@@ -1,0 +1,51 @@
+rules:
+  - id: javascript-eval
+    message: Avoid eval-style execution. Treat dynamic code strings as untrusted input.
+    severity: ERROR
+    languages:
+      - javascript
+      - typescript
+    pattern-either:
+      - pattern: eval($CODE)
+      - pattern: window.eval($CODE)
+      - pattern: globalThis.eval($CODE)
+
+  - id: javascript-new-function
+    message: Avoid new Function with dynamic strings. It bypasses normal module and review boundaries.
+    severity: ERROR
+    languages:
+      - javascript
+      - typescript
+    pattern-either:
+      - pattern: new Function(...)
+      - pattern: Function(...)
+
+  - id: node-child-process-string-shell
+    message: Review shell execution carefully. Prefer argument arrays and strict allowlists over dynamic strings.
+    severity: WARNING
+    languages:
+      - javascript
+      - typescript
+    pattern-either:
+      - pattern: child_process.exec($CMD, ...)
+      - pattern: child_process.execSync($CMD, ...)
+      - pattern: exec($CMD, ...)
+      - pattern: execSync($CMD, ...)
+
+  - id: package-lifecycle-script
+    message: Lifecycle scripts can execute during installs. Keep them intentional and reviewed.
+    severity: WARNING
+    languages:
+      - json
+    patterns:
+      - pattern-inside: |
+          {
+            "scripts": {
+              ...
+            }
+          }
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: ^"(preinstall|install|postinstall|prepare)"$
+      - pattern: |
+          "$KEY": "$VALUE"

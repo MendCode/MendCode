@@ -1,0 +1,92 @@
+version: 2
+
+updates:
+  - package-ecosystem: "bun"
+    directory: "/src/mendcode"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 2
+    groups:
+      bun-dependencies:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "security"
+
+  - package-ecosystem: "bun"
+    directory: "/src/mendcode/github"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:05"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 1
+    groups:
+      bun-github-action:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "security"
+
+  - package-ecosystem: "bun"
+    directory: "/src/mendcode/packages/console/resource"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:10"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 1
+    groups:
+      bun-console-resource:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "security"
+
+  - package-ecosystem: "bun"
+    directory: "/src/mendcode/sdks/vscode"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:15"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 1
+    groups:
+      bun-vscode-sdk:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "deps"
+    labels:
+      - "dependencies"
+      - "security"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:30"
+      timezone: "America/New_York"
+    open-pull-requests-limit: 2
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "ci"
+    labels:
+      - "dependencies"
+      - "github-actions"

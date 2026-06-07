@@ -1,0 +1,216 @@
+name: Security Guard
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - dev
+  workflow_dispatch:
+  schedule:
+    - cron: "17 14 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  SECURITY_GUARD_BLOCK_SCANNERS: "0"
+
+concurrency:
+  group: security-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository-guards:
+    name: Repository guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Block invisible Unicode controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          blocked = {
+              "\u200b": "ZERO WIDTH SPACE",
+              "\u200c": "ZERO WIDTH NON-JOINER",
+              "\u200d": "ZERO WIDTH JOINER",
+              "\u200e": "LEFT-TO-RIGHT MARK",
+              "\u200f": "RIGHT-TO-LEFT MARK",
+              "\u202a": "LEFT-TO-RIGHT EMBEDDING",
+              "\u202b": "RIGHT-TO-LEFT EMBEDDING",
+              "\u202c": "POP DIRECTIONAL FORMATTING",
+              "\u202d": "LEFT-TO-RIGHT OVERRIDE",
+              "\u202e": "RIGHT-TO-LEFT OVERRIDE",
+              "\u2066": "LEFT-TO-RIGHT ISOLATE",
+              "\u2067": "RIGHT-TO-LEFT ISOLATE",
+              "\u2068": "FIRST STRONG ISOLATE",
+              "\u2069": "POP DIRECTIONAL ISOLATE",
+              "\ufeff": "BYTE ORDER MARK",
+          }
+          skip_dirs = {".git", ".next", ".turbo", "build", "coverage", "dist", "node_modules"}
+          skip_prefixes = (
+              "src/mendcode/packages/web/src/content/docs/",
+          )
+          skip_paths = {
+              "src/mendcode/packages/web/README.md",
+          }
+          files = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+          findings = []
+
+          for raw in files:
+              if not raw:
+                  continue
+              path = raw.decode("utf-8", "replace")
+              if any(part in skip_dirs for part in path.split("/")):
+                  continue
+              if path in skip_paths or path.startswith(skip_prefixes):
+                  continue
+              if not os.path.isfile(path):
+                  continue
+              with open(path, "rb") as handle:
+                  data = handle.read()
+              if b"\0" in data:
+                  continue
+              text = data.decode("utf-8", "ignore")
+              for line_number, line in enumerate(text.splitlines(), 1):
+                  for char, name in blocked.items():
+                      if char in line:
+                          findings.append(f"{path}:{line_number}: {name}")
+
+          if findings:
+              print("Invisible or bidi Unicode controls found:")
+              print("\n".join(findings))
+              sys.exit(1)
+          PY
+
+      - name: Block risky tracked files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
+
+          allowed_paths = {
+              "src/mendcode/packages/console/app/public/opencode-brand-assets.zip",
+              "src/mendcode/packages/console/app/src/asset/brand/opencode-brand-assets.zip",
+              "src/mendcode/packages/slack/.env.example",
+          }
+          blocked_extensions = {
+              ".7z", ".class", ".dll", ".dylib", ".exe", ".gz", ".jar", ".key",
+              ".node", ".p12", ".pem", ".pfx", ".rar", ".so", ".tar", ".tgz",
+              ".wasm", ".zip",
+          }
+          env_file = re.compile(r"(^|/)\.env($|\.)")
+          findings = []
+
+          for raw in subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0"):
+              if not raw:
+                  continue
+              path = raw.decode("utf-8", "replace")
+              if path in allowed_paths:
+                  continue
+              lower = path.lower()
+              _, ext = os.path.splitext(lower)
+              if env_file.search(path) or ext in blocked_extensions:
+                  findings.append(path)
+
+          if findings:
+              print("Risky tracked files found:")
+              print("\n".join(findings))
+              sys.exit(1)
+          PY
+
+  secrets:
+    name: Secrets scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run gitleaks
+        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.29.0@sha256:71d3ee5990f2176f763b438298453fc37e87b119122045e176ca9d44ff00b08b \
+            detect --source=/repo --no-git --redact --verbose
+
+  dependencies:
+    name: Dependency vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Run OSV-Scanner
+        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/src" \
+            ghcr.io/google/osv-scanner:v2.3.8 \
+            scan --recursive /src/src/mendcode
+
+  github-actions:
+    name: GitHub Actions audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' }}
+        uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d
+        with:
+          advanced-security: false
+          annotations: true
+          version: "v1.25.2"
+
+  semgrep:
+    name: Semgrep custom rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+
+      - name: Run Semgrep CLI
+        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/src" \
+            semgrep/semgrep:1.165.0 \
+            semgrep scan --error --config /src/.github/semgrep/security-guard.yml /src/src/mendcode
