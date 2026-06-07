@@ -260,6 +260,44 @@ export type TuiKV = {
   readonly ready: boolean
 }
 
+export type TuiWidgetPlacement = "aboveEditor" | "belowEditor" | "sessionBottomDock"
+
+export type TuiRuntimeApi = {
+  setStatus: (id: string, value?: string, input?: { order?: number }) => boolean
+  clearStatus: (id: string) => boolean
+  setWidget: (
+    id: string,
+    render?: (() => JSX.Element | null) | undefined,
+    input?: { placement?: TuiWidgetPlacement; order?: number },
+  ) => boolean
+  clearWidget: (id: string) => boolean
+  setFooter: (renderer?: (() => JSX.Element | null) | undefined) => boolean
+  setFooterEntry: (id: string, render?: (() => JSX.Element | null) | undefined, input?: { order?: number }) => boolean
+  setWorkingIndicator: (input?: { frames?: string[]; intervalMs?: number; visible?: boolean }) => boolean
+  setEditorVisual: (input?: {
+    showPlaceholder?: boolean
+    normalPrefix?: string
+    shellPrefix?: string
+    normalExamples?: string[]
+    shellExamples?: string[]
+    borderGlyph?: string
+    footerGlyph?: string
+  }) => boolean
+  setEditor: (
+    factory?:
+      | ((input: {
+          sessionID?: string
+          workspaceID?: string
+          visible?: boolean
+          disabled?: boolean
+          onSubmit?: () => void
+          right?: JSX.Element
+          defaultEditor: () => JSX.Element
+        }) => JSX.Element | null)
+      | undefined,
+  ) => boolean
+}
+
 export type TuiState = {
   readonly ready: boolean
   readonly config: SdkConfig
@@ -468,6 +506,7 @@ export type TuiPluginApi = {
     Prompt: (props: TuiPromptProps) => JSX.Element
     toast: (input: TuiToast) => void
     dialog: TuiDialogStack
+    runtime: TuiRuntimeApi
   }
   keybind: {
     match: (key: string, evt: ParsedKey) => boolean

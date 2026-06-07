@@ -44,7 +44,11 @@ export type MendToastInput = {
 export type MendUiRuntimeApi = {
   setStatus(id: string, value?: string, input?: { order?: number }): boolean
   clearStatus(id: string): boolean
-  setWidget(id: string, render?: (() => unknown) | undefined, input?: { placement?: "aboveEditor" | "belowEditor"; order?: number }): boolean
+  setWidget(
+    id: string,
+    render?: (() => unknown) | undefined,
+    input?: { placement?: "aboveEditor" | "belowEditor" | "sessionBottomDock"; order?: number },
+  ): boolean
   clearWidget(id: string): boolean
   setFooter(renderer?: (() => unknown) | undefined): boolean
   setFooterEntry(id: string, render?: (() => unknown) | undefined, input?: { order?: number }): boolean

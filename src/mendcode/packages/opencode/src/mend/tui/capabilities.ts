@@ -22,6 +22,7 @@ export type MendCapabilityPublicID =
   | "sidebar.title"
   | "sidebar.content"
   | "sidebar.footer"
+  | "session.bottomDock"
   | "editor.widget.above"
   | "editor.widget.below"
   | "footer.entry"
@@ -43,6 +44,7 @@ export type MendCapabilityLegacyID =
   | "status"
   | "widget.aboveEditor"
   | "widget.belowEditor"
+  | "widget.sessionBottomDock"
   | "footer.augment"
   | "editor.custom"
   | "slot.home_logo"
@@ -238,6 +240,24 @@ const registry = [
     contractVersion: MEND_TUI_CAPABILITY_CONTRACT_VERSION,
     mapsFromUserIntents: ["sidebar footer", "sidebar status", "sidebar bottom"],
     nearestSafeAlternatives: ["sidebar.content", "footer.entry"],
+  },
+  {
+    id: "session.bottomDock",
+    label: "Session bottom dock",
+    productSurface: "session bottom dock",
+    runtimeIDs: ["widget.sessionBottomDock"],
+    legacyIDs: ["widget.sessionBottomDock"],
+    trust: "trusted",
+    status: "available",
+    tier: "trusted-only",
+    owner: "mend/tui/widgets",
+    fallback: "Skip the dock widget and keep the default bottom session layout.",
+    docs: "Trusted widget contract for compact session widgets next to Todos above the prompt.",
+    entrypoints: ["runtime", "prompt.full", "status", "plugin"],
+    operations: ["setWidget", "inspect"],
+    contractVersion: MEND_TUI_CAPABILITY_CONTRACT_VERSION,
+    mapsFromUserIntents: ["bottom dock", "session dock", "bottom session widget", "widget beside todos"],
+    nearestSafeAlternatives: ["editor.widget.above", "editor.widget.below", "footer.entry"],
   },
   {
     id: "editor.widget.above",
@@ -698,6 +718,10 @@ export function resolveCustomizationIntent(request: string): MendCustomizationRe
 
   if (containsAny(text, ["widget above", "above editor", "above chat input"])) {
     return resolution(request, "resolved", "editor.widget.above", "setWidget", "This request maps to the trusted above-editor widget contract.")
+  }
+
+  if (containsAny(text, ["bottom dock", "session dock", "bottom session widget", "beside todos", "beside todo"])) {
+    return resolution(request, "resolved", "session.bottomDock", "setWidget", "This request maps to the trusted session bottom dock contract.")
   }
 
   if (containsAny(text, ["widget below", "below editor", "below chat input"])) {
