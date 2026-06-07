@@ -3461,26 +3461,14 @@ function BlockTool(props: {
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
-  const [hover, setHover] = createSignal(false)
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error : undefined))
-  const blockColor = createMemo(() => {
-    if (/^(# )?(Wrote|Created)\b/.test(props.title)) return { background: theme.diffAddedBg, border: theme.diffAdded }
-    if (/^(# )?Deleted\b/.test(props.title)) return { background: theme.diffRemovedBg, border: theme.diffRemoved }
-    return { background: theme.backgroundPanel, border: theme.background }
-  })
   return (
     <box
-      border={["left"]}
       paddingTop={1}
       paddingBottom={1}
-      paddingLeft={2}
+      paddingLeft={3}
       marginTop={1}
       gap={1}
-      backgroundColor={hover() ? theme.backgroundMenu : blockColor().background}
-      customBorderChars={SplitBorder.customBorderChars}
-      borderColor={blockColor().border}
-      onMouseOver={() => props.onClick && setHover(true)}
-      onMouseOut={() => setHover(false)}
       onMouseUp={() => {
         if (renderer.getSelection()?.getSelectedText()) return
         props.onClick?.()
@@ -3489,7 +3477,7 @@ function BlockTool(props: {
       <Show
         when={props.spinner}
         fallback={
-          <text paddingLeft={3} fg={theme.textMuted}>
+          <text fg={theme.textMuted}>
             {props.title}
           </text>
         }
