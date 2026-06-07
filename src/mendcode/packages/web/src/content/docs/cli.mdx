@@ -1,0 +1,264 @@
+---
+title: CLI
+description: MendCode CLI commands that are currently owned by the MendCode runtime adapter.
+---
+
+The MendCode CLI starts the terminal UI when run without arguments.
+
+```bash
+mend
+```
+
+`mend run` also starts the TUI, but preloads your message so it is ready to send.
+
+```bash
+mend run "Explain how closures work in JavaScript"
+```
+
+MendCode also exposes control-plane commands for status, diagnostics, model policy, memory, provider setup, and the runtime boundary. Commands that still belong to the donor runtime are intentionally not part of this public contract.
+
+---
+
+## Core
+
+### status
+
+Show a short MendCode status summary.
+
+```bash
+mend status
+```
+
+### doctor
+
+Run local diagnostics for the MendCode checkout.
+
+```bash
+mend doctor
+```
+
+### check
+
+Verify that the owned-runtime boundary is valid and that the donor identity guard is active.
+
+```bash
+mend check
+```
+
+### config
+
+Inspect MendCode config and runtime paths.
+
+```bash
+mend config show
+mend config paths
+```
+
+---
+
+## Models And Providers
+
+### models
+
+Inspect and configure MendCode model policy.
+
+```bash
+mend models status
+mend models show
+mend models plan
+mend models presets
+mend models set-default <provider> <model> --enable
+mend models use-preset <preset> --enable
+```
+
+`set-default` and `use-preset` write model policy only when run without `--dry-run`.
+
+### providers
+
+Inspect provider auth and adapter readiness.
+
+```bash
+mend providers status
+mend providers auth
+mend providers adapters
+mend providers smoke
+```
+
+### auth
+
+Inspect or plan provider login state. Browser login execution is currently explicit.
+
+```bash
+mend auth status
+mend auth login-plan <provider>
+mend auth login openai --method browser --execute
+```
+
+---
+
+## Project Controls
+
+### tui
+
+Inspect and manage the MendCode TUI profile.
+
+```bash
+mend tui status
+mend tui profile
+mend tui schema
+mend tui preview --state home
+mend tui render
+mend tui propose "make the footer denser" --dry-run
+mend tui apply <proposal-id>
+mend tui rollback
+```
+
+### focus
+
+Inspect or switch MendCode focus profiles.
+
+```bash
+mend focus status
+mend focus list
+mend focus show <focus-id>
+mend focus use <focus-id>
+```
+
+### context
+
+Inspect or refresh project context generated for MendCode.
+
+```bash
+mend context status
+mend context refresh
+mend context show
+```
+
+### memory
+
+Inspect and manage MendCode memory. Search and preview do not call providers.
+
+```bash
+mend memory status
+mend memory search "<query>"
+mend memory preview "<query>"
+mend memory add "User prefers local-only workflows." --scope project
+mend memory list
+mend memory apply <proposal-id>
+mend memory reject <proposal-id>
+```
+
+### permissions
+
+Inspect and set MendCode permission defaults.
+
+```bash
+mend permissions status
+mend permissions set-default approval
+mend permissions set-default smart
+mend permissions set-default full_access
+mend permissions set-reviewer-role <role>
+```
+
+The interactive session UI may also apply per-session behavior on top of these defaults.
+
+### mcp
+
+Inspect MendCode MCP config or add a local MCP command to MendCode-managed config.
+
+```bash
+mend mcp status
+mend mcp preview
+mend mcp add-local <name> <command> [args...]
+```
+
+---
+
+## Runtime Boundary
+
+### export
+
+Show the current export policy. This command does not create an archive yet.
+
+```bash
+mend export plan
+```
+
+### adapter
+
+Inspect the MendCode adapter guard and donor-command boundary.
+
+```bash
+mend adapter status
+```
+
+### upstream
+
+Inspect upstream baseline state without applying upstream changes.
+
+```bash
+mend upstream status
+mend upstream inspect <commit-or-ref>
+mend upstream baseline <commit>
+```
+
+### runtime
+
+Inspect or plan owned-runtime adoption/configuration work.
+
+```bash
+mend runtime status
+mend runtime configure
+```
+
+### toolchain
+
+Inspect the local toolchain expected by this checkout.
+
+```bash
+mend toolchain status
+```
+
+### budget
+
+Inspect budget policy and diagnostics.
+
+```bash
+mend budget status
+mend budget doctor
+```
+
+### worktree
+
+Inspect MendCode worktree policy and dry-run plans.
+
+```bash
+mend worktree status
+mend worktree plan
+mend worktree doctor
+```
+
+---
+
+## Not Public Yet
+
+These donor-runtime commands are not part of the MendCode public CLI contract today:
+
+```bash
+mend agent
+mend session
+mend stats
+mend attach
+mend import
+mend export <sessionID>
+mend web
+mend serve
+mend debug
+mend acp
+```
+
+If you need to inspect the donor boundary, use:
+
+```bash
+mend adapter status
+```

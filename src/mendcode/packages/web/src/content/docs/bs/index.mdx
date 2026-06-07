@@ -1,0 +1,325 @@
+---
+title: Uvod
+description: Započnite sa MendCode.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components"
+import config from "../../../../config.mjs"
+export const console = config.console
+
+[**MendCode**](/) je AI agent za kodiranje otvorenog koda. Dostupan je kao interfejs baziran na terminalu, desktop aplikacija ili IDE ekstenzija.
+![Snimak ekrana MendCode TUI-ja](../../../assets/lander/screenshot.png)
+Hajde da počnemo.
+
+---
+
+#### Preduvjeti
+
+Da biste koristili MendCode u svom terminalu, trebat će vam:
+
+1. Moderan emulator terminala kao što su:
+   - [WezTerm](https://wezterm.org), više platformi
+   - [Alacritty](https://alacritty.org), više platformi
+   - [Ghostty](https://ghostty.org), Linux i macOS
+   - [Kitty](https://sw.kovidgoyal.net/kitty/), Linux i macOS
+2. API ključevi za LLM provajdere koje želite koristiti.
+
+---
+
+## Instalacija
+
+Najlakši način za instaliranje MendCode je putem instalacijske skripte.
+
+```bash
+mend init
+```
+
+Također ga možete instalirati pomoću sljedećih naredbi:
+
+- **Korištenje Node.js**
+
+        <Tabs>
+
+      <TabItem label="npm">
+      ```bash
+      MendCode package is not published yet
+      ```
+
+          </TabItem>
+
+        <TabItem label="Bun">
+        ```bash
+        MendCode package is not published yet
+        ```
+
+          </TabItem>
+
+        <TabItem label="pnpm">
+        ```bash
+        MendCode package is not published yet
+        ```
+
+          </TabItem>
+
+        <TabItem label="Yarn">
+        ```bash
+        MendCode package is not published yet
+        ```
+
+      </TabItem>
+
+  </Tabs>
+
+- **Korištenje Homebrew-a na macOS-u i Linux-u**
+
+```bash
+  MendCode package is not published yet
+```
+
+> Preporučujemo korištenje MendCode tap za najnovija izdanja. Službenu formulu `MendCode package is not published yet` održava Homebrew tim i ažurira se rjeđe.
+
+- **Korištenje Parua na Arch Linuxu**
+
+  ```bash
+  MendCode package is not published yet
+# Arch Linux (Stable)
+  MendCode package is not published yet
+# Arch Linux (Latest from AUR)
+  ```
+
+#### Windows
+
+:::tip[Preporučeno: Koristite WSL]
+Za najbolje iskustvo na Windows-u preporučujemo korištenje [Windows Subsystem for Linux (WSL)](/docs/windows-wsl). Pruža bolje performanse i potpunu kompatibilnost sa MendCode funkcijama.
+:::
+
+- **Korištenje Chocolatey-a**
+
+```bash
+  MendCode package is not published yet
+```
+
+- **Korištenje Scoop-a**
+
+```bash
+  MendCode package is not published yet
+```
+
+- **Korištenje NPM-a**
+
+```bash
+  MendCode package is not published yet
+```
+
+- **Korištenje Mise**
+
+```bash
+  MendCode package is not published yet
+```
+
+- **Korištenje Dockera**
+
+```bash
+  MendCode package is not published yet
+```
+
+Podrška za instaliranje MendCode na Windows koristeći Bun je trenutno u toku.
+Također možete preuzeti binarnu datoteku iz [Releases](/).
+
+---
+
+## Konfiguracija
+
+Uz MendCode možete koristiti bilo kojeg LLM provajdera tako što ćete konfigurirati njihove API ključeve.
+Ako ste tek počeli koristiti LLM provajdere, preporučujemo korištenje [MendCode Zen](/docs/zen).
+To je kurirana lista modela koji su testirani i verifikovani od strane MendCode tima.
+
+1. Pokrenite naredbu `/connect` u TUI-u i odaberite MendCode Zen. Hostovana autentifikacija još nije objavljena.
+
+```txt
+   /connect
+```
+
+2. Prijavite se, dodajte svoje detalje naplate i kopirajte svoj API ključ.
+3. Zalijepite svoj API ključ.
+
+```txt
+   ┌ API key
+   │
+   │
+   └ enter
+```
+
+Alternativno, možete odabrati jednog od drugih provajdera. [Saznajte više](/docs/providers#directory).
+
+---
+
+## Inicijalizacija
+
+Sada kada ste konfigurisali provajdera, možete se kretati do projekta na kojem želite raditi.
+
+```bash
+cd /path/to/project
+```
+
+I pokrenite MendCode.
+
+```bash
+mend
+```
+
+Zatim inicijalizirajte MendCode za projekat pokretanjem sljedeće naredbe.
+
+```bash frame="none"
+/init
+```
+
+Ovo će omogućiti MendCode da analizira vaš projekat i kreira `AGENTS.md` fajl u korijenu projekta.
+:::tip
+Trebali biste komitovati datoteku `AGENTS.md` vašeg projekta u Git.
+:::
+Ovo pomaže MendCode da razumije strukturu projekta i obrasce kodiranja koji se koriste.
+
+---
+
+## Korištenje
+
+Sada ste spremni da koristite MendCode za rad na svom projektu. Slobodno pitajte bilo šta!
+Ako ste novi u korištenju agenta za AI kodiranje, evo nekoliko primjera koji bi mogli pomoći.
+
+---
+
+### Postavljanje pitanja
+
+Možete zamoliti MendCode da vam objasni kodnu bazu.
+:::tip
+Koristite tipku `@` za nejasnu pretragu datoteka u projektu.
+:::
+
+```txt frame="none" "@packages/functions/src/api/index.ts"
+How is authentication handled in @packages/functions/src/api/index.ts
+```
+
+Ovo je korisno ako postoji dio kodne baze na kojem niste radili.
+
+---
+
+### Dodavanje funkcija
+
+Možete zamoliti MendCode da vašem projektu doda nove funkcije. Iako preporučujemo da ga prvo zamolite da napravi plan.
+
+1. **Kreirajte plan**
+   MendCode ima _Plan mod_ koji onemogućuje njegovu sposobnost da pravi promjene i umjesto toga predlaže _kako_ će implementirati ovu funkciju.
+   Prebacite se na njega pomoću tipke **Tab**. Vidjet ćete indikator za ovo u donjem desnom uglu.
+
+```bash frame="none" title="Switch to Plan mode"
+   <TAB>
+```
+
+Hajde sada da opišemo šta želimo da uradi.
+
+```txt frame="none"
+    When a user deletes a note, we'd like to flag it as deleted in the database.
+    Then create a screen that shows all the recently deleted notes.
+    From this screen, the user can undelete a note or permanently delete it.
+```
+
+Želite da date MendCode dovoljno detalja da razumije šta želite. Pomaže da razgovarate s njim kao da razgovarate sa mlađim programerom u svom timu.
+:::tip
+Dajte MendCode dosta konteksta i primjera koji će mu pomoći da razumije šta vi želite.
+:::
+
+2. **Ponovite plan**
+   Kada vam da plan, možete mu dati povratne informacije ili dodati više detalja.
+
+```txt frame="none"
+    We'd like to design this new screen using a design I've used before.
+    [Image #1] Take a look at this image and use it as a reference.
+```
+
+:::tip
+Prevucite i ispustite slike u terminal da biste ih dodali u prompt.
+:::
+MendCode može skenirati sve slike koje mu date i dodati ih u prompt. Možete to učiniti povlačenjem i ispuštanjem slike u terminal.
+
+3. **Izgradite funkciju**
+   Kada se osjećate ugodno s planom, vratite se na _Build mode_ ponovnim pritiskom na taster **Tab**.
+
+```bash frame="none"
+   <TAB>
+```
+
+I tražeći od njega da napravi promjene.
+
+```bash frame="none"
+   Sounds good! Go ahead and make the changes.
+```
+
+---
+
+### Pravljenje izmjena
+
+Za jednostavnije promjene, možete zamoliti MendCode da ga direktno izgradi bez potrebe da prvo pregledate plan.
+
+```txt frame="none" "@packages/functions/src/settings.ts" "@packages/functions/src/notes.ts"
+We need to add authentication to the /settings route. Take a look at how this is
+handled in the /notes route in @packages/functions/src/notes.ts and implement
+the same logic in @packages/functions/src/settings.ts
+```
+
+Želite da budete sigurni da ste pružili dobru količinu detalja kako bi MendCode napravio ispravne promjene.
+
+---
+
+### Poništavanje izmjena
+
+Recimo da tražite od MendCode da izvrši neke promjene.
+
+```txt frame="none" "@packages/functions/src/api/index.ts"
+Can you refactor the function in @packages/functions/src/api/index.ts?
+```
+
+Ali shvatate da to nije ono što ste željeli. Možete **poništiti** promjene koristeći naredbu `/undo`.
+
+```bash frame="none"
+/undo
+```
+
+MendCode će sada poništiti promjene koje ste napravili i ponovo prikazati vašu originalnu poruku.
+
+```txt frame="none" "@packages/functions/src/api/index.ts"
+Can you refactor the function in @packages/functions/src/api/index.ts?
+```
+
+Odavde možete podesiti prompt i zamoliti MendCode da pokuša ponovo.
+:::tip
+Možete pokrenuti `/undo` više puta da poništite više promjena.
+:::
+Ili **možete ponoviti** promjene koristeći naredbu `/redo`.
+
+```bash frame="none"
+/redo
+```
+
+---
+
+## Dijeljenje
+
+Razgovore koje imate sa MendCode možete [dijeliti sa vašim timom](/docs/share).
+
+```bash frame="none"
+/share
+```
+
+Ovo će kreirati vezu do trenutnog razgovora i kopirati je u međuspremnik.
+:::note
+Razgovori se ne dijele prema zadanim postavkama.
+:::
+Primjeri dijeljenja razgovora još nisu objavljeni.
+
+---
+
+## Prilagođavanje
+
+I to je to! Sada ste profesionalac u korištenju MendCode.
+Da biste to učinili svojim, preporučujemo [odabir teme](/docs/themes), [prilagođavanje povezivanja tipki](/docs/keybinds), [konfiguriranje formatera koda](/docs/formatters), [kreiranje prilagođenih komandi](/docs/commands), ili igranje sa [MendCode config](/docs/config).

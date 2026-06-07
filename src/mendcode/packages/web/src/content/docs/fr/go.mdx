@@ -1,0 +1,182 @@
+---
+title: Go
+description: Abonnement à bas coût pour les modèles de codage ouverts.
+---
+
+import config from "../../../../config.mjs"
+export const console = config.console
+export const email = `mailto:${config.email}`
+
+MendCode Go est un abonnement à bas coût — **5 $ pour votre premier mois**, puis **10 $/mois** — qui vous donne un accès fiable aux modèles de codage ouverts populaires.
+
+:::note
+MendCode Go est actuellement en version bêta.
+:::
+
+Go fonctionne comme n'importe quel autre fournisseur dans MendCode. Vous vous abonnez à MendCode Go et obtenez votre clé d'API. C'est **totalement facultatif** et vous n'avez pas besoin de l'utiliser pour utiliser MendCode.
+
+Il est conçu principalement pour les utilisateurs internationaux, avec des modèles hébergés aux États-Unis, dans l'UE et à Singapour pour un accès mondial stable.
+
+---
+
+## Contexte
+
+Les modèles ouverts sont devenus vraiment performants. Ils atteignent désormais des performances proches de celles des modèles propriétaires pour les tâches de codage. Et comme de nombreux fournisseurs peuvent les proposer de manière compétitive, ils sont généralement beaucoup moins chers.
+
+Cependant, obtenir un accès fiable et à faible latence à ces modèles peut être difficile. Les fournisseurs varient en qualité et en disponibilité.
+
+:::tip
+Nous avons testé un groupe sélectionné de modèles et de fournisseurs qui fonctionnent bien avec MendCode.
+:::
+
+Pour remédier à cela, nous avons fait plusieurs choses :
+
+1. Nous avons testé un groupe sélectionné de modèles ouverts et discuté avec leurs équipes de la meilleure façon de les exécuter.
+2. Nous avons ensuite travaillé avec quelques fournisseurs pour nous assurer qu'ils étaient correctement servis.
+3. Enfin, nous avons évalué les performances de la combinaison modèle/fournisseur et avons dressé une liste que nous nous sentons à l'aise de recommander.
+
+MendCode Go vous donne accès à ces modèles pour **5 $ pour votre premier mois**, puis **10 $/mois**.
+
+---
+
+## Comment ça marche
+
+MendCode Go fonctionne comme n'importe quel autre fournisseur dans MendCode.
+
+1. Vous vous connectez à **<a href={console}>MendCode Zen</a>**, vous vous abonnez à Go et copiez votre clé d'API.
+2. Vous exécutez la commande `/connect` dans la TUI, sélectionnez `MendCode Go` et collez votre clé d'API.
+3. Exécutez `/models` dans la TUI pour voir la liste des modèles disponibles via Go.
+
+:::note
+Un seul membre par espace de travail peut s'abonner à MendCode Go.
+:::
+
+La liste actuelle des modèles comprend :
+
+- **GLM-5**
+- **GLM-5.1**
+- **Kimi K2.5**
+- **Kimi K2.6**
+- **MiMo-V2-Pro**
+- **MiMo-V2-Omni**
+- **MiMo-V2.5-Pro**
+- **MiMo-V2.5**
+- **MiniMax M2.5**
+- **Qwen3.5 Plus**
+- **Qwen3.6 Plus**
+- **MiniMax M2.7**
+- **DeepSeek V4 Pro**
+- **DeepSeek V4 Flash**
+
+La liste des modèles peut changer au fur et à mesure que nous en testons et en ajoutons de nouveaux.
+
+---
+
+## Limites d'utilisation
+
+MendCode Go inclut les limites suivantes :
+
+- **Limite de 5 heures** — 12 $ d'utilisation
+- **Limite hebdomadaire** — 30 $ d'utilisation
+- **Limite mensuelle** — 60 $ d'utilisation
+
+Les limites sont définies en valeur monétaire (dollars). Cela signifie que votre nombre réel de requêtes dépend du modèle que vous utilisez. Les modèles moins chers comme MiniMax M2.5 permettent plus de requêtes, tandis que les modèles plus coûteux comme GLM-5.1 en permettent moins.
+
+Le tableau ci-dessous fournit une estimation du nombre de requêtes basée sur des modèles d'utilisation typiques de Go :
+
+| Model              | requêtes par 5 heures | requêtes par semaine | requêtes par mois |
+| ------------------ | --------------------- | -------------------- | ----------------- |
+| GLM-5.1            | 880                   | 2,150                | 4,300             |
+| GLM-5              | 1,150                 | 2,880                | 5,750             |
+| Kimi K2.5          | 1,850                 | 4,630                | 9,250             |
+| Kimi K2.6          | 1,150                 | 2,880                | 5,750             |
+| MiMo-V2-Pro        | 1,290                 | 3,225                | 6,450             |
+| MiMo-V2-Omni       | 2,150                 | 5,450                | 10,900            |
+| MiMo-V2.5-Pro      | 1,290                 | 3,225                | 6,450             |
+| MiMo-V2.5 (≤ 256K) | 2,150                 | 5,450                | 10,900            |
+| MiniMax M2.7       | 3,400                 | 8,500                | 17,000            |
+| MiniMax M2.5       | 6,300                 | 15,900               | 31,800            |
+| Qwen3.6 Plus       | 3,300                 | 8,200                | 16,300            |
+| Qwen3.5 Plus       | 10,200                | 25,200               | 50,500            |
+| DeepSeek V4 Pro    | 3,450                 | 8,550                | 17,150            |
+| DeepSeek V4 Flash  | 31,650                | 79,050               | 158,150           |
+
+Les estimations sont basées sur les modèles de requêtes moyens observés :
+
+- GLM-5/5.1 — 700 tokens en entrée, 52,000 en cache, 150 tokens en sortie par requête
+- Kimi K2.5/K2.6 — 870 tokens en entrée, 55,000 en cache, 200 tokens en sortie par requête
+- DeepSeek V4 Pro — 750 tokens en entrée, 82,000 en cache, 290 tokens en sortie par requête
+- DeepSeek V4 Flash — 790 tokens en entrée, 68,000 en cache, 280 tokens en sortie par requête
+- MiniMax M2.7/M2.5 — 300 tokens en entrée, 55,000 en cache, 125 tokens en sortie par requête
+- Qwen3.5 Plus — 410 tokens en entrée, 47,000 en cache, 140 tokens en sortie par requête
+- Qwen3.6 Plus — 500 tokens en entrée, 57,000 en cache, 190 tokens en sortie par requête
+- MiMo-V2-Pro — 350 tokens en entrée, 41,000 en cache, 250 tokens en sortie par requête
+- MiMo-V2-Omni — 1000 tokens en entrée, 60,000 en cache, 140 tokens en sortie par requête
+- MiMo-V2.5-Pro — 350 tokens en entrée, 41,000 en cache, 250 tokens en sortie par requête
+- MiMo-V2.5 — 1000 tokens en entrée, 60,000 en cache, 140 tokens en sortie par requête
+
+Vous pouvez suivre votre utilisation actuelle dans la **<a href={console}>console</a>**.
+
+:::tip
+Si vous atteignez la limite d'utilisation, vous pouvez continuer à utiliser les modèles gratuits.
+:::
+
+Les limites d'utilisation peuvent changer au fur et à mesure que nous tirons des enseignements des premières utilisations et des retours.
+
+---
+
+### Utilisation au-delà des limites
+
+Si vous avez également des crédits sur votre solde Zen, vous pouvez activer l'option **Use balance** dans la console. Lorsqu'elle est activée, Go se rabattra sur votre solde Zen après que vous ayez atteint vos limites d'utilisation au lieu de bloquer les requêtes.
+
+---
+
+## Points de terminaison
+
+Vous pouvez également accéder aux modèles Go via les points de terminaison d'API suivants.
+
+| Modèle            | ID de modèle      | Point de terminaison                             | Package AI SDK              |
+| ----------------- | ----------------- | ------------------------------------------------ | --------------------------- |
+| GLM-5.1           | glm-5.1           | `MendCode Go hosted endpoint is not published yet` | `@ai-sdk/openai-compatible` |
+| GLM-5             | glm-5             | `MendCode Go hosted endpoint is not published yet` | `@ai-sdk/openai-compatible` |
+| Kimi K2.5         | kimi-k2.5         | `MendCode Go hosted endpoint is not published yet` | `@ai-sdk/openai-compatible` |
+| Kimi K2.6         | kimi-k2.6         | `MendCode Go hosted endpoint is not published yet` | `@ai-sdk/openai-compatible` |
+| DeepSeek V4 Pro   | deepseek-v4-pro   | `MendCode Go hosted endpoint is not published yet` | `@ai-sdk/openai-compatible` |
+| DeepSeek V4 Flash | deepseek-v4-flash | `MendCode Go hosted endpoint is not published yet` | `@ai-sdk/openai-compatible` |
+| MiMo-V2-Pro       | mimo-v2-pro       | `MendCode Go hosted endpoint is not published yet` | `@ai-sdk/openai-compatible` |
+| MiMo-V2-Omni      | mimo-v2-omni      | `MendCode Go hosted endpoint is not published yet` | `@ai-sdk/openai-compatible` |
+| MiMo-V2.5-Pro     | mimo-v2.5-pro     | `MendCode Go hosted endpoint is not published yet` | `@ai-sdk/openai-compatible` |
+| MiMo-V2.5         | mimo-v2.5         | `MendCode Go hosted endpoint is not published yet` | `@ai-sdk/openai-compatible` |
+| MiniMax M2.7      | minimax-m2.7      | `MendCode Go hosted endpoint is not published yet`         | `@ai-sdk/anthropic`         |
+| MiniMax M2.5      | minimax-m2.5      | `MendCode Go hosted endpoint is not published yet`         | `@ai-sdk/anthropic`         |
+| Qwen3.6 Plus      | qwen3.6-plus      | `MendCode Go hosted endpoint is not published yet` | `@ai-sdk/alibaba`           |
+| Qwen3.5 Plus      | qwen3.5-plus      | `MendCode Go hosted endpoint is not published yet` | `@ai-sdk/alibaba`           |
+
+L'[ID de modèle](/docs/config/#models) dans votre configuration MendCode utilise le format `MendCode-go/<model-id>`. Par exemple, pour Kimi K2.6, vous utiliseriez `MendCode-go/kimi-k2.6` dans votre configuration.
+
+---
+
+### Modèles
+
+Vous pouvez récupérer la liste complète des modèles disponibles et leurs métadonnées à partir de :
+
+```
+MendCode Go model metadata endpoint is not published yet
+```
+
+---
+
+## Confidentialité
+
+Cette offre est conçue avant tout pour les utilisateurs internationaux, avec des modèles hébergés aux US, dans l’EU et à Singapore afin d’assurer un accès mondial stable. Nos fournisseurs appliquent une politique de rétention zéro et n’utilisent pas vos données pour l’entraînement des modèles.
+
+---
+
+## Objectifs
+
+Nous avons créé MendCode Go pour :
+
+1. Rendre le codage par IA **accessible** à un plus grand nombre de personnes avec un abonnement à bas coût.
+2. Fournir un accès **fiable** aux meilleurs modèles de codage ouverts.
+3. Sélectionner des modèles qui sont **testés et évalués** pour une utilisation en tant qu'agent de codage.
+4. N'avoir **aucun verrouillage exclusif** en vous permettant d'utiliser n'importe quel autre fournisseur avec MendCode également.

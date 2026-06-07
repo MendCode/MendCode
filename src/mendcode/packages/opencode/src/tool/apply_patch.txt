@@ -1,0 +1,39 @@
+Use the `apply_patch` tool to edit files. Pass the patch directly as the `patchText` argument. Do not wrap it in a shell command, JSON command array, heredoc, or code fence.
+
+Your patch language is a stripped-down, file-oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high-level envelope:
+
+*** Begin Patch
+[ one or more file sections ]
+*** End Patch
+
+Within that envelope, you get a sequence of file operations.
+You MUST include a header to specify the action you are taking.
+Each operation starts with one of three headers:
+
+*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
+*** Delete File: <path> - remove an existing file. Nothing follows.
+*** Update File: <path> - patch an existing file in place (optionally with a rename).
+
+Example patch:
+
+```
+*** Begin Patch
+*** Add File: hello.txt
++Hello world
+*** Update File: src/app.py
+*** Move to: src/main.py
+@@ def greet():
+-print("Hi")
++print("Hello, world!")
+*** Delete File: obsolete.txt
+*** End Patch
+```
+
+It is important to remember:
+
+- The `patchText` string itself must start with `*** Begin Patch` and end with `*** End Patch`
+- You must include a header with your intended action (Add/Delete/Update)
+- You must prefix new lines with `+` even when creating a new file
+- For updates, first make sure you have the latest file text around the target. Offset-limited reads can go stale after another tool, agent, formatter, or user edit.
+- Prefer the smallest unique hunk that matches current text exactly. Avoid pasting large blocks from an old read when changing only a few lines.
+- If verification fails with "Failed to find expected lines" or "Failed to find context", immediately read the target file again and retry with fresher, narrower context. Do not retry the same patch.

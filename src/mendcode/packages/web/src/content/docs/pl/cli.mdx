@@ -1,0 +1,612 @@
+---
+title: CLI
+description: Opcje i polecenia wiersza poleceń MendCode.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components"
+
+CLI MendCode domyślnie uruchamia [TUI](/docs/tui), gdy wywołasz je bez argumentów.
+
+```bash
+mend
+```
+
+CLI obsługuje też polecenia opisane na tej stronie, więc możesz używać MendCode programowo.
+
+```bash
+mend run "Explain how closures work in JavaScript"
+```
+
+---
+
+### tui
+
+Uruchamia interfejs terminalowy (TUI) MendCode.
+
+```bash
+mend [project]
+```
+
+#### Flagi
+
+| Flaga                                    | Skrót | Opis                                                                    |
+| ---------------------------------------- | ----- | ----------------------------------------------------------------------- |
+| <nobr><code>{"--continue"}</code></nobr> | `-c`  | Kontynuuj ostatnią sesję                                                |
+| <nobr><code>{"--session"}</code></nobr>  | `-s`  | Identyfikator sesji do kontynuowania                                    |
+| <nobr><code>{"--fork"}</code></nobr>     |       | Sklonuj sesję podczas kontynuacji (użyj z `--continue` lub `--session`) |
+| <nobr><code>{"--prompt"}</code></nobr>   |       | Monit do użycia                                                         |
+| <nobr><code>{"--model"}</code></nobr>    | `-m`  | Model do użycia w formacie dostawca/model                               |
+| <nobr><code>{"--agent"}</code></nobr>    |       | Agent do użycia                                                         |
+| <nobr><code>{"--port"}</code></nobr>     |       | Port do nasłuchiwania                                                   |
+| <nobr><code>{"--hostname"}</code></nobr> |       | Nazwa hosta, do której należy się powiązać                              |
+
+---
+
+## Polecenia
+
+Interfejs CLI MendCode zawiera także dodatkowe polecenia.
+
+---
+
+### agent
+
+Zarządzaj agentami MendCode.
+
+```bash
+mend agent [command]
+```
+
+---
+
+### attach
+
+Dołącz terminal do już działającego serwera backendu MendCode uruchomionego za pomocą `serve` lub `web`.
+
+```bash
+mend attach [url]
+```
+
+Pozwala to połączyć TUI ze zdalnym backendem MendCode. Na przykład:
+
+```bash
+# Start the backend server for web/mobile access
+mend web --port 4096 --hostname 0.0.0.0
+
+# In another terminal, attach the TUI to the running backend
+mend attach http://10.20.30.40:4096
+```
+
+#### Flagi
+
+| Flaga                                    | Skrót | Opis                                                                                                  |
+| ---------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------- |
+| <nobr><code>{"--dir"}</code></nobr>      |       | Katalog roboczy, w którym uruchomić TUI                                                               |
+| <nobr><code>{"--continue"}</code></nobr> | `-c`  | Kontynuuj ostatnią sesję                                                                              |
+| <nobr><code>{"--session"}</code></nobr>  | `-s`  | Identyfikator sesji do kontynuowania                                                                  |
+| <nobr><code>{"--fork"}</code></nobr>     |       | Rozgałęź sesję podczas kontynuowania (użyj z `--continue` lub `--session`)                            |
+| <nobr><code>{"--password"}</code></nobr> | `-p`  | Hasło uwierzytelniania podstawowego (domyślnie `OPENCODE_SERVER_PASSWORD`)                            |
+| <nobr><code>{"--username"}</code></nobr> | `-u`  | Nazwa użytkownika uwierzytelniania podstawowego (domyślnie `OPENCODE_SERVER_USERNAME` lub `mend`) |
+
+---
+
+#### create
+
+Utwórz nowego agenta z niestandardową konfiguracją.
+
+```bash
+mend agent create
+```
+
+To polecenie poprowadzi Cię przez proces tworzenia nowego agenta z niestandardowym promptem systemowym i konfiguracją narzędzi.
+
+---
+
+#### list
+
+Wyświetl listę wszystkich agentów.
+
+```bash
+mend agent list
+```
+
+---
+
+### auth
+
+Zarządzaj danymi uwierzytelniającymi i logowaniem dla dostawców.
+
+```bash
+mend auth [command]
+```
+
+---
+
+#### login
+
+MendCode integruje się z wieloma dostawcami. Możesz użyć `mend auth login`, aby skonfigurować klucz API dla dowolnego obsługiwanego dostawcy. Klucze są bezpiecznie przechowywane w `~/.local/share/opencode/auth.json`.
+
+```bash
+mend auth login
+```
+
+Podczas uruchamiania MendCode ładuje dostawców z pliku poświadczeń, a także ze zmiennych środowiskowych lub pliku `.env` w Twoim projekcie.
+
+---
+
+#### list
+
+Wyświetl listę wszystkich uwierzytelnionych dostawców przechowywanych w pliku poświadczeń.
+
+```bash
+mend auth list
+```
+
+Lub skrócona wersja:
+
+```bash
+mend auth ls
+```
+
+---
+
+#### logout
+
+Wyloguj się z dostawcy, usuwając go z pliku poświadczeń.
+
+```bash
+mend auth logout
+```
+
+---
+
+### github
+
+Zarządzaj agentem GitHub w celu automatyzacji repozytorium.
+
+```bash
+mend github [command]
+```
+
+---
+
+#### install
+
+Zainstaluj agenta GitHub w swoim repozytorium.
+
+```bash
+mend github install
+```
+
+Spowoduje to utworzenie pliku workflow GitHub Actions i poprowadzi Cię przez proces konfiguracji. [Dowiedz się więcej](/docs/github).
+
+---
+
+#### run
+
+Uruchom agenta na GitHubie. Zwykle używane w GitHub Actions.
+
+```bash
+mend github run
+```
+
+##### Flagi
+
+| Flaga                                 | Opis                                     |
+| ------------------------------------- | ---------------------------------------- |
+| <nobr><code>{"--event"}</code></nobr> | Zdarzenie GitHub, które wyzwoliło agenta |
+| <nobr><code>{"--token"}</code></nobr> | Osobisty token dostępu GitHub            |
+
+---
+
+### mcp
+
+Zarządzaj serwerami Model Context Protocol (MCP).
+
+```bash
+mend mcp [command]
+```
+
+---
+
+#### add
+
+Dodaj serwer MCP do swojej konfiguracji.
+
+```bash
+mend mcp add
+```
+
+To polecenie poprowadzi Cię przez proces dodawania lokalnego lub zdalnego serwera MCP.
+
+---
+
+#### list
+
+Wyświetl listę wszystkich skonfigurowanych serwerów MCP i ich status.
+
+```bash
+mend mcp list
+```
+
+Lub skrócona wersja:
+
+```bash
+mend mcp ls
+```
+
+---
+
+#### auth
+
+Uwierzytelnij się w serwerze MCP z włączoną funkcją OAuth.
+
+```bash
+mend mcp auth [name]
+```
+
+Jeśli nie podasz nazwy serwera, zostaniesz poproszony o wybranie jednego z serwerów wymagających uwierzytelnienia.
+
+Możesz także wyświetlić listę serwerów obsługujących OAuth i ich status uwierzytelnienia.
+
+```bash
+mend mcp auth list
+```
+
+Lub skrócona wersja:
+
+```bash
+mend mcp auth ls
+```
+
+---
+
+#### logout
+
+Usuń tokeny OAuth dla serwera MCP.
+
+```bash
+mend mcp logout [name]
+```
+
+---
+
+#### debug
+
+Debuguj problemy z połączeniem OAuth dla serwera MCP.
+
+```bash
+mend mcp debug <name>
+```
+
+---
+
+### models
+
+Wyświetl listę modeli ze wszystkich skonfigurowanych dostawców.
+
+```bash
+mend models [provider]
+```
+
+Pokazuje modele dostępne do użycia w `provider/model`.
+
+Jest to identyfikator modelu, którego używasz w [konfiguracji](/docs/config).
+
+Opcjonalnie możesz podać identyfikator dostawcy, aby filtrować modele według tego dostawcy.
+
+```bash
+mend models anthropic
+```
+
+#### Flagi
+
+| Flaga                                   | Opis                                                                            |
+| --------------------------------------- | ------------------------------------------------------------------------------- |
+| <nobr><code>{"--refresh"}</code></nobr> | Odśwież pamięć podręczną modeli                                                 |
+| <nobr><code>{"--verbose"}</code></nobr> | Bardziej szczegółowe dane wyjściowe modelu (zawiera metadane, takie jak koszty) |
+
+Użyj flagi `--refresh`, aby zaktualizować listę modeli w pamięci podręcznej. Jest to przydatne, gdy dostawca dodał nowe modele, które chcesz zobaczyć w MendCode.
+
+```bash
+mend models --refresh
+```
+
+---
+
+### run
+
+Uruchom MendCode w trybie nieinteraktywnym, przekazując bezpośrednio prompt.
+
+```bash
+mend run [message..]
+```
+
+Jest to przydatne do tworzenia skryptów, automatyzacji lub gdy chcesz wysłać szybkie zapytanie bez uruchamiania TUI. Na przykład:
+
+```bash "mend run"
+mend run Explain the use of context in Go
+```
+
+Można również użyć tego z działającym `mend serve`, aby uniknąć zimnego startu serwera MCP przy każdym uruchomieniu:
+
+```bash
+# Start a headless server in one terminal
+mend serve
+
+# In another terminal, run commands that attach to it
+mend run --attach http://localhost:4096 "Explain async/await in JavaScript"
+```
+
+#### Flagi
+
+| Flaga                                    | Skrót | Opis                                                                                                  |
+| ---------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------- |
+| <nobr><code>{"--command"}</code></nobr>  |       | Polecenie do uruchomienia, reszta to argumenty                                                        |
+| <nobr><code>{"--continue"}</code></nobr> | `-c`  | Kontynuuj ostatnią sesję                                                                              |
+| <nobr><code>{"--session"}</code></nobr>  | `-s`  | Identyfikator sesji do kontynuowania                                                                  |
+| <nobr><code>{"--fork"}</code></nobr>     |       | Sklonuj sesję podczas kontynuacji (użyj z `--continue` lub `--session`)                               |
+| <nobr><code>{"--share"}</code></nobr>    |       | Udostępnij sesję po zakończeniu                                                                       |
+| <nobr><code>{"--model"}</code></nobr>    | `-m`  | Model do użycia w formacie dostawca/model                                                             |
+| <nobr><code>{"--agent"}</code></nobr>    |       | Agent do użycia                                                                                       |
+| <nobr><code>{"--file"}</code></nobr>     | `-f`  | Pliki do załączenia do wiadomości                                                                     |
+| <nobr><code>{"--format"}</code></nobr>   |       | Format wyjściowy: `default` (sformatowany) lub `json` (surowy JSON)                                   |
+| <nobr><code>{"--title"}</code></nobr>    |       | Tytuł sesji (jeśli nie podano, zostanie wygenerowany z promptu)                                       |
+| <nobr><code>{"--attach"}</code></nobr>   |       | Dołącz do działającego serwera MendCode (np. http://localhost:4096)                                   |
+| <nobr><code>{"--password"}</code></nobr> | `-p`  | Hasło uwierzytelniania podstawowego (domyślnie `OPENCODE_SERVER_PASSWORD`)                            |
+| <nobr><code>{"--username"}</code></nobr> | `-u`  | Nazwa użytkownika uwierzytelniania podstawowego (domyślnie `OPENCODE_SERVER_USERNAME` lub `mend`) |
+| <nobr><code>{"--dir"}</code></nobr>      |       | Katalog do uruchomienia lub ścieżka na zdalnym serwerze podczas dołączania                            |
+| <nobr><code>{"--variant"}</code></nobr>  |       | Wariant modelu (poziom wnioskowania specyficzny dla dostawcy)                                         |
+| <nobr><code>{"--thinking"}</code></nobr> |       | Pokaż bloki myślenia                                                                                  |
+| <nobr><code>{"--port"}</code></nobr>     |       | Port dla serwera lokalnego (domyślnie losowy)                                                         |
+
+---
+
+### serve
+
+Uruchom serwer MendCode (bez interfejsu) w celu uzyskania dostępu do API. Pełny opis API HTTP znajduje się w [dokumentacji serwera](/docs/server).
+
+```bash
+mend serve
+```
+
+Uruchamia to serwer HTTP, który zapewnia dostęp do API MendCode bez interfejsu TUI. Ustaw `OPENCODE_SERVER_PASSWORD`, aby włączyć podstawowe uwierzytelnianie HTTP (domyślna nazwa użytkownika to `mend`).
+
+#### Flagi
+
+| Flaga                                    | Opis                                       |
+| ---------------------------------------- | ------------------------------------------ |
+| <nobr><code>{"--port"}</code></nobr>     | Port do nasłuchiwania                      |
+| <nobr><code>{"--hostname"}</code></nobr> | Nazwa hosta, do której należy się powiązać |
+| <nobr><code>{"--mdns"}</code></nobr>     | Włącz wykrywanie mDNS                      |
+| <nobr><code>{"--cors"}</code></nobr>     | Dodatkowe dozwolone źródła CORS            |
+
+---
+
+### session
+
+Zarządzaj sesjami MendCode.
+
+```bash
+mend session [command]
+```
+
+---
+
+#### list
+
+Lista wszystkich sesji MendCode.
+
+```bash
+mend session list
+```
+
+##### Flagi
+
+| Flaga                                     | Skrót | Opis                                       |
+| ----------------------------------------- | ----- | ------------------------------------------ |
+| <nobr><code>{"--max-count"}</code></nobr> | `-n`  | Ogranicz do ostatnich N sesji              |
+| <nobr><code>{"--format"}</code></nobr>    |       | Format wyjściowy: tabela lub json (tabela) |
+
+---
+
+### stats
+
+Pokaż statystyki wykorzystania tokenów i sesji MendCode.
+
+```bash
+mend stats
+```
+
+#### Flagi
+
+| Flaga                                   | Opis                                                                                  |
+| --------------------------------------- | ------------------------------------------------------------------------------------- |
+| <nobr><code>{"--days"}</code></nobr>    | Pokaż statystyki z ostatnich N dni (domyślnie: cały czas)                             |
+| <nobr><code>{"--tools"}</code></nobr>   | Pokaż użycie poszczególnych narzędzi (domyślnie: wszystkie)                           |
+| <nobr><code>{"--models"}</code></nobr>  | Pokaż podział na modele (domyślnie ukryty). Podaj liczbę, aby pokazać N najczęstszych |
+| <nobr><code>{"--project"}</code></nobr> | Filtruj według projektu (domyślnie: wszystkie projekty, pusty ciąg: bieżący projekt)  |
+
+---
+
+### export
+
+Eksportuj dane sesji jako JSON.
+
+```bash
+mend export [sessionID]
+```
+
+Jeśli nie podasz identyfikatora sesji, zostaniesz poproszony o wybranie jednej z ostatnich sesji.
+
+---
+
+### import
+
+Importuj dane sesji z pliku JSON lub adresu URL udostępniania MendCode.
+
+```bash
+mend import <file>
+```
+
+Możesz importować z pliku lokalnego lub adresu URL.
+
+```bash
+mend import session.json
+mend import https://opncd.ai/s/abc123
+```
+
+---
+
+### web
+
+Uruchom serwer MendCode z interfejsem internetowym.
+
+```bash
+mend web
+```
+
+Uruchamia to serwer HTTP i udostępnia MendCode przez interfejs przeglądarkowy. Ustaw `OPENCODE_SERVER_PASSWORD`, aby włączyć podstawowe uwierzytelnianie HTTP (domyślna nazwa użytkownika to `mend`).
+
+#### Flagi
+
+| Flaga                                    | Opis                                       |
+| ---------------------------------------- | ------------------------------------------ |
+| <nobr><code>{"--port"}</code></nobr>     | Port do nasłuchiwania                      |
+| <nobr><code>{"--hostname"}</code></nobr> | Nazwa hosta, do której należy się powiązać |
+| <nobr><code>{"--mdns"}</code></nobr>     | Włącz wykrywanie mDNS                      |
+| <nobr><code>{"--cors"}</code></nobr>     | Dodatkowe dozwolone źródła CORS            |
+
+---
+
+### acp
+
+Uruchom serwer ACP (Agent Client Protocol).
+
+```bash
+mend acp
+```
+
+Uruchamia serwer ACP, który komunikuje się przez stdin/stdout przy użyciu JSON-RPC.
+
+#### Flagi
+
+| Flaga                                    | Opis                                       |
+| ---------------------------------------- | ------------------------------------------ |
+| <nobr><code>{"--cwd"}</code></nobr>      | Katalog roboczy                            |
+| <nobr><code>{"--port"}</code></nobr>     | Port do nasłuchiwania                      |
+| <nobr><code>{"--hostname"}</code></nobr> | Nazwa hosta, do której należy się powiązać |
+
+---
+
+### uninstall
+
+Odinstaluj MendCode i usuń wszystkie powiązane pliki.
+
+```bash
+mend uninstall
+```
+
+#### Flagi
+
+| Flaga                                       | Skrót | Opis                          |
+| ------------------------------------------- | ----- | ----------------------------- |
+| <nobr><code>{"--keep-config"}</code></nobr> | `-c`  | Zachowaj pliki konfiguracyjne |
+| <nobr><code>{"--keep-data"}</code></nobr>   | `-d`  | Zachowaj dane sesji i migawki |
+| <nobr><code>{"--dry-run"}</code></nobr>     |       | Pokaż co zostanie usunięte    |
+| <nobr><code>{"--force"}</code></nobr>       | `-f`  | Pomiń monity o potwierdzenie  |
+
+---
+
+### upgrade
+
+Aktualizuj MendCode do najnowszej lub określonej wersji.
+
+```bash
+mend upgrade [target]
+```
+
+Aby zaktualizować do najnowszej wersji:
+
+```bash
+mend upgrade
+```
+
+Aby zaktualizować do konkretnej wersji:
+
+```bash
+mend upgrade v0.1.48
+```
+
+#### Flagi
+
+| Flaga                                  | Skrót | Opis                                                |
+| -------------------------------------- | ----- | --------------------------------------------------- |
+| <nobr><code>{"--method"}</code></nobr> | `-m`  | Wymuś metodę instalacji: curl, npm, pnpm, bun, brew |
+
+---
+
+## Flagi globalne
+
+Interfejs CLI MendCode przyjmuje następujące flagi globalne dla każdego polecenia.
+
+| Flaga                                      | Skrót | Opis                                        |
+| ------------------------------------------ | ----- | ------------------------------------------- |
+| <nobr><code>{"--help"}</code></nobr>       | `-h`  | Wyświetl pomoc                              |
+| <nobr><code>{"--version"}</code></nobr>    | `-v`  | Wydrukuj numer wersji                       |
+| <nobr><code>{"--print-logs"}</code></nobr> |       | Drukuj logi na stderr                       |
+| <nobr><code>{"--log-level"}</code></nobr>  |       | Poziom logowania (DEBUG, INFO, WARN, ERROR) |
+
+---
+
+## Zmienne środowiskowe
+
+MendCode można skonfigurować za pomocą zmiennych środowiskowych.
+
+| Zmienna                               | Typ     | Opis                                                       |
+| ------------------------------------- | ------- | ---------------------------------------------------------- |
+| `OPENCODE_AUTO_SHARE`                 | boolean | Automatycznie udostępniaj sesje                            |
+| `OPENCODE_GIT_BASH_PATH`              | string  | Ścieżka do pliku wykonywalnego Git Bash w systemie Windows |
+| `OPENCODE_CONFIG`                     | string  | Ścieżka do pliku konfiguracyjnego                          |
+| `OPENCODE_TUI_CONFIG`                 | string  | Ścieżka do pliku konfiguracyjnego TUI                      |
+| `OPENCODE_CONFIG_DIR`                 | string  | Ścieżka do katalogu konfiguracyjnego                       |
+| `OPENCODE_CONFIG_CONTENT`             | string  | Treść konfiguracji JSON (inline)                           |
+| `OPENCODE_DISABLE_AUTOUPDATE`         | boolean | Wyłącz automatyczne sprawdzanie aktualizacji               |
+| `OPENCODE_DISABLE_PRUNE`              | boolean | Wyłącz czyszczenie starych wyników (pruning)               |
+| `OPENCODE_DISABLE_TERMINAL_TITLE`     | boolean | Wyłącz automatyczne ustawianie tytułu terminala            |
+| `OPENCODE_PERMISSION`                 | string  | Konfiguracja uprawnień w JSON (inline)                     |
+| `OPENCODE_DISABLE_DEFAULT_PLUGINS`    | boolean | Wyłącz domyślne wtyczki                                    |
+| `OPENCODE_DISABLE_LSP_DOWNLOAD`       | boolean | Wyłącz automatyczne pobieranie serwerów LSP                |
+| `OPENCODE_ENABLE_EXPERIMENTAL_MODELS` | boolean | Włącz modele eksperymentalne                               |
+| `OPENCODE_DISABLE_AUTOCOMPACT`        | boolean | Wyłącz automatyczne kompaktowanie kontekstu                |
+| `OPENCODE_DISABLE_CLAUDE_CODE`        | boolean | Wyłącz integrację z `.claude` (prompt + skills)            |
+| `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT` | boolean | Wyłącz czytanie `~/.claude/CLAUDE.md`                      |
+| `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS` | boolean | Wyłącz ładowanie `.claude/skills`                          |
+| `OPENCODE_DISABLE_MODELS_FETCH`       | boolean | Wyłącz pobieranie modeli ze źródeł zewnętrznych            |
+| `OPENCODE_FAKE_VCS`                   | string  | Fałszywy dostawca VCS do celów testowych                   |
+| `OPENCODE_CLIENT`                     | string  | Identyfikator klienta (domyślnie `cli`)                    |
+| `OPENCODE_ENABLE_EXA`                 | boolean | Włącz narzędzie wyszukiwania internetowego Exa             |
+| `OPENCODE_SERVER_PASSWORD`            | string  | Włącz uwierzytelnianie podstawowe dla `serve`/`web`        |
+| `OPENCODE_SERVER_USERNAME`            | string  | Nazwa użytkownika do autoryzacji (domyślnie `mend`)    |
+| `OPENCODE_MODELS_URL`                 | string  | Niestandardowy adres URL do pobierania konfiguracji modeli |
+
+---
+
+### Eksperymentalne
+
+Te zmienne włączają funkcje eksperymentalne, które mogą ulec zmianie lub zostać usunięte.
+
+| Zmienna                                         | Typ     | Opis                                         |
+| ----------------------------------------------- | ------- | -------------------------------------------- |
+| `OPENCODE_EXPERIMENTAL`                         | boolean | Włącz wszystkie funkcje eksperymentalne      |
+| `OPENCODE_EXPERIMENTAL_ICON_DISCOVERY`          | boolean | Włącz wykrywanie ikon                        |
+| `OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT`  | boolean | Wyłącz kopiowanie przy zaznaczaniu w TUI     |
+| `OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS` | number  | Domyślny limit czasu dla narzędzia bash w ms |
+| `OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX`        | number  | Maksymalne tokeny wyjściowe dla LLM          |
+| `OPENCODE_EXPERIMENTAL_FILEWATCHER`             | boolean | Włącz obserwatora plików dla całego katalogu |
+| `OPENCODE_EXPERIMENTAL_OXFMT`                   | boolean | Włącz formater oxfmt                         |
+| `OPENCODE_EXPERIMENTAL_LSP_TOOL`                | boolean | Włącz eksperymentalne narzędzie LSP          |
+| `OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER`     | boolean | Wyłącz obserwatora plików                    |
+| `OPENCODE_EXPERIMENTAL_EXA`                     | boolean | Włącz funkcje eksperymentalne Exa            |
+| `OPENCODE_EXPERIMENTAL_LSP_TY`                  | boolean | Włącz TY LSP dla plików python               |
+| `OPENCODE_EXPERIMENTAL_MARKDOWN`                | boolean | Włącz funkcje eksperymentalne Markdown       |
+| `OPENCODE_EXPERIMENTAL_PLAN_MODE`               | boolean | Włącz tryb planowania                        |

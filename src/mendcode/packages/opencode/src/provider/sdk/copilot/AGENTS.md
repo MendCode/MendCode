@@ -1,0 +1,1 @@
+/Users/obed/code/MendCode/.agents/vendor/opencode/packages/opencode/src/provider/sdk/copilot/README.md

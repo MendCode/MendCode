@@ -1,0 +1,138 @@
+{
+  "version": 1,
+  "copiedAt": "2026-05-06T23:40:00Z",
+  "policy": "Tracked snapshots of OSS prompt sources only. Proprietary-derived/unverified sources remain behavior-only.",
+  "sources": {
+    "codex": {
+      "label": "OpenAI Codex",
+      "sourceRepo": "https://github.com/openai/codex.git",
+      "sourceCommit": "41505bcea28255ad8849e094c8b7051fed07956a",
+      "license": "Apache-2.0",
+      "copiedAt": "2026-05-06T23:40:00Z",
+      "files": [
+        {
+          "file": "codex/gpt_5_2_prompt.md",
+          "sourcePath": "codex-rs/core/gpt_5_2_prompt.md",
+          "bytes": 21672
+        },
+        {
+          "file": "codex/gpt-5.2-codex_prompt.md",
+          "sourcePath": "codex-rs/core/gpt-5.2-codex_prompt.md",
+          "bytes": 7589
+        },
+        {
+          "file": "codex/gpt_5_1_prompt.md",
+          "sourcePath": "codex-rs/core/gpt_5_1_prompt.md",
+          "bytes": 24224
+        },
+        {
+          "file": "codex/gpt_5_codex_prompt.md",
+          "sourcePath": "codex-rs/core/gpt_5_codex_prompt.md",
+          "bytes": 6647
+        },
+        {
+          "file": "codex/prompt_with_apply_patch_instructions.md",
+          "sourcePath": "codex-rs/core/prompt_with_apply_patch_instructions.md",
+          "bytes": 24008
+        },
+        {
+          "file": "codex/review_prompt.md",
+          "sourcePath": "codex-rs/core/review_prompt.md",
+          "bytes": 6438
+        },
+        {
+          "file": "codex/hierarchical_agents_message.md",
+          "sourcePath": "codex-rs/core/hierarchical_agents_message.md",
+          "bytes": 1111
+        }
+      ]
+    },
+    "gemini": {
+      "label": "Gemini CLI",
+      "sourceRepo": "https://github.com/google-gemini/gemini-cli.git",
+      "sourceCommit": "82f6ea5b61a6321748d81a62d34c62bf7d2c9fa2",
+      "license": "Apache-2.0",
+      "copiedAt": "2026-05-06T23:40:00Z",
+      "files": [
+        {
+          "file": "gemini/system-prompt.md",
+          "sourcePath": "docs/cli/system-prompt.md",
+          "bytes": 4632
+        }
+      ]
+    },
+    "kimi": {
+      "label": "Kimi CLI",
+      "sourceRepo": "https://github.com/MoonshotAI/kimi-cli.git",
+      "sourceCommit": "17938161923c6f7550c9f291ff15ed5b1cacc1a9",
+      "license": "Apache-2.0",
+      "copiedAt": "2026-05-06T23:40:00Z",
+      "files": [
+        {
+          "file": "kimi/init.md",
+          "sourcePath": "src/kimi_cli/prompts/init.md",
+          "bytes": 1380
+        },
+        {
+          "file": "kimi/compact.md",
+          "sourcePath": "src/kimi_cli/prompts/compact.md",
+          "bytes": 1858
+        }
+      ]
+    },
+    "mistral": {
+      "label": "Mistral Vibe",
+      "sourceRepo": "https://github.com/mistralai/mistral-vibe.git",
+      "sourceCommit": "4972dd5694ed41290d9ddd7de3ead55b123f4750",
+      "license": "Apache-2.0",
+      "copiedAt": "2026-05-06T23:40:00Z",
+      "files": [
+        {
+          "file": "mistral/system_prompt.py",
+          "sourcePath": "vibe/core/system_prompt.py",
+          "bytes": 12293
+        },
+        {
+          "file": "mistral/project_context.md",
+          "sourcePath": "vibe/core/prompts/project_context.md",
+          "bytes": 196
+        },
+        {
+          "file": "mistral/explore.md",
+          "sourcePath": "vibe/core/prompts/explore.md",
+          "bytes": 1472
+        },
+        {
+          "file": "mistral/cli.md",
+          "sourcePath": "vibe/core/prompts/cli.md",
+          "bytes": 6062
+        },
+        {
+          "file": "mistral/agents_doc.md",
+          "sourcePath": "vibe/core/prompts/agents_doc.md",
+          "bytes": 674
+        },
+        {
+          "file": "mistral/tests.md",
+          "sourcePath": "vibe/core/prompts/tests.md",
+          "bytes": 52
+        },
+        {
+          "file": "mistral/lean.md",
+          "sourcePath": "vibe/core/prompts/lean.md",
+          "bytes": 8157
+        },
+        {
+          "file": "mistral/turn_summary.md",
+          "sourcePath": "vibe/core/prompts/turn_summary.md",
+          "bytes": 577
+        },
+        {
+          "file": "mistral/compact.md",
+          "sourcePath": "vibe/core/prompts/compact.md",
+          "bytes": 2248
+        }
+      ]
+    }
+  }
+}

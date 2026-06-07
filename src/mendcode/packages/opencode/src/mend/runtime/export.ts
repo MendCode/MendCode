@@ -1,0 +1,48 @@
+export function exportPlan() {
+  const safe = [
+    "mend-package.json",
+    ".mendcode/mendcode.json",
+    ".mendcode/models.yaml",
+    ".mendcode/package.json",
+    ".mendcode/focus/*.yaml",
+    ".mendcode/commands/**/*.md",
+    ".mendcode/agents/**/*.md",
+    ".mendcode/skills/**/SKILL.md",
+    ".mendcode/prompts/**/*.md",
+    ".mendcode/mcp/**/*.{json,jsonc}",
+    ".mendcode/context/project.md",
+    ".mendcode/context/summary.md",
+    ".mendcode/tui/profile.json",
+    ".mendcode/worktree/policy.yaml",
+    ".mendcode/registry.json",
+    ".mendcode/runtime-pack.json",
+    "docs/*.md",
+    ".agents/specs/mendcode-runtime-v1/*.md",
+  ]
+  const blocked = [
+    ".env*",
+    ".git",
+    ".mflow",
+    "node_modules",
+    "dist",
+    "build",
+    ".mendcode/runs",
+    ".mendcode/cache",
+    ".mendcode/generated",
+    ".mendcode/auth",
+    ".mendcode/node_modules",
+    ".mendcode/tui/backups",
+    ".mendcode/tui/proposals",
+    ".mendcode/tui/renders",
+    "provider tokens",
+    "private raw prompts",
+    "unredacted run payloads",
+  ]
+  return {
+    mode: "plan-only",
+    writesArchive: false,
+    safe,
+    blocked,
+    note: "This command only reports export policy; it does not create an archive.",
+  }
+}

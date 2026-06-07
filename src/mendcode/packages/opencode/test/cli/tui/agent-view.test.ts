@@ -1,0 +1,67 @@
+import { describe, expect, test } from "bun:test"
+import {
+  isAgentViewSessionVisible,
+  isTemporaryAgentViewDirectory,
+  type AgentViewBackgroundSession,
+} from "../../../src/cli/cmd/tui/util/agent-view"
+
+const now = 1_800_000_000_000
+
+describe("Agent View visibility", () => {
+  test("detects temp and test directories", () => {
+    expect(isTemporaryAgentViewDirectory("/private/var/folders/wk/opencode-test-123")).toBe(true)
+    expect(isTemporaryAgentViewDirectory("/tmp/mendcode-test-123")).toBe(true)
+    expect(isTemporaryAgentViewDirectory("/Users/obed/Code/MendCode")).toBe(false)
+  })
+
+  test("hides temp sessions before active state classification", () => {
+    const completed = item({
+      state: "completed",
+      directory: "/private/var/folders/wk/opencode-test-123",
+    })
+    expect(isAgentViewSessionVisible({ item: completed, now })).toBe(false)
+    expect(isAgentViewSessionVisible({ item: item({ ...completed.background, state: "working" }), now })).toBe(false)
+    expect(isAgentViewSessionVisible({ item: item({ ...completed.background, pinned: true }), now })).toBe(true)
+  })
+
+  test("keeps recent real completed sessions and hides orphan completed rows", () => {
+    expect(
+      isAgentViewSessionVisible({
+        item: item({ state: "completed", directory: "/Users/obed/Code/MendCode", updated: now - 1_000 }),
+        now,
+      }),
+    ).toBe(true)
+    expect(isAgentViewSessionVisible({ item: item({ state: "completed", session: null }), now })).toBe(false)
+  })
+})
+
+function item(
+  input: Partial<AgentViewBackgroundSession> & {
+    directory?: string
+    updated?: number
+  },
+) {
+  const background: AgentViewBackgroundSession = {
+    sessionID: input.sessionID ?? "ses_test",
+    state: input.state ?? "completed",
+    summary: input.summary,
+    error: input.error,
+    pinned: input.pinned,
+    time: {
+      created: input.time?.created ?? now - 2_000,
+      updated: input.updated ?? input.time?.updated ?? now - 1_000,
+    },
+    session:
+      input.session === null
+        ? null
+        : {
+            id: input.session?.id ?? "ses_test",
+            title: input.session?.title ?? "test session",
+            directory: input.directory ?? input.session?.directory ?? "/Users/obed/Code/MendCode",
+            path: input.session?.path,
+            agent: input.session?.agent,
+            time: input.session?.time ?? { created: now - 2_000, updated: now - 1_000 },
+          },
+  }
+  return { background }
+}

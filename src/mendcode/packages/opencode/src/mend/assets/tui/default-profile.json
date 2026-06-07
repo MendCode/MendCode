@@ -1,0 +1,154 @@
+{
+  "version": 0,
+  "profile": "default",
+  "promptChrome": {
+    "preset": "top-bottom",
+    "borderStyle": "rounded"
+  },
+  "promptStatus": {
+    "enabled": true,
+    "commandsHint": {
+      "visible": false
+    },
+    "placementByPreset": {
+      "box": "outside",
+      "top-bottom": "outside",
+      "minimal": "outside",
+      "ascii-box": "inside"
+    },
+    "left": [
+      { "type": "builtin", "value": "mode" },
+      { "type": "builtin", "value": "model" },
+      { "type": "builtin", "value": "provider" },
+      { "type": "builtin", "value": "reasoning" }
+    ],
+    "right": [
+      { "type": "builtin", "value": "context" }
+    ],
+    "separator": " · ",
+    "colors": {},
+    "scripts": {
+      "left": {
+        "enabled": false,
+        "command": "",
+        "timeoutMs": 150,
+        "refreshMs": 1000,
+        "prepend": false
+      },
+      "right": {
+        "enabled": false,
+        "command": "",
+        "timeoutMs": 150,
+        "refreshMs": 1000,
+        "prepend": false
+      }
+    },
+    "script": {
+      "enabled": false,
+      "command": "",
+      "timeoutMs": 150,
+      "refreshMs": 1000,
+      "prepend": false
+    }
+  },
+  "workingIndicator": {
+    "messages": ["Thinking..."],
+    "messageIntervalMs": 2500,
+    "visible": true,
+    "showElapsed": true,
+    "showTokenUsage": true
+  },
+  "presentation": {
+    "profile": "mendcode",
+    "reasoning": {
+      "defaultVisibility": "collapsed"
+    },
+    "activity": {
+      "style": "raw",
+      "placement": "current",
+      "maxLines": 1,
+      "collapseOnComplete": false,
+      "showModel": false,
+      "showTokens": true,
+      "showElapsed": true,
+      "showInterruptHint": true,
+      "messages": {
+        "sending": ["Generating..."],
+        "thinking": ["Thinking..."],
+        "searching": ["Searching..."],
+        "reading": ["Reading..."],
+        "running": ["Running command..."],
+        "editing": ["Editing..."],
+        "patching": ["Patching..."],
+        "installing": ["Installing..."],
+        "browsing": ["Browsing..."],
+        "uploading": ["Uploading..."],
+        "downloading": ["Downloading..."],
+        "testing": ["Testing..."],
+        "planning": ["Planning..."],
+        "retrying": ["Retrying..."],
+        "blocked": ["Waiting..."],
+        "done": ["Done"]
+      }
+    },
+    "symbols": {
+      "assistantDone": "◈"
+    }
+  },
+  "identity": {
+    "productName": "MendCode",
+    "tagline": "terminal-first coding",
+    "logoMode": "title",
+    "logoFont": "mendcode"
+  },
+  "theme": {
+    "mode": "dark",
+    "palette": "mend-dark",
+    "tokens": {
+      "accent": "#22c55e",
+      "background": "#08110d",
+      "backgroundPanel": "#0b1f16",
+      "foreground": "#ffffff",
+      "muted": "#a3a3a3",
+      "border": "#2f2f2f"
+    }
+  },
+  "layout": {
+    "density": "comfortable",
+    "spacing": "normal",
+    "borders": "rounded",
+    "width": 88,
+    "zones": {
+      "sidebar": { "enabled": false, "compact": false, "width": 0 },
+      "header": { "enabled": true },
+      "footer": { "enabled": true },
+      "session": { "transcript": "main", "metadata": "footer", "stickyUserHeader": true },
+      "prompt": { "position": "bottom", "rightSurface": false }
+    }
+  },
+  "widgets": {
+    "enabled": ["focus", "budget", "worktree", "models", "status", "prompt-mode"],
+    "order": ["focus", "budget", "worktree", "models", "status", "prompt-mode"],
+    "config": {
+      "focus": { "label": "Behavior", "value": "Codex", "surface": "footer" },
+      "budget": { "label": "Budget", "value": "guarded", "surface": "footer" },
+      "worktree": { "label": "Worktree", "value": "dry-run", "surface": "footer" },
+      "models": { "label": "Provider", "value": "auto", "surface": "footer" },
+      "status": { "label": "Status", "value": "donor guarded", "surface": "header" },
+      "prompt-mode": { "label": "Prompt", "value": "focus", "surface": "footer" }
+    }
+  },
+  "surfaces": {
+    "model": { "visible": true, "format": "provider/model" },
+    "provider": { "visible": true, "format": "provider" },
+    "status": { "visible": true, "mode": "guarded-runtime" },
+    "homeLogo": { "size": "default" },
+    "homeWelcome": { "mode": "centered", "rightPanel": "actions" }
+  },
+  "rollback": {
+    "enabled": true,
+    "lastAppliedProposal": null,
+    "previousProfilePath": null,
+    "updatedAt": null
+  }
+}

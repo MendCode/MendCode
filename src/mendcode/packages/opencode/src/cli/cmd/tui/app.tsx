@@ -1,0 +1,2496 @@
+import { render, TimeToFirstDraw, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
+import * as Clipboard from "@tui/util/clipboard"
+import * as Selection from "@tui/util/selection"
+import { createCliRenderer, MouseButton, type CliRendererConfig } from "@opentui/core"
+import { RouteProvider, useRoute } from "@tui/context/route"
+import {
+  Switch,
+  Match,
+  createEffect,
+  createMemo,
+  ErrorBoundary,
+  createSignal,
+  onMount,
+  onCleanup,
+  batch,
+  Show,
+  on,
+} from "solid-js"
+import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
+import { Flag } from "@mendcode/core/flag/flag"
+import semver from "semver"
+import { DialogProvider, useDialog } from "@tui/ui/dialog"
+import { DialogProvider as DialogProviderList } from "@tui/component/dialog-provider"
+import { ErrorComponent } from "@tui/component/error-component"
+import { PluginRouteMissing } from "@tui/component/plugin-route-missing"
+import { ProjectProvider, useProject } from "@tui/context/project"
+import { EditorContextProvider } from "@tui/context/editor"
+import { useEvent } from "@tui/context/event"
+import { SDKProvider, useSDK } from "@tui/context/sdk"
+import { StartupLoading } from "@tui/component/startup-loading"
+import { SyncProvider, useSync } from "@tui/context/sync"
+import { SyncProviderV2 } from "@tui/context/sync-v2"
+import { LocalProvider, useLocal } from "@tui/context/local"
+import { DialogModel } from "@tui/component/dialog-model"
+import { useConnected } from "@tui/component/use-connected"
+import { DialogMcp } from "@tui/component/dialog-mcp"
+import { DialogStatus } from "@tui/component/dialog-status"
+import { DialogThemeList } from "@tui/component/dialog-theme-list"
+import { DialogHelp } from "./ui/dialog-help"
+import { CommandProvider, useCommandDialog } from "@tui/component/dialog-command"
+import { DialogAgent } from "@tui/component/dialog-agent"
+import { DialogSessionList } from "@tui/component/dialog-session-list"
+import { DialogConsoleOrg } from "@tui/component/dialog-console-org"
+import { KeybindProvider, useKeybind } from "@tui/context/keybind"
+import { ThemeProvider, useTheme } from "@tui/context/theme"
+import { Home } from "@tui/routes/home"
+import { Session } from "@tui/routes/session"
+import { Setup } from "@tui/routes/setup"
+import { PromptHistoryProvider } from "./component/prompt/history"
+import { FrecencyProvider } from "./component/prompt/frecency"
+import { PromptStashProvider } from "./component/prompt/stash"
+import { DialogAlert } from "./ui/dialog-alert"
+import { DialogConfirm } from "./ui/dialog-confirm"
+import { DialogPrompt } from "./ui/dialog-prompt"
+import { DialogSelect, type DialogSelectOption } from "./ui/dialog-select"
+import { ToastProvider, useToast } from "./ui/toast"
+import { ExitProvider, useExit } from "./context/exit"
+import { Session as SessionApi } from "@/session/session"
+import { TuiEvent } from "./event"
+import { KVProvider, useKV } from "./context/kv"
+import { Provider } from "@/provider/provider"
+import { ArgsProvider, useArgs, type Args } from "./context/args"
+import open from "open"
+import { PromptRefProvider, usePromptRef } from "./context/prompt"
+import { TuiConfigProvider, useTuiConfig } from "./context/tui-config"
+import { TuiConfig } from "@/cli/cmd/tui/config/tui"
+import { createTuiApi } from "@/cli/cmd/tui/plugin/api"
+import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
+import type { RouteMap } from "@/cli/cmd/tui/plugin/api"
+import { FormatError, FormatUnknownError } from "@/cli/error"
+
+import type { EventSource } from "./context/sdk"
+import { DialogVariant } from "./component/dialog-variant"
+import { MendTuiProfileProvider, useMendTuiProfile } from "./context/mend"
+import type { MendTuiProfile } from "@/mend/profile"
+import { pathToFileURL } from "url"
+import { mendStatusSummary, integrationStatus } from "@/mend/commands/status"
+import { mendTuiCapabilityVersion, visibleCustomizationCapabilities } from "@/mend/tui/capabilities"
+import { applyRuntimePack, formatRuntimePackPlan, runtimePackPlan } from "@/mend/runtime/pack"
+import { cyclePromptMode, writePromptMode, type MendPromptMode } from "@/mend/prompt/mode"
+import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
+import { setupReadiness } from "@/mend/runtime/readiness"
+import { isSetupComplete, readSetupState } from "@/mend/setup/state"
+import { runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistryStatus } from "@/mend/runtime/registry"
+import { writeGlobalMemoryConfig } from "@/mend/memory/config"
+import { readPermissionsConfig } from "@/mend/config/permissions"
+import {
+  appendMemoryEntry,
+  deleteMemoryEntry,
+  memoryStatus,
+  readMemoryEntries,
+  updateMemoryEntry,
+  type MemoryEntry,
+} from "@/mend/memory/store"
+import {
+  applyMemoryProposal,
+  listMemoryProposals,
+  rejectMemoryProposal,
+  updateMemoryProposal,
+  type MemoryProposal,
+} from "@/mend/memory/proposals"
+import type { MendPromptChromePreset } from "@/mend/tui/prompt-chrome"
+import { defaultPromptStatus, type MendPromptStatusBuiltin, type MendPromptStatusItem } from "@/mend/tui/prompt-status"
+import { resolveTuiPresentation, type MendPresentationProfile } from "@/mend/tui/presentation"
+
+function rendererConfig(_config: TuiConfig.Info): CliRendererConfig {
+  const mouseEnabled = !Flag.OPENCODE_DISABLE_MOUSE && (_config.mouse ?? true)
+
+  return {
+    externalOutputMode: "passthrough",
+    targetFps: 60,
+    gatherStats: false,
+    exitOnCtrlC: false,
+    useKittyKeyboard: {},
+    autoFocus: false,
+    openConsoleOnError: false,
+    useMouse: mouseEnabled,
+    consoleOptions: {
+      keyBindings: [{ name: "y", ctrl: true, action: "copy-selection" }],
+      onCopySelection: (text) => {
+        Clipboard.copy(text).catch((error) => {
+          console.error(`Failed to copy console selection to clipboard: ${error}`)
+        })
+      },
+    },
+  }
+}
+
+function errorMessage(error: unknown) {
+  const formatted = FormatError(error)
+  if (formatted !== undefined) return formatted
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "data" in error &&
+    typeof error.data === "object" &&
+    error.data !== null &&
+    "message" in error.data &&
+    typeof error.data.message === "string"
+  ) {
+    return error.data.message
+  }
+  return FormatUnknownError(error)
+}
+
+type MemoryManagerOption = DialogSelectOption<string> & {
+  previewTitle?: string
+  previewBody?: string
+  previewMeta?: string
+}
+
+function MemoryManagerPreview(props: { option: MemoryManagerOption }) {
+  const { theme } = useTheme()
+
+  return (
+    <box
+      borderColor={theme.border}
+      borderStyle="single"
+      paddingLeft={2}
+      paddingRight={2}
+      paddingTop={1}
+      paddingBottom={1}
+      flexDirection="column"
+      backgroundColor={theme.backgroundPanel}
+    >
+      <text fg={theme.primary}>Preview</text>
+      <box flexDirection="column" gap={1} paddingTop={1}>
+        <text fg={theme.text} wrapMode="word">
+          {props.option.previewTitle || props.option.title}
+        </text>
+        <Show when={props.option.previewMeta}>
+          <text fg={theme.textMuted} wrapMode="word">
+            {props.option.previewMeta}
+          </text>
+        </Show>
+        <text fg={theme.textMuted} wrapMode="word">
+          {props.option.previewBody || props.option.description || "No extra details."}
+        </text>
+      </box>
+    </box>
+  )
+}
+
+export function tui(input: {
+  url: string
+  args: Args
+  config: TuiConfig.Info
+  mendProfile: {
+    profile: MendTuiProfile
+    root: string
+    defaultPath: string
+    activePath: string
+    config?: unknown
+  }
+  onSnapshot?: () => Promise<string[]>
+  directory?: string
+  fetch?: typeof fetch
+  headers?: RequestInit["headers"]
+  events?: EventSource
+}) {
+  // promise to prevent immediate exit
+  // oxlint-disable-next-line no-async-promise-executor -- intentional: async executor used for sequential setup before resolve
+  return new Promise<void>(async (resolve) => {
+    const unguard = win32InstallCtrlCGuard()
+    win32DisableProcessedInput()
+
+    const onExit = async () => {
+      unguard?.()
+      resolve()
+    }
+
+    const onBeforeExit = async () => {
+      await TuiPluginRuntime.dispose()
+    }
+
+    const renderer = await createCliRenderer(rendererConfig(input.config))
+    // Prewarm palette before ThemeProvider mounts so `system` theme avoids a first-paint fallback flash.
+    void renderer.getPalette({ size: 16 }).catch(() => undefined)
+    const mode = (await renderer.waitForThemeMode(1000)) ?? "dark"
+
+    await render(() => {
+      return (
+        <ErrorBoundary
+          fallback={(error, reset) => (
+            <ErrorComponent error={error} reset={reset} onBeforeExit={onBeforeExit} onExit={onExit} mode={mode} />
+          )}
+        >
+          <ArgsProvider {...input.args}>
+            <ExitProvider onBeforeExit={onBeforeExit} onExit={onExit}>
+              <KVProvider>
+                <ToastProvider>
+                  <RouteProvider
+                    initialRoute={
+                      input.args.continue
+                        ? {
+                            type: "session",
+                            sessionID: "dummy",
+                          }
+                        : input.args.initialMessage
+                          ? {
+                              type: "home",
+                              prompt: { input: input.args.initialMessage, parts: [] },
+                            }
+                          : undefined
+                    }
+                  >
+                    <TuiConfigProvider config={input.config}>
+                      <MendTuiProfileProvider {...input.mendProfile} config={input.config}>
+                        <SDKProvider
+                          url={input.url}
+                          directory={input.directory}
+                          fetch={input.fetch}
+                          headers={input.headers}
+                          events={input.events}
+                        >
+                          <ProjectProvider>
+                            <SyncProvider>
+                              <SyncProviderV2>
+                                <ThemeProvider mode={mode}>
+                                  <LocalProvider>
+                                    <KeybindProvider>
+                                      <PromptStashProvider>
+                                        <DialogProvider>
+                                          <CommandProvider>
+                                            <FrecencyProvider>
+                                              <PromptHistoryProvider>
+                                                <PromptRefProvider>
+                                                  <EditorContextProvider>
+                                                    <App onSnapshot={input.onSnapshot} />
+                                                  </EditorContextProvider>
+                                                </PromptRefProvider>
+                                              </PromptHistoryProvider>
+                                            </FrecencyProvider>
+                                          </CommandProvider>
+                                        </DialogProvider>
+                                      </PromptStashProvider>
+                                    </KeybindProvider>
+                                  </LocalProvider>
+                                </ThemeProvider>
+                              </SyncProviderV2>
+                            </SyncProvider>
+                          </ProjectProvider>
+                        </SDKProvider>
+                      </MendTuiProfileProvider>
+                    </TuiConfigProvider>
+                  </RouteProvider>
+                </ToastProvider>
+              </KVProvider>
+            </ExitProvider>
+          </ArgsProvider>
+        </ErrorBoundary>
+      )
+    }, renderer)
+  })
+}
+
+function App(props: { onSnapshot?: () => Promise<string[]> }) {
+  const tuiConfig = useTuiConfig()
+  const route = useRoute()
+  const dimensions = useTerminalDimensions()
+  const renderer = useRenderer()
+  const dialog = useDialog()
+  const local = useLocal()
+  const kv = useKV()
+  const command = useCommandDialog()
+  const keybind = useKeybind()
+  const event = useEvent()
+  const mend = useMendTuiProfile()
+  const project = useProject()
+  const productName = () => mend.profile.identity.productName
+  const normalizeProductName = (value: string) => value.trim().replace(/\s+/g, " ") || "MendCode"
+  const docsPath = () => pathToFileURL(`${mend.root}/docs/tui-personalization.md`).href
+  const sdk = useSDK()
+  const toast = useToast()
+  const themeState = useTheme()
+  const { theme, mode, setMode, locked, lock, unlock } = themeState
+  const sync = useSync()
+  const exit = useExit()
+  const promptRef = usePromptRef()
+  const routes: RouteMap = new Map()
+  const [routeRev, setRouteRev] = createSignal(0)
+  const routeView = (name: string) => {
+    routeRev()
+    return routes.get(name)?.at(-1)?.render
+  }
+
+  const api = createTuiApi({
+    command,
+    tuiConfig,
+    dialog,
+    keybind,
+    kv,
+    route,
+    routes,
+    bump: () => setRouteRev((x) => x + 1),
+    event,
+    sdk,
+    sync,
+    theme: themeState,
+    toast,
+    renderer,
+  })
+  const [ready, setReady] = createSignal(false)
+  TuiPluginRuntime.init({
+    api,
+    config: tuiConfig,
+  })
+    .catch((error) => {
+      console.error("Failed to load TUI plugins", error)
+    })
+    .finally(() => {
+      setReady(true)
+    })
+
+  const permissionConfigSummary = createMemo(() => {
+    const permission = sync.data.config.permission
+    if (permission === undefined) return "No explicit project permission config loaded. Runtime defaults still apply."
+    if (typeof permission === "string") return `permission: ${permission}`
+    return JSON.stringify(permission, null, 2)
+  })
+
+  useKeyboard((evt) => {
+    if (evt.defaultPrevented || dialog.stack.length > 0) return
+    if (!evt.ctrl || evt.name !== "s") return
+    evt.preventDefault()
+    evt.stopPropagation()
+    command.trigger("session.list")
+  })
+
+  async function showGlobalPermissionStatus() {
+    const permissions = await readPermissionsConfig()
+    await DialogAlert.show(
+      dialog,
+      "Permission mode",
+      [
+        `Global default: ${permissions.mode === "full_access" ? "Full Access" : permissions.mode === "smart" ? "Smart Approval" : "Require approval"}`,
+        `Smart reviewer role: ${permissions.reviewerRole}`,
+        "",
+        "Interactive Full Access and Smart Approval are available from a session command palette.",
+        "Open a session, press Ctrl+P, then search for `permission`.",
+        "",
+        "Config permission:",
+        permissionConfigSummary(),
+        "",
+        "--dangerously-skip-permissions only applies to `mend run`; it does not toggle an already-running TUI session.",
+      ].join("\n"),
+    )
+  }
+
+  useKeyboard((evt) => {
+    if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
+    const sel = renderer.getSelection()
+    if (!sel) return
+
+    // Windows Terminal-like behavior:
+    // - Ctrl+C copies and dismisses selection
+    // - Esc dismisses selection
+    // - Most other key input dismisses selection and is passed through
+    if (evt.ctrl && evt.name === "c") {
+      if (!Selection.copy(renderer, toast)) {
+        renderer.clearSelection()
+        return
+      }
+
+      evt.preventDefault()
+      evt.stopPropagation()
+      return
+    }
+
+    if (evt.name === "escape") {
+      renderer.clearSelection()
+      evt.preventDefault()
+      evt.stopPropagation()
+      return
+    }
+
+    const focus = renderer.currentFocusedRenderable
+    if (focus?.hasSelection() && sel.selectedRenderables.includes(focus)) {
+      return
+    }
+
+    renderer.clearSelection()
+  })
+
+  // Wire up console copy-to-clipboard via opentui's onCopySelection callback
+  renderer.console.onCopySelection = async (text: string) => {
+    if (!text || text.length === 0) return
+
+    await Clipboard.copy(text)
+      .then(() => toast.show({ message: "Copied to clipboard", variant: "info" }))
+      .catch(toast.error)
+
+    renderer.clearSelection()
+  }
+  const [terminalTitleEnabled, setTerminalTitleEnabled] = createSignal(kv.get("terminal_title_enabled", true))
+  const [pasteSummaryEnabled, setPasteSummaryEnabled] = createSignal(
+    kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary),
+  )
+
+  // Update terminal window title based on current route and session
+  createEffect(() => {
+    if (!terminalTitleEnabled() || Flag.OPENCODE_DISABLE_TERMINAL_TITLE) return
+
+    if (route.data.type === "home") {
+      renderer.setTerminalTitle(productName())
+      return
+    }
+
+    if (route.data.type === "session") {
+      const session = sync.session.get(route.data.sessionID)
+      if (!session || SessionApi.isDefaultTitle(session.title)) {
+        renderer.setTerminalTitle(productName())
+        return
+      }
+
+      const title = session.title.length > 40 ? session.title.slice(0, 37) + "..." : session.title
+      renderer.setTerminalTitle(`${productName()} | ${title}`)
+      return
+    }
+
+    if (route.data.type === "plugin") {
+      renderer.setTerminalTitle(`${productName()} | ${route.data.id}`)
+      return
+    }
+
+    if (route.data.type === "setup") {
+      renderer.setTerminalTitle(`${productName()} | Setup`)
+    }
+  })
+
+  const args = useArgs()
+  onMount(() => {
+    batch(() => {
+      if (args.agent) local.agent.set(args.agent)
+      if (args.model) {
+        const { providerID, modelID } = Provider.parseModel(args.model)
+        if (!providerID || !modelID)
+          return toast.show({
+            variant: "warning",
+            message: `Invalid model format: ${args.model}`,
+            duration: 3000,
+          })
+        local.model.set({ providerID, modelID }, { recent: true })
+      }
+      if (args.sessionID && !args.fork) {
+        route.navigate({
+          type: "session",
+          sessionID: args.sessionID,
+        })
+      }
+    })
+  })
+
+  let continued = false
+  createEffect(() => {
+    // When using -c, session list is loaded in blocking phase, so we can navigate at "partial"
+    if (continued || sync.status === "loading" || !args.continue) return
+    const match = sync.data.session
+      .toSorted((a, b) => b.time.updated - a.time.updated)
+      .find((x) => x.parentID === undefined)?.id
+    if (match) {
+      continued = true
+      if (args.fork) {
+        void sdk.client.session.fork({ sessionID: match }).then((result) => {
+          if (result.data?.id) {
+            route.navigate({ type: "session", sessionID: result.data.id })
+          } else {
+            toast.show({ message: "Failed to fork session", variant: "error" })
+          }
+        })
+      } else {
+        route.navigate({ type: "session", sessionID: match })
+      }
+    }
+  })
+
+  // Handle --session with --fork: wait for sync to be fully complete before forking
+  // (session list loads in non-blocking phase for --session, so we must wait for "complete"
+  // to avoid a race where reconcile overwrites the newly forked session)
+  let forked = false
+  createEffect(() => {
+    if (forked || sync.status !== "complete" || !args.sessionID || !args.fork) return
+    forked = true
+    void sdk.client.session.fork({ sessionID: args.sessionID }).then((result) => {
+      if (result.data?.id) {
+        route.navigate({ type: "session", sessionID: result.data.id })
+      } else {
+        toast.show({ message: "Failed to fork session", variant: "error" })
+      }
+    })
+  })
+
+  createEffect(
+    on(
+      () => sync.status === "complete" && sync.data.provider.length === 0,
+      (isEmpty, wasEmpty) => {
+        // only trigger when we transition into an empty-provider state
+        if (!isEmpty || wasEmpty) return
+        dialog.replace(() => <DialogProviderList />)
+      },
+    ),
+  )
+
+  createEffect(() => {
+    if (route.data.type !== "setup") return
+    command.keybinds(false)
+    onCleanup(() => {
+      command.keybinds(true)
+    })
+  })
+
+  let setupRedirectChecked = false
+  createEffect(() => {
+    if (setupRedirectChecked || !ready() || sync.status === "loading") return
+    if (route.data.type !== "home") return
+    setupRedirectChecked = true
+    void Promise.all([readSetupState(mend.root), setupReadiness(mend.root)])
+      .then(([state, readiness]) => {
+        if (isSetupComplete(state)) return
+        if (readiness.aiReady) return
+        route.navigate({ type: "setup", step: state.currentStep, minimal: Boolean(state.dismissedAt) })
+      })
+      .catch(toast.error)
+  })
+
+  const connected = useConnected()
+  const mendCategory = "System"
+  const memoryRoot = () => project.instance.path().directory || project.instance.path().worktree || mend.root
+  const showMendStatus = async (title = "MendCode Status") => {
+    await DialogAlert.show(dialog, title, await mendStatusSummary(mend.root))
+  }
+  const showMemoryStatus = async () => {
+    const root = memoryRoot()
+    const status = await memoryStatus(root)
+    await DialogAlert.show(
+      dialog,
+      "MendCode Memory",
+      [
+        `Status: ${status.enabled ? "enabled" : "disabled"}`,
+        `Input memory: ${status.input ? "on" : "off"} · adds relevant saved memories to each request`,
+        `Memory learning: ${status.output ? "on" : "off"} · creates approval-gated proposals after chats`,
+        `Applies to: minimal, focus, full, and dev-js modes`,
+        "",
+        `Entries: global ${status.entries.global.count} · project ${status.entries.project.count}`,
+        `Proposals: pending ${status.proposals.pending} · applied ${status.proposals.applied} · rejected ${status.proposals.rejected}`,
+        "",
+        `Memory context limit: up to ${status.maxPromptTokens} tokens · max ${status.maxEntries} entries per request`,
+        `Extractor: ${status.extractorRole} · output model calls ${status.outputCallsProviders ? "possible" : "off"}`,
+        `Consolidation: ${status.consolidatorRole} · no background spend`,
+        `Project path: ${status.paths.projectEntries}`,
+        `Global path: ${status.paths.globalEntries}`,
+        "",
+        `Safety: retrieval is local · generated proposals use the configured extractor model only when learning is on · no secret reads/prints`,
+      ].join("\n"),
+    )
+  }
+  const showPromptModes = () => {
+    const modes: Array<{ mode: MendPromptMode; title: string; description: string }> = [
+      { mode: "minimal", title: "Minimal", description: "Small MendCode boundary only." },
+      { mode: "focus", title: "Focus", description: "Provider-aware harness behavior." },
+      { mode: "full", title: "Full", description: "Focus plus MendCode runtime context." },
+      {
+        mode: "dev-js",
+        title: "Dev JS",
+        description: "JavaScript mode: pnpm-first, vanilla-or-existing-framework, no unapproved installs.",
+      },
+    ]
+    dialog.replace(() => (
+      <DialogSelect
+        title="MendCode Prompt Modes"
+        current={mend.promptMode as MendPromptMode}
+        options={modes.map((item) => ({
+          title: item.title,
+          value: item.mode,
+          description: item.description,
+          category: "Prompt Mode",
+          onSelect: async () => {
+            const result = await writePromptMode(item.mode, mend.root)
+            await mend.reload()
+            toast.show({
+              variant: "info",
+              message: `Prompt mode is now ${result.mode}.`,
+              duration: 4000,
+            })
+            dialog.clear()
+          },
+        }))}
+      />
+    ))
+  }
+  const updatePromptChrome = async (
+    update: (
+      profile: Awaited<ReturnType<typeof readActiveTuiProfile>>,
+    ) => Awaited<ReturnType<typeof readActiveTuiProfile>>,
+    message: string,
+  ) => {
+    const current = await readActiveTuiProfile(mend.root)
+    const next = update(current)
+    await writeActiveTuiProfile(next, mend.root)
+    await mend.reload()
+    toast.show({ variant: "info", message, duration: 4000 })
+    dialog.clear()
+  }
+  const showPromptChromePresets = () => {
+    const currentPreset = mend.profile.promptChrome.preset
+    const options: Array<{ title: string; value: MendPromptChromePreset; description: string }> = [
+      {
+        title: "Full box",
+        value: "box",
+        description: "Full bordered prompt with outer status line below.",
+      },
+      {
+        title: "Top + bottom only",
+        value: "top-bottom",
+        description: "Horizontal rules only, plus lead prompt string on the first line.",
+      },
+      {
+        title: "Minimal panel",
+        value: "minimal",
+        description: "Background panel only, with outer status line and configurable lead prompt string.",
+      },
+      {
+        title: "ASCII terminal",
+        value: "ascii-box",
+        description: "ASCII box prompt with mode/model metadata kept inside the prompt.",
+      },
+    ]
+    dialog.replace(() => (
+      <DialogSelect
+        title="Prompt chrome"
+        current={currentPreset}
+        options={options.map((item) => ({
+          title: item.title,
+          value: item.value,
+          category: "System",
+          description: item.description,
+          onSelect: () =>
+            void updatePromptChrome(
+              (profile) => ({
+                ...profile,
+                promptChrome: { ...profile.promptChrome, preset: item.value },
+              }),
+              `Prompt chrome is now ${item.value}.`,
+            ),
+        }))}
+      />
+    ))
+  }
+  const showPromptLeadString = async () => {
+    const currentLead = mend.profile.promptChrome.glyphs?.leadText ?? "❭"
+    const value = await DialogPrompt.show(dialog, "Prompt lead string", {
+      value: currentLead,
+      placeholder: "❭",
+    })
+    if (value === undefined || value === null) return
+    await updatePromptChrome(
+      (profile) => ({
+        ...profile,
+        promptChrome: {
+          ...profile.promptChrome,
+          glyphs: {
+            ...(profile.promptChrome.glyphs || {}),
+            leadText: value,
+          },
+        },
+      }),
+      `Prompt lead string updated to ${value || "blank"}.`,
+    )
+  }
+  const showHomeIdentityMode = () => {
+    const current = mend.profile.identity.logoMode || "title"
+    dialog.replace(() => (
+      <DialogSelect
+        title="Home identity"
+        current={current}
+        options={[
+          {
+            title: "ASCII title",
+            value: "title",
+            category: "Home",
+            description: "Use the generated MendCode/title ASCII on the home screen.",
+            onSelect: () =>
+              void updatePromptChrome(
+                (profile) => ({
+                  ...profile,
+                  identity: { ...profile.identity, logoMode: "title" },
+                }),
+                "Home identity now uses the ASCII title.",
+              ),
+          },
+          {
+            title: "ASCII mascot",
+            value: "mascot",
+            category: "Home",
+            description: "Use the MendBug mascot on home and as compact activity feedback.",
+            onSelect: () =>
+              void updatePromptChrome(
+                (profile) => ({
+                  ...profile,
+                  identity: { ...profile.identity, logoMode: "mascot" },
+                }),
+                "Home identity now uses the MendBug mascot.",
+              ),
+          },
+        ]}
+      />
+    ))
+  }
+  const showHomeTitleText = async () => {
+    const value = await DialogPrompt.show(dialog, "Home title text", {
+      value: mend.profile.identity.productName,
+      placeholder: "MendCode",
+      description: () => (
+        <text fg={theme.textMuted}>Used for terminal title, footer labels, and generated ASCII title mode.</text>
+      ),
+    })
+    if (value === undefined || value === null) return
+    await updatePromptChrome(
+      (profile) => ({
+        ...profile,
+        identity: { ...profile.identity, productName: normalizeProductName(value) },
+      }),
+      `Home title updated to ${normalizeProductName(value)}.`,
+    )
+  }
+  const showHomeLogoFont = () => {
+    const current =
+      mend.profile.identity.logoFont === "classic" || mend.profile.identity.logoFont === "opencode"
+        ? "mendcode"
+        : mend.profile.identity.logoFont || "mendcode"
+    const options: Array<{ title: string; value: "mendcode" | "small" | "standard" | "shadow"; description: string }> =
+      [
+        { title: "MendCode", value: "mendcode", description: "Block tops, flat bases, compact rows." },
+        { title: "Small", value: "small", description: "Compact figlet style." },
+        { title: "Standard", value: "standard", description: "Readable slanted ASCII banner." },
+        { title: "Shadow", value: "shadow", description: "ANSI shadow style with tighter letter spacing." },
+      ]
+    dialog.replace(() => (
+      <DialogSelect
+        title="Home title font"
+        current={current}
+        options={options.map((item) => ({
+          title: item.title,
+          value: item.value,
+          category: "Home",
+          description: item.description,
+          onSelect: () =>
+            void updatePromptChrome(
+              (profile) => ({
+                ...profile,
+                identity: { ...profile.identity, logoFont: item.value },
+              }),
+              `Home title font is now ${item.value}.`,
+            ),
+        }))}
+      />
+    ))
+  }
+  const showHomeLogoSize = () => {
+    const current = mend.profile.surfaces.homeLogo?.size || "default"
+    const options: Array<{ title: string; value: "compact" | "default" | "large"; description: string }> = [
+      { title: "Compact", value: "compact", description: "Small MendBug for tighter home screens." },
+      { title: "Default", value: "default", description: "Larger MendBug default identity." },
+      { title: "Large", value: "large", description: "Big MendBug for spacious terminal starts." },
+    ]
+    dialog.replace(() => (
+      <DialogSelect
+        title="Home ASCII size"
+        current={current}
+        options={options.map((item) => ({
+          title: item.title,
+          value: item.value,
+          category: "Home",
+          description: item.description,
+          onSelect: () =>
+            void updatePromptChrome(
+              (profile) => ({
+                ...profile,
+                surfaces: {
+                  ...profile.surfaces,
+                  homeLogo: { ...(profile.surfaces.homeLogo || {}), size: item.value },
+                },
+              }),
+              `Home ASCII size is now ${item.value}.`,
+            ),
+        }))}
+      />
+    ))
+  }
+  const showHomeWelcomeMode = () => {
+    const current = mend.profile.surfaces.homeWelcome?.mode || "centered"
+    const options: Array<{ title: string; value: "centered" | "split"; description: string }> = [
+      { title: "Centered", value: "centered", description: "Current centered logo with actions underneath." },
+      { title: "Split", value: "split", description: "Claude-style welcome: identity top-left, actions top-right." },
+    ]
+    dialog.replace(() => (
+      <DialogSelect
+        title="Home welcome mode"
+        current={current}
+        options={options.map((item) => ({
+          title: item.title,
+          value: item.value,
+          category: "Home",
+          description: item.description,
+          onSelect: () =>
+            void updatePromptChrome(
+              (profile) => ({
+                ...profile,
+                surfaces: {
+                  ...profile.surfaces,
+                  homeWelcome: { ...(profile.surfaces.homeWelcome || {}), mode: item.value },
+                },
+              }),
+              `Home welcome mode is now ${item.value}.`,
+            ),
+        }))}
+      />
+    ))
+  }
+  const showHomeSplitPanel = () => {
+    const current = mend.profile.surfaces.homeWelcome?.rightPanel || "actions"
+    const options: Array<{ title: string; value: "actions" | "agentManager"; description: string }> = [
+      { title: "Actions", value: "actions", description: "Show Resume, Open commands, and Quit in the split panel." },
+      { title: "Agent View", value: "agentManager", description: "Show global sessions grouped by input, working, and completed." },
+    ]
+    dialog.replace(() => (
+      <DialogSelect
+        title="Home split panel"
+        current={current}
+        options={options.map((item) => ({
+          title: item.title,
+          value: item.value,
+          category: "Home",
+          description: item.description,
+          onSelect: () =>
+            void updatePromptChrome(
+              (profile) => ({
+                ...profile,
+                surfaces: {
+                  ...profile.surfaces,
+                  homeWelcome: { ...(profile.surfaces.homeWelcome || {}), rightPanel: item.value },
+                },
+              }),
+              `Home split panel is now ${item.title}.`,
+            ),
+        }))}
+      />
+    ))
+  }
+  const showPresentationProfile = () => {
+    const current = mend.profile.presentation.profile
+    const options: Array<{ title: string; value: MendPresentationProfile; description: string }> = [
+      {
+        title: "Raw",
+        value: "raw",
+        description: "Full session history: reasoning, tool cards, diffs, and classic metadata.",
+      },
+      {
+        title: "Minimal",
+        value: "minimal",
+        description: "Compact session history: collapsed reasoning and one-line tool traces.",
+      },
+      {
+        title: "MendCode",
+        value: "mendcode",
+        description: "MendCode session history: compact simple tools, rich diffs, and MendCode symbols.",
+      },
+    ]
+    dialog.replace(() => (
+      <DialogSelect
+        title="Chat presentation"
+        current={current}
+        options={options.map((item) => ({
+          title: item.title,
+          value: item.value,
+          category: "MendCode",
+          description: item.description,
+          onSelect: () =>
+            void updatePromptChrome(
+              (profile) => ({
+                ...profile,
+                presentation: resolveTuiPresentation({ ...profile.presentation, profile: item.value }),
+              }),
+              `Chat presentation is now ${item.value}.`,
+            ),
+        }))}
+      />
+    ))
+  }
+  const showPromptStatusPlacement = () => {
+    const preset = mend.profile.promptChrome.preset
+    const currentPlacement =
+      mend.profile.promptStatus.placementByPreset?.[preset] || (preset === "ascii-box" ? "inside" : "outside")
+    dialog.replace(() => (
+      <DialogSelect
+        title={`Prompt status placement (${preset})`}
+        current={currentPlacement}
+        options={[
+          {
+            title: "Outside prompt",
+            value: "outside",
+            category: "System",
+            description: "Render mode/model/context in the bottom status row under the prompt.",
+            onSelect: () =>
+              void updatePromptChrome(
+                (profile) => ({
+                  ...profile,
+                  promptStatus: {
+                    ...profile.promptStatus,
+                    placementByPreset: {
+                      ...(profile.promptStatus.placementByPreset || {}),
+                      [preset]: "outside",
+                    },
+                  },
+                }),
+                `Prompt status for ${preset} now renders outside the prompt.`,
+              ),
+          },
+          {
+            title: "Inside prompt",
+            value: "inside",
+            category: "System",
+            description: "Render mode/model/context inside the prompt box itself.",
+            onSelect: () =>
+              void updatePromptChrome(
+                (profile) => ({
+                  ...profile,
+                  promptStatus: {
+                    ...profile.promptStatus,
+                    placementByPreset: {
+                      ...(profile.promptStatus.placementByPreset || {}),
+                      [preset]: "inside",
+                    },
+                  },
+                }),
+                `Prompt status for ${preset} now renders inside the prompt.`,
+              ),
+          },
+        ]}
+      />
+    ))
+  }
+  const showPromptStatusScript = async (side: "left" | "right") => {
+    const currentCommand = mend.profile.promptStatus.scripts?.[side]?.command || ""
+    const value = await DialogPrompt.show(dialog, `Prompt status ${side} script`, {
+      value: currentCommand,
+      placeholder: "./.mendcode/tui/prompt-status.sh",
+    })
+    if (value === undefined || value === null) return
+    await updatePromptChrome(
+      (profile) => ({
+        ...profile,
+        promptStatus: {
+          ...profile.promptStatus,
+          scripts: {
+            ...(profile.promptStatus.scripts || {}),
+            [side]: {
+              ...(profile.promptStatus.scripts?.[side] || {}),
+              enabled: Boolean(value.trim()),
+              command: value,
+            },
+          },
+          script: {
+            ...(profile.promptStatus.script || {}),
+            enabled:
+              side === "left" &&
+              !(profile.promptStatus.scripts?.right?.enabled && profile.promptStatus.scripts?.right?.command?.trim())
+                ? Boolean(value.trim())
+                : profile.promptStatus.script?.enabled,
+            command:
+              side === "left" &&
+              !(profile.promptStatus.scripts?.right?.enabled && profile.promptStatus.scripts?.right?.command?.trim())
+                ? value
+                : profile.promptStatus.script?.command || "",
+          },
+        },
+      }),
+      value.trim() ? `Prompt status ${side} script updated.` : `Prompt status ${side} script disabled.`,
+    )
+  }
+  const PROMPT_STATUS_BUILTINS: MendPromptStatusBuiltin[] = [
+    "mode",
+    "model",
+    "provider",
+    "reasoning",
+    "variant",
+    "context",
+    "permissionMode",
+    "commandsHint",
+    "agentsHint",
+  ]
+  const PROMPT_STATUS_BUILTIN_META: Record<
+    MendPromptStatusBuiltin,
+    {
+      title: string
+      description: string
+    }
+  > = {
+    mode: {
+      title: "Mode",
+      description: "Current prompt mode or active agent label, like Build, Spec, or Shell.",
+    },
+    model: {
+      title: "Model",
+      description: "Resolved model name for the current session.",
+    },
+    provider: {
+      title: "Provider",
+      description: "Resolved provider label for the current model.",
+    },
+    reasoning: {
+      title: "Reasoning",
+      description: "Current model effort variant, when the selected model exposes one.",
+    },
+    variant: {
+      title: "Variant",
+      description: "Alias of the current model variant when you want it explicitly in the row.",
+    },
+    context: {
+      title: "Context",
+      description: "Context usage summary, for example 81.1K (31%).",
+    },
+    permissionMode: {
+      title: "Permission mode",
+      description: "Current interactive permission mode and pending permission prompt count.",
+    },
+    commandsHint: {
+      title: "Commands hint",
+      description: "Shortcut hint for opening the commands palette.",
+    },
+    agentsHint: {
+      title: "Agents hint",
+      description: "Shortcut hint for cycling or opening agents.",
+    },
+  }
+  const defaultPromptStatusSide = (side: "left" | "right") => defaultPromptStatus()[side].map((item) => item.value)
+  const parsePromptStatusBuiltins = (raw: string): MendPromptStatusItem[] => {
+    return raw
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .filter((item): item is MendPromptStatusBuiltin =>
+        PROMPT_STATUS_BUILTINS.includes(item as MendPromptStatusBuiltin),
+      )
+      .map((value) => ({ type: "builtin" as const, value }))
+  }
+  const writePromptStatusBuiltins = async (
+    side: "left" | "right",
+    values: MendPromptStatusBuiltin[],
+    message: string,
+    options?: { reopen?: boolean },
+  ) => {
+    const current = await readActiveTuiProfile(mend.root)
+    const next = values.map((value) => ({ type: "builtin" as const, value }))
+    await writeActiveTuiProfile(
+      {
+        ...current,
+        promptStatus: {
+          ...current.promptStatus,
+          [side]: next,
+        },
+      },
+      mend.root,
+    )
+    await mend.reload()
+    toast.show({ variant: "info", message, duration: 4000 })
+    if (options?.reopen) {
+      showPromptStatusBuiltins(side)
+      return
+    }
+    dialog.clear()
+  }
+  const showPromptStatusBuiltinsManual = async (side: "left" | "right") => {
+    const current = mend.profile.promptStatus[side].map((item) => item.value).join(", ")
+    const value = await DialogPrompt.show(dialog, `Prompt status ${side} builtins`, {
+      value: current,
+      placeholder: "mode, model, provider, reasoning",
+    })
+    if (value === undefined || value === null) return
+    const parsed = parsePromptStatusBuiltins(value)
+    await writePromptStatusBuiltins(
+      side,
+      parsed.map((item) => item.value),
+      `Prompt status ${side} builtins updated.`,
+    )
+  }
+  const showPromptStatusBuiltinActions = (side: "left" | "right", builtin: MendPromptStatusBuiltin) => {
+    const current = mend.profile.promptStatus[side].map((item) => item.value)
+    const index = current.indexOf(builtin)
+    const meta = PROMPT_STATUS_BUILTIN_META[builtin]
+    if (index < 0) {
+      void writePromptStatusBuiltins(side, [...current, builtin], `${meta.title} added to prompt status ${side}.`, {
+        reopen: true,
+      })
+      return
+    }
+    dialog.replace(() => (
+      <DialogSelect
+        title={`${meta.title} (${side})`}
+        current="move-up"
+        options={[
+          {
+            title: "Move earlier",
+            value: "move-up",
+            category: "Actions",
+            description: "Shift this field one slot toward the start of the row.",
+            disabled: index === 0,
+            onSelect: () => {
+              const next = [...current]
+              ;[next[index - 1], next[index]] = [next[index], next[index - 1]]
+              void writePromptStatusBuiltins(side, next, `${meta.title} moved earlier in prompt status ${side}.`, {
+                reopen: true,
+              })
+            },
+          },
+          {
+            title: "Move later",
+            value: "move-down",
+            category: "Actions",
+            description: "Shift this field one slot toward the end of the row.",
+            disabled: index === current.length - 1,
+            onSelect: () => {
+              const next = [...current]
+              ;[next[index], next[index + 1]] = [next[index + 1], next[index]]
+              void writePromptStatusBuiltins(side, next, `${meta.title} moved later in prompt status ${side}.`, {
+                reopen: true,
+              })
+            },
+          },
+          {
+            title: "Move to start",
+            value: "move-start",
+            category: "Actions",
+            description: "Place this field at the very beginning of the row.",
+            disabled: index === 0,
+            onSelect: () => {
+              const next = [builtin, ...current.filter((item) => item !== builtin)]
+              void writePromptStatusBuiltins(side, next, `${meta.title} moved to the start of prompt status ${side}.`, {
+                reopen: true,
+              })
+            },
+          },
+          {
+            title: "Move to end",
+            value: "move-end",
+            category: "Actions",
+            description: "Place this field at the very end of the row.",
+            disabled: index === current.length - 1,
+            onSelect: () => {
+              const next = [...current.filter((item) => item !== builtin), builtin]
+              void writePromptStatusBuiltins(side, next, `${meta.title} moved to the end of prompt status ${side}.`, {
+                reopen: true,
+              })
+            },
+          },
+          {
+            title: "Remove field",
+            value: "remove",
+            category: "Actions",
+            description: "Hide this field from the selected side.",
+            onSelect: () => {
+              const next = current.filter((item) => item !== builtin)
+              void writePromptStatusBuiltins(side, next, `${meta.title} removed from prompt status ${side}.`, {
+                reopen: true,
+              })
+            },
+          },
+          {
+            title: "Back",
+            value: "back",
+            category: "Navigation",
+            description: "Return to the builtins editor.",
+            onSelect: () => showPromptStatusBuiltins(side),
+          },
+        ]}
+      />
+    ))
+  }
+  const showPromptStatusBuiltins = (side: "left" | "right") => {
+    const current = mend.profile.promptStatus[side].map((item) => item.value)
+    dialog.replace(() => (
+      <DialogSelect
+        title={`Prompt status ${side} builtins`}
+        options={[
+          {
+            title: "Edit as text",
+            value: "__manual__",
+            category: "Actions",
+            description: "Fallback editor for typing a raw comma-separated list.",
+            onSelect: () => void showPromptStatusBuiltinsManual(side),
+          },
+          {
+            title: "Reset to default",
+            value: "__reset__",
+            category: "Actions",
+            description: `Restore the default ${side} row for the current CLI look.`,
+            onSelect: () =>
+              void writePromptStatusBuiltins(
+                side,
+                defaultPromptStatusSide(side),
+                `Prompt status ${side} reset to defaults.`,
+                {
+                  reopen: true,
+                },
+              ),
+          },
+          {
+            title: "Clear all fields",
+            value: "__clear__",
+            category: "Actions",
+            description: "Leave this side empty until you add fields back.",
+            disabled: current.length === 0,
+            onSelect: () =>
+              void writePromptStatusBuiltins(side, [], `Prompt status ${side} cleared.`, { reopen: true }),
+          },
+          ...PROMPT_STATUS_BUILTINS.map((builtin) => {
+            const activeIndex = current.indexOf(builtin)
+            const active = activeIndex >= 0
+            const meta = PROMPT_STATUS_BUILTIN_META[builtin]
+            return {
+              title: `${active ? "[x]" : "[ ]"} ${meta.title}`,
+              value: builtin,
+              category: active ? `Enabled · #${activeIndex + 1}` : "Available",
+              description: active
+                ? `${meta.description} Select to reorder or remove it.`
+                : `${meta.description} Select to add it to the ${side} row.`,
+              onSelect: () => {
+                if (!active) {
+                  void writePromptStatusBuiltins(
+                    side,
+                    [...current, builtin],
+                    `${meta.title} added to prompt status ${side}.`,
+                    {
+                      reopen: true,
+                    },
+                  )
+                  return
+                }
+                showPromptStatusBuiltinActions(side, builtin)
+              },
+            }
+          }),
+        ]}
+      />
+    ))
+  }
+  const showPromptStatusSeparator = async () => {
+    const value = await DialogPrompt.show(dialog, "Prompt status separator", {
+      value: mend.profile.promptStatus.separator || " · ",
+      placeholder: " · ",
+    })
+    if (value === undefined || value === null) return
+    await updatePromptChrome(
+      (profile) => ({
+        ...profile,
+        promptStatus: {
+          ...profile.promptStatus,
+          separator: value,
+        },
+      }),
+      "Prompt status separator updated.",
+    )
+  }
+  const showRegistryMarketplace = async () => {
+    const result = await runtimeRegistrySearch("", "local", mend.root)
+    dialog.replace(() => (
+      <DialogSelect
+        title="MendCode Marketplace"
+        options={result.results.map((pack) => ({
+          title: pack.title || pack.id,
+          value: pack.id,
+          category: "channel" in pack && pack.channel ? `Official / ${pack.channel}` : "Official",
+          description: pack.description || pack.id,
+          footer: pack.version,
+          onSelect: async () => {
+            const detail = await runtimeRegistryShow(pack.id, "local", mend.root)
+            await DialogAlert.show(dialog, pack.title || pack.id, JSON.stringify(detail.pack, null, 2))
+          },
+        }))}
+      />
+    ))
+  }
+  const showMendAssets = async () => {
+    const plan = await runtimePackPlan("preview", mend.root)
+    await DialogAlert.show(
+      dialog,
+      "MendCode Assets",
+      [
+        `Skills: ${plan.pack.skills.length}`,
+        `Slash commands: ${plan.pack.commands.length}`,
+        `Agents: ${plan.pack.agents.length}`,
+        `Prompt templates: ${plan.pack.prompts.templates.length}`,
+        `MCP files: ${plan.pack.mcp.files.length}`,
+        `Prompt mode: ${plan.pack.prompts.mode}`,
+      ].join("\n"),
+    )
+  }
+  const showSlashCommands = async () => {
+    const slashes = command.slashes()
+    await DialogAlert.show(
+      dialog,
+      "MendCode Slash Commands",
+      slashes.map((item) => `${item.display}  ${item.description || ""}`).join("\n") || "No slash commands available.",
+    )
+  }
+  const showCustomizationCapabilities = async () => {
+    await DialogAlert.show(
+      dialog,
+      "MendCode customization capabilities",
+      [
+        `Contract version: ${mendTuiCapabilityVersion()}`,
+        "",
+        ...visibleCustomizationCapabilities().map(
+          (item) =>
+            `${item.label}\n- id: ${item.id}\n- tier: ${item.tier}\n- trust: ${item.trust}\n- runtime: ${item.runtimeIDs.join(", ")}\n- note: ${item.docs}`,
+        ),
+      ].join("\n\n"),
+    )
+  }
+  const editMemoryEntry = async (entry: MemoryEntry) => {
+    const text = await DialogPrompt.show(dialog, `Edit ${entry.scope} memory`, {
+      value: entry.text,
+      placeholder: "Memory text",
+    })
+    if (!text?.trim()) return
+    await updateMemoryEntry(entry.scope, entry.id, { text }, memoryRoot())
+    toast.show({ variant: "success", message: "Memory updated.", duration: 3000 })
+    await showMemoryManager(entry.scope)
+  }
+  const deleteMemoryEntryFromDialog = async (entry: MemoryEntry) => {
+    const ok = await DialogConfirm.show(
+      dialog,
+      "Delete Memory",
+      `Delete this ${entry.scope} memory?\n\n${entry.text.slice(0, 240)}`,
+      "keep",
+    )
+    if (!ok) return
+    await deleteMemoryEntry(entry.scope, entry.id, memoryRoot())
+    toast.show({ variant: "success", message: "Memory deleted.", duration: 3000 })
+    await showMemoryManager(entry.scope)
+  }
+  const showMemoryEntryActions = (entry: MemoryEntry) => {
+    dialog.replace(() => (
+      <DialogSelect
+        title="Memory Entry"
+        options={[
+          {
+            title: "[edit] Edit memory",
+            value: "edit",
+            category: entry.scope,
+            description: entry.text,
+            onSelect: () => void editMemoryEntry(entry),
+          },
+          {
+            title: "[delete] Delete memory",
+            value: "delete",
+            category: entry.scope,
+            description: "Remove this memory entry.",
+            onSelect: () => void deleteMemoryEntryFromDialog(entry),
+          },
+          {
+            title: "[info] View details",
+            value: "json",
+            category: entry.scope,
+            description: "Show full entry metadata.",
+            onSelect: async () => {
+              await DialogAlert.show(dialog, "Memory Entry", JSON.stringify(entry, null, 2))
+            },
+          },
+        ]}
+      />
+    ))
+  }
+  const addMemoryEntryFromDialog = async (scope: "global" | "project") => {
+    const text = await DialogPrompt.show(dialog, `Add ${scope} memory`, { placeholder: "Memory text" })
+    if (!text?.trim()) return
+    await appendMemoryEntry({ scope, text, source: "tui-memory-manager" }, memoryRoot())
+    toast.show({ variant: "success", message: `${scope} memory added.`, duration: 3000 })
+    await showMemoryManager(scope)
+  }
+  const editMemoryProposalFromDialog = async (proposal: MemoryProposal) => {
+    const text = await DialogPrompt.show(dialog, "Edit memory proposal", {
+      value: proposal.text,
+      placeholder: "Memory text",
+    })
+    if (!text?.trim()) return
+    await updateMemoryProposal(proposal.id, { text }, memoryRoot())
+    toast.show({ variant: "success", message: "Memory proposal updated.", duration: 3000 })
+    await showMemoryManager("proposals")
+  }
+  const changeMemoryProposalScope = async (proposal: MemoryProposal, scope: "global" | "project") => {
+    if (proposal.scope === scope) return
+    await updateMemoryProposal(proposal.id, { scope }, memoryRoot())
+    toast.show({ variant: "success", message: `Memory proposal moved to ${scope}.`, duration: 3000 })
+    await showMemoryManager("proposals")
+  }
+  const showMemoryProposalActions = (proposal: MemoryProposal) => {
+    dialog.replace(() => (
+      <DialogSelect
+        title="Memory Proposal"
+        options={[
+          {
+            title: "[edit] Edit before saving",
+            value: "edit",
+            category: proposal.scope,
+            description: "Adjust the proposal text before applying it.",
+            disabled: proposal.status !== "pending",
+            onSelect: () => void editMemoryProposalFromDialog(proposal),
+          },
+          {
+            title: proposal.scope === "global" ? "[scope] Move to project" : "[scope] Move to global",
+            value: "scope",
+            category: proposal.scope,
+            description: "Change where this memory will live before applying it.",
+            disabled: proposal.status !== "pending",
+            onSelect: () =>
+              void changeMemoryProposalScope(proposal, proposal.scope === "global" ? "project" : "global"),
+          },
+          {
+            title: "[apply] Save as memory",
+            value: "apply",
+            category: proposal.scope,
+            description: proposal.text,
+            disabled: proposal.status !== "pending",
+            onSelect: async () => {
+              await applyMemoryProposal(proposal.id, memoryRoot())
+              toast.show({ variant: "success", message: "Memory proposal applied.", duration: 3000 })
+              await showMemoryManager("proposals")
+            },
+          },
+          {
+            title: "[reject] Dismiss proposal",
+            value: "reject",
+            category: proposal.scope,
+            description: proposal.text,
+            disabled: proposal.status !== "pending",
+            onSelect: async () => {
+              await rejectMemoryProposal(proposal.id, memoryRoot())
+              toast.show({ variant: "success", message: "Memory proposal rejected.", duration: 3000 })
+              await showMemoryManager("proposals")
+            },
+          },
+          {
+            title: "[info] View details",
+            value: "json",
+            category: proposal.status,
+            description: proposal.reason || "Show full proposal metadata.",
+            onSelect: async () => {
+              await DialogAlert.show(dialog, "Memory Proposal", JSON.stringify(proposal, null, 2))
+            },
+          },
+        ]}
+      />
+    ))
+  }
+  const applyMemoryProposalsBulk = async (proposals: MemoryProposal[], label = "pending") => {
+    const pending = proposals.filter((proposal) => proposal.status === "pending")
+    if (!pending.length) return
+    const ok = await DialogConfirm.show(
+      dialog,
+      "Apply Memory Proposals",
+      `Save ${pending.length} ${label} memory proposal${pending.length === 1 ? "" : "s"} as memory?`,
+      "cancel",
+    )
+    if (!ok) return
+    let applied = 0
+    for (const proposal of pending) {
+      await applyMemoryProposal(proposal.id, memoryRoot())
+      applied++
+    }
+    toast.show({
+      variant: "success",
+      message: `${applied} memory proposal${applied === 1 ? "" : "s"} applied.`,
+      duration: 3000,
+    })
+    await showMemoryManager("proposals")
+  }
+  const rejectMemoryProposalsBulk = async (proposals: MemoryProposal[], label = "pending") => {
+    const pending = proposals.filter((proposal) => proposal.status === "pending")
+    if (!pending.length) return
+    const ok = await DialogConfirm.show(
+      dialog,
+      "Reject Memory Proposals",
+      `Reject ${pending.length} ${label} memory proposal${pending.length === 1 ? "" : "s"}?`,
+      "cancel",
+    )
+    if (!ok) return
+    let rejected = 0
+    for (const proposal of pending) {
+      await rejectMemoryProposal(proposal.id, memoryRoot())
+      rejected++
+    }
+    toast.show({
+      variant: "success",
+      message: `${rejected} memory proposal${rejected === 1 ? "" : "s"} rejected.`,
+      duration: 3000,
+    })
+    await showMemoryManager("proposals")
+  }
+  const showMemoryManager = async (tab: "global" | "project" | "proposals" = "proposals") => {
+    const [globalEntries, projectEntries, proposals] = await Promise.all([
+      readMemoryEntries("global", memoryRoot()),
+      readMemoryEntries("project", memoryRoot()),
+      listMemoryProposals(memoryRoot(), "pending"),
+    ])
+    const projectProposals = proposals.filter((proposal) => proposal.scope === "project")
+    const globalProposals = proposals.filter((proposal) => proposal.scope === "global")
+    const bulkOptions: MemoryManagerOption[] = [
+      ...(proposals.length
+        ? [
+            {
+              title: `[apply] Apply all pending (${proposals.length})`,
+              value: "bulk-apply-all",
+              category: "Bulk actions",
+              description: "Save every pending proposal as memory.",
+              previewTitle: "Apply all pending proposals",
+              previewBody: `Save all ${proposals.length} pending memory proposal${proposals.length === 1 ? "" : "s"}. Applied proposals disappear from this review queue.`,
+              previewMeta: "bulk · all scopes",
+              onSelect: () => void applyMemoryProposalsBulk(proposals, "pending"),
+            },
+            {
+              title: `[reject] Reject all pending (${proposals.length})`,
+              value: "bulk-reject-all",
+              category: "Bulk actions",
+              description: "Dismiss every pending proposal.",
+              previewTitle: "Reject all pending proposals",
+              previewBody: `Reject all ${proposals.length} pending memory proposal${proposals.length === 1 ? "" : "s"}. Rejected proposals disappear from this review queue.`,
+              previewMeta: "bulk · all scopes",
+              onSelect: () => void rejectMemoryProposalsBulk(proposals, "pending"),
+            },
+          ]
+        : []),
+      ...(projectProposals.length
+        ? [
+            {
+              title: `[apply] Apply project pending (${projectProposals.length})`,
+              value: "bulk-apply-project",
+              category: "Bulk actions",
+              description: "Save every project-scoped pending proposal.",
+              previewTitle: "Apply project proposals",
+              previewBody: `Save all ${projectProposals.length} project memory proposal${projectProposals.length === 1 ? "" : "s"}.`,
+              previewMeta: "bulk · project",
+              onSelect: () => void applyMemoryProposalsBulk(projectProposals, "project"),
+            },
+            {
+              title: `[reject] Reject project pending (${projectProposals.length})`,
+              value: "bulk-reject-project",
+              category: "Bulk actions",
+              description: "Dismiss every project-scoped pending proposal.",
+              previewTitle: "Reject project proposals",
+              previewBody: `Reject all ${projectProposals.length} project memory proposal${projectProposals.length === 1 ? "" : "s"}.`,
+              previewMeta: "bulk · project",
+              onSelect: () => void rejectMemoryProposalsBulk(projectProposals, "project"),
+            },
+          ]
+        : []),
+      ...(globalProposals.length
+        ? [
+            {
+              title: `[reject] Reject global pending (${globalProposals.length})`,
+              value: "bulk-reject-global",
+              category: "Bulk actions",
+              description: "Dismiss every global-scoped pending proposal.",
+              previewTitle: "Reject global proposals",
+              previewBody: `Reject all ${globalProposals.length} global memory proposal${globalProposals.length === 1 ? "" : "s"}. Useful when project facts were proposed too broadly.`,
+              previewMeta: "bulk · global",
+              onSelect: () => void rejectMemoryProposalsBulk(globalProposals, "global"),
+            },
+          ]
+        : []),
+    ]
+    const proposalOptions: MemoryManagerOption[] = proposals.map((proposal) => ({
+      title: `[${proposal.status}] ${proposal.text.slice(0, 68)}`,
+      value: proposal.id,
+      category: "Proposals",
+      description: `${proposal.scope} · ${proposal.sensitivity}`,
+      footer: proposal.createdAt.slice(0, 10),
+      previewTitle: proposal.status === "pending" ? "Pending memory proposal" : "Memory proposal",
+      previewBody: [proposal.text, proposal.reason ? `Why: ${proposal.reason}` : ""].filter(Boolean).join("\n\n"),
+      previewMeta: `${proposal.scope} · ${proposal.sensitivity} · confidence ${Math.round((proposal.confidence ?? 0) * 100)}% · durability ${Math.round((proposal.durability ?? 0) * 100)}% · change risk ${Math.round((proposal.changeRisk ?? 0) * 100)}%`,
+      onSelect: () => showMemoryProposalActions(proposal),
+    }))
+    const manualActionOptions: MemoryManagerOption[] = [
+      {
+        title: "[+] Add global memory",
+        value: "add-global",
+        category: "Manual actions",
+        description: "Create a memory that follows you across projects.",
+        previewTitle: "Add global memory",
+        previewBody:
+          "Create a cross-project memory entry. Use this for durable preferences, workflow rules, and decisions that should follow you between repos.",
+        previewMeta: "scope: global",
+        onSelect: () => void addMemoryEntryFromDialog("global"),
+      },
+      {
+        title: "[+] Add project memory",
+        value: "add-project",
+        category: "Manual actions",
+        description: "Create a memory only for this repo.",
+        previewTitle: "Add project memory",
+        previewBody:
+          "Create a memory only for the current repo. Use this for repo-specific constraints, architecture decisions, or warnings that should not leak globally.",
+        previewMeta: "scope: project",
+        onSelect: () => void addMemoryEntryFromDialog("project"),
+      },
+    ]
+    const savedMemoryOptions: MemoryManagerOption[] = [
+      ...globalEntries.map((entry) => ({
+        title: `[global] ${entry.text.slice(0, 70)}`,
+        value: entry.id,
+        category: "Saved memories",
+        description: entry.tags.length ? entry.tags.join(", ") : entry.source,
+        footer: entry.updatedAt.slice(0, 10),
+        previewTitle: "Global memory",
+        previewBody: entry.text,
+        previewMeta: `${entry.scope} · ${entry.sensitivity} · ${entry.updatedAt.slice(0, 10)}`,
+        onSelect: () => showMemoryEntryActions(entry),
+      })),
+      ...projectEntries.map((entry) => ({
+        title: `[project] ${entry.text.slice(0, 69)}`,
+        value: entry.id,
+        category: "Saved memories",
+        description: entry.tags.length ? entry.tags.join(", ") : entry.source,
+        footer: entry.updatedAt.slice(0, 10),
+        previewTitle: "Project memory",
+        previewBody: entry.text,
+        previewMeta: `${entry.scope} · ${entry.sensitivity} · ${entry.updatedAt.slice(0, 10)}`,
+        onSelect: () => showMemoryEntryActions(entry),
+      })),
+    ]
+    const options: MemoryManagerOption[] = [
+      ...bulkOptions,
+      ...proposalOptions,
+      ...manualActionOptions,
+      ...savedMemoryOptions,
+    ]
+    const current =
+      tab === "global"
+        ? globalEntries[0]?.id
+        : tab === "project"
+          ? projectEntries[0]?.id
+          : (bulkOptions[0]?.value ?? proposals[0]?.id)
+    dialog.replace(() => (
+      <DialogSelect
+        title="Memory Manager"
+        current={current}
+        options={options}
+        preview={(option) => <MemoryManagerPreview option={option as MemoryManagerOption} />}
+      />
+    ))
+    dialog.setSize("xlarge")
+  }
+  command.register(() => [
+    {
+      title: "Permission mode",
+      value: "mendcode.permission.status",
+      category: mendCategory,
+      description: "Show current permission config and where to enable Smart Approval or Full Access",
+      enabled: route.data.type !== "session",
+      onSelect: () => void showGlobalPermissionStatus(),
+    },
+    {
+      title: "Status",
+      value: "mendcode.status",
+      category: mendCategory,
+      suggested: true,
+      onSelect: () => void showMendStatus(),
+    },
+    {
+      title: "Setup",
+      value: "mendcode.setup",
+      category: mendCategory,
+      slash: { name: "setup", aliases: ["configure", "onboarding"] },
+      onSelect: () => {
+        dialog.clear()
+        route.navigate({ type: "setup" })
+      },
+    },
+    {
+      title: "Configure Provider",
+      value: "mendcode.ai.status",
+      category: mendCategory,
+      onSelect: () => {
+        dialog.clear()
+        route.navigate({ type: "setup", step: "provider" })
+      },
+    },
+    {
+      title: "Configure Models",
+      value: "mendcode.models.status",
+      category: mendCategory,
+      onSelect: () => {
+        dialog.clear()
+        route.navigate({ type: "setup", step: "models" })
+      },
+    },
+    {
+      title: "Configure Budget",
+      value: "mendcode.budget.status",
+      category: mendCategory,
+      onSelect: () => {
+        dialog.clear()
+        route.navigate({ type: "setup", step: "budget" })
+      },
+    },
+    {
+      title: "Prompt modes",
+      value: "mendcode.prompt.mode",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "prompt-mode", aliases: ["prompt", "modes"] },
+      onSelect: showPromptModes,
+    },
+    {
+      title: "Prompt chrome",
+      value: "mendcode.prompt.chrome",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "prompt-chrome", aliases: ["chatinput", "prompt-style", "tui-prompt"] },
+      onSelect: showPromptChromePresets,
+    },
+    {
+      title: "Chat presentation",
+      value: "mendcode.presentation.profile",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "presentation", aliases: ["chat-presentation", "render-mode"] },
+      onSelect: showPresentationProfile,
+    },
+    {
+      title: "Prompt lead string",
+      value: "mendcode.prompt.lead",
+      category: mendCategory,
+      onSelect: () => void showPromptLeadString(),
+    },
+    {
+      title: "Prompt status placement",
+      value: "mendcode.prompt.status.placement",
+      category: mendCategory,
+      onSelect: showPromptStatusPlacement,
+    },
+    {
+      title: "Prompt status left script",
+      value: "mendcode.prompt.status.script.left",
+      category: mendCategory,
+      onSelect: () => void showPromptStatusScript("left"),
+    },
+    {
+      title: "Prompt status right script",
+      value: "mendcode.prompt.status.script.right",
+      category: mendCategory,
+      onSelect: () => void showPromptStatusScript("right"),
+    },
+    {
+      title: "Prompt status left builtins",
+      value: "mendcode.prompt.status.left",
+      category: mendCategory,
+      onSelect: () => void showPromptStatusBuiltins("left"),
+    },
+    {
+      title: "Prompt status right builtins",
+      value: "mendcode.prompt.status.right",
+      category: mendCategory,
+      onSelect: () => void showPromptStatusBuiltins("right"),
+    },
+    {
+      title: "Prompt status separator",
+      value: "mendcode.prompt.status.separator",
+      category: mendCategory,
+      onSelect: () => void showPromptStatusSeparator(),
+    },
+    {
+      title: "Home identity",
+      value: "mendcode.home.identity",
+      category: mendCategory,
+      suggested: true,
+      onSelect: showHomeIdentityMode,
+    },
+    {
+      title: "Home title text",
+      value: "mendcode.home.title",
+      category: mendCategory,
+      onSelect: () => void showHomeTitleText(),
+    },
+    {
+      title: "Home title font",
+      value: "mendcode.home.font",
+      category: mendCategory,
+      onSelect: showHomeLogoFont,
+    },
+    {
+      title: "Home ASCII size",
+      value: "mendcode.home.logo.size",
+      category: mendCategory,
+      onSelect: showHomeLogoSize,
+    },
+    {
+      title: "Home welcome mode",
+      value: "mendcode.home.welcome",
+      category: mendCategory,
+      suggested: true,
+      onSelect: showHomeWelcomeMode,
+    },
+    {
+      title: "Home split panel",
+      value: "mendcode.home.split.panel",
+      category: mendCategory,
+      suggested: true,
+      onSelect: showHomeSplitPanel,
+    },
+    {
+      title: "Cycle prompt mode",
+      value: "mendcode.prompt.mode.cycle",
+      category: mendCategory,
+      onSelect: async () => {
+        const result = await cyclePromptMode(mend.root)
+        await mend.reload()
+        toast.show({ variant: "info", message: `Prompt mode is now ${result.mode}.`, duration: 4000 })
+      },
+    },
+    {
+      title: "Customization capabilities",
+      value: "mendcode.customization.capabilities",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "customization", aliases: ["capabilities", "tui-customization"] },
+      onSelect: () => void showCustomizationCapabilities(),
+    },
+    {
+      title: "Marketplace",
+      value: "mendcode.marketplace",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "marketplace", aliases: ["registry", "packs"] },
+      onSelect: () => void showRegistryMarketplace(),
+    },
+    {
+      title: "Runtime registry status",
+      value: "mendcode.registry.status",
+      category: mendCategory,
+      onSelect: async () => {
+        await DialogAlert.show(
+          dialog,
+          "MendCode Runtime Registry",
+          JSON.stringify(await runtimeRegistryStatus(mend.root), null, 2),
+        )
+      },
+    },
+    {
+      title: "Memory status",
+      value: "mendcode.memory.status",
+      category: mendCategory,
+      slash: { name: "memory", aliases: ["mem"] },
+      onSelect: () => void showMemoryStatus(),
+    },
+    {
+      title: "Memory Manager",
+      value: "mendcode.memory.manager",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "memory-manager", aliases: ["memories"] },
+      onSelect: () => void showMemoryManager(),
+    },
+    {
+      title: "Enable memory input",
+      value: "mendcode.memory.input.enable",
+      category: mendCategory,
+      onSelect: async (dialog) => {
+        await writeGlobalMemoryConfig({ enabled: true, use: true, generate: false }, memoryRoot())
+        await mend.reload()
+        toast.show({
+          variant: "success",
+          message: "Memory input enabled. Output proposals remain off.",
+          duration: 4000,
+        })
+        dialog.clear()
+      },
+    },
+    {
+      title: "Enable memory input and output",
+      value: "mendcode.memory.io.enable",
+      category: mendCategory,
+      onSelect: async (dialog) => {
+        await writeGlobalMemoryConfig(
+          { enabled: true, use: true, generate: true, requireApprovalForGenerated: true },
+          memoryRoot(),
+        )
+        await mend.reload()
+        toast.show({ variant: "success", message: "Memory input and approval-gated output enabled.", duration: 4000 })
+        dialog.clear()
+      },
+    },
+    {
+      title: "Disable memory",
+      value: "mendcode.memory.disable",
+      category: mendCategory,
+      onSelect: async (dialog) => {
+        await writeGlobalMemoryConfig({ enabled: false, use: false, generate: false }, memoryRoot())
+        await mend.reload()
+        toast.show({ variant: "success", message: "Memory disabled.", duration: 4000 })
+        dialog.clear()
+      },
+    },
+    {
+      title: "Skills, commands, prompt assets",
+      value: "mendcode.assets",
+      category: mendCategory,
+      slash: { name: "mend-assets", aliases: ["commands"] },
+      onSelect: () => void showMendAssets(),
+    },
+    {
+      title: "Slash commands",
+      value: "mendcode.slash.commands",
+      category: mendCategory,
+      onSelect: () => void showSlashCommands(),
+    },
+    {
+      title: "Configure runtime",
+      value: "mendcode.runtime.configure",
+      category: mendCategory,
+      onSelect: async () => {
+        const preview = formatRuntimePackPlan(await runtimePackPlan("preview", mend.root))
+        const confirmed = await DialogConfirm.show(
+          dialog,
+          "MendCode Runtime",
+          `${preview}\n\nApply this local runtime pack now?`,
+        )
+        if (!confirmed) return
+        const result = await applyRuntimePack(mend.root)
+        toast.show({
+          variant: "success",
+          message: `Runtime pack applied to ${result.packPath}`,
+          duration: 5000,
+        })
+      },
+    },
+    {
+      title: "TSM status",
+      value: "mendcode.tsm.status",
+      category: mendCategory,
+      onSelect: async () => {
+        await DialogAlert.show(dialog, "MendCode TSM status", await integrationStatus("tsm", mend.root))
+      },
+    },
+    {
+      title: "Mflow status",
+      value: "mendcode.mflow.status",
+      category: mendCategory,
+      onSelect: async () => {
+        await DialogAlert.show(dialog, "MendCode Mflow status", await integrationStatus("mflow", mend.root))
+      },
+    },
+    {
+      title: "Switch session",
+      value: "session.list",
+      keybind: "session_list",
+      category: "Session",
+      suggested: sync.data.session.length > 0,
+      slash: {
+        name: "sessions",
+        aliases: ["resume", "continue"],
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogSessionList />)
+      },
+    },
+    {
+      title: "New session",
+      suggested: route.data.type === "session",
+      value: "session.new",
+      keybind: "session_new",
+      category: "Session",
+      slash: {
+        name: "new",
+        aliases: ["clear"],
+      },
+      onSelect: () => {
+        route.navigate({
+          type: "home",
+        })
+        dialog.clear()
+      },
+    },
+    {
+      title: "Switch model",
+      value: "model.list",
+      keybind: "model_list",
+      suggested: true,
+      category: "Agent",
+      slash: {
+        name: "models",
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogModel />)
+      },
+    },
+    {
+      title: "Model cycle",
+      value: "model.cycle_recent",
+      keybind: "model_cycle_recent",
+      category: "Agent",
+      hidden: true,
+      onSelect: () => {
+        local.model.cycle(1)
+      },
+    },
+    {
+      title: "Model cycle reverse",
+      value: "model.cycle_recent_reverse",
+      keybind: "model_cycle_recent_reverse",
+      category: "Agent",
+      hidden: true,
+      onSelect: () => {
+        local.model.cycle(-1)
+      },
+    },
+    {
+      title: "Favorite cycle",
+      value: "model.cycle_favorite",
+      keybind: "model_cycle_favorite",
+      category: "Agent",
+      hidden: true,
+      onSelect: () => {
+        local.model.cycleFavorite(1)
+      },
+    },
+    {
+      title: "Favorite cycle reverse",
+      value: "model.cycle_favorite_reverse",
+      keybind: "model_cycle_favorite_reverse",
+      category: "Agent",
+      hidden: true,
+      onSelect: () => {
+        local.model.cycleFavorite(-1)
+      },
+    },
+    {
+      title: "Switch agent",
+      value: "agent.list",
+      keybind: "agent_list",
+      category: "Agent",
+      slash: {
+        name: "agents",
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogAgent />)
+      },
+    },
+    {
+      title: "Toggle MCPs",
+      value: "mcp.list",
+      category: "Agent",
+      slash: {
+        name: "mcps",
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogMcp />)
+      },
+    },
+    {
+      title: "Agent cycle",
+      value: "agent.cycle",
+      keybind: "agent_cycle",
+      category: "Agent",
+      hidden: true,
+      onSelect: () => {
+        local.agent.move(1)
+      },
+    },
+    {
+      title: "Variant cycle",
+      value: "variant.cycle",
+      keybind: "variant_cycle",
+      category: "Agent",
+      onSelect: () => {
+        local.model.variant.cycle()
+      },
+    },
+    {
+      title: "Switch model variant",
+      value: "variant.list",
+      keybind: "variant_list",
+      category: "Agent",
+      hidden: local.model.variant.list().length === 0,
+      slash: {
+        name: "variants",
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogVariant />)
+      },
+    },
+    {
+      title: "Agent cycle reverse",
+      value: "agent.cycle.reverse",
+      keybind: "agent_cycle_reverse",
+      category: "Agent",
+      hidden: true,
+      onSelect: () => {
+        local.agent.move(-1)
+      },
+    },
+    {
+      title: "Connect provider",
+      value: "provider.connect",
+      suggested: !connected(),
+      slash: {
+        name: "connect",
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogProviderList />)
+      },
+      category: "Provider",
+    },
+    ...(sync.data.console_state.switchableOrgCount > 1
+      ? [
+          {
+            title: "Switch org",
+            value: "console.org.switch",
+            suggested: Boolean(sync.data.console_state.activeOrgName),
+            slash: {
+              name: "org",
+              aliases: ["orgs", "switch-org"],
+            },
+            onSelect: () => {
+              dialog.replace(() => <DialogConsoleOrg />)
+            },
+            category: "Provider",
+          },
+        ]
+      : []),
+    {
+      title: "View status",
+      keybind: "status_view",
+      value: "mendcode.runtime.status",
+      slash: {
+        name: "status",
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogStatus />)
+      },
+      category: "System",
+    },
+    {
+      title: "Switch theme",
+      value: "theme.switch",
+      keybind: "theme_list",
+      slash: {
+        name: "themes",
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogThemeList />)
+      },
+      category: "System",
+    },
+    {
+      title: mode() === "dark" ? "Switch to light mode" : "Switch to dark mode",
+      value: "theme.switch_mode",
+      onSelect: (dialog) => {
+        setMode(mode() === "dark" ? "light" : "dark")
+        dialog.clear()
+      },
+      category: "System",
+    },
+    {
+      title: locked() ? "Unlock theme mode" : "Lock theme mode",
+      value: "theme.mode.lock",
+      onSelect: (dialog) => {
+        if (locked()) unlock()
+        else lock()
+        dialog.clear()
+      },
+      category: "System",
+    },
+    {
+      title: "Help",
+      value: "help.show",
+      slash: {
+        name: "help",
+      },
+      onSelect: () => {
+        dialog.replace(() => <DialogHelp />)
+      },
+      category: "System",
+    },
+    {
+      title: "Open docs",
+      value: "docs.open",
+      onSelect: () => {
+        open(docsPath()).catch(() => {})
+        dialog.clear()
+      },
+      category: "System",
+    },
+    {
+      title: "Exit the app",
+      value: "app.exit",
+      slash: {
+        name: "exit",
+        aliases: ["quit", "q"],
+      },
+      onSelect: () => exit(),
+      category: "System",
+    },
+    {
+      title: "Toggle debug panel",
+      category: "System",
+      value: "app.debug",
+      onSelect: (dialog) => {
+        renderer.toggleDebugOverlay()
+        dialog.clear()
+      },
+    },
+    {
+      title: "Toggle console",
+      category: "System",
+      value: "app.console",
+      onSelect: (dialog) => {
+        renderer.console.toggle()
+        dialog.clear()
+      },
+    },
+    {
+      title: "Write heap snapshot",
+      category: "System",
+      value: "app.heap_snapshot",
+      onSelect: async (dialog) => {
+        const files = await props.onSnapshot?.()
+        toast.show({
+          variant: "info",
+          message: `Heap snapshot written to ${files?.join(", ")}`,
+          duration: 5000,
+        })
+        dialog.clear()
+      },
+    },
+    {
+      title: "Suspend terminal",
+      value: "terminal.suspend",
+      keybind: "terminal_suspend",
+      category: "System",
+      hidden: true,
+      enabled: tuiConfig.keybinds?.terminal_suspend !== "none",
+      onSelect: () => {
+        process.once("SIGCONT", () => {
+          renderer.resume()
+        })
+
+        renderer.suspend()
+        // pid=0 means send the signal to all processes in the process group
+        process.kill(0, "SIGTSTP")
+      },
+    },
+    {
+      title: terminalTitleEnabled() ? "Disable terminal title" : "Enable terminal title",
+      value: "terminal.title.toggle",
+      keybind: "terminal_title_toggle",
+      category: "System",
+      onSelect: (dialog) => {
+        setTerminalTitleEnabled((prev) => {
+          const next = !prev
+          kv.set("terminal_title_enabled", next)
+          if (!next) renderer.setTerminalTitle("")
+          return next
+        })
+        dialog.clear()
+      },
+    },
+    {
+      title: kv.get("animations_enabled", true) ? "Disable animations" : "Enable animations",
+      value: "app.toggle.animations",
+      category: "System",
+      onSelect: (dialog) => {
+        kv.set("animations_enabled", !kv.get("animations_enabled", true))
+        dialog.clear()
+      },
+    },
+    {
+      title: kv.get("file_context_enabled", true) ? "Disable file context" : "Enable file context",
+      value: "app.toggle.file_context",
+      category: "System",
+      onSelect: (dialog) => {
+        kv.set("file_context_enabled", !kv.get("file_context_enabled", true))
+        dialog.clear()
+      },
+    },
+    {
+      title: pasteSummaryEnabled() ? "Disable paste summary" : "Enable paste summary",
+      value: "app.toggle.paste_summary",
+      category: "System",
+      onSelect: (dialog) => {
+        setPasteSummaryEnabled((prev) => {
+          const next = !prev
+          kv.set("paste_summary_enabled", next)
+          return next
+        })
+        dialog.clear()
+      },
+    },
+    {
+      title: kv.get("session_directory_filter_enabled", true)
+        ? "Disable session directory filtering"
+        : "Enable session directory filtering",
+      value: "app.toggle.session_directory_filter",
+      category: "System",
+      onSelect: async (dialog) => {
+        kv.set("session_directory_filter_enabled", !kv.get("session_directory_filter_enabled", true))
+        await sync.session.refresh()
+        dialog.clear()
+      },
+    },
+    {
+      title: kv.get("diff_wrap_mode", "word") === "word" ? "Disable diff wrapping" : "Enable diff wrapping",
+      value: "app.toggle.diffwrap",
+      category: "System",
+      onSelect: (dialog) => {
+        const current = kv.get("diff_wrap_mode", "word")
+        kv.set("diff_wrap_mode", current === "word" ? "none" : "word")
+        dialog.clear()
+      },
+    },
+  ])
+
+  event.on(TuiEvent.CommandExecute.type, (evt) => {
+    command.trigger(evt.properties.command)
+  })
+
+  event.on(TuiEvent.ToastShow.type, (evt) => {
+    toast.show({
+      title: evt.properties.title,
+      message: evt.properties.message,
+      variant: evt.properties.variant,
+      duration: evt.properties.duration,
+    })
+  })
+
+  event.on(TuiEvent.SessionSelect.type, (evt) => {
+    route.navigate({
+      type: "session",
+      sessionID: evt.properties.sessionID,
+    })
+  })
+
+  event.on("session.deleted", (evt) => {
+    if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
+      route.navigate({ type: "home" })
+      toast.show({
+        variant: "info",
+        message: "The current session was deleted",
+      })
+    }
+  })
+
+  event.on("session.error", (evt) => {
+    const error = evt.properties.error
+    if (error && typeof error === "object" && error.name === "MessageAbortedError") return
+    const message = errorMessage(error)
+
+    toast.show({
+      variant: "error",
+      message,
+      duration: 5000,
+    })
+  })
+
+  event.on("installation.update-available", async (evt) => {
+    const version = evt.properties.version
+
+    const skipped = kv.get("skipped_version")
+    if (skipped && !semver.gt(version, skipped)) return
+
+    const choice = await DialogConfirm.show(
+      dialog,
+      `Update Available`,
+      `A new release v${version} is available. Would you like to update now?`,
+      "skip",
+    )
+
+    if (choice === false) {
+      kv.set("skipped_version", version)
+      return
+    }
+
+    if (choice !== true) return
+
+    toast.show({
+      variant: "info",
+      message: `Updating to v${version}...`,
+      duration: 30000,
+    })
+
+    const result = await sdk.client.global.upgrade({ target: version })
+
+    if (result.error || !result.data?.success) {
+      toast.show({
+        variant: "error",
+        title: "Update Failed",
+        message: "Update failed",
+        duration: 10000,
+      })
+      return
+    }
+
+    await DialogAlert.show(
+      dialog,
+      "Update Complete",
+      `Successfully updated to ${productName()} runtime v${result.data.version}. Please restart the application.`,
+    )
+
+    void exit()
+  })
+
+  const plugin = createMemo(() => {
+    if (!ready()) return
+    if (route.data.type !== "plugin") return
+    const render = routeView(route.data.id)
+    if (!render) return <PluginRouteMissing id={route.data.id} onHome={() => route.navigate({ type: "home" })} />
+    return render({ params: route.data.data })
+  })
+
+  return (
+    <box
+      width={dimensions().width}
+      height={dimensions().height}
+      backgroundColor={theme.background}
+      onMouseDown={(evt) => {
+        if (!Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
+        if (evt.button !== MouseButton.RIGHT) return
+
+        if (!Selection.copy(renderer, toast)) return
+        evt.preventDefault()
+        evt.stopPropagation()
+      }}
+      onMouseUp={Flag.OPENCODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT ? undefined : () => Selection.copy(renderer, toast)}
+    >
+      <Show when={Flag.OPENCODE_SHOW_TTFD}>
+        <TimeToFirstDraw />
+      </Show>
+      <Show when={ready()}>
+        <Switch>
+          <Match when={route.data.type === "home"}>
+            <Home />
+          </Match>
+          <Match when={route.data.type === "session"}>
+            <Session />
+          </Match>
+          <Match when={route.data.type === "setup"}>
+            <Setup />
+          </Match>
+        </Switch>
+      </Show>
+      {plugin()}
+      <TuiPluginRuntime.Slot name="app" />
+      <StartupLoading ready={ready} />
+    </box>
+  )
+}

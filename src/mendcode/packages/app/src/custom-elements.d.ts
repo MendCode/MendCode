@@ -1,0 +1,1 @@
+/Users/obed/code/MendCode/.agents/vendor/opencode/packages/ui/src/custom-elements.d.ts

@@ -1,0 +1,342 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mendcode.local/schemas/tui-profile-v0.json",
+  "title": "MendCode TUI profile v0",
+  "type": "object",
+  "required": [
+    "version",
+    "profile",
+    "promptChrome",
+    "promptStatus",
+    "identity",
+    "theme",
+    "layout",
+    "widgets",
+    "surfaces",
+    "rollback"
+  ],
+  "properties": {
+    "version": { "const": 0 },
+    "profile": { "type": "string", "minLength": 1 },
+    "promptChrome": {
+      "type": "object",
+      "required": ["preset"],
+      "properties": {
+        "preset": { "enum": ["box", "top-bottom", "minimal", "ascii-box"] },
+        "top": { "type": "boolean" },
+        "bottom": { "type": "boolean" },
+        "left": { "type": "boolean" },
+        "right": { "type": "boolean" },
+        "borderStyle": { "enum": ["single", "rounded", "heavy", "ascii"] },
+        "glyphs": {
+          "type": "object",
+          "properties": {
+            "horizontal": { "type": "string" },
+            "vertical": { "type": "string" },
+            "topLeft": { "type": "string" },
+            "topRight": { "type": "string" },
+            "bottomLeft": { "type": "string" },
+            "bottomRight": { "type": "string" },
+            "leadText": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "promptStatus": {
+      "type": "object",
+      "required": ["enabled", "left", "right"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "commandsHint": {
+          "type": "object",
+          "properties": {
+            "visible": { "type": "boolean" }
+          },
+          "additionalProperties": true
+        },
+        "placementByPreset": {
+          "type": "object",
+          "properties": {
+            "box": { "enum": ["inside", "outside"] },
+            "top-bottom": { "enum": ["inside", "outside"] },
+            "minimal": { "enum": ["inside", "outside"] },
+            "ascii-box": { "enum": ["inside", "outside"] }
+          },
+          "additionalProperties": true
+        },
+        "left": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "value"],
+            "properties": {
+              "type": { "const": "builtin" },
+              "value": {
+                "enum": [
+                  "mode",
+                  "model",
+                  "provider",
+                  "reasoning",
+                  "variant",
+                  "context",
+                  "permissionMode",
+                  "commandsHint",
+                  "agentsHint"
+                ]
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "right": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["type", "value"],
+            "properties": {
+              "type": { "const": "builtin" },
+              "value": {
+                "enum": [
+                  "mode",
+                  "model",
+                  "provider",
+                  "reasoning",
+                  "variant",
+                  "context",
+                  "permissionMode",
+                  "commandsHint",
+                  "agentsHint"
+                ]
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "separator": { "type": "string" },
+        "colors": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "scripts": {
+          "type": "object",
+          "properties": {
+            "left": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "command": { "type": "string" },
+                "timeoutMs": { "type": "integer", "minimum": 10 },
+                "refreshMs": { "type": "integer", "minimum": 250 },
+                "prepend": { "type": "boolean" }
+              },
+              "additionalProperties": true
+            },
+            "right": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "command": { "type": "string" },
+                "timeoutMs": { "type": "integer", "minimum": 10 },
+                "refreshMs": { "type": "integer", "minimum": 250 },
+                "prepend": { "type": "boolean" }
+              },
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        },
+        "script": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "command": { "type": "string" },
+            "timeoutMs": { "type": "integer", "minimum": 10 },
+            "refreshMs": { "type": "integer", "minimum": 250 },
+            "prepend": { "type": "boolean" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "workingIndicator": {
+      "type": "object",
+      "properties": {
+        "frames": { "type": "array", "items": { "type": "string" } },
+        "intervalMs": { "type": "integer", "minimum": 20 },
+        "messages": { "type": "array", "items": { "type": "string" } },
+        "messageIntervalMs": { "type": "integer", "minimum": 250 },
+        "visible": { "type": "boolean" },
+        "showElapsed": { "type": "boolean" },
+        "showTokenUsage": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "presentation": {
+      "type": "object",
+      "properties": {
+        "profile": { "enum": ["raw", "minimal", "mendcode"] },
+        "reasoning": {
+          "type": "object",
+          "properties": {
+            "defaultVisibility": { "enum": ["visible", "collapsed", "hidden"] }
+          },
+          "additionalProperties": true
+        },
+        "activity": {
+          "type": "object",
+          "properties": {
+            "style": { "enum": ["raw", "minimal", "signal"] },
+            "placement": { "enum": ["current", "left-docked", "footer"] },
+            "maxLines": { "type": "integer", "minimum": 1, "maximum": 4 },
+            "collapseOnComplete": { "type": "boolean" },
+            "showModel": { "type": "boolean" },
+            "showTokens": { "type": "boolean" },
+            "showElapsed": { "type": "boolean" },
+            "showInterruptHint": { "type": "boolean" },
+            "mascot": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "hover": { "type": "string" },
+                "states": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" }
+                }
+              },
+              "additionalProperties": true
+            },
+            "messages": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            }
+          },
+          "additionalProperties": true
+        },
+        "symbols": {
+          "type": "object",
+          "properties": {
+            "assistantDone": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "identity": {
+      "type": "object",
+      "required": ["productName"],
+      "properties": {
+        "productName": { "type": "string", "minLength": 1 },
+        "tagline": { "type": "string" },
+        "logoMode": { "enum": ["title", "mascot"] },
+        "logoFont": { "enum": ["classic", "mendcode", "opencode", "small", "standard", "shadow"] }
+      },
+      "additionalProperties": true
+    },
+    "theme": {
+      "type": "object",
+      "required": ["mode", "palette", "tokens"],
+      "properties": {
+        "mode": { "enum": ["dark", "light"] },
+        "palette": { "type": "string" },
+        "tokens": {
+          "type": "object",
+          "required": ["accent", "background", "foreground", "muted", "border"],
+          "properties": {
+            "accent": { "type": "string" },
+            "background": { "type": "string" },
+            "foreground": { "type": "string" },
+            "muted": { "type": "string" },
+            "border": { "type": "string" },
+            "backgroundPanel": { "type": "string" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "layout": {
+      "type": "object",
+      "required": ["density", "spacing", "borders", "zones"],
+      "properties": {
+        "density": { "enum": ["compact", "comfortable", "spacious"] },
+        "spacing": { "enum": ["tight", "normal", "loose"] },
+        "borders": { "enum": ["none", "single", "rounded", "heavy"] },
+        "width": { "type": "integer", "minimum": 64 },
+        "zones": {
+          "type": "object",
+          "required": ["sidebar", "header", "footer", "session", "prompt"],
+          "properties": {
+            "sidebar": { "type": "object", "required": ["enabled", "compact", "width"] },
+            "header": { "type": "object", "required": ["enabled"] },
+            "footer": { "type": "object", "required": ["enabled"] },
+            "session": {
+              "type": "object",
+              "properties": {
+                "stickyUserHeader": { "type": "boolean" }
+              },
+              "additionalProperties": true
+            },
+            "prompt": { "type": "object" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "widgets": {
+      "type": "object",
+      "required": ["enabled", "order", "config"],
+      "properties": {
+        "enabled": { "type": "array", "items": { "type": "string" } },
+        "order": { "type": "array", "items": { "type": "string" } },
+        "config": { "type": "object", "additionalProperties": { "type": "object" } }
+      },
+      "additionalProperties": true
+    },
+    "surfaces": {
+      "type": "object",
+      "required": ["model", "provider", "status"],
+      "properties": {
+        "model": { "type": "object", "required": ["visible", "format"] },
+        "provider": { "type": "object", "required": ["visible", "format"] },
+        "status": { "type": "object", "required": ["visible", "mode"] },
+        "homeLogo": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string" },
+            "size": { "enum": ["compact", "default", "large"] }
+          },
+          "additionalProperties": true
+        },
+        "homeWelcome": {
+          "type": "object",
+          "properties": {
+            "mode": { "enum": ["centered", "split"] },
+            "rightPanel": { "enum": ["actions", "agentManager"] }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "rollback": {
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "const": true },
+        "lastAppliedProposal": { "type": ["string", "null"] },
+        "previousProfilePath": { "type": ["string", "null"] },
+        "updatedAt": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

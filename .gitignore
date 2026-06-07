@@ -1,0 +1,22 @@
+# Dependencies / build output
+node_modules/
+dist/
+build/
+coverage/
+
+# Secrets and local env
+.env
+.env.*
+!.env.example
+
+# MendCode generated/runtime state. The release repo must not carry local
+# project state; users get a fresh .mendcode from `mend init`.
+.mendcode/
+
+# Local Codex/SEDA planning state
+.agents/
+
+# Local OS/editor noise
+.DS_Store
+*.log
+.envrefs
