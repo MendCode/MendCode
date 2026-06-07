@@ -11,7 +11,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../context/tui-config"
 import { renderPlanMarkdown } from "../../util/plan-markdown"
 
-type Stage = "preview" | "edit" | "reject"
+type Stage = "preview" | "edit" | "comment" | "reject"
 
 function previewMarkdown(markdown: string) {
   return markdown.replace(/^\s*#\s+[^\n]+\n{1,2}/, "")
@@ -25,6 +25,7 @@ export function PlanReviewPrompt(props: { request: PlanReviewRequest }) {
   const dimensions = useTerminalDimensions()
   const [stage, setStage] = createSignal<Stage>("preview")
   const [markdown, setMarkdown] = createSignal(props.request.markdown)
+  const [comments, setComments] = createSignal("")
   const [reason, setReason] = createSignal("")
   const modalWidth = createMemo(() => Math.max(64, Math.min(128, dimensions().width - 10)))
   const modalHeight = createMemo(() => Math.max(24, dimensions().height - 2))
@@ -37,18 +38,25 @@ export function PlanReviewPrompt(props: { request: PlanReviewRequest }) {
   )
 
   let editArea: TextareaRenderable | undefined
+  let commentArea: TextareaRenderable | undefined
   let rejectArea: TextareaRenderable | undefined
 
   const title = createMemo(() => props.request.title?.trim() || "plan.md")
   const scrollAcceleration = createMemo(() => getScrollAcceleration(config))
 
-  function reply(action: "apply" | "edit" | "reject", override?: { markdown?: string; reason?: string }) {
+  function reviewComments(override?: string) {
+    const value = (override ?? comments()).trim()
+    return value || undefined
+  }
+
+  function reply(action: "apply" | "edit" | "reject", override?: { markdown?: string; reason?: string; comments?: string }) {
     void sdk.client.planReview.reply({
       requestID: props.request.id,
       planReviewReply: {
         action,
         markdown: action === "apply" || action === "edit" ? (override?.markdown ?? markdown()) : undefined,
         reason: action === "reject" ? (override?.reason ?? reason()).trim() : undefined,
+        comments: action === "apply" || action === "edit" ? reviewComments(override?.comments) : undefined,
       },
     })
   }
@@ -66,6 +74,12 @@ export function PlanReviewPrompt(props: { request: PlanReviewRequest }) {
         evt.preventDefault()
         setStage("edit")
         setTimeout(() => editArea?.focus(), 1)
+        return
+      }
+      if (evt.name === "c") {
+        evt.preventDefault()
+        setStage("comment")
+        setTimeout(() => commentArea?.focus(), 1)
         return
       }
       if (evt.name === "r") {
@@ -87,7 +101,23 @@ export function PlanReviewPrompt(props: { request: PlanReviewRequest }) {
         evt.preventDefault()
         const value = editArea?.plainText ?? markdown()
         setMarkdown(value)
-        reply("apply", { markdown: value })
+        reply("apply", { markdown: value, comments: comments() })
+      }
+      return
+    }
+
+    if (stage() === "comment") {
+      if (evt.name === "escape") {
+        evt.preventDefault()
+        setComments(commentArea?.plainText ?? comments())
+        setStage("preview")
+        return
+      }
+      if (evt.ctrl && evt.name === "o") {
+        evt.preventDefault()
+        const value = commentArea?.plainText ?? comments()
+        setComments(value)
+        reply("apply", { comments: value })
       }
       return
     }
@@ -196,6 +226,23 @@ export function PlanReviewPrompt(props: { request: PlanReviewRequest }) {
               />
             </box>
           </Match>
+          <Match when={stage() === "comment"}>
+            <box height={bodyHeight()} paddingTop={1} paddingLeft={4} paddingRight={4} gap={1}>
+              <text fg={theme.textMuted}>Implementation comments for the agent</text>
+              <textarea
+                height={Math.max(5, bodyHeight() - 2)}
+                ref={(value: TextareaRenderable) => {
+                  commentArea = value
+                }}
+                initialValue={comments()}
+                placeholder="Notes, constraints, or changes to keep in mind"
+                placeholderColor={theme.textMuted}
+                textColor={theme.text}
+                focusedTextColor={theme.text}
+                cursorColor={theme.text}
+              />
+            </box>
+          </Match>
           <Match when={stage() === "reject"}>
             <box height={bodyHeight()} paddingTop={1} paddingLeft={4} paddingRight={4} gap={1}>
               <text fg={theme.textMuted}>Why reject this plan?</text>
@@ -237,10 +284,21 @@ export function PlanReviewPrompt(props: { request: PlanReviewRequest }) {
                 e <span style={{ fg: theme.textMuted }}>edit</span>
               </text>
               <text fg={theme.text}>
+                c <span style={{ fg: theme.textMuted }}>{comments().trim() ? "comments*" : "comments"}</span>
+              </text>
+              <text fg={theme.text}>
                 r <span style={{ fg: theme.textMuted }}>reject</span>
               </text>
             </Match>
             <Match when={stage() === "edit"}>
+              <text fg={theme.text}>
+                Ctrl+o <span style={{ fg: theme.textMuted }}>save + implement</span>
+              </text>
+              <text fg={theme.text}>
+                Esc <span style={{ fg: theme.textMuted }}>preview</span>
+              </text>
+            </Match>
+            <Match when={stage() === "comment"}>
               <text fg={theme.text}>
                 Ctrl+o <span style={{ fg: theme.textMuted }}>save + implement</span>
               </text>

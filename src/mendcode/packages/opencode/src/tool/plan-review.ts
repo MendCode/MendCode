@@ -40,6 +40,12 @@ function updateDisplayedPlanInput(input: {
   })
 }
 
+function userCommentsSection(comments: string | undefined) {
+  const value = comments?.trim()
+  if (!value) return []
+  return ["", "User implementation comments:", value]
+}
+
 export const PlanReviewTool = Tool.define<
   typeof Parameters,
   {},
@@ -86,11 +92,15 @@ export const PlanReviewTool = Tool.define<
                 "Implement this approved plan. The user approved it via the plan review modal. You can now edit files.",
                 "",
                 reviewedMarkdown,
+                ...userCommentsSection(reply.comments),
               ].join("\n"),
             })
             return {
               title: "Plan approved",
-              output: `User approved the plan and switched to ${planExitAgent}. Continue by implementing the approved plan.`,
+              output: [
+                `User approved the plan and switched to ${planExitAgent}. Continue by implementing the approved plan.`,
+                ...userCommentsSection(reply.comments),
+              ].join("\n"),
               metadata: { planExitAgent },
             }
           }
@@ -102,6 +112,7 @@ export const PlanReviewTool = Tool.define<
                 "The user manually edited the plan. Treat this edited Markdown as the latest source of truth:",
                 "",
                 reviewedMarkdown,
+                ...userCommentsSection(reply.comments),
               ].join("\n"),
               metadata: {},
             }

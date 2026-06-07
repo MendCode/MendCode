@@ -1616,6 +1616,7 @@ export type PlanReviewReply = {
   action: PlanReviewAction
   markdown?: string
   reason?: string
+  comments?: string
 }
 
 export type ProviderAuthMethod = {
