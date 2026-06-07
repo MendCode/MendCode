@@ -46,10 +46,12 @@ export function SubagentFooter() {
   const keybind = useKeybind()
   const command = useCommandDialog()
   const [hover, setHover] = createSignal<"parent" | "prev" | "next" | null>(null)
-  useTerminalDimensions()
+  const dimensions = useTerminalDimensions()
+  const compact = createMemo(() => dimensions().width < 92)
+  const usageDetail = createMemo(() => (compact() ? undefined : usage()?.detail))
 
   return (
-    <box flexShrink={0}>
+    <box flexShrink={0} width="100%" marginBottom={1}>
       <box
         paddingTop={1}
         paddingBottom={1}
@@ -59,6 +61,7 @@ export function SubagentFooter() {
         border={["left"]}
         borderColor={theme.border}
         flexShrink={0}
+        width="100%"
         backgroundColor={theme.backgroundPanel}
       >
         <box flexDirection="row" justifyContent="space-between" gap={1}>
@@ -71,10 +74,10 @@ export function SubagentFooter() {
                 ({subagentInfo().index} of {subagentInfo().total})
               </text>
             </Show>
-            <Show when={usage()}>
-              {(item) => (
+            <Show when={usageDetail()}>
+              {(detail) => (
                 <text fg={theme.textMuted} wrapMode="none">
-                  {item().detail}
+                  {detail()}
                 </text>
               )}
             </Show>
