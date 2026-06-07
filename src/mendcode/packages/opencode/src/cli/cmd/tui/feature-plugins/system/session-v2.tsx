@@ -762,7 +762,6 @@ function BlockTool(props: {
       paddingBottom={1}
       paddingLeft={3}
       marginTop={1}
-      gap={1}
       onMouseUp={() => {
         if (renderer.getSelection()?.getSelectedText()) return
         props.onClick?.()
