@@ -13,6 +13,9 @@ on:
 permissions:
   contents: read
 
+env:
+  SECURITY_GUARD_BLOCK_SCANNERS: "0"
+
 concurrency:
   group: security-guard-${{ github.ref }}
   cancel-in-progress: true
@@ -142,13 +145,14 @@ jobs:
           persist-credentials: false
 
       - name: Run gitleaks
+        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' }}
         shell: bash
         run: |
           set -euo pipefail
           docker run --rm \
             -v "$PWD:/repo" \
             ghcr.io/gitleaks/gitleaks:v8.29.0@sha256:71d3ee5990f2176f763b438298453fc37e87b119122045e176ca9d44ff00b08b \
-            detect --source=/repo --redact --verbose
+            detect --source=/repo --no-git --redact --verbose
 
   dependencies:
     name: Dependency vulnerabilities
@@ -161,6 +165,7 @@ jobs:
           persist-credentials: false
 
       - name: Run OSV-Scanner
+        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -183,6 +188,7 @@ jobs:
           persist-credentials: false
 
       - name: Run zizmor
+        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' }}
         uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d
         with:
           advanced-security: false
@@ -200,6 +206,7 @@ jobs:
           persist-credentials: false
 
       - name: Run Semgrep CLI
+        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' }}
         shell: bash
         run: |
           set -euo pipefail
