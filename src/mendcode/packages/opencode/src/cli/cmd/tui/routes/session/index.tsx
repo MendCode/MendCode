@@ -102,6 +102,7 @@ import { formatTranscript } from "../../util/transcript"
 import { UI } from "@/cli/ui.ts"
 import { useTuiConfig } from "../../context/tui-config"
 import { getScrollAcceleration } from "../../util/scroll"
+import { sessionPromptVisible } from "../../util/session-layout"
 import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { restorePromptFromSubmittedParts } from "../../component/prompt/submit-parts"
@@ -228,8 +229,13 @@ export function Session() {
     if (session()?.parentID) return []
     return children().flatMap((x) => sync.data.plan_review[x.id] ?? [])
   })
-  const visible = createMemo(
-    () => !session()?.parentID && permissions().length === 0 && questions().length === 0 && planReviews().length === 0,
+  const visible = createMemo(() =>
+    sessionPromptVisible({
+      isChildSession: Boolean(session()?.parentID),
+      permissionCount: permissions().length,
+      questionCount: questions().length,
+      planReviewCount: planReviews().length,
+    }),
   )
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0 || planReviews().length > 0)
 
@@ -969,7 +975,7 @@ export function Session() {
   const dialog = useDialog()
   const renderer = useRenderer()
 
-  // Allow exit when in child session (prompt is hidden)
+  // Keep the child-session exit shortcut for states where the prompt is not mounted.
   const exit = useExit()
 
   createEffect(() => {
@@ -992,7 +998,7 @@ export function Session() {
   })
 
   useKeyboard((evt) => {
-    if (!session()?.parentID) return
+    if (!session()?.parentID || visible()) return
     if (keybind.match("app_exit", evt)) {
       void exit()
     }
@@ -1938,6 +1944,9 @@ export function Session() {
                 scrollAcceleration={scrollAcceleration()}
               >
                 <box height={1} />
+                <Show when={session()?.parentID}>
+                  <SubagentFooter />
+                </Show>
                 <For each={messages()}>
                   {(message, index) => (
                     <Switch>
@@ -2063,9 +2072,6 @@ export function Session() {
               </Show>
               <Show when={!backgroundWriterLocked() && permissions().length === 0 && questions().length > 0}>
                 <QuestionPrompt request={questions()[0]} />
-              </Show>
-              <Show when={session()?.parentID}>
-                <SubagentFooter />
               </Show>
               <Show when={backgroundWriterMode() === "following"}>
                 <box paddingLeft={contentInset()} paddingRight={contentInset()} width="100%">
@@ -2388,7 +2394,7 @@ function SessionNotesWidget(props: { sessionID: string; width: number; height: n
     const lines = note().split("\n")
     return Math.max(
       1,
-      lines.reduce((total, line) => total + Math.max(1, Math.ceil(line.length / contentWidth)), 0),
+      lines.reduce((total: number, line: string) => total + Math.max(1, Math.ceil(line.length / contentWidth)), 0),
     )
   })
   const noteOverflow = createMemo(() => noteRows() > textareaHeight())
