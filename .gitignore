@@ -4,6 +4,9 @@ dist/
 build/
 coverage/
 
+# Local developer launcher shims. Package bins under src/**/bin stay tracked.
+/bin/
+
 # Secrets and local env
 .env
 .env.*

@@ -1473,7 +1473,7 @@ export function Prompt(props: PromptProps) {
       case "context":
         return usage()?.context
           ? {
-              text: usage()!.context!,
+              text: usage()!.contextPercent === undefined ? usage()!.context! : "█".repeat(8) + " 100%",
               fg: theme.textMuted,
               render: (
                 <ContextUsageBar
@@ -1510,6 +1510,7 @@ export function Prompt(props: PromptProps) {
     const [hover, setHover] = createSignal(false)
     const width = 8
     const labelWidth = 4
+    const totalWidth = width + 1 + labelWidth
     const pct = createMemo(() => {
       if (props.percent === undefined) return undefined
       return Math.max(0, Math.min(100, props.percent))
@@ -1524,7 +1525,13 @@ export function Prompt(props: PromptProps) {
       return `${pct()}%`.padEnd(labelWidth)
     })
     return (
-      <text wrapMode="none" onMouseOver={() => setHover(true)} onMouseOut={() => setHover(false)}>
+      <text
+        width={totalWidth}
+        flexShrink={0}
+        wrapMode="none"
+        onMouseOver={() => setHover(true)}
+        onMouseOut={() => setHover(false)}
+      >
         <Show when={pct() !== undefined} fallback={<span style={{ fg: theme.textMuted }}>{props.tokens}</span>}>
           <span style={{ fg: theme.text }}>{"█".repeat(filled())}</span>
           <span style={{ fg: theme.backgroundElement }}>{"█".repeat(empty())}</span>

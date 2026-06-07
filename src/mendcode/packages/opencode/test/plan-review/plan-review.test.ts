@@ -107,6 +107,28 @@ it.instance(
 )
 
 it.instance(
+  "ask - apply can include implementation comments",
+  () =>
+    Effect.gen(function* () {
+      const fiber = yield* askEffect({
+        sessionID: SessionID.make("ses_test"),
+        markdown: "# Original",
+      }).pipe(Effect.forkScoped)
+
+      const pending = yield* waitForPending(1)
+      yield* replyEffect({
+        requestID: pending[0].id,
+        reply: { action: "apply", comments: "Keep the existing terminal shortcuts intact." },
+      })
+
+      const reply = yield* Fiber.join(fiber)
+      expect(reply.action).toBe("apply")
+      expect(reply.comments).toBe("Keep the existing terminal shortcuts intact.")
+    }),
+  { git: true },
+)
+
+it.instance(
   "ask - close fails the pending review",
   () =>
     Effect.gen(function* () {

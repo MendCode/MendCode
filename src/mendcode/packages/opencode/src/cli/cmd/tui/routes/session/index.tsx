@@ -22,7 +22,14 @@ import { useEvent } from "@tui/context/event"
 import { SplitBorder } from "@tui/component/border"
 import { Spinner } from "@tui/component/spinner"
 import { selectedForeground, useTheme } from "@tui/context/theme"
-import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
+import {
+  BoxRenderable,
+  ScrollBoxRenderable,
+  addDefaultParsers,
+  TextAttributes,
+  RGBA,
+  type TextareaRenderable,
+} from "@opentui/core"
 import { Prompt, type PromptRef } from "@tui/component/prompt"
 import type {
   AssistantMessage,
@@ -61,6 +68,7 @@ import { useKeybind } from "@tui/context/keybind"
 import { useDialog } from "../../ui/dialog"
 import { DialogSelect } from "../../ui/dialog-select"
 import { TodoItem } from "../../component/todo-item"
+import { useTextareaKeybindings } from "../../component/textarea-keybindings"
 import { DialogMessage } from "./dialog-message"
 import type { PromptInfo } from "../../component/prompt/history"
 import { DialogConfirm } from "@tui/ui/dialog-confirm"
@@ -94,6 +102,7 @@ import { formatTranscript } from "../../util/transcript"
 import { UI } from "@/cli/ui.ts"
 import { useTuiConfig } from "../../context/tui-config"
 import { getScrollAcceleration } from "../../util/scroll"
+import { sessionPromptVisible } from "../../util/session-layout"
 import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { restorePromptFromSubmittedParts } from "../../component/prompt/submit-parts"
@@ -220,8 +229,13 @@ export function Session() {
     if (session()?.parentID) return []
     return children().flatMap((x) => sync.data.plan_review[x.id] ?? [])
   })
-  const visible = createMemo(
-    () => !session()?.parentID && permissions().length === 0 && questions().length === 0 && planReviews().length === 0,
+  const visible = createMemo(() =>
+    sessionPromptVisible({
+      isChildSession: Boolean(session()?.parentID),
+      permissionCount: permissions().length,
+      questionCount: questions().length,
+      planReviewCount: planReviews().length,
+    }),
   )
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0 || planReviews().length > 0)
 
@@ -292,10 +306,12 @@ export function Session() {
     () => ({ directory: sessionDirectory(), tick: topStatsTick() }),
     async ({ directory }) => {
       const diff = await Process.text(["git", "diff", "--numstat", "HEAD", "--"], { cwd: directory, nothrow: true })
+      const branch = await Process.text(["git", "branch", "--show-current"], { cwd: directory, nothrow: true })
       const lineStats = diff.code === 0 ? parseGitNumstat(diff.text) : undefined
       return {
         added: lineStats?.added,
         removed: lineStats?.removed,
+        branch: branch.code === 0 ? branch.text.trim() : "",
       }
     },
   )
@@ -307,6 +323,7 @@ export function Session() {
       removed: stats.removed ?? 0,
     }
   })
+  const topBranchLabel = createMemo(() => Locale.truncate(topStats()?.branch || "no branch", 24))
   const todos = createMemo(() => sync.data.todo[route.sessionID] ?? [])
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
@@ -323,6 +340,7 @@ export function Session() {
     const mode = backgroundWriterMode()
     return mode === "attaching" || mode === "following"
   })
+  const showSessionBottomDock = createMemo(() => showTodos() && !disabled() && !backgroundWriterLocked())
   const promptDisabled = createMemo(() => disabled() || backgroundWriterLocked())
   const [permissionModeSetting, setPermissionModeSetting] = createSignal<PermissionMode>("approval")
   const [permissionsConfig, { refetch: refetchPermissionsConfig }] = createResource(
@@ -957,7 +975,7 @@ export function Session() {
   const dialog = useDialog()
   const renderer = useRenderer()
 
-  // Allow exit when in child session (prompt is hidden)
+  // Keep the child-session exit shortcut for states where the prompt is not mounted.
   const exit = useExit()
 
   createEffect(() => {
@@ -980,7 +998,7 @@ export function Session() {
   })
 
   useKeyboard((evt) => {
-    if (!session()?.parentID) return
+    if (!session()?.parentID || visible()) return
     if (keybind.match("app_exit", evt)) {
       void exit()
     }
@@ -1926,6 +1944,9 @@ export function Session() {
                 scrollAcceleration={scrollAcceleration()}
               >
                 <box height={1} />
+                <Show when={session()?.parentID}>
+                  <SubagentFooter />
+                </Show>
                 <For each={messages()}>
                   {(message, index) => (
                     <Switch>
@@ -2052,9 +2073,6 @@ export function Session() {
               <Show when={!backgroundWriterLocked() && permissions().length === 0 && questions().length > 0}>
                 <QuestionPrompt request={questions()[0]} />
               </Show>
-              <Show when={session()?.parentID}>
-                <SubagentFooter />
-              </Show>
               <Show when={backgroundWriterMode() === "following"}>
                 <box paddingLeft={contentInset()} paddingRight={contentInset()} width="100%">
                   <text fg={theme.textMuted} wrapMode="none">
@@ -2070,8 +2088,23 @@ export function Session() {
                   <text fg={theme.textMuted} wrapMode="none">Attaching session…</text>
                 </box>
               </Show>
-              <Show when={showTodos()}>
-                <SessionTodoPanel todos={todos()} width={contentWidth()} />
+              <Show when={showSessionBottomDock()}>
+                <SessionBottomDock
+                  todos={todos()}
+                  width={contentWidth()}
+                  sessionID={route.sessionID}
+                  info={{
+                    branch: topBranchLabel(),
+                    cwd: topPathLabel(),
+                    model: (() => {
+                      const model = local.model.current()
+                      return model ? Model.name(providers(), model.providerID, model.modelID) : "model unset"
+                    })(),
+                    context: topUsage()?.contextLabel ?? "context n/a",
+                    status: permissionPendingCount() > 0 ? `${permissionPendingCount()} permission` : pending() ? "assistant active" : "idle",
+                    permission: permissionModeLabel(),
+                  }}
+                />
               </Show>
               <For each={listMendWidgets("aboveEditor")}>{(item) => item.render() as any}</For>
               <Show when={visible()}>
@@ -2234,33 +2267,258 @@ function SessionUsageBar(props: { context: number; contextLimit?: number; contex
   )
 }
 
-function SessionTodoPanel(props: { todos: Array<{ content: string; status: string; priority?: string }>; width: number }) {
+type SessionTodo = { content: string; status: string; priority?: string }
+
+type SessionBottomInfo = {
+  branch: string
+  cwd: string
+  model: string
+  context: string
+  status: string
+  permission: string
+}
+
+function clampDockWidth(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value))
+}
+
+function sessionTodoIcon(status: string) {
+  if (status === "completed") return "✓"
+  if (status === "in_progress") return "▸"
+  if (status === "cancelled") return "×"
+  return "□"
+}
+
+function sessionTodoPanelWidth(input: {
+  todos: SessionTodo[]
+  maxWidth: number
+  expanded: boolean
+  collapsedLimit: number
+}) {
+  const hidden = Math.max(0, input.todos.length - input.collapsedLimit)
+  const visibleTodos = input.expanded || hidden === 0 ? input.todos : input.todos.slice(0, input.collapsedLimit)
+  const open = input.todos.filter((todo) => todo.status !== "completed").length
+  const openLabel = `${Locale.number(open)} open`
+  const headerWidth = "Todos".length + openLabel.length + 3
+  const fallbackWidth = "□ No todo items.".length
+  const itemWidth = Math.max(
+    0,
+    ...visibleTodos.map((todo) => `${sessionTodoIcon(todo.status)} ${todo.content}`.length),
+    hidden > 0 ? `${input.expanded ? "▾ collapse" : `▸ ${Locale.number(hidden)} more`}`.length : 0,
+  )
+  return Math.min(input.maxWidth, Math.max(20, headerWidth, fallbackWidth, itemWidth) + 4)
+}
+
+function SessionBottomDock(props: { todos: SessionTodo[]; width: number; sessionID: string; info: SessionBottomInfo }) {
+  const { theme } = useTheme()
+  const mascotClearance = 8
+  const dockHeight = 7
+  const dockWidth = createMemo(() => Math.max(20, props.width - mascotClearance))
+  const todoWidth = createMemo(() =>
+    sessionTodoPanelWidth({
+      todos: props.todos,
+      maxWidth: dockWidth(),
+      expanded: false,
+      collapsedLimit: 7,
+    }),
+  )
+  const remainingWidth = createMemo(() => Math.max(0, dockWidth() - todoWidth() - 2))
+  const compact = createMemo(() => dockWidth() < 72 || remainingWidth() < 48)
+  const showNotes = createMemo(() => !compact() || dockWidth() >= 52)
+  const showInfo = createMemo(() => !compact() && remainingWidth() >= 74)
+  const notesWidth = createMemo(() =>
+    compact() ? dockWidth() : clampDockWidth(Math.floor(remainingWidth() * 0.6), 28, 44),
+  )
+  const infoWidth = createMemo(() => clampDockWidth(remainingWidth() - notesWidth() - 1, 24, 36))
+
+  return (
+    <box flexShrink={0} width="100%" paddingBottom={1}>
+      <box
+        width={dockWidth()}
+        height={dockHeight}
+        flexDirection={compact() ? "column" : "row"}
+        gap={1}
+        alignItems="stretch"
+        overflow="hidden"
+      >
+        <SessionTodoPanel todos={props.todos} width={dockWidth()} height={dockHeight} />
+        <Show when={showNotes()}>
+          <SessionNotesWidget sessionID={props.sessionID} width={notesWidth()} height={dockHeight} />
+        </Show>
+        <Show when={showInfo()}>
+          <SessionInfoWidget info={props.info} width={infoWidth()} height={dockHeight} />
+        </Show>
+        <Show when={!compact()}>
+          <For each={listMendWidgets("sessionBottomDock")}>
+            {(item) => (
+              <box flexShrink={1} minWidth={18} height={dockHeight} backgroundColor={theme.backgroundPanel}>
+                {item.render() as any}
+              </box>
+            )}
+          </For>
+        </Show>
+      </box>
+    </box>
+  )
+}
+
+function SessionDockHeader(props: { title: string; right?: string }) {
+  const { theme } = useTheme()
+  return (
+    <box flexDirection="row" justifyContent="space-between" width="100%" flexShrink={0}>
+      <text fg={theme.textMuted} wrapMode="none">
+        {props.title}
+      </text>
+      <Show when={props.right}>
+        {(right) => (
+          <text fg={theme.textMuted} wrapMode="none">
+            {right()}
+          </text>
+        )}
+      </Show>
+    </box>
+  )
+}
+
+function SessionNotesWidget(props: { sessionID: string; width: number; height: number }) {
+  const { theme } = useTheme()
+  const kv = useKV()
+  const promptRef = usePromptRef()
+  const textareaKeybindings = useTextareaKeybindings()
+  let textarea: TextareaRenderable | undefined
+  const key = createMemo(() => `session_notes:${props.sessionID}`)
+  const [note, setNote] = createSignal(kv.get(key(), ""))
+  const textareaHeight = createMemo(() => Math.max(1, props.height - 3))
+  const noteRows = createMemo(() => {
+    const contentWidth = Math.max(1, props.width - 5)
+    const lines = note().split("\n")
+    return Math.max(
+      1,
+      lines.reduce((total: number, line: string) => total + Math.max(1, Math.ceil(line.length / contentWidth)), 0),
+    )
+  })
+  const noteOverflow = createMemo(() => noteRows() > textareaHeight())
+  const noteKeybindings = createMemo(() =>
+    textareaKeybindings().map((binding) =>
+      binding.action === "submit" ? { ...binding, action: "newline" as const } : binding,
+    ),
+  )
+
+  function leaveNotes() {
+    textarea?.blur()
+    promptRef.current?.focus()
+  }
+
+  createEffect(
+    on(
+      key,
+      (nextKey) => {
+        const next = kv.get(nextKey, "")
+        setNote(next)
+        textarea?.setText(next)
+      },
+      { defer: true },
+    ),
+  )
+
+  return (
+    <box
+      width={props.width}
+      height={props.height}
+      paddingLeft={2}
+      paddingRight={2}
+      paddingTop={1}
+      paddingBottom={1}
+      backgroundColor={theme.backgroundPanel}
+      onMouseDown={(event) => event.target?.focus()}
+    >
+      <SessionDockHeader title="Notes" right={note().trim() ? "saved" : "scratch"} />
+      <box flexDirection="row" height={textareaHeight()} width="100%">
+        <textarea
+          height={textareaHeight()}
+          width={noteOverflow() ? Math.max(1, props.width - 5) : "100%"}
+          initialValue={note()}
+          placeholder="Private note"
+          placeholderColor={theme.textMuted}
+          textColor={theme.text}
+          focusedTextColor={theme.text}
+          cursorColor={theme.text}
+          keyBindings={noteKeybindings()}
+          ref={(value: TextareaRenderable) => {
+            textarea = value
+          }}
+          onMouseDown={(event) => event.target?.focus()}
+          onKeyDown={(event) => {
+            if (event.name !== "escape") return
+            event.preventDefault()
+            leaveNotes()
+          }}
+          onContentChange={() => {
+            const next = textarea?.plainText ?? ""
+            setNote(next)
+            kv.set(key(), next)
+          }}
+        />
+        <Show when={noteOverflow()}>
+          <box width={1} height={textareaHeight()} flexShrink={0}>
+            <For each={Array.from({ length: textareaHeight() })}>
+              {(_, index) => (
+                <text fg={theme.textMuted} wrapMode="none">
+                  {index() === 0 ? "█" : "│"}
+                </text>
+              )}
+            </For>
+          </box>
+        </Show>
+      </box>
+    </box>
+  )
+}
+
+function SessionInfoWidget(props: { info: SessionBottomInfo; width: number; height: number }) {
+  const { theme } = useTheme()
+  const row = (label: string, value: string) => (
+    <text fg={theme.textMuted} wrapMode="none">
+      {label} <span style={{ fg: theme.text }}>{Locale.truncateMiddle(value, Math.max(8, props.width - label.length - 5))}</span>
+    </text>
+  )
+
+  return (
+    <box
+      width={props.width}
+      height={props.height}
+      paddingLeft={2}
+      paddingRight={2}
+      paddingTop={1}
+      paddingBottom={1}
+      backgroundColor={theme.backgroundPanel}
+    >
+      <SessionDockHeader title="Info" right={props.info.status} />
+      {row("git", props.info.branch)}
+      {row("cwd", props.info.cwd)}
+      {row("ctx", props.info.context)}
+      {row("perm", props.info.permission)}
+      {row("model", props.info.model)}
+    </box>
+  )
+}
+
+function SessionTodoPanel(props: { todos: SessionTodo[]; width: number; height: number }) {
   const { theme } = useTheme()
   const [expanded, setExpanded] = createSignal(false)
   const collapsedLimit = 7
-  const mascotClearance = 8
   const open = createMemo(() => props.todos.filter((todo) => todo.status !== "completed").length)
   const hidden = createMemo(() => Math.max(0, props.todos.length - collapsedLimit))
   const visibleTodos = createMemo(() =>
     expanded() || hidden() === 0 ? props.todos : props.todos.slice(0, collapsedLimit),
   )
-  const icon = (status: string) => {
-    if (status === "completed") return "✓"
-    if (status === "in_progress") return "▸"
-    if (status === "cancelled") return "×"
-    return "□"
-  }
   const panelWidth = createMemo(() => {
-    const maxWidth = Math.max(20, props.width - mascotClearance)
-    const openLabel = `${Locale.number(open())} open`
-    const headerWidth = "Todos".length + openLabel.length + 3
-    const fallbackWidth = "□ No todo items.".length
-    const itemWidth = Math.max(
-      0,
-      ...visibleTodos().map((todo) => `${icon(todo.status)} ${todo.content}`.length),
-      hidden() > 0 ? `${expanded() ? "▾ collapse" : `▸ ${Locale.number(hidden())} more`}`.length : 0,
-    )
-    return Math.min(maxWidth, Math.max(20, headerWidth, fallbackWidth, itemWidth) + 4)
+    return sessionTodoPanelWidth({
+      todos: props.todos,
+      maxWidth: props.width,
+      expanded: expanded(),
+      collapsedLimit,
+    })
   })
   const color = (status: string) => {
     if (status === "completed") return theme.textMuted
@@ -2270,9 +2528,10 @@ function SessionTodoPanel(props: { todos: Array<{ content: string; status: strin
   }
 
   return (
-    <box flexShrink={0} width="100%" paddingBottom={1}>
+    <box flexShrink={0} width={panelWidth()} height={props.height}>
       <box
         width={panelWidth()}
+        height={props.height}
         paddingLeft={2}
         paddingRight={2}
         paddingTop={1}
@@ -2304,7 +2563,7 @@ function SessionTodoPanel(props: { todos: Array<{ content: string; status: strin
             {(todo) => (
               <box flexDirection="row" gap={1} width="100%" backgroundColor={theme.backgroundPanel}>
                 <text fg={color(todo.status)} flexShrink={0} wrapMode="none">
-                  {icon(todo.status)}
+                  {sessionTodoIcon(todo.status)}
                 </text>
                 <text fg={color(todo.status)} wrapMode="none" flexGrow={1}>
                   {todo.content}

@@ -35,6 +35,7 @@ export class Reply extends Schema.Class<Reply>("PlanReviewReply")({
   action: Action,
   markdown: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String),
+  comments: Schema.optional(Schema.String),
 }) {
   static readonly zod = zod(this)
 }

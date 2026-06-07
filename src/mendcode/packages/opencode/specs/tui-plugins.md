@@ -209,6 +209,18 @@ Top-level API groups exposed to `tui(api, options, meta)`:
 - `api.plugins.list()`, `activate(id)`, `deactivate(id)`, `add(spec)`, `install(spec, options?)`
 - `api.lifecycle.signal`, `api.lifecycle.onDispose(fn)`
 
+### Runtime widgets
+
+`api.ui.runtime.setWidget(id, render, options?)` registers trusted host widgets without replacing the prompt/editor itself.
+
+Supported placements:
+
+- `aboveEditor`: rendered above the session prompt.
+- `belowEditor`: rendered below the session prompt.
+- `sessionBottomDock`: rendered in the bottom session dock beside the host Todos widget, above the prompt/activity area.
+
+`sessionBottomDock` widgets should be compact, workflow-focused boxes. They share horizontal room with Todos and built-in session widgets, so plugins should prefer fixed or content-sized widths and avoid full-width layouts. The host may stack or hide dock widgets on narrow terminals to preserve the prompt, footer, and ASCII pet clearance.
+
 ### Commands
 
 `api.command.register` returns an unregister function. Command rows support:
