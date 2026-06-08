@@ -927,6 +927,54 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       />
     ))
   }
+  const sessionSubmitScrollMode = () => {
+    const value = (mend.profile.layout.zones.session as { submitScrollMode?: unknown }).submitScrollMode
+    return value === "clear" ? "clear" : "bottom"
+  }
+  const showSessionSubmitScrollMode = () => {
+    const current = sessionSubmitScrollMode()
+    const options: Array<{ title: string; value: "bottom" | "clear"; description: string }> = [
+      {
+        title: "Normal follow",
+        value: "bottom",
+        description: "Keep the current flow: after submit, follow the newest session output at the bottom.",
+      },
+      {
+        title: "Clear sent message",
+        value: "clear",
+        description: "After submit, place the new user message under the top menu so the next turn starts clean.",
+      },
+    ]
+    dialog.replace(() => (
+      <DialogSelect
+        title="Submit scroll behavior"
+        current={current}
+        options={options.map((item) => ({
+          title: item.title,
+          value: item.value,
+          category: "Session",
+          description: item.description,
+          onSelect: () =>
+            void updatePromptChrome(
+              (profile) => ({
+                ...profile,
+                layout: {
+                  ...profile.layout,
+                  zones: {
+                    ...profile.layout.zones,
+                    session: {
+                      ...profile.layout.zones.session,
+                      submitScrollMode: item.value,
+                    },
+                  },
+                },
+              }),
+              `Submit scroll behavior is now ${item.title}.`,
+            ),
+        }))}
+      />
+    ))
+  }
   const showPromptStatusPlacement = () => {
     const preset = mend.profile.promptChrome.preset
     const currentPlacement =
@@ -1766,6 +1814,14 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       suggested: true,
       slash: { name: "presentation", aliases: ["chat-presentation", "render-mode"] },
       onSelect: showPresentationProfile,
+    },
+    {
+      title: "Submit scroll behavior",
+      value: "mendcode.session.submit_scroll",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "submit-scroll", aliases: ["send-scroll", "clear-submit"] },
+      onSelect: showSessionSubmitScrollMode,
     },
     {
       title: "Prompt lead string",
