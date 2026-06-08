@@ -1086,8 +1086,25 @@ function todoMarkdown(status: string | undefined, content: string | undefined) {
   return `- [${status === "completed" ? "x" : " "}] ${(content ?? "").replace(/\s+/g, " ").trim()}`
 }
 
+function parseTodoOutput(output?: string): Record<string, unknown>[] {
+  if (!output) return []
+  try {
+    const parsed = JSON.parse(output) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((item) => (isRecord(item) ? [item] : []))
+  } catch {
+    return []
+  }
+}
+
 function TodoWrite(props: ToolProps) {
-  const todos = createMemo(() => arrayValue(props.input.todos).flatMap((item) => (isRecord(item) ? [item] : [])))
+  const todos = createMemo(() => {
+    const inputTodos = arrayValue(props.input.todos).flatMap((item) => (isRecord(item) ? [item] : []))
+    if (inputTodos.length) return inputTodos
+    const metadataTodos = arrayValue(props.metadata.todos).flatMap((item) => (isRecord(item) ? [item] : []))
+    if (metadataTodos.length) return metadataTodos
+    return parseTodoOutput(props.output)
+  })
   const content = createMemo(() => todos().map((todo) => todoMarkdown(stringValue(todo.status), stringValue(todo.content))).join("\n"))
   return (
     <Switch>

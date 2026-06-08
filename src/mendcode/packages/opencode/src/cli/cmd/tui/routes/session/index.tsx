@@ -284,8 +284,21 @@ export function Session() {
     const sessionLayout = mend.profile.layout.zones.session
     return (sessionLayout as { submitScrollMode?: unknown }).submitScrollMode === "clear" ? "clear" : "bottom"
   })
+  const [clearSubmitPending, setClearSubmitPending] = createSignal(false)
+  const [clearSubmitPreviousUserMessageID, setClearSubmitPreviousUserMessageID] = createSignal<string>()
+  const [clearSubmitPinnedUserMessageID, setClearSubmitPinnedUserMessageID] = createSignal<string>()
+  const clearSubmitPinnedUserMessage = createMemo(() => {
+    const id = clearSubmitPinnedUserMessageID()
+    if (!id) return undefined
+    return messages().find((message): message is UserMessage => message.id === id && message.role === "user")
+  })
+  const clearSubmitScrollActive = createMemo(
+    () => submitScrollMode() === "clear" && (clearSubmitPending() || Boolean(clearSubmitPinnedUserMessage())),
+  )
   const [stickyUserMessageID, setStickyUserMessageID] = createSignal<string>()
   const stickyUserMessage = createMemo(() => {
+    const clearPinned = clearSubmitPinnedUserMessage()
+    if (clearPinned) return clearPinned
     const id = stickyUserMessageID()
     if (!id) return undefined
     return messages().find((message): message is UserMessage => message.id === id && message.role === "user")
@@ -1055,6 +1068,7 @@ export function Session() {
   }
 
   function toBottom() {
+    resetClearSubmitScroll()
     setTimeout(() => {
       if (!scroll || scroll.isDestroyed) return
       scroll.scrollTo(scroll.scrollHeight)
@@ -1063,13 +1077,28 @@ export function Session() {
 
   const stickyUserHeaderClearance = () => Math.max(1, stickyUserHeaderBox?.height ?? 1)
 
+  function latestUserMessageAfter(previousUserMessageID: string | undefined) {
+    return messages().findLast(
+      (message): message is UserMessage => message.role === "user" && message.id !== previousUserMessageID,
+    )
+  }
+
+  function resetClearSubmitScroll() {
+    setClearSubmitPending(false)
+    setClearSubmitPreviousUserMessageID(undefined)
+    setClearSubmitPinnedUserMessageID(undefined)
+  }
+
   function scrollSubmittedMessageIntoClearView() {
     if (!scroll || scroll.isDestroyed) return false
-    const latestUser = messages().findLast((message): message is UserMessage => message.role === "user")
+    const latestUser = latestUserMessageAfter(clearSubmitPreviousUserMessageID())
     if (!latestUser) return false
+    setClearSubmitPinnedUserMessageID(latestUser.id)
+
     const child = scroll.getChildren().find((item) => item.id === latestUser.id)
     if (!child) return false
 
+    setClearSubmitPending(false)
     const targetTop = stickyUserHeaderEnabled() ? 0 : 1
     scroll.scrollBy(child.y - scroll.y - targetTop)
     if (stickyUserHeaderEnabled()) setStickyUserMessageID(latestUser.id)
@@ -1083,14 +1112,22 @@ export function Session() {
       return
     }
 
-    const delays = [0, 35, 90, 180]
+    const currentLatestUser = messages().findLast((message): message is UserMessage => message.role === "user")
+    setStickyUserMessageID(undefined)
+    setClearSubmitPreviousUserMessageID(currentLatestUser?.id)
+    setClearSubmitPinnedUserMessageID(undefined)
+    setClearSubmitPending(true)
+
+    const delays = [0, 35, 90, 180, 360, 720]
     for (const [index, delay] of delays.entries()) {
       setTimeout(() => {
         if (scrollSubmittedMessageIntoClearView()) return
         if (!scroll || scroll.isDestroyed) return
         if (index !== delays.length - 1) return
-        const latestUser = messages().findLast((message): message is UserMessage => message.role === "user")
+        const latestUser = latestUserMessageAfter(clearSubmitPreviousUserMessageID())
+        setClearSubmitPending(false)
         if (stickyUserHeaderEnabled() && latestUser) {
+          setClearSubmitPinnedUserMessageID(latestUser.id)
           setStickyUserMessageID(latestUser.id)
         }
         scroll.scrollTo(Math.max(0, scroll.scrollHeight))
@@ -1099,6 +1136,10 @@ export function Session() {
   }
 
   const updateStickyUserHeader = () => {
+    if (clearSubmitPending() || clearSubmitPinnedUserMessage()) {
+      setStickyUserMessageID(undefined)
+      return
+    }
     if (!stickyUserHeaderEnabled() || !scroll || scroll.isDestroyed) {
       setStickyUserMessageID(undefined)
       return
@@ -1129,6 +1170,16 @@ export function Session() {
     queueMicrotask(updateStickyUserHeader)
     onCleanup(() => clearInterval(interval))
   })
+
+  createEffect(
+    on(
+      () => messages().map((message) => message.id).join("\0"),
+      () => {
+        if (!clearSubmitPending() || submitScrollMode() !== "clear") return
+        setTimeout(scrollSubmittedMessageIntoClearView, 0)
+      },
+    ),
+  )
 
   const local = useLocal()
 
@@ -1924,7 +1975,12 @@ export function Session() {
   })
 
   // snap to bottom when session changes
-  createEffect(on(() => route.sessionID, toBottom))
+  createEffect(
+    on(() => route.sessionID, () => {
+      resetClearSubmitScroll()
+      toBottom()
+    }),
+  )
 
   return (
     <context.Provider
@@ -1978,8 +2034,8 @@ export function Session() {
                     foregroundColor: theme.border,
                   },
                 }}
-                stickyScroll={true}
-                stickyStart="bottom"
+                stickyScroll={!clearSubmitScrollActive()}
+                stickyStart={clearSubmitScrollActive() ? undefined : "bottom"}
                 flexGrow={1}
                 width="100%"
                 scrollAcceleration={scrollAcceleration()}
@@ -4096,11 +4152,28 @@ function todoMarkdown(status: string, content: string) {
   return `- [${status === "completed" ? "x" : " "}] ${content.replace(/\s+/g, " ").trim()}`
 }
 
+function parseTodoOutput(output?: string): Array<{ content: string; status: string }> {
+  if (!output) return []
+  try {
+    const parsed = JSON.parse(output) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((item) => {
+      if (!item || typeof item !== "object") return []
+      const todo = item as Record<string, unknown>
+      if (typeof todo.content !== "string" || typeof todo.status !== "string") return []
+      return [{ content: todo.content, status: todo.status }]
+    })
+  } catch {
+    return []
+  }
+}
+
 function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
-  const content = createMemo(() => (props.input.todos ?? []).map((todo) => todoMarkdown(todo.status, todo.content)).join("\n"))
+  const todos = createMemo(() => props.input.todos ?? props.metadata.todos ?? parseTodoOutput(props.output))
+  const content = createMemo(() => todos().map((todo) => todoMarkdown(todo.status, todo.content)).join("\n"))
   return (
     <Switch>
-      <Match when={props.metadata.todos?.length}>
+      <Match when={todos().length && props.part.state.status === "completed"}>
         <BlockTool title="Todos" part={props.part} variant="left-line" marginTop={1}>
           <MarkdownChecklist content={content()} />
         </BlockTool>
