@@ -292,9 +292,6 @@ export function Session() {
     if (!id) return undefined
     return messages().find((message): message is UserMessage => message.id === id && message.role === "user")
   })
-  const clearSubmitScrollActive = createMemo(
-    () => submitScrollMode() === "clear" && (clearSubmitPending() || Boolean(clearSubmitPinnedUserMessage())),
-  )
   const [stickyUserMessageID, setStickyUserMessageID] = createSignal<string>()
   const stickyUserMessage = createMemo(() => {
     const clearPinned = clearSubmitPinnedUserMessage()
@@ -302,6 +299,13 @@ export function Session() {
     const id = stickyUserMessageID()
     if (!id) return undefined
     return messages().find((message): message is UserMessage => message.id === id && message.role === "user")
+  })
+  const transcriptMessages = createMemo(() => {
+    if (clearSubmitPending() && submitScrollMode() === "clear") return []
+    const pinned = clearSubmitPinnedUserMessage()
+    if (!pinned || submitScrollMode() !== "clear") return messages()
+    const pinnedIndex = messages().findIndex((message) => message.id === pinned.id)
+    return pinnedIndex === -1 ? messages() : messages().slice(pinnedIndex + 1)
   })
   const sessionDirectory = createMemo(() => {
     for (const message of messages().toReversed()) {
@@ -1094,13 +1098,8 @@ export function Session() {
     const latestUser = latestUserMessageAfter(clearSubmitPreviousUserMessageID())
     if (!latestUser) return false
     setClearSubmitPinnedUserMessageID(latestUser.id)
-
-    const child = scroll.getChildren().find((item) => item.id === latestUser.id)
-    if (!child) return false
-
     setClearSubmitPending(false)
-    const targetTop = stickyUserHeaderEnabled() ? 0 : 1
-    scroll.scrollBy(child.y - scroll.y - targetTop)
+    scroll.scrollTo(0)
     if (stickyUserHeaderEnabled()) setStickyUserMessageID(latestUser.id)
     else updateStickyUserHeader()
     return true
@@ -1130,7 +1129,7 @@ export function Session() {
           setClearSubmitPinnedUserMessageID(latestUser.id)
           setStickyUserMessageID(latestUser.id)
         }
-        scroll.scrollTo(Math.max(0, scroll.scrollHeight))
+        scroll.scrollTo(0)
       }, delay)
     }
   }
@@ -2034,8 +2033,8 @@ export function Session() {
                     foregroundColor: theme.border,
                   },
                 }}
-                stickyScroll={!clearSubmitScrollActive()}
-                stickyStart={clearSubmitScrollActive() ? undefined : "bottom"}
+                stickyScroll={true}
+                stickyStart="bottom"
                 flexGrow={1}
                 width="100%"
                 scrollAcceleration={scrollAcceleration()}
@@ -2044,7 +2043,10 @@ export function Session() {
                 <Show when={session()?.parentID}>
                   <SubagentFooter />
                 </Show>
-                <For each={messages()}>
+                <Show when={clearSubmitPinnedUserMessage()}>
+                  <box height={stickyUserHeaderClearance()} />
+                </Show>
+                <For each={transcriptMessages()}>
                   {(message, index) => (
                     <Switch>
                       <Match when={message.id === revert()?.messageID}>
