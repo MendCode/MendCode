@@ -815,6 +815,43 @@ it.live(
   3_000,
 )
 
+it.live(
+  "loop refreshes the session title every ten human messages",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        yield* sessions.create({ title: "Recent packaging cleanup" })
+        const chat = yield* sessions.create({
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+
+        for (let i = 1; i <= 10; i++) {
+          yield* user(chat.id, `human turn ${i}`)
+          yield* llm.text(`assistant turn ${i}`)
+          yield* prompt.loop({ sessionID: chat.id })
+        }
+
+        yield* llm.wait(12)
+        const hits = yield* llm.hits
+        const titleHits = hits.filter((hit) =>
+          JSON.stringify(hit.body).includes("Generate an updated title for this conversation"),
+        )
+        expect(titleHits).toHaveLength(1)
+        const body = JSON.stringify(titleHits[0]?.body)
+        expect(body).toContain("Latest human messages")
+        expect(body).toContain("human turn 1")
+        expect(body).toContain("human turn 10")
+        expect(body).toContain("Current and recent session titles")
+        expect(body).toContain("E2E Title")
+        expect(body).toContain("Recent packaging cleanup")
+      }),
+      { git: true, config: providerCfg },
+    ),
+  10_000,
+)
+
 // Cancel semantics
 
 it.live(

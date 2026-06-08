@@ -598,7 +598,8 @@ function hit(url: string, body: unknown) {
 
 function isTitleRequest(body: unknown): boolean {
   if (!body || typeof body !== "object") return false
-  return JSON.stringify(body).includes("Generate a title for this conversation")
+  const text = JSON.stringify(body)
+  return text.includes("Generate a title for this conversation") || text.includes("Generate an updated title for this conversation")
 }
 
 namespace TestLLMServer {
