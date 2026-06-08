@@ -38,7 +38,7 @@
     "cross-spawn": "catalog:",
     "glob": "13.0.5",
     "mime-types": "3.0.2",
-    "minimatch": "10.2.5",
+    "minimatch": "10.2.3",
     "npm-package-arg": "13.0.2",
     "semver": "^7.6.3",
     "xdg-basedir": "5.1.0",
