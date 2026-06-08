@@ -17,8 +17,9 @@
     "db": "bun drizzle-kit"
   },
   "bin": {
-    "mend": "./bin/opencode",
-    "mend-runtime": "./bin/opencode"
+    "mendcode": "./bin/mendcode",
+    "mend": "./bin/mendcode",
+    "mend-runtime": "./bin/mendcode"
   },
   "exports": {
     "./*": "./src/*.ts"
