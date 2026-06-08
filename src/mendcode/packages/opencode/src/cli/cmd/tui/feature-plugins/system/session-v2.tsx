@@ -323,11 +323,7 @@ function AssistantMessage(props: {
         {(part) => (
           <Switch>
             <Match when={part.type === "text"}>
-              <AssistantText
-                part={part as SessionMessageAssistantText}
-                syntax={props.syntax}
-                completed={!!props.message.time.completed}
-              />
+              <AssistantText part={part as SessionMessageAssistantText} syntax={props.syntax} />
             </Match>
             <Match when={part.type === "reasoning"}>
               <AssistantReasoning
@@ -376,25 +372,20 @@ function AssistantMessage(props: {
   )
 }
 
-function AssistantText(props: { part: SessionMessageAssistantText; syntax: SyntaxStyle; completed: boolean }) {
+function AssistantText(props: { part: SessionMessageAssistantText; syntax: SyntaxStyle }) {
   const { theme } = useTheme()
   return (
     <Show when={props.part.text.trim()}>
       <box paddingLeft={3} marginTop={1} flexShrink={0} id="text">
-        <Show
-          when={props.completed}
-          fallback={<text fg={theme.text}>{props.part.text.trim()}</text>}
-        >
-          <code
-            filetype="markdown"
-            drawUnstyledText={false}
-            streaming={false}
-            syntaxStyle={props.syntax}
-            content={props.part.text.trim()}
-            conceal={true}
-            fg={theme.text}
-          />
-        </Show>
+        <code
+          filetype="markdown"
+          drawUnstyledText={false}
+          streaming={true}
+          syntaxStyle={props.syntax}
+          content={props.part.text.trim()}
+          conceal={true}
+          fg={theme.text}
+        />
       </box>
     </Show>
   )
@@ -418,20 +409,15 @@ function AssistantReasoning(props: { part: SessionMessageAssistantReasoning; sub
             <ReasoningHeader done={props.completed} title={display().title} />
             <Show when={display().body}>
               <box marginTop={1}>
-                <Show
-                  when={props.completed}
-                  fallback={<text fg={theme.textMuted}>{display().body}</text>}
-                >
-                  <code
-                    filetype="markdown"
-                    drawUnstyledText={false}
-                    streaming={false}
-                    syntaxStyle={props.subtleSyntax}
-                    content={display().body}
-                    conceal={true}
-                    fg={theme.textMuted}
-                  />
-                </Show>
+                <code
+                  filetype="markdown"
+                  drawUnstyledText={false}
+                  streaming={true}
+                  syntaxStyle={props.subtleSyntax}
+                  content={display().body}
+                  conceal={true}
+                  fg={theme.textMuted}
+                />
               </box>
             </Show>
           </box>
@@ -446,20 +432,15 @@ function AssistantReasoning(props: { part: SessionMessageAssistantReasoning; sub
             borderColor={theme.backgroundElement}
             flexShrink={0}
           >
-            <Show
-              when={props.completed}
-              fallback={<text fg={theme.textMuted}>Thinking: {content()}</text>}
-            >
-              <code
-                filetype="markdown"
-                drawUnstyledText={false}
-                streaming={false}
-                syntaxStyle={props.subtleSyntax}
-                content={"_Thinking:_ " + content()}
-                conceal={true}
-                fg={theme.textMuted}
-              />
-            </Show>
+            <code
+              filetype="markdown"
+              drawUnstyledText={false}
+              streaming={true}
+              syntaxStyle={props.subtleSyntax}
+              content={"_Thinking:_ " + content()}
+              conceal={true}
+              fg={theme.textMuted}
+            />
           </box>
         </Match>
       </Switch>
