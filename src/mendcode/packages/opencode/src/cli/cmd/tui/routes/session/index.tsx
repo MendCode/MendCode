@@ -284,8 +284,21 @@ export function Session() {
     const sessionLayout = mend.profile.layout.zones.session
     return (sessionLayout as { submitScrollMode?: unknown }).submitScrollMode === "clear" ? "clear" : "bottom"
   })
+  const [clearSubmitPending, setClearSubmitPending] = createSignal(false)
+  const [clearSubmitPreviousUserMessageID, setClearSubmitPreviousUserMessageID] = createSignal<string>()
+  const [clearSubmitPinnedUserMessageID, setClearSubmitPinnedUserMessageID] = createSignal<string>()
+  const clearSubmitPinnedUserMessage = createMemo(() => {
+    const id = clearSubmitPinnedUserMessageID()
+    if (!id) return undefined
+    return messages().find((message): message is UserMessage => message.id === id && message.role === "user")
+  })
+  const clearSubmitScrollActive = createMemo(
+    () => submitScrollMode() === "clear" && (clearSubmitPending() || Boolean(clearSubmitPinnedUserMessage())),
+  )
   const [stickyUserMessageID, setStickyUserMessageID] = createSignal<string>()
   const stickyUserMessage = createMemo(() => {
+    const clearPinned = clearSubmitPinnedUserMessage()
+    if (clearPinned) return clearPinned
     const id = stickyUserMessageID()
     if (!id) return undefined
     return messages().find((message): message is UserMessage => message.id === id && message.role === "user")
@@ -1055,6 +1068,7 @@ export function Session() {
   }
 
   function toBottom() {
+    resetClearSubmitScroll()
     setTimeout(() => {
       if (!scroll || scroll.isDestroyed) return
       scroll.scrollTo(scroll.scrollHeight)
@@ -1063,13 +1077,28 @@ export function Session() {
 
   const stickyUserHeaderClearance = () => Math.max(1, stickyUserHeaderBox?.height ?? 1)
 
+  function latestUserMessageAfter(previousUserMessageID: string | undefined) {
+    return messages().findLast(
+      (message): message is UserMessage => message.role === "user" && message.id !== previousUserMessageID,
+    )
+  }
+
+  function resetClearSubmitScroll() {
+    setClearSubmitPending(false)
+    setClearSubmitPreviousUserMessageID(undefined)
+    setClearSubmitPinnedUserMessageID(undefined)
+  }
+
   function scrollSubmittedMessageIntoClearView() {
     if (!scroll || scroll.isDestroyed) return false
-    const latestUser = messages().findLast((message): message is UserMessage => message.role === "user")
+    const latestUser = latestUserMessageAfter(clearSubmitPreviousUserMessageID())
     if (!latestUser) return false
+    setClearSubmitPinnedUserMessageID(latestUser.id)
+
     const child = scroll.getChildren().find((item) => item.id === latestUser.id)
     if (!child) return false
 
+    setClearSubmitPending(false)
     const targetTop = stickyUserHeaderEnabled() ? 0 : 1
     scroll.scrollBy(child.y - scroll.y - targetTop)
     if (stickyUserHeaderEnabled()) setStickyUserMessageID(latestUser.id)
@@ -1083,22 +1112,26 @@ export function Session() {
       return
     }
 
-    const delays = [0, 35, 90, 180]
-    for (const [index, delay] of delays.entries()) {
+    const currentLatestUser = messages().findLast((message): message is UserMessage => message.role === "user")
+    setStickyUserMessageID(undefined)
+    setClearSubmitPreviousUserMessageID(currentLatestUser?.id)
+    setClearSubmitPinnedUserMessageID(undefined)
+    setClearSubmitPending(true)
+
+    const delays = [0, 35, 90, 180, 360, 720]
+    for (const delay of delays) {
       setTimeout(() => {
         if (scrollSubmittedMessageIntoClearView()) return
         if (!scroll || scroll.isDestroyed) return
-        if (index !== delays.length - 1) return
-        const latestUser = messages().findLast((message): message is UserMessage => message.role === "user")
-        if (stickyUserHeaderEnabled() && latestUser) {
-          setStickyUserMessageID(latestUser.id)
-          scroll.scrollTo(Math.max(0, scroll.scrollHeight))
-        }
       }, delay)
     }
   }
 
   const updateStickyUserHeader = () => {
+    if (clearSubmitPending() || clearSubmitPinnedUserMessage()) {
+      setStickyUserMessageID(undefined)
+      return
+    }
     if (!stickyUserHeaderEnabled() || !scroll || scroll.isDestroyed) {
       setStickyUserMessageID(undefined)
       return
@@ -1129,6 +1162,16 @@ export function Session() {
     queueMicrotask(updateStickyUserHeader)
     onCleanup(() => clearInterval(interval))
   })
+
+  createEffect(
+    on(
+      () => messages().map((message) => message.id).join("\0"),
+      () => {
+        if (!clearSubmitPending() || submitScrollMode() !== "clear") return
+        setTimeout(scrollSubmittedMessageIntoClearView, 0)
+      },
+    ),
+  )
 
   const local = useLocal()
 
@@ -1924,7 +1967,12 @@ export function Session() {
   })
 
   // snap to bottom when session changes
-  createEffect(on(() => route.sessionID, toBottom))
+  createEffect(
+    on(() => route.sessionID, () => {
+      resetClearSubmitScroll()
+      toBottom()
+    }),
+  )
 
   return (
     <context.Provider
@@ -1978,8 +2026,8 @@ export function Session() {
                     foregroundColor: theme.border,
                   },
                 }}
-                stickyScroll={true}
-                stickyStart="bottom"
+                stickyScroll={!clearSubmitScrollActive()}
+                stickyStart={clearSubmitScrollActive() ? undefined : "bottom"}
                 flexGrow={1}
                 width="100%"
                 scrollAcceleration={scrollAcceleration()}
