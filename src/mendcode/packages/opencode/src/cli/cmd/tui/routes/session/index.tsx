@@ -67,7 +67,6 @@ import type { DialogContext } from "@tui/ui/dialog"
 import { useKeybind } from "@tui/context/keybind"
 import { useDialog } from "../../ui/dialog"
 import { DialogSelect } from "../../ui/dialog-select"
-import { TodoItem } from "../../component/todo-item"
 import { useTextareaKeybindings } from "../../component/textarea-keybindings"
 import { DialogMessage } from "./dialog-message"
 import type { PromptInfo } from "../../component/prompt/history"
@@ -1071,9 +1070,10 @@ export function Session() {
     const child = scroll.getChildren().find((item) => item.id === latestUser.id)
     if (!child) return false
 
-    const targetTop = stickyUserHeaderEnabled() ? stickyUserHeaderClearance() + 1 : 1
+    const targetTop = stickyUserHeaderEnabled() ? 0 : 1
     scroll.scrollBy(child.y - scroll.y - targetTop)
-    updateStickyUserHeader()
+    if (stickyUserHeaderEnabled()) setStickyUserMessageID(latestUser.id)
+    else updateStickyUserHeader()
     return true
   }
 
@@ -1088,7 +1088,12 @@ export function Session() {
       setTimeout(() => {
         if (scrollSubmittedMessageIntoClearView()) return
         if (!scroll || scroll.isDestroyed) return
-        if (index === delays.length - 1) scroll.scrollTo(scroll.scrollHeight)
+        if (index !== delays.length - 1) return
+        const latestUser = messages().findLast((message): message is UserMessage => message.role === "user")
+        if (stickyUserHeaderEnabled() && latestUser) {
+          setStickyUserMessageID(latestUser.id)
+        }
+        scroll.scrollTo(Math.max(0, scroll.scrollHeight))
       }, delay)
     }
   }
@@ -3506,6 +3511,8 @@ function BlockTool(props: {
   titleColor?: RGBA
   titleAttributes?: typeof TextAttributes.BOLD
   variant?: "plain" | "left-line"
+  contentGap?: number
+  marginTop?: number
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
@@ -3535,7 +3542,8 @@ function BlockTool(props: {
     <box
       paddingBottom={1}
       paddingLeft={3}
-      gap={1}
+      gap={props.contentGap ?? 1}
+      marginTop={props.marginTop ?? 0}
       onMouseUp={() => {
         if (renderer.getSelection()?.getSelectedText()) return
         props.onClick?.()
@@ -3646,6 +3654,7 @@ function Shell(props: ToolProps<typeof ShellTool>) {
           spinner={isRunning()}
           titleColor={theme.primary}
           titleAttributes={TextAttributes.BOLD}
+          contentGap={0}
           onClick={overflow() ? () => setExpanded((prev) => !prev) : undefined}
         >
           <CommandOutput
@@ -4068,16 +4077,32 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
   )
 }
 
+function MarkdownChecklist(props: { content: string }) {
+  const ctx = use()
+  const { theme, syntax } = useTheme()
+  return (
+    <markdown
+      syntaxStyle={syntax()}
+      streaming={true}
+      content={props.content}
+      conceal={ctx.conceal()}
+      fg={theme.markdownText}
+      bg={theme.background}
+    />
+  )
+}
+
+function todoMarkdown(status: string, content: string) {
+  return `- [${status === "completed" ? "x" : " "}] ${content.replace(/\s+/g, " ").trim()}`
+}
+
 function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
+  const content = createMemo(() => (props.input.todos ?? []).map((todo) => todoMarkdown(todo.status, todo.content)).join("\n"))
   return (
     <Switch>
       <Match when={props.metadata.todos?.length}>
-        <BlockTool title="Todos" part={props.part} variant="left-line">
-          <box>
-            <For each={props.input.todos ?? []}>
-              {(todo) => <TodoItem status={todo.status} content={todo.content} />}
-            </For>
-          </box>
+        <BlockTool title="Todos" part={props.part} variant="left-line" marginTop={1}>
+          <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
       <Match when={true}>
@@ -4090,8 +4115,15 @@ function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
 }
 
 function Question(props: ToolProps<typeof QuestionTool>) {
-  const { theme } = useTheme()
   const count = createMemo(() => props.input.questions?.length ?? 0)
+  const content = createMemo(() =>
+    (props.input.questions ?? [])
+      .map((question, index) => {
+        const answer = format(props.metadata.answers?.[index])
+        return `- [${answer === "(no answer)" ? " " : "x"}] ${question.question.replace(/\s+/g, " ").trim()}\n  ${answer}`
+      })
+      .join("\n"),
+  )
 
   function format(answer?: ReadonlyArray<string>) {
     if (!answer?.length) return "(no answer)"
@@ -4101,17 +4133,8 @@ function Question(props: ToolProps<typeof QuestionTool>) {
   return (
     <Switch>
       <Match when={props.metadata.answers}>
-        <BlockTool title="Questions" part={props.part} variant="left-line">
-          <box gap={1}>
-            <For each={props.input.questions ?? []}>
-              {(q, i) => (
-                <box flexDirection="column">
-                  <text fg={theme.textMuted}>{q.question}</text>
-                  <text fg={theme.text}>{format(props.metadata.answers?.[i()])}</text>
-                </box>
-              )}
-            </For>
-          </box>
+        <BlockTool title="Questions" part={props.part} variant="left-line" marginTop={1}>
+          <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
       <Match when={true}>

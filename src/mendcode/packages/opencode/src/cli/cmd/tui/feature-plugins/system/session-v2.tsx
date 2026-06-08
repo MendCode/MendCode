@@ -215,6 +215,7 @@ function ShellMessage(props: { message: SessionMessageShell }) {
       spinner={!props.message.time.completed}
       titleColor={theme.primary}
       titleAttributes={TextAttributes.BOLD}
+      contentGap={0}
       onClick={overflow() ? () => setExpanded((prev) => !prev) : undefined}
     >
       <CommandOutput
@@ -752,34 +753,50 @@ function BlockTool(props: {
   spinner?: boolean
   titleColor?: RGBA
   titleAttributes?: typeof TextAttributes.BOLD
+  contentGap?: number
+  marginTop?: number
+  variant?: "plain" | "left-line"
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error.message : undefined))
+  const title = () => (
+    <Show
+      when={props.spinner}
+      fallback={
+        <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
+          {props.title}
+        </text>
+      }
+    >
+      <Spinner color={props.titleColor ?? theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
+    </Show>
+  )
+  const content = () => (
+    <>
+      {title()}
+      {props.children}
+      <Show when={error()}>
+        <text fg={theme.error}>{error()}</text>
+      </Show>
+    </>
+  )
   return (
     <box
       paddingBottom={1}
       paddingLeft={3}
-      gap={1}
+      gap={props.contentGap ?? 1}
+      marginTop={props.marginTop ?? 0}
       onMouseUp={() => {
         if (renderer.getSelection()?.getSelectedText()) return
         props.onClick?.()
       }}
       flexShrink={0}
     >
-      <Show
-        when={props.spinner}
-        fallback={
-          <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
-            {props.title}
-          </text>
-        }
-      >
-        <Spinner color={props.titleColor ?? theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
-      </Show>
-      {props.children}
-      <Show when={error()}>
-        <text fg={theme.error}>{error()}</text>
+      <Show when={props.variant === "left-line"} fallback={content()}>
+        <box border={["left"]} borderColor={props.titleColor ?? theme.border} paddingLeft={2} gap={1}>
+          {content()}
+        </box>
       </Show>
     </box>
   )
@@ -795,7 +812,13 @@ function CommandOutput(props: {
 }) {
   const { theme } = useTheme()
   return (
-    <box gap={1}>
+    <box
+      border={["top", "bottom", "left", "right"]}
+      borderColor={props.running ? theme.primary : theme.border}
+      paddingLeft={1}
+      paddingRight={1}
+      gap={1}
+    >
       <box flexDirection="row" gap={1}>
         <text fg={theme.textMuted}>$</text>
         <text fg={theme.primary} attributes={TextAttributes.BOLD}>
@@ -839,6 +862,7 @@ function Bash(props: ToolProps) {
           spinner={props.part.state.status === "running"}
           titleColor={theme.primary}
           titleAttributes={TextAttributes.BOLD}
+          contentGap={0}
           onClick={overflow() ? () => setExpanded((prev) => !prev) : undefined}
         >
           <CommandOutput
@@ -1045,22 +1069,31 @@ function ApplyPatch(props: ToolProps) {
   )
 }
 
+function MarkdownChecklist(props: { content: string }) {
+  const { theme, syntax } = useTheme()
+  return (
+    <markdown
+      syntaxStyle={syntax()}
+      streaming={true}
+      content={props.content}
+      fg={theme.markdownText}
+      bg={theme.background}
+    />
+  )
+}
+
+function todoMarkdown(status: string | undefined, content: string | undefined) {
+  return `- [${status === "completed" ? "x" : " "}] ${(content ?? "").replace(/\s+/g, " ").trim()}`
+}
+
 function TodoWrite(props: ToolProps) {
-  const { theme } = useTheme()
   const todos = createMemo(() => arrayValue(props.input.todos).flatMap((item) => (isRecord(item) ? [item] : [])))
+  const content = createMemo(() => todos().map((todo) => todoMarkdown(stringValue(todo.status), stringValue(todo.content))).join("\n"))
   return (
     <Switch>
       <Match when={todos().length > 0 && props.part.state.status === "completed"}>
-        <BlockTool title="# Todos" part={props.part}>
-          <box>
-            <For each={todos()}>
-              {(todo) => (
-                <text fg={theme.text}>
-                  {todoIcon(stringValue(todo.status))} {stringValue(todo.content)}
-                </text>
-              )}
-            </For>
-          </box>
+        <BlockTool title="Todos" part={props.part} marginTop={1} variant="left-line">
+          <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
       <Match when={true}>
@@ -1073,25 +1106,23 @@ function TodoWrite(props: ToolProps) {
 }
 
 function Question(props: ToolProps) {
-  const { theme } = useTheme()
   const questions = createMemo(() =>
     arrayValue(props.input.questions).flatMap((item) => (isRecord(item) ? [item] : [])),
   )
   const answers = createMemo(() => arrayValue(props.metadata.answers))
+  const content = createMemo(() =>
+    questions()
+      .map((question, index) => {
+        const answer = formatAnswer(answers()[index])
+        return `- [${answer === "(no answer)" ? " " : "x"}] ${(stringValue(question.question) ?? "").replace(/\s+/g, " ").trim()}\n  ${answer}`
+      })
+      .join("\n"),
+  )
   return (
     <Switch>
       <Match when={answers().length > 0}>
-        <BlockTool title="# Questions" part={props.part}>
-          <box gap={1}>
-            <For each={questions()}>
-              {(question, index) => (
-                <box>
-                  <text fg={theme.textMuted}>{stringValue(question.question)}</text>
-                  <text fg={theme.text}>{formatAnswer(answers()[index()])}</text>
-                </box>
-              )}
-            </For>
-          </box>
+        <BlockTool title="Questions" part={props.part} marginTop={1} variant="left-line">
+          <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
       <Match when={true}>
@@ -1215,13 +1246,6 @@ function filetype(input?: string) {
   const language = LANGUAGE_EXTENSIONS[path.extname(input)]
   if (["typescriptreact", "javascriptreact", "javascript"].includes(language)) return "typescript"
   return language
-}
-
-function todoIcon(status?: string) {
-  if (status === "completed") return "✓"
-  if (status === "in_progress") return "~"
-  if (status === "cancelled") return "✕"
-  return "☐"
 }
 
 function formatAnswer(answer: unknown) {
