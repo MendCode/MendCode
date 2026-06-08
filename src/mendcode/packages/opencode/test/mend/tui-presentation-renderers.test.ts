@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { parseTimelineDiffRows } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
+import { rawReasoningDisplay } from "../../src/mend/tui/presentation"
 import { groupTimelineParts } from "../../src/mend/tui/timeline/group"
 import { normalizeToolEvent, shouldRenderCompactTool, toolClass, toolSummary } from "../../src/mend/tui/timeline/normalize"
 
@@ -253,6 +254,17 @@ describe("mend tui presentation renderers", () => {
         title: "Thinking: Exploring startup ideas",
       },
     ])
+  })
+
+  test("raw reasoning keeps provider headings in the body instead of live header titles", () => {
+    expect(rawReasoningDisplay("**Updating dashboard features**\n\nStreaming body")).toEqual({
+      title: null,
+      body: "**Updating dashboard features**\n\nStreaming body",
+    })
+    expect(rawReasoningDisplay("", { fallbackTitle: "reasoning metadata" })).toEqual({
+      title: "reasoning metadata",
+      body: "",
+    })
   })
 
   test("minimal and mendcode compact active streaming tool rows", () => {

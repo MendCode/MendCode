@@ -108,7 +108,7 @@ import { getRevertDiffFiles } from "../../util/revert-diff"
 import { restorePromptFromSubmittedParts } from "../../component/prompt/submit-parts"
 import { useMendTuiProfile } from "../../context/mend"
 import { subagentTaskColorIndex, type SubagentTaskColorEntry } from "../../util/subagent-color"
-import { presentationReasoningVisible, reasoningSummary, shouldDisplayReasoning } from "@/mend/tui/presentation"
+import { presentationReasoningVisible, rawReasoningDisplay, shouldDisplayReasoning } from "@/mend/tui/presentation"
 import { promptChromeUsesFullSessionWidth } from "@/mend/tui/prompt-chrome"
 import { formatDuration } from "@/util/format"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
@@ -2976,7 +2976,6 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
     const end = props.part.time.end
     return end === undefined ? 0 : Math.max(0, end - props.part.time.start)
   })
-  const summary = createMemo(() => reasoningSummary(content()))
   const reasoningDetail = createMemo(() => {
     return [
       reasoningTokenCount() > 0 ? `${Locale.number(reasoningTokenCount())} reasoning tokens` : undefined,
@@ -2989,6 +2988,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
     [isDone() ? Locale.duration(duration()) : undefined, reasoningDetail()].filter(Boolean).join(" · "),
   )
   const activeReasoningLabel = createMemo(() => "Thinking")
+  const display = createMemo(() => rawReasoningDisplay(content()))
 
   return (
     <Show when={visible()}>
@@ -3001,18 +3001,18 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
                 open={true}
                 done={isDone()}
                 activeLabel={activeReasoningLabel()}
-                title={summary().title}
+                title={display().title}
                 duration={headerDetail() || undefined}
               />
             </box>
-            <Show when={summary().body}>
+            <Show when={display().body}>
               <box marginTop={1}>
                 <code
                   filetype="markdown"
                   drawUnstyledText={false}
                   streaming={true}
                   syntaxStyle={subtleSyntax()}
-                  content={summary().body}
+                  content={display().body}
                   conceal={ctx.conceal()}
                   fg={theme.textMuted}
                 />

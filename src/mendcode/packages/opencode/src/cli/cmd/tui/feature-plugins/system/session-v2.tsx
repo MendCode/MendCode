@@ -30,7 +30,7 @@ import { useMendTuiProfile } from "@tui/context/mend"
 import { normalizeToolEvent, shouldRenderCompactTool } from "@/mend/tui/timeline/normalize"
 import { TimelineDiff } from "@/cli/cmd/tui/routes/session/renderers/diff"
 import { formatDuration } from "@/util/format"
-import { reasoningSummary, shouldDisplayReasoning } from "@/mend/tui/presentation"
+import { rawReasoningDisplay, shouldDisplayReasoning } from "@/mend/tui/presentation"
 
 const id = "internal:session-v2-debug"
 const route = "session.v2.messages"
@@ -399,21 +399,21 @@ function AssistantReasoning(props: { part: SessionMessageAssistantReasoning; sub
     Boolean((props.part as unknown as { metadata?: Record<string, any> }).metadata?.openai?.reasoningEncryptedContent),
   )
   const hasReasoningEvidence = createMemo(() => Boolean(content() || (raw() && encryptedReasoning())))
-  const summary = createMemo(() => reasoningSummary(content()))
+  const display = createMemo(() => rawReasoningDisplay(content(), { fallbackTitle: "reasoning metadata" }))
   return (
     <Show when={hasReasoningEvidence() && shouldDisplayReasoning(mend.profile, { completed: props.completed })}>
       <Switch>
         <Match when={raw()}>
           <box paddingLeft={3} marginTop={1} flexDirection="column" flexShrink={0}>
-            <ReasoningHeader done={props.completed} title={summary().title ?? (!content() ? "reasoning metadata" : null)} />
-            <Show when={summary().body}>
+            <ReasoningHeader done={props.completed} title={display().title} />
+            <Show when={display().body}>
               <box marginTop={1}>
                 <code
                   filetype="markdown"
                   drawUnstyledText={false}
                   streaming={true}
                   syntaxStyle={props.subtleSyntax}
-                  content={summary().body}
+                  content={display().body}
                   conceal={true}
                   fg={theme.textMuted}
                 />
