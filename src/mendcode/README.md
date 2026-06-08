@@ -10,8 +10,7 @@
 <p align="center">The open source AI coding agent.</p>
 <p align="center">
   <a href="https://mendcode.ai"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/opencode-ai"><img alt="npm" src="https://img.shields.io/npm/v/opencode-ai?style=flat-square" /></a>
-  <a href="https://mendcode.ai/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
+  <a href="https://github.com/MendCode/mendcode-cli/actions"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/MendCode/mendcode-cli/security.yml?style=flat-square&branch=main" /></a>
 </p>
 
 <p align="center">
@@ -45,22 +44,13 @@
 
 ### Installation
 
-Current install/distribution assets still come from the OpenCode upstream runtime. MendCode keeps the local UX/runtime branding while preserving those real upstream contracts for now.
+Install MendCode from the MendCode release assets:
 
 ```bash
-# YOLO
 curl -fsSL https://mendcode.ai/install | bash
 
-# Package managers
-npm i -g opencode-ai@latest        # or bun/pnpm/yarn
-scoop install opencode             # Windows
-choco install opencode             # Windows
-brew install anomalyco/tap/opencode # macOS and Linux (recommended, always up to date)
-brew install opencode              # macOS and Linux (official brew formula, updated less)
-sudo pacman -S opencode            # Arch Linux (Stable)
-paru -S opencode-bin               # Arch Linux (Latest from AUR)
-mise use -g opencode               # Any OS
-nix run nixpkgs#opencode           # or github:anomalyco/opencode for latest dev branch
+# Install into a custom bin directory
+MENDCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://mendcode.ai/install | bash
 ```
 
 > [!TIP]
@@ -72,30 +62,23 @@ MendCode is also available through the current MendCode desktop distribution. Do
 
 | Platform              | Download                           |
 | --------------------- | ---------------------------------- |
-| macOS (Apple Silicon) | `opencode-desktop-mac-arm64.dmg`   |
-| macOS (Intel)         | `opencode-desktop-mac-x64.dmg`     |
-| Windows               | `opencode-desktop-windows-x64.exe` |
+| macOS (Apple Silicon) | `mendcode-desktop-mac-arm64.dmg`   |
+| macOS (Intel)         | `mendcode-desktop-mac-x64.dmg`     |
+| Windows               | `mendcode-desktop-windows-x64.exe` |
 | Linux                 | `.deb`, `.rpm`, or `.AppImage`     |
-
-```bash
-# macOS (Homebrew)
-brew install --cask opencode-desktop
-# Windows (Scoop)
-scoop bucket add extras; scoop install extras/opencode-desktop
-```
 
 #### Installation Directory
 
 The install script respects the following priority order for the installation path:
 
-1. `$OPENCODE_INSTALL_DIR` - Custom installation directory
-2. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
-3. `$HOME/bin` - Standard user binary directory (if it exists or can be created)
+1. `$MENDCODE_INSTALL_DIR` - Custom installation directory
+2. `$OPENCODE_INSTALL_DIR` - Legacy compatibility custom directory
+3. `$XDG_BIN_DIR` - XDG Base Directory Specification compliant path
 4. `$HOME/.mendcode/bin` - Default fallback
 
 ```bash
 # Examples
-OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://mendcode.ai/install | bash
+MENDCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://mendcode.ai/install | bash
 XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://mendcode.ai/install | bash
 ```
 
@@ -112,11 +95,11 @@ MendCode includes two built-in agents you can switch between with the `Tab` key.
 Also included is a **general** subagent for complex searches and multistep tasks.
 This is used internally and can be invoked using `@general` in messages.
 
-Learn more in the current [upstream agent docs](https://mendcode.ai/docs/agents).
+Learn more in the [MendCode agent docs](https://mendcode.ai/docs/agents).
 
 ### Documentation
 
-For more info on how to configure MendCode today, use the current [upstream docs](https://mendcode.ai/docs).
+For more info on how to configure MendCode today, use the [MendCode docs](https://mendcode.ai/docs).
 
 MendCode also includes a local persistent memory system for user preferences and project decisions. See [Memory](../../docs/memory-system.md) for storage paths, CLI/TUI controls, proposal approval, and the editable learning policy.
 
@@ -124,9 +107,9 @@ MendCode also includes a local persistent memory system for user preferences and
 
 If you're interested in contributing to MendCode, please read our [contributing docs](./CONTRIBUTING.md) before submitting a pull request.
 
-### Building on MendCode
+### Internal Layout
 
-If you are working on a project that's related to MendCode and is using "opencode" as part of its name, for example "opencode-dashboard" or "opencode-mobile", please add a note to your README to clarify that it is not built by the MendCode team and is not affiliated with us in any way.
+Some source paths still include `packages/opencode` while the runtime is being adopted. That path is internal only; public distribution and install commands use MendCode-owned names.
 
 ### FAQ
 
@@ -135,11 +118,11 @@ If you are working on a project that's related to MendCode and is using "opencod
 It's very similar to Claude Code in terms of capability. Here are the key differences:
 
 - 100% open source
-- Not coupled to any provider. Current hosted model access still routes through the upstream [OpenCode Zen](https://mendcode.ai/zen) service, while MendCode keeps the local CLI/runtime experience provider-agnostic.
+- Not coupled to any provider. MendCode keeps the local CLI/runtime experience provider-agnostic.
 - Built-in opt-in LSP support
 - A focus on TUI. MendCode is built by neovim users and the creators of [terminal.shop](https://terminal.shop); we are going to push the limits of what's possible in the terminal.
 - A client/server architecture. This, for example, can allow MendCode to run on your computer while you drive it remotely from a mobile app, meaning that the TUI frontend is just one of the possible clients.
 
 ---
 
-**Current upstream community** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+**Community** [mendcode.ai](https://mendcode.ai)

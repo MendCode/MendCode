@@ -71,9 +71,10 @@ async function fetchReleases(): Promise<Release[]> {
   const releases: Release[] = []
   let page = 1
   const per = 100
+  const repo = process.env.GH_REPO ?? "MendCode/mendcode-cli"
 
   while (true) {
-    const url = `https://api.github.com/repos/anomalyco/opencode/releases?page=${page}&per_page=${per}`
+    const url = `https://api.github.com/repos/${repo}/releases?page=${page}&per_page=${per}`
 
     const response = await fetch(url)
     if (!response.ok) {
@@ -188,15 +189,15 @@ async function save(githubTotal: number, npmDownloads: number) {
   )
 }
 
-console.log("Fetching GitHub releases for anomalyco/opencode...\n")
+console.log("Fetching GitHub releases for MendCode/mendcode-cli...\n")
 
 const releases = await fetchReleases()
 console.log(`\nFetched ${releases.length} releases total\n`)
 
 const { total: githubTotal } = calculate(releases)
 
-console.log("Fetching npm all-time downloads for opencode-ai...\n")
-const npmDownloads = await fetchNpmDownloads("opencode-ai")
+console.log("Fetching npm all-time downloads for mendcode...\n")
+const npmDownloads = await fetchNpmDownloads("mendcode")
 console.log(`Fetched npm all-time downloads: ${npmDownloads.toLocaleString()}\n`)
 
 await save(githubTotal, npmDownloads)
