@@ -160,9 +160,10 @@ const workingStartedAtBySession = new Map<string, number>()
 export function resolveWorkingStartedAt(input: {
   stored?: number
   activeAssistantCreated?: number
+  sessionUpdated?: number
   fallback?: number
 }) {
-  return [input.stored, input.activeAssistantCreated, input.fallback]
+  return [input.stored, input.activeAssistantCreated, input.sessionUpdated, input.fallback]
     .filter((item): item is number => typeof item === "number" && Number.isFinite(item) && item > 0)
     .toSorted((a, b) => a - b)[0]
 }
@@ -230,6 +231,7 @@ export function Prompt(props: PromptProps) {
           const started = resolveWorkingStartedAt({
             stored: sessionID ? workingStartedAtBySession.get(sessionID) : undefined,
             activeAssistantCreated: findActiveWorkingAssistant()?.time.created,
+            sessionUpdated: sessionID ? sync.session.get(sessionID)?.time.updated : undefined,
             fallback: workingStartedAt() ?? Date.now(),
           })
           if (sessionID && started) workingStartedAtBySession.set(sessionID, started)
@@ -1796,6 +1798,7 @@ export function Prompt(props: PromptProps) {
     resolveWorkingStartedAt({
       stored: props.sessionID ? workingStartedAtBySession.get(props.sessionID) : undefined,
       activeAssistantCreated: activeWorkingAssistant()?.time.created,
+      sessionUpdated: props.sessionID ? sync.session.get(props.sessionID)?.time.updated : undefined,
       fallback: workingStartedAt(),
     }),
   )

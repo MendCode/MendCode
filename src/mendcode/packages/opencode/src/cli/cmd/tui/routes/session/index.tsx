@@ -4125,11 +4125,28 @@ function todoMarkdown(status: string, content: string) {
   return `- [${status === "completed" ? "x" : " "}] ${content.replace(/\s+/g, " ").trim()}`
 }
 
+function parseTodoOutput(output?: string): Array<{ content: string; status: string }> {
+  if (!output) return []
+  try {
+    const parsed = JSON.parse(output) as unknown
+    if (!Array.isArray(parsed)) return []
+    return parsed.flatMap((item) => {
+      if (!item || typeof item !== "object") return []
+      const todo = item as Record<string, unknown>
+      if (typeof todo.content !== "string" || typeof todo.status !== "string") return []
+      return [{ content: todo.content, status: todo.status }]
+    })
+  } catch {
+    return []
+  }
+}
+
 function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
-  const content = createMemo(() => (props.input.todos ?? []).map((todo) => todoMarkdown(todo.status, todo.content)).join("\n"))
+  const todos = createMemo(() => props.input.todos ?? props.metadata.todos ?? parseTodoOutput(props.output))
+  const content = createMemo(() => todos().map((todo) => todoMarkdown(todo.status, todo.content)).join("\n"))
   return (
     <Switch>
-      <Match when={props.metadata.todos?.length}>
+      <Match when={todos().length && props.part.state.status === "completed"}>
         <BlockTool title="Todos" part={props.part} marginTop={1}>
           <MarkdownChecklist content={content()} />
         </BlockTool>
