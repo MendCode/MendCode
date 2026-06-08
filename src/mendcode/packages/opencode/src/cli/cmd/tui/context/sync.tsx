@@ -51,6 +51,41 @@ type ShellOutputEvent = {
   }
 }
 
+function preserveAppendOnlyPartText(current: Part, incoming: Part): Part {
+  if (current.type !== incoming.type) return incoming
+  if (current.type !== "text" && current.type !== "reasoning") return incoming
+  if (incoming.type !== "text" && incoming.type !== "reasoning") return incoming
+
+  const currentText = current.text
+  const incomingText = incoming.text
+  if (currentText.length > incomingText.length && currentText.startsWith(incomingText)) {
+    return { ...incoming, text: currentText } as Part
+  }
+
+  return incoming
+}
+
+function mergeFetchedParts(current: Part[] | undefined, incoming: Part[]) {
+  if (!current?.length) return incoming
+
+  const currentByID = new Map(current.map((part) => [part.id, part]))
+  const seen = new Set<string>()
+  const merged = incoming.map((part) => {
+    seen.add(part.id)
+    const existing = currentByID.get(part.id)
+    return existing ? preserveAppendOnlyPartText(existing, part) : part
+  })
+
+  for (const part of current) {
+    if (seen.has(part.id)) continue
+    if ((part.type === "text" || part.type === "reasoning") && part.time.end === undefined) {
+      merged.push(part)
+    }
+  }
+
+  return merged.toSorted((a, b) => a.id.localeCompare(b.id))
+}
+
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
   init: () => {
@@ -463,7 +498,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           }
           const result = Binary.search(parts, event.properties.part.id, (p) => p.id)
           if (result.found) {
-            setStore("part", event.properties.part.messageID, result.index, reconcile(event.properties.part))
+            const next = preserveAppendOnlyPartText(parts[result.index], event.properties.part)
+            setStore("part", event.properties.part.messageID, result.index, reconcile(next))
             break
           }
           setStore(
@@ -687,7 +723,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             setStore("todo", sessionID, reconcile(todo.data ?? []))
             setStore("message", sessionID, reconcile(messages.data!.map((x) => x.info)))
             for (const message of messages.data!) {
-              setStore("part", message.info.id, reconcile(message.parts))
+              setStore("part", message.info.id, reconcile(mergeFetchedParts(store.part[message.info.id], message.parts)))
             }
             setStore("session_diff", sessionID, reconcile(diff.data ?? []))
             setStore("session_status", reconcile(statuses.data ?? {}))

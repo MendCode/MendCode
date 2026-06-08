@@ -34,11 +34,13 @@ function eventSource(): EventSource {
   }
 }
 
-function createFetch() {
+function createFetch(overrides: Record<string, unknown | ((url: URL) => unknown)> = {}) {
   const session = [] as URL[]
   const fetch = (async (input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input))
     if (url.pathname === "/session") session.push(url)
+    const override = overrides[url.pathname]
+    if (override) return json(typeof override === "function" ? override(url) : override)
 
     switch (url.pathname) {
       case "/agent":
@@ -76,8 +78,8 @@ function createFetch() {
   return { fetch, session }
 }
 
-async function mount() {
-  const calls = createFetch()
+async function mount(overrides: Record<string, unknown | ((url: URL) => unknown)> = {}) {
+  const calls = createFetch(overrides)
   let sync!: ReturnType<typeof useSync>
   let kv!: ReturnType<typeof useKV>
   let done!: () => void
@@ -141,6 +143,70 @@ describe("tui sync", () => {
 
       expect(session.at(-1)?.searchParams.get("scope")).toBe("project")
       expect(session.at(-1)?.searchParams.get("path")).toBeNull()
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("session sync keeps live append-only text over stale fetched snapshots", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    const sessionID = "ses_live"
+    const messageID = "msg_live"
+    const partID = "prt_live"
+    const info = {
+      id: sessionID,
+      projectID: "proj_test",
+      directory,
+      title: "Live",
+      version: "test",
+      time: { created: 1, updated: 1 },
+    }
+    const message = {
+      id: messageID,
+      sessionID,
+      role: "assistant",
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-test" },
+      tokens: {},
+      time: { created: 1 },
+    }
+    const livePart = {
+      id: partID,
+      messageID,
+      sessionID,
+      type: "text",
+      text: "hola soy una IA como te va",
+      time: { start: 1 },
+    }
+    const stalePart = {
+      ...livePart,
+      text: "hola soy una IA",
+    }
+
+    const { app, sync } = await mount({
+      [`/session/${sessionID}`]: info,
+      [`/session/${sessionID}/message`]: [{ info: message, parts: [stalePart] }],
+      [`/session/${sessionID}/todo`]: [],
+      [`/session/${sessionID}/diff`]: [],
+    })
+
+    try {
+      sync.set("session", [info as any])
+      sync.set("message", sessionID, [message as any])
+      sync.set("part", messageID, [livePart as any])
+
+      await sync.session.sync(sessionID, { force: true })
+
+      expect(sync.data.part[messageID]?.[0]).toMatchObject({
+        id: partID,
+        type: "text",
+        text: livePart.text,
+      })
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous
