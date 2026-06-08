@@ -215,7 +215,13 @@ export function shouldDisplayReasoning(profile: MendTuiProfile, input: { complet
 export function reasoningSummary(text: string) {
   const content = text.trim()
   const match = content.match(/^\*\*([^*\n]+)\*\*(?:\r?\n\r?\n|$)/)
-  if (!match) return { title: null, body: content }
+  if (!match) {
+    const streamingTitle = content.match(/^\*\*([^\n*]+)\*{0,2}(?:\r?\n\r?\n|$)/)
+    if (streamingTitle) {
+      return { title: streamingTitle[1].trim(), body: content.slice(streamingTitle[0].length).trimEnd() }
+    }
+    return { title: null, body: content.replace(/^\*{1,2}/, "").replace(/\*{1,2}$/, "") }
+  }
   return { title: match[1].trim(), body: content.slice(match[0].length).trimEnd() }
 }
 
