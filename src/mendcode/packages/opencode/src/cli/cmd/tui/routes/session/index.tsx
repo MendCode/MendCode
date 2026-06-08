@@ -3125,20 +3125,15 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
             </box>
             <Show when={display().body}>
               <box marginTop={1}>
-                <Show
-                  when={isDone()}
-                  fallback={<text fg={theme.textMuted}>{display().body}</text>}
-                >
-                  <code
-                    filetype="markdown"
-                    drawUnstyledText={false}
-                    streaming={false}
-                    syntaxStyle={subtleSyntax()}
-                    content={display().body}
-                    conceal={ctx.conceal()}
-                    fg={theme.textMuted}
-                  />
-                </Show>
+                <code
+                  filetype="markdown"
+                  drawUnstyledText={false}
+                  streaming={true}
+                  syntaxStyle={subtleSyntax()}
+                  content={display().body}
+                  conceal={ctx.conceal()}
+                  fg={theme.textMuted}
+                />
               </box>
             </Show>
           </box>
@@ -3153,20 +3148,15 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
             customBorderChars={SplitBorder.customBorderChars}
             borderColor={theme.backgroundElement}
           >
-            <Show
-              when={isDone()}
-              fallback={<text fg={theme.textMuted}>Thinking: {content()}</text>}
-            >
-              <code
-                filetype="markdown"
-                drawUnstyledText={false}
-                streaming={false}
-                syntaxStyle={subtleSyntax()}
-                content={"_Thinking:_ " + content()}
-                conceal={ctx.conceal()}
-                fg={theme.textMuted}
-              />
-            </Show>
+            <code
+              filetype="markdown"
+              drawUnstyledText={false}
+              streaming={true}
+              syntaxStyle={subtleSyntax()}
+              content={"_Thinking:_ " + content()}
+              conceal={ctx.conceal()}
+              fg={theme.textMuted}
+            />
           </box>
         </Match>
       </Switch>
@@ -3234,19 +3224,17 @@ function ReasoningHeader(props: {
 function TextPart(props: { last: boolean; part: TextPart; message: AssistantMessage }) {
   const ctx = use()
   const { theme, syntax } = useTheme()
-  const completed = createMemo(() => Boolean(props.message.time.completed))
   return (
     <Show when={props.part.text.trim()}>
       <box id={"text-" + props.part.id} paddingLeft={3} marginTop={1} flexShrink={0}>
         <Switch>
-          <Match when={!completed()}>
-            <text fg={theme.text}>{props.part.text.trim()}</text>
-          </Match>
           <Match when={Flag.OPENCODE_EXPERIMENTAL_MARKDOWN}>
             <markdown
               syntaxStyle={syntax()}
-              streaming={false}
+              streaming={true}
+              internalBlockMode="top-level"
               content={props.part.text.trim()}
+              tableOptions={{ style: "grid" }}
               conceal={ctx.conceal()}
               fg={theme.markdownText}
               bg={theme.background}
@@ -3256,7 +3244,7 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
             <code
               filetype="markdown"
               drawUnstyledText={false}
-              streaming={false}
+              streaming={true}
               syntaxStyle={syntax()}
               content={props.part.text.trim()}
               conceal={ctx.conceal()}
