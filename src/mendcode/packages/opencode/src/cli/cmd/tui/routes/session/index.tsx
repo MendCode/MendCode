@@ -67,7 +67,6 @@ import type { DialogContext } from "@tui/ui/dialog"
 import { useKeybind } from "@tui/context/keybind"
 import { useDialog } from "../../ui/dialog"
 import { DialogSelect } from "../../ui/dialog-select"
-import { TodoItem } from "../../component/todo-item"
 import { useTextareaKeybindings } from "../../component/textarea-keybindings"
 import { DialogMessage } from "./dialog-message"
 import type { PromptInfo } from "../../component/prompt/history"
@@ -3512,6 +3511,7 @@ function BlockTool(props: {
   titleColor?: RGBA
   titleAttributes?: TextAttributes
   contentGap?: number
+  marginTop?: number
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
@@ -3521,6 +3521,7 @@ function BlockTool(props: {
       paddingBottom={1}
       paddingLeft={3}
       gap={props.contentGap ?? 1}
+      marginTop={props.marginTop ?? 0}
       onMouseUp={() => {
         if (renderer.getSelection()?.getSelectedText()) return
         props.onClick?.()
@@ -4057,16 +4058,32 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
   )
 }
 
+function MarkdownChecklist(props: { content: string }) {
+  const ctx = use()
+  const { theme, syntax } = useTheme()
+  return (
+    <markdown
+      syntaxStyle={syntax()}
+      streaming={true}
+      content={props.content}
+      conceal={ctx.conceal()}
+      fg={theme.markdownText}
+      bg={theme.background}
+    />
+  )
+}
+
+function todoMarkdown(status: string, content: string) {
+  return `- [${status === "completed" ? "x" : " "}] ${content.replace(/\s+/g, " ").trim()}`
+}
+
 function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
+  const content = createMemo(() => (props.input.todos ?? []).map((todo) => todoMarkdown(todo.status, todo.content)).join("\n"))
   return (
     <Switch>
       <Match when={props.metadata.todos?.length}>
-        <BlockTool title="# Todos" part={props.part}>
-          <box>
-            <For each={props.input.todos ?? []}>
-              {(todo) => <TodoItem status={todo.status} content={todo.content} />}
-            </For>
-          </box>
+        <BlockTool title="Todos" part={props.part} marginTop={1}>
+          <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
       <Match when={true}>
@@ -4079,8 +4096,15 @@ function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
 }
 
 function Question(props: ToolProps<typeof QuestionTool>) {
-  const { theme } = useTheme()
   const count = createMemo(() => props.input.questions?.length ?? 0)
+  const content = createMemo(() =>
+    (props.input.questions ?? [])
+      .map((question, index) => {
+        const answer = format(props.metadata.answers?.[index])
+        return `- [${answer === "(no answer)" ? " " : "x"}] ${question.question.replace(/\s+/g, " ").trim()}\n  ${answer}`
+      })
+      .join("\n"),
+  )
 
   function format(answer?: ReadonlyArray<string>) {
     if (!answer?.length) return "(no answer)"
@@ -4090,17 +4114,8 @@ function Question(props: ToolProps<typeof QuestionTool>) {
   return (
     <Switch>
       <Match when={props.metadata.answers}>
-        <BlockTool title="# Questions" part={props.part}>
-          <box gap={1}>
-            <For each={props.input.questions ?? []}>
-              {(q, i) => (
-                <box flexDirection="column">
-                  <text fg={theme.textMuted}>{q.question}</text>
-                  <text fg={theme.text}>{format(props.metadata.answers?.[i()])}</text>
-                </box>
-              )}
-            </For>
-          </box>
+        <BlockTool title="Questions" part={props.part} marginTop={1}>
+          <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
       <Match when={true}>
