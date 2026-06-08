@@ -752,13 +752,35 @@ function BlockTool(props: {
   onClick?: () => void
   spinner?: boolean
   titleColor?: RGBA
-  titleAttributes?: TextAttributes
+  titleAttributes?: typeof TextAttributes.BOLD
   contentGap?: number
   marginTop?: number
+  variant?: "plain" | "left-line"
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error.message : undefined))
+  const title = () => (
+    <Show
+      when={props.spinner}
+      fallback={
+        <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
+          {props.title}
+        </text>
+      }
+    >
+      <Spinner color={props.titleColor ?? theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
+    </Show>
+  )
+  const content = () => (
+    <>
+      {title()}
+      {props.children}
+      <Show when={error()}>
+        <text fg={theme.error}>{error()}</text>
+      </Show>
+    </>
+  )
   return (
     <box
       paddingBottom={1}
@@ -771,19 +793,10 @@ function BlockTool(props: {
       }}
       flexShrink={0}
     >
-      <Show
-        when={props.spinner}
-        fallback={
-          <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
-            {props.title}
-          </text>
-        }
-      >
-        <Spinner color={props.titleColor ?? theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
-      </Show>
-      {props.children}
-      <Show when={error()}>
-        <text fg={theme.error}>{error()}</text>
+      <Show when={props.variant === "left-line"} fallback={content()}>
+        <box border={["left"]} borderColor={props.titleColor ?? theme.border} paddingLeft={2} gap={1}>
+          {content()}
+        </box>
       </Show>
     </box>
   )
@@ -799,7 +812,13 @@ function CommandOutput(props: {
 }) {
   const { theme } = useTheme()
   return (
-    <box gap={1}>
+    <box
+      border={["top", "bottom", "left", "right"]}
+      borderColor={props.running ? theme.primary : theme.border}
+      paddingLeft={1}
+      paddingRight={1}
+      gap={1}
+    >
       <box flexDirection="row" gap={1}>
         <text fg={theme.textMuted}>$</text>
         <text fg={theme.primary} attributes={TextAttributes.BOLD}>
@@ -1090,7 +1109,7 @@ function TodoWrite(props: ToolProps) {
   return (
     <Switch>
       <Match when={todos().length > 0 && props.part.state.status === "completed"}>
-        <BlockTool title="Todos" part={props.part} marginTop={1}>
+        <BlockTool title="Todos" part={props.part} marginTop={1} variant="left-line">
           <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
@@ -1119,7 +1138,7 @@ function Question(props: ToolProps) {
   return (
     <Switch>
       <Match when={answers().length > 0}>
-        <BlockTool title="Questions" part={props.part} marginTop={1}>
+        <BlockTool title="Questions" part={props.part} marginTop={1} variant="left-line">
           <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>

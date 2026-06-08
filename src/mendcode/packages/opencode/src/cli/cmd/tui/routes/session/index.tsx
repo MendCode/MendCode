@@ -1119,10 +1119,18 @@ export function Session() {
     setClearSubmitPending(true)
 
     const delays = [0, 35, 90, 180, 360, 720]
-    for (const delay of delays) {
+    for (const [index, delay] of delays.entries()) {
       setTimeout(() => {
         if (scrollSubmittedMessageIntoClearView()) return
         if (!scroll || scroll.isDestroyed) return
+        if (index !== delays.length - 1) return
+        const latestUser = latestUserMessageAfter(clearSubmitPreviousUserMessageID())
+        setClearSubmitPending(false)
+        if (stickyUserHeaderEnabled() && latestUser) {
+          setClearSubmitPinnedUserMessageID(latestUser.id)
+          setStickyUserMessageID(latestUser.id)
+        }
+        scroll.scrollTo(Math.max(0, scroll.scrollHeight))
       }, delay)
     }
   }
@@ -3557,13 +3565,35 @@ function BlockTool(props: {
   part?: ToolPart
   spinner?: boolean
   titleColor?: RGBA
-  titleAttributes?: TextAttributes
+  titleAttributes?: typeof TextAttributes.BOLD
+  variant?: "plain" | "left-line"
   contentGap?: number
   marginTop?: number
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error : undefined))
+  const title = () => (
+    <Show
+      when={props.spinner}
+      fallback={
+        <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
+          {props.title}
+        </text>
+      }
+    >
+      <Spinner color={props.titleColor ?? theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
+    </Show>
+  )
+  const content = () => (
+    <>
+      {title()}
+      {props.children}
+      <Show when={error()}>
+        <text fg={theme.error}>{error()}</text>
+      </Show>
+    </>
+  )
   return (
     <box
       paddingBottom={1}
@@ -3575,19 +3605,10 @@ function BlockTool(props: {
         props.onClick?.()
       }}
     >
-      <Show
-        when={props.spinner}
-        fallback={
-          <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
-            {props.title}
-          </text>
-        }
-      >
-        <Spinner color={props.titleColor ?? theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
-      </Show>
-      {props.children}
-      <Show when={error()}>
-        <text fg={theme.error}>{error()}</text>
+      <Show when={props.variant === "left-line"} fallback={content()}>
+        <box border={["left"]} borderColor={props.titleColor ?? theme.border} paddingLeft={2} gap={1}>
+          {content()}
+        </box>
       </Show>
     </box>
   )
@@ -3603,7 +3624,13 @@ function CommandOutput(props: {
 }) {
   const { theme } = useTheme()
   return (
-    <box gap={1}>
+    <box
+      border={["top", "bottom", "left", "right"]}
+      borderColor={props.running ? theme.primary : theme.border}
+      paddingLeft={1}
+      paddingRight={1}
+      gap={1}
+    >
       <box flexDirection="row" gap={1}>
         <text fg={theme.textMuted}>$</text>
         <text fg={theme.primary} attributes={TextAttributes.BOLD}>
@@ -4147,7 +4174,7 @@ function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
   return (
     <Switch>
       <Match when={todos().length && props.part.state.status === "completed"}>
-        <BlockTool title="Todos" part={props.part} marginTop={1}>
+        <BlockTool title="Todos" part={props.part} variant="left-line" marginTop={1}>
           <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
@@ -4179,7 +4206,7 @@ function Question(props: ToolProps<typeof QuestionTool>) {
   return (
     <Switch>
       <Match when={props.metadata.answers}>
-        <BlockTool title="Questions" part={props.part} marginTop={1}>
+        <BlockTool title="Questions" part={props.part} variant="left-line" marginTop={1}>
           <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
