@@ -215,6 +215,7 @@ function ShellMessage(props: { message: SessionMessageShell }) {
       spinner={!props.message.time.completed}
       titleColor={theme.primary}
       titleAttributes={TextAttributes.BOLD}
+      contentGap={0}
       onClick={overflow() ? () => setExpanded((prev) => !prev) : undefined}
     >
       <CommandOutput
@@ -752,6 +753,7 @@ function BlockTool(props: {
   spinner?: boolean
   titleColor?: RGBA
   titleAttributes?: TextAttributes
+  contentGap?: number
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
@@ -760,7 +762,7 @@ function BlockTool(props: {
     <box
       paddingBottom={1}
       paddingLeft={3}
-      gap={1}
+      gap={props.contentGap ?? 1}
       onMouseUp={() => {
         if (renderer.getSelection()?.getSelectedText()) return
         props.onClick?.()
@@ -839,6 +841,7 @@ function Bash(props: ToolProps) {
           spinner={props.part.state.status === "running"}
           titleColor={theme.primary}
           titleAttributes={TextAttributes.BOLD}
+          contentGap={0}
           onClick={overflow() ? () => setExpanded((prev) => !prev) : undefined}
         >
           <CommandOutput
