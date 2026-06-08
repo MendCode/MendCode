@@ -281,6 +281,10 @@ export function Session() {
     const sessionLayout = mend.profile.layout.zones.session
     return Boolean((sessionLayout as { stickyUserHeader?: unknown }).stickyUserHeader)
   })
+  const submitScrollMode = createMemo<"bottom" | "clear">(() => {
+    const sessionLayout = mend.profile.layout.zones.session
+    return (sessionLayout as { submitScrollMode?: unknown }).submitScrollMode === "clear" ? "clear" : "bottom"
+  })
   const [stickyUserMessageID, setStickyUserMessageID] = createSignal<string>()
   const stickyUserMessage = createMemo(() => {
     const id = stickyUserMessageID()
@@ -963,6 +967,7 @@ export function Session() {
 
   let seeded = false
   let scroll: ScrollBoxRenderable
+  let stickyUserHeaderBox: BoxRenderable | undefined
   let prompt: PromptRef | undefined
   const bind = (r: PromptRef | undefined) => {
     prompt = r
@@ -1057,6 +1062,37 @@ export function Session() {
     }, 50)
   }
 
+  const stickyUserHeaderClearance = () => Math.max(1, stickyUserHeaderBox?.height ?? 1)
+
+  function scrollSubmittedMessageIntoClearView() {
+    if (!scroll || scroll.isDestroyed) return false
+    const latestUser = messages().findLast((message): message is UserMessage => message.role === "user")
+    if (!latestUser) return false
+    const child = scroll.getChildren().find((item) => item.id === latestUser.id)
+    if (!child) return false
+
+    const targetTop = stickyUserHeaderEnabled() ? stickyUserHeaderClearance() + 1 : 1
+    scroll.scrollBy(child.y - scroll.y - targetTop)
+    updateStickyUserHeader()
+    return true
+  }
+
+  function scrollAfterSubmit() {
+    if (submitScrollMode() !== "clear") {
+      toBottom()
+      return
+    }
+
+    const delays = [0, 35, 90, 180]
+    for (const [index, delay] of delays.entries()) {
+      setTimeout(() => {
+        if (scrollSubmittedMessageIntoClearView()) return
+        if (!scroll || scroll.isDestroyed) return
+        if (index === delays.length - 1) scroll.scrollTo(scroll.scrollHeight)
+      }, delay)
+    }
+  }
+
   const updateStickyUserHeader = () => {
     if (!stickyUserHeaderEnabled() || !scroll || scroll.isDestroyed) {
       setStickyUserMessageID(undefined)
@@ -1064,7 +1100,7 @@ export function Session() {
     }
 
     const byID = new Map(messages().map((message) => [message.id, message]))
-    const top = scroll.y
+    const top = scroll.y + stickyUserHeaderClearance()
     const userAnchors = scroll
       .getChildren()
       .map((child) => {
@@ -2045,7 +2081,16 @@ export function Session() {
               </scrollbox>
               <Show when={stickyUserHeaderEnabled() && stickyUserMessage()}>
                 {(message) => (
-                  <box position="absolute" top={0} left={0} right={showScrollbar() ? 1 : 0} zIndex={1000}>
+                  <box
+                    ref={(box: BoxRenderable) => {
+                      stickyUserHeaderBox = box
+                    }}
+                    position="absolute"
+                    top={0}
+                    left={0}
+                    right={showScrollbar() ? 1 : 0}
+                    zIndex={1000}
+                  >
                     <UserMessage
                       index={0}
                       message={message()}
@@ -2115,7 +2160,7 @@ export function Session() {
                     session_id={route.sessionID}
                     visible={visible()}
                     disabled={promptDisabled()}
-                    on_submit={toBottom}
+                    on_submit={scrollAfterSubmit}
                     ref={bind}
                   >
                     {
@@ -2128,7 +2173,7 @@ export function Session() {
                         disabled: promptDisabled(),
                         ref: bind,
                         onSubmit: () => {
-                          toBottom()
+                          scrollAfterSubmit()
                         },
                         right: <TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />,
                         defaultEditor: () => (
@@ -2137,7 +2182,7 @@ export function Session() {
                             ref={bind}
                             disabled={promptDisabled()}
                             onSubmit={() => {
-                              toBottom()
+                              scrollAfterSubmit()
                             }}
                             sessionID={route.sessionID}
                             permissionMode={permissionMode()}
@@ -3459,11 +3504,33 @@ function BlockTool(props: {
   part?: ToolPart
   spinner?: boolean
   titleColor?: RGBA
-  titleAttributes?: TextAttributes
+  titleAttributes?: typeof TextAttributes.BOLD
+  variant?: "plain" | "left-line"
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error : undefined))
+  const title = () => (
+    <Show
+      when={props.spinner}
+      fallback={
+        <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
+          {props.title}
+        </text>
+      }
+    >
+      <Spinner color={props.titleColor ?? theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
+    </Show>
+  )
+  const content = () => (
+    <>
+      {title()}
+      {props.children}
+      <Show when={error()}>
+        <text fg={theme.error}>{error()}</text>
+      </Show>
+    </>
+  )
   return (
     <box
       paddingBottom={1}
@@ -3474,19 +3541,10 @@ function BlockTool(props: {
         props.onClick?.()
       }}
     >
-      <Show
-        when={props.spinner}
-        fallback={
-          <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
-            {props.title}
-          </text>
-        }
-      >
-        <Spinner color={props.titleColor ?? theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
-      </Show>
-      {props.children}
-      <Show when={error()}>
-        <text fg={theme.error}>{error()}</text>
+      <Show when={props.variant === "left-line"} fallback={content()}>
+        <box border={["left"]} borderColor={props.titleColor ?? theme.border} paddingLeft={2} gap={1}>
+          {content()}
+        </box>
       </Show>
     </box>
   )
@@ -3502,7 +3560,13 @@ function CommandOutput(props: {
 }) {
   const { theme } = useTheme()
   return (
-    <box gap={1}>
+    <box
+      border={["top", "bottom", "left", "right"]}
+      borderColor={props.running ? theme.primary : theme.border}
+      paddingLeft={1}
+      paddingRight={1}
+      gap={1}
+    >
       <box flexDirection="row" gap={1}>
         <text fg={theme.textMuted}>$</text>
         <text fg={theme.primary} attributes={TextAttributes.BOLD}>
@@ -4008,7 +4072,7 @@ function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
   return (
     <Switch>
       <Match when={props.metadata.todos?.length}>
-        <BlockTool title="# Todos" part={props.part}>
+        <BlockTool title="Todos" part={props.part} variant="left-line">
           <box>
             <For each={props.input.todos ?? []}>
               {(todo) => <TodoItem status={todo.status} content={todo.content} />}
@@ -4037,7 +4101,7 @@ function Question(props: ToolProps<typeof QuestionTool>) {
   return (
     <Switch>
       <Match when={props.metadata.answers}>
-        <BlockTool title="# Questions" part={props.part}>
+        <BlockTool title="Questions" part={props.part} variant="left-line">
           <box gap={1}>
             <For each={props.input.questions ?? []}>
               {(q, i) => (

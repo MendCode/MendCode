@@ -751,7 +751,7 @@ function BlockTool(props: {
   onClick?: () => void
   spinner?: boolean
   titleColor?: RGBA
-  titleAttributes?: TextAttributes
+  titleAttributes?: typeof TextAttributes.BOLD
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
