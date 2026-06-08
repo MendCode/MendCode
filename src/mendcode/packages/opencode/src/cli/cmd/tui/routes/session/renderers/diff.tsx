@@ -37,7 +37,7 @@ export function TimelineDiff(props: {
     return theme.diffLineNumber
   }
   return (
-    <box flexDirection="column" width="100%">
+    <box flexDirection="column" width="100%" paddingTop={1}>
       <For each={rows()}>
         {(row) => (
           <box width="100%" flexDirection="row">

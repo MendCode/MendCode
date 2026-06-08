@@ -213,22 +213,20 @@ function ShellMessage(props: { message: SessionMessageShell }) {
     <BlockTool
       title="# Shell"
       spinner={!props.message.time.completed}
+      titleColor={theme.primary}
+      titleAttributes={TextAttributes.BOLD}
       onClick={overflow() ? () => setExpanded((prev) => !prev) : undefined}
     >
-      <box gap={1}>
-        <text fg={theme.text}>$ {props.message.command}</text>
-        <Show when={output()}>
-          <text fg={theme.text}>{limited()}</text>
-        </Show>
-        <Show when={!output() && isRunning()}>
+      <CommandOutput
+        command={props.message.command}
+        output={output() ? limited() : undefined}
+        empty={
           <text fg={theme.textMuted}>No output emitted yet · running {elapsed()}</text>
-        </Show>
-        <Show when={overflow()}>
-          <text fg={theme.textMuted}>
-            {expanded() ? "Click to collapse" : isRunning() ? "Showing latest output" : "Click to expand"}
-          </text>
-        </Show>
-      </box>
+        }
+        overflow={overflow()}
+        expanded={expanded()}
+        running={isRunning()}
+      />
     </BlockTool>
   )
 }
@@ -752,16 +750,17 @@ function BlockTool(props: {
   part?: SessionMessageAssistantTool
   onClick?: () => void
   spinner?: boolean
+  titleColor?: RGBA
+  titleAttributes?: TextAttributes
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error.message : undefined))
   return (
     <box
-      paddingTop={1}
       paddingBottom={1}
       paddingLeft={3}
-      marginTop={1}
+      gap={1}
       onMouseUp={() => {
         if (renderer.getSelection()?.getSelectedText()) return
         props.onClick?.()
@@ -771,16 +770,48 @@ function BlockTool(props: {
       <Show
         when={props.spinner}
         fallback={
-          <text fg={theme.textMuted}>
+          <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
             {props.title}
           </text>
         }
       >
-        <Spinner color={theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
+        <Spinner color={props.titleColor ?? theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
       </Show>
       {props.children}
       <Show when={error()}>
         <text fg={theme.error}>{error()}</text>
+      </Show>
+    </box>
+  )
+}
+
+function CommandOutput(props: {
+  command: string
+  output?: string
+  empty?: JSX.Element
+  overflow?: boolean
+  expanded?: boolean
+  running?: boolean
+}) {
+  const { theme } = useTheme()
+  return (
+    <box gap={1}>
+      <box flexDirection="row" gap={1}>
+        <text fg={theme.textMuted}>$</text>
+        <text fg={theme.primary} attributes={TextAttributes.BOLD}>
+          {props.command}
+        </text>
+      </box>
+      <Show when={props.output}>
+        <box paddingLeft={2}>
+          <text fg={theme.textMuted}>{props.output}</text>
+        </box>
+      </Show>
+      <Show when={!props.output}>{props.empty}</Show>
+      <Show when={props.overflow}>
+        <text fg={theme.textMuted}>
+          {props.expanded ? "Click to collapse" : props.running ? "Showing latest output" : "Click to expand"}
+        </text>
       </Show>
     </box>
   )
@@ -806,21 +837,17 @@ function Bash(props: ToolProps) {
           title={title()}
           part={props.part}
           spinner={props.part.state.status === "running"}
+          titleColor={theme.primary}
+          titleAttributes={TextAttributes.BOLD}
           onClick={overflow() ? () => setExpanded((prev) => !prev) : undefined}
         >
-          <box gap={1}>
-            <text fg={theme.text}>$ {command()}</text>
-            <text fg={theme.text}>{limited()}</text>
-            <Show when={overflow()}>
-              <text fg={theme.textMuted}>
-                {expanded()
-                  ? "Click to collapse"
-                  : props.part.state.status === "running"
-                    ? "Showing latest output"
-                    : "Click to expand"}
-              </text>
-            </Show>
-          </box>
+          <CommandOutput
+            command={command()}
+            output={limited()}
+            overflow={overflow()}
+            expanded={expanded()}
+            running={props.part.state.status === "running"}
+          />
         </BlockTool>
       </Match>
       <Match when={true}>
