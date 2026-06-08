@@ -3011,9 +3011,23 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
 }
 
 function isTimelineStackStart(nodes: Array<{ type: string }>, index: number) {
-  if (index === 0) return true
+  if (index === 0) return false
   const previous = nodes[index - 1]
   return previous?.type !== "row" && previous?.type !== "collapse"
+}
+
+function shouldBreakBeforeTool(previous: BoxRenderable | undefined) {
+  const previousID = previous?.id ?? ""
+  return previousID.startsWith("text-") || previousID.startsWith("reasoning-")
+}
+
+function updateToolBreakMargin(el: BoxRenderable, setMargin: (value: number) => void) {
+  const parent = el.parent
+  if (!parent) return
+
+  const children = parent.getChildren()
+  const index = children.indexOf(el)
+  setMargin(shouldBreakBeforeTool(children[index - 1]) ? 1 : 0)
 }
 
 function TimelineRowView(props: { row: TimelineRow; stackStart?: boolean }) {
@@ -3024,7 +3038,7 @@ function TimelineRowView(props: { row: TimelineRow; stackStart?: boolean }) {
   const color = createMemo(() => (failed() ? theme.error : planning() ? theme.warning : active() ? theme.text : theme.textMuted))
   const icon = createMemo(() => (planning() ? "" : failed() ? "×" : "◆"))
   return (
-    <box paddingLeft={3} marginTop={0} flexShrink={0}>
+    <box paddingLeft={3} marginTop={props.stackStart ? 1 : 0} flexShrink={0}>
       <text fg={color()} attributes={active() && !planning() ? TextAttributes.BOLD : undefined}>
         <Show when={icon()}>
           {(value) => <span>{value()} </span>}
@@ -3038,7 +3052,7 @@ function TimelineRowView(props: { row: TimelineRow; stackStart?: boolean }) {
 function TimelineCollapseRow(props: { count: number; stackStart?: boolean }) {
   const { theme } = useTheme()
   return (
-    <box paddingLeft={3} marginTop={0} flexShrink={0}>
+    <box paddingLeft={3} marginTop={props.stackStart ? 1 : 0} flexShrink={0}>
       <text fg={theme.textMuted}>◇ {props.count} more</text>
     </box>
   )
@@ -3371,6 +3385,7 @@ function PlanReviewToolRow(props: ToolProps<any>) {
 function PresentationToolRow(props: { tool: string; state: string; input: Record<string, any> }) {
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
+  const [margin, setMargin] = createSignal(0)
   const pending = createMemo(() => props.state === "pending" || props.state === "running")
   const errored = createMemo(() => props.state === "error")
   const event = createMemo(() => normalizeToolEvent({ tool: props.tool, state: props.state, input: props.input }))
@@ -3388,7 +3403,14 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
     <Show
       when={mend.profile.presentation.profile === "mendcode"}
       fallback={
-        <box paddingLeft={3} marginTop={1} flexShrink={0}>
+        <box
+          paddingLeft={3}
+          marginTop={margin()}
+          flexShrink={0}
+          renderBefore={function () {
+            updateToolBreakMargin(this as BoxRenderable, setMargin)
+          }}
+        >
           <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>
             {icon()} {detail()}
           </text>
@@ -3398,14 +3420,29 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
       <Show
         when={event().lines.length > 0}
         fallback={
-          <box paddingLeft={3} marginTop={1} flexShrink={0}>
+          <box
+            paddingLeft={3}
+            marginTop={margin()}
+            flexShrink={0}
+            renderBefore={function () {
+              updateToolBreakMargin(this as BoxRenderable, setMargin)
+            }}
+          >
             <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>
               {icon()} {title()}
             </text>
           </box>
         }
       >
-        <box paddingLeft={3} marginTop={1} flexShrink={0} flexDirection="column">
+        <box
+          paddingLeft={3}
+          marginTop={margin()}
+          flexShrink={0}
+          flexDirection="column"
+          renderBefore={function () {
+            updateToolBreakMargin(this as BoxRenderable, setMargin)
+          }}
+        >
           <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>╭─ {title()}</text>
           <For each={event().lines}>{(line) => <text fg={theme.textMuted}>│ {line}</text>}</For>
           <Show when={event().result}>{(result) => <text fg={theme.textMuted}>╰─ {result()}</text>}</Show>
@@ -3515,25 +3552,7 @@ function InlineTool(props: {
         }}
         renderBefore={function () {
           const el = this as BoxRenderable
-          const parent = el.parent
-          if (!parent) {
-            return
-          }
-          if (el.height > 1) {
-            setMargin(1)
-            return
-          }
-          const children = parent.getChildren()
-          const index = children.indexOf(el)
-          const previous = children[index - 1]
-          if (!previous) {
-            setMargin(0)
-            return
-          }
-          if (previous.height > 1 || previous.id.startsWith("text-")) {
-            setMargin(1)
-            return
-          }
+          updateToolBreakMargin(el, setMargin)
         }}
       >
         <Switch>
@@ -3570,6 +3589,7 @@ function BlockTool(props: {
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
+  const [margin, setMargin] = createSignal(0)
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error : undefined))
   const title = () => (
     <Show
@@ -3597,7 +3617,10 @@ function BlockTool(props: {
       paddingBottom={1}
       paddingLeft={3}
       gap={props.contentGap ?? 1}
-      marginTop={props.marginTop ?? 0}
+      marginTop={props.marginTop ?? margin()}
+      renderBefore={function () {
+        updateToolBreakMargin(this as BoxRenderable, setMargin)
+      }}
       onMouseUp={() => {
         if (renderer.getSelection()?.getSelectedText()) return
         props.onClick?.()
@@ -4172,7 +4195,7 @@ function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
   return (
     <Switch>
       <Match when={todos().length && props.part.state.status === "completed"}>
-        <BlockTool title="Todos" part={props.part} variant="left-line" marginTop={1}>
+        <BlockTool title="Todos" part={props.part} variant="left-line">
           <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
@@ -4204,7 +4227,7 @@ function Question(props: ToolProps<typeof QuestionTool>) {
   return (
     <Switch>
       <Match when={props.metadata.answers}>
-        <BlockTool title="Questions" part={props.part} variant="left-line" marginTop={1}>
+        <BlockTool title="Questions" part={props.part} variant="left-line">
           <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
