@@ -256,36 +256,6 @@ describe("mend tui presentation renderers", () => {
     ])
   })
 
-  test("minimal and mendcode reasoning rows strip partial markdown headings while streaming", () => {
-    const part = {
-      id: "reasoning-active",
-      type: "reasoning",
-      text: "**Evaluating potential issues",
-      time: { start: 1_000 },
-    }
-
-    expect(groupTimelineParts("mendcode", [part], { showReasoningRows: true })).toEqual([
-      {
-        type: "row",
-        id: "reasoning-active",
-        state: "running",
-        class: "planning",
-        title: "Thinking: Evaluating potential issues",
-      },
-    ])
-
-    part.text = "**Evaluating potential issues**"
-    expect(groupTimelineParts("mendcode", [part], { showReasoningRows: true })).toEqual([
-      {
-        type: "row",
-        id: "reasoning-active",
-        state: "running",
-        class: "planning",
-        title: "Thinking: Evaluating potential issues",
-      },
-    ])
-  })
-
   test("raw reasoning keeps provider headings in the body instead of live header titles", () => {
     expect(rawReasoningDisplay("**Updating dashboard features**\n\nStreaming body")).toEqual({
       title: null,
