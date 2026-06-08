@@ -135,6 +135,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
     const fullSyncedSessions = new Set<string>()
     let syncedWorkspace = project.workspace.current()
+    let pendingInputRefreshTimer: Timer | undefined
 
     function sessionListQuery(): { scope?: "project"; path?: string } {
       if (!kv.get("session_directory_filter_enabled", true)) return { scope: "project" }
@@ -150,6 +151,40 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       return sdk.client.session
         .list({ start: Date.now() - 30 * 24 * 60 * 60 * 1000, ...sessionListQuery() })
         .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
+    }
+
+    function groupBySession<T extends { sessionID: string }>(items: ReadonlyArray<T>) {
+      const grouped: Record<string, T[]> = {}
+      for (const item of items) {
+        grouped[item.sessionID] ??= []
+        grouped[item.sessionID].push(item)
+      }
+      return grouped
+    }
+
+    async function refreshPendingInput() {
+      const workspace = project.workspace.current()
+      const [permissions, questions, planReviews] = await Promise.allSettled([
+        sdk.client.permission.list({ workspace }),
+        sdk.client.question.list({ workspace }),
+        sdk.client.planReview.list({ workspace }),
+      ])
+      batch(() => {
+        if (permissions.status === "fulfilled")
+          setStore("permission", reconcile(groupBySession(permissions.value.data ?? [])))
+        if (questions.status === "fulfilled")
+          setStore("question", reconcile(groupBySession(questions.value.data ?? [])))
+        if (planReviews.status === "fulfilled")
+          setStore("plan_review", reconcile(groupBySession(planReviews.value.data ?? [])))
+      })
+    }
+
+    function schedulePendingInputRefresh() {
+      if (pendingInputRefreshTimer) clearTimeout(pendingInputRefreshTimer)
+      pendingInputRefreshTimer = setTimeout(() => {
+        pendingInputRefreshTimer = undefined
+        void refreshPendingInput().catch(() => undefined)
+      }, 25)
     }
 
     event.subscribe((event) => {
@@ -187,9 +222,15 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           break
         case "permission.replied": {
           const requests = store.permission[event.properties.sessionID]
-          if (!requests) break
+          if (!requests) {
+            schedulePendingInputRefresh()
+            break
+          }
           const match = Binary.search(requests, event.properties.requestID, (r) => r.id)
-          if (!match.found) break
+          if (!match.found) {
+            schedulePendingInputRefresh()
+            break
+          }
           setStore(
             "permission",
             event.properties.sessionID,
@@ -197,6 +238,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               draft.splice(match.index, 1)
             }),
           )
+          schedulePendingInputRefresh()
           break
         }
 
@@ -205,11 +247,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const requests = store.permission[request.sessionID]
           if (!requests) {
             setStore("permission", request.sessionID, [request])
+            schedulePendingInputRefresh()
             break
           }
           const match = Binary.search(requests, request.id, (r) => r.id)
           if (match.found) {
             setStore("permission", request.sessionID, match.index, reconcile(request))
+            schedulePendingInputRefresh()
             break
           }
           setStore(
@@ -219,15 +263,22 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               draft.splice(match.index, 0, request)
             }),
           )
+          schedulePendingInputRefresh()
           break
         }
 
         case "question.replied":
         case "question.rejected": {
           const requests = store.question[event.properties.sessionID]
-          if (!requests) break
+          if (!requests) {
+            schedulePendingInputRefresh()
+            break
+          }
           const match = Binary.search(requests, event.properties.requestID, (r) => r.id)
-          if (!match.found) break
+          if (!match.found) {
+            schedulePendingInputRefresh()
+            break
+          }
           setStore(
             "question",
             event.properties.sessionID,
@@ -235,6 +286,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               draft.splice(match.index, 1)
             }),
           )
+          schedulePendingInputRefresh()
           break
         }
 
@@ -243,11 +295,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const requests = store.question[request.sessionID]
           if (!requests) {
             setStore("question", request.sessionID, [request])
+            schedulePendingInputRefresh()
             break
           }
           const match = Binary.search(requests, request.id, (r) => r.id)
           if (match.found) {
             setStore("question", request.sessionID, match.index, reconcile(request))
+            schedulePendingInputRefresh()
             break
           }
           setStore(
@@ -257,14 +311,21 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               draft.splice(match.index, 0, request)
             }),
           )
+          schedulePendingInputRefresh()
           break
         }
 
         case "plan_review.replied": {
           const requests = store.plan_review[event.properties.sessionID]
-          if (!requests) break
+          if (!requests) {
+            schedulePendingInputRefresh()
+            break
+          }
           const match = Binary.search(requests, event.properties.requestID, (r) => r.id)
-          if (!match.found) break
+          if (!match.found) {
+            schedulePendingInputRefresh()
+            break
+          }
           setStore(
             "plan_review",
             event.properties.sessionID,
@@ -272,6 +333,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               draft.splice(match.index, 1)
             }),
           )
+          schedulePendingInputRefresh()
           break
         }
 
@@ -280,11 +342,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const requests = store.plan_review[request.sessionID]
           if (!requests) {
             setStore("plan_review", request.sessionID, [request])
+            schedulePendingInputRefresh()
             break
           }
           const match = Binary.search(requests, request.id, (r) => r.id)
           if (match.found) {
             setStore("plan_review", request.sessionID, match.index, reconcile(request))
+            schedulePendingInputRefresh()
             break
           }
           setStore(
@@ -294,6 +358,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               draft.splice(match.index, 0, request)
             }),
           )
+          schedulePendingInputRefresh()
           break
         }
 
@@ -540,14 +605,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             }),
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
-            sdk.client.planReview.list({ workspace }).then((x) => {
-              const grouped: Record<string, PlanReviewRequest[]> = {}
-              for (const request of x.data ?? []) {
-                grouped[request.sessionID] ??= []
-                grouped[request.sessionID].push(request)
-              }
-              setStore("plan_review", reconcile(grouped))
-            }),
+            refreshPendingInput(),
             project.workspace.sync(),
           ]).then(() => {
             setStore("status", "complete")
