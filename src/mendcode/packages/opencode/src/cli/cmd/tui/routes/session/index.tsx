@@ -3779,16 +3779,22 @@ function Write(props: ToolProps<typeof WriteTool>) {
   return (
     <Switch>
       <Match when={props.metadata.diagnostics !== undefined}>
-        <BlockTool title={"# Wrote " + normalizePath(props.input.filePath!)} part={props.part}>
-          <line_number fg={theme.textMuted} minWidth={3} paddingRight={1}>
-            <code
-              conceal={false}
-              fg={theme.text}
-              filetype={filetype(props.input.filePath!)}
-              syntaxStyle={syntax()}
-              content={code()}
-            />
-          </line_number>
+        <BlockTool
+          title={"# Wrote " + normalizePath(props.input.filePath!)}
+          titleColor={theme.diffHighlightAdded}
+          part={props.part}
+        >
+          <box backgroundColor={theme.diffAddedBg}>
+            <line_number fg={theme.diffHighlightAdded} minWidth={3} paddingRight={1}>
+              <code
+                conceal={false}
+                fg={theme.text}
+                filetype={filetype(props.input.filePath!)}
+                syntaxStyle={syntax()}
+                content={code()}
+              />
+            </line_number>
+          </box>
           <Diagnostics diagnostics={props.metadata.diagnostics} filePath={props.input.filePath ?? ""} />
         </BlockTool>
       </Match>
@@ -4116,7 +4122,7 @@ function Edit(props: ToolProps<typeof EditTool>) {
 
 function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
   const ctx = use()
-  const { syntax } = useTheme()
+  const { syntax, theme } = useTheme()
 
   const files = createMemo(() => props.metadata.files ?? [])
 
@@ -4147,12 +4153,18 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
     return "← Patched " + file.relativePath
   }
 
+  function titleColor(file: { type: string }) {
+    if (file.type === "delete") return theme.diffHighlightRemoved
+    if (file.type === "add") return theme.diffHighlightAdded
+    return undefined
+  }
+
   return (
     <Switch>
       <Match when={files().length > 0}>
         <For each={files()}>
           {(file) => (
-            <BlockTool title={title(file)} part={props.part}>
+            <BlockTool title={title(file)} titleColor={titleColor(file)} part={props.part}>
               <Diff diff={file.patch} filePath={file.filePath} />
               <Diagnostics diagnostics={props.metadata.diagnostics} filePath={file.movePath ?? file.filePath} />
             </BlockTool>

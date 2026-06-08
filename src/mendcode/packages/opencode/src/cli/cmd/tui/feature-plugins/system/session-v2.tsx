@@ -997,16 +997,22 @@ function Write(props: ToolProps) {
   return (
     <Switch>
       <Match when={content() && props.part.state.status === "completed"}>
-        <BlockTool title={"# Wrote " + normalizePath(filePath())} part={props.part}>
-          <line_number fg={theme.textMuted} minWidth={3} paddingRight={1}>
-            <code
-              conceal={false}
-              fg={theme.text}
-              filetype={filetype(filePath())}
-              syntaxStyle={syntax()}
-              content={content()}
-            />
-          </line_number>
+        <BlockTool
+          title={"# Wrote " + normalizePath(filePath())}
+          titleColor={theme.diffHighlightAdded}
+          part={props.part}
+        >
+          <box backgroundColor={theme.diffAddedBg}>
+            <line_number fg={theme.diffHighlightAdded} minWidth={3} paddingRight={1}>
+              <code
+                conceal={false}
+                fg={theme.text}
+                filetype={filetype(filePath())}
+                syntaxStyle={syntax()}
+                content={content()}
+              />
+            </line_number>
+          </box>
           <Diagnostics diagnostics={props.metadata.diagnostics} filePath={filePath()} />
         </BlockTool>
       </Match>
@@ -1049,7 +1055,7 @@ function Edit(props: ToolProps) {
 }
 
 function ApplyPatch(props: ToolProps) {
-  const { syntax } = useTheme()
+  const { syntax, theme } = useTheme()
   const files = createMemo(() => arrayValue(props.metadata.files).flatMap((item) => (isRecord(item) ? [item] : [])))
   const fullDiff = createMemo(() => stringValue(props.metadata.diff))
   const fileTitle = (file: Record<string, unknown>) => {
@@ -1060,13 +1066,19 @@ function ApplyPatch(props: ToolProps) {
     if (type === "move") return "# Moved " + normalizePath(stringValue(file.filePath)) + " → " + relativePath
     return "← Patched " + relativePath
   }
+  const fileTitleColor = (file: Record<string, unknown>) => {
+    const type = stringValue(file.type)
+    if (type === "delete") return theme.diffHighlightRemoved
+    if (type === "add") return theme.diffHighlightAdded
+    return undefined
+  }
   const patchForFile = (file: Record<string, unknown>) => stringValue(file.patch) ?? fullDiff()
   return (
     <Switch>
       <Match when={files().length > 0}>
         <For each={files()}>
           {(file) => (
-            <BlockTool title={fileTitle(file)} part={props.part}>
+            <BlockTool title={fileTitle(file)} titleColor={fileTitleColor(file)} part={props.part}>
               <box paddingLeft={1}>
                 <TimelineDiff
                   diff={patchForFile(file) ?? ""}
