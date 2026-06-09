@@ -408,7 +408,7 @@ function AssistantReasoning(props: { part: SessionMessageAssistantReasoning; sub
           <box paddingLeft={3} marginTop={1} flexDirection="column" flexShrink={0}>
             <ReasoningHeader done={props.completed} title={display().title} />
             <Show when={display().body}>
-              <box marginTop={1}>
+              <box>
                 <code
                   filetype="markdown"
                   drawUnstyledText={false}
