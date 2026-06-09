@@ -7,6 +7,14 @@ export type TimelineDiffRow = {
   text: string
 }
 
+export type TimelineDiffFileStatus = "added" | "removed" | undefined
+
+export function timelineDiffFileStatus(diff: string): TimelineDiffFileStatus {
+  if (/^(?:new file mode|--- \/dev\/null)/m.test(diff)) return "added"
+  if (/^(?:deleted file mode|\+\+\+ \/dev\/null)/m.test(diff)) return "removed"
+  return undefined
+}
+
 export function parseTimelineDiffRows(diff: string): TimelineDiffRow[] {
   const rows: TimelineDiffRow[] = []
   let oldLine = 0
