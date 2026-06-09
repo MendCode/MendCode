@@ -2367,6 +2367,70 @@ describe("SessionNs.getUsage", () => {
     expect(result.tokens.total).toBe(1500)
   })
 
+  test("separates OpenAI Responses reasoning tokens from raw usage", () => {
+    const model = createModel({ context: 100_000, output: 32_000 })
+    const result = SessionNs.getUsage({
+      model,
+      usage: {
+        inputTokens: 1000,
+        outputTokens: 500,
+        totalTokens: 1500,
+        inputTokenDetails: {
+          noCacheTokens: undefined,
+          cacheReadTokens: undefined,
+          cacheWriteTokens: undefined,
+        },
+        outputTokenDetails: {
+          textTokens: undefined,
+          reasoningTokens: undefined,
+        },
+        raw: {
+          input_tokens: 1000,
+          output_tokens: 500,
+          total_tokens: 1500,
+          output_tokens_details: {
+            reasoning_tokens: 125,
+          },
+        },
+      } as any,
+    })
+
+    expect(result.tokens.output).toBe(375)
+    expect(result.tokens.reasoning).toBe(125)
+  })
+
+  test("separates Chat Completions reasoning tokens from raw usage", () => {
+    const model = createModel({ context: 100_000, output: 32_000 })
+    const result = SessionNs.getUsage({
+      model,
+      usage: {
+        inputTokens: 1000,
+        outputTokens: 500,
+        totalTokens: 1500,
+        inputTokenDetails: {
+          noCacheTokens: undefined,
+          cacheReadTokens: undefined,
+          cacheWriteTokens: undefined,
+        },
+        outputTokenDetails: {
+          textTokens: undefined,
+          reasoningTokens: undefined,
+        },
+        raw: {
+          prompt_tokens: 1000,
+          completion_tokens: 500,
+          total_tokens: 1500,
+          completion_tokens_details: {
+            reasoning_tokens: 90,
+          },
+        },
+      } as any,
+    })
+
+    expect(result.tokens.output).toBe(410)
+    expect(result.tokens.reasoning).toBe(90)
+  })
+
   test("does not double count reasoning tokens in cost", () => {
     const model = createModel({
       context: 100_000,
