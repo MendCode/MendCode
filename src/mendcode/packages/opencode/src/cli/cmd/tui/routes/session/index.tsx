@@ -3128,7 +3128,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
               />
             </box>
             <Show when={display().body}>
-              <box marginTop={1}>
+              <box>
                 <code
                   filetype="markdown"
                   drawUnstyledText={false}
