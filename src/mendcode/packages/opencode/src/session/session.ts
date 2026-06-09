@@ -351,6 +351,40 @@ export function plan(input: { slug: string; time: { created: number } }, instanc
   return path.join(base, [input.time.created, input.slug].join("-") + ".md")
 }
 
+function usageValue(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  return value
+}
+
+function usagePath(source: unknown, path: string[]): number | undefined {
+  let current = source
+  for (const key of path) {
+    if (!current || typeof current !== "object" || !(key in current)) return undefined
+    current = (current as Record<string, unknown>)[key]
+  }
+  return usageValue(current)
+}
+
+function reasoningTokensFromUsage(usage: LanguageModelUsage): number | undefined {
+  const candidates: string[][] = [
+    ["outputTokenDetails", "reasoningTokens"],
+    ["reasoningTokens"],
+    ["raw", "output_tokens_details", "reasoning_tokens"],
+    ["raw", "completion_tokens_details", "reasoning_tokens"],
+    ["raw", "reasoning_output_tokens"],
+    ["raw", "reasoning_tokens"],
+    ["output_tokens_details", "reasoning_tokens"],
+    ["completion_tokens_details", "reasoning_tokens"],
+    ["reasoning_output_tokens"],
+    ["reasoning_tokens"],
+  ]
+  for (const path of candidates) {
+    const value = usagePath(usage, path)
+    if (value !== undefined) return value
+  }
+  return undefined
+}
+
 export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsage; metadata?: ProviderMetadata }) => {
   const safe = (value: number) => {
     if (!Number.isFinite(value)) return 0
@@ -358,7 +392,7 @@ export const getUsage = (input: { model: Provider.Model; usage: LanguageModelUsa
   }
   const inputTokens = safe(input.usage.inputTokens ?? 0)
   const outputTokens = safe(input.usage.outputTokens ?? 0)
-  const reasoningTokens = safe(input.usage.outputTokenDetails?.reasoningTokens ?? input.usage.reasoningTokens ?? 0)
+  const reasoningTokens = safe(reasoningTokensFromUsage(input.usage) ?? 0)
 
   const cacheReadInputTokens = safe(
     input.usage.inputTokenDetails?.cacheReadTokens ?? input.usage.cachedInputTokens ?? 0,
