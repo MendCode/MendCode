@@ -209,6 +209,7 @@ export function Session() {
   })
   const promptRef = usePromptRef()
   const session = createMemo(() => sync.session.get(route.sessionID))
+  const [permissionModeSetting, setPermissionModeSetting] = createSignal<PermissionMode>("approval")
   const children = createMemo(() => {
     const parentID = session()?.parentID ?? session()?.id
     return sync.data.session
@@ -216,9 +217,13 @@ export function Session() {
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
-  const permissions = createMemo(() => {
+  const pendingPermissions = createMemo(() => {
     if (session()?.parentID) return []
     return children().flatMap((x) => sync.data.permission[x.id] ?? [])
+  })
+  const permissions = createMemo(() => {
+    if (permissionModeSetting() === "full_access") return []
+    return pendingPermissions()
   })
   const questions = createMemo(() => {
     if (session()?.parentID) return []
@@ -358,7 +363,6 @@ export function Session() {
   })
   const showSessionBottomDock = createMemo(() => showTodos() && !disabled() && !backgroundWriterLocked())
   const promptDisabled = createMemo(() => disabled() || backgroundWriterLocked())
-  const [permissionModeSetting, setPermissionModeSetting] = createSignal<PermissionMode>("approval")
   const [permissionsConfig, { refetch: refetchPermissionsConfig }] = createResource(
     () => route.sessionID,
     async () => readPermissionsConfig(),
@@ -419,7 +423,7 @@ export function Session() {
 
   async function autoAcceptPendingPermissions() {
     let accepted = 0
-    for (const request of permissions()) {
+    for (const request of pendingPermissions()) {
       if (await replyPermissionOnce(request)) accepted++
     }
     return accepted
