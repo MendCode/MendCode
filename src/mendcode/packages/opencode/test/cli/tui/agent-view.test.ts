@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  isAgentViewSessionFallbackVisible,
   isAgentViewSessionVisible,
   isTemporaryAgentViewDirectory,
   type AgentViewBackgroundSession,
@@ -32,6 +33,24 @@ describe("Agent View visibility", () => {
       }),
     ).toBe(true)
     expect(isAgentViewSessionVisible({ item: item({ state: "completed", session: null }), now })).toBe(false)
+  })
+
+  test("allows old real sessions only as the empty-recent fallback", () => {
+    const oldSession = item({
+      state: "completed",
+      directory: "/Users/obed/Code/TerraPredict",
+      updated: now - 25 * 60 * 60 * 1_000,
+    })
+    const tempSession = item({
+      state: "completed",
+      directory: "/private/var/folders/wk/opencode-test-123",
+      updated: now - 25 * 60 * 60 * 1_000,
+    })
+
+    expect(isAgentViewSessionVisible({ item: oldSession, now })).toBe(false)
+    expect(isAgentViewSessionFallbackVisible(oldSession)).toBe(true)
+    expect(isAgentViewSessionFallbackVisible(tempSession)).toBe(false)
+    expect(isAgentViewSessionFallbackVisible(item({ state: "completed", session: null }))).toBe(false)
   })
 })
 

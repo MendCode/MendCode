@@ -23,6 +23,7 @@ import { Locale } from "@/util/locale"
 import { Global } from "@mendcode/core/global"
 import type { GlobalEvent, PermissionRequest, PlanReviewRequest, QuestionRequest, Session, SessionStatus } from "@mendcode/sdk/v2"
 import {
+  isAgentViewSessionFallbackVisible,
   isAgentViewSessionVisible,
   type AgentViewBackgroundSession,
   type AgentViewSessionItem,
@@ -253,12 +254,25 @@ export function HomeSurface(props: {
   }
 
   async function listAgentViewSessions() {
-    const query = {
-      start: Date.now() - agentViewSessionWindowMs,
+    const baseQuery = {
       roots: true as const,
       limit: 50,
       ...agentViewScopeQuery(),
     }
+    const recent = await listAgentViewSessionsWithQuery({
+      ...baseQuery,
+      start: Date.now() - agentViewSessionWindowMs,
+    })
+    if (recent.length > 0) return recent
+    return listAgentViewSessionsWithQuery(baseQuery)
+  }
+
+  async function listAgentViewSessionsWithQuery(query: {
+    directory?: string
+    roots: true
+    limit: number
+    start?: number
+  }) {
     const attempts = [
       () => fetchAgentViewJSON<Session[]>("/experimental/session", query),
       () =>
@@ -395,14 +409,16 @@ export function HomeSurface(props: {
           },
         }
       })
-    return [...backgroundItems, ...foregroundItems]
-      .filter((item) =>
-        isAgentViewSessionVisible({
-          item,
-          status: globalStatuses()[item.background.sessionID] ?? sync.data.session_status[item.background.sessionID],
-          pendingInput: pendingInputCount(item.background.sessionID),
-        }),
-      )
+    const items = [...backgroundItems, ...foregroundItems]
+    const visible = items.filter((item) =>
+      isAgentViewSessionVisible({
+        item,
+        status: globalStatuses()[item.background.sessionID] ?? sync.data.session_status[item.background.sessionID],
+        pendingInput: pendingInputCount(item.background.sessionID),
+      }),
+    )
+    const displayItems = visible.length > 0 ? visible : items.filter(isAgentViewSessionFallbackVisible)
+    return displayItems
       .toSorted(
         (a, b) => b.background.time.updated - a.background.time.updated || b.background.sessionID.localeCompare(a.background.sessionID),
       )
