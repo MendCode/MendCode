@@ -76,12 +76,26 @@ import type { MendTuiProfile } from "@/mend/profile"
 import { pathToFileURL } from "url"
 import { mendStatusSummary, integrationStatus } from "@/mend/commands/status"
 import { mendTuiCapabilityVersion, visibleCustomizationCapabilities } from "@/mend/tui/capabilities"
-import { applyRuntimePack, formatRuntimePackPlan, runtimePackPlan } from "@/mend/runtime/pack"
+import {
+  applyRuntimePack,
+  deleteLocalRuntimePack,
+  formatRuntimePackPlan,
+  runtimePackArtifactCandidates,
+  runtimePackPlan,
+  type RuntimePackSelection,
+} from "@/mend/runtime/pack"
+import { packageMetadata, packageMetadataSet, syncProject } from "@/mend/config/project"
 import { cyclePromptMode, writePromptMode, type MendPromptMode } from "@/mend/prompt/mode"
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import { setupReadiness } from "@/mend/runtime/readiness"
 import { isSetupComplete, readSetupState } from "@/mend/setup/state"
-import { runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistryStatus } from "@/mend/runtime/registry"
+import { runtimeRegistryApply, runtimeRegistryPreview, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistryStatus } from "@/mend/runtime/registry"
+import {
+  disableAllMendPackages,
+  listMendPackages,
+  removeMendPackage,
+  setMendPackageEnabled,
+} from "@/mend/runtime/packages"
 import { writeGlobalMemoryConfig } from "@/mend/memory/config"
 import { readPermissionsConfig } from "@/mend/config/permissions"
 import {
@@ -565,7 +579,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
 
   const connected = useConnected()
   const mendCategory = "System"
-  const memoryRoot = () => project.instance.path().directory || project.instance.path().worktree || mend.root
+  const memoryRoot = () => project.instance.path().worktree || project.instance.path().directory || mend.root
   const showMendStatus = async (title = "MendCode Status") => {
     await DialogAlert.show(dialog, title, await mendStatusSummary(mend.root))
   }
@@ -584,7 +598,8 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         `Entries: global ${status.entries.global.count} · project ${status.entries.project.count}`,
         `Proposals: pending ${status.proposals.pending} · applied ${status.proposals.applied} · rejected ${status.proposals.rejected}`,
         "",
-        `Memory context limit: up to ${status.maxPromptTokens} tokens · max ${status.maxEntries} entries per request`,
+        `Memory context limit: up to ${status.maxPromptTokens} tokens`,
+        `Runtime caps: project ${status.projectMaxEntries}/request · global ${status.globalCompactionMaxEntries}/after compaction`,
         `Extractor: ${status.extractorRole} · output model calls ${status.outputCallsProviders ? "possible" : "off"}`,
         `Consolidation: ${status.consolidatorRole} · no background spend`,
         `Project path: ${status.paths.projectEntries}`,
@@ -1302,7 +1317,14 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     )
   }
   const showRegistryMarketplace = async () => {
-    const result = await runtimeRegistrySearch("", "local", mend.root)
+    const result = await runtimeRegistrySearch("", "official", mend.root).catch(async (error) => {
+      toast.show({
+        variant: "warning",
+        message: `Official packages unavailable; showing local packages. ${errorMessage(error)}`,
+        duration: 5000,
+      })
+      return runtimeRegistrySearch("", "local", mend.root)
+    })
     dialog.replace(() => (
       <DialogSelect
         title="MendCode Marketplace"
@@ -1317,6 +1339,424 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             await DialogAlert.show(dialog, pack.title || pack.id, JSON.stringify(detail.pack, null, 2))
           },
         }))}
+      />
+    ))
+  }
+  const refreshPackagesRuntime = async () => {
+    await syncProject(mend.root)
+    await mend.reload()
+  }
+  const showPackageAuthorWizard = async () => {
+    const metadata = packageMetadata(mend.root)
+    const candidates = await runtimePackArtifactCandidates(mend.root)
+    const title = await DialogPrompt.show(dialog, "Package title", {
+      value: metadata.title || "",
+      placeholder: "Starter Pack",
+      description: () => <text fg={theme.textMuted}>Human-facing package name shown in local package lists and registry previews.</text>,
+    })
+    if (title === undefined || title === null) return
+    const id = await DialogPrompt.show(dialog, "Package id", {
+      value: metadata.id || "",
+      placeholder: "starter-pack",
+      description: () => <text fg={theme.textMuted}>Stable package id. Blank keeps the generated local runtime id.</text>,
+    })
+    if (id === undefined || id === null) return
+    const description = await DialogPrompt.show(dialog, "Package description", {
+      value: metadata.description || "",
+      placeholder: "Reusable MendCode starter package",
+      description: () => <text fg={theme.textMuted}>Short summary for package search, install previews, and show output.</text>,
+    })
+    if (description === undefined || description === null) return
+    const version = await DialogPrompt.show(dialog, "Package version", {
+      value: metadata.version || "0.1.0",
+      placeholder: "0.1.0",
+      description: () => <text fg={theme.textMuted}>Optional semantic package version. This is not the manifest schema version.</text>,
+    })
+    if (version === undefined || version === null) return
+    const selection: RuntimePackSelection = { ...(metadata.selection as RuntimePackSelection) }
+    type PackageFileCategoryKey = "commands" | "agents" | "modes" | "skills" | "plugins" | "prompts" | "mcp" | "context" | "extensions"
+    const fileCategories: Array<{ key: PackageFileCategoryKey; title: string; files: string[] }> = [
+      { key: "commands", title: "Commands", files: candidates.commands },
+      { key: "agents", title: "Agents", files: candidates.agents },
+      { key: "modes", title: "Modes", files: candidates.modes },
+      { key: "skills", title: "Skills", files: candidates.skills },
+      { key: "plugins", title: "Plugins", files: candidates.plugins },
+      { key: "prompts", title: "Prompt templates", files: candidates.prompts },
+      { key: "mcp", title: "MCP files", files: candidates.mcp },
+      { key: "context", title: "Context files", files: candidates.context },
+      { key: "extensions", title: "Widgets, components, scripts", files: candidates.extensions },
+    ]
+    const boolCategories: Array<{ key: "tuiProfile" | "worktreePolicy" | "models" | "focus" | "budget" | "memory" | "permissions"; title: string }> = [
+      { key: "models", title: "Model roles (global/project config)" },
+      { key: "focus", title: "Focus config (project config)" },
+      { key: "budget", title: "Budget policy (project config)" },
+      { key: "memory", title: "Memory settings (global/project config)" },
+      { key: "permissions", title: "Permission settings (global config)" },
+      { key: "tuiProfile", title: "TUI profile (global/project config)" },
+      { key: "worktreePolicy", title: "Worktree policy (project config)" },
+    ]
+    const selectedSet = (key: PackageFileCategoryKey, files: string[]) =>
+      new Set((selection[key] ?? files) as string[])
+    const selectedCount = (key: PackageFileCategoryKey, files: string[]) =>
+      selectedSet(key, files).size
+    const visibleFileCategories = () =>
+      fileCategories.filter((category) => category.files.length > 0 || selectedCount(category.key, category.files) > 0)
+    const boolEnabled = (key: "tuiProfile" | "worktreePolicy" | "models" | "focus" | "budget" | "memory" | "permissions") =>
+      selection[key] !== false
+    const configSelectedCount = () => boolCategories.filter((category) => boolEnabled(category.key)).length
+    const packageSummaryLine = () =>
+      `${selectedCount("commands", candidates.commands)} commands · ${selectedCount("agents", candidates.agents)} agents · ${selectedCount("skills", candidates.skills)} skills · ${selectedCount("mcp", candidates.mcp)} MCP · ${configSelectedCount()}/${boolCategories.length} config`
+    const packageSummaryText = () => [
+      `Commands: ${selectedCount("commands", candidates.commands)}/${candidates.commands.length}`,
+      `Agents/subagents: ${selectedCount("agents", candidates.agents)}/${candidates.agents.length}`,
+      `Modes: ${selectedCount("modes", candidates.modes)}/${candidates.modes.length}`,
+      `Skills: ${selectedCount("skills", candidates.skills)}/${candidates.skills.length}`,
+      `Plugins: ${selectedCount("plugins", candidates.plugins)}/${candidates.plugins.length}`,
+      `Prompt templates: ${selectedCount("prompts", candidates.prompts)}/${candidates.prompts.length}`,
+      `MCP files: ${selectedCount("mcp", candidates.mcp)}/${candidates.mcp.length}`,
+      `Context files: ${selectedCount("context", candidates.context)}/${candidates.context.length}`,
+      `Widgets/components/scripts: ${selectedCount("extensions", candidates.extensions)}/${candidates.extensions.length}`,
+      `Config groups: ${configSelectedCount()}/${boolCategories.length}`,
+      "",
+      "Project file counts are only files under this project's .mendcode directory.",
+      "Config groups may come from global or project config, depending on the label.",
+    ].join("\n")
+    const openFileCategory = (category: (typeof fileCategories)[number]) => {
+      const chosen = selectedSet(category.key, category.files)
+      dialog.replace(() => (
+        <DialogSelect
+          title={category.title}
+          options={[
+            {
+              title: "Done",
+              value: "done",
+              category: "Action",
+              description: "Return to package contents.",
+              onSelect: () => openPackageContents(),
+            },
+            {
+              title: "Select all",
+              value: "all",
+              category: "Action",
+              description: `Copy all ${category.files.length} current files into the package snapshot.`,
+              onSelect: () => {
+                selection[category.key] = [...category.files]
+                openFileCategory(category)
+              },
+            },
+            {
+              title: "Select none",
+              value: "none",
+              category: "Action",
+              description: "Exclude this artifact type from the snapshot. Local files stay on disk.",
+              onSelect: () => {
+                selection[category.key] = []
+                openFileCategory(category)
+              },
+            },
+            ...category.files.map((file) => ({
+              title: `${chosen.has(file) ? "[x]" : "[ ]"} ${file}`,
+              value: file,
+              category: "Files",
+              description: chosen.has(file) ? "Will be copied into the package snapshot." : "Will stay local and outside the package snapshot.",
+              onSelect: () => {
+                const next = selectedSet(category.key, category.files)
+                if (next.has(file)) next.delete(file)
+                else next.add(file)
+                selection[category.key] = [...next].sort()
+                openFileCategory(category)
+              },
+            })),
+          ]}
+        />
+      ))
+    }
+    const openPackageContents = () => {
+      dialog.replace(() => (
+        <DialogSelect
+          title="Package contents"
+          options={[
+            {
+              title: "Package summary",
+              value: "summary",
+              category: "Summary",
+              description: packageSummaryLine(),
+              onSelect: () => void DialogAlert.show(dialog, "Package summary", packageSummaryText()),
+            },
+            {
+              title: "Save package snapshot",
+              value: "save",
+              category: "Action",
+              description: "Write the package snapshot from selected items. Local files are not deleted.",
+              onSelect: async () => {
+                await packageMetadataSet({ title, id, description, version, selection }, mend.root)
+                const snapshot = await applyRuntimePack(mend.root)
+                await mend.reload()
+                toast.show({
+                  variant: "success",
+                  message: `Package ${title || id || version} snapshot updated: ${snapshot.packageManifestPath}`,
+                  duration: 5000,
+                })
+                dialog.clear()
+              },
+            },
+            {
+              title: "Select all current artifacts",
+              value: "all",
+              category: "Action",
+              description: "Include every detected project file and config group in the snapshot only.",
+              onSelect: () => {
+                for (const category of fileCategories) selection[category.key] = [...category.files]
+                for (const category of boolCategories) selection[category.key] = true
+                openPackageContents()
+              },
+            },
+            {
+              title: "Select no file artifacts",
+              value: "none",
+              category: "Action",
+              description: "Exclude project files from this snapshot. It does not delete local files.",
+              onSelect: () => {
+                for (const category of fileCategories) selection[category.key] = []
+                openPackageContents()
+              },
+            },
+            ...(visibleFileCategories().length
+              ? visibleFileCategories().map((category) => ({
+                  title: `${category.title}: ${selectedCount(category.key, category.files)}/${category.files.length}`,
+                  value: category.key,
+                  category: "Project files",
+                  description: "Choose which project .mendcode files are copied into the package snapshot.",
+                  onSelect: () => openFileCategory(category),
+                }))
+              : [{
+                  title: "No project artifact files found",
+                  value: "no-project-files",
+                  category: "Project files",
+                  description: "This project has no .mendcode commands, agents, modes, skills, plugins, prompts, MCP files, or widgets to copy.",
+                }]),
+            ...boolCategories.map((category) => ({
+              title: `${boolEnabled(category.key) ? "[x]" : "[ ]"} ${category.title}`,
+              value: category.key,
+              category: "Config",
+              description: boolEnabled(category.key) ? "Included in snapshot; original config stays in place." : "Excluded from snapshot; original config stays in place.",
+              onSelect: () => {
+                selection[category.key] = !boolEnabled(category.key)
+                openPackageContents()
+              },
+            })),
+          ]}
+        />
+      ))
+    }
+    openPackageContents()
+  }
+  const packageArtifactSummary = (files: string[]) => {
+    const count = (pattern: RegExp) => files.filter((file) => pattern.test(file)).length
+    return [
+      `Commands: ${count(/^\.mendcode\/commands\//)}`,
+      `Agents: ${count(/^\.mendcode\/agents\//)}`,
+      `Modes: ${count(/^\.mendcode\/modes\//)}`,
+      `Skills: ${count(/^\.mendcode\/skills\//)}`,
+      `Plugins: ${count(/^\.mendcode\/plugins\//)}`,
+      `MCP files: ${count(/^\.mendcode\/mcp\//)}`,
+      `Prompt templates: ${count(/^\.mendcode\/prompts\//)}`,
+      `Widgets/components/scripts: ${count(/^\.mendcode\/(widgets|components|scripts)\//)}`,
+      `Runtime snapshot/config: ${count(/^(mend-package\.json|\.mendcode\/runtime-pack\.json|\.mendcode\/mendcode\.json|\.mendcode\/models\.yaml|\.mendcode\/prompt-mode\.json|\.mendcode\/tui\/profile\.json|\.mendcode\/worktree\/policy\.yaml)$/)}`,
+    ].join("\n")
+  }
+  const packageTransitionText = (input: {
+    title: string
+    action: string
+    activeBefore: string[]
+    activeAfter: string[]
+    files: string[]
+    extra?: string[]
+  }) => [
+    input.action,
+    "",
+    `Active before: ${input.activeBefore.join(", ") || "none"}`,
+    `Active after: ${input.activeAfter.join(", ") || "none"}`,
+    "",
+    "Runtime updated for next message:",
+    packageArtifactSummary(input.files),
+    ...(input.extra?.length ? ["", ...input.extra] : []),
+    "",
+    "Will not touch:",
+    "- open chat/session history",
+    "- local .mendcode/skills, modes, commands, plugins",
+    "- provider auth, runs, cache, generated history",
+    "",
+    "If the current mode disappears, MendCode will switch to the first available mode and show a notification.",
+  ].join("\n")
+  const confirmPackageTransition = async (input: Parameters<typeof packageTransitionText>[0]) =>
+    DialogConfirm.show(dialog, input.title, packageTransitionText(input))
+  const showPackageManager = async () => {
+    const state = await listMendPackages(mend.root)
+    const installed = state.installed
+    dialog.replace(() => (
+      <DialogSelect
+        title="MendCode Packages"
+        options={[
+          {
+            title: "Create/update local package",
+            value: "create-local",
+            category: "Start here",
+            description: "Name the package, then choose exact files/config to include.",
+            onSelect: () => void showPackageAuthorWizard(),
+          },
+          {
+            title: "Install registry source",
+            value: "install-source",
+            category: "Install",
+            description: "Download/install a configured source id, for example official or a local source.",
+            onSelect: async () => {
+              const source = await DialogPrompt.show(dialog, "Package source id", {
+                value: "official",
+                placeholder: "official",
+              })
+              if (!source?.trim()) return
+              const preview = await runtimeRegistryPreview(source.trim(), mend.root)
+              const stateBefore = await listMendPackages(mend.root)
+              const confirmed = await DialogConfirm.show(
+                dialog,
+                "Install package source",
+                [
+                  `Source: ${source.trim()}`,
+                  `Fetches network: ${preview.fetchesNetwork ? "yes" : "no"}`,
+                  `Pack: ${preview.package?.title || preview.package?.id || source.trim()}`,
+                  "",
+                  "Will update for next message:",
+                  `Commands: ${preview.pack?.commands.length || 0}`,
+                  `Agents: ${preview.pack?.agents.length || 0}`,
+                  `Modes: ${preview.pack?.modes.length || 0}`,
+                  `Skills: ${preview.pack?.skills.length || 0}`,
+                  `Plugins: ${preview.pack?.plugins.length || 0}`,
+                  `MCP files: ${preview.pack?.mcp.files.length || 0}`,
+                  `Prompt mode: ${preview.pack?.prompts.mode || "unchanged"}`,
+                  `TUI profile/chrome: ${preview.pack && Object.keys(preview.pack.tui || {}).length ? "included" : "unchanged"}`,
+                  `Model roles: ${preview.pack && Object.keys(preview.pack.models.roles || {}).length ? "included" : "unchanged"}`,
+                  "",
+                  `Active before: ${stateBefore.active.join(", ") || "none"}`,
+                  `Active after: ${preview.package?.id || source.trim()}`,
+                  "",
+                  "Will not touch local skills/modes/sessions/auth.",
+                ].join("\n"),
+              )
+              if (!confirmed) return
+              const result = await runtimeRegistryApply(source.trim(), mend.root)
+              await mend.reload()
+              toast.show({
+                variant: "success",
+                message: `Package installed from ${result.source.id}.`,
+                duration: 5000,
+              })
+              await showPackageManager()
+            },
+          },
+          {
+            title: "Browse packages",
+            value: "browse-packages",
+            category: "Install",
+            description: "Search available package sources and inspect package details.",
+            onSelect: () => void showRegistryMarketplace(),
+          },
+          ...(state.enabled.length
+            ? [{
+                title: "Deselect all packages",
+                value: "disable-all",
+                category: "Active",
+                description: "Return runtime projection to local config only.",
+                onSelect: async () => {
+                  const files = state.enabled.flatMap((item) => item.copied)
+                  const confirmed = await confirmPackageTransition({
+                    title: "Deselect all packages",
+                    action: "Deselect every active package and return to local-only runtime.",
+                    activeBefore: state.active,
+                    activeAfter: [],
+                    files,
+                  })
+                  if (!confirmed) return
+                  await disableAllMendPackages(mend.root)
+                  await refreshPackagesRuntime()
+                  toast.show({ variant: "success", message: "All packages deselected.", duration: 4000 })
+                  await showPackageManager()
+                },
+              }]
+            : []),
+          ...installed.map((item) => ({
+            title: `${item.enabled ? "[x]" : "[ ]"} ${item.title || item.id}`,
+            value: item.id,
+            category: item.enabled ? "Active package" : "Installed package",
+            description: item.description || item.root,
+            footer: item.version || item.channel || item.sourceType,
+            onSelect: async () => {
+              const activeAfter = item.enabled
+                ? state.active.filter((id) => id !== item.id)
+                : [...state.active.filter((id) => id !== item.id), item.id]
+              const confirmed = await confirmPackageTransition({
+                title: item.enabled ? "Deselect package" : "Enable package",
+                action: `${item.enabled ? "Deselect" : "Enable"} ${item.title || item.id}.`,
+                activeBefore: state.active,
+                activeAfter,
+                files: item.copied,
+                extra: [`Package root: ${item.root}`, `Version/channel: ${item.version || item.channel || item.sourceType}`],
+              })
+              if (!confirmed) return
+              await setMendPackageEnabled(item.id, !item.enabled, mend.root)
+              await refreshPackagesRuntime()
+              toast.show({
+                variant: "success",
+                message: `${item.title || item.id} ${item.enabled ? "deselected" : "enabled"}.`,
+                duration: 4000,
+              })
+              await showPackageManager()
+            },
+          })),
+          ...installed.map((item) => ({
+            title: `Remove ${item.title || item.id}`,
+            value: `remove:${item.id}`,
+            category: "Remove",
+            description: "Delete the installed package snapshot. Local MendCode config is not touched.",
+            onSelect: async () => {
+              const confirmed = await confirmPackageTransition({
+                title: "Remove package",
+                action: `Remove installed package snapshot ${item.title || item.id}.`,
+                activeBefore: state.active,
+                activeAfter: state.active.filter((id) => id !== item.id),
+                files: item.copied,
+                extra: ["The downloaded overlay copy will be deleted.", "Local source/customization files stay on disk."],
+              })
+              if (!confirmed) return
+              await removeMendPackage(item.id, mend.root)
+              await refreshPackagesRuntime()
+              toast.show({ variant: "success", message: `${item.title || item.id} removed.`, duration: 4000 })
+              await showPackageManager()
+            },
+          })),
+          {
+            title: "Delete local package snapshot",
+            value: "delete-local",
+            category: "Maintenance",
+            description: "Remove mend-package.json, runtime-pack.json, and saved artifact selection. Skills/modes stay on disk.",
+            onSelect: async () => {
+              const confirmed = await DialogConfirm.show(
+                dialog,
+                "Delete local package snapshot",
+                "Remove the local package snapshot and saved artifact selection? Local skills, modes, commands, plugins, sessions, and config files stay on disk.",
+              )
+              if (!confirmed) return
+              const result = await deleteLocalRuntimePack(mend.root)
+              await refreshPackagesRuntime()
+              toast.show({
+                variant: "success",
+                message: `Local package snapshot deleted (${result.removed.length} files).`,
+                duration: 4000,
+              })
+              await showPackageManager()
+            },
+          },
+        ]}
       />
     ))
   }
@@ -1538,10 +1978,12 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     await showMemoryManager("proposals")
   }
   const showMemoryManager = async (tab: "global" | "project" | "proposals" = "proposals") => {
-    const [globalEntries, projectEntries, proposals] = await Promise.all([
-      readMemoryEntries("global", memoryRoot()),
-      readMemoryEntries("project", memoryRoot()),
-      listMemoryProposals(memoryRoot(), "pending"),
+    const root = memoryRoot()
+    const [status, globalEntries, projectEntries, proposals] = await Promise.all([
+      memoryStatus(root),
+      readMemoryEntries("global", root),
+      readMemoryEntries("project", root),
+      listMemoryProposals(root, "pending"),
     ])
     const projectProposals = proposals.filter((proposal) => proposal.scope === "project")
     const globalProposals = proposals.filter((proposal) => proposal.scope === "global")
@@ -1620,6 +2062,27 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       previewMeta: `${proposal.scope} · ${proposal.sensitivity} · confidence ${Math.round((proposal.confidence ?? 0) * 100)}% · durability ${Math.round((proposal.durability ?? 0) * 100)}% · change risk ${Math.round((proposal.changeRisk ?? 0) * 100)}%`,
       onSelect: () => showMemoryProposalActions(proposal),
     }))
+    const statusOptions: MemoryManagerOption[] = [
+      {
+        title: `Status: ${status.enabled ? "enabled" : "disabled"} · pending ${status.proposals.pending}`,
+        value: "memory-status",
+        category: "Status",
+        description: `input ${status.input ? "on" : "off"} · learning ${status.output ? "on" : "off"} · extractor ${status.extractorRole}`,
+        previewTitle: "MendCode Memory",
+        previewBody: [
+          `Status: ${status.enabled ? "enabled" : "disabled"}`,
+          `Input memory: ${status.input ? "on" : "off"} · transient project memories are injected into each request`,
+          `Memory learning: ${status.output ? "on" : "off"} · creates approval-gated proposals after chats`,
+          `Entries: global ${status.entries.global.count} · project ${status.entries.project.count}`,
+          `Proposals: pending ${status.proposals.pending} · applied ${status.proposals.applied} · rejected ${status.proposals.rejected}`,
+          `Runtime caps: project ${status.projectMaxEntries}/request · global ${status.globalCompactionMaxEntries}/after compaction`,
+          `Extractor: ${status.extractorRole} · output model calls ${status.outputCallsProviders ? "possible" : "off"}`,
+          `Project path: ${status.paths.projectEntries}`,
+          `Global path: ${status.paths.globalEntries}`,
+        ].join("\n"),
+        previewMeta: `context ${status.maxPromptTokens} tokens · max ${status.maxEntries} manual entries`,
+      },
+    ]
     const manualActionOptions: MemoryManagerOption[] = [
       {
         title: "[+] Add global memory",
@@ -1669,6 +2132,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       })),
     ]
     const options: MemoryManagerOption[] = [
+      ...statusOptions,
       ...bulkOptions,
       ...proposalOptions,
       ...manualActionOptions,
@@ -1679,7 +2143,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         ? globalEntries[0]?.id
         : tab === "project"
           ? projectEntries[0]?.id
-          : (bulkOptions[0]?.value ?? proposals[0]?.id)
+          : (bulkOptions[0]?.value ?? proposals[0]?.id ?? statusOptions[0]?.value)
     dialog.replace(() => (
       <DialogSelect
         title="Memory Manager"
@@ -1867,6 +2331,27 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       onSelect: () => void showCustomizationCapabilities(),
     },
     {
+      title: "Create/update local package",
+      value: "mendcode.packages.create",
+      category: mendCategory,
+      suggested: true,
+      onSelect: () => void showPackageAuthorWizard(),
+    },
+    {
+      title: "Manage/install packages",
+      value: "mendcode.packages",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "packages", aliases: ["package", "packs"] },
+      onSelect: () => void showPackageManager(),
+    },
+    {
+      title: "Deselect all packages",
+      value: "mendcode.packages.disableAll",
+      category: mendCategory,
+      onSelect: () => void showPackageManager(),
+    },
+    {
       title: "Marketplace",
       value: "mendcode.marketplace",
       category: mendCategory,
@@ -1891,7 +2376,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       value: "mendcode.memory.status",
       category: mendCategory,
       slash: { name: "memory", aliases: ["mem"] },
-      onSelect: () => void showMemoryStatus(),
+      onSelect: () => void showMemoryManager(),
     },
     {
       title: "Memory Manager",

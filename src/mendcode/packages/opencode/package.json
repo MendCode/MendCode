@@ -18,7 +18,8 @@
   },
   "bin": {
     "mend": "./bin/opencode",
-    "mend-runtime": "./bin/opencode"
+    "mendcode": "./bin/opencode",
+    "mendcode-runtime": "./bin/opencode"
   },
   "exports": {
     "./*": "./src/*.ts"

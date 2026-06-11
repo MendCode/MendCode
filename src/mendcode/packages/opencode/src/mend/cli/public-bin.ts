@@ -24,6 +24,8 @@ const controlPlaneRoutes: Record<string, (args: string[]) => string[]> = {
   permissions: (args) => ["permissions", args[0] || "status", ...args.slice(1)],
   auth: (args) => ["auth", args[0] || "status", ...args.slice(1)],
   setup: (args) => ["setup", args[0] || "status"],
+  packages: (args) => ["packages", args[0] || "status", ...args.slice(1)],
+  package: (args) => ["packages", args[0] || "status", ...args.slice(1)],
   ai: (args) => ["ai", ...args],
   runtime: (args) => {
     const sub = args[0] || "status"
@@ -101,6 +103,11 @@ Project controls:
   mend memory status|search|preview|add|list
   mend permissions status      inspect permission defaults
   mend permissions set-default <approval|smart|full_access>
+  mend packages status|list    inspect installed/active MendCode packages
+  mend packages create --id <id> --title <name> [--include skills,modes,plugins]
+                                snapshot selected local skills/modes/widgets/config into a package
+  mend packages install <source-id>
+  mend packages disable <id>   deselect a package without deleting local config
 
 Runtime boundary:
   mend export plan             show export policy only

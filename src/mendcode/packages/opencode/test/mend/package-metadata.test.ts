@@ -52,6 +52,53 @@ describe("mend package metadata", () => {
     })
   })
 
+  test("writes package artifact selection with metadata", async () => {
+    await using dir = await tmpdir()
+    await writeJson(path.join(dir.path, ".mendcode", "mendcode.json"), {
+      version: 0,
+      focus: { default: "codex" },
+      budgets: { warnUsd: 1 },
+      worktree: { mode: "off" },
+    })
+
+    const result = await packageMetadataSet({
+      id: "ui-pack",
+      title: "UI Pack",
+      version: "0.2.0",
+      selection: {
+        commands: [],
+        agents: [],
+        modes: [".mendcode/modes/build.md"],
+        skills: [".mendcode/skills/ui/SKILL.md"],
+        plugins: [],
+        prompts: [],
+        mcp: [],
+        context: [],
+        extensions: [".mendcode/widgets/status.ts"],
+        models: false,
+        budget: false,
+      },
+    }, dir.path)
+
+    const config = JSON.parse(await readFile(path.join(dir.path, ".mendcode", "mendcode.json"), "utf8")) as any
+    expect(result.id).toBe("ui-pack")
+    expect(result.title).toBe("UI Pack")
+    expect(result.version).toBe("0.2.0")
+    expect(config.package.selection).toEqual({
+      commands: [],
+      agents: [],
+      modes: [".mendcode/modes/build.md"],
+      skills: [".mendcode/skills/ui/SKILL.md"],
+      plugins: [],
+      prompts: [],
+      mcp: [],
+      context: [],
+      extensions: [".mendcode/widgets/status.ts"],
+      models: false,
+      budget: false,
+    })
+  })
+
   test("reads package metadata with repo fallback", async () => {
     await using dir = await tmpdir()
     await writeJson(path.join(dir.path, "package.json"), {

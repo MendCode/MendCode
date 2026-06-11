@@ -8,7 +8,7 @@ import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
 import { ConfigModelID } from "@/config/model-id"
 import { Provider } from "@/provider/provider"
-import { Effect, Exit, Schema } from "effect"
+import { Cause, Effect, Exit, Schema } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 
 export interface TaskPromptOps {
@@ -21,6 +21,36 @@ const id = "task"
 
 export function normalizeSubagentType(value: string) {
   return value.trim().replace(/^(sub[/-])+/i, "")
+}
+
+function lastText(parts: readonly MessageV2.Part[]) {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i]
+    if (part?.type !== "text") continue
+    const text = part.text.trim()
+    if (text) return text
+  }
+  return ""
+}
+
+function isAbortError(error: unknown) {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (error instanceof Error && error.name === "MessageAbortedError") ||
+    (typeof error === "object" && error !== null && "name" in error && error.name === "MessageAbortedError")
+  )
+}
+
+function errorText(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (typeof error === "object" && error !== null) {
+    const data = "data" in error ? error.data : undefined
+    if (typeof data === "object" && data !== null && "message" in data && typeof data.message === "string") {
+      return data.message
+    }
+    if ("message" in error && typeof error.message === "string") return error.message
+  }
+  return String(error)
 }
 
 export const Parameters = Schema.Struct({
@@ -151,6 +181,42 @@ export const TaskTool = Tool.define(
       const messageID = MessageID.ascending()
       const cancel = ops.cancel(nextSession.id)
 
+      const output = (input: { status: "completed" | "interrupted" | "failed"; text?: string; error?: unknown }) => {
+        const lines = [
+          `task_id: ${nextSession.id} (for resuming to continue this task if needed)`,
+          `task_status: ${input.status}`,
+        ]
+        if (input.error) {
+          lines.push(`task_error: ${errorText(input.error)}`)
+        }
+        lines.push("", "<task_result>", input.text ?? "", "</task_result>")
+        if (input.status !== "completed") {
+          lines.push("", `Resume this subagent chat with task_id ${nextSession.id} to inspect or continue the work.`)
+        }
+        return {
+          title: params.description,
+          metadata: {
+            sessionId: nextSession.id,
+            model,
+            status: input.status,
+          },
+          output: lines.join("\n"),
+        }
+      }
+
+      const errorOutput = (input: { error: unknown; interrupted: boolean }) =>
+        Effect.gen(function* () {
+          const history = yield* sessions
+            .messages({ sessionID: nextSession.id })
+            .pipe(Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])))
+          const partial = lastText(history.flatMap((item) => item.parts))
+          return output({
+            status: input.interrupted ? "interrupted" : "failed",
+            text: partial,
+            error: input.error,
+          })
+        })
+
       function onAbort() {
         runCancel.fork(cancel)
       }
@@ -162,37 +228,38 @@ export const TaskTool = Tool.define(
         () =>
           Effect.gen(function* () {
             const parts = yield* ops.resolvePromptParts(params.prompt)
-            const result = yield* ops.prompt({
-              messageID,
-              sessionID: nextSession.id,
-              model: {
-                modelID: model.modelID,
-                providerID: model.providerID,
-              },
-              variant,
-              agent: next.name,
-              tools: {
-                ...(canTodo ? {} : { todowrite: false }),
-                ...(canTask ? {} : { task: false }),
-                ...Object.fromEntries((cfg.experimental?.primary_tools ?? []).map((item) => [item, false])),
-              },
-              parts,
-            })
+            const result = yield* ops
+              .prompt({
+                messageID,
+                sessionID: nextSession.id,
+                model: {
+                  modelID: model.modelID,
+                  providerID: model.providerID,
+                },
+                variant,
+                agent: next.name,
+                tools: {
+                  ...(canTodo ? {} : { todowrite: false }),
+                  ...(canTask ? {} : { task: false }),
+                  ...Object.fromEntries((cfg.experimental?.primary_tools ?? []).map((item) => [item, false])),
+                },
+                parts,
+              })
+              .pipe(
+                Effect.matchCauseEffect({
+                  onFailure: (cause) => {
+                    const error = Cause.squash(cause)
+                    return errorOutput({ error, interrupted: Cause.hasInterrupts(cause) || isAbortError(error) })
+                  },
+                  onSuccess: (result) => {
+                    const error = result.info.role === "assistant" ? result.info.error : undefined
+                    if (error) return errorOutput({ error, interrupted: isAbortError(error) })
+                    return Effect.succeed(output({ status: "completed", text: lastText(result.parts) }))
+                  },
+                }),
+              )
 
-            return {
-              title: params.description,
-              metadata: {
-                sessionId: nextSession.id,
-                model,
-              },
-              output: [
-                `task_id: ${nextSession.id} (for resuming to continue this task if needed)`,
-                "",
-                "<task_result>",
-                result.parts.findLast((item) => item.type === "text")?.text ?? "",
-                "</task_result>",
-              ].join("\n"),
-            }
+            return result
           }),
         (_, exit) =>
           Effect.gen(function* () {

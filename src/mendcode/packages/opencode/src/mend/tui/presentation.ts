@@ -219,6 +219,19 @@ export function reasoningSummary(text: string) {
   return { title: match[1].trim(), body: content.slice(match[0].length).trimEnd() }
 }
 
+export function rawReasoningDisplay(text: string, input?: { fallbackTitle?: string | null }) {
+  const body = text.trim()
+  return {
+    title: body ? null : (input?.fallbackTitle ?? null),
+    body,
+  }
+}
+
+export function unavailableReasoningLabel(input: { hasReadableContent: boolean; encrypted: boolean }) {
+  if (input.hasReadableContent) return null
+  return "reasoning unavailable"
+}
+
 export function activityMessagesForPhase(profile: MendTuiProfile, phase: MendActivityPhase) {
   const messages = profile.presentation.activity.messages[phase]
   if (messages?.length) return [messages[0]]

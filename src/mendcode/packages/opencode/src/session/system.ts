@@ -76,6 +76,9 @@ export async function mendPromptPolicy(model: Provider.Model, root?: string) {
     "- When the user explicitly asks to remember, save, guardar, or add something to memory, use the MendCode memory command instead of creating arbitrary project files.",
     "- Use `mend memory add \"<memory text>\" --scope global` for global/cross-project memory.",
     "- Use `mend memory add \"<memory text>\" --scope project` for memory that belongs only to the current repo.",
+    "- When the user asks to inspect or manage memory, use the exact MendCode commands: `mend memory status`, `mend memory list --scope global|project`, `mend memory search <query>`, `mend memory edit <entry-id> \"<new text>\" --scope global|project`, `mend memory delete <entry-id> --scope global|project`, `mend memory apply <proposal-id>`, and `mend memory reject <proposal-id>`.",
+    "- Do not infer memory IDs from chat text. List or search first, then edit/delete/apply the exact ID.",
+    "- Runtime memory is injected as transient system context. Do not copy loaded memories into normal assistant messages unless the user asks to see them.",
     "- Memory config is global by default. Use `mend memory config ...` for global config, and only use `mend memory config ... --project` when the user explicitly wants a repo-local override.",
     "- Generated memory proposals are approval-gated; direct `mend memory add` is appropriate only when the user explicitly asks to save that memory.",
     "</mendcode_prompt_policy>",
@@ -98,8 +101,13 @@ export async function mendBaseProvider(model: Provider.Model, root?: string) {
   return provider(model)
 }
 
-export async function mendMemory(model: Provider.Model, root?: string, query?: string | null) {
-  const result = await mendMemoryContext(model, root, query)
+export async function mendMemory(
+  model: Provider.Model,
+  root?: string,
+  query?: string | null,
+  mode: "request" | "after-compaction" = "request",
+) {
+  const result = await mendMemoryContext(model, root, query, mode)
   return result.text
 }
 

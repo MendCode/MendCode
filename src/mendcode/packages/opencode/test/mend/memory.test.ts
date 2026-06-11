@@ -72,6 +72,66 @@ describe("mend memory", () => {
     expect(result.lines?.join("\n")).toContain("provider work")
   })
 
+  test("runtime request memory injects capped project memories only", async () => {
+    await using dir = await tmpdir()
+    await writeProjectMemoryConfig({
+      enabled: true,
+      use: true,
+      generate: false,
+      projectMaxEntries: 2,
+      globalCompactionMaxEntries: 4,
+      maxPromptTokens: 1_000,
+    }, dir.path)
+    await appendMemoryEntry({ scope: "global", text: "Global preference should not appear in normal project requests." }, dir.path)
+    for (const text of [
+      "Project memory one.",
+      "Project memory two.",
+      "Project memory three.",
+    ]) {
+      await appendMemoryEntry({ scope: "project", text }, dir.path)
+    }
+
+    const result = await retrieveMemory({ root: dir.path, query: "nothing matches", cwd: dir.path, mode: "request" })
+    const lines = result.lines?.join("\n") ?? ""
+
+    expect(result.entries.length).toBe(2)
+    expect(result.entries.every((entry) => entry.scope === "project")).toBe(true)
+    expect(lines).toContain("Project memory")
+    expect(lines).not.toContain("Global preference")
+  })
+
+  test("post-compaction memory injects capped global memories plus project cap", async () => {
+    await using dir = await tmpdir()
+    await writeProjectMemoryConfig({
+      enabled: true,
+      use: true,
+      generate: false,
+      projectMaxEntries: 2,
+      globalCompactionMaxEntries: 3,
+      maxPromptTokens: 1_000,
+    }, dir.path)
+    for (const text of [
+      "Global memory one.",
+      "Global memory two.",
+      "Global memory three.",
+      "Global memory four.",
+    ]) {
+      await appendMemoryEntry({ scope: "global", text }, dir.path)
+    }
+    for (const text of [
+      "Project memory one.",
+      "Project memory two.",
+      "Project memory three.",
+    ]) {
+      await appendMemoryEntry({ scope: "project", text }, dir.path)
+    }
+
+    const result = await retrieveMemory({ root: dir.path, query: "compacted resume", cwd: dir.path, mode: "after-compaction" })
+
+    expect(result.entries.filter((entry) => entry.scope === "global").length).toBe(3)
+    expect(result.entries.filter((entry) => entry.scope === "project").length).toBe(2)
+  })
+
   test("project config writer keeps generation approval gated", async () => {
     await using dir = await tmpdir()
 

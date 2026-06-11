@@ -160,9 +160,10 @@ const workingStartedAtBySession = new Map<string, number>()
 export function resolveWorkingStartedAt(input: {
   stored?: number
   activeAssistantCreated?: number
+  sessionUpdated?: number
   fallback?: number
 }) {
-  return [input.stored, input.activeAssistantCreated, input.fallback]
+  return [input.stored, input.activeAssistantCreated, input.sessionUpdated, input.fallback]
     .filter((item): item is number => typeof item === "number" && Number.isFinite(item) && item > 0)
     .toSorted((a, b) => a - b)[0]
 }
@@ -230,6 +231,7 @@ export function Prompt(props: PromptProps) {
           const started = resolveWorkingStartedAt({
             stored: sessionID ? workingStartedAtBySession.get(sessionID) : undefined,
             activeAssistantCreated: findActiveWorkingAssistant()?.time.created,
+            sessionUpdated: sessionID ? sync.session.get(sessionID)?.time.updated : undefined,
             fallback: workingStartedAt() ?? Date.now(),
           })
           if (sessionID && started) workingStartedAtBySession.set(sessionID, started)
@@ -422,6 +424,42 @@ export function Prompt(props: PromptProps) {
     if (!messages) return undefined
     return messages.findLast((m): m is UserMessage => m.role === "user")
   })
+  const currentSession = createMemo(() => {
+    if (!props.sessionID) return undefined
+    return sync.data.session.find((item) => item.id === props.sessionID)
+  })
+  const sessionAgent = createMemo(() => {
+    const name = currentSession()?.agent ?? lastUserMessage()?.agent
+    if (!name) return undefined
+    return sync.data.agent.find((item) => item.name === name && !item.hidden)
+  })
+  const activeAgent = createMemo(() => sessionAgent() ?? local.agent.current())
+  const sessionUsesSubagent = createMemo(() => {
+    const name = sessionAgent()?.name
+    if (!name) return false
+    return !local.agent.list().some((item) => item.name === name)
+  })
+  const selectedPromptModel = createMemo(() => {
+    if (!sessionUsesSubagent()) return local.model.current()
+    const userModel = lastUserMessage()?.model
+    if (userModel) return { providerID: userModel.providerID, modelID: userModel.modelID }
+    const sessionModel = currentSession()?.model as
+      | { providerID?: string; id?: string; modelID?: string; variant?: string }
+      | undefined
+    const sessionModelID = sessionModel?.modelID ?? sessionModel?.id
+    if (sessionModel?.providerID && sessionModelID) {
+      return { providerID: sessionModel.providerID, modelID: sessionModelID }
+    }
+    const agentModel = sessionAgent()?.model as { providerID?: string; modelID?: string; id?: string } | undefined
+    const agentModelID = agentModel?.modelID ?? agentModel?.id
+    if (agentModel?.providerID && agentModelID) return { providerID: agentModel.providerID, modelID: agentModelID }
+    return local.model.current()
+  })
+  const selectedPromptVariant = createMemo(() => {
+    if (!sessionUsesSubagent()) return local.model.variant.current()
+    const sessionModel = currentSession()?.model as { variant?: string } | undefined
+    return lastUserMessage()?.model.variant ?? sessionModel?.variant ?? local.model.variant.current()
+  })
 
   const usage = createMemo(() => {
     if (!props.sessionID) return
@@ -542,8 +580,8 @@ export function Prompt(props: PromptProps) {
         // Keep command line --agent if specified.
         if (!args.agent) local.agent.set(msg.agent)
         if (msg.model) {
-          local.model.set(msg.model)
-          local.model.variant.set(msg.model.variant)
+          const hydrated = local.model.set(msg.model, { ifUnset: true })
+          if (hydrated) local.model.variant.set(msg.model.variant, { ifUnset: true })
         }
       }
     }
@@ -988,14 +1026,14 @@ export function Prompt(props: PromptProps) {
     if (workspaceCreating()) return false
     if (autocomplete?.visible) return false
     if (!store.prompt.input) return false
-    const agent = local.agent.current()
+    const agent = activeAgent()
     if (!agent) return false
     const trimmed = store.prompt.input.trim()
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
       void exit()
       return true
     }
-    const selectedModel = local.model.current()
+    const selectedModel = selectedPromptModel()
     if (!selectedModel) {
       void promptModelWarning()
       return false
@@ -1047,7 +1085,7 @@ export function Prompt(props: PromptProps) {
       return false
     }
 
-    const variant = local.model.variant.current()
+    const variant = selectedPromptVariant()
     let sessionID = props.sessionID
     if (sessionID == null) {
       const workspace = workspaceSelection()
@@ -1292,7 +1330,7 @@ export function Prompt(props: PromptProps) {
   const highlight = createMemo(() => {
     if (keybind.leader) return theme.border
     if (store.mode === "shell") return theme.primary
-    const agent = local.agent.current()
+    const agent = activeAgent()
     if (!agent) return theme.border
     return local.agent.color(agent.name)
   })
@@ -1304,10 +1342,10 @@ export function Prompt(props: PromptProps) {
     return !!current
   })
 
-  const agentMetaAlpha = createFadeIn(() => !!local.agent.current(), animationsEnabled)
-  const modelMetaAlpha = createFadeIn(() => !!local.agent.current() && store.mode === "normal", animationsEnabled)
+  const agentMetaAlpha = createFadeIn(() => !!activeAgent(), animationsEnabled)
+  const modelMetaAlpha = createFadeIn(() => !!activeAgent() && store.mode === "normal", animationsEnabled)
   const variantMetaAlpha = createFadeIn(
-    () => !!local.agent.current() && store.mode === "normal" && showVariant(),
+    () => !!activeAgent() && store.mode === "normal" && showVariant(),
     animationsEnabled,
   )
   const borderHighlight = createMemo(() => tint(theme.border, highlight(), agentMetaAlpha()))
@@ -1359,13 +1397,17 @@ export function Prompt(props: PromptProps) {
   const promptStatusSeparator = createMemo(() => promptStatusConfig().separator)
   const currentAgentLabel = createMemo(() => {
     if (store.mode === "shell") return "Shell"
-    const agent = local.agent.current()
+    const agent = activeAgent()
     if (agent?.name) return Locale.titlecase(agent.name)
     return mend.promptMode
   })
-  const currentModelLabel = createMemo(() => local.model.parsed().model)
+  const currentModelLabel = createMemo(() => {
+    const selectedModel = selectedPromptModel()
+    if (!sessionUsesSubagent()) return local.model.parsed().model
+    return selectedModel?.modelID ?? local.model.parsed().model
+  })
   const currentProviderText = createMemo(() => currentProviderLabel())
-  const currentReasoningLabel = createMemo(() => local.model.variant.current() || undefined)
+  const currentReasoningLabel = createMemo(() => selectedPromptVariant() || undefined)
   const currentRootName = createMemo(() => {
     const normalized = mend.root.replace(/\/+$/, "")
     const parts = normalized.split("/")
@@ -1456,19 +1498,17 @@ export function Prompt(props: PromptProps) {
     switch (value) {
       case "mode":
         if (store.mode === "shell") return { text: "Shell", fg: theme.primary }
-        return local.agent.current()
-          ? { text: Locale.titlecase(local.agent.current()!.name), fg: highlight() }
+        return activeAgent()
+          ? { text: Locale.titlecase(activeAgent()!.name), fg: highlight() }
           : undefined
       case "model":
-        return store.mode === "normal"
-          ? { text: local.model.parsed().model, fg: keybind.leader ? theme.textMuted : theme.text }
-          : undefined
+        return store.mode === "normal" ? { text: currentModelLabel(), fg: keybind.leader ? theme.textMuted : theme.text } : undefined
       case "provider":
         return store.mode === "normal" ? { text: currentProviderLabel(), fg: theme.textMuted } : undefined
       case "reasoning":
       case "variant":
-        return store.mode === "normal" && local.model.variant.current()
-          ? { text: local.model.variant.current()!, fg: theme.warning, bold: true }
+        return store.mode === "normal" && currentReasoningLabel()
+          ? { text: currentReasoningLabel()!, fg: theme.warning, bold: true }
           : undefined
       case "context":
         return usage()?.context
@@ -1796,6 +1836,7 @@ export function Prompt(props: PromptProps) {
     resolveWorkingStartedAt({
       stored: props.sessionID ? workingStartedAtBySession.get(props.sessionID) : undefined,
       activeAssistantCreated: activeWorkingAssistant()?.time.created,
+      sessionUpdated: props.sessionID ? sync.session.get(props.sessionID)?.time.updated : undefined,
       fallback: workingStartedAt(),
     }),
   )

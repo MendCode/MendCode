@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { parseTimelineDiffRows } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
+import { parseTimelineDiffRows, timelineDiffFileStatus } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
+import { rawReasoningDisplay, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
 import { groupTimelineParts } from "../../src/mend/tui/timeline/group"
 import { normalizeToolEvent, shouldRenderCompactTool, toolClass, toolSummary } from "../../src/mend/tui/timeline/normalize"
 
@@ -255,6 +256,23 @@ describe("mend tui presentation renderers", () => {
     ])
   })
 
+  test("raw reasoning keeps provider headings in the body instead of live header titles", () => {
+    expect(rawReasoningDisplay("**Updating dashboard features**\n\nStreaming body")).toEqual({
+      title: null,
+      body: "**Updating dashboard features**\n\nStreaming body",
+    })
+    expect(rawReasoningDisplay("", { fallbackTitle: "reasoning unavailable" })).toEqual({
+      title: "reasoning unavailable",
+      body: "",
+    })
+  })
+
+  test("raw reasoning labels unavailable content without hiding readable thoughts", () => {
+    expect(unavailableReasoningLabel({ hasReadableContent: true, encrypted: true })).toBeNull()
+    expect(unavailableReasoningLabel({ hasReadableContent: false, encrypted: true })).toBe("reasoning unavailable")
+    expect(unavailableReasoningLabel({ hasReadableContent: false, encrypted: false })).toBe("reasoning unavailable")
+  })
+
   test("minimal and mendcode compact active streaming tool rows", () => {
     const parts = [
       {
@@ -325,25 +343,40 @@ describe("mend tui presentation renderers", () => {
   })
 
   test("timeline diff parser keeps deleted file contents as removed rows", () => {
-    const rows = parseTimelineDiffRows(
-      [
-        "diff --git a/lib/optimization/vroom-client.ts b/lib/optimization/vroom-client.ts",
-        "deleted file mode 100644",
-        "index 1111111..0000000",
-        "--- a/lib/optimization/vroom-client.ts",
-        "+++ /dev/null",
-        "@@ -1,3 +0,0 @@",
-        "-import { createClient } from \"vroom\"",
-        "-export const client = createClient()",
-        "-export default client",
-      ].join("\n"),
-    )
+    const diff = [
+      "diff --git a/lib/optimization/vroom-client.ts b/lib/optimization/vroom-client.ts",
+      "deleted file mode 100644",
+      "index 1111111..0000000",
+      "--- a/lib/optimization/vroom-client.ts",
+      "+++ /dev/null",
+      "@@ -1,3 +0,0 @@",
+      '-import { createClient } from "vroom"',
+      "-export const client = createClient()",
+      "-export default client",
+    ].join("\n")
+    const rows = parseTimelineDiffRows(diff)
 
+    expect(timelineDiffFileStatus(diff)).toBe("removed")
     expect(rows).toContainEqual({ kind: "file", text: "lib/optimization/vroom-client.ts" })
     expect(rows.filter((row) => row.kind === "removed").map((row) => row.text)).toEqual([
       'import { createClient } from "vroom"',
       "export const client = createClient()",
       "export default client",
     ])
+  })
+
+  test("timeline diff detects complete created files", () => {
+    const diff = [
+      "diff --git a/new.ts b/new.ts",
+      "new file mode 100644",
+      "index 0000000..1111111",
+      "--- /dev/null",
+      "+++ b/new.ts",
+      "@@ -0,0 +1,2 @@",
+      "+export const value = 1",
+      "+export default value",
+    ].join("\n")
+
+    expect(timelineDiffFileStatus(diff)).toBe("added")
   })
 })

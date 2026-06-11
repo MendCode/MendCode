@@ -9,6 +9,7 @@ console.log("=== publishing ===\n")
 const dir = fileURLToPath(new URL("..", import.meta.url))
 process.chdir(dir)
 const tag = `v${Script.version}`
+const publishRegistries = process.env.MENDCODE_PUBLISH_REGISTRIES === "true"
 
 const pkgjsons = await Array.fromAsync(
   new Bun.Glob("**/package.json").scan({
@@ -45,11 +46,16 @@ await prepareReleaseFiles()
 console.log("\n=== cli ===\n")
 await $`bun ./packages/opencode/script/publish.ts`
 
-console.log("\n=== sdk ===\n")
-await $`bun ./packages/sdk/js/script/publish.ts`
+if (publishRegistries) {
+  console.log("\n=== sdk ===\n")
+  await $`bun ./packages/sdk/js/script/publish.ts`
 
-console.log("\n=== plugin ===\n")
-await $`bun ./packages/plugin/script/publish.ts`
+  console.log("\n=== plugin ===\n")
+  await $`bun ./packages/plugin/script/publish.ts`
+} else {
+  console.log("\n=== registries skipped ===\n")
+  console.log("Skipping SDK/plugin registry publishing; set MENDCODE_PUBLISH_REGISTRIES=true to enable it.")
+}
 
 if (Script.release) {
   await $`bun ./packages/desktop/scripts/finalize-latest-json.ts`

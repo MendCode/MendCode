@@ -19,6 +19,7 @@ export interface DialogSelectProps<T> {
   placeholder?: string
   options: DialogSelectOption<T>[]
   flat?: boolean
+  variant?: "default" | "command"
   ref?: (ref: DialogSelectRef<T>) => void
   onMove?: (option: DialogSelectOption<T>) => void
   onFilter?: (query: string) => void
@@ -44,6 +45,7 @@ export interface DialogSelectOption<T = any> {
   footer?: JSX.Element | string
   category?: string
   categoryView?: JSX.Element
+  searchText?: string
   disabled?: boolean
   bg?: RGBA
   gutter?: () => JSX.Element
@@ -66,6 +68,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   const [store, setStore] = createStore({
     selected: 0,
     filter: "",
+    activeCategory: undefined as string | undefined,
     input: "keyboard" as "keyboard" | "mouse",
   })
 
@@ -84,6 +87,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   )
 
   let input: InputRenderable
+  const commandVariant = createMemo(() => props.variant === "command")
 
   const filtered = createMemo(() => {
     if (props.skipFilter || props.renderFilter === false) return props.options.filter((x) => x.disabled !== true)
@@ -94,12 +98,12 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     )
     if (!needle) return options
 
-    // prioritize title matches (weight: 2) over category matches (weight: 1).
-    // users typically search by the item name, and not its category.
+    // Users usually search by item name, then slash aliases, category, or secondary copy.
     const result = fuzzysort
       .go(needle, options, {
-        keys: ["title", "category"],
-        scoreFn: (r) => r[0].score * 2 + r[1].score,
+        keys: ["title", "category", "description", "searchText"],
+        scoreFn: (r) =>
+          (r[0]?.score ?? -100000) * 3 + (r[1]?.score ?? -100000) + (r[2]?.score ?? -100000) + (r[3]?.score ?? -100000),
       })
       .map((x) => x.obj)
 
@@ -116,7 +120,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
 
   const flatten = createMemo(() => props.flat && store.filter.length > 0)
 
-  const grouped = createMemo<[string, DialogSelectOption<T>[]][]>(() => {
+  const allGrouped = createMemo<[string, DialogSelectOption<T>[]][]>(() => {
     if (flatten()) return [["", filtered()]]
     const result = pipe(
       filtered(),
@@ -126,6 +130,17 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     )
     return result
   })
+  const categories = createMemo(() =>
+    allGrouped()
+      .map(([category]) => category)
+      .filter(Boolean),
+  )
+  const grouped = createMemo<[string, DialogSelectOption<T>[]][]>(() => {
+    if (!commandVariant() || flatten()) return allGrouped()
+    const active = store.activeCategory ?? categories()[0]
+    const group = allGrouped().find(([category]) => category === active)
+    return group ? [group] : allGrouped().slice(0, 1)
+  })
 
   const flat = createMemo(() => {
     return pipe(
@@ -134,7 +149,17 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     )
   })
 
+  createEffect(() => {
+    if (!commandVariant() || flatten()) return
+    const available = categories()
+    if (!available.length) return
+    if (store.activeCategory && available.includes(store.activeCategory)) return
+    setStore("activeCategory", available[0])
+    setStore("selected", 0)
+  })
+
   const rows = createMemo(() => {
+    if (commandVariant() && !flatten()) return flat().length
     const headers = grouped().reduce((acc, [category], i) => {
       if (!category) return acc
       return acc + (i > 0 ? 2 : 1)
@@ -145,6 +170,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   const dimensions = useTerminalDimensions()
   const height = createMemo(() => {
     const reservedRows = props.preview ? 14 : 6
+    if (commandVariant()) return Math.min(rows(), Math.max(6, Math.floor(dimensions().height * 0.45)))
     return Math.min(rows(), Math.max(3, Math.floor(dimensions().height / 2) - reservedRows))
   })
 
@@ -171,6 +197,19 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     if (next < 0) next = flat().length - 1
     if (next >= flat().length) next = 0
     moveTo(next, true)
+  }
+
+  function moveCategory(direction: number) {
+    const available = categories()
+    if (!available.length) return
+    const current = store.activeCategory ?? available[0]
+    const index = Math.max(0, available.indexOf(current))
+    const next = (index + direction + available.length) % available.length
+    batch(() => {
+      setStore("activeCategory", available[next])
+      setStore("selected", 0)
+    })
+    scroll?.scrollTo(0)
   }
 
   function moveTo(next: number, center = false) {
@@ -206,6 +245,14 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
 
     if (evt.name === "up" || (allowCtrlNavigation && evt.ctrl && evt.name === "p")) move(-1)
     if (evt.name === "down" || (allowCtrlNavigation && evt.ctrl && evt.name === "n")) move(1)
+    if (commandVariant() && !store.filter && evt.name === "left") {
+      evt.preventDefault()
+      moveCategory(-1)
+    }
+    if (commandVariant() && !store.filter && evt.name === "right") {
+      evt.preventDefault()
+      moveCategory(1)
+    }
     if (evt.name === "pageup") move(-10)
     if (evt.name === "pagedown") move(10)
     if (evt.name === "home") moveTo(0)
@@ -250,7 +297,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
 
   return (
     <box gap={1} paddingBottom={1}>
-      <box paddingLeft={4} paddingRight={4}>
+      <box paddingLeft={commandVariant() ? 3 : 4} paddingRight={commandVariant() ? 3 : 4}>
         <box flexDirection="row" justifyContent="space-between">
           <text fg={theme.text} attributes={TextAttributes.BOLD}>
             {props.title}
@@ -280,12 +327,36 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                   input.focus()
                 }, 1)
               }}
-              placeholder={props.placeholder ?? "Search"}
+              placeholder={props.placeholder ?? (commandVariant() ? "search commands, /slash, shortcut..." : "Search")}
               placeholderColor={theme.textMuted}
             />
           </box>
         </Show>
       </box>
+      <Show when={commandVariant() && !flatten() && categories().length > 1}>
+        <box paddingLeft={3} paddingRight={3} flexDirection="row" gap={2}>
+          <For each={categories()}>
+            {(category) => {
+              const active = createMemo(() => (store.activeCategory ?? categories()[0]) === category)
+              return (
+                <text
+                  fg={active() ? theme.text : theme.textMuted}
+                  attributes={active() ? TextAttributes.BOLD : undefined}
+                  onMouseUp={() => {
+                    batch(() => {
+                      setStore("activeCategory", category)
+                      setStore("selected", 0)
+                    })
+                    scroll?.scrollTo(0)
+                  }}
+                >
+                  {category}
+                </text>
+              )
+            }}
+          </For>
+        </box>
+      </Show>
       <Show
         when={grouped().length > 0}
         fallback={
@@ -295,8 +366,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         }
       >
         <scrollbox
-          paddingLeft={1}
-          paddingRight={1}
+          paddingLeft={commandVariant() ? 1 : 1}
+          paddingRight={commandVariant() ? 1 : 1}
           scrollbarOptions={{ visible: false }}
           scrollAcceleration={scrollAcceleration()}
           ref={(r: ScrollBoxRenderable) => (scroll = r)}
@@ -305,7 +376,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           <For each={grouped()}>
             {([category, options], index) => (
               <>
-                <Show when={category}>
+                <Show when={category && (!commandVariant() || flatten())}>
                   <box paddingTop={index() > 0 ? 1 : 0} paddingLeft={3}>
                     <Show
                       when={options[0]?.categoryView}
@@ -349,6 +420,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                         backgroundColor={active() ? (option.bg ?? theme.primary) : RGBA.fromInts(0, 0, 0, 0)}
                         paddingLeft={current() || option.gutter ? 1 : 3}
                         paddingRight={3}
+                        paddingTop={0}
+                        paddingBottom={0}
                         gap={1}
                       >
                         <Show when={!current() && option.margin}>
@@ -358,11 +431,18 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                         </Show>
                         <Option
                           title={option.title}
-                          footer={flatten() ? (option.category ?? option.footer) : option.footer}
-                          description={option.description !== category ? option.description : undefined}
+                          footer={flatten() && !commandVariant() ? (option.category ?? option.footer) : option.footer}
+                          description={
+                            commandVariant()
+                              ? undefined
+                              : option.description !== category
+                                ? option.description
+                                : undefined
+                          }
                           active={active()}
                           current={current()}
                           gutter={option.gutter}
+                          commandVariant={commandVariant()}
                         />
                       </box>
                     )
@@ -426,6 +506,7 @@ function Option(props: {
   current?: boolean
   footer?: JSX.Element | string
   gutter?: () => JSX.Element
+  commandVariant?: boolean
   onMouseOver?: () => void
 }) {
   const { theme } = useTheme()
@@ -449,9 +530,9 @@ function Option(props: {
         attributes={props.active ? TextAttributes.BOLD : undefined}
         overflow="hidden"
         wrapMode="none"
-        paddingLeft={3}
+        paddingLeft={props.commandVariant ? 1 : 3}
       >
-        {Locale.truncate(props.title, 61)}
+        {Locale.truncate(props.title, props.commandVariant ? 48 : 61)}
         <Show when={props.description}>
           <span style={{ fg: props.active ? fg : theme.textMuted }}> {props.description}</span>
         </Show>

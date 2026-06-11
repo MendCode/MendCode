@@ -19,7 +19,9 @@ function parseArtifacts(value: unknown): MendPackageManifest["artifacts"] | unde
   return {
     ...(stringArray(obj.commands).length ? { commands: stringArray(obj.commands) } : {}),
     ...(stringArray(obj.agents).length ? { agents: stringArray(obj.agents) } : {}),
+    ...(stringArray(obj.modes).length ? { modes: stringArray(obj.modes) } : {}),
     ...(stringArray(obj.skills).length ? { skills: stringArray(obj.skills) } : {}),
+    ...(stringArray(obj.plugins).length ? { plugins: stringArray(obj.plugins) } : {}),
     ...(stringArray(obj.prompts).length ? { prompts: stringArray(obj.prompts) } : {}),
     ...(stringArray(obj.mcp).length ? { mcp: stringArray(obj.mcp) } : {}),
     ...(typeof obj.tuiProfile === "string" ? { tuiProfile: obj.tuiProfile } : {}),
@@ -43,6 +45,7 @@ export function parseMendPackageManifest(raw: unknown, sourceLabel = "Mend packa
   return {
     version: 0,
     id: value.id,
+    ...(typeof value.packageVersion === "string" ? { packageVersion: value.packageVersion } : {}),
     ...(typeof value.title === "string" ? { title: value.title } : {}),
     ...(typeof value.description === "string" ? { description: value.description } : {}),
     ...(typeof value.kind === "string" ? { kind: value.kind } : {}),

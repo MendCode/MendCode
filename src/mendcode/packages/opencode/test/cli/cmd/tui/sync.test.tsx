@@ -8,6 +8,7 @@ import { ExitProvider } from "../../../../src/cli/cmd/tui/context/exit"
 import { KVProvider, useKV } from "../../../../src/cli/cmd/tui/context/kv"
 import { ProjectProvider } from "../../../../src/cli/cmd/tui/context/project"
 import { SDKProvider, type EventSource } from "../../../../src/cli/cmd/tui/context/sdk"
+import type { GlobalEvent } from "@mendcode/sdk/v2"
 import { SyncProvider, useSync } from "../../../../src/cli/cmd/tui/context/sync"
 import { tmpdir } from "../../../fixture/fixture"
 
@@ -28,17 +29,22 @@ function json(data: unknown) {
   })
 }
 
-function eventSource(): EventSource {
+function eventSource(input?: { onSubscribe?: (handler: (event: GlobalEvent) => void) => void }): EventSource {
   return {
-    subscribe: async () => () => {},
+    subscribe: async (handler) => {
+      input?.onSubscribe?.(handler)
+      return () => {}
+    },
   }
 }
 
-function createFetch() {
+function createFetch(overrides: Record<string, unknown | ((url: URL) => unknown)> = {}) {
   const session = [] as URL[]
   const fetch = (async (input: RequestInfo | URL) => {
     const url = new URL(input instanceof Request ? input.url : String(input))
     if (url.pathname === "/session") session.push(url)
+    const override = overrides[url.pathname]
+    if (override) return json(typeof override === "function" ? override(url) : override)
 
     switch (url.pathname) {
       case "/agent":
@@ -76,8 +82,11 @@ function createFetch() {
   return { fetch, session }
 }
 
-async function mount() {
-  const calls = createFetch()
+async function mount(
+  overrides: Record<string, unknown | ((url: URL) => unknown)> = {},
+  options: { events?: EventSource } = {},
+) {
+  const calls = createFetch(overrides)
   let sync!: ReturnType<typeof useSync>
   let kv!: ReturnType<typeof useKV>
   let done!: () => void
@@ -89,7 +98,7 @@ async function mount() {
     <ArgsProvider>
       <ExitProvider>
         <KVProvider>
-          <SDKProvider url="http://test" directory={directory} fetch={calls.fetch} events={eventSource()}>
+          <SDKProvider url="http://test" directory={directory} fetch={calls.fetch} events={options.events ?? eventSource()}>
             <ProjectProvider>
               <SyncProvider>
                 <Probe
@@ -141,6 +150,116 @@ describe("tui sync", () => {
 
       expect(session.at(-1)?.searchParams.get("scope")).toBe("project")
       expect(session.at(-1)?.searchParams.get("path")).toBeNull()
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("session sync keeps live append-only text over stale fetched snapshots", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    const sessionID = "ses_live"
+    const messageID = "msg_live"
+    const partID = "prt_live"
+    const info = {
+      id: sessionID,
+      projectID: "proj_test",
+      directory,
+      title: "Live",
+      version: "test",
+      time: { created: 1, updated: 1 },
+    }
+    const message = {
+      id: messageID,
+      sessionID,
+      role: "assistant",
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-test" },
+      tokens: {},
+      time: { created: 1 },
+    }
+    const livePart = {
+      id: partID,
+      messageID,
+      sessionID,
+      type: "text",
+      text: "hola soy una IA como te va",
+      time: { start: 1 },
+    }
+    const stalePart = {
+      ...livePart,
+      text: "hola soy una IA",
+    }
+
+    const { app, sync } = await mount({
+      [`/session/${sessionID}`]: info,
+      [`/session/${sessionID}/message`]: [{ info: message, parts: [stalePart] }],
+      [`/session/${sessionID}/todo`]: [],
+      [`/session/${sessionID}/diff`]: [],
+    })
+
+    try {
+      sync.set("session", [info as any])
+      sync.set("message", sessionID, [message as any])
+      sync.set("part", messageID, [livePart as any])
+
+      await sync.session.sync(sessionID, { force: true })
+
+      expect(sync.data.part[messageID]?.[0]).toMatchObject({
+        id: partID,
+        type: "text",
+        text: livePart.text,
+      })
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("session.created events add new sessions to live sync state", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    let emit!: (event: GlobalEvent) => void
+    const info = {
+      id: "ses_created",
+      projectID: "proj_test",
+      directory,
+      title: "Created elsewhere",
+      version: "test",
+      time: { created: 1, updated: 1 },
+    }
+
+    const { app, sync } = await mount(
+      {},
+      {
+        events: eventSource({
+          onSubscribe: (handler) => {
+            emit = handler
+          },
+        }),
+      },
+    )
+
+    try {
+      emit({
+        directory,
+        project: "proj_test",
+        payload: {
+          id: "evt_created",
+          type: "session.created",
+          properties: { sessionID: info.id, info },
+        },
+      } as GlobalEvent)
+
+      await wait(() => sync.data.session.some((session) => session.id === info.id))
+      expect(sync.data.session.find((session) => session.id === info.id)).toMatchObject(info)
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous

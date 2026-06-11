@@ -43,8 +43,6 @@ type Result = Awaited<ReturnType<typeof streamText>>
 const mergeOptions = (target: Record<string, any>, source: Record<string, any> | undefined): Record<string, any> =>
   mergeDeep(target, source ?? {}) as Record<string, any>
 
-const loadedSessionMemory = new Set<string>()
-
 function lastUserText(messages: ModelMessage[]) {
   for (const message of [...messages].reverse()) {
     if (message.role !== "user") continue
@@ -55,6 +53,13 @@ function lastUserText(messages: ModelMessage[]) {
     }
   }
   return null
+}
+
+function memoryMode(messages: ModelMessage[]) {
+  const text = lastUserText(messages) || ""
+  return text.includes("The conversation was compacted automatically while the current request was running.")
+    ? "after-compaction" as const
+    : "request" as const
 }
 
 export type StreamInput = {
@@ -68,6 +73,7 @@ export type StreamInput = {
   permission?: Permission.Ruleset
   system: string[]
   messages: ModelMessage[]
+  memoryMode?: "request" | "after-compaction"
   small?: boolean
   tools: Record<string, Tool>
   retries?: number
@@ -202,17 +208,14 @@ const live: Layer.Layer<
 
       // TODO: move this to a proper hook
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
-      const mendProjectRoot = input.cwd || input.root
-      const memorySessionKey = `${input.sessionID}:${mendProjectRoot || ""}`
+      const mendProjectRoot = input.root || input.cwd
       const mendFocus = SystemPrompt.mendFocus(input.model)
       const mendPromptPolicy = yield* Effect.promise(() => SystemPrompt.mendPromptPolicy(input.model, mendProjectRoot))
       const mendBaseProvider = yield* Effect.promise(() => SystemPrompt.mendBaseProvider(input.model, mendProjectRoot))
-      const mendMemory = loadedSessionMemory.has(memorySessionKey)
-        ? ""
-        : yield* Effect.promise(async () => {
-          loadedSessionMemory.add(memorySessionKey)
-          return SystemPrompt.mendMemory(input.model, mendProjectRoot, lastUserText(input.messages))
-        })
+      const memoryQuery = lastUserText(input.messages)
+      const mendMemory = yield* Effect.promise(() =>
+        SystemPrompt.mendMemory(input.model, mendProjectRoot, memoryQuery, input.memoryMode ?? memoryMode(input.messages)),
+      )
 
       const system: string[] = []
       system.push(

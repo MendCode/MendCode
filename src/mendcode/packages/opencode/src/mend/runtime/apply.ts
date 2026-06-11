@@ -7,10 +7,13 @@ export type RuntimePackSubsystem =
   | "focus"
   | "commands"
   | "agents"
+  | "modes"
   | "skills"
+  | "plugins"
   | "mcp"
   | "prompts"
   | "context"
+  | "extensions"
   | "budget"
   | "tui"
   | "worktree"
@@ -63,10 +66,22 @@ export function runtimePackAdapterPreview(pack: RuntimePack): RuntimePackAdapter
       reason: `Pack references ${pack.agents.length} agent files using runtime loader-compatible globs.`,
     },
     {
+      subsystem: "modes",
+      target: ".mendcode/modes",
+      action: "noop",
+      reason: `Pack references ${pack.modes.length} mode files using runtime loader-compatible globs.`,
+    },
+    {
       subsystem: "skills",
       target: ".mendcode/skills",
       action: "noop",
       reason: `Pack references ${pack.skills.length} skill files using **/SKILL.md.`,
+    },
+    {
+      subsystem: "plugins",
+      target: ".mendcode/plugins",
+      action: "noop",
+      reason: `Pack references ${pack.plugins.length} plugin files using runtime loader-compatible globs.`,
     },
     {
       subsystem: "mcp",
@@ -85,6 +100,12 @@ export function runtimePackAdapterPreview(pack: RuntimePack): RuntimePackAdapter
       target: ".mendcode/context",
       action: "noop",
       reason: `Pack references ${pack.context.include.length} context inputs.`,
+    },
+    {
+      subsystem: "extensions",
+      target: ".mendcode/{widgets,components,scripts}",
+      action: "noop",
+      reason: `Pack references ${pack.extensions.length} extension support files.`,
     },
     {
       subsystem: "budget",

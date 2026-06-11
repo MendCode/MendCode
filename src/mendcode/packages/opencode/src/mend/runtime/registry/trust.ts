@@ -31,9 +31,12 @@ export function isApplyAllowed(rel: string) {
   if (/^\.mendcode\/focus\/[^/]+\.ya?ml$/.test(normalized)) return true
   if (/^\.mendcode\/commands\/.+\.md$/.test(normalized)) return true
   if (/^\.mendcode\/agents\/.+\.md$/.test(normalized)) return true
+  if (/^\.mendcode\/modes\/.+\.md$/.test(normalized)) return true
   if (/^\.mendcode\/skills\/.+\/SKILL\.md$/.test(normalized)) return true
+  if (/^\.mendcode\/plugins\/.+\.(ts|js)$/.test(normalized)) return true
   if (/^\.mendcode\/prompts\/.+\.md$/.test(normalized)) return true
   if (/^\.mendcode\/mcp\/.+\.jsonc?$/.test(normalized)) return true
+  if (/^\.mendcode\/(widgets|components|scripts)\/.+$/.test(normalized)) return true
   if (/^\.mendcode\/context\/(project|summary)\.md$/.test(normalized)) return true
   if (normalized === ".mendcode/context/refresh.json") return true
   if (normalized === ".mendcode/tui/profile.json") return true

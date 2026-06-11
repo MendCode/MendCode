@@ -16,6 +16,36 @@ coverage/
 # project state; users get a fresh .mendcode from `mend init`.
 .mendcode/
 
+# MendCode package artifacts. Some package snapshots are still tracked for now,
+# but new local files under those app/docs surfaces must stay off git until
+# they are split or deliberately re-owned.
+src/mendcode/.sst/
+src/mendcode/.turbo/
+src/mendcode/.astro/
+src/mendcode/.wrangler/
+src/mendcode/.vercel/
+src/mendcode/.netlify/
+src/mendcode/**/.cache/
+src/mendcode/**/*.tsbuildinfo
+src/mendcode/packages/app/
+src/mendcode/packages/console/
+src/mendcode/packages/desktop/
+src/mendcode/packages/docs/
+src/mendcode/packages/enterprise/
+src/mendcode/packages/storybook/
+src/mendcode/packages/web/
+src/mendcode/packages/app/web-smoke.png
+src/mendcode/packages/app/playwright-report/
+src/mendcode/packages/app/test-results/
+src/mendcode/packages/web/playwright-report/
+src/mendcode/packages/web/test-results/
+src/mendcode/packages/desktop/out/
+src/mendcode/packages/desktop/dist/
+src/mendcode/packages/desktop/release/
+src/mendcode/packages/desktop/resources/icons/
+src/mendcode/packages/opencode/src/provider/models-snapshot.d.ts
+src/mendcode/packages/opencode/src/provider/models-snapshot.js
+
 # Local Codex/SEDA planning state
 .agents/
 

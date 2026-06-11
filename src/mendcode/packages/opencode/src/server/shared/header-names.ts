@@ -22,7 +22,7 @@ export const HEADER_REQUEST_LEGACY = "x-opencode-request"
 export const HEADER_PROJECT = "x-mendcode-project"
 export const HEADER_PROJECT_LEGACY = "x-opencode-project"
 
-export const HEADER_CLIENT = "x-mendcode-client"
+export const HEADER_CLIENT = "x-MendCodeent"
 export const HEADER_CLIENT_LEGACY = "x-opencode-client"
 
 export function getHeader(headers: Headers, primary: string, legacy?: string) {

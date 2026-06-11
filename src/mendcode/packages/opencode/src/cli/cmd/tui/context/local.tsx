@@ -62,6 +62,19 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         theme.error,
         theme.info,
       ])
+      createEffect(() => {
+        const selected = agentStore.current
+        if (!selected) return
+        if (agents().some((x) => x.name === selected)) return
+        const fallback = agents().at(0)
+        if (!fallback) return
+        setAgentStore("current", fallback.name)
+        toast.show({
+          variant: "info",
+          message: `Mode ${selected} is no longer available; switched to ${fallback.name}.`,
+          duration: 5000,
+        })
+      })
       return {
         list() {
           return agents()
@@ -355,7 +368,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           )
           save()
         },
-        set(model: { providerID: string; modelID: string }, options?: { recent?: boolean }) {
+        set(model: { providerID: string; modelID: string }, options?: { recent?: boolean; ifUnset?: boolean }) {
+          let updated = false
           batch(() => {
             if (!isModelValid(model)) {
               toast.show({
@@ -367,7 +381,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             }
             const key = scopedModelKey()
             if (!key) return
+            if (options?.ifUnset && modelStore.model[key]) return
             setModelStore("model", key, model)
+            updated = true
             if (options?.recent) {
               const uniq = uniqueBy([model, ...modelStore.recent], (x) => `${x.providerID}/${x.modelID}`)
               if (uniq.length > 10) uniq.pop()
@@ -378,6 +394,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               save()
             }
           })
+          return updated
         },
         toggleFavorite(model: { providerID: string; modelID: string }) {
           batch(() => {
@@ -431,11 +448,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             if (!info?.variants) return []
             return Object.keys(info.variants)
           },
-          set(value: string | undefined) {
+          set(value: string | undefined, options?: { ifUnset?: boolean }) {
             const m = currentModel()
             if (!m) return
             const scope = scopedModelKey()
             const key = scope ? `${scope}:${m.providerID}/${m.modelID}` : `${m.providerID}/${m.modelID}`
+            if (options?.ifUnset && modelStore.variant[key] !== undefined) return
             setModelStore("variant", key, value ?? "default")
           },
           cycle() {

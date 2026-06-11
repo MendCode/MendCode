@@ -14,6 +14,7 @@ describe("resolveWorkingStartedAt", () => {
 
   test("falls back to stored or local start when active assistant history is not loaded yet", () => {
     expect(resolveWorkingStartedAt({ stored: 1_000, fallback: 2_000 })).toBe(1_000)
+    expect(resolveWorkingStartedAt({ sessionUpdated: 1_500, fallback: 2_000 })).toBe(1_500)
     expect(resolveWorkingStartedAt({ fallback: 2_000 })).toBe(2_000)
   })
 })

@@ -10,7 +10,7 @@ import { modelPresets, modelRoleProjection, readModelsConfig, refreshGeneratedRu
 import { mendMcpStatus, writeMendMcpServer } from "../config/mcp"
 import { baselineUpstream, contextRefresh, contextShow, contextStatus, focusList, focusShow, focusStatus, focusUse, initProject, packageMetadata, packageMetadataSet, readMendConfig, syncGlobalPrimaryAgentModels, syncProject } from "../config/project"
 import { mflowDoctor, mflowPlan, mflowStatus, tsmDoctor, tsmPlan, tsmStatus, worktreeDoctor, worktreePlan, worktreeStatus } from "../config/worktree"
-import { applyRuntimePack, formatRuntimePackPlan, rollbackRuntimePack, runtimePackPlan } from "../runtime/pack"
+import { applyRuntimePack, deleteLocalRuntimePack, formatRuntimePackPlan, rollbackRuntimePack, runtimePackArtifactCandidates, runtimePackPlan } from "../runtime/pack"
 import { budgetDoctor, budgetStatus } from "../runtime/budget"
 import { promptSourcesStatus } from "../prompt/sources"
 import { composePromptPolicy } from "../prompt/compose"
@@ -23,6 +23,7 @@ import { adapterStatus, checkRuntime, collectStatus, doctorLines, donorConfigPat
 import { adoptOwnedRuntime, ownedRuntimePlan } from "../runtime/adoption"
 import { runBenchmark } from "../runtime/bench"
 import { runtimeRegistryAdd, runtimeRegistryApply, runtimeRegistryList, runtimeRegistryPreview, runtimeRegistryPublishPlan, runtimeRegistryRemove, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistrySign, runtimeRegistrySmoke, runtimeRegistryStatus } from "../runtime/registry"
+import { disableAllMendPackages, listMendPackages, removeMendPackage, setMendPackageEnabled } from "../runtime/packages"
 import { appendMemoryEntry, deleteMemoryEntry, memoryStatus, readMemoryEntries, refreshMemoryIndex, updateMemoryEntry } from "../memory/store"
 import { formatMemoryBlock, retrieveMemory } from "../memory/retrieve"
 import { writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../memory/config"
@@ -615,13 +616,17 @@ async function memory(args: string[]) {
     if (maxPromptTokens) updates.maxPromptTokens = Number(maxPromptTokens)
     const maxEntries = optionValue(args, "--max-entries")
     if (maxEntries) updates.maxEntries = Number(maxEntries)
+    const projectMaxEntries = optionValue(args, "--project-max-entries")
+    if (projectMaxEntries) updates.projectMaxEntries = Number(projectMaxEntries)
+    const globalCompactionMaxEntries = optionValue(args, "--global-compaction-max-entries")
+    if (globalCompactionMaxEntries) updates.globalCompactionMaxEntries = Number(globalCompactionMaxEntries)
     const result = args.includes("--project")
       ? await writeProjectMemoryConfig(updates, root)
       : await writeGlobalMemoryConfig(updates, root)
     console.log(JSON.stringify({ ...result, callsProviders: false, readsSecrets: false }, null, 2))
     return
   }
-  throw new Error("Usage: mend-control-plane memory <status|search <query>|preview <query>|add <text>|edit <entry-id> <text>|delete <entry-id>|propose <text|--from-file path>|list [--status pending|applied|rejected|all]|apply <proposal-id>|reject <proposal-id>|import-codex [--from path] [--apply]|index|config [--enable|--disable|--input|--no-input|--output|--no-output|--use|--no-use|--generate|--no-generate|--max-prompt-tokens n|--max-entries n|--project]>")
+  throw new Error("Usage: mend-control-plane memory <status|search <query>|preview <query>|add <text>|edit <entry-id> <text>|delete <entry-id>|propose <text|--from-file path>|list [--status pending|applied|rejected|all]|apply <proposal-id>|reject <proposal-id>|import-codex [--from path] [--apply]|index|config [--enable|--disable|--input|--no-input|--output|--no-output|--use|--no-use|--generate|--no-generate|--max-prompt-tokens n|--max-entries n|--project-max-entries n|--global-compaction-max-entries n|--project]>")
 }
 
 async function auth(args: string[]) {
@@ -649,6 +654,138 @@ async function setup(args: string[]) {
   if (!result) throw new Error("Usage: mend-control-plane setup <status|plan|doctor>")
   console.log(JSON.stringify(result, null, 2))
   if ("ok" in result && result.ok === false) process.exitCode = 1
+}
+
+const selectablePackageArtifacts = ["commands", "agents", "modes", "skills", "plugins", "prompts", "mcp", "context", "extensions"] as const
+const selectablePackageSettings = ["models", "focus", "budget", "memory", "permissions", "tuiProfile", "worktreePolicy"] as const
+
+function packageOptionValue(args: string[], name: string) {
+  const index = args.indexOf(name)
+  if (index === -1) return undefined
+  const value = args[index + 1]
+  if (!value || value.startsWith("--")) throw new Error(`Missing value for ${name}`)
+  return value
+}
+
+function packageOptionList(args: string[], name: string) {
+  const values: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] !== name) continue
+    const value = args[i + 1]
+    if (!value || value.startsWith("--")) throw new Error(`Missing value for ${name}`)
+    values.push(...value.split(",").map((item) => item.trim()).filter(Boolean))
+    i++
+  }
+  return values
+}
+
+async function packageSelectionFromArgs(args: string[], root: string) {
+  const includes = packageOptionList(args, "--include")
+  const excludes = new Set(packageOptionList(args, "--exclude"))
+  if (!includes.length && !excludes.size) return undefined
+  const candidates = await runtimePackArtifactCandidates(root)
+  const includeAll = includes.length === 0 || includes.includes("all")
+  const wanted = new Set(includeAll ? [...selectablePackageArtifacts, ...selectablePackageSettings] : includes)
+  const unknown = [...wanted, ...excludes].filter((item) => item !== "all" && !selectablePackageArtifacts.includes(item as any) && !selectablePackageSettings.includes(item as any))
+  if (unknown.length) throw new Error(`Unknown package include/exclude target: ${unknown.join(", ")}`)
+
+  const selection: Record<string, unknown> = {}
+  for (const key of selectablePackageArtifacts) {
+    if (!wanted.has(key) || excludes.has(key)) selection[key] = []
+    else selection[key] = candidates[key]
+  }
+  for (const key of selectablePackageSettings) {
+    if (!wanted.has(key) || excludes.has(key)) selection[key] = false
+  }
+  return selection
+}
+
+async function packages(args: string[]) {
+  const root = mendPaths().root
+  const sub = args[0] || "status"
+  if (sub === "status" || sub === "list") {
+    console.log(JSON.stringify(await listMendPackages(root), null, 2))
+    return
+  }
+  if (sub === "create" || sub === "update") {
+    const createArgs = args.slice(1)
+    const selection = await packageSelectionFromArgs(createArgs, root)
+    const metadata = {
+      id: packageOptionValue(createArgs, "--id"),
+      title: packageOptionValue(createArgs, "--title") || packageOptionValue(createArgs, "--name"),
+      description: packageOptionValue(createArgs, "--description"),
+      kind: packageOptionValue(createArgs, "--kind"),
+      channel: packageOptionValue(createArgs, "--channel"),
+      sourceType: packageOptionValue(createArgs, "--source-type"),
+      sourceURL: packageOptionValue(createArgs, "--source-url"),
+      compatMendcode: packageOptionValue(createArgs, "--compat-mendcode"),
+      compatRuntimePack: packageOptionValue(createArgs, "--compat-runtime-pack"),
+      version: packageOptionValue(createArgs, "--version"),
+      ...(selection !== undefined ? { selection } : {}),
+    }
+    if (Object.values(metadata).some((value) => value !== undefined)) await packageMetadataSet(metadata, root)
+    const plan = await applyRuntimePack(root)
+    console.log(args.includes("--json") ? JSON.stringify(plan, null, 2) : formatRuntimePackPlan(plan))
+    return
+  }
+  if (sub === "delete-local") {
+    const result = await deleteLocalRuntimePack(root)
+    await syncProject(root)
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+  if (sub === "install" || sub === "use") {
+    const sourceID = args[1]
+    if (!sourceID) throw new Error("Usage: mend packages install <source-id>")
+    const result = await runtimeRegistryApply(sourceID, root)
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+  if (sub === "enable") {
+    const result = await setMendPackageEnabled(args[1], true, root)
+    await syncProject(root)
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+  if (sub === "disable" || sub === "deselect") {
+    const result = await setMendPackageEnabled(args[1], false, root)
+    await syncProject(root)
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+  if (sub === "disable-all" || sub === "deselect-all") {
+    const result = await disableAllMendPackages(root)
+    await syncProject(root)
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+  if (sub === "remove" || sub === "delete") {
+    const result = await removeMendPackage(args[1], root)
+    await syncProject(root)
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+  if (sub === "search") {
+    console.log(JSON.stringify(await runtimeRegistrySearch(args[1] || "", args[2] || "official", root), null, 2))
+    return
+  }
+  if (sub === "show") {
+    console.log(JSON.stringify(await runtimeRegistryShow(args[1], args[2] || "official", root), null, 2))
+    return
+  }
+  if (sub === "sources") {
+    console.log(JSON.stringify(await runtimeRegistryList(root), null, 2))
+    return
+  }
+  if (sub === "add-source") {
+    console.log(JSON.stringify(await runtimeRegistryAdd(args.slice(1), root), null, 2))
+    return
+  }
+  if (sub === "remove-source") {
+    console.log(JSON.stringify(await runtimeRegistryRemove(args[1], root), null, 2))
+    return
+  }
+  throw new Error("Usage: mend-control-plane packages <status|list|create [--id id] [--title name] [--description text] [--include all|skills,modes,...] [--exclude models,budget,...] [--version x.y.z]|update ...|delete-local|install <source-id>|enable <id>|disable <id>|disable-all|remove <id>|search [query] [source-id]|show <pack-id> [source-id]|sources|add-source ...|remove-source <source-id>>")
 }
 
 function parsePermissionMode(value: string | null): PermissionMode {
@@ -810,6 +947,7 @@ async function project(args: string[]) {
       id: value("--id"),
       title: value("--title"),
       description: value("--description"),
+      version: value("--version"),
       kind: value("--kind"),
       channel: value("--channel"),
       sourceType: value("--source-type"),
@@ -844,6 +982,7 @@ async function main() {
   if (cmd === "permissions") return permissions(args)
   if (cmd === "auth") return auth(args)
   if (cmd === "setup") return setup(args)
+  if (cmd === "packages") return packages(args)
   if (cmd === "ai") return ai(args)
   if (cmd === "export") return exportCommand(args)
   if (cmd === "system") return system(args)
@@ -859,7 +998,7 @@ async function main() {
     console.log(await integrationStatus("tsm"))
     return
   }
-  throw new Error("Usage: mend-control-plane <status|runtime|runtime-config|bench|tui|prompt|models|budget|providers|mcp|memory|permissions|auth|setup|ai|export|system|project|worktree|mflow|tsm|mflow-status|tsm-status>")
+  throw new Error("Usage: mend-control-plane <status|runtime|runtime-config|bench|tui|prompt|models|budget|providers|mcp|memory|permissions|auth|setup|packages|ai|export|system|project|worktree|mflow|tsm|mflow-status|tsm-status>")
 }
 
 main().catch((error) => {

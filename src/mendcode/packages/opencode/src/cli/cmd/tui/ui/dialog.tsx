@@ -9,7 +9,7 @@ import * as Selection from "@tui/util/selection"
 
 export function Dialog(
   props: ParentProps<{
-    size?: "medium" | "large" | "xlarge"
+    size?: "medium" | "large" | "xlarge" | "command"
     onClose: () => void
   }>,
 ) {
@@ -21,6 +21,7 @@ export function Dialog(
   const width = () => {
     if (props.size === "xlarge") return 116
     if (props.size === "large") return 88
+    if (props.size === "command") return 84
     return 60
   }
 
@@ -39,9 +40,10 @@ export function Dialog(
       width={dimensions().width}
       height={dimensions().height}
       alignItems="center"
+      justifyContent={props.size === "command" ? "center" : undefined}
       position="absolute"
       zIndex={3000}
-      paddingTop={dimensions().height / 4}
+      paddingTop={props.size === "command" ? 0 : dimensions().height / 4}
       left={0}
       top={0}
       backgroundColor={RGBA.fromInts(0, 0, 0, 150)}
@@ -68,7 +70,7 @@ function init() {
       element: JSX.Element
       onClose?: () => void
     }[],
-    size: "medium" as "medium" | "large" | "xlarge",
+    size: "medium" as "medium" | "large" | "xlarge" | "command",
   })
 
   const renderer = useRenderer()
@@ -141,7 +143,7 @@ function init() {
     get size() {
       return store.size
     },
-    setSize(size: "medium" | "large" | "xlarge") {
+    setSize(size: "medium" | "large" | "xlarge" | "command") {
       setStore("size", size)
     },
   }
