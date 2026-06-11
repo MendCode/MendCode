@@ -51,15 +51,9 @@ function ownedRuntimeCopyRoots() {
     "packages/discord",
     "packages/cloudflare",
     "script",
-    "github",
     "patches",
     "infra",
-    "nix",
-    ".opencode",
     ".github",
-    ".vscode",
-    ".zed",
-    ".husky",
   ]
 }
 
@@ -76,8 +70,6 @@ function ownedRuntimeRootFiles() {
     "AGENTS.md",
     "README.md",
     "install",
-    "flake.nix",
-    "flake.lock",
     "sst.config.ts",
     "sst-env.d.ts",
     ".editorconfig",

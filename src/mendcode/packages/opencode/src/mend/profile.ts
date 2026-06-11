@@ -111,7 +111,7 @@ const fallbackProfile: MendTuiProfile = {
       sidebar: { enabled: false, compact: false, width: 0 },
       header: { enabled: true },
       footer: { enabled: true },
-      session: { transcript: "main", metadata: "footer", stickyUserHeader: true },
+      session: { transcript: "main", metadata: "footer", stickyUserHeader: true, submitScrollMode: "bottom" },
       prompt: { position: "bottom", rightSurface: false },
     },
   },
@@ -407,6 +407,14 @@ export function validateMendTuiProfile(profile: MendTuiProfile) {
   if (!["compact", "comfortable", "spacious"].includes(profile.layout.density))
     failures.push("tui layout.density is invalid")
   if (!["tight", "normal", "loose"].includes(profile.layout.spacing)) failures.push("tui layout.spacing is invalid")
+  const sessionZone = profile.layout.zones.session as { submitScrollMode?: unknown }
+  if (
+    sessionZone.submitScrollMode !== undefined &&
+    sessionZone.submitScrollMode !== "bottom" &&
+    sessionZone.submitScrollMode !== "clear"
+  ) {
+    failures.push("tui layout.zones.session.submitScrollMode is invalid")
+  }
   if (
     profile.surfaces.homeLogo?.size !== undefined &&
     !["compact", "default", "large"].includes(profile.surfaces.homeLogo.size)

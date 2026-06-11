@@ -17,6 +17,7 @@ describe("mend tui prompt chrome", () => {
     expect(defaultTuiProfile().presentation.profile).toBe("mendcode")
     expect(defaultTuiProfile().presentation.activity.maxLines).toBe(1)
     expect(defaultTuiProfile().layout.zones.session.stickyUserHeader).toBe(true)
+    expect(defaultTuiProfile().layout.zones.session.submitScrollMode).toBe("bottom")
     expect(validateMendTuiProfile(defaultTuiProfile()).ok).toBe(true)
   })
 
@@ -46,6 +47,35 @@ describe("mend tui prompt chrome", () => {
 
     expect(disabled.layout.zones.session.stickyUserHeader).toBe(false)
     expect(validateMendTuiProfile(disabled).ok).toBe(true)
+  })
+
+  test("submit scroll behavior remains configurable through session layout", () => {
+    const clear = mergeMendTuiProfile({
+      layout: {
+        zones: {
+          session: {
+            submitScrollMode: "clear",
+          },
+        },
+      },
+    })
+
+    expect(clear.layout.zones.session.submitScrollMode).toBe("clear")
+    expect(validateMendTuiProfile(clear).ok).toBe(true)
+
+    const invalid = mergeMendTuiProfile({
+      layout: {
+        zones: {
+          session: {
+            submitScrollMode: "middle",
+          },
+        },
+      },
+    })
+
+    expect(validateMendTuiProfile(invalid).failures).toContain(
+      "tui layout.zones.session.submitScrollMode is invalid",
+    )
   })
 
   test("merge preserves prompt chrome overrides", () => {
