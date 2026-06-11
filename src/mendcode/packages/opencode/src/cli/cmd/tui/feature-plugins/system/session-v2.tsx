@@ -1,5 +1,6 @@
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@mendcode/plugin/tui"
 import { useSyncV2 } from "@tui/context/sync-v2"
+import { useSync } from "@tui/context/sync"
 import { SplitBorder } from "@tui/component/border"
 import { Spinner } from "@tui/component/spinner"
 import { useTheme } from "@tui/context/theme"
@@ -30,7 +31,8 @@ import { useMendTuiProfile } from "@tui/context/mend"
 import { normalizeToolEvent, shouldRenderCompactTool } from "@/mend/tui/timeline/normalize"
 import { TimelineDiff } from "@/cli/cmd/tui/routes/session/renderers/diff"
 import { formatDuration } from "@/util/format"
-import { rawReasoningDisplay, shouldDisplayReasoning } from "@/mend/tui/presentation"
+import { rawReasoningDisplay, shouldDisplayReasoning, unavailableReasoningLabel } from "@/mend/tui/presentation"
+import { sessionContentWidth } from "@/cli/cmd/tui/util/session-layout"
 
 const id = "internal:session-v2-debug"
 const route = "session.v2.messages"
@@ -46,6 +48,7 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
   const sync = useSyncV2()
   const dimensions = useTerminalDimensions()
   const { theme, syntax, subtleSyntax } = useTheme()
+  const contentWidth = createMemo(() => sessionContentWidth(dimensions().width, false))
   const messages = createMemo(() => sync.data.messages[props.sessionID] ?? [])
   const renderedMessages = createMemo(() => messages().toReversed())
   const lastAssistant = createMemo(() => renderedMessages().findLast((message) => message.type === "assistant"))
@@ -68,7 +71,7 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
   return (
     <box width={dimensions().width} height={dimensions().height} backgroundColor={theme.background}>
       <box flexDirection="row">
-        <box flexGrow={1} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
+        <box width={contentWidth()} flexGrow={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
           <scrollbox
             viewportOptions={{ paddingRight: 0 }}
             verticalScrollbarOptions={{ visible: false }}
@@ -221,9 +224,7 @@ function ShellMessage(props: { message: SessionMessageShell }) {
       <CommandOutput
         command={props.message.command}
         output={output() ? limited() : undefined}
-        empty={
-          <text fg={theme.textMuted}>No output emitted yet · running {elapsed()}</text>
-        }
+        empty={<text fg={theme.textMuted}>No output emitted yet · running {elapsed()}</text>}
         overflow={overflow()}
         expanded={expanded()}
         running={isRunning()}
@@ -269,7 +270,9 @@ function AgentSwitchedMessage(props: { message: SessionMessageAgentSwitched }) {
   return (
     <box paddingLeft={3} marginTop={1} flexShrink={0}>
       <text>
-        <span style={{ fg: local.agent.color(props.message.agent) }}>{mend.profile.presentation.symbols.assistantDone} </span>
+        <span style={{ fg: local.agent.color(props.message.agent) }}>
+          {mend.profile.presentation.symbols.assistantDone}{" "}
+        </span>
         <span style={{ fg: theme.textMuted }}>Switched agent to </span>
         <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.agent)}</span>
       </text>
@@ -323,10 +326,15 @@ function AssistantMessage(props: {
         {(part) => (
           <Switch>
             <Match when={part.type === "text"}>
-              <AssistantText part={part as SessionMessageAssistantText} syntax={props.syntax} />
+              <AssistantText
+                messageID={props.message.id}
+                part={part as SessionMessageAssistantText}
+                syntax={props.syntax}
+              />
             </Match>
             <Match when={part.type === "reasoning"}>
               <AssistantReasoning
+                messageID={props.message.id}
                 part={part as SessionMessageAssistantReasoning}
                 subtleSyntax={props.subtleSyntax}
                 completed={!!props.message.time.completed}
@@ -359,7 +367,9 @@ function AssistantMessage(props: {
       <Show when={props.last || final() || props.message.error}>
         <box paddingLeft={3} flexShrink={0}>
           <text marginTop={1}>
-            <span style={{ fg: local.agent.color(props.message.agent) }}>{mend.profile.presentation.symbols.assistantDone} </span>
+            <span style={{ fg: local.agent.color(props.message.agent) }}>
+              {mend.profile.presentation.symbols.assistantDone}{" "}
+            </span>
             <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.agent)}</span>
             <span style={{ fg: theme.textMuted }}> · {model()}</span>
             <Show when={duration()}>
@@ -372,11 +382,12 @@ function AssistantMessage(props: {
   )
 }
 
-function AssistantText(props: { part: SessionMessageAssistantText; syntax: SyntaxStyle }) {
+function AssistantText(props: { messageID: string; part: SessionMessageAssistantText; syntax: SyntaxStyle }) {
   const { theme } = useTheme()
+  const textID = createMemo(() => props.part.text.slice(0, 32).replace(/\W+/g, "-"))
   return (
     <Show when={props.part.text.trim()}>
-      <box paddingLeft={3} marginTop={1} flexShrink={0} id="text">
+      <box paddingLeft={3} marginTop={1} flexShrink={0} id={`text-${props.messageID}-${textID()}`}>
         <code
           filetype="markdown"
           drawUnstyledText={false}
@@ -391,7 +402,12 @@ function AssistantText(props: { part: SessionMessageAssistantText; syntax: Synta
   )
 }
 
-function AssistantReasoning(props: { part: SessionMessageAssistantReasoning; subtleSyntax: SyntaxStyle; completed: boolean }) {
+function AssistantReasoning(props: {
+  messageID: string
+  part: SessionMessageAssistantReasoning
+  subtleSyntax: SyntaxStyle
+  completed: boolean
+}) {
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
   const content = createMemo(() => props.part.text.replace("[REDACTED]", "").trim())
@@ -400,12 +416,26 @@ function AssistantReasoning(props: { part: SessionMessageAssistantReasoning; sub
     Boolean((props.part as unknown as { metadata?: Record<string, any> }).metadata?.openai?.reasoningEncryptedContent),
   )
   const hasReasoningEvidence = createMemo(() => Boolean(content() || (raw() && encryptedReasoning())))
-  const display = createMemo(() => rawReasoningDisplay(content(), { fallbackTitle: "reasoning metadata" }))
+  const display = createMemo(() =>
+    rawReasoningDisplay(content(), {
+      fallbackTitle: unavailableReasoningLabel({
+        hasReadableContent: Boolean(content()),
+        encrypted: encryptedReasoning(),
+      }),
+    }),
+  )
+  const streaming = createMemo(() => !props.completed)
   return (
     <Show when={hasReasoningEvidence() && shouldDisplayReasoning(mend.profile, { completed: props.completed })}>
       <Switch>
         <Match when={raw()}>
-          <box paddingLeft={3} marginTop={1} flexDirection="column" flexShrink={0}>
+          <box
+            paddingLeft={3}
+            marginTop={1}
+            flexDirection="column"
+            flexShrink={0}
+            id={`reasoning-${props.messageID}-${props.part.id}`}
+          >
             <ReasoningHeader done={props.completed} title={display().title} />
             <Show when={display().body}>
               <box>
@@ -424,6 +454,7 @@ function AssistantReasoning(props: { part: SessionMessageAssistantReasoning; sub
         </Match>
         <Match when={true}>
           <box
+            id={`reasoning-${props.messageID}-${props.part.id}`}
             paddingLeft={2}
             marginTop={1}
             flexDirection="column"
@@ -590,9 +621,7 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
         <box paddingLeft={3} marginTop={1} flexShrink={0} flexDirection="column">
           <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>╭─ {title()}</text>
           <For each={event().lines}>{(line) => <text fg={theme.textMuted}>│ {line}</text>}</For>
-          <Show when={event().result}>
-            {(result) => <text fg={theme.textMuted}>╰─ {result()}</text>}
-          </Show>
+          <Show when={event().result}>{(result) => <text fg={theme.textMuted}>╰─ {result()}</text>}</Show>
         </box>
       </Show>
     </Show>
@@ -755,32 +784,10 @@ function BlockTool(props: {
   titleAttributes?: typeof TextAttributes.BOLD
   contentGap?: number
   marginTop?: number
-  variant?: "plain" | "left-line"
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error.message : undefined))
-  const title = () => (
-    <Show
-      when={props.spinner}
-      fallback={
-        <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
-          {props.title}
-        </text>
-      }
-    >
-      <Spinner color={props.titleColor ?? theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
-    </Show>
-  )
-  const content = () => (
-    <>
-      {title()}
-      {props.children}
-      <Show when={error()}>
-        <text fg={theme.error}>{error()}</text>
-      </Show>
-    </>
-  )
   return (
     <box
       paddingBottom={1}
@@ -793,10 +800,19 @@ function BlockTool(props: {
       }}
       flexShrink={0}
     >
-      <Show when={props.variant === "left-line"} fallback={content()}>
-        <box border={["left"]} borderColor={props.titleColor ?? theme.border} paddingLeft={2} gap={1}>
-          {content()}
-        </box>
+      <Show
+        when={props.spinner}
+        fallback={
+          <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
+            {props.title}
+          </text>
+        }
+      >
+        <Spinner color={props.titleColor ?? theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
+      </Show>
+      {props.children}
+      <Show when={error()}>
+        <text fg={theme.error}>{error()}</text>
       </Show>
     </box>
   )
@@ -812,13 +828,7 @@ function CommandOutput(props: {
 }) {
   const { theme } = useTheme()
   return (
-    <box
-      border={["top", "bottom", "left", "right"]}
-      borderColor={props.running ? theme.primary : theme.border}
-      paddingLeft={1}
-      paddingRight={1}
-      gap={1}
-    >
+    <box gap={1}>
       <box flexDirection="row" gap={1}>
         <text fg={theme.textMuted}>$</text>
         <text fg={theme.primary} attributes={TextAttributes.BOLD}>
@@ -1016,11 +1026,7 @@ function Edit(props: ToolProps) {
         {(diff) => (
           <BlockTool title={"← Edit " + normalizePath(filePath())} part={props.part}>
             <box paddingLeft={1}>
-              <TimelineDiff
-                diff={diff()}
-                filetype={filetype(filePath())}
-                syntaxStyle={syntax()}
-              />
+              <TimelineDiff diff={diff()} filetype={filetype(filePath())} syntaxStyle={syntax()} />
             </box>
             <Diagnostics diagnostics={props.metadata.diagnostics} filePath={filePath()} />
           </BlockTool>
@@ -1117,11 +1123,15 @@ function TodoWrite(props: ToolProps) {
     if (metadataTodos.length) return metadataTodos
     return parseTodoOutput(props.output)
   })
-  const content = createMemo(() => todos().map((todo) => todoMarkdown(stringValue(todo.status), stringValue(todo.content))).join("\n"))
+  const content = createMemo(() =>
+    todos()
+      .map((todo) => todoMarkdown(stringValue(todo.status), stringValue(todo.content)))
+      .join("\n"),
+  )
   return (
     <Switch>
       <Match when={todos().length > 0 && props.part.state.status === "completed"}>
-        <BlockTool title="Todos" part={props.part} marginTop={1} variant="left-line">
+        <BlockTool title="# Todos" part={props.part} marginTop={1}>
           <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
@@ -1150,7 +1160,7 @@ function Question(props: ToolProps) {
   return (
     <Switch>
       <Match when={answers().length > 0}>
-        <BlockTool title="Questions" part={props.part} marginTop={1} variant="left-line">
+        <BlockTool title="# Questions" part={props.part} marginTop={1}>
           <MarkdownChecklist content={content()} />
         </BlockTool>
       </Match>
@@ -1172,10 +1182,25 @@ function Skill(props: ToolProps) {
 }
 
 function Task(props: ToolProps) {
+  const sync = useSync()
+  const sessionId = createMemo(() => stringValue(props.metadata.sessionId))
+  const childMessages = createMemo(() => (sessionId() ? (sync.data.message[sessionId()!] ?? []) : []))
+  const childState = createMemo(() => {
+    const id = sessionId()
+    if (!id) return undefined
+    const pendingInputCount =
+      (sync.data.permission[id]?.length ?? 0) +
+      (sync.data.question[id]?.length ?? 0) +
+      (sync.data.plan_review[id]?.length ?? 0)
+    return taskSessionState(sync.data.session_status[id], childMessages(), pendingInputCount)
+  })
   const content = createMemo(() => {
     const description = stringValue(props.input.description)
     if (!description) return pendingInput(props.part)
-    return `${Locale.titlecase(stringValue(props.input.subagent_type) ?? "General")} Task — ${description}`
+    const title = `${Locale.titlecase(stringValue(props.input.subagent_type) ?? "General")} Task — ${description}`
+    const state = childState()
+    if (!state || (state === "responded" && props.part.state.status === "completed")) return title
+    return `${title}\n↳ child ${state}`
   })
   return (
     <InlineTool
@@ -1188,6 +1213,22 @@ function Task(props: ToolProps) {
       {content()}
     </InlineTool>
   )
+}
+
+function taskSessionState(
+  status: { type: string; attempt?: number } | undefined,
+  messages: Array<{ role: string; time: { created: number; completed?: number } }>,
+  pendingInputCount: number,
+) {
+  if (pendingInputCount > 0) return "needs input"
+  if (status?.type === "retry") return status.attempt && status.attempt > 1 ? `retry #${status.attempt}` : "retrying"
+  if (status?.type === "busy") return "working"
+  const lastUser = messages.findLast((message) => message.role === "user")
+  const lastAssistant = messages.findLast((message) => message.role === "assistant")
+  if (lastAssistant && !lastAssistant.time.completed) return "working"
+  if (lastUser && (!lastAssistant || lastAssistant.time.created < lastUser.time.created)) return "waiting"
+  if (lastAssistant) return "responded"
+  return "ready"
 }
 
 function Diagnostics(props: { diagnostics: unknown; filePath: string }) {

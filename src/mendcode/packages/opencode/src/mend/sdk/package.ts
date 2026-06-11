@@ -1,7 +1,9 @@
 export type MendPackageArtifactMap = {
   commands?: string[]
   agents?: string[]
+  modes?: string[]
   skills?: string[]
+  plugins?: string[]
   prompts?: string[]
   mcp?: string[]
   tuiProfile?: string
@@ -14,6 +16,7 @@ export type MendPackageArtifactMap = {
 export type MendPackageManifest = {
   version: 0
   id: string
+  packageVersion?: string
   title?: string
   description?: string
   kind?: "bundle" | "theme" | "prompt-pack" | "skill-pack" | "starter" | string

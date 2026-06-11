@@ -3,7 +3,6 @@ import { Effect, Layer, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Installation } from "../../src/installation"
-import { InstallationChannel } from "@mendcode/core/installation/version"
 
 const encoder = new TextEncoder()
 
@@ -69,100 +68,43 @@ describe("installation", () => {
       expect(result).toBe("4.0.0-beta.1")
     })
 
-    test("reads npm versions via registry", async () => {
+    test.each(["npm", "bun", "pnpm", "scoop", "choco", "brew"] as const)(
+      "reads %s latest version from GitHub releases while registries are unpublished",
+      async (method) => {
+        const calls: string[] = []
+        const layer = testLayer((request) => {
+          calls.push(request.url)
+          return jsonResponse({ tag_name: "v1.5.0" })
+        })
+
+        const result = await Effect.runPromise(
+          Installation.Service.use((svc) => svc.latest(method)).pipe(Effect.provide(layer)),
+        )
+        expect(result).toBe("1.5.0")
+        expect(calls).toEqual(["https://api.github.com/repos/MendCode/MendCode/releases/latest"])
+      },
+    )
+  })
+
+  describe("upgrade", () => {
+    test("blocks registry upgrades until MendCode-owned registries exist", async () => {
       const calls: string[] = []
       const layer = testLayer((request) => {
         calls.push(request.url)
-        return jsonResponse({ version: "1.5.0" })
+        return jsonResponse({ tag_name: "v1.5.0" })
       })
 
-      const result = await Effect.runPromise(
-        Installation.Service.use((svc) => svc.latest("npm")).pipe(Effect.provide(layer)),
-      )
-      expect(result).toBe("1.5.0")
-      expect(calls).toContain(`https://registry.npmjs.org/opencode-ai/${InstallationChannel}`)
-    })
+      let error: any
+      try {
+        await Effect.runPromise(
+          Installation.Service.use((svc) => svc.upgrade("npm", "1.5.0")).pipe(Effect.provide(layer)),
+        )
+      } catch (err) {
+        error = err
+      }
 
-    test("reads bun versions via registry", async () => {
-      const calls: string[] = []
-      const layer = testLayer((request) => {
-        calls.push(request.url)
-        return jsonResponse({ version: "1.6.0" })
-      })
-
-      const result = await Effect.runPromise(
-        Installation.Service.use((svc) => svc.latest("bun")).pipe(Effect.provide(layer)),
-      )
-      expect(result).toBe("1.6.0")
-      expect(calls).toContain(`https://registry.npmjs.org/opencode-ai/${InstallationChannel}`)
-    })
-
-    test("reads pnpm versions via registry", async () => {
-      const calls: string[] = []
-      const layer = testLayer((request) => {
-        calls.push(request.url)
-        return jsonResponse({ version: "1.7.0" })
-      })
-
-      const result = await Effect.runPromise(
-        Installation.Service.use((svc) => svc.latest("pnpm")).pipe(Effect.provide(layer)),
-      )
-      expect(result).toBe("1.7.0")
-      expect(calls).toContain(`https://registry.npmjs.org/opencode-ai/${InstallationChannel}`)
-    })
-
-    test("reads scoop manifest versions", async () => {
-      const layer = testLayer(() => jsonResponse({ version: "2.3.4" }))
-
-      const result = await Effect.runPromise(
-        Installation.Service.use((svc) => svc.latest("scoop")).pipe(Effect.provide(layer)),
-      )
-      expect(result).toBe("2.3.4")
-    })
-
-    test("reads chocolatey feed versions", async () => {
-      const layer = testLayer(() => jsonResponse({ d: { results: [{ Version: "3.4.5" }] } }))
-
-      const result = await Effect.runPromise(
-        Installation.Service.use((svc) => svc.latest("choco")).pipe(Effect.provide(layer)),
-      )
-      expect(result).toBe("3.4.5")
-    })
-
-    test("reads brew formulae API versions", async () => {
-      const layer = testLayer(
-        () => jsonResponse({ versions: { stable: "2.0.0" } }),
-        (cmd, args) => {
-          // getBrewFormula: return core formula (no tap)
-          if (cmd === "brew" && args.includes("--formula") && args.includes("anomalyco/tap/opencode")) return ""
-          if (cmd === "brew" && args.includes("--formula") && args.includes("opencode")) return "opencode"
-          return ""
-        },
-      )
-
-      const result = await Effect.runPromise(
-        Installation.Service.use((svc) => svc.latest("brew")).pipe(Effect.provide(layer)),
-      )
-      expect(result).toBe("2.0.0")
-    })
-
-    test("reads brew tap info JSON via CLI", async () => {
-      const brewInfoJson = JSON.stringify({
-        formulae: [{ versions: { stable: "2.1.0" } }],
-      })
-      const layer = testLayer(
-        () => jsonResponse({}), // HTTP not used for tap formula
-        (cmd, args) => {
-          if (cmd === "brew" && args.includes("anomalyco/tap/opencode") && args.includes("--formula")) return "opencode"
-          if (cmd === "brew" && args.includes("--json=v2")) return brewInfoJson
-          return ""
-        },
-      )
-
-      const result = await Effect.runPromise(
-        Installation.Service.use((svc) => svc.latest("brew")).pipe(Effect.provide(layer)),
-      )
-      expect(result).toBe("2.1.0")
+      expect(error?.stderr).toContain("Reinstall from GitHub")
+      expect(calls).toEqual([])
     })
   })
 })

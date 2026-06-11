@@ -436,6 +436,151 @@ describe("tool.task", () => {
     }),
   )
 
+  it.instance("execute returns partial child output when the subagent aborts after writing text", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) =>
+          Effect.gen(function* () {
+            const messageID = MessageID.ascending()
+            yield* sessions.updateMessage({
+              id: messageID,
+              role: "assistant",
+              parentID: input.messageID ?? MessageID.ascending(),
+              sessionID: input.sessionID,
+              mode: input.agent ?? "general",
+              agent: input.agent ?? "general",
+              cost: 0,
+              path: { cwd: "/tmp", root: "/tmp" },
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              modelID: input.model?.modelID ?? ref.modelID,
+              providerID: input.model?.providerID ?? ref.providerID,
+              time: { created: Date.now() },
+            })
+            yield* sessions.updatePart({
+              id: PartID.ascending(),
+              messageID,
+              sessionID: input.sessionID,
+              type: "text",
+              text: "partial investigation result",
+            })
+            return yield* Effect.die(new DOMException("Aborted", "AbortError"))
+          }),
+      }
+
+      const result = yield* def.execute(
+        {
+          description: "inspect bug",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.output).toContain(`task_id: ${result.metadata.sessionId}`)
+      expect(result.output).toContain("task_status: interrupted")
+      expect(result.output).toContain("task_error: Aborted")
+      expect(result.output).toContain("partial investigation result")
+      expect(result.metadata.status).toBe("interrupted")
+    }),
+  )
+
+  it.instance("execute marks an aborted child result as interrupted instead of completed empty output", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) =>
+          Effect.gen(function* () {
+            const partialMessageID = MessageID.ascending()
+            yield* sessions.updateMessage({
+              id: partialMessageID,
+              role: "assistant",
+              parentID: input.messageID ?? MessageID.ascending(),
+              sessionID: input.sessionID,
+              mode: input.agent ?? "general",
+              agent: input.agent ?? "general",
+              cost: 0,
+              path: { cwd: "/tmp", root: "/tmp" },
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              modelID: input.model?.modelID ?? ref.modelID,
+              providerID: input.model?.providerID ?? ref.providerID,
+              time: { created: Date.now() },
+              finish: "stop",
+            })
+            yield* sessions.updatePart({
+              id: PartID.ascending(),
+              messageID: partialMessageID,
+              sessionID: input.sessionID,
+              type: "text",
+              text: "saved child text before abort",
+            })
+
+            const abortedMessageID = MessageID.ascending()
+            return {
+              info: {
+                id: abortedMessageID,
+                role: "assistant",
+                parentID: partialMessageID,
+                sessionID: input.sessionID,
+                mode: input.agent ?? "general",
+                agent: input.agent ?? "general",
+                cost: 0,
+                path: { cwd: "/tmp", root: "/tmp" },
+                tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                modelID: input.model?.modelID ?? ref.modelID,
+                providerID: input.model?.providerID ?? ref.providerID,
+                time: { created: Date.now() },
+                error: new MessageV2.AbortedError({ message: "Aborted" }).toObject(),
+              },
+              parts: [],
+            }
+          }),
+      }
+
+      const result = yield* def.execute(
+        {
+          description: "inspect bug",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.output).toContain("task_status: interrupted")
+      expect(result.output).toContain("saved child text before abort")
+      expect(result.output).not.toContain("task_status: completed")
+      expect(result.metadata.status).toBe("interrupted")
+    }),
+  )
+
   it.instance("execute creates a child when task_id does not exist", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service

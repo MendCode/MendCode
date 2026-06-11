@@ -16,6 +16,7 @@ import { Protected } from "./protected"
 import { Ripgrep } from "./ripgrep"
 import { zod } from "@/util/effect-zod"
 import { NonNegativeInt, type DeepMutable, withStatics } from "@/util/schema"
+import { appendFile } from "fs/promises"
 
 export const Info = Schema.Struct({
   path: Schema.String,
@@ -278,6 +279,7 @@ const mime: Record<string, string> = {
 }
 
 type Entry = { files: string[]; dirs: string[] }
+type FrecencyEntry = { frequency: number; lastOpen: number }
 
 const ext = (file: string) => path.extname(file).toLowerCase().slice(1)
 const name = (file: string) => path.basename(file).toLowerCase()
@@ -314,8 +316,19 @@ const sortHiddenLast = (items: string[], prefer: boolean) => {
   return [...visible, ...hiddenItems]
 }
 
+function calculateFrecency(entry?: FrecencyEntry): number {
+  if (!entry) return 0
+  const daysSince = (Date.now() - entry.lastOpen) / 86400000
+  return entry.frequency / (1 + daysSince)
+}
+
+function normalizeFrecencyPath(filepath: string) {
+  return path.resolve(filepath).split(path.sep).join("/")
+}
+
 interface State {
   cache: Entry
+  frecency: Record<string, FrecencyEntry>
 }
 
 export interface Interface {
@@ -345,9 +358,75 @@ export const layer = Layer.effect(
       Effect.fn("File.state")(() =>
         Effect.succeed({
           cache: { files: [], dirs: [] } as Entry,
+          frecency: {},
         }),
       ),
     )
+
+    const frecencyPath = path.join(Global.Path.state, "frecency.jsonl")
+    const maxFrecencyEntries = 1000
+
+    const compactFrecency = Effect.fn("File.compactFrecency")(function* (entries: Record<string, FrecencyEntry>) {
+      const sorted = Object.entries(entries)
+        .sort(([, a], [, b]) => b.lastOpen - a.lastOpen)
+        .slice(0, maxFrecencyEntries)
+      const data = Object.fromEntries(sorted)
+      const content = sorted.map(([filePath, entry]) => JSON.stringify({ path: filePath, ...entry })).join("\n")
+      yield* appFs.writeWithDirs(frecencyPath, content ? content + "\n" : "").pipe(Effect.ignore)
+      return data
+    })
+
+    const loadFrecency = Effect.fn("File.loadFrecency")(function* () {
+      const text = yield* appFs.readFileStringSafe(frecencyPath).pipe(Effect.orElseSucceed(() => undefined))
+      if (!text) return
+
+      const next: Record<string, FrecencyEntry> = {}
+      for (const line of text.split("\n")) {
+        if (!line) continue
+        try {
+          const parsed = JSON.parse(line) as { path?: unknown; frequency?: unknown; lastOpen?: unknown }
+          if (typeof parsed.path !== "string") continue
+          if (typeof parsed.frequency !== "number") continue
+          if (typeof parsed.lastOpen !== "number") continue
+          next[normalizeFrecencyPath(parsed.path)] = {
+            frequency: parsed.frequency,
+            lastOpen: parsed.lastOpen,
+          }
+        } catch {
+          continue
+        }
+      }
+
+      const s = yield* InstanceState.get(state)
+      s.frecency = Object.fromEntries(
+        Object.entries(next)
+          .sort(([, a], [, b]) => b.lastOpen - a.lastOpen)
+          .slice(0, maxFrecencyEntries),
+      )
+    })
+
+    const touchFrecency = Effect.fn("File.touchFrecency")(function* (filepath: string) {
+      const ctx = yield* InstanceState.context
+      const full = path.isAbsolute(filepath) ? filepath : path.join(ctx.directory, filepath)
+      const key = normalizeFrecencyPath(full)
+      const now = Date.now()
+      const s = yield* InstanceState.get(state)
+      const entry = s.frecency[key]
+      const next = {
+        frequency: (entry?.frequency ?? 0) + 1,
+        lastOpen: now,
+      }
+      s.frecency[key] = next
+
+      yield* appFs.ensureDir(Global.Path.state).pipe(Effect.ignore)
+      yield* Effect.promise(() => appendFile(frecencyPath, JSON.stringify({ path: key, ...next }) + "\n")).pipe(
+        Effect.ignore,
+      )
+
+      if (Object.keys(s.frecency).length > maxFrecencyEntries) {
+        s.frecency = yield* compactFrecency(s.frecency)
+      }
+    })
 
     const scan = Effect.fn("File.scan")(function* () {
       const ctx = yield* InstanceState.context
@@ -406,6 +485,7 @@ export const layer = Layer.effect(
     let cachedScan = yield* Effect.cached(scan().pipe(Effect.catchCause(() => Effect.void)))
 
     const ensure = Effect.fn("File.ensure")(function* () {
+      yield* loadFrecency()
       yield* cachedScan
       cachedScan = yield* Effect.cached(scan().pipe(Effect.catchCause(() => Effect.void)))
     })
@@ -415,6 +495,7 @@ export const layer = Layer.effect(
     })
 
     const init = Effect.fn("File.init")(function* () {
+      yield* loadFrecency()
       yield* ensure().pipe(Effect.forkIn(scope))
     })
 
@@ -514,6 +595,7 @@ export const layer = Layer.effect(
       if (isImageByExtension(file)) {
         const exists = yield* appFs.existsSafe(full)
         if (exists) {
+          yield* touchFrecency(file)
           const bytes = yield* appFs.readFile(full).pipe(Effect.catch(() => Effect.succeed(new Uint8Array())))
           return {
             type: "text" as const,
@@ -531,6 +613,7 @@ export const layer = Layer.effect(
 
       const exists = yield* appFs.existsSafe(full)
       if (!exists) return { type: "text" as const, content: "" }
+      yield* touchFrecency(file)
 
       const mimeType = AppFileSystem.mimeType(full)
       const encode = knownText ? false : shouldEncode(mimeType)
@@ -620,7 +703,8 @@ export const layer = Layer.effect(
       type?: "file" | "directory"
     }) {
       yield* ensure()
-      const { cache } = yield* InstanceState.get(state)
+      const ctx = yield* InstanceState.context
+      const { cache, frecency } = yield* InstanceState.get(state)
 
       const query = input.query.trim()
       const limit = input.limit ?? 100
@@ -628,16 +712,27 @@ export const layer = Layer.effect(
       log.info("search", { query, kind })
 
       const preferHidden = query.startsWith(".") || query.includes("/.")
+      const frecencyScore = (item: string) => {
+        if (item.endsWith("/")) return 0
+        return calculateFrecency(frecency[normalizeFrecencyPath(path.join(ctx.directory, item))])
+      }
+
+      const sortByFrecency = (items: string[]) =>
+        items.toSorted((a, b) => {
+          const score = frecencyScore(b) - frecencyScore(a)
+          if (score !== 0) return score
+          return 0
+        })
 
       if (!query) {
-        if (kind === "file") return cache.files.slice(0, limit)
+        if (kind === "file") return sortByFrecency(cache.files).slice(0, limit)
         return sortHiddenLast(cache.dirs.toSorted(), preferHidden).slice(0, limit)
       }
 
       const items = kind === "file" ? cache.files : kind === "directory" ? cache.dirs : [...cache.files, ...cache.dirs]
 
       const searchLimit = kind === "directory" && !preferHidden ? limit * 20 : limit
-      const sorted = fuzzysort.go(query, items, { limit: searchLimit }).map((item) => item.target)
+      const sorted = sortByFrecency(fuzzysort.go(query, items, { limit: searchLimit }).map((item) => item.target))
       const output = kind === "directory" ? sortHiddenLast(sorted, preferHidden).slice(0, limit) : sorted
 
       log.info("search", { query, kind, results: output.length })

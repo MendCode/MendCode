@@ -6,6 +6,7 @@ import { readMendPackageManifest } from "./package-manifest"
 import { buildLocalRuntimePack, type RuntimePack } from "../pack"
 import { opencodeSettingsPreview } from "./import-opencode"
 import { readPackFromStage } from "./source"
+import type { MendPackageManifest } from "@/mend/sdk/package"
 import type { RuntimeRegistryEntry } from "./types"
 
 export type RegistryMarketplacePackManifest = {
@@ -29,9 +30,12 @@ export type RegistryMarketplacePackManifest = {
     focusDefault?: string
     commands?: number
     agents?: number
+    modes?: number
     skills?: number
+    plugins?: number
     prompts?: number
     mcpFiles?: number
+    extensions?: number
   }
 }
 
@@ -42,13 +46,13 @@ function summarizeArtifactCount(value?: string[] | string) {
 }
 
 function synthesizeManifestFromPackageManifest(
-  manifest: Awaited<ReturnType<typeof readMendPackageManifest>>["manifest"],
+  manifest: MendPackageManifest,
   entry: RuntimeRegistryEntry,
   digest?: { algorithm: "sha256"; value: string },
 ) {
   return {
     id: manifest.id,
-    version: entry.version || "0",
+    version: manifest.packageVersion || entry.version || "0",
     ...(manifest.title ? { title: manifest.title } : {}),
     ...(manifest.description ? { description: manifest.description } : {}),
     ...(digest ? { digest } : {}),
@@ -62,9 +66,12 @@ function synthesizeManifestFromPackageManifest(
     runtime: {
       commands: summarizeArtifactCount(manifest.artifacts?.commands),
       agents: summarizeArtifactCount(manifest.artifacts?.agents),
+      modes: summarizeArtifactCount(manifest.artifacts?.modes),
       skills: summarizeArtifactCount(manifest.artifacts?.skills),
+      plugins: summarizeArtifactCount(manifest.artifacts?.plugins),
       prompts: summarizeArtifactCount(manifest.artifacts?.prompts),
       mcpFiles: summarizeArtifactCount(manifest.artifacts?.mcp),
+      extensions: summarizeArtifactCount(manifest.artifacts?.extensions),
     },
   } satisfies RegistryMarketplacePackManifest
 }
@@ -102,11 +109,11 @@ function parseManifest(raw: unknown, fallbackSource: RuntimeRegistryEntry): Regi
   const version = value.version
   if (typeof id !== "string" || !id.trim()) throw new Error("Marketplace pack entry requires string id")
   if (typeof version !== "string" || !version.trim()) throw new Error(`Marketplace pack ${id} requires string version`)
-  const digest = value.digest && ensureObject(value.digest, `Marketplace pack ${id} digest`)
-  const signature = value.signature && ensureObject(value.signature, `Marketplace pack ${id} signature`)
-  const runtime = value.runtime && ensureObject(value.runtime, `Marketplace pack ${id} runtime`)
-  const source = value.source && ensureObject(value.source, `Marketplace pack ${id} source`)
-  const compatibility = value.compatibility && ensureObject(value.compatibility, `Marketplace pack ${id} compatibility`)
+  const digest = value.digest ? ensureObject(value.digest, `Marketplace pack ${id} digest`) : null
+  const signature = value.signature ? ensureObject(value.signature, `Marketplace pack ${id} signature`) : null
+  const runtime = value.runtime ? ensureObject(value.runtime, `Marketplace pack ${id} runtime`) : null
+  const source = value.source ? ensureObject(value.source, `Marketplace pack ${id} source`) : null
+  const compatibility = value.compatibility ? ensureObject(value.compatibility, `Marketplace pack ${id} compatibility`) : null
   return {
     id,
     version,
@@ -134,9 +141,12 @@ function parseManifest(raw: unknown, fallbackSource: RuntimeRegistryEntry): Regi
       ...(typeof runtime.focusDefault === "string" ? { focusDefault: runtime.focusDefault } : {}),
       ...(typeof runtime.commands === "number" ? { commands: runtime.commands } : {}),
       ...(typeof runtime.agents === "number" ? { agents: runtime.agents } : {}),
+      ...(typeof runtime.modes === "number" ? { modes: runtime.modes } : {}),
       ...(typeof runtime.skills === "number" ? { skills: runtime.skills } : {}),
+      ...(typeof runtime.plugins === "number" ? { plugins: runtime.plugins } : {}),
       ...(typeof runtime.prompts === "number" ? { prompts: runtime.prompts } : {}),
       ...(typeof runtime.mcpFiles === "number" ? { mcpFiles: runtime.mcpFiles } : {}),
+      ...(typeof runtime.extensions === "number" ? { extensions: runtime.extensions } : {}),
     } : undefined,
   }
 }
@@ -154,7 +164,7 @@ async function readMarketplaceIndexFile(stageDir: string, entry: RuntimeRegistry
       path: path.relative(stageDir, file),
       format: file.endsWith(".jsonc") ? "jsonc" : "json",
       version: 0 as const,
-      marketplace: value.marketplace && ensureObject(value.marketplace, "Marketplace metadata"),
+      marketplace: value.marketplace ? ensureObject(value.marketplace, "Marketplace metadata") : null,
       packs,
     }
   }
@@ -181,9 +191,12 @@ function synthesizeManifestFromPack(pack: RuntimePack, entry: RuntimeRegistryEnt
       focusDefault: pack.focus.default,
       commands: pack.commands?.length || 0,
       agents: pack.agents?.length || 0,
+      modes: pack.modes?.length || 0,
       skills: pack.skills?.length || 0,
+      plugins: pack.plugins?.length || 0,
       prompts: pack.prompts?.templates?.length || 0,
       mcpFiles: pack.mcp?.files?.length || 0,
+      extensions: pack.extensions?.length || 0,
     },
   } satisfies RegistryMarketplacePackManifest
 }

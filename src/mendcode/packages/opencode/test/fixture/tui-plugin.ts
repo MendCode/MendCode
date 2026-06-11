@@ -125,7 +125,7 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
         : fallback
   const client = () => read()
   let depth = 0
-  let size: "medium" | "large" | "xlarge" = "medium"
+  let size: HostPluginApi["ui"]["dialog"]["size"] = "medium"
   const has = opts.theme?.has ?? (() => false)
   let selected = opts.theme?.selected ?? "opencode"
   const key = {
@@ -245,6 +245,17 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
         get open() {
           return depth > 0
         },
+      },
+      runtime: {
+        setStatus: () => true,
+        clearStatus: () => true,
+        setWidget: () => true,
+        clearWidget: () => true,
+        setFooter: () => true,
+        setFooterEntry: () => true,
+        setWorkingIndicator: () => true,
+        setEditorVisual: () => true,
+        setEditor: () => true,
       },
     },
     keybind: {

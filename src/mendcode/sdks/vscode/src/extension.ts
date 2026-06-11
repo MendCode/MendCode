@@ -3,7 +3,7 @@ export function deactivate() {}
 
 import * as vscode from "vscode"
 
-const TERMINAL_NAME = "opencode"
+const TERMINAL_NAME = "MendCode"
 
 export function activate(context: vscode.ExtensionContext) {
   const openNewTerminalDisposable = vscode.commands.registerCommand("opencode.openNewTerminal", async () => {
@@ -11,7 +11,7 @@ export function activate(context: vscode.ExtensionContext) {
   })
 
   const openTerminalDisposable = vscode.commands.registerCommand("opencode.openTerminal", async () => {
-    // An opencode terminal already exists => focus it
+    // A MendCode terminal already exists => focus it
     const existingTerminal = vscode.window.terminals.find((t) => t.name === TERMINAL_NAME)
     if (existingTerminal) {
       existingTerminal.show()
@@ -62,7 +62,7 @@ export function activate(context: vscode.ExtensionContext) {
     })
 
     terminal.show()
-    terminal.sendText(`opencode --port ${port}`)
+    terminal.sendText(`mendcode --port ${port}`)
 
     const fileRef = getActiveFile()
     if (!fileRef) {

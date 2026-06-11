@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "fs/promises"
 import path from "path"
 import { mendPaths } from "../config/paths"
+import { activeMendPackageProjection } from "../runtime/packages"
 
 export type MendPromptMode = "minimal" | "focus" | "full" | "dev-js"
 const modes: MendPromptMode[] = ["minimal", "focus", "full", "dev-js"]
@@ -12,6 +13,10 @@ const note = "Persisted prompt mode is consumed by mend run/chat and shown by th
 
 export async function readPromptMode(root?: string): Promise<PromptModeState> {
   const paths = mendPaths(root)
+  const projected = await activeMendPackageProjection(paths.root).catch(() => undefined)
+  const packageMode = projected?.runtimePacks.findLast((pack) => modes.includes(pack.prompts?.mode as MendPromptMode))
+    ?.prompts.mode
+  if (packageMode && modes.includes(packageMode as MendPromptMode)) return { mode: packageMode as MendPromptMode, live, note }
   try {
     const parsed = JSON.parse(await readFile(paths.promptMode, "utf8"))
     if (modes.includes(parsed.mode)) return { mode: parsed.mode, live, note }

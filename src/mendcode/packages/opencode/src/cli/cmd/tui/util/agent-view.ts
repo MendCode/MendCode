@@ -71,3 +71,9 @@ export function isAgentViewSessionVisible(input: {
 
   return (input.now ?? Date.now()) - item.background.time.updated <= visibleCompletedWindowMs
 }
+
+export function isAgentViewSessionFallbackVisible(item: AgentViewSessionItem) {
+  const directory = item.background.session?.directory || item.session?.directory
+  if (isTemporaryAgentViewDirectory(directory)) return false
+  return Boolean(item.background.session || item.session)
+}

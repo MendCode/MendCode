@@ -4,6 +4,7 @@ import { homedir } from "os"
 import path from "path"
 import { Global } from "@mendcode/core/global"
 import { mendPaths } from "./paths"
+import { activeMendPackageProjection } from "../runtime/packages"
 
 export type ModelRole = {
   providerID: string | null
@@ -244,12 +245,25 @@ async function applyGlobalConfigOverrides(config: ModelsConfig) {
 
 export async function readModelsConfig(root?: string): Promise<ModelsConfig> {
   const globalFile = resolveGlobalModelsConfigPath()
-  if (existsSync(globalFile)) return applyGlobalConfigOverrides(await readGlobalModelsConfig())
-  const file = mendPaths(root).modelsConfig
-  if (!existsSync(file)) {
-    return applyGlobalConfigOverrides(JSON.parse(JSON.stringify(defaultModelsConfig)) as ModelsConfig)
+  const paths = mendPaths(root)
+  const base = existsSync(globalFile)
+    ? await applyGlobalConfigOverrides(await readGlobalModelsConfig())
+    : existsSync(paths.modelsConfig)
+      ? await applyGlobalConfigOverrides(parseModelsYaml(await readFile(paths.modelsConfig, "utf8")))
+      : await applyGlobalConfigOverrides(JSON.parse(JSON.stringify(defaultModelsConfig)) as ModelsConfig)
+  const projected = await activeMendPackageProjection(paths.root).catch(() => undefined)
+  for (const pack of projected?.runtimePacks || []) {
+    if (!pack.models || (!pack.models.default.providerID && !Object.keys(pack.models.roles || {}).length)) continue
+    base.enabled = true
+    base.roles = {
+      ...base.roles,
+      ...pack.models.roles,
+      ...(pack.models.default.providerID || pack.models.default.modelID
+        ? { default: { ...base.roles.default, ...pack.models.default } }
+        : {}),
+    }
   }
-  return applyGlobalConfigOverrides(parseModelsYaml(await readFile(file, "utf8")))
+  return base
 }
 
 export async function writeModelsConfig(config: ModelsConfig, root?: string) {

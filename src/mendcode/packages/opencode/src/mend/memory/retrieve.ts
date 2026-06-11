@@ -1,7 +1,7 @@
 import path from "path"
 import type { Provider } from "@/provider/provider"
 import { resolvePromptFocus } from "../prompt/focus-resolver"
-import { readMemoryConfig } from "./config"
+import { readMemoryConfig, type MemoryScope } from "./config"
 import { readMemoryEntries, readMemorySummary, type MemoryEntry } from "./store"
 
 export type MemoryRetrievalInput = {
@@ -14,6 +14,8 @@ export type MemoryRetrievalInput = {
   focusID?: string | null
   maxEntries?: number
   maxPromptTokens?: number
+  mode?: "request" | "after-compaction" | "manual"
+  scopes?: MemoryScope[]
 }
 
 function terms(...values: Array<string | null | undefined>) {
@@ -85,19 +87,39 @@ export async function retrieveMemory(input: MemoryRetrievalInput = {}) {
   if (!config.enabled || !config.use) {
     return { enabled: config.enabled, use: config.use, summaries: [], entries: [], callsProviders: false as const }
   }
-  const maxEntries = input.maxEntries ?? config.maxEntries
+  const mode = input.mode ?? "manual"
+  const selectedScopes = input.scopes ?? (
+    mode === "request"
+      ? config.scopes.filter((scope) => scope === "project")
+      : config.scopes
+  )
+  const maxEntries = input.maxEntries ?? (mode === "request" ? config.projectMaxEntries : config.maxEntries)
   const maxPromptTokens = input.maxPromptTokens ?? config.maxPromptTokens
   const queryTerms = terms(input.query, input.cwd, ...(input.files || []), input.providerID, input.modelID, input.focusID)
-  const summaries = await Promise.all(config.scopes.map(async (scope) => ({
+  const summaries = await Promise.all(selectedScopes.map(async (scope) => ({
     scope,
     text: (await readMemorySummary(scope, input.root)).trim(),
   }))).then((items) => items.filter((item) => item.text))
-  const entryGroups = await Promise.all(config.scopes.map((scope) => readMemoryEntries(scope, input.root).catch(() => [])))
-  const entries = entryGroups.flat()
+  const entryGroups = await Promise.all(selectedScopes.map((scope) => readMemoryEntries(scope, input.root).catch(() => [])))
+  const perScopeLimit = (scope: MemoryScope) => {
+    if (mode === "request" && scope === "project") return config.projectMaxEntries
+    if (mode === "after-compaction" && scope === "global") return config.globalCompactionMaxEntries
+    if (mode === "after-compaction" && scope === "project") return config.projectMaxEntries
+    return maxEntries
+  }
+  const shouldInclude = (entry: MemoryEntry, score: number) => {
+    if (score > 0) return true
+    if (mode === "request" && entry.scope === "project") return true
+    if (mode === "after-compaction" && (entry.scope === "global" || entry.scope === "project")) return true
+    return false
+  }
+  const entries = entryGroups.flatMap((group, index) => group
     .map((entry) => ({ entry, score: scoreEntry(entry, input, queryTerms) }))
-    .filter((item) => item.score > 0)
+    .filter((item) => shouldInclude(item.entry, item.score))
     .sort((a, b) => b.score - a.score || b.entry.updatedAt.localeCompare(a.entry.updatedAt))
-    .slice(0, maxEntries)
+    .slice(0, perScopeLimit(selectedScopes[index]!)),
+  )
+    .sort((a, b) => b.score - a.score || b.entry.updatedAt.localeCompare(a.entry.updatedAt))
   const summaryLines = summaries.map((item) => `- ${item.scope} summary: ${item.text.replace(/\s+/g, " ")}`)
   const entryLines = entries.map(({ entry }) => {
     const source = [entry.scope, entry.source, entry.evidence].filter(Boolean).join("; ")
@@ -130,7 +152,7 @@ export function formatMemoryBlock(input: {
       : "Use these memories as soft context. Current user instructions and repo evidence win."
   return [
     "<mendcode_memory>",
-    "Loaded once for this session.",
+    "Loaded for this request only; not persisted to chat history.",
     `Policy: ${style}`,
     "Use a memory only if it directly helps the current task; ignore stale or irrelevant memory.",
     "Memories:",
@@ -139,7 +161,12 @@ export function formatMemoryBlock(input: {
   ].join("\n")
 }
 
-export async function mendMemoryContext(model: Provider.Model, root?: string, query?: string | null) {
+export async function mendMemoryContext(
+  model: Provider.Model,
+  root?: string,
+  query?: string | null,
+  mode: MemoryRetrievalInput["mode"] = "request",
+) {
   const modelID = model.api.id || model.id
   const focus = resolvePromptFocus({ providerID: model.providerID, modelID })
   const retrieved = await retrieveMemory({
@@ -149,6 +176,7 @@ export async function mendMemoryContext(model: Provider.Model, root?: string, qu
     providerID: model.providerID,
     modelID,
     focusID: focus.focusID,
+    mode,
   })
   return {
     ...retrieved,

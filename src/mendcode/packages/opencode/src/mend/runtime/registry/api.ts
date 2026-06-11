@@ -1,17 +1,18 @@
 import { existsSync } from "fs"
-import { cp, mkdir, readFile, readdir } from "fs/promises"
+import { readFile } from "fs/promises"
 import { fileURLToPath } from "url"
 import path from "path"
 import semver from "semver"
 import { mendPaths } from "../../config/paths"
 import { applyRuntimePack, buildLocalRuntimePack } from "../pack"
+import { installMendPackageFromStage, listMendPackages } from "../packages"
 import { detectRegistryConflicts, writeRegistryApplyReport } from "./conflicts"
 import { normalizeOpencodeSettingsToMendcode, opencodeSettingsPreview } from "./import-opencode"
 import { readMarketplaceCatalog, runtimeRegistrySearchCatalog, runtimeRegistryShowCatalog, type RegistryMarketplacePackManifest } from "./marketplace"
 import { readMendPackageManifest } from "./package-manifest"
 import { fetchRegistrySource, readPackFromStage, smokeRegistrySource } from "./source"
 import { parseRegistryEntryArgs, readRuntimeRegistry, readRuntimeRegistryLocalState, registryFilePath, registryLocalStatePath, trustForType, writeJson, writeRuntimeRegistryLocalState } from "./state"
-import { digestApplicableSource, isApplyAllowed, privateGitReadiness, verifyRegistryTrust } from "./trust"
+import { digestApplicableSource, privateGitReadiness, verifyRegistryTrust } from "./trust"
 import type { RegistryApplyRecord, RuntimeRegistryEntry } from "./types"
 
 function packageSummary(
@@ -41,20 +42,6 @@ function packageSummary(
   return null
 }
 
-async function listFilesRecursive(root: string) {
-  const out: string[] = []
-  async function walk(dir: string) {
-    if (!existsSync(dir)) return
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-      const full = path.join(dir, entry.name)
-      if (entry.isDirectory()) await walk(full)
-      else out.push(full)
-    }
-  }
-  await walk(root)
-  return out.sort()
-}
-
 async function readRuntimePackageVersion(root: string) {
   const packageFile = path.join(root, "src", "mendcode", "packages", "opencode", "package.json")
   const fallbackPackageFile = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..", "package.json")
@@ -77,6 +64,7 @@ function ensureCompatibility(pack: RegistryMarketplacePackManifest, runtimeVersi
 export async function runtimeRegistryStatus(root = mendPaths().root) {
   const state = await readRuntimeRegistry(root)
   const local = await readRuntimeRegistryLocalState(root)
+  const packages = await listMendPackages(root)
   return {
     ok: true,
     path: path.relative(root, registryFilePath(root)),
@@ -89,6 +77,11 @@ export async function runtimeRegistryStatus(root = mendPaths().root) {
     signatureRequiredEntries: state.entries.filter((entry) => entry.trustPolicy?.requireSignature).length,
     teamChannels: local.teamChannels,
     lastApply: local.lastApply ? { id: local.lastApply.id, appliedAt: local.lastApply.appliedAt, digest: local.lastApply.digest } : null,
+    packages: {
+      installed: packages.installed.length,
+      enabled: packages.enabled.map((item) => item.id),
+      statePath: packages.path,
+    },
     secretsIncluded: false,
     redaction: state.redaction,
   }
@@ -148,21 +141,21 @@ export async function runtimeRegistryApply(id: string | undefined, root = mendPa
   if (!pack) throw new Error(`Registry source ${id} did not contain a MendCode runtime pack or .mendcode directory`)
   if (selectedPack) ensureCompatibility(selectedPack, runtimeVersion, String(pack.version))
 
-  const sourceMend = path.join(sourceStageDir, ".mendcode")
   const copied: string[] = []
   const skipped: string[] = []
-  if (sourceStageDir !== root && existsSync(sourceMend)) {
-    for (const file of await listFilesRecursive(sourceMend)) {
-      const rel = path.relative(sourceStageDir, file)
-      if (!isApplyAllowed(rel)) {
-        skipped.push(rel)
-        continue
-      }
-      const target = path.join(root, rel)
-      await mkdir(path.dirname(target), { recursive: true })
-      await cp(file, target)
-      copied.push(rel)
-    }
+  const installedPackage = sourceStageDir !== root
+    ? await installMendPackageFromStage({
+      entry,
+      stageDir: sourceStageDir,
+      digest,
+      selectedPack: selectedPack || null,
+      pack,
+      root,
+    })
+    : null
+  if (installedPackage) {
+    copied.push(...installedPackage.copied)
+    skipped.push(...installedPackage.skipped)
   }
 
   const applyPlan = await applyRuntimePack(root)
@@ -188,6 +181,9 @@ export async function runtimeRegistryApply(id: string | undefined, root = mendPa
     conflicts,
     copied,
     skipped,
+    package: installedPackage
+      ? { id: installedPackage.id, enabled: installedPackage.enabled, root: installedPackage.root }
+      : null,
     applyPlan,
     privateGit: privateGitReadiness(entry),
     normalized: normalized ? { path: path.relative(root, normalized.stageDir), writes: normalized.writes, preview: normalized.preview } : null,
@@ -242,6 +238,9 @@ export async function runtimeRegistryApply(id: string | undefined, root = mendPa
     conflicts,
     copied,
     skipped,
+    package: installedPackage
+      ? { id: installedPackage.id, enabled: installedPackage.enabled, root: installedPackage.root }
+      : null,
     applyPlan,
     reportPath,
     localStatePath: path.relative(root, registryLocalStatePath(root)),
@@ -391,7 +390,7 @@ export async function runtimeRegistryPublishPlan(id = "local", root = mendPaths(
   const manifest = {
     version: 0,
     id: packageManifest?.manifest.id || entry.id,
-    packVersion: entry.version || String(pack.version),
+    packVersion: packageManifest?.manifest.packageVersion || entry.version || String(pack.version),
     title: packageManifest?.manifest.title || entry.id,
     description: packageManifest?.manifest.description || entry.note,
     channel: packageManifest?.manifest.channel || entry.channel || entry.team?.channel || "stable",
@@ -414,9 +413,12 @@ export async function runtimeRegistryPublishPlan(id = "local", root = mendPaths(
       focusDefault: pack.focus.default,
       commands: pack.commands.length,
       agents: pack.agents.length,
+      modes: pack.modes.length,
       skills: pack.skills.length,
+      plugins: pack.plugins.length,
       prompts: pack.prompts.templates.length,
       mcpFiles: pack.mcp.files.length,
+      extensions: pack.extensions.length,
     },
     ...(packageManifest?.path ? { packageManifestPath: packageManifest.path } : {}),
     secretsIncluded: false,

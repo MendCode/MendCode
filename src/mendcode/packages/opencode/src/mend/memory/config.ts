@@ -4,6 +4,7 @@ import path from "path"
 import { Global } from "@mendcode/core/global"
 import { readMendConfig } from "../config/project"
 import { mendPaths } from "../config/paths"
+import { activeMendPackageProjection } from "../runtime/packages"
 
 export type MemoryScope = "global" | "project"
 
@@ -16,6 +17,8 @@ export type MemoryConfig = {
   scopes: MemoryScope[]
   maxPromptTokens: number
   maxEntries: number
+  projectMaxEntries: number
+  globalCompactionMaxEntries: number
   extractorRole: string
   consolidatorRole: string
   minIdleMinutes: number
@@ -33,6 +36,8 @@ export const defaultMemoryConfig: MemoryConfig = {
   scopes: ["global", "project"],
   maxPromptTokens: 10_000,
   maxEntries: 50,
+  projectMaxEntries: 3,
+  globalCompactionMaxEntries: 50,
   extractorRole: "memoryExtractor",
   consolidatorRole: "none",
   minIdleMinutes: 30,
@@ -105,6 +110,8 @@ export function normalizeMemoryConfig(input: unknown): MemoryConfig {
     scopes: scopes(raw.scopes),
     maxPromptTokens: boundedNumberValue(raw.maxPromptTokens, defaultMemoryConfig.maxPromptTokens, 100, 10_000),
     maxEntries: boundedNumberValue(raw.maxEntries, defaultMemoryConfig.maxEntries, 1, 100),
+    projectMaxEntries: boundedNumberValue(raw.projectMaxEntries, defaultMemoryConfig.projectMaxEntries, 1, 100),
+    globalCompactionMaxEntries: boundedNumberValue(raw.globalCompactionMaxEntries, defaultMemoryConfig.globalCompactionMaxEntries, 1, 100),
     extractorRole: roleValue(raw.extractorRole, defaultMemoryConfig.extractorRole),
     consolidatorRole: roleValue(raw.consolidatorRole, defaultMemoryConfig.consolidatorRole),
     minIdleMinutes: numberValue(raw.minIdleMinutes, defaultMemoryConfig.minIdleMinutes, 0),
@@ -125,11 +132,17 @@ export async function readMemoryConfig(root?: string): Promise<MemoryConfig> {
   const globalConfig = await readJsonIfExists(paths.globalConfig).catch(() => null)
   const projectConfig = await readJsonIfExists(paths.projectConfig).catch(() => null)
   const explicitProjectConfig = typeof projectConfig === "object" && projectConfig !== null && (projectConfig as Record<string, unknown>).configScope === "project"
+  const projected = await activeMendPackageProjection(paths.root).catch(() => undefined)
+  const packageMemoryConfig = projected?.runtimePacks.reduce<Record<string, unknown>>((acc, pack) => ({
+    ...acc,
+    ...(pack.settings?.memory || {}),
+  }), {})
   return normalizeMemoryConfig({
     ...defaultMemoryConfig,
     ...(cfg.memory || {}),
     ...(globalConfig || {}),
     ...(explicitProjectConfig ? projectConfig : {}),
+    ...(packageMemoryConfig || {}),
   })
 }
 

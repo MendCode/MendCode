@@ -6,6 +6,7 @@ import { mendPaths } from "./config/paths"
 import { defaultPromptChrome, normalizePromptChromePreset, type MendPromptChromeConfig } from "./tui/prompt-chrome"
 import { defaultPromptStatus, type MendPromptStatusConfig } from "./tui/prompt-status"
 import { defaultPresentationConfig, resolveTuiPresentation, type MendPresentationConfig } from "./tui/presentation"
+import { activeMendPackageProjection } from "./runtime/packages"
 import type { MendHomeLogoSize, MendLogoMode } from "./tui/mascot"
 import type { MendWorkingIndicator } from "./tui/working-indicator"
 import { Global } from "@mendcode/core/global"
@@ -476,6 +477,11 @@ export async function loadMendTuiProfile(root = ownRootFromModule(), config?: un
       else delete presentation.reasoning
       configured.presentation = resolveTuiPresentation(presentation)
     }
+  }
+  const packageProjection = await activeMendPackageProjection(requestedRoot).catch(() => undefined)
+  for (const pack of packageProjection?.runtimePacks || []) {
+    if (!isRecord(pack.tui) || Object.keys(pack.tui).length === 0) continue
+    configured = mergeMendTuiProfile({ ...configured, ...pack.tui })
   }
   if (profileRoot !== requestedRoot) {
     absolutizeInheritedPromptStatusScripts(configured, profileRoot)

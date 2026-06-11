@@ -203,6 +203,25 @@ export const layer = Layer.effect(
       return message.info.role === "user" && !message.parts.every((part) => "synthetic" in part && part.synthetic)
     }
 
+    function promptMemoryMode(messages: MessageV2.WithParts[], lastUser: MessageV2.User) {
+      const lastUserIndex = messages.findIndex((message) => message.info.id === lastUser.id)
+      if (lastUserIndex === -1) return "request" as const
+      const lastUserMessage = messages[lastUserIndex]
+      if (lastUserMessage?.parts.some((part) => part.type === "text" && part.synthetic === true && part.metadata?.compaction_continue === true)) {
+        return "after-compaction" as const
+      }
+      const latestSummaryIndex = messages.findLastIndex((message, index) =>
+        index < lastUserIndex &&
+        message.info.role === "assistant" &&
+        message.info.summary === true &&
+        Boolean(message.info.finish) &&
+        !message.info.error,
+      )
+      if (latestSummaryIndex === -1) return "request" as const
+      const realUsersAfterSummary = messages.slice(latestSummaryIndex + 1, lastUserIndex + 1).filter(realUserMessage)
+      return realUsersAfterSummary.length <= 1 ? "after-compaction" as const : "request" as const
+    }
+
     function userMessageTitleText(message: MessageV2.WithParts) {
       return message.parts
         .map((part) => {
@@ -1744,6 +1763,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               root: ctx.worktree,
               system,
               messages: [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
+              memoryMode: promptMemoryMode(msgs, lastUser),
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,

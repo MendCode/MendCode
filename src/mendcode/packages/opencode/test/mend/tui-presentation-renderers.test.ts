@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { parseTimelineDiffRows, timelineDiffFileStatus } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
-import { rawReasoningDisplay } from "../../src/mend/tui/presentation"
+import { rawReasoningDisplay, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
 import { groupTimelineParts } from "../../src/mend/tui/timeline/group"
 import { normalizeToolEvent, shouldRenderCompactTool, toolClass, toolSummary } from "../../src/mend/tui/timeline/normalize"
 
@@ -261,10 +261,16 @@ describe("mend tui presentation renderers", () => {
       title: null,
       body: "**Updating dashboard features**\n\nStreaming body",
     })
-    expect(rawReasoningDisplay("", { fallbackTitle: "reasoning metadata" })).toEqual({
-      title: "reasoning metadata",
+    expect(rawReasoningDisplay("", { fallbackTitle: "reasoning unavailable" })).toEqual({
+      title: "reasoning unavailable",
       body: "",
     })
+  })
+
+  test("raw reasoning labels unavailable content without hiding readable thoughts", () => {
+    expect(unavailableReasoningLabel({ hasReadableContent: true, encrypted: true })).toBeNull()
+    expect(unavailableReasoningLabel({ hasReadableContent: false, encrypted: true })).toBe("reasoning unavailable")
+    expect(unavailableReasoningLabel({ hasReadableContent: false, encrypted: false })).toBe("reasoning unavailable")
   })
 
   test("minimal and mendcode compact active streaming tool rows", () => {

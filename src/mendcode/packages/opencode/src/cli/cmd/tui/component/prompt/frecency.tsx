@@ -5,6 +5,7 @@ import { onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createSimpleContext } from "../../context/helper"
 import { appendFile, writeFile } from "fs/promises"
+import { useSync } from "@tui/context/sync"
 
 function calculateFrecency(entry?: { frequency: number; lastOpen: number }): number {
   if (!entry) return 0
@@ -15,9 +16,15 @@ function calculateFrecency(entry?: { frequency: number; lastOpen: number }): num
 
 const MAX_FRECENCY_ENTRIES = 1000
 
+function normalizeFrecencyPath(filePath: string, baseDir: string) {
+  const resolved = path.isAbsolute(filePath) ? filePath : path.join(baseDir, filePath)
+  return path.resolve(resolved).split(path.sep).join("/")
+}
+
 export const { use: useFrecency, provider: FrecencyProvider } = createSimpleContext({
   name: "Frecency",
   init: () => {
+    const sync = useSync()
     const frecencyPath = path.join(Global.Path.state, "frecency.jsonl")
     onMount(async () => {
       const text = await Filesystem.readText(frecencyPath).catch(() => "")
@@ -35,7 +42,8 @@ export const { use: useFrecency, provider: FrecencyProvider } = createSimpleCont
 
       const latest = lines.reduce(
         (acc, entry) => {
-          acc[entry.path] = entry
+          const filePath = normalizeFrecencyPath(entry.path, sync.path.directory || process.cwd())
+          acc[filePath] = { ...entry, path: filePath }
           return acc
         },
         {} as Record<string, { path: string; frequency: number; lastOpen: number }>,
@@ -62,8 +70,10 @@ export const { use: useFrecency, provider: FrecencyProvider } = createSimpleCont
       data: {} as Record<string, { frequency: number; lastOpen: number }>,
     })
 
+    const baseDir = () => sync.path.directory || process.cwd()
+
     function updateFrecency(filePath: string) {
-      const absolutePath = path.resolve(process.cwd(), filePath)
+      const absolutePath = normalizeFrecencyPath(filePath, baseDir())
       const newEntry = {
         frequency: (store.data[absolutePath]?.frequency || 0) + 1,
         lastOpen: Date.now(),
@@ -82,7 +92,7 @@ export const { use: useFrecency, provider: FrecencyProvider } = createSimpleCont
     }
 
     return {
-      getFrecency: (filePath: string) => calculateFrecency(store.data[path.resolve(process.cwd(), filePath)]),
+      getFrecency: (filePath: string) => calculateFrecency(store.data[normalizeFrecencyPath(filePath, baseDir())]),
       updateFrecency,
       data: () => store.data,
     }

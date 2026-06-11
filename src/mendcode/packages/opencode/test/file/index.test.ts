@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import path from "path"
 import fs from "fs/promises"
 import { File } from "../../src/file"
+import { Global } from "@mendcode/core/global"
 import { Instance } from "../../src/project/instance"
 import { WithInstance } from "../../src/project/with-instance"
 import { Filesystem } from "@/util/filesystem"
@@ -828,6 +829,63 @@ describe("file/index Filesystem patterns", () => {
           expect(result).toContain("fresh.ts")
         },
       })
+    })
+
+    test("read files rank higher in file search", async () => {
+      await using tmp = await tmpdir({ git: true })
+      await using state = await tmpdir()
+      const previousState = Global.Path.state
+      Global.Path.state = state.path
+      await fs.writeFile(path.join(tmp.path, "src-alpha.ts"), "alpha", "utf-8")
+      await fs.writeFile(path.join(tmp.path, "docs-alpha.ts"), "docs", "utf-8")
+
+      try {
+        await WithInstance.provide({
+          directory: tmp.path,
+          fn: async () => {
+            await init()
+            await read("docs-alpha.ts")
+
+            const result = await search({ query: "alpha", type: "file" })
+            expect(result[0]).toBe("docs-alpha.ts")
+          },
+        })
+      } finally {
+        Global.Path.state = previousState
+      }
+    })
+
+    test("file search loads persisted frecency", async () => {
+      await using tmp = await tmpdir({ git: true })
+      await using state = await tmpdir()
+      const previousState = Global.Path.state
+      Global.Path.state = state.path
+      await fs.writeFile(path.join(tmp.path, "src-alpha.ts"), "alpha", "utf-8")
+      await fs.writeFile(path.join(tmp.path, "docs-alpha.ts"), "docs", "utf-8")
+
+      try {
+        await WithInstance.provide({
+          directory: tmp.path,
+          fn: async () => {
+            await init()
+            await read("docs-alpha.ts")
+          },
+        })
+
+        await disposeAllInstances()
+
+        await WithInstance.provide({
+          directory: tmp.path,
+          fn: async () => {
+            await init()
+
+            const result = await search({ query: "alpha", type: "file" })
+            expect(result[0]).toBe("docs-alpha.ts")
+          },
+        })
+      } finally {
+        Global.Path.state = previousState
+      }
     })
   })
 

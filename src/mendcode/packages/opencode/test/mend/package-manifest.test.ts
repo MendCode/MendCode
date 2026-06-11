@@ -15,6 +15,7 @@ describe("mend package manifest", () => {
     const manifest = parseMendPackageManifest({
       version: 0,
       id: "starter-js",
+      packageVersion: "1.0.1",
       title: "Starter JS",
       description: "JavaScript starter package",
       compatibility: {
@@ -23,7 +24,10 @@ describe("mend package manifest", () => {
       },
       artifacts: {
         commands: [".mendcode/commands"],
+        modes: [".mendcode/modes/build.md"],
+        plugins: [".mendcode/plugins/status.ts"],
         prompts: [".mendcode/prompts"],
+        extensions: [".mendcode/widgets/panel.ts"],
         tuiProfile: ".mendcode/tui/profile.json",
       },
       distribution: {
@@ -38,7 +42,11 @@ describe("mend package manifest", () => {
     })
 
     expect(manifest.id).toBe("starter-js")
+    expect(manifest.packageVersion).toBe("1.0.1")
     expect(manifest.artifacts?.commands).toEqual([".mendcode/commands"])
+    expect(manifest.artifacts?.modes).toEqual([".mendcode/modes/build.md"])
+    expect(manifest.artifacts?.plugins).toEqual([".mendcode/plugins/status.ts"])
+    expect(manifest.artifacts?.extensions).toEqual([".mendcode/widgets/panel.ts"])
     expect(manifest.artifacts?.tuiProfile).toBe(".mendcode/tui/profile.json")
     expect(manifest.distribution?.trust?.signatureRequired).toBe(true)
   })

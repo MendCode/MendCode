@@ -34,6 +34,8 @@ export type MemoryStatus = {
   scopes: MemoryScope[]
   maxPromptTokens: number
   maxEntries: number
+  projectMaxEntries: number
+  globalCompactionMaxEntries: number
   extractorRole: string
   consolidatorRole: string
   paths: Record<string, string>
@@ -218,6 +220,8 @@ export async function memoryStatus(root?: string): Promise<MemoryStatus> {
     scopes: config.scopes,
     maxPromptTokens: config.maxPromptTokens,
     maxEntries: config.maxEntries,
+    projectMaxEntries: config.projectMaxEntries,
+    globalCompactionMaxEntries: config.globalCompactionMaxEntries,
     extractorRole: config.extractorRole,
     consolidatorRole: config.consolidatorRole,
     paths: {

@@ -1,16 +1,18 @@
 import { existsSync } from "fs"
-import { copyFile, mkdir, readdir, readFile, writeFile } from "fs/promises"
+import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "fs/promises"
 import path from "path"
 import { fileURLToPath } from "url"
 import { Glob } from "@mendcode/core/util/glob"
 import { mendPaths } from "../config/paths"
 import type { MendPackageManifest } from "../sdk/package"
-import { packageMetadata } from "../config/project"
+import { packageMetadata, packageMetadataSet } from "../config/project"
 import { readModelsConfig } from "../config/models"
-import { readMendMcpConfig } from "../config/mcp"
+import { readMendMcpConfig, readMendMcpConfigFromDir } from "../config/mcp"
 import { readPromptMode } from "../prompt/mode"
 import { resolvePromptFocusForRole } from "../prompt/focus-resolver"
 import { readActiveTuiProfile } from "../tui/profile-actions"
+import { readMemoryConfig } from "../memory/config"
+import { readPermissionsConfig } from "../config/permissions"
 import { applyRuntimePackAdapters, runtimePackAdapterPreview, type RuntimePackAdapterChange, type RuntimePackApplyResult } from "./apply"
 
 export type RuntimePackSource = {
@@ -29,16 +31,56 @@ export type RuntimePack = {
   focus: { default: string; resolved: ReturnType<typeof resolvePromptFocusForRole> }
   commands: string[]
   agents: string[]
+  modes: string[]
   skills: string[]
+  plugins: string[]
   mcp: {
     config: Record<string, unknown>
     files: string[]
   }
   prompts: { mode: string; resolver: "provider-model-aware"; templates: string[] }
   context: { include: string[]; refresh: "deterministic" }
+  extensions: string[]
+  settings: {
+    memory: Record<string, unknown>
+    permissions: Record<string, unknown>
+  }
   budget: Record<string, unknown>
   tui: Record<string, unknown>
   worktree: Record<string, unknown>
+}
+
+export type RuntimePackSelection = {
+  commands?: string[]
+  agents?: string[]
+  modes?: string[]
+  skills?: string[]
+  plugins?: string[]
+  prompts?: string[]
+  mcp?: string[]
+  context?: string[]
+  extensions?: string[]
+  tuiProfile?: boolean
+  worktreePolicy?: boolean
+  models?: boolean
+  focus?: boolean
+  budget?: boolean
+  memory?: boolean
+  permissions?: boolean
+}
+
+export type RuntimePackArtifactCandidates = {
+  commands: string[]
+  agents: string[]
+  modes: string[]
+  skills: string[]
+  plugins: string[]
+  prompts: string[]
+  mcp: string[]
+  context: string[]
+  extensions: string[]
+  tuiProfile: string | null
+  worktreePolicy: string | null
 }
 
 export type RuntimePackPlan = {
@@ -87,6 +129,41 @@ async function listPackFiles(root: string, pattern: string) {
     .sort()
 }
 
+function selectedFiles(all: string[], selected: string[] | undefined) {
+  if (!selected) return all
+  const allowed = new Set(selected.map((file) => file.split(path.sep).join(path.posix.sep)))
+  return all.filter((file) => allowed.has(file))
+}
+
+function packageSelection(root: string): RuntimePackSelection {
+  const metadata = packageMetadata(root)
+  return metadata.selection && typeof metadata.selection === "object" ? metadata.selection as RuntimePackSelection : {}
+}
+
+export async function runtimePackArtifactCandidates(root?: string): Promise<RuntimePackArtifactCandidates> {
+  const paths = mendPaths(root)
+  const mcp = await readMendMcpConfig(paths.root)
+  return {
+    commands: await listPackFiles(paths.root, "{command,commands}/**/*.md"),
+    agents: await listPackFiles(paths.root, "{agent,agents}/**/*.md"),
+    modes: await listPackFiles(paths.root, "{mode,modes}/**/*.md"),
+    skills: await listPackFiles(paths.root, "{skill,skills}/**/SKILL.md"),
+    plugins: await listPackFiles(paths.root, "{plugin,plugins}/**/*.{ts,js}"),
+    prompts: await listPackFiles(paths.root, "{prompt,prompts}/**/*.md"),
+    mcp: mcp.files.map((file) => file.split(path.sep).join(path.posix.sep)),
+    context: [
+      ".mendcode/context/project.md",
+      ".mendcode/context/summary.md",
+      ".mendcode/context/refresh.json",
+    ].filter((file) => existsSync(path.join(paths.root, file))),
+    extensions: await listPackFiles(paths.root, "{widget,widgets,component,components,script,scripts}/**/*"),
+    tuiProfile: existsSync(paths.tuiProfile) ? ".mendcode/tui/profile.json" : null,
+    worktreePolicy: existsSync(path.join(paths.root, ".mendcode", "worktree", "policy.yaml"))
+      ? ".mendcode/worktree/policy.yaml"
+      : null,
+  }
+}
+
 function packFile(root: string) {
   return path.join(root, ".mendcode", "runtime-pack.json")
 }
@@ -118,7 +195,7 @@ async function readRuntimeVersion(root: string) {
 }
 
 function inferPackageKind(pack: RuntimePack): MendPackageManifest["kind"] {
-  if (pack.skills.length && !pack.commands.length && !pack.agents.length) return "skill-pack"
+  if (pack.skills.length && !pack.commands.length && !pack.agents.length && !pack.modes.length) return "skill-pack"
   if (pack.prompts.templates.length && !pack.skills.length && !pack.commands.length) return "prompt-pack"
   if (pack.tui && Object.keys(pack.tui).length && !pack.commands.length && !pack.skills.length) return "theme"
   return "bundle"
@@ -132,6 +209,7 @@ export async function buildLocalMendPackageManifest(root?: string, pack?: Runtim
   return {
     version: 0,
     id: metadata.id || resolvedPack.id,
+    packageVersion: metadata.version,
     ...(metadata.title ? { title: metadata.title } : { title: "MendCode Local Runtime Pack" }),
     ...(metadata.description ? { description: metadata.description } : { description: "Local-first MendCode package manifest generated from shareable project configuration." }),
     kind: metadata.kind || inferPackageKind(resolvedPack),
@@ -143,12 +221,15 @@ export async function buildLocalMendPackageManifest(root?: string, pack?: Runtim
     artifacts: {
       ...(resolvedPack.commands.length ? { commands: resolvedPack.commands } : {}),
       ...(resolvedPack.agents.length ? { agents: resolvedPack.agents } : {}),
+      ...(resolvedPack.modes.length ? { modes: resolvedPack.modes } : {}),
       ...(resolvedPack.skills.length ? { skills: resolvedPack.skills } : {}),
+      ...(resolvedPack.plugins.length ? { plugins: resolvedPack.plugins } : {}),
       ...(resolvedPack.prompts.templates.length ? { prompts: resolvedPack.prompts.templates } : {}),
       ...(resolvedPack.mcp.files.length ? { mcp: resolvedPack.mcp.files } : {}),
       ...(resolvedPack.context.include.length ? { context: resolvedPack.context.include } : {}),
-      tuiProfile: ".mendcode/tui/profile.json",
-      worktreePolicy: ".mendcode/worktree/policy.yaml",
+      ...(resolvedPack.extensions.length ? { extensions: resolvedPack.extensions } : {}),
+      ...(Object.keys(resolvedPack.tui).length ? { tuiProfile: ".mendcode/tui/profile.json" } : {}),
+      ...(Object.keys(resolvedPack.worktree).length ? { worktreePolicy: ".mendcode/worktree/policy.yaml" } : {}),
     },
     distribution: {
       source: {
@@ -164,35 +245,59 @@ export async function buildLocalMendPackageManifest(root?: string, pack?: Runtim
 
 export async function buildLocalRuntimePack(root?: string): Promise<RuntimePack> {
   const paths = mendPaths(root)
+  const selection = packageSelection(paths.root)
   const [config, models, prompt, profile] = await Promise.all([
     readJsonIfExists(paths.mendConfig),
     readModelsConfig(paths.root),
     readPromptMode(paths.root),
     readActiveTuiProfile(paths.root),
   ])
-  const mcp = await readMendMcpConfig(paths.root)
+  const [memory, permissions] = await Promise.all([
+    readMemoryConfig(paths.root).catch(() => ({})),
+    readPermissionsConfig().catch(() => ({})),
+  ])
+  const allMcp = await readMendMcpConfig(paths.root)
+  const selectedMcpFiles = selectedFiles(allMcp.files.map((file) => file.split(path.sep).join(path.posix.sep)), selection.mcp)
+  const mcp = await readMendMcpConfigFromDir(paths.root, paths.mcpDir, selectedMcpFiles)
   if (mcp.failures.length) throw new Error(`Invalid .mendcode/mcp config:\n${mcp.failures.join("\n")}`)
   const defaultRole = models.roles.default || { providerID: null, modelID: null, authMode: null }
   const focusDefault = config?.focus?.default || "codex"
+  const commands = selectedFiles(await listPackFiles(paths.root, "{command,commands}/**/*.md"), selection.commands)
+  const agents = selectedFiles(await listPackFiles(paths.root, "{agent,agents}/**/*.md"), selection.agents)
+  const modes = selectedFiles(await listPackFiles(paths.root, "{mode,modes}/**/*.md"), selection.modes)
+  const skills = selectedFiles(await listPackFiles(paths.root, "{skill,skills}/**/SKILL.md"), selection.skills)
+  const plugins = selectedFiles(await listPackFiles(paths.root, "{plugin,plugins}/**/*.{ts,js}"), selection.plugins)
+  const prompts = selectedFiles(await listPackFiles(paths.root, "{prompt,prompts}/**/*.md"), selection.prompts)
+  const context = selectedFiles([
+    ".mendcode/context/project.md",
+    ".mendcode/context/summary.md",
+    ".mendcode/context/refresh.json",
+  ].filter((file) => existsSync(path.join(paths.root, file))), selection.context)
+  const extensions = selectedFiles(
+    await listPackFiles(paths.root, "{widget,widgets,component,components,script,scripts}/**/*"),
+    selection.extensions,
+  )
   return {
     id: "codex-local",
     version: 0,
     source: { type: "local", url: null },
     models: {
       default: {
-        providerID: defaultRole.providerID || null,
-        modelID: defaultRole.modelID || null,
-        authMode: defaultRole.authMode || null,
+        providerID: selection.models === false ? null : defaultRole.providerID || null,
+        modelID: selection.models === false ? null : defaultRole.modelID || null,
+        authMode: selection.models === false ? null : defaultRole.authMode || null,
       },
-      roles: models.roles,
+      roles: selection.models === false ? {} : models.roles,
     },
     focus: {
-      default: focusDefault,
+      default: selection.focus === false ? "codex" : focusDefault,
       resolved: resolvePromptFocusForRole(defaultRole),
     },
-    commands: await listPackFiles(paths.root, "{command,commands}/**/*.md"),
-    agents: await listPackFiles(paths.root, "{agent,agents}/**/*.md"),
-    skills: await listPackFiles(paths.root, "{skill,skills}/**/SKILL.md"),
+    commands,
+    agents,
+    modes,
+    skills,
+    plugins,
     mcp: {
       config: { ...(config?.mcp || {}), ...mcp.servers },
       files: mcp.files.map((file) => file.split(path.sep).join(path.posix.sep)),
@@ -200,19 +305,20 @@ export async function buildLocalRuntimePack(root?: string): Promise<RuntimePack>
     prompts: {
       mode: prompt.mode,
       resolver: "provider-model-aware",
-      templates: await listPackFiles(paths.root, "{prompt,prompts}/**/*.md"),
+      templates: prompts,
     },
     context: {
-      include: [
-        ".mendcode/context/project.md",
-        ".mendcode/context/summary.md",
-        ".mendcode/context/refresh.json",
-      ].filter((file) => existsSync(path.join(paths.root, file))),
+      include: context,
       refresh: "deterministic",
     },
-    budget: config?.budgets || {},
-    tui: profile,
-    worktree: config?.worktree || {},
+    extensions,
+    settings: {
+      memory: selection.memory === false ? {} : memory as Record<string, unknown>,
+      permissions: selection.permissions === false ? {} : permissions as Record<string, unknown>,
+    },
+    budget: selection.budget === false ? {} : config?.budgets || {},
+    tui: selection.tuiProfile === false ? {} : profile,
+    worktree: selection.worktreePolicy === false ? {} : config?.worktree || {},
   }
 }
 
@@ -292,6 +398,26 @@ export async function applyRuntimePack(root?: string) {
   return plan
 }
 
+export async function deleteLocalRuntimePack(root?: string) {
+  const paths = mendPaths(root)
+  const removed: string[] = []
+  const targets = [mendPackageManifestFile(paths.root), packFile(paths.root)]
+  for (const target of targets) {
+    if (!existsSync(target)) continue
+    await rm(target, { force: true })
+    removed.push(path.relative(paths.root, target).split(path.sep).join(path.posix.sep))
+  }
+  await packageMetadataSet({ selection: null }, paths.root)
+  return {
+    ok: true,
+    action: "delete-local",
+    removed,
+    selectionCleared: true,
+    localArtifactsTouched: false,
+    secretsIncluded: false,
+  }
+}
+
 export async function rollbackRuntimePack(root?: string) {
   const paths = mendPaths(root)
   const backupDir = path.join(paths.root, ".mendcode", "runtime-pack.backups")
@@ -335,8 +461,13 @@ export function formatRuntimePackPlan(plan: RuntimePackPlan) {
     `Focus: ${plan.pack.focus.resolved.focusID} (${plan.pack.focus.resolved.source})`,
     `Commands: ${plan.pack.commands.length}`,
     `Agents: ${plan.pack.agents.length}`,
+    `Modes: ${plan.pack.modes.length}`,
     `Skills: ${plan.pack.skills.length}`,
+    `Plugins: ${plan.pack.plugins.length}`,
     `Prompt templates: ${plan.pack.prompts.templates.length}`,
+    `Extensions: ${plan.pack.extensions.length}`,
+    `Memory settings: ${Object.keys(plan.pack.settings.memory || {}).length ? "included" : "none"}`,
+    `Permission settings: ${Object.keys(plan.pack.settings.permissions || {}).length ? "included" : "none"}`,
     `Context: ${plan.pack.context.include.join(", ") || "none"}`,
     `TUI: ${(plan.pack.tui as any).profile || "unknown"} / ${(plan.pack.tui as any).layout?.density || "unknown"}`,
     `Budget keys: ${Object.keys(plan.pack.budget).join(", ") || "none"}`,

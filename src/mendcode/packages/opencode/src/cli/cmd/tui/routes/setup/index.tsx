@@ -28,6 +28,8 @@ import { memoryStatus } from "@/mend/memory/store"
 import { writeGlobalMemoryConfig } from "@/mend/memory/config"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
 import { packageMetadata, packageMetadataSet, syncGlobalPrimaryAgentModels } from "@/mend/config/project"
+import { applyRuntimePack } from "@/mend/runtime/pack"
+import { listMendPackages } from "@/mend/runtime/packages"
 import { mendTuiCapabilityVersion, visibleCustomizationCapabilities } from "@/mend/tui/capabilities"
 import { listActiveCustomizations } from "@/mend/tui/customization-state"
 import { applyTuiPreset, readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
@@ -178,7 +180,7 @@ export function Setup() {
   const [summary] = createResource(refresh, async () => {
     const root = mend.root
     const state = await openSetupState(selected(), root)
-    const [setup, ai, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, permissions] = await Promise.all(
+    const [setup, ai, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, packages, permissions] = await Promise.all(
       [
         setupReadiness(root),
         aiStatus(root),
@@ -191,6 +193,7 @@ export function Setup() {
           promptModes.map(async (mode) => [mode, await composePromptPolicy({ root, mode, focusID: "codex" })] as const),
         ).then((entries) => Object.fromEntries(entries)),
         Promise.resolve(packageMetadata(root)),
+        listMendPackages(root),
         readPermissionsConfig(),
       ],
     )
@@ -204,7 +207,7 @@ export function Setup() {
         root,
       )
       : null
-    return { state, setup, ai, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, memory, memoryExtractorAuth, permissions }
+    return { state, setup, ai, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, packages, memory, memoryExtractorAuth, permissions }
   })
 
   const narrow = createMemo(() => dimensions().width < 110)
@@ -668,6 +671,24 @@ export function Setup() {
     ))
   }
 
+  const savePackageMetadataAndSnapshot = async (input: {
+    title: string
+    id: string
+    description: string
+    version: string
+    channel: string
+  }) => {
+    await packageMetadataSet(input, mend.root)
+    const snapshot = await applyRuntimePack(mend.root)
+    await mark("package")
+    reload()
+    toast.show({
+      variant: "success",
+      message: `Package snapshot updated: ${snapshot.packageManifestPath}`,
+      duration: 4000,
+    })
+  }
+
   const choosePackageMetadata = async () => {
     const current = summary()?.pkg
     const title = await DialogPrompt.show(dialog, "Package title", {
@@ -692,6 +713,12 @@ export function Setup() {
       description: () => <text fg={theme.textMuted}>Short summary for registry/search/show output.</text>,
     })
     if (description === null) return
+    const version = await DialogPrompt.show(dialog, "Package version", {
+      value: current?.version || "0.1.0",
+      placeholder: "0.1.0",
+      description: () => <text fg={theme.textMuted}>Semantic package version used by registry previews and updates.</text>,
+    })
+    if (version === undefined || version === null) return
     dialog.replace(() => (
       <DialogSelect
         title="Package channel"
@@ -703,18 +730,7 @@ export function Setup() {
             category: "Channel",
             description: "Only for local authoring/default export.",
             onSelect: async () => {
-              await packageMetadataSet(
-                {
-                  title,
-                  id,
-                  description,
-                  channel: "local",
-                },
-                mend.root,
-              )
-              await mark("package")
-              reload()
-              toast.show({ variant: "success", message: "Package metadata updated.", duration: 3000 })
+              await savePackageMetadataAndSnapshot({ title, id, description, version, channel: "local" })
             },
           },
           {
@@ -723,18 +739,7 @@ export function Setup() {
             category: "Channel",
             description: "Prepared for curated/shared registry publication.",
             onSelect: async () => {
-              await packageMetadataSet(
-                {
-                  title,
-                  id,
-                  description,
-                  channel: "official",
-                },
-                mend.root,
-              )
-              await mark("package")
-              reload()
-              toast.show({ variant: "success", message: "Package metadata updated.", duration: 3000 })
+              await savePackageMetadataAndSnapshot({ title, id, description, version, channel: "official" })
             },
           },
           {
@@ -743,18 +748,7 @@ export function Setup() {
             category: "Channel",
             description: "Visible as pre-release/shared preview.",
             onSelect: async () => {
-              await packageMetadataSet(
-                {
-                  title,
-                  id,
-                  description,
-                  channel: "beta",
-                },
-                mend.root,
-              )
-              await mark("package")
-              reload()
-              toast.show({ variant: "success", message: "Package metadata updated.", duration: 3000 })
+              await savePackageMetadataAndSnapshot({ title, id, description, version, channel: "beta" })
             },
           },
         ]}
@@ -1301,14 +1295,19 @@ export function Setup() {
                   <text>ID: {summary()?.pkg.id || "generated from local runtime"}</text>
                   <text>Title: {summary()?.pkg.title || "unset"}</text>
                   <text>Description: {summary()?.pkg.description || "unset"}</text>
+                  <text>Version: {summary()?.pkg.version || "0.1.0"}</text>
                   <text>Kind: {summary()?.pkg.kind || "bundle"}</text>
                   <text>Channel: {summary()?.pkg.channel || "local"}</text>
+                  <text>
+                    Installed packages: {summary()?.packages.installed.length || 0} · active{" "}
+                    {summary()?.packages.enabled.length || 0}
+                  </text>
+                  <text>Snapshot: mend-package.json + .mendcode/runtime-pack.json</text>
                   <text fg={theme.textMuted}>
-                    This metadata feeds generated `mend-package.json`, runtime-config preview, and registry
-                    previews/show.
+                    This metadata feeds generated `mend-package.json`, runtime-pack snapshots, and registry previews.
                   </text>
                   <text fg={theme.textMuted}>
-                    Enter edits id/title/description/channel without touching runtime/session hot paths.
+                    Enter edits metadata and updates the local package snapshot. Ctrl+P Packages opens the artifact checklist.
                   </text>
                 </box>
               </Match>
@@ -1341,8 +1340,8 @@ export function Setup() {
                   <text>Input memory: {summary()?.memory.use ? "on" : "off"}</text>
                   <text>Memory learning: {summary()?.memory.generate ? "on" : "off"} · {memoryLearningStatus()}</text>
                   <text>
-                    Context limit: {summary()?.memory.maxPromptTokens} tokens · max {summary()?.memory.maxEntries}{" "}
-                    entries/request
+                    Context limit: {summary()?.memory.maxPromptTokens} tokens · project {summary()?.memory.projectMaxEntries}
+                    /request · global {summary()?.memory.globalCompactionMaxEntries}/after compaction
                   </text>
                   <text>Extractor model role: {summary()?.memory.extractorRole || "memoryExtractor"}</text>
                   <text>

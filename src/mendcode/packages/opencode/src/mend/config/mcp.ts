@@ -43,7 +43,7 @@ function scanSecrets(serverName: string, server: MendMcpServer) {
   if (server.type === "local") check("environment", server.environment)
   if (server.type === "remote") {
     check("headers", server.headers)
-    if (server.oauth && server.oauth !== false && server.oauth.clientSecret && secretLike(server.oauth.clientSecret)) {
+    if (server.oauth && typeof server.oauth === "object" && server.oauth.clientSecret && secretLike(server.oauth.clientSecret)) {
       failures.push(`${serverName}.oauth.clientSecret looks like an inline secret; store it outside shared MCP config`)
     }
   }
@@ -62,12 +62,19 @@ function parseMcpFile(data: unknown, file: string): Record<string, MendMcpServer
   return out
 }
 
-export async function readMendMcpConfig(root?: string): Promise<MendMcpReadResult> {
+export async function readMendMcpConfigFromDir(
+  root: string,
+  mcpDir: string,
+  includeFiles?: string[],
+): Promise<MendMcpReadResult> {
   const paths = mendPaths(root)
-  if (!existsSync(paths.mcpDir)) {
+  const included = includeFiles
+    ? new Set(includeFiles.map((file) => file.split(path.sep).join(path.posix.sep)))
+    : null
+  if (!existsSync(mcpDir)) {
     return {
       root: paths.root,
-      dir: path.relative(paths.root, paths.mcpDir),
+      dir: path.relative(paths.root, mcpDir),
       files: [],
       servers: {},
       warnings: [],
@@ -77,11 +84,17 @@ export async function readMendMcpConfig(root?: string): Promise<MendMcpReadResul
   }
 
   const matches = (await Glob.scan("**/*.{json,jsonc}", {
-    cwd: paths.mcpDir,
+    cwd: mcpDir,
     absolute: true,
     dot: true,
     symlink: true,
-  })).sort()
+  }))
+    .filter((file) => {
+      if (!included) return true
+      const rel = path.relative(paths.root, file).split(path.sep).join(path.posix.sep)
+      return included.has(rel)
+    })
+    .sort()
   const servers: Record<string, MendMcpServer> = {}
   const warnings: string[] = []
   const failures: string[] = []
@@ -102,13 +115,18 @@ export async function readMendMcpConfig(root?: string): Promise<MendMcpReadResul
 
   return {
     root: paths.root,
-    dir: path.relative(paths.root, paths.mcpDir),
+    dir: path.relative(paths.root, mcpDir),
     files: matches.map((file) => path.relative(paths.root, file)),
     servers,
     warnings,
     failures,
     secretsIncluded: false,
   }
+}
+
+export async function readMendMcpConfig(root?: string): Promise<MendMcpReadResult> {
+  const paths = mendPaths(root)
+  return readMendMcpConfigFromDir(paths.root, paths.mcpDir)
 }
 
 export async function writeMendMcpServer(name: string, server: MendMcpServer, root?: string) {

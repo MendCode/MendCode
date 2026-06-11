@@ -2,11 +2,13 @@ import { spawnSync } from "child_process"
 import { existsSync, readFileSync, readdirSync, statSync } from "fs"
 import { mkdir, writeFile } from "fs/promises"
 import path from "path"
+import { mergeDeep } from "remeda"
 import { Global } from "@mendcode/core/global"
 import { generatedInternalAgentModelConfig, modelRoleProjection, modelsConfigToYaml, readGlobalModelsConfig, resolveModelRoles } from "./models"
 import { readMendMcpConfig } from "./mcp"
 import { mendPaths } from "./paths"
 import { defaultTuiProfile } from "../profile"
+import { activeMendPackageProjection } from "../runtime/packages"
 
 const BASELINE_OPENCODE_COMMIT = "aa3c99a3c0a609ea4dd485355627e3161251584a"
 const OPENCODE_WATCH_REMOTE = "https://mendcode.ai"
@@ -28,6 +30,8 @@ export const defaultMendConfig = {
     scopes: ["global", "project"],
     maxPromptTokens: 10_000,
     maxEntries: 50,
+    projectMaxEntries: 3,
+    globalCompactionMaxEntries: 50,
     extractorRole: "memoryExtractor",
     consolidatorRole: "none",
     requireApprovalForGenerated: true,
@@ -35,6 +39,7 @@ export const defaultMendConfig = {
   package: {
     kind: "bundle",
     channel: "local",
+    version: "0.1.0",
   },
   tui: { profile: "default", rollbackOnError: true },
   worktree: { mode: "off" },
@@ -264,10 +269,12 @@ export function packageMetadata(root?: string) {
       : typeof pkg.description === "string"
         ? pkg.description
         : null,
+    version: typeof configured.version === "string" && configured.version.trim() ? configured.version : "0.1.0",
     kind: typeof configured.kind === "string" && configured.kind.trim() ? configured.kind : "bundle",
     channel: typeof configured.channel === "string" && configured.channel.trim() ? configured.channel : "local",
     source: configured.source && typeof configured.source === "object" ? configured.source : {},
     compatibility: configured.compatibility && typeof configured.compatibility === "object" ? configured.compatibility : {},
+    selection: configured.selection && typeof configured.selection === "object" ? configured.selection : {},
   }
 }
 
@@ -275,12 +282,14 @@ export async function packageMetadataSet(input: {
   id?: string | null
   title?: string | null
   description?: string | null
+  version?: string | null
   kind?: string | null
   channel?: string | null
   sourceType?: string | null
   sourceURL?: string | null
   compatMendcode?: string | null
   compatRuntimePack?: string | null
+  selection?: Record<string, unknown> | null
 }, root?: string) {
   const paths = mendPaths(root)
   const cfg = readMendConfig(paths.root)
@@ -288,8 +297,10 @@ export async function packageMetadataSet(input: {
   if (input.id !== undefined) next.id = input.id || undefined
   if (input.title !== undefined) next.title = input.title || undefined
   if (input.description !== undefined) next.description = input.description || undefined
+  if (input.version !== undefined) next.version = input.version || undefined
   if (input.kind !== undefined) next.kind = input.kind || undefined
   if (input.channel !== undefined) next.channel = input.channel || undefined
+  if (input.selection !== undefined) next.selection = input.selection || undefined
 
   const currentSource = next.source && typeof next.source === "object" ? next.source : {}
   if (input.sourceType !== undefined || input.sourceURL !== undefined) {
@@ -377,20 +388,28 @@ function upstreamState(root?: string) {
 
 async function generatedConfigFor(root?: string) {
   const profile = activeProfile(root)
-  const [resolved, mcp] = await Promise.all([
+  const [resolved, mcp, packages] = await Promise.all([
     resolveModelRoles(root, profile.id),
     readMendMcpConfig(root),
+    activeMendPackageProjection(root),
   ])
   if (mcp.failures.length) throw new Error(`Invalid .mendcode/mcp config:\n${mcp.failures.join("\n")}`)
-  const command = Object.fromEntries(Object.entries(commands).map(([name, info]) => [name, { description: info.description, agent: profile.agent, template: info.template }]))
+  const command = {
+    ...packages.command,
+    ...Object.fromEntries(Object.entries(commands).map(([name, info]) => [name, { description: info.description, agent: profile.agent, template: info.template }])),
+  }
   const config: Record<string, any> = { "$schema": "https://mendcode.ai/config.json", default_agent: profile.agent, command }
   if (resolved.defaultModel) config.model = resolved.defaultModel
   if (resolved.smallModel) config.small_model = resolved.smallModel
   const subagentModel = configuredRuntimeModel((resolved.roles as Record<string, any>).subagent)
   if (subagentModel) config.subagent_model = subagentModel
   const agent = generatedInternalAgentModelConfig(resolved.roles as any)
-  if (Object.keys(agent).length) config.agent = agent
-  if (Object.keys(mcp.servers).length) config.mcp = mcp.servers
+  const mergedAgent = mergeDeep(packages.agent, agent) as Record<string, any>
+  if (Object.keys(mergedAgent).length) config.agent = mergedAgent
+  const mergedMcp = mergeDeep(packages.mcp, mcp.servers) as Record<string, any>
+  if (Object.keys(mergedMcp).length) config.mcp = mergedMcp
+  if (packages.plugin.length) config.plugin = packages.plugin
+  if (packages.skills.paths.length) config.skills = { paths: packages.skills.paths }
   return { config, profile, resolved }
 }
 

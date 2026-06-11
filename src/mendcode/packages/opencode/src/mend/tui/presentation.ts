@@ -227,6 +227,11 @@ export function rawReasoningDisplay(text: string, input?: { fallbackTitle?: stri
   }
 }
 
+export function unavailableReasoningLabel(input: { hasReadableContent: boolean; encrypted: boolean }) {
+  if (input.hasReadableContent) return null
+  return "reasoning unavailable"
+}
+
 export function activityMessagesForPhase(profile: MendTuiProfile, phase: MendActivityPhase) {
   const messages = profile.presentation.activity.messages[phase]
   if (messages?.length) return [messages[0]]

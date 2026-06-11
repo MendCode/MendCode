@@ -106,8 +106,6 @@ function timeoutStreamUnless<A, E, R>(
     },
   )
 }
-const reportedSessionMemory = new Set<string>()
-
 function memoryExtractorAgent(): Agent.Info {
   return {
     name: "memoryExtractor",
@@ -326,6 +324,7 @@ type PendingMemoryExtraction = {
     output: {
       enabled: boolean
       generate: boolean
+      extractorRole?: string
       queued: boolean
       saved: unknown[]
       proposals: unknown[]
@@ -847,7 +846,7 @@ export const layer: Layer.Layer<
               usage: value.usage,
               metadata: value.providerMetadata,
             })
-            const memoryRoot = ctx.assistantMessage.path.cwd || ctx.assistantMessage.path.root
+            const memoryRoot = ctx.assistantMessage.path.root || ctx.assistantMessage.path.cwd
             const persistedUserText = ctx.assistantMessage.parentID
               ? messagePartsText(MessageV2.parts(ctx.assistantMessage.parentID))
               : ""
@@ -859,12 +858,10 @@ export const layer: Layer.Layer<
             const memoryMetadata = yield* Effect.promise(async () => {
               if (ctx.assistantMessage.summary) return undefined
               const config = await readMemoryConfig(memoryRoot)
-              const memorySessionKey = `${ctx.sessionID}:${memoryRoot}`
-              const shouldReportInput = config.enabled && config.use && !reportedSessionMemory.has(memorySessionKey)
+              const shouldReportInput = config.enabled && config.use
               const used = shouldReportInput
                 ? await mendMemoryContext(ctx.model, memoryRoot, ctx.memoryQuery)
                 : { enabled: config.enabled, use: config.use, entries: [], lines: [] }
-              if (shouldReportInput) reportedSessionMemory.add(memorySessionKey)
               return {
                 input: {
                   enabled: used.enabled,
@@ -881,6 +878,7 @@ export const layer: Layer.Layer<
                 output: {
                   enabled: config.enabled,
                   generate: config.generate,
+                  extractorRole: config.extractorRole,
                   queued: false,
                   saved: [],
                   proposals: [],
@@ -903,11 +901,23 @@ export const layer: Layer.Layer<
             ctx.assistantMessage.cost += usage.cost
             ctx.assistantMessage.tokens = usage.tokens
             ctx.assistantMessage.liveUsage = undefined
+            const shouldQueueMemory = Boolean(
+              memoryMetadata?.output?.enabled &&
+              memoryMetadata.output.generate &&
+              memoryMetadata.output.extractorRole !== "none" &&
+              memoryTurnText.trim(),
+            )
+            const queuedMemoryMetadata = memoryMetadata
+              ? {
+                  ...memoryMetadata,
+                  output: { ...memoryMetadata.output, queued: shouldQueueMemory },
+                }
+              : undefined
             const finishPart = yield* session.updatePart({
               id: PartID.ascending(),
               reason: value.finishReason,
               snapshot: completedSnapshot,
-              metadata: memoryMetadata ? { mendMemory: memoryMetadata } : undefined,
+              metadata: queuedMemoryMetadata ? { mendMemory: queuedMemoryMetadata } : undefined,
               messageID: ctx.assistantMessage.id,
               sessionID: ctx.assistantMessage.sessionID,
               type: "step-finish",
@@ -929,10 +939,10 @@ export const layer: Layer.Layer<
               }
               ctx.snapshot = undefined
             }
-            if (memoryMetadata?.output?.enabled && memoryMetadata.output.generate && memoryTurnText.trim()) {
+            if (shouldQueueMemory && queuedMemoryMetadata) {
               const messagePath = ctx.assistantMessage.path
               ctx.pendingMemoryExtraction = {
-                memoryMetadata,
+                memoryMetadata: queuedMemoryMetadata,
                 finishPart,
                 memoryRoot,
                 memoryTurnText,

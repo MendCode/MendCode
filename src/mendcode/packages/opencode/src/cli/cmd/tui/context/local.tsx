@@ -62,6 +62,19 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         theme.error,
         theme.info,
       ])
+      createEffect(() => {
+        const selected = agentStore.current
+        if (!selected) return
+        if (agents().some((x) => x.name === selected)) return
+        const fallback = agents().at(0)
+        if (!fallback) return
+        setAgentStore("current", fallback.name)
+        toast.show({
+          variant: "info",
+          message: `Mode ${selected} is no longer available; switched to ${fallback.name}.`,
+          duration: 5000,
+        })
+      })
       return {
         list() {
           return agents()
