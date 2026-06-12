@@ -64,8 +64,8 @@ const controlPlaneRoutes: Record<string, (args: string[]) => string[]> = {
   },
   worktree: (args) => {
     const sub = args[0] || "status"
-    if (["status", "plan", "doctor"].includes(sub)) return ["worktree", ...args]
-    throw new Error("Usage: mend worktree <status|plan|doctor>")
+    if (["status", "plan", "create", "open", "adopt", "remove", "reset", "doctor"].includes(sub)) return ["worktree", ...args]
+    throw new Error("Usage: mend worktree <status|plan|create|open|adopt|remove|reset|doctor>")
   },
 }
 
@@ -108,6 +108,12 @@ Project controls:
   mend mflow activate --room <room> --accept-public-relay-limits
   mend mflow deactivate        disable mflow without deleting local config
   mend mflow remove            remove local mflow config and scaffold files
+  mend tsm status|plan|doctor  inspect optional TSM integration
+  mend tsm setup|activate|deactivate|remove
+                                manage MendCode TSM scaffold without touching external sessions
+  mend worktree status|plan    inspect worktree registry and dry-run create plan
+  mend worktree create|open|adopt|remove|reset
+                                preview-first worktree management; destructive actions are gated
   mend packages status|list    inspect installed/active MendCode packages
   mend packages create --id <id> --title <name> [--include skills,modes,plugins]
                                 snapshot selected local skills/modes/widgets/config into a package

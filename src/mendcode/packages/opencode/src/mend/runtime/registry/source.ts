@@ -15,7 +15,7 @@ function isLikelyGitSource(type: RuntimeRegistryEntry["type"]) {
 }
 
 function cloneEnv(entry: RuntimeRegistryEntry) {
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" }
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" }
   if (entry.type === "private-git" && entry.privateGit?.credentialMode === "env-token" && entry.privateGit.tokenEnv) {
     const token = process.env[entry.privateGit.tokenEnv]
     if (!token) throw new Error(`Private registry source ${entry.id} requires environment variable ${entry.privateGit.tokenEnv}; no credentials are stored in .mendcode/registry.json`)
@@ -28,6 +28,11 @@ function cloneEnv(entry: RuntimeRegistryEntry) {
 
 function cloneArgs(url: string, stage: string) {
   return ["clone", "--depth", "1", url, stage]
+}
+
+function cloneTimeoutMs() {
+  const configured = Number(process.env.MENDCODE_REGISTRY_FETCH_TIMEOUT_MS)
+  return Number.isFinite(configured) && configured > 0 ? configured : 10000
 }
 
 export function registrySourceSmokePlan(entry: RuntimeRegistryEntry) {
@@ -79,7 +84,10 @@ export async function smokeRegistrySource(entry: RuntimeRegistryEntry, root: str
     cwd: root,
     encoding: "utf8",
     env: cloneEnv(entry),
+    timeout: cloneTimeoutMs(),
   })
+  if (result.error) throw result.error
+  if (result.signal === "SIGTERM") throw new Error(`Registry smoke timed out for ${entry.id} after ${cloneTimeoutMs()}ms`)
   if (result.status !== 0) {
     throw new Error(`Registry smoke failed for ${entry.id}: ${String(result.stderr || result.stdout || "").trim()}`)
   }
@@ -133,7 +141,14 @@ export async function fetchRegistrySource(entry: RuntimeRegistryEntry, root: str
 
     await rm(stage, { recursive: true, force: true })
     await mkdir(path.dirname(stage), { recursive: true })
-    const result = spawnSync("git", cloneArgs(url, stage), { cwd: root, encoding: "utf8", env: cloneEnv(entry) })
+    const result = spawnSync("git", cloneArgs(url, stage), {
+      cwd: root,
+      encoding: "utf8",
+      env: cloneEnv(entry),
+      timeout: cloneTimeoutMs(),
+    })
+    if (result.error) throw result.error
+    if (result.signal === "SIGTERM") throw new Error(`Registry fetch timed out for ${entry.id} after ${cloneTimeoutMs()}ms`)
     if (result.status !== 0) {
       throw new Error(`Failed to fetch registry source ${entry.id}: ${String(result.stderr || result.stdout || "").trim()}`)
     }

@@ -9,7 +9,8 @@ import { loadMendTuiProfile, validateMendTuiProfile } from "../profile"
 import { modelPresets, modelRoleProjection, readModelsConfig, refreshGeneratedRuntimeModelConfig, resolveModelRoles, validateProviderModelID, writeGlobalModelsConfig } from "../config/models"
 import { mendMcpStatus, writeMendMcpServer } from "../config/mcp"
 import { baselineUpstream, contextRefresh, contextShow, contextStatus, focusList, focusShow, focusStatus, focusUse, initProject, packageMetadata, packageMetadataSet, readMendConfig, syncGlobalPrimaryAgentModels, syncProject } from "../config/project"
-import { mflowDoctor, mflowPlan, mflowStatus, tsmDoctor, tsmPlan, tsmStatus, worktreeDoctor, worktreePlan, worktreeStatus } from "../config/worktree"
+import { mflowDoctor, mflowPlan, mflowStatus, worktreeAdopt, worktreeCreate, worktreeDoctor, worktreeOpen, worktreePlan, worktreeRemove, worktreeReset, worktreeStatus } from "../config/worktree"
+import { activateTsm, deactivateTsm, removeTsm, setupTsm, tsmDoctor, tsmPlan, tsmStatus, type TsmState } from "../config/tsm"
 import { activateMflow, deactivateMflow, mflowControlStatus, MFLOW_PUBLIC_RELAY, MFLOW_PUBLIC_RELAY_WARNING, removeMflowConfig, type MflowRelayMode } from "../config/mflow"
 import { applyRuntimePack, deleteLocalRuntimePack, formatRuntimePackPlan, rollbackRuntimePack, runtimePackArtifactCandidates, runtimePackPlan } from "../runtime/pack"
 import { budgetDoctor, budgetStatus } from "../runtime/budget"
@@ -419,17 +420,51 @@ async function mflow(args: string[]) {
 }
 
 async function tsm(args: string[]) {
+  const root = shellProjectRoot()
   const sub = args[0] || "status"
-  const result = sub === "status" ? await tsmStatus() : sub === "plan" ? await tsmPlan() : sub === "doctor" ? await tsmDoctor() : null
-  if (!result) throw new Error("Usage: mend-control-plane tsm <status|plan|doctor>")
+  const muxBackend = optionValue(args, "--mux") as TsmState["defaultMuxBackend"] | null
+  const result = sub === "status"
+    ? await tsmStatus(root)
+    : sub === "plan" || sub === "install"
+      ? await tsmPlan(root)
+      : sub === "setup"
+        ? await setupTsm(root)
+        : sub === "activate"
+          ? await activateTsm(root, { muxBackend: muxBackend || undefined })
+          : sub === "deactivate"
+            ? await deactivateTsm(root)
+            : sub === "remove"
+              ? await removeTsm(root)
+              : sub === "doctor"
+                ? await tsmDoctor(root)
+                : null
+  if (!result) throw new Error("Usage: mend-control-plane tsm <status|plan|setup|install|activate|deactivate|remove|doctor>")
   console.log(JSON.stringify(result, null, 2))
   if ("ok" in result && result.ok === false) process.exitCode = 1
 }
 
 async function worktree(args: string[]) {
+  const root = shellProjectRoot()
   const sub = args[0] || "status"
-  const result = sub === "status" ? await worktreeStatus() : sub === "plan" ? await worktreePlan(args.slice(1)) : sub === "doctor" ? await worktreeDoctor() : null
-  if (!result) throw new Error("Usage: mend-control-plane worktree <status|plan|doctor>")
+  const rest = args.slice(1)
+  const result = sub === "status"
+    ? await worktreeStatus(root)
+    : sub === "plan"
+      ? await worktreePlan(rest, root)
+      : sub === "create"
+        ? await worktreeCreate(rest, root)
+        : sub === "open"
+          ? await worktreeOpen(rest, root)
+          : sub === "adopt"
+            ? await worktreeAdopt(rest, root)
+            : sub === "remove"
+              ? await worktreeRemove(rest, root)
+              : sub === "reset"
+                ? await worktreeReset(rest, root)
+                : sub === "doctor"
+                  ? await worktreeDoctor(root)
+                  : null
+  if (!result) throw new Error("Usage: mend-control-plane worktree <status|plan|create|open|adopt|remove|reset|doctor>")
   console.log(JSON.stringify(result, null, 2))
   if ("ok" in result && result.ok === false) process.exitCode = 1
 }

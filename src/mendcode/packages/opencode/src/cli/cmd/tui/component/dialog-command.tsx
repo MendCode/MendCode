@@ -252,6 +252,7 @@ const titleOverrides: Record<string, string> = {
   "mendcode.assets": "Project assets",
   "mendcode.slash.commands": "Commands",
   "mendcode.tsm.status": "TSM",
+  "mendcode.worktree.manager": "Worktrees",
   "mendcode.mflow.status": "Mflow",
   "mendcode.mflow.activate": "Mflow on",
   "mendcode.mflow.deactivate": "Mflow off",
@@ -286,6 +287,8 @@ const slashFallbacks: Record<string, Slash> = {
   "mendcode.registry.status": { name: "registry" },
   "mendcode.slash.commands": { name: "commands" },
   "plugins.list": { name: "plugins" },
+  "mendcode.tsm.status": { name: "tsm" },
+  "mendcode.worktree.manager": { name: "worktrees" },
   "mendcode.mflow.status": { name: "mflow" },
   "mendcode.mflow.activate": { name: "mflow-on" },
   "mendcode.mflow.deactivate": { name: "mflow-off" },
@@ -315,6 +318,7 @@ function commandCategory(option: CommandOption) {
     option.value.includes("registry") ||
     option.value.includes("slash.commands") ||
     option.value.includes("tsm") ||
+    option.value.includes("worktree") ||
     option.value.includes("mflow")
   ) {
     return "Tools"
@@ -379,11 +383,13 @@ function commandRank(option: CommandOption) {
     "provider.connect": 42,
     "mcp.list": 60,
     "mendcode.mflow.status": 61,
-    "mendcode.mflow.activate": 62,
-    "mendcode.mflow.deactivate": 63,
-    "mendcode.mflow.remove": 64,
-    "plugins.list": 65,
-    "prompt.skills": 66,
+    "mendcode.tsm.status": 62,
+    "mendcode.worktree.manager": 63,
+    "mendcode.mflow.activate": 64,
+    "mendcode.mflow.deactivate": 65,
+    "mendcode.mflow.remove": 66,
+    "plugins.list": 67,
+    "prompt.skills": 68,
     "theme.switch": 80,
     "help.show": 81,
     "app.exit": 99,

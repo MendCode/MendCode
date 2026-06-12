@@ -26,6 +26,15 @@ const PROVIDER_PRIORITY: Record<string, number> = {
   google: 4,
 }
 
+function providerErrorMessage(error: unknown) {
+  if (typeof error === "string") return error
+  if (typeof error === "object" && error !== null) {
+    if ("message" in error && typeof error.message === "string") return error.message
+    if ("error" in error && typeof error.error === "string") return error.error
+  }
+  return "Provider authorization failed."
+}
+
 export function createDialogProviderOptions() {
   const sync = useSync()
   const dialog = useDialog()
@@ -101,7 +110,7 @@ export function createDialogProviderOptions() {
               if (result.error) {
                 toast.show({
                   variant: "error",
-                  message: JSON.stringify(result.error),
+                  message: providerErrorMessage(result.error),
                 })
                 dialog.clear()
                 return

@@ -108,6 +108,7 @@ describe("runtime registry marketplace", () => {
 
     expect(result.catalog.source).toBe("synthetic")
     expect(result.catalog.matches).toBe(1)
+    expect(result.results[0]?.version).toBe("unversioned")
     expect(result.results[0]?.runtime?.focusDefault).toBe("gemini")
   })
 

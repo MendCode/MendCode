@@ -1,8 +1,11 @@
 import { existsSync } from "fs"
-import { copyFile, mkdir, readdir, readFile, rm, writeFile } from "fs/promises"
+import { copyFile, cp, mkdir, readdir, readFile, rm, writeFile } from "fs/promises"
+import { homedir } from "os"
 import path from "path"
 import { fileURLToPath } from "url"
 import { Glob } from "@mendcode/core/util/glob"
+import { Flag } from "@mendcode/core/flag/flag"
+import { Global } from "@mendcode/core/global"
 import { mendPaths } from "../config/paths"
 import type { MendPackageManifest } from "../sdk/package"
 import { packageMetadata, packageMetadataSet } from "../config/project"
@@ -74,6 +77,7 @@ export type RuntimePackArtifactCandidates = {
   agents: string[]
   modes: string[]
   skills: string[]
+  globalSkills: string[]
   plugins: string[]
   prompts: string[]
   mcp: string[]
@@ -129,10 +133,96 @@ async function listPackFiles(root: string, pattern: string) {
     .sort()
 }
 
+async function listGlobalSkillFiles() {
+  if (Flag.OPENCODE_DISABLE_EXTERNAL_SKILLS) return []
+  const home = process.env.OPENCODE_TEST_HOME || homedir()
+  const roots = [
+    ...(Flag.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS ? [] : [path.join(home, ".claude")]),
+    path.join(home, ".agents"),
+  ]
+  const matches = await Promise.all(roots.map(async (root) => {
+    if (!existsSync(root)) return []
+    return Glob.scan("skills/**/SKILL.md", {
+      cwd: root,
+      absolute: true,
+      dot: true,
+      symlink: true,
+      include: "file",
+    }).catch(() => [])
+  }))
+  return matches.flat().sort()
+}
+
+function posixPath(file: string) {
+  return file.split(path.sep).join(path.posix.sep)
+}
+
+export function globalRuntimePackAuthorRoot() {
+  return path.join(Global.Path.config, "packages", "authoring", "local")
+}
+
+async function copyDirIfExists(source: string, target: string) {
+  if (!existsSync(source)) return
+  await mkdir(path.dirname(target), { recursive: true })
+  await cp(source, target, { recursive: true })
+}
+
+async function copyFileIfExists(source: string, target: string) {
+  if (!existsSync(source)) return
+  await mkdir(path.dirname(target), { recursive: true })
+  await copyFile(source, target)
+}
+
+function globalSkillSnapshotName(skillFile: string) {
+  const sourceRoot = skillFile.includes(`${path.sep}.claude${path.sep}`) ? "claude" : "agents"
+  return `${sourceRoot}-${path.basename(path.dirname(skillFile)).replace(/[^a-zA-Z0-9._-]/g, "_")}`
+}
+
+export async function prepareGlobalRuntimePackAuthorRoot() {
+  const root = globalRuntimePackAuthorRoot()
+  const targetMend = path.join(root, ".mendcode")
+  const previousConfig = await readJsonIfExists(path.join(targetMend, "mendcode.json")) as Record<string, any>
+  const previousPackage = previousConfig.package && typeof previousConfig.package === "object" ? previousConfig.package : null
+  await rm(targetMend, { recursive: true, force: true })
+  await mkdir(targetMend, { recursive: true })
+
+  await Promise.all([
+    copyFileIfExists(path.join(Global.Path.config, "models.yaml"), path.join(targetMend, "models.yaml")),
+    copyDirIfExists(path.join(Global.Path.config, "commands"), path.join(targetMend, "commands")),
+    copyDirIfExists(path.join(Global.Path.config, "agents"), path.join(targetMend, "agents")),
+    copyDirIfExists(path.join(Global.Path.config, "modes"), path.join(targetMend, "modes")),
+    copyDirIfExists(path.join(Global.Path.config, "skills"), path.join(targetMend, "skills")),
+    copyDirIfExists(path.join(Global.Path.config, "plugins"), path.join(targetMend, "plugins")),
+    copyDirIfExists(path.join(Global.Path.config, "prompts"), path.join(targetMend, "prompts")),
+    copyDirIfExists(path.join(Global.Path.config, "mcp"), path.join(targetMend, "mcp")),
+    copyDirIfExists(path.join(Global.Path.config, "widgets"), path.join(targetMend, "widgets")),
+    copyDirIfExists(path.join(Global.Path.config, "components"), path.join(targetMend, "components")),
+    copyDirIfExists(path.join(Global.Path.config, "scripts"), path.join(targetMend, "scripts")),
+    copyDirIfExists(path.join(Global.Path.config, "tui"), path.join(targetMend, "tui")),
+  ])
+  if (existsSync(path.join(Global.Path.config, "mendcode.json"))) {
+    await copyFileIfExists(path.join(Global.Path.config, "mendcode.json"), path.join(targetMend, "mendcode.json"))
+  } else {
+    await copyFileIfExists(path.join(Global.Path.config, "mendcode.jsonc"), path.join(targetMend, "mendcode.json"))
+  }
+  if (previousPackage) {
+    const nextConfig = await readJsonIfExists(path.join(targetMend, "mendcode.json")) as Record<string, any>
+    nextConfig.version = typeof nextConfig.version === "number" ? nextConfig.version : 0
+    nextConfig.package = previousPackage
+    await writeFile(path.join(targetMend, "mendcode.json"), `${JSON.stringify(nextConfig, null, 2)}\n`)
+  }
+
+  for (const skillFile of await listGlobalSkillFiles()) {
+    await copyDirIfExists(path.dirname(skillFile), path.join(targetMend, "skills", globalSkillSnapshotName(skillFile)))
+  }
+
+  return root
+}
+
 function selectedFiles(all: string[], selected: string[] | undefined) {
   if (!selected) return all
   const allowed = new Set(selected.map((file) => file.split(path.sep).join(path.posix.sep)))
-  return all.filter((file) => allowed.has(file))
+  return all.filter((file) => allowed.has(posixPath(file)))
 }
 
 function packageSelection(root: string): RuntimePackSelection {
@@ -148,6 +238,7 @@ export async function runtimePackArtifactCandidates(root?: string): Promise<Runt
     agents: await listPackFiles(paths.root, "{agent,agents}/**/*.md"),
     modes: await listPackFiles(paths.root, "{mode,modes}/**/*.md"),
     skills: await listPackFiles(paths.root, "{skill,skills}/**/SKILL.md"),
+    globalSkills: await listGlobalSkillFiles(),
     plugins: await listPackFiles(paths.root, "{plugin,plugins}/**/*.{ts,js}"),
     prompts: await listPackFiles(paths.root, "{prompt,prompts}/**/*.md"),
     mcp: mcp.files.map((file) => file.split(path.sep).join(path.posix.sep)),

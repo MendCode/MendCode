@@ -49,10 +49,10 @@ function synthesizeManifestFromPackageManifest(
   manifest: MendPackageManifest,
   entry: RuntimeRegistryEntry,
   digest?: { algorithm: "sha256"; value: string },
-) {
+): RegistryMarketplacePackManifest {
   return {
     id: manifest.id,
-    version: manifest.packageVersion || entry.version || "0",
+    version: manifest.packageVersion || entry.version || "unversioned",
     ...(manifest.title ? { title: manifest.title } : {}),
     ...(manifest.description ? { description: manifest.description } : {}),
     ...(digest ? { digest } : {}),
@@ -171,14 +171,13 @@ async function readMarketplaceIndexFile(stageDir: string, entry: RuntimeRegistry
   return null
 }
 
-function synthesizeManifestFromPack(pack: RuntimePack, entry: RuntimeRegistryEntry, digest?: { algorithm: "sha256"; value: string }) {
+function synthesizeManifestFromPack(pack: RuntimePack, entry: RuntimeRegistryEntry, digest?: { algorithm: "sha256"; value: string }): RegistryMarketplacePackManifest {
   return {
     id: entry.id,
-    version: String(pack.version),
+    version: entry.version || "unversioned",
     title: entry.id,
     description: entry.note,
     tags: [entry.type, entry.trust],
-    ...(entry.version ? { version: entry.version } : {}),
     ...(digest ? { digest } : {}),
     ...(entry.signature ? { signature: entry.signature } : {}),
     ...(entry.channel ? { channel: entry.channel } : entry.team ? { channel: entry.team.channel } : {}),
@@ -258,7 +257,7 @@ export async function readMarketplaceCatalog(args: {
       marketplace: { name: "staged-opencode-settings", source: "synthetic" },
       packs: [{
         id: entry.id,
-        version: entry.version || "0",
+        version: entry.version || "unversioned",
         title: entry.id,
         description: "Synthetic marketplace view generated from staged OpenCode settings.",
         tags: ["opencode-settings"],
