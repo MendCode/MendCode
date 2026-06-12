@@ -1,8 +1,11 @@
+import { spawnSync } from "child_process"
 import { readFile, writeFile, mkdir } from "fs/promises"
 import { existsSync } from "fs"
 import path from "path"
 import { mendPaths } from "./paths"
 import { activeFocus, focusProfiles } from "./project"
+import { buildWorktreePreview, createWorktreeRecord, gitWorktreeList, planNativeWorktreeCreate, planNativeWorktreeRemove, planNativeWorktreeReset, readWorktreeState, reconcileWorktreeState, renderWorktreePreview, resolveWorktreeContext, saveWorktreeRecord } from "../worktree"
+export { activateTsm, deactivateTsm, removeTsm, setupTsm, tsmDoctor, tsmPlan, tsmStatus } from "./tsm"
 
 export const MFLOW_DEFAULT_SIGNALING = "wss://mflow-signal.obed0101.deno.net"
 export const MFLOW_REPOSITORY = "https://github.com/Obed0101/mflow"
@@ -53,21 +56,56 @@ function optionValue(args: string[], name: string) {
 }
 
 export async function worktreeStatus(root?: string) {
-  const paths = mendPaths(root)
+  const context = resolveWorktreeContext(root || process.cwd())
+  const paths = mendPaths(context.repoRoot)
   const flows = await readJson(path.join(paths.mendDir, "worktree", "flows.json"), { version: 0, flows: [] })
   const locks = await readJson(path.join(paths.mendDir, "worktree", "locks.json"), {})
-  return { policy: await readWorktreePolicy(paths.root), flows: flows.flows || [], locks }
+  const state = await readWorktreeState(paths.root)
+  const git = context.git.ok ? context.git : gitWorktreeList(paths.root)
+  const reconciliation = reconcileWorktreeState(state, git.entries)
+  return {
+    workspace: {
+      currentPath: context.currentPath,
+      currentBranch: context.currentBranch,
+      repoRoot: context.repoRoot,
+      isLinkedWorktree: context.isLinkedWorktree,
+      stateRoot: paths.root,
+    },
+    policy: await readWorktreePolicy(paths.root),
+    registry: {
+      path: path.relative(paths.root, path.join(paths.mendDir, "worktree", "state.json")),
+      branchPrefix: state.branchPrefix,
+      defaultExecutor: state.defaultExecutor,
+      records: reconciliation.records,
+      external: reconciliation.external,
+      stale: reconciliation.stale,
+      drifted: reconciliation.drifted,
+    },
+    git,
+    flows: flows.flows || [],
+    locks,
+  }
 }
 
 export async function worktreePlan(args: string[], root?: string) {
-  const paths = mendPaths(root)
+  const context = resolveWorktreeContext(root || process.cwd())
+  const paths = mendPaths(context.repoRoot)
   const name = args[0]
   if (!name) throw new Error("Usage: mend worktree plan <name> [--branch <branch>] [--focus <focus>]")
-  const branch = optionValue(args, "--branch") || `mend/${name}`
+  const managerState = await readWorktreeState(paths.root)
+  const branch = optionValue(args, "--branch") || `${managerState.branchPrefix}${name}`
   const focus = optionValue(args, "--focus") || activeFocus(paths.root)
   if (!focusProfiles[focus]) throw new Error(`Unknown focus profile: ${focus}`)
+  const preview = planNativeWorktreeCreate({
+    repoRoot: paths.root,
+    name,
+    branchPrefix: managerState.branchPrefix,
+    branch,
+    baseRef: optionValue(args, "--base") || null,
+    directory: optionValue(args, "--path") || undefined,
+    root: paths.root,
+  }).preview
   const flowsPath = path.join(paths.mendDir, "worktree", "flows.json")
-  const state = await readJson(flowsPath, { version: 0, flows: [] })
   const plan = {
     id: name,
     branch,
@@ -76,15 +114,134 @@ export async function worktreePlan(args: string[], root?: string) {
     status: "planned",
     createdAt: new Date().toISOString(),
     executesGit: false,
-    note: "Phase 2 command architecture only; this plan does not create a git worktree.",
+    preview,
+    previewText: renderWorktreePreview(preview),
+    note: "Preview-only; this plan does not create a git worktree.",
   }
-  state.flows = [...(state.flows || []).filter((flow: any) => flow.id !== name), plan]
-  await writeJson(flowsPath, state)
+  const flowState = await readJson(flowsPath, { version: 0, flows: [] })
+  flowState.flows = [...(flowState.flows || []).filter((flow: any) => flow.id !== name), plan]
+  await writeJson(flowsPath, flowState)
   return plan
 }
 
+export async function worktreeCreate(args: string[], root?: string) {
+  const plan = await worktreePlan(args, root)
+  return {
+    ...plan,
+    command: "create",
+    executesGit: false,
+    requires: "live execution is intentionally gated behind a future explicit execute flag",
+  }
+}
+
+export async function worktreeOpen(args: string[], root?: string) {
+  const context = resolveWorktreeContext(root || process.cwd())
+  const paths = mendPaths(context.repoRoot)
+  const target = args[0]
+  if (!target) throw new Error("Usage: mend worktree open <id|branch|path>")
+  const state = await readWorktreeState(paths.root)
+  const records = Object.values(state.worktrees)
+  const record = records.find((item) => item.id === target || item.branch === target || item.path === target)
+  if (record) {
+    return {
+      action: "open",
+      target,
+      ownership: record.ownership,
+      executor: record.executor,
+      path: record.path,
+      branch: record.branch,
+      executesTsm: false,
+      executesGit: false,
+    }
+  }
+  const git = gitWorktreeList(paths.root)
+  const external = git.entries.find((item) => item.path === target || item.branch === target)
+  if (!external) throw new Error(`Unknown worktree target: ${target}`)
+  return {
+    action: "open",
+    target,
+    ownership: "external",
+    path: external.path,
+    branch: external.branch,
+    executesTsm: false,
+    executesGit: false,
+    note: "External worktree is visible but not owned; adopt before destructive actions.",
+  }
+}
+
+export async function worktreeAdopt(args: string[], root?: string) {
+  const context = resolveWorktreeContext(root || process.cwd())
+  const paths = mendPaths(context.repoRoot)
+  const target = args[0]
+  if (!target) throw new Error("Usage: mend worktree adopt <path|branch>")
+  const git = gitWorktreeList(paths.root)
+  const external = git.entries.find((item) => item.path === target || item.branch === target)
+  if (!external) throw new Error(`Cannot adopt unknown git worktree: ${target}`)
+  const record = createWorktreeRecord({
+    creator: "user-adopted",
+    ownership: "adopted",
+    repoRoot: paths.root,
+    path: external.path,
+    branch: external.branch,
+    baseRef: null,
+    executor: "native",
+    sessions: [],
+    packages: [],
+    mflowMode: "unknown",
+    creationPlan: { commands: [], writes: [".mendcode/worktree/state.json"], note: "explicit user adoption" },
+    cleanupPolicy: "manual-only",
+  })
+  const saved = await saveWorktreeRecord(record, paths.root)
+  return { action: "adopt", record: saved, executesGit: false, executesTsm: false }
+}
+
+export async function worktreeRemove(args: string[], root?: string) {
+  return destructivePreview("remove", args, root)
+}
+
+export async function worktreeReset(args: string[], root?: string) {
+  return destructivePreview("reset", args, root)
+}
+
+async function destructivePreview(action: "remove" | "reset", args: string[], root?: string) {
+  const context = resolveWorktreeContext(root || process.cwd())
+  const paths = mendPaths(context.repoRoot)
+  const target = args[0]
+  if (!target) throw new Error(`Usage: mend worktree ${action} <id|branch|path>`)
+  const state = await readWorktreeState(paths.root)
+  const records = Object.values(state.worktrees)
+  const record = records.find((item) => item.id === target || item.branch === target || item.path === target)
+  if (!record) {
+    const git = gitWorktreeList(paths.root)
+    const external = git.entries.find((item) => item.path === target || item.branch === target)
+    if (!external) throw new Error(`Unknown worktree target: ${target}`)
+    const preview = buildWorktreePreview({
+      action,
+      root: paths.root,
+      record: createWorktreeRecord({
+        creator: "user-adopted",
+        ownership: "external",
+        repoRoot: paths.root,
+        path: external.path,
+        branch: external.branch,
+        baseRef: null,
+        executor: "native",
+        sessions: [],
+        packages: [],
+        mflowMode: "unknown",
+        creationPlan: { commands: [], writes: [] },
+        cleanupPolicy: "manual-only",
+      }),
+    })
+    return { action, mode: "preview", executesGit: false, preview, previewText: renderWorktreePreview(preview) }
+  }
+  const preview = action === "remove" ? planNativeWorktreeRemove(record, paths.root) : planNativeWorktreeReset(record, paths.root)
+  return { action, mode: "preview", executesGit: false, preview, previewText: renderWorktreePreview(preview) }
+}
+
 export async function worktreeDoctor(root?: string) {
-  const paths = mendPaths(root)
+  const context = resolveWorktreeContext(root || process.cwd())
+  const paths = mendPaths(context.repoRoot)
   const policy = await readWorktreePolicy(paths.root)
   const flows = await readJson(path.join(paths.mendDir, "worktree", "flows.json"), { version: 0, flows: [] })
   const locks = await readJson(path.join(paths.mendDir, "worktree", "locks.json"), {})
@@ -104,6 +261,13 @@ export async function worktreeDoctor(root?: string) {
     ok: failures.length === 0,
     executesGit: false,
     approvedForRealWorktreeAdd: false,
+    workspace: {
+      currentPath: context.currentPath,
+      currentBranch: context.currentBranch,
+      repoRoot: context.repoRoot,
+      isLinkedWorktree: context.isLinkedWorktree,
+      stateRoot: paths.root,
+    },
     policy,
     rootGit,
     engineGit,
@@ -152,32 +316,4 @@ export async function mflowDoctor(root?: string) {
   if (!existsSync(paths.mflowPlan)) warnings.push("mflow plan has not been generated yet; run `mend mflow plan` before implementation")
   if (MFLOW_NPM_PACKAGE !== "mflow-cli") failures.push(`selected package must remain mflow-cli, got ${MFLOW_NPM_PACKAGE}`)
   return { ok: failures.length === 0, package: { reserved: MFLOW_RESERVED_NPM_PACKAGE, selected: MFLOW_NPM_PACKAGE, version: MFLOW_NPM_VERSION, published: true }, repository: MFLOW_REPOSITORY, signaling: MFLOW_DEFAULT_SIGNALING, policy, plan: existsSync(paths.mflowPlan) ? path.relative(paths.root, paths.mflowPlan) : null, failures, warnings }
-}
-
-export async function tsmStatus(root?: string) {
-  const paths = mendPaths(root)
-  const policy = await readWorktreePolicy(root)
-  const rootGit = existsSync(path.join(paths.root, ".git"))
-  const safety = { installsTsm: false, runsTsm: false, runsGitWorktreeAdd: false, liveSyncRequired: false, explicitApprovalRequiredForExecution: true }
-  const candidate = { repository: TSM_REPOSITORY, observedHead: TSM_OBSERVED_HEAD, capabilitiesObserved: ["persistent terminal sessions", "native terminal mux workspaces", "git worktree lifecycle via tsm wt", "session TUI/palette"] }
-  return { integration: "external-terminal-session-worktree-candidate", candidate, policy, rootGit, plan: existsSync(paths.tsmPlan) ? path.relative(paths.root, paths.tsmPlan) : null, safety }
-}
-
-export async function tsmPlan(root?: string) {
-  const paths = mendPaths(root)
-  const status = await tsmStatus(root)
-  const plan = { version: 0, status: "dry-run", generatedAt: new Date().toISOString(), candidate: status.candidate, objective: "Use TSM as a possible session/workspace controller around MendCode worktree flows, not as live sync and not as a required runtime dependency.", phase: "inspect-and-plan-only", proposedSurfaces: { "mend tsm status": "read candidate/policy state", "mend tsm plan": "write this dry-run plan", "future mend worktree create --executor tsm": "blocked until explicit approval; would delegate worktree/session lifecycle after safety gate" }, executionBoundaries: { install: false, runTsmWtAdd: false, runGitWorktreeAdd: false, removeWorktrees: false, pruneSessions: false, touchMflow: false, touchDonorHotPaths: false }, requiredBeforeExecution: ["approval for real worktree creation", "branch/path policy", "dirty-tree guard", "cleanup/rollback plan", "lock ownership behavior", "TSM install provenance decision"], localPolicy: status.policy, rootGit: status.rootGit, safety: status.safety }
-  await writeJson(paths.tsmPlan, plan)
-  return { ...plan, path: path.relative(paths.root, paths.tsmPlan) }
-}
-
-export async function tsmDoctor(root?: string) {
-  const paths = mendPaths(root)
-  const status = await tsmStatus(root)
-  const failures: string[] = []
-  const warnings: string[] = []
-  if (!status.rootGit) failures.push("project root must be a git checkout before any worktree executor can be approved")
-  if (status.policy.liveSync) failures.push("TSM worktree execution must not start while liveSync=true")
-  if (!existsSync(paths.tsmPlan)) warnings.push("TSM plan has not been generated yet; run `mend tsm plan`")
-  return { ok: failures.length === 0, ...status, failures, warnings }
 }

@@ -571,20 +571,7 @@ export const layer = Layer.effect(
           return base === ".mendcode" || base === ".mendcode" || dir === Flag.OPENCODE_CONFIG_DIR
         }
 
-        for (const dir of directories) {
-          if (isProjectConfigDir(dir)) {
-            for (const file of ["mendcode.json", "mendcode.jsonc", "mendcode.json", "mendcode.jsonc"]) {
-              const source = path.join(dir, file)
-              log.debug(`loading config from ${source}`)
-              yield* merge(source, yield* loadFile(source))
-              result.agent ??= {}
-              result.mode ??= {}
-              result.plugin ??= []
-            }
-          }
-
-          yield* ensureGitignore(dir).pipe(Effect.orDie)
-
+        const installPluginDependency = Effect.fnUntraced(function* (dir: string) {
           const dep = yield* npmSvc
             .install(dir, {
               add: [
@@ -607,6 +594,29 @@ export const layer = Layer.effect(
               Effect.forkDetach,
             )
           deps.push(dep)
+        })
+
+        const hasPluginOriginInDir = (dir: string) =>
+          (result.plugin_origins ?? []).some((origin) => {
+            if (ConfigPlugin.pluginSpecifier(origin.spec).startsWith("file://")) return false
+            if (origin.source.startsWith("http://") || origin.source.startsWith("https://")) return false
+            if (origin.source === "OPENCODE_CONFIG_CONTENT") return dir === ctx.directory
+            return path.dirname(origin.source) === dir
+          })
+
+        for (const dir of directories) {
+          if (isProjectConfigDir(dir)) {
+            for (const file of ["mendcode.json", "mendcode.jsonc", "mendcode.json", "mendcode.jsonc"]) {
+              const source = path.join(dir, file)
+              log.debug(`loading config from ${source}`)
+              yield* merge(source, yield* loadFile(source))
+              result.agent ??= {}
+              result.mode ??= {}
+              result.plugin ??= []
+            }
+          }
+
+          yield* ensureGitignore(dir).pipe(Effect.orDie)
 
           result.command = mergeDeep(result.command ?? {}, yield* Effect.promise(() => ConfigCommand.load(dir)))
           result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.load(dir)))
@@ -615,6 +625,9 @@ export const layer = Layer.effect(
           // returns normalized Specs and we only need to attach origin metadata here.
           const list = yield* Effect.promise(() => ConfigPlugin.load(dir))
           yield* mergePluginOrigins(dir, list)
+          if (hasPluginOriginInDir(dir)) {
+            yield* installPluginDependency(dir)
+          }
         }
 
         if (Flag.OPENCODE_CONFIG_CONTENT) {

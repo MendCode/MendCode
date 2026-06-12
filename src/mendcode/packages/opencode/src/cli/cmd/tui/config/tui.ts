@@ -20,6 +20,7 @@ import { Filesystem } from "@/util/filesystem"
 import * as Log from "@mendcode/core/util/log"
 import { ConfigVariable } from "@/config/variable"
 import { Npm } from "@mendcode/core/npm"
+import path from "path"
 
 const log = Log.create({ service: "tui.config" })
 
@@ -189,9 +190,16 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
   }
   acc.result.keybinds = ConfigKeybinds.Keybinds.parse(keybinds)
 
+  const pluginDirs = unique(
+    (acc.result.plugin_origins ?? [])
+      .filter((origin) => !ConfigPlugin.pluginSpecifier(origin.spec).startsWith("file://"))
+      .map((origin) => path.dirname(origin.source))
+      .filter((dir) => dirs.includes(dir)),
+  )
+
   return {
     config: acc.result,
-    dirs: acc.result.plugin?.length ? dirs : [],
+    dirs: pluginDirs,
   }
 })
 

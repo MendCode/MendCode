@@ -122,10 +122,10 @@ async function fullKnowledge(root: string) {
       "- Runtime mflow coordination is enabled. File edit locks are enforced by MendCode hooks; do not call mflow manually unless the user asks.",
     )
   }
-  if (tsm.policy?.mode && tsm.policy.mode !== "off") {
+  if (tsm.enabled || tsm.lifecycle === "active" || tsm.lifecycle === "degraded" || (tsm.policy?.mode && tsm.policy.mode !== "off")) {
     integration.push(
       "TSM context:",
-      `- TSM is relevant as a terminal-session/worktree orchestration candidate with policy mode=${tsm.policy.mode}. Do not install or run TSM unless explicitly requested.`,
+      `- TSM lifecycle=${tsm.lifecycle}, enabled=${tsm.enabled}, worktreeCapable=${tsm.worktreeCapable}. Do not install, activate, run, remove, or delegate worktrees to TSM unless explicitly requested.`,
     )
   }
   if (policy.mode === "live-sync" && !mflow.enabled) {

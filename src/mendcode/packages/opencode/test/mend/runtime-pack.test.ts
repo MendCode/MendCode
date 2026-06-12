@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { mkdir, readFile, readdir, writeFile } from "fs/promises"
 import path from "path"
+import { Global } from "@mendcode/core/global"
 import { tmpdir } from "../fixture/fixture"
-import { packageMetadata, syncProject } from "../../src/mend/config/project"
+import { packageMetadata, packageMetadataSet, syncProject } from "../../src/mend/config/project"
 import { mendMcpStatus } from "../../src/mend/config/mcp"
 import { readModelsConfig } from "../../src/mend/config/models"
-import { applyRuntimePack, buildLocalMendPackageManifest, buildLocalRuntimePack, deleteLocalRuntimePack, rollbackRuntimePack, runtimePackPlan } from "../../src/mend/runtime/pack"
+import { applyRuntimePack, buildLocalMendPackageManifest, buildLocalRuntimePack, deleteLocalRuntimePack, prepareGlobalRuntimePackAuthorRoot, rollbackRuntimePack, runtimePackArtifactCandidates, runtimePackPlan } from "../../src/mend/runtime/pack"
 import { runtimeRegistryAdd, runtimeRegistryApply, runtimeRegistryPreview, runtimeRegistryRemove } from "../../src/mend/runtime/registry"
 import { activeMendPackageProjection, disableAllMendPackages, listMendPackages } from "../../src/mend/runtime/packages"
 import { readPromptMode, writePromptMode } from "../../src/mend/prompt/mode"
@@ -61,6 +62,64 @@ describe("runtime pack", () => {
     expect(pack.mcp.config).toHaveProperty("localstdio")
     expect(pack.prompts.mode).toBe("full")
     expect(pack.extensions).toEqual([".mendcode/widgets/panel.ts"])
+  })
+
+  test("reports project and global skills separately for package authoring", async () => {
+    await using dir = await tmpdir()
+    await using home = await tmpdir()
+    const previousHome = process.env.OPENCODE_TEST_HOME
+    process.env.OPENCODE_TEST_HOME = home.path
+    try {
+      await writeText(path.join(dir.path, ".mendcode", "skills", "project-skill", "SKILL.md"), "---\nname: project-skill\ndescription: Project skill\n---\n")
+      await writeText(path.join(home.path, ".agents", "skills", "global-skill", "SKILL.md"), "---\nname: global-skill\ndescription: Global skill\n---\n")
+
+      const candidates = await runtimePackArtifactCandidates(dir.path)
+
+      expect(candidates.skills).toEqual([".mendcode/skills/project-skill/SKILL.md"])
+      expect(candidates.globalSkills).toEqual([path.join(home.path, ".agents", "skills", "global-skill", "SKILL.md")])
+    } finally {
+      if (previousHome === undefined) delete process.env.OPENCODE_TEST_HOME
+      else process.env.OPENCODE_TEST_HOME = previousHome
+    }
+  })
+
+  test("prepares global package authoring snapshot independent of project folder", async () => {
+    await using dir = await tmpdir()
+    await using config = await tmpdir()
+    await using home = await tmpdir()
+    const previousConfig = Global.Path.config
+    const previousHome = process.env.OPENCODE_TEST_HOME
+    ;(Global.Path as { config: string }).config = config.path
+    process.env.OPENCODE_TEST_HOME = home.path
+    try {
+      await writeJson(path.join(config.path, "mendcode.json"), {
+        version: 0,
+        focus: { default: "codex" },
+        mcp: {
+          globalstdio: { type: "local", command: ["node", "server.js"] },
+        },
+      })
+      await writeText(path.join(config.path, "agents", "global-reviewer.md"), "---\nmode: subagent\n---\nReview globally.\n")
+      await writeText(path.join(home.path, ".agents", "skills", "global-skill", "SKILL.md"), "---\nname: global-skill\ndescription: Global skill\n---\n")
+
+      const authorRoot = await prepareGlobalRuntimePackAuthorRoot()
+      await packageMetadataSet({ title: "Global Pack", id: "global-pack", version: "9.9.9" }, authorRoot)
+      await prepareGlobalRuntimePackAuthorRoot()
+      const candidates = await runtimePackArtifactCandidates(authorRoot)
+      const pack = await buildLocalRuntimePack(authorRoot)
+
+      expect(packageMetadata(authorRoot)).toMatchObject({ title: "Global Pack", id: "global-pack", version: "9.9.9" })
+      expect(candidates.agents).toEqual([".mendcode/agents/global-reviewer.md"])
+      expect(candidates.skills).toEqual([".mendcode/skills/agents-global-skill/SKILL.md"])
+      expect(pack.agents).toEqual([".mendcode/agents/global-reviewer.md"])
+      expect(pack.skills).toEqual([".mendcode/skills/agents-global-skill/SKILL.md"])
+      expect(pack.mcp.config).toHaveProperty("globalstdio")
+      expect(await runtimePackArtifactCandidates(dir.path)).toMatchObject({ agents: [], skills: [] })
+    } finally {
+      ;(Global.Path as { config: string }).config = previousConfig
+      if (previousHome === undefined) delete process.env.OPENCODE_TEST_HOME
+      else process.env.OPENCODE_TEST_HOME = previousHome
+    }
   })
 
   test("writes apply and rollback manifests under ignored runtime-pack runs", async () => {

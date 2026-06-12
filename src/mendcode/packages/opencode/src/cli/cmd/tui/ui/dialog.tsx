@@ -55,6 +55,7 @@ export function Dialog(
         }}
         width={width()}
         maxWidth={dimensions().width - 2}
+        maxHeight={Math.max(6, dimensions().height - 4)}
         backgroundColor={theme.backgroundPanel}
         paddingTop={1}
       >

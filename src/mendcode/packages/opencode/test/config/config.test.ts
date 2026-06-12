@@ -1092,6 +1092,50 @@ test("installs dependencies in writable OPENCODE_CONFIG_DIR", async () => {
   }
 })
 
+test("does not install dependencies for auto-discovered local file plugins", async () => {
+  let installs = 0
+  const trackedNpm = Layer.mock(Npm.Service)({
+    install: () =>
+      Effect.sync(() => {
+        installs++
+      }),
+    add: () => Effect.die("not implemented"),
+    which: () => Effect.succeed(Option.none()),
+  })
+  const testLayer = Config.layer.pipe(
+    Layer.provide(testFlock),
+    Layer.provide(AppFileSystem.defaultLayer),
+    Layer.provide(Env.defaultLayer),
+    Layer.provide(emptyAuth),
+    Layer.provide(emptyAccount),
+    Layer.provideMerge(infra),
+    Layer.provide(trackedNpm),
+  )
+
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const pluginDir = path.join(dir, ".mendcode", "plugins")
+      await fs.mkdir(pluginDir, { recursive: true })
+      await Filesystem.write(path.join(pluginDir, "mflow-lock.js"), "export default async () => ({})\n")
+    },
+  })
+
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await Effect.runPromise(
+        Config.Service.use((svc) => svc.get()).pipe(Effect.scoped, Effect.provide(testLayer)),
+      )
+      expect(config.plugin?.some((plugin) => ConfigPlugin.pluginSpecifier(plugin).startsWith("file://"))).toBe(true)
+      await Effect.runPromise(
+        Config.Service.use((svc) => svc.waitForDependencies()).pipe(Effect.scoped, Effect.provide(testLayer)),
+      )
+    },
+  })
+
+  expect(installs).toBe(0)
+})
+
 // Note: deduplication and serialization of npm installs is now handled by the
 // core Npm.Service (via EffectFlock). Those behaviors are tested in the core
 // package's npm tests, not here.

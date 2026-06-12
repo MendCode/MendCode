@@ -82,6 +82,7 @@ type RuntimeState = {
 
 const log = Log.create({ service: "tui.plugin" })
 const DISPOSE_TIMEOUT_MS = 5000
+const DEPENDENCY_WAIT_STARTUP_BUDGET_MS = 1500
 const KV_KEY = "plugin_enabled"
 const EMPTY_TUI: TuiPluginModule = {
   tui: async () => {},
@@ -591,15 +592,31 @@ function applyInitialPluginEnabledState(state: RuntimeState, config: TuiConfig.I
   }
 }
 
+async function waitForPluginDependenciesWithStartupBudget(wait: () => Promise<void>) {
+  let timeout: Timer | undefined
+  const dependencyWait = wait()
+    .then(() => "ready" as const)
+    .catch((error) => {
+      log.warn("failed waiting for tui plugin dependencies", { error })
+      return "failed" as const
+    })
+  const budget = new Promise<"timeout">((resolve) => {
+    timeout = setTimeout(() => resolve("timeout"), DEPENDENCY_WAIT_STARTUP_BUDGET_MS)
+  })
+  const result = await Promise.race([dependencyWait, budget])
+  if (timeout) clearTimeout(timeout)
+  if (result === "timeout") {
+    log.warn("timed out waiting for tui plugin dependencies", {
+      budgetMs: DEPENDENCY_WAIT_STARTUP_BUDGET_MS,
+    })
+  }
+}
+
 async function resolveExternalPlugins(list: ConfigPlugin.Origin[], wait: () => Promise<void>) {
   return PluginLoader.loadExternal({
     items: list,
     kind: "tui",
-    wait: async () => {
-      await wait().catch((error) => {
-        log.warn("failed waiting for tui plugin dependencies", { error })
-      })
-    },
+    wait: () => waitForPluginDependenciesWithStartupBudget(wait),
     finish: async (loaded, origin, retry) => {
       const mod = await Promise.resolve()
         .then(() => readV1Plugin(loaded.mod as Record<string, unknown>, loaded.spec, "tui") as TuiPluginModule)
