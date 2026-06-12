@@ -103,6 +103,11 @@ Project controls:
   mend memory status|search|preview|add|list
   mend permissions status      inspect permission defaults
   mend permissions set-default <approval|smart|full_access>
+  mend mflow status            inspect mflow activation, daemon, and locks
+  mend mflow setup             guided mflow setup for this repo
+  mend mflow activate --room <room> --accept-public-relay-limits
+  mend mflow deactivate        disable mflow without deleting local config
+  mend mflow remove            remove local mflow config and scaffold files
   mend packages status|list    inspect installed/active MendCode packages
   mend packages create --id <id> --title <name> [--include skills,modes,plugins]
                                 snapshot selected local skills/modes/widgets/config into a package

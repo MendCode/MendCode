@@ -1,6 +1,7 @@
 import { Buffer } from "buffer"
 import { readMendConfig } from "../config/project"
-import { mflowStatus, readWorktreePolicy, tsmStatus } from "../config/worktree"
+import { readWorktreePolicy, tsmStatus } from "../config/worktree"
+import { readMflowConfig } from "../config/mflow"
 import type { MendPromptMode } from "./mode"
 import { focusNames, readPromptSource, resolvePromptSourceFile, sourceForFocus } from "./sources"
 import { composeCustomizationCapabilitySection } from "./capabilities"
@@ -102,7 +103,7 @@ async function fullKnowledge(root: string) {
   const [config, policy, mflow, tsm] = await Promise.all([
     Promise.resolve(readMendConfig(root)),
     readWorktreePolicy(root),
-    mflowStatus(root),
+    readMflowConfig(root),
     tsmStatus(root),
   ])
   const lines = [
@@ -118,7 +119,7 @@ async function fullKnowledge(root: string) {
   if (mflow.enabled) {
     integration.push(
       "Mflow context:",
-      `- Mflow live sync is configured active with mode=${mflow.mode}. Respect neverSync boundaries and require explicit visible start/stop actions.`,
+      "- Runtime mflow coordination is enabled. File edit locks are enforced by MendCode hooks; do not call mflow manually unless the user asks.",
     )
   }
   if (tsm.policy?.mode && tsm.policy.mode !== "off") {

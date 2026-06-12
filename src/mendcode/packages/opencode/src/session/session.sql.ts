@@ -130,7 +130,10 @@ export const SessionStatusTable = sqliteTable("session_status", {
   ...Timestamps,
   data: text({ mode: "json" })
     .notNull()
-    .$type<{ type: "busy" } | { type: "retry"; attempt: number; message: string; next: number }>(),
+    .$type<
+      | { type: "busy"; kind?: "mflow-wait"; message?: string; until?: number }
+      | { type: "retry"; attempt: number; message: string; next: number }
+    >(),
 })
 
 export const BackgroundSessionTable = sqliteTable("background_session", {

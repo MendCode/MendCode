@@ -227,6 +227,12 @@ describe("SessionStatus.Info", () => {
   test("idle / busy discriminators", () => {
     expect(decode({ type: "idle" })).toEqual({ type: "idle" })
     expect(decode({ type: "busy" })).toEqual({ type: "busy" })
+    expect(decode({ type: "busy", kind: "mflow-wait", message: "mflow waiting for shared-test.md", until: 500 })).toEqual({
+      type: "busy",
+      kind: "mflow-wait",
+      message: "mflow waiting for shared-test.md",
+      until: 500,
+    })
     expect(SessionStatus.Info.zod.parse({ type: "idle" })).toEqual({ type: "idle" })
   })
 

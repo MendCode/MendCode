@@ -1,3 +1,7 @@
+# Mflow ignore patterns
+# Uses .gitignore syntax
+
+# From .gitignore:
 # Dependencies / build output
 node_modules/
 dist/
@@ -54,5 +58,19 @@ src/mendcode/packages/opencode/src/provider/models-snapshot.js
 *.log
 .envrefs
 
-# mflow local state
+# Mflow defaults:
+node_modules
+.env*
+*.lock
+dist/
+build/
+.git/
 .mflow/
+.agents/
+.next/
+.turbo/
+coverage/
+*.pyc
+__pycache__/
+.DS_Store
+Thumbs.db

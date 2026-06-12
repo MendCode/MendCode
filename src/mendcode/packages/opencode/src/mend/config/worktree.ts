@@ -6,7 +6,8 @@ import { activeFocus, focusProfiles } from "./project"
 
 export const MFLOW_DEFAULT_SIGNALING = "wss://mflow-signal.obed0101.deno.net"
 export const MFLOW_REPOSITORY = "https://github.com/Obed0101/mflow"
-export const MFLOW_NPM_PACKAGE = "mflow-sdk"
+export const MFLOW_NPM_PACKAGE = "mflow-cli"
+export const MFLOW_NPM_VERSION = "0.1.12"
 export const MFLOW_RESERVED_NPM_PACKAGE = { name: "mflow", reason: "npm name already exists for an unrelated monad-style flow control package" }
 export const TSM_REPOSITORY = "https://github.com/adibhanna/tsm"
 export const TSM_OBSERVED_HEAD = "d33778c90e36558c6eb5ad110a3506e209975f5c"
@@ -38,9 +39,9 @@ async function writeJson(file: string, value: unknown) {
 
 export async function mflowStatus(root?: string) {
   const policy = await readWorktreePolicy(root)
-  const packageState = { reserved: MFLOW_RESERVED_NPM_PACKAGE, selected: MFLOW_NPM_PACKAGE, published: false }
+  const packageState = { reserved: MFLOW_RESERVED_NPM_PACKAGE, selected: MFLOW_NPM_PACKAGE, version: MFLOW_NPM_VERSION, published: true }
   const safety = { explicitOptInRequired: true, createsOrSyncsFiles: false, blockedByDefault: !policy.liveSync, neverSync: policy.neverSync }
-  return { integration: "optional-open-source-package", repository: MFLOW_REPOSITORY, packageManager: "npm-or-bun-after-publish", npmPackage: packageState, signaling: MFLOW_DEFAULT_SIGNALING, mode: policy.mode, liveSync: policy.liveSync, enabled: policy.liveSync && policy.mode === "live-sync", safety }
+  return { integration: "optional-open-source-package", repository: MFLOW_REPOSITORY, packageManager: "pnpm", npmPackage: packageState, signaling: MFLOW_DEFAULT_SIGNALING, mode: policy.mode, liveSync: policy.liveSync, enabled: policy.liveSync && policy.mode === "live-sync", safety }
 }
 
 function optionValue(args: string[], name: string) {
@@ -125,7 +126,7 @@ export async function mflowPlan(root?: string) {
     integration: status.integration,
     repository: MFLOW_REPOSITORY,
     npmPackage: status.npmPackage,
-    install: { package: MFLOW_NPM_PACKAGE, allowedAfterPublish: true, command: `npm install ${MFLOW_NPM_PACKAGE}`, executesInstall: false },
+    install: { package: MFLOW_NPM_PACKAGE, version: MFLOW_NPM_VERSION, command: `pnpm dlx --package ${MFLOW_NPM_PACKAGE}@${MFLOW_NPM_VERSION} mflow setup`, executesInstall: false },
     lifecycle: { start: "dry-run-only-until-explicit-approval", stop: "safe-noop-until-start-exists", pause: "human-pause-authority-required", resume: "human-or-admin-explicit-only" },
     room: { idSource: "explicit-config-or-generated-local-plan", secretSource: "explicit-env-or-keychain-never-committed", signaling: MFLOW_DEFAULT_SIGNALING },
     surfaces: ["status", "peers", "files", "locks", "pause", "resume"],
@@ -149,8 +150,8 @@ export async function mflowDoctor(root?: string) {
   if (policy.liveSync && policy.mode !== "live-sync") failures.push("liveSync=true requires mode: live-sync")
   if (policy.mode === "live-sync") warnings.push("live-sync mode is configured; start must still remain explicit and visible")
   if (!existsSync(paths.mflowPlan)) warnings.push("mflow plan has not been generated yet; run `mend mflow plan` before implementation")
-  if (MFLOW_NPM_PACKAGE !== "mflow-sdk") failures.push(`selected package must remain mflow-sdk, got ${MFLOW_NPM_PACKAGE}`)
-  return { ok: failures.length === 0, package: { reserved: MFLOW_RESERVED_NPM_PACKAGE, selected: MFLOW_NPM_PACKAGE, published: false }, repository: MFLOW_REPOSITORY, signaling: MFLOW_DEFAULT_SIGNALING, policy, plan: existsSync(paths.mflowPlan) ? path.relative(paths.root, paths.mflowPlan) : null, failures, warnings }
+  if (MFLOW_NPM_PACKAGE !== "mflow-cli") failures.push(`selected package must remain mflow-cli, got ${MFLOW_NPM_PACKAGE}`)
+  return { ok: failures.length === 0, package: { reserved: MFLOW_RESERVED_NPM_PACKAGE, selected: MFLOW_NPM_PACKAGE, version: MFLOW_NPM_VERSION, published: true }, repository: MFLOW_REPOSITORY, signaling: MFLOW_DEFAULT_SIGNALING, policy, plan: existsSync(paths.mflowPlan) ? path.relative(paths.root, paths.mflowPlan) : null, failures, warnings }
 }
 
 export async function tsmStatus(root?: string) {

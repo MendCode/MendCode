@@ -8,6 +8,7 @@ import { readModelsConfig, resolveModelRoles } from "../config/models"
 import { resolvePromptFocusForRole } from "../prompt/focus-resolver"
 import { mendTuiCapabilityVersion, visibleCustomizationCapabilities } from "../tui/capabilities"
 import { listActiveCustomizations } from "../tui/customization-state"
+import { mflowControlStatus } from "../config/mflow"
 
 async function readJson(file: string) {
   try { return JSON.parse(await readFile(file, "utf8")) } catch { return null }
@@ -68,11 +69,63 @@ export async function mendRuntimeConfigurationSummary(root?: string) {
 }
 
 export async function integrationStatus(kind: "mflow" | "tsm", root?: string) {
+  if (kind === "mflow") return mflowStatusSummary(root)
   const paths = mendPaths(root)
-  const file = kind === "mflow" ? paths.mflowPlan : paths.tsmPlan
+  const file = paths.tsmPlan
   const data = await readJson(file)
   if (!existsSync(file)) return `${kind.toUpperCase()}: no plan file at ${file}`
   const status = data?.status || data?.mode || "planned/off"
   const repo = data?.repository || data?.repo || data?.source || "not configured"
   return `${kind.toUpperCase()}: ${status}\nRepo: ${repo}\nPlan: ${file}`
+}
+
+export async function mflowStatusSummary(root?: string) {
+  const status = await mflowControlStatus(root)
+  const config = status.config
+  const daemon = summarizeMflowDaemon(status.daemon.output)
+  const locks = summarizeMflowLocks(status.locks.output)
+  return [
+    `Mode: ${status.mode}`,
+    `Enabled: ${config.enabled ? "yes" : "no"}`,
+    `Relay: ${config.relayMode === "public" ? "public fair-use" : "custom"} (${config.signaling})`,
+    `Room: ${config.room}`,
+    `Queue priority: ${config.hookPriority}`,
+    `MCP: ${status.files.mcp}`,
+    `Runtime config: ${status.files.runtimeConfig}`,
+    `Hook scaffold: ${status.files.plugin}`,
+    `Local secret file: ${status.files.secretStoredLocally ? "yes" : "no"}`,
+    `Daemon: ${status.daemon.running ? "running" : "not running"}`,
+    `Daemon state: ${daemon.state}`,
+    `Peers: ${daemon.peers}`,
+    `Files: ${daemon.files}`,
+    `Ops/s: ${daemon.ops}`,
+    `Uptime: ${daemon.uptime}`,
+    daemon.dashboard ? `Dashboard: ${daemon.dashboard}` : undefined,
+    `Locks: ${status.locks.checked ? "available" : "unavailable"}`,
+    locks,
+    "",
+    "Public relay: shared fair-use; use custom relay for private code, larger teams, or custom limits.",
+  ].filter((line): line is string => typeof line === "string").join("\n")
+}
+
+function pickLine(output: string | undefined, label: string) {
+  return output?.match(new RegExp(`^\\s*${label}:\\s*(.+)$`, "m"))?.[1]?.trim()
+}
+
+function summarizeMflowDaemon(output: string | undefined) {
+  return {
+    state: pickLine(output, "State") || "unknown",
+    peers: pickLine(output, "Peers") || "unknown",
+    files: pickLine(output, "Files") || "unknown",
+    ops: pickLine(output, "Ops/s") || "unknown",
+    uptime: pickLine(output, "Uptime") || "unknown",
+    dashboard: output?.match(/https:\/\/\S+\/dashboard/)?.[0],
+  }
+}
+
+function summarizeMflowLocks(output: string | undefined) {
+  const text = output?.trim()
+  if (!text) return "No lock output."
+  if (/no active locks/i.test(text)) return "No active locks."
+  return text.split(/\r?\n/).slice(0, 4).join("\n")
 }

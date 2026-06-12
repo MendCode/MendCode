@@ -10,6 +10,7 @@ import { modelPresets, modelRoleProjection, readModelsConfig, refreshGeneratedRu
 import { mendMcpStatus, writeMendMcpServer } from "../config/mcp"
 import { baselineUpstream, contextRefresh, contextShow, contextStatus, focusList, focusShow, focusStatus, focusUse, initProject, packageMetadata, packageMetadataSet, readMendConfig, syncGlobalPrimaryAgentModels, syncProject } from "../config/project"
 import { mflowDoctor, mflowPlan, mflowStatus, tsmDoctor, tsmPlan, tsmStatus, worktreeDoctor, worktreePlan, worktreeStatus } from "../config/worktree"
+import { activateMflow, deactivateMflow, mflowControlStatus, MFLOW_PUBLIC_RELAY, MFLOW_PUBLIC_RELAY_WARNING, removeMflowConfig, type MflowRelayMode } from "../config/mflow"
 import { applyRuntimePack, deleteLocalRuntimePack, formatRuntimePackPlan, rollbackRuntimePack, runtimePackArtifactCandidates, runtimePackPlan } from "../runtime/pack"
 import { budgetDoctor, budgetStatus } from "../runtime/budget"
 import { promptSourcesStatus } from "../prompt/sources"
@@ -340,9 +341,79 @@ async function models(args: string[]) {
 }
 
 async function mflow(args: string[]) {
+  const root = shellProjectRoot()
   const sub = args[0] || "status"
-  const result = sub === "status" ? await mflowStatus() : sub === "plan" ? await mflowPlan() : sub === "doctor" ? await mflowDoctor() : null
-  if (!result) throw new Error("Usage: mend-control-plane mflow <status|plan|doctor>")
+  if (sub === "status") {
+    console.log(JSON.stringify(await mflowControlStatus(root), null, 2))
+    return
+  }
+  if (sub === "activate") {
+    const relay = (optionValue(args, "--relay") || "public") as MflowRelayMode
+    const signaling = optionValue(args, "--url") || optionValue(args, "--signaling") || undefined
+    const room = optionValue(args, "--room") || undefined
+    const secret = optionValue(args, "--secret") || undefined
+    const hookPriorityRaw = optionValue(args, "--priority")
+    const hookPriority = hookPriorityRaw === null ? undefined : Number(hookPriorityRaw)
+    console.log(JSON.stringify(await activateMflow({
+      relayMode: relay,
+      signaling,
+      room,
+      secret,
+      generateSecret: !secret,
+      storeSecret: args.includes("--store-secret"),
+      hookPriority,
+      publicRelayNoticeAccepted: args.includes("--accept-public-relay-limits") || relay !== "public",
+    }, root), null, 2))
+    return
+  }
+  if (sub === "deactivate") {
+    console.log(JSON.stringify(await deactivateMflow(root), null, 2))
+    return
+  }
+  if (sub === "remove") {
+    console.log(JSON.stringify(await removeMflowConfig(root), null, 2))
+    return
+  }
+  if (sub === "setup") {
+    const readline = await import("readline/promises")
+    const { stdin: input, stdout: output } = await import("process")
+    const rl = readline.createInterface({ input, output })
+    try {
+      console.log("mflow setup for MendCode")
+      console.log("1) Public fair-use relay")
+      console.log("2) Custom/self-hosted relay URL")
+      const relayChoice = (await rl.question("Relay [1/2]: ")).trim() || "1"
+      const relayMode: MflowRelayMode = relayChoice === "2" ? "custom" : "public"
+      let signaling: string | undefined
+      let publicRelayNoticeAccepted = true
+      if (relayMode === "custom") {
+        signaling = (await rl.question("Relay URL (ws:// or wss://): ")).trim()
+      } else {
+        console.log(MFLOW_PUBLIC_RELAY_WARNING)
+        const accepted = (await rl.question("Use public relay with these limits? [y/N]: ")).trim().toLowerCase()
+        publicRelayNoticeAccepted = accepted === "y" || accepted === "yes"
+        signaling = MFLOW_PUBLIC_RELAY
+      }
+      const room = (await rl.question(`Room [${root.split("/").pop() || "mendcode"}/mflow]: `)).trim() || undefined
+      const generate = ((await rl.question("Generate room secret? [Y/n]: ")).trim().toLowerCase() || "y") !== "n"
+      const secret = generate ? undefined : (await rl.question("Room secret: ")).trim()
+      const storeSecret = (await rl.question("Store secret in .mflow/config.toml? [y/N]: ")).trim().toLowerCase() === "y"
+      console.log(JSON.stringify(await activateMflow({
+        relayMode,
+        signaling,
+        room,
+        secret,
+        generateSecret: generate,
+        storeSecret,
+        publicRelayNoticeAccepted,
+      }, root), null, 2))
+    } finally {
+      rl.close()
+    }
+    return
+  }
+  const result = sub === "plan" ? await mflowPlan(root) : sub === "doctor" ? await mflowDoctor(root) : sub === "legacy-status" ? await mflowStatus(root) : null
+  if (!result) throw new Error("Usage: mend-control-plane mflow <status|setup|activate|deactivate|remove|plan|doctor>")
   console.log(JSON.stringify(result, null, 2))
   if ("ok" in result && result.ok === false) process.exitCode = 1
 }

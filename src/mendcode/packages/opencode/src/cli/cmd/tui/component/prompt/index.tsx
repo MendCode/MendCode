@@ -1923,15 +1923,24 @@ export function Prompt(props: PromptProps) {
 
     return
   })
+  const mflowWaitMessage = createMemo(() => {
+    const current = status() as { type: string; kind?: string; message?: string; until?: number }
+    if (current.type !== "busy" || current.kind !== "mflow-wait" || !current.message) return
+    const seconds = current.until ? Math.max(0, Math.ceil((current.until - workingTick()) / 1000)) : undefined
+    return `${current.message}${seconds === undefined ? "" : ` (${seconds}s)`}`
+  })
   const workingIndicatorView = () => {
     const connectionMessage = workingConnectionMessage()
+    const mflowMessage = mflowWaitMessage()
     const message = fitWorkingText(
       connectionMessage ??
+        mflowMessage ??
         [workingMessage(), workingElapsed(), workingIndicatorConfig().showTokenUsage ? workingTokenUsage() : undefined]
           .filter(Boolean)
           .join("  "),
     )
-    const color = effectiveConnectionStatus() === "failed" ? theme.error : connectionMessage ? theme.warning : theme.text
+    const color =
+      effectiveConnectionStatus() === "failed" ? theme.error : connectionMessage || mflowMessage ? theme.warning : theme.text
     return <Spinner color={color}>{message}</Spinner>
   }
   const MascotLines = (props: { text: string; hoverText?: string; paddingTop?: number }) => (

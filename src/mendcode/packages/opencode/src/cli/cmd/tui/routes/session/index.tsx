@@ -366,6 +366,7 @@ export function Session() {
       branch: sync.data.vcs?.branch || "git",
       path: topPathLabel(),
       maxWidth: topbarLeftWidth(),
+      isChildSession: Boolean(session()?.parentID),
     }),
   )
   const todos = createMemo(() => sync.data.todo[route.sessionID] ?? [])
@@ -2934,7 +2935,6 @@ function memoryToastMessage(info: SessionMemoryMetadata | undefined) {
   const proposals = output.proposals?.length ?? 0
   if (saved > 0) return `Memory saved ${saved}`
   if (proposals > 0) return `Memory proposal${proposals === 1 ? "" : "s"} ready: ${proposals}`
-  if (output.queued) return "Memory proposal pending"
   return ""
 }
 

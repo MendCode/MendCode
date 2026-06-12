@@ -21,6 +21,9 @@ export const Info = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("busy"),
+    kind: Schema.optional(Schema.Literal("mflow-wait")),
+    message: Schema.optional(Schema.String),
+    until: Schema.optional(NonNegativeInt),
   }),
 ])
   .annotate({ identifier: "SessionStatus" })
