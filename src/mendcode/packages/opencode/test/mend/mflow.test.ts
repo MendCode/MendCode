@@ -3,7 +3,7 @@ import { createHash } from "crypto"
 import { mkdir, readFile, stat, writeFile } from "fs/promises"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
-import { activateMflow, deactivateMflow, enforceMflowBeforeEdit, mflowEditTargets, mflowReadTargets, readMflowConfig, releaseMflowLocks, waitMflowBeforeRead } from "../../src/mend/config/mflow"
+import { activateMflow, deactivateMflow, enforceMflowBeforeEdit, mflowControlStatus, mflowEditTargets, mflowReadTargets, readMflowConfig, releaseMflowLocks, waitMflowBeforeRead } from "../../src/mend/config/mflow"
 
 async function exists(file: string) {
   try {
@@ -74,6 +74,19 @@ describe("mflow MendCode integration", () => {
     expect(await readMflowConfig(tmp.path)).toMatchObject({ enabled: false, signaling: "wss://relay.example.test" })
     expect(await exists(path.join(tmp.path, ".mflow/config.toml"))).toBe(true)
     expect(JSON.parse(await readFile(path.join(tmp.path, ".mendcode/mcp/mflow.json"), "utf8"))).toMatchObject({ enabled: false })
+  })
+
+  test("does not check daemon or remote locks when mflow is disabled", async () => {
+    await using tmp = await tmpdir()
+
+    const status = await mflowControlStatus(tmp.path)
+
+    expect(status.mode).toBe("disabled")
+    expect(status.daemon.checked).toBe(false)
+    expect(status.daemon.running).toBe(false)
+    expect(status.daemon.output).toContain("not checked")
+    expect(status.locks.checked).toBe(false)
+    expect(status.locks.output).toContain("not checked")
   })
 
   test("extracts edit targets and rejects paths outside the project", () => {
