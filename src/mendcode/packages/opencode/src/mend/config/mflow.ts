@@ -61,6 +61,7 @@ const PUBLIC_RELAY_WARNING =
 const EDIT_LOCK_LEASE_MS = 35_000
 const EDIT_LOCK_WAIT_TIMEOUT_MS = 90_000
 const EDIT_LOCK_RETRY_MS = 750
+const MFLOW_CLI_TIMEOUT_MS = 1_200
 
 function readJson<T>(file: string, fallback: T): T {
   try {
@@ -129,6 +130,35 @@ function mflowCommand(args: string[]) {
 
 function mflowImmediateLockCommandArgs(file: string) {
   return ["lock", file, "--duration", "30s"]
+}
+
+function runMflowCli(root: string, args: string[], timeout = MFLOW_CLI_TIMEOUT_MS) {
+  try {
+    const result = spawnSync("mflow", args, { cwd: root, encoding: "utf8", timeout })
+    const stdout = result.stdout?.trim() ?? ""
+    const stderr = result.stderr?.trim() ?? ""
+    const timedOut = (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT"
+    const missing = (result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
+    const output = [stdout, stderr, timedOut ? `mflow command timed out after ${timeout}ms` : "", missing ? "mflow CLI is not installed" : "", result.error?.message ?? ""]
+      .filter(Boolean)
+      .join("\n")
+      .trim()
+    return {
+      ok: result.status === 0 && !result.error,
+      status: result.status,
+      output: output || "mflow command produced no output",
+      timedOut,
+      missing,
+    }
+  } catch (error: any) {
+    return {
+      ok: false,
+      status: null,
+      output: error?.message || "mflow command failed",
+      timedOut: error?.code === "ETIMEDOUT",
+      missing: error?.code === "ENOENT",
+    }
+  }
 }
 
 function sleep(ms: number) {
@@ -236,10 +266,10 @@ async function acquireMflowCliLockWithWait(input: {
 }) {
   const deadline = Date.now() + EDIT_LOCK_WAIT_TIMEOUT_MS
   while (true) {
-    const result = spawnSync("mflow", mflowImmediateLockCommandArgs(input.file), { cwd: input.root, encoding: "utf8" })
-    if (result.status === 0) return
-    const output = (result.stderr || result.stdout || result.error?.message || "lock failed").trim()
-    if (!retryableMflowLockFailure(output) || Date.now() >= deadline) {
+    const result = runMflowCli(input.root, mflowImmediateLockCommandArgs(input.file))
+    if (result.ok) return
+    const output = result.output || "lock failed"
+    if (result.timedOut || result.missing || !retryableMflowLockFailure(output) || Date.now() >= deadline) {
       throw new Error(`mflow could not acquire lock for ${input.file}: ${output}`)
     }
     await input.onWait?.({ file: input.file, remainingMs: Math.max(0, deadline - Date.now()), deadlineMs: Math.max(0, deadline - Date.now()) })
@@ -369,10 +399,37 @@ export async function readMflowConfig(root?: string): Promise<MflowConfig> {
 export async function mflowControlStatus(root?: string) {
   const paths = mendPaths(root)
   const config = await readMflowConfig(paths.root)
-  const daemon = spawnSync("mflow", ["status"], { cwd: paths.root, encoding: "utf8" })
-  const running = daemon.status === 0 && /running|connected|room|peer/i.test(`${daemon.stdout}\n${daemon.stderr}`)
-  const mode: MflowMode = !config.enabled ? "disabled" : running ? "running" : "enabled-stopped"
-  const locks = spawnSync("mflow", ["locks"], { cwd: paths.root, encoding: "utf8" })
+  const localLocks = localMflowEditLocks(paths.root)
+  if (!config.enabled) {
+    return {
+      ok: true,
+      mode: "disabled" as MflowMode,
+      config,
+      publicRelayWarning: PUBLIC_RELAY_WARNING,
+      files: {
+        state: path.relative(paths.root, mflowStatePath(paths.root)),
+        runtimeConfig: path.relative(paths.root, mflowRuntimeConfigPath(paths.root)),
+        plugin: path.relative(paths.root, mflowPluginPath(paths.root)),
+        mcp: ".mendcode/mcp/mflow.json",
+        secretStoredLocally: existsSync(mflowSecretPath(paths.root)),
+      },
+      daemon: {
+        checked: false,
+        running: false,
+        output: "mflow disabled; daemon was not checked",
+      },
+      locks: {
+        checked: false,
+        output: "mflow disabled; remote locks were not checked",
+        local: localLocks,
+      },
+    }
+  }
+
+  const daemon = runMflowCli(paths.root, ["status"])
+  const running = daemon.ok && /running|connected|room|peer/i.test(daemon.output)
+  const mode: MflowMode = running ? "running" : "enabled-stopped"
+  const locks = runMflowCli(paths.root, ["locks"])
   return {
     ok: true,
     mode,
@@ -388,12 +445,12 @@ export async function mflowControlStatus(root?: string) {
     daemon: {
       checked: true,
       running,
-      output: daemon.status === 0 ? daemon.stdout.trim() : daemon.stderr.trim(),
+      output: daemon.output,
     },
     locks: {
-      checked: locks.status === 0,
-      output: locks.status === 0 ? locks.stdout.trim() : locks.stderr.trim(),
-      local: localMflowEditLocks(paths.root),
+      checked: locks.ok,
+      output: locks.output,
+      local: localLocks,
     },
   }
 }
@@ -517,8 +574,8 @@ async function waitForMflowReadAccess(input: {
   while (true) {
     const local = localMflowEditLocks(input.root).find((lock) => lock.file === input.file)
     const ownLocalLease = local?.owner === input.owner
-    const remoteStatus = ownLocalLease ? undefined : spawnSync("mflow", ["locks"], { cwd: input.root, encoding: "utf8" })
-    const remote = remoteStatus ? hasActiveMflowLock(`${remoteStatus.stdout}\n${remoteStatus.stderr}`, input.file) : false
+    const remoteStatus = ownLocalLease ? undefined : runMflowCli(input.root, ["locks"])
+    const remote = remoteStatus?.ok ? hasActiveMflowLock(remoteStatus.output, input.file) : false
     const remainingMs = local && !ownLocalLease ? local.remainingMs : Math.max(0, deadline - Date.now())
     if ((!local || ownLocalLease) && !remote) return
     if (Date.now() >= deadline) throw new Error(`mflow could not read ${input.file}: file is locked`)
