@@ -63,6 +63,7 @@ import * as Database from "@/storage/db"
 import { SessionTable } from "./session.sql"
 import { readPromptMode } from "@/mend/prompt/mode"
 import { composePromptPolicy } from "@/mend/prompt/compose"
+import { enforceMflowBeforeEdit, releaseMflowLocks, waitMflowBeforeRead } from "@/mend/config/mflow"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -568,12 +569,53 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             return run.promise(
               Effect.gen(function* () {
                 const ctx = context(args, options)
+                const instance = yield* InstanceState.context
+                const mflowReads = yield* Effect.promise(() =>
+                  waitMflowBeforeRead({
+                    tool: item.id,
+                    args,
+                    root: instance.directory,
+                    onWait: (wait) =>
+                      Effect.runPromise(
+                        status.set(ctx.sessionID, {
+                          type: "busy",
+                          kind: "mflow-wait",
+                          message: `mflow waiting to read ${wait.file}`,
+                          until: Date.now() + wait.remainingMs,
+                        }),
+                      ),
+                  }),
+                )
+                if (mflowReads.waited.length) {
+                  yield* status.set(ctx.sessionID, { type: "busy" })
+                }
+                const mflowLocks = yield* Effect.promise(() =>
+                  enforceMflowBeforeEdit({
+                    tool: item.id,
+                    args,
+                    root: instance.directory,
+                    onWait: (wait) =>
+                      Effect.runPromise(
+                        status.set(ctx.sessionID, {
+                          type: "busy",
+                          kind: "mflow-wait",
+                          message: `mflow waiting for ${wait.file}`,
+                          until: Date.now() + wait.remainingMs,
+                        }),
+                      ),
+                  }),
+                )
+                if (mflowLocks.locked.length) {
+                  yield* status.set(ctx.sessionID, { type: "busy" })
+                }
                 yield* plugin.trigger(
                   "tool.execute.before",
                   { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
                   { args },
                 )
-                const result = yield* item.execute(args, ctx)
+                const result = yield* item.execute(args, ctx).pipe(
+                  Effect.ensuring(Effect.promise(() => releaseMflowLocks({ root: instance.directory, files: mflowLocks.locked, owner: mflowLocks.owner }))),
+                )
                 const output = {
                   ...result,
                   attachments: result.attachments?.map((attachment) => ({

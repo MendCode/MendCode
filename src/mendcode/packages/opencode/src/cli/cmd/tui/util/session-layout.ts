@@ -127,6 +127,12 @@ export function truncateMiddleDisplay(value: string, maxWidth: number) {
   return `${start}${ellipsis}${end}`
 }
 
-export function sessionTopbarLeftLabel(input: { branch: string; path: string; maxWidth: number }) {
-  return truncateMiddleDisplay(` ${input.branch || "git"} ${input.path}`, input.maxWidth)
+export function sessionTopbarLeftLabel(input: {
+  branch: string
+  path: string
+  maxWidth: number
+  isChildSession?: boolean
+}) {
+  const sessionKind = input.isChildSession ? "Subagent | " : ""
+  return truncateMiddleDisplay(`${sessionKind} ${input.branch || "git"} ${input.path}`, input.maxWidth)
 }

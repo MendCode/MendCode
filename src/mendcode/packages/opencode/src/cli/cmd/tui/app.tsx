@@ -75,6 +75,13 @@ import { MendTuiProfileProvider, useMendTuiProfile } from "./context/mend"
 import type { MendTuiProfile } from "@/mend/profile"
 import { pathToFileURL } from "url"
 import { mendStatusSummary, integrationStatus } from "@/mend/commands/status"
+import {
+  activateMflow,
+  deactivateMflow,
+  mflowControlStatus,
+  removeMflowConfig,
+  type MflowRelayMode,
+} from "@/mend/config/mflow"
 import { mendTuiCapabilityVersion, visibleCustomizationCapabilities } from "@/mend/tui/capabilities"
 import {
   applyRuntimePack,
@@ -96,7 +103,7 @@ import {
   removeMendPackage,
   setMendPackageEnabled,
 } from "@/mend/runtime/packages"
-import { writeGlobalMemoryConfig } from "@/mend/memory/config"
+import { writeProjectMemoryConfig, type MemoryConfig } from "@/mend/memory/config"
 import { readPermissionsConfig } from "@/mend/config/permissions"
 import {
   appendMemoryEntry,
@@ -583,31 +590,289 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   const showMendStatus = async (title = "MendCode Status") => {
     await DialogAlert.show(dialog, title, await mendStatusSummary(mend.root))
   }
-  const showMemoryStatus = async () => {
-    const root = memoryRoot()
-    const status = await memoryStatus(root)
-    await DialogAlert.show(
+  const mflowStatusLine = async () => {
+    const status = await mflowControlStatus(mend.root)
+    const config = status.config
+    return {
+      status,
+      line: `${status.mode} · ${config.relayMode} · ${config.room}`,
+      relay: `${config.relayMode === "public" ? "Public fair-use" : "Custom"} · ${config.signaling}`,
+      daemon: status.daemon.running ? "daemon running" : "daemon stopped",
+      locks: status.locks.checked ? "locks available" : "locks unavailable",
+    }
+  }
+  const mflowDaemonValue = (output: string | undefined, label: string) => {
+    return output?.match(new RegExp(`^\\s*${label}:\\s*(.+)$`, "m"))?.[1]?.trim() ?? "unknown"
+  }
+  const showMflowDetails = async () => {
+    const current = await mflowStatusLine()
+    const status = current.status
+    const config = status.config
+    const dashboard = status.daemon.output?.match(/https:\/\/\S+\/dashboard/)?.[0] ?? "https://mflow-signal.obed0101.deno.net/dashboard"
+    const locksText = status.locks.output?.trim() || "No lock output."
+    dialog.replace(() => (
+      <DialogSelect
+        title="mflow details"
+        renderFilter={false}
+        current="state"
+        options={[
+          {
+            title: status.mode,
+            value: "state",
+            category: "State",
+            description: `${config.enabled ? "enabled" : "disabled"} · ${status.daemon.running ? "daemon running" : "daemon stopped"}`,
+            onSelect: () => {},
+          },
+          {
+            title: config.relayMode === "public" ? "Public relay" : "Custom relay",
+            value: "relay",
+            category: "Connection",
+            description: config.signaling,
+            onSelect: () => {},
+          },
+          {
+            title: config.room,
+            value: "room",
+            category: "Connection",
+            description: `priority ${config.hookPriority} · secret ${status.files.secretStoredLocally ? "stored locally" : "external"}`,
+            onSelect: () => {},
+          },
+          {
+            title: mflowDaemonValue(status.daemon.output, "State"),
+            value: "daemon",
+            category: "Daemon",
+            description: `${mflowDaemonValue(status.daemon.output, "Peers")} peers · ${mflowDaemonValue(status.daemon.output, "Files")} · ${mflowDaemonValue(status.daemon.output, "Ops/s")} ops/s`,
+            onSelect: () => {},
+          },
+          {
+            title: mflowDaemonValue(status.daemon.output, "Uptime"),
+            value: "uptime",
+            category: "Daemon",
+            description: `memory ${mflowDaemonValue(status.daemon.output, "Memory")}`,
+            onSelect: () => {},
+          },
+          {
+            title: locksText.length > 72 ? `${locksText.slice(0, 69)}...` : locksText,
+            value: "locks",
+            category: "Locks",
+            description: status.locks.checked ? "lock service available" : "lock service unavailable",
+            onSelect: () => {},
+          },
+          {
+            title: "Dashboard",
+            value: "dashboard",
+            category: "Links",
+            description: dashboard,
+            onSelect: () => {},
+          },
+          {
+            title: "Back",
+            value: "back",
+            category: "Actions",
+            description: "Return to mflow manager.",
+            onSelect: () => void showMflowManager(),
+          },
+        ]}
+      />
+    ))
+  }
+  const configureAndActivateMflowFromTui = async () => {
+    const current = (await mflowControlStatus(mend.root)).config
+    const relayMode = await new Promise<MflowRelayMode | null>((resolve) => {
+      dialog.replace(
+        () => (
+          <DialogSelect
+            title="mflow relay"
+            current={current.relayMode}
+            options={[
+              {
+                title: "Public relay",
+                value: "public" as const,
+                category: "Relay",
+                description: "Use the shared fair-use relay. Good for demos and small swarms.",
+                onSelect: () => resolve("public"),
+              },
+              {
+                title: "Custom URL",
+                value: "custom" as const,
+                category: "Relay",
+                description: "Use your own ws:// or wss:// mflow relay.",
+                onSelect: () => resolve("custom"),
+              },
+            ]}
+          />
+        ),
+        () => resolve(null),
+      )
+    })
+    if (!relayMode) return
+
+    let signaling = current.signaling
+    let publicRelayNoticeAccepted = true
+    if (relayMode === "public") {
+      publicRelayNoticeAccepted = await DialogConfirm.show(
+        dialog,
+        "Use public mflow relay?",
+        "The public relay is shared fair-use and has peer, message, rate, active-room, idle-timeout, and dashboard-history limits.",
+        "back",
+      ) === true
+      if (!publicRelayNoticeAccepted) return
+    } else {
+      const value = await DialogPrompt.show(dialog, "mflow relay URL", {
+        value: current.relayMode === "custom" ? current.signaling : "wss://",
+        placeholder: "wss://your-relay.example.com",
+      })
+      if (value === null || value === undefined) return
+      signaling = value.trim()
+    }
+
+    const room = await DialogPrompt.show(dialog, "mflow room", {
+      value: current.room,
+      placeholder: "repo/task-or-branch",
+    })
+    if (room === null || room === undefined) return
+
+    const secretMode = await new Promise<"generate" | "manual" | null>((resolve) => {
+      dialog.replace(
+        () => (
+          <DialogSelect
+            title="mflow room secret"
+            current="generate"
+            options={[
+              {
+                title: "Generate secret",
+                value: "generate" as const,
+                category: "Secret",
+                description: "Create a new local room secret.",
+                onSelect: () => resolve("generate"),
+              },
+              {
+                title: "Type secret",
+                value: "manual" as const,
+                category: "Secret",
+                description: "Use a room secret you already share with the swarm.",
+                onSelect: () => resolve("manual"),
+              },
+            ]}
+          />
+        ),
+        () => resolve(null),
+      )
+    })
+    if (!secretMode) return
+
+    const secret = secretMode === "manual"
+      ? await DialogPrompt.show(dialog, "mflow room secret", { placeholder: "shared room secret" })
+      : undefined
+    if (secretMode === "manual" && (secret === null || secret === undefined)) return
+
+    const storeSecret = await DialogConfirm.show(
       dialog,
-      "MendCode Memory",
-      [
-        `Status: ${status.enabled ? "enabled" : "disabled"}`,
-        `Input memory: ${status.input ? "on" : "off"} · adds relevant saved memories to each request`,
-        `Memory learning: ${status.output ? "on" : "off"} · creates approval-gated proposals after chats`,
-        `Applies to: minimal, focus, full, and dev-js modes`,
-        "",
-        `Entries: global ${status.entries.global.count} · project ${status.entries.project.count}`,
-        `Proposals: pending ${status.proposals.pending} · applied ${status.proposals.applied} · rejected ${status.proposals.rejected}`,
-        "",
-        `Memory context limit: up to ${status.maxPromptTokens} tokens`,
-        `Runtime caps: project ${status.projectMaxEntries}/request · global ${status.globalCompactionMaxEntries}/after compaction`,
-        `Extractor: ${status.extractorRole} · output model calls ${status.outputCallsProviders ? "possible" : "off"}`,
-        `Consolidation: ${status.consolidatorRole} · no background spend`,
-        `Project path: ${status.paths.projectEntries}`,
-        `Global path: ${status.paths.globalEntries}`,
-        "",
-        `Safety: retrieval is local · generated proposals use the configured extractor model only when learning is on · no secret reads/prints`,
-      ].join("\n"),
+      "Store secret locally?",
+      "Store the room secret in .mflow/config.toml for this repo. Choose back to keep it outside the runtime config.",
+      "back",
     )
+    if (storeSecret === undefined) return
+
+    const priorityText = await DialogPrompt.show(dialog, "mflow queue priority", {
+      value: String(current.hookPriority ?? 0),
+      placeholder: "0",
+    })
+    if (priorityText === null || priorityText === undefined) return
+
+    await activateMflow({
+      relayMode,
+      signaling,
+      room: room.trim(),
+      secret: secret?.trim(),
+      generateSecret: secretMode === "generate",
+      storeSecret: storeSecret === true,
+      hookPriority: Number(priorityText) || 0,
+      publicRelayNoticeAccepted,
+    }, mend.root)
+    await mend.reload()
+    toast.show({
+      variant: "success",
+      message: "mflow configured and enabled.",
+      duration: 5000,
+    })
+    await showMflowManager()
+  }
+  const deactivateMflowFromTui = async () => {
+    await deactivateMflow(mend.root)
+    await mend.reload()
+    toast.show({ variant: "success", message: "mflow disabled.", duration: 4000 })
+    await showMflowManager()
+  }
+  const removeMflowFromTui = async () => {
+    const confirmed = await DialogConfirm.show(
+      dialog,
+      "Remove mflow config?",
+      "This removes MendCode's local mflow state, MCP file, hook scaffold, and control guide for this repo.",
+    )
+    if (!confirmed) return
+    await removeMflowConfig(mend.root)
+    await mend.reload()
+    toast.show({ variant: "success", message: "mflow config removed.", duration: 4000 })
+    await showMflowManager()
+  }
+  const showMflowManager = async () => {
+    const current = await mflowStatusLine()
+    dialog.replace(() => (
+      <DialogSelect
+        title="mflow"
+        renderFilter={false}
+        current="status"
+        options={[
+          {
+            title: current.status.config.enabled ? "Enabled" : "Disabled",
+            value: "status",
+            category: "Status",
+            description: `${current.line} · ${current.daemon} · ${current.locks}`,
+            onSelect: () => {},
+          },
+          {
+            title: "Configure and turn on",
+            value: "activate",
+            category: "Actions",
+            description: "Choose public/custom relay, URL, room, secret handling, and queue priority.",
+            onSelect: () => void configureAndActivateMflowFromTui(),
+          },
+          {
+            title: "Turn off",
+            value: "deactivate",
+            category: "Actions",
+            description: "Disable pre-edit locks and MCP projection without deleting local config.",
+            disabled: !current.status.config.enabled,
+            onSelect: () => void deactivateMflowFromTui(),
+          },
+          {
+            title: "Remove local config",
+            value: "remove",
+            category: "Actions",
+            description: "Delete local mflow state, MCP file, hook scaffold, and control guide.",
+            onSelect: () => void removeMflowFromTui(),
+          },
+          {
+            title: "Show details",
+            value: "details",
+            category: "Diagnostics",
+            description: current.relay,
+            onSelect: () => void showMflowDetails(),
+          },
+        ]}
+      />
+    ))
+  }
+  const updateMemoryConfigFromDialog = async (
+    patch: Partial<MemoryConfig>,
+    message: string,
+    tab: "global" | "project" | "proposals" = "proposals",
+  ) => {
+    await writeProjectMemoryConfig(patch, memoryRoot())
+    await mend.reload()
+    toast.show({ variant: "success", message, duration: 4000 })
+    await showMemoryManager(tab)
   }
   const showPromptModes = () => {
     const modes: Array<{ mode: MendPromptMode; title: string; description: string }> = [
@@ -2131,6 +2396,55 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         previewMeta: `context ${status.maxPromptTokens} tokens · max ${status.maxEntries} manual entries`,
       },
     ]
+    const configOptions: MemoryManagerOption[] = [
+      {
+        title: status.input && !status.output ? "[on] Memory input enabled" : "Enable memory input only",
+        value: "memory-enable-input",
+        category: "Settings",
+        description: "Inject saved memory into requests without generating new proposals.",
+        previewTitle: "Enable memory input",
+        previewBody:
+          "Saved memory will be available to future model requests. Automatic memory proposal generation stays off.",
+        previewMeta: "project config",
+        onSelect: () =>
+          void updateMemoryConfigFromDialog(
+            { enabled: true, use: true, generate: false },
+            "Memory input enabled. Output proposals remain off.",
+          ),
+      },
+      {
+        title: status.input && status.output
+          ? "[on] Memory input and learning enabled"
+          : "Enable memory input and learning",
+        value: "memory-enable-io",
+        category: "Settings",
+        description: "Inject memory and create approval-gated proposals after chats.",
+        previewTitle: "Enable memory input and learning",
+        previewBody:
+          "Saved memory will be available to future model requests, and durable new facts can appear here as pending proposals for review.",
+        previewMeta: "project config · approval-gated",
+        onSelect: () =>
+          void updateMemoryConfigFromDialog(
+            { enabled: true, use: true, generate: true, requireApprovalForGenerated: true },
+            "Memory input and approval-gated output enabled.",
+          ),
+      },
+      {
+        title: status.enabled ? "Disable memory" : "[off] Memory disabled",
+        value: "memory-disable",
+        category: "Settings",
+        description: "Stop memory injection and automatic proposal generation.",
+        previewTitle: "Disable memory",
+        previewBody:
+          "Saved memory entries and pending proposals remain on disk, but they will not be injected or generated while memory is disabled.",
+        previewMeta: "project config",
+        onSelect: () =>
+          void updateMemoryConfigFromDialog(
+            { enabled: false, use: false, generate: false },
+            "Memory disabled.",
+          ),
+      },
+    ]
     const manualActionOptions: MemoryManagerOption[] = [
       {
         title: "[+] Add global memory",
@@ -2181,6 +2495,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     ]
     const options: MemoryManagerOption[] = [
       ...statusOptions,
+      ...configOptions,
       ...bulkOptions,
       ...proposalOptions,
       ...manualActionOptions,
@@ -2431,6 +2746,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       title: "Memory status",
       value: "mendcode.memory.status",
       category: mendCategory,
+      hidden: true,
       slash: { name: "memory", aliases: ["mem"] },
       onSelect: () => void showMemoryManager(),
     },
@@ -2439,21 +2755,18 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       value: "mendcode.memory.manager",
       category: mendCategory,
       suggested: true,
-      slash: { name: "memory-manager", aliases: ["memories"] },
+      slash: { name: "memory", aliases: ["mem", "memories", "memory-manager"] },
       onSelect: () => void showMemoryManager(),
     },
     {
       title: "Enable memory input",
       value: "mendcode.memory.input.enable",
       category: mendCategory,
+      hidden: true,
       onSelect: async (dialog) => {
-        await writeGlobalMemoryConfig({ enabled: true, use: true, generate: false }, memoryRoot())
+        await writeProjectMemoryConfig({ enabled: true, use: true, generate: false }, memoryRoot())
         await mend.reload()
-        toast.show({
-          variant: "success",
-          message: "Memory input enabled. Output proposals remain off.",
-          duration: 4000,
-        })
+        toast.show({ variant: "success", message: "Memory input enabled. Output proposals remain off.", duration: 4000 })
         dialog.clear()
       },
     },
@@ -2461,8 +2774,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       title: "Enable memory input and output",
       value: "mendcode.memory.io.enable",
       category: mendCategory,
+      hidden: true,
       onSelect: async (dialog) => {
-        await writeGlobalMemoryConfig(
+        await writeProjectMemoryConfig(
           { enabled: true, use: true, generate: true, requireApprovalForGenerated: true },
           memoryRoot(),
         )
@@ -2475,8 +2789,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       title: "Disable memory",
       value: "mendcode.memory.disable",
       category: mendCategory,
+      hidden: true,
       onSelect: async (dialog) => {
-        await writeGlobalMemoryConfig({ enabled: false, use: false, generate: false }, memoryRoot())
+        await writeProjectMemoryConfig({ enabled: false, use: false, generate: false }, memoryRoot())
         await mend.reload()
         toast.show({ variant: "success", message: "Memory disabled.", duration: 4000 })
         dialog.clear()
@@ -2524,12 +2839,29 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
     },
     {
-      title: "Mflow status",
+      title: "Mflow",
       value: "mendcode.mflow.status",
       category: mendCategory,
-      onSelect: async () => {
-        await DialogAlert.show(dialog, "MendCode Mflow status", await integrationStatus("mflow", mend.root))
-      },
+      slash: { name: "mflow" },
+      onSelect: () => void showMflowManager(),
+    },
+    {
+      title: "Configure and turn on mflow",
+      value: "mendcode.mflow.activate",
+      category: mendCategory,
+      onSelect: () => void configureAndActivateMflowFromTui(),
+    },
+    {
+      title: "Deactivate mflow",
+      value: "mendcode.mflow.deactivate",
+      category: mendCategory,
+      onSelect: () => void deactivateMflowFromTui(),
+    },
+    {
+      title: "Remove mflow config",
+      value: "mendcode.mflow.remove",
+      category: mendCategory,
+      onSelect: () => void removeMflowFromTui(),
     },
     {
       title: "Switch session",

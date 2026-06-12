@@ -21,6 +21,7 @@ import { ProjectRoutes } from "./project"
 import { SessionRoutes } from "./session"
 import { PtyRoutes } from "./pty"
 import { McpRoutes } from "./mcp"
+import { MflowRoutes } from "./mflow"
 import { FileRoutes } from "./file"
 import { ConfigRoutes } from "./config"
 import { ExperimentalRoutes } from "./experimental"
@@ -180,6 +181,7 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket, opts?: CorsOptions): H
     .route("/", FileRoutes())
     .route("/", EventRoutes())
     .route("/mcp", McpRoutes())
+    .route("/mflow", MflowRoutes())
     .route("/tui", TuiRoutes())
     .post(
       "/instance/dispose",
