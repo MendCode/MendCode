@@ -219,9 +219,9 @@ export async function providerLogin(providerID: string, method?: string | null, 
   const paths = mendPaths(root)
   const execute = options.execute === true
   const open = options.open === true
-  if (providerID !== "openai") throw new Error("Only OpenAI subscription OAuth login is implemented. Usage: mend auth login openai --method browser|headless --execute [--open]")
+  if (providerID !== "openai") throw new Error("Only OpenAI subscription OAuth login is implemented. Usage: mendcode auth login openai --method browser|headless --execute [--open]")
   const resolvedMethod = method || "browser"
-  if (!["browser", "headless"].includes(resolvedMethod)) throw new Error("Usage: mend auth login openai --method browser|headless --execute [--open]")
+  if (!["browser", "headless"].includes(resolvedMethod)) throw new Error("Usage: mendcode auth login openai --method browser|headless --execute [--open]")
   if (!execute) {
     return {
       ...providerLoginPlan(providerID, resolvedMethod),
@@ -262,6 +262,6 @@ export async function providerLogin(providerID: string, method?: string | null, 
     openedBrowser: resolvedMethod === "browser" && open,
     urlDelivery: resolvedMethod === "browser" ? "print-url" : "device-code",
     auth: redactedAuthSummary(state, paths.root),
-    next: "Run `mend auth status openai`; then use `mend run`.",
+    next: "Run `mendcode auth status openai`; then use `mendcode run`.",
   }
 }

@@ -1,36 +1,36 @@
-id = "opencode"
+id = "mendcode"
 name = "MendCode"
 description = "The open source coding agent."
-version = "1.14.39"
+version = "0.1.2"
 schema_version = 1
-authors = ["Anomaly"]
-repository = "https://mendcode.ai"
+authors = ["MendCode"]
+repository = "https://github.com/MendCode/MendCode"
 
 [agent_servers.mendcode]
 name = "MendCode"
 icon = "./icons/opencode.svg"
 
 [agent_servers.mendcode.targets.darwin-aarch64]
-archive = "https://mendcode.ai/releases/download/v1.14.39/opencode-darwin-arm64.zip"
-cmd = "./opencode"
+archive = "https://github.com/MendCode/MendCode/releases/download/v0.1.2/mendcode-darwin-arm64.zip"
+cmd = "./mendcode"
 args = ["acp"]
 
 [agent_servers.mendcode.targets.darwin-x86_64]
-archive = "https://mendcode.ai/releases/download/v1.14.39/opencode-darwin-x64.zip"
-cmd = "./opencode"
+archive = "https://github.com/MendCode/MendCode/releases/download/v0.1.2/mendcode-darwin-x64.zip"
+cmd = "./mendcode"
 args = ["acp"]
 
 [agent_servers.mendcode.targets.linux-aarch64]
-archive = "https://mendcode.ai/releases/download/v1.14.39/opencode-linux-arm64.tar.gz"
-cmd = "./opencode"
+archive = "https://github.com/MendCode/MendCode/releases/download/v0.1.2/mendcode-linux-arm64.tar.gz"
+cmd = "./mendcode"
 args = ["acp"]
 
 [agent_servers.mendcode.targets.linux-x86_64]
-archive = "https://mendcode.ai/releases/download/v1.14.39/opencode-linux-x64.tar.gz"
-cmd = "./opencode"
+archive = "https://github.com/MendCode/MendCode/releases/download/v0.1.2/mendcode-linux-x64.tar.gz"
+cmd = "./mendcode"
 args = ["acp"]
 
 [agent_servers.mendcode.targets.windows-x86_64]
-archive = "https://mendcode.ai/releases/download/v1.14.39/opencode-windows-x64.zip"
-cmd = "./opencode.exe"
+archive = "https://github.com/MendCode/MendCode/releases/download/v0.1.2/mendcode-windows-x64.zip"
+cmd = "./mendcode.exe"
 args = ["acp"]

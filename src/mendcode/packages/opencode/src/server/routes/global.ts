@@ -10,7 +10,6 @@ import { Bus } from "@/bus"
 import { AppRuntime } from "@/effect/app-runtime"
 import { AsyncQueue } from "@/util/queue"
 import { Installation } from "@/installation"
-import { InstallationVersion } from "@mendcode/core/installation/version"
 import * as Log from "@mendcode/core/util/log"
 import { lazy } from "../../util/lazy"
 import { Config } from "@/config/config"
@@ -84,14 +83,14 @@ export const GlobalRoutes = lazy(() =>
             description: "Health information",
             content: {
               "application/json": {
-                schema: resolver(z.object({ healthy: z.literal(true), version: z.string() })),
+                schema: resolver(z.object({ healthy: z.literal(true), version: z.string(), channel: z.string() })),
               },
             },
           },
         },
       }),
       async (c) => {
-        return c.json({ healthy: true, version: InstallationVersion })
+        return c.json({ healthy: true, version: Installation.displayVersion(), channel: Installation.channel() })
       },
     )
     .get(

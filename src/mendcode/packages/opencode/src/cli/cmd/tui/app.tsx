@@ -326,7 +326,7 @@ export function tui(input: {
   // oxlint-disable-next-line no-async-promise-executor -- intentional: async executor used for sequential setup before resolve
   return new Promise<void>(async (resolve) => {
     if (!canStartInteractiveTui()) {
-      process.stderr.write("Error: mend TUI requires an interactive terminal. Use `mend run` for non-interactive input.\n")
+      process.stderr.write("Error: mend TUI requires an interactive terminal. Use `mendcode run` for non-interactive input.\n")
       process.exitCode = 1
       resolve()
       return
@@ -513,7 +513,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         "Config permission:",
         permissionConfigSummary(),
         "",
-        "--dangerously-skip-permissions only applies to `mend run`; it does not toggle an already-running TUI session.",
+        "--dangerously-skip-permissions only applies to `mendcode run`; it does not toggle an already-running TUI session.",
       ].join("\n"),
     )
   }

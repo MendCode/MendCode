@@ -27,15 +27,15 @@ export function parseRunArgs(args: string[], commandName: "run" | "chat"): RunAr
     else if (arg === "--json") flags.json = true
     else if (arg === "--session") {
       const value = args[++i]
-      if (!value) throw new Error(`Usage: mend ${commandName} [--json] [--dry-run] [--session <id>] <message>`)
+      if (!value) throw new Error(`Usage: mendcode ${commandName} [--json] [--dry-run] [--session <id>] <message>`)
       flags.sessionID = value
     } else if (arg === "--prompt-mode") {
       const value = args[++i]
-      if (!value) throw new Error(`Usage: mend ${commandName} [--prompt-mode minimal|focus|full] <message>`)
+      if (!value) throw new Error(`Usage: mendcode ${commandName} [--prompt-mode minimal|focus|full] <message>`)
       flags.promptMode = value
     } else if (arg === "--focus") {
       const value = args[++i]
-      if (!value) throw new Error(`Usage: mend ${commandName} [--focus <id>] <message>`)
+      if (!value) throw new Error(`Usage: mendcode ${commandName} [--focus <id>] <message>`)
       flags.focusID = value
     } else rest.push(arg)
   }
@@ -116,7 +116,7 @@ export async function buildRunPlan(input: { prompt: string; dryRun: boolean; pro
     wouldCallProvider: !input.dryRun && support.supported,
     wouldRunDonorRuntime: false,
     secretsPrinted: false,
-    next: "Configure models/auth first; then run `mend run <prompt>`.",
+    next: "Configure models/auth first; then run `mendcode run <prompt>`.",
   }
 }
 

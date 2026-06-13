@@ -80,7 +80,7 @@ async function tui(args: string[]) {
   }
   if (sub === "apply-preset") {
     const preset = args[1]
-    if (preset !== "compact" && preset !== "comfortable" && preset !== "spacious" && preset !== "toggle-worktree") throw new Error("Usage: mend tui apply-preset <compact|comfortable|spacious|toggle-worktree>")
+    if (preset !== "compact" && preset !== "comfortable" && preset !== "spacious" && preset !== "toggle-worktree") throw new Error("Usage: mendcode tui apply-preset <compact|comfortable|spacious|toggle-worktree>")
     const result = await applyTuiPreset(preset, root)
     console.log(JSON.stringify({ ok: true, preset, backupPath: relative(root, result.backupPath), profilePath: relative(root, result.profilePath), profile: result.profile.profile }, null, 2))
     return
@@ -102,7 +102,7 @@ async function tui(args: string[]) {
   if (sub === "propose") {
     const dryRun = args.includes("--dry-run")
     const preference = args.slice(1).filter((arg) => arg !== "--dry-run").join(" ").trim()
-    if (!dryRun) throw new Error('TUI propose is gated: use `mend tui propose "<preference>" --dry-run`')
+    if (!dryRun) throw new Error('TUI propose is gated: use `mendcode tui propose "<preference>" --dry-run`')
     const { proposal, proposalPath, proposalDir } = await writeTuiProposal(preference, root)
     console.log(JSON.stringify({ ...proposal, proposalPath: relative(root, proposalPath), previewDir: relative(root, proposalDir), profile: undefined }, null, 2))
     if (!proposal.validation.ok) process.exitCode = 1
@@ -137,7 +137,7 @@ async function tui(args: string[]) {
     if (result.exitCode !== 0) process.exitCode = result.exitCode || 1
     return
   }
-  throw new Error("Usage: mend tui <status|schema|profile|apply|apply-preset|rollback|preview|propose|project|render|preview-plan|runtime-plan|probe>")
+  throw new Error("Usage: mendcode tui <status|schema|profile|apply|apply-preset|rollback|preview|propose|project|render|preview-plan|runtime-plan|probe>")
 }
 
 async function prompt(args: string[]) {
@@ -205,12 +205,12 @@ async function prompt(args: string[]) {
     console.log(JSON.stringify(await cyclePromptMode(), null, 2))
     return
   }
-  throw new Error("Usage: mend prompt <sources|build|mode|cycle-mode>")
+  throw new Error("Usage: mendcode prompt <sources|build|mode|cycle-mode>")
 }
 
 async function run(args: string[]) {
   const parsed = parseRunArgs(args, "run")
-  if (!parsed.prompt) throw new Error("Usage: mend run [--json] [--dry-run] <prompt>")
+  if (!parsed.prompt) throw new Error("Usage: mendcode run [--json] [--dry-run] <prompt>")
   const plan = await buildRunPlan({ prompt: parsed.prompt, dryRun: parsed.dryRun, promptMode: parsed.promptMode, focusID: parsed.focusID })
   if (parsed.dryRun || plan.blockers.length) {
     console.log(JSON.stringify(redactedRunPlanOutput(plan), null, 2))
@@ -239,7 +239,7 @@ async function run(args: string[]) {
 
 async function chat(args: string[]) {
   const parsed = parseRunArgs(args, "chat")
-  if (!parsed.prompt) throw new Error("Usage: mend chat [--json] [--dry-run] [--session <id>] <message>")
+  if (!parsed.prompt) throw new Error("Usage: mendcode chat [--json] [--dry-run] [--session <id>] <message>")
   const session = await readChatSession(parsed.sessionID)
   const messages = [...(session.messages || []), { role: "user", content: parsed.prompt }]
   const transcript = transcriptPrompt(messages)
@@ -324,7 +324,7 @@ async function models(args: string[]) {
     const failures = validateProviderModelID(providerID, modelID)
     if (failures.length) throw new Error(`Invalid model mapping:\n${failures.map((x) => `- ${x}`).join("\n")}`)
     const config = await readModelsConfig(root)
-    config.roles.default = { ...(config.roles.default || {}), providerID: providerID!, modelID: modelID!, ...(authMode ? { authMode } : {}), reason: "Explicit default model configured by mend models set-default." }
+    config.roles.default = { ...(config.roles.default || {}), providerID: providerID!, modelID: modelID!, ...(authMode ? { authMode } : {}), reason: "Explicit default model configured by mendcode models set-default." }
     if (args.includes("--enable")) config.enabled = true
     const refresh = !dryRun
       ? (await writeGlobalModelsConfig(config), await syncGlobalPrimaryAgentModels(root), await refreshGeneratedRuntimeModelConfig(root))
@@ -636,7 +636,7 @@ async function memory(args: string[]) {
       const prev = all[index - 1]
       return !arg.startsWith("--") && prev !== "--scope" && prev !== "--tags"
     }).join(" ").trim()
-    if (!text) throw new Error("Usage: mend memory add <text> [--scope global|project] [--tags a,b]")
+    if (!text) throw new Error("Usage: mendcode memory add <text> [--scope global|project] [--tags a,b]")
     const entry = await appendMemoryEntry({ scope, text, tags, cwd: root, source: "manual-cli" }, root)
     console.log(JSON.stringify({ ok: true, entry, callsProviders: false, readsSecrets: false }, null, 2))
     return
@@ -648,7 +648,7 @@ async function memory(args: string[]) {
       const prev = all[index - 1]
       return !arg.startsWith("--") && prev !== "--scope"
     }).join(" ").trim()
-    if (!id || !text) throw new Error("Usage: mend memory edit <entry-id> <text> [--scope global|project]")
+    if (!id || !text) throw new Error("Usage: mendcode memory edit <entry-id> <text> [--scope global|project]")
     const entry = await updateMemoryEntry(scope, id, { text }, root)
     console.log(JSON.stringify({ ok: true, entry, callsProviders: false, readsSecrets: false }, null, 2))
     return
@@ -656,7 +656,7 @@ async function memory(args: string[]) {
   if (sub === "delete") {
     const scope = optionValue(args, "--scope") === "global" ? "global" : "project"
     const id = args[1]
-    if (!id) throw new Error("Usage: mend memory delete <entry-id> [--scope global|project]")
+    if (!id) throw new Error("Usage: mendcode memory delete <entry-id> [--scope global|project]")
     console.log(JSON.stringify({ ...(await deleteMemoryEntry(scope, id, root)), callsProviders: false, readsSecrets: false }, null, 2))
     return
   }
@@ -676,7 +676,7 @@ async function memory(args: string[]) {
       console.log(JSON.stringify(result, null, 2))
       return
     }
-    if (!text) throw new Error("Usage: mend memory propose <text> [--scope global|project] [--tags a,b] OR mend memory propose --from-file <path> [--max-proposals n]")
+    if (!text) throw new Error("Usage: mendcode memory propose <text> [--scope global|project] [--tags a,b] OR mendcode memory propose --from-file <path> [--max-proposals n]")
     const proposal = await proposeMemory({ scope, text, tags, cwd: root, source: "manual-cli-proposal" }, root)
     console.log(JSON.stringify({ ok: true, proposal, callsProviders: false, readsSecrets: false, writesMemory: false }, null, 2))
     return
@@ -856,7 +856,7 @@ async function packages(args: string[]) {
   }
   if (sub === "install" || sub === "use") {
     const sourceID = args[1]
-    if (!sourceID) throw new Error("Usage: mend packages install <source-id>")
+    if (!sourceID) throw new Error("Usage: mendcode packages install <source-id>")
     const result = await runtimeRegistryApply(sourceID, root)
     console.log(JSON.stringify(result, null, 2))
     return
