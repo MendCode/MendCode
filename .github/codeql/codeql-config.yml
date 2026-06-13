@@ -1,0 +1,4 @@
+name: MendCode CodeQL
+
+paths-ignore:
+  - src/mendcode/packages/opencode/script/run-workspace-server

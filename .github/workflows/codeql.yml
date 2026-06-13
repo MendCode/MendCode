@@ -34,6 +34,7 @@ jobs:
         with:
           languages: javascript-typescript
           build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@411bbbe57033eedfc1a82d68c01345aa96c737d7
