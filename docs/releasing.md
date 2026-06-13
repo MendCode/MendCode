@@ -138,7 +138,7 @@ Inputs:
 The workflow:
 
 - runs supply-chain preflight
-- blocks release when OSV reports vulnerable checked-in lockfile entries
+- blocks release when OSV reports vulnerable release lockfile entries outside `.github/osv-release.toml`
 - installs from the checked-in lockfile with dependency scripts disabled
 - runs required MendCode native repair steps explicitly
 - builds `mendcode-*` release archives
