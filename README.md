@@ -1,17 +1,5 @@
 # MendCode
 
-<div align="center">
-
-```text
-      .-.
-     (o o)
-    /|[+]|\
-   /_|___|_\
-      \_/
-```
-
-</div>
-
 MendCode is a terminal-first coding runtime built around the `mend` CLI, a MendCode-owned configuration layer, reusable runtime packages, optional mflow coordination, optional TSM/worktree orchestration, and a highly customizable terminal UI.
 
 It is designed for people and teams who want a coding agent environment they can make their own: model-role presets, project packages, prompt chrome, bottom status, home layouts, ASCII titles, mascots, widgets, command palettes, and agent/session views without editing runtime internals.
