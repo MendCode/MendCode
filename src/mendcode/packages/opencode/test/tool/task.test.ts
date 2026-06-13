@@ -841,6 +841,7 @@ describe("tool.task", () => {
 
         const child = yield* sessions.get(result.metadata.sessionId)
         expect(child.parentID).toBe(chat.id)
+        expect(child.agent).toBe("reviewer")
         expect(child.permission).toEqual([
           {
             permission: "todowrite",

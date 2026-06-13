@@ -19,9 +19,41 @@ const providerID = "test-oauth-parity"
 const oauthURL = "https://example.com/oauth"
 const oauthInstructions = "Finish OAuth"
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
 function app(experimental: boolean) {
   Flag.OPENCODE_EXPERIMENTAL_HTTPAPI = experimental
   return experimental ? Server.Default().app : Server.Legacy().app
+}
+
+function providerList(input: unknown, key: "all" | "providers") {
+  if (!isRecord(input)) return []
+  if (!Array.isArray(input[key])) return []
+  return input[key]
+}
+
+function providerByID(input: unknown, key: "all" | "providers", id: string) {
+  return providerList(input, key).find((provider) => isRecord(provider) && provider.id === id)
+}
+
+function hasNonZeroModelCost(input: unknown, key: "all" | "providers", id: string) {
+  const provider = providerByID(input, key, id)
+  if (!isRecord(provider) || !isRecord(provider.models)) return false
+  return Object.values(provider.models).some((model) => {
+    if (!isRecord(model) || !isRecord(model.cost) || !isRecord(model.cost.cache)) return false
+    return [model.cost.input, model.cost.output, model.cost.cache.read, model.cost.cache.write].some(
+      (cost) => typeof cost === "number" && cost > 0,
+    )
+  })
+}
+
+function hasProviderMutationMarker(input: unknown, key: "all" | "providers", id: string) {
+  const provider = providerByID(input, key, id)
+  if (!isRecord(provider)) return false
+  if (provider.name === "mutated-provider") return true
+  return isRecord(provider.options) && provider.options.mutatedByPlugin === true
 }
 
 function requestAuthorize(input: {
@@ -70,6 +102,40 @@ function writeProviderAuthPlugin(dir: string) {
         "          }),",
         "        },",
         "      ],",
+        "    },",
+        "  }),",
+        "}",
+        "",
+      ].join("\n"),
+    )
+  })
+}
+
+function writeProviderModelsMutationPlugin(dir: string) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+
+    yield* fs.makeDirectory(path.join(dir, ".mendcode", "plugin"), { recursive: true })
+    yield* fs.writeFileString(
+      path.join(dir, ".mendcode", "plugin", "provider-models-mutation.ts"),
+      [
+        "export default {",
+        '  id: "test.provider-models-mutation",',
+        "  server: async () => ({",
+        "    provider: {",
+        '      id: "google",',
+        "      models: async (provider) => {",
+        "        const models = Object.fromEntries(",
+        "          Object.entries(provider.models ?? {}).map(([id, model]) => [id, { ...model }]),",
+        "        )",
+        '        provider.name = "mutated-provider"',
+        "        provider.options = { ...provider.options, mutatedByPlugin: true }",
+        "        for (const model of Object.values(provider.models ?? {})) {",
+        "          model.cost = { input: 0, output: 0 }",
+        "        }",
+        "        return models",
+        "      },",
         "    },",
         "  }),",
         "}",
@@ -150,5 +216,32 @@ describe("provider HttpApi", () => {
         })
       }),
     ),
+  )
+
+  it.live("keeps provider.models hook input mutations out of provider state", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "mendcode-test-" })
+
+      yield* fs.writeFileString(
+        path.join(dir, "mendcode.json"),
+        JSON.stringify({ $schema: "https://mendcode.ai/config.json", formatter: false, lsp: false }),
+      )
+      yield* writeProviderModelsMutationPlugin(dir)
+
+      const headers = { "x-opencode-directory": dir }
+      const providerResponse = yield* Effect.promise(() => Promise.resolve(app(true).request("/provider", { headers })))
+      const configResponse = yield* Effect.promise(() =>
+        Promise.resolve(app(true).request("/config/providers", { headers })),
+      )
+
+      expect(providerResponse.status).toBe(200)
+      expect(configResponse.status).toBe(200)
+
+      const providerBody = yield* Effect.promise(() => providerResponse.json())
+      expect(hasProviderMutationMarker(providerBody, "all", "google")).toBe(false)
+      expect(hasNonZeroModelCost(providerBody, "all", "google")).toBe(true)
+    }),
   )
 })
