@@ -30,6 +30,7 @@ import { createStore, produce, unwrap } from "solid-js/store"
 import { useKeybind } from "@tui/context/keybind"
 import { usePromptHistory, type PromptInfo } from "./history"
 import { computePromptTraits } from "./traits"
+import { resolveActivePromptAgentName } from "./agent"
 import { assign } from "./part"
 import { pastedContentLabel, promptSubmitParts, shouldSummarizePastedContentWithThreshold } from "./submit-parts"
 import { findSlashCommandInvocation } from "./slash-command"
@@ -433,11 +434,19 @@ export function Prompt(props: PromptProps) {
     if (!name) return undefined
     return sync.data.agent.find((item) => item.name === name && !item.hidden)
   })
-  const activeAgent = createMemo(() => sessionAgent() ?? local.agent.current())
   const sessionUsesSubagent = createMemo(() => {
     const name = sessionAgent()?.name
     if (!name) return false
     return !local.agent.list().some((item) => item.name === name)
+  })
+  const activeAgent = createMemo(() => {
+    const name = resolveActivePromptAgentName({
+      sessionAgentName: sessionAgent()?.name,
+      localAgentName: local.agent.current()?.name,
+      primaryAgentNames: local.agent.list().map((item) => item.name),
+    })
+    if (!name) return undefined
+    return sync.data.agent.find((item) => item.name === name && !item.hidden)
   })
   const selectedPromptModel = createMemo(() => {
     if (!sessionUsesSubagent()) return local.model.current()
