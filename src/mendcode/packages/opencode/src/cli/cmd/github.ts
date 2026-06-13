@@ -444,7 +444,7 @@ export const GithubRunCommand = effectCmd({
       })
       .option("token", {
         type: "string",
-        describe: "GitHub personal access token (github_pat_********)",
+        describe: "GitHub personal access token",
       }),
   handler: Effect.fn("Cli.github.run")(function* (args) {
     const disabled = mendcodeGitHubDisabled()
