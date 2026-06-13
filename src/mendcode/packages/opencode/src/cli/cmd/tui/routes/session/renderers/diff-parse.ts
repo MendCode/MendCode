@@ -1,3 +1,5 @@
+import path from "path"
+
 export type TimelineDiffRowKind = "file" | "context" | "added" | "removed" | "meta"
 
 export type TimelineDiffRow = {
@@ -22,7 +24,14 @@ export function parseTimelineDiffRows(diff: string): TimelineDiffRow[] {
   let currentFile: string | undefined
   const lines = diff.split(/\r?\n/)
   if (lines.at(-1) === "") lines.pop()
-  const cleanPath = (input: string) => input.replace(/^[ab]\//, "")
+  const cleanPath = (input: string) => {
+    const withoutPrefix = input.replace(/^[ab]\//, "")
+    if (!path.isAbsolute(withoutPrefix)) return withoutPrefix
+
+    const relative = path.relative(process.cwd(), withoutPrefix)
+    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return withoutPrefix
+    return relative.split(path.sep).join("/")
+  }
   const pushFile = (file: string) => {
     const text = cleanPath(file.trim())
     if (!text || text === "/dev/null" || text === currentFile) return

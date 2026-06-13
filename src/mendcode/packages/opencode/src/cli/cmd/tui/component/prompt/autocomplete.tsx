@@ -19,6 +19,8 @@ import type { PromptInfo } from "./history"
 import { useFrecency } from "./frecency"
 import { findSlashAutocompleteTrigger } from "./slash-command"
 
+const RESERVED_UI_SLASHES = new Set(["context"])
+
 function removeLineRange(input: string) {
   const hashIndex = input.lastIndexOf("#")
   return hashIndex !== -1 ? input.substring(0, hashIndex) : input
@@ -400,9 +402,18 @@ export function Autocomplete(props: {
   })
 
   const commands = createMemo((): AutocompleteOption[] => {
-    const results: AutocompleteOption[] = [...command.slashes()]
+    const nativeSlashes = command.slashes()
+    const nativeSlashNames = new Set(
+      nativeSlashes.flatMap((item) => [
+        item.display.replace(/^\//, ""),
+        ...(item.aliases ?? []).map((alias) => alias.replace(/^\//, "")),
+      ]),
+    )
+    for (const slash of RESERVED_UI_SLASHES) nativeSlashNames.add(slash)
+    const results: AutocompleteOption[] = [...nativeSlashes]
 
     for (const serverCommand of sync.data.command) {
+      if (nativeSlashNames.has(serverCommand.name)) continue
       const label = serverCommand.source === "mcp" ? ":mcp" : serverCommand.source === "skill" ? ":skill" : ""
       results.push({
         display: "/" + serverCommand.name + label,
