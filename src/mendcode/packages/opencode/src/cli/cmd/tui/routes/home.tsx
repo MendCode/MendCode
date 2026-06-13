@@ -21,11 +21,12 @@ import { asciiTextWidth, renderAsciiText, type HomeLogoFont } from "../component
 import { homeMascotText } from "@/mend/tui/mascot"
 import { Locale } from "@/util/locale"
 import { Global } from "@mendcode/core/global"
-import { InstallationVersion } from "@mendcode/core/installation/version"
+import { Installation } from "@/installation"
 import type { GlobalEvent, PermissionRequest, PlanReviewRequest, QuestionRequest, Session, SessionStatus } from "@mendcode/sdk/v2"
 import {
   isAgentViewSessionFallbackVisible,
   isAgentViewSessionVisible,
+  formatAgentViewSessionTime,
   type AgentViewBackgroundSession,
   type AgentViewSessionItem,
 } from "../util/agent-view"
@@ -120,8 +121,7 @@ export function HomeSurface(props: {
   const homeWelcomeMode = createMemo(() => mend.profile.surfaces.homeWelcome?.mode || "centered")
   const homeWelcomeRightPanel = createMemo(() => mend.profile.surfaces.homeWelcome?.rightPanel || "agentManager")
   const productVersionLabel = createMemo(() => {
-    const version = InstallationVersion === "local" ? "local" : `v${InstallationVersion}`
-    return `${mend.profile.identity.productName} ${version}`
+    return `${mend.profile.identity.productName} ${Installation.labelVersion()}`
   })
   const splitWelcome = createMemo(() => homeWelcomeMode() === "split" && homeDensity() === "full" && dimensions().width >= 76)
   const promptPreset = createMemo(() => mend.profile.promptChrome.preset)
@@ -538,7 +538,7 @@ export function HomeSurface(props: {
       item.background.state
     )
   }
-  const timeLabel = (item: AgentViewSessionItem) => Locale.time(item.background.time.updated)
+  const timeLabel = (item: AgentViewSessionItem) => formatAgentViewSessionTime(item.background.time.updated)
   const elapsedLabel = (item: AgentViewSessionItem) => {
     const seconds = Math.max(0, Math.floor((Date.now() - item.background.time.updated) / 1000))
     if (seconds < 60) return `${seconds}s`
@@ -647,7 +647,7 @@ export function HomeSurface(props: {
   const homeAgentManagerSurface = (options?: { paddingTop?: number; width?: number }) => {
     const width = options?.width ?? launcherWidth()
     const nameWidth = createMemo(() => Math.min(26, Math.max(14, Math.floor(width * 0.32))))
-    const timeWidth = createMemo(() => (width >= 68 ? 9 : 6))
+    const timeWidth = createMemo(() => (width >= 68 ? 18 : width >= 54 ? 14 : 10))
     const detailWidth = createMemo(() => Math.max(10, width - nameWidth() - timeWidth() - 4))
     const row = (
       item: AgentViewSessionItem,
@@ -680,7 +680,9 @@ export function HomeSurface(props: {
           </text>
         </box>
         <box width={timeWidth()} flexShrink={0} alignItems="flex-end">
-          <text fg={launcherHintColor} wrapMode="none">{options?.elapsed ? elapsedLabel(item) : timeLabel(item)}</text>
+          <text fg={launcherHintColor} wrapMode="none">
+            {Locale.truncateMiddle(options?.elapsed ? elapsedLabel(item) : timeLabel(item), timeWidth())}
+          </text>
         </box>
       </box>
     )

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  formatAgentViewSessionTime,
   isAgentViewSessionFallbackVisible,
   isAgentViewSessionVisible,
   isTemporaryAgentViewDirectory,
@@ -9,6 +10,27 @@ import {
 const now = 1_800_000_000_000
 
 describe("Agent View visibility", () => {
+  test("formats welcome timestamps with date context", () => {
+    const current = Date.UTC(2026, 5, 13, 18, 0, 0)
+    const today = Date.UTC(2026, 5, 13, 15, 30, 0)
+    const previousMonth = Date.UTC(2026, 4, 10, 15, 30, 0)
+    const previousYear = Date.UTC(2025, 5, 13, 15, 30, 0)
+
+    expect(formatAgentViewSessionTime(today, current)).toBe(
+      `Today · ${new Date(today).toLocaleTimeString(undefined, { timeStyle: "short" })}`,
+    )
+    expect(formatAgentViewSessionTime(previousMonth, current)).toBe(
+      `${new Date(previousMonth).toLocaleTimeString(undefined, { timeStyle: "short" })} · ${new Date(
+        previousMonth,
+      ).toLocaleDateString(undefined, { day: "numeric", month: "short" })}`,
+    )
+    expect(formatAgentViewSessionTime(previousYear, current)).toBe(
+      `${new Date(previousYear).toLocaleTimeString(undefined, { timeStyle: "short" })} · ${new Date(
+        previousYear,
+      ).toLocaleDateString(undefined, { day: "numeric", month: "numeric", year: "numeric" })}`,
+    )
+  })
+
   test("detects temp and test directories", () => {
     expect(isTemporaryAgentViewDirectory("/private/var/folders/wk/opencode-test-123")).toBe(true)
     expect(isTemporaryAgentViewDirectory("/tmp/mendcode-test-123")).toBe(true)
