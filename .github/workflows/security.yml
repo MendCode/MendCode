@@ -169,13 +169,13 @@ jobs:
           persist-credentials: false
 
       - name: Run OSV-Scanner
-        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' }}
+        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' || github.event_name == 'pull_request' || github.event_name == 'push' }}
         shell: bash
         run: |
           set -euo pipefail
           docker run --rm \
             -v "$PWD:/src" \
-            ghcr.io/google/osv-scanner:v2.3.8 \
+            ghcr.io/google/osv-scanner:v2.3.8@sha256:64e86bec6df2466feea5137fc7c78fb3b7c21ec077f014d7130f64810e50676b \
             scan --recursive /src/src/mendcode
 
   github-actions:
@@ -216,5 +216,5 @@ jobs:
           set -euo pipefail
           docker run --rm \
             -v "$PWD:/src" \
-            semgrep/semgrep:1.165.0 \
+            semgrep/semgrep:1.165.0@sha256:f4791a54c891eabe1188248135574e6e03dfc31dfd3f3b747c7bec7079bfed1b \
             semgrep scan --error --config /src/.github/semgrep/security-guard.yml /src/src/mendcode

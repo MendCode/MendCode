@@ -1,5 +1,5 @@
 import path from "path"
-import { exec } from "child_process"
+import { spawn } from "child_process"
 import { Filesystem } from "@/util/filesystem"
 import * as prompts from "@clack/prompts"
 import { map, pipe, sortBy, values } from "remeda"
@@ -342,15 +342,26 @@ export const GithubInstallCommand = effectCmd({
 
           // Open browser
           const url = "https://github.com/apps/opencode-agent"
-          const command =
+          const opener =
             process.platform === "darwin"
-              ? `open "${url}"`
+              ? { command: "open", args: [url] }
               : process.platform === "win32"
-                ? `start "" "${url}"`
-                : `xdg-open "${url}"`
+                ? { command: "cmd", args: ["/c", "start", "", url] }
+                : { command: "xdg-open", args: [url] }
 
-          exec(command, (error) => {
-            if (error) {
+          const child = spawn(opener.command, opener.args, {
+            detached: true,
+            stdio: "ignore",
+            windowsHide: true,
+          })
+          child.on("error", () => {
+            prompts.log.warn(`Could not open browser. Please visit: ${url}`)
+          })
+          child.on("spawn", () => {
+            child.unref()
+          })
+          child.on("exit", (code) => {
+            if (code && code !== 0) {
               prompts.log.warn(`Could not open browser. Please visit: ${url}`)
             }
           })

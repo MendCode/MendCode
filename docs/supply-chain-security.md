@@ -33,7 +33,8 @@ Repository automation follows these rules:
 - Release assets are checked for MendCode-owned names and expected binaries.
 - Dependency review blocks high-severity dependency changes in PRs.
 - CodeQL runs on `main`, `dev`, PRs, and schedule.
-- Security Guard blocks invisible Unicode controls, risky tracked files, scanner findings, GitHub Actions issues, Semgrep findings, and supply-chain preflight failures.
+- Security Guard blocks invisible Unicode controls, risky tracked files, secrets findings, GitHub Actions issues, Semgrep findings, and supply-chain preflight failures.
+- OSV dependency scanning runs on PRs and pushes as advisory signal for the current migration baseline, and blocks scheduled/manual security runs plus every release workflow.
 
 ## Preflight Guard
 
@@ -55,12 +56,18 @@ bash .github/scripts/supply-chain-preflight.sh
 
 Dependency changes should go through PR review and CI. Direct package publishing is intentionally separate from CLI release publishing.
 
-For release asset generation, the controlled GitHub Actions release workflow installs from the checked-in lockfile, builds assets, verifies the release contract, generates an SBOM, and emits provenance attestations.
+For release asset generation, the controlled GitHub Actions release workflow scans checked-in lockfiles with OSV before installing dependencies. A release cannot publish while OSV reports vulnerable lockfile entries. After that gate, the workflow installs from the checked-in lockfile, builds assets, verifies the release contract, generates an SBOM, and emits provenance attestations.
 
 ## Current First Release Status
 
-No public GitHub Release is published until the release workflow successfully creates all installer assets. Track the first release in:
+No public GitHub Release is published until the release workflow successfully creates all installer assets and the dependency release gate is clean. Track the first release in:
 
 ```text
 https://github.com/MendCode/MendCode/issues/52
+```
+
+Track the OSV lockfile remediation release blocker in:
+
+```text
+https://github.com/MendCode/MendCode/issues/55
 ```

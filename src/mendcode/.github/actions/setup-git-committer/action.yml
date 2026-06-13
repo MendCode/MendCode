@@ -19,17 +19,18 @@ runs:
   steps:
     - name: Create app token
       id: apptoken
-      uses: actions/create-github-app-token@v2
+      uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
       with:
-        app-id: ${{ inputs.mendcode-app-id }}
-        private-key: ${{ inputs.mendcode-app-secret }}
-        owner: ${{ github.repository_owner }}
+        app-id: ${{ inputs.opencode-app-id }}
+        private-key: ${{ inputs.opencode-app-secret }}
+        permission-contents: write
 
     - name: Configure git user
+      env:
+        APP_SLUG: ${{ steps.apptoken.outputs.app-slug }}
       run: |
-        slug="${{ steps.apptoken.outputs.app-slug }}"
-        git config --global user.name "${slug}[bot]"
-        git config --global user.email "${slug}[bot]@users.noreply.github.com"
+        git config --global user.name "${APP_SLUG}[bot]"
+        git config --global user.email "${APP_SLUG}[bot]@users.noreply.github.com"
       shell: bash
 
     - name: Clear checkout auth
@@ -38,6 +39,9 @@ runs:
       shell: bash
 
     - name: Configure git remote
+      env:
+        APP_TOKEN: ${{ steps.apptoken.outputs.token }}
+        REPOSITORY: ${{ github.repository }}
       run: |
-        git remote set-url origin https://x-access-token:${{ steps.apptoken.outputs.token }}@github.com/${{ github.repository }}
+        git remote set-url origin "https://x-access-token:${APP_TOKEN}@github.com/${REPOSITORY}"
       shell: bash

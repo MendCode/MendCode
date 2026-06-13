@@ -9,6 +9,8 @@ updates:
       time: "09:00"
       timezone: "America/New_York"
     open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
     groups:
       bun-dependencies:
         patterns:
@@ -27,6 +29,8 @@ updates:
       time: "09:05"
       timezone: "America/New_York"
     open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
     groups:
       bun-github-action:
         patterns:
@@ -45,6 +49,8 @@ updates:
       time: "09:10"
       timezone: "America/New_York"
     open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
     groups:
       bun-console-resource:
         patterns:
@@ -63,6 +69,8 @@ updates:
       time: "09:15"
       timezone: "America/New_York"
     open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
     groups:
       bun-vscode-sdk:
         patterns:
@@ -81,6 +89,8 @@ updates:
       time: "09:30"
       timezone: "America/New_York"
     open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns:

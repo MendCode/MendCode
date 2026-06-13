@@ -138,6 +138,7 @@ Inputs:
 The workflow:
 
 - runs supply-chain preflight
+- blocks release when OSV reports vulnerable checked-in lockfile entries
 - installs from the checked-in lockfile
 - builds `mendcode-*` release archives
 - validates the installer asset contract

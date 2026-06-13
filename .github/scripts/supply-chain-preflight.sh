@@ -40,7 +40,8 @@ while IFS= read -r -d '' file; do
   done < <(grep -nE 'uses: [^[:space:]#]+@' "$file" | grep -vE 'uses: docker://' || true)
 done < <(find .github/workflows -type f \( -name '*.yml' -o -name '*.yaml' \) -print0)
 
-if grep -RInP 'curl .*\| *(bash|sh)|wget .*\| *(bash|sh)' .github src/mendcode/script src/mendcode/packages/opencode/script 2>/dev/null; then
+if grep -RInP 'curl .*\| *(bash|sh)|wget .*\| *(bash|sh)' .github src/mendcode/script src/mendcode/packages/opencode/script 2>/dev/null \
+  | grep -v '^\.github/scripts/supply-chain-preflight\.sh:'; then
   add_failure "Pipe-to-shell command found in automation path"
 fi
 
