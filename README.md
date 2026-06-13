@@ -1,14 +1,15 @@
 # MendCode
 
 <div align="center">
-<pre>
-      .-.         ███╗   ███╗███████╗███╗   ██╗██████╗  ██████╗ ██████╗ ██████╗ ███████╗
-     (o o)        ████╗ ████║██╔════╝████╗  ██║██╔══██╗██╔════╝██╔═══██╗██╔══██╗██╔════╝
-    /|[+]|\       ██╔████╔██║█████╗  ██╔██╗ ██║██║  ██║██║     ██║   ██║██║  ██║█████╗
-   /_|___|_\      ██║╚██╔╝██║██╔══╝  ██║╚██╗██║██║  ██║██║     ██║   ██║██║  ██║██╔══╝
-      \_/         ██║ ╚═╝ ██║███████╗██║ ╚████║██████╔╝╚██████╗╚██████╔╝██████╔╝███████╗
-                  ╚═╝     ╚═╝╚══════╝╚═╝  ╚═══╝╚═════╝  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝
-</pre>
+
+```text
+      .-.
+     (o o)
+    /|[+]|\
+   /_|___|_\
+      \_/
+```
+
 </div>
 
 MendCode is a terminal-first coding runtime built around the `mend` CLI, a MendCode-owned configuration layer, reusable runtime packages, optional mflow coordination, optional TSM/worktree orchestration, and a highly customizable terminal UI.
