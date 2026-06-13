@@ -7,6 +7,7 @@ These docs describe the MendCode-specific runtime layer in this repository. They
 - [Architecture and packages](architecture.md): repo layout, owned runtime, package list, and how the pieces fit.
 - [CLI, setup, and configuration](cli-setup-configuration.md): `mend`, setup steps, config files, models, providers, memory, permissions.
 - [Customization](customization.md): prompt chrome, TUI profile, widgets, title/logo/ASCII mascot, model roles.
+- [TUI plugins and widgets](tui-plugins-and-widgets.md): custom widgets, slots, footer entries, commands, dialogs, routes, themes, and package distribution.
 - [Packages and team sharing](packages-and-team-sharing.md): package manifests, local snapshots, GitHub/team registries, sharing one company package.
 - [mflow coordination](mflow.md): what mflow is, setup, relay modes, file locks, and multi-agent same-worktree editing.
 - [TSM and worktrees](tsm-and-worktrees.md): `mend --worktree`, `mend --tsm`, optional TSM lifecycle, preview-first worktree safety.
