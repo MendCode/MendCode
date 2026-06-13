@@ -224,6 +224,7 @@ function worktreeShortcutCandidates(status: Awaited<ReturnType<typeof worktreeSt
 export function resolveWorktreeShortcutTarget(
   status: Awaited<ReturnType<typeof worktreeStatus>>,
   target?: string,
+  command = "worktree",
 ): ShortcutWorktreeTarget {
   if (target) {
     const hit = worktreeShortcutCandidates(status).find((item) =>
@@ -244,17 +245,26 @@ export function resolveWorktreeShortcutTarget(
     }
   }
 
+  const managedNonBase = status.registry.records
+    .filter((item) => item.path !== status.workspace.repoRoot)
+    .map((record) => ({
+      path: record.path,
+      branch: record.branch,
+      label: record.id,
+    }))
+  if (managedNonBase.length === 1) return managedNonBase[0]!
+
   const nonBase = worktreeShortcutCandidates(status).filter((item) => item.path !== status.workspace.repoRoot)
   if (nonBase.length === 1) return nonBase[0]!
   const summary = nonBase.map((item) => item.branch || item.path).join(", ") || "none"
-  throw new Error(`Multiple or no worktree targets found (${summary}). Use \`mend --worktree <branch|path>\`.`)
+  throw new Error(`Multiple or no worktree targets found (${summary}). Use \`mend --${command} <branch|path>\`.`)
 }
 
 async function runWorktreeShortcut(args: string[]) {
   const target = args[0]
   if (args.length > 1) throw new Error("Usage: mend --worktree [branch|path|id]")
   const status = await worktreeStatus(process.cwd())
-  const resolved = resolveWorktreeShortcutTarget(status, target)
+  const resolved = resolveWorktreeShortcutTarget(status, target, "worktree")
   return runRuntime([resolved.path])
 }
 
@@ -267,7 +277,7 @@ async function runTsmShortcut(args: string[]) {
   if (tsm.lifecycle !== "active" || !tsm.worktreeCapable) {
     throw new Error(`TSM is not active for this repo (${tsm.lifecycle}). Run \`mend tsm status\` and \`mend tsm activate\`.`)
   }
-  const branches = all ? [] : [resolveWorktreeShortcutTarget(status, target).branch].filter((branch): branch is string => Boolean(branch))
+  const branches = all ? [] : [resolveWorktreeShortcutTarget(status, target, "tsm").branch].filter((branch): branch is string => Boolean(branch))
   if (!all && !branches.length) throw new Error("TSM shortcut requires a branch-backed worktree target.")
   const result = spawnSync("tsm", ["wt", "open", ...branches, "--split", "mend"], {
     cwd: status.workspace.repoRoot,
