@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discussions
+    url: https://github.com/MendCode/MendCode/discussions
+    about: Ask setup, package, mflow, TUI customization, and plugin/widget questions.
+  - name: Private vulnerability report
+    url: https://github.com/MendCode/MendCode/security/advisories/new
+    about: Report security issues privately. Do not open public issues for vulnerabilities.
