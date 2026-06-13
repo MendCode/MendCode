@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4 - 2026-06-13
+
+- Stop normal automatic and manual compaction from re-triggering the assistant after a completed turn.
+- Keep overflow compaction recovery for requests that really hit provider context limits.
+- Make `Tab` mode cycling update the active prompt mode instead of leaving the mode label stuck while model state changes.
+
 ## 0.1.3 - 2026-06-13
 
 - Show richer Agent View welcome timestamps, including `Today` plus contextual day, month, and year information.
