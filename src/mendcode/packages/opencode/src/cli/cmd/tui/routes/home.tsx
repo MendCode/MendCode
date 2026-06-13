@@ -21,6 +21,7 @@ import { asciiTextWidth, renderAsciiText, type HomeLogoFont } from "../component
 import { homeMascotText } from "@/mend/tui/mascot"
 import { Locale } from "@/util/locale"
 import { Global } from "@mendcode/core/global"
+import { InstallationVersion } from "@mendcode/core/installation/version"
 import type { GlobalEvent, PermissionRequest, PlanReviewRequest, QuestionRequest, Session, SessionStatus } from "@mendcode/sdk/v2"
 import {
   isAgentViewSessionFallbackVisible,
@@ -117,7 +118,11 @@ export function HomeSurface(props: {
   const logoBottomPad = createMemo(() => (homeDensity() === "full" && logoFont() === "shadow" ? 1 : 0))
   const logoPromptGap = createMemo(() => (homeDensity() === "full" && logoFont() === "shadow" ? 0 : 0))
   const homeWelcomeMode = createMemo(() => mend.profile.surfaces.homeWelcome?.mode || "centered")
-  const homeWelcomeRightPanel = createMemo(() => mend.profile.surfaces.homeWelcome?.rightPanel || "actions")
+  const homeWelcomeRightPanel = createMemo(() => mend.profile.surfaces.homeWelcome?.rightPanel || "agentManager")
+  const productVersionLabel = createMemo(() => {
+    const version = InstallationVersion === "local" ? "local" : `v${InstallationVersion}`
+    return `${mend.profile.identity.productName} ${version}`
+  })
   const splitWelcome = createMemo(() => homeWelcomeMode() === "split" && homeDensity() === "full" && dimensions().width >= 76)
   const promptPreset = createMemo(() => mend.profile.promptChrome.preset)
   const promptEdgeToEdge = createMemo(() => promptPreset() === "minimal" || promptPreset() === "top-bottom")
@@ -129,6 +134,7 @@ export function HomeSurface(props: {
   const rootPaddingTop = createMemo(() => (homeDensity() === "tiny" ? 0 : 1))
   const sidePadding = createMemo(() => (homeDensity() === "tiny" ? 1 : 2))
   const launcherVisible = createMemo(() => homeDensity() !== "tiny")
+  const agentViewHomeActive = createMemo(() => launcherVisible() && homeWelcomeRightPanel() === "agentManager")
   const launcherCompact = createMemo(() => homeDensity() === "compact")
   const launcherWidth = createMemo(() => Math.min(44, Math.max(28, dimensions().width - sidePadding() * 4)))
   const splitPanelInnerWidth = createMemo(() => Math.max(24, dimensions().width - sidePadding() * 2 - 6))
@@ -315,7 +321,7 @@ export function HomeSurface(props: {
   }
 
   const scheduleAgentViewRefresh = () => {
-    if (!splitWelcome() || homeWelcomeRightPanel() !== "agentManager") return
+    if (!agentViewHomeActive()) return
     if (agentViewRefreshTimer) clearTimeout(agentViewRefreshTimer)
     agentViewRefreshTimer = setTimeout(() => {
       agentViewRefreshTimer = undefined
@@ -324,12 +330,12 @@ export function HomeSurface(props: {
   }
 
   createEffect(() => {
-    if (!splitWelcome() || homeWelcomeRightPanel() !== "agentManager") return
+    if (!agentViewHomeActive()) return
     scheduleAgentViewRefresh()
   })
 
   createEffect(() => {
-    const active = splitWelcome() && homeWelcomeRightPanel() === "agentManager"
+    const active = agentViewHomeActive()
     if (!active) {
       if (agentViewPollTimer) {
         clearInterval(agentViewPollTimer)
@@ -465,7 +471,7 @@ export function HomeSurface(props: {
     visibleAgentViewRows().find((item) => item.background.sessionID === selectedAgentViewSessionID()),
   )
   const selectedAgentViewPromptSessionID = createMemo(() => {
-    if (!splitWelcome() || homeWelcomeRightPanel() !== "agentManager") return undefined
+    if (!agentViewHomeActive()) return undefined
     return selectedAgentViewItem()?.background.sessionID
   })
   const moveAgentViewSelection = (direction: 1 | -1) => {
@@ -479,7 +485,7 @@ export function HomeSurface(props: {
     setSelectedAgentViewSessionID(rows[next]?.background.sessionID)
   }
   useKeyboard((evt) => {
-    if (!splitWelcome() || homeWelcomeRightPanel() !== "agentManager") return
+    if (!agentViewHomeActive()) return
     if (dialog.stack.length > 0) return
     const promptInput = promptRef.current?.current.input ?? ""
     const rows = visibleAgentViewRows()
@@ -544,12 +550,7 @@ export function HomeSurface(props: {
   }
   const sessionTitle = (item: AgentViewSessionItem) =>
     item.background.session?.title || item.session?.title || item.background.session?.agent || item.session?.agent || item.background.sessionID
-  const commandCount = createMemo(() => sync.data.command.length)
-  const mcpCount = createMemo(() => Object.keys(sync.data.mcp).length)
-  const homeIdentityDetail = createMemo(() => {
-    const pieces = [`${commandCount()} commands`, `${mcpCount()} MCP servers`]
-    return pieces.join(" · ")
-  })
+  const homeIdentityDetail = createMemo(() => productVersionLabel())
   const openAgentViewSession = (item: AgentViewSessionItem) => {
     route.navigate({
       type: "session",
@@ -740,12 +741,15 @@ export function HomeSurface(props: {
         <Show when={!splitWelcome()}>
           <box
             width="100%"
+            flexDirection="row"
             paddingTop={rootPaddingTop()}
             paddingLeft={sidePadding()}
             paddingRight={sidePadding()}
             flexShrink={0}
           >
             <text fg={mend.profile.theme.tokens.muted}>{rootLabel()}</text>
+            <box flexGrow={1} minWidth={1} />
+            <text fg={mend.profile.theme.tokens.muted}>{productVersionLabel()}</text>
           </box>
         </Show>
         <box
@@ -767,7 +771,14 @@ export function HomeSurface(props: {
                   </box>
                 </Show>
                 <box height={logoPromptGap()} minHeight={0} flexShrink={0} />
-                <Show when={launcherVisible()}>{homeActionsSurface()}</Show>
+                <Show when={launcherVisible()}>
+                  <Show
+                    when={homeWelcomeRightPanel() === "agentManager"}
+                    fallback={homeActionsSurface()}
+                  >
+                    {homeAgentManagerSurface({ paddingTop: launcherTopPadding(), width: rightPanelWidth() })}
+                  </Show>
+                </Show>
                 <box flexGrow={1} minHeight={0} />
               </>
             }
