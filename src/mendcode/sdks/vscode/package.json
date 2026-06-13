@@ -2,7 +2,7 @@
   "name": "mendcode",
   "displayName": "MendCode",
   "description": "MendCode for VS Code",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "publisher": "sst-dev",
   "repository": {
     "type": "git",

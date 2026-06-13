@@ -12,7 +12,9 @@ interface MockClientState {
   listToolsShouldFail: boolean
   listToolsError: string
   listPromptsShouldFail: boolean
+  listPromptsShouldHang: boolean
   listResourcesShouldFail: boolean
+  listResourcesShouldHang: boolean
   prompts: Array<{ name: string; description?: string }>
   resources: Array<{ name: string; uri: string; description?: string }>
   closed: boolean
@@ -28,6 +30,7 @@ let connectError = "Mock transport cannot connect"
 let clientCreateCount = 0
 // Tracks how many times transport.close() is called across all mock transports
 let transportCloseCount = 0
+let lastStdioOptions: any
 
 function getOrCreateClientState(name?: string): MockClientState {
   const key = name ?? "default"
@@ -39,7 +42,9 @@ function getOrCreateClientState(name?: string): MockClientState {
       listToolsShouldFail: false,
       listToolsError: "listTools failed",
       listPromptsShouldFail: false,
+      listPromptsShouldHang: false,
       listResourcesShouldFail: false,
+      listResourcesShouldHang: false,
       prompts: [],
       resources: [],
       closed: false,
@@ -54,8 +59,9 @@ function getOrCreateClientState(name?: string): MockClientState {
 class MockStdioTransport {
   stderr: null = null
   pid = 12345
-  // oxlint-disable-next-line no-useless-constructor
-  constructor(_opts: any) {}
+  constructor(opts: any) {
+    lastStdioOptions = opts
+  }
   async start() {
     if (connectShouldHang) return new Promise<void>(() => {}) // never resolves
     if (connectShouldFail) throw new Error(connectError)
@@ -140,6 +146,7 @@ void mock.module("@modelcontextprotocol/sdk/client/index.js", () => ({
     }
 
     async listPrompts() {
+      if (this._state?.listPromptsShouldHang) return new Promise(() => {})
       if (this._state?.listPromptsShouldFail) {
         throw new Error("listPrompts failed")
       }
@@ -147,6 +154,7 @@ void mock.module("@modelcontextprotocol/sdk/client/index.js", () => ({
     }
 
     async listResources() {
+      if (this._state?.listResourcesShouldHang) return new Promise(() => {})
       if (this._state?.listResourcesShouldFail) {
         throw new Error("listResources failed")
       }
@@ -167,6 +175,7 @@ beforeEach(() => {
   connectError = "Mock transport cannot connect"
   clientCreateCount = 0
   transportCloseCount = 0
+  lastStdioOptions = undefined
 })
 
 // Import after mocks
@@ -179,7 +188,7 @@ const { tmpdir } = await import("../fixture/fixture")
 
 function withInstance(
   config: Record<string, unknown>,
-  fn: (mcp: MCPNS.Interface) => Effect.Effect<void, unknown, never>,
+  fn: (mcp: MCPNS.Interface, directory: string) => Effect.Effect<void, unknown, never>,
 ) {
   return async () => {
     await using tmp = await tmpdir({
@@ -197,7 +206,7 @@ function withInstance(
     await WithInstance.provide({
       directory: tmp.path,
       fn: async () => {
-        await Effect.runPromise(MCP.Service.use(fn).pipe(Effect.provide(MCP.defaultLayer)))
+        await Effect.runPromise(MCP.Service.use((mcp) => fn(mcp, tmp.path)).pipe(Effect.provide(MCP.defaultLayer)))
         // dispose instance to clean up state between tests
         await InstanceRuntime.disposeInstance(Instance.current)
       },
@@ -233,6 +242,46 @@ test(
       expect(Object.keys(toolsA).length).toBeGreaterThan(0)
       expect(Object.keys(toolsB).length).toBeGreaterThan(0)
       expect(serverState.listToolsCalls).toBe(1)
+    }),
+  ),
+)
+
+test(
+  "local stdio transport resolves configured cwd from the project directory",
+  withInstance({}, (mcp, directory) =>
+    Effect.gen(function* () {
+      lastCreatedClientName = "cwd-server"
+      getOrCreateClientState("cwd-server")
+
+      const addResult = yield* mcp.add("cwd-server", {
+        type: "local",
+        command: ["echo", "test"],
+        cwd: "tools/mcp",
+      })
+
+      expect((addResult.status as any)["cwd-server"]?.status ?? (addResult.status as any).status).toBe("connected")
+      expect(lastStdioOptions?.cwd).toBe(`${directory}/tools/mcp`)
+    }),
+  ),
+)
+
+test(
+  "local stdio transport keeps absolute configured cwd",
+  withInstance({}, (mcp) =>
+    Effect.gen(function* () {
+      lastCreatedClientName = "absolute-cwd-server"
+      getOrCreateClientState("absolute-cwd-server")
+
+      const addResult = yield* mcp.add("absolute-cwd-server", {
+        type: "local",
+        command: ["echo", "test"],
+        cwd: "/tmp/mendcode-mcp",
+      })
+
+      expect((addResult.status as any)["absolute-cwd-server"]?.status ?? (addResult.status as any).status).toBe(
+        "connected",
+      )
+      expect(lastStdioOptions?.cwd).toBe("/tmp/mendcode-mcp")
     }),
   ),
 )
@@ -500,6 +549,34 @@ test(
 )
 
 test(
+  "prompts() respects MCP timeout and skips hung servers",
+  withInstance(
+    {
+      "hung-prompts": {
+        type: "local",
+        command: ["echo", "test"],
+        timeout: 50,
+      },
+    },
+    (mcp) =>
+      Effect.gen(function* () {
+        lastCreatedClientName = "hung-prompts"
+        const serverState = getOrCreateClientState("hung-prompts")
+        serverState.listPromptsShouldHang = true
+
+        yield* mcp.add("hung-prompts", {
+          type: "local",
+          command: ["echo", "test"],
+          timeout: 50,
+        })
+
+        const prompts = yield* mcp.prompts()
+        expect(Object.keys(prompts)).toEqual([])
+      }),
+  ),
+)
+
+test(
   "resources() returns resources from connected servers",
   withInstance(
     {
@@ -524,6 +601,34 @@ test(
         const key = Object.keys(resources)[0]
         expect(key).toContain("resource-server")
         expect(key).toContain("my-resource")
+      }),
+  ),
+)
+
+test(
+  "resources() respects MCP timeout and skips hung servers",
+  withInstance(
+    {
+      "hung-resources": {
+        type: "local",
+        command: ["echo", "test"],
+        timeout: 50,
+      },
+    },
+    (mcp) =>
+      Effect.gen(function* () {
+        lastCreatedClientName = "hung-resources"
+        const serverState = getOrCreateClientState("hung-resources")
+        serverState.listResourcesShouldHang = true
+
+        yield* mcp.add("hung-resources", {
+          type: "local",
+          command: ["echo", "test"],
+          timeout: 50,
+        })
+
+        const resources = yield* mcp.resources()
+        expect(Object.keys(resources)).toEqual([])
       }),
   ),
 )

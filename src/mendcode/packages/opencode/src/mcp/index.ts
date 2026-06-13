@@ -25,6 +25,7 @@ import { BusEvent } from "../bus/bus-event"
 import { Bus } from "@/bus"
 import { TuiEvent } from "@/cli/cmd/tui/event"
 import open from "open"
+import path from "path"
 import { Effect, Exit, Layer, Option, Context, Schema, Stream } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
@@ -168,9 +169,10 @@ function fetchFromClient<T extends { name: string }>(
   client: Client,
   listFn: (c: Client) => Promise<T[]>,
   label: string,
+  timeout?: number,
 ) {
   return Effect.tryPromise({
-    try: () => listFn(client),
+    try: () => withTimeout(listFn(client), timeout ?? DEFAULT_TIMEOUT),
     catch: (e: any) => {
       log.error(`failed to get ${label}`, { clientName, error: e.message })
       return e
@@ -387,7 +389,8 @@ export const layer = Layer.effect(
       mcp: ConfigMCP.Info & { type: "local" },
     ) {
       const [cmd, ...args] = mcp.command
-      const cwd = yield* InstanceState.directory
+      const directory = yield* InstanceState.directory
+      const cwd = mcp.cwd ? path.resolve(directory, mcp.cwd) : directory
       const transport = new StdioClientTransport({
         stderr: "pipe",
         command: cmd,
@@ -666,23 +669,45 @@ export const layer = Layer.effect(
       s: State,
       listFn: (c: Client) => Promise<T[]>,
       label: string,
+      config: Record<string, ConfigMCP.Info | boolean>,
+      defaultTimeout?: number,
     ) {
       return Effect.forEach(
         Object.entries(s.clients).filter(([name]) => s.status[name]?.status === "connected"),
-        ([clientName, client]) =>
-          fetchFromClient(clientName, client, listFn, label).pipe(Effect.map((items) => Object.entries(items ?? {}))),
+        ([clientName, client]) => {
+          const mcpConfig = config[clientName]
+          const entry = mcpConfig && isMcpConfigured(mcpConfig) ? mcpConfig : undefined
+          const timeout = entry?.timeout ?? defaultTimeout
+          return fetchFromClient(clientName, client, listFn, label, timeout).pipe(
+            Effect.map((items) => Object.entries(items ?? {})),
+          )
+        },
         { concurrency: "unbounded" },
       ).pipe(Effect.map((results) => Object.fromEntries<T & { client: string }>(results.flat())))
     }
 
     const prompts = Effect.fn("MCP.prompts")(function* () {
       const s = yield* InstanceState.get(state)
-      return yield* collectFromConnected(s, (c) => c.listPrompts().then((r) => r.prompts), "prompts")
+      const cfg = yield* cfgSvc.get()
+      return yield* collectFromConnected(
+        s,
+        (c) => c.listPrompts().then((r) => r.prompts),
+        "prompts",
+        cfg.mcp ?? {},
+        cfg.experimental?.mcp_timeout,
+      )
     })
 
     const resources = Effect.fn("MCP.resources")(function* () {
       const s = yield* InstanceState.get(state)
-      return yield* collectFromConnected(s, (c) => c.listResources().then((r) => r.resources), "resources")
+      const cfg = yield* cfgSvc.get()
+      return yield* collectFromConnected(
+        s,
+        (c) => c.listResources().then((r) => r.resources),
+        "resources",
+        cfg.mcp ?? {},
+        cfg.experimental?.mcp_timeout,
+      )
     })
 
     const withClient = Effect.fnUntraced(function* <A>(
@@ -697,8 +722,12 @@ export const layer = Layer.effect(
         log.warn(`client not found for ${label}`, { clientName })
         return undefined
       }
+      const cfg = yield* cfgSvc.get()
+      const mcpConfig = cfg.mcp?.[clientName]
+      const entry = mcpConfig && isMcpConfigured(mcpConfig) ? mcpConfig : undefined
+      const timeout = entry?.timeout ?? cfg.experimental?.mcp_timeout
       return yield* Effect.tryPromise({
-        try: () => fn(client),
+        try: () => withTimeout(fn(client), timeout ?? DEFAULT_TIMEOUT),
         catch: (e: any) => {
           log.error(`failed to ${label}`, { clientName, ...meta, error: e?.message })
           return e

@@ -48,7 +48,7 @@ export const AuthMiddleware: MiddlewareHandler = (c, next) => {
   if (!password) return next()
   if (isPublicUIPath(c.req.method, c.req.path)) return next()
   if (isPtyConnectPath(c.req.path) && c.req.query(PTY_CONNECT_TICKET_QUERY)) return next()
-  const username = Flag.OPENCODE_SERVER_USERNAME ?? (process.env.MENDCODE === "1" ? "mendcode" : "opencode")
+  const username = Flag.OPENCODE_SERVER_USERNAME ?? "mendcode"
 
   if (c.req.query("auth_token")) c.req.raw.headers.set("authorization", `Basic ${c.req.query("auth_token")}`)
 

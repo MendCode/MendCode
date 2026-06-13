@@ -15,6 +15,11 @@ coverage/
 # MendCode generated/runtime state. The release repo must not carry local
 # project state; users get a fresh .mendcode from `mend init`.
 .mendcode/
+!.mendcode/
+!.mendcode/.gitignore
+.mendcode/*
+!.mendcode/skills/
+!.mendcode/skills/**
 
 # MendCode package artifacts. Some package snapshots are still tracked for now,
 # but new local files under those app/docs surfaces must stay off git until

@@ -7,6 +7,10 @@ export const Local = Schema.Struct({
   command: Schema.mutable(Schema.Array(Schema.String)).annotate({
     description: "Command and arguments to run the MCP server",
   }),
+  cwd: Schema.optional(Schema.String).annotate({
+    description:
+      "Working directory for the MCP server. Relative paths are resolved from the current MendCode project directory.",
+  }),
   environment: Schema.optional(Schema.Record(Schema.String, Schema.String)).annotate({
     description: "Environment variables to set when running the MCP server",
   }),
