@@ -127,6 +127,15 @@ Slots let a plugin inject or replace named UI regions. Built-in host slots inclu
 - `sidebar_content`
 - `sidebar_footer`
 
+The most common customization targets are:
+
+- `home_logo`: replace the home title/mascot surface.
+- `home_prompt`: replace the whole home prompt editor surface.
+- `home_prompt_right`: add small right-side prompt context without replacing the editor.
+- `session_prompt`: replace the session prompt editor surface.
+- `session_prompt_right`: add session-specific prompt context.
+- `home_footer` / `sidebar_footer`: add persistent low-noise team status.
+
 ```tsx
 /** @jsxImportSource @opentui/solid */
 
@@ -148,6 +157,8 @@ export default {
 ```
 
 When consuming slots inside a custom route or component, use `api.ui.Slot`. Slot mode follows the opentui Solid slot model and can be used by host components to append, prepend, or replace default content.
+
+For static home identity, prefer the profile fields documented in [Customization](customization.md): `identity.logoMode`, `identity.productName`, `identity.logoFont`, `surfaces.homeLogo`, and `surfaces.homeWelcome`. Use slots when the content needs runtime data or interaction.
 
 ## Commands and Dialogs
 
