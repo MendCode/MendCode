@@ -1,0 +1,21 @@
+name: Question
+description: Ask a usage question
+title: "[Question]: "
+labels:
+  - question
+body:
+  - type: markdown
+    attributes:
+      value: For general usage help, GitHub Discussions may be a better place than Issues.
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What are you trying to do?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Include commands, docs links, or config snippets. Redact secrets.
