@@ -14,6 +14,7 @@ MendCode is a terminal-first coding runtime built around the `mend` CLI, a MendC
 - [mflow coordination](docs/mflow.md)
 - [TSM and worktrees](docs/tsm-and-worktrees.md)
 - [Releasing](docs/releasing.md)
+- [Supply chain security](docs/supply-chain-security.md)
 - [Community](docs/community.md)
 - [Public readiness audit](docs/public-readiness-audit.md)
 - [Lineage and acknowledgements](ACKNOWLEDGEMENTS.md)
