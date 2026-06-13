@@ -77,7 +77,7 @@ jobs:
           docker run --rm \
             -v "$PWD:/src" \
             ghcr.io/google/osv-scanner:v2.3.8@sha256:64e86bec6df2466feea5137fc7c78fb3b7c21ec077f014d7130f64810e50676b \
-            scan --recursive /src/src/mendcode
+            scan --config /src/.github/osv-release.toml --lockfile /src/src/mendcode/bun.lock
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
