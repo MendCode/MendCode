@@ -13,6 +13,8 @@
     "dev:storybook": "bun --cwd packages/storybook storybook",
     "lint": "oxlint",
     "typecheck": "bun turbo typecheck",
+    "release:assets": "bun run --cwd packages/opencode script/build.ts --release-assets",
+    "release:check-assets": "bash script/check-release-assets.sh",
     "postinstall": "bun run --cwd packages/opencode fix-node-pty",
     "random": "echo 'Random script'",
     "hello": "echo 'Hello World!'",

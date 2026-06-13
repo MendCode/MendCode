@@ -5,6 +5,14 @@ import path from "path"
 import { initProject } from "../config/project"
 import { mendPaths } from "../config/paths"
 import { donorIdentityGuardStatus, runtimeAdapterCommand } from "../runtime/system"
+import { worktreeStatus } from "../config/worktree"
+import { tsmStatus } from "../config/tsm"
+
+type ShortcutWorktreeTarget = {
+  path: string
+  branch: string | null
+  label: string
+}
 
 const controlPlaneRoutes: Record<string, (args: string[]) => string[]> = {
   init: () => ["project", "init"],
@@ -83,6 +91,8 @@ function usage(exitCode = 0) {
 
 Usage:
   mend                         open MendCode TUI in the current project
+  mend --worktree [target]     open MendCode in a git worktree by branch/path/id
+  mend --tsm [target|--all]    open TSM workspace with MendCode split
   mend run [message..]         open TUI with message ready to send
   mend chat [message..]        run a control-plane chat turn
 
@@ -197,6 +207,75 @@ async function runRuntime(args: string[], root = mendPaths().root) {
   process.exit(result.status ?? 1)
 }
 
+function worktreeShortcutCandidates(status: Awaited<ReturnType<typeof worktreeStatus>>): ShortcutWorktreeTarget[] {
+  const records = status.registry.records.map((record) => ({
+    path: record.path,
+    branch: record.branch,
+    label: record.id,
+  }))
+  const external = status.registry.external.map((entry) => ({
+    path: entry.path,
+    branch: entry.branch,
+    label: entry.branch || entry.path,
+  }))
+  return [...records, ...external]
+}
+
+export function resolveWorktreeShortcutTarget(
+  status: Awaited<ReturnType<typeof worktreeStatus>>,
+  target?: string,
+): ShortcutWorktreeTarget {
+  if (target) {
+    const hit = worktreeShortcutCandidates(status).find((item) =>
+      item.path === target ||
+      item.branch === target ||
+      item.label === target ||
+      path.basename(item.path) === target
+    )
+    if (!hit) throw new Error(`Unknown worktree target: ${target}. Run \`mend worktree status\` to inspect available targets.`)
+    return hit
+  }
+
+  if (status.workspace.isLinkedWorktree) {
+    return {
+      path: status.workspace.currentPath,
+      branch: status.workspace.currentBranch,
+      label: status.workspace.currentBranch || status.workspace.currentPath,
+    }
+  }
+
+  const nonBase = worktreeShortcutCandidates(status).filter((item) => item.path !== status.workspace.repoRoot)
+  if (nonBase.length === 1) return nonBase[0]!
+  const summary = nonBase.map((item) => item.branch || item.path).join(", ") || "none"
+  throw new Error(`Multiple or no worktree targets found (${summary}). Use \`mend --worktree <branch|path>\`.`)
+}
+
+async function runWorktreeShortcut(args: string[]) {
+  const target = args[0]
+  if (args.length > 1) throw new Error("Usage: mend --worktree [branch|path|id]")
+  const status = await worktreeStatus(process.cwd())
+  const resolved = resolveWorktreeShortcutTarget(status, target)
+  return runRuntime([resolved.path])
+}
+
+async function runTsmShortcut(args: string[]) {
+  const all = args[0] === "--all"
+  const target = all ? undefined : args[0]
+  if (args.length > 1) throw new Error("Usage: mend --tsm [branch|path|id|--all]")
+  const status = await worktreeStatus(process.cwd())
+  const tsm = await tsmStatus(process.cwd())
+  if (tsm.lifecycle !== "active" || !tsm.worktreeCapable) {
+    throw new Error(`TSM is not active for this repo (${tsm.lifecycle}). Run \`mend tsm status\` and \`mend tsm activate\`.`)
+  }
+  const branches = all ? [] : [resolveWorktreeShortcutTarget(status, target).branch].filter((branch): branch is string => Boolean(branch))
+  if (!all && !branches.length) throw new Error("TSM shortcut requires a branch-backed worktree target.")
+  const result = spawnSync("tsm", ["wt", "open", ...branches, "--split", "mend"], {
+    cwd: status.workspace.repoRoot,
+    stdio: "inherit",
+  })
+  process.exit(result.status ?? 1)
+}
+
 function runTuiWithMessage(args: string[]) {
   const passthrough: string[] = []
   const message: string[] = []
@@ -219,6 +298,8 @@ export async function main(argv = process.argv.slice(2)) {
   try {
     if (!cmd) return runRuntime([process.cwd()])
     if (cmd === "help" || cmd === "-h" || cmd === "--help") usage(0)
+    if (cmd === "--worktree") return await runWorktreeShortcut(args)
+    if (cmd === "--tsm") return await runTsmShortcut(args)
     if (cmd.startsWith("-")) return runRuntime([process.cwd(), cmd, ...args])
     if (cmd === "opencode") {
       const donorArgs = args[0] === "--" ? args.slice(1) : args

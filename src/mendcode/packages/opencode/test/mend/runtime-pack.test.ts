@@ -23,6 +23,18 @@ async function writeText(file: string, value: string) {
 }
 
 describe("runtime pack", () => {
+  test("normalizes legacy dev-js prompt mode to full", async () => {
+    await using dir = await tmpdir()
+    await writeJson(path.join(dir.path, ".mendcode", "prompt-mode.json"), {
+      version: 0,
+      mode: "dev-js",
+      live: "runtime-run-chat",
+    })
+
+    expect((await readPromptMode(dir.path)).mode).toBe("full")
+    await expect(writePromptMode("dev-js", dir.path)).rejects.toThrow("minimal, focus, full")
+  })
+
   test("materializes agents, nested skills, prompt templates, and mcp files from .mendcode", async () => {
     await using dir = await tmpdir()
     await writeJson(path.join(dir.path, ".mendcode", "mendcode.json"), {
@@ -434,7 +446,7 @@ describe("runtime pack", () => {
         },
         worktree: { mode: "off" },
       })
-      await writePromptMode("dev-js", source.path)
+      await writePromptMode("full", source.path)
       await writeText(path.join(source.path, ".mendcode", "models.yaml"), [
         "version: 0",
         "enabled: true",
@@ -456,7 +468,7 @@ describe("runtime pack", () => {
       await runtimeRegistryAdd(["runtime-settings", "--type", "local", "--url", source.path], dir.path)
       await runtimeRegistryApply("runtime-settings", dir.path)
 
-      expect((await readPromptMode(dir.path)).mode).toBe("dev-js")
+      expect((await readPromptMode(dir.path)).mode).toBe("full")
       const models = await readModelsConfig(dir.path)
       expect(models.enabled).toBe(true)
       expect(models.roles.default).toMatchObject({ providerID: "openai", modelID: "gpt-5.2" })

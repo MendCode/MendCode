@@ -5,10 +5,10 @@ import { Effect } from "effect"
 import { Instance } from "@/project/instance"
 import { lazy } from "@/util/lazy"
 import { jsonRequest } from "./trace"
-import { activateMflow, deactivateMflow, mflowControlStatus, removeMflowConfig } from "@/mend/config/mflow"
+import { activateMflow, deactivateMflow, mflowControlStatus, mflowLocalRelayGuide, removeMflowConfig, scanMflowRelays } from "@/mend/config/mflow"
 
 const ActivatePayload = z.object({
-  relayMode: z.enum(["public", "custom"]),
+  relayMode: z.enum(["local", "public", "legacy-public", "remote", "custom"]),
   signaling: z.string().optional(),
   room: z.string().optional(),
   secret: z.string().optional(),
@@ -55,6 +55,42 @@ export const MflowRoutes = lazy(() =>
       async (c) =>
         jsonRequest("MflowRoutes.activate", c, function* () {
           return yield* Effect.promise(() => activateMflow(c.req.valid("json"), Instance.directory))
+        }),
+    )
+    .get(
+      "/scan",
+      describeRoute({
+        summary: "Scan mflow relays",
+        description: "Scan localhost and local LAN candidates for visible mflow relays.",
+        operationId: "mflow.scan",
+        responses: {
+          200: {
+            description: "detected relays",
+            content: { "application/json": { schema: resolver(z.any()) } },
+          },
+        },
+      }),
+      async (c) =>
+        jsonRequest("MflowRoutes.scan", c, function* () {
+          return yield* Effect.promise(() => scanMflowRelays())
+        }),
+    )
+    .get(
+      "/relay-guide",
+      describeRoute({
+        summary: "Get local mflow relay guide",
+        description: "Get local relay command guidance until mflow ships a packaged relay start command.",
+        operationId: "mflow.relayGuide",
+        responses: {
+          200: {
+            description: "local relay guide",
+            content: { "application/json": { schema: resolver(z.any()) } },
+          },
+        },
+      }),
+      async (c) =>
+        jsonRequest("MflowRoutes.relayGuide", c, function* () {
+          return mflowLocalRelayGuide(Instance.directory)
         }),
     )
     .post(

@@ -7,10 +7,10 @@ import { activeFocus, focusProfiles } from "./project"
 import { buildWorktreePreview, createWorktreeRecord, gitWorktreeList, planNativeWorktreeCreate, planNativeWorktreeRemove, planNativeWorktreeReset, readWorktreeState, reconcileWorktreeState, renderWorktreePreview, resolveWorktreeContext, saveWorktreeRecord } from "../worktree"
 export { activateTsm, deactivateTsm, removeTsm, setupTsm, tsmDoctor, tsmPlan, tsmStatus } from "./tsm"
 
-export const MFLOW_DEFAULT_SIGNALING = "wss://mflow-signal.obed0101.deno.net"
+export const MFLOW_DEFAULT_SIGNALING = "ws://localhost:8787"
 export const MFLOW_REPOSITORY = "https://github.com/Obed0101/mflow"
 export const MFLOW_NPM_PACKAGE = "mflow-cli"
-export const MFLOW_NPM_VERSION = "0.1.12"
+export const MFLOW_NPM_VERSION = "registry-default"
 export const MFLOW_RESERVED_NPM_PACKAGE = { name: "mflow", reason: "npm name already exists for an unrelated monad-style flow control package" }
 export const TSM_REPOSITORY = "https://github.com/adibhanna/tsm"
 export const TSM_OBSERVED_HEAD = "d33778c90e36558c6eb5ad110a3506e209975f5c"
@@ -290,7 +290,7 @@ export async function mflowPlan(root?: string) {
     integration: status.integration,
     repository: MFLOW_REPOSITORY,
     npmPackage: status.npmPackage,
-    install: { package: MFLOW_NPM_PACKAGE, version: MFLOW_NPM_VERSION, command: `pnpm dlx --package ${MFLOW_NPM_PACKAGE}@${MFLOW_NPM_VERSION} mflow setup`, executesInstall: false },
+    install: { package: MFLOW_NPM_PACKAGE, version: MFLOW_NPM_VERSION, command: `pnpm dlx --package ${MFLOW_NPM_PACKAGE} mflow setup`, executesInstall: false },
     lifecycle: { start: "dry-run-only-until-explicit-approval", stop: "safe-noop-until-start-exists", pause: "human-pause-authority-required", resume: "human-or-admin-explicit-only" },
     room: { idSource: "explicit-config-or-generated-local-plan", secretSource: "explicit-env-or-keychain-never-committed", signaling: MFLOW_DEFAULT_SIGNALING },
     surfaces: ["status", "peers", "files", "locks", "pause", "resume"],

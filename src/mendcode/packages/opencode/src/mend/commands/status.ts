@@ -84,10 +84,15 @@ export async function mflowStatusSummary(root?: string) {
   const config = status.config
   const daemon = summarizeMflowDaemon(status.daemon.output)
   const locks = summarizeMflowLocks(status.locks.output)
+  const relayLabel = config.relayMode === "local"
+    ? "local"
+    : config.relayMode === "legacy-public" || (config.relayMode === "public" && config.signaling.includes("mflow-signal.obed0101.deno.net"))
+      ? "legacy public"
+      : "public"
   return [
     `Mode: ${status.mode}`,
     `Enabled: ${config.enabled ? "yes" : "no"}`,
-    `Relay: ${config.relayMode === "public" ? "public fair-use" : "custom"} (${config.signaling})`,
+    `Relay: ${relayLabel} (${config.signaling})`,
     `Room: ${config.room}`,
     `Queue priority: ${config.hookPriority}`,
     `MCP: ${status.files.mcp}`,
@@ -104,7 +109,7 @@ export async function mflowStatusSummary(root?: string) {
     `Locks: ${status.locks.checked ? "available" : "unavailable"}`,
     locks,
     "",
-    "Public relay: shared fair-use; use custom relay for private code, larger teams, or custom limits.",
+    "mflow is local-first: prefer a local/LAN relay; use public only for a user/team-controlled VPS or domain relay. Legacy public relay is demo-only.",
   ].filter((line): line is string => typeof line === "string").join("\n")
 }
 
