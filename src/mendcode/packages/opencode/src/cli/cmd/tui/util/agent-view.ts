@@ -1,4 +1,5 @@
 import type { Session, SessionStatus } from "@mendcode/sdk/v2"
+import { Locale } from "@/util/locale"
 
 export type AgentViewBackgroundSession = {
   sessionID: string
@@ -76,4 +77,22 @@ export function isAgentViewSessionFallbackVisible(item: AgentViewSessionItem) {
   const directory = item.background.session?.directory || item.session?.directory
   if (isTemporaryAgentViewDirectory(directory)) return false
   return Boolean(item.background.session || item.session)
+}
+
+export function formatAgentViewSessionTime(input: number, now: number = Date.now()) {
+  const date = new Date(input)
+  const current = new Date(now)
+  const isToday =
+    date.getFullYear() === current.getFullYear() &&
+    date.getMonth() === current.getMonth() &&
+    date.getDate() === current.getDate()
+  if (isToday) return Locale.time(input)
+
+  const sameYear = date.getFullYear() === current.getFullYear()
+  const localDate = date.toLocaleDateString(undefined, {
+    day: "numeric",
+    month: sameYear ? "short" : "numeric",
+    ...(sameYear ? {} : { year: "numeric" as const }),
+  })
+  return `${Locale.time(input)} · ${localDate}`
 }
