@@ -25,7 +25,7 @@ const MigrateCommand = cmd({
         return
       }
       UI.println(`Copied: ${result.copiedRoots.join(", ")}`)
-      UI.println("Migration marker written. Restart mend-runtime so Global.Path uses the mend segment.")
+      UI.println("Migration marker written. Restart mendcode so Global.Path uses the mend segment.")
     } catch (e) {
       UI.error(errorMessage(e))
       process.exit(1)

@@ -799,7 +799,7 @@ export function Session() {
               "Config permission:",
               permissionConfigSummary(),
               "",
-              "--dangerously-skip-permissions only applies to `mend run`. This TUI mode only affects the current interactive session and does not override explicit deny rules.",
+              "--dangerously-skip-permissions only applies to `mendcode run`. This TUI mode only affects the current interactive session and does not override explicit deny rules.",
             ].join("\n"),
           )
         }}

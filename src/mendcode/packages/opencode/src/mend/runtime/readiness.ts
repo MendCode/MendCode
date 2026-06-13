@@ -149,7 +149,7 @@ export async function providerAuthStatus(providerID?: string | null, modelID?: s
   if (selectedProviderID === "openai" && authState?.type === "oauth" && oauth.expired && !oauth.refreshReady)
     status.blockers.push("OpenAI OAuth token expired and MENDCODE_OPENAI_OAUTH_CLIENT_ID/OPENAI_OAUTH_CLIENT_ID is missing")
   if (requiresOAuthBridge && !status.mendRunReady) {
-    status.blockers.push(authState ? "MendCode OAuth state is not usable for provider calls" : "MendCode OAuth state is missing; run `mend auth login openai --method browser|headless --execute` after approval")
+    status.blockers.push(authState ? "MendCode OAuth state is not usable for provider calls" : "MendCode OAuth state is missing; run `mendcode auth login openai --method browser|headless --execute` after approval")
   }
   if (acceptsEitherOAuthOrToken && !status.mendRunReady) {
     if (status.missingEnv.length) status.blockers.push(...status.missingEnv.map((key: string) => `missing env:${key}`))
@@ -161,16 +161,16 @@ export async function providerAuthStatus(providerID?: string | null, modelID?: s
   status.next = input.skipNext
     ? null
     : status.mendRunReady
-      ? "Run `mend run --dry-run <prompt>` or `mend run <prompt>` with the enabled model."
+      ? "Run `mendcode run --dry-run <prompt>` or `mendcode run <prompt>` with the enabled model."
       : selectedProviderID
-        ? "Run `mend providers auth` to inspect auth mode, then configure required credentials outside committed files."
-        : "Configure a default model first with `mend models use-preset ... --enable`."
+        ? "Run `mendcode providers auth` to inspect auth mode, then configure required credentials outside committed files."
+        : "Configure a default model first with `mendcode models use-preset ... --enable`."
   return status
 }
 
 export function providerLoginPlan(providerID: string, method?: string | null) {
   const record = (authInventory as any)[providerID]
-  if (!record) throw new Error(`Unknown provider auth inventory: ${providerID}\nRun \`mend providers auth\`.`)
+  if (!record) throw new Error(`Unknown provider auth inventory: ${providerID}\nRun \`mendcode providers auth\`.`)
   const resolvedMethod = method || (providerID === "openai" ? "browser" : record.subscriptionLike ? "device" : "api-key")
   const allowed = providerID === "openai" ? ["browser", "headless", "api-key"] : record.subscriptionLike ? ["device", "api-key"] : ["api-key"]
   if (!allowed.includes(resolvedMethod)) throw new Error(`Unsupported method for ${providerID}: ${resolvedMethod}\nAllowed: ${allowed.join(", ")}`)
@@ -190,7 +190,7 @@ export function providerLoginPlan(providerID: string, method?: string | null) {
     approvalRequiredForExecution: true,
     donorCommandPolicy: "blocked-by-default",
     next: oauth
-      ? "No login was run. If approved, `mend auth login openai --method browser --execute` prints the URL; add `--open` only if you want auto-launch."
+      ? "No login was run. If approved, `mendcode auth login openai --method browser --execute` prints the URL; add `--open` only if you want auto-launch."
       : "No credential was written. Set the provider env var outside git, then re-run readiness gates.",
   }
 }
@@ -315,9 +315,9 @@ export async function aiStatus(root?: string) {
       : "Provider/model setup is incomplete; MendCode will not call donor runtime or provider APIs by default.",
     missing: [...readiness.blockers, ...(((env.roles as any).default?.missingEnv || []).map((key: string) => `missing env:${key}`))],
     auth: await providerAuthStatus(null, null, {}, root),
-    plannedCommandSurface: ["mend run <prompt>", "future mend chat", "future mend apply"],
+    plannedCommandSurface: ["mendcode run <prompt>", "future mendcode chat", "future mend apply"],
     donorRuntimeBlockedByDefault: true,
     env,
-    next: readiness.aiReady && env.defaultReady ? "run `mend run --dry-run <prompt>` first, then `mend run <prompt>`" : "complete mend setup plan and env/auth contract before AI execution",
+    next: readiness.aiReady && env.defaultReady ? "run `mendcode run --dry-run <prompt>` first, then `mendcode run <prompt>`" : "complete mend setup plan and env/auth contract before AI execution",
   }
 }

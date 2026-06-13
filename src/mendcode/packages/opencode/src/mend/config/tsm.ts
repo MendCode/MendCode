@@ -213,12 +213,12 @@ export async function tsmPlan(root?: string) {
       ],
     },
     activation: {
-      command: "mend tsm activate",
+      command: "mendcode tsm activate",
       requiresDetectedBinary: true,
       delegatesWorktreesImmediately: false,
     },
     removal: {
-      command: "mend tsm remove",
+      command: "mendcode tsm remove",
       removesExternalTsm: false,
       killsSessions: false,
     },

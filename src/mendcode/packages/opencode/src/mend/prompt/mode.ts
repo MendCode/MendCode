@@ -9,7 +9,7 @@ const modes: MendPromptMode[] = ["minimal", "focus", "full"]
 type PromptModeState = { mode: MendPromptMode; live: "runtime-run-chat"; note: string }
 
 const live: PromptModeState["live"] = "runtime-run-chat"
-const note = "Persisted prompt mode is consumed by mend run/chat and shown by the MendCode TUI footer."
+const note = "Persisted prompt mode is consumed by mendcode run/chat and shown by the MendCode TUI footer."
 
 export async function readPromptMode(root?: string): Promise<PromptModeState> {
   const paths = mendPaths(root)

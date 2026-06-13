@@ -35,7 +35,7 @@ describe("MendCode public donor reference audit", () => {
       ].join("\n"),
     )
     await writeFile(path.join(cliDir, "network.ts"), 'const mdns = "opencode.local"\n')
-    await writeFile(path.join(mcpDir, "mcp.ts"), 'const hint = "Add servers with: mend-runtime mcp add"\n')
+    await writeFile(path.join(mcpDir, "mcp.ts"), 'const hint = "Add servers with: mendcode mcp add"\n')
     await writeFile(path.join(httpApiDir, "public.ts"), 'const title = "MendCode HttpApi"\n')
 
     const audit = publicDonorReferenceAudit(dir.path)

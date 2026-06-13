@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "1.14.39",
+  "version": "0.1.2",
   "name": "mendcode",
   "type": "module",
   "license": "MIT",
@@ -17,7 +17,6 @@
     "db": "bun drizzle-kit"
   },
   "bin": {
-    "mend": "./bin/opencode",
     "mendcode": "./bin/opencode",
     "mendcode-runtime": "./bin/opencode"
   },

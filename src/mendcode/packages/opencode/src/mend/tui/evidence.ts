@@ -83,7 +83,7 @@ function widgetLines(profile: MendTuiProfile, input: { resource?: any; promptMod
 export async function buildTuiPreview(input: { state?: string; root?: string; profile?: MendTuiProfile } = {}) {
   const paths = mendPaths(input.root)
   const state = input.state || "home"
-  if (!["home", "session", "diff", "error"].includes(state)) throw new Error("Usage: mend tui preview [--state home|session|diff|error]")
+  if (!["home", "session", "diff", "error"].includes(state)) throw new Error("Usage: mendcode tui preview [--state home|session|diff|error]")
   const profile = input.profile || (await readActiveTuiProfile(paths.root))
   const promptMode = (await readPromptMode(paths.root)).mode
   const validation = validateMendTuiProfile(profile)
@@ -143,7 +143,7 @@ export async function writeTuiPreview(input: { state?: string; root?: string; pr
 }
 
 export async function writeTuiProposal(preference: string, root?: string) {
-  if (!preference) throw new Error('Usage: mend tui propose "<natural language preference>" --dry-run')
+  if (!preference) throw new Error('Usage: mendcode tui propose "<natural language preference>" --dry-run')
   const paths = mendPaths(root)
   const current = await readActiveTuiProfile(paths.root)
   const next = mergeMendTuiProfile(JSON.parse(JSON.stringify(current)))
@@ -317,7 +317,7 @@ export async function buildTuiRenderProof(root?: string) {
   const sidebarWidth = Math.min(Math.max(18, Number(resource.layout?.sidebarWidth) || 24), width - 24)
   const mainWidth = width - sidebarWidth - 3
   const sidebarLines = [resource.identity?.productName || "MendCode", resource.identity?.subtitle || "coding agent harness", "", ...widgetLines(profile, { resource, promptMode }), "", `Profile: ${profile.profile}`, "Donor: guarded"]
-  const mainLines = [resource.identity.status, "mend run/chat: ready", "tool/apply: next sprint", "TUI source: mend/assets/tui", "state: .mendcode/tui", "hot paths: untouched", "render: terminal text proof"]
+  const mainLines = [resource.identity.status, "mendcode run/chat: ready", "tool/apply: next sprint", "TUI source: mend/assets/tui", "state: .mendcode/tui", "hot paths: untouched", "render: terminal text proof"]
   const rowCount = Math.max(sidebarLines.length, mainLines.length)
   const top = `┌${"─".repeat(sidebarWidth)}┬${"─".repeat(mainWidth)}┐`
   const bottom = `└${"─".repeat(sidebarWidth)}┴${"─".repeat(mainWidth)}┘`
@@ -425,7 +425,7 @@ export async function tuiRuntimePlan(root?: string) {
     },
     safestFirstRuntimeProof: {
       approach: "MendCode-owned local TUI plugin file plus generated local tui.json in an isolated temp/config dir",
-      commandShape: "future mend tui probe --pure|--render",
+      commandShape: "future mendcode tui probe --pure|--render",
       allowed: ["read donor TUI plugin spec/types/tests", "generate isolated temp plugin/config", "run donor TUI plugin loader tests/probe only with explicit runtime command"],
       blocked: ["edit protected donor hot paths", "run public donor auth/account/update commands", "claim rendered sidebar integration without terminal render evidence"],
     },
