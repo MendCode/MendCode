@@ -1468,7 +1468,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     const current = mend.profile.surfaces.homeWelcome?.mode || "centered"
     const options: Array<{ title: string; value: "centered" | "split"; description: string }> = [
       { title: "Centered", value: "centered", description: "Current centered logo with actions underneath." },
-      { title: "Split", value: "split", description: "Claude-style welcome: identity top-left, actions top-right." },
+      { title: "Split", value: "split", description: "Claude-style welcome: identity top-left, activity panel top-right." },
     ]
     dialog.replace(() => (
       <DialogSelect
@@ -1495,14 +1495,14 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     ))
   }
   const showHomeSplitPanel = () => {
-    const current = mend.profile.surfaces.homeWelcome?.rightPanel || "actions"
+    const current = mend.profile.surfaces.homeWelcome?.rightPanel || "agentManager"
     const options: Array<{ title: string; value: "actions" | "agentManager"; description: string }> = [
       { title: "Actions", value: "actions", description: "Show Resume, Open commands, and Quit in the split panel." },
       { title: "Agent View", value: "agentManager", description: "Show global sessions grouped by input, working, and completed." },
     ]
     dialog.replace(() => (
       <DialogSelect
-        title="Home split panel"
+        title="Home activity panel"
         current={current}
         options={options.map((item) => ({
           title: item.title,
@@ -1518,7 +1518,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
                   homeWelcome: { ...(profile.surfaces.homeWelcome || {}), rightPanel: item.value },
                 },
               }),
-              `Home split panel is now ${item.title}.`,
+              `Home activity panel is now ${item.title}.`,
             ),
         }))}
       />
@@ -3052,7 +3052,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       onSelect: showHomeWelcomeMode,
     },
     {
-      title: "Home split panel",
+      title: "Home activity panel",
       value: "mendcode.home.split.panel",
       category: mendCategory,
       suggested: true,

@@ -36,6 +36,7 @@ const HomeConfigOverride = z
     welcome: z
       .object({
         mode: z.enum(["centered", "split"]).optional(),
+        rightPanel: z.enum(["actions", "agentManager"]).optional(),
       })
       .strict()
       .optional(),

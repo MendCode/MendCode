@@ -893,7 +893,7 @@ export function Setup() {
                 title: "Split",
                 value: "split",
                 category: "Home",
-                description: "Claude-style welcome: identity top-left, actions top-right.",
+                description: "Claude-style welcome: identity top-left, activity panel top-right.",
                 onSelect: async () => resolve("split"),
               },
             ]}
@@ -907,8 +907,8 @@ export function Setup() {
       dialog.replace(
         () => (
           <DialogSelect
-            title="Home split panel"
-            current={current.surfaces.homeWelcome?.rightPanel || "actions"}
+            title="Home activity panel"
+            current={current.surfaces.homeWelcome?.rightPanel || "agentManager"}
             renderFilter={false}
             options={[
               {
