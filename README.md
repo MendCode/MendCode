@@ -8,6 +8,7 @@ MendCode is a terminal-first coding runtime built around the `mend` CLI, a MendC
 - [Architecture and packages](docs/architecture.md)
 - [CLI, setup, and configuration](docs/cli-setup-configuration.md)
 - [Customization](docs/customization.md)
+- [TUI plugins and widgets](docs/tui-plugins-and-widgets.md)
 - [Packages and team sharing](docs/packages-and-team-sharing.md)
 - [mflow coordination](docs/mflow.md)
 - [TSM and worktrees](docs/tsm-and-worktrees.md)

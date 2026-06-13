@@ -80,6 +80,8 @@ The `@mendcode/plugin` package exposes:
 
 Package artifacts can include widget files under `.mendcode/widgets`, `.mendcode/components`, or `.mendcode/scripts`. Runtime packages project them into the active runtime package state.
 
+See [TUI plugins and widgets](tui-plugins-and-widgets.md) for concrete examples of `setWidget`, `setFooterEntry`, slots, dialogs, commands, routes, themes, and team package distribution.
+
 ## Model Customization
 
 Model behavior is controlled by model roles. This lets a team use one model for build/code, another for review, and cheaper models for title/summary/compaction.
