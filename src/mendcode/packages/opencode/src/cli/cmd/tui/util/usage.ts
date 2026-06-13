@@ -18,9 +18,13 @@ type AssistantUsageInput = {
 export type AssistantUsageSummary = {
   model: string
   scope: "turn" | "total"
+  rawInput: number
+  rawOutput: number
   input: number
   output: number
   reasoning: number
+  cacheRead: number
+  cacheWrite: number
   context: number
   contextPercent?: number
   contextLimit?: number
@@ -90,6 +94,10 @@ function formatUsage(input: AssistantUsageInput, providers?: ProviderIndex): Ass
   const tokens = assistantTokenTotals(input)
   if (tokens.context <= 0) return
 
+  const cacheRead = safe(input.tokens.cache?.read)
+  const cacheWrite = safe(input.tokens.cache?.write)
+  const rawInput = safe(input.tokens.input)
+  const rawOutput = safe(input.tokens.output)
   const scope = input.scope ?? "turn"
   const model = Model.name(providers, input.providerID, input.modelID)
   const modelInfo = Model.get(providers, input.providerID, input.modelID)
@@ -114,8 +122,12 @@ function formatUsage(input: AssistantUsageInput, providers?: ProviderIndex): Ass
     costLabel,
     compact: [model, variantLabel, tokenLabel].filter(Boolean).join(" · "),
     detail: [liveLabel, model, variantLabel, tokenLabel, contextLabel, costLabel].filter(Boolean).join(" · "),
+    rawInput,
+    rawOutput,
     ...tokens,
     reasoning: safe(input.tokens.reasoning),
+    cacheRead,
+    cacheWrite,
   }
 }
 

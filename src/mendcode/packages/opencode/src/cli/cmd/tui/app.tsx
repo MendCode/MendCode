@@ -1244,13 +1244,13 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     ]
     dialog.replace(() => (
       <DialogSelect
-        title="MendCode Prompt Modes"
+        title="MendCode Prompt Context"
         current={mend.promptMode as MendPromptMode}
         options={modes.map((item) => ({
           title: item.title,
           value: item.mode,
           description: item.description,
-          category: "Prompt Mode",
+          category: "Prompt Context",
           onSelect: async () => {
             const result = await writePromptMode(item.mode, mend.root)
             await mend.reload()
@@ -2946,7 +2946,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
     },
     {
-      title: "Prompt modes",
+      title: "Prompt context",
       value: "mendcode.prompt.mode",
       category: mendCategory,
       suggested: true,
@@ -3062,6 +3062,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       title: "Cycle prompt mode",
       value: "mendcode.prompt.mode.cycle",
       category: mendCategory,
+      hidden: true,
       onSelect: async () => {
         const result = await cyclePromptMode(mend.root)
         await mend.reload()

@@ -132,14 +132,15 @@ Use the manual `Release` workflow from the Actions tab.
 Inputs:
 
 - `version`: semver without leading `v`.
-- `dry_run`: `true` builds artifacts and attestations without publishing; `false` creates a draft GitHub Release.
+- `dry_run`: `true` builds artifacts and attestations without publishing or entering the protected release environment; `false` creates a draft GitHub Release through the protected release environment.
 - `prerelease`: marks the release as prerelease.
 
 The workflow:
 
 - runs supply-chain preflight
-- blocks release when OSV reports vulnerable checked-in lockfile entries
-- installs from the checked-in lockfile
+- blocks release when OSV reports vulnerable release lockfile entries outside `.github/osv-release.toml`
+- installs from the checked-in lockfile with dependency scripts disabled
+- runs required MendCode native repair steps explicitly
 - builds `mendcode-*` release archives
 - validates the installer asset contract
 - writes `RELEASE-MANIFEST.txt`
@@ -147,6 +148,8 @@ The workflow:
 - creates GitHub artifact attestations
 - uploads workflow artifacts
 - optionally creates a draft GitHub Release
+
+Dry-run failures can still appear in the Actions run, but they should not create failed `release` deployments. A failed `release` deployment means the protected publish job started and failed; a failed dry-run build is only a build/security check failure.
 
 ## Registry Publishing
 
