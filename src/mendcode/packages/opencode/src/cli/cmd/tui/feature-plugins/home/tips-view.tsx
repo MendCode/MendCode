@@ -54,7 +54,7 @@ export function Tips(props: { connected?: boolean }) {
 const TIPS = [
   "Type {highlight}@{/highlight} followed by a filename to fuzzy search and attach files",
   "Start a message with {highlight}!{/highlight} to run shell commands directly (e.g., {highlight}!ls -la{/highlight})",
-  "Press {highlight}Tab{/highlight} to cycle between Build and Plan agents",
+  "Press {highlight}Tab{/highlight} to cycle the active agent, such as Build or Plan",
   "Use {highlight}/undo{/highlight} to revert the last message and file changes",
   "Use {highlight}/redo{/highlight} to restore previously undone messages and file changes",
   "Drag and drop images or PDFs into the terminal to add them as context",
@@ -78,7 +78,7 @@ const TIPS = [
   "Press {highlight}Shift+Enter{/highlight} or {highlight}Ctrl+J{/highlight} to add newlines in your prompt",
   "Press {highlight}Ctrl+C{/highlight} when typing to clear the input field",
   "Press {highlight}Escape{/highlight} to stop the AI mid-response",
-  "Switch to {highlight}Plan{/highlight} agent to get suggestions without making actual changes",
+  "Switch to the {highlight}Plan{/highlight} agent to get suggestions without making actual changes",
   "Use {highlight}@agent-name{/highlight} in prompts to invoke specialized subagents",
   "Press {highlight}Ctrl+X Right/Left{/highlight} to cycle through parent and child sessions",
   "Create {highlight}mendcode.json{/highlight} for server settings and {highlight}tui.json{/highlight} for TUI settings",
