@@ -13,6 +13,7 @@ These docs describe the MendCode-specific runtime layer in this repository. They
 - [mflow coordination](mflow.md): what mflow is, setup, relay modes, file locks, and multi-agent same-worktree editing.
 - [TSM and worktrees](tsm-and-worktrees.md): `mend --worktree`, `mend --tsm`, optional TSM lifecycle, preview-first worktree safety.
 - [Releasing](releasing.md): release assets, installer contract, checksums, and smoke tests.
+- [Supply chain security](supply-chain-security.md): release provenance, SBOM, pinned actions, dependency review, and scanner policy.
 - [Community](community.md): issues, discussions, PRs, and labels.
 - [Wiki](wiki.md): GitHub wiki setup and doc sync.
 - [Public readiness audit](public-readiness-audit.md): current branch, secret, and old-repo-reference audit notes.

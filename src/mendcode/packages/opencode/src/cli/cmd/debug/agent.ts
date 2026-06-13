@@ -29,7 +29,7 @@ export const AgentCommand = effectCmd({
       })
       .option("params", {
         type: "string",
-        description: "Tool params as JSON or a JS object literal",
+        description: "Tool params as JSON",
       }),
   handler: Effect.fn("Cli.debug.agent")(function* (args) {
     const ctx = yield* InstanceRef
@@ -105,14 +105,7 @@ function parseToolParams(input?: string) {
     try {
       return JSON.parse(trimmed)
     } catch (jsonError) {
-      try {
-        return new Function(`return (${trimmed})`)()
-      } catch (evalError) {
-        throw new Error(
-          `Failed to parse --params. Use JSON or a JS object literal. JSON error: ${jsonError}. Eval error: ${evalError}.`,
-          { cause: evalError },
-        )
-      }
+      throw new Error(`Failed to parse --params. Use JSON. JSON error: ${jsonError}.`, { cause: jsonError })
     }
   })
 
