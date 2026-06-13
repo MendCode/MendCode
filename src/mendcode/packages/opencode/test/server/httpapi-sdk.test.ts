@@ -365,11 +365,16 @@ describe("HttpApi SDK", () => {
         const thrown = yield* captureThrown(() => sdk.session.get({ sessionID }, { throwOnError: true }))
 
         expect(missing.error).toEqual(expected)
-        expect(thrown).toEqual(expected)
+        expect(thrown).toBeInstanceOf(Error)
+        expect(errorMessage(thrown)).toBe(expected.data.message)
+        expect((thrown as Error).cause).toMatchObject({ body: expected, status: 404 })
         return {
           status: missing.status,
           error: missing.error,
-          thrown,
+          thrown: {
+            message: errorMessage(thrown),
+            cause: (thrown as Error).cause,
+          },
         }
       }),
     ),
@@ -402,13 +407,13 @@ describe("HttpApi SDK", () => {
         const bad = yield* capture(() =>
           client(backend, directory, {
             password: "secret",
-            headers: { authorization: authorization("opencode", "wrong") },
+            headers: { authorization: authorization("mendcode", "wrong") },
           }).file.read({ path: "hello.txt" }),
         )
         const good = yield* capture(() =>
           client(backend, directory, {
             password: "secret",
-            headers: { authorization: authorization("opencode", "secret") },
+            headers: { authorization: authorization("mendcode", "secret") },
           }).file.read({ path: "hello.txt" }),
         )
 

@@ -21,7 +21,7 @@ import { asciiTextWidth, renderAsciiText, type HomeLogoFont } from "../component
 import { homeMascotText } from "@/mend/tui/mascot"
 import { Locale } from "@/util/locale"
 import { Global } from "@mendcode/core/global"
-import { InstallationVersion } from "@mendcode/core/installation/version"
+import { Installation } from "@/installation"
 import type { GlobalEvent, PermissionRequest, PlanReviewRequest, QuestionRequest, Session, SessionStatus } from "@mendcode/sdk/v2"
 import {
   isAgentViewSessionFallbackVisible,
@@ -121,8 +121,7 @@ export function HomeSurface(props: {
   const homeWelcomeMode = createMemo(() => mend.profile.surfaces.homeWelcome?.mode || "centered")
   const homeWelcomeRightPanel = createMemo(() => mend.profile.surfaces.homeWelcome?.rightPanel || "agentManager")
   const productVersionLabel = createMemo(() => {
-    const version = InstallationVersion === "local" ? "local" : `v${InstallationVersion}`
-    return `${mend.profile.identity.productName} ${version}`
+    return `${mend.profile.identity.productName} ${Installation.labelVersion()}`
   })
   const splitWelcome = createMemo(() => homeWelcomeMode() === "split" && homeDensity() === "full" && dimensions().width >= 76)
   const promptPreset = createMemo(() => mend.profile.promptChrome.preset)
