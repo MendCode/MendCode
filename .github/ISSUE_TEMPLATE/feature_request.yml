@@ -1,0 +1,45 @@
+name: Feature request
+description: Suggest a MendCode feature or improvement
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Desired behavior
+      description: What should MendCode do?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - CLI/setup
+        - TUI customization
+        - Plugins/widgets
+        - Packages/team sharing
+        - mflow
+        - TSM/worktrees
+        - Models/providers
+        - Docs
+        - Other
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and discussions.
+          required: true

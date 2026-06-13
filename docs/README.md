@@ -9,8 +9,12 @@ These docs describe the MendCode-specific runtime layer in this repository. They
 - [Customization](customization.md): prompt chrome, TUI profile, widgets, title/logo/ASCII mascot, model roles.
 - [TUI plugins and widgets](tui-plugins-and-widgets.md): custom widgets, slots, footer entries, commands, dialogs, routes, themes, and package distribution.
 - [Packages and team sharing](packages-and-team-sharing.md): package manifests, local snapshots, GitHub/team registries, sharing one company package.
+- [Package index](package-index.md): source package map and runtime package distinction.
 - [mflow coordination](mflow.md): what mflow is, setup, relay modes, file locks, and multi-agent same-worktree editing.
 - [TSM and worktrees](tsm-and-worktrees.md): `mend --worktree`, `mend --tsm`, optional TSM lifecycle, preview-first worktree safety.
+- [Releasing](releasing.md): release assets, installer contract, checksums, and smoke tests.
+- [Community](community.md): issues, discussions, PRs, and labels.
+- [Wiki](wiki.md): GitHub wiki setup and doc sync.
 - [Public readiness audit](public-readiness-audit.md): current branch, secret, and old-repo-reference audit notes.
 - [Lineage and acknowledgements](../ACKNOWLEDGEMENTS.md): opencode attribution and MendCode downstream scope.
 

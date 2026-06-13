@@ -1,0 +1,66 @@
+name: Bug report
+description: Report a reproducible MendCode bug
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Give the smallest reproduction you can.
+      placeholder: |
+        1. Run ...
+        2. Open ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: MendCode version
+      placeholder: mend --version
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS, Linux, Windows, WSL
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal
+      placeholder: Ghostty, iTerm2, Terminal.app, Windows Terminal
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: Redact secrets. Do not paste API keys or private prompts.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and discussions.
+          required: true
+        - label: I removed secrets and private config from this report.
+          required: true
