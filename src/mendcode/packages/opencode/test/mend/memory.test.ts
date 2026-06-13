@@ -273,7 +273,7 @@ describe("mend memory", () => {
     await using dir = await tmpdir()
 
     const proposal = await proposeMemory({
-      text: "OPENAI_API_KEY=sk-testsecretvalue123456 should never be memorized raw.",
+      text: "OPENAI_API_KEY=REDACTION_TEST_SECRET should never be memorized raw.",
       tags: ["security"],
     }, dir.path)
 

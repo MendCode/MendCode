@@ -71,7 +71,7 @@ async function fetchReleases(): Promise<Release[]> {
   const releases: Release[] = []
   let page = 1
   const per = 100
-  const repo = process.env.GH_REPO ?? "MendCode/mendcode-cli"
+  const repo = process.env.GH_REPO ?? "MendCode/MendCode"
 
   while (true) {
     const url = `https://api.github.com/repos/${repo}/releases?page=${page}&per_page=${per}`
@@ -189,7 +189,7 @@ async function save(githubTotal: number, npmDownloads: number) {
   )
 }
 
-console.log("Fetching GitHub releases for MendCode/mendcode-cli...\n")
+console.log("Fetching GitHub releases for MendCode/MendCode...\n")
 
 const releases = await fetchReleases()
 console.log(`\nFetched ${releases.length} releases total\n`)
