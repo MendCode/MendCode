@@ -2,6 +2,9 @@ Last release: latest
 Target ref: pending release
 
 ## TUI
+### Features
+- Show contextual day, month, and year information in the welcome Agent View timestamps instead of only showing the time for older sessions.
+
 ### Bugfixes
 - Clarified that Tab cycles the active primary agent, such as Build or Plan, not the persistent prompt context.
 - Renamed the persistent `minimal`/`focus`/`full` selector to "Prompt context" across the command palette and dialog.

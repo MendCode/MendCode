@@ -26,6 +26,7 @@ import type { GlobalEvent, PermissionRequest, PlanReviewRequest, QuestionRequest
 import {
   isAgentViewSessionFallbackVisible,
   isAgentViewSessionVisible,
+  formatAgentViewSessionTime,
   type AgentViewBackgroundSession,
   type AgentViewSessionItem,
 } from "../util/agent-view"
@@ -538,7 +539,7 @@ export function HomeSurface(props: {
       item.background.state
     )
   }
-  const timeLabel = (item: AgentViewSessionItem) => Locale.time(item.background.time.updated)
+  const timeLabel = (item: AgentViewSessionItem) => formatAgentViewSessionTime(item.background.time.updated)
   const elapsedLabel = (item: AgentViewSessionItem) => {
     const seconds = Math.max(0, Math.floor((Date.now() - item.background.time.updated) / 1000))
     if (seconds < 60) return `${seconds}s`
@@ -647,7 +648,7 @@ export function HomeSurface(props: {
   const homeAgentManagerSurface = (options?: { paddingTop?: number; width?: number }) => {
     const width = options?.width ?? launcherWidth()
     const nameWidth = createMemo(() => Math.min(26, Math.max(14, Math.floor(width * 0.32))))
-    const timeWidth = createMemo(() => (width >= 68 ? 9 : 6))
+    const timeWidth = createMemo(() => (width >= 68 ? 18 : width >= 54 ? 14 : 10))
     const detailWidth = createMemo(() => Math.max(10, width - nameWidth() - timeWidth() - 4))
     const row = (
       item: AgentViewSessionItem,
@@ -680,7 +681,9 @@ export function HomeSurface(props: {
           </text>
         </box>
         <box width={timeWidth()} flexShrink={0} alignItems="flex-end">
-          <text fg={launcherHintColor} wrapMode="none">{options?.elapsed ? elapsedLabel(item) : timeLabel(item)}</text>
+          <text fg={launcherHintColor} wrapMode="none">
+            {Locale.truncateMiddle(options?.elapsed ? elapsedLabel(item) : timeLabel(item), timeWidth())}
+          </text>
         </box>
       </box>
     )
