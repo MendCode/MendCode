@@ -118,10 +118,35 @@ HOME="$tmp_home" bash -c "curl -fsSL https://raw.githubusercontent.com/MendCode/
 - GitHub Actions are green on `main`.
 - Dependabot alerts are reviewed.
 - Secret scan is clean on the publicable tree.
+- Dependency Review and CodeQL are green.
 - `docs/public-readiness-audit.md` is current.
 - Release assets pass `bun run release:check-assets`.
+- `SHA256SUMS`, `RELEASE-MANIFEST.txt`, `mendcode.spdx.json`, and artifact attestations are present.
 - Installer smoke test passes on at least one macOS or Linux machine.
 - Release notes mention breaking changes, package changes, and installer changes.
+
+## GitHub Actions Release Flow
+
+Use the manual `Release` workflow from the Actions tab.
+
+Inputs:
+
+- `version`: semver without leading `v`.
+- `dry_run`: `true` builds artifacts and attestations without publishing; `false` creates a draft GitHub Release.
+- `prerelease`: marks the release as prerelease.
+
+The workflow:
+
+- runs supply-chain preflight
+- blocks release when OSV reports vulnerable checked-in lockfile entries
+- installs from the checked-in lockfile
+- builds `mendcode-*` release archives
+- validates the installer asset contract
+- writes `RELEASE-MANIFEST.txt`
+- generates `mendcode.spdx.json`
+- creates GitHub artifact attestations
+- uploads workflow artifacts
+- optionally creates a draft GitHub Release
 
 ## Registry Publishing
 
