@@ -16,7 +16,9 @@ describe("Agent View visibility", () => {
     const previousMonth = Date.UTC(2026, 4, 10, 15, 30, 0)
     const previousYear = Date.UTC(2025, 5, 13, 15, 30, 0)
 
-    expect(formatAgentViewSessionTime(today, current)).toBe(new Date(today).toLocaleTimeString(undefined, { timeStyle: "short" }))
+    expect(formatAgentViewSessionTime(today, current)).toBe(
+      `Today · ${new Date(today).toLocaleTimeString(undefined, { timeStyle: "short" })}`,
+    )
     expect(formatAgentViewSessionTime(previousMonth, current)).toBe(
       `${new Date(previousMonth).toLocaleTimeString(undefined, { timeStyle: "short" })} · ${new Date(
         previousMonth,

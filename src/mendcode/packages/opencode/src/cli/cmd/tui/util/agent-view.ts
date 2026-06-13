@@ -86,7 +86,7 @@ export function formatAgentViewSessionTime(input: number, now: number = Date.now
     date.getFullYear() === current.getFullYear() &&
     date.getMonth() === current.getMonth() &&
     date.getDate() === current.getDate()
-  if (isToday) return Locale.time(input)
+  if (isToday) return `Today · ${Locale.time(input)}`
 
   const sameYear = date.getFullYear() === current.getFullYear()
   const localDate = date.toLocaleDateString(undefined, {
