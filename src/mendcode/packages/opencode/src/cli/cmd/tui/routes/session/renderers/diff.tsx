@@ -12,9 +12,13 @@ export function TimelineDiff(props: {
   syntaxStyle: SyntaxStyle
   view?: TimelineDiffViewMode
   wrapMode?: TimelineDiffWrapMode
+  showFileRows?: boolean
 }) {
   const { theme } = useTheme()
-  const rows = () => parseTimelineDiffRows(props.diff)
+  const rows = () => {
+    const parsed = parseTimelineDiffRows(props.diff)
+    return props.showFileRows ? parsed : parsed.filter((row) => row.kind !== "file")
+  }
   const wrapMode = () => props.wrapMode ?? "word"
   const fileStatus = () => timelineDiffFileStatus(props.diff)
   const lineNumber = (row: TimelineDiffRow) => {

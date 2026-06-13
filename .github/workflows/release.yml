@@ -19,9 +19,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 concurrency:
   group: release-${{ inputs.version }}
@@ -32,12 +30,17 @@ jobs:
     name: Build release assets
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: release
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       VERSION: ${{ inputs.version }}
-      BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-cache
+      MENDCODE_VERSION: ${{ inputs.version }}
+      OPENCODE_VERSION: ${{ inputs.version }}
+      BUN_INSTALL_CACHE_DIR: /tmp/mendcode-bun-cache
     steps:
       - name: Validate release input
         shell: bash
@@ -49,7 +52,7 @@ jobs:
           fi
 
       - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -76,7 +79,7 @@ jobs:
           docker run --rm \
             -v "$PWD:/src" \
             ghcr.io/google/osv-scanner:v2.3.8@sha256:64e86bec6df2466feea5137fc7c78fb3b7c21ec077f014d7130f64810e50676b \
-            scan --recursive /src/src/mendcode
+            scan --config /src/.github/osv-release.toml --lockfile /src/src/mendcode/bun.lock
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -88,14 +91,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bun install --frozen-lockfile
+          bun install --frozen-lockfile --ignore-scripts --os="*" --cpu="*"
+          bun run --cwd packages/opencode fix-node-pty
 
       - name: Build release assets
         working-directory: src/mendcode
         shell: bash
         run: |
           set -euo pipefail
-          bun run --cwd packages/opencode script/build.ts --release-assets --skip-embed-web-ui
+          bun run --cwd packages/opencode script/build.ts --release-assets --skip-embed-web-ui --skip-install
           bash script/check-release-assets.sh
 
       - name: Write release manifest
@@ -132,7 +136,7 @@ jobs:
             src/mendcode/packages/opencode/dist/mendcode.spdx.json
 
       - name: Upload release artifacts to workflow
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: mendcode-release-${{ inputs.version }}
           path: |
@@ -144,9 +148,27 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  publish-release:
+    name: Create draft GitHub Release
+    if: ${{ inputs.dry_run == false }}
+    needs: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: mendcode-release-${{ inputs.version }}
+          path: dist
+
       - name: Create draft GitHub Release
-        if: ${{ inputs.dry_run == false }}
-        working-directory: src/mendcode/packages/opencode/dist
+        working-directory: dist
         shell: bash
         run: |
           set -euo pipefail

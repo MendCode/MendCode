@@ -1,0 +1,13 @@
+[[IgnoredVulns]]
+id = "GHSA-j965-2qgj-vjmq"
+reason = "aws-sdk v2 has no fixed version reported by OSV. It is retained only as a transitive package while release artifacts are built with scripts disabled, SBOM, and provenance attestations."
+
+[[IgnoredVulns]]
+id = "GHSA-gv7w-rqvm-qjhr"
+ignoreUntil = 2026-06-20
+reason = "esbuild fixed version 0.28.1 is still inside the repository minimum release-age window. Revisit after the release-age hold expires."
+
+[[IgnoredVulns]]
+id = "GHSA-g7r4-m6w7-qqqr"
+ignoreUntil = 2026-06-20
+reason = "esbuild fixed version 0.28.1 is still inside the repository minimum release-age window. Revisit after the release-age hold expires."

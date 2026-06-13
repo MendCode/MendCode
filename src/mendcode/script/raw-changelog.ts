@@ -31,7 +31,7 @@ const team = [
     .then((x) => x.filter((x) => x && !x.startsWith("#")))),
   ...bot,
 ]
-const order = ["Core", "TUI", "Desktop", "SDK", "Extensions"] as const
+const order = ["Core", "TUI", "Desktop", "SDK", "Extensions", "Release"] as const
 const sections = {
   core: "Core",
   tui: "TUI",
@@ -41,6 +41,7 @@ const sections = {
   plugin: "SDK",
   "extensions/zed": "Extensions",
   "extensions/vscode": "Extensions",
+  release: "Release",
 } as const
 
 function ref(input: string) {
@@ -74,7 +75,7 @@ async function diff(base: string, head: string) {
 }
 
 function section(areas: Set<string>) {
-  const priority = ["core", "tui", "app", "tauri", "sdk", "plugin", "extensions/zed", "extensions/vscode"]
+  const priority = ["tui", "core", "app", "tauri", "sdk", "plugin", "extensions/zed", "extensions/vscode", "release"]
   for (const area of priority) {
     if (areas.has(area)) return sections[area as keyof typeof sections]
   }
@@ -84,6 +85,10 @@ function section(areas: Set<string>) {
 function type(message: string) {
   if (message.match(/fix/i)) return "Bugfixes"
   return "Improvements"
+}
+
+function repoLocalPath(file: string) {
+  return file.replace(/^src\/mendcode\//, "")
 }
 
 function reverted(commits: Commit[]) {
@@ -120,7 +125,7 @@ async function commits(from: string, to: string) {
   }
 
   const log =
-    await $`git log ${base}..${head} --format=%H -- packages/opencode packages/sdk packages/plugin packages/desktop packages/app sdks/vscode packages/extensions`.text()
+    await $`git log ${base}..${head} --format=%H -- packages/opencode packages/sdk packages/plugin packages/desktop packages/app sdks/vscode packages/extensions ../../.github/workflows/release.yml ../../.github/release.yml`.text()
 
   const list: Commit[] = []
   for (const hash of log.split("\n").filter(Boolean)) {
@@ -131,7 +136,8 @@ async function commits(from: string, to: string) {
     const diff = await $`git diff-tree --no-commit-id --name-only -r ${hash}`.text()
     const areas = new Set<string>()
 
-    for (const file of diff.split("\n").filter(Boolean)) {
+    for (const rawFile of diff.split("\n").filter(Boolean)) {
+      const file = repoLocalPath(rawFile)
       if (file.startsWith("packages/opencode/src/cli/cmd/")) areas.add("tui")
       else if (file.startsWith("packages/opencode/")) areas.add("core")
       else if (file.startsWith("packages/desktop/src-tauri/")) areas.add("tauri")
@@ -139,6 +145,8 @@ async function commits(from: string, to: string) {
       else if (file.startsWith("packages/sdk/") || file.startsWith("packages/plugin/")) areas.add("sdk")
       else if (file.startsWith("packages/extensions/")) areas.add("extensions/zed")
       else if (file.startsWith("sdks/vscode/")) areas.add("extensions/vscode")
+      else if (file === "script/changelog.ts" || file === "script/raw-changelog.ts") areas.add("release")
+      else if (file === ".github/workflows/release.yml" || file === ".github/release.yml") areas.add("release")
     }
 
     if (areas.size === 0) continue

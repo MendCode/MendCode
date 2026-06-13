@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import path from "path"
 import { parseTimelineDiffRows, timelineDiffFileStatus } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
 import { rawReasoningDisplay, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
 import { groupTimelineParts } from "../../src/mend/tui/timeline/group"
@@ -340,6 +341,13 @@ describe("mend tui presentation renderers", () => {
     expect(rows.some((row) => row.text.startsWith("new "))).toBe(false)
     expect(rows.some((row) => row.text.startsWith("diff --git"))).toBe(false)
     expect(rows.filter((row) => row.kind === "file")).toEqual([{ kind: "file", text: "a.ts" }])
+  })
+
+  test("timeline diff parser normalizes absolute workspace headers", () => {
+    const file = path.join(process.cwd(), "scripts/install.ps1")
+    const rows = parseTimelineDiffRows([`--- ${file}`, `+++ ${file}`, "@@ -1 +1 @@", "-old", "+new"].join("\n"))
+
+    expect(rows[0]).toEqual({ kind: "file", text: "scripts/install.ps1" })
   })
 
   test("timeline diff parser keeps deleted file contents as removed rows", () => {
