@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.5 - 2026-06-13
+
+- Backport MCP runtime updates: catalog pagination, capability-aware prompt/resource listing, tolerant tool schema discovery, abort signal forwarding, OAuth `callbackPort`/`scope`, and manual OAuth header preservation.
+- Isolate provider model plugin hooks from internal provider state so plugin mutations cannot rename providers or zero model pricing globally.
+- Preserve delegated subagent identity on task child sessions.
+- Avoid a shell-cancel race by cancelling an existing session runner during short busy-state transitions instead of marking the session idle too early.
+
 ## 0.1.4 - 2026-06-13
 
 - Stop normal automatic and manual compaction from re-triggering the assistant after a completed turn.

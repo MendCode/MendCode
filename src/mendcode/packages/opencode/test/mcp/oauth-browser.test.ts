@@ -35,7 +35,7 @@ class MockUnauthorizedError extends Error {
 const transportCalls: Array<{
   type: "streamable" | "sse"
   url: string
-  options: { authProvider?: unknown }
+  options: { authProvider?: unknown; requestInit?: RequestInit }
 }> = []
 
 // Mock the transport constructors
@@ -43,7 +43,10 @@ void mock.module("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: class MockStreamableHTTP {
     url: string
     authProvider: { redirectToAuthorization?: (url: URL) => Promise<void> } | undefined
-    constructor(url: URL, options?: { authProvider?: { redirectToAuthorization?: (url: URL) => Promise<void> } }) {
+    constructor(
+      url: URL,
+      options?: { authProvider?: { redirectToAuthorization?: (url: URL) => Promise<void> }; requestInit?: RequestInit },
+    ) {
       this.url = url.toString()
       this.authProvider = options?.authProvider
       transportCalls.push({
@@ -231,6 +234,9 @@ test("open() is called with the authorization URL", async () => {
             "test-oauth-server-3": {
               type: "remote",
               url: "https://example.com/mcp",
+              headers: {
+                "X-Custom-Header": "custom-value",
+              },
             },
           },
         }),
@@ -264,6 +270,7 @@ test("open() is called with the authorization URL", async () => {
       expect(openCalledWith).toBeDefined()
       expect(typeof openCalledWith).toBe("string")
       expect(openCalledWith!).toContain("https://")
+      expect(transportCalls.at(-1)?.options.requestInit?.headers).toEqual({ "X-Custom-Header": "custom-value" })
     },
   })
 })
