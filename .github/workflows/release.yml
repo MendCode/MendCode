@@ -89,7 +89,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bun install --frozen-lockfile --ignore-scripts
+          bun install --frozen-lockfile --ignore-scripts --os="*" --cpu="*"
           bun run --cwd packages/opencode fix-node-pty
 
       - name: Build release assets
@@ -97,7 +97,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bun run --cwd packages/opencode script/build.ts --release-assets --skip-embed-web-ui
+          bun run --cwd packages/opencode script/build.ts --release-assets --skip-embed-web-ui --skip-install
           bash script/check-release-assets.sh
 
       - name: Write release manifest
