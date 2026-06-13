@@ -1,14 +1,10 @@
-import { dynamicTool, type Tool, jsonSchema, type JSONSchema7 } from "ai"
+import { type Tool } from "ai"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js"
-import {
-  CallToolResultSchema,
-  type Tool as MCPToolDef,
-  ToolListChangedNotificationSchema,
-} from "@modelcontextprotocol/sdk/types.js"
+import { type Tool as MCPToolDef, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js"
 import { Config } from "@/config/config"
 import { ConfigMCP } from "../config/mcp"
 import * as Log from "@mendcode/core/util/log"
@@ -18,7 +14,7 @@ import { Installation } from "../installation"
 import { InstallationVersion } from "@mendcode/core/installation/version"
 import { withTimeout } from "@/util/timeout"
 import { AppFileSystem } from "@mendcode/core/filesystem"
-import { McpOAuthProvider } from "./oauth-provider"
+import { McpOAuthProvider, OAUTH_CALLBACK_PATH } from "./oauth-provider"
 import { McpOAuthCallback } from "./oauth-callback"
 import { McpAuth } from "./auth"
 import { BusEvent } from "../bus/bus-event"
@@ -33,6 +29,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { zod as effectZod } from "@/util/effect-zod"
 import { withStatics } from "@/util/schema"
+import * as McpCatalog from "./catalog"
 
 const log = Log.create({ service: "mcp" })
 const DEFAULT_TIMEOUT = 30_000
@@ -113,50 +110,13 @@ function isMcpConfigured(entry: McpEntry): entry is ConfigMCP.Info {
   return typeof entry === "object" && entry !== null && "type" in entry
 }
 
-const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_")
-
 function remoteURL(key: string, value: string) {
   if (URL.canParse(value)) return new URL(value)
   log.warn("invalid remote mcp url", { key })
 }
 
-// Convert MCP tool definition to AI SDK Tool type
-function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number): Tool {
-  const inputSchema = mcpTool.inputSchema
-
-  // Spread first, then override type to ensure it's always "object"
-  const schema: JSONSchema7 = {
-    ...(inputSchema as JSONSchema7),
-    type: "object",
-    properties: (inputSchema.properties ?? {}) as JSONSchema7["properties"],
-    additionalProperties: false,
-  }
-
-  return dynamicTool({
-    description: mcpTool.description ?? "",
-    inputSchema: jsonSchema(schema),
-    execute: async (args: unknown) => {
-      return client.callTool(
-        {
-          name: mcpTool.name,
-          arguments: (args || {}) as Record<string, unknown>,
-        },
-        CallToolResultSchema,
-        {
-          resetTimeoutOnProgress: true,
-          timeout,
-        },
-      )
-    },
-  })
-}
-
 function defs(key: string, client: MCPClient, timeout?: number) {
-  return Effect.tryPromise({
-    try: () => withTimeout(client.listTools(), timeout ?? DEFAULT_TIMEOUT),
-    catch: (err) => (err instanceof Error ? err : new Error(String(err))),
-  }).pipe(
-    Effect.map((result) => result.tools),
+  return McpCatalog.defs(client, timeout).pipe(
     Effect.catch((err) => {
       log.error("failed to get tools from client", { key, error: err })
       return Effect.succeed(undefined)
@@ -180,9 +140,9 @@ function fetchFromClient<T extends { name: string }>(
   }).pipe(
     Effect.map((items) => {
       const out: Record<string, T & { client: string }> = {}
-      const sanitizedClient = sanitize(clientName)
+      const sanitizedClient = McpCatalog.sanitize(clientName)
       for (const item of items) {
-        out[sanitizedClient + ":" + sanitize(item.name)] = { ...item, client: clientName }
+        out[sanitizedClient + ":" + McpCatalog.sanitize(item.name)] = { ...item, client: clientName }
       }
       return out
     }),
@@ -291,6 +251,7 @@ export const layer = Layer.effect(
             clientId: oauthConfig?.clientId,
             clientSecret: oauthConfig?.clientSecret,
             scope: oauthConfig?.scope,
+            callbackPort: oauthConfig?.callbackPort,
             redirectUri: oauthConfig?.redirectUri,
           },
           {
@@ -657,7 +618,8 @@ export const layer = Layer.effect(
 
             const timeout = entry?.timeout ?? defaultTimeout
             for (const mcpTool of listed) {
-              result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(mcpTool, client, timeout)
+              result[McpCatalog.sanitize(clientName) + "_" + McpCatalog.sanitize(mcpTool.name)] =
+                McpCatalog.convertTool(mcpTool, client, timeout)
             }
           }),
         { concurrency: "unbounded" },
@@ -667,9 +629,9 @@ export const layer = Layer.effect(
 
     function collectFromConnected<T extends { name: string }>(
       s: State,
-      listFn: (c: Client) => Promise<T[]>,
+      listFn: (c: Client, timeout?: number) => Promise<T[]>,
       label: string,
-      config: Record<string, ConfigMCP.Info | boolean>,
+      config: Record<string, McpEntry>,
       defaultTimeout?: number,
     ) {
       return Effect.forEach(
@@ -678,7 +640,7 @@ export const layer = Layer.effect(
           const mcpConfig = config[clientName]
           const entry = mcpConfig && isMcpConfigured(mcpConfig) ? mcpConfig : undefined
           const timeout = entry?.timeout ?? defaultTimeout
-          return fetchFromClient(clientName, client, listFn, label, timeout).pipe(
+          return fetchFromClient(clientName, client, (c) => listFn(c, timeout), label, timeout).pipe(
             Effect.map((items) => Object.entries(items ?? {})),
           )
         },
@@ -689,9 +651,9 @@ export const layer = Layer.effect(
     const prompts = Effect.fn("MCP.prompts")(function* () {
       const s = yield* InstanceState.get(state)
       const cfg = yield* cfgSvc.get()
-      return yield* collectFromConnected(
+      return yield* collectFromConnected<PromptInfo>(
         s,
-        (c) => c.listPrompts().then((r) => r.prompts),
+        (c, timeout) => McpCatalog.prompts(c, timeout),
         "prompts",
         cfg.mcp ?? {},
         cfg.experimental?.mcp_timeout,
@@ -701,9 +663,9 @@ export const layer = Layer.effect(
     const resources = Effect.fn("MCP.resources")(function* () {
       const s = yield* InstanceState.get(state)
       const cfg = yield* cfgSvc.get()
-      return yield* collectFromConnected(
+      return yield* collectFromConnected<ResourceInfo>(
         s,
-        (c) => c.listResources().then((r) => r.resources),
+        (c, timeout) => McpCatalog.resources(c, timeout),
         "resources",
         cfg.mcp ?? {},
         cfg.experimental?.mcp_timeout,
@@ -768,9 +730,14 @@ export const layer = Layer.effect(
 
       // OAuth config is optional - if not provided, we'll use auto-discovery
       const oauthConfig = typeof mcpConfig.oauth === "object" ? mcpConfig.oauth : undefined
+      const effectiveRedirectUri =
+        oauthConfig?.redirectUri ??
+        (oauthConfig?.callbackPort
+          ? `http://127.0.0.1:${oauthConfig.callbackPort}${OAUTH_CALLBACK_PATH}`
+          : undefined)
 
       // Start the callback server with custom redirectUri if configured
-      yield* Effect.promise(() => McpOAuthCallback.ensureRunning(oauthConfig?.redirectUri))
+      yield* Effect.promise(() => McpOAuthCallback.ensureRunning(effectiveRedirectUri))
 
       const oauthState = Array.from(crypto.getRandomValues(new Uint8Array(32)))
         .map((b) => b.toString(16).padStart(2, "0"))
@@ -784,7 +751,8 @@ export const layer = Layer.effect(
           clientId: oauthConfig?.clientId,
           clientSecret: oauthConfig?.clientSecret,
           scope: oauthConfig?.scope,
-          redirectUri: oauthConfig?.redirectUri,
+          callbackPort: oauthConfig?.callbackPort,
+          redirectUri: effectiveRedirectUri,
         },
         {
           onRedirect: async (url) => {
@@ -794,7 +762,10 @@ export const layer = Layer.effect(
         auth,
       )
 
-      const transport = new StreamableHTTPClientTransport(url, { authProvider })
+      const transport = new StreamableHTTPClientTransport(url, {
+        authProvider,
+        requestInit: mcpConfig.headers ? { headers: mcpConfig.headers } : undefined,
+      })
 
       return yield* Effect.tryPromise({
         try: () => {

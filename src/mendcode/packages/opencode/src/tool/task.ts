@@ -113,6 +113,7 @@ export const TaskTool = Tool.define(
         (yield* sessions.create({
           parentID: ctx.sessionID,
           title: params.description + ` (@${next.name} subagent)`,
+          agent: next.name,
           permission: [
             ...(parent.permission ?? []).filter(
               (rule) => rule.permission === "external_directory" || rule.action === "deny",

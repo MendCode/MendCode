@@ -16,10 +16,25 @@ Target ref: pending release
 - Wrapped generated SDK `throwOnError` values in real `Error` objects while preserving the original structured body and status in `cause`.
 - Aligned legacy and Effect HTTP API Basic Auth defaults on the MendCode username.
 
+## Providers
+### Bugfixes
+- Isolated provider model plugin hooks from internal provider state so plugin-side mutations cannot rename providers or zero model pricing globally.
+
+## Subagents
+### Bugfixes
+- Store the delegated subagent name on task child sessions so resumed/background-visible task sessions keep the correct agent identity.
+
+## Sessions
+### Bugfixes
+- Avoid a shell-cancel race by cancelling an existing session runner even during short busy-state transitions instead of marking the session idle too early.
+
 ## MCP
 ### Bugfixes
 - Added `cwd` support for local MCP servers, resolving relative paths from the active MendCode project directory.
 - Applied configured MCP timeouts to prompt and resource discovery so hung servers do not stall those lists.
+- Paginate MCP tool, prompt, and resource catalogs; skip prompt/resource listing when a server does not advertise those capabilities; tolerate broken tool `outputSchema` metadata during discovery; and forward tool-call abort signals to MCP servers.
+- Added OAuth `callbackPort` shorthand and include configured OAuth `scope` in MCP client metadata.
+- Preserve configured remote MCP headers during manual OAuth authentication flows.
 
 ## Release
 ### Bugfixes
