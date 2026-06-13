@@ -17,7 +17,7 @@ main
 dev
 ```
 
-Dependabot PR #49 was closed and its branch was deleted before publication because it was an unrelated dependency bump, not part of the docs/public-readiness release gate.
+Dependabot PR #49 was closed and its branch was deleted during branch cleanup. Its security-relevant package updates were then applied manually to this release line so `dev` and `main` do not publish with the same Dependabot alerts.
 
 Open PRs at cleanup time: none.
 
@@ -43,8 +43,20 @@ Scanner results on a temporary tree made from tracked files plus new untracked d
 
 ```text
 gitleaks v8.30.1: no leaks found
-trufflehog v3.95.5 --only-verified: verified_secrets=0, unverified_secrets=0
+trufflehog v3.95.5: verified_secrets=0, unverified_secrets=0
 ```
+
+## Dependency Alerts
+
+Open Dependabot alerts on `main` before the final dependency patch covered:
+
+- `esbuild` in `src/mendcode/sdks/vscode/package.json`
+- `dompurify` in `src/mendcode/packages/ui/package.json`
+- `@hono/node-server` in `src/mendcode/packages/opencode/package.json`
+- `minimatch` in `src/mendcode/packages/opencode/package.json`
+- `turbo` in `src/mendcode/package.json`
+
+The release line updates those direct package declarations to the patched versions reported by GitHub. `src/mendcode/packages/core/package.json` already used a newer fixed `minimatch` version and was intentionally left unchanged.
 
 History scan note: reachable Git history contains fake/test placeholders that intentionally look like keys, including old memory redaction tests and old docs examples. They do not appear to be live credentials, but they are still public key-shaped strings in history. If the public requirement is "zero key-shaped strings anywhere in all historical commits", rewrite/scrub history before release.
 
