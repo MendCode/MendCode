@@ -60,7 +60,7 @@ const baseModelRoleOrder = [
 type SetupModelRole = string
 const primaryModelRoles = ["default", "build", "plan", "review"] as const
 const internalModelRoles = ["subagent", "small", "title", "compaction", "summary", "memoryExtractor", "permissionReviewer"] as const
-const promptModes: MendPromptMode[] = ["minimal", "focus", "full", "dev-js"]
+const promptModes: MendPromptMode[] = ["minimal", "focus", "full"]
 const promptModeDetails: Record<MendPromptMode, { summary: string; runtime: string; adds: string }> = {
   minimal: {
     summary: "fresh extensible base",
@@ -77,11 +77,6 @@ const promptModeDetails: Record<MendPromptMode, { summary: string; runtime: stri
     summary: "MendCode-aware prompt",
     runtime: "Loads normal skills and project instructions.",
     adds: "focus plus MendCode runtime knowledge; Mflow/TSM only when configured active or relevant",
-  },
-  "dev-js": {
-    summary: "JavaScript development mode",
-    runtime: "Loads normal skills, project instructions, and JavaScript-specific MendCode runtime rules.",
-    adds: "full plus pnpm-first dependency policy, vanilla-or-existing-framework guidance, and no unapproved installs",
   },
 }
 const roleDescriptions: Record<string, string> = {
@@ -573,7 +568,7 @@ export function Setup() {
         current={current?.enabled ? "enabled" : "disabled"}
         options={[
           {
-            title: "Enable memory use",
+            title: "Enable memory use (opt-in)",
             value: "enable-use",
             category: "Memory",
             description: "Read local global/project memories and inject relevant context.",
@@ -596,7 +591,7 @@ export function Setup() {
             },
           },
           {
-            title: "Allow generated proposals",
+            title: "Allow generated proposals (approval-gated)",
             value: "generate",
             category: "Generation",
             description: "Permit future extractor runs to create approval-gated memory proposals.",
@@ -1358,7 +1353,7 @@ export function Setup() {
                     Stored entries: global {summary()?.memory.entries.global.count}, project{" "}
                     {summary()?.memory.entries.project.count}
                   </text>
-                  <text fg={theme.textMuted}>Works in every prompt mode: minimal, focus, full, and dev-js.</text>
+                  <text fg={theme.textMuted}>Works in every prompt mode: minimal, focus, and full.</text>
                   <text fg={theme.textMuted}>
                     Enter toggles memory config. Retrieval is local-only; learning uses the configured extractor role.
                   </text>

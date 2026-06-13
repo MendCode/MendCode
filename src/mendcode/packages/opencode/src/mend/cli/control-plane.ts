@@ -160,7 +160,7 @@ async function prompt(args: string[]) {
       else if (args[i] === "--role") role = args[++i]!
       else if (args[i] === "--workflow") workflow = args[++i]!
       else if (args[i] === "--show-full") showFull = true
-      else throw new Error("Usage: mend-control-plane prompt build [--mode minimal|focus|full|dev-js] [--focus <id>] [--model <modelID>] [--role <role>] [--workflow <workflow>] [--show-full]")
+      else throw new Error("Usage: mend-control-plane prompt build [--mode minimal|focus|full] [--focus <id>] [--model <modelID>] [--role <role>] [--workflow <workflow>] [--show-full]")
     }
     const policy = await composePromptPolicy({ mode, focusID, modelID, role, workflow })
     console.log(JSON.stringify({

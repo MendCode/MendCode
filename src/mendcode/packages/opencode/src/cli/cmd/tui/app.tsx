@@ -1183,11 +1183,6 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       { mode: "minimal", title: "Minimal", description: "Small MendCode boundary only." },
       { mode: "focus", title: "Focus", description: "Provider-aware harness behavior." },
       { mode: "full", title: "Full", description: "Focus plus MendCode runtime context." },
-      {
-        mode: "dev-js",
-        title: "Dev JS",
-        description: "JavaScript mode: pnpm-first, vanilla-or-existing-framework, no unapproved installs.",
-      },
     ]
     dialog.replace(() => (
       <DialogSelect

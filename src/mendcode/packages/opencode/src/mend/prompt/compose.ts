@@ -60,8 +60,9 @@ type ComposeInput = {
 }
 
 function assertMode(mode: string): MendPromptMode {
-  if (mode === "minimal" || mode === "focus" || mode === "full" || mode === "dev-js") return mode
-  throw new Error("prompt mode must be one of: minimal, focus, full, dev-js")
+  if (mode === "minimal" || mode === "focus" || mode === "full") return mode
+  if (mode === "dev-js") return "full"
+  throw new Error("prompt mode must be one of: minimal, focus, full")
 }
 
 function preview(text: string, limit = 240) {
@@ -114,6 +115,21 @@ async function fullKnowledge(root: string) {
     `- Default focus: ${config.focus?.default || "codex"}. Prompt mode is persisted in .mendcode/prompt-mode.json.`,
     "- Model roles are managed from ~/.mendcode/models.yaml and projected into each checkout generated runtime compatibility config.",
     "- Budget behavior is local policy; dry-run/status commands must not call providers.",
+    "",
+    "MendCode CLI map:",
+    "- `mend` opens the interactive TUI. `mend run <message>` opens the TUI with a message queued. `mend chat <message>` runs a control-plane chat turn.",
+    "- Health/config: `mend status`, `mend doctor`, `mend check`, `mend setup status|plan|doctor`, `mend config show|paths`.",
+    "- Models/providers/auth: `mend models status|show|plan|presets|set-default|use-preset`, `mend providers status`, `mend auth status|login-plan|login`.",
+    "- Prompt/runtime: `mend prompts sources|build|mode|cycle-mode`, `mend runtime status|configure|plan|adopt|registry`, `mend adapter status`, `mend upstream status|inspect|baseline`.",
+    "- Memory: `mend memory status|search|preview|add|edit|delete|propose|list|apply|reject|import-codex|index|config`.",
+    "- Project controls: `mend tui status|profile|apply|preview|propose`, `mend focus status|list|show|use`, `mend packages status|list|create|install|enable|disable|remove|search|show`.",
+    "- Collaboration: `mend worktree status|plan|create|open|adopt|remove|reset|doctor`, `mend mflow status|setup|activate|deactivate|remove|plan|doctor`, `mend tsm status|plan|setup|activate|deactivate|remove|doctor`.",
+    "",
+    "Memory operating contract:",
+    "- Use `mend memory add` only when the user explicitly asks to save/remember a fact.",
+    "- Use `mend memory propose` for durable future-use candidates that still need approval.",
+    "- List/search before editing, deleting, applying, or rejecting memory IDs.",
+    "- Treat injected memories as soft context; current user instructions and repository evidence win.",
   ]
   const integration: string[] = []
   if (mflow.enabled) {
@@ -132,19 +148,6 @@ async function fullKnowledge(root: string) {
     integration.push("Worktree context:", "- Worktree policy mentions live-sync, but Mflow is not fully enabled; keep live operations blocked.")
   }
   return { knowledge: lines.join("\n"), integration: integration.join("\n") }
-}
-
-function devJsKnowledge() {
-  return [
-    "JavaScript development mode:",
-    "- Prefer the existing repo stack and package manager. When the repo has no package-manager signal and a choice is needed, use pnpm.",
-    "- Do not install packages or run networked package-manager commands unless the user explicitly approves it.",
-    "- Use vanilla JavaScript, HTML, CSS, Web APIs, and small focused modules when they satisfy the product goal.",
-    "- Use the framework already present in the repo. Introduce a framework only when the requested app genuinely needs framework-level state, routing, rendering, or build ergonomics.",
-    "- Do not introduce TanStack libraries unless the repo already uses them or the user explicitly asks for them.",
-    "- Keep dependency changes exact and minimal. Prefer built-in platform APIs over new packages for parsing, dates, fetch, storage, and simple state.",
-    "- For frontend work, build the actual usable interface first and verify rendered behavior when feasible.",
-  ].join("\n")
 }
 
 export async function composePromptPolicy(input: ComposeInput = {}): Promise<PromptComposition> {
@@ -198,7 +201,7 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
     }
   }
 
-  if (mode === "full" || mode === "dev-js") {
+  if (mode === "full") {
     const full = await fullKnowledge(root)
     sections.push(section({
       id: "mendcode-context",
@@ -219,15 +222,6 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
       label: "MendCode customization capabilities",
       source: "mendcode-context",
       text: composeCustomizationCapabilitySection(),
-    }))
-  }
-
-  if (mode === "dev-js") {
-    sections.push(section({
-      id: "dev-js-policy",
-      label: "JavaScript development policy",
-      source: "mendcode-context",
-      text: devJsKnowledge(),
     }))
   }
 

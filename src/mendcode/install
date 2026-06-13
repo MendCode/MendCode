@@ -5,7 +5,7 @@ GITHUB_REPO=${MENDCODE_GITHUB_REPO:-MendCode/MendCode}
 GITHUB_BASE_URL=${MENDCODE_GITHUB_BASE_URL:-https://github.com/$GITHUB_REPO}
 GITHUB_API_URL=${MENDCODE_GITHUB_API_URL:-https://api.github.com/repos/$GITHUB_REPO}
 BINARY_NAME=mendcode
-ARCHIVE_BINARY=opencode
+ARCHIVE_BINARY=mendcode
 
 MUTED='\033[0;2m'
 RED='\033[0;31m'
@@ -106,7 +106,7 @@ else
 
     combo="$os-$arch"
     case "$combo" in
-      linux-x64|linux-arm64|darwin-x64|darwin-arm64|windows-x64)
+      linux-x64|linux-arm64|darwin-x64|darwin-arm64|windows-x64|windows-arm64)
         ;;
       *)
         echo -e "${RED}Unsupported OS/Arch: $os/$arch${NC}"
@@ -463,7 +463,7 @@ echo -e "${MUTED}MendCode includes free models, to start:${NC}"
 echo -e ""
 echo -e "cd <project>  ${MUTED}# Open directory${NC}"
 echo -e ""
-echo -e "mendcode    ${MUTED}# Run command${NC}"
+echo -e "mendcode    ${MUTED}# Open MendCode; first run opens setup${NC}"
 echo -e ""
 echo -e "${MUTED}For more information visit ${NC}$GITHUB_BASE_URL"
 echo -e ""
