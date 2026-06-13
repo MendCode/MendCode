@@ -1,7 +1,7 @@
 import { Global } from "@mendcode/core/global"
-import { InstallationVersion } from "@mendcode/core/installation/version"
 import { Flag } from "@mendcode/core/flag/flag"
 import os from "os"
+import { Installation } from "@/installation"
 import { Duration, Effect } from "effect"
 import { Config } from "@/config/config"
 import { ConfigPlugin } from "@/config/plugin"
@@ -56,7 +56,8 @@ const InfoCommand = effectCmd({
       : undefined
     const terminal = [termProgram, process.env.TERM].filter((item): item is string => Boolean(item)).join(" / ")
 
-    console.log(`MendCode runtime version: ${InstallationVersion}`)
+    console.log(`MendCode runtime version: ${Installation.displayVersion()}`)
+    console.log(`channel: ${Installation.channel()}`)
     console.log(`os: ${os.type()} ${os.release()} ${os.arch()}`)
     console.log(`terminal: ${terminal || "unknown"}`)
     console.log("plugins:")

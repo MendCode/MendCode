@@ -1,6 +1,6 @@
 {
   "name": "@mendcode/ui",
-  "version": "1.14.39",
+  "version": "0.1.2",
   "type": "module",
   "license": "MIT",
   "exports": {

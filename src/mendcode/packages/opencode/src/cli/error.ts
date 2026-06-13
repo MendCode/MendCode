@@ -39,7 +39,7 @@ export function FormatError(input: unknown) {
     return [
       `Model not found: ${data?.providerID}/${data?.modelID}`,
       ...(suggestions.length ? ["Did you mean: " + suggestions.join(", ")] : []),
-      `Try: \`mend-runtime models\` to list available models`,
+      `Try: \`mendcode models\` to list available models`,
       `Or check your config provider/model names`,
     ].join("\n")
   }

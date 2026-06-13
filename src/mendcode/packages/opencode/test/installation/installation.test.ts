@@ -49,6 +49,12 @@ function testLayer(
 }
 
 describe("installation", () => {
+  test("uses package version for local display labels", () => {
+    expect(Installation.displayVersion()).toMatch(/^\d+\.\d+\.\d+$/)
+    expect(Installation.labelVersion()).toMatch(/^v\d+\.\d+\.\d+$/)
+    expect(Installation.channel()).toBe("local")
+  })
+
   describe("latest", () => {
     test("reads release version from GitHub releases", async () => {
       const layer = testLayer(() => jsonResponse({ tag_name: "v1.2.3" }))

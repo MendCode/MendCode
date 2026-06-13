@@ -91,7 +91,7 @@ export async function worktreePlan(args: string[], root?: string) {
   const context = resolveWorktreeContext(root || process.cwd())
   const paths = mendPaths(context.repoRoot)
   const name = args[0]
-  if (!name) throw new Error("Usage: mend worktree plan <name> [--branch <branch>] [--focus <focus>]")
+  if (!name) throw new Error("Usage: mendcode worktree plan <name> [--branch <branch>] [--focus <focus>]")
   const managerState = await readWorktreeState(paths.root)
   const branch = optionValue(args, "--branch") || `${managerState.branchPrefix}${name}`
   const focus = optionValue(args, "--focus") || activeFocus(paths.root)
@@ -138,7 +138,7 @@ export async function worktreeOpen(args: string[], root?: string) {
   const context = resolveWorktreeContext(root || process.cwd())
   const paths = mendPaths(context.repoRoot)
   const target = args[0]
-  if (!target) throw new Error("Usage: mend worktree open <id|branch|path>")
+  if (!target) throw new Error("Usage: mendcode worktree open <id|branch|path>")
   const state = await readWorktreeState(paths.root)
   const records = Object.values(state.worktrees)
   const record = records.find((item) => item.id === target || item.branch === target || item.path === target)
@@ -173,7 +173,7 @@ export async function worktreeAdopt(args: string[], root?: string) {
   const context = resolveWorktreeContext(root || process.cwd())
   const paths = mendPaths(context.repoRoot)
   const target = args[0]
-  if (!target) throw new Error("Usage: mend worktree adopt <path|branch>")
+  if (!target) throw new Error("Usage: mendcode worktree adopt <path|branch>")
   const git = gitWorktreeList(paths.root)
   const external = git.entries.find((item) => item.path === target || item.branch === target)
   if (!external) throw new Error(`Cannot adopt unknown git worktree: ${target}`)
@@ -207,7 +207,7 @@ async function destructivePreview(action: "remove" | "reset", args: string[], ro
   const context = resolveWorktreeContext(root || process.cwd())
   const paths = mendPaths(context.repoRoot)
   const target = args[0]
-  if (!target) throw new Error(`Usage: mend worktree ${action} <id|branch|path>`)
+  if (!target) throw new Error(`Usage: mendcode worktree ${action} <id|branch|path>`)
   const state = await readWorktreeState(paths.root)
   const records = Object.values(state.worktrees)
   const record = records.find((item) => item.id === target || item.branch === target || item.path === target)
@@ -313,7 +313,7 @@ export async function mflowDoctor(root?: string) {
   for (const entry of requiredNeverSync) if (!policy.neverSync.includes(entry)) failures.push(`policy.neverSync missing ${entry}`)
   if (policy.liveSync && policy.mode !== "live-sync") failures.push("liveSync=true requires mode: live-sync")
   if (policy.mode === "live-sync") warnings.push("live-sync mode is configured; start must still remain explicit and visible")
-  if (!existsSync(paths.mflowPlan)) warnings.push("mflow plan has not been generated yet; run `mend mflow plan` before implementation")
+  if (!existsSync(paths.mflowPlan)) warnings.push("mflow plan has not been generated yet; run `mendcode mflow plan` before implementation")
   if (MFLOW_NPM_PACKAGE !== "mflow-cli") failures.push(`selected package must remain mflow-cli, got ${MFLOW_NPM_PACKAGE}`)
   return { ok: failures.length === 0, package: { reserved: MFLOW_RESERVED_NPM_PACKAGE, selected: MFLOW_NPM_PACKAGE, version: MFLOW_NPM_VERSION, published: true }, repository: MFLOW_REPOSITORY, signaling: MFLOW_DEFAULT_SIGNALING, policy, plan: existsSync(paths.mflowPlan) ? path.relative(paths.root, paths.mflowPlan) : null, failures, warnings }
 }

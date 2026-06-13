@@ -4,7 +4,6 @@ import { EffectBridge } from "@/effect/bridge"
 import { Bus } from "@/bus"
 import { Installation } from "@/installation"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
-import { InstallationVersion } from "@mendcode/core/installation/version"
 import * as Log from "@mendcode/core/util/log"
 import { Effect, Queue, Schema } from "effect"
 import * as Stream from "effect/Stream"
@@ -73,7 +72,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const bridge = yield* EffectBridge.make()
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
-      return { healthy: true as const, version: InstallationVersion }
+      return { healthy: true as const, version: Installation.displayVersion(), channel: Installation.channel() }
     })
 
     const event = Effect.fn("GlobalHttpApi.event")(function* () {

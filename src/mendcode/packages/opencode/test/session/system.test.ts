@@ -110,7 +110,7 @@ describe("session.system", () => {
 
     expect(output).toContain("Mode: minimal")
     expect(output).toContain("<mendcode_prompt_policy>")
-    expect(output).toContain("mend memory add")
+    expect(output).toContain("mendcode memory add")
     expect(output).toContain("--scope global")
     expect(output).toContain("instead of creating arbitrary project files")
     expect(output).not.toContain(".agents")

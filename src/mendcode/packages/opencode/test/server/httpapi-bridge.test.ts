@@ -394,7 +394,11 @@ describe("HttpApi server", () => {
     const response = await app().request(`${GlobalPaths.health}?directory=/does/not/exist/opencode-test`)
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toMatchObject({ healthy: true })
+    expect(await response.json()).toMatchObject({
+      healthy: true,
+      version: expect.stringMatching(/^\d+\.\d+\.\d+$/),
+      channel: "local",
+    })
   })
 
   test("serves global event stream from Effect HttpApi", async () => {
