@@ -11,7 +11,6 @@ import { UninstallCommand } from "./cli/cmd/uninstall"
 import { ModelsCommand } from "./cli/cmd/models"
 import { UI } from "./cli/ui"
 import { Installation } from "./installation"
-import { InstallationVersion } from "@mendcode/core/installation/version"
 import { NamedError } from "@mendcode/core/util/error"
 import { FormatError } from "./cli/error"
 import { ServeCommand } from "./cli/cmd/serve"
@@ -57,7 +56,7 @@ const args = hideBin(process.argv)
 
 function show(out: string) {
   const text = out.trimStart()
-  if (!text.startsWith("mend-runtime ")) {
+  if (!text.startsWith("mendcode ")) {
     process.stderr.write(UI.logo() + EOL + EOL)
     process.stderr.write(text)
     return
@@ -67,11 +66,11 @@ function show(out: string) {
 
 const cli = yargs(args)
   .parserConfiguration({ "populate--": true })
-  .scriptName("mend-runtime")
+  .scriptName("mendcode")
   .wrap(100)
   .help("help", "show help")
   .alias("help", "h")
-  .version("version", "show version number", InstallationVersion)
+  .version("version", "show version number", Installation.displayVersion())
   .alias("version", "v")
   .option("print-logs", {
     describe: "print logs to stderr",
@@ -108,8 +107,8 @@ const cli = yargs(args)
     process.env.MENDCODE_RUNTIME = "1"
     process.env.OPENCODE_PID = String(process.pid)
 
-    Log.Default.info("mend-runtime", {
-      version: InstallationVersion,
+    Log.Default.info("mendcode", {
+      version: Installation.displayVersion(),
       args: process.argv.slice(2),
       process_role: processMetadata.processRole,
       run_id: processMetadata.runID,

@@ -361,7 +361,7 @@ export function focusShow(id: string | undefined, root?: string) {
 }
 
 export async function focusUse(id: string | undefined, root?: string) {
-  if (!id || !focusProfiles[id]) throw new Error(`Usage: mend focus use <${Object.keys(focusProfiles).join("|")}>`)
+  if (!id || !focusProfiles[id]) throw new Error(`Usage: mendcode focus use <${Object.keys(focusProfiles).join("|")}>`)
   const paths = mendPaths(root)
   const cfg = readMendConfig(paths.root)
   cfg.focus = { ...(cfg.focus || {}), default: id }
@@ -607,7 +607,7 @@ function mustRun(cmd: string, args: string[], root: string) {
 }
 
 export async function baselineUpstream(commit: string | undefined, root?: string) {
-  if (!commit) throw new Error("Usage: mend upstream baseline <commit>")
+  if (!commit) throw new Error("Usage: mendcode upstream baseline <commit>")
   const paths = mendPaths(root)
   const engineRoot = path.join(paths.root, ".agents", "vendor", "opencode")
   const status = spawnSync("git", ["-C", engineRoot, "status", "--short"], { cwd: paths.root, encoding: "utf8" })

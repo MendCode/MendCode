@@ -98,7 +98,7 @@ export async function applyTuiPreset(preset: "compact" | "comfortable" | "spacio
 }
 
 export async function applyTuiProposal(proposalID: string, root?: string) {
-  if (!proposalID) throw new Error("Usage: mend tui apply <proposal-id>")
+  if (!proposalID) throw new Error("Usage: mendcode tui apply <proposal-id>")
   const paths = mendPaths(root)
   const proposalPath = path.join(paths.tuiProposalDir, proposalID, "proposal.json")
   const proposal = await readJson<{ profile?: MendTuiProfile } | undefined>(proposalPath, undefined)

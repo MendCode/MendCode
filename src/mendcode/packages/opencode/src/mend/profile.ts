@@ -132,7 +132,7 @@ const fallbackProfile: MendTuiProfile = {
     provider: { visible: true, format: "provider" },
     status: { visible: true, mode: "guarded-runtime" },
     homeLogo: { size: "default" },
-    homeWelcome: { mode: "centered", rightPanel: "actions" },
+    homeWelcome: { mode: "centered", rightPanel: "agentManager" },
   },
   rollback: {
     enabled: true,

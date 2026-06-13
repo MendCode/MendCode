@@ -4,6 +4,8 @@ import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import path from "path"
+import { readFileSync } from "fs"
+import { fileURLToPath } from "url"
 import z from "zod"
 import { BusEvent } from "@/bus/bus-event"
 import { Flag } from "@mendcode/core/flag/flag"
@@ -17,6 +19,15 @@ const GITHUB_REPO = process.env.MENDCODE_GITHUB_REPO ?? "MendCode/MendCode"
 const GITHUB_RAW_INSTALL_URL =
   process.env.MENDCODE_INSTALL_URL ?? `https://raw.githubusercontent.com/${GITHUB_REPO}/main/src/mendcode/install`
 const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`
+const PackageVersion = (() => {
+  try {
+    const packagePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../package.json")
+    const data = JSON.parse(readFileSync(packagePath, "utf8")) as { version?: unknown }
+    return typeof data.version === "string" && data.version ? data.version : undefined
+  } catch {
+    return undefined
+  }
+})()
 
 export type Method = "curl" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "unknown"
 
@@ -66,6 +77,20 @@ export function isPreview() {
 
 export function isLocal() {
   return InstallationChannel === "local"
+}
+
+export function displayVersion() {
+  if (isLocal() && PackageVersion) return PackageVersion
+  return InstallationVersion
+}
+
+export function labelVersion() {
+  if (isLocal() && PackageVersion) return `v${PackageVersion}`
+  return InstallationVersion === "local" ? "local" : `v${InstallationVersion}`
+}
+
+export function channel() {
+  return InstallationChannel
 }
 
 export class UpgradeFailedError extends Schema.TaggedErrorClass<UpgradeFailedError>()("UpgradeFailedError", {

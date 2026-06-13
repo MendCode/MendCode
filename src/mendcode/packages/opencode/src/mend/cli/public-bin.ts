@@ -46,40 +46,40 @@ const controlPlaneRoutes: Record<string, (args: string[]) => string[]> = {
   export: (args) => ["export", ...args],
   adapter: () => ["system", "adapter-status"],
   toolchain: (args) => {
-    if (args[0] !== "status") throw new Error("Usage: mend toolchain status")
+    if (args[0] !== "status") throw new Error("Usage: mendcode toolchain status")
     return ["system", "toolchain"]
   },
   config: (args) => {
     if (args[0] === "show") return ["project", "config-show"]
     if (args[0] === "paths") return ["system", "config-paths"]
-    throw new Error("Usage: mend config <show|paths>")
+    throw new Error("Usage: mendcode config <show|paths>")
   },
   upstream: (args) => {
     if (args[0] === "status") return ["system", "upstream-status"]
     if (args[0] === "inspect") return ["system", "upstream-inspect", ...args.slice(1)]
     if (args[0] === "baseline") return ["project", "upstream-baseline", ...args.slice(1)]
-    throw new Error("Usage: mend upstream <status|inspect|baseline>")
+    throw new Error("Usage: mendcode upstream <status|inspect|baseline>")
   },
   context: (args) => {
     const sub = args[0] || "status"
     if (["status", "refresh", "show"].includes(sub)) return ["project", `context-${sub}`]
-    throw new Error("Usage: mend context <status|refresh|show>")
+    throw new Error("Usage: mendcode context <status|refresh|show>")
   },
   focus: (args) => {
     const sub = args[0] || "status"
     if (["status", "list", "show", "use"].includes(sub)) return ["project", `focus-${sub}`, ...args.slice(1)]
-    throw new Error("Usage: mend focus <list|status|show|use>")
+    throw new Error("Usage: mendcode focus <list|status|show|use>")
   },
   worktree: (args) => {
     const sub = args[0] || "status"
     if (["status", "plan", "create", "open", "adopt", "remove", "reset", "doctor"].includes(sub)) return ["worktree", ...args]
-    throw new Error("Usage: mend worktree <status|plan|create|open|adopt|remove|reset|doctor>")
+    throw new Error("Usage: mendcode worktree <status|plan|create|open|adopt|remove|reset|doctor>")
   },
 }
 
 function mendVersion(root = mendPaths().root) {
   try {
-    const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"))
+    const pkg = JSON.parse(readFileSync(path.join(mendPaths(root).ownedRuntimePackage, "package.json"), "utf8"))
     return typeof pkg.version === "string" && pkg.version ? pkg.version : "0.0.0"
   } catch {
     return "0.0.0"
@@ -87,53 +87,53 @@ function mendVersion(root = mendPaths().root) {
 }
 
 function usage(exitCode = 0) {
-  const out = `mend ${mendVersion()}
+  const out = `mendcode ${mendVersion()}
 
 Usage:
-  mend                         open MendCode TUI in the current project
-  mend --worktree [target]     open MendCode in a git worktree by branch/path/id
-  mend --tsm [target|--all]    open TSM workspace with MendCode split
-  mend run [message..]         open TUI with message ready to send
-  mend chat [message..]        run a control-plane chat turn
+  mendcode                         open MendCode TUI in the current project
+  mendcode --worktree [target]     open MendCode in a git worktree by branch/path/id
+  mendcode --tsm [target|--all]    open TSM workspace with MendCode split
+  mendcode run [message..]         open TUI with message ready to send
+  mendcode chat [message..]        run a control-plane chat turn
 
 Core:
-  mend status                  show MendCode status
-  mend doctor                  run local diagnostics
-  mend check                   verify the owned-runtime boundary
-  mend config show|paths       inspect effective config and paths
+  mendcode status                  show MendCode status
+  mendcode doctor                  run local diagnostics
+  mendcode check                   verify the owned-runtime boundary
+  mendcode config show|paths       inspect effective config and paths
 
 Models and providers:
-  mend models status           inspect model catalog/policy
-  mend providers status        inspect provider auth/adapters
-  mend auth status             inspect provider login state
+  mendcode models status           inspect model catalog/policy
+  mendcode providers status        inspect provider auth/adapters
+  mendcode auth status             inspect provider login state
 
 Project controls:
-  mend tui status              inspect active TUI profile
-  mend focus status|list|show|use
-  mend memory status|search|preview|add|list
-  mend permissions status      inspect permission defaults
-  mend permissions set-default <approval|smart|full_access>
-  mend mflow status            inspect mflow activation, daemon, and locks
-  mend mflow setup             guided mflow setup for this repo
-  mend mflow activate --room <room> --accept-public-relay-limits
-  mend mflow deactivate        disable mflow without deleting local config
-  mend mflow remove            remove local mflow config and scaffold files
-  mend tsm status|plan|doctor  inspect optional TSM integration
-  mend tsm setup|activate|deactivate|remove
+  mendcode tui status              inspect active TUI profile
+  mendcode focus status|list|show|use
+  mendcode memory status|search|preview|add|list
+  mendcode permissions status      inspect permission defaults
+  mendcode permissions set-default <approval|smart|full_access>
+  mendcode mflow status            inspect mflow activation, daemon, and locks
+  mendcode mflow setup             guided mflow setup for this repo
+  mendcode mflow activate --room <room> --accept-public-relay-limits
+  mendcode mflow deactivate        disable mflow without deleting local config
+  mendcode mflow remove            remove local mflow config and scaffold files
+  mendcode tsm status|plan|doctor  inspect optional TSM integration
+  mendcode tsm setup|activate|deactivate|remove
                                 manage MendCode TSM scaffold without touching external sessions
-  mend worktree status|plan    inspect worktree registry and dry-run create plan
-  mend worktree create|open|adopt|remove|reset
+  mendcode worktree status|plan    inspect worktree registry and dry-run create plan
+  mendcode worktree create|open|adopt|remove|reset
                                 preview-first worktree management; destructive actions are gated
-  mend packages status|list    inspect installed/active MendCode packages
-  mend packages create --id <id> --title <name> [--include skills,modes,plugins]
+  mendcode packages status|list    inspect installed/active MendCode packages
+  mendcode packages create --id <id> --title <name> [--include skills,modes,plugins]
                                 snapshot selected local skills/modes/widgets/config into a package
-  mend packages install <source-id>
-  mend packages disable <id>   deselect a package without deleting local config
+  mendcode packages install <source-id>
+  mendcode packages disable <id>   deselect a package without deleting local config
 
 Runtime boundary:
-  mend export plan             show export policy only
-  mend adapter status          inspect MendCode vs donor guard
-  mend upstream status         inspect upstream baseline
+  mendcode export plan             show export policy only
+  mendcode adapter status          inspect MendCode vs donor guard
+  mendcode upstream status         inspect upstream baseline
 `
   ;(exitCode ? console.error : console.log)(out)
   process.exit(exitCode)
@@ -191,8 +191,8 @@ function enforceDonorIdentityGuard(args: string[]) {
   throw new Error([
     `Blocked internal donor runtime command: ${token}`,
     status.reason,
-    "Use MendCode-owned commands from `mend --help` or inspect guard state with `mend adapter status`.",
-    `Temporary internal override: ${status.overrideEnv}=1 ./bin/mend opencode -- ${args.join(" ") || "--help"}`,
+    "Use MendCode-owned commands from `mendcode --help` or inspect guard state with `mendcode adapter status`.",
+    `Temporary internal override: ${status.overrideEnv}=1 mendcode opencode -- ${args.join(" ") || "--help"}`,
   ].join("\n"))
 }
 
@@ -233,7 +233,7 @@ export function resolveWorktreeShortcutTarget(
       item.label === target ||
       path.basename(item.path) === target
     )
-    if (!hit) throw new Error(`Unknown worktree target: ${target}. Run \`mend worktree status\` to inspect available targets.`)
+    if (!hit) throw new Error(`Unknown worktree target: ${target}. Run \`mendcode worktree status\` to inspect available targets.`)
     return hit
   }
 
@@ -257,12 +257,12 @@ export function resolveWorktreeShortcutTarget(
   const nonBase = worktreeShortcutCandidates(status).filter((item) => item.path !== status.workspace.repoRoot)
   if (nonBase.length === 1) return nonBase[0]!
   const summary = nonBase.map((item) => item.branch || item.path).join(", ") || "none"
-  throw new Error(`Multiple or no worktree targets found (${summary}). Use \`mend --${command} <branch|path>\`.`)
+  throw new Error(`Multiple or no worktree targets found (${summary}). Use \`mendcode --${command} <branch|path>\`.`)
 }
 
 async function runWorktreeShortcut(args: string[]) {
   const target = args[0]
-  if (args.length > 1) throw new Error("Usage: mend --worktree [branch|path|id]")
+  if (args.length > 1) throw new Error("Usage: mendcode --worktree [branch|path|id]")
   const status = await worktreeStatus(process.cwd())
   const resolved = resolveWorktreeShortcutTarget(status, target, "worktree")
   return runRuntime([resolved.path])
@@ -271,15 +271,15 @@ async function runWorktreeShortcut(args: string[]) {
 async function runTsmShortcut(args: string[]) {
   const all = args[0] === "--all"
   const target = all ? undefined : args[0]
-  if (args.length > 1) throw new Error("Usage: mend --tsm [branch|path|id|--all]")
+  if (args.length > 1) throw new Error("Usage: mendcode --tsm [branch|path|id|--all]")
   const status = await worktreeStatus(process.cwd())
   const tsm = await tsmStatus(process.cwd())
   if (tsm.lifecycle !== "active" || !tsm.worktreeCapable) {
-    throw new Error(`TSM is not active for this repo (${tsm.lifecycle}). Run \`mend tsm status\` and \`mend tsm activate\`.`)
+    throw new Error(`TSM is not active for this repo (${tsm.lifecycle}). Run \`mendcode tsm status\` and \`mendcode tsm activate\`.`)
   }
   const branches = all ? [] : [resolveWorktreeShortcutTarget(status, target, "tsm").branch].filter((branch): branch is string => Boolean(branch))
   if (!all && !branches.length) throw new Error("TSM shortcut requires a branch-backed worktree target.")
-  const result = spawnSync("tsm", ["wt", "open", ...branches, "--split", "mend"], {
+  const result = spawnSync("tsm", ["wt", "open", ...branches, "--split", "mendcode"], {
     cwd: status.workspace.repoRoot,
     stdio: "inherit",
   })
@@ -296,10 +296,10 @@ function runTuiWithMessage(args: string[]) {
       const value = args[++i]
       if (!value) throw new Error(`Missing value for ${arg}`)
       passthrough.push(arg, value)
-    } else if (arg.startsWith("-")) throw new Error(`mend run opens the interactive TUI; unsupported headless flag: ${arg}`)
+    } else if (arg.startsWith("-")) throw new Error(`mendcode run opens the interactive TUI; unsupported headless flag: ${arg}`)
     else message.push(arg)
   }
-  if (!message.length) throw new Error("Usage: mend run [message..]")
+  if (!message.length) throw new Error("Usage: mendcode run [message..]")
   return runRuntime([process.cwd(), "--initial-message", message.join(" "), ...passthrough])
 }
 

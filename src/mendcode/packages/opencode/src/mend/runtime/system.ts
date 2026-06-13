@@ -262,7 +262,7 @@ export async function upstreamStatus(root = mendPaths().root) {
 }
 
 export async function upstreamInspect(ref: string | undefined, root = mendPaths().root) {
-  if (!ref) throw new Error("Usage: mend upstream inspect <commit-or-ref>")
+  if (!ref) throw new Error("Usage: mendcode upstream inspect <commit-or-ref>")
   const state = upstreamState(root)
   mustRun("git", ["-C", engineRoot(root), "fetch", state.watchRemote, ref])
   const target = mustRun("git", ["-C", engineRoot(root), "rev-parse", "FETCH_HEAD"])

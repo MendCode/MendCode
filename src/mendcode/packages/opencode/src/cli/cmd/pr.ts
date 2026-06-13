@@ -105,7 +105,7 @@ export const PrCommand = effectCmd({
     const mendcodeArgs = sessionId ? ["-s", sessionId] : []
     const code = yield* Effect.promise(
       () =>
-        Process.spawn(["mend-runtime", ...mendcodeArgs], {
+        Process.spawn(["mendcode", ...mendcodeArgs], {
           stdin: "inherit",
           stdout: "inherit",
           stderr: "inherit",

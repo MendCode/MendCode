@@ -167,7 +167,7 @@ describe("Mend TUI profile config overrides", () => {
     expect(activityMascotHoverText(result.profile)).toContain("(^ o)")
   })
 
-  test("home welcome right panel defaults to actions and validates allowed values", async () => {
+  test("home welcome right panel defaults to Agent View and validates allowed values", async () => {
     const result = await loadMendTuiProfile(undefined, {
       home: {
         welcome: {
@@ -176,8 +176,18 @@ describe("Mend TUI profile config overrides", () => {
       },
     })
 
-    expect(result.profile.surfaces.homeWelcome?.rightPanel).toBe("actions")
+    expect(result.profile.surfaces.homeWelcome?.rightPanel).toBe("agentManager")
     expect(validateMendTuiProfile(result.profile).ok).toBe(true)
+
+    const actions = await loadMendTuiProfile(undefined, {
+      home: {
+        welcome: {
+          rightPanel: "actions",
+        },
+      },
+    })
+
+    expect(actions.profile.surfaces.homeWelcome?.rightPanel).toBe("actions")
 
     const invalid = mergeMendTuiProfile({
       ...result.profile,
