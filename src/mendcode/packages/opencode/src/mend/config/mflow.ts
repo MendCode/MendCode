@@ -3,17 +3,20 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { mkdir, readFile, rm, writeFile } from "fs/promises"
 import path from "path"
 import { createHash, randomBytes } from "crypto"
+import net from "net"
+import os from "os"
 import { mendPaths } from "./paths"
 import { syncProject } from "./project"
 import { writeMendMcpServer } from "./mcp"
 
-export const MFLOW_PUBLIC_RELAY = "wss://mflow-signal.obed0101.deno.net"
-export const MFLOW_PUBLIC_RELAY_DISPLAY = "https://mflow-signal.obed0101.deno.net/"
+export const MFLOW_LOCAL_RELAY = "ws://localhost:8787"
+export const MFLOW_LEGACY_PUBLIC_RELAY = "wss://mflow-signal.obed0101.deno.net"
+export const MFLOW_LEGACY_PUBLIC_RELAY_DISPLAY = "https://mflow-signal.obed0101.deno.net/"
 export const MFLOW_PACKAGE = "mflow-cli"
-export const MFLOW_VERSION = "0.1.12"
+export const MFLOW_DEFAULT_RELAY_PORT = 8787
 
 export type MflowMode = "disabled" | "enabled-stopped" | "running"
-export type MflowRelayMode = "public" | "custom"
+export type MflowRelayMode = "local" | "public" | "legacy-public" | "remote" | "custom"
 
 export type MflowConfig = {
   version: 1
@@ -25,6 +28,17 @@ export type MflowConfig = {
   hookPriority: number
   publicRelayNoticeAccepted: boolean
   updatedAt: string
+}
+
+export type MflowDetectedRelay = {
+  url: string
+  host: string
+  port: number
+  scope: "local-machine" | "lan-machine"
+  health: "healthy" | "tcp-open" | "unreachable"
+  status: string
+  roomCount?: number
+  peerCount?: number
 }
 
 export type MflowActivateInput = {
@@ -57,11 +71,12 @@ const DEFAULT_IGNORE = [
 ]
 
 const PUBLIC_RELAY_WARNING =
-  "Public mflow relay is a shared fair-use service. It is good for demos, small swarms, and onboarding. It has peer, message, rate, active-room, idle-timeout, and dashboard-history limits. For larger teams, private code, production reliability, or custom limits, use a self-hosted mflow relay URL."
+  "Legacy public mflow relay is a shared demo-only service with reliability and platform-limit issues. It is not the recommended free path. Use a local mflow relay on this machine/LAN or a public relay URL controlled by you or your team."
 const EDIT_LOCK_LEASE_MS = 35_000
 const EDIT_LOCK_WAIT_TIMEOUT_MS = 90_000
 const EDIT_LOCK_RETRY_MS = 750
 const MFLOW_CLI_TIMEOUT_MS = 1_200
+const RELAY_SCAN_TIMEOUT_MS = 300
 
 function readJson<T>(file: string, fallback: T): T {
   try {
@@ -125,7 +140,26 @@ function mflowEditLockPath(root: string, file: string) {
 }
 
 function mflowCommand(args: string[]) {
-  return ["pnpm", "dlx", "--package", `${MFLOW_PACKAGE}@${MFLOW_VERSION}`, ...args]
+  return ["pnpm", "dlx", "--package", MFLOW_PACKAGE, ...args]
+}
+
+function relayModeLabel(mode: MflowRelayMode) {
+  if (mode === "local") return "Local relay"
+  if (mode === "public") return "Public relay URL"
+  if (mode === "remote") return "Public relay URL"
+  if (mode === "custom") return "Public relay URL"
+  return "Legacy public relay"
+}
+
+function normalizeRelayMode(mode: MflowRelayMode): MflowRelayMode {
+  if (mode === "custom" || mode === "remote") return "public"
+  return mode
+}
+
+function normalizePublicSignaling(value: string) {
+  if (value.startsWith("https://")) return `wss://${value.slice("https://".length)}`
+  if (value.startsWith("http://")) return `ws://${value.slice("http://".length)}`
+  return value
 }
 
 function mflowImmediateLockCommandArgs(file: string) {
@@ -292,10 +326,18 @@ function controlGuide(config: MflowConfig, root: string) {
   return `# mflow for MendCode
 
 State: ${config.enabled ? "enabled" : "disabled"}
-Relay: ${config.relayMode === "public" ? `${MFLOW_PUBLIC_RELAY_DISPLAY} (public fair-use)` : config.signaling}
+Relay: ${relayModeLabel(config.relayMode)} (${config.signaling})
 Room: ${config.room}
 
-${PUBLIC_RELAY_WARNING}
+MendCode is local-first for mflow. Prefer a relay on this machine or the local WiFi/LAN. Use a public URL only for a relay controlled by you or your team, such as a VPS or domain with WebSockets. The old public Deno relay is legacy/demo-only and should not be used for normal onboarding.
+
+Local relay examples:
+
+\`\`\`bash
+PORT=8787 bun run packages/signaling/src/index.ts
+docker build -f packages/signaling/Dockerfile -t mflow-signaling .
+docker run --rm -p 8787:8787 -e PORT=8787 mflow-signaling
+\`\`\`
 
 MCP command:
 
@@ -386,14 +428,104 @@ export async function readMflowConfig(root?: string): Promise<MflowConfig> {
   return readJsonAsync<MflowConfig>(mflowStatePath(paths.root), {
     version: 1,
     enabled: false,
-    relayMode: "public",
-    signaling: MFLOW_PUBLIC_RELAY,
+    relayMode: "local",
+    signaling: MFLOW_LOCAL_RELAY,
     room: defaultRoom(paths.root),
     storeSecret: false,
     hookPriority: 0,
     publicRelayNoticeAccepted: false,
     updatedAt: new Date(0).toISOString(),
   })
+}
+
+function localRelayHosts() {
+  const hosts = new Set(["localhost", "127.0.0.1"])
+  for (const entries of Object.values(os.networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family !== "IPv4" || entry.internal) continue
+      hosts.add(entry.address)
+      const parts = entry.address.split(".")
+      if (parts.length === 4) {
+        for (let host = 1; host <= 254; host++) hosts.add(`${parts[0]}.${parts[1]}.${parts[2]}.${host}`)
+      }
+    }
+  }
+  return [...hosts]
+}
+
+function tcpProbe(host: string, port: number, timeout = RELAY_SCAN_TIMEOUT_MS) {
+  return new Promise<boolean>((resolve) => {
+    const socket = net.createConnection({ host, port })
+    const done = (ok: boolean) => {
+      socket.removeAllListeners()
+      socket.destroy()
+      resolve(ok)
+    }
+    socket.setTimeout(timeout)
+    socket.once("connect", () => done(true))
+    socket.once("timeout", () => done(false))
+    socket.once("error", () => done(false))
+  })
+}
+
+function countValue(value: unknown) {
+  if (typeof value === "number") return value
+  if (Array.isArray(value)) return value.length
+  if (value && typeof value === "object") return Object.keys(value).length
+  return undefined
+}
+
+async function relayHttpStatus(host: string, port: number): Promise<Pick<MflowDetectedRelay, "health" | "status" | "roomCount" | "peerCount">> {
+  for (const pathName of ["/health", "/status", "/"]) {
+    try {
+      const response = await fetch(`http://${host}:${port}${pathName}`, { signal: AbortSignal.timeout(RELAY_SCAN_TIMEOUT_MS) })
+      const text = await response.text()
+      const parsed = text.trim().startsWith("{") ? JSON.parse(text) as Record<string, unknown> : {}
+      return {
+        health: response.ok ? "healthy" as const : "tcp-open" as const,
+        status: response.ok ? `http ${response.status}` : `http ${response.status}; websocket port open`,
+        roomCount: countValue(parsed.rooms ?? parsed.roomCount ?? parsed.room_count),
+        peerCount: countValue(parsed.peers ?? parsed.peerCount ?? parsed.peer_count),
+      }
+    } catch {}
+  }
+  return { health: "tcp-open" as const, status: "websocket port open" }
+}
+
+export async function scanMflowRelays(options?: { port?: number; hosts?: string[] }): Promise<MflowDetectedRelay[]> {
+  const port = options?.port ?? MFLOW_DEFAULT_RELAY_PORT
+  const own = new Set(["localhost", "127.0.0.1", ...Object.values(os.networkInterfaces()).flatMap((entries) =>
+    (entries ?? []).filter((entry) => entry.family === "IPv4").map((entry) => entry.address)
+  )])
+  const hosts = [...new Set(options?.hosts ?? localRelayHosts())]
+  const results = await Promise.all(hosts.map(async (host): Promise<MflowDetectedRelay | undefined> => {
+    if (!await tcpProbe(host, port)) return
+    const status = await relayHttpStatus(host, port)
+    return {
+      url: `ws://${host}:${port}`,
+      host,
+      port,
+      scope: own.has(host) ? "local-machine" as const : "lan-machine" as const,
+      ...status,
+    }
+  }))
+  return results.filter((item): item is MflowDetectedRelay => item !== undefined)
+    .sort((a, b) => Number(a.scope !== "local-machine") - Number(b.scope !== "local-machine") || a.host.localeCompare(b.host))
+}
+
+export function mflowLocalRelayGuide(root?: string) {
+  const paths = mendPaths(root)
+  return {
+    recommendedUrl: MFLOW_LOCAL_RELAY,
+    lanUrlExample: "ws://<relay-lan-ip>:8787",
+    commands: [
+      "PORT=8787 bun run packages/signaling/src/index.ts",
+      "docker build -f packages/signaling/Dockerfile -t mflow-signaling .",
+      "docker run --rm -p 8787:8787 -e PORT=8787 mflow-signaling",
+    ],
+    note: "Run the Bun/Docker relay command from an mflow repo checkout until mflow ships a packaged relay start command.",
+    mcpCommand: mflowCommand(["mflow-mcp", "--root", paths.root]),
+  }
 }
 
 export async function mflowControlStatus(root?: string) {
@@ -457,15 +589,22 @@ export async function mflowControlStatus(root?: string) {
 
 export async function activateMflow(input: MflowActivateInput, root?: string, options?: { sync?: boolean }) {
   const paths = mendPaths(root)
-  const relayMode = input.relayMode
-  if (relayMode !== "public" && relayMode !== "custom") {
-    throw new Error("mflow relay mode must be public or custom")
+  const relayMode = normalizeRelayMode(input.relayMode)
+  if (relayMode !== "local" && relayMode !== "public" && relayMode !== "legacy-public") {
+    throw new Error("mflow relay mode must be local, public, or legacy-public")
   }
-  const signaling = relayMode === "public" ? MFLOW_PUBLIC_RELAY : (input.signaling || "").trim()
-  if (relayMode === "custom" && !/^wss?:\/\//.test(signaling)) {
-    throw new Error("Custom mflow relay URL must start with ws:// or wss://")
+  const signaling = relayMode === "legacy-public"
+    ? MFLOW_LEGACY_PUBLIC_RELAY
+    : relayMode === "local"
+      ? normalizePublicSignaling((input.signaling || MFLOW_LOCAL_RELAY).trim())
+      : normalizePublicSignaling((input.signaling || "").trim())
+  if (relayMode === "public" && !/^wss?:\/\//.test(signaling)) {
+    throw new Error("Public mflow relay URL must start with ws://, wss://, http://, or https://")
   }
-  if (relayMode === "public" && !input.publicRelayNoticeAccepted) {
+  if (relayMode === "local" && !/^wss?:\/\/[^/]+:\d+/.test(signaling)) {
+    throw new Error("Local mflow relay URL must be ws://host:port or wss://host:port")
+  }
+  if (relayMode === "legacy-public" && !input.publicRelayNoticeAccepted) {
     throw new Error(PUBLIC_RELAY_WARNING)
   }
 
@@ -480,7 +619,7 @@ export async function activateMflow(input: MflowActivateInput, root?: string, op
     room: (input.room || defaultRoom(paths.root)).trim(),
     storeSecret: Boolean(input.storeSecret),
     hookPriority: Number.isInteger(input.hookPriority) ? Math.max(0, Math.min(9, input.hookPriority!)) : 0,
-    publicRelayNoticeAccepted: relayMode !== "public" || Boolean(input.publicRelayNoticeAccepted),
+    publicRelayNoticeAccepted: relayMode !== "legacy-public" || Boolean(input.publicRelayNoticeAccepted),
     updatedAt: new Date().toISOString(),
   }
   if (!config.room) throw new Error("mflow room is required")
@@ -593,8 +732,8 @@ export async function enforceMflowBeforeEdit(input: {
   const config = readJson<MflowConfig>(mflowStatePath(input.root), {
     version: 1,
     enabled: false,
-    relayMode: "public",
-    signaling: MFLOW_PUBLIC_RELAY,
+    relayMode: "local",
+    signaling: MFLOW_LOCAL_RELAY,
     room: defaultRoom(input.root),
     storeSecret: false,
     hookPriority: 0,
@@ -629,8 +768,8 @@ export async function waitMflowBeforeRead(input: {
   const config = readJson<MflowConfig>(mflowStatePath(input.root), {
     version: 1,
     enabled: false,
-    relayMode: "public",
-    signaling: MFLOW_PUBLIC_RELAY,
+    relayMode: "local",
+    signaling: MFLOW_LOCAL_RELAY,
     room: defaultRoom(input.root),
     storeSecret: false,
     hookPriority: 0,
@@ -652,4 +791,4 @@ export async function releaseMflowLocks(input: { root: string; files: string[]; 
   }
 }
 
-export { PUBLIC_RELAY_WARNING as MFLOW_PUBLIC_RELAY_WARNING }
+export { PUBLIC_RELAY_WARNING as MFLOW_PUBLIC_RELAY_WARNING, MFLOW_LEGACY_PUBLIC_RELAY as MFLOW_PUBLIC_RELAY }

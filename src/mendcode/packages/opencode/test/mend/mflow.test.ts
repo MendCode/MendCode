@@ -3,7 +3,7 @@ import { createHash } from "crypto"
 import { mkdir, readFile, stat, writeFile } from "fs/promises"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
-import { activateMflow, deactivateMflow, enforceMflowBeforeEdit, mflowControlStatus, mflowEditTargets, mflowReadTargets, readMflowConfig, releaseMflowLocks, waitMflowBeforeRead } from "../../src/mend/config/mflow"
+import { activateMflow, deactivateMflow, enforceMflowBeforeEdit, mflowControlStatus, mflowEditTargets, mflowLocalRelayGuide, mflowReadTargets, readMflowConfig, releaseMflowLocks, waitMflowBeforeRead } from "../../src/mend/config/mflow"
 
 async function exists(file: string) {
   try {
@@ -15,21 +15,32 @@ async function exists(file: string) {
 }
 
 describe("mflow MendCode integration", () => {
-  test("requires explicit acceptance before using the public relay", async () => {
+  test("defaults disabled config to local-first relay", async () => {
+    await using tmp = await tmpdir()
+
+    await expect(readMflowConfig(tmp.path)).resolves.toMatchObject({
+      enabled: false,
+      relayMode: "local",
+      signaling: "ws://localhost:8787",
+    })
+  })
+
+  test("requires explicit acceptance before using the legacy public relay", async () => {
     await using tmp = await tmpdir()
 
     await expect(activateMflow({
-      relayMode: "public",
+      relayMode: "legacy-public",
       room: "test-room",
       publicRelayNoticeAccepted: false,
-    }, tmp.path, { sync: false })).rejects.toThrow("Public mflow relay is a shared fair-use service")
+    }, tmp.path, { sync: false })).rejects.toThrow("Legacy public mflow relay is a shared demo-only service")
   })
 
   test("writes activation config, pnpm MCP config, hook scaffold, and runtime config", async () => {
     await using tmp = await tmpdir()
 
     const status = await activateMflow({
-      relayMode: "public",
+      relayMode: "local",
+      signaling: "ws://localhost:8787",
       room: "test-room",
       secret: "local-test-secret",
       generateSecret: false,
@@ -41,7 +52,8 @@ describe("mflow MendCode integration", () => {
     expect(["enabled-stopped", "running"]).toContain(status.mode)
     expect(await readMflowConfig(tmp.path)).toMatchObject({
       enabled: true,
-      relayMode: "public",
+      relayMode: "local",
+      signaling: "ws://localhost:8787",
       room: "test-room",
       storeSecret: true,
       hookPriority: 4,
@@ -51,7 +63,7 @@ describe("mflow MendCode integration", () => {
     expect(mcp).toMatchObject({
       type: "local",
       enabled: true,
-      command: ["pnpm", "dlx", "--package", "mflow-cli@0.1.12", "mflow-mcp", "--root", tmp.path],
+      command: ["pnpm", "dlx", "--package", "mflow-cli", "mflow-mcp", "--root", tmp.path],
     })
     expect(await exists(path.join(tmp.path, ".mendcode/plugins/mflow-lock.js"))).toBe(true)
     expect(await readFile(path.join(tmp.path, ".mflow/config.toml"), "utf8")).toContain('secret = "local-test-secret"')
@@ -105,15 +117,40 @@ describe("mflow MendCode integration", () => {
     expect(() => mflowEditTargets("write", { path: "../outside.ts" }, root)).toThrow("outside project")
   })
 
-  test("validates custom relay URLs", async () => {
+  test("validates public relay URLs", async () => {
     await using tmp = await tmpdir()
 
     await expect(activateMflow({
-      relayMode: "custom",
+      relayMode: "public",
+      signaling: "ftp://relay.example.test",
+      room: "test-room",
+      publicRelayNoticeAccepted: true,
+    }, tmp.path, { sync: false })).rejects.toThrow("must start with ws://, wss://, http://, or https://")
+  })
+
+  test("normalizes https public relay URLs to websocket URLs", async () => {
+    await using tmp = await tmpdir()
+
+    await activateMflow({
+      relayMode: "public",
       signaling: "https://relay.example.test",
       room: "test-room",
       publicRelayNoticeAccepted: true,
-    }, tmp.path, { sync: false })).rejects.toThrow("must start with ws:// or wss://")
+    }, tmp.path, { sync: false })
+
+    await expect(readMflowConfig(tmp.path)).resolves.toMatchObject({
+      relayMode: "public",
+      signaling: "wss://relay.example.test",
+    })
+  })
+
+  test("exposes local relay guide with pnpm MCP command", async () => {
+    await using tmp = await tmpdir()
+
+    expect(mflowLocalRelayGuide(tmp.path)).toMatchObject({
+      recommendedUrl: "ws://localhost:8787",
+      mcpCommand: ["pnpm", "dlx", "--package", "mflow-cli", "mflow-mcp", "--root", tmp.path],
+    })
   })
 
   test("waits for a local edit lock lease before acquiring", async () => {
@@ -122,7 +159,7 @@ describe("mflow MendCode integration", () => {
     const lockDir = path.join(tmp.path, ".mendcode/mflow/edit-locks")
 
     await activateMflow({
-      relayMode: "public",
+      relayMode: "local",
       room: "test-room",
       publicRelayNoticeAccepted: true,
     }, tmp.path, { sync: false })
@@ -157,7 +194,7 @@ describe("mflow MendCode integration", () => {
   test("keeps local edit locks visible as a short lease after the owning tool call", async () => {
     await using tmp = await tmpdir()
     await activateMflow({
-      relayMode: "public",
+      relayMode: "local",
       room: "test-room",
       publicRelayNoticeAccepted: true,
     }, tmp.path, { sync: false })
@@ -183,7 +220,7 @@ describe("mflow MendCode integration", () => {
   test("waits before reading a file locked by another local writer", async () => {
     await using tmp = await tmpdir()
     await activateMflow({
-      relayMode: "public",
+      relayMode: "local",
       room: "test-room",
       publicRelayNoticeAccepted: true,
     }, tmp.path, { sync: false })
@@ -218,7 +255,7 @@ describe("mflow MendCode integration", () => {
   test("does not wait before reading its own local edit lease", async () => {
     await using tmp = await tmpdir()
     await activateMflow({
-      relayMode: "public",
+      relayMode: "local",
       room: "test-room",
       publicRelayNoticeAccepted: true,
     }, tmp.path, { sync: false })

@@ -11,7 +11,7 @@ import { mendMcpStatus, writeMendMcpServer } from "../config/mcp"
 import { baselineUpstream, contextRefresh, contextShow, contextStatus, focusList, focusShow, focusStatus, focusUse, initProject, packageMetadata, packageMetadataSet, readMendConfig, syncGlobalPrimaryAgentModels, syncProject } from "../config/project"
 import { mflowDoctor, mflowPlan, mflowStatus, worktreeAdopt, worktreeCreate, worktreeDoctor, worktreeOpen, worktreePlan, worktreeRemove, worktreeReset, worktreeStatus } from "../config/worktree"
 import { activateTsm, deactivateTsm, removeTsm, setupTsm, tsmDoctor, tsmPlan, tsmStatus, type TsmState } from "../config/tsm"
-import { activateMflow, deactivateMflow, mflowControlStatus, MFLOW_PUBLIC_RELAY, MFLOW_PUBLIC_RELAY_WARNING, removeMflowConfig, type MflowRelayMode } from "../config/mflow"
+import { activateMflow, deactivateMflow, mflowControlStatus, MFLOW_LOCAL_RELAY, MFLOW_PUBLIC_RELAY, MFLOW_PUBLIC_RELAY_WARNING, mflowLocalRelayGuide, scanMflowRelays, removeMflowConfig, type MflowRelayMode } from "../config/mflow"
 import { applyRuntimePack, deleteLocalRuntimePack, formatRuntimePackPlan, rollbackRuntimePack, runtimePackArtifactCandidates, runtimePackPlan } from "../runtime/pack"
 import { budgetDoctor, budgetStatus } from "../runtime/budget"
 import { promptSourcesStatus } from "../prompt/sources"
@@ -349,7 +349,7 @@ async function mflow(args: string[]) {
     return
   }
   if (sub === "activate") {
-    const relay = (optionValue(args, "--relay") || "public") as MflowRelayMode
+    const relay = (optionValue(args, "--relay") || "local") as MflowRelayMode
     const signaling = optionValue(args, "--url") || optionValue(args, "--signaling") || undefined
     const room = optionValue(args, "--room") || undefined
     const secret = optionValue(args, "--secret") || undefined
@@ -363,7 +363,7 @@ async function mflow(args: string[]) {
       generateSecret: !secret,
       storeSecret: args.includes("--store-secret"),
       hookPriority,
-      publicRelayNoticeAccepted: args.includes("--accept-public-relay-limits") || relay !== "public",
+      publicRelayNoticeAccepted: args.includes("--accept-public-relay-limits") || relay !== "legacy-public",
     }, root), null, 2))
     return
   }
@@ -381,17 +381,31 @@ async function mflow(args: string[]) {
     const rl = readline.createInterface({ input, output })
     try {
       console.log("mflow setup for MendCode")
-      console.log("1) Public fair-use relay")
-      console.log("2) Custom/self-hosted relay URL")
-      const relayChoice = (await rl.question("Relay [1/2]: ")).trim() || "1"
-      const relayMode: MflowRelayMode = relayChoice === "2" ? "custom" : "public"
+      console.log("1) Local mflow relay (recommended)")
+      console.log("2) Public relay URL")
+      console.log("3) Legacy public relay (demo-only)")
+      const relayChoice = (await rl.question("Relay [1/2/3]: ")).trim() || "1"
+      const relayMode: MflowRelayMode = relayChoice === "2" ? "public" : relayChoice === "3" ? "legacy-public" : "local"
       let signaling: string | undefined
       let publicRelayNoticeAccepted = true
-      if (relayMode === "custom") {
-        signaling = (await rl.question("Relay URL (ws:// or wss://): ")).trim()
-      } else {
+      if (relayMode === "local") {
+        const detected = await scanMflowRelays()
+        if (detected.length) {
+          console.log("Detected local/LAN relays:")
+          detected.forEach((relay, index) => console.log(`${index + 1}) ${relay.url} ${relay.scope} ${relay.health} rooms=${relay.roomCount ?? "unknown"} peers=${relay.peerCount ?? "unknown"}`))
+          const picked = Number((await rl.question(`Use detected relay [1-${detected.length}] or Enter for localhost:8787: `)).trim())
+          signaling = detected[picked - 1]?.url || MFLOW_LOCAL_RELAY
+        } else {
+          console.log(JSON.stringify(mflowLocalRelayGuide(root), null, 2))
+          signaling = MFLOW_LOCAL_RELAY
+        }
+      }
+      if (relayMode === "public") {
+        signaling = (await rl.question("Public relay URL (ws://, wss://, http://, or https://): ")).trim()
+      }
+      if (relayMode === "legacy-public") {
         console.log(MFLOW_PUBLIC_RELAY_WARNING)
-        const accepted = (await rl.question("Use public relay with these limits? [y/N]: ")).trim().toLowerCase()
+        const accepted = (await rl.question("Use legacy public relay with these limits? [y/N]: ")).trim().toLowerCase()
         publicRelayNoticeAccepted = accepted === "y" || accepted === "yes"
         signaling = MFLOW_PUBLIC_RELAY
       }
@@ -413,8 +427,8 @@ async function mflow(args: string[]) {
     }
     return
   }
-  const result = sub === "plan" ? await mflowPlan(root) : sub === "doctor" ? await mflowDoctor(root) : sub === "legacy-status" ? await mflowStatus(root) : null
-  if (!result) throw new Error("Usage: mend-control-plane mflow <status|setup|activate|deactivate|remove|plan|doctor>")
+  const result = sub === "scan" ? await scanMflowRelays() : sub === "relay-guide" ? mflowLocalRelayGuide(root) : sub === "plan" ? await mflowPlan(root) : sub === "doctor" ? await mflowDoctor(root) : sub === "legacy-status" ? await mflowStatus(root) : null
+  if (!result) throw new Error("Usage: mend-control-plane mflow <status|setup|activate|deactivate|remove|scan|relay-guide|plan|doctor>")
   console.log(JSON.stringify(result, null, 2))
   if ("ok" in result && result.ok === false) process.exitCode = 1
 }

@@ -79,8 +79,10 @@ import { mendStatusSummary } from "@/mend/commands/status"
 import {
   activateMflow,
   deactivateMflow,
+  mflowLocalRelayGuide,
   mflowControlStatus,
   removeMflowConfig,
+  scanMflowRelays,
   type MflowRelayMode,
 } from "@/mend/config/mflow"
 import {
@@ -701,10 +703,15 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   const mflowStatusLine = async () => {
     const status = await mflowControlStatus(mend.root)
     const config = status.config
+    const relayLabel = config.relayMode === "local"
+      ? "Local"
+      : config.relayMode === "legacy-public" || (config.relayMode === "public" && config.signaling.includes("mflow-signal.obed0101.deno.net"))
+        ? "Legacy public"
+        : "Public"
     return {
       status,
       line: `${status.mode} · ${config.relayMode} · ${config.room}`,
-      relay: `${config.relayMode === "public" ? "Public fair-use" : "Custom"} · ${config.signaling}`,
+      relay: `${relayLabel} · ${config.signaling}`,
       daemon: status.daemon.running ? "daemon running" : "daemon stopped",
       locks: status.locks.checked ? "locks available" : "locks unavailable",
     }
@@ -928,7 +935,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             onSelect: () => {},
           },
           {
-            title: config.relayMode === "public" ? "Public relay" : "Custom relay",
+            title: config.relayMode === "local" ? "Local relay" : config.relayMode === "legacy-public" || config.signaling.includes("mflow-signal.obed0101.deno.net") ? "Legacy public relay" : "Public relay URL",
             value: "relay",
             category: "Connection",
             description: config.signaling,
@@ -982,26 +989,80 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   }
   const configureAndActivateMflowFromTui = async () => {
     const current = (await mflowControlStatus(mend.root)).config
+    const currentIsLegacyPublic = current.relayMode === "legacy-public" || current.signaling.includes("mflow-signal.obed0101.deno.net")
+    const showLocalRelayPicker = async (): Promise<string | null> => {
+      const scan = await scanMflowRelays()
+      return new Promise((resolve) => {
+        const guide = mflowLocalRelayGuide(mend.root)
+        dialog.replace(
+          () => (
+            <DialogSelect
+              title="local mflow relay"
+              current={scan[0]?.url ?? "start"}
+              renderFilter={false}
+              options={[
+                ...scan.map((relay) => ({
+                  title: `${relay.host}:${relay.port}`,
+                  value: relay.url,
+                  category: relay.scope === "local-machine" ? "This machine" : "LAN",
+                  description: `${relay.health} · rooms ${relay.roomCount ?? "unknown"} · peers ${relay.peerCount ?? "unknown"}`,
+                  onSelect: () => resolve(relay.url),
+                })),
+                {
+                  title: "Start local relay",
+                  value: "start",
+                  category: "Actions",
+                  description: guide.commands[0],
+                  onSelect: () => void showDialogObject(dialog, "Start local mflow relay", guide).then(() => resolve(null)),
+                },
+                {
+                  title: "Copy LAN relay URL",
+                  value: "copy",
+                  category: "Actions",
+                  description: guide.lanUrlExample,
+                  onSelect: () => void showDialogObject(dialog, "LAN relay URL", guide).then(() => resolve(null)),
+                },
+                {
+                  title: "Refresh scan",
+                  value: "refresh",
+                  category: "Actions",
+                  description: "Scan localhost and local IPv4 /24 networks for port 8787.",
+                  onSelect: () => void showLocalRelayPicker().then(resolve),
+                },
+                {
+                  title: "Use localhost:8787",
+                  value: "localhost",
+                  category: "Actions",
+                  description: "Use the default local relay URL even if the scan did not detect it.",
+                  onSelect: () => resolve(guide.recommendedUrl),
+                },
+              ]}
+            />
+          ),
+          () => resolve(null),
+        )
+      })
+    }
     const relayMode = await new Promise<MflowRelayMode | null>((resolve) => {
       dialog.replace(
         () => (
           <DialogSelect
             title="mflow relay"
-            current={current.relayMode}
+            current={currentIsLegacyPublic ? "local" : current.relayMode === "remote" || current.relayMode === "custom" ? "public" : current.relayMode}
             options={[
               {
-                title: "Public relay",
-                value: "public" as const,
+                title: "Local mflow relay",
+                value: "local" as const,
                 category: "Relay",
-                description: "Use the shared fair-use relay. Good for demos and small swarms.",
-                onSelect: () => resolve("public"),
+                description: "Use a relay on this computer or the local WiFi/LAN.",
+                onSelect: () => resolve("local"),
               },
               {
-                title: "Custom URL",
-                value: "custom" as const,
+                title: "Public relay URL",
+                value: "public" as const,
                 category: "Relay",
-                description: "Use your own ws:// or wss:// mflow relay.",
-                onSelect: () => resolve("custom"),
+                description: "Use your own VPS/domain relay URL.",
+                onSelect: () => resolve("public"),
               },
             ]}
           />
@@ -1013,18 +1074,15 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
 
     let signaling = current.signaling
     let publicRelayNoticeAccepted = true
+    if (relayMode === "local") {
+      const selected = await showLocalRelayPicker()
+      if (!selected) return
+      signaling = selected
+    }
     if (relayMode === "public") {
-      publicRelayNoticeAccepted = await DialogConfirm.show(
-        dialog,
-        "Use public mflow relay?",
-        "The public relay is shared fair-use and has peer, message, rate, active-room, idle-timeout, and dashboard-history limits.",
-        "back",
-      ) === true
-      if (!publicRelayNoticeAccepted) return
-    } else {
       const value = await DialogPrompt.show(dialog, "mflow relay URL", {
-        value: current.relayMode === "custom" ? current.signaling : "wss://",
-        placeholder: "wss://your-relay.example.com",
+        value: !currentIsLegacyPublic && (current.relayMode === "public" || current.relayMode === "remote" || current.relayMode === "custom") ? current.signaling : "wss://",
+        placeholder: "wss://relay.example.com",
       })
       if (value === null || value === undefined) return
       signaling = value.trim()
@@ -1139,7 +1197,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             title: "Configure and turn on",
             value: "activate",
             category: "Actions",
-            description: "Choose public/custom relay, URL, room, secret handling, and queue priority.",
+            description: "Choose local/public relay, room, secret handling, and queue priority.",
             onSelect: () => void configureAndActivateMflowFromTui(),
           },
           {
