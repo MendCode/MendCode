@@ -9,10 +9,21 @@ Follow this workflow for MendCode changes that may ship.
 
 ## Non-negotiables
 
-- Preserve unrelated local changes. If the active checkout is dirty, use a clean worktree from `origin/dev` or `origin/main`.
+- For maintainer/agent work inside the main MendCode repository, use the local `dev` branch by default. Do not create a separate branch unless the user explicitly asks for one, the current worktree has unrelated changes in the same files, or a GitHub contribution flow requires it.
+- Preserve unrelated local changes. If the active checkout is dirty, inspect the touched files first. Work in-place on `dev` only when the requested files are clean or the existing edits are clearly part of the same user-approved task.
+- If unrelated dirty files conflict with the task, stop and explain the blocker before creating a worktree or branch.
 - Before editing release/version/package files, ask or verify whether another agent already bumped the version locally or remotely.
 - Do not publish a release, merge to `main`, or overwrite a user worktree without explicit user intent.
 - Never leave open public PRs/issues as noise. Close, merge, or explain exactly why they must remain open.
+- Never hide security/release failures. If a supply-chain, secret, CodeQL, release, or installer check fails, keep the issue open until fixed or document the exact reason it is accepted.
+
+## Branch Policy
+
+- Internal MendCode maintainers and local agents work on `dev` by default.
+- External contributors should use a fork or feature branch and open a PR targeting `dev`, not `main`.
+- `main` is the public release branch. Only promote `dev` to `main` after CI passes, the user-visible change has been tested, version/changelog state is correct, and the user intends to ship.
+- Do not merge random branches directly into `main`. Bring useful branches back through PRs to `dev`, then delete stale branches after merge.
+- Before starting, check whether another PR/agent already contains the same work. Prefer continuing the existing local `dev` work over creating a duplicate branch.
 
 ## Standard Flow
 
@@ -23,8 +34,8 @@ Follow this workflow for MendCode changes that may ship.
    - Check extension/package metadata such as `src/mendcode/packages/extensions/zed/extension.toml`.
    - Check recent merged PRs and tags.
 3. Ask the user before choosing a new version unless the version is already clearly bumped by another agent.
-4. Implement the change in a branch based on `origin/dev`.
-5. Run focused tests/scripts for the touched area. For release-affecting changes, also run the release/installer validation path when feasible.
+4. Implement the change on local `dev` unless the Branch Policy says a separate branch/worktree is required.
+5. Run focused tests/scripts for the touched area. Use existing repo scripts and generated-client/build checks when relevant.
 6. Stop and let the user test locally when the change is user-visible. Do not bump/changelog/merge until the user says it works, unless they explicitly ask for fully autonomous shipping.
 7. After the user confirms it works:
    - Bump version if needed.
@@ -43,7 +54,9 @@ Follow this workflow for MendCode changes that may ship.
 - For code: run the narrow test file or command covering the changed path.
 - For release: verify `mendcode --version` prints the release version.
 - For installer: test `curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash -s -- --no-modify-path` in a temporary `HOME`.
-- For branch hygiene: verify open PRs/issues, latest release, and `git diff origin/main..origin/dev`.
+- For supply chain: verify secret scan, dependency review/vulnerability checks, CodeQL/Semgrep, and release artifact checksums before publishing.
+- For branch hygiene: verify open PRs/issues, latest release, branches, and `git diff origin/main..origin/dev`.
+- For local safety: before committing, review `git diff --name-only` and stage only files intentionally changed for this task.
 
 ## Reporting
 
