@@ -19,9 +19,7 @@ on:
         type: boolean
 
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 concurrency:
   group: release-${{ inputs.version }}
@@ -32,7 +30,10 @@ jobs:
     name: Build release assets
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    environment: release
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
@@ -88,7 +89,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bun install --frozen-lockfile
+          bun install --frozen-lockfile --ignore-scripts
+          bun run --cwd packages/opencode fix-node-pty
 
       - name: Build release assets
         working-directory: src/mendcode
@@ -144,9 +146,27 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  publish-release:
+    name: Create draft GitHub Release
+    if: ${{ inputs.dry_run == false }}
+    needs: build-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: mendcode-release-${{ inputs.version }}
+          path: dist
+
       - name: Create draft GitHub Release
-        if: ${{ inputs.dry_run == false }}
-        working-directory: src/mendcode/packages/opencode/dist
+        working-directory: dist
         shell: bash
         run: |
           set -euo pipefail
