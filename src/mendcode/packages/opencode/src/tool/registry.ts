@@ -307,7 +307,7 @@ export const layer: Layer.Layer<
       const promptMode = yield* Effect.promise(() => readPromptMode())
       const filtered = (yield* all()).filter((tool) => {
         if (tool.id === PlanReviewTool.id) {
-          return input.agent.name === "plan" || promptMode.mode === "full" || promptMode.mode === "dev-js"
+          return input.agent.name === "plan" || promptMode.mode === "full"
         }
 
         if (tool.id === WebSearchTool.id) {
