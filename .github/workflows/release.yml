@@ -37,7 +37,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       VERSION: ${{ inputs.version }}
-      BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-cache
+      BUN_INSTALL_CACHE_DIR: /tmp/mendcode-bun-cache
     steps:
       - name: Validate release input
         shell: bash
