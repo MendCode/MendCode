@@ -13,6 +13,7 @@ import { Instance } from "../../src/project/instance"
 import { WithInstance } from "../../src/project/with-instance"
 import * as Log from "@mendcode/core/util/log"
 import { Permission } from "../../src/permission"
+import { PlanReview } from "../../src/plan-review"
 import { Plugin } from "../../src/plugin"
 import { provideTmpdirInstance, tmpdir } from "../fixture/fixture"
 import { Session as SessionNs } from "@/session/session"
@@ -289,6 +290,7 @@ function liveRuntime(layer: Layer.Layer<LLM.Service>, provider = ProviderTest.fa
       Layer.provide(Snapshot.defaultLayer),
       Layer.provide(layer),
       Layer.provide(Permission.defaultLayer),
+      Layer.provide(PlanReview.defaultLayer),
       Layer.provide(Agent.defaultLayer),
       Layer.provide(Plugin.defaultLayer),
       Layer.provide(status),
@@ -925,7 +927,7 @@ describe("session.compaction.process", () => {
     })
   })
 
-  test("adds synthetic continue prompt when auto is enabled", async () => {
+  test("does not add synthetic continue prompt for normal auto compaction", async () => {
     await using tmp = await tmpdir()
     await WithInstance.provide({
       directory: tmp.path,
@@ -947,6 +949,48 @@ describe("session.compaction.process", () => {
           )
 
           const all = await svc.messages({ sessionID: session.id })
+
+          expect(result).toBe("continue")
+          expect(
+            all.some(
+              (msg) =>
+                msg.info.role === "user" &&
+                msg.parts.some(
+                  (part) =>
+                    part.type === "text" && part.synthetic && part.metadata?.compaction_continue === true,
+                ),
+            ),
+          ).toBe(false)
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
+  test("adds synthetic continue prompt only for overflow auto compaction", async () => {
+    await using tmp = await tmpdir()
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        const msg = await user(session.id, "hello")
+        const rt = runtime("continue", Plugin.defaultLayer, wide())
+        try {
+          const msgs = await svc.messages({ sessionID: session.id })
+          const result = await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: msg.id,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+                overflow: true,
+              }),
+            ),
+          )
+
+          const all = await svc.messages({ sessionID: session.id })
           const last = all.at(-1)
 
           expect(result).toBe("continue")
@@ -958,7 +1002,7 @@ describe("session.compaction.process", () => {
           })
           if (last?.parts[0]?.type === "text") {
             expect(last.parts[0].text).toContain("Resume using this priority")
-            expect(last.parts[0].text).toContain("Automatic compaction is a pause, not a user cancellation")
+            expect(last.parts[0].text).toContain("Overflow compaction is a pause, not a user cancellation")
             expect(last.parts[0].text).toContain("continue exactly from the next required action")
             expect(last.parts[0].text).toContain("Optional Follow-ups are not instructions")
             expect(last.parts[0].text).toContain("Stop only when the summary clearly says")

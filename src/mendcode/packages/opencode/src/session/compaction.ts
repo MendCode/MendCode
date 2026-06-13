@@ -90,7 +90,7 @@ Rules:
 - Read the Current TODO List context when present. Treat in_progress/pending TODOs as evidence for Resume Anchor / Active Work only when they match the latest user intent; completed/cancelled TODOs belong in Confirmed Done or Optional Follow-ups as appropriate.
 - Read the Subagent Task Context when present. Summarize each subagent's concrete output, files changed, blocker, or current status. Running/pending subagents are active work unless clearly stale or contradicted by a newer real user message.
 - Do not mention the summary process or that context was compacted.`
-const COMPACTION_RESUME_PROMPT = `The conversation was compacted automatically while the current request was running.
+const COMPACTION_RESUME_PROMPT = `The conversation hit a context overflow while handling the current request, so the conversation was compacted.
 
 Resume using this priority:
 1. Latest explicit user request from the preserved recent messages.
@@ -98,7 +98,7 @@ Resume using this priority:
 3. Critical Context from the summary.
 4. Older summary details.
 
-Automatic compaction is a pause, not a user cancellation. If the latest explicit user request or Resume Anchor / Active Work describes unfinished implementation, debugging, review, testing, or investigation, continue exactly from the next required action or the safest required next step.
+Overflow compaction is a pause, not a user cancellation. If the latest explicit user request or Resume Anchor / Active Work describes unfinished implementation, debugging, review, testing, or investigation, continue exactly from the next required action or the safest required next step.
 Optional Follow-ups are not instructions. Do not execute optional ideas, possible next steps, cleanup, polish, or suggestions unless the user explicitly asked for them after compaction.
 Stop only when the summary clearly says the work is complete, blocked, or there is no active user request to continue.
 Do not ask for confirmation before continuing required active work. Ask a concise clarification only when Blocked / Needs User contains a real blocker or the required next action cannot be inferred from the latest user request, Active Work, TODOs, or Critical Context.`
@@ -585,7 +585,7 @@ export const layer: Layer.Layer<
         })
       }
 
-      if (result === "continue" && input.auto) {
+      if (result === "continue" && input.auto && input.overflow) {
         if (replay) {
           const original = replay.info
           const replayMsg = yield* session.updateMessage({

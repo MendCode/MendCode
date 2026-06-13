@@ -22,6 +22,8 @@ Follow this workflow for MendCode changes that may ship.
 - Internal MendCode maintainers and local agents work on `dev` by default.
 - External contributors should use a fork or feature branch and open a PR targeting `dev`, not `main`.
 - `main` is the public release branch. Only promote `dev` to `main` after CI passes, the user-visible change has been tested, version/changelog state is correct, and the user intends to ship.
+- For internal promotion, prefer a direct `dev` -> `main` PR. Do not create `codex/*` promotion branches unless GitHub cannot represent the intended merge directly or a conflict must be resolved outside the user's local checkout.
+- If an emergency promotion branch/worktree is unavoidable, delete the remote branch, local branch, and temporary worktree immediately after merge or close.
 - Do not merge random branches directly into `main`. Bring useful branches back through PRs to `dev`, then delete stale branches after merge.
 - Before starting, check whether another PR/agent already contains the same work. Prefer continuing the existing local `dev` work over creating a duplicate branch.
 
@@ -41,7 +43,7 @@ Follow this workflow for MendCode changes that may ship.
    - Bump version if needed.
    - Add or update `CHANGELOG.md`.
    - Open a PR to `dev`, wait for CI, and merge.
-   - Promote `dev` to `main` with a PR, resolving conflicts deliberately.
+   - Promote `dev` to `main` with a direct PR whenever possible, resolving conflicts deliberately.
    - Sync `main` back to `dev` if needed so both branches have the same tree.
 8. If releasing:
    - Use the Release workflow from `main`.
