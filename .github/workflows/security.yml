@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  SECURITY_GUARD_BLOCK_SCANNERS: "0"
+  SECURITY_GUARD_BLOCK_SCANNERS: "1"
 
 concurrency:
   group: security-guard-${{ github.ref }}
@@ -30,6 +30,10 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+
+      - name: Supply-chain preflight
+        shell: bash
+        run: bash .github/scripts/supply-chain-preflight.sh
 
       - name: Block invisible Unicode controls
         shell: bash
