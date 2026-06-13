@@ -1033,6 +1033,19 @@ export function Prompt(props: PromptProps) {
       void exit()
       return true
     }
+    const uiSlashInvocation = findSlashCommandInvocation(trimmed, (name) => {
+      if (NATIVE_COMPACTION_SLASHES.has(name)) return false
+      return command
+        .slashes()
+        .some((item) => item.display === `/${name}` || item.aliases?.some((alias) => alias === `/${name}`))
+    })
+    if (store.mode !== "shell" && uiSlashInvocation && command.triggerSlash(uiSlashInvocation.name)) {
+      input.extmarks.clear()
+      input.clear()
+      setStore("prompt", { input: "", parts: [] })
+      setStore("extmarkToPartIndex", new Map())
+      return true
+    }
     const selectedModel = selectedPromptModel()
     if (!selectedModel) {
       void promptModelWarning()

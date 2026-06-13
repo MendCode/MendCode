@@ -75,6 +75,7 @@ import { DialogConfirm } from "@tui/ui/dialog-confirm"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
+import { DialogContextUsage } from "./dialog-context-usage"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { Flag } from "@mendcode/core/flag/flag"
@@ -808,6 +809,18 @@ export function Session() {
     dialog.setSize("large")
   }
 
+  function showContextUsage(dialog: DialogContext) {
+    dialog.replace(() => (
+      <DialogContextUsage
+        messages={rootMessages()}
+        partsByMessageID={sync.data.part}
+        providers={providers()}
+        mainAgentNames={mainAgentNames()}
+      />
+    ))
+    dialog.setSize("large")
+  }
+
   createEffect(() => {
     const sessionID = route.sessionID
     void (async () => {
@@ -1484,6 +1497,18 @@ export function Session() {
             sessionID={route.sessionID}
           />
         ))
+      },
+    },
+    {
+      title: "Context usage",
+      value: "session.context",
+      category: "Context",
+      description: topUsage()?.contextLabel ?? "Show token usage for this chat.",
+      slash: {
+        name: "context",
+      },
+      onSelect: (dialog) => {
+        showContextUsage(dialog)
       },
     },
     {

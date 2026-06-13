@@ -62,6 +62,10 @@ describe("usage", () => {
     expect(result?.tokens).toBe("↑125 ↓60")
     expect(result?.compact).toBe("test-model · ↑125 ↓60")
     expect(result?.contextLabel).toBe("ctx 185")
+    expect(result?.rawInput).toBe(100)
+    expect(result?.rawOutput).toBe(50)
+    expect(result?.cacheRead).toBe(20)
+    expect(result?.cacheWrite).toBe(5)
   })
 
   test("formats context percent without parentheses", () => {

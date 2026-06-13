@@ -85,6 +85,16 @@ function init() {
         }
       }
     },
+    triggerSlash(name: string) {
+      for (const option of visibleOptions()) {
+        const slash = option.slash ?? slashFallbacks[option.value]
+        if (!slash) continue
+        if (slash.name !== name && !slash.aliases?.includes(name)) continue
+        option.onSelect?.(dialog)
+        return true
+      }
+      return false
+    },
     slashes() {
       return visibleOptions().flatMap((option) => {
         const slash = option.slash ?? slashFallbacks[option.value]
@@ -180,6 +190,7 @@ const titleOverrides: Record<string, string> = {
   "session.new": "New chat",
   "session.rename": "Rename",
   "session.compact": "Summarize",
+  "session.context": "Context",
   "session.permission.status": "Approval",
   "session.toggle.todos": "Todos",
   "session.toggle.thinking": "Thinking",
@@ -377,6 +388,7 @@ function commandRank(option: CommandOption) {
     "session.rename": 2,
     "session.timeline": 3,
     "session.compact": 4,
+    "session.context": 5,
     "mendcode.memory.manager": 20,
     "model.list": 40,
     "agent.list": 41,
