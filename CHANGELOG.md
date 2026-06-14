@@ -2,6 +2,7 @@
 
 ## 0.1.6 - 2026-06-14
 
+- Add a TUI Usage Insights dashboard with daily token activity, global/project stats, response-time metrics, top tools/agents/models, cached stats loading, and optional Open-Meteo weather.
 - Inject saved global memories into normal runtime requests as transient system context instead of only after compaction.
 - Keep project memories in the runtime prompt with their own request cap so repo-local context is available without persisting injected memory into chat history.
 - Make `mendcode memory search` and `mendcode memory preview` show request-mode retrieval by default, with an explicit `--mode` selector for compaction/manual checks.
