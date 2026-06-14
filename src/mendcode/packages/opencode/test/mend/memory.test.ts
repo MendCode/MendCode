@@ -7,7 +7,7 @@ import { tmpdir } from "../fixture/fixture"
 import { appendMemoryEntry, deleteMemoryEntry, memoryStatus, readMemoryEntries, updateMemoryEntry } from "../../src/mend/memory/store"
 import { retrieveMemory } from "../../src/mend/memory/retrieve"
 import { readMemoryConfig, writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../../src/mend/memory/config"
-import { applyMemoryProposal, autoProposeMemoriesFromSession, extractorPrompt, importCodexMemories, listMemoryProposals, memoryExtractorFailureReason, proposeMemoriesFromExtractorText, proposeMemoriesWithExtractor, proposeMemory, rejectMemoryProposal, updateMemoryProposal } from "../../src/mend/memory/proposals"
+import { applyMemoryProposal, autoProposeMemoriesFromSession, extractorPrompt, importCodexMemories, listMemoryProposals, memoryExtractorCandidateMessage, memoryExtractorFailureReason, proposeMemoriesFromExtractorText, proposeMemoriesWithExtractor, proposeMemory, readMemoryExtractorContext, rejectMemoryProposal, updateMemoryProposal } from "../../src/mend/memory/proposals"
 
 async function writeJson(file: string, value: unknown) {
   await mkdir(path.dirname(file), { recursive: true })
@@ -343,8 +343,50 @@ describe("mend memory", () => {
 
     expect(prompt).toContain("Do not require explicit memory wording")
     expect(prompt).toContain("future workflow rule")
+    expect(prompt).toContain("Para este repo")
+    expect(prompt).toContain("Review saved_memory and pending_memory")
     expect(prompt).toContain("Assistant text such as 'I will not save this yet' is not a reason to skip")
-    expect(prompt).toContain("already saved or proposed the same memory")
+    expect(prompt).toContain("If the user repeats or lightly rephrases")
+  })
+
+  test("extractor sees saved global/project memory and pending proposals before deciding", async () => {
+    await using dir = await tmpdir()
+    await appendMemoryEntry({
+      scope: "global",
+      text: "The user prefers concise Spanish responses.",
+      tags: ["language"],
+    }, dir.path)
+    await appendMemoryEntry({
+      scope: "project",
+      text: "MendCode setup changes should keep terminal row copy compact.",
+      tags: ["setup"],
+    }, dir.path)
+    await proposeMemory({
+      scope: "project",
+      text: "Visible TUI changes should be validated with a smoke test before saying done.",
+      tags: ["tui"],
+      cwd: dir.path,
+      source: "test",
+      evidence: "test",
+    }, dir.path)
+
+    const context = await readMemoryExtractorContext(dir.path)
+    const message = memoryExtractorCandidateMessage({
+      text: "USER:\nPara este repo, cuando hagas cambios visibles de TUI, valida con smoke test antes de decir listo.\n\nASSISTANT:\nentendido",
+      tags: ["tui", "auto"],
+      cwd: dir.path,
+      source: "tui-session-auto-extract",
+      evidence: "session:test:message:test",
+    }, context.existing)
+
+    expect(message).toContain("<saved_memory>")
+    expect(message).toContain("[saved][global] The user prefers concise Spanish responses.")
+    expect(message).toContain("[saved][project] MendCode setup changes should keep terminal row copy compact.")
+    expect(message).toContain("<pending_memory>")
+    expect(message).toContain("[pending][project] Visible TUI changes should be validated with a smoke test")
+    expect(message).toContain("<candidate_turn>")
+    expect(message).toContain("USER:")
+    expect(message).toContain("ASSISTANT:")
   })
 
   test("extractor provider failures are classified for TUI status", () => {

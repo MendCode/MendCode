@@ -19,6 +19,7 @@ export type MendActivityPhase =
   | "downloading"
   | "testing"
   | "planning"
+  | "memory"
   | "retrying"
   | "blocked"
   | "done"
@@ -61,6 +62,7 @@ const activityMessages: MendActivityMessages = {
   downloading: ["Downloading..."],
   testing: ["Testing..."],
   planning: ["Planning..."],
+  memory: ["Preparing memory..."],
   retrying: ["Retrying..."],
   blocked: ["Waiting..."],
   done: ["Done"],

@@ -32,7 +32,12 @@ import { usePromptHistory, type PromptInfo } from "./history"
 import { computePromptTraits } from "./traits"
 import { resolveActivePromptAgentName } from "./agent"
 import { assign } from "./part"
-import { pastedContentLabel, promptSubmitParts, shouldSummarizePastedContentWithThreshold } from "./submit-parts"
+import {
+  DEFAULT_PASTE_SUMMARY_MIN_CHARS,
+  pastedContentLabel,
+  promptSubmitParts,
+  shouldSummarizePastedContentWithThreshold,
+} from "./submit-parts"
 import { findSlashCommandInvocation } from "./slash-command"
 import { usePromptStash } from "./stash"
 import { DialogStash } from "../dialog-stash"
@@ -543,7 +548,7 @@ export function Prompt(props: PromptProps) {
     const experimental = sync.data.config.experimental as
       | (typeof sync.data.config.experimental & { paste_summary_min_chars?: number })
       | undefined
-    return Math.max(1, experimental?.paste_summary_min_chars ?? 800)
+    return Math.max(1, experimental?.paste_summary_min_chars ?? DEFAULT_PASTE_SUMMARY_MIN_CHARS)
   })
   const [store, setStore] = createStore<{
     prompt: PromptInfo
@@ -1830,10 +1835,12 @@ export function Prompt(props: PromptProps) {
     }
     return connection.status
   })
-  const activityPhase = createMemo(() =>
-    resolveActivityPhase({
-      status: status().type,
-      retry: status().type === "retry",
+  const activityPhase = createMemo(() => {
+    const currentStatus = status()
+    return resolveActivityPhase({
+      status: currentStatus.type,
+      statusKind: currentStatus.type === "busy" ? currentStatus.kind : undefined,
+      retry: currentStatus.type === "retry",
       connection: effectiveConnectionStatus(),
       toolNames: activityToolNames(),
       activeToolNames: activeActivityToolNames(),
@@ -1842,8 +1849,8 @@ export function Prompt(props: PromptProps) {
       livePhase: workingLiveUsage()?.phase,
       liveOutputTokens: workingLiveUsage()?.output,
       liveReasoningTokens: workingLiveUsage()?.reasoning,
-    }),
-  )
+    })
+  })
   const workingMessage = createMemo(() => {
     if (props.permissionPending) return props.permissionModeLabel || "Permission pending..."
     const config = workingIndicatorConfig()

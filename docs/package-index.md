@@ -31,10 +31,10 @@ MendCode runtime packages are different from npm workspace packages. Runtime pac
 Use:
 
 ```bash
-mend packages status
-mend packages create --include skills,modes,plugins,tuiProfile
-mend packages install github:YourOrg/company-mend-package
-mend packages enable company-mend-package
+mendcode packages status
+mendcode packages create --include skills,modes,plugins,tuiProfile
+mendcode packages install github:YourOrg/company-mend-package
+mendcode packages enable company-mend-package
 ```
 
 See [Packages and team sharing](packages-and-team-sharing.md) for the team workflow.

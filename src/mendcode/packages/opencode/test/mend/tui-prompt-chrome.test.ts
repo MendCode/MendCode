@@ -195,6 +195,7 @@ describe("mend tui prompt chrome", () => {
     })
 
     expect(activityMessagesForPhase(profile, "testing")).toEqual(["Testing..."])
+    expect(activityMessagesForPhase(profile, "memory")).toEqual(["Preparing memory..."])
     expect(activityMessagesForPhase(profile, "blocked")).toEqual(["Waiting..."])
     expect(validateMendTuiProfile(profile).ok).toBe(true)
   })
@@ -225,6 +226,7 @@ describe("mend tui prompt chrome", () => {
     expect(resolveActivityPhase({ status: "busy", toolNames: ["upload_artifact"] })).toBe("uploading")
     expect(resolveActivityPhase({ status: "busy", toolNames: ["download_file"] })).toBe("downloading")
     expect(resolveActivityPhase({ status: "busy", toolNames: ["pnpm_install"] })).toBe("installing")
+    expect(resolveActivityPhase({ status: "busy", statusKind: "memory-extract" })).toBe("memory")
   })
 
   test("resolves presets into prompt border sides", () => {

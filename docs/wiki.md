@@ -50,7 +50,7 @@ Create `Home.md`:
 ```markdown
 # MendCode Wiki
 
-MendCode is a terminal-first coding runtime built around the `mend` CLI, reusable packages, mflow coordination, optional TSM/worktrees, and a customizable terminal UI.
+MendCode is a terminal-first coding runtime built around the `mendcode` CLI, reusable packages, mflow coordination, optional TSM/worktrees, and a customizable terminal UI.
 
 Start with:
 

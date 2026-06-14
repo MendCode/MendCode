@@ -29,25 +29,25 @@ pnpm dlx --package mflow-cli ...
 Inspect status:
 
 ```bash
-mend mflow status
+mendcode mflow status
 ```
 
 Start a guided setup:
 
 ```bash
-mend mflow setup
+mendcode mflow setup
 ```
 
 Activate with a local relay:
 
 ```bash
-mend mflow activate --room acme/main
+mendcode mflow activate --room acme/main
 ```
 
 Activate with an explicit public relay you control:
 
 ```bash
-mend mflow activate --relay public --signaling wss://relay.example.com --room acme/main
+mendcode mflow activate --relay public --signaling wss://relay.example.com --room acme/main
 ```
 
 The legacy public relay is demo-only. It requires explicit acknowledgement and should not be used for normal team onboarding.
@@ -84,8 +84,8 @@ Secrets should stay local. If `storeSecret` is false, the secret is stored in `.
 ## Deactivate or Remove
 
 ```bash
-mend mflow deactivate
-mend mflow remove
+mendcode mflow deactivate
+mendcode mflow remove
 ```
 
 Deactivate disables mflow without deleting all local scaffold. Remove deletes the local mflow config/scaffold files that MendCode owns.

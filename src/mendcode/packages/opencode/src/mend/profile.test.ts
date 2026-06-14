@@ -74,6 +74,7 @@ describe("Mend TUI profile config overrides", () => {
     expect(homeMascotText(result.profile)).toContain("[+]")
     expect(homeMascotText(result.profile).split("\n")[0]).toBe("      .-.")
     expect(activityMascotText(result.profile, "thinking")).toContain("(o -)")
+    expect(activityMascotText(result.profile, "memory")).toContain("(o m)")
     expect(activityMascotText(result.profile, "thinking")).not.toContain("thinking")
     expect(activityMascotText(result.profile, "idle")?.split("\n")[0]).toBe("  .-.")
     expect(activityMascotHoverText(result.profile)).toContain("(^ ^)")
