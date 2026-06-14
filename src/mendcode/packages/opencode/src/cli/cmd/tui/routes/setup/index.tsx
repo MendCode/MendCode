@@ -134,8 +134,20 @@ function approxPromptTokens(bytes?: number) {
   return `~${Math.ceil(bytes / 4)} tokens`
 }
 
-function truncateSetupText(value: string, max = 88) {
-  return value.length > max ? `${value.slice(0, max - 3)}...` : value
+export function truncateSetupText(value: string, max = 88) {
+  const limit = Math.max(4, max)
+  return value.length > limit ? `${value.slice(0, limit - 3)}...` : value
+}
+
+export function setupLabelValueLine(label: string, value: string, max = 88) {
+  return truncateSetupText(`${label}: ${value}`, max)
+}
+
+export function setupExtractorAuthMessage(value: string) {
+  if (value.includes("OAuth token expired")) {
+    return "OAuth expired; re-auth OpenAI or set MENDCODE_OPENAI_OAUTH_CLIENT_ID/OPENAI_OAUTH_CLIENT_ID."
+  }
+  return value
 }
 
 function normalizeProductName(value: string) {
@@ -205,11 +217,12 @@ export function Setup() {
     return { state, setup, ai, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, packages, memory, memoryExtractorAuth, permissions }
   })
 
+  const setupSummary = createMemo(() => summary.latest ?? summary())
   const narrow = createMemo(() => dimensions().width < 110)
-  const current = createMemo(() => summary()?.state.currentStep || selected())
+  const current = createMemo(() => setupSummary()?.state.currentStep || selected())
   const active = createMemo(() => selected() || current())
   const complete = createMemo(() => {
-    const state = summary()?.state
+    const state = setupSummary()?.state
     return state ? isSetupComplete(state) : false
   })
   const promptPanelWidth = createMemo(() => Math.max(56, dimensions().width - (narrow() ? 12 : 44)))
@@ -230,7 +243,7 @@ export function Setup() {
   }
 
   const exitSetup = async () => {
-    const state = summary()?.state
+    const state = setupSummary()?.state
     if (state?.completedOnce || complete()) {
       route.navigate({ type: "home" })
       return
@@ -272,7 +285,7 @@ export function Setup() {
   }
 
   const chooseProvider = async () => {
-    const auth = summary()?.auth as any
+    const auth = setupSummary()?.auth as any
     dialog.replace(() => (
       <DialogSelect
         title="Connect a provider"
@@ -323,7 +336,7 @@ export function Setup() {
   }
 
   const inferAuthMode = (providerID: string, modelID: string) => {
-    const currentAuth = summary()?.auth as any
+    const currentAuth = setupSummary()?.auth as any
     if (currentAuth?.providerID === providerID && typeof currentAuth.authMode === "string") return currentAuth.authMode
     const preset = Object.values(modelPresets).find(
       (item) => item.providerID === providerID && item.modelID === modelID,
@@ -455,7 +468,7 @@ export function Setup() {
             category: "Budget",
             description: "Choose your own warn and stop thresholds. Blank means no limit.",
             onSelect: async () => {
-              const current = summary()?.budget as any
+              const current = setupSummary()?.budget as any
               const warnInput = await DialogPrompt.show(dialog, "Warn USD", {
                 value: current?.warnUsd === undefined ? "" : String(current.warnUsd),
                 placeholder: "1, 3.50, or blank for no warning",
@@ -521,7 +534,7 @@ export function Setup() {
             category: "Safety",
             description: "Require confirmation before expensive API-priced model calls.",
             onSelect: async () => {
-              const current = summary()?.budget as any
+              const current = setupSummary()?.budget as any
               await writeBudgetPolicy(
                 {
                   warnUsd: current?.warnUsd ?? null,
@@ -543,7 +556,7 @@ export function Setup() {
     dialog.replace(() => (
       <DialogSelect
         title="Prompt Mode"
-        current={summary()?.prompt.mode}
+        current={setupSummary()?.prompt.mode}
         options={promptModes.map((mode) => ({
           title: mode,
           value: mode,
@@ -561,7 +574,7 @@ export function Setup() {
   }
 
   const chooseMemory = () => {
-    const current = summary()?.memory
+    const current = setupSummary()?.memory
     dialog.replace(() => (
       <DialogSelect
         title="Memory"
@@ -618,7 +631,7 @@ export function Setup() {
   }
 
   const choosePermissions = () => {
-    const current = summary()?.permissions
+    const current = setupSummary()?.permissions
     const modeOptions: Array<{ title: string; value: PermissionMode; category: string; description: string }> = [
       {
         title: "Require approval",
@@ -685,7 +698,7 @@ export function Setup() {
   }
 
   const choosePackageMetadata = async () => {
-    const current = summary()?.pkg
+    const current = setupSummary()?.pkg
     const title = await DialogPrompt.show(dialog, "Package title", {
       value: current?.title || "",
       placeholder: "Starter Pack",
@@ -1020,7 +1033,7 @@ export function Setup() {
   }
 
   const finish = async () => {
-    const state = summary()?.state
+    const state = setupSummary()?.state
     if (!state || !isSetupComplete(state)) {
       toast.show({
         variant: "warning",
@@ -1043,7 +1056,7 @@ export function Setup() {
     if (step === "permissions") return choosePermissions()
   }
 
-  const models = createMemo(() => summary()?.modelsConfig.roles || {})
+  const models = createMemo(() => setupSummary()?.modelsConfig.roles || {})
   const additionalModelRoles = createMemo(() =>
     setupModelRoles().filter((role) => {
       return (
@@ -1057,8 +1070,8 @@ export function Setup() {
     if (role === "build") return roles.build?.modelID ? roles.build : roles.code
     return roles[role]
   }
-  const budget = createMemo(() => summary()?.budget as any)
-  const auth = createMemo(() => summary()?.auth as any)
+  const budget = createMemo(() => setupSummary()?.budget as any)
+  const auth = createMemo(() => setupSummary()?.auth as any)
   const activeRuntimeProviderID = createMemo(() => local.model.current()?.providerID || undefined)
   const providerLabel = createMemo(() => {
     const providerID = auth()?.providerID || activeRuntimeProviderID() || connectedProviderIDs()[0]
@@ -1079,9 +1092,9 @@ export function Setup() {
     if (connectedProviderIDs().length > 0) return "available via stored runtime auth"
     return "incomplete"
   })
-  const memoryExtractorAuth = createMemo(() => summary()?.memoryExtractorAuth as any)
+  const memoryExtractorAuth = createMemo(() => setupSummary()?.memoryExtractorAuth as any)
   const memoryLearningStatus = createMemo(() => {
-    const memory = summary()?.memory
+    const memory = setupSummary()?.memory
     if (!memory?.generate) return "off"
     if (!memory.outputCallsProviders) return "no extractor"
     const auth = memoryExtractorAuth()
@@ -1092,7 +1105,7 @@ export function Setup() {
   })
 
   createEffect(() => {
-    const state = summary()?.state
+    const state = setupSummary()?.state
     if (!state) return
     if (!providerReady()) return
     if (state.completedSteps.includes("provider")) return
@@ -1100,8 +1113,8 @@ export function Setup() {
   })
 
   createEffect(() => {
-    const state = summary()?.state
-    const setup = summary()?.setup
+    const state = setupSummary()?.state
+    const setup = setupSummary()?.setup
     if (!state || !setup) return
     if (!(setup.modelsEnabled && setup.defaultModel)) return
     if (state.completedSteps.includes("models")) return
@@ -1126,19 +1139,19 @@ export function Setup() {
       <box flexGrow={1} minHeight={0} flexDirection={narrow() ? "column" : "row"} gap={2}>
         <SetupRail
           active={active()}
-          state={summary()?.state}
+          state={setupSummary()?.state}
           complete={complete()}
           minimal={data.minimal}
           narrow={narrow()}
           summary={{
-            model: summary()?.models.defaultModel,
-            prompt: summary()?.prompt.mode,
+            model: setupSummary()?.models.defaultModel,
+            prompt: setupSummary()?.prompt.mode,
             budget: budget()?.enforcement?.state,
-            packageTitle: summary()?.pkg.title || summary()?.pkg.id || undefined,
+            packageTitle: setupSummary()?.pkg.title || setupSummary()?.pkg.id || undefined,
             authReady: providerReady(),
-            memory: summary()?.memory.enabled ? (summary()?.memory.use ? "on" : "stored") : "off",
+            memory: setupSummary()?.memory.enabled ? (setupSummary()?.memory.use ? "on" : "stored") : "off",
             permissions:
-              summary()?.permissions.mode === "full_access" ? "full" : summary()?.permissions.mode || "approval",
+              setupSummary()?.permissions.mode === "full_access" ? "full" : setupSummary()?.permissions.mode || "approval",
           }}
           onSelect={(step) => {
             setSelected(step)
@@ -1155,7 +1168,7 @@ export function Setup() {
           paddingRight={1}
           paddingTop={1}
         >
-          <Show when={!summary.loading} fallback={<text fg={theme.textMuted}>Loading setup state...</text>}>
+          <Show when={setupSummary()} fallback={<text fg={theme.textMuted}>Loading setup state...</text>}>
             <Switch>
               <Match when={active() === "provider"}>
                 <box flexDirection="column" gap={1}>
@@ -1234,15 +1247,15 @@ export function Setup() {
               <Match when={active() === "prompt"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme.primary}>Prompt Mode</text>
-                  <text>Current: {summary()?.prompt.mode}</text>
+                  <text>Current: {setupSummary()?.prompt.mode}</text>
                   <text fg={theme.textMuted}>
                     Customization contract: v{mendTuiCapabilityVersion()} · {surfacedCustomizationCapabilities.length}{" "}
                     visible · {listActiveCustomizations().length} active
                   </text>
                   <For each={promptModes}>
                     {(mode) => {
-                      const policy = () => summary()?.promptPolicies[mode]
-                      const activeMode = () => summary()?.prompt.mode === mode
+                      const policy = () => setupSummary()?.promptPolicies[mode]
+                      const activeMode = () => setupSummary()?.prompt.mode === mode
                       return (
                         <box flexDirection="column" gap={0}>
                           <text
@@ -1287,15 +1300,15 @@ export function Setup() {
               <Match when={active() === "package"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme.primary}>Package Metadata</text>
-                  <text>ID: {summary()?.pkg.id || "generated from local runtime"}</text>
-                  <text>Title: {summary()?.pkg.title || "unset"}</text>
-                  <text>Description: {summary()?.pkg.description || "unset"}</text>
-                  <text>Version: {summary()?.pkg.version || "0.1.0"}</text>
-                  <text>Kind: {summary()?.pkg.kind || "bundle"}</text>
-                  <text>Channel: {summary()?.pkg.channel || "local"}</text>
+                  <text>ID: {setupSummary()?.pkg.id || "generated from local runtime"}</text>
+                  <text>Title: {setupSummary()?.pkg.title || "unset"}</text>
+                  <text>Description: {setupSummary()?.pkg.description || "unset"}</text>
+                  <text>Version: {setupSummary()?.pkg.version || "0.1.0"}</text>
+                  <text>Kind: {setupSummary()?.pkg.kind || "bundle"}</text>
+                  <text>Channel: {setupSummary()?.pkg.channel || "local"}</text>
                   <text>
-                    Installed packages: {summary()?.packages.installed.length || 0} · active{" "}
-                    {summary()?.packages.enabled.length || 0}
+                    Installed packages: {setupSummary()?.packages.installed.length || 0} · active{" "}
+                    {setupSummary()?.packages.enabled.length || 0}
                   </text>
                   <text>Snapshot: mend-package.json + .mendcode/runtime-pack.json</text>
                   <text fg={theme.textMuted}>
@@ -1331,27 +1344,31 @@ export function Setup() {
               <Match when={active() === "memory"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme.primary}>Memory</text>
-                  <text>Enabled: {summary()?.memory.enabled ? "yes" : "no"}</text>
-                  <text>Input memory: {summary()?.memory.use ? "on" : "off"}</text>
-                  <text>Memory learning: {summary()?.memory.generate ? "on" : "off"} · {memoryLearningStatus()}</text>
+                  <text>Enabled: {setupSummary()?.memory.enabled ? "yes" : "no"}</text>
+                  <text>Input memory: {setupSummary()?.memory.use ? "on" : "off"}</text>
+                  <text>Memory learning: {setupSummary()?.memory.generate ? "on" : "off"} · {memoryLearningStatus()}</text>
                   <text>
-                    Context limit: {summary()?.memory.maxPromptTokens} tokens · project {summary()?.memory.projectMaxEntries}
-                    /request · global {summary()?.memory.globalCompactionMaxEntries}/after compaction
+                    Context limit: {setupSummary()?.memory.maxPromptTokens} tokens · project {setupSummary()?.memory.projectMaxEntries}
+                    /request · global {setupSummary()?.memory.globalCompactionMaxEntries}/after compaction
                   </text>
-                  <text>Extractor model role: {summary()?.memory.extractorRole || "memoryExtractor"}</text>
+                  <text>Extractor model role: {setupSummary()?.memory.extractorRole || "memoryExtractor"}</text>
                   <text>
-                    Output model calls: {summary()?.memory.outputCallsProviders ? "possible when learning runs" : "off"}
+                    Output model calls: {setupSummary()?.memory.outputCallsProviders ? "possible when learning runs" : "off"}
                   </text>
-                  <Show when={summary()?.memory.generate && memoryExtractorAuth()?.blockers?.length}>
+                  <Show when={setupSummary()?.memory.generate && memoryExtractorAuth()?.blockers?.length}>
                     <text fg={theme.warning}>
-                      Extractor auth: {truncateSetupText(memoryExtractorAuth().blockers[0], promptPanelWidth())}
+                      {setupLabelValueLine(
+                        "Extractor auth",
+                        setupExtractorAuthMessage(memoryExtractorAuth().blockers[0]),
+                        promptPanelWidth(),
+                      )}
                     </text>
                   </Show>
-                  <text>Consolidation model: {summary()?.memory.consolidatorRole || "none"} · no background spend</text>
-                  <text>Scopes: {summary()?.memory.scopes.join(", ")}</text>
+                  <text>Consolidation model: {setupSummary()?.memory.consolidatorRole || "none"} · no background spend</text>
+                  <text>Scopes: {setupSummary()?.memory.scopes.join(", ")}</text>
                   <text>
-                    Stored entries: global {summary()?.memory.entries.global.count}, project{" "}
-                    {summary()?.memory.entries.project.count}
+                    Stored entries: global {setupSummary()?.memory.entries.global.count}, project{" "}
+                    {setupSummary()?.memory.entries.project.count}
                   </text>
                   <text fg={theme.textMuted}>Works in every prompt mode: minimal, focus, and full.</text>
                   <text fg={theme.textMuted}>
@@ -1367,16 +1384,16 @@ export function Setup() {
                   <text fg={theme.primary}>Permissions</text>
                   <text>
                     Mode:{" "}
-                    {summary()?.permissions.mode === "full_access"
+                    {setupSummary()?.permissions.mode === "full_access"
                       ? "Full Access"
-                      : summary()?.permissions.mode === "smart"
+                      : setupSummary()?.permissions.mode === "smart"
                         ? "Smart Approval"
                         : "Require approval"}
                   </text>
                   <text>Smart trigger: risky shell/script/delete prompts only</text>
-                  <text>Reviewer role: {summary()?.permissions.reviewerRole || "permissionReviewer"}</text>
+                  <text>Reviewer role: {setupSummary()?.permissions.reviewerRole || "permissionReviewer"}</text>
                   <text>
-                    Reviewer model: {modelLabel(modelRole(summary()?.permissions.reviewerRole || "permissionReviewer"))}
+                    Reviewer model: {modelLabel(modelRole(setupSummary()?.permissions.reviewerRole || "permissionReviewer"))}
                   </text>
                   <text fg={theme.textMuted}>
                     Smart Approval uses the reviewer model for fast allow/reject/ask decisions; non-risky permission
