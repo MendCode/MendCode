@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6 - 2026-06-14
+
+- Inject saved global memories into normal runtime requests as transient system context instead of only after compaction.
+- Keep project memories in the runtime prompt with their own request cap so repo-local context is available without persisting injected memory into chat history.
+- Make `mendcode memory search` and `mendcode memory preview` show request-mode retrieval by default, with an explicit `--mode` selector for compaction/manual checks.
+
 ## 0.1.5 - 2026-06-13
 
 - Backport MCP runtime updates: catalog pagination, capability-aware prompt/resource listing, tolerant tool schema discovery, abort signal forwarding, OAuth `callbackPort`/`scope`, and manual OAuth header preservation.

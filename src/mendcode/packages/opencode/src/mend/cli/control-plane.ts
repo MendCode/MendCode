@@ -49,6 +49,13 @@ function optionValue(args: string[], name: string) {
   return value
 }
 
+function memoryModeValue(args: string[]) {
+  const value = optionValue(args, "--mode")
+  if (value === "request" || value === "after-compaction" || value === "manual") return value
+  if (value) throw new Error("Usage: mendcode memory search|preview [query] [--mode request|after-compaction|manual]")
+  return "request" as const
+}
+
 function shellProjectRoot() {
   return path.resolve(process.env.MENDCODE_SHELL_CWD || process.cwd())
 }
@@ -595,10 +602,15 @@ async function memory(args: string[]) {
     return
   }
   if (sub === "search") {
-    const query = args.slice(1).filter((arg) => !arg.startsWith("--")).join(" ").trim()
-    const result = await retrieveMemory({ root, query, cwd: root })
+    const mode = memoryModeValue(args)
+    const query = args.slice(1).filter((arg, index, all) => {
+      const prev = all[index - 1]
+      return !arg.startsWith("--") && prev !== "--mode"
+    }).join(" ").trim()
+    const result = await retrieveMemory({ root, query, cwd: root, mode })
     console.log(JSON.stringify({
       query,
+      mode,
       enabled: result.enabled,
       use: result.use,
       callsProviders: false,
@@ -609,23 +621,25 @@ async function memory(args: string[]) {
     return
   }
   if (sub === "preview") {
+    const mode = memoryModeValue(args)
     const query = args.slice(1).filter((arg, index, all) => {
       const prev = all[index - 1]
-      return !arg.startsWith("--") && prev !== "--provider" && prev !== "--model"
+      return !arg.startsWith("--") && prev !== "--provider" && prev !== "--model" && prev !== "--mode"
     }).join(" ").trim()
     const providerID = optionValue(args, "--provider") || "openai"
     const modelID = optionValue(args, "--model") || "gpt-5.2"
-    const result = await retrieveMemory({ root, query, cwd: root, providerID, modelID })
+    const result = await retrieveMemory({ root, query, cwd: root, providerID, modelID, mode })
     const model = { id: modelID, providerID, api: { id: modelID } } as any
     console.log(JSON.stringify({
       query,
+      mode,
       providerID,
       modelID,
       enabled: result.enabled,
       use: result.use,
       callsProviders: false,
       entries: result.entries,
-      promptBlock: formatMemoryBlock({ model, lines: result.lines }),
+      promptBlock: result.lines?.length ? formatMemoryBlock({ model, lines: result.lines }) : "",
     }, null, 2))
     return
   }
