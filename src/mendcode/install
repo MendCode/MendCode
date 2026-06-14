@@ -224,9 +224,12 @@ print_message() {
 }
 
 check_version() {
-    if command -v "$BINARY_NAME" >/dev/null 2>&1; then
-        installed_path=$(which "$BINARY_NAME")
+    local installed_path="$INSTALL_DIR/$BINARY_NAME"
+    if [ "$os" = "windows" ] && [ -f "$INSTALL_DIR/$BINARY_NAME.exe" ]; then
+        installed_path="$INSTALL_DIR/$BINARY_NAME.exe"
+    fi
 
+    if [ -x "$installed_path" ]; then
         ## Check the installed version
         installed_version=$("$installed_path" --version 2>/dev/null || echo "")
 
