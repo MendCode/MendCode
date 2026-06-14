@@ -45,6 +45,10 @@ type StatsWeather = {
   wind?: number
   code?: number
 }
+type StatsCachePayload = {
+  updated: number
+  data: UsageInsights
+}
 
 function sameWeatherConfig(left: StatsWeatherConfig, right: StatsWeatherConfig) {
   return (
@@ -76,59 +80,6 @@ function heatColor(theme: ReturnType<typeof useTheme>["theme"], value: number, p
 
 function stat(label: string, value: string, detail?: string) {
   return { label, value, detail }
-}
-
-function emptyInsights(days = DEFAULT_DAYS): UsageInsights {
-  const end = new Date()
-  end.setHours(0, 0, 0, 0)
-  const start = end.getTime() - (days - 1) * DAY_MS
-  const series = Array.from({ length: days }, (_, index) => {
-    const time = start + index * DAY_MS
-    const date = new Date(time)
-    const year = date.getFullYear()
-    const month = String(date.getMonth() + 1).padStart(2, "0")
-    const day = String(date.getDate()).padStart(2, "0")
-    return {
-      day: `${year}-${month}-${day}`,
-      time,
-      sessions: 0,
-      messages: 0,
-      userMessages: 0,
-      userWords: 0,
-      tokens: 0,
-      cost: 0,
-      aiResponseMs: 0,
-      toolMs: 0,
-      changedFiles: 0,
-    }
-  })
-  return {
-    days: series,
-    totals: {
-      sessions: 0,
-      messages: 0,
-      userMessages: 0,
-      userWords: 0,
-      tokens: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      reasoningTokens: 0,
-      cacheTokens: 0,
-      cost: 0,
-      aiResponseMs: 0,
-      toolMs: 0,
-      changedFiles: 0,
-      activeDays: 0,
-      currentStreak: 0,
-      longestStreak: 0,
-      peakTokens: 0,
-      longestTaskMs: 0,
-      sessionsWithCodeChanges: 0,
-    },
-    topTools: [],
-    topAgents: [],
-    topModels: [],
-  }
 }
 
 function Panel(props: {
@@ -198,7 +149,7 @@ function Header(props: { advanced: boolean; scope: StatsScope; narrow: boolean }
   const mend = useMendTuiProfile()
   const view = props.scope === "global" ? "global stats" : props.scope === "project" ? "project stats" : "directory stats"
   const status = `${mend.profile.identity.productName} · ${view} · daily · 365d${props.advanced ? "" : " · compact"}`
-  const shortcuts = "a details · w weather · r refresh · esc"
+  const shortcuts = "a details · w weather · esc"
   return (
     <Switch>
       <Match when={props.narrow}>
@@ -465,6 +416,34 @@ function StatusSummary(props: {
         <MetricRows items={props.rows} maxWidth={props.width} gap={props.compact ? 0 : 1} />
       </box>
     </Panel>
+  )
+}
+
+function LoadingStats(props: { tiny: boolean }) {
+  const { theme } = useTheme()
+  return (
+    <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
+      <Panel title="Activity" height={props.tiny ? 8 : 7}>
+        <box flexDirection="column" flexGrow={1} justifyContent="center" overflow="hidden" gap={1}>
+          <text fg={theme.text} wrapMode="none">
+            Loading session metrics...
+          </text>
+          <text fg={theme.textMuted} wrapMode="none">
+            Reading global cached stats first.
+          </text>
+        </box>
+      </Panel>
+      <Panel title="Token activity · daily · 365 days" grow>
+        <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
+          <text fg={theme.textMuted} wrapMode="none">
+            · · · · · · · · · · · · · · · · · · · · ·
+          </text>
+          <text fg={theme.primary} wrapMode="none">
+            Preparing usage timeline
+          </text>
+        </box>
+      </Panel>
+    </box>
   )
 }
 
@@ -766,8 +745,7 @@ export function Stats() {
   const [advanced, setAdvanced] = createSignal(true)
   const [scope] = createSignal<StatsScope>(route.data.type === "stats" ? route.data.scope ?? "global" : "global")
   const mode = () => "daily" as const
-  const [refresh, setRefresh] = createSignal(0)
-  const [weatherConfig, setWeatherConfig] = createSignal<StatsWeatherConfig>(kv.get(WEATHER_KV_KEY, { enabled: false }))
+  const [weatherConfig, setWeatherConfig] = createSignal<StatsWeatherConfig>({ enabled: false })
   const [weatherRefresh, setWeatherRefresh] = createSignal(0)
   const [weatherError, setWeatherError] = createSignal<string | undefined>()
   const [weatherReady, setWeatherReady] = createSignal(false)
@@ -797,14 +775,19 @@ export function Stats() {
   const statsCacheKey = createMemo(() => usageInsightsCacheKey(scope()))
   const [cachedInsights, setCachedInsights] = createSignal<UsageInsights | undefined>()
   createEffect(() => {
-    const cached = kv.get(statsCacheKey()) as { data?: UsageInsights } | UsageInsights | undefined
-    const next = cached && typeof cached === "object" && "data" in cached ? cached.data : (cached as UsageInsights | undefined)
-    setCachedInsights(next)
+    if (!kv.ready) return
+    const cached = kv.get(statsCacheKey()) as StatsCachePayload | UsageInsights | undefined
+    setCachedInsights(cached && typeof cached === "object" && "data" in cached ? cached.data : cached)
+  })
+  createEffect(() => {
+    if (!kv.ready) return
+    setWeatherConfig(kv.get(WEATHER_KV_KEY, { enabled: false }) as StatsWeatherConfig)
   })
   const [insights] = createResource(
-    () => ({ advanced: advanced(), scope: scope(), query: scopeQuery(), refresh: refresh(), cached: cachedInsights() }),
+    () => ({ ready: kv.ready, advanced: advanced(), scope: scope(), query: scopeQuery(), cached: cachedInsights() }),
     async (input) => {
-      if (input.cached && input.refresh === 0) return input.cached
+      if (!input.ready) return input.cached
+      if (input.cached) return input.cached
       const next = await loadInsights(sdk, input)
       const payload = { updated: Date.now(), data: next }
       setCachedInsights(next)
@@ -885,10 +868,6 @@ export function Stats() {
       setAdvanced((value) => !value)
       return
     }
-    if (evt.name === "r") {
-      setRefresh((value) => value + 1)
-      return
-    }
     if (evt.name === "w") {
       evt.preventDefault()
       evt.stopPropagation()
@@ -897,7 +876,7 @@ export function Stats() {
     }
   })
 
-  const visibleInsights = createMemo(() => insights() ?? cachedInsights() ?? emptyInsights())
+  const visibleInsights = createMemo(() => insights() ?? cachedInsights())
   const totals = createMemo(() => visibleInsights()?.totals)
   const headline = createMemo(() => {
     const current = totals()
@@ -969,8 +948,12 @@ export function Stats() {
   return (
     <box flexDirection="column" width="100%" height="100%" paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} gap={1}>
       <Header advanced={showDetails()} scope={scope()} narrow={tiny()} />
-      <Show when={visibleInsights()}>
-        {(data) => (
+      <Switch>
+        <Match when={!visibleInsights()}>
+          <LoadingStats tiny={tiny()} />
+        </Match>
+        <Match when={visibleInsights()}>
+          {(data) => (
           <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
             <Switch>
               <Match when={tiny()}>
@@ -1011,8 +994,9 @@ export function Stats() {
             </Switch>
 
           </box>
-        )}
-      </Show>
+          )}
+        </Match>
+      </Switch>
     </box>
   )
 }
