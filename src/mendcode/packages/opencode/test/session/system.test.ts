@@ -121,13 +121,15 @@ describe("session.system", () => {
   test("formats persistent memory as soft context when enabled", async () => {
     await using tmp = await tmpdir()
     await mkdir(path.join(tmp.path, ".mendcode", "memory"), { recursive: true })
-    await writeFile(path.join(tmp.path, ".mendcode", "memory", "config.json"), JSON.stringify({ version: 0, configScope: "project", enabled: true, use: true, scopes: ["project"], maxEntries: 3, maxPromptTokens: 200 }))
+    await writeFile(path.join(tmp.path, ".mendcode", "memory", "config.json"), JSON.stringify({ version: 0, configScope: "project", enabled: true, use: true, scopes: ["global", "project"], maxEntries: 3, maxPromptTokens: 200 }))
+    await writeFile(path.join(process.env.MENDCODE_MEMORY_DIR!, "entries.jsonl"), JSON.stringify({ text: "Global preference follows the user across repos.", scope: "global" }) + "\n")
     await writeFile(path.join(tmp.path, ".mendcode", "memory", "memory_summary.md"), "User wants local-only MendCode work.\n")
 
     const output = await SystemPrompt.mendMemory(fakeModel("openai", "gpt-5.2"), tmp.path, "MendCode memory")
 
     expect(output).toContain("<mendcode_memory>")
     expect(output).toContain("soft context")
+    expect(output).toContain("Global preference follows the user")
     expect(output).toContain("local-only MendCode work")
   })
 
