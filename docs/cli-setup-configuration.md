@@ -1,6 +1,6 @@
 # CLI, Setup, and Configuration
 
-The public CLI is `mendcode`. It opens the interactive TUI, inspects configuration, runs setup, manages packages, controls optional mflow/TSM/worktree integrations, and exposes prompt/memory/permission configuration.
+The public CLI is `mendcode`. It opens the interactive terminal coding harness, runs setup/status checks, manages packages, and controls optional mflow/TSM/worktree integrations.
 
 Development checkouts may still have a local `mend` shim, but the public installer and package metadata expose `mendcode` and `mendcode-runtime`. Public docs and screenshots should use `mendcode`.
 
@@ -15,8 +15,6 @@ mendcode chat "message"          # run a control-plane chat turn
 mendcode status
 mendcode doctor
 mendcode check
-mendcode config show
-mendcode config paths
 ```
 
 ## Setup Flow
@@ -230,15 +228,12 @@ Screenshot slots:
 | `docs/assets/screenshots/permissions-smart.png` | A permission prompt or smart-approval status with no dangerous command, no secrets, and no sensitive path. |
 | `docs/assets/screenshots/memory-preview.png` | `mendcode memory search` or `preview` using demo data, not personal memory content. |
 
-## Packages, TUI, mflow, And Worktrees
+## Packages, mflow, TSM, And Worktrees
 
 Common next commands:
 
 ```bash
 mendcode packages status
-mendcode tui status
-mendcode tui profile
-mendcode tui preview
 mendcode mflow status
 mendcode worktree status
 mendcode tsm status

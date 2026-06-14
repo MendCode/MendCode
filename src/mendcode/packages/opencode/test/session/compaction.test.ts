@@ -198,6 +198,7 @@ function fake(
     },
     updateToolCall: Effect.fn("TestSessionProcessor.updateToolCall")(() => Effect.succeed(undefined)),
     completeToolCall: Effect.fn("TestSessionProcessor.completeToolCall")(() => Effect.void),
+    flushMemory: Effect.fn("TestSessionProcessor.flushMemory")(() => Effect.void),
     process: Effect.fn("TestSessionProcessor.process")(() => Effect.succeed(result)),
   } satisfies SessionProcessorModule.SessionProcessor.Handle
 }
@@ -1001,6 +1002,7 @@ describe("session.compaction.process", () => {
             metadata: { compaction_continue: true },
           })
           if (last?.parts[0]?.type === "text") {
+            expect(last.parts[0].text).toContain("previous request exceeded the provider's size or context limit")
             expect(last.parts[0].text).toContain("Resume using this priority")
             expect(last.parts[0].text).toContain("Overflow compaction is a pause, not a user cancellation")
             expect(last.parts[0].text).toContain("continue exactly from the next required action")
@@ -1369,31 +1371,47 @@ describe("session.compaction.process", () => {
     })
   })
 
-  test("replays the prior user turn on overflow when earlier context exists", async () => {
-    await using tmp = await tmpdir()
+  test("summarizes the latest real user turn instead of replaying it visibly after overflow", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const stub = llm()
+    let captured = ""
+    stub.push(
+      reply("summary", (input) => {
+        captured = JSON.stringify(input.messages)
+      }),
+    )
     await WithInstance.provide({
       directory: tmp.path,
       fn: async () => {
         const session = await svc.create({})
         await user(session.id, "root")
-        const replay = await user(session.id, "image")
+        const latest = await user(session.id, "image")
         await svc.updatePart({
           id: PartID.ascending(),
-          messageID: replay.id,
+          messageID: latest.id,
           sessionID: session.id,
           type: "file",
           mime: "image/png",
           filename: "cat.png",
           url: "https://example.com/cat.png",
         })
-        const msg = await user(session.id, "current")
-        const rt = runtime("continue", Plugin.defaultLayer, wide())
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: true,
+          overflow: true,
+        })
+
+        const rt = liveRuntime(stub.layer, wide())
         try {
           const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
           const result = await rt.runPromise(
             SessionCompaction.Service.use((svc) =>
               svc.process({
-                parentID: msg.id,
+                parentID: parent!,
                 messages: msgs,
                 sessionID: session.id,
                 auto: true,
@@ -1402,14 +1420,24 @@ describe("session.compaction.process", () => {
             ),
           )
 
-          const last = (await svc.messages({ sessionID: session.id })).at(-1)
+          const all = await svc.messages({ sessionID: session.id })
+          const visibleLatestCopies = all.filter(
+            (msg) =>
+              msg.info.role === "user" &&
+              msg.parts.some((part) => part.type === "text" && part.text === "image" && !part.synthetic),
+          )
+          const last = all.at(-1)
 
           expect(result).toBe("continue")
+          expect(captured).toContain("image")
+          expect(captured).toContain("Attached image/png: cat.png")
+          expect(visibleLatestCopies).toHaveLength(1)
           expect(last?.info.role).toBe("user")
-          expect(last?.parts.some((part) => part.type === "file")).toBe(false)
-          expect(
-            last?.parts.some((part) => part.type === "text" && part.text.includes("Attached image/png: cat.png")),
-          ).toBe(true)
+          expect(last?.parts[0]).toMatchObject({
+            type: "text",
+            synthetic: true,
+            metadata: { compaction_continue: true },
+          })
         } finally {
           await rt.dispose()
         }
@@ -1446,7 +1474,7 @@ describe("session.compaction.process", () => {
           expect(result).toBe("continue")
           expect(last?.info.role).toBe("user")
           if (last?.parts[0]?.type === "text") {
-            expect(last.parts[0].text).toContain("previous request exceeded the provider's size limit")
+            expect(last.parts[0].text).toContain("previous request exceeded the provider's size or context limit")
           }
         } finally {
           await rt.dispose()

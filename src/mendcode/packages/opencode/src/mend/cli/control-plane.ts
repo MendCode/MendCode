@@ -56,6 +56,27 @@ function memoryModeValue(args: string[]) {
   return "request" as const
 }
 
+function closest(value: string, candidates: string[]) {
+  const distance = (a: string, b: string) => {
+    const prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+    const curr = Array.from({ length: b.length + 1 }, () => 0)
+    for (let i = 1; i <= a.length; i++) {
+      curr[0] = i
+      for (let j = 1; j <= b.length; j++) {
+        curr[j] = Math.min(
+          prev[j]! + 1,
+          curr[j - 1]! + 1,
+          prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+        )
+      }
+      for (let j = 0; j <= b.length; j++) prev[j] = curr[j]!
+    }
+    return prev[b.length]!
+  }
+  const match = candidates.map((candidate) => ({ candidate, score: distance(value, candidate) })).sort((a, b) => a.score - b.score)[0]
+  return match && match.score <= Math.max(2, Math.floor(value.length / 3)) ? match.candidate : undefined
+}
+
 function shellProjectRoot() {
   return path.resolve(process.env.MENDCODE_SHELL_CWD || process.cwd())
 }
@@ -63,6 +84,14 @@ function shellProjectRoot() {
 async function tui(args: string[]) {
   const root = shellProjectRoot()
   const sub = args[0] || "status"
+  const publicSubs = ["status", "preview", "apply-preset", "rollback"]
+  const internalSubs = ["schema", "profile", "apply", "propose", "project", "render", "preview-plan", "runtime-plan", "probe"]
+  const tuiSubs = [...publicSubs, ...internalSubs]
+  if (!tuiSubs.includes(sub)) {
+    const suggestion = closest(sub, tuiSubs)
+    const hint = suggestion ? `\nDid you mean \`mendcode tui ${suggestion}\`?` : ""
+    throw new Error(`Unknown mendcode tui command: ${sub}${hint}\nUsage: mendcode tui <status|preview|apply-preset|rollback>`)
+  }
   const loadedProfile = await loadMendTuiProfile(root)
   const profile = loadedProfile.profile
   const validation = validateMendTuiProfile(profile)
@@ -144,7 +173,7 @@ async function tui(args: string[]) {
     if (result.exitCode !== 0) process.exitCode = result.exitCode || 1
     return
   }
-  throw new Error("Usage: mendcode tui <status|schema|profile|apply|apply-preset|rollback|preview|propose|project|render|preview-plan|runtime-plan|probe>")
+  throw new Error("Usage: mendcode tui <status|preview|apply-preset|rollback>")
 }
 
 async function prompt(args: string[]) {

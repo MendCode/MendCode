@@ -459,30 +459,7 @@ export const layer: Layer.Layer<
       const userMessage = parent.info
       const compactionPart = parent.parts.find((part): part is MessageV2.CompactionPart => part.type === "compaction")
 
-      let messages = input.messages
-      let replay:
-        | {
-            info: MessageV2.User
-            parts: MessageV2.Part[]
-          }
-        | undefined
-      if (input.overflow) {
-        const idx = input.messages.findIndex((m) => m.info.id === input.parentID)
-        for (let i = idx - 1; i >= 0; i--) {
-          const msg = input.messages[i]
-          if (msg.info.role === "user" && !msg.parts.some((p) => p.type === "compaction")) {
-            replay = { info: msg.info, parts: msg.parts }
-            messages = input.messages.slice(0, i)
-            break
-          }
-        }
-        const hasContent =
-          replay && messages.some((m) => m.info.role === "user" && !m.parts.some((p) => p.type === "compaction"))
-        if (!hasContent) {
-          replay = undefined
-          messages = input.messages
-        }
-      }
+      const messages = input.messages
 
       const agent = yield* agents.get("compaction")
       const model = agent.model
@@ -569,9 +546,7 @@ export const layer: Layer.Layer<
 
       if (result === "compact") {
         processor.message.error = new MessageV2.ContextOverflowError({
-          message: replay
-            ? "Conversation history too large to compact - exceeds model context limit"
-            : "Session too large to compact - context exceeds model limit even after stripping media",
+          message: "Session too large to compact - context exceeds model limit even after stripping media",
         }).toObject()
         processor.message.finish = "error"
         yield* session.updateMessage(processor.message)
@@ -586,84 +561,52 @@ export const layer: Layer.Layer<
       }
 
       if (result === "continue" && input.auto && input.overflow) {
-        if (replay) {
-          const original = replay.info
-          const replayMsg = yield* session.updateMessage({
+        const info = yield* provider.getProvider(userMessage.model.providerID)
+        if (
+          (yield* plugin.trigger(
+            "experimental.compaction.autocontinue",
+            {
+              sessionID: input.sessionID,
+              agent: userMessage.agent,
+              model: yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID),
+              provider: {
+                source: info.source,
+                info,
+                options: info.options,
+              },
+              message: userMessage,
+              overflow: input.overflow === true,
+            },
+            { enabled: true },
+          )).enabled
+        ) {
+          const continueMsg = yield* session.updateMessage({
             id: MessageID.ascending(),
             role: "user",
             sessionID: input.sessionID,
             time: { created: Date.now() },
-            agent: original.agent,
-            model: original.model,
-            format: original.format,
-            tools: original.tools,
-            system: original.system,
+            agent: userMessage.agent,
+            model: userMessage.model,
           })
-          for (const part of replay.parts) {
-            if (part.type === "compaction") continue
-            const replayPart =
-              part.type === "file" && MessageV2.isMedia(part.mime)
-                ? { type: "text" as const, text: `[Attached ${part.mime}: ${part.filename ?? "file"}]` }
-                : part
-            yield* session.updatePart({
-              ...replayPart,
-              id: PartID.ascending(),
-              messageID: replayMsg.id,
-              sessionID: input.sessionID,
-            })
-          }
-        }
-
-        if (!replay) {
-          const info = yield* provider.getProvider(userMessage.model.providerID)
-          if (
-            (yield* plugin.trigger(
-              "experimental.compaction.autocontinue",
-              {
-                sessionID: input.sessionID,
-                agent: userMessage.agent,
-                model: yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID),
-                provider: {
-                  source: info.source,
-                  info,
-                  options: info.options,
-                },
-                message: userMessage,
-                overflow: input.overflow === true,
-              },
-              { enabled: true },
-            )).enabled
-          ) {
-            const continueMsg = yield* session.updateMessage({
-              id: MessageID.ascending(),
-              role: "user",
-              sessionID: input.sessionID,
-              time: { created: Date.now() },
-              agent: userMessage.agent,
-              model: userMessage.model,
-            })
-            const text =
-              (input.overflow
-                ? "The previous request exceeded the provider's size limit due to large media attachments. The conversation was compacted and media files were removed from context. If the user was asking about attached images or files, explain that the attachments were too large to process and suggest they try again with smaller or fewer files.\n\n"
-                : "") +
-              COMPACTION_RESUME_PROMPT
-            yield* session.updatePart({
-              id: PartID.ascending(),
-              messageID: continueMsg.id,
-              sessionID: input.sessionID,
-              type: "text",
-              // Internal marker for auto-compaction followups so provider plugins
-              // can distinguish them from manual post-compaction user prompts.
-              // This is not a stable plugin contract and may change or disappear.
-              metadata: { compaction_continue: true },
-              synthetic: true,
-              text,
-              time: {
-                start: Date.now(),
-                end: Date.now(),
-              },
-            })
-          }
+          const text =
+            "The previous request exceeded the provider's size or context limit, so the conversation was compacted. Continue from the summary and preserved recent messages. If attachments were removed from context, say so only when relevant to the user's request.\n\n" +
+            COMPACTION_RESUME_PROMPT
+          yield* session.updatePart({
+            id: PartID.ascending(),
+            messageID: continueMsg.id,
+            sessionID: input.sessionID,
+            type: "text",
+            // Internal marker for auto-compaction followups so provider plugins
+            // can distinguish them from manual post-compaction user prompts.
+            // This is not a stable plugin contract and may change or disappear.
+            metadata: { compaction_continue: true },
+            synthetic: true,
+            text,
+            time: {
+              start: Date.now(),
+              end: Date.now(),
+            },
+          })
         }
       }
 

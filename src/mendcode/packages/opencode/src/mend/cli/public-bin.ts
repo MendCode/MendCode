@@ -8,6 +8,55 @@ import { donorIdentityGuardStatus, runtimeAdapterCommand } from "../runtime/syst
 import { worktreeStatus } from "../config/worktree"
 import { tsmStatus } from "../config/tsm"
 
+const primaryCommands = [
+  "run",
+  "chat",
+  "status",
+  "doctor",
+  "setup",
+  "packages",
+  "mflow",
+  "worktree",
+  "tsm",
+]
+
+const advancedCommands = [
+  "check",
+  "models",
+  "providers",
+  "auth",
+  "permissions",
+  "memory",
+  "focus",
+]
+
+const internalCommands = [
+  "adapter",
+  "ai",
+  "bench",
+  "budget",
+  "config",
+  "context",
+  "export",
+  "mcp",
+  "prompt",
+  "prompts",
+  "runtime",
+  "toolchain",
+  "tui",
+  "upstream",
+]
+
+const deprecatedAliases = ["init", "sync", "package", "prompts"]
+const deprecationMessages: Record<string, string> = {
+  init: "Deprecated alias: `mendcode init` is kept for compatibility. Use `mendcode setup status` for setup checks; project init remains internal.",
+  sync: "Deprecated alias: `mendcode sync` is kept for compatibility. Use `mendcode setup status` or `mendcode status` for normal workflows.",
+  package: "Deprecated alias: `mendcode package` is kept for compatibility. Use `mendcode packages`.",
+  prompts: "Deprecated alias: `mendcode prompts` is kept for compatibility. Prompt internals are not part of the public workflow.",
+}
+const internalCommandWarning =
+  "Internal/debug command: this is hidden from normal `mendcode --help` and is not part of the primary terminal coding workflow."
+
 type ShortcutWorktreeTarget = {
   path: string
   branch: string | null
@@ -90,53 +139,102 @@ function usage(exitCode = 0) {
   const out = `mendcode ${mendVersion()}
 
 Usage:
-  mendcode                         open MendCode TUI in the current project
+  mendcode                         open MendCode in the current project
+  mendcode run [message..]         open MendCode with message ready to send
+  mendcode chat [message..]        run a control-plane chat turn
   mendcode --worktree [target]     open MendCode in a git worktree by branch/path/id
   mendcode --tsm [target|--all]    open TSM workspace with MendCode split
-  mendcode run [message..]         open TUI with message ready to send
-  mendcode chat [message..]        run a control-plane chat turn
 
-Core:
+Workflows:
   mendcode status                  show MendCode status
   mendcode doctor                  run local diagnostics
-  mendcode check                   verify the owned-runtime boundary
-  mendcode config show|paths       inspect effective config and paths
-
-Models and providers:
-  mendcode models status           inspect model catalog/policy
-  mendcode providers status        inspect provider auth/adapters
-  mendcode auth status             inspect provider login state
-
-Project controls:
-  mendcode tui status              inspect active TUI profile
-  mendcode focus status|list|show|use
-  mendcode memory status|search|preview|add|list
-  mendcode permissions status      inspect permission defaults
-  mendcode permissions set-default <approval|smart|full_access>
+  mendcode setup status|plan|doctor
+                                inspect setup readiness and local diagnostics
+  mendcode packages status|list    inspect installed/active MendCode packages
+  mendcode packages create --id <id> --title <name> [--include skills,modes,plugins]
+                                package selected local harness config
+  mendcode packages install <source-id>
+  mendcode packages enable|disable <id>
+                                select or deselect a runtime package
   mendcode mflow status            inspect mflow activation, daemon, and locks
   mendcode mflow setup             guided mflow setup for this repo
   mendcode mflow activate --room <room> --accept-public-relay-limits
   mendcode mflow deactivate        disable mflow without deleting local config
   mendcode mflow remove            remove local mflow config and scaffold files
-  mendcode tsm status|plan|doctor  inspect optional TSM integration
-  mendcode tsm setup|activate|deactivate|remove
-                                manage MendCode TSM scaffold without touching external sessions
   mendcode worktree status|plan    inspect worktree registry and dry-run create plan
   mendcode worktree create|open|adopt|remove|reset
                                 preview-first worktree management; destructive actions are gated
-  mendcode packages status|list    inspect installed/active MendCode packages
-  mendcode packages create --id <id> --title <name> [--include skills,modes,plugins]
-                                snapshot selected local skills/modes/widgets/config into a package
-  mendcode packages install <source-id>
-  mendcode packages disable <id>   deselect a package without deleting local config
+  mendcode tsm status|plan|doctor  inspect optional TSM integration
+  mendcode tsm setup|activate|deactivate|remove
+                                manage MendCode TSM scaffold without touching external sessions
 
-Runtime boundary:
-  mendcode export plan             show export policy only
-  mendcode adapter status          inspect MendCode vs donor guard
-  mendcode upstream status         inspect upstream baseline
+Advanced/support:
+  mendcode help advanced           show support/debug commands that are hidden from normal help
 `
   ;(exitCode ? console.error : console.log)(out)
   process.exit(exitCode)
+}
+
+function advancedUsage(exitCode = 0) {
+  const out = `mendcode ${mendVersion()} advanced/support
+
+Primary public surface:
+  mendcode
+  mendcode run [message..]
+  mendcode chat [message..]
+  mendcode --worktree [branch|path|id]
+  mendcode --tsm [branch|path|id|--all]
+  mendcode status|doctor
+  mendcode setup status|plan|doctor
+  mendcode packages status|list|create|install|enable|disable|remove
+  mendcode mflow status|setup|activate|deactivate|remove
+  mendcode worktree status|plan|create|open|adopt|remove|reset|doctor
+  mendcode tsm status|plan|setup|activate|deactivate|remove|doctor
+
+Advanced/support surface:
+  mendcode check
+  mendcode models status|show|plan|presets|set-default|use-preset
+  mendcode providers status
+  mendcode auth status|login-plan|login
+  mendcode permissions status|set-default
+  mendcode memory status|search|preview|add|list
+  mendcode focus status|list|show|use
+
+Internal/debug-only surface, intentionally hidden from normal help:
+  ${internalCommands.join(", ")}
+
+Deprecated legacy aliases kept for compatibility:
+  init -> project init
+  sync -> project sync
+  package -> packages
+  prompts -> prompt
+`
+  ;(exitCode ? console.error : console.log)(out)
+  process.exit(exitCode)
+}
+
+function levenshtein(a: string, b: string) {
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+  const curr = Array.from({ length: b.length + 1 }, () => 0)
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i
+    for (let j = 1; j <= b.length; j++) {
+      curr[j] = Math.min(
+        prev[j]! + 1,
+        curr[j - 1]! + 1,
+        prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+      )
+    }
+    for (let j = 0; j <= b.length; j++) prev[j] = curr[j]!
+  }
+  return prev[b.length]!
+}
+
+function suggestCommand(value: string, candidates = [...primaryCommands, ...advancedCommands, ...internalCommands, ...deprecatedAliases]) {
+  const match = candidates
+    .map((candidate) => ({ candidate, score: levenshtein(value, candidate) }))
+    .sort((a, b) => a.score - b.score)[0]
+  return match && match.score <= Math.max(2, Math.floor(value.length / 3)) ? match.candidate : undefined
 }
 
 function controlPlaneEnv(root: string) {
@@ -191,7 +289,7 @@ function enforceDonorIdentityGuard(args: string[]) {
   throw new Error([
     `Blocked internal donor runtime command: ${token}`,
     status.reason,
-    "Use MendCode-owned commands from `mendcode --help` or inspect guard state with `mendcode adapter status`.",
+    "Use MendCode-owned commands from `mendcode --help`; support/debug commands are listed in `mendcode help advanced`.",
     `Temporary internal override: ${status.overrideEnv}=1 mendcode opencode -- ${args.join(" ") || "--help"}`,
   ].join("\n"))
 }
@@ -307,6 +405,7 @@ export async function main(argv = process.argv.slice(2)) {
   const [cmd, ...args] = argv
   try {
     if (!cmd) return runRuntime([process.cwd()])
+    if (cmd === "help" && args[0] === "advanced") advancedUsage(0)
     if (cmd === "help" || cmd === "-h" || cmd === "--help") usage(0)
     if (cmd === "--worktree") return await runWorktreeShortcut(args)
     if (cmd === "--tsm") return await runTsmShortcut(args)
@@ -322,7 +421,16 @@ export async function main(argv = process.argv.slice(2)) {
       return runRuntime(args)
     }
     const route = controlPlaneRoutes[cmd]
-    if (route) return runControlPlane(route(args))
+    if (route) {
+      const deprecation = deprecationMessages[cmd]
+      if (deprecation) console.error(deprecation)
+      else if (internalCommands.includes(cmd)) console.error(internalCommandWarning)
+      return runControlPlane(route(args))
+    }
+    const suggestion = suggestCommand(cmd)
+    if (suggestion) {
+      throw new Error(`Unknown mendcode command: ${cmd}\nDid you mean \`mendcode ${suggestion}\`?\nRun \`mendcode --help\` for public workflows or \`mendcode help advanced\` for support commands.`)
+    }
     enforceDonorIdentityGuard([cmd, ...args])
     return runRuntime([cmd, ...args])
   } catch (error) {

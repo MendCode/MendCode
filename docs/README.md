@@ -49,7 +49,6 @@ If you only read one page after this index, read [CLI, setup, and configuration]
 mendcode
 mendcode status
 mendcode setup status
-mendcode tui status
 mendcode models status
 mendcode packages status
 mendcode mflow status
@@ -77,13 +76,7 @@ Ctrl+P -> Chat presentation
 Ctrl+P -> Usage Insights
 ```
 
-You can also inspect the active profile from the CLI:
-
-```bash
-mendcode tui status
-mendcode tui profile
-mendcode tui preview
-```
+CLI profile inspection exists for compatibility/debugging, but it is not the normal customization path.
 
 ## Screenshot Capture Queue
 
