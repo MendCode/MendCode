@@ -149,7 +149,7 @@ Before sharing a package:
 3. Confirm the package uses `mendcode` in docs/examples.
 4. Confirm no secrets are included.
 5. Install it in a throwaway checkout.
-6. Run `mendcode packages status`, `mendcode tui status`, `mendcode models status`, and `mendcode permissions status`.
+6. Run `mendcode packages status`, `mendcode models status`, and `mendcode permissions status`.
 7. Open the TUI and verify prompt marker, status row, command palette entries, Agent View/home layout, and any widgets.
 
 Screenshot slot:
