@@ -1,18 +1,18 @@
 # Architecture and Packages
 
-MendCode has a MendCode-owned control plane wrapped around an adapted terminal coding runtime. The public surface is the `mend` CLI. The runtime source lives in `src/mendcode/packages/opencode`, but public commands are routed through MendCode modules under `src/mendcode/packages/opencode/src/mend`.
+MendCode has a MendCode-owned control plane wrapped around an adapted terminal coding runtime. The public surface is the `mendcode` CLI. The runtime source lives in `src/mendcode/packages/opencode`, but public commands are routed through MendCode modules under `src/mendcode/packages/opencode/src/mend`.
 
 ## Lineage
 
 MendCode is a downstream project built on the opencode codebase. In open-source terms, it is a derivative work with substantial product/runtime additions rather than a simple mirror fork. The opencode lineage is preserved in the MIT license and in [ACKNOWLEDGEMENTS.md](../ACKNOWLEDGEMENTS.md).
 
-MendCode's own layer includes the `mend` public CLI, MendCode-owned config/control plane, setup flow, package and registry system, mflow coordination, optional TSM/worktree orchestration, model-role projection, prompt/TUI customization, and public docs.
+MendCode's own layer includes the `mendcode` public CLI, MendCode-owned config/control plane, setup flow, package and registry system, mflow coordination, optional TSM/worktree orchestration, model-role projection, prompt/TUI customization, and public docs.
 
 ## Repository Layout
 
 - `.github/`: public automation and security workflow wiring.
 - `src/mendcode/`: main product source, installer, package workspace, infra, and release scripts.
-- `src/mendcode/packages/opencode/`: the `mend`/`mendcode` CLI runtime package.
+- `src/mendcode/packages/opencode/`: the `mendcode` CLI runtime package; development checkouts may keep local `mend` shims.
 - `src/mendcode/packages/core/`: shared filesystem, global paths, locks, npm config, logging, utilities.
 - `src/mendcode/packages/plugin/`: public plugin/tool/TUI extension SDK.
 - `src/mendcode/packages/ui/`: web/UI component package.
@@ -27,18 +27,18 @@ MendCode's own layer includes the `mend` public CLI, MendCode-owned config/contr
 
 MendCode keeps user-facing state under `.mendcode/` and generates compatibility config for the underlying runtime. The important contract is:
 
-- Users interact with `mend`, not donor runtime commands.
+- Users interact with `mendcode`, not donor runtime commands. A local `mend` shim may exist in development checkouts, but it is not the public install contract.
 - MendCode config is source of truth.
 - Generated runtime files are implementation detail.
 - Donor/runtime hot paths are guarded and should not be the public customization API.
 
-The public router is `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`. It routes commands such as `mend setup`, `mend packages`, `mend mflow`, `mend tsm`, and `mend worktree` to the MendCode control plane.
+The public router is `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`. It routes commands such as `mendcode setup`, `mendcode packages`, `mendcode mflow`, `mendcode tsm`, and `mendcode worktree` to the MendCode control plane.
 
 ## Core Runtime Packages
 
 | Package | Purpose |
 | --- | --- |
-| `mendcode` | CLI runtime package; exposes `mend`, `mendcode`, and `mendcode-runtime`. |
+| `mendcode` | CLI runtime package; exposes `mendcode` and `mendcode-runtime`. |
 | `@mendcode/core` | Global paths, filesystem helpers, locks, npm config, observability, utility code. |
 | `@mendcode/plugin` | Plugin API for custom tools and TUI/widget extensions. |
 | `@mendcode/ui` | Shared UI components, theme tokens, file/message rendering, stories. |
@@ -60,6 +60,6 @@ The public router is `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`
 MendCode treats optional integrations as opt-in:
 
 - Packages project configuration; they do not install TSM or start mflow by themselves.
-- TSM is optional and never installed by `mend tsm status`.
+- TSM is optional and never installed by `mendcode tsm status`.
 - Worktree create/remove/reset commands are preview-first and report `executesGit: false` unless a future explicit execution gate is added.
 - mflow setup writes visible local config and can be deactivated or removed without deleting unrelated project files.

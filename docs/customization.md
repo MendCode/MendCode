@@ -4,12 +4,64 @@ MendCode customization is centered on `.mendcode/` config plus optional runtime 
 
 The main profile is `.mendcode/tui/profile.json`. It controls the prompt input, input marker, bottom status, home title or mascot, centered/split home layout, Agent View panel, activity rendering, activity mascot states, widgets, theme, and density.
 
+## Visual Capture Plan
+
+Use screenshots for visual surfaces and examples for config. Do not add image links until the files exist under `docs/assets/screenshots/`.
+
+| Screenshot file | Capture | Shows |
+| --- | --- | --- |
+| `docs/assets/screenshots/home-centered-title.png` | Home screen in centered mode with generated ASCII title. | First-run identity and default welcome posture. |
+| `docs/assets/screenshots/home-agent-view.png` | Home split mode with Agent View on the right and at least one working or needs-input session. | Background sessions, follow-up work, and why split home matters. |
+| `docs/assets/screenshots/prompt-top-bottom.png` | `promptChrome.preset: "top-bottom"` with `mendcode>` marker and status row. | Everyday prompt input, marker, and operational status. |
+| `docs/assets/screenshots/prompt-ascii-box.png` | `promptChrome.preset: "ascii-box"` with status inside the frame. | ASCII-compatible/SSH-friendly prompt chrome. |
+| `docs/assets/screenshots/prompt-marker-custom.png` | Prompt marker changed to `ship>` or `acme>`. | `promptChrome.glyphs.leadText` as team identity. |
+| `docs/assets/screenshots/session-activity.png` | Active session while reading/searching/running a command. | Activity text, tool rendering, usage/context status, and compact activity surface. |
+| `docs/assets/screenshots/home-mascot.png` | Home identity in mascot mode. | Custom ASCII identity without overloading README. |
+| `docs/assets/screenshots/command-palette-customization.png` | Command palette filtered to Home/Prompt/Presentation/Status commands. | TUI customization is discoverable without hand-editing JSON. |
+
+Capture commands and prompts should show `mendcode`, not the legacy local `mend` shim. Good demo prompts:
+
+```text
+Search the repo for promptChrome and summarize the available prompt input presets.
+```
+
+```text
+Run git status and explain which files are safe to document without changing anything.
+```
+
+```text
+Review this repository and produce a short plan to improve the README. Do not edit files yet.
+```
+
+## What Needs A Screenshot
+
+Use screenshots for:
+
+- home centered vs split
+- Agent View
+- prompt chrome presets
+- prompt marker
+- prompt status row
+- session activity presentation
+- mascot/title identity
+- command palette customization entries
+
+Use text/code examples for:
+
+- `promptChrome`, `promptStatus`, `identity`, and `surfaces.homeWelcome` JSON
+- package manifests
+- model roles
+- prompt modes
+- memory scopes
+- permission modes
+- plugin/widget API contracts
+
 Inspect the active profile with:
 
 ```bash
-mend tui status
-mend tui profile
-mend tui preview
+mendcode tui status
+mendcode tui profile
+mendcode tui preview
 ```
 
 Most visual settings are also available from the command palette inside the TUI:
@@ -37,6 +89,18 @@ There are four layers:
 4. Runtime extensions: widgets, slots, footer entries, plugin routes, package-distributed themes, and scripts.
 
 Use the profile for stable product/team defaults. Use TUI plugins when behavior needs code, live data, custom routes, or dynamic UI.
+
+## Recommended Product Profiles
+
+These are not separate built-in themes; they are starting points for profiles a person or team can ship.
+
+| Profile | Key settings | Best for |
+| --- | --- | --- |
+| Clean daily driver | `promptChrome.preset: "top-bottom"`, status outside, `presentation.profile: "mendcode"`, command hints hidden. | Everyday coding with low chrome and enough context. |
+| Team-branded shell | `identity.productName`, `identity.logoFont`, `promptChrome.glyphs.leadText`, custom status script. | Company/team environments that need a recognizable terminal surface. |
+| Agent cockpit | `surfaces.homeWelcome.mode: "split"`, `surfaces.homeWelcome.rightPanel: "agentManager"`. | Background sessions, delegated work, and follow-up queues. |
+| SSH/ASCII safe | `promptChrome.preset: "ascii-box"`, status inside, compact mascot/title. | Remote terminals, simpler fonts, narrow machines. |
+| Low-noise review | `presentation.profile: "minimal"`, fewer status items, no mascot activity. | Review-heavy or pair-programming sessions where visual motion is distracting. |
 
 ## TUI Profile Shape
 
@@ -76,7 +140,7 @@ Example:
     "preset": "top-bottom",
     "borderStyle": "rounded",
     "glyphs": {
-      "leadText": "mend>"
+      "leadText": "mendcode>"
     }
   }
 }
@@ -108,7 +172,7 @@ Examples:
 {
   "promptChrome": {
     "glyphs": {
-      "leadText": "mend>"
+      "leadText": "mendcode>"
     }
   }
 }
@@ -786,7 +850,7 @@ This fragment combines mascot home, split Agent View, compact status, custom act
     "preset": "top-bottom",
     "borderStyle": "rounded",
     "glyphs": {
-      "leadText": "mend>"
+      "leadText": "mendcode>"
     }
   },
   "promptStatus": {
@@ -886,7 +950,7 @@ Default MendCode shape to riff on:
       \_/
 ```
 
-After generating, paste the JSON into `.mendcode/tui/profile.json`, run `mend tui preview`, and check it in a narrow terminal. Fix width/height before sharing it as a package.
+After generating, paste the JSON into `.mendcode/tui/profile.json`, run `mendcode tui preview`, and check it in a narrow terminal. Fix width/height before sharing it as a package.
 
 ## TUI Plugins and Widgets
 
@@ -947,10 +1011,10 @@ See [TUI plugins and widgets](tui-plugins-and-widgets.md) for full plugin exampl
 Model behavior is controlled by model roles. This lets a team use one model for build/code, another for review, and cheaper models for title/summary/compaction.
 
 ```bash
-mend models status
-mend models presets
-mend models set-default openai gpt-5.2 --auth-mode api-key --enable
-mend models plan
+mendcode models status
+mendcode models presets
+mendcode models set-default openai gpt-5.2 --auth-mode api-key --enable
+mendcode models plan
 ```
 
 When `models.yaml` has `enabled: false`, roles are documented but not projected into generated runtime config. The CLI supports `set-default` and `use-preset`; edit `models.yaml` for role-specific overrides such as `build`, `review`, `subagent`, `title`, and `compaction`.
@@ -975,9 +1039,9 @@ For team rollout, put the profile and any scripts/plugins inside a MendCode pack
 Then share it:
 
 ```bash
-mend packages create --include plugins,tuiProfile,themes
-mend packages install github:YourOrg/team-mend-package
-mend packages enable team-mend-package
+mendcode packages create --include plugins,tuiProfile,themes
+mendcode packages install github:YourOrg/team-mend-package
+mendcode packages enable team-mend-package
 ```
 
 Keep packages explicit. Enabling a visual package should project config and assets; it should not secretly install TSM, create worktrees, mutate branches, or start unrelated services.

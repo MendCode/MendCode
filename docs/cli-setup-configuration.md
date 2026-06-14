@@ -1,51 +1,73 @@
 # CLI, Setup, and Configuration
 
-The public CLI is `mend`. It can open the interactive TUI, inspect configuration, run setup, manage packages, and control optional mflow/TSM/worktree integrations.
+The public CLI is `mendcode`. It opens the interactive TUI, inspects configuration, runs setup, manages packages, controls optional mflow/TSM/worktree integrations, and exposes prompt/memory/permission configuration.
+
+Development checkouts may still have a local `mend` shim, but the public installer and package metadata expose `mendcode` and `mendcode-runtime`. Public docs and screenshots should use `mendcode`.
 
 ## Public Commands
 
 ```bash
-mend                         # open MendCode TUI in the current project
-mend --worktree [target]     # open MendCode in a git worktree by branch/path/id
-mend --tsm [target|--all]    # open TSM workspace with a MendCode split
-mend run "message"           # open TUI with an initial message
-mend chat "message"          # run a control-plane chat turn
-mend status
-mend doctor
-mend check
-mend config show
-mend config paths
+mendcode                         # open MendCode TUI in the current project
+mendcode --worktree [target]     # open MendCode in a git worktree by branch/path/id
+mendcode --tsm [target|--all]    # open TSM workspace with a MendCode split
+mendcode run "message"           # open TUI with an initial message
+mendcode chat "message"          # run a control-plane chat turn
+mendcode status
+mendcode doctor
+mendcode check
+mendcode config show
+mendcode config paths
 ```
 
-## Setup Page
+## Setup Flow
 
-The setup flow tracks these steps:
+The setup flow separates required harness readiness from optional product features.
 
-- Required: `provider`, `models`, `budget`, `prompt`.
-- Optional: `package`, `tui`, `memory`, `permissions`.
+Required setup:
+
+- `provider`: the provider/auth path MendCode can use.
+- `models`: model role projection for runtime use.
+- `budget`: API/budget posture when API-based usage is enabled.
+- `prompt`: prompt mode and focus behavior.
+
+Optional setup:
+
+- `package`: active team/runtime package.
+- `tui`: TUI profile and visual preferences.
+- `memory`: global/project memory config.
+- `permissions`: global default permission mode and smart-reviewer role.
 
 Useful commands:
 
 ```bash
-mend setup status
-mend setup plan
-mend setup doctor
+mendcode setup status
+mendcode setup plan
+mendcode setup doctor
 ```
 
-The setup state is local project state. Completing setup means the required steps are recorded, not that secrets are committed. Provider credentials and API keys must stay outside the repository.
+Screenshot slot:
+
+| File | Capture |
+| --- | --- |
+| `docs/assets/screenshots/setup-status.png` | Setup/status page showing provider, models, budget, prompt, package, TUI, memory, and permissions. Do not show API keys, OAuth tokens, or personal paths. |
+
+Completing setup records local project state. It does not mean provider credentials are committed. Provider credentials, OAuth tokens, API keys, local mflow room secrets, caches, and machine-local state must stay outside shared packages and repository docs.
 
 ## Configuration Files
 
 Common MendCode config paths:
 
-- `.mendcode/mendcode.json`: project config and package metadata.
-- `.mendcode/generated/opencode.json`: generated runtime compatibility config.
+- `.mendcode/mendcode.json`: project config, focus defaults, package metadata, budget/worktree policy, and integration settings.
+- `.mendcode/generated/opencode.json`: generated compatibility config for the adapted runtime.
+- `.mendcode/prompt-mode.json`: persisted prompt mode consumed by `mendcode run`, `mendcode chat`, and the TUI footer.
 - `.mendcode/models.yaml`: project model-role config.
 - `~/.config/mendcode/models.yaml`: global model-role config.
 - `~/.config/mendcode/mendcode.json`: global MendCode config.
+- `~/.config/mendcode/permissions.json`: global permission mode and reviewer-role config.
 - `.mendcode/tui/profile.json`: TUI profile.
 - `.mendcode/packages/state.json`: installed/enabled package state.
 - `.mendcode/registry.json`: package registry sources.
+- `.mendcode/memory/`: project memory config, entries, and proposals when project memory is enabled.
 - `.mendcode/mflow/state.json`: mflow local state.
 - `.mflow/config.toml`: mflow runtime config scaffold.
 - `.mendcode/tsm/state.json`: optional TSM state.
@@ -53,7 +75,9 @@ Common MendCode config paths:
 
 ## Focus Profiles
 
-MendCode ships focus profiles that tune prompt policy, model role, tool posture, budget posture, and worktree policy:
+Focus profiles tune provider-family behavior, model role defaults, prompt policy, tool posture, budget posture, and worktree policy.
+
+Built-in focus families include:
 
 - `codex`
 - `claude`
@@ -65,15 +89,38 @@ MendCode ships focus profiles that tune prompt policy, model role, tool posture,
 Commands:
 
 ```bash
-mend focus status
-mend focus list
-mend focus show codex
-mend focus use codex
+mendcode focus status
+mendcode focus list
+mendcode focus show codex
+mendcode focus use codex
 ```
+
+Use focus profiles to keep provider-specific behavior explicit. Do not describe them as proprietary upstream prompt dumps; MendCode adapts behavior for provider/model families without pretending to be those products.
+
+## Prompt Modes
+
+Prompt mode controls how much MendCode harness context is added to runtime requests. The persisted state lives in `.mendcode/prompt-mode.json` and is shown in the TUI footer/status surfaces.
+
+| Mode | What it does | Good for |
+| --- | --- | --- |
+| `minimal` | Uses a small MendCode boundary and avoids the full harness prompt. Persistent memory remains independent and can still be retrieved when enabled. | Low-noise experiments, debugging prompt influence, narrow one-off tasks. |
+| `focus` | Default mode. Uses the selected focus profile and provider-family policy. | Normal daily coding. |
+| `full` | Adds the focus behavior plus MendCode product/runtime policy and integration context. Legacy `dev-js` config is normalized to `full`. | Work that needs package, memory, workflow, or product policy context. |
+
+Current public setup/status surfaces should be used to inspect prompt readiness:
+
+```bash
+mendcode setup status
+mendcode status
+```
+
+For team rollout, packages can include prompt mode state as part of the runtime pack. For manual local experiments, edit `.mendcode/prompt-mode.json` with one of `minimal`, `focus`, or `full`, then verify through setup/status and the TUI footer.
 
 ## Models
 
-Models are configured by role instead of hardcoding one model everywhere. Roles include:
+Models are configured by role instead of hardcoding one model everywhere.
+
+Common roles:
 
 - `default`
 - `small`
@@ -106,31 +153,95 @@ roles:
     providerID: "openai"
     modelID: "gpt-5-mini"
     authMode: "api-key"
+  permissionReviewer:
+    providerID: "openai"
+    modelID: "gpt-5-mini"
+    authMode: "api-key"
 ```
 
 Commands:
 
 ```bash
-mend models status
-mend models presets
-mend models set-default openai gpt-5.2 --auth-mode api-key --enable
-mend models use-preset openai-api-gpt-5.2-codex --enable
-mend models plan
+mendcode models status
+mendcode models presets
+mendcode models set-default openai gpt-5.2 --auth-mode api-key --enable
+mendcode models use-preset openai-api-gpt-5.2-codex --enable
+mendcode models plan
 ```
 
-The CLI currently writes the default model role directly. For non-default roles such as `build`, `review`, or `permissionReviewer`, edit `models.yaml` and run `mend models plan` / `mend models status` to verify projection.
+The CLI currently writes the default model role directly. For non-default roles such as `build`, `review`, `subagent`, `memoryExtractor`, or `permissionReviewer`, edit `models.yaml` and run `mendcode models plan` / `mendcode models status` to verify projection.
 
-## Providers, Auth, Permissions, Memory
+## Permissions And Memory
 
 Useful inspection commands:
 
 ```bash
-mend providers status
-mend auth status
-mend permissions status
-mend permissions set-default smart
-mend memory status
-mend memory search "project convention"
+mendcode providers status
+mendcode auth status
+mendcode permissions status
+mendcode memory status
+mendcode memory search "project convention"
+mendcode memory preview "project convention"
 ```
 
-MendCode should never commit provider credentials. Package and registry flows explicitly report `secretsIncluded: false` for shared package state.
+Permission modes:
+
+| Mode | Behavior |
+| --- | --- |
+| `approval` | Manual approval remains the default posture. |
+| `smart` | Uses an AI-assisted reviewer role for configured triggers. If the reviewer role is not configured, MendCode asks instead of silently approving. |
+| `full_access` | Reduces permission prompts for the current policy surface, but explicit deny rules still matter. Use only when that trust posture is intentional. |
+
+Configure permissions:
+
+```bash
+mendcode permissions status
+mendcode permissions set-default approval
+mendcode permissions set-default smart
+mendcode permissions set-default full_access
+mendcode permissions set-reviewer-role permissionReviewer
+```
+
+Describe `smart` as AI-assisted permission review, not as “secure by default”. It depends on the configured reviewer role and still needs a sane trust boundary.
+
+Memory behavior:
+
+- Memory can be global or project-scoped.
+- Runtime memory is injected as transient system context; it is not copied into normal chat history unless the user asks to see it.
+- Generated memory proposals are approval-gated.
+- Direct `mendcode memory add` is for explicit user requests to save memory.
+- `mendcode memory search` and `mendcode memory preview` are the right commands before editing, deleting, applying, or rejecting entries/proposals.
+
+Example:
+
+```bash
+mendcode memory status
+mendcode memory list --scope global
+mendcode memory list --scope project
+mendcode memory search "release workflow"
+mendcode memory preview "release workflow"
+mendcode memory add "Use docs screenshots with the public mendcode command." --scope project
+```
+
+Screenshot slots:
+
+| File | Capture |
+| --- | --- |
+| `docs/assets/screenshots/permissions-smart.png` | A permission prompt or smart-approval status with no dangerous command, no secrets, and no sensitive path. |
+| `docs/assets/screenshots/memory-preview.png` | `mendcode memory search` or `preview` using demo data, not personal memory content. |
+
+## Packages, TUI, mflow, And Worktrees
+
+Common next commands:
+
+```bash
+mendcode packages status
+mendcode tui status
+mendcode tui profile
+mendcode tui preview
+mendcode mflow status
+mendcode worktree status
+mendcode tsm status
+```
+
+Use [Packages and team sharing](packages-and-team-sharing.md), [Customization](customization.md), [mflow coordination](mflow.md), and [TSM and worktrees](tsm-and-worktrees.md) for deeper workflows.

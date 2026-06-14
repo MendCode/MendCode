@@ -317,9 +317,9 @@ Company packages should include plugins and widgets under `.mendcode/plugins`, `
 Use package sync for team rollout:
 
 ```bash
-mend packages create --include plugins,tuiProfile,themes
-mend packages install github:YourOrg/company-mend-package
-mend packages enable company-mend-package
+mendcode packages create --include plugins,tuiProfile,themes
+mendcode packages install github:YourOrg/company-mend-package
+mendcode packages enable company-mend-package
 ```
 
 ## Rules

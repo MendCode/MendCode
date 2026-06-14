@@ -3,6 +3,7 @@ import { activityMessagesForPhase, type MendActivityPhase } from "@/mend/tui/pre
 
 export type ActivitySignalInput = {
   status: "idle" | "busy" | "retry" | string
+  statusKind?: string
   retry?: boolean
   connection?: "connecting" | "connected" | "reconnecting" | "disconnected" | "failed"
   toolNames?: string[]
@@ -18,6 +19,7 @@ export function resolveActivityPhase(input: ActivitySignalInput): MendActivityPh
   if (input.connection && input.connection !== "connected") return "blocked"
   if (input.retry || input.status === "retry") return "retrying"
   if (input.status === "idle") return "done"
+  if (input.status === "busy" && input.statusKind === "memory-extract") return "memory"
 
   const activeNames = (input.activeToolNames ?? []).map((item) => item.toLowerCase())
   const activeToolPhase = phaseForToolNames(activeNames)

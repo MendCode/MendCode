@@ -1225,6 +1225,11 @@ export const layer: Layer.Layer<
         const pending = ctx.pendingMemoryExtraction
         ctx.pendingMemoryExtraction = undefined
         if (!pending || ctx.blocked || ctx.assistantMessage.error) return
+        yield* status.set(ctx.sessionID, {
+          type: "busy",
+          kind: "memory-extract",
+          message: "Preparing memory proposal...",
+        })
         const sessionID = ctx.sessionID
         const messageID = ctx.assistantMessage.id
         const created = yield* proposeAutomaticMemories({

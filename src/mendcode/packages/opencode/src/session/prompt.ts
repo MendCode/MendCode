@@ -112,6 +112,15 @@ export function shouldSkipAutoCompaction(messages: MessageV2.WithParts[]) {
   return true
 }
 
+export function shouldResumeAfterAutoCompaction(finish: string | undefined) {
+  if (!finish) return true
+  return finish !== "stop"
+}
+
+function hasRunnableToolCalls(parts: MessageV2.Part[]) {
+  return parts.some((part) => part.type === "tool" && !part.metadata?.providerExecuted)
+}
+
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts>
@@ -1642,8 +1651,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           // Keep the loop running so tool results can be sent back to the model.
           // Skip provider-executed tool parts — those were fully handled within the
           // provider's stream (e.g. DWS Agent Platform) and don't need a re-loop.
-          const hasToolCalls =
-            lastAssistantMsg?.parts.some((part) => part.type === "tool" && !part.metadata?.providerExecuted) ?? false
+          const hasToolCalls = lastAssistantMsg ? hasRunnableToolCalls(lastAssistantMsg.parts) : false
 
           if (
             lastAssistant?.finish &&
@@ -1846,8 +1854,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 agent: lastUser.agent,
                 model: lastUser.model,
                 auto: true,
-                overflow: !handle.message.finish,
+                overflow: shouldResumeAfterAutoCompaction(handle.message.finish),
               })
+              return "continue" as const
+            }
+            if (finished && !handle.message.error && !hasRunnableToolCalls(MessageV2.parts(handle.message.id))) {
+              return "break" as const
             }
             return "continue" as const
           }).pipe(Effect.ensuring(instruction.clear(handle.message.id)))

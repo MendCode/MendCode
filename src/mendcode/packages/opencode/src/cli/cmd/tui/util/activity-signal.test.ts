@@ -22,6 +22,17 @@ describe("resolveActivityPhase", () => {
     ).toBe("sending")
   })
 
+  test("labels memory extraction as memory work", () => {
+    expect(
+      resolveActivityPhase({
+        status: "busy",
+        statusKind: "memory-extract",
+        livePhase: "output",
+        liveOutputTokens: 42,
+      }),
+    ).toBe("memory")
+  })
+
   test("live answer output wins over stale tool parts", () => {
     expect(
       resolveActivityPhase({
