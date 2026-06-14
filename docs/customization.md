@@ -56,14 +56,6 @@ Use text/code examples for:
 - permission modes
 - plugin/widget API contracts
 
-Inspect the active profile with:
-
-```bash
-mendcode tui status
-mendcode tui profile
-mendcode tui preview
-```
-
 Most visual settings are also available from the command palette inside the TUI:
 
 ```text
@@ -950,7 +942,7 @@ Default MendCode shape to riff on:
       \_/
 ```
 
-After generating, paste the JSON into `.mendcode/tui/profile.json`, run `mendcode tui preview`, and check it in a narrow terminal. Fix width/height before sharing it as a package.
+After generating, paste the JSON into `.mendcode/tui/profile.json`, open `mendcode`, and check it in a narrow terminal. Fix width/height before sharing it as a package.
 
 ## TUI Plugins and Widgets
 
