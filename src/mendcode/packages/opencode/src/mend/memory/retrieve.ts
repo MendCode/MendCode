@@ -88,11 +88,7 @@ export async function retrieveMemory(input: MemoryRetrievalInput = {}) {
     return { enabled: config.enabled, use: config.use, summaries: [], entries: [], callsProviders: false as const }
   }
   const mode = input.mode ?? "manual"
-  const selectedScopes = input.scopes ?? (
-    mode === "request"
-      ? config.scopes.filter((scope) => scope === "project")
-      : config.scopes
-  )
+  const selectedScopes = input.scopes ?? config.scopes
   const maxEntries = input.maxEntries ?? (mode === "request" ? config.projectMaxEntries : config.maxEntries)
   const maxPromptTokens = input.maxPromptTokens ?? config.maxPromptTokens
   const queryTerms = terms(input.query, input.cwd, ...(input.files || []), input.providerID, input.modelID, input.focusID)
@@ -102,6 +98,7 @@ export async function retrieveMemory(input: MemoryRetrievalInput = {}) {
   }))).then((items) => items.filter((item) => item.text))
   const entryGroups = await Promise.all(selectedScopes.map((scope) => readMemoryEntries(scope, input.root).catch(() => [])))
   const perScopeLimit = (scope: MemoryScope) => {
+    if (mode === "request" && scope === "global") return config.maxEntries
     if (mode === "request" && scope === "project") return config.projectMaxEntries
     if (mode === "after-compaction" && scope === "global") return config.globalCompactionMaxEntries
     if (mode === "after-compaction" && scope === "project") return config.projectMaxEntries
@@ -109,7 +106,7 @@ export async function retrieveMemory(input: MemoryRetrievalInput = {}) {
   }
   const shouldInclude = (entry: MemoryEntry, score: number) => {
     if (score > 0) return true
-    if (mode === "request" && entry.scope === "project") return true
+    if (mode === "request" && (entry.scope === "global" || entry.scope === "project")) return true
     if (mode === "after-compaction" && (entry.scope === "global" || entry.scope === "project")) return true
     return false
   }
