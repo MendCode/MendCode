@@ -174,6 +174,19 @@ function canStartInteractiveTui() {
   return process.stdin.isTTY && (process.stdout.isTTY || process.stderr.isTTY)
 }
 
+function releaseTerminalInputModes() {
+  const out = process.stdout.isTTY ? process.stdout : process.stderr.isTTY ? process.stderr : undefined
+  out?.write("\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?1006l\x1b[?1015l\x1b[?2004l")
+  const stdin = process.stdin as typeof process.stdin & { setRawMode?: (mode: boolean) => unknown }
+  if (process.stdin.isTTY && typeof stdin.setRawMode === "function") {
+    try {
+      stdin.setRawMode(false)
+    } catch {
+      // Best-effort terminal recovery before yielding control to the parent shell.
+    }
+  }
+}
+
 function errorMessage(error: unknown) {
   const formatted = FormatError(error)
   if (formatted !== undefined) return formatted
@@ -338,6 +351,7 @@ export function tui(input: {
 
     const onExit = async () => {
       unguard?.()
+      releaseTerminalInputModes()
       resolve()
     }
 
@@ -3559,6 +3573,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         })
 
         renderer.suspend()
+        releaseTerminalInputModes()
         // pid=0 means send the signal to all processes in the process group
         process.kill(0, "SIGTSTP")
       },
