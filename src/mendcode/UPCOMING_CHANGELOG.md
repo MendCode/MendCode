@@ -1,8 +1,8 @@
-Last release: v0.1.5
-Target ref: v0.1.6
+Last release: v0.1.6
+Target ref: v0.1.7
 
-## Memory
+## Setup
 ### Bugfixes
-- Inject saved global memories into normal runtime requests as transient system context instead of only after compaction.
-- Keep project memories in the runtime prompt with their own request cap so repo-local context is available without persisting injected memory into chat history.
-- Make `mendcode memory search` and `mendcode memory preview` show request-mode retrieval by default, with an explicit `--mode` selector for compaction/manual checks.
+- Keep the setup screen stable while refreshing step state so changing setup pages no longer flashes back to a loading placeholder.
+- Widen the setup rail so longer step labels such as TUI Profile and Permissions do not collide with completion status.
+- Shorten and row-budget the memory extractor auth warning while preserving the actionable OAuth/client-id blocker.
