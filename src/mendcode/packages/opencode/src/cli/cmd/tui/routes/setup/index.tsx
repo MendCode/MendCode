@@ -90,7 +90,7 @@ const roleDescriptions: Record<string, string> = {
   compaction: "Hidden runtime agent that compacts long context.",
   summary: "Hidden runtime summary agent for session summary metadata.",
   memoryExtractor:
-    "Hidden memory extractor model that decides whether a turn deserves approval-gated memory proposals.",
+    "Background model that reviews completed turns and proposes only durable memories worth approval.",
   permissionReviewer:
     "Hidden permission reviewer model that quickly checks risky shell permission prompts in Smart Approval.",
 }
@@ -104,8 +104,8 @@ const roleLabels: Record<string, string> = {
   title: "Chat titles",
   compaction: "Context compaction",
   summary: "Session summaries",
-  memoryExtractor: "Memory learning",
-  permissionReviewer: "Smart permissions",
+  memoryExtractor: "Memory extractor",
+  permissionReviewer: "Permission reviewer",
 }
 
 function roleLabel(role: string) {
@@ -148,6 +148,32 @@ export function setupExtractorAuthMessage(value: string) {
     return "OAuth expired; re-auth OpenAI or set MENDCODE_OPENAI_OAUTH_CLIENT_ID/OPENAI_OAUTH_CLIENT_ID."
   }
   return value
+}
+
+export function setupMemoryLearningStatus(input: {
+  generate?: boolean
+  outputCallsProviders?: boolean
+  auth?: { providerID?: string | null; mendRunReady?: boolean; oauthExpired?: boolean; oauthRefreshReady?: boolean } | null
+  connectedProviderIDs?: readonly string[]
+}) {
+  if (!input.generate) return "off"
+  if (!input.outputCallsProviders) return "no extractor"
+  const auth = input.auth
+  if (!auth) return "no model"
+  if (auth.mendRunReady || (auth.providerID && input.connectedProviderIDs?.includes(auth.providerID))) return "ready"
+  if (auth.oauthExpired && !auth.oauthRefreshReady) return "oauth expired"
+  return "auth blocked"
+}
+
+export function setupShouldShowExtractorAuthBlocker(input: {
+  generate?: boolean
+  auth?: { providerID?: string | null; blockers?: unknown[]; mendRunReady?: boolean } | null
+  connectedProviderIDs?: readonly string[]
+}) {
+  const auth = input.auth
+  if (!input.generate || !auth?.blockers?.length) return false
+  if (auth.mendRunReady) return false
+  return !(auth.providerID && input.connectedProviderIDs?.includes(auth.providerID))
 }
 
 function normalizeProductName(value: string) {
@@ -1095,13 +1121,19 @@ export function Setup() {
   const memoryExtractorAuth = createMemo(() => setupSummary()?.memoryExtractorAuth as any)
   const memoryLearningStatus = createMemo(() => {
     const memory = setupSummary()?.memory
-    if (!memory?.generate) return "off"
-    if (!memory.outputCallsProviders) return "no extractor"
-    const auth = memoryExtractorAuth()
-    if (!auth) return "no model"
-    if (auth.mendRunReady) return "ready"
-    if (auth.oauthExpired && !auth.oauthRefreshReady) return "oauth expired"
-    return "auth blocked"
+    return setupMemoryLearningStatus({
+      generate: memory?.generate,
+      outputCallsProviders: memory?.outputCallsProviders,
+      auth: memoryExtractorAuth(),
+      connectedProviderIDs: connectedProviderIDs(),
+    })
+  })
+  const showMemoryExtractorAuthBlocker = createMemo(() => {
+    return setupShouldShowExtractorAuthBlocker({
+      generate: setupSummary()?.memory.generate,
+      auth: memoryExtractorAuth(),
+      connectedProviderIDs: connectedProviderIDs(),
+    })
   })
 
   createEffect(() => {
@@ -1351,11 +1383,13 @@ export function Setup() {
                     Context limit: {setupSummary()?.memory.maxPromptTokens} tokens · project {setupSummary()?.memory.projectMaxEntries}
                     /request · global {setupSummary()?.memory.globalCompactionMaxEntries}/after compaction
                   </text>
-                  <text>Extractor model role: {setupSummary()?.memory.extractorRole || "memoryExtractor"}</text>
+                  <text>
+                    Memory extractor model: {modelLabel(modelRole(setupSummary()?.memory.extractorRole || "memoryExtractor"))}
+                  </text>
                   <text>
                     Output model calls: {setupSummary()?.memory.outputCallsProviders ? "possible when learning runs" : "off"}
                   </text>
-                  <Show when={setupSummary()?.memory.generate && memoryExtractorAuth()?.blockers?.length}>
+                  <Show when={showMemoryExtractorAuthBlocker()}>
                     <text fg={theme.warning}>
                       {setupLabelValueLine(
                         "Extractor auth",
@@ -1391,9 +1425,9 @@ export function Setup() {
                         : "Require approval"}
                   </text>
                   <text>Smart trigger: risky shell/script/delete prompts only</text>
-                  <text>Reviewer role: {setupSummary()?.permissions.reviewerRole || "permissionReviewer"}</text>
                   <text>
-                    Reviewer model: {modelLabel(modelRole(setupSummary()?.permissions.reviewerRole || "permissionReviewer"))}
+                    Permission reviewer model:{" "}
+                    {modelLabel(modelRole(setupSummary()?.permissions.reviewerRole || "permissionReviewer"))}
                   </text>
                   <text fg={theme.textMuted}>
                     Smart Approval uses the reviewer model for fast allow/reject/ask decisions; non-risky permission

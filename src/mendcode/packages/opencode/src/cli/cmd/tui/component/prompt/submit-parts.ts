@@ -7,13 +7,14 @@ export function pastedContentLabel(text: string) {
   return `[Pasted Content ${text.length} chars]`
 }
 
+export const DEFAULT_PASTE_SUMMARY_MIN_CHARS = 3000
+
 export function shouldSummarizePastedContent(text: string) {
-  return shouldSummarizePastedContentWithThreshold(text, 800)
+  return shouldSummarizePastedContentWithThreshold(text, DEFAULT_PASTE_SUMMARY_MIN_CHARS)
 }
 
 export function shouldSummarizePastedContentWithThreshold(text: string, minChars: number) {
-  const lineCount = (text.match(/\n/g)?.length ?? 0) + 1
-  return lineCount >= 3 || text.length > Math.max(1, minChars)
+  return text.length > Math.max(1, minChars)
 }
 
 export function promptSubmitParts(prompt: PromptInfo) {

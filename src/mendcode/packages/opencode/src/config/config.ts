@@ -275,7 +275,7 @@ export const Info = Schema.Struct({
       disable_paste_summary: Schema.optional(Schema.Boolean),
       paste_summary_min_chars: Schema.optional(PositiveInt).annotate({
         description:
-          "Minimum pasted text length before the TUI collapses it into a pasted-content placeholder (default: 800). Multi-line pastes with 3+ lines are still collapsed.",
+          "Minimum pasted text length before the TUI collapses it into a pasted-content placeholder (default: 3000).",
       }),
       batch_tool: Schema.optional(Schema.Boolean).annotate({ description: "Enable the batch tool" }),
       openTelemetry: Schema.optional(Schema.Boolean).annotate({
