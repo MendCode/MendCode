@@ -46,6 +46,7 @@ import { ThemeProvider, useTheme } from "@tui/context/theme"
 import { Home } from "@tui/routes/home"
 import { Session } from "@tui/routes/session"
 import { Setup } from "@tui/routes/setup"
+import { Stats } from "@tui/routes/stats"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -3170,6 +3171,27 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
     },
     {
+      title: "Usage Insights",
+      value: "mendcode.stats.insights",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "stats", aliases: ["usage", "insights", "activity"] },
+      onSelect: (dialog) => {
+        route.navigate({ type: "stats", scope: "global" })
+        dialog.clear()
+      },
+    },
+    {
+      title: "Project Usage Insights",
+      value: "mendcode.stats.project",
+      category: mendCategory,
+      slash: { name: "stats-project", aliases: ["project-stats", "project-usage"] },
+      onSelect: (dialog) => {
+        route.navigate({ type: "stats", scope: "project" })
+        dialog.clear()
+      },
+    },
+    {
       title: "Skills, commands, prompt assets",
       value: "mendcode.assets",
       category: mendCategory,
@@ -3736,6 +3758,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           </Match>
           <Match when={route.data.type === "setup"}>
             <Setup />
+          </Match>
+          <Match when={route.data.type === "stats"}>
+            <Stats />
           </Match>
         </Switch>
       </Show>
