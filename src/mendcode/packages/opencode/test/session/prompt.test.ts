@@ -14,6 +14,9 @@ import { MCP } from "../../src/mcp"
 import { Permission } from "../../src/permission"
 import { Plugin } from "../../src/plugin"
 import { Provider as ProviderSvc } from "@/provider/provider"
+import { defaultModelsConfig, writeModelsConfig } from "@/mend/config/models"
+import { writeProjectMemoryConfig } from "@/mend/memory/config"
+import { listMemoryProposals } from "@/mend/memory/proposals"
 import { Env } from "../../src/env"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Question } from "../../src/question"
@@ -28,7 +31,7 @@ import { SessionCompaction } from "../../src/session/compaction"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
-import { SessionPrompt, shouldSkipAutoCompaction } from "../../src/session/prompt"
+import { SessionPrompt, shouldResumeAfterAutoCompaction, shouldSkipAutoCompaction } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
@@ -261,6 +264,14 @@ test("auto compaction guard waits for real user input after a synthetic resume",
   expect(shouldSkipAutoCompaction([summary, syntheticResume])).toBe(true)
   expect(shouldSkipAutoCompaction([summary, oldUser, oldAssistant, syntheticResume])).toBe(true)
   expect(shouldSkipAutoCompaction([summary, syntheticResume, realUser])).toBe(false)
+})
+
+test("auto compaction resumes only for active or incomplete assistant turns", () => {
+  expect(shouldResumeAfterAutoCompaction(undefined)).toBe(true)
+  expect(shouldResumeAfterAutoCompaction("tool-calls")).toBe(true)
+  expect(shouldResumeAfterAutoCompaction("length")).toBe(true)
+  expect(shouldResumeAfterAutoCompaction("unknown")).toBe(true)
+  expect(shouldResumeAfterAutoCompaction("stop")).toBe(false)
 })
 
 // Config that registers a custom "test" provider with a "test-model" model
@@ -496,6 +507,81 @@ it.live("static loop returns assistant text through local provider", () =>
       expect(yield* llm.hits).toHaveLength(1)
       expect(yield* llm.pending).toBe(0)
     }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("loop flushes automatic memory extraction after a normal assistant stop", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const root = path.resolve(dir)
+        const previousXdgConfigHome = process.env.XDG_CONFIG_HOME
+        process.env.XDG_CONFIG_HOME = path.join(root, ".xdg")
+        try {
+          yield* Effect.promise(() => writeProjectMemoryConfig({
+            enabled: true,
+            use: false,
+            generate: true,
+            extractorRole: "memoryExtractor",
+          }, root))
+          yield* Effect.promise(() => writeModelsConfig({
+            ...defaultModelsConfig,
+            enabled: true,
+            roles: {
+              ...defaultModelsConfig.roles,
+              default: { providerID: "test", modelID: "test-model" },
+              memoryExtractor: { providerID: "test", modelID: "test-model" },
+            },
+          }, root))
+
+          const prompt = yield* SessionPrompt.Service
+          const sessions = yield* Session.Service
+          const session = yield* sessions.create({
+            title: "Memory flush",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          })
+          yield* prompt.prompt({
+            sessionID: session.id,
+            agent: "build",
+            noReply: true,
+            parts: [{
+              type: "text",
+              text: "Para este repo, cuando hagas cambios visibles de TUI, valida con smoke test antes de decir listo. Responde solo: entendido.",
+            }],
+          })
+
+          yield* llm.text("entendido")
+          yield* llm.text(JSON.stringify({
+            proposals: [{
+              shouldRemember: true,
+              scope: "project",
+              text: "For this repo, visible TUI changes should be validated with a smoke test before saying done.",
+              tags: ["workflow", "tui"],
+              durability: 0.92,
+              confidence: 0.9,
+              changeRisk: 0.1,
+              reason: "Durable repo-specific validation preference.",
+            }],
+          }))
+
+          const result = yield* prompt.loop({ sessionID: session.id })
+          const proposals = yield* Effect.promise(() => listMemoryProposals(root, "pending"))
+          const inputs = yield* llm.inputs
+
+          expect(result.info.role).toBe("assistant")
+          expect(yield* llm.calls).toBe(2)
+          expect(JSON.stringify(inputs[1])).toContain("You are MendCode's memory extractor")
+          expect(JSON.stringify(inputs[1])).toContain("<memory_context>")
+          expect(JSON.stringify(inputs[1])).toContain("<candidate_turn>")
+          expect(proposals).toHaveLength(1)
+          expect(proposals[0]?.scope).toBe("project")
+          expect(proposals[0]?.text).toContain("visible TUI changes")
+        } finally {
+          if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
+          else process.env.XDG_CONFIG_HOME = previousXdgConfigHome
+        }
+      }),
     { git: true, config: providerCfg },
   ),
 )

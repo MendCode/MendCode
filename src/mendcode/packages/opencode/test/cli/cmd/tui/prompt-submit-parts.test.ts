@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  DEFAULT_PASTE_SUMMARY_MIN_CHARS,
   pastedContentLabel,
   promptSubmitParts,
   restorePromptFromSubmittedParts,
@@ -9,10 +10,10 @@ import {
 
 describe("prompt submit parts", () => {
   test("summarizes large pasted content in the visible prompt", () => {
-    expect(shouldSummarizePastedContent("one\ntwo\nthree")).toBe(true)
+    expect(shouldSummarizePastedContent("one\ntwo\nthree")).toBe(false)
     expect(shouldSummarizePastedContent("short")).toBe(false)
-    expect(shouldSummarizePastedContent("a".repeat(500))).toBe(false)
-    expect(shouldSummarizePastedContent("a".repeat(801))).toBe(true)
+    expect(shouldSummarizePastedContent("a".repeat(DEFAULT_PASTE_SUMMARY_MIN_CHARS))).toBe(false)
+    expect(shouldSummarizePastedContent("a".repeat(DEFAULT_PASTE_SUMMARY_MIN_CHARS + 1))).toBe(true)
     expect(shouldSummarizePastedContentWithThreshold("a".repeat(501), 500)).toBe(true)
     expect(pastedContentLabel("abc")).toBe("[Pasted Content 3 chars]")
   })

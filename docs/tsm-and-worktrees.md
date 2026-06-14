@@ -10,14 +10,14 @@ TSM is not required to use MendCode. It is an optional accelerator when installe
 ## Worktree Commands
 
 ```bash
-mend worktree status
-mend worktree plan feature-name --branch mend/feature-name
-mend worktree create feature-name
-mend worktree open <id|branch|path>
-mend worktree adopt <path|branch>
-mend worktree remove <id|branch|path>
-mend worktree reset <id|branch|path>
-mend worktree doctor
+mendcode worktree status
+mendcode worktree plan feature-name --branch feature/feature-name
+mendcode worktree create feature-name
+mendcode worktree open <id|branch|path>
+mendcode worktree adopt <path|branch>
+mendcode worktree remove <id|branch|path>
+mendcode worktree reset <id|branch|path>
+mendcode worktree doctor
 ```
 
 Current safety posture:
@@ -29,10 +29,10 @@ Current safety posture:
 - destructive actions return previews and report `executesGit: false`.
 - external worktrees must be adopted before MendCode treats them as owned.
 
-## `mend --worktree`
+## `mendcode --worktree`
 
 ```bash
-mend --worktree [branch|path|id]
+mendcode --worktree [branch|path|id]
 ```
 
 This shortcut opens MendCode in a known git worktree. If no target is passed, MendCode resolves a safe target only when the current repo state is unambiguous. If multiple targets exist, pass the branch, path, or registry id.
@@ -42,27 +42,27 @@ This shortcut opens MendCode in a known git worktree. If no target is passed, Me
 Inspect:
 
 ```bash
-mend tsm status
-mend tsm plan
-mend tsm doctor
+mendcode tsm status
+mendcode tsm plan
+mendcode tsm doctor
 ```
 
 Setup/activate/deactivate/remove:
 
 ```bash
-mend tsm setup
-mend tsm activate
-mend tsm deactivate
-mend tsm remove
+mendcode tsm setup
+mendcode tsm activate
+mendcode tsm deactivate
+mendcode tsm remove
 ```
 
 TSM status detects a `tsm` binary but does not install it. The TSM plan includes install suggestions, but `executesInstall` is false.
 
-## `mend --tsm`
+## `mendcode --tsm`
 
 ```bash
-mend --tsm [branch|path|id]
-mend --tsm --all
+mendcode --tsm [branch|path|id]
+mendcode --tsm --all
 ```
 
 This shortcut requires:
@@ -74,13 +74,13 @@ This shortcut requires:
 When valid, MendCode runs:
 
 ```bash
-tsm wt open <branch> --split mend
+tsm wt open <branch> --split mendcode
 ```
 
 or for all:
 
 ```bash
-tsm wt open --split mend
+tsm wt open --split mendcode
 ```
 
 ## TSM Is an Executor, Not Source of Truth
@@ -101,10 +101,10 @@ TSM provides optional terminal/session execution. It should not independently de
 Before live worktree operations, check:
 
 ```bash
-mend worktree status
-mend worktree doctor
-mend tsm status
-mend tsm doctor
+mendcode worktree status
+mendcode worktree doctor
+mendcode tsm status
+mendcode tsm doctor
 ```
 
 Do not treat unowned external worktrees as disposable. Adopt them first, then use preview output before destructive operations.

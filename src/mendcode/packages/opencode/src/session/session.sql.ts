@@ -131,7 +131,7 @@ export const SessionStatusTable = sqliteTable("session_status", {
   data: text({ mode: "json" })
     .notNull()
     .$type<
-      | { type: "busy"; kind?: "mflow-wait"; message?: string; until?: number }
+      | { type: "busy"; kind?: "mflow-wait" | "memory-extract"; message?: string; until?: number }
       | { type: "retry"; attempt: number; message: string; next: number }
     >(),
 })

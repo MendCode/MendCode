@@ -233,6 +233,11 @@ describe("SessionStatus.Info", () => {
       message: "mflow waiting for shared-test.md",
       until: 500,
     })
+    expect(decode({ type: "busy", kind: "memory-extract", message: "Preparing memory proposal..." })).toEqual({
+      type: "busy",
+      kind: "memory-extract",
+      message: "Preparing memory proposal...",
+    })
     expect(SessionStatus.Info.zod.parse({ type: "idle" })).toEqual({ type: "idle" })
   })
 

@@ -2,6 +2,18 @@
 
 MendCode packages are reusable bundles of `.mendcode` configuration and extensions. They are the intended way for a team or company to share the same commands, agents, modes, prompts, TUI profile, widgets, model policy, permissions, and worktree policy.
 
+The mental model is “package your harness,” not “publish a plugin.” A package can make a fresh checkout feel like the team environment: the same command palette, review modes, model roles, permission posture, prompt marker, status row, memory defaults, and optional worktree policy.
+
+## Good Package Examples
+
+| Package | Includes | Does not include |
+| --- | --- | --- |
+| Team standard | commands, agents, modes, skills, focus default, model roles, permission defaults, TUI profile. | Provider tokens, local auth files, personal memory. |
+| Review mode bundle | review agent, review mode, prompt templates, stricter permission mode, review model role. | Branch mutations or CI credentials. |
+| UI theme | TUI profile, theme tokens, prompt chrome, status script, widgets. | Runtime service activation. |
+| MCP bundle | MCP server config/files, commands, docs/context files. | Secrets required by the MCP server. |
+| Worktree policy | worktree policy, package docs, optional TSM hints. | Destructive worktree operations at install time. |
+
 ## What a Package Can Include
 
 Package artifacts can include:
@@ -43,28 +55,28 @@ Active package state lives in:
 ## Create a Local Package
 
 ```bash
-mend packages create --id acme-standard --title "Acme Standard" --include all --version 1.0.0
+mendcode packages create --id acme-standard --title "Acme Standard" --include all --version 1.0.0
 ```
 
 Useful variants:
 
 ```bash
-mend packages create --include skills,modes,plugins,tuiProfile
-mend packages create --include all --exclude models,budget
-mend packages status
-mend packages list
+mendcode packages create --include skills,modes,plugins,tuiProfile
+mendcode packages create --include all --exclude models,budget
+mendcode packages status
+mendcode packages list
 ```
 
 ## Install and Use Packages
 
 ```bash
-mend packages sources
-mend packages search acme
-mend packages show acme-standard
-mend packages install acme-standard
-mend packages disable acme-standard
-mend packages enable acme-standard
-mend packages remove acme-standard
+mendcode packages sources
+mendcode packages search acme
+mendcode packages show acme-standard
+mendcode packages install acme-standard
+mendcode packages disable acme-standard
+mendcode packages enable acme-standard
+mendcode packages remove acme-standard
 ```
 
 Disabling a package deselects it without deleting local project config. Removing a package deletes the installed package copy and updates package state.
@@ -92,7 +104,7 @@ Example package manifest:
   "kind": "bundle",
   "channel": "team",
   "compatibility": {
-    "mendcode": "^1.14.0",
+    "mendcode": ">=0.1.7 <1.0.0",
     "runtimePack": "^0"
   },
   "artifacts": {
@@ -121,12 +133,30 @@ Example package manifest:
 Add a registry source:
 
 ```bash
-mend packages add-source acme --type github --url https://github.com/acme/acme-mendcode-package.git --channel team
-mend packages search "" acme
-mend packages install acme-standard
+mendcode packages add-source acme --type github --url https://github.com/acme/acme-mendcode-package.git --channel team
+mendcode packages search "" acme
+mendcode packages install acme-standard
 ```
 
 For private repos, use a private-git/team source and a credential environment variable. Credentials are not stored in `.mendcode/registry.json`.
+
+## Rollout Checklist
+
+Before sharing a package:
+
+1. Run `mendcode packages create` from a clean package authoring checkout.
+2. Inspect the generated `mend-package.json` and `.mendcode/runtime-pack.json`.
+3. Confirm the package uses `mendcode` in docs/examples.
+4. Confirm no secrets are included.
+5. Install it in a throwaway checkout.
+6. Run `mendcode packages status`, `mendcode tui status`, `mendcode models status`, and `mendcode permissions status`.
+7. Open the TUI and verify prompt marker, status row, command palette entries, Agent View/home layout, and any widgets.
+
+Screenshot slot:
+
+| File | Capture |
+| --- | --- |
+| `docs/assets/screenshots/package-status.png` | `mendcode packages status` or package show output for a demo package such as `acme-standard`. Use demo values only. |
 
 ## What Does Not Belong in Packages
 

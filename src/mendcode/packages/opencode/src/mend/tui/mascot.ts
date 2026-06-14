@@ -76,6 +76,11 @@ export const defaultActivityMascotStates: MendActivityMascotConfig["states"] = {
  (o .)
  /[+]\
 `,
+  memory: String.raw`
+  .-.
+ (o m)
+ /[+]\
+`,
   reading: String.raw`
   .-.
  (o o)

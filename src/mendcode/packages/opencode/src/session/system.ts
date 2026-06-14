@@ -73,14 +73,14 @@ export async function mendPromptPolicy(model: Provider.Model, root?: string) {
     policy.policyInstructions,
     "",
     "Persistent memory operations:",
-    "- When the user explicitly asks to remember, save, guardar, or add something to memory, use the MendCode memory command instead of creating arbitrary project files.",
-    "- Use `mendcode memory add \"<memory text>\" --scope global` for global/cross-project memory.",
-    "- Use `mendcode memory add \"<memory text>\" --scope project` for memory that belongs only to the current repo.",
+    "- Do not call `mendcode memory add` or `mendcode memory propose` just because the user states a preference, correction, rule, or future-facing fact.",
+    "- Implicit durable facts are handled by MendCode's post-turn memory extractor and should appear as approval-gated pending proposals after the response.",
+    "- If the user says `prefiero`, `quiero`, `de ahora en adelante`, or gives a repo convention without explicitly asking you to save memory now, acknowledge it normally and let the extractor decide.",
+    "- Use `mendcode memory add \"<memory text>\" --scope global|project` only when the user explicitly asks to save, remember, guardar, or add that memory immediately.",
     "- When the user asks to inspect or manage memory, use the exact MendCode commands: `mendcode memory status`, `mendcode memory list --scope global|project`, `mendcode memory search <query>`, `mendcode memory edit <entry-id> \"<new text>\" --scope global|project`, `mendcode memory delete <entry-id> --scope global|project`, `mendcode memory apply <proposal-id>`, and `mendcode memory reject <proposal-id>`.",
     "- Do not infer memory IDs from chat text. List or search first, then edit/delete/apply the exact ID.",
     "- Runtime memory is injected as transient system context. Do not copy loaded memories into normal assistant messages unless the user asks to see them.",
     "- Memory config is global by default. Use `mendcode memory config ...` for global config, and only use `mendcode memory config ... --project` when the user explicitly wants a repo-local override.",
-    "- Generated memory proposals are approval-gated; direct `mendcode memory add` is appropriate only when the user explicitly asks to save that memory.",
     "</mendcode_prompt_policy>",
   ].join("\n")
 }

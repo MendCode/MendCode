@@ -219,8 +219,11 @@ export function extractorPrompt() {
     "- Return an empty proposals array unless the input contains genuinely durable future-use information that should be remembered indefinitely.",
     "- Only set shouldRemember=true when durability is at least 0.8, confidence is at least 0.75, and changeRisk is at most 0.25.",
     "- Do not require explicit memory wording. If the user says something is very important, says always/never, gives a future workflow rule, states a durable preference, or corrects how the assistant should behave in future sessions, treat it as a strong memory candidate.",
+    "- Repo-scoped workflow rules such as 'Para este repo, cuando hagas cambios visibles de TUI, valida con smoke test antes de decir listo' are strong project memory candidates even if the assistant only replies 'entendido'.",
     "- Assistant text such as 'I will not save this yet' is not a reason to skip. Extract from the user's durable instruction, not from whether the assistant remembered to save it.",
-    "- If the assistant already saved or proposed the same memory in this turn, or existing_memory already contains an equivalent fact, return an empty proposals array.",
+    "- Review saved_memory and pending_memory before proposing. If either already contains an equivalent fact, return an empty proposals array.",
+    "- Saved global memories apply across projects. Saved project memories and pending project proposals apply to this repo. Use that scope evidence when checking duplicates.",
+    "- If the user repeats or lightly rephrases a durable preference that is not in saved_memory or pending_memory, propose it once.",
     "- Prefer a single consolidated proposal. Return two only when there are two clearly separate durable memories. Never return more than two.",
     "- Do not split related details into multiple memories; merge them into one precise memory.",
     "- Do not propose uncertain, provisional, likely-to-change, disputed, weakly inferred, or recently discovered facts unless the user clearly frames them as a future preference, rule, or decision.",
@@ -298,21 +301,40 @@ export async function resolveMemoryExtractorRole(root?: string): Promise<MemoryE
 
 export async function readMemoryExtractorContext(root?: string) {
   const paths = memoryPaths(root)
-  const existingItems = await Promise.all([
+  const [globalEntries, projectEntries, proposals] = await Promise.all([
     readMemoryEntries("global", paths.root).catch(() => []),
     readMemoryEntries("project", paths.root).catch(() => []),
     listMemoryProposals(paths.root, "all").catch(() => []),
-  ]).then(([globalEntries, projectEntries, proposals]) => [...globalEntries, ...projectEntries, ...proposals])
-  const existing = existingItems.map((item) => `- ${item.text}`).join("\n")
+  ])
+  const saved = [...globalEntries, ...projectEntries]
+  const pending = proposals.filter((proposal) => proposal.status === "pending")
+  const historical = proposals.filter((proposal) => proposal.status !== "pending")
+  const existing = [
+    "<saved_memory>",
+    ...saved.map((item) => `- [saved][${item.scope}] ${item.text}`),
+    saved.length ? "" : "- none",
+    "</saved_memory>",
+    "",
+    "<pending_memory>",
+    ...pending.map((item) => `- [pending][${item.scope}] ${item.text}`),
+    pending.length ? "" : "- none",
+    "</pending_memory>",
+    "",
+    "<historical_memory_proposals>",
+    ...historical.map((item) => `- [${item.status}][${item.scope}] ${item.text}`),
+    historical.length ? "" : "- none",
+    "</historical_memory_proposals>",
+  ].join("\n")
+  const existingItems = [...saved, ...proposals]
   const existingFingerprints = existingItems.map((item) => memoryFingerprint(item.text)).filter(Boolean)
   return { existing, existingFingerprints }
 }
 
 export function memoryExtractorCandidateMessage(input: ProposeMemoriesFromTextInput, existing: string) {
   return [
-    "<existing_memory>",
+    "<memory_context>",
     existing || "- none",
-    "</existing_memory>",
+    "</memory_context>",
     "",
     "<candidate_turn>",
     input.text,

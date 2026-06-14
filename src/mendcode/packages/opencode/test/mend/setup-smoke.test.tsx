@@ -3,6 +3,8 @@ import { setupSteps, requiredSetupSteps } from "../../src/mend/setup/state"
 import {
   setupExtractorAuthMessage,
   setupLabelValueLine,
+  setupMemoryLearningStatus,
+  setupShouldShowExtractorAuthBlocker,
   truncateSetupText,
 } from "../../src/cli/cmd/tui/routes/setup"
 
@@ -20,5 +22,27 @@ describe("setup route smoke", () => {
     expect(message).toContain("OAuth expired")
     expect(line.length).toBeLessThanOrEqual(72)
     expect(truncateSetupText("abcdef", 4)).toBe("a...")
+  })
+
+  test("treats connected runtime provider auth as ready for memory learning", () => {
+    const auth = {
+      providerID: "openai",
+      mendRunReady: false,
+      oauthExpired: true,
+      oauthRefreshReady: false,
+      blockers: ["OpenAI OAuth token expired and MENDCODE_OPENAI_OAUTH_CLIENT_ID/OPENAI_OAUTH_CLIENT_ID is missing"],
+    }
+
+    expect(setupMemoryLearningStatus({
+      generate: true,
+      outputCallsProviders: true,
+      auth,
+      connectedProviderIDs: ["openai"],
+    })).toBe("ready")
+    expect(setupShouldShowExtractorAuthBlocker({
+      generate: true,
+      auth,
+      connectedProviderIDs: ["openai"],
+    })).toBe(false)
   })
 })

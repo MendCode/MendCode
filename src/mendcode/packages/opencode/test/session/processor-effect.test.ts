@@ -336,6 +336,7 @@ it.live("session.processor routes automatic memory extraction through LLM servic
             },
           }, root))
           const { processors, session, provider } = yield* boot()
+          const bus = yield* Bus.Service
 
           yield* llm.text("Ok, entendido.")
           yield* llm.text(JSON.stringify({
@@ -355,6 +356,13 @@ it.live("session.processor routes automatic memory extraction through LLM servic
           const parent = yield* user(chat.id, "bro es muy importante que siempre preguntes antes de cualquier feature nueva o plan ok?")
           const msg = yield* assistant(chat.id, parent.id, root)
           const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+          const memoryStatuses: string[] = []
+          const off = yield* bus.subscribeCallback(SessionStatus.Event.Status, (evt) => {
+            if (evt.properties.sessionID !== chat.id) return
+            if (evt.properties.status.type === "busy" && evt.properties.status.kind) {
+              memoryStatuses.push(evt.properties.status.kind)
+            }
+          })
           const handle = yield* processors.create({
             assistantMessage: msg,
             sessionID: chat.id,
@@ -379,6 +387,7 @@ it.live("session.processor routes automatic memory extraction through LLM servic
           })
           const callsBeforeFlush = yield* llm.calls
           yield* handle.flushMemory()
+          off()
 
           const parts = MessageV2.parts(msg.id)
           const finish = [...parts].reverse().find((part): part is MessageV2.StepFinishPart => part.type === "step-finish")
@@ -391,6 +400,7 @@ it.live("session.processor routes automatic memory extraction through LLM servic
           expect(callsBeforeFlush).toBe(1)
           expect(yield* llm.calls).toBe(2)
           expect(JSON.stringify(inputs[1])).toContain("You are MendCode's memory extractor")
+          expect(memoryStatuses).toContain("memory-extract")
           expect(memory?.output?.skipped).toBe(false)
           expect(memory?.output?.proposals?.length).toBe(1)
         } finally {

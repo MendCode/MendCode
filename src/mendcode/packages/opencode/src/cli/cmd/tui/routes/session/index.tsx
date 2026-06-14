@@ -2803,6 +2803,7 @@ function UserMessage(props: {
   sticky?: boolean
 }) {
   const local = useLocal()
+  const [expandedText, setExpandedText] = createSignal(false)
   const [expandedPaste, setExpandedPaste] = createSignal(false)
   const text = createMemo(() => {
     const texts = props.parts
@@ -2828,17 +2829,21 @@ function UserMessage(props: {
   const queued = createMemo(() => props.pending && props.message.id > props.pending)
   const color = createMemo(() => local.agent.color(props.message.agent))
   const queuedFg = createMemo(() => selectedForeground(theme, color()))
-  const displayText = createMemo(() =>
-    userMessageDisplayText(
-      fullText(),
-      props.sticky ? { maxLines: 2, maxChars: 220 } : expandedPaste() ? { maxLines: 240, maxChars: 40_000 } : undefined,
-    ),
+  const collapsedDisplayText = createMemo(() =>
+    userMessageDisplayText(fullText(), props.sticky ? { maxLines: 2, maxChars: 220 } : undefined),
   )
+  const expandedDisplayText = createMemo(() => userMessageDisplayText(fullText(), { maxLines: 240, maxChars: 40_000 }))
+  const displayText = createMemo(() => (expandedText() ? expandedDisplayText() : collapsedDisplayText()))
   const pastedContentChars = createMemo(() => pastedContentParts().reduce((total, part) => total + part.text.length, 0))
   const togglePastedContent = (event: unknown) => {
     const maybeEvent = event as { stopPropagation?: () => void } | undefined
     maybeEvent?.stopPropagation?.()
     setExpandedPaste((value) => !value)
+  }
+  const toggleExpandedText = (event?: unknown) => {
+    const maybeEvent = event as { stopPropagation?: () => void } | undefined
+    maybeEvent?.stopPropagation?.()
+    setExpandedText((value) => !value)
   }
 
   const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
@@ -2900,21 +2905,19 @@ function UserMessage(props: {
                 {Locale.number(pastedContentChars())} chars)
               </text>
             </Show>
-            <Show when={displayText().compacted}>
+            <Show when={collapsedDisplayText().compacted}>
               <text
                 fg={theme.textMuted}
                 onMouseUp={(event) => {
-                  if (pastedContentParts().length > 0) togglePastedContent(event)
+                  toggleExpandedText(event)
                 }}
               >
-                … {Locale.number(displayText().hiddenChars)} chars hidden
-                <Show when={displayText().hiddenLines > 0}>
-                  <span style={{ fg: theme.textMuted }}> · {Locale.number(displayText().hiddenLines)} more lines</span>
+                … {Locale.number(collapsedDisplayText().hiddenChars)} chars hidden
+                <Show when={collapsedDisplayText().hiddenLines > 0}>
+                  <span style={{ fg: theme.textMuted }}> · {Locale.number(collapsedDisplayText().hiddenLines)} more lines</span>
                 </Show>
                 <span style={{ fg: theme.textMuted }}>
-                  {" "}
-                  · click to{" "}
-                  {expandedPaste() ? "collapse" : pastedContentParts().length > 0 ? "expand" : "open actions"}
+                  {" "}· click to {expandedText() ? "collapse" : "expand"}
                 </span>
               </text>
             </Show>

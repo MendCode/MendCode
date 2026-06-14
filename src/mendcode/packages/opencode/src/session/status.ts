@@ -21,7 +21,7 @@ export const Info = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("busy"),
-    kind: Schema.optional(Schema.Literal("mflow-wait")),
+    kind: Schema.optional(Schema.Union([Schema.Literal("mflow-wait"), Schema.Literal("memory-extract")])),
     message: Schema.optional(Schema.String),
     until: Schema.optional(NonNegativeInt),
   }),
