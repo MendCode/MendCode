@@ -44,7 +44,7 @@ export function SetupRail(props: {
 }) {
   const { theme } = useTheme()
   return (
-    <box width={props.narrow ? "100%" : 26} flexShrink={0} borderColor={theme.border} borderStyle="single" paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1}>
+    <box width={props.narrow ? "100%" : 30} flexShrink={0} borderColor={theme.border} borderStyle="single" paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1}>
       <For each={setupSteps}>
         {(step, index) => (
           <box flexDirection="row" justifyContent="space-between" onMouseDown={() => props.onSelect(step)}>
