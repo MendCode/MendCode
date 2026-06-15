@@ -30,15 +30,12 @@ export function findSlashCommandInvocation(
   const firstLineEnd = inputText.indexOf("\n")
   const firstLine = firstLineEnd === -1 ? inputText : inputText.slice(0, firstLineEnd)
   const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
-  const matches = firstLine.matchAll(/(^|\s)\/([^\s/]+)(?=\s|$)/g)
-  const match = Array.from(matches).find((item) => item[2] && commandExists(item[2]))
-  if (!match?.[2]) return
+  const match = firstLine.match(/^\s*\/([^\s/]+)(?=\s|$)/)
+  const name = match?.[1]
+  if (!name || !commandExists(name)) return
 
-  const name = match[2]
-  const slashStart = (match.index ?? 0) + match[1].length
-  const before = firstLine.slice(0, slashStart).trim()
-  const after = firstLine.slice(slashStart + name.length + 1).trim()
-  const args = [before, after].filter(Boolean).join(" ")
+  const after = firstLine.slice(match[0].length).trim()
+  const args = after
 
   return {
     name,

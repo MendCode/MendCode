@@ -92,17 +92,35 @@ describe("Mend TUI profile config overrides", () => {
 
   test("project roots without local profile inherit custom prompt status scripts", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "mend-tui-no-profile-"))
+    const globalProfilePath = process.env.MENDCODE_TUI_PROFILE_PATH!
+    mkdirSync(path.dirname(globalProfilePath), { recursive: true })
+    writeFileSync(
+      globalProfilePath,
+      JSON.stringify({
+        version: 0,
+        promptStatus: {
+          commandsHint: { visible: false },
+          scripts: {
+            left: {
+              enabled: true,
+              command: "./.mendcode/tui/seda-statusline-9.sh --left",
+            },
+          },
+        },
+      }),
+    )
 
     try {
       const result = await loadMendTuiProfile(root)
 
       expect(result.root).toBe(root)
-      expect(result.activePath).toContain("/.mendcode/tui/profile.json")
+      expect(result.activePath).toBe(globalProfilePath)
       expect(result.profile.promptStatus.commandsHint?.visible).toBe(false)
       expect(result.profile.promptStatus.scripts?.left?.enabled).toBe(true)
       expect(result.profile.promptStatus.scripts?.left?.command).toContain("/.mendcode/tui/seda-statusline-9.sh'")
     } finally {
       rmSync(root, { recursive: true, force: true })
+      rmSync(globalProfilePath, { force: true })
     }
   })
 

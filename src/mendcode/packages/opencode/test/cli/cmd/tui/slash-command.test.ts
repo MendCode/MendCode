@@ -12,25 +12,20 @@ describe("slash command prompt helpers", () => {
     expect(findSlashAutocompleteTrigger("path/to", "path/to".length)).toBeUndefined()
   })
 
-  test("extracts a command invocation from any token on the first line", () => {
+  test("extracts a command invocation only when slash starts the prompt", () => {
     const exists = (name: string) => name === "spec"
 
-    expect(findSlashCommandInvocation("/spec haz esto", exists)).toEqual({
+    expect(findSlashCommandInvocation("/spec do this", exists)).toEqual({
       name: "spec",
-      arguments: "haz esto",
+      arguments: "do this",
     })
-    expect(findSlashCommandInvocation("recuerda /spec haz esto\ncon detalle", exists)).toEqual({
+    expect(findSlashCommandInvocation("  /spec do this\nwith details", exists)).toEqual({
       name: "spec",
-      arguments: "recuerda haz esto\ncon detalle",
+      arguments: "do this\nwith details",
     })
-    expect(findSlashCommandInvocation("recuerda /unknown haz esto", exists)).toBeUndefined()
-    expect(findSlashCommandInvocation("ignora /unknown pero usa /spec bien", exists)).toEqual({
-      name: "spec",
-      arguments: "ignora /unknown pero usa bien",
-    })
-    expect(findSlashCommandInvocation("path/to /spec", exists)).toEqual({
-      name: "spec",
-      arguments: "path/to",
-    })
+    expect(findSlashCommandInvocation("remember /spec do this\nwith details", exists)).toBeUndefined()
+    expect(findSlashCommandInvocation("remember /unknown do this", exists)).toBeUndefined()
+    expect(findSlashCommandInvocation("ignore /unknown but use /spec well", exists)).toBeUndefined()
+    expect(findSlashCommandInvocation("path/to /spec", exists)).toBeUndefined()
   })
 })

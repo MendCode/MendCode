@@ -547,11 +547,11 @@ it.live("loop flushes automatic memory extraction after a normal assistant stop"
             noReply: true,
             parts: [{
               type: "text",
-              text: "Para este repo, cuando hagas cambios visibles de TUI, valida con smoke test antes de decir listo. Responde solo: entendido.",
+              text: "For this repo, when you make visible TUI changes, run a smoke test before saying done. Respond only: understood.",
             }],
           })
 
-          yield* llm.text("entendido")
+          yield* llm.text("understood")
           yield* llm.text(JSON.stringify({
             proposals: [{
               shouldRemember: true,

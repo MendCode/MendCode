@@ -712,6 +712,17 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   const connected = useConnected()
   const mendCategory = "System"
   const memoryRoot = () => project.instance.path().worktree || project.instance.path().directory || mend.root
+  const currentSessionReturn = () =>
+    route.data.type === "session" ? ({ type: "session", sessionID: route.data.sessionID } as const) : undefined
+  const setupRoute = (step?: "provider" | "models" | "budget") => {
+    const returnTo = currentSessionReturn()
+    const base = step ? { type: "setup" as const, step } : { type: "setup" as const }
+    return returnTo ? { ...base, returnTo } : base
+  }
+  const statsRoute = (scope: "global" | "project") => {
+    const returnTo = currentSessionReturn()
+    return returnTo ? { type: "stats" as const, scope, returnTo } : { type: "stats" as const, scope }
+  }
   const showMendStatus = async (title = "MendCode Status") => {
     await DialogAlert.show(dialog, title, await mendStatusSummary(mend.root))
   }
@@ -1483,7 +1494,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     const current = mend.profile.surfaces.homeWelcome?.mode || "centered"
     const options: Array<{ title: string; value: "centered" | "split"; description: string }> = [
       { title: "Centered", value: "centered", description: "Current centered logo with actions underneath." },
-      { title: "Split", value: "split", description: "Claude-style welcome: identity top-left, activity panel top-right." },
+      { title: "Split", value: "split", description: "Two-column welcome: identity top-left, activity panel top-right." },
     ]
     dialog.replace(() => (
       <DialogSelect
@@ -2111,7 +2122,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       `Config groups: ${configSelectedCount()}/${boolCategories.length}`,
       "",
       "Package source: global MendCode configuration, not the currently opened project folder.",
-      "Global skills from ~/.claude/skills and ~/.agents/skills are copied into this package authoring snapshot.",
+      "Global skills from supported legacy and MendCode skill folders are copied into this package authoring snapshot.",
       "Original global skills/config are not deleted or moved.",
     ].join("\n")
     const openFileCategory = (category: (typeof fileCategories)[number]) => {
@@ -2561,6 +2572,23 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     toast.show({ variant: "success", message: `${scope} memory added.`, duration: 3000 })
     await showMemoryManager(scope)
   }
+  const memoryProposalApplyLabel = (proposal: MemoryProposal) => {
+    const operation = proposal.operation ?? "add"
+    if (operation === "update") return "Update memory"
+    if (operation === "remove") return "Remove memory"
+    return "Save as memory"
+  }
+  const memoryProposalAppliedLabel = (proposal: MemoryProposal) => {
+    const operation = proposal.operation ?? "add"
+    if (operation === "update") return "Memory updated"
+    if (operation === "remove") return "Memory removed"
+    return "Memory saved"
+  }
+  const memoryProposalDescription = (proposal: MemoryProposal) => {
+    const operation = proposal.operation ?? "add"
+    const target = proposal.targetEntryID ? ` · target ${proposal.targetEntryID}` : ""
+    return `${operation} · ${proposal.scope} · ${proposal.sensitivity}${target}`
+  }
   const editMemoryProposalFromDialog = async (proposal: MemoryProposal) => {
     const text = await DialogPrompt.show(dialog, "Edit memory proposal", {
       value: proposal.text,
@@ -2594,20 +2622,22 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             title: proposal.scope === "global" ? "[scope] Move to project" : "[scope] Move to global",
             value: "scope",
             category: proposal.scope,
-            description: "Change where this memory will live before applying it.",
-            disabled: proposal.status !== "pending",
+            description: (proposal.operation ?? "add") === "add"
+              ? "Change where this memory will live before applying it."
+              : "Targeted update/remove proposals keep the scope of their target memory.",
+            disabled: proposal.status !== "pending" || (proposal.operation ?? "add") !== "add",
             onSelect: () =>
               void changeMemoryProposalScope(proposal, proposal.scope === "global" ? "project" : "global"),
           },
           {
-            title: "[apply] Save as memory",
+            title: `[apply] ${memoryProposalApplyLabel(proposal)}`,
             value: "apply",
             category: proposal.scope,
-            description: proposal.text,
+            description: memoryProposalDescription(proposal),
             disabled: proposal.status !== "pending",
             onSelect: async () => {
               await applyMemoryProposal(proposal.id, memoryRoot())
-              toast.show({ variant: "success", message: "Memory proposal applied.", duration: 3000 })
+              toast.show({ variant: "success", message: `${memoryProposalAppliedLabel(proposal)}.`, duration: 3000 })
               await showMemoryManager("proposals")
             },
           },
@@ -2642,7 +2672,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     const ok = await DialogConfirm.show(
       dialog,
       "Apply Memory Proposals",
-      `Save ${pending.length} ${label} memory proposal${pending.length === 1 ? "" : "s"} as memory?`,
+      `Apply ${pending.length} ${label} memory proposal${pending.length === 1 ? "" : "s"}? Add proposals create memories, update proposals replace target memories, and remove proposals delete target memories.`,
       "cancel",
     )
     if (!ok) return
@@ -2697,9 +2727,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
               title: `[apply] Apply all pending (${proposals.length})`,
               value: "bulk-apply-all",
               category: "Bulk actions",
-              description: "Save every pending proposal as memory.",
+              description: "Apply every pending add, update, and remove proposal.",
               previewTitle: "Apply all pending proposals",
-              previewBody: `Save all ${proposals.length} pending memory proposal${proposals.length === 1 ? "" : "s"}. Applied proposals disappear from this review queue.`,
+              previewBody: `Apply all ${proposals.length} pending memory proposal${proposals.length === 1 ? "" : "s"}. Add creates entries, update replaces target entries, and remove deletes target entries.`,
               previewMeta: "bulk · all scopes",
               onSelect: () => void applyMemoryProposalsBulk(proposals, "pending"),
             },
@@ -2721,9 +2751,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
               title: `[apply] Apply project pending (${projectProposals.length})`,
               value: "bulk-apply-project",
               category: "Bulk actions",
-              description: "Save every project-scoped pending proposal.",
+              description: "Apply every project-scoped pending proposal.",
               previewTitle: "Apply project proposals",
-              previewBody: `Save all ${projectProposals.length} project memory proposal${projectProposals.length === 1 ? "" : "s"}.`,
+              previewBody: `Apply all ${projectProposals.length} project memory proposal${projectProposals.length === 1 ? "" : "s"}.`,
               previewMeta: "bulk · project",
               onSelect: () => void applyMemoryProposalsBulk(projectProposals, "project"),
             },
@@ -2755,13 +2785,17 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         : []),
     ]
     const proposalOptions: MemoryManagerOption[] = proposals.map((proposal) => ({
-      title: `[${proposal.status}] ${proposal.text.slice(0, 68)}`,
+      title: `[${proposal.status}][${proposal.operation ?? "add"}] ${proposal.text.slice(0, 62)}`,
       value: proposal.id,
       category: "Proposals",
-      description: `${proposal.scope} · ${proposal.sensitivity}`,
+      description: memoryProposalDescription(proposal),
       footer: proposal.createdAt.slice(0, 10),
       previewTitle: proposal.status === "pending" ? "Pending memory proposal" : "Memory proposal",
-      previewBody: [proposal.text, proposal.reason ? `Why: ${proposal.reason}` : ""].filter(Boolean).join("\n\n"),
+      previewBody: [
+        memoryProposalDescription(proposal),
+        proposal.text,
+        proposal.reason ? `Why: ${proposal.reason}` : "",
+      ].filter(Boolean).join("\n\n"),
       previewMeta: `${proposal.scope} · ${proposal.sensitivity} · confidence ${Math.round((proposal.confidence ?? 0) * 100)}% · durability ${Math.round((proposal.durability ?? 0) * 100)}% · change risk ${Math.round((proposal.changeRisk ?? 0) * 100)}%`,
       onSelect: () => showMemoryProposalActions(proposal),
     }))
@@ -2930,7 +2964,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       slash: { name: "setup", aliases: ["configure", "onboarding"] },
       onSelect: () => {
         dialog.clear()
-        route.navigate({ type: "setup" })
+        route.navigate(setupRoute())
       },
     },
     {
@@ -2939,7 +2973,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       category: mendCategory,
       onSelect: () => {
         dialog.clear()
-        route.navigate({ type: "setup", step: "provider" })
+        route.navigate(setupRoute("provider"))
       },
     },
     {
@@ -2948,7 +2982,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       category: mendCategory,
       onSelect: () => {
         dialog.clear()
-        route.navigate({ type: "setup", step: "models" })
+        route.navigate(setupRoute("models"))
       },
     },
     {
@@ -2957,7 +2991,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       category: mendCategory,
       onSelect: () => {
         dialog.clear()
-        route.navigate({ type: "setup", step: "budget" })
+        route.navigate(setupRoute("budget"))
       },
     },
     {
@@ -3191,7 +3225,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       suggested: true,
       slash: { name: "stats", aliases: ["usage", "insights", "activity"] },
       onSelect: (dialog) => {
-        route.navigate({ type: "stats", scope: "global" })
+        route.navigate(statsRoute("global"))
         dialog.clear()
       },
     },
@@ -3201,7 +3235,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       category: mendCategory,
       slash: { name: "stats-project", aliases: ["project-stats", "project-usage"] },
       onSelect: (dialog) => {
-        route.navigate({ type: "stats", scope: "project" })
+        route.navigate(statsRoute("project"))
         dialog.clear()
       },
     },

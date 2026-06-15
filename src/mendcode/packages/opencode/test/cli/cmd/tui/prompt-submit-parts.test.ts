@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
   DEFAULT_PASTE_SUMMARY_MIN_CHARS,
+  messagePartsToPortableClipboard,
+  parsePortableImageClipboard,
   pastedContentLabel,
   promptSubmitParts,
   restorePromptFromSubmittedParts,
@@ -97,5 +99,47 @@ describe("prompt submit parts", () => {
         },
       },
     })
+  })
+
+  test("serializes submitted image attachments as portable clipboard data URLs", () => {
+    const result = messagePartsToPortableClipboard([
+      {
+        id: "prt_text",
+        sessionID: "ses",
+        messageID: "msg",
+        type: "text",
+        text: "inspect [Image 1] please",
+      },
+      {
+        id: "prt_image",
+        sessionID: "ses",
+        messageID: "msg",
+        type: "file",
+        mime: "image/png",
+        filename: "clip.png",
+        url: "data:image/png;base64,aGVsbG8=",
+        source: {
+          text: {
+            start: 8,
+            end: 17,
+            value: "[Image 1]",
+          },
+        },
+      },
+    ])
+
+    expect(result.imageCount).toBe(1)
+    expect(result.firstImage).toEqual({ mime: "image/png", data: "aGVsbG8=" })
+    expect(result.text).toBe("inspect ![clip.png](data:image/png;base64,aGVsbG8=) please")
+  })
+
+  test("parses portable clipboard image data URLs back into paste tokens", () => {
+    const tokens = parsePortableImageClipboard("before ![clip.png](data:image/png;base64,aGVsbG8=) after")
+
+    expect(tokens).toEqual([
+      { type: "text", text: "before " },
+      { type: "image", filename: "clip.png", mime: "image/png", content: "aGVsbG8=" },
+      { type: "text", text: " after" },
+    ])
   })
 })

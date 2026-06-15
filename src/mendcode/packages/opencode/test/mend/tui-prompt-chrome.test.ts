@@ -11,7 +11,7 @@ describe("mend tui prompt chrome", () => {
     expect(defaultTuiProfile().promptChrome.preset).toBe("top-bottom")
     expect(defaultTuiProfile().promptStatus.placementByPreset?.["ascii-box"]).toBe("inside")
     expect(defaultTuiProfile().promptStatus.commandsHint?.visible).toBe(false)
-    expect(defaultTuiProfile().promptStatus.right.map((item) => item.value)).toEqual(["context"])
+    expect(defaultTuiProfile().promptStatus.right).toEqual([])
     expect(defaultTuiProfile().workingIndicator.messages).toEqual(["Thinking..."])
     expect(defaultTuiProfile().workingIndicator.showTokenUsage).toBe(true)
     expect(defaultTuiProfile().presentation.profile).toBe("mendcode")

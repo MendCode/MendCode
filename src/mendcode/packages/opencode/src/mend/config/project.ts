@@ -60,7 +60,7 @@ export const focusProfiles: Record<string, any> = {
   },
   claude: {
     id: "claude",
-    publicName: "Claude-like planning discipline",
+    publicName: "Anthropic-family planning discipline",
     agent: "build",
     model: null,
     reasoning: { default: "medium", escalation: ["large-refactor", "architecture", "security"] },

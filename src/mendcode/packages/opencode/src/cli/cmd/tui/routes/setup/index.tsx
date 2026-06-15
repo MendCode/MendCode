@@ -1,6 +1,6 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal } from "solid-js"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
-import { useRoute, useRouteData, type SetupStepID } from "@tui/context/route"
+import { routeReturnTarget, useRoute, useRouteData, type SetupStepID } from "@tui/context/route"
 import { useTheme } from "@tui/context/theme"
 import { useSync } from "@tui/context/sync"
 import { createDialogProviderOptions } from "@tui/component/dialog-provider"
@@ -271,7 +271,7 @@ export function Setup() {
   const exitSetup = async () => {
     const state = setupSummary()?.state
     if (state?.completedOnce || complete()) {
-      route.navigate({ type: "home" })
+      route.navigate(routeReturnTarget(route.data))
       return
     }
     const leave = await DialogConfirm.show(
@@ -282,7 +282,7 @@ export function Setup() {
     )
     if (!leave) return
     await dismissSetup(mend.root)
-    route.navigate({ type: "home" })
+    route.navigate(routeReturnTarget(route.data))
   }
 
   useKeyboard((evt) => {
@@ -932,7 +932,7 @@ export function Setup() {
                 title: "Split",
                 value: "split",
                 category: "Home",
-                description: "Claude-style welcome: identity top-left, activity panel top-right.",
+                description: "Two-column welcome: identity top-left, activity panel top-right.",
                 onSelect: async () => resolve("split"),
               },
             ]}
@@ -1068,7 +1068,7 @@ export function Setup() {
       })
       return
     }
-    route.navigate({ type: "home" })
+    route.navigate(routeReturnTarget(route.data))
   }
 
   const runPrimaryAction = async (step: SetupStepID) => {

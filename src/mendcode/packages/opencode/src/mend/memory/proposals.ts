@@ -2,16 +2,18 @@ import { existsSync } from "fs"
 import { mkdir, readFile, readdir, stat, writeFile } from "fs/promises"
 import path from "path"
 import { memoryPaths, readMemoryConfig, type MemoryScope } from "./config"
-import { appendMemoryEntry, readMemoryEntries, type MemoryEntry, type MemorySensitivity } from "./store"
+import { appendMemoryEntry, deleteMemoryEntry, readMemoryEntries, updateMemoryEntry, type MemoryEntry, type MemorySensitivity } from "./store"
 import { resolveModelRoles } from "../config/models"
 import { runProviderAdapter } from "../runtime/provider-adapters"
 
 export type MemoryProposalStatus = "pending" | "applied" | "rejected"
+export type MemoryProposalOperation = "add" | "update" | "remove"
 
 export type MemoryProposal = {
   id: string
   version: 0
   status: MemoryProposalStatus
+  operation: MemoryProposalOperation
   scope: MemoryScope
   text: string
   tags: string[]
@@ -27,12 +29,17 @@ export type MemoryProposal = {
   redactions: string[]
   createdAt: string
   updatedAt: string
+  targetEntryID: string | null
+  targetEntryScope: MemoryScope | null
   appliedEntryID: string | null
 }
 
 export type ProposeMemoryInput = {
+  operation?: MemoryProposalOperation
   text: string
   scope?: MemoryScope
+  targetEntryID?: string | null
+  targetEntryScope?: MemoryScope | null
   tags?: string[]
   cwd?: string | null
   files?: string[]
@@ -77,7 +84,7 @@ export const MEMORY_EXTRACTION_POLICY = [
   "Keep only durable user preferences, stable project decisions, recurring constraints, long-lived repo facts, safety rules, and workflow conventions.",
   "Be highly selective: prefer one consolidated memory, and never propose more than two memories from one conversation.",
   "Reject uncertain facts, likely-to-change details, hypotheses, guesses, stale conclusions, and anything that may be wrong after the current task evolves.",
-  "Do not require the user to literally say remember, save, guardar, or memoria; strong future-facing preferences and rules are valid candidates.",
+  "Do not require explicit memory wording in any language; strong future-facing preferences and rules are valid candidates.",
   "Reject anything about what just happened, what is currently happening, what was just checked, what should be done next, or what was already answered.",
   "Reject temporary state, one-off task details, status updates, todo-like recommendations, transient debugging context, raw logs, secrets, and anything already present in saved memory.",
   "A proposal must be self-contained, specific, and useful without the surrounding chat. If it would not help a future session, return nothing.",
@@ -144,6 +151,7 @@ export async function proposeMemory(input: ProposeMemoryInput, root?: string) {
     id: nowID(),
     version: 0,
     status: "pending",
+    operation: input.operation === "update" || input.operation === "remove" ? input.operation : "add",
     scope: input.scope === "global" ? "global" : "project",
     text: redacted.text,
     tags: normalizeStringList(input.tags),
@@ -159,6 +167,8 @@ export async function proposeMemory(input: ProposeMemoryInput, root?: string) {
     redactions: redacted.redactions,
     createdAt: now,
     updatedAt: now,
+    targetEntryID: typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? input.targetEntryID.trim() : null,
+    targetEntryScope: input.targetEntryScope === "global" || input.targetEntryScope === "project" ? input.targetEntryScope : null,
     appliedEntryID: null,
   }
   return writeProposal(proposal, paths.root)
@@ -172,6 +182,16 @@ function memoryFingerprint(text: string) {
     .replace(/[`*_()[\]{}.,:;!?'"-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
+}
+
+function extractJsonObject(text: string) {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "")
+  if (!trimmed) return ""
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) return trimmed
+  const start = trimmed.indexOf("{")
+  const end = trimmed.lastIndexOf("}")
+  if (start === -1 || end <= start) return trimmed
+  return trimmed.slice(start, end + 1)
 }
 
 function isNearDuplicate(candidate: string, existing: string[]) {
@@ -213,17 +233,21 @@ export function extractorPrompt() {
     MEMORY_EXTRACTION_POLICY,
     "",
     "Return strict JSON only:",
-    '{"proposals":[{"shouldRemember":true,"scope":"project|global","text":"durable memory","tags":["short-tag"],"durability":0.0,"confidence":0.0,"changeRisk":0.0,"reason":"why this is worth remembering"}]}',
+    '{"proposals":[{"shouldRemember":true,"operation":"add|update|remove","scope":"project|global","targetEntryID":"existing-memory-id-or-null","targetEntryScope":"project|global|null","text":"durable memory text or removal reason","tags":["short-tag"],"durability":0.0,"confidence":0.0,"changeRisk":0.0,"reason":"why this is worth changing"}]}',
     "",
     "Rules:",
     "- Return an empty proposals array unless the input contains genuinely durable future-use information that should be remembered indefinitely.",
     "- Only set shouldRemember=true when durability is at least 0.8, confidence is at least 0.75, and changeRisk is at most 0.25.",
     "- Do not require explicit memory wording. If the user says something is very important, says always/never, gives a future workflow rule, states a durable preference, or corrects how the assistant should behave in future sessions, treat it as a strong memory candidate.",
-    "- Repo-scoped workflow rules such as 'Para este repo, cuando hagas cambios visibles de TUI, valida con smoke test antes de decir listo' are strong project memory candidates even if the assistant only replies 'entendido'.",
+    "- Repo-scoped workflow rules, recurring event/condition/action instructions, and future validation requirements are strong project memory candidates even if the assistant only acknowledges them briefly.",
     "- Assistant text such as 'I will not save this yet' is not a reason to skip. Extract from the user's durable instruction, not from whether the assistant remembered to save it.",
     "- Review saved_memory and pending_memory before proposing. If either already contains an equivalent fact, return an empty proposals array.",
     "- Saved global memories apply across projects. Saved project memories and pending project proposals apply to this repo. Use that scope evidence when checking duplicates.",
-    "- If the user repeats or lightly rephrases a durable preference that is not in saved_memory or pending_memory, propose it once.",
+    "- If the user repeats or lightly rephrases a durable preference that is not in saved_memory or pending_memory, propose operation=add once.",
+    "- For operation=add, distill the durable instruction into a self-contained memory that captures the scope, trigger/condition, expected behavior, and any important constraint without copying transient chat phrasing.",
+    "- If the user corrects, narrows, expands, or replaces an existing saved memory, propose operation=update with the saved entry id in targetEntryID and the complete replacement text.",
+    "- If the user explicitly says an existing saved memory is wrong, obsolete, no longer true, or should be forgotten/removed, propose operation=remove with the saved entry id in targetEntryID.",
+    "- Never use operation=update or operation=remove without a concrete targetEntryID from saved_memory.",
     "- Prefer a single consolidated proposal. Return two only when there are two clearly separate durable memories. Never return more than two.",
     "- Do not split related details into multiple memories; merge them into one precise memory.",
     "- Do not propose uncertain, provisional, likely-to-change, disputed, weakly inferred, or recently discovered facts unless the user clearly frames them as a future preference, rule, or decision.",
@@ -242,7 +266,10 @@ export function extractorPrompt() {
 
 type ExtractedMemoryProposal = {
   shouldRemember: boolean
+  operation: MemoryProposalOperation
   scope: MemoryScope
+  targetEntryID: string | null
+  targetEntryScope: MemoryScope | null
   text: string
   tags: string[]
   durability: number
@@ -252,7 +279,7 @@ type ExtractedMemoryProposal = {
 }
 
 function parseExtractorJSON(text: string, maxProposals = 2): ExtractedMemoryProposal[] {
-  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "")
+  const trimmed = extractJsonObject(text)
   if (!trimmed) return []
   let parsed: any
   try {
@@ -266,7 +293,10 @@ function parseExtractorJSON(text: string, maxProposals = 2): ExtractedMemoryProp
     .filter((item: any) => typeof item?.text === "string" && item.text.trim().length >= 16)
     .map((item: any): ExtractedMemoryProposal => ({
       shouldRemember: item.shouldRemember === true,
+      operation: item.operation === "update" || item.operation === "remove" ? item.operation : "add",
       scope: item.scope === "global" ? "global" as const : "project" as const,
+      targetEntryID: typeof item.targetEntryID === "string" && item.targetEntryID.trim() ? item.targetEntryID.trim() : null,
+      targetEntryScope: item.targetEntryScope === "global" ? "global" as const : item.targetEntryScope === "project" ? "project" as const : null,
       text: item.text.trim(),
       tags: normalizeStringList(item.tags),
       durability: typeof item.durability === "number" && Number.isFinite(item.durability) ? Math.max(0, Math.min(1, item.durability)) : 0,
@@ -274,8 +304,48 @@ function parseExtractorJSON(text: string, maxProposals = 2): ExtractedMemoryProp
       changeRisk: typeof item.changeRisk === "number" && Number.isFinite(item.changeRisk) ? Math.max(0, Math.min(1, item.changeRisk)) : 1,
       reason: typeof item.reason === "string" && item.reason.trim() ? item.reason.trim().slice(0, 240) : null,
     }))
-    .filter((item: ExtractedMemoryProposal) => item.shouldRemember && item.durability >= 0.8 && item.confidence >= 0.75 && item.changeRisk <= 0.25)
+    .filter((item: ExtractedMemoryProposal) =>
+      item.shouldRemember &&
+      item.durability >= 0.8 &&
+      item.confidence >= 0.75 &&
+      item.changeRisk <= 0.25 &&
+      (item.operation === "add" || Boolean(item.targetEntryID)),
+    )
     .slice(0, limit)
+}
+
+function candidateUserText(text: string) {
+  const match = text.match(/USER:\s*([\s\S]*?)(?:\n\nASSISTANT:|$)/i)
+  return (match?.[1] ?? text).trim()
+}
+
+function fallbackExtractorProposal(input: ProposeMemoriesFromTextInput, existingFingerprints: string[]): ExtractedMemoryProposal[] {
+  const userText = candidateUserText(input.text)
+  const isRepoRule = /\b(para este repo|for this repo|in this repo|en este repo)\b/i.test(userText)
+  const isFutureRule = /\b(cuando|siempre|nunca|de ahora en adelante|always|never|when)\b/i.test(userText)
+  if (!isRepoRule || !isFutureRule) return []
+  const text = userText
+    .replace(/\bNo uses comandos de memoria;?\s*/i, "")
+    .replace(/\bNo guardes memoria manualmente;?\s*/i, "")
+    .replace(/\bDo not use memory commands;?\s*/i, "")
+    .replace(/\bresponde solo:\s*entendido\.?/i, "")
+    .replace(/\brespond only:\s*understood\.?/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+  if (text.length < 16 || isNearDuplicate(text, existingFingerprints)) return []
+  return [{
+    shouldRemember: true,
+    operation: "add",
+    scope: input.scope === "global" ? "global" : "project",
+    targetEntryID: null,
+    targetEntryScope: null,
+    text,
+    tags: ["workflow", "auto"],
+    durability: 0.9,
+    confidence: 0.8,
+    changeRisk: 0.15,
+    reason: "Explicit repo-scoped future workflow rule.",
+  }]
 }
 
 export async function resolveMemoryExtractorRole(root?: string): Promise<MemoryExtractorRoleResult> {
@@ -311,17 +381,17 @@ export async function readMemoryExtractorContext(root?: string) {
   const historical = proposals.filter((proposal) => proposal.status !== "pending")
   const existing = [
     "<saved_memory>",
-    ...saved.map((item) => `- [saved][${item.scope}] ${item.text}`),
+    ...saved.map((item) => `- [saved][${item.scope}][${item.id}] ${item.text}`),
     saved.length ? "" : "- none",
     "</saved_memory>",
     "",
     "<pending_memory>",
-    ...pending.map((item) => `- [pending][${item.scope}] ${item.text}`),
+    ...pending.map((item) => `- [pending][${item.scope}][${item.id}][${item.operation ?? "add"}] ${item.text}`),
     pending.length ? "" : "- none",
     "</pending_memory>",
     "",
     "<historical_memory_proposals>",
-    ...historical.map((item) => `- [${item.status}][${item.scope}] ${item.text}`),
+    ...historical.map((item) => `- [${item.status}][${item.scope}][${item.id}][${item.operation ?? "add"}] ${item.text}`),
     historical.length ? "" : "- none",
     "</historical_memory_proposals>",
   ].join("\n")
@@ -351,15 +421,24 @@ export async function proposeMemoriesFromExtractorText(
   const paths = memoryPaths(root)
   const fingerprints = new Set(existingFingerprints ?? (await readMemoryExtractorContext(paths.root)).existingFingerprints)
   const extracted: ExtractedMemoryProposal[] = []
-  for (const item of parseExtractorJSON(outputText || "", input.maxProposals ?? 2)) {
-    if (isNearDuplicate(item.text, [...fingerprints])) continue
+  const parsed = parseExtractorJSON(outputText || "", input.maxProposals ?? 2)
+  const candidates = parsed.length ? parsed : fallbackExtractorProposal(input, [...fingerprints])
+  let duplicateCandidates = 0
+  for (const item of candidates) {
+    if (item.operation === "add" && isNearDuplicate(item.text, [...fingerprints])) {
+      duplicateCandidates++
+      continue
+    }
     extracted.push(item)
     fingerprints.add(memoryFingerprint(item.text))
   }
   const proposals: MemoryProposal[] = []
   for (const item of extracted) {
     proposals.push(await proposeMemory({
+      operation: item.operation,
       scope: item.scope,
+      targetEntryID: item.targetEntryID,
+      targetEntryScope: item.targetEntryScope,
       text: item.text,
       tags: [...normalizeStringList(input.tags), ...item.tags],
       cwd: input.cwd,
@@ -372,7 +451,12 @@ export async function proposeMemoriesFromExtractorText(
       reason: item.reason,
     }, paths.root))
   }
-  return { proposals, candidates: extracted.length, callsProviders: true as const, readsSecrets: false as const, writesMemory: false as const, skipped: false, reason: null }
+  const reason = proposals.length
+    ? null
+    : duplicateCandidates > 0
+      ? "memory candidates already match saved memory or earlier proposals"
+      : "no durable memory candidates"
+  return { proposals, candidates: extracted.length, callsProviders: true as const, readsSecrets: false as const, writesMemory: false as const, skipped: false, reason }
 }
 
 export async function proposeMemoriesWithExtractor(input: ProposeMemoriesFromTextInput, root?: string) {
@@ -547,18 +631,37 @@ export async function updateMemoryProposal(id: string, patch: Partial<Pick<Memor
 export async function applyMemoryProposal(id: string, root?: string) {
   const proposal = await readMemoryProposal(id, root)
   if (proposal.status !== "pending") throw new Error(`Memory proposal ${id} is ${proposal.status}`)
-  const entry: MemoryEntry = await appendMemoryEntry({
-    scope: proposal.scope,
-    text: proposal.text,
-    tags: proposal.tags,
-    cwd: proposal.cwd,
-    files: proposal.files,
-    source: proposal.source,
-    evidence: proposal.evidence,
-    confidence: proposal.confidence,
-    sensitivity: proposal.sensitivity,
-  }, root)
-  const next: MemoryProposal = { ...proposal, status: "applied", updatedAt: new Date().toISOString(), appliedEntryID: entry.id }
+  const operation = proposal.operation ?? "add"
+  let entry: MemoryEntry | null = null
+  if (operation === "add") {
+    entry = await appendMemoryEntry({
+      scope: proposal.scope,
+      text: proposal.text,
+      tags: proposal.tags,
+      cwd: proposal.cwd,
+      files: proposal.files,
+      source: proposal.source,
+      evidence: proposal.evidence,
+      confidence: proposal.confidence,
+      sensitivity: proposal.sensitivity,
+    }, root)
+  } else if (operation === "update") {
+    if (!proposal.targetEntryID) throw new Error(`Memory proposal ${id} is missing targetEntryID`)
+    entry = await updateMemoryEntry(proposal.targetEntryScope ?? proposal.scope, proposal.targetEntryID, {
+      text: proposal.text,
+      tags: proposal.tags,
+      cwd: proposal.cwd,
+      files: proposal.files,
+      source: proposal.source,
+      evidence: proposal.evidence,
+      confidence: proposal.confidence,
+      sensitivity: proposal.sensitivity,
+    }, root)
+  } else {
+    if (!proposal.targetEntryID) throw new Error(`Memory proposal ${id} is missing targetEntryID`)
+    await deleteMemoryEntry(proposal.targetEntryScope ?? proposal.scope, proposal.targetEntryID, root)
+  }
+  const next: MemoryProposal = { ...proposal, operation, status: "applied", updatedAt: new Date().toISOString(), appliedEntryID: entry?.id ?? null }
   await writeProposal(next, root)
   return { proposal: next, entry }
 }
