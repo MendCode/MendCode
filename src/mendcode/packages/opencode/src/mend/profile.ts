@@ -188,6 +188,10 @@ export function mergeMendTuiProfile(input: unknown): MendTuiProfile {
     promptStatus: {
       ...fallbackProfile.promptStatus,
       ...(isRecord(input.promptStatus) ? input.promptStatus : {}),
+      context: {
+        ...(fallbackProfile.promptStatus.context || {}),
+        ...(isRecord(input.promptStatus) && isRecord(input.promptStatus.context) ? input.promptStatus.context : {}),
+      },
       commandsHint: {
         ...(fallbackProfile.promptStatus.commandsHint || {}),
         ...(isRecord(input.promptStatus) && isRecord(input.promptStatus.commandsHint)
@@ -371,6 +375,9 @@ export function validateMendTuiProfile(profile: MendTuiProfile) {
     failures.push("tui promptChrome.glyphs.leadText must be a string")
   }
   if (typeof profile.promptStatus.enabled !== "boolean") failures.push("tui promptStatus.enabled must be a boolean")
+  if (profile.promptStatus.context !== undefined && !isRecord(profile.promptStatus.context)) {
+    failures.push("tui promptStatus.context must be an object")
+  }
   if (!Array.isArray(profile.promptStatus.left)) failures.push("tui promptStatus.left must be an array")
   if (!Array.isArray(profile.promptStatus.right)) failures.push("tui promptStatus.right must be an array")
   if (profile.promptStatus.separator !== undefined && typeof profile.promptStatus.separator !== "string") {

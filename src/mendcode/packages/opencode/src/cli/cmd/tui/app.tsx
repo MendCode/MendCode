@@ -465,6 +465,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   const promptRef = usePromptRef()
   const routes: RouteMap = new Map()
   const [routeRev, setRouteRev] = createSignal(0)
+  const [homeRevision, setHomeRevision] = createSignal(0)
   const routeView = (name: string) => {
     routeRev()
     return routes.get(name)?.at(-1)?.render
@@ -1295,13 +1296,14 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     update: (
       profile: Awaited<ReturnType<typeof readActiveTuiProfile>>,
     ) => Awaited<ReturnType<typeof readActiveTuiProfile>>,
-    message: string,
+    message?: string,
   ) => {
     const current = await readActiveTuiProfile(mend.root)
     const next = update(current)
     await writeActiveTuiProfile(next, mend.root)
     await mend.reload()
-    toast.show({ variant: "info", message, duration: 4000 })
+    if (route.data.type === "home") setHomeRevision((value) => value + 1)
+    if (message) toast.show({ variant: "info", message, duration: 4000 })
     dialog.clear()
   }
   const showPromptChromePresets = () => {
@@ -1423,7 +1425,6 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         ...profile,
         identity: { ...profile.identity, productName: normalizeProductName(value) },
       }),
-      `Home title updated to ${normalizeProductName(value)}.`,
     )
   }
   const showHomeLogoFont = () => {
@@ -3800,7 +3801,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       <Show when={ready()}>
         <Switch>
           <Match when={route.data.type === "home"}>
-            <Home />
+            <Home revision={homeRevision()} />
           </Match>
           <Match when={route.data.type === "session"}>
             <Session />
