@@ -177,9 +177,9 @@ export function HomeSurface(props: {
   const splitTitleAvailableWidth = createMemo(() =>
     Math.max(
       24,
-      (splitTwoColumnWelcome() ? splitPanelInnerWidth() - rightPanelWidth() - 4 : splitPanelInnerWidth()) -
-        splitLogoWidth() -
-        8,
+      splitTwoColumnWelcome()
+        ? splitPanelInnerWidth() - rightPanelWidth() - (showLogo() ? splitLogoWidth() + 10 : 6)
+        : splitPanelInnerWidth() - (showLogo() ? splitLogoWidth() + 8 : 4),
     ),
   )
   const splitProductAscii = createMemo(() => {
@@ -198,6 +198,9 @@ export function HomeSurface(props: {
     if (homeDensity() !== "full") return false
     return splitTitleAsciiWidth() <= splitTitleAvailableWidth()
   })
+  const splitProductText = createMemo(() =>
+    Locale.truncate(mend.profile.identity.productName, Math.max(8, splitTitleAvailableWidth())),
+  )
   const splitShowsSideTitle = createMemo(() => logoMode() === "mascot" || !showLogo())
   const agentViewSessionWindowMs = 30 * 24 * 60 * 60 * 1000
   const [globalBackgroundSessions, setGlobalBackgroundSessions] = createSignal<BackgroundSessionInfo[]>([])
@@ -205,6 +208,7 @@ export function HomeSurface(props: {
   const [globalStatuses, setGlobalStatuses] = createSignal<Record<string, SessionStatus>>({})
   const [globalPendingInput, setGlobalPendingInput] = createSignal<Record<string, number>>({})
   const [selectedAgentViewSessionID, setSelectedAgentViewSessionID] = createSignal<string | undefined>()
+  const [hoveredAgentViewSessionID, setHoveredAgentViewSessionID] = createSignal<string | undefined>()
   let agentViewRefreshTimer: ReturnType<typeof setTimeout> | undefined
   let agentViewPollTimer: ReturnType<typeof setInterval> | undefined
 
@@ -487,9 +491,14 @@ export function HomeSurface(props: {
   useKeyboard((evt) => {
     if (!agentViewHomeActive()) return
     if (dialog.stack.length > 0) return
-    const promptInput = promptRef.current?.current.input ?? ""
     const rows = visibleAgentViewRows()
     if (rows.length === 0) return
+    if (evt.name === "escape" && selectedAgentViewSessionID()) {
+      evt.preventDefault()
+      setSelectedAgentViewSessionID(undefined)
+      return
+    }
+    const promptInput = promptRef.current?.current.input ?? ""
     if (promptInput !== "") return
     if (evt.name === "up") {
       evt.preventDefault()
@@ -499,11 +508,6 @@ export function HomeSurface(props: {
     if (evt.name === "down") {
       evt.preventDefault()
       moveAgentViewSelection(1)
-      return
-    }
-    if (evt.name === "escape" && selectedAgentViewSessionID()) {
-      evt.preventDefault()
-      setSelectedAgentViewSessionID(undefined)
       return
     }
     if (evt.name === "return") {
@@ -562,7 +566,7 @@ export function HomeSurface(props: {
     if (!selected) return placeholder
     return {
       ...placeholder,
-      normal: [`Reply to ${Locale.truncate(sessionTitle(selected), 40)}`],
+      normal: [`Reply to selected session: ${Locale.truncate(sessionTitle(selected), 40)}`],
     }
   })
   const logoSurface = () => (
@@ -659,9 +663,16 @@ export function HomeSurface(props: {
         width="100%"
         height={1}
         flexDirection="row"
-        backgroundColor={selectedAgentViewSessionID() === item.background.sessionID ? "#303030" : undefined}
-        onMouseOver={() => setSelectedAgentViewSessionID(item.background.sessionID)}
-        onMouseUp={() => openAgentViewSession(item)}
+        backgroundColor={
+          selectedAgentViewSessionID() === item.background.sessionID
+            ? "#303030"
+            : hoveredAgentViewSessionID() === item.background.sessionID
+              ? "#242424"
+              : undefined
+        }
+        onMouseOver={() => setHoveredAgentViewSessionID(item.background.sessionID)}
+        onMouseOut={() => setHoveredAgentViewSessionID((current) => current === item.background.sessionID ? undefined : current)}
+        onMouseUp={() => setSelectedAgentViewSessionID(item.background.sessionID)}
       >
         <box width={2} flexShrink={0}>
           {(() => {
@@ -821,11 +832,17 @@ export function HomeSurface(props: {
                     </box>
                   </Show>
                   <box width={3} flexShrink={0} />
-                  <box flexDirection="column" flexGrow={1} minWidth={20} justifyContent="center">
+                  <box
+                    flexDirection="column"
+                    width={splitTwoColumnWelcome() ? splitTitleAvailableWidth() : undefined}
+                    flexGrow={splitTwoColumnWelcome() ? 0 : 1}
+                    minWidth={Math.min(20, splitTitleAvailableWidth())}
+                    justifyContent="center"
+                  >
                     <Show when={splitShowsSideTitle()}>
                       <Show
                         when={showSplitAsciiTitle()}
-                        fallback={<text fg={mend.profile.theme.tokens.foreground} wrapMode="none">{mend.profile.identity.productName}</text>}
+                        fallback={<text fg={mend.profile.theme.tokens.foreground} wrapMode="none">{splitProductText()}</text>}
                       >
                         <box>
                           <SurfaceLines text={splitProductAscii()} />

@@ -18,7 +18,7 @@ async function createGlobalSkill(homeDir: string) {
     path.join(skillDir, "SKILL.md"),
     `---
 name: global-test-skill
-description: A global skill from ~/.claude/skills for testing.
+description: A global skill from the legacy global skills directory for testing.
 ---
 
 # Global Test Skill
@@ -191,7 +191,7 @@ description: A skill in the .claude/skills directory.
     ),
   )
 
-  it.live("discovers global skills from ~/.claude/skills/ directory", () =>
+  it.live("discovers skills from the legacy global skills directory", () =>
     Effect.gen(function* () {
       const tmp = yield* Effect.acquireRelease(
         Effect.promise(() => tmpdir({ git: true })),
@@ -207,7 +207,7 @@ description: A skill in the .claude/skills directory.
             const list = yield* skill.all()
             expect(list.length).toBe(1)
             expect(list[0].name).toBe("global-test-skill")
-            expect(list[0].description).toBe("A global skill from ~/.claude/skills for testing.")
+            expect(list[0].description).toBe("A global skill from the legacy global skills directory for testing.")
             expect(list[0].location).toContain(path.join(".claude", "skills", "global-test-skill", "SKILL.md"))
           }).pipe(provideInstance(tmp.path))
         }),

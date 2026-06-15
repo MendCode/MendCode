@@ -19,11 +19,13 @@ export type SetupRoute = {
   type: "setup"
   step?: SetupStepID
   minimal?: boolean
+  returnTo?: HomeRoute | SessionRoute
 }
 
 export type StatsRoute = {
   type: "stats"
   scope?: "global" | "project" | "directory"
+  returnTo?: HomeRoute | SessionRoute
 }
 
 export type PluginRoute = {
@@ -62,4 +64,9 @@ export type RouteContext = ReturnType<typeof useRoute>
 export function useRouteData<T extends Route["type"]>(type: T) {
   const route = useRoute()
   return route.data as Extract<Route, { type: typeof type }>
+}
+
+export function routeReturnTarget(route: Route): HomeRoute | SessionRoute {
+  if ((route.type === "setup" || route.type === "stats") && route.returnTo) return route.returnTo
+  return { type: "home" }
 }

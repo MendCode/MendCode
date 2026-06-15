@@ -192,6 +192,7 @@ type SessionMemoryMetadata = {
     queued?: boolean
     skipped?: boolean
     reason?: string | null
+    candidates?: number
   }
 }
 
@@ -2956,14 +2957,19 @@ function UserMessage(props: {
   )
 }
 
-function memoryToastMessage(info: SessionMemoryMetadata | undefined) {
+export function memoryToastMessage(info: SessionMemoryMetadata | undefined) {
   if (!info?.output?.generate) return ""
   const output = info.output
   const saved = output.saved?.length ?? 0
   const proposals = output.proposals?.length ?? 0
   if (saved > 0) return `Memory saved ${saved}`
   if (proposals > 0) return `Memory proposal${proposals === 1 ? "" : "s"} ready: ${proposals}`
-  return ""
+  if (output.queued) return ""
+  if (output.skipped) {
+    return `Memory skipped: ${Locale.truncate(output.reason || "not available", 72)}`
+  }
+  const reason = output.reason || "no pending update"
+  return `Memory checked: ${Locale.truncate(reason, 72)}`
 }
 
 function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; last: boolean }) {

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.10 - 2026-06-14
+
+- Let automatic memory learning create approval-gated `add`, `update`, and `remove` proposals, with targeted updates/deletes applied to existing memory entries instead of only appending new entries.
+- Recover durable repo-scoped memory rules when the extractor returns empty or wrapped JSON, without relying on hard-coded prompt examples.
+- Show a memory toast when extraction finishes with no pending proposal, including skipped or no-candidate reasons instead of silently disappearing after "Preparing memory proposal...".
+- Treat slash commands as commands only when they start the prompt, so normal messages that mention `/setup`, `/stats`, or other commands are sent as chat text instead of navigating away.
+- Keep `/setup` and `/stats` as temporary pages from an active chat: pressing escape or finishing setup now returns to the originating session instead of dropping to New Chat.
+- Keep Agent View hover visual-only; click or arrow keys select the reply target, and `esc` clears that selected session before returning to normal prompt input.
+- Keep split home welcome branding neutral and prevent long ASCII title text from clipping into partial letters.
+- Remove the default right-side prompt context meter so the footer no longer shows the extra context bar and separator dot by default.
+- Preserve pasted chat images through message copy/paste by copying image attachments as portable data-image Markdown and rehydrating those images back into prompt attachments when pasted into MendCode.
+
 ## 0.1.9 - 2026-06-14
 
 - Make `mendcode --help` workflow-first: open the terminal harness, run with an initial intent, use packages, mflow, worktrees, TSM, setup, and status.

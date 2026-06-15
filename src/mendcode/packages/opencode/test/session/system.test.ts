@@ -114,7 +114,8 @@ describe("session.system", () => {
     expect(output).toContain("post-turn memory extractor")
     expect(output).toContain("approval-gated pending proposals")
     expect(output).toContain("only when the user explicitly asks to save")
-    expect(output).toContain("If the user says `prefiero`")
+    expect(output).toContain("preference, future-facing rule, or repo convention")
+    expect(output).toContain("equivalent explicit memory wording in the user's language")
     expect(output).not.toContain(".agents")
     expect(output).not.toContain("AGENTS.md")
     expect(output).not.toContain("MendCode policy layering")
@@ -140,7 +141,7 @@ describe("session.system", () => {
     await mkdir(path.join(tmp.path, ".mendcode", "memory"), { recursive: true })
     await writeFile(path.join(tmp.path, ".mendcode", "memory", "config.json"), JSON.stringify({ version: 0, configScope: "project", enabled: true, use: true, scopes: ["project"], maxEntries: 3, maxPromptTokens: 200 }))
 
-    const output = await SystemPrompt.mendMemory(fakeModel("openai", "gpt-5.2"), tmp.path, "agrega esto a la memoria del proyecto")
+    const output = await SystemPrompt.mendMemory(fakeModel("openai", "gpt-5.2"), tmp.path, "add this to project memory")
 
     expect(output).toBe("")
   })
