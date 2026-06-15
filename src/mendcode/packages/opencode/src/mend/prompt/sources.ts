@@ -57,7 +57,7 @@ const promptSources: Record<string, PromptSource> = {
     behavior: ["max-turn/max-price gates", "AGENTS.md layering", "custom system prompt ids", "tool allow/deny patterns"],
   },
   claude: {
-    label: "OpenClaude / Claude-like",
+    label: "Anthropic-family",
     license: "proprietary-derived-warning",
     sourcePolicy: "behavior-only",
     promptPath: null,
@@ -76,7 +76,7 @@ const promptSources: Record<string, PromptSource> = {
 
 export const focusNames: Record<string, string> = {
   codex: "Codex harness",
-  claude: "Claude-like",
+  claude: "Anthropic-family",
   gemini: "Gemini CLI",
   kimi: "Kimi CLI",
   mistral: "Mistral Vibe",

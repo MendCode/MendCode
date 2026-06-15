@@ -1,6 +1,6 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, onCleanup } from "solid-js"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
-import { useRoute } from "@tui/context/route"
+import { routeReturnTarget, useRoute } from "@tui/context/route"
 import { useSDK } from "@tui/context/sdk"
 import { useTheme } from "@tui/context/theme"
 import { useSync } from "@tui/context/sync"
@@ -859,7 +859,7 @@ export function Stats() {
 
   useKeyboard((evt) => {
     if (evt.name === "escape") {
-      route.navigate({ type: "home" })
+      route.navigate(routeReturnTarget(route.data))
       evt.preventDefault()
       evt.stopPropagation()
       return

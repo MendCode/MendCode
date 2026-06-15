@@ -128,7 +128,7 @@ async function fullKnowledge(root: string) {
     "Memory operating contract:",
     "- Do not call `mendcode memory add` or `mendcode memory propose` for implicit preferences, corrections, rules, or durable future-use candidates.",
     "- Let the post-turn memory extractor create approval-gated pending proposals from normal chat content.",
-    "- Use direct memory mutation commands only when the user explicitly asks to save, remember, guardar, add, edit, delete, apply, or reject memory now.",
+    "- Use direct memory mutation commands only when the user explicitly asks to save, remember, add, edit, delete, apply, or reject memory now, including equivalent explicit memory wording in the user's language.",
     "- List/search before editing, deleting, applying, or rejecting memory IDs.",
     "- Treat injected memories as soft context; current user instructions and repository evidence win.",
   ]

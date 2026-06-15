@@ -6,7 +6,7 @@ describe("session bottom dock layout", () => {
     const layout = sessionBottomDockLayout({
       width: 120,
       todos: [
-        { content: "Mapear toasts, forms y mapas actuales", status: "completed" },
+        { content: "Map current toasts, forms, and maps", status: "completed" },
         { content: "Auto-review post-sprint", status: "in_progress" },
       ],
     })
@@ -22,7 +22,7 @@ describe("session bottom dock layout", () => {
       todos: [
         {
           content:
-            "Mejorar DriverForm con smart inputs y validacion/formato conservando el layout compacto del prompt",
+            "Improve DriverForm with smart inputs and validation/formatting while preserving the compact prompt layout",
           status: "in_progress",
         },
       ],
@@ -57,7 +57,7 @@ describe("session bottom dock layout", () => {
       todos: [
         {
           content:
-            "Mejorar DriverForm con smart inputs y validacion/formato conservando el layout compacto del prompt",
+            "Improve DriverForm with smart inputs and validation/formatting while preserving the compact prompt layout",
           status: "in_progress",
         },
       ],

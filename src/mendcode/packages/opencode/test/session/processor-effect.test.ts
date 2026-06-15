@@ -338,7 +338,7 @@ it.live("session.processor routes automatic memory extraction through LLM servic
           const { processors, session, provider } = yield* boot()
           const bus = yield* Bus.Service
 
-          yield* llm.text("Ok, entendido.")
+          yield* llm.text("Ok, understood.")
           yield* llm.text(JSON.stringify({
             proposals: [{
               shouldRemember: true,
@@ -353,7 +353,7 @@ it.live("session.processor routes automatic memory extraction through LLM servic
           }))
 
           const chat = yield* session.create({})
-          const parent = yield* user(chat.id, "bro es muy importante que siempre preguntes antes de cualquier feature nueva o plan ok?")
+          const parent = yield* user(chat.id, "bro it is important that you always ask before any new feature or plan, ok?")
           const msg = yield* assistant(chat.id, parent.id, root)
           const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
           const memoryStatuses: string[] = []
@@ -382,7 +382,7 @@ it.live("session.processor routes automatic memory extraction through LLM servic
             model: mdl,
             agent: agent(),
             system: [],
-            messages: [{ role: "user", content: "bro es muy importante que siempre preguntes antes de cualquier feature nueva o plan ok?" }],
+            messages: [{ role: "user", content: "bro it is important that you always ask before any new feature or plan, ok?" }],
             tools: {},
           })
           const callsBeforeFlush = yield* llm.calls
@@ -402,6 +402,7 @@ it.live("session.processor routes automatic memory extraction through LLM servic
           expect(JSON.stringify(inputs[1])).toContain("You are MendCode's memory extractor")
           expect(memoryStatuses).toContain("memory-extract")
           expect(memory?.output?.skipped).toBe(false)
+          expect(memory?.output?.candidates).toBe(1)
           expect(memory?.output?.proposals?.length).toBe(1)
         } finally {
           if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME

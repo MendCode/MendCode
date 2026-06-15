@@ -3,6 +3,93 @@ import type { PromptInfo } from "./history"
 type PromptPart = PromptInfo["parts"][number]
 type PromptTextPart = Extract<PromptPart, { type: "text" }>
 
+type RuntimeClipboardPart = {
+  type: string
+  text?: string
+  synthetic?: boolean
+  mime?: string
+  filename?: string
+  url?: string
+  source?: {
+    text?: {
+      value?: string
+    }
+  }
+}
+
+export type PortableImageClipboardToken =
+  | { type: "text"; text: string }
+  | { type: "image"; mime: string; content: string; filename?: string }
+
+function asClipboardPart(part: unknown): RuntimeClipboardPart {
+  return part as RuntimeClipboardPart
+}
+
+function imageMarkdown(part: RuntimeClipboardPart) {
+  if (!part.url?.startsWith("data:") || !part.mime?.startsWith("image/")) return
+  const match = part.url.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=\s]+)$/)
+  if (!match || !match[1].startsWith("image/")) return
+  const filename = (part.filename || "image").replace(/[\]\n\r]/g, " ").trim() || "image"
+  return `![${filename}](data:${match[1]};base64,${match[2].replace(/\s+/g, "")})`
+}
+
+export function messagePartsToPortableClipboard(parts: readonly unknown[]) {
+  let text = ""
+  const attachments: RuntimeClipboardPart[] = []
+
+  for (const raw of parts) {
+    const part = asClipboardPart(raw)
+    if (part.type === "text" && !part.synthetic && part.text) text += part.text
+    if (part.type === "file" && part.mime?.startsWith("image/") && part.url?.startsWith("data:")) attachments.push(part)
+  }
+
+  for (const attachment of attachments) {
+    const markdown = imageMarkdown(attachment)
+    if (!markdown) continue
+    const placeholder = attachment.source?.text?.value
+    if (placeholder && text.includes(placeholder)) {
+      text = text.replace(placeholder, markdown)
+      continue
+    }
+    text += `${text && !text.endsWith("\n") ? "\n\n" : ""}${markdown}`
+  }
+
+  return {
+    text,
+    imageCount: attachments.length,
+    firstImage: attachments[0]
+      ? {
+          mime: attachments[0].mime!,
+          data: attachments[0].url!.replace(/^data:[^;,]+;base64,/, "").replace(/\s+/g, ""),
+        }
+      : undefined,
+  }
+}
+
+export function parsePortableImageClipboard(text: string): PortableImageClipboardToken[] | undefined {
+  const regex = /!\[([^\]\n\r]*)\]\(data:(image\/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)\)/g
+  const tokens: PortableImageClipboardToken[] = []
+  let index = 0
+  let matched = false
+
+  for (const match of text.matchAll(regex)) {
+    matched = true
+    const start = match.index ?? 0
+    if (start > index) tokens.push({ type: "text", text: text.slice(index, start) })
+    tokens.push({
+      type: "image",
+      filename: match[1]?.trim() || undefined,
+      mime: match[2],
+      content: match[3].replace(/\s+/g, ""),
+    })
+    index = start + match[0].length
+  }
+
+  if (!matched) return
+  if (index < text.length) tokens.push({ type: "text", text: text.slice(index) })
+  return tokens.filter((token) => token.type !== "text" || token.text.length > 0)
+}
+
 export function pastedContentLabel(text: string) {
   return `[Pasted Content ${text.length} chars]`
 }

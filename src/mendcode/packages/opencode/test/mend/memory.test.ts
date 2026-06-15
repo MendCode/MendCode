@@ -243,10 +243,58 @@ describe("mend memory", () => {
     const applied = await applyMemoryProposal(proposal.id, dir.path)
     const statusAfterApply = await memoryStatus(dir.path)
 
-    expect(applied.entry.text).toContain("approval-gated")
+    expect(applied.entry?.text).toContain("approval-gated")
     expect(applied.proposal.status).toBe("applied")
     expect(statusAfterApply.entries.project.count).toBe(1)
     expect(statusAfterApply.proposals.applied).toBe(1)
+  })
+
+  test("applies pending update and remove memory proposals", async () => {
+    await using dir = await tmpdir()
+    const stale = await appendMemoryEntry({
+      scope: "project",
+      text: "MendCode memory learning only creates add proposals.",
+      tags: ["memory"],
+    }, dir.path)
+
+    const update = await proposeMemory({
+      operation: "update",
+      scope: "project",
+      targetEntryID: stale.id,
+      targetEntryScope: "project",
+      text: "MendCode memory learning can create approval-gated add, update, and remove proposals.",
+      tags: ["memory", "approval"],
+      confidence: 0.9,
+      durability: 0.92,
+      changeRisk: 0.1,
+      reason: "User corrected the durable memory behavior.",
+    }, dir.path)
+    const appliedUpdate = await applyMemoryProposal(update.id, dir.path)
+    const afterUpdate = await readMemoryEntries("project", dir.path)
+
+    expect(appliedUpdate.proposal.operation).toBe("update")
+    expect(appliedUpdate.entry?.id).toBe(stale.id)
+    expect(afterUpdate).toHaveLength(1)
+    expect(afterUpdate[0]?.text).toContain("add, update, and remove")
+
+    const remove = await proposeMemory({
+      operation: "remove",
+      scope: "project",
+      targetEntryID: stale.id,
+      targetEntryScope: "project",
+      text: "Remove obsolete memory about MendCode memory learning.",
+      tags: ["memory"],
+      confidence: 0.88,
+      durability: 0.9,
+      changeRisk: 0.05,
+      reason: "User said the prior memory is obsolete.",
+    }, dir.path)
+    const appliedRemove = await applyMemoryProposal(remove.id, dir.path)
+    const afterRemove = await readMemoryEntries("project", dir.path)
+
+    expect(appliedRemove.proposal.operation).toBe("remove")
+    expect(appliedRemove.entry).toBeNull()
+    expect(afterRemove).toHaveLength(0)
   })
 
   test("edits pending proposal text and scope before applying", async () => {
@@ -254,7 +302,7 @@ describe("mend memory", () => {
 
     const proposal = await proposeMemory({
       scope: "global",
-      text: "User prefers concise Spanish responses in MendCode.",
+      text: "User prefers concise responses in their chosen language in MendCode.",
       tags: ["style"],
       confidence: 0.9,
       durability: 0.9,
@@ -272,8 +320,8 @@ describe("mend memory", () => {
     expect(edited.scope).toBe("project")
     expect(edited.text).toContain("approval-gated")
     expect(edited.reason).toBe("Durable communication preference.")
-    expect(applied.entry.scope).toBe("project")
-    expect(applied.entry.text).toContain("approval-gated")
+    expect(applied.entry?.scope).toBe("project")
+    expect(applied.entry?.text).toContain("approval-gated")
   })
 
   test("redacts sensitive proposal text and allows rejection", async () => {
@@ -343,17 +391,21 @@ describe("mend memory", () => {
 
     expect(prompt).toContain("Do not require explicit memory wording")
     expect(prompt).toContain("future workflow rule")
-    expect(prompt).toContain("Para este repo")
+    expect(prompt).toContain("recurring event/condition/action instructions")
     expect(prompt).toContain("Review saved_memory and pending_memory")
+    expect(prompt).toContain("operation=update")
+    expect(prompt).toContain("operation=remove")
     expect(prompt).toContain("Assistant text such as 'I will not save this yet' is not a reason to skip")
     expect(prompt).toContain("If the user repeats or lightly rephrases")
+    expect(prompt).not.toContain("mflow live test")
+    expect(prompt).not.toContain("smoke test before saying done")
   })
 
   test("extractor sees saved global/project memory and pending proposals before deciding", async () => {
     await using dir = await tmpdir()
     await appendMemoryEntry({
       scope: "global",
-      text: "The user prefers concise Spanish responses.",
+      text: "The user prefers concise responses in their chosen language.",
       tags: ["language"],
     }, dir.path)
     await appendMemoryEntry({
@@ -372,7 +424,7 @@ describe("mend memory", () => {
 
     const context = await readMemoryExtractorContext(dir.path)
     const message = memoryExtractorCandidateMessage({
-      text: "USER:\nPara este repo, cuando hagas cambios visibles de TUI, valida con smoke test antes de decir listo.\n\nASSISTANT:\nentendido",
+      text: "USER:\nFor this repo, when you make visible TUI changes, run a smoke test before saying done.\n\nASSISTANT:\nunderstood",
       tags: ["tui", "auto"],
       cwd: dir.path,
       source: "tui-session-auto-extract",
@@ -380,10 +432,13 @@ describe("mend memory", () => {
     }, context.existing)
 
     expect(message).toContain("<saved_memory>")
-    expect(message).toContain("[saved][global] The user prefers concise Spanish responses.")
-    expect(message).toContain("[saved][project] MendCode setup changes should keep terminal row copy compact.")
+    expect(message).toContain("[saved][global]")
+    expect(message).toContain("The user prefers concise responses in their chosen language.")
+    expect(message).toContain("[saved][project]")
+    expect(message).toContain("MendCode setup changes should keep terminal row copy compact.")
     expect(message).toContain("<pending_memory>")
-    expect(message).toContain("[pending][project] Visible TUI changes should be validated with a smoke test")
+    expect(message).toContain("[pending][project]")
+    expect(message).toContain("[add] Visible TUI changes should be validated with a smoke test")
     expect(message).toContain("<candidate_turn>")
     expect(message).toContain("USER:")
     expect(message).toContain("ASSISTANT:")
@@ -435,6 +490,117 @@ describe("mend memory", () => {
     expect(result.proposals.length).toBe(1)
     expect(result.candidates).toBe(1)
     expect(pending.length).toBe(1)
+  })
+
+  test("extractor fallback proposes explicit repo-scoped future workflow rules", async () => {
+    await using dir = await tmpdir()
+
+    const result = await proposeMemoriesFromExtractorText({
+      text: "USER:\nFor this repo, in the mflow live test folder, when you make visible TUI or interactive-flow changes, run a real smoke test before saying done. Do not use memory commands; respond only: understood.\n\nASSISTANT:\nUnderstood.",
+      tags: ["tui", "auto"],
+      cwd: dir.path,
+      source: "tui-session-auto-extract",
+      evidence: "session:test:message:fallback",
+      maxProposals: 1,
+    }, "{\"proposals\":[]}", dir.path)
+
+    expect(result.proposals).toHaveLength(1)
+    expect(result.proposals[0]?.operation).toBe("add")
+    expect(result.proposals[0]?.scope).toBe("project")
+    expect(result.proposals[0]?.text).toContain("mflow live test")
+    expect(result.proposals[0]?.text).not.toContain("Do not use memory commands")
+  })
+
+  test("extractor parses strict JSON even when the model wraps it in prose", async () => {
+    await using dir = await tmpdir()
+    const output = [
+      "Sure, here is the JSON:",
+      JSON.stringify({
+        proposals: [{
+          shouldRemember: true,
+          operation: "add",
+          scope: "project",
+          text: "For this repo, smoke-test visible TUI changes before saying done.",
+          tags: ["workflow", "tui"],
+          durability: 0.91,
+          confidence: 0.87,
+          changeRisk: 0.1,
+          reason: "Durable repo workflow rule.",
+        }],
+      }),
+    ].join("\n")
+
+    const result = await proposeMemoriesFromExtractorText({
+      text: "USER: For this repo, smoke-test visible TUI changes before saying done.\nASSISTANT: understood",
+      tags: ["tui", "auto"],
+      cwd: dir.path,
+      source: "tui-session-auto-extract",
+      evidence: "session:test:message:wrapped-json",
+      maxProposals: 1,
+    }, output, dir.path)
+
+    expect(result.proposals).toHaveLength(1)
+    expect(result.proposals[0]?.text).toContain("smoke-test visible TUI")
+  })
+
+  test("extractor reports why empty output creates no proposal", async () => {
+    await using dir = await tmpdir()
+
+    const result = await proposeMemoriesFromExtractorText({
+      text: "USER: thanks\nASSISTANT: gladly",
+      tags: ["tui", "auto"],
+      cwd: dir.path,
+      source: "tui-session-auto-extract",
+      evidence: "session:test:message:empty",
+      maxProposals: 1,
+    }, "{\"proposals\":[]}", dir.path)
+
+    expect(result.proposals).toHaveLength(0)
+    expect(result.candidates).toBe(0)
+    expect(result.reason).toBe("no durable memory candidates")
+  })
+
+  test("extractor output can propose targeted memory updates and removals", async () => {
+    await using dir = await tmpdir()
+    const outdated = await appendMemoryEntry({
+      scope: "project",
+      text: "MendCode should never create automatic memory proposals.",
+      tags: ["memory"],
+    }, dir.path)
+    const context = await readMemoryExtractorContext(dir.path)
+    const output = JSON.stringify({
+      proposals: [
+        {
+          shouldRemember: true,
+          operation: "update",
+          scope: "project",
+          targetEntryID: outdated.id,
+          targetEntryScope: "project",
+          text: "MendCode should create approval-gated automatic memory proposals for durable add, update, and remove candidates.",
+          tags: ["memory"],
+          durability: 0.93,
+          confidence: 0.88,
+          changeRisk: 0.1,
+          reason: "User corrected the existing memory policy.",
+        },
+      ],
+    })
+
+    const result = await proposeMemoriesFromExtractorText({
+      text: "USER: actually memory should make pending updates too\nASSISTANT: understood",
+      tags: ["tui", "auto"],
+      cwd: dir.path,
+      source: "tui-session-auto-extract",
+      evidence: "session:test:message:update",
+      maxProposals: 2,
+    }, output, dir.path, context.existingFingerprints)
+    const applied = await applyMemoryProposal(result.proposals[0]!.id, dir.path)
+    const entries = await readMemoryEntries("project", dir.path)
+
+    expect(result.proposals[0]?.operation).toBe("update")
+    expect(result.proposals[0]?.targetEntryID).toBe(outdated.id)
+    expect(applied.entry?.id).toBe(outdated.id)
+    expect(entries[0]?.text).toContain("add, update, and remove")
   })
 
   test("imports Codex memory through extractor only when applied", async () => {

@@ -35,6 +35,7 @@ import { assign } from "./part"
 import {
   DEFAULT_PASTE_SUMMARY_MIN_CHARS,
   pastedContentLabel,
+  parsePortableImageClipboard,
   promptSubmitParts,
   shouldSummarizePastedContentWithThreshold,
 } from "./submit-parts"
@@ -2348,6 +2349,22 @@ export function Prompt(props: PromptProps) {
                         }
                       }
                     } catch {}
+                  }
+
+                  const portableImageTokens = parsePortableImageClipboard(pastedContent)
+                  if (portableImageTokens) {
+                    for (const token of portableImageTokens) {
+                      if (token.type === "text") {
+                        input.insertText(token.text)
+                        continue
+                      }
+                      await pasteAttachment({
+                        filename: token.filename,
+                        mime: token.mime,
+                        content: token.content,
+                      })
+                    }
+                    return
                   }
 
                   if (
