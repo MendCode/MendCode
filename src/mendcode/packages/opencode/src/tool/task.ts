@@ -162,11 +162,6 @@ export const TaskTool = Tool.define(
           : configuredSubagentModel
             ? cfg.subagent_variant
             : msg.info.variant
-      if (requestedModel || next.model || configuredSubagentModel) {
-        const resolved = yield* provider.getModel(model.providerID, model.modelID)
-        model = { providerID: resolved.providerID, modelID: resolved.id }
-      }
-
       yield* ctx.metadata({
         title: params.description,
         metadata: {
@@ -174,6 +169,18 @@ export const TaskTool = Tool.define(
           model,
         },
       })
+
+      if (requestedModel || next.model || configuredSubagentModel) {
+        const resolved = yield* provider.getModel(model.providerID, model.modelID)
+        model = { providerID: resolved.providerID, modelID: resolved.id }
+        yield* ctx.metadata({
+          title: params.description,
+          metadata: {
+            sessionId: nextSession.id,
+            model,
+          },
+        })
+      }
 
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))

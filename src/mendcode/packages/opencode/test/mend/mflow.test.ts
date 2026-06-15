@@ -101,8 +101,9 @@ describe("mflow MendCode integration", () => {
     expect(status.locks.output).toContain("not checked")
   })
 
-  test("extracts edit targets and rejects paths outside the project", () => {
+  test("extracts edit targets and keeps external paths explicit", () => {
     const root = "/tmp/mend-mflow-root"
+    const outside = "/tmp/outside.ts"
 
     expect(mflowEditTargets("edit", { filePath: "src/app.ts" }, root)).toEqual(["src/app.ts"])
     expect(mflowReadTargets("read", { filePath: "src/app.ts" }, root)).toEqual(["src/app.ts"])
@@ -114,7 +115,8 @@ describe("mflow MendCode integration", () => {
         "*** End Patch",
       ].join("\n"),
     }, root)).toEqual(["src/app.ts", "docs/mflow.md"])
-    expect(() => mflowEditTargets("write", { path: "../outside.ts" }, root)).toThrow("outside project")
+    expect(mflowEditTargets("write", { path: "../outside.ts" }, root)).toEqual([outside])
+    expect(mflowReadTargets("read", { path: "../outside.ts" }, root)).toEqual([outside])
   })
 
   test("validates public relay URLs", async () => {

@@ -71,6 +71,7 @@ export function HomeSurface(props: {
   bind?: (ref: PromptRef | undefined) => void
   disabled?: boolean
   showToast?: boolean
+  revision?: number
   surface?: {
     homeAscii?: string
     homeBottom?: string
@@ -91,6 +92,10 @@ export function HomeSurface(props: {
   const customProductAscii = createMemo(() => renderAsciiText(mend.profile.identity.productName, logoFont()))
   const configuredHomeAscii = createMemo(() => (logoMode() === "mascot" ? homeMascotText(mend.profile) : undefined))
   const activeHomeAscii = createMemo(() => props.surface?.homeAscii || configuredHomeAscii())
+  const homeIdentityKey = createMemo(
+    () =>
+      `${props.revision ?? 0}:${mend.profile.identity.productName}:${logoFont()}:${logoMode()}:${activeHomeAscii() ?? ""}`,
+  )
   const homeDensity = createMemo<"full" | "compact" | "tiny">(() => {
     const height = dimensions().height
     if (height <= 17) return "tiny"
@@ -570,38 +575,40 @@ export function HomeSurface(props: {
     }
   })
   const logoSurface = () => (
-    <Show
-      when={activeHomeAscii()}
-      fallback={
-        <TuiPluginRuntime.Slot name="home_logo" mode="replace">
-          <Show
-            when={useProfileIdentityLogo()}
-            fallback={
+    <Show keyed when={homeIdentityKey()}>
+      {() => (
+        <Show
+          when={activeHomeAscii()}
+          fallback={
+            <TuiPluginRuntime.Slot name="home_logo" mode="replace">
               <Show
-                when={!useCompactProductName()}
+                when={useProfileIdentityLogo()}
                 fallback={
-                  <text fg={mend.profile.theme.tokens.foreground}>{mend.profile.identity.productName}</text>
+                  <Show
+                    when={!useCompactProductName()}
+                    fallback={
+                      <text fg={mend.profile.theme.tokens.foreground}>{mend.profile.identity.productName}</text>
+                    }
+                  >
+                    <Logo />
+                  </Show>
                 }
               >
-                <Logo />
+                <Show
+                  when={!useCompactProductName()}
+                  fallback={<text fg={mend.profile.theme.tokens.foreground}>{mend.profile.identity.productName}</text>}
+                >
+                  <box paddingBottom={logoBottomPad()}>
+                    <SurfaceLines text={customProductAscii()} />
+                  </box>
+                </Show>
               </Show>
-            }
-          >
-            <Show
-              when={!useCompactProductName()}
-              fallback={
-                <text fg={mend.profile.theme.tokens.foreground}>{mend.profile.identity.productName}</text>
-              }
-            >
-              <box paddingBottom={logoBottomPad()}>
-                <SurfaceLines text={customProductAscii()} />
-              </box>
-            </Show>
-          </Show>
-        </TuiPluginRuntime.Slot>
-      }
-    >
-      {(text) => <SurfaceLines text={text()} />}
+            </TuiPluginRuntime.Slot>
+          }
+        >
+          {(text) => <SurfaceLines text={text()} />}
+        </Show>
+      )}
     </Show>
   )
   const homeActionsSurface = (options?: {
@@ -916,7 +923,7 @@ export function HomeSurface(props: {
   )
 }
 
-export function Home() {
+export function Home(props: { revision?: number }) {
   const sync = useSync()
   const route = useRouteData("home")
   const promptRef = usePromptRef()
@@ -956,5 +963,5 @@ export function Home() {
     r.submit()
   })
 
-  return <HomeSurface bind={bind} />
+  return <HomeSurface bind={bind} revision={props.revision} />
 }

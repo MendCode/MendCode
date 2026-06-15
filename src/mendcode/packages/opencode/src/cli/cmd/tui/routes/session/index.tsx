@@ -2969,6 +2969,7 @@ export function memoryToastMessage(info: SessionMemoryMetadata | undefined) {
     return `Memory skipped: ${Locale.truncate(output.reason || "not available", 72)}`
   }
   const reason = output.reason || "no pending update"
+  if (reason === "no durable memory candidates" || (output.candidates === 0 && reason === "no pending update")) return ""
   return `Memory checked: ${Locale.truncate(reason, 72)}`
 }
 
