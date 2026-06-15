@@ -419,7 +419,7 @@ export async function providerSmoke(args: string[], root?: string) {
       providerID,
       authMode,
       modelID,
-      prompt: "responde solo: ok",
+      prompt: "respond only: ok",
       instructions: "You are MendCode provider smoke test. Respond with exactly: ok",
     })
     results.push({

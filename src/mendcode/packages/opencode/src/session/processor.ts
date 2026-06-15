@@ -1251,6 +1251,7 @@ export const layer: Layer.Layer<
             log.warn("memory extract", { error: reason })
             return Effect.succeed({
               proposals: [],
+              candidates: 0,
               callsProviders: true as const,
               skipped: true,
               reason,
@@ -1264,6 +1265,7 @@ export const layer: Layer.Layer<
             queued: false,
             skipped: created.skipped ?? false,
             reason: created.reason ?? null,
+            candidates: "candidates" in created ? created.candidates : 0,
             proposals: created.proposals.map((proposal) => ({
               id: proposal.id,
               status: proposal.status,

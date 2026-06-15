@@ -14,8 +14,8 @@ export function shell(template: string) {
   return Array.from(template.matchAll(SHELL_REGEX))
 }
 
-// other coding agents like claude code allow invalid yaml in their
-// frontmatter, we need to fallback to a more permissive parser for those cases
+// Some imported agent assets allow invalid yaml in their frontmatter, so keep a
+// permissive fallback parser for those compatibility cases.
 export function fallbackSanitization(content: string): string {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)
   if (!match) return content

@@ -144,9 +144,7 @@ export function defaultPromptStatus(): MendPromptStatusConfig {
       { type: "builtin", value: "provider" },
       { type: "builtin", value: "reasoning" },
     ],
-    right: [
-      { type: "builtin", value: "context" },
-    ],
+    right: [],
     separator: " · ",
     colors: {},
     scripts: {

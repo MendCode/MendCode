@@ -36,6 +36,11 @@ export interface Content {
   mime: string
 }
 
+export interface ImageContent {
+  data: string
+  mime: string
+}
+
 // Checks clipboard for images first, then falls back to text.
 //
 // On Windows prompt/ can call this from multiple paste signals because
@@ -200,6 +205,76 @@ export async function copy(text: string): Promise<void> {
   writeOsc52(text)
   const method = await getCopyMethod()
   await method(text)
+}
+
+export async function copyImage(content: ImageContent): Promise<void> {
+  const buffer = Buffer.from(content.data, "base64")
+  if (buffer.length === 0) throw new Error("Cannot copy empty image")
+  const os = platform()
+  const which = await getWhich()
+
+  if (os === "darwin" && content.mime === "image/png" && which("osascript")) {
+    const tmpfile = path.join(tmpdir(), `mendcode-clipboard-${Date.now()}.png`)
+    try {
+      await fs.writeFile(tmpfile, buffer)
+      await Process.run(
+        [
+          "osascript",
+          "-e",
+          `set the clipboard to (read (POSIX file "${tmpfile}") as «class PNGf»)`,
+        ],
+      )
+      return
+    } finally {
+      await fs.rm(tmpfile, { force: true }).catch(() => {})
+    }
+  }
+
+  if (os === "linux") {
+    if (process.env["WAYLAND_DISPLAY"] && which("wl-copy")) {
+      const proc = Process.spawn(["wl-copy", "-t", content.mime], { stdin: "pipe", stdout: "ignore", stderr: "ignore" })
+      if (!proc.stdin) throw new Error("wl-copy stdin unavailable")
+      proc.stdin.write(buffer)
+      proc.stdin.end()
+      const code = await proc.exited
+      if (code !== 0) throw new Error(`wl-copy failed with code ${code}`)
+      return
+    }
+    if (which("xclip")) {
+      const proc = Process.spawn(["xclip", "-selection", "clipboard", "-t", content.mime], {
+        stdin: "pipe",
+        stdout: "ignore",
+        stderr: "ignore",
+      })
+      if (!proc.stdin) throw new Error("xclip stdin unavailable")
+      proc.stdin.write(buffer)
+      proc.stdin.end()
+      const code = await proc.exited
+      if (code !== 0) throw new Error(`xclip failed with code ${code}`)
+      return
+    }
+  }
+
+  if (os === "win32" && which("powershell.exe")) {
+    const tmpfile = path.join(tmpdir(), `mendcode-clipboard-${Date.now()}.png`)
+    try {
+      await fs.writeFile(tmpfile, buffer)
+      await Process.run(
+        [
+          "powershell.exe",
+          "-NonInteractive",
+          "-NoProfile",
+          "-Command",
+          `Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $img=[System.Drawing.Image]::FromFile('${tmpfile.replace(/'/g, "''")}'); [System.Windows.Forms.Clipboard]::SetImage($img); $img.Dispose()`,
+        ],
+      )
+      return
+    } finally {
+      await fs.rm(tmpfile, { force: true }).catch(() => {})
+    }
+  }
+
+  throw new Error("Native image clipboard is not supported on this platform")
 }
 
 export * as Clipboard from "./clipboard"

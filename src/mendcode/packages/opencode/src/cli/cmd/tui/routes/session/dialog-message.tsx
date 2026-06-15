@@ -5,7 +5,7 @@ import { useSDK } from "@tui/context/sdk"
 import { useRoute } from "@tui/context/route"
 import * as Clipboard from "@tui/util/clipboard"
 import type { PromptInfo } from "@tui/component/prompt/history"
-import { restorePromptFromSubmittedParts } from "@tui/component/prompt/submit-parts"
+import { messagePartsToPortableClipboard, restorePromptFromSubmittedParts } from "@tui/component/prompt/submit-parts"
 
 export function DialogMessage(props: {
   messageID: string
@@ -51,14 +51,14 @@ export function DialogMessage(props: {
             if (!msg) return
 
             const parts = sync.data.part[msg.id]
-            const text = parts.reduce((agg, part) => {
-              if (part.type === "text" && !part.synthetic) {
-                agg += part.text
-              }
-              return agg
-            }, "")
+            const clipboard = messagePartsToPortableClipboard(parts)
+            if (!clipboard.text) return
 
-            await Clipboard.copy(text)
+            if (clipboard.imageCount === 1 && clipboard.firstImage && clipboard.text.startsWith("![")) {
+              await Clipboard.copyImage(clipboard.firstImage).catch(() => Clipboard.copy(clipboard.text))
+            } else {
+              await Clipboard.copy(clipboard.text)
+            }
             dialog.clear()
           },
         },
