@@ -667,7 +667,7 @@ function normalizeProjectPath(root: string, file: string) {
   const absolute = path.isAbsolute(file) ? file : path.resolve(root, file)
   const relative = path.relative(root, absolute)
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-    throw new Error(`mflow refused path outside project: ${file}`)
+    return absolute
   }
   return relative
 }
@@ -696,11 +696,7 @@ export function mflowReadTargets(tool: string, args: unknown, root: string) {
   const normalizedTool = tool.toLowerCase()
   const directPath = input.filePath || input.file_path || input.path
   if (normalizedTool !== "read" || typeof directPath !== "string") return []
-  try {
-    return [normalizeProjectPath(root, directPath)]
-  } catch {
-    return []
-  }
+  return [normalizeProjectPath(root, directPath)]
 }
 
 async function waitForMflowReadAccess(input: {
