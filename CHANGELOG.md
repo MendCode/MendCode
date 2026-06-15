@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.11 - 2026-06-15
+
+- Preserve `task` tool metadata while a subagent is running, after tool-call transitions, and when a subagent fails before model resolution completes.
+- Queue a newly submitted prompt behind an active run so the second prompt is saved and answered in the next LLM call instead of being coalesced into the first run's result.
+- Keep existing concurrent `loop()` callers coalesced to the same active run while only explicit prompt submissions enqueue a follow-up turn.
+- Stop showing the empty memory-check toast when the extractor finds no durable candidates, and keep Home title changes silent while refreshing the visible Home surface.
+- Hide the prompt-bottom context meter unless `promptStatus.context.visible` is explicitly enabled, including old profiles that still list the context builtin.
+- Let mflow lock/read external absolute paths by default instead of refusing paths outside the current project.
+
 ## 0.1.10 - 2026-06-14
 
 - Let automatic memory learning create approval-gated `add`, `update`, and `remove` proposals, with targeted updates/deletes applied to existing memory entries instead of only appending new entries.

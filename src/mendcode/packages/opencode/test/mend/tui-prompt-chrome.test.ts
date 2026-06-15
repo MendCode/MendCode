@@ -21,6 +21,27 @@ describe("mend tui prompt chrome", () => {
     expect(validateMendTuiProfile(defaultTuiProfile()).ok).toBe(true)
   })
 
+  test("context meter is opt-in even when old profiles still list the context builtin", () => {
+    const profile = mergeMendTuiProfile({
+      promptStatus: {
+        right: [{ type: "builtin", value: "context" }],
+      },
+    })
+    const resolved = resolvePromptStatus(profile.promptStatus, "top-bottom")
+
+    expect(resolved.context?.visible).toBe(false)
+    expect(resolved.right).toEqual([{ type: "builtin", value: "context" }])
+
+    const visible = mergeMendTuiProfile({
+      promptStatus: {
+        context: { visible: true },
+        right: [{ type: "builtin", value: "context" }],
+      },
+    })
+
+    expect(resolvePromptStatus(visible.promptStatus, "top-bottom").context?.visible).toBe(true)
+  })
+
   test("sticky user header remains configurable through session layout", () => {
     const profile = mergeMendTuiProfile({
       layout: {

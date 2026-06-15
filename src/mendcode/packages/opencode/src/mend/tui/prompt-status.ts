@@ -30,6 +30,9 @@ export type MendPromptStatusScripts = Partial<Record<"left" | "right", MendPromp
 
 export type MendPromptStatusConfig = {
   enabled: boolean
+  context?: {
+    visible?: boolean
+  }
   commandsHint?: {
     visible?: boolean
   }
@@ -44,6 +47,9 @@ export type MendPromptStatusConfig = {
 
 export type MendPromptStatusResolved = {
   enabled: boolean
+  context?: {
+    visible?: boolean
+  }
   placement: MendPromptStatusPlacement
   left: MendPromptStatusItem[]
   right: MendPromptStatusItem[]
@@ -129,6 +135,9 @@ function warmCacheKey(input: MendPromptStatusScriptInput) {
 export function defaultPromptStatus(): MendPromptStatusConfig {
   return {
     enabled: true,
+    context: {
+      visible: false,
+    },
     commandsHint: {
       visible: false,
     },
@@ -178,6 +187,10 @@ export function resolvePromptStatus(config: MendPromptStatusConfig | null | unde
   const merged = {
     ...defaults,
     ...(config || {}),
+    context: {
+      ...(defaults.context || {}),
+      ...(config?.context || {}),
+    },
     placementByPreset: {
       ...(defaults.placementByPreset || {}),
       ...(config?.placementByPreset || {}),
@@ -225,6 +238,7 @@ export function resolvePromptStatus(config: MendPromptStatusConfig | null | unde
   }
   return {
     enabled: merged.enabled !== false,
+    context: merged.context,
     placement: merged.placementByPreset?.[preset] || "outside",
     left: filterPromptStatusItems(merged.left, merged),
     right: filterPromptStatusItems(merged.right, merged),

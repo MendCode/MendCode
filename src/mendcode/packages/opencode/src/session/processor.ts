@@ -340,6 +340,7 @@ type PendingMemoryExtraction = {
 
 interface ProcessorContext extends Input {
   toolcalls: Record<string, ToolCall>
+  pendingToolUpdates: Record<string, (part: MessageV2.ToolPart) => MessageV2.ToolPart>
   shouldBreak: boolean
   snapshot: string | undefined
   blocked: boolean
@@ -400,6 +401,7 @@ export const layer: Layer.Layer<
         sessionID: input.sessionID,
         model: input.model,
         toolcalls: {},
+        pendingToolUpdates: {},
         shouldBreak: false,
         snapshot: initialSnapshot,
         blocked: false,
@@ -540,7 +542,11 @@ export const layer: Layer.Layer<
         update: (part: MessageV2.ToolPart) => MessageV2.ToolPart,
       ) {
         const match = yield* readToolCall(toolCallID)
-        if (!match) return
+        if (!match) {
+          const pending = ctx.pendingToolUpdates[toolCallID]
+          ctx.pendingToolUpdates[toolCallID] = pending ? (part) => update(pending(part)) : update
+          return
+        }
         const part = yield* session.updatePart(update(match.part))
         ctx.toolcalls[toolCallID] = {
           ...match.call,
@@ -568,7 +574,7 @@ export const layer: Layer.Layer<
             status: "completed",
             input: match.part.state.input,
             output: output.output,
-            metadata: output.metadata,
+            metadata: output.metadata ?? match.part.state.metadata,
             title: output.title,
             time: { start: match.part.state.time.start, end: Date.now() },
             attachments: output.attachments,
@@ -586,6 +592,7 @@ export const layer: Layer.Layer<
             status: "error",
             input: match.part.state.input,
             error: errorMessage(error),
+            metadata: match.part.state.metadata,
             time: { start: match.part.state.time.start, end: Date.now() },
           },
         })
@@ -675,11 +682,14 @@ export const layer: Layer.Layer<
               state: { status: "pending", input: {}, raw: "" },
               metadata: value.providerExecuted ? { providerExecuted: true } : undefined,
             } satisfies MessageV2.ToolPart)
+            const pending = ctx.pendingToolUpdates[value.id]
+            const updatedPart = pending ? yield* session.updatePart(pending(part)) : part
+            delete ctx.pendingToolUpdates[value.id]
             ctx.toolcalls[value.id] = {
               done: yield* Deferred.make<void>(),
-              partID: part.id,
-              messageID: part.messageID,
-              sessionID: part.sessionID,
+              partID: updatedPart.id,
+              messageID: updatedPart.messageID,
+              sessionID: updatedPart.sessionID,
             }
             return
 

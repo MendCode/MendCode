@@ -1539,6 +1539,7 @@ export function Prompt(props: PromptProps) {
           ? { text: currentReasoningLabel()!, fg: theme.warning, bold: true }
           : undefined
       case "context":
+        if (promptStatusConfig().context?.visible !== true) return undefined
         return usage()?.context
           ? {
               text: usage()!.contextPercent === undefined ? usage()!.context! : "█".repeat(8) + " 100%",
