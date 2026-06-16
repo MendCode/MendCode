@@ -10,6 +10,8 @@ ARCHIVE_BINARY=mendcode
 MUTED='\033[0;2m'
 RED='\033[0;31m'
 ORANGE='\033[38;5;214m'
+GREEN='\033[0;32m'
+BOLD='\033[1m'
 NC='\033[0m' # No Color
 
 usage() {
@@ -223,6 +225,33 @@ print_message() {
     echo -e "${color}${message}${NC}"
 }
 
+print_banner() {
+    echo -e ""
+    echo -e "${ORANGE} __  __                _  ____          _      ${NC}"
+    echo -e "${ORANGE}|  \\/  | ___ _ __   __| |/ ___|___   __| | ___ ${NC}"
+    echo -e "${ORANGE}| |\\/| |/ _ \\ '_ \\ / _\` | |   / _ \\ / _\` |/ _ \\ ${NC}"
+    echo -e "${ORANGE}| |  | |  __/ | | | (_| | |__| (_) | (_| |  __/${NC}"
+    echo -e "${ORANGE}|_|  |_|\\___|_| |_|\\__,_|\\____\\___/ \\__,_|\\___|${NC}"
+    echo -e ""
+    echo -e "${BOLD}MendCode installer${NC}"
+    echo -e "${MUTED}Version:${NC} $specific_version  ${MUTED}Target:${NC} ${target:-local}"
+    echo -e "${MUTED}Install dir:${NC} $INSTALL_DIR"
+}
+
+print_step() {
+    local current="$1"
+    local total="$2"
+    local message="$3"
+    echo -e "${ORANGE}[$current/$total]${NC} ${BOLD}$message${NC}"
+}
+
+print_success() {
+    echo -e "${GREEN}OK${NC} $1"
+}
+
+STEP_TOTAL=4
+PATH_STEP=4
+
 check_version() {
     local installed_path="$INSTALL_DIR/$BINARY_NAME"
     if [ "$os" = "windows" ] && [ -f "$INSTALL_DIR/$BINARY_NAME.exe" ]; then
@@ -265,11 +294,11 @@ print_progress() {
     local off=$(( width - on ))
 
     local filled=$(printf "%*s" "$on" "")
-    filled=${filled// /■}
+    filled=${filled// /#}
     local empty=$(printf "%*s" "$off" "")
-    empty=${empty// /･}
+    empty=${empty// /-}
 
-    printf "\r${ORANGE}%s%s %3d%%${NC}" "$filled" "$empty" "$percent" >&4
+    printf "\r${ORANGE}[%s%s] %3d%%${NC}" "$filled" "$empty" "$percent" >&4
 }
 
 download_with_progress() {
@@ -333,15 +362,19 @@ download_with_progress() {
 }
 
 download_and_install() {
-    print_message info "\n${MUTED}Installing ${NC}MendCode ${MUTED}version: ${NC}$specific_version"
+    print_banner
+    print_step 1 4 "Preparing download"
     local tmp_dir="${TMPDIR:-/tmp}/mendcode_install_$$"
     mkdir -p "$tmp_dir"
 
+    print_step 2 4 "Downloading release asset"
     if [[ "$os" == "windows" ]] || ! [ -t 2 ] || ! download_with_progress "$url" "$tmp_dir/$filename"; then
         # Fallback to standard curl on Windows, non-TTY environments, or if custom progress fails
         curl -# -L -o "$tmp_dir/$filename" "$url"
     fi
+    print_success "Downloaded $filename"
 
+    print_step 3 4 "Installing binary"
     if [ "$os" = "linux" ]; then
         tar -xzf "$tmp_dir/$filename" -C "$tmp_dir"
     else
@@ -361,12 +394,19 @@ download_and_install() {
     mv "$extracted" "$INSTALL_DIR/$BINARY_NAME"
     chmod 755 "${INSTALL_DIR}/$BINARY_NAME"
     rm -rf "$tmp_dir"
+    print_success "Installed ${INSTALL_DIR}/$BINARY_NAME"
 }
 
 install_from_binary() {
-    print_message info "\n${MUTED}Installing ${NC}MendCode ${MUTED}from: ${NC}$binary_path"
+    specific_version="local"
+    target="local"
+    STEP_TOTAL=2
+    PATH_STEP=2
+    print_banner
+    print_step 1 "$STEP_TOTAL" "Installing local binary"
     cp "$binary_path" "${INSTALL_DIR}/$BINARY_NAME"
     chmod 755 "${INSTALL_DIR}/$BINARY_NAME"
+    print_success "Installed ${INSTALL_DIR}/$BINARY_NAME"
 }
 
 if [ -n "$binary_path" ]; then
@@ -419,6 +459,7 @@ case $current_shell in
 esac
 
 if [[ "$no_modify_path" != "true" ]]; then
+    print_step "$PATH_STEP" "$STEP_TOTAL" "Updating PATH"
     config_file=""
     for file in $config_files; do
         if [[ -f $file ]]; then
@@ -453,7 +494,11 @@ if [[ "$no_modify_path" != "true" ]]; then
                 print_message info "  export PATH=$INSTALL_DIR:\$PATH"
             ;;
         esac
+    else
+        print_success "PATH already includes $INSTALL_DIR"
     fi
+else
+    print_message info "${MUTED}Skipping PATH update because --no-modify-path was set.${NC}"
 fi
 
 if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
@@ -462,12 +507,14 @@ if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
 fi
 
 echo -e ""
-echo -e "${MUTED}MendCode includes free models, to start:${NC}"
+echo -e "${GREEN}MendCode is ready.${NC}"
 echo -e ""
-echo -e "cd <project>  ${MUTED}# Open directory${NC}"
+echo -e "  cd <project>                 ${MUTED}# open your repo${NC}"
+echo -e "  ${INSTALL_DIR}/$BINARY_NAME        ${MUTED}# run now in this terminal${NC}"
 echo -e ""
-echo -e "mendcode    ${MUTED}# Open MendCode; first run opens setup${NC}"
+echo -e "${MUTED}Open a new terminal to use:${NC} mendcode"
+echo -e "${MUTED}Or update this terminal now:${NC} export PATH=$INSTALL_DIR:\$PATH"
 echo -e ""
-echo -e "${MUTED}For more information visit ${NC}$GITHUB_BASE_URL"
+echo -e "${MUTED}Docs and releases:${NC} $GITHUB_BASE_URL"
 echo -e ""
 echo -e ""

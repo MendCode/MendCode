@@ -71,7 +71,7 @@ function normalizeLoadedConfig(data: unknown, source: string) {
     log.warn("tui keys in runtime config are deprecated; move them to tui.json", { path: source })
   }
 
-  const mendControlPlaneKeys = ["version", "engine", "focus", "budgets", "worktree"] as const
+  const mendControlPlaneKeys = ["version", "engine", "focus", "budgets", "memory", "package", "worktree"] as const
   const removedControlPlaneKeys = mendControlPlaneKeys.filter((key) => key in copy)
   if (removedControlPlaneKeys.length) {
     mutated = true
@@ -630,9 +630,10 @@ export const layer = Layer.effect(
           }
         }
 
-        if (Flag.OPENCODE_CONFIG_CONTENT) {
+        const opencodeConfigContent = process.env.OPENCODE_CONFIG_CONTENT || Flag.OPENCODE_CONFIG_CONTENT
+        if (opencodeConfigContent) {
           const source = "OPENCODE_CONFIG_CONTENT"
-          const next = yield* loadConfig(Flag.OPENCODE_CONFIG_CONTENT, {
+          const next = yield* loadConfig(opencodeConfigContent, {
             dir: ctx.directory,
             source,
           })

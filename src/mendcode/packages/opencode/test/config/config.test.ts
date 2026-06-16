@@ -161,6 +161,38 @@ test("loads JSON config file", async () => {
   })
 })
 
+test("ignores MendCode-owned project config keys in .mendcode/mendcode.json", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await fs.mkdir(path.join(dir, ".mendcode"), { recursive: true })
+      await writeConfig(
+        path.join(dir, ".mendcode"),
+        {
+          $schema: "https://mendcode.ai/config.json",
+          version: 0,
+          engine: { name: "opencode" },
+          focus: { default: "codex" },
+          budgets: { warnUsd: 1 },
+          memory: { enabled: false },
+          package: { kind: "bundle" },
+          tui: { profile: "default" },
+          worktree: { mode: "off" },
+          username: "setup-user",
+        },
+      )
+    },
+  })
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await load()
+      expect(config.username).toBe("setup-user")
+      expect((config as any).memory).toBeUndefined()
+      expect((config as any).package).toBeUndefined()
+    },
+  })
+})
+
 test("loads subagent_model without changing main model", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
