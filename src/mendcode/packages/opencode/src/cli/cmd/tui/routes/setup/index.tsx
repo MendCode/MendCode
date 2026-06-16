@@ -4,6 +4,7 @@ import { routeReturnTarget, useRoute, useRouteData, type SetupStepID } from "@tu
 import { useTheme } from "@tui/context/theme"
 import { useSync } from "@tui/context/sync"
 import { createDialogProviderOptions } from "@tui/component/dialog-provider"
+import { providerDisplayName } from "@tui/util/provider-origin"
 import { useLocal } from "@tui/context/local"
 import { useDialog } from "@tui/ui/dialog"
 import { DialogConfirm } from "@tui/ui/dialog-confirm"
@@ -252,12 +253,13 @@ export function Setup() {
     return state ? isSetupComplete(state) : false
   })
   const promptPanelWidth = createMemo(() => Math.max(56, dimensions().width - (narrow() ? 12 : 44)))
-  const connectedProviderIDs = createMemo(() =>
-    sync.data.provider_next.connected.filter((providerID) => providerID !== "opencode"),
-  )
+  const connectedProviderIDs = createMemo(() => sync.data.provider_next.connected)
   const connectedProviderNames = createMemo(() =>
     connectedProviderIDs().map(
-      (providerID) => sync.data.provider.find((provider) => provider.id === providerID)?.name ?? providerID,
+      (providerID) => {
+        const provider = sync.data.provider.find((provider) => provider.id === providerID)
+        return provider ? providerDisplayName(provider) : providerID
+      },
     ),
   )
 
@@ -411,15 +413,15 @@ export function Setup() {
       onSelect: () => Promise<void>
     }> = []
 
-    for (const provider of sync.data.provider
-      .filter((item) => item.id !== "opencode")
-      .toSorted((a, b) => a.name.localeCompare(b.name))) {
+    for (const provider of sync.data.provider.toSorted((a, b) =>
+      providerDisplayName(a).localeCompare(providerDisplayName(b)),
+    )) {
       for (const [modelID, model] of Object.entries(provider.models).sort(([a], [b]) => a.localeCompare(b))) {
         if (model.status === "deprecated") continue
         options.push({
           title: model.name ?? modelID,
           value: { providerID: provider.id, modelID },
-          category: provider.name,
+          category: providerDisplayName(provider),
           description: provider.id,
           onSelect: async () => {
             await saveModelRoleWithVariant(roleName, {

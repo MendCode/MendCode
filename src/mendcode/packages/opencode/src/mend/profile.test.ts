@@ -147,10 +147,49 @@ describe("Mend TUI profile config overrides", () => {
       })
 
       expect(result.profile.presentation.profile).toBe("raw")
+      expect(result.profile.presentation.message.renderer).toBe("plain")
       expect(result.profile.presentation.reasoning.defaultVisibility).toBe("visible")
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  test("chat presentation message renderer can be overridden independently", () => {
+    const raw = mergeMendTuiProfile({
+      presentation: {
+        profile: "raw",
+        message: {
+          renderer: "rich",
+        },
+      },
+    })
+    expect(raw.presentation.profile).toBe("raw")
+    expect(raw.presentation.reasoning.defaultVisibility).toBe("visible")
+    expect(raw.presentation.message.renderer).toBe("rich")
+
+    const invalid = mergeMendTuiProfile({
+      presentation: {
+        profile: "minimal",
+        message: {
+          renderer: "unsafe",
+        },
+      },
+    })
+    expect(invalid.presentation.profile).toBe("minimal")
+    expect(invalid.presentation.message.renderer).toBe("markdown")
+    expect(validateMendTuiProfile(invalid).ok).toBe(true)
+  })
+
+  test("chat presentation accepts full as a compatibility alias", () => {
+    const result = mergeMendTuiProfile({
+      presentation: {
+        profile: "full",
+      },
+    })
+
+    expect(result.presentation.profile).toBe("mendcode")
+    expect(result.presentation.message.renderer).toBe("rich")
+    expect(validateMendTuiProfile(result).ok).toBe(true)
   })
 
   test("home logo size and welcome mode can be overridden from TUI config", async () => {

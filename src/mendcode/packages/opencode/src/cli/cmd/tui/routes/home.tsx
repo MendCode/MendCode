@@ -723,15 +723,9 @@ export function HomeSurface(props: {
         <Show
           when={agentViewSessions().length > 0}
           fallback={
-            <box width="100%" flexDirection="column">
-              <box width="100%" height={1} flexDirection="row">
-                <box flexGrow={1} minWidth={1} />
-                <text fg={mend.profile.theme.tokens.muted} wrapMode="none">No sessions yet</text>
-              </box>
-              <box width="100%" height={1} flexDirection="row">
-                <box flexGrow={1} minWidth={1} />
-                <text fg={launcherHintColor} wrapMode="none">resume or start a task</text>
-              </box>
+            <box width="100%" flexDirection="column" alignItems="center">
+              <text fg={mend.profile.theme.tokens.muted} wrapMode="none">No sessions yet</text>
+              <text fg={launcherHintColor} wrapMode="none">resume or start a task</text>
             </box>
           }
         >

@@ -26,6 +26,13 @@ function cleanLabel(input: string | undefined) {
     .trim()
 }
 
+function cleanConnectorLabel(input: string | undefined) {
+  return (input ?? "")
+    .replace(/[`"']/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
 export function planReviewInlineTitle(input: string | undefined) {
   const title = cleanLabel(input).replace(/^Plan:\s*/i, "")
   return title || undefined
@@ -39,20 +46,43 @@ function renderBox(label: string) {
   return [`╭${"─".repeat(width)}╮`, `│${inner}│`, `╰${"─".repeat(width)}╯`]
 }
 
+function renderEntityBox(label: string, fields: string[]) {
+  if (fields.length === 0) return renderBox(label)
+
+  const name = cleanLabel(label) || "entity"
+  const fieldLines = fields.slice(0, 8).map((field) => cleanLabel(field)).filter(Boolean)
+  const width = Math.min(52, Math.max(10, Bun.stringWidth(name) + 2, ...fieldLines.map((field) => Bun.stringWidth(field) + 2)))
+  const center = centerVisual(name, width)
+  const rows = fieldLines.map((field) => {
+    const padded = ` ${field} `
+    return `│${padded}${" ".repeat(Math.max(0, width - Bun.stringWidth(padded)))}│`
+  })
+
+  return [
+    `╭${"─".repeat(width)}╮`,
+    `│${center}│`,
+    `├${"─".repeat(width)}┤`,
+    ...rows,
+    `╰${"─".repeat(width)}╯`,
+  ]
+}
+
 function renderInlineBox(label: string) {
   const text = cleanLabel(label) || "step"
   return `┌ ${text} ┐`
 }
 
+function renderCompactBox(label: string, minWidth = 8) {
+  const text = cleanLabel(label) || "item"
+  const width = Math.min(28, Math.max(minWidth, Bun.stringWidth(text) + 2))
+  const padded = ` ${text} `
+  const inner = padded + " ".repeat(Math.max(0, width - Bun.stringWidth(padded)))
+  return [`╭${"─".repeat(width)}╮`, `│${inner}│`, `╰${"─".repeat(width)}╯`]
+}
+
 function indentLines(lines: string[], depth: number) {
   const prefix = "  ".repeat(depth)
   return lines.map((line) => (line ? `${prefix}${line}` : line))
-}
-
-function centerLine(input: string, width: number) {
-  const lineWidth = Bun.stringWidth(input)
-  if (lineWidth >= width) return input
-  return `${" ".repeat(Math.floor((width - lineWidth) / 2))}${input}`
 }
 
 function popTrailingHeading(input: string) {
@@ -67,32 +97,404 @@ function popTrailingHeading(input: string) {
   }
 }
 
-function renderSimpleFlowchart(input: string): string | undefined {
+function isMarkdownTableSeparator(line: string) {
+  return /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line)
+}
+
+function isMarkdownTableRow(line: string) {
+  const trimmed = line.trim()
+  return trimmed.includes("|") && !trimmed.startsWith("```")
+}
+
+function splitMarkdownTableRow(line: string) {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim())
+}
+
+function wrapTextLine(prefix: string, text: string, width: number) {
+  const maxWidth = Math.max(48, Math.min(100, width - 8))
+  const words = text.split(/\s+/).filter(Boolean)
+  const lines: string[] = []
+  let current = prefix
+
+  for (const word of words) {
+    const separator = current === prefix ? "" : " "
+    const next = `${current}${separator}${word}`
+    if (Bun.stringWidth(next) <= maxWidth) {
+      current = next
+      continue
+    }
+
+    if (current !== prefix) lines.push(current)
+    current = `${" ".repeat(Bun.stringWidth(prefix))}${word}`
+  }
+
+  lines.push(current === prefix ? `${prefix}${text}` : current)
+  return lines
+}
+
+function renderWideTablesAsText(markdown: string, width: number) {
+  const lines = markdown.split("\n")
+  const result: string[] = []
+
+  for (let index = 0; index < lines.length; index++) {
+    const current = lines[index]
+    const next = lines[index + 1]
+    if (!current || !next || !isMarkdownTableRow(current) || !isMarkdownTableSeparator(next)) {
+      result.push(current)
+      continue
+    }
+
+    const table: string[] = [current, next]
+    index += 2
+    while (index < lines.length && isMarkdownTableRow(lines[index])) {
+      table.push(lines[index])
+      index++
+    }
+    index--
+
+    const tableWidth = Math.max(...table.map((line) => Bun.stringWidth(line)))
+    if (tableWidth < Math.max(40, width - 4)) {
+      result.push(...table)
+      continue
+    }
+
+    const headers = splitMarkdownTableRow(table[0])
+    const rows = table.slice(2).map(splitMarkdownTableRow)
+    result.push("```text")
+    rows.forEach((row, rowIndex) => {
+      const title = row[0] || `Fila ${rowIndex + 1}`
+      result.push(...wrapTextLine("", title, width))
+
+      for (let cellIndex = 1; cellIndex < Math.max(headers.length, row.length); cellIndex++) {
+        const header = headers[cellIndex] || `Campo ${cellIndex + 1}`
+        const cell = row[cellIndex]
+        if (!cell) continue
+        result.push(...wrapTextLine(`  ${header}: `, cell, width))
+      }
+
+      if (rowIndex < rows.length - 1) result.push("")
+    })
+    result.push("```")
+  }
+
+  return result.join("\n")
+}
+
+function renderMarkdownListsAsText(markdown: string) {
+  const lines = markdown.split("\n")
+  const result: string[] = []
+  let inFence = false
+
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      result.push(line)
+      continue
+    }
+
+    if (inFence) {
+      result.push(line)
+      continue
+    }
+
+    const checklist = /^(\s*)[-*+]\s+\[([ xX])\]\s+(.+)$/.exec(line)
+    if (checklist) {
+      const depth = Math.floor(checklist[1].replace(/\t/g, "  ").length / 2)
+      const glyph = checklist[2].toLowerCase() === "x" ? "☑" : "☐"
+      result.push(`${"  ".repeat(depth)}${glyph} ${checklist[3]}`)
+      continue
+    }
+
+    const bullet = /^(\s*)[-*+]\s+(.+)$/.exec(line)
+    if (bullet) {
+      const depth = Math.floor(bullet[1].replace(/\t/g, "  ").length / 2)
+      const glyph = depth === 0 ? "•" : depth === 1 ? "◦" : "▪"
+      result.push(`${"  ".repeat(depth)}${glyph} ${bullet[2]}`)
+      continue
+    }
+
+    const numbered = /^(\s*)(\d+)[.)]\s+(.+)$/.exec(line)
+    if (numbered) {
+      const depth = Math.floor(numbered[1].replace(/\t/g, "  ").length / 2)
+      result.push(`${"  ".repeat(depth)}${numbered[2]}. ${numbered[3]}`)
+      continue
+    }
+
+    result.push(line)
+  }
+
+  return result.join("\n")
+}
+
+function renderMarkdownHeadingsAsText(markdown: string) {
+  const lines = markdown.split("\n")
+  const result: string[] = []
+  let inFence = false
+
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      result.push(line)
+      continue
+    }
+
+    if (inFence) {
+      result.push(line)
+      continue
+    }
+
+    const heading = /^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line)
+    if (!heading) {
+      result.push(line)
+      continue
+    }
+
+    const level = heading[1].length
+    const title = cleanLabel(heading[2])
+    if (!title) {
+      result.push(line)
+      continue
+    }
+
+    if (level === 1) {
+      result.push(title, "═".repeat(Math.min(72, Math.max(8, Bun.stringWidth(title)))))
+      continue
+    }
+    if (level === 2) {
+      result.push(title, "─".repeat(Math.min(72, Math.max(8, Bun.stringWidth(title)))))
+      continue
+    }
+
+    const glyph = level === 3 ? "◆" : level === 4 ? "◇" : level === 5 ? "▪" : "·"
+    result.push(`${glyph} ${title}`)
+  }
+
+  return result.join("\n")
+}
+
+function renderMarkdownForTui(markdown: string, width: number) {
+  return renderMarkdownHeadingsAsText(renderMarkdownListsAsText(renderWideTablesAsText(markdown, width)))
+}
+
+function alignTextBlock(input: string, width: number) {
+  const lines = input.split("\n")
+  const contentWidth = Math.max(...lines.map((line) => Bun.stringWidth(line)), 0)
+  const availableWidth = Math.max(40, width - 4)
+  if (contentWidth >= availableWidth) return input
+
+  const padding = " ".repeat(Math.floor((availableWidth - contentWidth) / 2))
+  return lines.map((line) => (line ? `${padding}${line}` : line)).join("\n")
+}
+
+type FlowDirection = "td" | "tb" | "lr" | "rl" | "bt"
+
+function parseFlowchartEdgeLine(line: string, labels: Map<string, string>) {
+  const nodePattern = /([A-Za-z][\w-]*)(?:\[([^\]]+)\]|\(([^)]+)\)|\{([^}]+)\})?/y
+  const connectorPattern = /\s*(?:--\s*([^>|-]+?)\s*--!?>|--!?>\|([^|]+)\||==>\|([^|]+)\||--!?>|---|==>|-.->|[—–-]*→|→)\s*/y
+  const edges: Array<{ from: string; to: string; label?: string }> = []
+  let cursor = 0
+  nodePattern.lastIndex = cursor
+  const first = nodePattern.exec(line)
+  if (!first) return edges
+
+  let previous = first[1]
+  labels.set(previous, cleanLabel(first[2] || first[3] || first[4] || labels.get(previous) || previous))
+  cursor = nodePattern.lastIndex
+
+  while (cursor < line.length) {
+    connectorPattern.lastIndex = cursor
+    const connector = connectorPattern.exec(line)
+    if (!connector) break
+
+    nodePattern.lastIndex = connectorPattern.lastIndex
+    const next = nodePattern.exec(line)
+    if (!next) break
+
+    const target = next[1]
+    labels.set(target, cleanLabel(next[2] || next[3] || next[4] || labels.get(target) || target))
+    edges.push({
+      from: previous,
+      to: target,
+      label: cleanLabel(connector[1] || connector[2] || connector[3]) || undefined,
+    })
+    previous = target
+    cursor = nodePattern.lastIndex
+  }
+
+  return edges
+}
+
+type HorizontalPathSegment =
+  | { type: "node"; label: string }
+  | { type: "edge"; label?: string }
+  | { type: "loop"; label: string }
+
+function padVisual(input: string, width: number) {
+  return input + " ".repeat(Math.max(0, width - Bun.stringWidth(input)))
+}
+
+function centerVisual(input: string, width: number) {
+  const inputWidth = Bun.stringWidth(input)
+  if (inputWidth >= width) return input
+  const left = Math.floor((width - inputWidth) / 2)
+  return `${" ".repeat(left)}${input}${" ".repeat(width - inputWidth - left)}`
+}
+
+function renderBoxConnection(input: {
+  from: string
+  to: string
+  label?: string
+  connector?: string
+  width: number
+}) {
+  const left = renderBox(input.from)
+  const right = renderBox(input.to)
+  const leftWidth = Math.max(...left.map((line) => Bun.stringWidth(line)))
+  const rightWidth = Math.max(...right.map((line) => Bun.stringWidth(line)))
+  const connector = input.connector ?? "────▶"
+  const label = cleanConnectorLabel(input.label)
+  const connectorWidth =
+    input.connector && !label ? Bun.stringWidth(connector) : Math.max(8, Math.min(28, Bun.stringWidth(label || connector) + 4))
+  const availableWidth = Math.max(40, input.width - 4)
+  const rowWidth = leftWidth + connectorWidth + rightWidth
+
+  if (rowWidth > availableWidth) {
+    const from = renderInlineBox(input.from)
+    const to = renderInlineBox(input.to)
+    const line = `${from} ${connector} ${to}${label ? `  ${label}` : ""}`
+    return Bun.stringWidth(line) <= availableWidth ? [line] : [`${from} ${connector} ${to}`, ...(label ? [`  ${label}`] : [])]
+  }
+
+  return [
+    `${padVisual(left[0], leftWidth)}${" ".repeat(connectorWidth)}${padVisual(right[0], rightWidth)}`,
+    `${padVisual(left[1], leftWidth)}${centerVisual(connector, connectorWidth)}${padVisual(right[1], rightWidth)}`,
+    `${padVisual(left[2], leftWidth)}${centerVisual(label, connectorWidth)}${padVisual(right[2], rightWidth)}`,
+  ]
+}
+
+function writeVisual(target: string[], start: number, input: string) {
+  const chars = [...input]
+  for (let index = 0; index < chars.length && start + index < target.length; index++) {
+    if (start + index >= 0) target[start + index] = chars[index]
+  }
+}
+
+function blankRow(width: number) {
+  return Array.from({ length: width }, () => " ")
+}
+
+function renderHorizontalPath(segments: HorizontalPathSegment[], direction: "lr" | "rl") {
+  const rows = ["", "", ""]
+
+  for (const segment of segments) {
+    if (segment.type === "edge") {
+      const connector =
+        direction === "rl"
+          ? segment.label
+            ? `◀─ ${segment.label} ──`
+            : "◀────"
+          : segment.label
+            ? `── ${segment.label} ─▶`
+            : "────▶"
+      const padding = " ".repeat(Bun.stringWidth(connector))
+      rows[0] += padding
+      rows[1] += connector
+      rows[2] += padding
+      continue
+    }
+
+    const box = segment.type === "loop" ? renderBox(`↺ ${segment.label}`) : renderBox(segment.label)
+    const boxWidth = Math.max(...box.map((line) => Bun.stringWidth(line)))
+    for (let index = 0; index < rows.length; index++) {
+      rows[index] += padVisual(box[index] ?? "", boxWidth)
+    }
+  }
+
+  return rows
+}
+
+function reverseHorizontalPath(segments: HorizontalPathSegment[]) {
+  const reversed: HorizontalPathSegment[] = []
+  for (let index = segments.length - 1; index >= 0; index--) {
+    const segment = segments[index]
+    if (!segment) continue
+    reversed.push(segment)
+  }
+  return reversed
+}
+
+function renderLayeredHorizontalFlowchart(input: {
+  starts: string[]
+  edges: Array<{ from: string; to: string; label?: string }>
+  labels: Map<string, string>
+  direction: "lr" | "rl"
+  width: number
+}) {
+  const outgoing = new Map<string, Array<{ to: string; label?: string }>>()
+  for (const { from, to, label } of input.edges) {
+    outgoing.set(from, [...(outgoing.get(from) ?? []), { to, label }])
+  }
+
+  const paths: HorizontalPathSegment[][] = []
+  const walk = (node: string, path: HorizontalPathSegment[], seen: Set<string>) => {
+    const next = outgoing.get(node) ?? []
+    if (next.length === 0 || path.length >= 8) {
+      paths.push(path)
+      return
+    }
+
+    for (const edge of next) {
+      const nextLabel = input.labels.get(edge.to) ?? edge.to
+      const connector = { type: "edge", label: edge.label } satisfies HorizontalPathSegment
+      if (seen.has(edge.to)) {
+        paths.push([...path, connector, { type: "loop", label: nextLabel }])
+        continue
+      }
+      walk(edge.to, [...path, connector, { type: "node", label: nextLabel }], new Set([...seen, edge.to]))
+    }
+  }
+
+  for (const start of input.starts) {
+    walk(start, [{ type: "node", label: input.labels.get(start) ?? start }], new Set([start]))
+    if (paths.length >= 6) break
+  }
+
+  const rendered = paths.slice(0, 6).flatMap((path, index) => {
+    const rows = renderHorizontalPath(input.direction === "rl" ? reverseHorizontalPath(path) : path, input.direction)
+    return index === 0 ? rows : ["", ...rows]
+  })
+  if (rendered.length === 0) return undefined
+
+  const maxWidth = Math.max(...rendered.map((line) => Bun.stringWidth(line)))
+  const availableWidth = Math.max(40, input.width - 4)
+  return maxWidth <= availableWidth ? rendered.join("\n").trimEnd() : undefined
+}
+
+function renderSimpleFlowchart(input: string, width: number): string | undefined {
   const lines = input
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
   const head = lines[0]?.toLowerCase()
-  if (!head?.match(/^(flowchart|graph)\s+(td|tb|lr|rl|bt)\b/)) return undefined
+  const headMatch = /^(flowchart|graph)\s+(td|tb|lr|rl|bt)\b/.exec(head ?? "")
+  if (!headMatch) return undefined
+  const direction = headMatch[2] as FlowDirection
 
-  const nodePattern = String.raw`([A-Za-z][\w-]*)(?:\[([^\]]+)\]|\(([^)]+)\)|\{([^}]+)\})?`
-  const edgePattern = new RegExp(
-    `^\\s*${nodePattern}\\s*(?:--\\s*([^>-]+?)\\s*-->|-->|---|==>|-.->|[—–-]*→|→)\\s*${nodePattern}\\s*$`,
-  )
   const labels = new Map<string, string>()
-  const edges: Array<{ from: string; to: string; label?: string }> = []
+  const parsedEdges: Array<{ from: string; to: string; label?: string }> = []
 
   for (const line of lines.slice(1)) {
-    const match = edgePattern.exec(line)
-    if (!match) continue
-    const [, from, fromSquare, fromRound, fromBrace, edgeLabel, to, toSquare, toRound, toBrace] = match
-    if (!from || !to) continue
-    labels.set(from, cleanLabel(fromSquare || fromRound || fromBrace || labels.get(from) || from))
-    labels.set(to, cleanLabel(toSquare || toRound || toBrace || labels.get(to) || to))
-    edges.push({ from, to, label: cleanLabel(edgeLabel) || undefined })
+    parsedEdges.push(...parseFlowchartEdgeLine(line, labels))
   }
 
-  if (edges.length === 0) return undefined
+  if (parsedEdges.length === 0) return undefined
+  const edges =
+    direction === "bt" ? parsedEdges.map((edge) => ({ from: edge.to, to: edge.from, label: edge.label })) : parsedEdges
 
   const outgoing = new Map<string, Array<{ to: string; label?: string }>>()
   const incoming = new Set<string>()
@@ -102,6 +504,17 @@ function renderSimpleFlowchart(input: string): string | undefined {
   }
   const starts = [...outgoing.keys()].filter((node) => !incoming.has(node))
   const start = starts[0] ?? edges[0]?.from
+
+  if ((direction === "lr" || direction === "rl") && edges.length <= 24) {
+    const horizontal = renderLayeredHorizontalFlowchart({
+      starts: starts.length > 0 ? starts : start ? [start] : [],
+      edges,
+      labels,
+      direction,
+      width,
+    })
+    if (horizontal) return horizontal
+  }
 
   if (start && edges.length <= 16) {
     const renderNode = (node: string, path: Set<string>, depth = 0): string[] => {
@@ -122,14 +535,21 @@ function renderSimpleFlowchart(input: string): string | undefined {
 
       for (let index = 0; index < next.length; index++) {
         const edge = next[index]
-        const branch = index === next.length - 1 ? "└" : "├"
-        const label = edge.label ? `${edge.label} →` : "→"
-        lines.push(`${"  ".repeat(depth)}${branch}─ ${label}`)
+        const isLast = index === next.length - 1
+        const branch = isLast ? "└" : "├"
+        const label = edge.label || `path ${index + 1}`
+        const branchIndent = "  ".repeat(depth)
+        const childPrefix = `${branchIndent}${isLast ? "   " : "│  "}`
+        if (index > 0) lines.push("")
+        lines.push(`${branchIndent}${branch}─ ${label}`)
+
         if (path.has(edge.to)) {
-          lines.push(`${"  ".repeat(depth + 1)}↺ ${labels.get(edge.to) ?? edge.to}`)
+          lines.push(`${childPrefix}↺ ${labels.get(edge.to) ?? edge.to}`)
           continue
         }
-        lines.push(...renderNode(edge.to, new Set([...path, edge.to]), depth + 1))
+        lines.push(
+          ...renderNode(edge.to, new Set([...path, edge.to]), 0).map((line) => (line ? `${childPrefix}${line}` : line)),
+        )
       }
       return lines
     }
@@ -144,6 +564,614 @@ function renderSimpleFlowchart(input: string): string | undefined {
       return `${renderInlineBox(labels.get(from) ?? from)}${connector}${renderInlineBox(labels.get(to) ?? to)}`
     })
     .join("\n")
+}
+
+function renderSequenceDiagram(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (lines[0]?.toLowerCase() !== "sequencediagram") return undefined
+
+  const aliases = new Map<string, string>()
+  const messages: Array<{ from: string; to: string; label: string; dashed: boolean }> = []
+  const participants: string[] = []
+  const addParticipant = (id: string, label?: string) => {
+    aliases.set(id, cleanLabel(label || aliases.get(id) || id))
+    if (!participants.includes(id)) participants.push(id)
+  }
+
+  for (const line of lines.slice(1)) {
+    const participant = /^(?:participant|actor)\s+([A-Za-z][\w-]*)(?:\s+as\s+(.+))?$/i.exec(line)
+    if (participant) {
+      addParticipant(participant[1], participant[2] || participant[1])
+      continue
+    }
+
+    const message = /^([A-Za-z][\w-]*?)\s*(-->>|->>|-->|->|--x|-x|==>>|=>>|==>|=>|-\)|--\))\s*([A-Za-z][\w-]*)\s*:\s*(.+)$/.exec(
+      line,
+    )
+    if (!message) continue
+    const from = message[1]
+    const to = message[3]
+    addParticipant(from)
+    addParticipant(to)
+    messages.push({
+      from,
+      to,
+      label: cleanLabel(message[4]),
+      dashed: message[2].startsWith("--") || message[2].startsWith("="),
+    })
+  }
+
+  if (messages.length === 0) return undefined
+  if (participants.length >= 2 && participants.length <= 5) {
+    const labels = participants.map((id) => aliases.get(id) ?? id)
+    const columnWidth = Math.max(12, Math.min(24, Math.max(...labels.map((label) => Bun.stringWidth(label) + 4))))
+    const gap = Math.max(8, Math.min(18, Math.floor(width / Math.max(6, participants.length * 2))))
+    const totalWidth = participants.length * columnWidth + (participants.length - 1) * gap
+    const availableWidth = Math.max(40, width - 4)
+
+    if (totalWidth <= availableWidth) {
+      const centers = participants.map((_, index) => index * (columnWidth + gap) + Math.floor(columnWidth / 2))
+      const renderParticipantRow = () => {
+        const rows = [blankRow(totalWidth), blankRow(totalWidth), blankRow(totalWidth)]
+        labels.forEach((label, index) => {
+          const box = renderCompactBox(label, columnWidth - 2)
+          const start = index * (columnWidth + gap)
+          for (let row = 0; row < box.length; row++) writeVisual(rows[row], start, padVisual(box[row], columnWidth))
+        })
+        return rows.map((row) => row.join("").trimEnd())
+      }
+      const lifelineRow = () => {
+        const row = blankRow(totalWidth)
+        for (const center of centers) row[center] = "│"
+        return row.join("").trimEnd()
+      }
+
+      const rows: string[] = [...renderParticipantRow(), lifelineRow()]
+      for (const message of messages.slice(0, 10)) {
+        const fromIndex = participants.indexOf(message.from)
+        const toIndex = participants.indexOf(message.to)
+        if (fromIndex < 0 || toIndex < 0) continue
+
+        const start = centers[fromIndex]
+        const end = centers[toIndex]
+        const low = Math.min(start, end)
+        const high = Math.max(start, end)
+        const label = cleanLabel(message.label)
+        const labelRow = blankRow(totalWidth)
+        const arrowRow = blankRow(totalWidth)
+        for (const center of centers) {
+          labelRow[center] = "│"
+          arrowRow[center] = "│"
+        }
+
+        const labelStart = Math.max(low + 1, low + Math.floor((high - low - Bun.stringWidth(label)) / 2))
+        writeVisual(labelRow, labelStart, label)
+        const lineGlyph = message.dashed ? "╌" : "─"
+        for (let index = low + 1; index < high; index++) arrowRow[index] = lineGlyph
+        arrowRow[start] = fromIndex < toIndex ? "├" : "┤"
+        arrowRow[end] = fromIndex < toIndex ? "▶" : "◀"
+        rows.push(labelRow.join("").trimEnd(), arrowRow.join("").trimEnd(), lifelineRow())
+      }
+      rows.push(...renderParticipantRow())
+      return rows.join("\n")
+    }
+  }
+
+  const rows: string[] = []
+
+  for (const [index, message] of messages.slice(0, 10).entries()) {
+    if (index > 0) rows.push("")
+    rows.push(
+      ...renderBoxConnection({
+        from: aliases.get(message.from) ?? message.from,
+        to: aliases.get(message.to) ?? message.to,
+        label: message.label,
+        connector: message.dashed ? "╌╌╌▶" : "────▶",
+        width,
+      }),
+    )
+  }
+
+  return rows.join("\n")
+}
+
+type ErRelation = { from: string; to: string; relation: string; label: string; dotted: boolean }
+
+function renderErTree(input: {
+  relations: ErRelation[]
+  attributes: Map<string, string[]>
+}) {
+  const outgoing = new Map<string, ErRelation[]>()
+  const incoming = new Set<string>()
+  const entities = new Set<string>()
+
+  for (const relation of input.relations) {
+    outgoing.set(relation.from, [...(outgoing.get(relation.from) ?? []), relation])
+    incoming.add(relation.to)
+    entities.add(relation.from)
+    entities.add(relation.to)
+  }
+  for (const entity of input.attributes.keys()) entities.add(entity)
+
+  const roots = [...entities].filter((entity) => !incoming.has(entity))
+  const starts = roots.length > 0 ? roots : [...entities].slice(0, 1)
+  const rendered = new Set<string>()
+
+  const renderEntity = (entity: string, depth: number, path: Set<string>): string[] => {
+    const prefix = "  ".repeat(depth)
+    const lines = indentLines(renderEntityBox(entity, input.attributes.get(entity) ?? []), depth)
+    rendered.add(entity)
+
+    const children = outgoing.get(entity) ?? []
+    children.slice(0, 6).forEach((relation, index) => {
+      const branch = index === children.length - 1 ? "└" : "├"
+      lines.push(`${prefix}${branch}─ ${relation.relation} ${relation.label}`)
+
+      if (path.has(relation.to) || rendered.has(relation.to)) {
+        lines.push(`${prefix}   ↺ ${relation.to}`)
+        return
+      }
+
+      lines.push(...renderEntity(relation.to, depth + 1, new Set([...path, relation.to])))
+    })
+
+    return lines
+  }
+
+  const blocks = starts.slice(0, 6).flatMap((entity, index) => {
+    const lines = rendered.has(entity) ? [`↺ ${entity}`] : renderEntity(entity, 0, new Set([entity]))
+    return index === 0 ? lines : ["", ...lines]
+  })
+
+  const remaining = [...entities].filter((entity) => !rendered.has(entity))
+  for (const entity of remaining.slice(0, 6)) {
+    blocks.push("", ...renderEntity(entity, 0, new Set([entity])))
+  }
+
+  return blocks
+}
+
+function renderErDiagram(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (lines[0]?.toLowerCase() !== "erdiagram") return undefined
+
+  const relationDefinitions: ErRelation[] = []
+  const attributes = new Map<string, string[]>()
+  let currentEntity: string | undefined
+
+  for (const line of lines.slice(1)) {
+    const entity = /^([A-Za-z][\w-]*)\s*\{$/.exec(line)
+    if (entity) {
+      currentEntity = entity[1]
+      attributes.set(currentEntity, [])
+      continue
+    }
+
+    if (line === "}") {
+      currentEntity = undefined
+      continue
+    }
+
+    if (currentEntity) {
+      attributes.set(currentEntity, [...(attributes.get(currentEntity) ?? []), cleanLabel(line)])
+      continue
+    }
+
+    const relation = /^([A-Za-z][\w-]*)\s+([|o}{]{1,2}(?:--|\.\.)[|o}{]{1,2})\s+([A-Za-z][\w-]*)\s*:\s*(.+)$/.exec(
+      line,
+    )
+    if (!relation) continue
+    relationDefinitions.push({
+      from: relation[1],
+      to: relation[3],
+      relation: relation[2],
+      label: cleanConnectorLabel(relation[4]),
+      dotted: relation[2].includes(".."),
+    })
+  }
+
+  if (relationDefinitions.length === 0 && attributes.size === 0) return undefined
+  const availableWidth = Math.max(40, width - 4)
+  if (relationDefinitions.length > 0) {
+    const tree = renderErTree({ relations: relationDefinitions, attributes })
+    const maxWidth = Math.max(...tree.map((line) => Bun.stringWidth(line)), 0)
+    if (maxWidth <= availableWidth) return tree.join("\n")
+    return tree.flatMap((line) => wrapTextLine("", line, width)).join("\n")
+  }
+
+  const renderedAttributes = [...attributes.entries()].slice(0, 6).flatMap(([entity, fields], index) => {
+    const lines = renderEntityBox(entity, fields)
+    return index === 0 ? lines : ["", ...lines]
+  })
+
+  return renderedAttributes.join("\n")
+}
+
+function renderStateDiagram(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^stateDiagram(?:-v2)?$/i.test(lines[0] ?? "")) return undefined
+
+  const aliases = new Map<string, string>()
+  const transitions: Array<{ from: string; to: string; label?: string }> = []
+
+  for (const line of lines.slice(1)) {
+    const stateAlias = /^state\s+"([^"]+)"\s+as\s+([A-Za-z][\w-]*)$/i.exec(line)
+    if (stateAlias) {
+      aliases.set(stateAlias[2], cleanLabel(stateAlias[1]))
+      continue
+    }
+
+    const transition = /^(\[\*\]|[A-Za-z][\w-]*)\s*-->\s*(\[\*\]|[A-Za-z][\w-]*)(?:\s*:\s*(.+))?$/.exec(line)
+    if (!transition) continue
+    transitions.push({
+      from: transition[1],
+      to: transition[2],
+      label: cleanLabel(transition[3]) || undefined,
+    })
+  }
+
+  if (transitions.length === 0) return undefined
+  const labelFor = (id: string) => (id === "[*]" ? "●" : aliases.get(id) ?? id)
+  const availableWidth = Math.max(40, width - 4)
+  return transitions
+    .slice(0, 16)
+    .flatMap((transition) => {
+      const connector = transition.label ? ` ── ${transition.label} ─▶ ` : " ──▶ "
+      const line = `${renderInlineBox(labelFor(transition.from))}${connector}${renderInlineBox(labelFor(transition.to))}`
+      return Bun.stringWidth(line) <= availableWidth ? [line] : wrapTextLine("", line, width)
+    })
+    .join("\n")
+}
+
+function renderClassDiagram(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^classDiagram(?:-v2)?$/i.test(lines[0] ?? "")) return undefined
+
+  const output: string[] = []
+  for (const line of lines.slice(1)) {
+    const relation = /^([A-Za-z][\w-]*)\s+([<|o*}.\-]+--?[|>o*{.\-]+)\s+([A-Za-z][\w-]*)(?:\s*:\s*(.+))?$/.exec(line)
+    if (relation) {
+      const label = cleanLabel(relation[4])
+      output.push(
+        `${renderInlineBox(relation[1])} ${relation[2]} ${renderInlineBox(relation[3])}${label ? `  ${label}` : ""}`,
+      )
+      continue
+    }
+
+    const member = /^([A-Za-z][\w-]*)\s*:\s*(.+)$/.exec(line)
+    if (member) {
+      output.push(`${renderInlineBox(member[1])}  ${cleanLabel(member[2])}`)
+      continue
+    }
+
+    const classBlock = /^class\s+([A-Za-z][\w-]*)/.exec(line)
+    if (classBlock) output.push(renderInlineBox(classBlock[1]))
+  }
+
+  if (output.length === 0) return undefined
+  const availableWidth = Math.max(40, width - 4)
+  return output
+    .slice(0, 16)
+    .flatMap((line) => (Bun.stringWidth(line) <= availableWidth ? [line] : wrapTextLine("", line, width)))
+    .join("\n")
+}
+
+function renderPieChart(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^pie(?:\s+showData)?$/i.test(lines[0] ?? "")) return undefined
+
+  let title: string | undefined
+  const slices: Array<{ label: string; value: number }> = []
+  for (const line of lines.slice(1)) {
+    const titleMatch = /^title\s+(.+)$/i.exec(line)
+    if (titleMatch) {
+      title = cleanLabel(titleMatch[1])
+      continue
+    }
+    const slice = /^"?([^":]+)"?\s*:\s*([0-9.]+)$/.exec(line)
+    if (slice) slices.push({ label: cleanLabel(slice[1]), value: Number(slice[2]) })
+  }
+
+  if (slices.length === 0) return undefined
+  const total = slices.reduce((sum, slice) => sum + slice.value, 0) || 1
+  const labelWidth = Math.min(22, Math.max(...slices.map((slice) => Bun.stringWidth(slice.label)), 8))
+  const barWidth = Math.max(8, Math.min(28, width - labelWidth - 22))
+  const rows = slices.slice(0, 12).map((slice) => {
+    const percent = (slice.value / total) * 100
+    const filled = Math.max(1, Math.round((percent / 100) * barWidth))
+    const bar = "█".repeat(filled) + "░".repeat(Math.max(0, barWidth - filled))
+    return `${padVisual(slice.label, labelWidth)} │${bar}│ ${slice.value} (${percent.toFixed(1)}%)`
+  })
+
+  return [title, title ? "─".repeat(Math.min(Bun.stringWidth(title), width - 4)) : undefined, ...rows, `Total: ${total}`]
+    .filter(Boolean)
+    .join("\n")
+}
+
+function renderIndentedMermaid(input: string, heads: RegExp, title: string): string | undefined {
+  const lines = input.split("\n")
+  if (!heads.test(lines[0]?.trim() ?? "")) return undefined
+  const body = lines
+    .slice(1)
+    .map((line) => line.replace(/\t/g, "  ").trimEnd())
+    .filter((line) => line.trim() && !/^title\s+/i.test(line.trim()))
+  if (body.length === 0) return undefined
+
+  const baseIndent = Math.min(...body.map((line) => line.match(/^\s*/)?.[0].length ?? 0))
+  const output: string[] = [title]
+  for (const line of body.slice(0, 24)) {
+    const indent = Math.floor(Math.max(0, (line.match(/^\s*/)?.[0].length ?? 0) - baseIndent) / 2)
+    const text = cleanLabel(line.trim().replace(/^section\s+/i, ""))
+    const glyph = indent === 0 ? "•" : indent === 1 ? "◦" : "▪"
+    output.push(`${"  ".repeat(indent)}${glyph} ${text}`)
+  }
+  return output.join("\n")
+}
+
+function stripMermaidCallArguments(input: string) {
+  const inside = input.slice(input.indexOf("(") + 1, input.lastIndexOf(")"))
+  const parts: string[] = []
+  let current = ""
+  let quoted = false
+  for (const char of inside) {
+    if (char === '"') quoted = !quoted
+    if (char === "," && !quoted) {
+      parts.push(cleanLabel(current))
+      current = ""
+      continue
+    }
+    current += char
+  }
+  if (current) parts.push(cleanLabel(current))
+  return parts.filter(Boolean)
+}
+
+function renderQuadrantChart(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^quadrantChart$/i.test(lines[0] ?? "")) return undefined
+
+  const output: string[] = ["Quadrant chart"]
+  for (const line of lines.slice(1, 18)) {
+    const title = /^title\s+(.+)$/i.exec(line)
+    if (title) {
+      output[0] = cleanLabel(title[1])
+      continue
+    }
+    const axis = /^(x-axis|y-axis)\s+(.+)$/i.exec(line)
+    if (axis) {
+      output.push(`${axis[1]}: ${cleanLabel(axis[2])}`)
+      continue
+    }
+    const point = /^(.+?)\s*:\s*\[([^\]]+)\]$/.exec(line)
+    if (point) output.push(`• ${cleanLabel(point[1])} (${cleanLabel(point[2])})`)
+  }
+  return output.length > 1 ? output.flatMap((line) => wrapTextLine("", line, width)).join("\n") : undefined
+}
+
+function renderGitGraph(input: string): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^gitGraph\b/i.test(lines[0] ?? "")) return undefined
+
+  const output: string[] = ["Git graph"]
+  for (const line of lines.slice(1, 24)) {
+    const commit = /^commit(?:\s+id:\s*"?([^"]+)"?)?/i.exec(line)
+    if (commit) {
+      output.push(`• commit${commit[1] ? ` ${cleanLabel(commit[1])}` : ""}`)
+      continue
+    }
+    const branch = /^branch\s+(.+)$/i.exec(line)
+    if (branch) {
+      output.push(`├─ branch ${cleanLabel(branch[1])}`)
+      continue
+    }
+    const checkout = /^checkout\s+(.+)$/i.exec(line)
+    if (checkout) {
+      output.push(`↳ checkout ${cleanLabel(checkout[1])}`)
+      continue
+    }
+    const merge = /^merge\s+(.+)$/i.exec(line)
+    if (merge) output.push(`⇄ merge ${cleanLabel(merge[1])}`)
+  }
+  return output.length > 1 ? output.join("\n") : undefined
+}
+
+function renderRequirementDiagram(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^requirementDiagram$/i.test(lines[0] ?? "")) return undefined
+
+  const output: string[] = ["Requirement diagram"]
+  let current: string | undefined
+  for (const line of lines.slice(1, 32)) {
+    const block = /^(requirement|functionalRequirement|performanceRequirement|interfaceRequirement|physicalRequirement|designConstraint)\s+([A-Za-z][\w-]*)\s*\{?$/i.exec(line)
+    if (block) {
+      current = block[2]
+      output.push(renderInlineBox(current))
+      continue
+    }
+    if (line === "}") {
+      current = undefined
+      continue
+    }
+    const field = /^(id|text|risk|verifymethod|verifyMethod):\s*(.+)$/i.exec(line)
+    if (field && current) {
+      output.push(`  ${field[1]}: ${cleanLabel(field[2])}`)
+      continue
+    }
+    const relation = /^([A-Za-z][\w-]*)\s+-\s*([A-Za-z]+)\s*->\s*([A-Za-z][\w-]*)$/i.exec(line)
+    if (relation) output.push(`${renderInlineBox(relation[1])} ── ${relation[2]} ─▶ ${renderInlineBox(relation[3])}`)
+  }
+  return output.length > 1 ? output.flatMap((line) => wrapTextLine("", line, width)).join("\n") : undefined
+}
+
+function renderC4Diagram(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^C4/i.test(lines[0] ?? "")) return undefined
+
+  const output: string[] = [cleanLabel(lines[0])]
+  for (const line of lines.slice(1, 32)) {
+    const entity = /^(Person|System|System_Boundary|Container|ContainerDb|Component|Boundary)\s*\((.+)\)$/i.exec(line)
+    if (entity) {
+      const args = stripMermaidCallArguments(entity[2])
+      output.push(`${entity[1]}: ${renderInlineBox(args[1] || args[0] || "item")}${args[2] ? `  ${args[2]}` : ""}`)
+      continue
+    }
+    const relation = /^Rel(?:_[A-Za-z]+)?\s*\((.+)\)$/i.exec(line)
+    if (relation) {
+      const args = stripMermaidCallArguments(relation[1])
+      output.push(`${renderInlineBox(args[0] || "from")} ── ${args[2] || "relates"} ─▶ ${renderInlineBox(args[1] || "to")}`)
+    }
+  }
+  return output.length > 1 ? output.flatMap((line) => wrapTextLine("", line, width)).join("\n") : undefined
+}
+
+function renderXyChart(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^xychart-beta$/i.test(lines[0] ?? "")) return undefined
+
+  const output: string[] = ["XY chart"]
+  for (const line of lines.slice(1, 24)) {
+    const title = /^title\s+"?([^"]+)"?$/i.exec(line)
+    if (title) {
+      output[0] = cleanLabel(title[1])
+      continue
+    }
+    const axis = /^(x-axis|y-axis)\s+(.+)$/i.exec(line)
+    if (axis) {
+      output.push(`${axis[1]}: ${cleanLabel(axis[2])}`)
+      continue
+    }
+    const series = /^(bar|line)\s+\[([^\]]+)\]$/i.exec(line)
+    if (series) output.push(`${series[1]}: ${cleanLabel(series[2])}`)
+  }
+  return output.length > 1 ? output.flatMap((line) => wrapTextLine("", line, width)).join("\n") : undefined
+}
+
+function renderSankeyDiagram(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^sankey-beta$/i.test(lines[0] ?? "")) return undefined
+
+  const output: string[] = ["Sankey"]
+  for (const line of lines.slice(1, 24)) {
+    const parts = line.split(",").map(cleanLabel).filter(Boolean)
+    if (parts.length >= 3) output.push(`${renderInlineBox(parts[0])} ── ${parts[2]} ─▶ ${renderInlineBox(parts[1])}`)
+  }
+  return output.length > 1 ? output.flatMap((line) => wrapTextLine("", line, width)).join("\n") : undefined
+}
+
+function renderBlockDiagram(input: string): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^block-beta$/i.test(lines[0] ?? "")) return undefined
+
+  const output: string[] = ["Block diagram"]
+  for (const line of lines.slice(1, 20)) {
+    if (/^columns\s+/i.test(line)) continue
+    const labels = [...line.matchAll(/([A-Za-z][\w-]*)(?:\["([^"]+)"\]|\[([^\]]+)\])?/g)].map((match) =>
+      renderInlineBox(match[2] || match[3] || match[1]),
+    )
+    if (labels.length) output.push(labels.join(" ── "))
+  }
+  return output.length > 1 ? output.join("\n") : undefined
+}
+
+function renderPacketDiagram(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^packet-beta$/i.test(lines[0] ?? "")) return undefined
+
+  const output: string[] = ["Packet"]
+  for (const line of lines.slice(1, 24)) {
+    const field = /^([0-9]+(?:-[0-9]+)?)\s*:\s*"?([^"]+)"?$/.exec(line)
+    if (field) output.push(`${padVisual(field[1], 8)} │ ${cleanLabel(field[2])}`)
+  }
+  return output.length > 1 ? output.flatMap((line) => wrapTextLine("", line, width)).join("\n") : undefined
+}
+
+function renderArchitectureDiagram(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^architecture-beta$/i.test(lines[0] ?? "")) return undefined
+
+  const output: string[] = ["Architecture"]
+  for (const line of lines.slice(1, 32)) {
+    const service = /^service\s+([A-Za-z][\w-]*)\(([^)]+)\)\[([^\]]+)\]/i.exec(line)
+    if (service) {
+      output.push(`${renderInlineBox(service[1])} ${cleanLabel(service[2])}  ${cleanLabel(service[3])}`)
+      continue
+    }
+    const group = /^group\s+([A-Za-z][\w-]*)\(([^)]+)\)\[([^\]]+)\]/i.exec(line)
+    if (group) {
+      output.push(`Group ${renderInlineBox(group[1])} ${cleanLabel(group[3])}`)
+      continue
+    }
+    const edge = /^([A-Za-z][\w-]*)(?::[A-Z])?\s*--\s*(?:[A-Z]:)?([A-Za-z][\w-]*)$/i.exec(line)
+    if (edge) output.push(`${renderInlineBox(edge[1])} ──▶ ${renderInlineBox(edge[2])}`)
+  }
+  return output.length > 1 ? output.flatMap((line) => wrapTextLine("", line, width)).join("\n") : undefined
+}
+
+function renderSimpleMermaid(input: string, width: number): string | undefined {
+  return (
+    renderSimpleFlowchart(input, width) ??
+    renderStateDiagram(input, width) ??
+    renderSequenceDiagram(input, width) ??
+    renderErDiagram(input, width) ??
+    renderClassDiagram(input, width) ??
+    renderPieChart(input, width) ??
+    renderQuadrantChart(input, width) ??
+    renderGitGraph(input) ??
+    renderRequirementDiagram(input, width) ??
+    renderC4Diagram(input, width) ??
+    renderXyChart(input, width) ??
+    renderSankeyDiagram(input, width) ??
+    renderBlockDiagram(input) ??
+    renderPacketDiagram(input, width) ??
+    renderArchitectureDiagram(input, width) ??
+    renderIndentedMermaid(input, /^mindmap$/i, "Mindmap") ??
+    renderIndentedMermaid(input, /^timeline$/i, "Timeline") ??
+    renderIndentedMermaid(input, /^journey$/i, "Journey") ??
+    renderIndentedMermaid(input, /^gantt$/i, "Gantt") ??
+    renderIndentedMermaid(input, /^kanban$/i, "Kanban")
+  )
 }
 
 async function runTermaid(input: string, width: number): Promise<string | undefined> {
@@ -206,7 +1234,7 @@ export async function renderPlanMarkdown(markdown: string, width: number): Promi
   const source =
     Buffer.byteLength(markdown, "utf8") > MAX_MARKDOWN_BYTES ? markdown.slice(0, MAX_MARKDOWN_BYTES) : markdown
   const blocks = [...source.matchAll(/```[ \t]*mermaid[^\r\n]*\r?\n([\s\S]*?)\r?\n[ \t]*```/gi)]
-  if (blocks.length === 0) return source
+  if (blocks.length === 0) return renderMarkdownForTui(source, width)
 
   let result = ""
   let cursor = 0
@@ -223,7 +1251,7 @@ export async function renderPlanMarkdown(markdown: string, width: number): Promi
       continue
     }
 
-    const output = renderSimpleFlowchart(diagram) ?? (await runTermaid(diagram, width))
+    const output = renderSimpleMermaid(diagram, width) ?? (await runTermaid(diagram, width))
     if (!output) {
       result += match[0]
       continue
@@ -233,10 +1261,13 @@ export async function renderPlanMarkdown(markdown: string, width: number): Promi
     const heading = popTrailingHeading(result)
     result = heading.prefix
     const renderedDiagram = output.trimEnd()
-    const block = heading.title ? [centerLine(heading.title, width), "", renderedDiagram].join("\n") : renderedDiagram
+    const block = alignTextBlock(
+      heading.title ? [heading.title, "", renderedDiagram].join("\n") : renderedDiagram,
+      width,
+    )
     result += ["```text", block, "```"].join("\n")
   }
 
   result += source.slice(cursor)
-  return result
+  return renderMarkdownForTui(result, width)
 }

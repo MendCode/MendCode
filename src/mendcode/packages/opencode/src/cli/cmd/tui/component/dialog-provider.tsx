@@ -13,17 +13,16 @@ import { DialogModel } from "./dialog-model"
 import { useKeyboard } from "@opentui/solid"
 import * as Clipboard from "@tui/util/clipboard"
 import { useToast } from "../ui/toast"
-import { isConsoleManagedProvider } from "@tui/util/provider-origin"
+import { isConsoleManagedProvider, providerDisplayName } from "@tui/util/provider-origin"
 import { useConnected } from "./use-connected"
-
-const HIDDEN_DONOR_MANAGED_PROVIDERS = new Set(["opencode"])
 
 const PROVIDER_PRIORITY: Record<string, number> = {
   openai: 0,
-  "opencode-go": 1,
-  "github-copilot": 2,
-  anthropic: 3,
-  google: 4,
+  opencode: 1,
+  "opencode-go": 2,
+  "github-copilot": 3,
+  anthropic: 4,
+  google: 5,
 }
 
 function providerErrorMessage(error: unknown) {
@@ -45,18 +44,18 @@ export function createDialogProviderOptions() {
   const options = createMemo(() => {
     return pipe(
       sync.data.provider_next.all,
-      (providers) => providers.filter((provider) => !HIDDEN_DONOR_MANAGED_PROVIDERS.has(provider.id)),
       sortBy((x) => PROVIDER_PRIORITY[x.id] ?? 99),
       map((provider) => {
         const consoleManaged = isConsoleManagedProvider(sync.data.console_state.consoleManagedProviders, provider.id)
         const connected = sync.data.provider_next.connected.includes(provider.id)
 
         return {
-          title: provider.name,
+          title: providerDisplayName(provider),
           value: provider.id,
           description: {
             anthropic: "(API key)",
             openai: "(ChatGPT Plus/Pro or API key)",
+            opencode: "(opencode Zen)",
             "opencode-go": "(Bring your own Go provider access)",
           }[provider.id],
           footer: consoleManaged ? sync.data.console_state.activeOrgName : undefined,
