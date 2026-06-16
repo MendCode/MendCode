@@ -8,6 +8,7 @@
 - Honor dynamic `OPENCODE_CONFIG_CONTENT` values at config-load time so SDK/runtime callers can inject per-instance config after process startup.
 - Preserve explicit model changes made while a session is busy so the next prompt uses the newly selected model instead of falling back to the previous session model.
 - Point npm registry publishing at the public `mendcode` package name instead of the temporary `mendcode-ai` wrapper name.
+- Update Hono to `4.12.25` so release dependency scanning passes without carrying known fixed advisories.
 
 ## 0.1.12 - 2026-06-16
 
