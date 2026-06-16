@@ -11346,7 +11346,7 @@
     "env": ["OPENCODE_API_KEY"],
     "npm": "@ai-sdk/openai-compatible",
     "api": "https://mendcode.ai/zen/v1",
-    "name": "MendCode Zen",
+    "name": "opencode Zen",
     "doc": "https://mendcode.ai/docs/zen",
     "models": {
       "gpt-5.2-codex": {
@@ -64072,7 +64072,7 @@
     "env": ["OPENCODE_API_KEY"],
     "npm": "@ai-sdk/openai-compatible",
     "api": "https://mendcode.ai/zen/go/v1",
-    "name": "MendCode Go",
+    "name": "opencode Go",
     "doc": "https://mendcode.ai/docs/zen",
     "models": {
       "kimi-k2.5": {

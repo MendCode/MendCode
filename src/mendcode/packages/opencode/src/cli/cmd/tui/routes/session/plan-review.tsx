@@ -49,7 +49,10 @@ export function PlanReviewPrompt(props: { request: PlanReviewRequest }) {
     return value || undefined
   }
 
-  function reply(action: "apply" | "edit" | "reject", override?: { markdown?: string; reason?: string; comments?: string }) {
+  function reply(
+    action: "apply" | "edit" | "reject",
+    override?: { markdown?: string; reason?: string; comments?: string },
+  ) {
     void sdk.client.planReview.reply({
       requestID: props.request.id,
       planReviewReply: {
@@ -179,6 +182,8 @@ export function PlanReviewPrompt(props: { request: PlanReviewRequest }) {
               paddingTop={1}
               paddingLeft={4}
               paddingRight={4}
+              stickyScroll={true}
+              stickyStart="top"
               scrollAcceleration={scrollAcceleration()}
               verticalScrollbarOptions={{
                 trackOptions: {
