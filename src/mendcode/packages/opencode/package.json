@@ -46,7 +46,7 @@
     }
   },
   "devDependencies": {
-    "@babel/core": "7.29.6",
+    "@babel/core": "7.29.7",
     "@octokit/webhooks-types": "7.6.1",
     "@mendcode/script": "workspace:*",
     "@mendcode/core": "workspace:*",
