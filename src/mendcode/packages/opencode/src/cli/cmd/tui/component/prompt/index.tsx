@@ -30,7 +30,7 @@ import { createStore, produce, unwrap } from "solid-js/store"
 import { useKeybind } from "@tui/context/keybind"
 import { usePromptHistory, type PromptInfo } from "./history"
 import { computePromptTraits } from "./traits"
-import { resolveActivePromptAgentName } from "./agent"
+import { resolveActivePromptAgentName, resolveSelectedPromptModel, resolveSelectedPromptVariant } from "./agent"
 import { assign } from "./part"
 import {
   DEFAULT_PASTE_SUMMARY_MIN_CHARS,
@@ -455,25 +455,29 @@ export function Prompt(props: PromptProps) {
     return sync.data.agent.find((item) => item.name === name && !item.hidden)
   })
   const selectedPromptModel = createMemo(() => {
-    if (!sessionUsesSubagent()) return local.model.current()
     const userModel = lastUserMessage()?.model
-    if (userModel) return { providerID: userModel.providerID, modelID: userModel.modelID }
     const sessionModel = currentSession()?.model as
       | { providerID?: string; id?: string; modelID?: string; variant?: string }
       | undefined
-    const sessionModelID = sessionModel?.modelID ?? sessionModel?.id
-    if (sessionModel?.providerID && sessionModelID) {
-      return { providerID: sessionModel.providerID, modelID: sessionModelID }
-    }
     const agentModel = sessionAgent()?.model as { providerID?: string; modelID?: string; id?: string } | undefined
-    const agentModelID = agentModel?.modelID ?? agentModel?.id
-    if (agentModel?.providerID && agentModelID) return { providerID: agentModel.providerID, modelID: agentModelID }
-    return local.model.current()
+    return resolveSelectedPromptModel({
+      sessionUsesSubagent: sessionUsesSubagent(),
+      localModel: local.model.current(),
+      localOverride: local.model.override(),
+      userModel,
+      sessionModel,
+      agentModel,
+    })
   })
   const selectedPromptVariant = createMemo(() => {
-    if (!sessionUsesSubagent()) return local.model.variant.current()
     const sessionModel = currentSession()?.model as { variant?: string } | undefined
-    return lastUserMessage()?.model.variant ?? sessionModel?.variant ?? local.model.variant.current()
+    return resolveSelectedPromptVariant({
+      sessionUsesSubagent: sessionUsesSubagent(),
+      localVariant: local.model.variant.current(),
+      hasLocalOverride: Boolean(local.model.override()),
+      userModel: lastUserMessage()?.model,
+      sessionModel,
+    })
   })
 
   const usage = createMemo(() => {

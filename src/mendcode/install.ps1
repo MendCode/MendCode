@@ -8,6 +8,38 @@ $BaseUrl = if ($env:MENDCODE_GITHUB_BASE_URL) { $env:MENDCODE_GITHUB_BASE_URL } 
 $ApiUrl = if ($env:MENDCODE_GITHUB_API_URL) { $env:MENDCODE_GITHUB_API_URL } else { "https://api.github.com/repos/$Repo" }
 $InstallDir = Join-Path $HOME ".mendcode\bin"
 
+function Write-MendCodeBanner {
+  param(
+    [string]$VersionLabel,
+    [string]$Target
+  )
+
+  Write-Host ""
+  Write-Host ' __  __                _  ____          _      ' -ForegroundColor Yellow
+  Write-Host '|  \/  | ___ _ __   __| |/ ___|___   __| | ___ ' -ForegroundColor Yellow
+  Write-Host "| |\/| |/ _ \ '_ \ / _`` | |   / _ \ / _`` |/ _ \" -ForegroundColor Yellow
+  Write-Host '| |  | |  __/ | | | (_| | |__| (_) | (_| |  __/' -ForegroundColor Yellow
+  Write-Host '|_|  |_|\___|_| |_|\__,_|\____\___/ \__,_|\___|' -ForegroundColor Yellow
+  Write-Host ""
+  Write-Host "MendCode installer"
+  Write-Host "Version: $VersionLabel  Target: $Target"
+  Write-Host "Install dir: $InstallDir"
+}
+
+function Write-Step {
+  param(
+    [int]$Current,
+    [int]$Total,
+    [string]$Message
+  )
+  Write-Host "[$Current/$Total] $Message" -ForegroundColor Yellow
+}
+
+function Write-Ok {
+  param([string]$Message)
+  Write-Host "OK $Message" -ForegroundColor Green
+}
+
 function Get-MendCodeTarget {
   $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
 
@@ -67,9 +99,13 @@ if ($Version) {
 $zip = Join-Path $env:TEMP "$App-$target.zip"
 $extractDir = Join-Path $env:TEMP "$App-install-$PID"
 
-Write-Host "Installing MendCode $versionLabel for $target..."
+Write-MendCodeBanner -VersionLabel $versionLabel -Target $target
+Write-Step 1 4 "Preparing download"
+Write-Step 2 4 "Downloading release asset"
 Invoke-WebRequest $url -OutFile $zip
+Write-Ok "Downloaded $App-$target.zip"
 
+Write-Step 3 4 "Installing binary"
 if (Test-Path $extractDir) {
   Remove-Item -Recurse -Force $extractDir
 }
@@ -84,9 +120,16 @@ if (-not $binary) {
 Copy-Item -Force $binary.FullName (Join-Path $InstallDir "mendcode.exe")
 Remove-Item -Recurse -Force $extractDir
 Remove-Item -Force $zip
+Write-Ok "Installed $(Join-Path $InstallDir "mendcode.exe")"
 
+Write-Step 4 4 "Updating PATH"
 Add-MendCodeToPath
 
-Write-Host "Installed MendCode to $InstallDir"
+Write-Host ""
+Write-Host "MendCode is ready." -ForegroundColor Green
 & (Join-Path $InstallDir "mendcode.exe") --version
-Write-Host "Run: mendcode"
+Write-Host ""
+Write-Host "  cd <project>                         # open your repo"
+Write-Host "  $(Join-Path $InstallDir "mendcode.exe")  # run now in this terminal"
+Write-Host ""
+Write-Host "Open a new terminal to use: mendcode"
