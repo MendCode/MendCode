@@ -74,7 +74,7 @@
       "solid-list": "0.3.0",
       "tailwindcss": "4.1.11",
       "virtua": "0.42.3",
-      "vite": "7.3.2",
+      "vite": "7.3.5",
       "@solidjs/meta": "0.29.4",
       "@solidjs/router": "0.15.4",
       "@solidjs/start": "https://pkg.pr.new/@solidjs/start@dfb2020",
@@ -128,6 +128,7 @@
   "overrides": {
     "@hono/node-server": "1.19.13",
     "@modelcontextprotocol/sdk": "1.27.1",
+    "@babel/core": "7.29.6",
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
     "axios": "1.16.0",
@@ -140,13 +141,15 @@
     "hono": "4.12.21",
     "ip-address": "10.1.1",
     "postcss": "8.5.10",
+    "js-yaml": "4.2.0",
     "protobufjs": "7.5.8",
     "qs": "6.15.2",
     "seroval": "1.4.1",
     "shell-quote": "1.8.4",
     "undici": "7.24.0",
     "uuid": "13.0.1",
-    "ws": "8.20.1"
+    "tar": "7.5.16",
+    "ws": "8.21.0"
   },
   "patchedDependencies": {
     "@npmcli/agent@4.0.0": "patches/@npmcli%2Fagent@4.0.0.patch",
