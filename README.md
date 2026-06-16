@@ -12,11 +12,68 @@ It is built for developers and teams who want their coding agent environment to 
 - Coordinate local agents: use optional mflow locks and optional TSM/worktree flows when multiple sessions or worktrees need a safer operating model.
 - See the work: Usage Insights surfaces daily token activity, sessions, AI time, user prompts, token mix, top tools, top agents, top models, and optional Open-Meteo weather.
 
-## Quick Start
+## Install
+
+Pick the command for your OS, then open a new terminal and run `mendcode`.
+
+<details open>
+<summary><strong>macOS</strong></summary>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash
 mendcode
+```
+
+The installer detects Apple Silicon vs Intel automatically and installs the latest release into `~/.mendcode/bin`.
+
+</details>
+
+<details>
+<summary><strong>Linux</strong></summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash
+mendcode
+```
+
+The installer detects x64 vs arm64, glibc vs musl/Alpine, and baseline CPU builds automatically.
+
+</details>
+
+<details>
+<summary><strong>Windows PowerShell</strong></summary>
+
+```powershell
+irm https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install.ps1 | iex
+mendcode
+```
+
+The PowerShell installer detects x64, x64 baseline, and arm64 release assets automatically.
+
+</details>
+
+<details>
+<summary><strong>Windows Git Bash / WSL</strong></summary>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash
+mendcode
+```
+
+Use this option if you already work from Git Bash, MSYS2, Cygwin, or WSL and want the same auto-detection flow as macOS/Linux.
+
+</details>
+
+To pin a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash -s -- --version <version>
+```
+
+To install without editing shell startup files:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash -s -- --no-modify-path
 ```
 
 The public install contract is `mendcode`. Development checkouts may contain a local `mend` shim for legacy/internal workflows, but public docs, examples, and screenshots should use `mendcode`.

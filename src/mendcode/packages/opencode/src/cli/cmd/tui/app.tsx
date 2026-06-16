@@ -145,7 +145,13 @@ import {
 } from "@/mend/memory/proposals"
 import type { MendPromptChromePreset } from "@/mend/tui/prompt-chrome"
 import { defaultPromptStatus, type MendPromptStatusBuiltin, type MendPromptStatusItem } from "@/mend/tui/prompt-status"
-import { resolveTuiPresentation, type MendPresentationProfile } from "@/mend/tui/presentation"
+import {
+  messageRendererForPresentationProfile,
+  presentationProfileTitle,
+  resolveTuiPresentation,
+  type MendMessageRenderer,
+  type MendPresentationProfile,
+} from "@/mend/tui/presentation"
 
 function rendererConfig(_config: TuiConfig.Info): CliRendererConfig {
   const mouseEnabled = !Flag.OPENCODE_DISABLE_MOUSE && (_config.mouse ?? true)
@@ -1557,17 +1563,17 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       {
         title: "Raw",
         value: "raw",
-        description: "Full session history: reasoning, tool cards, diffs, and classic metadata.",
+        description: "Plain messages only: no Markdown, tables, Mermaid, or emphasis.",
       },
       {
         title: "Minimal",
         value: "minimal",
-        description: "Compact session history: collapsed reasoning and one-line tool traces.",
+        description: "Compact activity detail with Markdown messages; Mermaid stays literal.",
       },
       {
-        title: "MendCode",
+        title: "Full",
         value: "mendcode",
-        description: "MendCode session history: compact simple tools, rich diffs, and MendCode symbols.",
+        description: "Full rich messages: Markdown, lists, tables, and local Mermaid rendering.",
       },
     ]
     dialog.replace(() => (
@@ -1577,15 +1583,68 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         options={options.map((item) => ({
           title: item.title,
           value: item.value,
-          category: "MendCode",
+          category: "Chat",
           description: item.description,
           onSelect: () =>
             void updatePromptChrome(
               (profile) => ({
                 ...profile,
-                presentation: resolveTuiPresentation({ ...profile.presentation, profile: item.value }),
+                presentation: resolveTuiPresentation({
+                  ...profile.presentation,
+                  profile: item.value,
+                  message: {
+                    ...profile.presentation.message,
+                    renderer: messageRendererForPresentationProfile(item.value),
+                  },
+                }),
               }),
-              `Chat presentation is now ${item.value}.`,
+              `Chat presentation is now ${presentationProfileTitle(item.value)}.`,
+            ),
+        }))}
+      />
+    ))
+  }
+  const showMessageRenderer = () => {
+    const current = mend.profile.presentation.message.renderer
+    const options: Array<{ title: string; value: MendMessageRenderer; description: string }> = [
+      {
+        title: "Plain",
+        value: "plain",
+        description: "Literal assistant text: no Markdown, Mermaid, tables, or emphasis.",
+      },
+      {
+        title: "Markdown",
+        value: "markdown",
+        description: "Markdown assistant text without local Mermaid conversion.",
+      },
+      {
+        title: "Rich",
+        value: "rich",
+        description: "Markdown plus local Mermaid diagrams, lists, and wide table cleanup.",
+      },
+    ]
+    dialog.replace(() => (
+      <DialogSelect
+        title="Message rendering"
+        current={current}
+        options={options.map((item) => ({
+          title: item.title,
+          value: item.value,
+          category: "Chat",
+          description: item.description,
+          onSelect: () =>
+            void updatePromptChrome(
+              (profile) => ({
+                ...profile,
+                presentation: resolveTuiPresentation({
+                  ...profile.presentation,
+                  message: {
+                    ...profile.presentation.message,
+                    renderer: item.value,
+                  },
+                }),
+              }),
+              `Message rendering is now ${item.value}.`,
             ),
         }))}
       />
@@ -3018,6 +3077,14 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       suggested: true,
       slash: { name: "presentation", aliases: ["chat-presentation", "render-mode"] },
       onSelect: showPresentationProfile,
+    },
+    {
+      title: "Message rendering",
+      value: "mendcode.message.renderer",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "message-rendering", aliases: ["message-renderer", "markdown-rendering"] },
+      onSelect: showMessageRenderer,
     },
     {
       title: "Submit scroll behavior",

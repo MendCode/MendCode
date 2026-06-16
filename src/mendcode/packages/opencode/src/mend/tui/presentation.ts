@@ -2,6 +2,8 @@ import type { MendTuiProfile } from "../profile"
 import { defaultActivityMascotConfig, type MendActivityMascotConfig } from "./mascot"
 
 export type MendPresentationProfile = "raw" | "minimal" | "mendcode"
+export type MendPresentationProfileInput = MendPresentationProfile | "full"
+export type MendMessageRenderer = "plain" | "markdown" | "rich"
 export type MendReasoningVisibility = "visible" | "collapsed" | "hidden"
 export type MendActivityPlacement = "current" | "left-docked" | "footer"
 export type MendActivityStyle = "raw" | "minimal" | "signal"
@@ -28,6 +30,9 @@ export type MendActivityMessages = Partial<Record<MendActivityPhase, string[]>>
 
 export type MendPresentationConfig = {
   profile: MendPresentationProfile
+  message: {
+    renderer: MendMessageRenderer
+  }
   reasoning: {
     defaultVisibility: MendReasoningVisibility
   }
@@ -83,6 +88,9 @@ const neutralActivityConfig: MendPresentationConfig["activity"] = {
 
 export const defaultPresentationConfig: MendPresentationConfig = {
   profile: "mendcode",
+  message: {
+    renderer: "rich",
+  },
   reasoning: {
     defaultVisibility: "collapsed",
   },
@@ -94,6 +102,9 @@ export const defaultPresentationConfig: MendPresentationConfig = {
 
 const rawPresentationConfig: MendPresentationConfig = {
   profile: "raw",
+  message: {
+    renderer: "plain",
+  },
   reasoning: {
     defaultVisibility: "visible",
   },
@@ -105,6 +116,9 @@ const rawPresentationConfig: MendPresentationConfig = {
 
 const minimalPresentationConfig: MendPresentationConfig = {
   profile: "minimal",
+  message: {
+    renderer: "markdown",
+  },
   reasoning: {
     defaultVisibility: "collapsed",
   },
@@ -126,7 +140,25 @@ function isRecord(value: unknown): value is Record<string, any> {
 
 function asProfile(value: unknown): MendPresentationProfile {
   if (value === "raw" || value === "minimal" || value === "mendcode") return value
+  if (value === "full") return "mendcode"
   return "mendcode"
+}
+
+export function presentationProfileTitle(profile: MendPresentationProfile) {
+  if (profile === "raw") return "Raw"
+  if (profile === "minimal") return "Minimal"
+  return "Full"
+}
+
+export function messageRendererForPresentationProfile(profile: MendPresentationProfile): MendMessageRenderer {
+  if (profile === "raw") return "plain"
+  if (profile === "minimal") return "markdown"
+  return "rich"
+}
+
+function asMessageRenderer(value: unknown, fallback: MendMessageRenderer): MendMessageRenderer {
+  if (value === "plain" || value === "markdown" || value === "rich") return value
+  return fallback
 }
 
 function asReasoningVisibility(value: unknown, fallback: MendReasoningVisibility): MendReasoningVisibility {
@@ -175,12 +207,16 @@ export function resolveTuiPresentation(input: unknown): MendPresentationConfig {
   const raw = isRecord(input) ? input : {}
   const profile = asProfile(raw.profile)
   const defaults = profileDefaults[profile]
+  const message = isRecord(raw.message) ? raw.message : {}
   const activity = isRecord(raw.activity) ? raw.activity : {}
   const reasoning = isRecord(raw.reasoning) ? raw.reasoning : {}
   const symbols = isRecord(raw.symbols) ? raw.symbols : {}
 
   return {
     profile,
+    message: {
+      renderer: asMessageRenderer(message.renderer ?? raw.messageRenderer, defaults.message.renderer),
+    },
     reasoning: {
       defaultVisibility: asReasoningVisibility(reasoning.defaultVisibility, defaults.reasoning.defaultVisibility),
     },

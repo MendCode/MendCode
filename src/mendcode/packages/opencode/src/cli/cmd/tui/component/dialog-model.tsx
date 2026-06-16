@@ -9,6 +9,7 @@ import { DialogVariant } from "./dialog-variant"
 import { useKeybind } from "../context/keybind"
 import * as fuzzysort from "fuzzysort"
 import { useConnected } from "./use-connected"
+import { providerDisplayName } from "@tui/util/provider-origin"
 
 export function DialogModel(props: { providerID?: string }) {
   const local = useLocal()
@@ -32,7 +33,6 @@ export function DialogModel(props: { providerID?: string }) {
       if (!showSections) return []
       return items.flatMap((item) => {
         const provider = sync.data.provider.find((x) => x.id === item.providerID)
-        if (provider?.id === "opencode") return []
         if (!provider) return []
         const model = provider.models[item.modelID]
         if (!model) return []
@@ -41,7 +41,7 @@ export function DialogModel(props: { providerID?: string }) {
             key: item,
             value: { providerID: provider.id, modelID: model.id },
             title: model.name ?? item.modelID,
-            description: provider.name,
+            description: providerDisplayName(provider),
             category,
             onSelect: () => {
               onSelect(provider.id, model.id)
@@ -61,11 +61,11 @@ export function DialogModel(props: { providerID?: string }) {
 
     const providerOptions = pipe(
       sync.data.provider,
-      filter((provider) => provider.id !== "opencode"),
       sortBy(
         (provider) => provider.id !== "openai",
+        (provider) => provider.id !== "opencode",
         (provider) => provider.id !== "opencode-go",
-        (provider) => provider.name,
+        (provider) => providerDisplayName(provider),
       ),
       flatMap((provider) =>
         pipe(
@@ -79,7 +79,7 @@ export function DialogModel(props: { providerID?: string }) {
             description: favorites.some((item) => item.providerID === provider.id && item.modelID === model)
               ? "(Favorite)"
               : undefined,
-            category: connected() ? provider.name : undefined,
+            category: connected() ? providerDisplayName(provider) : undefined,
             onSelect() {
               onSelect(provider.id, model)
             },
