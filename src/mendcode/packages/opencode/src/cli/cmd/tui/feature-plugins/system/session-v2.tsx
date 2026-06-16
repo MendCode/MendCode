@@ -26,13 +26,14 @@ import type {
   ToolFileContent,
   ToolTextContent,
 } from "@mendcode/sdk/v2"
-import { createEffect, createMemo, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
 import { useMendTuiProfile } from "@tui/context/mend"
 import { normalizeToolEvent, shouldRenderCompactTool } from "@/mend/tui/timeline/normalize"
 import { TimelineDiff } from "@/cli/cmd/tui/routes/session/renderers/diff"
 import { formatDuration } from "@/util/format"
 import { rawReasoningDisplay, shouldDisplayReasoning, unavailableReasoningLabel } from "@/mend/tui/presentation"
 import { sessionContentWidth } from "@/cli/cmd/tui/util/session-layout"
+import { renderPlanMarkdown } from "@/cli/cmd/tui/util/plan-markdown"
 
 const id = "internal:session-v2-debug"
 const route = "session.v2.messages"
@@ -384,19 +385,37 @@ function AssistantMessage(props: {
 
 function AssistantText(props: { messageID: string; part: SessionMessageAssistantText; syntax: SyntaxStyle }) {
   const { theme } = useTheme()
+  const mend = useMendTuiProfile()
+  const dimensions = useTerminalDimensions()
   const textID = createMemo(() => props.part.text.slice(0, 32).replace(/\W+/g, "-"))
+  const source = createMemo(() => props.part.text.trim())
+  const renderer = createMemo(() => mend.profile.presentation.message.renderer)
+  const richInput = createMemo(() => {
+    if (renderer() !== "rich") return
+    return { text: source(), width: sessionContentWidth(dimensions().width, false) }
+  })
+  const [richContent] = createResource(richInput, async (input) => renderPlanMarkdown(input.text, input.width))
+  const markdownContent = createMemo(() => (renderer() === "rich" ? (richContent() ?? source()) : source()))
   return (
-    <Show when={props.part.text.trim()}>
+    <Show when={source()}>
       <box paddingLeft={3} marginTop={1} flexShrink={0} id={`text-${props.messageID}-${textID()}`}>
-        <code
-          filetype="markdown"
-          drawUnstyledText={false}
-          streaming={true}
-          syntaxStyle={props.syntax}
-          content={props.part.text.trim()}
-          conceal={true}
-          fg={theme.text}
-        />
+        <Switch>
+          <Match when={renderer() === "plain"}>
+            <box flexDirection="column">
+              <For each={source().split("\n")}>{(line) => <text fg={theme.text}>{line || " "}</text>}</For>
+            </box>
+          </Match>
+          <Match when={true}>
+            <markdown
+              syntaxStyle={props.syntax}
+              streaming={true}
+              content={markdownContent()}
+              conceal={true}
+              fg={theme.markdownText}
+              bg={theme.background}
+            />
+          </Match>
+        </Switch>
       </box>
     </Show>
   )

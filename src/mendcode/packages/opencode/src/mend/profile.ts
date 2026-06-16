@@ -392,6 +392,9 @@ export function validateMendTuiProfile(profile: MendTuiProfile) {
   if (!Array.isArray(profile.workingIndicator.messages)) failures.push("tui workingIndicator.messages must be an array")
   if (!["raw", "minimal", "mendcode"].includes(profile.presentation.profile))
     failures.push("tui presentation.profile is invalid")
+  if (!["plain", "markdown", "rich"].includes(profile.presentation.message.renderer)) {
+    failures.push("tui presentation.message.renderer is invalid")
+  }
   if (!["visible", "collapsed", "hidden"].includes(profile.presentation.reasoning.defaultVisibility)) {
     failures.push("tui presentation.reasoning.defaultVisibility is invalid")
   }
@@ -482,6 +485,8 @@ export async function loadMendTuiProfile(root = ownRootFromModule(), config?: un
       }
       if (isRecord(active.presentation.reasoning)) presentation.reasoning = active.presentation.reasoning
       else delete presentation.reasoning
+      if (isRecord(active.presentation.message)) presentation.message = active.presentation.message
+      else delete presentation.message
       configured.presentation = resolveTuiPresentation(presentation)
     }
   }

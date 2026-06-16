@@ -144,7 +144,7 @@ import {
   userMessageDisplayText,
   type PastedContentDisplayPart,
 } from "./user-message-display"
-import { planReviewInlineTitle } from "../../util/plan-markdown"
+import { planReviewInlineTitle, renderPlanMarkdown } from "../../util/plan-markdown"
 
 addDefaultParsers(parsers.parsers)
 
@@ -3343,16 +3343,34 @@ function ReasoningHeader(props: {
 function TextPart(props: { last: boolean; part: TextPart; message: AssistantMessage }) {
   const ctx = use()
   const { theme, syntax } = useTheme()
+  const mend = useMendTuiProfile()
+  const dimensions = useTerminalDimensions()
+  const source = createMemo(() => props.part.text.trim())
+  const renderer = createMemo(() => mend.profile.presentation.message.renderer)
+  const richInput = createMemo(() => {
+    if (renderer() !== "rich") return
+    return {
+      text: source(),
+      width: sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)),
+    }
+  })
+  const [richContent] = createResource(richInput, async (input) => renderPlanMarkdown(input.text, input.width))
+  const markdownContent = createMemo(() => (renderer() === "rich" ? (richContent() ?? source()) : source()))
   return (
-    <Show when={props.part.text.trim()}>
+    <Show when={source()}>
       <box id={`text-${props.message.id}-${props.part.id}`} paddingLeft={3} marginTop={1} flexShrink={0}>
         <Switch>
-          <Match when={Flag.OPENCODE_EXPERIMENTAL_MARKDOWN}>
+          <Match when={renderer() === "plain"}>
+            <box flexDirection="column">
+              <For each={source().split("\n")}>{(line) => <text fg={theme.text}>{line || " "}</text>}</For>
+            </box>
+          </Match>
+          <Match when={renderer() === "markdown" || renderer() === "rich"}>
             <markdown
               syntaxStyle={syntax()}
               streaming={true}
               internalBlockMode="top-level"
-              content={props.part.text.trim()}
+              content={markdownContent()}
               tableOptions={{ style: "grid" }}
               conceal={ctx.conceal()}
               fg={theme.markdownText}
@@ -3365,7 +3383,7 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
               drawUnstyledText={false}
               streaming={true}
               syntaxStyle={syntax()}
-              content={props.part.text.trim()}
+              content={markdownContent()}
               conceal={ctx.conceal()}
               fg={theme.text}
             />

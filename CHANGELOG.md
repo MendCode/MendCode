@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.12 - 2026-06-16
+
+- Show the upstream `opencode` provider in the TUI provider/model/setup flows while keeping it labeled as `opencode Zen`, and keep `opencode-go` labeled separately as `opencode Go`.
+- Add a Windows PowerShell installer and document macOS, Linux, Windows PowerShell, and Git Bash/WSL install paths in the README.
+- Add configurable assistant message rendering modes: Plain, Markdown, and Rich.
+- Render plan/chat Markdown more cleanly in Rich mode, including local Mermaid flowcharts, wide tables, checklists, callouts, connectors, and compact terminal-friendly diagrams.
+- Keep plan review content anchored while scrolling so review modals stay readable during long plans.
+
 ## 0.1.11 - 2026-06-15
 
 - Preserve `task` tool metadata while a subagent is running, after tool-call transitions, and when a subagent fails before model resolution completes.
