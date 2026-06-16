@@ -41,7 +41,7 @@ if (publishRegistries) {
   await Bun.file(`./dist/${pkg.name}/package.json`).write(
     JSON.stringify(
       {
-        name: pkg.name + "-ai",
+        name: pkg.name,
         bin: {
           [pkg.name]: "./bin/opencode",
         },
@@ -61,7 +61,7 @@ if (publishRegistries) {
     await publish(`./dist/${name}`, name, binaries[name])
   })
   await Promise.all(tasks)
-  await publish(`./dist/${pkg.name}`, `${pkg.name}-ai`, version)
+  await publish(`./dist/${pkg.name}`, pkg.name, version)
 } else {
   console.log("Skipping npm binary package publishing; set MENDCODE_PUBLISH_REGISTRIES=true to enable it.")
 }

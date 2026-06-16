@@ -270,15 +270,23 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         }
       })
 
-      const scopedModelKey = createMemo(() => {
+      const scopedModelAgentName = createMemo(() => {
         const a = agent.current()
-        if (!a) return undefined
-        if (route.data.type === "session") return `session:${route.data.sessionID}:${a.name}`
-        return `agent:${a.name}`
+        if (route.data.type !== "session") return a?.name
+        const session = sync.session.get(route.data.sessionID)
+        if (session?.agent && !agent.list().some((item) => item.name === session.agent)) return session.agent
+        return a?.name ?? session?.agent
+      })
+
+      const scopedModelKey = createMemo(() => {
+        const name = scopedModelAgentName()
+        if (!name) return undefined
+        if (route.data.type === "session") return `session:${route.data.sessionID}:${name}`
+        return `agent:${name}`
       })
 
       const currentModel = createMemo(() => {
-        const a = agent.current()
+        const a = sync.data.agent.find((item) => item.name === scopedModelAgentName() && !item.hidden) ?? agent.current()
         const key = scopedModelKey()
         return (
           getFirstValidModel(
@@ -292,6 +300,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
       return {
         current: currentModel,
+        override() {
+          const key = scopedModelKey()
+          if (!key) return undefined
+          const model = modelStore.model[key]
+          if (!model || !isModelValid(model)) return undefined
+          return model
+        },
         get ready() {
           return modelStore.ready
         },

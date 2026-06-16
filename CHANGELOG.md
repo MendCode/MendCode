@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.13 - 2026-06-16
+
+- Refresh the Bash and PowerShell installers with a clearer MendCode banner, numbered install phases, ASCII progress output, and more direct next-step guidance.
+- Make installer guidance honest after `curl | bash`: run the installed binary by absolute path immediately, or open/source a terminal before using `mendcode` from `PATH`.
+- Keep MendCode-owned setup config keys such as `memory` and `package` from crashing the runtime config loader after first-run setup creates `.mendcode/mendcode.json`.
+- Honor dynamic `OPENCODE_CONFIG_CONTENT` values at config-load time so SDK/runtime callers can inject per-instance config after process startup.
+- Preserve explicit model changes made while a session is busy so the next prompt uses the newly selected model instead of falling back to the previous session model.
+- Point npm registry publishing at the public `mendcode` package name instead of the temporary `mendcode-ai` wrapper name.
+
 ## 0.1.12 - 2026-06-16
 
 - Show the upstream `opencode` provider in the TUI provider/model/setup flows while keeping it labeled as `opencode Zen`, and keep `opencode-go` labeled separately as `opencode Go`.
