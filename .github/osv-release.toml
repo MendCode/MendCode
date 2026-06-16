@@ -11,3 +11,57 @@ reason = "esbuild fixed version 0.28.1 is still inside the repository minimum re
 id = "GHSA-g7r4-m6w7-qqqr"
 ignoreUntil = 2026-06-20
 reason = "esbuild fixed version 0.28.1 is still inside the repository minimum release-age window. Revisit after the release-age hold expires."
+
+[[IgnoredVulns]]
+id = "GHSA-wcpc-wj8m-hjx6"
+ignoreUntil = 2026-06-17
+reason = "protobufjs fixed version 7.6.3 is still inside the repository minimum release-age window. Revisit after the release-age hold expires."
+
+[[IgnoredVulns]]
+id = "GHSA-f38q-mgvj-vph7"
+ignoreUntil = 2026-06-17
+reason = "protobufjs fixed version 7.6.3 is still inside the repository minimum release-age window. Revisit after the release-age hold expires."
+
+[[IgnoredVulns]]
+id = "GHSA-8988-4f7v-96qf"
+ignoreUntil = 2026-06-19
+reason = "OpenTelemetry fixed versions 2.8.0/0.219.0 are still inside the repository minimum release-age window. Revisit after the release-age hold expires."
+
+[[IgnoredVulns]]
+id = "GHSA-hmw2-7cc7-3qxx"
+ignoreUntil = 2026-06-20
+reason = "form-data fixed versions 2.5.6 and 4.0.6 are still inside the repository minimum release-age window. Revisit after the release-age hold expires."
+
+[[IgnoredVulns]]
+id = "GHSA-hpcv-96wg-7vj8"
+ignoreUntil = 2026-06-18
+reason = "DOMPurify fixed version 3.4.9 is still inside the repository minimum release-age window. Revisit after the release-age hold expires."
+
+[[IgnoredVulns]]
+id = "GHSA-r47g-fvhr-h676"
+ignoreUntil = 2026-06-18
+reason = "DOMPurify fixed version 3.4.9 is still inside the repository minimum release-age window. Revisit after the release-age hold expires."
+
+[[IgnoredVulns]]
+id = "GHSA-76mc-f452-cxcm"
+ignoreUntil = 2026-06-18
+reason = "DOMPurify fixed version 3.4.9 is still inside the repository minimum release-age window. Revisit after the release-age hold expires."
+
+[[IgnoredVulns]]
+id = "GHSA-rp9w-3fw7-7cwq"
+ignoreUntil = 2026-06-18
+reason = "DOMPurify fixed version 3.4.9 is still inside the repository minimum release-age window. Revisit after the release-age hold expires."
+
+[[IgnoredVulns]]
+id = "GHSA-gvmj-g25r-r7wr"
+ignoreUntil = 2026-06-18
+reason = "DOMPurify fixed version 3.4.9 is still inside the repository minimum release-age window. Revisit after the release-age hold expires."
+
+[[IgnoredVulns]]
+id = "GHSA-vxr8-fq34-vvx9"
+ignoreUntil = 2026-06-18
+reason = "DOMPurify fixed version 3.4.9 is still inside the repository minimum release-age window. Revisit after the release-age hold expires."
+
+[[IgnoredVulns]]
+id = "GHSA-x4vx-rjvf-j5p4"
+reason = "DOMPurify advisory has no fixed version reported by OSV. Retained temporarily with scripts disabled, SBOM, provenance attestations, and follow-up through Dependabot/security alerts."
