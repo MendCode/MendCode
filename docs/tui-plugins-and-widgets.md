@@ -318,7 +318,8 @@ Use package sync for team rollout:
 
 ```bash
 mendcode packages create --include plugins,tuiProfile,themes
-mendcode packages install github:YourOrg/company-mend-package
+mendcode packages add-source company --type github --url https://github.com/YourOrg/company-mend-package.git --channel team
+mendcode packages install company-mend-package company
 mendcode packages enable company-mend-package
 ```
 

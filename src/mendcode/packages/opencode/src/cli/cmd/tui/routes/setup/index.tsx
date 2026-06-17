@@ -28,9 +28,10 @@ import { composePromptPolicy } from "@/mend/prompt/compose"
 import { memoryStatus } from "@/mend/memory/store"
 import { writeGlobalMemoryConfig } from "@/mend/memory/config"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
-import { packageMetadata, packageMetadataSet, syncGlobalPrimaryAgentModels } from "@/mend/config/project"
+import { packageMetadata, packageMetadataSet, syncGlobalPrimaryAgentModels, syncProject } from "@/mend/config/project"
 import { applyRuntimePack } from "@/mend/runtime/pack"
-import { listMendPackages } from "@/mend/runtime/packages"
+import { disableAllMendPackages, listMendPackages, removeMendPackage, setMendPackageEnabled } from "@/mend/runtime/packages"
+import { runtimeRegistryAdd, runtimeRegistryApplySource, runtimeRegistryInstallPack, runtimeRegistrySearch } from "@/mend/runtime/registry"
 import { mendTuiCapabilityVersion, visibleCustomizationCapabilities } from "@/mend/tui/capabilities"
 import { listActiveCustomizations } from "@/mend/tui/customization-state"
 import { applyTuiPreset, readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
@@ -725,7 +726,7 @@ export function Setup() {
     })
   }
 
-  const choosePackageMetadata = async () => {
+  const choosePackageAuthorMetadata = async () => {
     const current = setupSummary()?.pkg
     const title = await DialogPrompt.show(dialog, "Package title", {
       value: current?.title || "",
@@ -786,6 +787,199 @@ export function Setup() {
             onSelect: async () => {
               await savePackageMetadataAndSnapshot({ title, id, description, version, channel: "beta" })
             },
+          },
+        ]}
+      />
+    ))
+  }
+
+  const syncPackageRuntime = async () => {
+    await syncProject(mend.root)
+    await mend.reload()
+    await mark("package")
+    reload()
+  }
+
+  const chooseOfficialPackage = async () => {
+    try {
+      const result = await runtimeRegistrySearch("", "official", mend.root)
+      if (!result.results.length) {
+        toast.show({ variant: "warning", message: "No official packages found in the registry.", duration: 5000 })
+        return
+      }
+      dialog.replace(() => (
+        <DialogSelect
+          title="Official Packages"
+          options={result.results.map((pack) => ({
+            title: pack.title || pack.id,
+            value: pack.id,
+            category: pack.channel || "official",
+            description: pack.description || `${pack.runtime?.commands || 0} commands · ${pack.runtime?.skills || 0} skills`,
+            footer: pack.version,
+            onSelect: async () => {
+              const confirmed = await DialogConfirm.show(
+                dialog,
+                `Install ${pack.title || pack.id}`,
+                [
+                  `Source: official`,
+                  `Package: ${pack.id}@${pack.version}`,
+                  `Fetches network: ${result.fetchesNetwork ? "yes" : "no"}`,
+                  `Digest: ${pack.digest ? `${pack.digest.algorithm}:${pack.digest.value.slice(0, 12)}...` : "not pinned"}`,
+                  `Signature: ${pack.signature ? `${pack.signature.algorithm}:${pack.signature.value.slice(0, 12)}...` : "not signed"}`,
+                  "",
+                  "Will activate as a package overlay for the next message.",
+                  "Will not touch local sessions, auth, runs, cache, or existing local customization files.",
+                ].join("\n"),
+              )
+              if (!confirmed) return
+              const installed = await runtimeRegistryInstallPack(pack.id, "official", mend.root)
+              await syncPackageRuntime()
+              toast.show({ variant: "success", message: `Installed package: ${installed.package.id}.`, duration: 5000 })
+              dialog.clear()
+            },
+          }))}
+        />
+      ))
+    } catch (error) {
+      toast.show({
+        variant: "error",
+        message: error instanceof Error ? error.message : "Official packages are unavailable.",
+        duration: 7000,
+      })
+    }
+  }
+
+  const installLocalPackagePath = async () => {
+    const sourcePath = await DialogPrompt.show(dialog, "Local package path", {
+      value: "",
+      placeholder: "/path/to/package-or-registry",
+      description: () => <text fg={theme.textMuted}>Directory or manifest containing a MendCode package.</text>,
+    })
+    if (!sourcePath?.trim()) return
+    const sourceID = await DialogPrompt.show(dialog, "Local source id", {
+      value: "local-import",
+      placeholder: "local-import",
+      description: () => <text fg={theme.textMuted}>Stable id for this local registry source.</text>,
+    })
+    if (!sourceID?.trim()) return
+    try {
+      await runtimeRegistryAdd([sourceID.trim(), "--type", "local", "--url", sourcePath.trim(), "--note", "Setup-added local package source."], mend.root)
+      const preview = await runtimeRegistryApplySource(sourceID.trim(), mend.root)
+      await syncPackageRuntime()
+      toast.show({
+        variant: "success",
+        message: `Installed local package source: ${preview.package?.id || sourceID.trim()}.`,
+        duration: 5000,
+      })
+    } catch (error) {
+      toast.show({
+        variant: "error",
+        message: error instanceof Error ? error.message : "Local package install failed.",
+        duration: 7000,
+      })
+    }
+  }
+
+  const manageInstalledPackages = async () => {
+    const packages = await listMendPackages(mend.root)
+    dialog.replace(() => (
+      <DialogSelect
+        title="Installed Packages"
+        options={[
+          {
+            title: "Deselect all",
+            value: "disable-all",
+            category: "Action",
+            description: `${packages.enabled.length} active packages`,
+            onSelect: async () => {
+              await disableAllMendPackages(mend.root)
+              await syncPackageRuntime()
+              toast.show({ variant: "success", message: "All packages deselected.", duration: 4000 })
+            },
+          },
+          ...packages.installed.map((item) => ({
+            title: `${item.enabled ? "[x]" : "[ ]"} ${item.title || item.id}`,
+            value: item.id,
+            category: item.enabled ? "Active" : "Installed",
+            description: item.description || item.root,
+            footer: item.version || item.channel || item.sourceType,
+            onSelect: async () => {
+              await setMendPackageEnabled(item.id, !item.enabled, mend.root)
+              await syncPackageRuntime()
+              toast.show({
+                variant: "success",
+                message: `${item.title || item.id} ${item.enabled ? "deselected" : "enabled"}.`,
+                duration: 4000,
+              })
+              void manageInstalledPackages()
+            },
+          })),
+          ...packages.installed.map((item) => ({
+            title: `Remove ${item.title || item.id}`,
+            value: `remove:${item.id}`,
+            category: "Remove",
+            description: "Deletes only the installed overlay copy.",
+            onSelect: async () => {
+              const confirmed = await DialogConfirm.show(
+                dialog,
+                "Remove package",
+                `Remove installed package snapshot ${item.title || item.id}? Local source/customization files stay on disk.`,
+              )
+              if (!confirmed) return
+              await removeMendPackage(item.id, mend.root)
+              await syncPackageRuntime()
+              toast.show({ variant: "success", message: `${item.title || item.id} removed.`, duration: 4000 })
+              void manageInstalledPackages()
+            },
+          })),
+        ]}
+      />
+    ))
+  }
+
+  const choosePackageMetadata = async () => {
+    dialog.replace(() => (
+      <DialogSelect
+        title="Package"
+        options={[
+          {
+            title: "Skip packages",
+            value: "skip",
+            category: "Setup",
+            description: "Leave package overlays unchanged.",
+            onSelect: async () => {
+              await mark("package")
+              toast.show({ variant: "success", message: "Package step skipped.", duration: 3000 })
+              dialog.clear()
+            },
+          },
+          {
+            title: "Browse official packages",
+            value: "official",
+            category: "Install",
+            description: "Install a curated package from MendCode/mendcode-packages.",
+            onSelect: () => void chooseOfficialPackage(),
+          },
+          {
+            title: "Install local package path",
+            value: "local-path",
+            category: "Install",
+            description: "Install a local package directory or manifest as an overlay.",
+            onSelect: () => void installLocalPackagePath(),
+          },
+          {
+            title: "Create/update local package",
+            value: "author",
+            category: "Author",
+            description: "Edit metadata and write mend-package.json + runtime-pack snapshot.",
+            onSelect: () => void choosePackageAuthorMetadata(),
+          },
+          {
+            title: "Manage installed packages",
+            value: "manage",
+            category: "Manage",
+            description: `${setupSummary()?.packages.installed.length || 0} installed · ${setupSummary()?.packages.enabled.length || 0} active`,
+            onSelect: () => void manageInstalledPackages(),
           },
         ]}
       />
@@ -1344,12 +1538,14 @@ export function Setup() {
                     Installed packages: {setupSummary()?.packages.installed.length || 0} · active{" "}
                     {setupSummary()?.packages.enabled.length || 0}
                   </text>
+                  <text>Install: official registry, local package path, or authored local snapshot</text>
                   <text>Snapshot: mend-package.json + .mendcode/runtime-pack.json</text>
                   <text fg={theme.textMuted}>
                     This metadata feeds generated `mend-package.json`, runtime-pack snapshots, and registry previews.
                   </text>
                   <text fg={theme.textMuted}>
-                    Enter edits metadata and updates the local package snapshot. Ctrl+P Packages opens the artifact checklist.
+                    Enter opens package actions. Package overlays install under .mendcode/packages/installed and do not
+                    replace local sessions, auth, runs, cache, or customization files.
                   </text>
                 </box>
               </Match>

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.14 - 2026-06-16
+
+- Make `mendcode packages install <pack-id>` install a selected package from the official or chosen registry catalog instead of applying a whole source by accident.
+- Keep source-level package application available as `mendcode packages install-source <source-id>` for existing local/team registry workflows.
+- Let the setup Package step skip packages, browse official packages, install a local package path, create/update a local package snapshot, or manage installed overlays.
+- Add registry coverage for multi-package catalogs, selected pack installation, source-level install compatibility, and runtime compatibility rejection.
+
 ## 0.1.13 - 2026-06-16
 
 - Refresh the Bash and PowerShell installers with a clearer MendCode banner, numbered install phases, ASCII progress output, and more direct next-step guidance.

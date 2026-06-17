@@ -436,6 +436,23 @@ test("renderPlanMarkdown renders wide markdown tables as text blocks", async () 
   expect(result).toContain("```")
 })
 
+test("renderPlanMarkdown strips inline markdown inside wide table text blocks", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "| Archivo | Acción | Cambio |",
+    "| --- | --- | --- |",
+    "| `components/landing/home-tui-gallery.tsx` | Modified | Ejecuté `npm run lint` y dejé **Full** sin backticks literales en el bloque largo de salida. |",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 72)
+  expect(result).toContain("components/landing/home-tui-gallery.tsx")
+  expect(result).toContain("Ejecuté npm run lint")
+  expect(result).toContain("Full sin backticks")
+  expect(result).not.toContain("`components/landing/home-tui-gallery.tsx`")
+  expect(result).not.toContain("`npm run lint`")
+  expect(result).not.toContain("**Full**")
+})
+
 test("renderPlanMarkdown renders Mermaid state diagrams locally", async () => {
   process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
   const markdown = ["```mermaid", "stateDiagram-v2", "  [*] --> Idle", "  Idle --> Running: start", "```"].join(

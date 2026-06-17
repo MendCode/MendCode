@@ -24,7 +24,7 @@ import { exportPlan } from "../runtime/export"
 import { adapterStatus, checkRuntime, collectStatus, doctorLines, donorConfigPathsReport, ownedRuntimeStatus, toolchainStatus, upstreamInspect, upstreamStatus } from "../runtime/system"
 import { adoptOwnedRuntime, ownedRuntimePlan } from "../runtime/adoption"
 import { runBenchmark } from "../runtime/bench"
-import { runtimeRegistryAdd, runtimeRegistryApply, runtimeRegistryList, runtimeRegistryPreview, runtimeRegistryPublishPlan, runtimeRegistryRemove, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistrySign, runtimeRegistrySmoke, runtimeRegistryStatus } from "../runtime/registry"
+import { runtimeRegistryAdd, runtimeRegistryApply, runtimeRegistryApplySource, runtimeRegistryInstallPack, runtimeRegistryList, runtimeRegistryPreview, runtimeRegistryPublishPlan, runtimeRegistryRemove, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistrySign, runtimeRegistrySmoke, runtimeRegistryStatus } from "../runtime/registry"
 import { disableAllMendPackages, listMendPackages, removeMendPackage, setMendPackageEnabled } from "../runtime/packages"
 import { appendMemoryEntry, deleteMemoryEntry, memoryStatus, readMemoryEntries, refreshMemoryIndex, updateMemoryEntry } from "../memory/store"
 import { formatMemoryBlock, retrieveMemory } from "../memory/retrieve"
@@ -562,7 +562,7 @@ async function runtimeCommand(args: string[]) {
     else if (action === "add") console.log(JSON.stringify(await runtimeRegistryAdd(args.slice(2), root), null, 2))
     else if (action === "remove") console.log(JSON.stringify(await runtimeRegistryRemove(args[2], root), null, 2))
     else if (action === "preview") console.log(JSON.stringify(await runtimeRegistryPreview(args[2] || "local", root), null, 2))
-    else if (action === "apply") console.log(JSON.stringify(await runtimeRegistryApply(args[2], root), null, 2))
+    else if (action === "apply") console.log(JSON.stringify(await runtimeRegistryApplySource(args[2], root), null, 2))
     else if (action === "search") console.log(JSON.stringify(await runtimeRegistrySearch(args[2] || "", args[3] || "local", root), null, 2))
     else if (action === "show") console.log(JSON.stringify(await runtimeRegistryShow(args[2], args[3] || "local", root), null, 2))
     else if (action === "publish-plan") console.log(JSON.stringify(await runtimeRegistryPublishPlan(args[2] || "local", root), null, 2))
@@ -898,9 +898,16 @@ async function packages(args: string[]) {
     return
   }
   if (sub === "install" || sub === "use") {
+    const packID = args[1]
+    if (!packID) throw new Error("Usage: mendcode packages install <pack-id> [source-id]")
+    const result = await runtimeRegistryInstallPack(packID, args[2] || "official", root)
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+  if (sub === "install-source" || sub === "use-source") {
     const sourceID = args[1]
-    if (!sourceID) throw new Error("Usage: mendcode packages install <source-id>")
-    const result = await runtimeRegistryApply(sourceID, root)
+    if (!sourceID) throw new Error("Usage: mendcode packages install-source <source-id>")
+    const result = await runtimeRegistryApplySource(sourceID, root)
     console.log(JSON.stringify(result, null, 2))
     return
   }
@@ -948,7 +955,7 @@ async function packages(args: string[]) {
     console.log(JSON.stringify(await runtimeRegistryRemove(args[1], root), null, 2))
     return
   }
-  throw new Error("Usage: mend-control-plane packages <status|list|create [--id id] [--title name] [--description text] [--include all|skills,modes,...] [--exclude models,budget,...] [--version x.y.z]|update ...|delete-local|install <source-id>|enable <id>|disable <id>|disable-all|remove <id>|search [query] [source-id]|show <pack-id> [source-id]|sources|add-source ...|remove-source <source-id>>")
+  throw new Error("Usage: mend-control-plane packages <status|list|create [--id id] [--title name] [--description text] [--include all|skills,modes,...] [--exclude models,budget,...] [--version x.y.z]|update ...|delete-local|install <pack-id> [source-id]|install-source <source-id>|enable <id>|disable <id>|disable-all|remove <id>|search [query] [source-id]|show <pack-id> [source-id]|sources|add-source ...|remove-source <source-id>>")
 }
 
 function parsePermissionMode(value: string | null): PermissionMode {
