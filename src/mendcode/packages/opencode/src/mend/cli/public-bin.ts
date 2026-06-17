@@ -153,7 +153,8 @@ Workflows:
   mendcode packages status|list    inspect installed/active MendCode packages
   mendcode packages create --id <id> --title <name> [--include skills,modes,plugins]
                                 package selected local harness config
-  mendcode packages install <source-id>
+  mendcode packages install <pack-id> [source-id]
+  mendcode packages install-source <source-id>
   mendcode packages enable|disable <id>
                                 select or deselect a runtime package
   mendcode mflow status            inspect mflow activation, daemon, and locks
@@ -186,7 +187,7 @@ Primary public surface:
   mendcode --tsm [branch|path|id|--all]
   mendcode status|doctor
   mendcode setup status|plan|doctor
-  mendcode packages status|list|create|install|enable|disable|remove
+  mendcode packages status|list|create|install|install-source|enable|disable|remove
   mendcode mflow status|setup|activate|deactivate|remove
   mendcode worktree status|plan|create|open|adopt|remove|reset|doctor
   mendcode tsm status|plan|setup|activate|deactivate|remove|doctor

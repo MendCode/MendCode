@@ -8,6 +8,8 @@ export type {
 export {
   runtimeRegistryAdd,
   runtimeRegistryApply,
+  runtimeRegistryApplySource,
+  runtimeRegistryInstallPack,
   runtimeRegistryList,
   runtimeRegistryPreview,
   runtimeRegistryPublishPlan,

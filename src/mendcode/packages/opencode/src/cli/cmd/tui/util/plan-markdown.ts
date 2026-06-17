@@ -115,9 +115,21 @@ function splitMarkdownTableRow(line: string) {
     .map((cell) => cell.trim())
 }
 
+function cleanInlineMarkdownForText(input: string) {
+  return input
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/\*([^*\s][^*]*?)\*/g, "$1")
+    .trim()
+}
+
 function wrapTextLine(prefix: string, text: string, width: number) {
   const maxWidth = Math.max(48, Math.min(100, width - 8))
-  const words = text.split(/\s+/).filter(Boolean)
+  const cleanText = cleanInlineMarkdownForText(text)
+  const words = cleanText.split(/\s+/).filter(Boolean)
   const lines: string[] = []
   let current = prefix
 
@@ -133,7 +145,7 @@ function wrapTextLine(prefix: string, text: string, width: number) {
     current = `${" ".repeat(Bun.stringWidth(prefix))}${word}`
   }
 
-  lines.push(current === prefix ? `${prefix}${text}` : current)
+  lines.push(current === prefix ? `${prefix}${cleanText}` : current)
   return lines
 }
 
@@ -167,12 +179,12 @@ function renderWideTablesAsText(markdown: string, width: number) {
     const rows = table.slice(2).map(splitMarkdownTableRow)
     result.push("```text")
     rows.forEach((row, rowIndex) => {
-      const title = row[0] || `Fila ${rowIndex + 1}`
+      const title = cleanInlineMarkdownForText(row[0] || `Fila ${rowIndex + 1}`)
       result.push(...wrapTextLine("", title, width))
 
       for (let cellIndex = 1; cellIndex < Math.max(headers.length, row.length); cellIndex++) {
-        const header = headers[cellIndex] || `Campo ${cellIndex + 1}`
-        const cell = row[cellIndex]
+        const header = cleanInlineMarkdownForText(headers[cellIndex] || `Campo ${cellIndex + 1}`)
+        const cell = cleanInlineMarkdownForText(row[cellIndex] ?? "")
         if (!cell) continue
         result.push(...wrapTextLine(`  ${header}: `, cell, width))
       }
