@@ -91,6 +91,7 @@ describe("mend public CLI help", () => {
     expect(result.exitCode).toBe(0)
     expect(output).toContain("mendcode                         open MendCode")
     expect(output).toContain("mendcode packages status|list")
+    expect(output).toContain("mendcode packages install <pack-id>")
     expect(output).toContain("mendcode mflow status")
     expect(output).toContain("mendcode worktree status|plan")
     expect(output).not.toContain("mendcode tui")
@@ -108,6 +109,7 @@ describe("mend public CLI help", () => {
     expect(output).toContain("Advanced/support surface")
     expect(output).toContain("Internal/debug-only surface")
     expect(output).toContain("tui")
+    expect(output).toContain("install-source")
     expect(output).not.toContain("mendcode tui status|preview")
   })
 

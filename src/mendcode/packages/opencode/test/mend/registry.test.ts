@@ -3,11 +3,16 @@ import { mkdir, readFile, writeFile } from "fs/promises"
 import { spawnSync } from "child_process"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
-import { runtimeRegistryAdd, runtimeRegistryApply, runtimeRegistryPreview, runtimeRegistryPublishPlan, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistrySign, runtimeRegistrySmoke } from "../../src/mend/runtime/registry"
+import { runtimeRegistryAdd, runtimeRegistryApply, runtimeRegistryApplySource, runtimeRegistryInstallPack, runtimeRegistryPreview, runtimeRegistryPublishPlan, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistrySign, runtimeRegistrySmoke } from "../../src/mend/runtime/registry"
 
 async function writeJson(file: string, value: unknown) {
   await mkdir(path.dirname(file), { recursive: true })
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`)
+}
+
+async function writeText(file: string, value: string) {
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, value)
 }
 
 function git(args: string[], cwd: string) {
@@ -91,6 +96,39 @@ describe("runtime registry marketplace", () => {
     expect(result.pack.version).toBe("2.0.0")
     expect(result.catalog.indexFormat).toBe("jsonc")
     expect(result.pack.tags).toEqual(["ops", "mcp"])
+  })
+
+  test("installs a selected pack from a multi-pack marketplace catalog", async () => {
+    await using dir = await tmpdir()
+    await using source = await tmpdir()
+    await writeJson(path.join(source.path, ".mendcode", "marketplace", "index.json"), {
+      version: 0,
+      packs: [
+        {
+          id: "alpha-pack",
+          version: "1.0.0",
+          title: "Alpha Pack",
+          source: { type: "github", url: "packages/alpha-pack" },
+        },
+        {
+          id: "review-pack",
+          version: "1.0.0",
+          title: "Review Pack",
+          source: { type: "github", url: "packages/review-pack" },
+        },
+      ],
+    })
+    await writeText(path.join(source.path, "packages", "alpha-pack", ".mendcode", "commands", "alpha.md"), "alpha command\n")
+    await writeText(path.join(source.path, "packages", "review-pack", ".mendcode", "commands", "review.md"), "review command\n")
+
+    await runtimeRegistryAdd(["official", "--type", "local", "--url", source.path], dir.path)
+    const result = await runtimeRegistryInstallPack("review-pack", "official", dir.path)
+
+    expect(result.package.id).toBe("review-pack")
+    expect(result.copied).toContain(".mendcode/commands/review.md")
+    expect(result.copied).not.toContain(".mendcode/commands/alpha.md")
+    await expect(readFile(path.join(dir.path, ".mendcode", "packages", "installed", "review-pack", ".mendcode", "commands", "review.md"), "utf8")).resolves.toBe("review command\n")
+    await expect(readFile(path.join(dir.path, ".mendcode", "packages", "installed", "review-pack", ".mendcode", "commands", "alpha.md"), "utf8")).rejects.toThrow()
   })
 
   test("falls back to synthetic pack metadata when no marketplace index exists", async () => {
@@ -260,13 +298,31 @@ describe("runtime registry marketplace", () => {
         {
           id: "external",
           version: "1.0.0",
-          compatibility: { mendcode: "<1.0.0" },
+          compatibility: { mendcode: "<0.1.0" },
         },
       ],
     })
 
     await runtimeRegistryAdd(["external", "--type", "local", "--url", source.path], dir.path)
     await expect(runtimeRegistryApply("external", dir.path)).rejects.toThrow("incompatible with MendCode runtime")
+  })
+
+  test("keeps source-level install available as install-source compatibility", async () => {
+    await using dir = await tmpdir()
+    await using source = await tmpdir()
+    await writeJson(path.join(source.path, ".mendcode", "mendcode.json"), {
+      version: 0,
+      focus: { default: "codex" },
+      budgets: { warnUsd: 1 },
+      worktree: { mode: "off" },
+    })
+    await writeText(path.join(source.path, ".mendcode", "commands", "source.md"), "source command\n")
+
+    await runtimeRegistryAdd(["external", "--type", "local", "--url", source.path], dir.path)
+    const result = await runtimeRegistryApplySource("external", dir.path)
+
+    expect(result.package).toMatchObject({ id: "external", enabled: true })
+    expect(result.copied).toContain(".mendcode/commands/source.md")
   })
 
   test("preview classifies changed, missing, blocked, and destructive files", async () => {
