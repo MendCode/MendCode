@@ -6,6 +6,7 @@
 - Keep source-level package application available as `mendcode packages install-source <source-id>` for existing local/team registry workflows.
 - Let the setup Package step skip packages, browse official packages, install a local package path, create/update a local package snapshot, or manage installed overlays.
 - Add registry coverage for multi-package catalogs, selected pack installation, source-level install compatibility, and runtime compatibility rejection.
+- Update `protobufjs` to `7.6.3` so the release dependency gate can pass with the fixed version.
 
 ## 0.1.13 - 2026-06-16
 
