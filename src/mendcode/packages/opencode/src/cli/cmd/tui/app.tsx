@@ -118,7 +118,7 @@ import { cyclePromptMode, writePromptMode, type MendPromptMode } from "@/mend/pr
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import { setupReadiness } from "@/mend/runtime/readiness"
 import { isSetupComplete, readSetupState } from "@/mend/setup/state"
-import { runtimeRegistryApply, runtimeRegistryPreview, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistryStatus } from "@/mend/runtime/registry"
+import { runtimeRegistryApplySource, runtimeRegistryInstallPack, runtimeRegistryPreview, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistryStatus } from "@/mend/runtime/registry"
 import type { RegistryMarketplacePackManifest } from "@/mend/runtime/registry/marketplace"
 import {
   disableAllMendPackages,
@@ -2097,7 +2097,30 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           footer: cleanMarketplaceVersion(pack.version),
           onSelect: async () => {
             const detail = await runtimeRegistryShow(pack.id, sourceID, sourceRoot)
-            await DialogAlert.show(dialog, detail.pack.title || detail.pack.id, marketplacePackDetails(detail.pack, sourceID))
+            if (sourceID === "local") {
+              await DialogAlert.show(dialog, detail.pack.title || detail.pack.id, marketplacePackDetails(detail.pack, sourceID))
+              return
+            }
+            const confirmed = await DialogConfirm.show(
+              dialog,
+              detail.pack.title || detail.pack.id,
+              [
+                marketplacePackDetails(detail.pack, sourceID),
+                "",
+                "Install this package overlay for the next message?",
+                "",
+                "Will not touch local skills/modes/sessions/auth.",
+              ].join("\n"),
+            )
+            if (!confirmed) return
+            const result = await runtimeRegistryInstallPack(detail.pack.id, sourceID, mend.root)
+            await mend.reload()
+            toast.show({
+              variant: "success",
+              message: `Package installed: ${result.package.id}.`,
+              duration: 5000,
+            })
+            await showPackageManager()
           },
         }))}
       />
@@ -2410,7 +2433,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
                 ].join("\n"),
               )
               if (!confirmed) return
-              const result = await runtimeRegistryApply(source.trim(), mend.root)
+              const result = await runtimeRegistryApplySource(source.trim(), mend.root)
               await mend.reload()
               toast.show({
                 variant: "success",

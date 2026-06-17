@@ -61,6 +61,55 @@ function ensureCompatibility(pack: RegistryMarketplacePackManifest, runtimeVersi
   }
 }
 
+function isRelativePackSource(url: string | null | undefined) {
+  if (!url) return false
+  if (url.startsWith("/") || url.startsWith(".") || url.includes("..")) return false
+  return !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)
+}
+
+function packStageDir(catalogStageDir: string, selectedPack: RegistryMarketplacePackManifest | null) {
+  const sourceURL = selectedPack?.source?.url
+  if (!isRelativePackSource(sourceURL)) return catalogStageDir
+  return path.join(catalogStageDir, sourceURL!)
+}
+
+function verifyPackDigest(pack: RegistryMarketplacePackManifest | null, digest: { algorithm: "sha256"; value: string }) {
+  if (!pack?.digest) return
+  if (pack.digest.algorithm !== digest.algorithm || pack.digest.value !== digest.value) {
+    throw new Error(`Marketplace pack ${pack.id} digest mismatch: expected sha256:${pack.digest.value}, got sha256:${digest.value}`)
+  }
+}
+
+async function resolveRegistryApplyTarget(input: {
+  entry: RuntimeRegistryEntry
+  fetchedStageDir: string
+  root: string
+  packID?: string | null
+}) {
+  const normalized = input.entry.type === "opencode-settings"
+    ? await normalizeOpencodeSettingsToMendcode(input.entry, input.fetchedStageDir, input.root)
+    : null
+  const catalogStageDir = normalized?.stageDir || input.fetchedStageDir
+  const catalogDigest = await digestApplicableSource(catalogStageDir)
+  const trust = verifyRegistryTrust(input.entry, catalogDigest)
+  const catalog = await readMarketplaceCatalog({ entry: input.entry, stageDir: catalogStageDir, digest: catalogDigest })
+  const selectedPack: RegistryMarketplacePackManifest | null = input.packID
+    ? catalog.packs.find((item) => item.id === input.packID) ?? null
+    : catalog.packs.find((item) => item.id === input.entry.id) ?? (catalog.packs.length === 1 ? catalog.packs[0]! : null)
+  if (input.packID && !selectedPack) {
+    throw new Error(input.packID
+      ? `Marketplace pack not found: ${input.packID}`
+      : `Registry source ${input.entry.id} did not contain any installable marketplace packs`)
+  }
+  const sourceStageDir = input.packID ? packStageDir(catalogStageDir, selectedPack) : catalogStageDir
+  if (input.packID && !existsSync(sourceStageDir)) {
+    throw new Error(`Marketplace pack ${input.packID} source path does not exist in registry: ${selectedPack?.source?.url || "."}`)
+  }
+  const digest = sourceStageDir === catalogStageDir ? catalogDigest : await digestApplicableSource(sourceStageDir)
+  verifyPackDigest(selectedPack, digest)
+  return { normalized, catalog, selectedPack, sourceStageDir, digest, trust, catalogDigest }
+}
+
 export async function runtimeRegistryStatus(root = mendPaths().root) {
   const state = await readRuntimeRegistry(root)
   const local = await readRuntimeRegistryLocalState(root)
@@ -119,18 +168,21 @@ export async function runtimeRegistryRemove(id: string | undefined, root = mendP
 }
 
 export async function runtimeRegistryApply(id: string | undefined, root = mendPaths().root) {
+  return runtimeRegistryApplySource(id, root)
+}
+
+export async function runtimeRegistryApplySource(id: string | undefined, root = mendPaths().root) {
   if (!id) throw new Error("Usage: mend runtime registry apply <id>")
   const state = await readRuntimeRegistry(root)
   const entry = state.entries.find((item) => item.id === id)
   if (!entry) throw new Error(`Unknown registry source: ${id}`)
   if (!entry.enabled) throw new Error(`Registry source is disabled: ${id}`)
   const fetched = await fetchRegistrySource(entry, root)
-  const normalized = entry.type === "opencode-settings" ? await normalizeOpencodeSettingsToMendcode(entry, fetched.stageDir, root) : null
-  const sourceStageDir = normalized?.stageDir || fetched.stageDir
-  const digest = await digestApplicableSource(sourceStageDir)
-  const trust = verifyRegistryTrust(entry, digest)
-  const catalog = await readMarketplaceCatalog({ entry, stageDir: sourceStageDir, digest })
-  const selectedPack = catalog.packs.find((item) => item.id === entry.id) || catalog.packs[0]
+  const { normalized, selectedPack, sourceStageDir, digest, trust } = await resolveRegistryApplyTarget({
+    entry,
+    fetchedStageDir: fetched.stageDir,
+    root,
+  })
   const runtimeVersion = await readRuntimePackageVersion(root)
   const conflicts = await detectRegistryConflicts(sourceStageDir, root)
   const approvalRequired = entry.type === "team" && (entry.team?.requireApproval || conflicts.requiresApproval)
@@ -241,6 +293,122 @@ export async function runtimeRegistryApply(id: string | undefined, root = mendPa
     package: installedPackage
       ? { id: installedPackage.id, enabled: installedPackage.enabled, root: installedPackage.root }
       : null,
+    applyPlan,
+    reportPath,
+    localStatePath: path.relative(root, registryLocalStatePath(root)),
+    writesConfig: true,
+    fetchesNetwork: fetched.fetchesNetwork,
+    secretsIncluded: false,
+  }
+}
+
+export async function runtimeRegistryInstallPack(packID: string | undefined, sourceID = "official", root = mendPaths().root) {
+  if (!packID) throw new Error("Usage: mendcode packages install <pack-id> [source-id]")
+  const state = await readRuntimeRegistry(root)
+  const entry = state.entries.find((item) => item.id === sourceID)
+  if (!entry) throw new Error(`Unknown registry source: ${sourceID}`)
+  if (!entry.enabled) throw new Error(`Registry source is disabled: ${sourceID}`)
+  const fetched = await fetchRegistrySource(entry, root)
+  const { normalized, selectedPack, sourceStageDir, digest, trust } = await resolveRegistryApplyTarget({
+    entry,
+    fetchedStageDir: fetched.stageDir,
+    root,
+    packID,
+  })
+  const runtimeVersion = await readRuntimePackageVersion(root)
+  const conflicts = await detectRegistryConflicts(sourceStageDir, root)
+  const approvalRequired = entry.type === "team" && (entry.team?.requireApproval || conflicts.requiresApproval)
+  if (approvalRequired && !process.env.MENDCODE_TEAM_PACK_APPROVED) {
+    throw new Error(`Team registry source ${entry.id} requires approval; set MENDCODE_TEAM_PACK_APPROVED=1 for this apply after review`)
+  }
+  const pack = entry.type === "local" && sourceStageDir === root ? await buildLocalRuntimePack(root) : await readPackFromStage(sourceStageDir)
+  if (!pack) throw new Error(`Marketplace pack ${packID} did not contain a MendCode runtime pack or .mendcode directory`)
+  if (!selectedPack) throw new Error(`Marketplace pack not found: ${packID}`)
+  ensureCompatibility(selectedPack, runtimeVersion, String(pack.version))
+
+  const installedPackage = sourceStageDir !== root
+    ? await installMendPackageFromStage({ entry, stageDir: sourceStageDir, digest, selectedPack, pack, root })
+    : null
+  if (!installedPackage) throw new Error(`Marketplace pack ${packID} resolves to the current local workspace; use packages create/update for local authoring`)
+
+  const copied = [...installedPackage.copied]
+  const skipped = [...installedPackage.skipped]
+  const applyPlan = await applyRuntimePack(root)
+  const reportPath = await writeRegistryApplyReport(root, {
+    version: 0,
+    appliedAt: new Date().toISOString(),
+    source: { id: entry.id, type: entry.type, url: entry.url, trust: entry.trust },
+    requestedPackID: packID,
+    selectedPack: { id: selectedPack.id, version: selectedPack.version, source: selectedPack.source || null },
+    digest,
+    trust: { signed: trust.signed, verified: trust.verified, warnings: trust.warnings },
+    compatibility: selectedPack.compatibility || null,
+    approval: {
+      required: approvalRequired,
+      via: entry.type === "team"
+        ? entry.team?.requireApproval ? "policy" : conflicts.requiresApproval ? "conflicts" : "none"
+        : "none",
+      envApproved: Boolean(process.env.MENDCODE_TEAM_PACK_APPROVED),
+    },
+    conflicts,
+    copied,
+    skipped,
+    package: { id: installedPackage.id, enabled: installedPackage.enabled, root: installedPackage.root },
+    applyPlan,
+    privateGit: privateGitReadiness(entry),
+    normalized: normalized ? { path: path.relative(root, normalized.stageDir), writes: normalized.writes, preview: normalized.preview } : null,
+    secretsIncluded: false,
+  })
+  const local = await readRuntimeRegistryLocalState(root)
+  const record: RegistryApplyRecord = {
+    id: selectedPack.id,
+    source: entry.url || "",
+    type: entry.type,
+    trust: entry.trust,
+    appliedAt: new Date().toISOString(),
+    digest: { algorithm: "sha256", value: digest.value, signed: trust.signed, verified: trust.verified },
+    reportPath,
+    approval: {
+      required: approvalRequired,
+      via: entry.type === "team"
+        ? entry.team?.requireApproval ? "policy" : conflicts.requiresApproval ? "conflicts" : "none"
+        : "none",
+      envApproved: Boolean(process.env.MENDCODE_TEAM_PACK_APPROVED),
+    },
+    conflicts,
+    copied,
+    skipped,
+    ...(entry.team ? { team: entry.team } : {}),
+  }
+  local.lastApply = record
+  local.history = [...local.history, record]
+  if (entry.type === "team" && entry.team) {
+    local.teamChannels[`${entry.team.id}:${entry.team.channel}`] = {
+      source: entry.id,
+      channel: entry.team.channel,
+      appliedAt: record.appliedAt,
+      digest: digest.value,
+    }
+  }
+  await writeRuntimeRegistryLocalState(root, local)
+  return {
+    ok: true,
+    source: entry,
+    requestedPackID: packID,
+    selectedPack,
+    staging: { path: path.relative(root, fetched.stageDir), fetched: fetched.fetched },
+    packageStage: path.relative(root, sourceStageDir),
+    normalized: normalized ? { path: path.relative(root, normalized.stageDir), writes: normalized.writes, preview: normalized.preview } : null,
+    digest,
+    trust: { signed: trust.signed, verified: trust.verified, warnings: trust.warnings },
+    compatibility: selectedPack.compatibility || null,
+    privateGit: privateGitReadiness(entry),
+    team: entry.team || null,
+    approval: record.approval,
+    conflicts,
+    copied,
+    skipped,
+    package: { id: installedPackage.id, enabled: installedPackage.enabled, root: installedPackage.root },
     applyPlan,
     reportPath,
     localStatePath: path.relative(root, registryLocalStatePath(root)),

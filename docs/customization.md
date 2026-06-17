@@ -1032,7 +1032,8 @@ Then share it:
 
 ```bash
 mendcode packages create --include plugins,tuiProfile,themes
-mendcode packages install github:YourOrg/team-mend-package
+mendcode packages add-source team --type github --url https://github.com/YourOrg/team-mend-package.git --channel team
+mendcode packages install team-mend-package team
 mendcode packages enable team-mend-package
 ```
 

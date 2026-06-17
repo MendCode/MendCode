@@ -9,8 +9,11 @@ ARCHIVE_BINARY=mendcode
 
 MUTED='\033[0;2m'
 RED='\033[0;31m'
-ORANGE='\033[38;5;214m'
-GREEN='\033[0;32m'
+MOSS_SOFT='\033[38;2;103;126;108m'
+MOSS_BG='\033[48;2;10;30;23m'
+PARCHMENT='\033[38;2;217;219;204m'
+CORAL='\033[38;2;255;126;87m'
+GREEN='\033[38;2;126;169;125m'
 BOLD='\033[1m'
 NC='\033[0m' # No Color
 
@@ -66,7 +69,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         *)
-            echo -e "${ORANGE}Warning: Unknown option '$1'${NC}" >&2
+            echo -e "${CORAL}Warning: Unknown option '$1'${NC}" >&2
             shift
             ;;
     esac
@@ -227,13 +230,18 @@ print_message() {
 
 print_banner() {
     echo -e ""
-    echo -e "${ORANGE} __  __                _  ____          _      ${NC}"
-    echo -e "${ORANGE}|  \\/  | ___ _ __   __| |/ ___|___   __| | ___ ${NC}"
-    echo -e "${ORANGE}| |\\/| |/ _ \\ '_ \\ / _\` | |   / _ \\ / _\` |/ _ \\ ${NC}"
-    echo -e "${ORANGE}| |  | |  __/ | | | (_| | |__| (_) | (_| |  __/${NC}"
-    echo -e "${ORANGE}|_|  |_|\\___|_| |_|\\__,_|\\____\\___/ \\__,_|\\___|${NC}"
+    echo -e "${MOSS_BG}${PARCHMENT} MendCode harness ${NC} ${MOSS_SOFT}terminal-first coding${NC}"
+    printf "%b%s%b\n" "$PARCHMENT" "█▄ ▄█  █▀▀▀  █▄  █  █▀▀▄  █▀▀▀  █▀▀█  █▀▀▄  █▀▀▀ " "$NC"
+    printf "%b%s%b\n" "$PARCHMENT" "█ ▀ █  █▀▀▀  █ ▀ █  █  █  █     █  █  █  █  █▀▀▀ " "$NC"
+    printf "%b%s%b\n" "$PARCHMENT" "▀   ▀  ▀▀▀▀  ▀   ▀  ▀▀▀   ▀▀▀▀  ▀▀▀▀  ▀▀▀   ▀▀▀▀ " "$NC"
     echo -e ""
-    echo -e "${BOLD}MendCode installer${NC}"
+    printf "%b%s%b\n" "$MOSS_SOFT" "      .-." "$NC"
+    printf "%b%s%b\n" "$MOSS_SOFT" "     (o o)" "$NC"
+    printf "%b%s%b\n" "$MOSS_SOFT" '    /|[+]|\' "$NC"
+    printf "%b%s%b\n" "$MOSS_SOFT" '   /_|___|_\' "$NC"
+    printf "%b%s%b\n" "$MOSS_SOFT" '      \_/' "$NC"
+    echo -e ""
+    echo -e "${BOLD}${PARCHMENT}MendCode installer${NC}"
     echo -e "${MUTED}Version:${NC} $specific_version  ${MUTED}Target:${NC} ${target:-local}"
     echo -e "${MUTED}Install dir:${NC} $INSTALL_DIR"
 }
@@ -242,7 +250,7 @@ print_step() {
     local current="$1"
     local total="$2"
     local message="$3"
-    echo -e "${ORANGE}[$current/$total]${NC} ${BOLD}$message${NC}"
+    echo -e "${CORAL}[$current/$total]${NC} ${BOLD}$message${NC}"
 }
 
 print_success() {
@@ -298,7 +306,7 @@ print_progress() {
     local empty=$(printf "%*s" "$off" "")
     empty=${empty// /-}
 
-    printf "\r${ORANGE}[%s%s] %3d%%${NC}" "$filled" "$empty" "$percent" >&4
+    printf "\r${MOSS_SOFT}[%s%s] %3d%%${NC}" "$filled" "$empty" "$percent" >&4
 }
 
 download_with_progress() {

@@ -74,6 +74,8 @@ mendcode packages sources
 mendcode packages search acme
 mendcode packages show acme-standard
 mendcode packages install acme-standard
+mendcode packages install acme-standard acme
+mendcode packages install-source acme
 mendcode packages disable acme-standard
 mendcode packages enable acme-standard
 mendcode packages remove acme-standard
@@ -135,7 +137,7 @@ Add a registry source:
 ```bash
 mendcode packages add-source acme --type github --url https://github.com/acme/acme-mendcode-package.git --channel team
 mendcode packages search "" acme
-mendcode packages install acme-standard
+mendcode packages install acme-standard acme
 ```
 
 For private repos, use a private-git/team source and a credential environment variable. Credentials are not stored in `.mendcode/registry.json`.
