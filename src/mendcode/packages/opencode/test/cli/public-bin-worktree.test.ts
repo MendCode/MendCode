@@ -62,6 +62,26 @@ describe("mend public worktree shortcuts", () => {
     expect(result).toMatchObject({ path: "/repo-wt", branch: "mend/demo" })
   })
 
+  test("resolves dot to the current worktree target", () => {
+    const result = resolveWorktreeShortcutTarget(status({
+      currentPath: "/repo",
+      currentBranch: "crp",
+      external: [{ path: "/repo", branch: "crp" }],
+    }), ".")
+
+    expect(result).toMatchObject({ path: "/repo", branch: "crp" })
+  })
+
+  test("uses the current base repo when it is the only branch-backed target", () => {
+    const result = resolveWorktreeShortcutTarget(status({
+      currentPath: "/repo",
+      currentBranch: "crp",
+      external: [{ path: "/repo", branch: "crp" }],
+    }))
+
+    expect(result).toMatchObject({ path: "/repo", branch: "crp" })
+  })
+
   test("prefers a single managed worktree over external worktrees from the base repo", () => {
     const result = resolveWorktreeShortcutTarget(status({
       records: [{ id: "owned", path: "/repo-owned", branch: "mend/owned" }],

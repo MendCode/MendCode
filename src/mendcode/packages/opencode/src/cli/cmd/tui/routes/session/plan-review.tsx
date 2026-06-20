@@ -2,7 +2,6 @@ import { createMemo, createResource, createSignal, Match, Show, Switch } from "s
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { RGBA, TextAttributes, type TextareaRenderable } from "@opentui/core"
 import type { PlanReviewRequest } from "@mendcode/sdk/v2"
-import { Flag } from "@mendcode/core/flag/flag"
 import { SplitBorder } from "../../component/border"
 import { useTheme } from "../../context/theme"
 import { useSDK } from "../../context/sdk"
@@ -10,6 +9,7 @@ import { useDialog } from "../../ui/dialog"
 import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../context/tui-config"
 import { renderPlanMarkdown } from "../../util/plan-markdown"
+import { StyledPlanMarkdown } from "../../component/styled-plan-markdown"
 
 type Stage = "preview" | "edit" | "comment" | "reject"
 
@@ -34,7 +34,7 @@ export function PlanReviewPrompt(props: { request: PlanReviewRequest }) {
   const bodyHeight = createMemo(() => Math.max(9, modalHeight() - 7))
   const [rendered] = createResource(
     () => ({ markdown: previewMarkdown(markdown()), width: Math.max(48, modalWidth() - 10) }),
-    (input) => renderPlanMarkdown(input.markdown, input.width),
+    (input) => renderPlanMarkdown(input.markdown, input.width, { tableMode: "grid", markdownMode: "tables-only" }),
   )
 
   let editArea: TextareaRenderable | undefined
@@ -194,25 +194,12 @@ export function PlanReviewPrompt(props: { request: PlanReviewRequest }) {
             >
               <Show when={rendered()} fallback={<text fg={theme.textMuted}>Rendering plan...</text>}>
                 {(content) => (
-                  <Switch>
-                    <Match when={Flag.OPENCODE_EXPERIMENTAL_MARKDOWN}>
-                      <markdown
-                        syntaxStyle={syntax()}
-                        content={content()}
-                        fg={theme.markdownText}
-                        bg={theme.backgroundPanel}
-                      />
-                    </Match>
-                    <Match when={!Flag.OPENCODE_EXPERIMENTAL_MARKDOWN}>
-                      <code
-                        filetype="markdown"
-                        drawUnstyledText={false}
-                        syntaxStyle={syntax()}
-                        content={content()}
-                        fg={theme.text}
-                      />
-                    </Match>
-                  </Switch>
+                  <StyledPlanMarkdown
+                    syntaxStyle={syntax()}
+                    content={content()}
+                    fg={theme.markdownText}
+                    bg={theme.backgroundPanel}
+                  />
                 )}
               </Show>
             </scrollbox>

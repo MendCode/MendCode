@@ -17,15 +17,21 @@ type PromptModelRef = {
 }
 
 export function resolveSelectedPromptModel(input: {
+  hasSession: boolean
   sessionUsesSubagent: boolean
   localModel?: { providerID: string; modelID: string }
   localOverride?: { providerID: string; modelID: string }
+  localOverrideUpdatedAt?: number
   userModel?: PromptModelRef
+  userModelCreatedAt?: number
   sessionModel?: PromptModelRef
   agentModel?: PromptModelRef
 }) {
-  if (!input.sessionUsesSubagent) return input.localModel
-  if (input.localOverride) return input.localOverride
+  const localOverrideIsNewer =
+    input.localOverride &&
+    (!input.hasSession || !input.userModelCreatedAt || (input.localOverrideUpdatedAt ?? 0) > input.userModelCreatedAt)
+  if (localOverrideIsNewer) return input.localOverride
+  if (!input.hasSession) return input.localModel
   if (input.userModel?.providerID && input.userModel.modelID) {
     return { providerID: input.userModel.providerID, modelID: input.userModel.modelID }
   }
@@ -33,20 +39,28 @@ export function resolveSelectedPromptModel(input: {
   if (input.sessionModel?.providerID && sessionModelID) {
     return { providerID: input.sessionModel.providerID, modelID: sessionModelID }
   }
-  const agentModelID = input.agentModel?.modelID ?? input.agentModel?.id
-  if (input.agentModel?.providerID && agentModelID) {
-    return { providerID: input.agentModel.providerID, modelID: agentModelID }
+  if (input.sessionUsesSubagent) {
+    const agentModelID = input.agentModel?.modelID ?? input.agentModel?.id
+    if (input.agentModel?.providerID && agentModelID) {
+      return { providerID: input.agentModel.providerID, modelID: agentModelID }
+    }
   }
   return input.localModel
 }
 
 export function resolveSelectedPromptVariant(input: {
-  sessionUsesSubagent: boolean
+  hasSession: boolean
   localVariant?: string
-  hasLocalOverride: boolean
+  hasLocalVariantOverride: boolean
+  localVariantOverrideUpdatedAt?: number
   userModel?: PromptModelRef
+  userModelCreatedAt?: number
   sessionModel?: PromptModelRef
 }) {
-  if (!input.sessionUsesSubagent || input.hasLocalOverride) return input.localVariant
+  const localOverrideIsNewer =
+    input.hasLocalVariantOverride &&
+    (!input.hasSession || !input.userModelCreatedAt || (input.localVariantOverrideUpdatedAt ?? 0) > input.userModelCreatedAt)
+  if (localOverrideIsNewer) return input.localVariant
+  if (!input.hasSession) return input.localVariant
   return input.userModel?.variant ?? input.sessionModel?.variant ?? input.localVariant
 }

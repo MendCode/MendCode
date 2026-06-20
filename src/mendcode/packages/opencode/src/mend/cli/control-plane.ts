@@ -81,6 +81,152 @@ function shellProjectRoot() {
   return path.resolve(process.env.MENDCODE_SHELL_CWD || process.cwd())
 }
 
+function jsonRequested(args: string[]) {
+  return args.includes("--json")
+}
+
+function printResult(args: string[], result: unknown, render: (value: any) => string) {
+  console.log(jsonRequested(args) ? JSON.stringify(result, null, 2) : render(result))
+}
+
+function yes(value: boolean) {
+  return value ? "yes" : "no"
+}
+
+function formatList(title: string, items: string[]) {
+  if (!items.length) return `${title}: none`
+  return [`${title}:`, ...items.map((item) => `  - ${item}`)].join("\n")
+}
+
+function formatTsmResult(result: any): string {
+  if (result.action === "remove") {
+    return [
+      "TSM removed from this repo.",
+      `Removed: ${result.removed?.join(", ") || "none"}`,
+      "External TSM install: untouched",
+      "Running sessions: untouched",
+      "",
+      formatTsmResult(result.status),
+    ].join("\n")
+  }
+  if (result.status === "dry-run" && result.install) {
+    return [
+      "TSM plan (dry-run)",
+      `Lifecycle: ${result.lifecycle}`,
+      `Repository: ${result.repository}`,
+      `Recommended: ${result.recommendedVersion}`,
+      "Install commands (not run):",
+      ...(result.install.commands || []).map((command: string) => `  - ${command}`),
+      `Activate: ${result.activation?.command || "mendcode tsm activate"}`,
+      `Plan file: ${result.path || ".mendcode/worktree/tsm-plan.json"}`,
+    ].join("\n")
+  }
+  const warnings = Array.isArray(result.warnings) ? result.warnings : []
+  const failures = Array.isArray(result.failures) ? result.failures : []
+  return [
+    `TSM: ${result.lifecycle || "unknown"}`,
+    `Enabled: ${yes(result.enabled === true)}`,
+    `Binary: ${result.binaryPath || "not found"}`,
+    `Version: ${result.detectedVersion || "unknown"}`,
+    `Worktree support: ${yes(result.worktreeCapable === true)}`,
+    `Repo: ${result.workspace?.repoRoot || "unknown"}`,
+    `Current: ${result.workspace?.currentPath || "unknown"}${result.workspace?.currentBranch ? ` (${result.workspace.currentBranch})` : ""}`,
+    `State: ${result.managedFiles?.state || ".mendcode/tsm/state.json"}`,
+    `Plan: ${result.managedFiles?.plan || ".mendcode/worktree/tsm-plan.json"}`,
+    `Policy: ${result.policy?.mode || "unknown"}${result.policy?.liveSync ? " live-sync" : ""}`,
+    formatList("Warnings", warnings),
+    formatList("Failures", failures),
+  ].filter(Boolean).join("\n")
+}
+
+function formatMflowResult(result: any): string {
+  if (Array.isArray(result)) {
+    if (!result.length) return "mflow scan: no relays found."
+    return ["mflow relays:", ...result.map((relay) => `  - ${relay.url} ${relay.scope || ""} ${relay.health || ""}`.trim())].join("\n")
+  }
+  if (result.commands && result.mcpCommand) {
+    return [
+      "Local mflow relay guide",
+      ...(result.commands || []).map((command: string) => `  - ${command}`),
+      `MCP command: ${result.mcpCommand.join(" ")}`,
+      result.note,
+    ].filter(Boolean).join("\n")
+  }
+  if (result.status === "dry-run" && result.install) {
+    return [
+      "mflow plan (dry-run)",
+      `Package: ${result.install.package}@${result.install.version}`,
+      `Install command: ${result.install.command}`,
+      `Policy: ${result.policy?.mode || "unknown"}`,
+      `Plan file: ${result.path || ".mendcode/worktree/mflow-plan.json"}`,
+    ].join("\n")
+  }
+  const config = result.config || result
+  const files = result.files || {}
+  const daemon = result.daemon || {}
+  const locks = result.locks || {}
+  const warnings = Array.isArray(result.warnings) ? result.warnings : []
+  const failures = Array.isArray(result.failures) ? result.failures : []
+  return [
+    `mflow: ${result.mode || (config.enabled ? "active" : "inactive")}`,
+    `Enabled: ${yes(config.enabled === true)}`,
+    `Relay: ${config.relayMode || "unknown"} (${config.signaling || "unset"})`,
+    `Room: ${config.room || "unset"}`,
+    files.runtimeConfig ? `Runtime config: ${files.runtimeConfig}` : undefined,
+    files.plugin ? `Hook scaffold: ${files.plugin}` : undefined,
+    files.mcp ? `MCP: ${files.mcp}` : undefined,
+    daemon.checked !== undefined ? `Daemon: ${daemon.running ? "running" : "not running"}` : undefined,
+    locks.checked !== undefined ? `Locks: ${locks.checked ? "checked" : "not checked"}` : undefined,
+    formatList("Warnings", warnings),
+    formatList("Failures", failures),
+  ].filter((line): line is string => Boolean(line)).join("\n")
+}
+
+function formatWorktreeResult(result: any): string {
+  if (result.workspace && result.registry) {
+    const records = result.registry.records || []
+    const external = result.registry.external || []
+    return [
+      "Worktrees",
+      `Repo: ${result.workspace.repoRoot}`,
+      `Current: ${result.workspace.currentPath}${result.workspace.currentBranch ? ` (${result.workspace.currentBranch})` : ""}`,
+      `Registry: ${result.registry.path}`,
+      formatList("Managed", records.map((item: any) => `${item.id || item.branch || item.path}: ${item.path}${item.branch ? ` (${item.branch})` : ""}`)),
+      formatList("External", external.map((item: any) => `${item.path}${item.branch ? ` (${item.branch})` : ""}`)),
+    ].join("\n")
+  }
+  if (result.previewText) return result.previewText
+  if (result.action === "open") {
+    return [
+      `Worktree open: ${result.path}`,
+      `Branch: ${result.branch || "none"}`,
+      `Ownership: ${result.ownership}`,
+      `Executes git: ${yes(result.executesGit === true)}`,
+      `Executes TSM: ${yes(result.executesTsm === true)}`,
+      result.note,
+    ].filter(Boolean).join("\n")
+  }
+  if (result.action === "adopt") {
+    return [
+      "Worktree adopted.",
+      `ID: ${result.record?.id}`,
+      `Path: ${result.record?.path}`,
+      `Branch: ${result.record?.branch || "none"}`,
+      "Git was not modified.",
+    ].join("\n")
+  }
+  if (result.status === "planned") {
+    return [
+      `Worktree plan: ${result.id}`,
+      `Branch: ${result.branch}`,
+      `Focus: ${result.focus}`,
+      result.previewText,
+      result.note,
+    ].filter(Boolean).join("\n")
+  }
+  return JSON.stringify(result, null, 2)
+}
+
 async function tui(args: string[]) {
   const root = shellProjectRoot()
   const sub = args[0] || "status"
@@ -381,7 +527,7 @@ async function mflow(args: string[]) {
   const root = shellProjectRoot()
   const sub = args[0] || "status"
   if (sub === "status") {
-    console.log(JSON.stringify(await mflowControlStatus(root), null, 2))
+    printResult(args, await mflowControlStatus(root), formatMflowResult)
     return
   }
   if (sub === "activate") {
@@ -391,7 +537,7 @@ async function mflow(args: string[]) {
     const secret = optionValue(args, "--secret") || undefined
     const hookPriorityRaw = optionValue(args, "--priority")
     const hookPriority = hookPriorityRaw === null ? undefined : Number(hookPriorityRaw)
-    console.log(JSON.stringify(await activateMflow({
+    const result = await activateMflow({
       relayMode: relay,
       signaling,
       room,
@@ -400,15 +546,16 @@ async function mflow(args: string[]) {
       storeSecret: args.includes("--store-secret"),
       hookPriority,
       publicRelayNoticeAccepted: args.includes("--accept-public-relay-limits") || relay !== "legacy-public",
-    }, root), null, 2))
+    }, root)
+    printResult(args, result, formatMflowResult)
     return
   }
   if (sub === "deactivate") {
-    console.log(JSON.stringify(await deactivateMflow(root), null, 2))
+    printResult(args, await deactivateMflow(root), formatMflowResult)
     return
   }
   if (sub === "remove") {
-    console.log(JSON.stringify(await removeMflowConfig(root), null, 2))
+    printResult(args, await removeMflowConfig(root), formatMflowResult)
     return
   }
   if (sub === "setup") {
@@ -432,7 +579,7 @@ async function mflow(args: string[]) {
           const picked = Number((await rl.question(`Use detected relay [1-${detected.length}] or Enter for localhost:8787: `)).trim())
           signaling = detected[picked - 1]?.url || MFLOW_LOCAL_RELAY
         } else {
-          console.log(JSON.stringify(mflowLocalRelayGuide(root), null, 2))
+          printResult(args, mflowLocalRelayGuide(root), formatMflowResult)
           signaling = MFLOW_LOCAL_RELAY
         }
       }
@@ -449,7 +596,7 @@ async function mflow(args: string[]) {
       const generate = ((await rl.question("Generate room secret? [Y/n]: ")).trim().toLowerCase() || "y") !== "n"
       const secret = generate ? undefined : (await rl.question("Room secret: ")).trim()
       const storeSecret = (await rl.question("Store secret in .mflow/config.toml? [y/N]: ")).trim().toLowerCase() === "y"
-      console.log(JSON.stringify(await activateMflow({
+      const result = await activateMflow({
         relayMode,
         signaling,
         room,
@@ -457,7 +604,8 @@ async function mflow(args: string[]) {
         generateSecret: generate,
         storeSecret,
         publicRelayNoticeAccepted,
-      }, root), null, 2))
+      }, root)
+      printResult(args, result, formatMflowResult)
     } finally {
       rl.close()
     }
@@ -465,7 +613,7 @@ async function mflow(args: string[]) {
   }
   const result = sub === "scan" ? await scanMflowRelays() : sub === "relay-guide" ? mflowLocalRelayGuide(root) : sub === "plan" ? await mflowPlan(root) : sub === "doctor" ? await mflowDoctor(root) : sub === "legacy-status" ? await mflowStatus(root) : null
   if (!result) throw new Error("Usage: mend-control-plane mflow <status|setup|activate|deactivate|remove|scan|relay-guide|plan|doctor>")
-  console.log(JSON.stringify(result, null, 2))
+  printResult(args, result, formatMflowResult)
   if ("ok" in result && result.ok === false) process.exitCode = 1
 }
 
@@ -489,7 +637,7 @@ async function tsm(args: string[]) {
                 ? await tsmDoctor(root)
                 : null
   if (!result) throw new Error("Usage: mend-control-plane tsm <status|plan|setup|install|activate|deactivate|remove|doctor>")
-  console.log(JSON.stringify(result, null, 2))
+  printResult(args, result, formatTsmResult)
   if ("ok" in result && result.ok === false) process.exitCode = 1
 }
 
@@ -515,7 +663,7 @@ async function worktree(args: string[]) {
                   ? await worktreeDoctor(root)
                   : null
   if (!result) throw new Error("Usage: mend-control-plane worktree <status|plan|create|open|adopt|remove|reset|doctor>")
-  console.log(JSON.stringify(result, null, 2))
+  printResult(args, result, formatWorktreeResult)
   if ("ok" in result && result.ok === false) process.exitCode = 1
 }
 
@@ -617,7 +765,10 @@ async function mcp(args: string[]) {
     const name = args[1]
     const command = args.slice(2)
     if (!name || !command.length) throw new Error("Usage: mend-control-plane mcp add-local <name> <command> [args...]")
-    console.log(JSON.stringify(await writeMendMcpServer(name, { type: "local", command }, mendPaths().root), null, 2))
+    const root = mendPaths().root
+    const result = await writeMendMcpServer(name, { type: "local", command }, root)
+    const synced = await syncProject(root)
+    console.log(JSON.stringify({ ...result, generatedConfig: synced.generatedConfig }, null, 2))
     return
   }
   throw new Error("Usage: mend-control-plane mcp <status|preview|add-local>")
@@ -655,8 +806,8 @@ async function memory(args: string[]) {
       const prev = all[index - 1]
       return !arg.startsWith("--") && prev !== "--provider" && prev !== "--model" && prev !== "--mode"
     }).join(" ").trim()
-    const providerID = optionValue(args, "--provider") || "openai"
-    const modelID = optionValue(args, "--model") || "gpt-5.2"
+    const providerID = optionValue(args, "--provider") || "generic"
+    const modelID = optionValue(args, "--model") || "memory-preview"
     const result = await retrieveMemory({ root, query, cwd: root, providerID, modelID, mode })
     const model = { id: modelID, providerID, api: { id: modelID } } as any
     console.log(JSON.stringify({

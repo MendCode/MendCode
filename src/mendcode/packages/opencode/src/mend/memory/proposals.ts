@@ -3,11 +3,13 @@ import { mkdir, readFile, readdir, stat, writeFile } from "fs/promises"
 import path from "path"
 import { memoryPaths, readMemoryConfig, type MemoryScope } from "./config"
 import { appendMemoryEntry, deleteMemoryEntry, readMemoryEntries, updateMemoryEntry, type MemoryEntry, type MemorySensitivity } from "./store"
+import { inferMemoryCategoryIDs, normalizeMemoryCategoryIDs, scopeReasonForMemory } from "./categories"
+import { legacyScopeForFact, upsertMemoryFact } from "./graph"
 import { resolveModelRoles } from "../config/models"
 import { runProviderAdapter } from "../runtime/provider-adapters"
 
 export type MemoryProposalStatus = "pending" | "applied" | "rejected"
-export type MemoryProposalOperation = "add" | "update" | "remove"
+export type MemoryProposalOperation = "add" | "update" | "remove" | "merge" | "split" | "verify" | "expire" | "recategorize" | "relink" | "demote-scope" | "promote-scope"
 
 export type MemoryProposal = {
   id: string
@@ -17,6 +19,8 @@ export type MemoryProposal = {
   scope: MemoryScope
   text: string
   tags: string[]
+  categoryIDs: string[]
+  scopeReason: string
   cwd: string | null
   files: string[]
   source: string
@@ -25,12 +29,15 @@ export type MemoryProposal = {
   durability: number
   changeRisk: number
   reason: string | null
+  evidenceRefs: string[]
+  policyDecision: "pending" | "auto-applied" | "manual-only" | "disabled"
   sensitivity: MemorySensitivity
   redactions: string[]
   createdAt: string
   updatedAt: string
   targetEntryID: string | null
   targetEntryScope: MemoryScope | null
+  targetEntryIDs: string[]
   appliedEntryID: string | null
 }
 
@@ -41,6 +48,7 @@ export type ProposeMemoryInput = {
   targetEntryID?: string | null
   targetEntryScope?: MemoryScope | null
   tags?: string[]
+  categoryIDs?: string[]
   cwd?: string | null
   files?: string[]
   source?: string
@@ -49,6 +57,7 @@ export type ProposeMemoryInput = {
   durability?: number
   changeRisk?: number
   reason?: string | null
+  evidenceRefs?: string[]
 }
 
 export type ProposeMemoriesFromTextInput = Omit<ProposeMemoryInput, "text"> & {
@@ -135,6 +144,19 @@ async function readJson<T>(file: string): Promise<T> {
   return JSON.parse(await readFile(file, "utf8")) as T
 }
 
+function normalizeMemoryProposal(input: MemoryProposal): MemoryProposal {
+  const categories = normalizeMemoryCategoryIDs((input as Partial<MemoryProposal>).categoryIDs?.length ? input.categoryIDs : inferMemoryCategoryIDs({ text: input.text, tags: input.tags, source: input.source }))
+  return {
+    ...input,
+    operation: input.operation ?? "add",
+    categoryIDs: categories,
+    scopeReason: input.scopeReason || scopeReasonForMemory({ requestedScope: input.scope, text: input.text, tags: input.tags }).reason,
+    evidenceRefs: normalizeStringList(input.evidenceRefs),
+    policyDecision: input.policyDecision === "auto-applied" || input.policyDecision === "manual-only" || input.policyDecision === "disabled" ? input.policyDecision : "pending",
+    targetEntryIDs: normalizeStringList(input.targetEntryIDs).length ? normalizeStringList(input.targetEntryIDs) : input.targetEntryID ? [input.targetEntryID] : [],
+  }
+}
+
 async function writeProposal(proposal: MemoryProposal, root?: string) {
   const paths = memoryPaths(root)
   await mkdir(paths.proposalsDir, { recursive: true })
@@ -151,10 +173,12 @@ export async function proposeMemory(input: ProposeMemoryInput, root?: string) {
     id: nowID(),
     version: 0,
     status: "pending",
-    operation: input.operation === "update" || input.operation === "remove" ? input.operation : "add",
-    scope: input.scope === "global" ? "global" : "project",
+    operation: input.operation === "update" || input.operation === "remove" || input.operation === "merge" || input.operation === "split" || input.operation === "verify" || input.operation === "expire" || input.operation === "recategorize" || input.operation === "relink" || input.operation === "demote-scope" || input.operation === "promote-scope" ? input.operation : "add",
+    scope: scopeReasonForMemory({ requestedScope: input.scope, text: redacted.text, tags: input.tags }).scope,
     text: redacted.text,
     tags: normalizeStringList(input.tags),
+    categoryIDs: normalizeMemoryCategoryIDs(input.categoryIDs?.length ? input.categoryIDs : inferMemoryCategoryIDs({ text: redacted.text, tags: input.tags, source: input.source })),
+    scopeReason: scopeReasonForMemory({ requestedScope: input.scope, text: redacted.text, tags: input.tags }).reason,
     cwd: typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : paths.root,
     files: normalizeStringList(input.files),
     source: typeof input.source === "string" && input.source.trim() ? input.source : "manual-proposal",
@@ -163,12 +187,15 @@ export async function proposeMemory(input: ProposeMemoryInput, root?: string) {
     durability: typeof input.durability === "number" && Number.isFinite(input.durability) ? Math.max(0, Math.min(1, input.durability)) : 0.7,
     changeRisk: typeof input.changeRisk === "number" && Number.isFinite(input.changeRisk) ? Math.max(0, Math.min(1, input.changeRisk)) : 0.3,
     reason: typeof input.reason === "string" && input.reason.trim() ? input.reason.trim() : null,
+    evidenceRefs: normalizeStringList(input.evidenceRefs),
+    policyDecision: "pending",
     sensitivity: sensitivityFor(redacted.redactions, input.text),
     redactions: redacted.redactions,
     createdAt: now,
     updatedAt: now,
     targetEntryID: typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? input.targetEntryID.trim() : null,
     targetEntryScope: input.targetEntryScope === "global" || input.targetEntryScope === "project" ? input.targetEntryScope : null,
+    targetEntryIDs: typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? [input.targetEntryID.trim()] : [],
     appliedEntryID: null,
   }
   return writeProposal(proposal, paths.root)
@@ -233,7 +260,7 @@ export function extractorPrompt() {
     MEMORY_EXTRACTION_POLICY,
     "",
     "Return strict JSON only:",
-    '{"proposals":[{"shouldRemember":true,"operation":"add|update|remove","scope":"project|global","targetEntryID":"existing-memory-id-or-null","targetEntryScope":"project|global|null","text":"durable memory text or removal reason","tags":["short-tag"],"durability":0.0,"confidence":0.0,"changeRisk":0.0,"reason":"why this is worth changing"}]}',
+    '{"proposals":[{"shouldRemember":true,"operation":"add|update|remove|verify|expire|recategorize|demote-scope","scope":"project|global","categoryIDs":["project.commands"],"targetEntryID":"existing-memory-id-or-null","targetEntryScope":"project|global|null","text":"durable memory text or removal reason","tags":["short-tag"],"durability":0.0,"confidence":0.0,"changeRisk":0.0,"reason":"why this is worth changing"}]}',
     "",
     "Rules:",
     "- Return an empty proposals array unless the input contains genuinely durable future-use information that should be remembered indefinitely.",
@@ -272,6 +299,7 @@ type ExtractedMemoryProposal = {
   targetEntryScope: MemoryScope | null
   text: string
   tags: string[]
+  categoryIDs: string[]
   durability: number
   confidence: number
   changeRisk: number
@@ -293,12 +321,13 @@ function parseExtractorJSON(text: string, maxProposals = 2): ExtractedMemoryProp
     .filter((item: any) => typeof item?.text === "string" && item.text.trim().length >= 16)
     .map((item: any): ExtractedMemoryProposal => ({
       shouldRemember: item.shouldRemember === true,
-      operation: item.operation === "update" || item.operation === "remove" ? item.operation : "add",
+      operation: item.operation === "update" || item.operation === "remove" || item.operation === "verify" || item.operation === "expire" || item.operation === "recategorize" || item.operation === "demote-scope" ? item.operation : "add",
       scope: item.scope === "global" ? "global" as const : "project" as const,
       targetEntryID: typeof item.targetEntryID === "string" && item.targetEntryID.trim() ? item.targetEntryID.trim() : null,
       targetEntryScope: item.targetEntryScope === "global" ? "global" as const : item.targetEntryScope === "project" ? "project" as const : null,
       text: item.text.trim(),
       tags: normalizeStringList(item.tags),
+      categoryIDs: normalizeMemoryCategoryIDs(item.categoryIDs),
       durability: typeof item.durability === "number" && Number.isFinite(item.durability) ? Math.max(0, Math.min(1, item.durability)) : 0,
       confidence: typeof item.confidence === "number" && Number.isFinite(item.confidence) ? Math.max(0, Math.min(1, item.confidence)) : 0,
       changeRisk: typeof item.changeRisk === "number" && Number.isFinite(item.changeRisk) ? Math.max(0, Math.min(1, item.changeRisk)) : 1,
@@ -341,6 +370,7 @@ function fallbackExtractorProposal(input: ProposeMemoriesFromTextInput, existing
     targetEntryScope: null,
     text,
     tags: ["workflow", "auto"],
+    categoryIDs: inferMemoryCategoryIDs({ text, tags: ["workflow", "auto"], source: input.source }),
     durability: 0.9,
     confidence: 0.8,
     changeRisk: 0.15,
@@ -441,6 +471,7 @@ export async function proposeMemoriesFromExtractorText(
       targetEntryScope: item.targetEntryScope,
       text: item.text,
       tags: [...normalizeStringList(input.tags), ...item.tags],
+      categoryIDs: item.categoryIDs,
       cwd: input.cwd,
       files: input.files,
       source: input.source || "model-extract",
@@ -599,6 +630,7 @@ export async function listMemoryProposals(root?: string, status?: MemoryProposal
   const proposals = await Promise.all(files.filter((file) => file.endsWith(".json")).map((file) => readJson<MemoryProposal>(path.join(paths.proposalsDir, file)).catch(() => null)))
   return proposals
     .filter((proposal): proposal is MemoryProposal => Boolean(proposal?.id))
+    .map(normalizeMemoryProposal)
     .filter((proposal) => !status || status === "all" || proposal.status === status)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
 }
@@ -607,10 +639,10 @@ export async function readMemoryProposal(id: string, root?: string) {
   if (!id) throw new Error("Missing memory proposal id")
   const file = proposalPath(root, id)
   if (!existsSync(file)) throw new Error(`Unknown memory proposal: ${id}`)
-  return readJson<MemoryProposal>(file)
+  return normalizeMemoryProposal(await readJson<MemoryProposal>(file))
 }
 
-export async function updateMemoryProposal(id: string, patch: Partial<Pick<MemoryProposal, "scope" | "text" | "tags" | "confidence" | "durability" | "changeRisk" | "reason">>, root?: string) {
+export async function updateMemoryProposal(id: string, patch: Partial<Pick<MemoryProposal, "scope" | "text" | "tags" | "categoryIDs" | "confidence" | "durability" | "changeRisk" | "reason">>, root?: string) {
   const proposal = await readMemoryProposal(id, root)
   if (proposal.status !== "pending") throw new Error(`Memory proposal ${id} is ${proposal.status}`)
   const next: MemoryProposal = {
@@ -618,6 +650,7 @@ export async function updateMemoryProposal(id: string, patch: Partial<Pick<Memor
     scope: patch.scope === "global" ? "global" : patch.scope === "project" ? "project" : proposal.scope,
     text: typeof patch.text === "string" && patch.text.trim() ? patch.text.trim() : proposal.text,
     tags: patch.tags ? normalizeStringList(patch.tags) : proposal.tags,
+    categoryIDs: patch.categoryIDs ? normalizeMemoryCategoryIDs(patch.categoryIDs) : proposal.categoryIDs,
     confidence: typeof patch.confidence === "number" && Number.isFinite(patch.confidence) ? Math.max(0, Math.min(1, patch.confidence)) : proposal.confidence,
     durability: typeof patch.durability === "number" && Number.isFinite(patch.durability) ? Math.max(0, Math.min(1, patch.durability)) : proposal.durability,
     changeRisk: typeof patch.changeRisk === "number" && Number.isFinite(patch.changeRisk) ? Math.max(0, Math.min(1, patch.changeRisk)) : proposal.changeRisk,
@@ -638,6 +671,7 @@ export async function applyMemoryProposal(id: string, root?: string) {
       scope: proposal.scope,
       text: proposal.text,
       tags: proposal.tags,
+      categoryIDs: proposal.categoryIDs,
       cwd: proposal.cwd,
       files: proposal.files,
       source: proposal.source,
@@ -650,6 +684,34 @@ export async function applyMemoryProposal(id: string, root?: string) {
     entry = await updateMemoryEntry(proposal.targetEntryScope ?? proposal.scope, proposal.targetEntryID, {
       text: proposal.text,
       tags: proposal.tags,
+      categoryIDs: proposal.categoryIDs,
+      cwd: proposal.cwd,
+      files: proposal.files,
+      source: proposal.source,
+      evidence: proposal.evidence,
+      confidence: proposal.confidence,
+      sensitivity: proposal.sensitivity,
+    }, root)
+  } else if (operation === "remove" || operation === "expire") {
+    if (!proposal.targetEntryID) throw new Error(`Memory proposal ${id} is missing targetEntryID`)
+    await deleteMemoryEntry(proposal.targetEntryScope ?? proposal.scope, proposal.targetEntryID, root)
+  } else if (operation === "verify" || operation === "recategorize") {
+    if (!proposal.targetEntryID) throw new Error(`Memory proposal ${id} is missing targetEntryID`)
+    entry = await updateMemoryEntry(proposal.targetEntryScope ?? proposal.scope, proposal.targetEntryID, {
+      tags: proposal.tags,
+      categoryIDs: proposal.categoryIDs,
+      evidence: proposal.evidence,
+      confidence: proposal.confidence,
+    }, root)
+  } else if (operation === "demote-scope" || operation === "promote-scope") {
+    if (!proposal.targetEntryID) throw new Error(`Memory proposal ${id} is missing targetEntryID`)
+    const fromScope = proposal.targetEntryScope ?? (operation === "demote-scope" ? "global" : "project")
+    await deleteMemoryEntry(fromScope, proposal.targetEntryID, root)
+    entry = await appendMemoryEntry({
+      scope: operation === "demote-scope" ? "project" : "global",
+      text: proposal.text,
+      tags: proposal.tags,
+      categoryIDs: proposal.categoryIDs,
       cwd: proposal.cwd,
       files: proposal.files,
       source: proposal.source,
@@ -659,7 +721,29 @@ export async function applyMemoryProposal(id: string, root?: string) {
     }, root)
   } else {
     if (!proposal.targetEntryID) throw new Error(`Memory proposal ${id} is missing targetEntryID`)
-    await deleteMemoryEntry(proposal.targetEntryScope ?? proposal.scope, proposal.targetEntryID, root)
+    entry = await updateMemoryEntry(proposal.targetEntryScope ?? proposal.scope, proposal.targetEntryID, {
+      text: proposal.text,
+      tags: proposal.tags,
+      categoryIDs: proposal.categoryIDs,
+      evidence: proposal.evidence,
+      confidence: proposal.confidence,
+    }, root)
+  }
+  if (entry) {
+    await upsertMemoryFact({
+      id: `legacy_${entry.id}`,
+      legacyEntryID: entry.id,
+      scope: legacyScopeForFact(entry.scope),
+      ownerWorkspaceIDs: entry.scope === "project" && entry.cwd ? [entry.cwd] : [],
+      categoryIDs: proposal.categoryIDs,
+      text: entry.text,
+      provenance: [proposal.evidence, ...proposal.evidenceRefs].filter((item): item is string => Boolean(item)),
+      confidence: entry.confidence,
+      durability: proposal.durability,
+      changeRisk: proposal.changeRisk,
+      sensitivity: entry.sensitivity,
+      legacyMaterialized: true,
+    }, root)
   }
   const next: MemoryProposal = { ...proposal, operation, status: "applied", updatedAt: new Date().toISOString(), appliedEntryID: entry?.id ?? null }
   await writeProposal(next, root)

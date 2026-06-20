@@ -440,6 +440,21 @@ export async function syncProject(root?: string) {
   return { generatedConfig: path.relative(paths.root, paths.generatedOpencodeConfig), focus: profile.id, model: resolved.defaultModel || "runtime-default" }
 }
 
+export function generatedConfigNeedsSync(root?: string) {
+  const paths = mendPaths(root)
+  if (!existsSync(paths.generatedOpencodeConfig)) return true
+  const generatedMtime = statSync(paths.generatedOpencodeConfig).mtimeMs
+  const inputs = [
+    paths.mendConfig,
+    paths.modelsConfig,
+    paths.packageState,
+    ...listFiles(paths.root, paths.mcpDir, { maxDepth: 8 })
+      .filter((file) => file.endsWith(".json") || file.endsWith(".jsonc"))
+      .map((file) => path.join(paths.root, file)),
+  ]
+  return inputs.some((file) => existsSync(file) && statSync(file).mtimeMs > generatedMtime)
+}
+
 export function collectLocalContext(root?: string) {
   const paths = mendPaths(root)
   const refreshState = path.join(paths.mendDir, "context", "refresh.json")

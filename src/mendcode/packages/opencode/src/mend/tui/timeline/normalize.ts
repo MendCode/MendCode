@@ -22,7 +22,7 @@ export function toolClass(tool: string, state?: TimelineToolState): TimelineTool
 export function shouldRenderCompactTool(profile: MendPresentationProfile, tool: string) {
   if (profile === "raw") return false
   if (tool === "task") return false
-  if (tool === "todowrite") return false
+  if (tool === "todowrite") return profile === "mendcode"
   if (toolClass(tool) === "artifact") return false
   if (profile === "minimal") return true
   return toolClass(tool) !== "artifact" && toolClass(tool) !== "command"
@@ -70,8 +70,8 @@ export function toolSummary(
   if (tool === "edit") return { title: `Edit ${file || compactInput(input)}`.trim(), lines: [] }
   if (tool === "apply_patch") return { title: "Patch files", lines: [] }
   if (tool === "task") return { title: `Task ${stringValue(input.description) || compactInput(input)}`.trim(), lines: [] }
-  if (tool === "todowrite") return { title: "Todo list", lines: [] }
-  if (tool === "question") return { title: "Question", lines: [] }
+  if (tool === "todowrite") return todoWriteSummary(input, metadata, output)
+  if (tool === "question") return questionSummary(input, metadata)
   if (tool === "skill") return { title: `Skill ${stringValue(input.name) || compactInput(input)}`.trim(), lines: [] }
   return { title: `${tool} ${compactInput(input)}`.trim(), lines: [] }
 }
@@ -94,6 +94,138 @@ function webSearchSummary(input: Record<string, unknown>, metadata?: Record<stri
     lines: [],
     result: undefined,
   }
+}
+
+function todoWriteSummary(input: Record<string, unknown>, metadata?: Record<string, unknown>, output?: unknown) {
+  const todos = todoItems(input.todos)
+  const fallbackTodos = todos.length ? todos : todoItems(metadata?.todos)
+  const outputTodos = fallbackTodos.length ? fallbackTodos : parseTodoOutput(output)
+  return {
+    title: "Todos",
+    lines: outputTodos.map((todo) => `${todoSymbol(todo.status)} ${todo.content}`),
+  }
+}
+
+function todoItems(value: unknown): Array<{ content: string; status: string }> {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return []
+    const todo = item as Record<string, unknown>
+    const content = typeof todo.content === "string" ? todo.content.replace(/\s+/g, " ").trim() : ""
+    if (!content) return []
+    return [{ content, status: typeof todo.status === "string" ? todo.status : "" }]
+  })
+}
+
+function parseTodoOutput(output: unknown): Array<{ content: string; status: string }> {
+  if (typeof output !== "string" || !output.trim()) return []
+  try {
+    return todoItems(JSON.parse(output))
+  } catch {
+    return []
+  }
+}
+
+function todoSymbol(status: string) {
+  const normalized = status.toLowerCase().replace(/[-\s]+/g, "_")
+  if (normalized === "completed" || normalized === "done" || normalized === "success") return "✓"
+  if (normalized === "cancelled" || normalized === "canceled" || normalized === "failed" || normalized === "error") return "×"
+  if (normalized === "in_progress" || normalized === "running" || normalized === "active") return "→"
+  return "○"
+}
+
+function questionSummary(input: Record<string, unknown>, metadata?: Record<string, unknown>) {
+  const questions = questionItems(input.questions)
+  const answers = answerItems(metadata?.answers)
+  const count = questions.length
+  const title = count === 1 ? "Question" : `Questions (${count})`
+  const lines = questions.flatMap((question, index) => {
+    const answer = answers[index]
+    const header = question.header ? `${question.header}: ` : ""
+    const options = question.options.length ? `choices: ${question.options.join(", ")}` : ""
+    return [
+      ...wrapTimelineLine("? ", `${header}${question.question}`),
+      ...(options ? wrapTimelineLine("  ", options) : []),
+      ...(answer?.length ? wrapTimelineLine("→ ", answer.join(", ")) : []),
+    ]
+  })
+  return { title, lines }
+}
+
+function wrapTimelineLine(prefix: string, text: string, width = 76) {
+  const words = text.split(/\s+/).filter(Boolean)
+  const lines: string[] = []
+  const continuation = "  "
+  let current = prefix
+
+  const pushCurrent = () => {
+    if (current.trim()) lines.push(current)
+    current = continuation
+  }
+
+  for (const word of words) {
+    const separator = current.trim() === prefix.trim() || current === continuation ? "" : " "
+    const next = `${current}${separator}${word}`
+    if (Bun.stringWidth(next) <= width) {
+      current = next
+      continue
+    }
+
+    pushCurrent()
+    if (Bun.stringWidth(`${current}${word}`) <= width) {
+      current = `${current}${word}`
+      continue
+    }
+
+    let remaining = word
+    while (Bun.stringWidth(`${current}${remaining}`) > width) {
+      let cut = 0
+      let measured = Bun.stringWidth(current)
+      for (const char of remaining) {
+        const charWidth = Bun.stringWidth(char)
+        if (measured + charWidth > width) break
+        measured += charWidth
+        cut += char.length
+      }
+      lines.push(`${current}${remaining.slice(0, Math.max(1, cut))}`)
+      remaining = remaining.slice(Math.max(1, cut))
+      current = continuation
+    }
+    current = `${current}${remaining}`
+  }
+
+  pushCurrent()
+  return lines.length ? lines : [prefix.trimEnd()]
+}
+
+function questionItems(value: unknown): Array<{ header: string; question: string; options: string[] }> {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return []
+    const question = item as Record<string, unknown>
+    const text = stringValue(question.question)?.replace(/\s+/g, " ").trim()
+    if (!text) return []
+    const options = Array.isArray(question.options)
+      ? question.options.flatMap((option) => {
+          if (!option || typeof option !== "object") return []
+          const label = stringValue((option as Record<string, unknown>).label)?.replace(/\s+/g, " ").trim()
+          return label ? [label] : []
+        })
+      : []
+    return [{ header: stringValue(question.header)?.replace(/\s+/g, " ").trim() ?? "", question: text, options }]
+  })
+}
+
+function answerItems(value: unknown): string[][] {
+  if (!Array.isArray(value)) return []
+  return value.map((answer) =>
+    Array.isArray(answer)
+      ? answer.flatMap((item) => {
+          const text = stringValue(item)?.replace(/\s+/g, " ").trim()
+          return text ? [text] : []
+        })
+      : [],
+  )
 }
 
 function readRange(input: Record<string, unknown>, output: unknown) {

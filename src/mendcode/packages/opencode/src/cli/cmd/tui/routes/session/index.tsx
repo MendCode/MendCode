@@ -77,7 +77,7 @@ import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogContextUsage } from "./dialog-context-usage"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
-import { SubagentFooter } from "./subagent-footer.tsx"
+import { StyledPlanMarkdown } from "../../component/styled-plan-markdown"
 import { Flag } from "@mendcode/core/flag/flag"
 import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
 import parsers from "../../../../../../parsers-config.ts"
@@ -106,6 +106,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import {
   sessionContentWidth,
   sessionDiffStatsLabel,
+  sessionPendingInputSessionIDs,
   sessionPromptVisible,
   sessionTopMetricsWidth,
   sessionTopbarLeftLabel,
@@ -135,7 +136,7 @@ import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } fr
 import { reviewPermissionRequestWithModel, shouldTriggerSmartApproval } from "@/mend/permission/smart-approval"
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import { normalizeToolEvent, shouldRenderCompactTool } from "@/mend/tui/timeline/normalize"
-import { groupTimelineParts } from "@/mend/tui/timeline/group"
+import { groupTimelineParts, isTimelineStackStart } from "@/mend/tui/timeline/group"
 import type { TimelineRow } from "@/mend/tui/timeline/types"
 import { TimelineDiff } from "./renderers/diff"
 import {
@@ -144,7 +145,7 @@ import {
   userMessageDisplayText,
   type PastedContentDisplayPart,
 } from "./user-message-display"
-import { planReviewInlineTitle, renderPlanMarkdown } from "../../util/plan-markdown"
+import { hasMermaidFence, planReviewInlineTitle, renderPlanMarkdown, renderPlanMarkdownStatic } from "../../util/plan-markdown"
 
 addDefaultParsers(parsers.parsers)
 
@@ -239,21 +240,25 @@ export function Session() {
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
+  const pendingInputSessionIDs = createMemo(() =>
+    sessionPendingInputSessionIDs({
+      sessionID: route.sessionID,
+      parentID: session()?.parentID,
+      visibleSessionIDs: children().map((x) => x.id),
+    }),
+  )
   const pendingPermissions = createMemo(() => {
-    if (session()?.parentID) return []
-    return children().flatMap((x) => sync.data.permission[x.id] ?? [])
+    return pendingInputSessionIDs().flatMap((sessionID) => sync.data.permission[sessionID] ?? [])
   })
   const permissions = createMemo(() => {
     if (permissionModeSetting() === "full_access") return []
     return pendingPermissions()
   })
   const questions = createMemo(() => {
-    if (session()?.parentID) return []
-    return children().flatMap((x) => sync.data.question[x.id] ?? [])
+    return pendingInputSessionIDs().flatMap((sessionID) => sync.data.question[sessionID] ?? [])
   })
   const planReviews = createMemo(() => {
-    if (session()?.parentID) return []
-    return children().flatMap((x) => sync.data.plan_review[x.id] ?? [])
+    return pendingInputSessionIDs().flatMap((sessionID) => sync.data.plan_review[sessionID] ?? [])
   })
   const visible = createMemo(() =>
     sessionPromptVisible({
@@ -357,10 +362,19 @@ export function Session() {
       usage: topUsage(),
     }),
   )
+  const subagentTopNavLabel = createMemo(() => {
+    if (!session()?.parentID) return ""
+    return `↖ Parent ${keybind.print("session_parent")}  ← Prev ${keybind.print("session_child_cycle_reverse")}  → Next ${keybind.print("session_child_cycle")}`
+  })
+  const topbarReservedWidth = createMemo(() => {
+    const navWidth = Bun.stringWidth(subagentTopNavLabel())
+    const metricsWidth = topMetricsWidth()
+    return navWidth + metricsWidth + (navWidth > 0 && metricsWidth > 0 ? 1 : 0)
+  })
   const topbarLeftWidth = createMemo(() =>
     sessionTopbarLeftWidth({
       contentWidth: contentWidth(),
-      metricsWidth: topMetricsWidth(),
+      metricsWidth: topbarReservedWidth(),
     }),
   )
   const topbarLeftLabel = createMemo(() =>
@@ -2049,6 +2063,9 @@ export function Session() {
                   {topbarLeftLabel()}
                 </text>
               </box>
+              <Show when={session()?.parentID}>
+                <SessionSubagentTopNav />
+              </Show>
               <SessionTopMetrics diff={topDiffStats()} usage={topUsage()} />
             </box>
             <box position="relative" flexGrow={1} width="100%">
@@ -2072,9 +2089,6 @@ export function Session() {
                 scrollAcceleration={scrollAcceleration()}
               >
                 <box height={1} />
-                <Show when={session()?.parentID}>
-                  <SubagentFooter />
-                </Show>
                 <For each={messages()}>
                   {(message, index) => (
                     <Switch>
@@ -2328,6 +2342,40 @@ function SessionTopMetrics(props: { diff?: GitDiffStats; usage?: ReturnType<type
           </box>
         )}
       </Show>
+    </box>
+  )
+}
+
+function SessionSubagentTopNav() {
+  const { theme } = useTheme()
+  const keybind = useKeybind()
+  const command = useCommandDialog()
+  const [hover, setHover] = createSignal<"parent" | "prev" | "next" | null>(null)
+  const item = (
+    id: "parent" | "prev" | "next",
+    icon: string,
+    label: string,
+    key: string,
+    commandID: "session.parent" | "session.child.previous" | "session.child.next",
+  ) => (
+    <box
+      flexShrink={0}
+      onMouseOver={() => setHover(id)}
+      onMouseOut={() => setHover(null)}
+      onMouseUp={() => command.trigger(commandID)}
+      backgroundColor={hover() === id ? theme.backgroundElement : theme.background}
+    >
+      <text fg={theme.text} wrapMode="none">
+        {icon} {label} <span style={{ fg: theme.textMuted }}>{keybind.print(key)}</span>
+      </text>
+    </box>
+  )
+
+  return (
+    <box flexDirection="row" flexShrink={0} gap={2}>
+      {item("parent", "↖", "Parent", "session_parent", "session.parent")}
+      {item("prev", "←", "Prev", "session_child_cycle_reverse", "session.child.previous")}
+      {item("next", "→", "Next", "session_child_cycle", "session.child.next")}
     </box>
   )
 }
@@ -2982,6 +3030,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   const messages = createMemo(() => sync.data.message[props.message.sessionID] ?? [])
   const model = createMemo(() => Model.name(ctx.providers(), props.message.providerID, props.message.modelID))
   const usage = createMemo(() => formatAssistantUsage(props.message, ctx.providers()))
+  const modelUsageLabel = createMemo(() => usage()?.compact ?? model())
   const rawReasoningUsageLabel = createMemo(() => {
     if (mend.profile.presentation.profile !== "raw") return
     const reasoning = props.message.tokens.reasoning ?? 0
@@ -3043,9 +3092,10 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
         {(nodes) => (
           <For each={nodes()}>
             {(node, index) => {
-              const component = createMemo(() =>
-                node.type === "part" ? PART_MAPPING[node.part.type as keyof typeof PART_MAPPING] : undefined,
-              )
+              const component = createMemo(() => {
+                if (node.type === "row" || node.type === "collapse") return undefined
+                return PART_MAPPING[node.type as keyof typeof PART_MAPPING]
+              })
               return (
                 <Switch>
                   <Match when={node.type === "row"}>
@@ -3053,15 +3103,15 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
                   </Match>
                   <Match when={node.type === "collapse"}>
                     <TimelineCollapseRow
-                      count={node.type === "collapse" ? node.count : 0}
+                      collapse={node as TimelineCollapse}
                       stackStart={isTimelineStackStart(nodes(), index())}
                     />
                   </Match>
-                  <Match when={node.type === "part" && component()}>
+                  <Match when={component()}>
                     <Dynamic
                       last={index() === nodes().length - 1}
                       component={component()}
-                      part={node.type === "part" ? (node.part as any) : undefined}
+                      part={node as any}
                       message={props.message}
                     />
                   </Match>
@@ -3100,8 +3150,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
                 {mend.profile.presentation.symbols.assistantDone}{" "}
               </span>{" "}
               <span style={{ fg: theme.text }}>{Locale.titlecase(props.message.mode)}</span>
-              <span style={{ fg: theme.textMuted }}> · {model()}</span>
-              <Show when={usage()}>{(item) => <span style={{ fg: theme.textMuted }}> · {item().tokens}</span>}</Show>
+              <span style={{ fg: theme.textMuted }}> · {modelUsageLabel()}</span>
               <Show when={rawReasoningUsageLabel()}>
                 {(label) => <span style={{ fg: theme.textMuted }}> · {label()}</span>}
               </Show>
@@ -3119,15 +3168,9 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   )
 }
 
-function isTimelineStackStart(nodes: Array<{ type: string }>, index: number) {
-  if (index === 0) return false
-  const previous = nodes[index - 1]
-  return previous?.type !== "row" && previous?.type !== "collapse"
-}
-
 function shouldBreakBeforeTool(previous: { id?: string } | undefined) {
   const previousID = previous?.id ?? ""
-  return previousID.startsWith("text-") || previousID.startsWith("reasoning-")
+  return previousID.startsWith("text-")
 }
 
 function updateToolBreakMargin(el: BoxRenderable, setMargin: (value: number) => void) {
@@ -3144,25 +3187,53 @@ function TimelineRowView(props: { row: TimelineRow; stackStart?: boolean }) {
   const active = createMemo(() => props.row.state === "pending" || props.row.state === "running")
   const failed = createMemo(() => props.row.state === "error" || props.row.class === "failure")
   const planning = createMemo(() => props.row.class === "planning")
+  const lines = createMemo(() => props.row.lines ?? [])
+  const detailed = createMemo(() => lines().length > 0)
   const color = createMemo(() =>
     failed() ? theme.error : planning() ? theme.warning : active() ? theme.text : theme.textMuted,
   )
   const icon = createMemo(() => (planning() ? "" : failed() ? "×" : "◆"))
   return (
-    <box paddingLeft={3} marginTop={props.stackStart ? 1 : 0} flexShrink={0}>
-      <text fg={color()} attributes={active() && !planning() ? TextAttributes.BOLD : undefined}>
-        <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
-        <span>{props.row.title}</span>
-      </text>
+    <box paddingLeft={3} marginTop={props.stackStart ? 1 : 0} flexShrink={0} flexDirection="column">
+      <Show
+        when={detailed()}
+        fallback={
+          <text fg={color()} attributes={active() && !planning() ? TextAttributes.BOLD : undefined}>
+            <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+            <span>{props.row.title}</span>
+          </text>
+        }
+      >
+        <text fg={failed() ? theme.error : active() ? theme.text : theme.textMuted}>╭─ {props.row.title}</text>
+        <For each={lines()}>{(line) => <text fg={theme.textMuted}>│ {line}</text>}</For>
+        <text fg={theme.textMuted}>╰─</text>
+      </Show>
     </box>
   )
 }
 
-function TimelineCollapseRow(props: { count: number; stackStart?: boolean }) {
+function TimelineCollapseRow(props: { collapse: TimelineCollapse; stackStart?: boolean }) {
   const { theme } = useTheme()
+  const [expanded, setExpanded] = createSignal(false)
+  const [hover, setHover] = createSignal(false)
   return (
-    <box paddingLeft={3} marginTop={props.stackStart ? 1 : 0} flexShrink={0}>
-      <text fg={theme.textMuted}>◇ {props.count} more</text>
+    <box flexDirection="column" flexShrink={0} marginTop={props.stackStart ? 1 : 0}>
+      <box
+        paddingLeft={3}
+        onMouseOver={() => setHover(true)}
+        onMouseOut={() => setHover(false)}
+        onMouseUp={() => setExpanded((value) => !value)}
+      >
+        <text fg={hover() || expanded() ? theme.text : theme.textMuted}>
+          ◇ {props.collapse.count} more
+          <Show when={hover()}>
+            <span style={{ fg: theme.textMuted }}> · click to {expanded() ? "collapse" : "expand"}</span>
+          </Show>
+        </text>
+      </box>
+      <Show when={expanded()}>
+        <For each={props.collapse.rows}>{(row) => <TimelineRowView row={row} stackStart={false} />}</For>
+      </Show>
     </box>
   )
 }
@@ -3182,6 +3253,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
     return props.part.text.replace("[REDACTED]", "").trim()
   })
   const raw = createMemo(() => mend.profile.presentation.profile === "raw")
+  const full = createMemo(() => mend.profile.presentation.profile === "mendcode")
   const encryptedReasoning = createMemo(() =>
     Boolean((props.part.metadata as Record<string, any> | undefined)?.openai?.reasoningEncryptedContent),
   )
@@ -3255,6 +3327,36 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
                 />
               </box>
             </Show>
+          </box>
+        </Match>
+        <Match when={full()}>
+          <box
+            id={`reasoning-${props.message.id}-${props.part.id}`}
+            paddingLeft={2}
+            marginTop={1}
+            flexDirection="column"
+            border={["left"]}
+            customBorderChars={SplitBorder.customBorderChars}
+            borderColor={theme.backgroundElement}
+            flexShrink={0}
+          >
+            <ReasoningHeader
+              toggleable={false}
+              open={true}
+              done={isDone()}
+              activeLabel={activeReasoningLabel()}
+              title={display().title}
+              duration={headerDetail() || undefined}
+            />
+            <code
+              filetype="markdown"
+              drawUnstyledText={false}
+              streaming={false}
+              syntaxStyle={subtleSyntax()}
+              content={display().body}
+              conceal={ctx.conceal()}
+              fg={theme.textMuted}
+            />
           </box>
         </Match>
         <Match when={true}>
@@ -3345,20 +3447,42 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   const { theme, syntax } = useTheme()
   const mend = useMendTuiProfile()
   const dimensions = useTerminalDimensions()
+  const textPaddingLeft = 3
   const source = createMemo(() => props.part.text.trim())
   const renderer = createMemo(() => mend.profile.presentation.message.renderer)
+  const messageWidth = createMemo(() =>
+    sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)),
+  )
+  const markdownWidth = createMemo(() => Math.max(1, messageWidth() - textPaddingLeft))
+  const richRenderWidth = createMemo(() => Math.min(markdownWidth(), 100))
+  const streaming = createMemo(() => props.last && !props.message.time.completed)
+  const hasMermaid = createMemo(() => hasMermaidFence(source()))
+  const markdownStaticContent = createMemo(() => {
+    if (renderer() !== "markdown" && renderer() !== "rich") return
+    if (streaming()) return
+    return renderPlanMarkdownStatic(source(), richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" })
+  })
   const richInput = createMemo(() => {
-    if (renderer() !== "rich") return
+    if ((renderer() !== "markdown" && renderer() !== "rich") || !hasMermaid()) return
+    if (streaming()) return
     return {
       text: source(),
-      width: sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)),
+      width: richRenderWidth(),
     }
   })
-  const [richContent] = createResource(richInput, async (input) => renderPlanMarkdown(input.text, input.width))
-  const markdownContent = createMemo(() => (renderer() === "rich" ? (richContent() ?? source()) : source()))
+  const [richContent] = createResource(richInput, async (input) =>
+    renderPlanMarkdown(input.text, input.width, { tableMode: "grid", markdownMode: "tables-only" }),
+  )
+  const markdownContent = createMemo(() => markdownStaticContent() ?? richContent() ?? source())
   return (
     <Show when={source()}>
-      <box id={`text-${props.message.id}-${props.part.id}`} paddingLeft={3} marginTop={1} flexShrink={0}>
+      <box
+        id={`text-${props.message.id}-${props.part.id}`}
+        width={messageWidth()}
+        paddingLeft={textPaddingLeft}
+        marginTop={1}
+        flexShrink={0}
+      >
         <Switch>
           <Match when={renderer() === "plain"}>
             <box flexDirection="column">
@@ -3366,22 +3490,23 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
             </box>
           </Match>
           <Match when={renderer() === "markdown" || renderer() === "rich"}>
-            <markdown
+            <StyledPlanMarkdown
               syntaxStyle={syntax()}
-              streaming={true}
-              internalBlockMode="top-level"
+              width={markdownWidth()}
               content={markdownContent()}
-              tableOptions={{ style: "grid" }}
+              tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
               conceal={ctx.conceal()}
               fg={theme.markdownText}
               bg={theme.background}
+              stableTextMode={streaming()}
+              colorizeHex={!streaming()}
             />
           </Match>
           <Match when={true}>
             <code
               filetype="markdown"
               drawUnstyledText={false}
-              streaming={true}
+              streaming={false}
               syntaxStyle={syntax()}
               content={markdownContent()}
               conceal={ctx.conceal()}
@@ -3725,6 +3850,7 @@ function BlockTool(props: {
   variant?: "plain" | "left-line"
   contentGap?: number
   marginTop?: number
+  paddingBottom?: number
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
@@ -3753,7 +3879,7 @@ function BlockTool(props: {
   )
   return (
     <box
-      paddingBottom={1}
+      paddingBottom={props.paddingBottom ?? 1}
       paddingLeft={3}
       gap={props.contentGap ?? 1}
       marginTop={props.marginTop ?? margin()}
@@ -3798,8 +3924,8 @@ function CommandOutput(props: {
         </text>
       </box>
       <Show when={props.output}>
-        <box paddingLeft={2}>
-          <text fg={theme.textMuted}>{props.output}</text>
+        <box paddingLeft={2} flexDirection="column">
+          <For each={props.output?.split("\n") ?? []}>{(line) => <text fg={theme.textMuted}>{line || " "}</text>}</For>
         </box>
       </Show>
       <Show when={!props.output}>{props.empty}</Show>
@@ -3871,6 +3997,7 @@ function Shell(props: ToolProps<typeof ShellTool>) {
           titleColor={theme.primary}
           titleAttributes={TextAttributes.BOLD}
           contentGap={0}
+          paddingBottom={0}
           onClick={overflow() ? () => setExpanded((prev) => !prev) : undefined}
         >
           <CommandOutput
@@ -4327,7 +4454,7 @@ function MarkdownChecklist(props: { content: string }) {
   return (
     <markdown
       syntaxStyle={syntax()}
-      streaming={true}
+      streaming={false}
       content={props.content}
       conceal={ctx.conceal()}
       fg={theme.markdownText}

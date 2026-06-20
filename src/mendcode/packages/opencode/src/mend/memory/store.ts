@@ -2,6 +2,7 @@ import { existsSync } from "fs"
 import { mkdir, readFile, readdir, writeFile } from "fs/promises"
 import path from "path"
 import { memoryPaths, readMemoryConfig, type MemoryScope } from "./config"
+import { inferMemoryCategoryIDs } from "./categories"
 
 export type MemorySensitivity = "low" | "medium" | "high"
 
@@ -10,6 +11,7 @@ export type MemoryEntry = {
   scope: MemoryScope
   text: string
   tags: string[]
+  categoryIDs: string[]
   cwd: string | null
   files: string[]
   providerID: string | null
@@ -38,6 +40,8 @@ export type MemoryStatus = {
   globalCompactionMaxEntries: number
   extractorRole: string
   consolidatorRole: string
+  memoryDreamRole: string
+  memoryAssistantRole: string
   paths: Record<string, string>
   summaries: Record<MemoryScope, { exists: boolean; bytes: number }>
   entries: Record<MemoryScope, { exists: boolean; count: number }>
@@ -65,6 +69,9 @@ export function normalizeMemoryEntry(input: Partial<MemoryEntry> & { text: strin
     scope: input.scope === "global" ? "global" : "project",
     text: input.text.trim(),
     tags: normalizeStringList(input.tags),
+    categoryIDs: normalizeStringList((input as Partial<MemoryEntry>).categoryIDs).length
+      ? normalizeStringList((input as Partial<MemoryEntry>).categoryIDs)
+      : inferMemoryCategoryIDs({ text: input.text, tags: input.tags, source: input.source }),
     cwd: typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : null,
     files: normalizeStringList(input.files),
     providerID: typeof input.providerID === "string" && input.providerID.trim() ? input.providerID : null,
@@ -170,6 +177,7 @@ export async function refreshMemoryIndex(root?: string) {
       id: entry.id,
       scope: entry.scope,
       tags: entry.tags,
+      categoryIDs: entry.categoryIDs,
       cwd: entry.cwd,
       files: entry.files,
       providerID: entry.providerID,
@@ -224,6 +232,8 @@ export async function memoryStatus(root?: string): Promise<MemoryStatus> {
     globalCompactionMaxEntries: config.globalCompactionMaxEntries,
     extractorRole: config.extractorRole,
     consolidatorRole: config.consolidatorRole,
+    memoryDreamRole: config.memoryDreamRole,
+    memoryAssistantRole: config.memoryAssistantRole,
     paths: {
       globalConfig: paths.globalConfig,
       globalSummary: paths.globalSummary,

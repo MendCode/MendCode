@@ -1,6 +1,7 @@
 import { spawn } from "child_process"
 import stripAnsi from "strip-ansi"
 import { which } from "@/util/which"
+import { normalizeHexColor } from "./hex-colors"
 
 const MAX_MARKDOWN_BYTES = 50_000
 const MAX_MERMAID_BLOCKS = 8
@@ -8,6 +9,12 @@ const MAX_MERMAID_BYTES = 8_000
 const MAX_TERMAID_OUTPUT_BYTES = 20_000
 const TERMAID_TIMEOUT_MS = 2_000
 const CONTROL_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g
+type TableRenderMode = "wide" | "preserve" | "grid"
+type RenderPlanMarkdownOptions = {
+  tableMode?: TableRenderMode
+  markdownMode?: "all" | "tables-only"
+}
+const MERMAID_FENCE_PATTERN = /```[ \t]*mermaid[^\r\n]*\r?\n/i
 
 function resolveTermaid() {
   const configured = process.env.MENDCODE_TERMAID_BIN?.trim()
@@ -80,6 +87,12 @@ function renderCompactBox(label: string, minWidth = 8) {
   return [`╭${"─".repeat(width)}╮`, `│${inner}│`, `╰${"─".repeat(width)}╯`]
 }
 
+function renderStateBox(label: string) {
+  const display = cleanLabel(label)
+  const width = display === "●" || display === "◉" ? 5 : Math.min(28, Math.max(12, Bun.stringWidth(display) + 2))
+  return [`╭${"─".repeat(width)}╮`, `│${centerVisual(display, width)}│`, `╰${"─".repeat(width)}╯`]
+}
+
 function indentLines(lines: string[], depth: number) {
   const prefix = "  ".repeat(depth)
   return lines.map((line) => (line ? `${prefix}${line}` : line))
@@ -116,7 +129,7 @@ function splitMarkdownTableRow(line: string) {
 }
 
 function cleanInlineMarkdownForText(input: string) {
-  return input
+  return stripAnsi(input)
     .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
@@ -149,7 +162,149 @@ function wrapTextLine(prefix: string, text: string, width: number) {
   return lines
 }
 
-function renderWideTablesAsText(markdown: string, width: number) {
+function wrapTableCell(text: string, width: number) {
+  const visualText = stripAnsi(text)
+  if (visualText !== text && Bun.stringWidth(visualText) <= width) return [text]
+  const cleanText = cleanInlineMarkdownForText(text)
+  if (!cleanText) return [""]
+
+  const lines: string[] = []
+  let current = ""
+  const pushChunk = (chunk: string) => {
+    let remaining = chunk
+    while (Bun.stringWidth(remaining) > width) {
+      let cut = 0
+      let measured = 0
+      for (const char of remaining) {
+        const charWidth = Bun.stringWidth(char)
+        if (measured + charWidth > width) break
+        measured += charWidth
+        cut += char.length
+      }
+      lines.push(remaining.slice(0, Math.max(1, cut)))
+      remaining = remaining.slice(Math.max(1, cut))
+    }
+    return remaining
+  }
+
+  for (const word of cleanText.split(/\s+/).filter(Boolean)) {
+    const next = current ? `${current} ${word}` : word
+    if (Bun.stringWidth(next) <= width) {
+      current = next
+      continue
+    }
+    if (current) lines.push(current)
+    current = pushChunk(word)
+  }
+  if (current || lines.length === 0) lines.push(current)
+  return lines
+}
+
+function padCell(text: string, width: number) {
+  return `${text}${" ".repeat(Math.max(0, width - Bun.stringWidth(stripAnsi(text))))}`
+}
+
+function renderHexTableCell(text: string, input: { header?: string; headers?: string[] }) {
+  const clean = cleanInlineMarkdownForText(text)
+  const hex = normalizeHexColor(clean)
+  if (!hex) return text
+
+  const header = cleanInlineMarkdownForText(input.header ?? "")
+  if (/\bpreview\b/i.test(header)) return hex.toUpperCase()
+
+  const hasPreviewColumn = input.headers?.some((item) => /\bpreview\b/i.test(cleanInlineMarkdownForText(item))) ?? false
+  if (hasPreviewColumn) return clean.toUpperCase()
+  return hex.toUpperCase()
+}
+
+function renderTableCellForGrid(text: string, input: { header?: string; headers?: string[] }) {
+  return renderHexTableCell(text, input)
+}
+
+function renderMarkdownTableAsGrid(table: string[], width: number) {
+  const headers = splitMarkdownTableRow(table[0])
+  const rows = table.slice(2).map(splitMarkdownTableRow)
+  const hexIndex = headers.findIndex((header) => /\bhex\b/i.test(cleanInlineMarkdownForText(header)))
+  const previewIndex = headers.findIndex((header) => /\bpreview\b/i.test(cleanInlineMarkdownForText(header)))
+  const displayRows = rows.map((row) => {
+    const next = [...row]
+    const hex = hexIndex >= 0 ? normalizeHexColor(cleanInlineMarkdownForText(next[hexIndex] ?? "")) : undefined
+    if (previewIndex >= 0 && hex) {
+      next[previewIndex] = hex
+    }
+    return next.map((cell, index) =>
+      renderTableCellForGrid(cell, {
+        header: headers[index],
+        headers,
+      }),
+    )
+  })
+  const columnCount = Math.max(headers.length, ...rows.map((row) => row.length))
+  const available = Math.max(40, Math.min(120, width))
+  const borderWidth = columnCount + 1
+  const paddingWidth = columnCount * 2
+  const cellBudget = Math.max(columnCount * 8, available - borderWidth - paddingWidth)
+  const naturalWidths = Array.from({ length: columnCount }, (_, index) =>
+    Math.max(
+      Bun.stringWidth(cleanInlineMarkdownForText(headers[index] ?? "")),
+      ...displayRows.map((row) => Bun.stringWidth(cleanInlineMarkdownForText(row[index] ?? ""))),
+      8,
+    ),
+  )
+  if (
+    columnCount === 3 &&
+    /\b(archivo|file|path)\b/i.test(cleanInlineMarkdownForText(headers[0] ?? "")) &&
+    /\b(acción|accion|action)\b/i.test(cleanInlineMarkdownForText(headers[1] ?? ""))
+  ) {
+    const actionWidth = Math.min(Math.max(naturalWidths[1], 8), 12)
+    const firstWidth = Math.min(naturalWidths[0], Math.max(24, Math.min(52, cellBudget - actionWidth - 24)))
+    const lastWidth = Math.max(16, cellBudget - firstWidth - actionWidth)
+    return renderGridRows(headers, displayRows, [firstWidth, actionWidth, lastWidth])
+  }
+  const baseWidth = Math.max(8, Math.floor(cellBudget / Math.max(1, columnCount)))
+  const columns = naturalWidths.map((natural) => Math.min(natural, baseWidth))
+  const totalCells = columns.reduce((sum, column) => sum + column, 0)
+  let remaining = cellBudget - totalCells
+  while (remaining > 0) {
+    let changed = false
+    for (let index = 0; index < columns.length && remaining > 0; index++) {
+      const natural = naturalWidths[index]
+      if (columns[index] >= natural) continue
+      columns[index] += 1
+      remaining -= 1
+      changed = true
+    }
+    if (!changed) break
+  }
+  return renderGridRows(headers, displayRows, columns)
+}
+
+function renderGridRows(headers: string[], rows: string[][], columns: number[]) {
+  const border = (left: string, middle: string, right: string) =>
+    `${left}${columns.map((column) => "─".repeat(column + 2)).join(middle)}${right}`
+  const renderRow = (row: string[]) => {
+    const wrapped = columns.map((column, index) => wrapTableCell(row[index] ?? "", column))
+    const height = Math.max(...wrapped.map((cell) => cell.length), 1)
+    return Array.from({ length: height }, (_, lineIndex) =>
+      `│${columns.map((column, columnIndex) => ` ${padCell(wrapped[columnIndex][lineIndex] ?? "", column)} `).join("│")}│`,
+    )
+  }
+
+  return [
+    "```text",
+    border("┌", "┬", "┐"),
+    ...renderRow(headers),
+    border("├", "┼", "┤"),
+    ...rows.flatMap((row, index) => {
+      const rendered = renderRow(row)
+      return index === rows.length - 1 ? rendered : [...rendered, border("├", "┼", "┤")]
+    }),
+    border("└", "┴", "┘"),
+    "```",
+  ]
+}
+
+function renderWideTablesAsText(markdown: string, width: number, mode: TableRenderMode = "wide") {
   const lines = markdown.split("\n")
   const result: string[] = []
 
@@ -168,6 +323,15 @@ function renderWideTablesAsText(markdown: string, width: number) {
       index++
     }
     index--
+
+    if (mode === "preserve") {
+      result.push(...table)
+      continue
+    }
+    if (mode === "grid") {
+      result.push(...renderMarkdownTableAsGrid(table, width))
+      continue
+    }
 
     const tableWidth = Math.max(...table.map((line) => Bun.stringWidth(line)))
     if (tableWidth < Math.max(40, width - 4)) {
@@ -289,8 +453,9 @@ function renderMarkdownHeadingsAsText(markdown: string) {
   return result.join("\n")
 }
 
-function renderMarkdownForTui(markdown: string, width: number) {
-  return renderMarkdownHeadingsAsText(renderMarkdownListsAsText(renderWideTablesAsText(markdown, width)))
+function renderMarkdownForTui(markdown: string, width: number, options: RenderPlanMarkdownOptions = {}) {
+  if (options.markdownMode === "tables-only") return renderWideTablesAsText(markdown, width, options.tableMode)
+  return renderMarkdownHeadingsAsText(renderMarkdownListsAsText(renderWideTablesAsText(markdown, width, options.tableMode)))
 }
 
 function alignTextBlock(input: string, width: number) {
@@ -832,16 +997,69 @@ function renderStateDiagram(input: string, width: number): string | undefined {
   }
 
   if (transitions.length === 0) return undefined
-  const labelFor = (id: string) => (id === "[*]" ? "●" : aliases.get(id) ?? id)
+  let terminalSeen = false
+  const labelFor = (id: string) => {
+    if (id !== "[*]") return aliases.get(id) ?? id
+    if (!terminalSeen) {
+      terminalSeen = true
+      return "●"
+    }
+    return "◉"
+  }
   const availableWidth = Math.max(40, width - 4)
-  return transitions
-    .slice(0, 16)
-    .flatMap((transition) => {
-      const connector = transition.label ? ` ── ${transition.label} ─▶ ` : " ──▶ "
-      const line = `${renderInlineBox(labelFor(transition.from))}${connector}${renderInlineBox(labelFor(transition.to))}`
-      return Bun.stringWidth(line) <= availableWidth ? [line] : wrapTextLine("", line, width)
-    })
-    .join("\n")
+  const outgoing = new Map<string, Array<{ to: string; label?: string }>>()
+  const incoming = new Set<string>()
+  for (const transition of transitions) {
+    outgoing.set(transition.from, [...(outgoing.get(transition.from) ?? []), { to: transition.to, label: transition.label }])
+    incoming.add(transition.to)
+  }
+  const starts = [...outgoing.keys()].filter((state) => !incoming.has(state) || state === "[*]")
+  const first = starts[0] ?? transitions[0]?.from
+  if (!first) return undefined
+
+  const renderNode = (state: string, path: Set<string>, depth = 0): string[] => {
+    const lines = indentLines(renderStateBox(labelFor(state)), depth)
+    const next = outgoing.get(state) ?? []
+    if (next.length === 0) return lines
+
+    if (next.length === 1) {
+      const edge = next[0]
+      lines.push(`${"  ".repeat(depth)}      │`)
+      if (edge.label) lines.push(`${"  ".repeat(depth)}      ${cleanConnectorLabel(edge.label)}`)
+      lines.push(`${"  ".repeat(depth)}      ▼`)
+      if (edge.to === "[*]" && state !== "[*]") return [...lines, ...renderNode(edge.to, new Set([...path, edge.to]), depth)]
+      if (path.has(edge.to)) {
+        lines.push(`${"  ".repeat(depth)}      ↺ ${aliases.get(edge.to) ?? edge.to}`)
+        return lines
+      }
+      return [...lines, ...renderNode(edge.to, new Set([...path, edge.to]), depth)]
+    }
+
+    for (const [index, edge] of next.slice(0, 6).entries()) {
+      const isLast = index === next.length - 1 || index === 5
+      const branch = isLast ? "└" : "├"
+      const label = edge.label ? cleanConnectorLabel(edge.label) : `path ${index + 1}`
+      const prefix = "  ".repeat(depth)
+      const childPrefix = `${prefix}${isLast ? "   " : "│  "}`
+      if (index > 0) lines.push("")
+      lines.push(`${prefix}${branch}─ ${label}`)
+      if (edge.to === "[*]" && state !== "[*]") {
+        lines.push(...renderNode(edge.to, new Set([...path, edge.to]), 0).map((line) => `${childPrefix}${line}`))
+        continue
+      }
+      if (path.has(edge.to)) {
+        lines.push(`${childPrefix}↺ ${aliases.get(edge.to) ?? edge.to}`)
+        continue
+      }
+      lines.push(...renderNode(edge.to, new Set([...path, edge.to]), 0).map((line) => `${childPrefix}${line}`))
+    }
+    return lines
+  }
+
+  const rendered = renderNode(first, new Set([first])).slice(0, 60)
+  const maxWidth = Math.max(...rendered.map((line) => Bun.stringWidth(line)), 0)
+  if (maxWidth <= availableWidth) return rendered.join("\n")
+  return rendered.flatMap((line) => (Bun.stringWidth(line) <= availableWidth ? [line] : wrapTextLine("", line, width))).join("\n")
 }
 
 function renderClassDiagram(input: string, width: number): string | undefined {
@@ -851,33 +1069,91 @@ function renderClassDiagram(input: string, width: number): string | undefined {
     .filter(Boolean)
   if (!/^classDiagram(?:-v2)?$/i.test(lines[0] ?? "")) return undefined
 
-  const output: string[] = []
+  const classes = new Map<string, string[]>()
+  const relations: Array<{ from: string; to: string; relation: string; label?: string }> = []
+  let currentClass: string | undefined
+
+  const ensureClass = (name: string) => {
+    if (!classes.has(name)) classes.set(name, [])
+  }
+
   for (const line of lines.slice(1)) {
+    if (line === "}") {
+      currentClass = undefined
+      continue
+    }
+
+    if (currentClass) {
+      classes.set(currentClass, [...(classes.get(currentClass) ?? []), cleanLabel(line)])
+      continue
+    }
+
+    const blockStart = /^class\s+([A-Za-z][\w-]*)\s*\{$/.exec(line)
+    if (blockStart) {
+      currentClass = blockStart[1]
+      ensureClass(currentClass)
+      continue
+    }
+
     const relation = /^([A-Za-z][\w-]*)\s+([<|o*}.\-]+--?[|>o*{.\-]+)\s+([A-Za-z][\w-]*)(?:\s*:\s*(.+))?$/.exec(line)
     if (relation) {
-      const label = cleanLabel(relation[4])
-      output.push(
-        `${renderInlineBox(relation[1])} ${relation[2]} ${renderInlineBox(relation[3])}${label ? `  ${label}` : ""}`,
-      )
+      ensureClass(relation[1])
+      ensureClass(relation[3])
+      relations.push({ from: relation[1], to: relation[3], relation: relation[2], label: cleanLabel(relation[4]) || undefined })
       continue
     }
 
     const member = /^([A-Za-z][\w-]*)\s*:\s*(.+)$/.exec(line)
     if (member) {
-      output.push(`${renderInlineBox(member[1])}  ${cleanLabel(member[2])}`)
+      ensureClass(member[1])
+      classes.set(member[1], [...(classes.get(member[1]) ?? []), cleanLabel(member[2])])
       continue
     }
 
-    const classBlock = /^class\s+([A-Za-z][\w-]*)/.exec(line)
-    if (classBlock) output.push(renderInlineBox(classBlock[1]))
+    const classLine = /^class\s+([A-Za-z][\w-]*)/.exec(line)
+    if (classLine) ensureClass(classLine[1])
   }
 
-  if (output.length === 0) return undefined
+  if (classes.size === 0 && relations.length === 0) return undefined
   const availableWidth = Math.max(40, width - 4)
-  return output
-    .slice(0, 16)
-    .flatMap((line) => (Bun.stringWidth(line) <= availableWidth ? [line] : wrapTextLine("", line, width)))
-    .join("\n")
+  const childrenByParent = new Map<string, Array<{ child: string; relation: string; label?: string }>>()
+  const incoming = new Set<string>()
+  for (const relation of relations) {
+    const parent = relation.relation.includes("<|") || relation.relation.includes("<--") ? relation.from : relation.to
+    const child = parent === relation.from ? relation.to : relation.from
+    childrenByParent.set(parent, [...(childrenByParent.get(parent) ?? []), { child, relation: relation.relation, label: relation.label }])
+    incoming.add(child)
+  }
+
+  const rendered = new Set<string>()
+  const renderClass = (name: string, depth: number): string[] => {
+    rendered.add(name)
+    const prefix = "  ".repeat(depth)
+    const lines = indentLines(renderEntityBox(name, classes.get(name) ?? []), depth)
+    const children = childrenByParent.get(name) ?? []
+    for (const [index, child] of children.slice(0, 6).entries()) {
+      const isLast = index === children.length - 1 || index === 5
+      lines.push(`${prefix}${isLast ? "└" : "├"}─△ ${child.label ? `${child.label} ` : ""}${child.child}`)
+      if (rendered.has(child.child)) {
+        lines.push(`${prefix}${isLast ? "   " : "│  "}↺ ${child.child}`)
+        continue
+      }
+      lines.push(...renderClass(child.child, depth + 1))
+    }
+    return lines
+  }
+
+  const roots = [...classes.keys()].filter((name) => !incoming.has(name))
+  const blocks = (roots.length ? roots : [...classes.keys()]).slice(0, 6).flatMap((name, index) => {
+    const block = rendered.has(name) ? [`↺ ${name}`] : renderClass(name, 0)
+    return index === 0 ? block : ["", ...block]
+  })
+  for (const name of [...classes.keys()].filter((item) => !rendered.has(item)).slice(0, 6)) blocks.push("", ...renderClass(name, 0))
+
+  const output = blocks.slice(0, 80)
+  const maxWidth = Math.max(...output.map((line) => Bun.stringWidth(line)), 0)
+  if (maxWidth <= availableWidth) return output.join("\n")
+  return output.flatMap((line) => (Bun.stringWidth(line) <= availableWidth ? [line] : wrapTextLine("", line, width))).join("\n")
 }
 
 function renderPieChart(input: string, width: number): string | undefined {
@@ -885,9 +1161,10 @@ function renderPieChart(input: string, width: number): string | undefined {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-  if (!/^pie(?:\s+showData)?$/i.test(lines[0] ?? "")) return undefined
+  const head = /^pie(?:\s+showData)?(?:\s+title\s+(.+))?$/i.exec(lines[0] ?? "")
+  if (!head) return undefined
 
-  let title: string | undefined
+  let title: string | undefined = cleanLabel(head[1])
   const slices: Array<{ label: string; value: number }> = []
   for (const line of lines.slice(1)) {
     const titleMatch = /^title\s+(.+)$/i.exec(line)
@@ -913,6 +1190,168 @@ function renderPieChart(input: string, width: number): string | undefined {
   return [title, title ? "─".repeat(Math.min(Bun.stringWidth(title), width - 4)) : undefined, ...rows, `Total: ${total}`]
     .filter(Boolean)
     .join("\n")
+}
+
+type GanttTask = {
+  section: string
+  label: string
+  id?: string
+  start?: number
+  end?: number
+  after?: string
+  duration: number
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function parseGanttDate(value: string) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return undefined
+  const time = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]))
+  return Number.isNaN(time) ? undefined : Math.floor(time / DAY_MS)
+}
+
+function formatGanttDate(day: number) {
+  const date = new Date(day * DAY_MS)
+  return `${date.getUTCMonth() + 1}/${date.getUTCDate()}`
+}
+
+function parseGanttDuration(value: string) {
+  const match = /^(\d+)\s*d(?:ays?)?$/i.exec(value)
+  return match ? Math.max(1, Number(match[1])) : undefined
+}
+
+function renderGanttChart(input: string, width: number): string | undefined {
+  const lines = input
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+  if (!/^gantt$/i.test(lines[0] ?? "")) return undefined
+
+  let title = "Gantt"
+  let dateFormat = ""
+  let section = "Tasks"
+  const tasks: GanttTask[] = []
+
+  for (const line of lines.slice(1)) {
+    const titleMatch = /^title\s+(.+)$/i.exec(line)
+    if (titleMatch) {
+      title = cleanLabel(titleMatch[1]) || title
+      continue
+    }
+    const dateFormatMatch = /^dateFormat\s+(.+)$/i.exec(line)
+    if (dateFormatMatch) {
+      dateFormat = cleanLabel(dateFormatMatch[1])
+      continue
+    }
+    const sectionMatch = /^section\s+(.+)$/i.exec(line)
+    if (sectionMatch) {
+      section = cleanLabel(sectionMatch[1]) || section
+      continue
+    }
+    if (/^(axisFormat|tickInterval|todayMarker|excludes|inclusiveEndDates)\b/i.test(line)) continue
+
+    const task = /^(.+?)\s*:\s*(.+)$/.exec(line)
+    if (!task) continue
+    const parts = task[2]
+      .split(",")
+      .map(cleanLabel)
+      .filter(Boolean)
+    let id: string | undefined
+    let start: number | undefined
+    let end: number | undefined
+    let after: string | undefined
+    let duration = 1
+
+    for (const part of parts) {
+      const lower = part.toLowerCase()
+      if (/^(active|done|crit|milestone)$/.test(lower)) continue
+      const parsedDate = parseGanttDate(part)
+      if (parsedDate !== undefined) {
+        if (start === undefined) start = parsedDate
+        else end = parsedDate
+        continue
+      }
+      const parsedDuration = parseGanttDuration(part)
+      if (parsedDuration !== undefined) {
+        duration = parsedDuration
+        continue
+      }
+      const afterMatch = /^after\s+(.+)$/i.exec(part)
+      if (afterMatch) {
+        after = cleanLabel(afterMatch[1]).split(/\s+/)[0]
+        continue
+      }
+      if (!id) id = part.split(/\s+/)[0]
+    }
+
+    tasks.push({ section, label: cleanLabel(task[1]), id, start, end, after, duration })
+  }
+
+  if (tasks.length === 0) return undefined
+
+  const byID = new Map<string, GanttTask>()
+  let cursor = tasks.find((task) => task.start !== undefined)?.start ?? Math.floor(Date.now() / DAY_MS)
+  for (const task of tasks) {
+    if (task.after && byID.has(task.after)) {
+      const dependency = byID.get(task.after)
+      if (dependency?.end !== undefined) task.start = dependency.end + 1
+    }
+    if (task.start === undefined) task.start = cursor
+    if (task.end === undefined) task.end = task.start + task.duration - 1
+    task.duration = Math.max(1, task.end - task.start + 1)
+    cursor = task.end + 1
+    if (task.id) byID.set(task.id, task)
+  }
+
+  const resolved = tasks.filter((task): task is GanttTask & { start: number; end: number } => task.start !== undefined && task.end !== undefined)
+  if (resolved.length === 0) return undefined
+
+  const start = Math.min(...resolved.map((task) => task.start))
+  const end = Math.max(...resolved.map((task) => task.end))
+  const totalDays = Math.max(1, end - start + 1)
+  const available = Math.max(56, Math.min(120, width - 4))
+  const nameWidth = Math.min(24, Math.max(10, ...resolved.map((task) => Bun.stringWidth(task.label))))
+  const rangeWidth = 13
+  const timelineWidth = Math.max(12, available - nameWidth - rangeWidth - 4)
+  const scale = Math.max(1, timelineWidth / totalDays)
+  const border = `${"─".repeat(nameWidth + 2)}┬${"─".repeat(timelineWidth + 2)}┬${"─".repeat(rangeWidth + 2)}`
+  const top = `┌${border}┐`
+  const mid = `├${border.replaceAll("┬", "┼")}┤`
+  const bottom = `└${border.replaceAll("┬", "┴")}┘`
+  const rulerCells = Array.from({ length: timelineWidth }, () => "─")
+  for (let day = 1; day <= totalDays; day++) {
+    if (day !== 1 && day !== totalDays && day % 5 !== 0) continue
+    const label = String(day)
+    const offset = Math.min(timelineWidth - label.length, Math.max(0, Math.round((day - 1) * scale)))
+    for (let index = 0; index < label.length && offset + index < rulerCells.length; index++) {
+      rulerCells[offset + index] = label[index]
+    }
+  }
+  const ruler = rulerCells.join("")
+
+  const output: string[] = [title]
+  if (dateFormat) output.push(`dateFormat ${dateFormat}`)
+  output.push(top)
+  output.push(`│ ${padCell("Task", nameWidth)} │ ${ruler} │ ${padCell(`${formatGanttDate(start)}-${formatGanttDate(end)}`, rangeWidth)} │`)
+  output.push(mid)
+
+  let previousSection = ""
+  for (const task of resolved.slice(0, 18)) {
+    if (task.section !== previousSection) {
+      previousSection = task.section
+      output.push(`│ ${padCell(task.section, nameWidth)} │ ${" ".repeat(timelineWidth)} │ ${" ".repeat(rangeWidth)} │`)
+    }
+    const barStart = Math.max(0, Math.floor((task.start - start) * scale))
+    const barEnd = Math.min(timelineWidth - 1, Math.max(barStart, Math.ceil((task.end - start + 1) * scale) - 1))
+    const bar = Array.from({ length: timelineWidth }, (_, index) =>
+      index >= barStart && index <= barEnd ? (index === barStart ? "█" : "▓") : " ",
+    ).join("")
+    const range = `${formatGanttDate(task.start)}-${formatGanttDate(task.end)}`
+    output.push(`│ ${padCell(task.label, nameWidth)} │ ${bar} │ ${padCell(range, rangeWidth)} │`)
+  }
+  output.push(bottom)
+  return output.join("\n")
 }
 
 function renderIndentedMermaid(input: string, heads: RegExp, title: string): string | undefined {
@@ -986,24 +1425,26 @@ function renderGitGraph(input: string): string | undefined {
   if (!/^gitGraph\b/i.test(lines[0] ?? "")) return undefined
 
   const output: string[] = ["Git graph"]
+  let currentBranch = "main"
   for (const line of lines.slice(1, 24)) {
     const commit = /^commit(?:\s+id:\s*"?([^"]+)"?)?/i.exec(line)
     if (commit) {
-      output.push(`• commit${commit[1] ? ` ${cleanLabel(commit[1])}` : ""}`)
+      output.push(`${padVisual(currentBranch, 12)} ● ${cleanLabel(commit[1]) || "commit"}`)
       continue
     }
     const branch = /^branch\s+(.+)$/i.exec(line)
     if (branch) {
-      output.push(`├─ branch ${cleanLabel(branch[1])}`)
+      output.push(`${padVisual(currentBranch, 12)} ├─ ${cleanLabel(branch[1])}`)
       continue
     }
     const checkout = /^checkout\s+(.+)$/i.exec(line)
     if (checkout) {
-      output.push(`↳ checkout ${cleanLabel(checkout[1])}`)
+      currentBranch = cleanLabel(checkout[1]) || currentBranch
+      output.push(`${padVisual(currentBranch, 12)} ↳ checkout`)
       continue
     }
     const merge = /^merge\s+(.+)$/i.exec(line)
-    if (merge) output.push(`⇄ merge ${cleanLabel(merge[1])}`)
+    if (merge) output.push(`${padVisual(currentBranch, 12)} ⇄ merge ${cleanLabel(merge[1])}`)
   }
   return output.length > 1 ? output.join("\n") : undefined
 }
@@ -1169,6 +1610,7 @@ function renderSimpleMermaid(input: string, width: number): string | undefined {
     renderErDiagram(input, width) ??
     renderClassDiagram(input, width) ??
     renderPieChart(input, width) ??
+    renderGanttChart(input, width) ??
     renderQuadrantChart(input, width) ??
     renderGitGraph(input) ??
     renderRequirementDiagram(input, width) ??
@@ -1181,7 +1623,6 @@ function renderSimpleMermaid(input: string, width: number): string | undefined {
     renderIndentedMermaid(input, /^mindmap$/i, "Mindmap") ??
     renderIndentedMermaid(input, /^timeline$/i, "Timeline") ??
     renderIndentedMermaid(input, /^journey$/i, "Journey") ??
-    renderIndentedMermaid(input, /^gantt$/i, "Gantt") ??
     renderIndentedMermaid(input, /^kanban$/i, "Kanban")
   )
 }
@@ -1242,11 +1683,15 @@ async function runTermaid(input: string, width: number): Promise<string | undefi
   })
 }
 
-export async function renderPlanMarkdown(markdown: string, width: number): Promise<string> {
+export async function renderPlanMarkdown(
+  markdown: string,
+  width: number,
+  options: RenderPlanMarkdownOptions = {},
+): Promise<string> {
   const source =
     Buffer.byteLength(markdown, "utf8") > MAX_MARKDOWN_BYTES ? markdown.slice(0, MAX_MARKDOWN_BYTES) : markdown
   const blocks = [...source.matchAll(/```[ \t]*mermaid[^\r\n]*\r?\n([\s\S]*?)\r?\n[ \t]*```/gi)]
-  if (blocks.length === 0) return renderMarkdownForTui(source, width)
+  if (blocks.length === 0) return renderMarkdownForTui(source, width, options)
 
   let result = ""
   let cursor = 0
@@ -1281,5 +1726,55 @@ export async function renderPlanMarkdown(markdown: string, width: number): Promi
   }
 
   result += source.slice(cursor)
-  return renderMarkdownForTui(result, width)
+  return renderMarkdownForTui(result, width, options)
+}
+
+export function renderPlanMarkdownStatic(
+  markdown: string,
+  width: number,
+  options: RenderPlanMarkdownOptions = {},
+): string {
+  const source =
+    Buffer.byteLength(markdown, "utf8") > MAX_MARKDOWN_BYTES ? markdown.slice(0, MAX_MARKDOWN_BYTES) : markdown
+  const blocks = [...source.matchAll(/```[ \t]*mermaid[^\r\n]*\r?\n([\s\S]*?)\r?\n[ \t]*```/gi)]
+  if (blocks.length === 0) return renderMarkdownForTui(source, width, options)
+
+  let result = ""
+  let cursor = 0
+  let rendered = 0
+
+  for (const match of blocks) {
+    const index = match.index ?? 0
+    result += source.slice(cursor, index)
+    cursor = index + match[0].length
+
+    const diagram = match[1] ?? ""
+    if (rendered >= MAX_MERMAID_BLOCKS || Buffer.byteLength(diagram, "utf8") > MAX_MERMAID_BYTES) {
+      result += match[0]
+      continue
+    }
+
+    const output = renderSimpleMermaid(diagram, width)
+    if (!output) {
+      result += match[0]
+      continue
+    }
+
+    rendered++
+    const heading = popTrailingHeading(result)
+    result = heading.prefix
+    const renderedDiagram = output.trimEnd()
+    const block = alignTextBlock(
+      heading.title ? [heading.title, "", renderedDiagram].join("\n") : renderedDiagram,
+      width,
+    )
+    result += ["```text", block, "```"].join("\n")
+  }
+
+  result += source.slice(cursor)
+  return renderMarkdownForTui(result, width, options)
+}
+
+export function hasMermaidFence(markdown: string): boolean {
+  return MERMAID_FENCE_PATTERN.test(markdown)
 }

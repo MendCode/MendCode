@@ -2,7 +2,7 @@
 import { spawnSync } from "child_process"
 import { existsSync, readFileSync } from "fs"
 import path from "path"
-import { initProject } from "../config/project"
+import { generatedConfigNeedsSync, initProject, syncProject } from "../config/project"
 import { mendPaths } from "../config/paths"
 import { donorIdentityGuardStatus, runtimeAdapterCommand } from "../runtime/system"
 import { worktreeStatus } from "../config/worktree"
@@ -278,6 +278,7 @@ async function ensureReady(root = mendPaths().root) {
   if (!existsSync(paths.donorRuntimeRoot)) throw new Error(`donor checkout missing: ${paths.donorRuntimeRoot}`)
   if (!existsSync(paths.donorRuntimePackage)) throw new Error(`donor runtime package missing: ${paths.donorRuntimePackage}`)
   if (!existsSync(paths.generatedOpencodeConfig)) await initProject(root)
+  else if (generatedConfigNeedsSync(root)) await syncProject(root)
 }
 
 function enforceDonorIdentityGuard(args: string[]) {
@@ -326,11 +327,16 @@ export function resolveWorktreeShortcutTarget(
   command = "worktree",
 ): ShortcutWorktreeTarget {
   if (target) {
+    const normalizedTarget = target === "." ? status.workspace.currentPath : target
+    const absoluteTarget = normalizedTarget.startsWith(".") || normalizedTarget.includes(path.sep)
+      ? path.resolve(status.workspace.currentPath, normalizedTarget)
+      : normalizedTarget
     const hit = worktreeShortcutCandidates(status).find((item) =>
-      item.path === target ||
-      item.branch === target ||
-      item.label === target ||
-      path.basename(item.path) === target
+      item.path === normalizedTarget ||
+      item.path === absoluteTarget ||
+      item.branch === normalizedTarget ||
+      item.label === normalizedTarget ||
+      path.basename(item.path) === normalizedTarget
     )
     if (!hit) throw new Error(`Unknown worktree target: ${target}. Run \`mendcode worktree status\` to inspect available targets.`)
     return hit
@@ -355,6 +361,13 @@ export function resolveWorktreeShortcutTarget(
 
   const nonBase = worktreeShortcutCandidates(status).filter((item) => item.path !== status.workspace.repoRoot)
   if (nonBase.length === 1) return nonBase[0]!
+  if (nonBase.length === 0 && status.workspace.currentBranch) {
+    return {
+      path: status.workspace.currentPath,
+      branch: status.workspace.currentBranch,
+      label: status.workspace.currentBranch,
+    }
+  }
   const summary = nonBase.map((item) => item.branch || item.path).join(", ") || "none"
   throw new Error(`Multiple or no worktree targets found (${summary}). Use \`mendcode --${command} <branch|path>\`.`)
 }

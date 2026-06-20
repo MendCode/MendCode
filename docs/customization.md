@@ -4,57 +4,7 @@ MendCode customization is centered on `.mendcode/` config plus optional runtime 
 
 The main profile is `.mendcode/tui/profile.json`. It controls the prompt input, input marker, bottom status, home title or mascot, centered/split home layout, Agent View panel, activity rendering, activity mascot states, widgets, theme, and density.
 
-## Visual Capture Plan
-
-Use screenshots for visual surfaces and examples for config. Do not add image links until the files exist under `docs/assets/screenshots/`.
-
-| Screenshot file | Capture | Shows |
-| --- | --- | --- |
-| `docs/assets/screenshots/home-centered-title.png` | Home screen in centered mode with generated ASCII title. | First-run identity and default welcome posture. |
-| `docs/assets/screenshots/home-agent-view.png` | Home split mode with Agent View on the right and at least one working or needs-input session. | Background sessions, follow-up work, and why split home matters. |
-| `docs/assets/screenshots/prompt-top-bottom.png` | `promptChrome.preset: "top-bottom"` with `mendcode>` marker and status row. | Everyday prompt input, marker, and operational status. |
-| `docs/assets/screenshots/prompt-ascii-box.png` | `promptChrome.preset: "ascii-box"` with status inside the frame. | ASCII-compatible/SSH-friendly prompt chrome. |
-| `docs/assets/screenshots/prompt-marker-custom.png` | Prompt marker changed to `ship>` or `acme>`. | `promptChrome.glyphs.leadText` as team identity. |
-| `docs/assets/screenshots/session-activity.png` | Active session while reading/searching/running a command. | Activity text, tool rendering, usage/context status, and compact activity surface. |
-| `docs/assets/screenshots/home-mascot.png` | Home identity in mascot mode. | Custom ASCII identity without overloading README. |
-| `docs/assets/screenshots/command-palette-customization.png` | Command palette filtered to Home/Prompt/Presentation/Status commands. | TUI customization is discoverable without hand-editing JSON. |
-
-Capture commands and prompts should show `mendcode`, not the legacy local `mend` shim. Good demo prompts:
-
-```text
-Search the repo for promptChrome and summarize the available prompt input presets.
-```
-
-```text
-Run git status and explain which files are safe to document without changing anything.
-```
-
-```text
-Review this repository and produce a short plan to improve the README. Do not edit files yet.
-```
-
-## What Needs A Screenshot
-
-Use screenshots for:
-
-- home centered vs split
-- Agent View
-- prompt chrome presets
-- prompt marker
-- prompt status row
-- session activity presentation
-- mascot/title identity
-- command palette customization entries
-
-Use text/code examples for:
-
-- `promptChrome`, `promptStatus`, `identity`, and `surfaces.homeWelcome` JSON
-- package manifests
-- model roles
-- prompt modes
-- memory scopes
-- permission modes
-- plugin/widget API contracts
+![MendCode wordmark welcome actions](assets/screenshots/home-wordmark-actions.png)
 
 Most visual settings are also available from the command palette inside the TUI:
 
@@ -1005,7 +955,7 @@ Model behavior is controlled by model roles. This lets a team use one model for 
 ```bash
 mendcode models status
 mendcode models presets
-mendcode models set-default openai gpt-5.2 --auth-mode api-key --enable
+mendcode models set-default <provider> <model> --auth-mode <auth-mode> --enable
 mendcode models plan
 ```
 

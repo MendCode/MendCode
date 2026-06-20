@@ -28,13 +28,18 @@ export type StatsRoute = {
   returnTo?: HomeRoute | SessionRoute
 }
 
+export type MemoryRoute = {
+  type: "memory"
+  returnTo?: HomeRoute | SessionRoute
+}
+
 export type PluginRoute = {
   type: "plugin"
   id: string
   data?: Record<string, unknown>
 }
 
-export type Route = HomeRoute | SessionRoute | SetupRoute | StatsRoute | PluginRoute
+export type Route = HomeRoute | SessionRoute | SetupRoute | StatsRoute | MemoryRoute | PluginRoute
 
 export const { use: useRoute, provider: RouteProvider } = createSimpleContext({
   name: "Route",
@@ -67,6 +72,6 @@ export function useRouteData<T extends Route["type"]>(type: T) {
 }
 
 export function routeReturnTarget(route: Route): HomeRoute | SessionRoute {
-  if ((route.type === "setup" || route.type === "stats") && route.returnTo) return route.returnTo
+  if ((route.type === "setup" || route.type === "stats" || route.type === "memory") && route.returnTo) return route.returnTo
   return { type: "home" }
 }

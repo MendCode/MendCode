@@ -426,6 +426,7 @@ it.live("loop calls LLM and returns assistant message", () =>
       yield* prompt.prompt({
         sessionID: chat.id,
         agent: "build",
+        variant: "low",
         noReply: true,
         parts: [{ type: "text", text: "hello" }],
       })
@@ -433,11 +434,64 @@ it.live("loop calls LLM and returns assistant message", () =>
 
       const result = yield* prompt.loop({ sessionID: chat.id })
       expect(result.info.role).toBe("assistant")
+      if (result.info.role === "assistant") expect(result.info.variant).toBe("low")
       const parts = result.parts.filter((p) => p.type === "text")
       expect(parts.some((p) => p.type === "text" && p.text === "world")).toBe(true)
       expect(yield* llm.hits).toHaveLength(1)
     }),
     { git: true, config: providerCfg },
+  ),
+)
+
+it.live("prompt updates persisted session model to the latest user selection", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Pinned",
+        agent: "build",
+        model: { providerID: ProviderID.make("test"), id: ModelID.make("test-model") },
+      })
+
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        model: { providerID: ProviderID.make("test"), modelID: ModelID.make("test-model-alt") },
+        variant: "low",
+        noReply: true,
+        parts: [{ type: "text", text: "switch the prompt model" }],
+      })
+
+      const updated = yield* sessions.get(session.id)
+      expect(updated.agent).toBe("build")
+      expect(updated.model).toEqual({
+        providerID: ProviderID.make("test"),
+        id: ModelID.make("test-model-alt"),
+        variant: "low",
+      })
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        provider: {
+          ...providerCfg(url).provider,
+          test: {
+            ...providerCfg(url).provider.test,
+            models: {
+              ...providerCfg(url).provider.test.models,
+              "test-model-alt": {
+                ...providerCfg(url).provider.test.models["test-model"],
+                id: "test-model-alt",
+                name: "Test Model Alt",
+                variants: { low: {} },
+              },
+            },
+          },
+        },
+      }),
+    },
   ),
 )
 

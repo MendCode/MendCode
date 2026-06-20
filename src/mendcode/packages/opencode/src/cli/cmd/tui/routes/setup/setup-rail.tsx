@@ -14,7 +14,14 @@ const labels: Record<SetupStepID, string> = {
   permissions: "Permissions",
 }
 
-function statusFor(step: SetupStepID, state?: SetupState) {
+export type SetupRailStepStatus = "complete" | "optional" | "pending" | "auth blocked"
+
+export function setupRailStepStatus(
+  step: SetupStepID,
+  state?: SetupState,
+  summary?: { authReady?: boolean; authBlocked?: boolean },
+): SetupRailStepStatus {
+  if (step === "provider" && summary?.authBlocked) return "auth blocked"
   if (state?.completedSteps.includes(step)) return "complete"
   if (step === "package" || step === "tui" || step === "memory" || step === "permissions") return "optional"
   return "pending"
@@ -23,6 +30,12 @@ function statusFor(step: SetupStepID, state?: SetupState) {
 export function summaryLabel(label: string, value: string | undefined) {
   const text = `${label} ${value || "unset"}`
   return text.length > 22 ? `${text.slice(0, 21)}...` : text
+}
+
+function statusColor(status: SetupRailStepStatus, theme: ReturnType<typeof useTheme>["theme"]) {
+  if (status === "complete") return theme.success
+  if (status === "auth blocked") return theme.warning
+  return theme.textMuted
 }
 
 export function SetupRail(props: {
@@ -37,6 +50,7 @@ export function SetupRail(props: {
     budget?: string
     packageTitle?: string
     authReady?: boolean
+    authBlocked?: boolean
     memory?: string
     permissions?: string
   }
@@ -46,14 +60,17 @@ export function SetupRail(props: {
   return (
     <box width={props.narrow ? "100%" : 30} flexShrink={0} borderColor={theme.border} borderStyle="single" paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1}>
       <For each={setupSteps}>
-        {(step, index) => (
-          <box flexDirection="row" justifyContent="space-between" onMouseDown={() => props.onSelect(step)}>
-            <text fg={props.active === step ? theme.primary : theme.text}>
-              {index() + 1}. {labels[step]}
-            </text>
-            <text fg={statusFor(step, props.state) === "complete" ? theme.success : theme.textMuted}>{statusFor(step, props.state)}</text>
-          </box>
-        )}
+        {(step, index) => {
+          const status = () => setupRailStepStatus(step, props.state, props.summary)
+          return (
+            <box flexDirection="row" justifyContent="space-between" onMouseDown={() => props.onSelect(step)}>
+              <text fg={props.active === step ? theme.primary : theme.text}>
+                {index() + 1}. {labels[step]}
+              </text>
+              <text fg={statusColor(status(), theme)}>{status()}</text>
+            </box>
+          )
+        }}
       </For>
       <box height={1} />
       <text fg={props.complete ? theme.success : theme.textMuted}>

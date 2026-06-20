@@ -2,7 +2,13 @@ import { afterEach, expect, test } from "bun:test"
 import { chmodSync, mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import path from "path"
-import { planReviewInlineTitle, renderPlanMarkdown } from "../../../src/cli/cmd/tui/util/plan-markdown"
+import {
+  hasMermaidFence,
+  planReviewInlineTitle,
+  renderPlanMarkdown,
+  renderPlanMarkdownStatic,
+} from "../../../src/cli/cmd/tui/util/plan-markdown"
+import { styledPlanMarkdownSegments, visibleStyledPlanMarkdownLines } from "../../../src/cli/cmd/tui/util/styled-plan-lines"
 
 const originalTermaid = process.env.MENDCODE_TERMAID_BIN
 
@@ -418,6 +424,117 @@ test("renderPlanMarkdown leaves narrow markdown tables unchanged", async () => {
   expect(await renderPlanMarkdown(markdown, 80)).toBe(markdown)
 })
 
+test("renderPlanMarkdown can preserve markdown tables for rich chat", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "| Archivo | Cambio |",
+    "| --- | --- |",
+    "| `services/zerobase/intent.go` | Nuevo envelope de intent estructurado + detección de acciones/rutas sensibles. |",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 80, { tableMode: "preserve" })
+  expect(result).toBe(markdown)
+})
+
+test("renderPlanMarkdown renders rich chat markdown tables as grids", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "| Archivo | Acción | Cambio |",
+    "| --- | --- | --- |",
+    "| `client/src/components/ui/OrgSelector.tsx` | Modificado | Emite evento cuando cambia la organización activa. |",
+    "| `client/src/components/ai/AIChatProvider.tsx` | Modificado | Reconsulta `/api/ai/status` cuando cambia la organización activa. |",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 96, { tableMode: "grid" })
+  expect(result).toContain("```text")
+  expect(result).toContain("┌")
+  expect(result).toContain("Archivo")
+  expect(result).toContain("OrgSelector.tsx")
+  expect(result).toContain("AIChatProvider.tsx")
+  expect(result).not.toContain("| Archivo | Acción | Cambio |")
+  expect(result).not.toContain("`/api/ai/status`")
+})
+
+test("renderPlanMarkdownStatic renders non-mermaid chat tables synchronously", () => {
+  const markdown = [
+    "| Archivo | Acción | Cambio |",
+    "| --- | --- | --- |",
+    "| `client/src/components/ui/OrgSelector.tsx` | Modificado | Emite evento cuando cambia la organización activa. |",
+  ].join("\n")
+
+  const result = renderPlanMarkdownStatic(markdown, 96, { tableMode: "grid" })
+  expect(hasMermaidFence(markdown)).toBe(false)
+  expect(result).toContain("┌")
+  expect(result).toContain("OrgSelector.tsx")
+  expect(result).not.toContain("| Archivo | Acción | Cambio |")
+})
+
+test("renderPlanMarkdownStatic renders local Mermaid before async fallback", () => {
+  const markdown = ["```mermaid", "gantt", "  title Delivery", "  dateFormat YYYY-MM-DD", "  Task :a1, 2026-06-19, 1d", "```"].join("\n")
+
+  const result = renderPlanMarkdownStatic(markdown, 96, { tableMode: "grid", markdownMode: "tables-only" })
+  expect(result).toContain("```text")
+  expect(result).toContain("Delivery")
+  expect(result).toContain("Task")
+  expect(result).toContain("█")
+  expect(result).not.toContain("```mermaid")
+})
+
+test("renderPlanMarkdownStatic renders hex color previews inside tables", () => {
+  const markdown = [
+    "| Name | Hex | Preview |",
+    "| --- | --- | --- |",
+    "| Mend Blue | #1E88E5 | 🔵 |",
+    "| Success Green | #43A047 | 🟢 |",
+  ].join("\n")
+
+  const result = renderPlanMarkdownStatic(markdown, 96, { tableMode: "grid", markdownMode: "tables-only" })
+  expect(result).toContain("│ Mend Blue")
+  expect(result).toContain("#1E88E5")
+  expect(result).toContain("#43A047")
+  expect(result).not.toContain("\u001b[")
+  expect(result).not.toContain("🔵")
+  expect(result).not.toContain("🟢")
+  expect(result).not.toContain("| Mend Blue | #1E88E5 | 🔵 |")
+})
+
+test("styled plan markdown hides generated text fences around hex tables", () => {
+  const content = ["# Title", "", "```text", "│ Hex │ Preview │", "│ #1E88E5 │ #1E88E5 │", "```", "After"].join("\n")
+
+  const lines = visibleStyledPlanMarkdownLines(content)
+  expect(lines).toEqual(["# Title", "", "│ Hex │ Preview │", "│ #1E88E5 │ #1E88E5 │", "After"])
+  expect(lines.join("\n")).not.toContain("```")
+  expect(styledPlanMarkdownSegments(content)).toEqual([
+    { kind: "markdown", content: "# Title\n" },
+    { kind: "text", content: "│ Hex │ Preview │\n│ #1E88E5 │ #1E88E5 │" },
+    { kind: "markdown", content: "After" },
+  ])
+})
+
+test("renderPlanMarkdownStatic preserves non-table markdown in rich chat mode", () => {
+  const markdown = [
+    "### Escapes",
+    "",
+    "\\# No heading",
+    "\\*No italic\\*",
+    "",
+    "```txt",
+    "DEMO",
+    "```",
+    "",
+    "| Elemento | Resultado |",
+    "|---|---|",
+    "| Tables | Columnas alineadas |",
+  ].join("\n")
+
+  const result = renderPlanMarkdownStatic(markdown, 96, { tableMode: "grid", markdownMode: "tables-only" })
+  expect(result).toContain("### Escapes")
+  expect(result).toContain("\\# No heading")
+  expect(result).toContain("```txt\nDEMO\n```")
+  expect(result).toContain("┌")
+  expect(result).toContain("│ Elemento")
+})
+
 test("renderPlanMarkdown renders wide markdown tables as text blocks", async () => {
   process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
   const markdown = [
@@ -455,13 +572,24 @@ test("renderPlanMarkdown strips inline markdown inside wide table text blocks", 
 
 test("renderPlanMarkdown renders Mermaid state diagrams locally", async () => {
   process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
-  const markdown = ["```mermaid", "stateDiagram-v2", "  [*] --> Idle", "  Idle --> Running: start", "```"].join(
-    "\n",
-  )
+  const markdown = [
+    "```mermaid",
+    "stateDiagram-v2",
+    "  [*] --> Idle",
+    "  Idle --> Running: start",
+    "  Running --> [*]: done",
+    "```",
+  ].join("\n")
 
   const result = await renderPlanMarkdown(markdown, 100)
-  expect(result).toContain("┌ ● ┐ ──▶ ┌ Idle ┐")
-  expect(result).toContain("┌ Idle ┐ ── start ─▶ ┌ Running ┐")
+  expect(result).toContain("│  ●  │")
+  expect(result).toContain("│    Idle    │")
+  expect(result).toContain("start")
+  expect(result).toContain("│  Running   │")
+  expect(result).toContain("done")
+  expect(result).toContain("│  ◉  │")
+  expect(result).not.toContain("↺ [*]")
+  expect(result).toContain("▼")
   expect(result).not.toContain("stateDiagram-v2")
 })
 
@@ -470,14 +598,16 @@ test("renderPlanMarkdown renders Mermaid class diagrams locally", async () => {
   const markdown = ["```mermaid", "classDiagram", "  Animal <|-- Duck", "  Duck : +swim()", "```"].join("\n")
 
   const result = await renderPlanMarkdown(markdown, 100)
-  expect(result).toContain("┌ Animal ┐ <|-- ┌ Duck ┐")
-  expect(result).toContain("┌ Duck ┐  +swim()")
+  expect(result).toContain("│ Animal")
+  expect(result).toContain("└─△ Duck")
+  expect(result).toContain("│   Duck")
+  expect(result).toContain("│ +swim()")
   expect(result).not.toContain("classDiagram")
 })
 
 test("renderPlanMarkdown renders Mermaid pie charts locally", async () => {
   process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
-  const markdown = ["```mermaid", "pie", "  title Status", "  \"Done\" : 60", "  \"Todo\" : 40", "```"].join("\n")
+  const markdown = ["```mermaid", "pie title Status", "  \"Done\" : 60", "  \"Todo\" : 40", "```"].join("\n")
 
   const result = await renderPlanMarkdown(markdown, 100)
   expect(result).toContain("Status")
@@ -501,6 +631,13 @@ test("renderPlanMarkdown renders additional Mermaid chart families locally", asy
   process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
   const markdown = [
     "```mermaid",
+    "gantt",
+    "  dateFormat YYYY-MM-DD",
+    "  section Discovery",
+    "  Repo inspection :a1, 2026-06-19, 1d",
+    "  Pattern analysis :a2, after a1, 1d",
+    "```",
+    "```mermaid",
     "quadrantChart",
     "  title Prioridades",
     "  x-axis Bajo --> Alto",
@@ -509,9 +646,11 @@ test("renderPlanMarkdown renders additional Mermaid chart families locally", asy
     "```mermaid",
     "gitGraph",
     "  commit id: \"init\"",
-    "  branch feature",
-    "  checkout feature",
+    "  branch feature/mendcode-demo",
+    "  checkout feature/mendcode-demo",
     "  commit id: \"work\"",
+    "  checkout main",
+    "  merge feature/mendcode-demo",
     "```",
     "```mermaid",
     "xychart-beta",
@@ -526,13 +665,22 @@ test("renderPlanMarkdown renders additional Mermaid chart families locally", asy
   ].join("\n")
 
   const result = await renderPlanMarkdown(markdown, 100)
+  expect(result).toContain("Gantt")
+  expect(result).toContain("│ Task")
+  expect(result).toContain("│ Discovery")
+  expect(result).toContain("│ Repo inspection")
+  expect(result).toContain("█")
   expect(result).toContain("Prioridades")
   expect(result).toContain("Feature A (0.8, 0.6)")
   expect(result).toContain("Git graph")
-  expect(result).toContain("branch feature")
+  expect(result).toContain("main         ├─ feature/mendcode-demo")
+  expect(result).toContain("feature/mendcode-demo ↳ checkout")
+  expect(result).toContain("main         ⇄ merge feature/mendcode-demo")
   expect(result).toContain("Ventas")
   expect(result).toContain("bar: 2, 4")
   expect(result).toContain("┌ A ┐ ── 10 ─▶ ┌ B ┐")
+  expect(result).not.toContain("dateFormat YYYY-MM-DD\n  section")
+  expect(result).not.toContain("gantt")
   expect(result).not.toContain("quadrantChart")
   expect(result).not.toContain("gitGraph")
   expect(result).not.toContain("xychart-beta")
