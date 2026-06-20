@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@mendcode/sdk": "workspace:*",
-    "@slack/bolt": "^3.17.1"
+    "@slack/bolt": "4.7.3"
   },
   "devDependencies": {
     "@types/node": "catalog:",
