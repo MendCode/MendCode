@@ -8,10 +8,12 @@ The customizable coding terminal.
 [![Docs](https://img.shields.io/badge/docs-github-2563eb)](docs/README.md)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-16a34a)](CONTRIBUTING.md)
 
-MendCode is a terminal-first coding-agent harness you can make your own: a public
-`mendcode` CLI, configurable model roles, review gates, memory policy, reusable
-team packages, local workflow coordination, Usage Insights, and a TUI that can
-be shaped without patching runtime internals.
+MendCode is a terminal-first coding-agent harness you can make your own: a
+public `mendcode` CLI, configurable model roles, review gates, Memory Center,
+Plan Mode Markdown, Agent View, reusable team packages, project MCP config,
+Herdr/mflow/worktree coordination, Usage Insights, release/security gates, and a
+customizable TUI for home identity, prompt chrome, widgets, panels, dialogs, and
+themes without patching runtime internals.
 
 [Website](https://www.mendcode.online/) · [Docs](docs/README.md) · [Feature map](docs/features.md) · [Acknowledgements](ACKNOWLEDGEMENTS.md)
 
