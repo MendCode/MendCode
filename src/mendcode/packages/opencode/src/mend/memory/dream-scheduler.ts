@@ -1,5 +1,5 @@
 import { existsSync } from "fs"
-import { mkdir, readFile, rm, writeFile } from "fs/promises"
+import { mkdir, readFile, readdir, rm, writeFile } from "fs/promises"
 import path from "path"
 import { memoryPaths } from "./config"
 import { readDreamRuns, runMemoryDream, type DreamModelAdapter } from "./dream"
@@ -42,6 +42,48 @@ function localDate(now: Date) {
   return now.toISOString().slice(0, 10)
 }
 
+function padTime(hour: number, minute: number) {
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`
+}
+
+function parseTimeToken(value: string) {
+  const trimmed = value.trim().toLowerCase()
+  const match = trimmed.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/)
+  if (!match) return null
+  let hour = Number(match[1])
+  const minute = match[2] ? Number(match[2]) : 0
+  const meridiem = match[3]
+  if (minute < 0 || minute > 59) return null
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return null
+    if (meridiem === "pm" && hour !== 12) hour += 12
+    if (meridiem === "am" && hour === 12) hour = 0
+  }
+  if (hour < 0 || hour > 23) return null
+  return padTime(hour, minute)
+}
+
+function timezoneFromText(text: string) {
+  const zone = text.match(/\b([A-Z][A-Za-z_]+\/[A-Za-z_]+)\b/)?.[1]
+  if (zone) return zone
+  if (/\bpanama\b/i.test(text)) return "America/Panama"
+  return undefined
+}
+
+export function dreamScheduleWindowFromText(text: string): DreamScheduleWindow | null {
+  const normalized = text.replace(/[–—]/g, "-")
+  const range = normalized.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:-|to|a|hasta)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b/i)
+  if (range) {
+    const start = parseTimeToken(range[1]!)
+    const end = parseTimeToken(range[2]!)
+    if (start && end) return { enabled: true, start, end, timezone: timezoneFromText(text) }
+  }
+  const fixed = normalized.match(/\b(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b/i)
+  const time = fixed ? parseTimeToken(fixed[1]!) : null
+  if (!time) return null
+  return { enabled: true, start: time, end: time, timezone: timezoneFromText(text) }
+}
+
 function insideWindow(now: Date, window: DreamScheduleWindow) {
   const start = minutes(window.start)
   const end = minutes(window.end)
@@ -78,6 +120,55 @@ async function writeDreamScheduleState(root: string | undefined, state: DreamSch
   const file = path.join(schedulerDir(root), "schedule.json")
   await mkdir(path.dirname(file), { recursive: true })
   await writeFile(file, `${JSON.stringify({ ...state, updatedAt: new Date().toISOString() }, null, 2)}\n`)
+}
+
+export async function configureDreamSchedule(root: string | undefined, window: DreamScheduleWindow, reason = "Dream schedule configured") {
+  const state = {
+    date: localDate(new Date()),
+    status: window.enabled ? "scheduled" : "disabled",
+    reason,
+    manualTriggerRequired: false,
+    window,
+  }
+  await writeDreamScheduleState(root, state)
+  return state
+}
+
+export async function configureDreamScheduleFromText(root: string | undefined, text: string, reason = "Dream schedule configured from proposal") {
+  const window = dreamScheduleWindowFromText(text)
+  if (!window) throw new Error("Dream proposal is missing a schedule window, e.g. 18:00-23:00")
+  return configureDreamSchedule(root, window, reason)
+}
+
+async function recoverDreamScheduleFromAppliedProposal(root?: string) {
+  const paths = memoryPaths(root)
+  if (!existsSync(paths.proposalsDir)) return null
+  const files = await readdir(paths.proposalsDir).catch(() => [] as string[])
+  const proposals = await Promise.all(files
+    .filter((file) => file.endsWith(".json"))
+    .map(async (file) => {
+      try {
+        return JSON.parse(await readFile(path.join(paths.proposalsDir, file), "utf8")) as {
+          status?: string
+          text?: string
+          tags?: string[]
+          updatedAt?: string
+          createdAt?: string
+        }
+      } catch {
+        return null
+      }
+    }))
+  const applied = proposals
+    .filter((proposal): proposal is NonNullable<typeof proposal> =>
+      proposal?.status === "applied" &&
+      typeof proposal.text === "string" &&
+      Array.isArray(proposal.tags) &&
+      proposal.tags.includes("dream-dry-run"))
+    .toSorted((a, b) => (b.updatedAt ?? b.createdAt ?? "").localeCompare(a.updatedAt ?? a.createdAt ?? ""))
+  const latest = applied[0]
+  if (!latest?.text) return null
+  return configureDreamScheduleFromText(root, latest.text, "Recovered from applied Dream proposal")
 }
 
 export async function markDreamMissed(root: string | undefined, date: string, reason: string, window?: DreamScheduleWindow) {
@@ -122,6 +213,6 @@ export async function runScheduledMemoryDream(input: {
 
 export async function readDreamScheduleState(root?: string) {
   const file = path.join(schedulerDir(root), "schedule.json")
-  if (!existsSync(file)) return null
+  if (!existsSync(file)) return recoverDreamScheduleFromAppliedProposal(root)
   return JSON.parse(await readFile(file, "utf8")) as DreamScheduleState
 }
