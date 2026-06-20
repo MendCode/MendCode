@@ -47,6 +47,7 @@
 - Use provider-neutral defaults for memory preview commands instead of hard-coded public provider/model examples.
 - Add setup smoke coverage for memory/model-role fields and package/runtime configuration.
 - Add tests for Memory Center layout helpers, memory categories, graph/proposals/retrieval, Dream events/scheduler/sources, HTTP memory routes, prompt compose, prompt model/variant resolution, prompt status identity, plan Markdown rendering, Herdr plugin reporting, MCP project config, worktree shortcuts, setup, TSM, runtime pack, and session prompt metadata.
+- Refresh release-gated dependencies and lockfile overrides for DOMPurify, Undici, form-data, esbuild, Slack Bolt, and OpenTelemetry so the OSV release scanner can pass without disabling supply-chain checks.
 
 ## 0.1.14 - 2026-06-16
 
