@@ -17,7 +17,7 @@ The pitch is not “another chat box.” The pitch is a configurable coding term
 | Plan Mode | The agent presents a Markdown plan inside a TUI review modal; the user can approve, edit, comment, or reject before implementation starts. Approval switches into the configured implementation agent. | [Plan Mode](plan-mode.md) |
 | Usage Insights | Local activity dashboard for tokens, sessions, AI time, words, tools, agents, models, changed files, daily activity, cache mix, and optional weather. | [Usage Insights](usage-insights.md) |
 | Approval-gated memory | Memory can retrieve context without silently turning every session into permanent state. Generated memories become reviewable proposals first. | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory) |
-| Memory page, graph, and Dream | Route-level memory workspace with saved/pending memories, categories, policy controls, Dream logs, and constrained memory side chat. In this checkout it targets the local `0.1.15` work; public promotion remains gated on local validation. | [Memory Graph, Dream, and Memory Page spec](specs/memory-graph-dream-page.md) |
+| Memory Center, graph, and Dream | Route-level memory workspace with saved/pending memories, categories, policy controls, Dream logs, and constrained memory side chat. | [Memory Center](memory-center.md) |
 | Smart permissions | Choose `approval`, `smart`, or `full_access`. Smart mode can route risky permission decisions through a configured `permissionReviewer` role. | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory) |
 | Model roles | Configure task-specific roles for default, small, plan, build, review, subagent, title, compaction, summary, memory extraction, Dream, memory side chat, and permission review. | [CLI, setup, and configuration](cli-setup-configuration.md#models) |
 | mflow coordination | Optional local-first coordination and locks for multiple agents working around the same repo. | [mflow coordination](mflow.md) |
@@ -224,7 +224,7 @@ Baseline memory behavior:
 - transient prompt injection through `<mendcode_memory>`
 - approval-first defaults for generated memory
 
-The local `0.1.15` memory work expands this into:
+Memory Center expands this into:
 
 - route-level Memory page
 - workspace/project registry
@@ -236,6 +236,12 @@ The local `0.1.15` memory work expands this into:
 - manual/scheduled Dream semantics with missed-window handling
 - constrained memory side chat
 - reviewable proposals for add, update, remove, verify, expire, recategorize, and scope changes
+
+The memory side agent can answer memory-specific questions, inspect saved
+entries/categories/policies, explain retrieval and proposal risk, and draft
+reviewable memory/category/policy/Dream changes. It is powerful inside the
+memory workspace, but it is not a normal coding agent and does not apply changes
+without review.
 
 Important safety model:
 
@@ -376,7 +382,7 @@ For a README, website, or creator demo, show these in order:
 7. Home layout switches to split mode with Agent View.
 8. Plan Mode displays a Markdown plan in the review modal.
 9. Usage Insights shows local activity.
-10. Memory page shows saved/pending memories, categories, Dream, and side chat when the `0.1.15` memory work is enabled.
+10. Memory Center shows saved/pending memories, categories, Dream, and side chat.
 11. Packages show how a team shares commands, agents, modes, skills, prompts, TUI profile, widgets, permissions, memory defaults, and worktree policy.
 12. mflow/TSM/worktree surfaces show parallel workflow coordination.
 

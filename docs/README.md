@@ -10,7 +10,7 @@ If you are deciding what to show on GitHub or the website, start with [Feature M
 2. [CLI, setup, and configuration](cli-setup-configuration.md): install/open commands, setup state, config paths, focus profiles, model roles, prompt modes, budget posture, permissions, and memory.
 3. [Customization](customization.md): prompt input, input marker, prompt status, home centered/split modes, Agent View, ASCII title/mascot, activity states, and team profile examples.
 4. [Plan Mode](plan-mode.md): interactive plan review modal, approve/edit/comment/reject flow, Mermaid support, and post-approval implementation handoff.
-5. [Memory Center](memory-center.md): saved memories, proposals, categories, Dream status, project grouping, and memory side chat.
+5. [Memory Center](memory-center.md): saved memories, proposals, categories, Dream status, project grouping, and the constrained memory side agent for questions, explanations, and draft proposals.
 6. [Usage Insights](usage-insights.md): global/project activity dashboard, token heatmap, AI time, top tools/agents/models, cache behavior, and weather.
 7. [Packages and team sharing](packages-and-team-sharing.md): package commands, agents, modes, skills, prompts, MCP files, widgets, TUI profiles, model policy, permissions, memory, and worktree policy for teams.
 
@@ -29,7 +29,7 @@ If you are deciding what to show on GitHub or the website, start with [Feature M
 ## Review, Memory, And Observability
 
 - [Plan Mode](plan-mode.md): planning without silent implementation.
-- [Memory Center](memory-center.md): approval-first memory review and side chat.
+- [Memory Center](memory-center.md): approval-first memory review, Dream maintenance, and constrained side-agent proposals.
 - [Usage Insights](usage-insights.md): local usage visibility without overclaiming productivity.
 - [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory): permission modes, smart reviewer role, memory scopes, search/preview, and approval-gated proposals.
 
@@ -100,8 +100,8 @@ CLI profile inspection exists for compatibility/debugging, but it is not the nor
 - `src/mendcode/packages/opencode/src/mend/config/models.ts`: model roles and projection.
 - `src/mendcode/packages/opencode/src/mend/config/permissions.ts`: global permission mode and smart-reviewer role config.
 - `src/mendcode/packages/opencode/src/mend/prompt/mode.ts`: prompt modes: `minimal`, `focus`, `full`.
-- `src/mendcode/packages/opencode/src/mend/memory/`: approval-gated memory storage, proposals, and retrieval.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/memory/index.tsx`: Memory page, category policy, Dream panel, and memory side chat.
+- `src/mendcode/packages/opencode/src/mend/memory/`: approval-gated memory storage, proposals, retrieval, graph, Dream, side chat, workspaces, and category policy.
+- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/memory/index.tsx`: Memory Center route, category policy, Dream panel, inspector, and constrained memory side agent.
 - `src/mendcode/packages/opencode/src/mend/config/mflow.ts`: local-first mflow setup, relay config, edit-lock enforcement.
 - `src/mendcode/packages/opencode/src/mend/config/tsm.ts`: optional TSM lifecycle and detection.
 - `src/mendcode/packages/opencode/src/mend/config/worktree.ts`: worktree status, dry-run planning, adoption, destructive previews.
