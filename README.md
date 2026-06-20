@@ -4,7 +4,7 @@ The customizable coding terminal.
 
 [![Release](https://img.shields.io/github/v/release/MendCode/MendCode?style=flat&label=release)](https://github.com/MendCode/MendCode/releases)
 [![License](https://img.shields.io/github/license/MendCode/MendCode?style=flat)](LICENSE)
-[![Website](https://img.shields.io/badge/website-mendcode.online-111827)](https://www.mendcode.online/)
+[![Website](https://img.shields.io/badge/website-mendcode.dev-111827)](https://www.mendcode.dev/)
 [![Docs](https://img.shields.io/badge/docs-github-2563eb)](docs/README.md)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-16a34a)](CONTRIBUTING.md)
 
@@ -15,7 +15,7 @@ Herdr/mflow/worktree coordination, Usage Insights, release/security gates, and a
 customizable TUI for home identity, prompt chrome, widgets, panels, dialogs, and
 themes without patching runtime internals.
 
-[Website](https://www.mendcode.online/) · [Docs](docs/README.md) · [Feature map](docs/features.md) · [Acknowledgements](ACKNOWLEDGEMENTS.md)
+[Website](https://www.mendcode.dev/) · [Docs](docs/README.md) · [Feature map](docs/features.md) · [Acknowledgements](ACKNOWLEDGEMENTS.md)
 
 ![MendCode README banner](docs/assets/banners/readme-hero-banner.png)
 
