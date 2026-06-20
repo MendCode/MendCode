@@ -17,7 +17,7 @@ permanent context.
 | Category graph | Shows how memories are distributed across categories such as security, commands, release, user preferences, and agent policy. |
 | Pending Queue | Presents generated proposals for review before they are applied. |
 | Inspector | Shows the selected proposal action, progress, and risk summary. |
-| Side chat | Lets the user ask memory-specific questions without turning the memory view into the normal coding agent. |
+| Side chat | Runs a constrained memory side agent for memory-specific questions, explanations, and draft proposals without turning the memory view into the normal coding agent. |
 
 ## Review Model
 
@@ -29,9 +29,48 @@ Memory is approval-first:
 - project and global memories stay separate
 - Dream state is shown as maintenance context, not as silent mutation
 
-The side chat is intentionally constrained. It can inspect categories, saved
-memories, and pending changes; draft memory actions for review; and help explain
-category policies. It is not a general implementation agent.
+Generated changes can come from normal extraction, Memory Center side chat, or
+Dream. They all land in the same review model: a proposal must be inspected,
+edited, applied, or rejected by the user before it changes saved memory.
+
+## Memory Side Agent
+
+The side chat is intentionally constrained, but it is still powerful inside the
+memory domain. It can:
+
+- answer questions about saved global and project memories
+- explain which category, scope, or policy a memory belongs to
+- inspect pending proposals and summarize their risk
+- draft new global/project memory proposals
+- draft updates, deletions, moves, recategorization, verification, expiration,
+  and policy changes
+- help tune extraction behavior, prompt inclusion, save behavior, and category
+  policy
+- draft Dream schedule, source, or dry-run changes
+
+The side agent should not be described as a source-editing or shell-capable
+coding agent. It does not apply generated changes by itself; it prepares
+reviewable memory work.
+
+## Dream
+
+Dream is the memory maintenance loop for manual or scheduled consolidation. It
+uses the `memoryDream` model role and focuses on memory quality rather than code
+execution.
+
+Dream can surface:
+
+- duplicated or stale memories
+- memories that should move between global/project scope
+- category and policy drift
+- missing verification signals
+- outdated project context
+- proposals for add, update, remove, verify, expire, recategorize, and scope
+  changes
+
+Dream writes logs, safety context, and reviewable proposals. It should not be
+documented as applying memory silently, editing source files, mutating git, or
+reading arbitrary filesystem/session evidence without an explicit bounded path.
 
 ## CLI Pairing
 
