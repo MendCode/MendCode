@@ -100,6 +100,15 @@ function focusFallback(focusID: string, reason: string) {
   ].join("\n")
 }
 
+function tuiMarkdownRendering() {
+  return [
+    "MendCode TUI rendering:",
+    "- Full text Markdown is supported in assistant responses: headings, bold/italic text, inline code, fenced code blocks, links, lists, checklists, blockquotes, and tables.",
+    "- Mermaid fenced blocks are supported for flowcharts and other useful diagrams.",
+    "- Embedded HTML and Markdown images are outside the terminal text rendering contract.",
+  ].join("\n")
+}
+
 async function fullKnowledge(root: string) {
   const [config, policy, mflow, tsm] = await Promise.all([
     Promise.resolve(readMendConfig(root)),
@@ -200,6 +209,15 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
         text: focusFallback(focusID, fallbackReason),
       }))
     }
+  }
+
+  if (mode !== "minimal") {
+    sections.push(section({
+      id: "tui-markdown-rendering",
+      label: "MendCode TUI Markdown rendering",
+      source: "mendcode-context",
+      text: tuiMarkdownRendering(),
+    }))
   }
 
   if (mode === "full") {

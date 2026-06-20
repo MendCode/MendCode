@@ -102,6 +102,11 @@ export type MendPromptStatusScriptOutput = {
   segments?: MendPromptStatusScriptSegment[]
 }
 
+export type MendPromptStatusScriptResult = {
+  identity: string
+  output: MendPromptStatusScriptOutput
+}
+
 const scriptCache = new Map<string, { value: MendPromptStatusScriptOutput; expiresAt: number; inflight?: Promise<MendPromptStatusScriptOutput> }>()
 const scriptWarmCache = new Map<string, { value: MendPromptStatusScriptOutput; expiresAt: number }>()
 
@@ -130,6 +135,45 @@ function warmCacheKey(input: MendPromptStatusScriptInput) {
     side: input.side,
     prepend: input.prepend,
   })
+}
+
+export function promptStatusScriptIdentityKey(input: MendPromptStatusScriptInput) {
+  return JSON.stringify({
+    root: input.root,
+    rootName: input.rootName || "",
+    command: input.command,
+    sessionID: input.sessionID || "",
+    workspaceID: input.workspaceID || "",
+    promptMode: input.promptMode,
+    promptModeLabel: input.promptModeLabel || "",
+    agentLabel: input.agentLabel || "",
+    model: input.model,
+    modelLabel: input.modelLabel || "",
+    provider: input.provider,
+    providerLabel: input.providerLabel || "",
+    reasoning: input.reasoning || "",
+    reasoningLabel: input.reasoningLabel || "",
+    variant: input.variant || "",
+    permissionMode: input.permissionMode || "",
+    permissionModeLabel: input.permissionModeLabel || "",
+    permissionPending: input.permissionPending ?? 0,
+    commandsHint: input.commandsHint || "",
+    agentsHint: input.agentsHint || "",
+    preset: input.preset,
+    side: input.side,
+    prepend: input.prepend,
+  })
+}
+
+export function pickPromptStatusScriptOutput(input: {
+  currentIdentity?: string
+  current?: MendPromptStatusScriptResult
+  latest?: MendPromptStatusScriptResult
+}) {
+  if (!input.currentIdentity) return input.current?.output ?? input.latest?.output
+  if (input.current?.identity === input.currentIdentity) return input.current.output
+  if (input.latest?.identity === input.currentIdentity) return input.latest.output
+  return undefined
 }
 
 export function defaultPromptStatus(): MendPromptStatusConfig {

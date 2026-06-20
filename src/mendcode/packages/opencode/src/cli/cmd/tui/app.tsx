@@ -47,6 +47,7 @@ import { Home } from "@tui/routes/home"
 import { Session } from "@tui/routes/session"
 import { Setup } from "@tui/routes/setup"
 import { Stats } from "@tui/routes/stats"
+import { Memory } from "@tui/routes/memory"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -295,6 +296,8 @@ type MemoryManagerOption = DialogSelectOption<string> & {
 
 function MemoryManagerPreview(props: { option: MemoryManagerOption }) {
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
+  const previewHeight = createMemo(() => Math.max(5, Math.min(12, Math.floor(dimensions().height * 0.22))))
 
   return (
     <box
@@ -317,9 +320,15 @@ function MemoryManagerPreview(props: { option: MemoryManagerOption }) {
             {props.option.previewMeta}
           </text>
         </Show>
-        <text fg={theme.textMuted} wrapMode="word">
-          {props.option.previewBody || props.option.description || "No extra details."}
-        </text>
+        <scrollbox
+          maxHeight={previewHeight()}
+          minHeight={Math.min(3, previewHeight())}
+          scrollbarOptions={{ visible: (props.option.previewBody || props.option.description || "").length > 360 }}
+        >
+          <text fg={theme.textMuted} wrapMode="word">
+            {props.option.previewBody || props.option.description || "No extra details."}
+          </text>
+        </scrollbox>
       </box>
     </box>
   )
@@ -520,6 +529,14 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     command.trigger("session.list")
   })
 
+  useKeyboard((evt) => {
+    if (evt.defaultPrevented || dialog.stack.length > 0) return
+    if (!keybind.match("agent_mode_picker", evt)) return
+    evt.preventDefault()
+    evt.stopPropagation()
+    showAgentModePicker()
+  })
+
   async function showGlobalPermissionStatus() {
     const permissions = await readPermissionsConfig()
     await DialogAlert.show(
@@ -618,6 +635,11 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
 
     if (route.data.type === "setup") {
       renderer.setTerminalTitle(`${productName()} | Setup`)
+      return
+    }
+
+    if (route.data.type === "memory") {
+      renderer.setTerminalTitle(`${productName()} | Memory`)
     }
   })
 
@@ -1295,6 +1317,31 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             dialog.clear()
           },
         }))}
+      />
+    ))
+  }
+  const showAgentModePicker = () => {
+    dialog.setSize("large")
+    dialog.replace(() => (
+      <DialogSelect
+        title="Select mode"
+        current={local.agent.current()?.name}
+        placeholder="Search modes"
+        cycleKeybind="agent_mode_picker"
+        options={local.agent.list().map((item) => ({
+          value: item.name,
+          title: item.name,
+          description: item.native ? "native" : item.description,
+        }))}
+        onSelect={(option) => {
+          local.agent.set(option.value)
+          toast.show({
+            variant: "info",
+            message: `Mode is now ${option.value}.`,
+            duration: 3000,
+          })
+          dialog.clear()
+        }}
       />
     ))
   }
@@ -3086,6 +3133,14 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       onSelect: showPromptModes,
     },
     {
+      title: "Mode picker",
+      value: "agent.mode.picker",
+      keybind: "agent_mode_picker",
+      category: mendCategory,
+      suggested: true,
+      onSelect: showAgentModePicker,
+    },
+    {
       title: "Prompt chrome",
       value: "mendcode.prompt.chrome",
       category: mendCategory,
@@ -3255,20 +3310,23 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
     },
     {
-      title: "Memory status",
+      title: "Memory Manager",
       value: "mendcode.memory.status",
       category: mendCategory,
-      hidden: true,
-      slash: { name: "memory", aliases: ["mem"] },
-      onSelect: () => void showMemoryManager(),
+      suggested: true,
+      slash: { name: "memory-manager", aliases: ["mem", "memory"] },
+      onSelect: () => void showMemoryManager("proposals"),
     },
     {
-      title: "Memory Manager",
+      title: "Memory Center",
       value: "mendcode.memory.manager",
       category: mendCategory,
       suggested: true,
-      slash: { name: "memory", aliases: ["mem", "memories", "memory-manager"] },
-      onSelect: () => void showMemoryManager(),
+      slash: { name: "memory-center", aliases: ["memories"] },
+      onSelect: () => {
+        dialog.clear()
+        route.navigate({ type: "memory", returnTo: route.data.type === "session" ? { type: "session", sessionID: route.data.sessionID } : { type: "home" } })
+      },
     },
     {
       title: "Enable memory input",
@@ -3901,6 +3959,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           </Match>
           <Match when={route.data.type === "stats"}>
             <Stats />
+          </Match>
+          <Match when={route.data.type === "memory"}>
+            <Memory />
           </Match>
         </Switch>
       </Show>

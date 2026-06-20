@@ -19,6 +19,7 @@ import { useDialog } from "../ui/dialog"
 import { renderMendEditor } from "@/mend/tui/editor-host"
 import { asciiTextWidth, renderAsciiText, type HomeLogoFont } from "../component/ascii-text"
 import { homeMascotText } from "@/mend/tui/mascot"
+import { logo as mendLogo } from "@/cli/logo"
 import { Locale } from "@/util/locale"
 import { Global } from "@mendcode/core/global"
 import { Installation } from "@/installation"
@@ -67,6 +68,10 @@ function maxLineWidth(text: string | undefined) {
   return text.split("\n").reduce((max, line) => Math.max(max, line.length), 0)
 }
 
+function logoShapeWidth(shape: { left: string[]; right: string[] }) {
+  return shape.left.reduce((max, line, index) => Math.max(max, line.length + 1 + (shape.right[index]?.length ?? 0)), 0)
+}
+
 export function HomeSurface(props: {
   bind?: (ref: PromptRef | undefined) => void
   disabled?: boolean
@@ -111,7 +116,7 @@ export function HomeSurface(props: {
     const homeAscii = activeHomeAscii()
     if (homeAscii) return maxLineWidth(homeAscii)
     if (useProfileIdentityLogo()) return asciiTextWidth(mend.profile.identity.productName, logoFont())
-    return 18
+    return logoShapeWidth(mendLogo)
   })
   const showLogo = createMemo(() => {
     if (homeDensity() === "tiny") return false

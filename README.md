@@ -1,149 +1,409 @@
 # MendCode
 
-MendCode is a customizable coding-agent harness for the terminal. It packages the `mendcode` CLI, model-role configuration, permission policy, memory, reusable team packages, mflow coordination, optional TSM/worktree orchestration, and a highly customizable TUI into one MendCode-owned runtime.
+The customizable coding terminal.
 
-It is built for developers and teams who want their coding agent environment to match how they actually work: the models they trust, the prompts they use, the context they share, the permission posture they need, and the terminal interface they want to live in all day.
+[![Release](https://img.shields.io/github/v/release/MendCode/MendCode?style=flat&label=release)](https://github.com/MendCode/MendCode/releases)
+[![License](https://img.shields.io/github/license/MendCode/MendCode?style=flat)](LICENSE)
+[![Website](https://img.shields.io/badge/website-mendcode.online-111827)](https://www.mendcode.online/)
+[![Docs](https://img.shields.io/badge/docs-github-2563eb)](docs/README.md)
+[![PRs welcome](https://img.shields.io/badge/PRs-welcome-16a34a)](CONTRIBUTING.md)
 
-## Why MendCode
+MendCode is a terminal-first coding-agent harness you can make your own: a public
+`mendcode` CLI, configurable model roles, review gates, memory policy, reusable
+team packages, local workflow coordination, Usage Insights, and a TUI that can
+be shaped without patching runtime internals.
 
-- Configure the harness: choose provider/model defaults, model roles, prompt context modes, budget posture, permissions, memory behavior, and TUI profile without editing runtime internals.
-- Package your workflow: share `.mendcode` commands, agents, modes, skills, prompts, MCP files, widgets, plugins, themes, model policy, and worktree policy as reusable team packages.
-- Review before execution: Plan Mode renders a Markdown plan in an interactive TUI modal, lets you approve, edit, comment, or reject it, then switches to your configured implementation agent.
-- Coordinate local agents: use optional mflow locks and optional TSM/worktree flows when multiple sessions or worktrees need a safer operating model.
-- See the work: Usage Insights surfaces daily token activity, sessions, AI time, user prompts, token mix, top tools, top agents, top models, and optional Open-Meteo weather.
+[Website](https://www.mendcode.online/) · [Docs](docs/README.md) · [Feature map](docs/features.md) · [Acknowledgements](ACKNOWLEDGEMENTS.md)
+
+![MendCode README banner](docs/assets/banners/readme-hero-banner.png)
+
+## Contents
+
+- [Why It Exists](#why-it-exists)
+- [Install](#install)
+- [First Run](#first-run)
+- [Product Surfaces](#product-surfaces)
+- [Documentation Map](#documentation-map)
+- [Development](#development)
+- [Community And Security](#community-and-security)
+- [Star History](#star-history)
+- [For Agents](#for-agents)
+- [Lineage](#lineage)
+
+## Why It Exists
+
+Most coding agents give you a chat box. MendCode gives you the harness around it:
+
+| Need | MendCode surface |
+| --- | --- |
+| Make the terminal feel like your workflow | TUI profiles for prompt chrome, marker, status row, home identity, split home, Agent View, chat presentation, widgets, routes, dialogs, and themes. |
+| Share a tuned setup with a team | Runtime packages for commands, agents, modes, skills, prompts, MCP config, plugins, TUI profile, model roles, permissions, memory defaults, and worktree policy. |
+| Review before implementation | Plan Mode renders Markdown, including Mermaid when supported, inside a TUI review modal before switching to the implementation agent. |
+| Keep risky actions explicit | Permission modes, smart permission review, preview-first worktree actions, and approval-gated memory proposals. |
+| Route work to the right model | Model roles for planning, building, review, subagents, summaries, compaction, memory extraction, Dream, memory side chat, and permission review. |
+| Coordinate parallel terminal work | Optional mflow locks plus optional TSM/worktree orchestration for multi-session work. |
+| See local activity without cloud analytics | Usage Insights for tokens, sessions, AI time, prompt volume, changed files, top tools, top agents, top models, cache mix, and daily activity. |
+
+The short version: MendCode is not just "run a model in a terminal." It is a
+configurable coding terminal with packaging, review, memory, permissions, and
+coordination built into the workflow.
 
 ## Install
 
-Pick the command for your OS, then open a new terminal and run `mendcode`.
+Choose the row for your shell:
 
-<details open>
-<summary><strong>macOS</strong></summary>
+| Platform | Command |
+| --- | --- |
+| macOS / Linux | `curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install \| bash && mendcode` |
+| Windows PowerShell | `irm https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install.ps1 \| iex; mendcode` |
+| Windows Git Bash / MSYS2 / Cygwin / WSL | `curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install \| bash && mendcode` |
+| Pin a release | `curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install \| bash -s -- --version <version>` |
+| No shell startup edits | `curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install \| bash -s -- --no-modify-path && ~/.mendcode/bin/mendcode` |
+
+The public command is `mendcode`. Development checkouts may contain a local
+`mend` shim for legacy/internal workflows, but public docs, examples, and
+screenshots should use `mendcode`.
+
+## First Run
+
+After installation, open MendCode in your repo:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash
 mendcode
 ```
 
-The installer detects Apple Silicon vs Intel automatically and installs the latest release into `~/.mendcode/bin`.
-
-</details>
-
-<details>
-<summary><strong>Linux</strong></summary>
+On first launch, MendCode opens the setup screen. Use it to configure the
+harness once: provider/auth, model roles, budget posture, package state, TUI
+profile, prompt mode, memory, and permissions. After that, daily use is just:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash
 mendcode
 ```
 
-The installer detects x64 vs arm64, glibc vs musl/Alpine, and baseline CPU builds automatically.
+Useful commands after setup:
 
-</details>
-
-<details>
-<summary><strong>Windows PowerShell</strong></summary>
-
-```powershell
-irm https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install.ps1 | iex
-mendcode
-```
-
-The PowerShell installer detects x64, x64 baseline, and arm64 release assets automatically.
-
-</details>
-
-<details>
-<summary><strong>Windows Git Bash / WSL</strong></summary>
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash
-mendcode
-```
-
-Use this option if you already work from Git Bash, MSYS2, Cygwin, or WSL and want the same auto-detection flow as macOS/Linux.
-
-</details>
-
-To pin a specific version:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash -s -- --version <version>
-```
-
-To install without editing shell startup files:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash -s -- --no-modify-path
-```
-
-The public install contract is `mendcode`. Development checkouts may contain a local `mend` shim for legacy/internal workflows, but public docs, examples, and screenshots should use `mendcode`.
+| Command | Use it when |
+| --- | --- |
+| `mendcode run "review this repo and draft a plan"` | You want to open MendCode with an initial task ready. |
+| `mendcode chat "summarize current status"` | You want a quick control-plane turn without entering the full TUI. |
+| `mendcode status` / `mendcode doctor` | You want readiness or diagnostics. |
+| `mendcode setup status` | You want to inspect setup state after the guided setup screen. |
+| `mendcode packages status` | You want to inspect active team/runtime packages. |
+| `mendcode mflow status` | You are coordinating multiple agents around the same repo. |
+| `mendcode --worktree feature-branch` | You want to open MendCode against a branch/path/id worktree target. |
+| `mendcode --tsm feature-branch` | You want a TSM workspace with a MendCode split. |
 
 ## Product Surfaces
 
-### Terminal UI
+### Custom Terminal UI
 
-The TUI can be shaped from config or the command palette:
+MendCode turns the terminal into a profile instead of hardcoded chrome.
 
-- Prompt input frame: `box`, `top-bottom`, `minimal`, or `ascii-box`.
-- Prompt marker: examples include `❭`, `>`, `mendcode>`, `ship>`, or a team marker.
-- Prompt status: mode, model, provider, reasoning, context, permission mode, command hints, and script-backed custom status.
-- Home identity: generated ASCII title or custom ASCII mascot.
-- Home layout: centered welcome or split view with Agent View.
-- Agent View: background/global sessions grouped by needs-input, working, and completed state.
-- Chat presentation: raw, minimal, or MendCode activity-oriented rendering.
+![MendCode centered wordmark welcome](docs/assets/screenshots/home-wordmark-centered.png)
 
-Screenshot slots for the README:
+```jsonc
+{
+  "identity": {
+    "logoMode": "mascot",
+    "productName": "MendCode"
+  },
+  "surfaces": {
+    "homeWelcome": {
+      "mode": "split",
+      "rightPanel": "agentManager"
+    }
+  },
+  "promptChrome": {
+    "preset": "top-bottom",
+    "glyphs": {
+      "leadText": "mendcode>"
+    }
+  },
+  "promptStatus": {
+    "placementByPreset": {
+      "top-bottom": "outside",
+      "ascii-box": "inside"
+    }
+  }
+}
+```
 
-| Slot | Capture | Use |
-| --- | --- | --- |
-| `docs/assets/screenshots/home-agent-view.png` | Home split with Agent View and at least one working or needs-input session. | First visual proof that MendCode is more than a chat prompt. |
-| `docs/assets/screenshots/prompt-top-bottom.png` | `top-bottom` prompt with `mendcode>` marker and status row. | Show prompt chrome, marker, model/provider/context status. |
-| `docs/assets/screenshots/usage-insights.png` | Usage Insights global dashboard. | Show product telemetry without ROI claims. |
+Configurable surfaces include prompt frame, prompt marker, status row, home
+title or mascot, centered/split home layout, Agent View, chat presentation,
+activity states, widgets, slots, custom routes, dialogs, footer entries, and
+themes.
 
-Do not add these image links until the files exist; broken screenshots make the README look less ready than no screenshots.
+![MendCode centered Agent View](docs/assets/screenshots/home-wordmark-agent-view-centered.png)
+
+Most visual changes are reachable from the command palette:
+
+```text
+Ctrl+P -> Home identity
+Ctrl+P -> Home welcome mode
+Ctrl+P -> Home split panel
+Ctrl+P -> Prompt chrome
+Ctrl+P -> Prompt lead string
+Ctrl+P -> Prompt status placement
+Ctrl+P -> Chat presentation
+Ctrl+P -> Usage Insights
+```
+
+### Package Your Harness
+
+A MendCode package captures the reusable parts of a team setup:
+
+```text
+.mendcode/
+  agents/
+  commands/
+  modes/
+  skills/
+  prompts/
+  plugins/
+  tui/
+  widgets/
+```
+
+Packages can include MCP config, context docs, scripts, TUI profiles, theme
+tokens, model roles, focus defaults, budget posture, permission defaults,
+memory defaults, and worktree policy.
+
+Packages must not include provider tokens, OAuth state, `.env*`,
+`.mendcode/auth`, local databases, room secrets, or machine-local cache/run
+state.
+
+```bash
+mendcode packages create --id acme-standard --title "Acme Standard" --include skills,modes,plugins
+mendcode packages list
+mendcode packages install acme-standard
+mendcode packages enable acme-standard
+```
 
 ### Plan Mode
 
-Plan Mode turns planning into an explicit review step. MendCode renders the plan in a TUI modal, including Markdown and Mermaid/flowcharts when supported. Approve it, edit it, add implementation comments, or reject it. When approved, MendCode switches to the configured implementation agent and continues from the reviewed plan.
+Plan Mode is for users who want the agent to think first without silently
+editing files.
+
+![MendCode Plan Mode review modal](docs/assets/screenshots/plan-review-modal.png)
+
+1. The planning agent researches and writes a Markdown plan.
+2. MendCode renders the plan in a TUI modal.
+3. The user can approve, edit, comment, reject, or close.
+4. Approval switches into the configured implementation agent.
+5. The reviewed Markdown becomes the source of truth for implementation.
 
 See [Plan Mode](docs/plan-mode.md).
 
+### Memory With Control
+
+MendCode memory is approval-first by design. It can retrieve useful project
+context without turning every session into permanent state.
+
+![MendCode Memory Center overview](docs/assets/screenshots/memory-center-overview.png)
+
+- global and project scopes
+- explicit `mendcode memory add`
+- `mendcode memory search` and `mendcode memory preview`
+- generated memory proposals
+- apply, reject, and edit proposal flow
+- transient prompt injection through bounded memory context
+
+The Memory Center view brings saved memories, pending proposals, categories,
+Dream state, project grouping, and a constrained memory side chat into one
+reviewable workspace. See [Memory Center](docs/memory-center.md).
+
 ### Usage Insights
 
-Usage Insights is a TUI dashboard for local activity: daily token heatmap, global/project scope, token mix, sessions, AI generation time, user prompt volume, changed files, top tools, top agents, top models, cached stats loading, and optional weather.
+Usage Insights is local observability for the coding harness, not cloud
+analytics and not a productivity claim.
+
+It can show global/project/directory scope, token heatmaps, sessions, active
+days, prompt volume, AI generation time, tool runtime, changed files, top tools,
+top agents, top models, cache mix, and optional weather.
 
 See [Usage Insights](docs/usage-insights.md).
 
-## Documentation
+### Coordination: mflow, TSM, Worktrees
 
-- [Docs index](docs/README.md): start by user journey.
-- [CLI, setup, and configuration](docs/cli-setup-configuration.md): install/open commands, setup state, config paths, focus profiles, model roles, prompt modes, permissions, and memory.
-- [Customization](docs/customization.md): prompt input, input marker, home centered/split modes, Agent View, ASCII title/mascot, activity events, screenshot capture plan, and team profile examples.
-- [Plan Mode](docs/plan-mode.md): plan review modal, approve/edit/comment/reject flow, and post-approval implementation mode.
-- [Usage Insights](docs/usage-insights.md): dashboard fields, scopes, shortcuts, weather, and screenshot plan.
-- [Packages and team sharing](docs/packages-and-team-sharing.md): package your harness for a team.
-- [TUI plugins and widgets](docs/tui-plugins-and-widgets.md): plugin entrypoints, slots, widgets, routes, dialogs, footer/status entries, and package distribution.
-- [mflow coordination](docs/mflow.md): optional same-worktree coordination and local edit locks.
-- [TSM and worktrees](docs/tsm-and-worktrees.md): optional TSM/worktree flow with preview-first safety.
-- [Architecture and packages](docs/architecture.md): source layout, runtime boundary, and MendCode-owned subsystems.
-- [Releasing](docs/releasing.md), [Supply chain security](docs/supply-chain-security.md), [Community](docs/community.md), [Public readiness audit](docs/public-readiness-audit.md).
-- [Lineage and acknowledgements](ACKNOWLEDGEMENTS.md): opencode attribution and MendCode downstream scope.
+MendCode includes optional coordination for people running multiple terminal
+sessions around the same codebase.
 
-## Example TUI Setup
+| Surface | Purpose |
+| --- | --- |
+| mflow | Local-first coordination, room activation, daemon status, and edit locks. |
+| Worktrees | Preview-first creation, adoption, opening, reset, and removal of git worktrees. |
+| TSM | Optional terminal-session workspace setup for MendCode panes. |
 
-A good power-user setup is:
+```bash
+mendcode mflow setup
+mendcode worktree plan feature-branch
+mendcode worktree create feature-branch
+mendcode tsm setup
+```
 
-- `identity.logoMode: "mascot"`
-- `surfaces.homeWelcome.mode: "split"`
-- `surfaces.homeWelcome.rightPanel: "agentManager"`
-- `promptChrome.preset: "top-bottom"` or `"ascii-box"`
-- `promptChrome.glyphs.leadText: "mendcode>"`
-- `promptStatus.placementByPreset["top-bottom"]: "outside"`
-- a compact custom bottom status script for branch, package, provider, context, and permissions
-- command hints hidden unless you want reminders
+## Documentation Map
 
-That gives you a mascot/title identity, live agent/session state, and a clean prompt surface at the bottom. Use `Ctrl+P` to open the command palette and search for Home, Prompt, Presentation, Agent, Status, or Usage Insights commands.
+| If you want to... | Read |
+| --- | --- |
+| Understand the whole product surface | [Feature map](docs/features.md) |
+| Install, configure, and check readiness | [CLI, setup, and configuration](docs/cli-setup-configuration.md) |
+| Shape the visual terminal experience | [Customization](docs/customization.md) |
+| Share team packages | [Packages and team sharing](docs/packages-and-team-sharing.md) |
+| Extend the TUI with code | [TUI plugins and widgets](docs/tui-plugins-and-widgets.md) |
+| Use plan review gates | [Plan Mode](docs/plan-mode.md) |
+| Inspect local activity | [Usage Insights](docs/usage-insights.md) |
+| Coordinate multi-session work | [mflow](docs/mflow.md), [TSM and worktrees](docs/tsm-and-worktrees.md) |
+| Understand source layout and ownership | [Architecture](docs/architecture.md) |
+| Release safely | [Releasing](docs/releasing.md), [Supply chain security](docs/supply-chain-security.md) |
+
+## Development
+
+This repository contains the MendCode-owned runtime under `src/mendcode/`.
+Focused development usually happens in `src/mendcode/packages/opencode`.
+
+Useful commands from an existing checkout:
+
+```bash
+cd src/mendcode/packages/opencode
+bun test --timeout 30000
+bun run typecheck
+bun run build
+```
+
+The root `src/mendcode` package intentionally does not use `bun test` as the
+normal test entrypoint; run focused tests from the package that owns the change.
+
+## Community And Security
+
+- [Contributing](CONTRIBUTING.md): local development, PR expectations, and review flow.
+- [Security policy](SECURITY.md): supported reporting path for security issues.
+- [Community docs](docs/community.md): issues, discussions, labels, and contribution guidance.
+- [Release process](docs/releasing.md): release assets, checksums, installer smoke tests, and public promotion.
+- [Supply chain security](docs/supply-chain-security.md): provenance, dependency review, scanners, and release hardening.
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=MendCode/MendCode&type=Date)](https://www.star-history.com/#MendCode/MendCode&Date)
+
+## For Agents
+
+<details>
+<summary><strong>Open MendCode repo context for coding agents</strong></summary>
+
+This block is intentionally visible only when expanded in GitHub Markdown. It
+exists so coding agents that read the README get MendCode context before editing
+docs, website copy, CLI help, screenshots, or public claims. Treat this as
+context, then verify live code before changing behavior.
+
+### Public identity
+
+- Product name: MendCode.
+- Public command: `mendcode`.
+- Local development checkouts may include a legacy `mend` shim. Public docs,
+  examples, screenshots, release notes, website copy, and user-facing commands
+  should use `mendcode` unless the router contract changes.
+- MendCode is a downstream project built on opencode, with attribution in
+  [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md). Do not present it as a simple
+  rename.
+
+### Public CLI contract
+
+- Source of truth: `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`.
+- Re-run public help before adding command examples.
+- Primary public surfaces include opening the TUI, `run`, `chat`, `status`,
+  `doctor`, `setup`, `packages`, `mflow`, `worktree`, and `tsm`.
+- Support surfaces include `models`, `providers`, `auth`, `permissions`,
+  `memory`, and `focus`.
+- Internal debug surfaces such as `adapter`, `ai`, `bench`, `budget`, `config`,
+  `context`, `export`, `mcp`, `prompt`, `prompts`, `runtime`, `toolchain`,
+  `tui`, and `upstream` should not be marketed as normal user workflows.
+
+### Core product story
+
+- MendCode is the customizable coding terminal: CLI, TUI, setup flow, model
+  roles, permission policy, memory, runtime packages, Plan Mode, Usage Insights,
+  optional mflow coordination, optional TSM and worktree orchestration, widgets,
+  plugins, and TUI profiles.
+- The pitch is not another chat prompt. The pitch is a configurable harness:
+  prompt chrome, status rows, model roles, memory policy, team packages,
+  workflow coordination, review gates, and local observability.
+
+### TUI customization
+
+- Main user-facing docs: [Customization](docs/customization.md) and
+  [TUI plugins and widgets](docs/tui-plugins-and-widgets.md).
+- Profile path: `.mendcode/tui/profile.json`.
+- Key surfaces: prompt frame, prompt lead string, prompt status row, home title,
+  mascot mode, centered home, split home, Agent View, chat presentation,
+  activity states, widgets, slots, custom routes, dialogs, footer entries,
+  themes, density, and package-distributed UI behavior.
+- Good demo profile: mascot identity, split home, `agentManager` right panel,
+  `top-bottom` prompt chrome, `mendcode>` lead text, and outside prompt status.
+
+### Packages
+
+- Main docs: [Packages and team sharing](docs/packages-and-team-sharing.md).
+- Packages can include commands, agents, modes, skills, prompts, MCP config,
+  context docs, scripts, plugins, widgets, components, TUI profile, themes,
+  model roles, focus defaults, budget posture, permission defaults, memory
+  defaults, and worktree policy.
+- Packages must not include provider tokens, OAuth state, `.env*`, auth state,
+  local databases, room secrets, or machine-local run/cache state.
+
+### Review, memory, and safety
+
+- Plan Mode is an explicit review gate before implementation.
+- Memory is approval-first: global/project scopes, explicit add/search/preview
+  flows, generated proposals, and apply/reject/edit review.
+- Memory page, categories, graph, Dream, and side chat belong to the local
+  memory work and should be promoted publicly only after validation.
+- Usage Insights is local observability, not cloud analytics and not a
+  productivity guarantee.
+- Smart permissions can route risky actions through a configured reviewer role.
+
+### Coordination
+
+- mflow is optional local-first coordination and lock/status support.
+- Worktree and TSM flows are optional terminal/worktree orchestration.
+- Destructive worktree actions should stay preview-first and gated.
+
+### Documentation map
+
+- [Feature map](docs/features.md): product inventory for README, website,
+  screenshots, and demos.
+- [Docs index](docs/README.md): user journey index.
+- [CLI, setup, and configuration](docs/cli-setup-configuration.md): setup,
+  config, models, permissions, and memory.
+- [Customization](docs/customization.md): static TUI profile and visual
+  customization.
+- [TUI plugins and widgets](docs/tui-plugins-and-widgets.md): dynamic TUI
+  extension points.
+- [Plan Mode](docs/plan-mode.md): plan review flow.
+- [Usage Insights](docs/usage-insights.md): local activity dashboard.
+- [mflow](docs/mflow.md): local-first coordination.
+- [TSM and worktrees](docs/tsm-and-worktrees.md): terminal/worktree orchestration.
+- [Architecture](docs/architecture.md): source layout and ownership boundaries.
+- [Releasing](docs/releasing.md) and
+  [Supply chain security](docs/supply-chain-security.md): release and supply
+  chain policy.
+
+### Public copy rules
+
+- Keep docs provider-neutral unless a user explicitly asks for provider-specific
+  examples.
+- Avoid aspirational feature claims without a source path, validated behavior,
+  or clearly marked local work.
+- Prefer factual capability wording over behavioral prompt instructions.
+- If code contradicts this block, the code wins.
+
+</details>
 
 ## Lineage
 
-MendCode is a downstream project built on the opencode codebase. It is not presented as a simple fork: MendCode adds its own `mendcode` CLI surface, control plane, setup flow, package system, mflow coordination, optional TSM/worktree orchestration, Plan Mode review flow, Usage Insights dashboard, memory policy, model-role projection, and terminal UI customization layer. See [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) for attribution.
+MendCode is a downstream project built on the opencode codebase. It is not
+presented as a simple fork: MendCode adds its own `mendcode` CLI surface,
+control plane, setup flow, package system, mflow coordination, optional
+TSM/worktree orchestration, Plan Mode review flow, Usage Insights dashboard,
+memory policy, model-role projection, and terminal UI customization layer.
+
+See [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) for attribution.

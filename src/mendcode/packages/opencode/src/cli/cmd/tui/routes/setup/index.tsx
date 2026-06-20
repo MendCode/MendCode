@@ -57,11 +57,13 @@ const baseModelRoleOrder = [
   "compaction",
   "summary",
   "memoryExtractor",
+  "memoryDream",
+  "memoryAssistant",
   "permissionReviewer",
 ] as const
 type SetupModelRole = string
 const primaryModelRoles = ["default", "build", "plan", "review"] as const
-const internalModelRoles = ["subagent", "small", "title", "compaction", "summary", "memoryExtractor", "permissionReviewer"] as const
+const internalModelRoles = ["subagent", "small", "title", "compaction", "summary", "memoryExtractor", "memoryDream", "memoryAssistant", "permissionReviewer"] as const
 const promptModes: MendPromptMode[] = ["minimal", "focus", "full"]
 const promptModeDetails: Record<MendPromptMode, { summary: string; runtime: string; adds: string }> = {
   minimal: {
@@ -93,6 +95,10 @@ const roleDescriptions: Record<string, string> = {
   summary: "Hidden runtime summary agent for session summary metadata.",
   memoryExtractor:
     "Background model that reviews completed turns and proposes only durable memories worth approval.",
+  memoryDream:
+    "Background model for manual/scheduled memory maintenance that writes reviewable proposals only.",
+  memoryAssistant:
+    "Memory page side-chat assistant that answers memory questions and can draft reviewable proposals only.",
   permissionReviewer:
     "Hidden permission reviewer model that quickly checks risky shell permission prompts in Smart Approval.",
 }
@@ -107,6 +113,8 @@ const roleLabels: Record<string, string> = {
   compaction: "Context compaction",
   summary: "Session summaries",
   memoryExtractor: "Memory extractor",
+  memoryDream: "Memory Dream",
+  memoryAssistant: "Memory side chat",
   permissionReviewer: "Permission reviewer",
 }
 
@@ -148,6 +156,19 @@ export function setupLabelValueLine(label: string, value: string, max = 88) {
 export function setupExtractorAuthMessage(value: string) {
   if (value.includes("OAuth token expired")) {
     return "OAuth expired; re-auth OpenAI or set MENDCODE_OPENAI_OAUTH_CLIENT_ID/OPENAI_OAUTH_CLIENT_ID."
+  }
+  return value
+}
+
+export function setupProviderAuthMessage(value: string) {
+  if (value.includes("OAuth token expired")) {
+    return "OAuth expired; re-auth OpenAI or set MENDCODE_OPENAI_OAUTH_CLIENT_ID/OPENAI_OAUTH_CLIENT_ID so MendCode can refresh it."
+  }
+  if (value.includes("missing env:OPENAI_API_KEY")) {
+    return "No OPENAI_API_KEY is visible to this MendCode runtime."
+  }
+  if (value.includes("missing usable OpenAI auth state")) {
+    return "OpenAI needs usable OAuth or API key auth before background helpers can run."
   }
   return value
 }
@@ -322,13 +343,22 @@ export function Setup() {
         options={providerOptions().map((option) => ({
           ...option,
           gutter: option.value === currentProviderID() ? undefined : option.gutter,
-          onSelect: async (activeDialog) => {
-            if (!(auth?.mendRunReady && auth?.providerID === option.value)) {
+          onSelect: async () => {
+            const alreadyReady = auth?.mendRunReady && auth?.providerID === option.value
+            if (!alreadyReady) {
               await option.onSelect?.()
             }
-            await mark("provider")
             reload()
-            toast.show({ variant: "success", message: "Provider step accepted.", duration: 3000 })
+            if (alreadyReady) {
+              await mark("provider")
+              toast.show({ variant: "success", message: "Provider step accepted.", duration: 3000 })
+              return
+            }
+            toast.show({
+              variant: "warning",
+              message: "Provider auth must be ready before this step is complete.",
+              duration: 5000,
+            })
           },
         }))}
       />
@@ -1305,12 +1335,14 @@ export function Setup() {
   )
   const providerReady = createMemo(() => {
     const status = auth()
-    if (status?.providerID) return status.mendRunReady === true
+    if (status?.providerID) return status.mendRunReady === true || connectedProviderIDs().includes(status.providerID)
     return connectedProviderIDs().length > 0
   })
   const providerStatusText = createMemo(() => {
-    if (auth()?.mendRunReady) return "ready"
-    if (auth()?.providerID) return "auth blocked"
+    const status = auth()
+    if (status?.mendRunReady) return "ready"
+    if (status?.providerID && connectedProviderIDs().includes(status.providerID)) return "ready via connected provider"
+    if (status?.providerID) return "auth blocked"
     if (connectedProviderIDs().length > 0) return "available via stored runtime auth"
     return "incomplete"
   })
@@ -1377,6 +1409,7 @@ export function Setup() {
             budget: budget()?.enforcement?.state,
             packageTitle: setupSummary()?.pkg.title || setupSummary()?.pkg.id || undefined,
             authReady: providerReady(),
+            authBlocked: Boolean(auth()?.providerID && !providerReady()),
             memory: setupSummary()?.memory.enabled ? (setupSummary()?.memory.use ? "on" : "stored") : "off",
             permissions:
               setupSummary()?.permissions.mode === "full_access" ? "full" : setupSummary()?.permissions.mode || "approval",
@@ -1390,14 +1423,27 @@ export function Setup() {
         <box
           flexGrow={1}
           minWidth={0}
+          minHeight={0}
           borderColor={theme.border}
           borderStyle="single"
           paddingLeft={1}
           paddingRight={1}
           paddingTop={1}
         >
-          <Show when={setupSummary()} fallback={<text fg={theme.textMuted}>Loading setup state...</text>}>
-            <Switch>
+          <scrollbox
+            flexGrow={1}
+            minHeight={0}
+            horizontalScrollbarOptions={{ visible: false }}
+            verticalScrollbarOptions={{
+              visible: narrow(),
+              trackOptions: {
+                backgroundColor: theme.backgroundPanel,
+                foregroundColor: theme.border,
+              },
+            }}
+          >
+            <Show when={setupSummary()} fallback={<text fg={theme.textMuted}>Loading setup state...</text>}>
+              <Switch>
               <Match when={active() === "provider"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme.primary}>Provider</text>
@@ -1405,6 +1451,23 @@ export function Setup() {
                   <text>
                     Auth: {providerStatusText()} · {auth()?.authMode || "not pinned in project config"}
                   </text>
+                  <Show when={!providerReady() && auth()?.blockers?.length}>
+                    <box flexDirection="column" gap={0}>
+                      <text fg={theme.warning}>Why blocked:</text>
+                      <For each={(auth()?.blockers || []).slice(0, 3)}>
+                        {(blocker) => (
+                          <text fg={theme.warning}>
+                            {truncateSetupText(setupProviderAuthMessage(String(blocker)), promptPanelWidth())}
+                          </text>
+                        )}
+                      </For>
+                    </box>
+                  </Show>
+                  <Show when={!providerReady()}>
+                    <text fg={theme.textMuted}>
+                      Re-auth in Provider or expose the credential to the runtime, then reopen Setup.
+                    </text>
+                  </Show>
                   <Show when={!auth()?.providerID && connectedProviderNames().length > 0}>
                     <text fg={theme.textMuted}>
                       Runtime already has stored auth for {connectedProviderNames().join(", ")}, but no global default
@@ -1574,6 +1637,9 @@ export function Setup() {
               <Match when={active() === "memory"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme.primary}>Memory</text>
+                  <text>
+                    Config scope: {setupSummary()?.memory.configScope === "project" ? "project override" : "global defaults"}
+                  </text>
                   <text>Enabled: {setupSummary()?.memory.enabled ? "yes" : "no"}</text>
                   <text>Input memory: {setupSummary()?.memory.use ? "on" : "off"}</text>
                   <text>Memory learning: {setupSummary()?.memory.generate ? "on" : "off"} · {memoryLearningStatus()}</text>
@@ -1597,6 +1663,12 @@ export function Setup() {
                     </text>
                   </Show>
                   <text>Consolidation model: {setupSummary()?.memory.consolidatorRole || "none"} · no background spend</text>
+                  <text>
+                    Dream model: {setupSummary()?.memory.memoryDreamRole || "memoryDream"} · manual/scheduled runs write proposals only
+                  </text>
+                  <text>
+                    Side chat model: {setupSummary()?.memory.memoryAssistantRole || "memoryAssistant"} · no shell/git/source edits
+                  </text>
                   <text>Scopes: {setupSummary()?.memory.scopes.join(", ")}</text>
                   <text>
                     Stored entries: global {setupSummary()?.memory.entries.global.count}, project{" "}
@@ -1638,9 +1710,9 @@ export function Setup() {
                   <text fg={theme.textMuted}>Enter changes the global default in your MendCode config.</text>
                 </box>
               </Match>
-            </Switch>
-          </Show>
-          <box flexGrow={1} />
+              </Switch>
+            </Show>
+          </scrollbox>
           <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
             <text fg={theme.textMuted}>
               Required: provider, models, budget, prompt · optional: package, tui, memory, permissions

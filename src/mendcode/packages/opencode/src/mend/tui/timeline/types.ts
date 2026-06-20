@@ -30,6 +30,7 @@ export type TimelineRow = {
   id: string
   state: TimelineToolState
   title: string
+  lines?: string[]
   tool?: string
   class?: TimelineToolClass
 }
@@ -38,6 +39,7 @@ export type TimelineCollapse = {
   type: "collapse"
   id: string
   count: number
+  rows: TimelineRow[]
 }
 
 export type TimelineEvent =

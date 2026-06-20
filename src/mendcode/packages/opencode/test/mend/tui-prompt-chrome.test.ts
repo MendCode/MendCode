@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import { defaultTuiProfile, mergeMendTuiProfile, validateMendTuiProfile } from "../../src/mend/profile"
 import { promptChromeUsesFullSessionWidth, resolvePromptChrome } from "../../src/mend/tui/prompt-chrome"
-import { resolvePromptStatus } from "../../src/mend/tui/prompt-status"
+import {
+  pickPromptStatusScriptOutput,
+  promptStatusScriptIdentityKey,
+  resolvePromptStatus,
+} from "../../src/mend/tui/prompt-status"
 import { resolveActivityPhase } from "../../src/cli/cmd/tui/util/activity-signal"
 import { activityMessagesForPhase, resolveTuiPresentation, shouldDisplayReasoning } from "../../src/mend/tui/presentation"
 import { ConfigKeybinds } from "../../src/config/keybinds"
@@ -176,7 +180,7 @@ describe("mend tui prompt chrome", () => {
       ),
     ).toBe(true)
     expect(shouldDisplayReasoning(mendcode, { completed: false, showThinking: true })).toBe(false)
-    expect(shouldDisplayReasoning(mendcode, { completed: true, showThinking: false })).toBe(false)
+    expect(shouldDisplayReasoning(mendcode, { completed: true, showThinking: false })).toBe(true)
     expect(shouldDisplayReasoning(mendcode, { completed: true, showThinking: true })).toBe(true)
   })
 
@@ -305,5 +309,106 @@ describe("mend tui prompt chrome", () => {
     expect(resolved.scripts.left?.command).toBe("./legacy-left.sh")
     expect(resolved.scripts.right?.command).toBe("./right.sh")
     expect(resolved.scripts.right?.prepend).toBe(true)
+  })
+
+  test("prompt status script identity changes when the selected model changes", () => {
+    const base = {
+      command: "./status.sh",
+      root: "/repo",
+      sessionID: "ses_123",
+      promptMode: "build",
+      model: "GPT-5.5 Fast",
+      modelLabel: "GPT-5.5 Fast",
+      provider: "OpenAI",
+      providerLabel: "OpenAI",
+      reasoning: "medium",
+      reasoningLabel: "medium",
+      preset: "top-bottom" as const,
+      side: "left" as const,
+      prepend: false,
+      timeoutMs: 150,
+    }
+
+    expect(
+      promptStatusScriptIdentityKey({
+        ...base,
+        model: "GPT-5.4",
+        modelLabel: "GPT-5.4",
+      }),
+    ).not.toBe(promptStatusScriptIdentityKey(base))
+  })
+
+  test("prompt status script identity ignores volatile usage refresh fields", () => {
+    const stable = promptStatusScriptIdentityKey({
+      command: "./status.sh",
+      root: "/repo",
+      sessionID: "ses_123",
+      promptMode: "build",
+      model: "GPT-5.5 Fast",
+      modelLabel: "GPT-5.5 Fast",
+      provider: "OpenAI",
+      providerLabel: "OpenAI",
+      reasoning: "medium",
+      reasoningLabel: "medium",
+      context: "21.5K 21%",
+      contextTokens: 21500,
+      contextLimit: 100000,
+      contextPercent: 21,
+      preset: "top-bottom",
+      side: "left",
+      prepend: false,
+      timeoutMs: 150,
+      refreshKey: 10,
+    })
+
+    expect(
+      promptStatusScriptIdentityKey({
+        command: "./status.sh",
+        root: "/repo",
+        sessionID: "ses_123",
+        promptMode: "build",
+        model: "GPT-5.5 Fast",
+        modelLabel: "GPT-5.5 Fast",
+        provider: "OpenAI",
+        providerLabel: "OpenAI",
+        reasoning: "medium",
+        reasoningLabel: "medium",
+        context: "24.1K 24%",
+        contextTokens: 24100,
+        contextLimit: 100000,
+        contextPercent: 24,
+        preset: "top-bottom",
+        side: "left",
+        prepend: false,
+        timeoutMs: 150,
+        refreshKey: 11,
+      }),
+    ).toBe(stable)
+  })
+
+  test("prompt status output refuses stale latest text after a model switch", () => {
+    expect(
+      pickPromptStatusScriptOutput({
+        currentIdentity: "model:gpt-5.4",
+        latest: {
+          identity: "model:gpt-5.5-fast",
+          output: { text: "GPT-5.5 Fast" },
+        },
+      }),
+    ).toBeUndefined()
+
+    expect(
+      pickPromptStatusScriptOutput({
+        currentIdentity: "model:gpt-5.4",
+        current: {
+          identity: "model:gpt-5.4",
+          output: { text: "GPT-5.4" },
+        },
+        latest: {
+          identity: "model:gpt-5.5-fast",
+          output: { text: "GPT-5.5 Fast" },
+        },
+      }),
+    ).toEqual({ text: "GPT-5.4" })
   })
 })

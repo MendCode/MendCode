@@ -141,6 +141,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             modelID: string
           }
         >
+        modelSource: Record<string, "user" | "hydrated" | undefined>
+        modelUpdatedAt: Record<string, number | undefined>
         recent: {
           providerID: string
           modelID: string
@@ -150,14 +152,20 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           modelID: string
         }[]
         variant: Record<string, string | undefined>
+        variantSource: Record<string, "user" | "hydrated" | undefined>
+        variantUpdatedAt: Record<string, number | undefined>
       }>({
         ready: false,
         mendDefault: undefined,
         mendRoles: {},
         model: {},
+        modelSource: {},
+        modelUpdatedAt: {},
         recent: [],
         favorite: [],
         variant: {},
+        variantSource: {},
+        variantUpdatedAt: {},
       })
 
       const filePath = path.join(Global.Path.state, "model.json")
@@ -298,14 +306,32 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         )
       })
 
+      function variantScopeKey(model: { providerID: string; modelID: string } | undefined) {
+        if (!model) return undefined
+        const scope = scopedModelKey()
+        return scope ? `${scope}:${model.providerID}/${model.modelID}` : `${model.providerID}/${model.modelID}`
+      }
+
       return {
         current: currentModel,
         override() {
           const key = scopedModelKey()
           if (!key) return undefined
+          if (modelStore.modelSource[key] !== "user") return undefined
           const model = modelStore.model[key]
           if (!model || !isModelValid(model)) return undefined
           return model
+        },
+        overrideInfo() {
+          const key = scopedModelKey()
+          if (!key) return undefined
+          if (modelStore.modelSource[key] !== "user") return undefined
+          const model = modelStore.model[key]
+          if (!model || !isModelValid(model)) return undefined
+          return {
+            model,
+            updatedAt: modelStore.modelUpdatedAt[key] ?? 0,
+          }
         },
         get ready() {
           return modelStore.ready
@@ -346,7 +372,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (!val) return
           const key = scopedModelKey()
           if (!key) return
-          setModelStore("model", key, { ...val })
+            setModelStore("model", key, { ...val })
+            setModelStore("modelSource", key, "user")
+            setModelStore("modelUpdatedAt", key, Date.now())
         },
         cycleFavorite(direction: 1 | -1) {
           const favorites = modelStore.favorite.filter((item) => isModelValid(item))
@@ -375,6 +403,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const key = scopedModelKey()
           if (!key) return
           setModelStore("model", key, { ...next })
+          setModelStore("modelSource", key, "user")
+          setModelStore("modelUpdatedAt", key, Date.now())
           const uniq = uniqueBy([next, ...modelStore.recent], (x) => `${x.providerID}/${x.modelID}`)
           if (uniq.length > 10) uniq.pop()
           setModelStore(
@@ -383,7 +413,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           )
           save()
         },
-        set(model: { providerID: string; modelID: string }, options?: { recent?: boolean; ifUnset?: boolean }) {
+        set(
+          model: { providerID: string; modelID: string },
+          options?: { recent?: boolean; ifUnset?: boolean; source?: "user" | "hydrated" },
+        ) {
           let updated = false
           batch(() => {
             if (!isModelValid(model)) {
@@ -397,7 +430,19 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             const key = scopedModelKey()
             if (!key) return
             if (options?.ifUnset && modelStore.model[key]) return
+            const source = options?.source ?? "user"
+            const existing = modelStore.model[key]
+            if (
+              source === "hydrated" &&
+              modelStore.modelSource[key] === "user" &&
+              existing &&
+              (existing.providerID !== model.providerID || existing.modelID !== model.modelID)
+            ) {
+              return
+            }
             setModelStore("model", key, model)
+            if (source === "user" || modelStore.modelSource[key] !== "user") setModelStore("modelSource", key, source)
+            if (source === "user") setModelStore("modelUpdatedAt", key, Date.now())
             updated = true
             if (options?.recent) {
               const uniq = uniqueBy([model, ...modelStore.recent], (x) => `${x.providerID}/${x.modelID}`)
@@ -435,13 +480,39 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           })
         },
         variant: {
-          selected() {
-            const m = currentModel()
+          hasOverride(model?: { providerID: string; modelID: string }) {
+            const key = variantScopeKey(model ?? currentModel())
+            if (!key) return false
+            return modelStore.variantSource[key] === "user"
+          },
+          overrideInfo(model?: { providerID: string; modelID: string }) {
+            const key = variantScopeKey(model ?? currentModel())
+            if (!key) return undefined
+            if (modelStore.variantSource[key] !== "user") return undefined
+            const raw = modelStore.variant[key]
+            return {
+              variant: raw === "default" ? undefined : raw,
+              updatedAt: modelStore.variantUpdatedAt[key] ?? 0,
+            }
+          },
+          override(model?: { providerID: string; modelID: string }) {
+            const key = variantScopeKey(model ?? currentModel())
+            if (!key) return undefined
+            if (modelStore.variantSource[key] !== "user") return undefined
+            if (modelStore.variant[key]) {
+              const value = modelStore.variant[key]
+              return value === "default" ? undefined : value
+            }
+            if (modelStore.variant[key] === "default") return undefined
+            return undefined
+          },
+          selected(model?: { providerID: string; modelID: string }) {
+            const m = model ?? currentModel()
             if (!m) return undefined
             const a = agent.current()
-            const scope = scopedModelKey()
-            const key = scope ? `${scope}:${m.providerID}/${m.modelID}` : `${m.providerID}/${m.modelID}`
-            if (modelStore.variant[key]) {
+            const key = variantScopeKey(m)
+            if (!key) return undefined
+            if (modelStore.variant[key] !== undefined) {
               const value = modelStore.variant[key]
               return value === "default" ? undefined : value
             }
@@ -449,27 +520,45 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             if (role?.providerID === m.providerID && role.modelID === m.modelID) return role.variant ?? undefined
             return undefined
           },
-          current() {
-            const v = this.selected()
+          current(model?: { providerID: string; modelID: string }) {
+            const v = this.selected(model)
             if (!v) return undefined
-            if (!this.list().includes(v)) return undefined
+            if (!this.list(model).includes(v)) return undefined
             return v
           },
-          list() {
-            const m = currentModel()
+          list(model?: { providerID: string; modelID: string }) {
+            const m = model ?? currentModel()
             if (!m) return []
             const provider = sync.data.provider.find((x) => x.id === m.providerID)
             const info = provider?.models[m.modelID]
             if (!info?.variants) return []
             return Object.keys(info.variants)
           },
-          set(value: string | undefined, options?: { ifUnset?: boolean }) {
-            const m = currentModel()
+          set(
+            value: string | undefined,
+            options?: {
+              ifUnset?: boolean
+              source?: "user" | "hydrated"
+              model?: { providerID: string; modelID: string }
+            },
+          ) {
+            const m = options?.model ?? currentModel()
             if (!m) return
             const scope = scopedModelKey()
             const key = scope ? `${scope}:${m.providerID}/${m.modelID}` : `${m.providerID}/${m.modelID}`
             if (options?.ifUnset && modelStore.variant[key] !== undefined) return
+            const source = options?.source ?? "user"
+            if (
+              source === "hydrated" &&
+              modelStore.variantSource[key] === "user" &&
+              modelStore.variant[key] !== undefined &&
+              modelStore.variant[key] !== (value ?? "default")
+            ) {
+              return
+            }
             setModelStore("variant", key, value ?? "default")
+            if (source === "user" || modelStore.variantSource[key] !== "user") setModelStore("variantSource", key, source)
+            if (source === "user") setModelStore("variantUpdatedAt", key, Date.now())
           },
           cycle() {
             const variants = this.list()

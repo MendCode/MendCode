@@ -31,6 +31,7 @@ import { useKeybind } from "@tui/context/keybind"
 import { usePromptHistory, type PromptInfo } from "./history"
 import { computePromptTraits } from "./traits"
 import { resolveActivePromptAgentName, resolveSelectedPromptModel, resolveSelectedPromptVariant } from "./agent"
+import * as Model from "../../util/model"
 import { assign } from "./part"
 import {
   DEFAULT_PASTE_SUMMARY_MIN_CHARS,
@@ -84,10 +85,13 @@ import {
   usableContextLimit,
 } from "../../util/usage"
 import {
+  pickPromptStatusScriptOutput,
+  promptStatusScriptIdentityKey,
   readPromptStatusScript,
   resolvePromptStatus,
   type MendPromptStatusBuiltin,
   type MendPromptStatusScriptOutput,
+  type MendPromptStatusScriptResult,
 } from "@/mend/tui/prompt-status"
 
 const NATIVE_COMPACTION_SLASHES = new Set(["compact", "summarize"])
@@ -456,26 +460,34 @@ export function Prompt(props: PromptProps) {
   })
   const selectedPromptModel = createMemo(() => {
     const userModel = lastUserMessage()?.model
+    const localOverride = local.model.overrideInfo()
     const sessionModel = currentSession()?.model as
       | { providerID?: string; id?: string; modelID?: string; variant?: string }
       | undefined
     const agentModel = sessionAgent()?.model as { providerID?: string; modelID?: string; id?: string } | undefined
     return resolveSelectedPromptModel({
+      hasSession: Boolean(props.sessionID),
       sessionUsesSubagent: sessionUsesSubagent(),
       localModel: local.model.current(),
-      localOverride: local.model.override(),
+      localOverride: localOverride?.model,
+      localOverrideUpdatedAt: localOverride?.updatedAt,
       userModel,
+      userModelCreatedAt: lastUserMessage()?.time.created,
       sessionModel,
       agentModel,
     })
   })
   const selectedPromptVariant = createMemo(() => {
+    const selectedModel = selectedPromptModel()
+    const localVariantOverride = local.model.variant.overrideInfo(selectedModel)
     const sessionModel = currentSession()?.model as { variant?: string } | undefined
     return resolveSelectedPromptVariant({
-      sessionUsesSubagent: sessionUsesSubagent(),
-      localVariant: local.model.variant.current(),
-      hasLocalOverride: Boolean(local.model.override()),
+      hasSession: Boolean(props.sessionID),
+      localVariant: local.model.variant.current(selectedModel),
+      hasLocalVariantOverride: local.model.variant.hasOverride(selectedModel),
+      localVariantOverrideUpdatedAt: localVariantOverride?.updatedAt,
       userModel: lastUserMessage()?.model,
+      userModelCreatedAt: lastUserMessage()?.time.created,
       sessionModel,
     })
   })
@@ -582,16 +594,17 @@ export function Prompt(props: PromptProps) {
     ),
   )
 
-  // Initialize agent/model/variant from last user message when session changes
-  let syncedSessionID: string | undefined
+  // Keep local prompt chrome aligned with the latest submitted user turn.
+  let syncedUserModelKey: string | undefined
   createEffect(() => {
     const sessionID = props.sessionID
     const msg = lastUserMessage()
+    const modelKey = sessionID && msg?.id ? `${sessionID}:${msg.id}` : undefined
 
-    if (sessionID !== syncedSessionID) {
-      if (!sessionID || !msg) return
+    if (modelKey !== syncedUserModelKey) {
+      if (!sessionID || !msg || !modelKey) return
 
-      syncedSessionID = sessionID
+      syncedUserModelKey = modelKey
 
       // Only set agent if it's a primary agent (not a subagent)
       const isPrimaryAgent = local.agent.list().some((x) => x.name === msg.agent)
@@ -599,8 +612,8 @@ export function Prompt(props: PromptProps) {
         // Keep command line --agent if specified.
         if (!args.agent) local.agent.set(msg.agent)
         if (msg.model) {
-          const hydrated = local.model.set(msg.model, { ifUnset: true })
-          if (hydrated) local.model.variant.set(msg.model.variant, { ifUnset: true })
+          const hydrated = local.model.set(msg.model, { source: "hydrated" })
+          if (hydrated) local.model.variant.set(msg.model.variant, { source: "hydrated", model: msg.model })
         }
       }
     }
@@ -1152,6 +1165,9 @@ export function Prompt(props: PromptProps) {
       sessionID = res.data.id
     }
 
+    local.model.set(selectedModel)
+    local.model.variant.set(variant, { model: selectedModel })
+
     const messageID = MessageID.ascending()
     workingStartedAtBySession.set(sessionID, Date.now())
     setWorkingStartedAt(workingStartedAtBySession.get(sessionID))
@@ -1368,9 +1384,10 @@ export function Prompt(props: PromptProps) {
   })
 
   const showVariant = createMemo(() => {
-    const variants = local.model.variant.list()
+    const selectedModel = selectedPromptModel()
+    const variants = local.model.variant.list(selectedModel)
     if (variants.length === 0) return false
-    const current = local.model.variant.current()
+    const current = local.model.variant.current(selectedModel)
     return !!current
   })
 
@@ -1435,10 +1452,15 @@ export function Prompt(props: PromptProps) {
   })
   const currentModelLabel = createMemo(() => {
     const selectedModel = selectedPromptModel()
-    if (!sessionUsesSubagent()) return local.model.parsed().model
-    return selectedModel?.modelID ?? local.model.parsed().model
+    if (!selectedModel) return local.model.parsed().model
+    return Model.name(sync.data.provider, selectedModel.providerID, selectedModel.modelID)
   })
-  const currentProviderText = createMemo(() => currentProviderLabel())
+  const currentSelectedProviderLabel = createMemo(() => {
+    const selectedModel = selectedPromptModel()
+    if (!selectedModel) return currentProviderLabel()
+    return sync.data.provider.find((item) => item.id === selectedModel.providerID)?.name ?? selectedModel.providerID
+  })
+  const currentProviderText = createMemo(() => currentSelectedProviderLabel())
   const currentReasoningLabel = createMemo(() => selectedPromptVariant() || undefined)
   const currentRootName = createMemo(() => {
     const normalized = mend.root.replace(/\/+$/, "")
@@ -1536,7 +1558,7 @@ export function Prompt(props: PromptProps) {
       case "model":
         return store.mode === "normal" ? { text: currentModelLabel(), fg: keybind.leader ? theme.textMuted : theme.text } : undefined
       case "provider":
-        return store.mode === "normal" ? { text: currentProviderLabel(), fg: theme.textMuted } : undefined
+        return store.mode === "normal" ? { text: currentProviderText(), fg: theme.textMuted } : undefined
       case "reasoning":
       case "variant":
         return store.mode === "normal" && currentReasoningLabel()
@@ -1671,8 +1693,36 @@ export function Prompt(props: PromptProps) {
       })(),
     }
   })
-  const [promptStatusLeftScriptText] = createResource(() => promptStatusScriptSource().left, readPromptStatusScript)
-  const [promptStatusRightScriptText] = createResource(() => promptStatusScriptSource().right, readPromptStatusScript)
+  const promptStatusLeftScriptSource = createMemo(() => {
+    const input = promptStatusScriptSource().left
+    if (!input) return
+    return {
+      identity: promptStatusScriptIdentityKey(input),
+      input,
+    }
+  })
+  const promptStatusRightScriptSource = createMemo(() => {
+    const input = promptStatusScriptSource().right
+    if (!input) return
+    return {
+      identity: promptStatusScriptIdentityKey(input),
+      input,
+    }
+  })
+  const [promptStatusLeftScriptResult] = createResource(
+    () => promptStatusLeftScriptSource(),
+    async (source): Promise<MendPromptStatusScriptResult> => ({
+      identity: source.identity,
+      output: await readPromptStatusScript(source.input),
+    }),
+  )
+  const [promptStatusRightScriptResult] = createResource(
+    () => promptStatusRightScriptSource(),
+    async (source): Promise<MendPromptStatusScriptResult> => ({
+      identity: source.identity,
+      output: await readPromptStatusScript(source.input),
+    }),
+  )
 
   const promptStatusSegments = (side: "left" | "right") => {
     const resolved = promptStatusConfig()
@@ -1692,11 +1742,18 @@ export function Prompt(props: PromptProps) {
       .map((item) => (item.type === "builtin" ? promptStatusBuiltinSegment(item.value) : undefined))
       .filter((item): item is PromptStatusSegment => Boolean(item && item.text.trim()))
       .map((item, index) => ({ ...item, separatorBefore: index > 0 }))
-    const scriptOutput = (
-      side === "left"
-        ? promptStatusLeftScriptText.latest || promptStatusLeftScriptText()
-        : promptStatusRightScriptText.latest || promptStatusRightScriptText()
-    ) as MendPromptStatusScriptOutput | undefined
+    const currentScript = (side === "left" ? promptStatusLeftScriptResult() : promptStatusRightScriptResult()) as
+      | MendPromptStatusScriptResult
+      | undefined
+    const latestScript = (
+      side === "left" ? promptStatusLeftScriptResult.latest : promptStatusRightScriptResult.latest
+    ) as MendPromptStatusScriptResult | undefined
+    const currentIdentity = side === "left" ? promptStatusLeftScriptSource()?.identity : promptStatusRightScriptSource()?.identity
+    const scriptOutput = pickPromptStatusScriptOutput({
+      currentIdentity,
+      current: currentScript,
+      latest: latestScript,
+    }) as MendPromptStatusScriptOutput | undefined
     if (scriptOutput?.segments?.length) {
       const separatorBefore = base.length > 0
       const next = scriptOutput.segments
@@ -1891,7 +1948,7 @@ export function Prompt(props: PromptProps) {
     return formatDuration(Math.max(0, Math.round((workingTick() - started) / 1000)))
   })
   const workingRightMeta = createMemo(() => {
-    const items = [workingIndicatorConfig().showModel ? local.model.parsed().model : undefined].filter(Boolean)
+    const items = [workingIndicatorConfig().showModel ? currentModelLabel() : undefined].filter(Boolean)
     return items.length ? items.join(" ") : undefined
   })
   const hoverMascot = createMemo(() => activityMascotHoverText(mend.profile))

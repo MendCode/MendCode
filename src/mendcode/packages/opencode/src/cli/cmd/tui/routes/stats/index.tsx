@@ -957,17 +957,30 @@ export function Stats() {
           <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
             <Switch>
               <Match when={tiny()}>
-                <CompactStats
-                  headline={headline()}
-                  insights={data()}
-                  mode={mode()}
-                  columns={heatColumns()}
-                  contentWidth={contentWidth()}
-                  tokenRows={tokenRows()}
-                  responseRows={responseRows()}
-                  statusRows={statusRows()}
-                  tall={compactTall()}
-                />
+                <scrollbox
+                  flexGrow={1}
+                  minHeight={0}
+                  horizontalScrollbarOptions={{ visible: false }}
+                  verticalScrollbarOptions={{
+                    visible: true,
+                    trackOptions: {
+                      backgroundColor: theme.backgroundPanel,
+                      foregroundColor: theme.border,
+                    },
+                  }}
+                >
+                  <CompactStats
+                    headline={headline()}
+                    insights={data()}
+                    mode={mode()}
+                    columns={heatColumns()}
+                    contentWidth={contentWidth()}
+                    tokenRows={tokenRows()}
+                    responseRows={responseRows()}
+                    statusRows={statusRows()}
+                    tall={true}
+                  />
+                </scrollbox>
               </Match>
               <Match when={!tiny()}>
                 <MainDashboard

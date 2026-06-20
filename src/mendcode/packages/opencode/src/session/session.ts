@@ -472,6 +472,12 @@ export interface Interface {
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info, NotFound>
   readonly setTitle: (input: { sessionID: SessionID; title: string }) => Effect.Effect<void>
+  readonly setAgentModel: (input: {
+    sessionID: SessionID
+    agent?: string
+    model?: Info["model"]
+    time?: number
+  }) => Effect.Effect<void>
   readonly setArchived: (input: { sessionID: SessionID; time?: number }) => Effect.Effect<void>
   readonly setPermission: (input: { sessionID: SessionID; permission: Permission.Ruleset }) => Effect.Effect<void>
   readonly setRevert: (input: {
@@ -796,6 +802,26 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
       yield* patch(input.sessionID, { title: input.title, time: { updated: Date.now() } })
     })
 
+    const setAgentModel = Effect.fn("Session.setAgentModel")(function* (input: {
+      sessionID: SessionID
+      agent?: string
+      model?: Info["model"]
+      time?: number
+    }) {
+      const updatedAt = input.time ?? Date.now()
+      yield* db((d) =>
+        d
+          .update(SessionTable)
+          .set({
+            ...(input.agent !== undefined ? { agent: input.agent } : {}),
+            ...(input.model !== undefined ? { model: input.model } : {}),
+            time_updated: updatedAt,
+          })
+          .where(eq(SessionTable.id, input.sessionID))
+          .run(),
+      )
+    })
+
     const setArchived = Effect.fn("Session.setArchived")(function* (input: { sessionID: SessionID; time?: number }) {
       yield* patch(input.sessionID, { time: { archived: input.time } })
     })
@@ -905,6 +931,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
       touch,
       get,
       setTitle,
+      setAgentModel,
       setArchived,
       setPermission,
       setRevert,

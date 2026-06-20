@@ -21,6 +21,8 @@ export type MemoryConfig = {
   globalCompactionMaxEntries: number
   extractorRole: string
   consolidatorRole: string
+  memoryDreamRole: string
+  memoryAssistantRole: string
   minIdleMinutes: number
   minBudgetRemainingUsd: number | null
   requireApprovalForGenerated: boolean
@@ -40,6 +42,8 @@ export const defaultMemoryConfig: MemoryConfig = {
   globalCompactionMaxEntries: 50,
   extractorRole: "memoryExtractor",
   consolidatorRole: "none",
+  memoryDreamRole: "memoryDream",
+  memoryAssistantRole: "memoryAssistant",
   minIdleMinutes: 30,
   minBudgetRemainingUsd: 0.25,
   requireApprovalForGenerated: true,
@@ -114,6 +118,8 @@ export function normalizeMemoryConfig(input: unknown): MemoryConfig {
     globalCompactionMaxEntries: boundedNumberValue(raw.globalCompactionMaxEntries, defaultMemoryConfig.globalCompactionMaxEntries, 1, 100),
     extractorRole: roleValue(raw.extractorRole, defaultMemoryConfig.extractorRole),
     consolidatorRole: roleValue(raw.consolidatorRole, defaultMemoryConfig.consolidatorRole),
+    memoryDreamRole: roleValue(raw.memoryDreamRole, defaultMemoryConfig.memoryDreamRole),
+    memoryAssistantRole: roleValue(raw.memoryAssistantRole, defaultMemoryConfig.memoryAssistantRole),
     minIdleMinutes: numberValue(raw.minIdleMinutes, defaultMemoryConfig.minIdleMinutes, 0),
     minBudgetRemainingUsd: nullableNumber(raw.minBudgetRemainingUsd, defaultMemoryConfig.minBudgetRemainingUsd, 0),
     requireApprovalForGenerated: bool(raw.requireApprovalForGenerated, defaultMemoryConfig.requireApprovalForGenerated),
