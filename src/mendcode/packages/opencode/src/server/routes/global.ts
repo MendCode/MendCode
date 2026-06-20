@@ -15,6 +15,8 @@ import { lazy } from "../../util/lazy"
 import { Config } from "@/config/config"
 import { errors } from "../error"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "../global-lifecycle"
+import "@/mend/memory/dream-events"
+import "@/mend/memory/workspace-events"
 
 const log = Log.create({ service: "server" })
 

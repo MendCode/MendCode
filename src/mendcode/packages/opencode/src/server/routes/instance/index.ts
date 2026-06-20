@@ -22,6 +22,7 @@ import { SessionRoutes } from "./session"
 import { PtyRoutes } from "./pty"
 import { McpRoutes } from "./mcp"
 import { MflowRoutes } from "./mflow"
+import { MemoryRoutes } from "./memory"
 import { FileRoutes } from "./file"
 import { ConfigRoutes } from "./config"
 import { ExperimentalRoutes } from "./experimental"
@@ -36,6 +37,7 @@ import { ExperimentalPaths } from "./httpapi/groups/experimental"
 import { FilePaths } from "./httpapi/groups/file"
 import { InstancePaths } from "./httpapi/groups/instance"
 import { McpPaths } from "./httpapi/groups/mcp"
+import { MemoryPaths } from "./httpapi/groups/memory"
 import { PtyPaths } from "./httpapi/groups/pty"
 import { SessionPaths } from "./httpapi/groups/session"
 import { SyncPaths } from "./httpapi/groups/sync"
@@ -104,6 +106,7 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket, opts?: CorsOptions): H
     app.delete(McpPaths.auth, (c) => handler(c.req.raw, context))
     app.post(McpPaths.connect, (c) => handler(c.req.raw, context))
     app.post(McpPaths.disconnect, (c) => handler(c.req.raw, context))
+    app.post(MemoryPaths.sideChat, (c) => handler(c.req.raw, context))
     app.post(SyncPaths.start, (c) => handler(c.req.raw, context))
     app.post(SyncPaths.replay, (c) => handler(c.req.raw, context))
     app.post(SyncPaths.history, (c) => handler(c.req.raw, context))
@@ -182,6 +185,7 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket, opts?: CorsOptions): H
     .route("/", EventRoutes())
     .route("/mcp", McpRoutes())
     .route("/mflow", MflowRoutes())
+    .route("/memory", MemoryRoutes())
     .route("/tui", TuiRoutes())
     .post(
       "/instance/dispose",

@@ -154,12 +154,6 @@ Before sharing a package:
 6. Run `mendcode packages status`, `mendcode models status`, and `mendcode permissions status`.
 7. Open the TUI and verify prompt marker, status row, command palette entries, Agent View/home layout, and any widgets.
 
-Screenshot slot:
-
-| File | Capture |
-| --- | --- |
-| `docs/assets/screenshots/package-status.png` | `mendcode packages status` or package show output for a demo package such as `acme-standard`. Use demo values only. |
-
 ## What Does Not Belong in Packages
 
 Do not package:

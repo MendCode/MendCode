@@ -3,6 +3,7 @@ import type { Provider } from "@/provider/provider"
 import { resolvePromptFocus } from "../prompt/focus-resolver"
 import { readMemoryConfig, type MemoryScope } from "./config"
 import { readMemoryEntries, readMemorySummary, type MemoryEntry } from "./store"
+import { memoryCategoryByID, normalizeMemoryCategoryPolicies } from "./categories"
 
 export type MemoryRetrievalInput = {
   root?: string
@@ -97,6 +98,7 @@ export async function retrieveMemory(input: MemoryRetrievalInput = {}) {
     text: (await readMemorySummary(scope, input.root)).trim(),
   }))).then((items) => items.filter((item) => item.text))
   const entryGroups = await Promise.all(selectedScopes.map((scope) => readMemoryEntries(scope, input.root).catch(() => [])))
+  const policies = normalizeMemoryCategoryPolicies({})
   const perScopeLimit = (scope: MemoryScope) => {
     if (mode === "request" && scope === "global") return config.maxEntries
     if (mode === "request" && scope === "project") return config.projectMaxEntries
@@ -118,9 +120,13 @@ export async function retrieveMemory(input: MemoryRetrievalInput = {}) {
   )
     .sort((a, b) => b.score - a.score || b.entry.updatedAt.localeCompare(a.entry.updatedAt))
   const summaryLines = summaries.map((item) => `- ${item.scope} summary: ${item.text.replace(/\s+/g, " ")}`)
-  const entryLines = entries.map(({ entry }) => {
+  const entryLines = entries
+    .filter(({ entry }) => (entry.categoryIDs?.length ? entry.categoryIDs : ["uncategorized"]).some((categoryID) => policies[categoryID]?.promptEnabled !== false))
+    .map(({ entry }) => {
+    const categoryIDs = entry.categoryIDs?.length ? entry.categoryIDs : ["uncategorized"]
+    const categoryLabels = categoryIDs.map((id) => memoryCategoryByID(id).label).join(", ")
     const source = [entry.scope, entry.source, entry.evidence].filter(Boolean).join("; ")
-    return `- ${entry.text.replace(/\s+/g, " ")} (${source})`
+    return `- [${entry.scope}][${categoryLabels}] ${entry.text.replace(/\s+/g, " ")} (${source})`
   })
   const lines = takeTokenBudget([...summaryLines, ...entryLines], maxPromptTokens)
   return {

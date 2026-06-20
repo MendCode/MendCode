@@ -93,19 +93,9 @@ Leaderboards:
 
 Use global scope when you want a whole-machine view of MendCode activity.
 
-Use project scope when you want to see activity for the current repository. Project scope is the right screenshot for docs because it makes the dashboard feel tied to a real workspace without exposing unrelated machine activity.
+Use project scope when you want to see activity for the current repository.
 
 Directory scope is useful when the current directory is inside a worktree or nested project path and you want narrower attribution.
-
-Screenshot slots:
-
-| File | Capture |
-| --- | --- |
-| `docs/assets/screenshots/usage-insights.png` | Global Usage Insights dashboard with daily token activity and top lists visible. |
-| `docs/assets/screenshots/project-usage-insights.png` | Project Usage Insights dashboard in a repo with recent demo sessions. |
-| `docs/assets/screenshots/usage-insights-weather.png` | Optional weather configured with a generic city, only if it looks clean and does not distract. |
-
-Do not add image links until the files exist.
 
 ## Weather
 
@@ -126,28 +116,6 @@ Current aggregation includes session/message metadata available to the TUI:
 - model/provider/agent labels
 
 If a provider or session does not supply a field, that field may be zero or absent. That is better than inventing a number.
-
-## Capture Prompt
-
-To generate a clean demo session before taking screenshots:
-
-```text
-Search the repo for promptChrome and summarize the available prompt input presets.
-```
-
-Then open:
-
-```text
-Ctrl+P -> Usage Insights
-```
-
-For project scope:
-
-```text
-Ctrl+P -> Project Usage Insights
-```
-
-Keep terminal width wide enough that the heatmap, totals, and top lists are visible together.
 
 ## Source Map
 

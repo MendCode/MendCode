@@ -27,6 +27,7 @@ export interface DialogSelectProps<T> {
   preview?: (option: DialogSelectOption<T>) => JSX.Element
   skipFilter?: boolean
   renderFilter?: boolean
+  cycleKeybind?: string
   keybind?: {
     keybind?: Keybind.Info
     title: string
@@ -242,6 +243,13 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   useKeyboard((evt) => {
     setStore("input", "keyboard")
     const allowCtrlNavigation = route.data.type !== "setup"
+
+    if (props.cycleKeybind && keybind.match(props.cycleKeybind, evt)) {
+      evt.preventDefault()
+      evt.stopPropagation()
+      move(1)
+      return
+    }
 
     if (evt.name === "up" || (allowCtrlNavigation && evt.ctrl && evt.name === "p")) move(-1)
     if (evt.name === "down" || (allowCtrlNavigation && evt.ctrl && evt.name === "n")) move(1)

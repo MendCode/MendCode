@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import path from "path"
 import { parseTimelineDiffRows, timelineDiffFileStatus } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
 import { rawReasoningDisplay, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
-import { groupTimelineParts } from "../../src/mend/tui/timeline/group"
+import { groupTimelineParts, isTimelineStackStart } from "../../src/mend/tui/timeline/group"
 import { normalizeToolEvent, shouldRenderCompactTool, toolClass, toolSummary } from "../../src/mend/tui/timeline/normalize"
 
 describe("mend tui presentation renderers", () => {
@@ -82,6 +82,63 @@ describe("mend tui presentation renderers", () => {
     expect(toolSummary("glob", { pattern: "src/**/*.ts" }, { count: 4 }).title).toBe("List src/**/*.ts (4 matches)")
     expect(toolSummary("grep", { pattern: "query" }, { matches: 3 }).title).toBe('Search "query" (3 matches)')
     expect(toolSummary("websearch", { query: "query" }, { numResults: 3 }).title).toBe('Search web "query" (3 results)')
+    expect(
+      toolSummary("todowrite", {
+        todos: [
+          { content: "Map repo", status: "completed" },
+          { content: "Fix render", status: "in_progress" },
+          { content: "Ship broken path", status: "cancelled" },
+          { content: "Validate", status: "pending" },
+        ],
+      }).lines,
+    ).toEqual(["✓ Map repo", "→ Fix render", "× Ship broken path", "○ Validate"])
+    expect(
+      toolSummary(
+        "question",
+        {
+          questions: [
+            {
+              header: "Deploy",
+              question: "Which environment should receive this change?",
+              options: [{ label: "Staging" }, { label: "Production" }],
+            },
+          ],
+        },
+        { answers: [["Staging"]] },
+      ),
+    ).toEqual({
+      title: "Question",
+      lines: ["? Deploy: Which environment should receive this change?", "  choices: Staging, Production", "→ Staging"],
+    })
+    const longQuestion = toolSummary(
+      "question",
+      {
+        questions: [
+          {
+            header: "Formato",
+            question: "¿En qué formato quieres que deje el reporte editable/final para poder revisar simulaciones, capturas, evidencias y anexos sin que el bloque se rompa visualmente?",
+            options: [
+              { label: "DOCX y PDF" },
+              { label: "Solo PDF" },
+              { label: "Markdown primero" },
+            ],
+          },
+        ],
+      },
+      {
+        answers: [
+          [
+            "markdown para que vayas armando todo luego lo montas a docx y pdf completo con imagenes de las simulaciones etc todo completo bien organizado",
+          ],
+        ],
+      },
+    )
+    expect(longQuestion.title).toBe("Question")
+    expect(longQuestion.lines.length).toBeGreaterThan(4)
+    expect(longQuestion.lines.every((line) => Bun.stringWidth(line) <= 76)).toBe(true)
+    expect(longQuestion.lines).toContain("  choices: DOCX y PDF, Solo PDF, Markdown primero")
+    expect(longQuestion.lines.some((line) => line.startsWith("  poder revisar"))).toBe(true)
+    expect(longQuestion.lines.some((line) => line.startsWith("  con imagenes"))).toBe(true)
   })
 
   test("mendcode keeps artifact and command tools on rich renderers", () => {
@@ -91,7 +148,7 @@ describe("mend tui presentation renderers", () => {
     expect(shouldRenderCompactTool("mendcode", "apply_patch")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "bash")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "task")).toBe(false)
-    expect(shouldRenderCompactTool("mendcode", "todowrite")).toBe(false)
+    expect(shouldRenderCompactTool("mendcode", "todowrite")).toBe(true)
     expect(shouldRenderCompactTool("minimal", "edit")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "apply_patch")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "task")).toBe(false)
@@ -120,11 +177,18 @@ describe("mend tui presentation renderers", () => {
 
     const labels = nodes.map((node) => (node.type === "row" ? node.title : node.type === "collapse" ? `◇ ${node.count} more` : node.type))
     expect(labels).toEqual([
-      "◇ 1 more",
-      ...Array.from({ length: 15 }, (_, index) => `Read file-${index + 2}.ts`),
+      "◇ 6 more",
+      ...Array.from({ length: 10 }, (_, index) => `Read file-${index + 7}.ts`),
       'Search web "docs"',
     ])
-    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 1 more"])
+    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 6 more"])
+    expect(nodes.find((node) => node.type === "collapse")).toMatchObject({
+      type: "collapse",
+      count: 6,
+      rows: Array.from({ length: 6 }, (_, index) =>
+        expect.objectContaining({ title: `Read file-${index + 1}.ts` }),
+      ),
+    })
     expect(nodes.find((node) => node.type === "row" && node.title === 'Search web "docs"')).toMatchObject({
       type: "row",
       state: "running",
@@ -149,10 +213,69 @@ describe("mend tui presentation renderers", () => {
     ])
 
     const labels = nodes.map((node) => (node.type === "row" ? node.title : node.type === "collapse" ? `◇ ${node.count} more` : node.type))
-    expect(labels[0]).toBe("◇ 5 more")
-    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 5 more"])
+    expect(labels[0]).toBe("◇ 10 more")
+    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 10 more"])
     expect(labels.at(-1)).toBe("Read /tmp/current.ts (5-14)")
-    expect(nodes.filter((node) => node.type === "row")).toHaveLength(16)
+    expect(nodes.filter((node) => node.type === "row")).toHaveLength(11)
+  })
+
+  test("mendcode keeps todo writes inside compact timeline stacks", () => {
+    const completedReads = Array.from({ length: 12 }, (_, index) => ({
+      id: `stack-read-${index + 1}`,
+      type: "tool",
+      tool: "read",
+      state: { status: "completed", input: { filePath: `stack-${index + 1}.ts` }, output: "" },
+    }))
+    const nodes = groupTimelineParts("mendcode", [
+      ...completedReads,
+      {
+        id: "todo-stack",
+        type: "tool",
+        tool: "todowrite",
+        state: { status: "completed", input: { todos: [{ content: "Ship the UI", status: "completed" }] }, output: "" },
+      },
+      {
+        id: "web-stack",
+        type: "tool",
+        tool: "websearch",
+        state: { status: "running", input: { query: "docs" } },
+      },
+    ], { completed: true, showReasoningRows: true })
+
+    const labels = nodes.map((node) => (node.type === "row" ? node.title : node.type === "collapse" ? `◇ ${node.count} more` : node.type))
+    expect(labels[0]).toBe("◇ 3 more")
+    expect(labels).toContain("Todos")
+    expect(nodes.find((node) => node.type === "row" && node.title === "Todos")).toMatchObject({
+      lines: ["✓ Ship the UI"],
+    })
+    expect(labels.at(-1)).toBe('Search web "docs"')
+    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 3 more"])
+  })
+
+  test("empty parts do not split compact timeline stacks", () => {
+    const parts = [
+      ...Array.from({ length: 7 }, (_, index) => ({
+        id: `before-${index + 1}`,
+        type: "tool",
+        tool: "read",
+        state: { status: "completed", input: { filePath: `before-${index + 1}.ts` }, output: "" },
+      })),
+      { id: "empty-text", type: "text", text: "   " },
+      { id: "empty-reasoning", type: "reasoning", text: "[REDACTED]", time: { start: 1_000, end: 2_000 } },
+      ...Array.from({ length: 7 }, (_, index) => ({
+        id: `after-${index + 1}`,
+        type: "tool",
+        tool: "read",
+        state: { status: "completed", input: { filePath: `after-${index + 1}.ts` }, output: "" },
+      })),
+    ]
+
+    const nodes = groupTimelineParts("mendcode", parts, { completed: true, showReasoningRows: true })
+    const labels = nodes.map((node) => (node.type === "row" ? node.title : node.type === "collapse" ? `◇ ${node.count} more` : node.type))
+
+    expect(labels[0]).toBe("◇ 4 more")
+    expect(labels).not.toContain("part")
+    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 4 more"])
   })
 
   test("minimal and mendcode compact errored tools into the same timeline stack", () => {
@@ -207,7 +330,27 @@ describe("mend tui presentation renderers", () => {
     }
   })
 
-  test("raw timeline keeps original parts as structural part nodes", () => {
+  test("timeline stacks only add top spacing after visible assistant text", () => {
+    const nodes = [
+      { id: "read-a", type: "row", title: "Read a.ts" },
+      { id: "edit-a", type: "tool", tool: "edit" },
+      { id: "read-b", type: "row", title: "Read b.ts" },
+      { id: "reasoning-a", type: "row", title: "Thought: Checking" },
+      { id: "question-a", type: "row", title: "Question" },
+      { id: "text-a", type: "text", text: "Now I can answer." },
+      { id: "read-c", type: "row", title: "Read c.ts" },
+      { id: "empty-text", type: "text", text: "   " },
+      { id: "read-d", type: "row", title: "Read d.ts" },
+    ]
+
+    expect(isTimelineStackStart(nodes, 0)).toBe(false)
+    expect(isTimelineStackStart(nodes, 2)).toBe(false)
+    expect(isTimelineStackStart(nodes, 4)).toBe(false)
+    expect(isTimelineStackStart(nodes, 6)).toBe(true)
+    expect(isTimelineStackStart(nodes, 8)).toBe(false)
+  })
+
+  test("raw timeline keeps original parts without wrapper nodes", () => {
     const part = {
       id: "read-raw",
       type: "tool",
@@ -215,7 +358,7 @@ describe("mend tui presentation renderers", () => {
       state: { status: "completed", input: { filePath: "a.ts" }, output: "" },
     }
 
-    expect(groupTimelineParts("raw", [part])).toEqual([{ type: "part", id: "read-raw", part }])
+    expect(groupTimelineParts("raw", [part])).toEqual([part])
   })
 
   test("reasoning rows stay hidden until the renderer opts in", () => {
@@ -226,16 +369,8 @@ describe("mend tui presentation renderers", () => {
       time: { start: 1_000, end: 3_000 },
     }
 
-    expect(groupTimelineParts("mendcode", [part], { completed: true })).toEqual([{ type: "part", id: "reasoning-hidden", part }])
-    expect(groupTimelineParts("mendcode", [part], { completed: true, showReasoningRows: true })).toEqual([
-      {
-        type: "row",
-        id: "reasoning-hidden",
-        state: "completed",
-        class: "planning",
-        title: "Thought: hidden · 2.0s",
-      },
-    ])
+    expect(groupTimelineParts("mendcode", [part], { completed: true })).toEqual([part])
+    expect(groupTimelineParts("mendcode", [part], { completed: true, showReasoningRows: true })).toEqual([part])
   })
 
   test("minimal and mendcode reasoning rows stay collapsed while streaming", () => {
@@ -254,6 +389,35 @@ describe("mend tui presentation renderers", () => {
         class: "planning",
         title: "Thinking: Exploring startup ideas",
       },
+    ])
+  })
+
+  test("minimal stacks reasoning rows while mendcode keeps reasoning body parts", () => {
+    const parts = [
+      {
+        id: "read-before",
+        type: "tool",
+        tool: "read",
+        state: { status: "completed", input: { filePath: "a.ts" }, output: "(End of file - total 5 lines)" },
+      },
+      {
+        id: "reasoning-middle",
+        type: "reasoning",
+        text: "**Checking model configuration**\n\nReasoning body",
+        time: { start: 1_000, end: 5_900 },
+      },
+      {
+        id: "read-after",
+        type: "tool",
+        tool: "read",
+        state: { status: "completed", input: { filePath: "b.ts" }, output: "(End of file - total 9 lines)" },
+      },
+    ]
+
+    expect(groupTimelineParts("mendcode", parts, { showReasoningRows: true })).toEqual([
+      expect.objectContaining({ type: "row", id: "read-before" }),
+      parts[1],
+      expect.objectContaining({ type: "row", id: "read-after" }),
     ])
   })
 
@@ -298,7 +462,7 @@ describe("mend tui presentation renderers", () => {
         state: "completed",
         title: "Read a.ts",
       },
-      { type: "part", id: "text-active", part: parts[1] },
+      parts[1],
     ])
     expect(groupTimelineParts("mendcode", parts)).toEqual([
       {
@@ -309,9 +473,9 @@ describe("mend tui presentation renderers", () => {
         state: "completed",
         title: "Read a.ts",
       },
-      { type: "part", id: "text-active", part: parts[1] },
+      parts[1],
     ])
-    expect(groupTimelineParts("mendcode", parts, { completed: true }).map((node) => node.type)).toEqual(["row", "part"])
+    expect(groupTimelineParts("mendcode", parts, { completed: true }).map((node) => node.type)).toEqual(["row", "text"])
   })
 
   test("timeline diff parser returns file-style rows without raw patch chrome", () => {

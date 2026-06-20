@@ -24,34 +24,37 @@ export type TimelinePart = {
   }
 }
 
-export type TimelinePartNode = {
-  type: "part"
-  id: string
-  part: TimelinePart
-}
-
-export type TimelineNode = TimelinePartNode | TimelineRow | TimelineCollapse
+export type TimelineNode = TimelinePart | TimelineRow | TimelineCollapse
 
 export type TimelineGroupOptions = {
   showReasoningRows?: boolean
   completed?: boolean
 }
 
-const MAX_VISIBLE_COMPLETED_ROWS = 15
+const MAX_VISIBLE_COMPLETED_ROWS = 10
 
 export function shouldGroupTimeline(profile: MendPresentationProfile) {
   return profile === "minimal" || profile === "mendcode"
 }
 
-export function groupTimelineParts(profile: MendPresentationProfile, parts: TimelinePart[], options: TimelineGroupOptions = {}) {
-  if (!shouldGroupTimeline(profile)) return parts.map((part, index) => partNode(part, index))
+export function isTimelineStackStart(nodes: Array<{ type: string; text?: string }>, index: number) {
+  if (index === 0) return false
+  const previous = nodes[index - 1]
+  return previous?.type === "text" && Boolean(previous.text?.trim())
+}
 
-  const nodes = parts.map((part, index) => rowNode(profile, part, options) ?? partNode(part, index))
+export function groupTimelineParts(profile: MendPresentationProfile, parts: TimelinePart[], options: TimelineGroupOptions = {}) {
+  if (!shouldGroupTimeline(profile)) return parts
+
+  const nodes = parts.flatMap((part): TimelineNode[] => {
+    if (isInvisiblePart(part)) return []
+    return [rowNode(profile, part, options) ?? part]
+  })
   return collapseCompletedRows(nodes)
 }
 
 function rowNode(profile: MendPresentationProfile, part: TimelinePart, options: TimelineGroupOptions): TimelineRow | undefined {
-  if (part.type === "reasoning") return options.showReasoningRows ? reasoningRow(part) : undefined
+  if (part.type === "reasoning") return profile === "minimal" && options.showReasoningRows ? reasoningRow(part) : undefined
   if (part.type !== "tool" || !part.tool || !part.state) return
   if (!shouldRenderCompactTool(profile, part.tool)) return
 
@@ -69,6 +72,7 @@ function rowNode(profile: MendPresentationProfile, part: TimelinePart, options: 
     class: event.class,
     state: event.state,
     title: event.title,
+    ...(event.lines.length > 0 ? { lines: event.lines } : {}),
   }
 }
 
@@ -117,28 +121,31 @@ function collapseRun(run: TimelineNode[]) {
   if (collapseCount <= 0) return run
 
   let remainingToCollapse = collapseCount
-  let insertedCollapse = false
+  let collapseIndex = -1
+  const collapsedRows: TimelineRow[] = []
   const result: TimelineNode[] = []
   for (const node of run) {
     if (node.type === "row" && node.state === "completed" && remainingToCollapse > 0) {
       remainingToCollapse -= 1
-      if (!insertedCollapse) {
-        result.push({ type: "collapse", id: `collapse-${node.id}`, count: collapseCount })
-        insertedCollapse = true
+      collapsedRows.push(node)
+      if (collapseIndex === -1) {
+        collapseIndex = result.length
+        result.push({ type: "collapse", id: `collapse-${node.id}`, count: collapseCount, rows: [] })
       }
       continue
     }
     result.push(node)
   }
+  if (collapseIndex >= 0) {
+    result[collapseIndex] = { ...(result[collapseIndex] as TimelineCollapse), rows: collapsedRows }
+  }
   return result
 }
 
-function partNode(part: TimelinePart, index: number): TimelinePartNode {
-  return {
-    type: "part",
-    id: part.id ?? `part-${index}`,
-    part,
-  }
+function isInvisiblePart(part: TimelinePart) {
+  if (part.type === "text") return !part.text?.trim()
+  if (part.type === "reasoning") return !part.text?.replace("[REDACTED]", "").trim()
+  return false
 }
 
 function formatSeconds(ms: number) {

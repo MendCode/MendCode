@@ -50,6 +50,7 @@ describe("usage", () => {
   test("formats assistant usage compactly", () => {
     const result = formatAssistantUsage(
       assistant({
+        variant: "low",
         tokens: {
           input: 100,
           output: 50,
@@ -60,7 +61,7 @@ describe("usage", () => {
     )
 
     expect(result?.tokens).toBe("↑125 ↓60")
-    expect(result?.compact).toBe("test-model · ↑125 ↓60")
+    expect(result?.compact).toBe("test-model · low · ↑125 ↓60")
     expect(result?.contextLabel).toBe("ctx 185")
     expect(result?.rawInput).toBe(100)
     expect(result?.rawOutput).toBe(50)

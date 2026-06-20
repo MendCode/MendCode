@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.1.15 - 2026-06-19
+
+- Add a route-level Memory Center in the TUI with Overview, Project memories, Global memories, Policy & categories, and Dream tabs.
+- Add saved/pending memory review surfaces with keyboard actions for applying, rejecting, editing, deleting, moving, and inspecting memories without leaving the terminal.
+- Add category-aware memory metadata, policy normalization, scope reasoning, evidence references, and reviewable proposal operations for verify, expire, recategorize, relink, demote-scope, and promote-scope flows.
+- Add a memory graph sidecar with legacy-entry bridging so memories can be grouped, indexed, and queried by category while preserving the existing flat memory files.
+- Add workspace-aware memory grouping so the Memory Center can show the current project plus other known project memory scopes.
+- Add Dream memory maintenance primitives: proposal-only Dream runs, bounded/redacted evidence collection, run logs, scheduler state, source manifests, missed-window handling, and safety reporting.
+- Add a constrained memory side chat backed by the `memoryAssistant` role so users can ask about memory state, draft memory actions, and inspect category policy without turning the Memory page into a general coding agent.
+- Add `memoryDream` and `memoryAssistant` model roles to local memory/model configuration while keeping generated memory writes approval-gated by default.
+- Label retrieved prompt memory by scope and category while preserving the existing `<mendcode_memory>` compatibility block.
+- Feed recent conversation context into post-turn memory extraction so proposals can distinguish durable facts from isolated one-line messages.
+- Add Memory HTTP/API routes for side-chat calls and wire the route into both the experimental HttpApi surface and instance routes.
+- Add a `Memory Center` command palette route and keep the existing lightweight `Memory Manager` proposal dialog as a separate command.
+- Add `/memory-center`, `/memories`, `/memory-manager`, `/memory`, and `/mem` routing so slash commands can open the right memory surface.
+- Add scrollable previews to the Memory Manager dialog so long proposal bodies do not overflow compact terminals.
+- Add screenshot-backed public docs for the README hero, home layouts, Agent View, Plan Mode, and Memory Center.
+- Add `docs/features.md` as the product-facing feature map for README, website, screenshot, and demo work.
+- Add `docs/memory-center.md` and a Memory Graph/Dream spec to document the new memory workspace and safety model.
+- Refresh the README into a public product page with install paths, product surfaces, documentation map, development notes, security/community pointers, star history, and an expanded agent-context block.
+- Refresh the docs index, setup/configuration docs, customization docs, Plan Mode docs, Usage Insights docs, and package-sharing docs to point at implemented screenshots and provider-neutral examples.
+- Document `memoryDream` and `memoryAssistant` roles alongside existing model roles, and keep public model examples provider-neutral.
+- Add a dedicated Shift+Tab Mode picker for primary agents, moving reverse agent cycling off Shift+Tab so the key opens the expected mode selector.
+- Make the prompt model, provider, and variant labels resolve from the selected prompt model metadata instead of stale local/session labels.
+- Track whether local model and variant state came from the user or session hydration, so explicit local changes win over older hydrated session state.
+- Persist submitted prompt agent/model selections onto the session before generation so resumed sessions and Agent View reflect the real active selection.
+- Preserve assistant provider/model/variant metadata when sync events arrive with partial message updates.
+- Keep prompt status script output tied to the current prompt-status identity so stale script output from an older model/session/root is not reused.
+- Show the currently selected model in the working indicator instead of the broader local parsed model when the prompt is using a session/subagent selection.
+- Add Markdown-rendering capability notes to non-minimal prompt policy so agents know the TUI supports headings, lists, tables, code fences, links, checklists, blockquotes, and Mermaid text diagrams.
+- Replace the Plan Review renderer path with a stable styled Markdown component instead of relying on the experimental Markdown flag.
+- Improve Plan Review table rendering with grid mode, wrapped cells, and better handling for file/action/detail tables.
+- Improve terminal Mermaid rendering for state diagrams, class diagrams, pie charts, Gantt charts, git graphs, requirement diagrams, journeys, timelines, and other common diagram shapes.
+- Add static Plan Markdown rendering helpers and Mermaid fence detection for tests and non-interactive surfaces.
+- Add hex color parsing/swatches so Markdown tables that list colors can render clean terminal previews.
+- Improve chat/timeline presentation for todo writes, questions, plan-review prompts, permission prompts, and grouped tool activity.
+- Remove the separate subagent footer file and fold subagent/session footer behavior into the main session layout.
+- Improve session layout sizing and compact terminal behavior around message rendering, plan review, usage/status surfaces, and bottom prompt chrome.
+- Add the built-in Herdr agent-state plugin so MendCode panes can report idle, working, blocked, needs-input, approval, plan-pending, retry, and error state to Herdr without requiring a separate user plugin.
+- Read project-local `.mendcode/mcp` server config into the MCP runtime, status, tools, prompts, and resources paths so project MCP servers participate alongside global config.
+- Sync generated project config when `mendcode` starts if the generated opencode config is stale.
+- Make `mendcode --worktree .` and current-worktree shortcuts resolve more naturally, including current-branch fallback when no non-base worktree exists.
+- Make control-plane output for mflow, TSM, and worktrees human-readable by default while keeping `--json` available for scripts.
+- Make `mendcode mcp add-local` sync generated runtime config after writing project MCP config.
+- Use provider-neutral defaults for memory preview commands instead of hard-coded public provider/model examples.
+- Add setup smoke coverage for memory/model-role fields and package/runtime configuration.
+- Add tests for Memory Center layout helpers, memory categories, graph/proposals/retrieval, Dream events/scheduler/sources, HTTP memory routes, prompt compose, prompt model/variant resolution, prompt status identity, plan Markdown rendering, Herdr plugin reporting, MCP project config, worktree shortcuts, setup, TSM, runtime pack, and session prompt metadata.
+
 ## 0.1.14 - 2026-06-16
 
 - Make `mendcode packages install <pack-id>` install a selected package from the official or chosen registry catalog instead of applying a whole source by accident.

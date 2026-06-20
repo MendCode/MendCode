@@ -3,7 +3,7 @@ import { mkdir, readFile, readdir, writeFile } from "fs/promises"
 import path from "path"
 import { Global } from "@mendcode/core/global"
 import { tmpdir } from "../fixture/fixture"
-import { packageMetadata, packageMetadataSet, syncProject } from "../../src/mend/config/project"
+import { generatedConfigNeedsSync, packageMetadata, packageMetadataSet, syncProject } from "../../src/mend/config/project"
 import { mendMcpStatus } from "../../src/mend/config/mcp"
 import { readModelsConfig } from "../../src/mend/config/models"
 import { applyRuntimePack, buildLocalMendPackageManifest, buildLocalRuntimePack, deleteLocalRuntimePack, prepareGlobalRuntimePackAuthorRoot, rollbackRuntimePack, runtimePackArtifactCandidates, runtimePackPlan } from "../../src/mend/runtime/pack"
@@ -512,6 +512,25 @@ describe("runtime pack", () => {
       await readFile(path.join(dir.path, ".mendcode", "generated", "opencode.json"), "utf8"),
     ) as { mcp?: Record<string, unknown> }
     expect(generated.mcp).toHaveProperty("local")
+  })
+
+  test("marks generated config stale when project MCP changes", async () => {
+    await using dir = await tmpdir()
+    await writeJson(path.join(dir.path, ".mendcode", "mendcode.json"), {
+      version: 0,
+      focus: { default: "codex" },
+      worktree: { mode: "off" },
+    })
+    await syncProject(dir.path)
+    expect(generatedConfigNeedsSync(dir.path)).toBe(false)
+
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await writeJson(path.join(dir.path, ".mendcode", "mcp", "local.json"), {
+      type: "local",
+      command: ["node", "server.js"],
+    })
+
+    expect(generatedConfigNeedsSync(dir.path)).toBe(true)
   })
 
   test("previews external local registry source from staging without live writes", async () => {

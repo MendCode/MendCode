@@ -8,6 +8,15 @@ export function sessionPromptVisible(input: {
   return input.permissionCount === 0 && input.questionCount === 0 && input.planReviewCount === 0
 }
 
+export function sessionPendingInputSessionIDs(input: {
+  sessionID: string
+  parentID?: string
+  visibleSessionIDs: string[]
+}) {
+  if (input.parentID) return [input.sessionID]
+  return input.visibleSessionIDs
+}
+
 const SESSION_SIDE_PADDING = 2
 const SESSION_USAGE_BAR_CELLS = 8
 
