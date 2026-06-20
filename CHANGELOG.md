@@ -4,7 +4,7 @@
 
 - Fix Memory Center Dream scheduling proposals so accepting a side-chat `dream-dry-run` proposal writes the Dream scheduler state instead of only saving an ordinary memory proposal.
 - Recover Dream scheduler state from already-applied Dream proposals, so users who accepted a Dream schedule proposal in `0.1.15` see the Dream page become scheduled after upgrading.
-- Add Dream schedule parsing for human time windows such as `6pm a 11pm en Panama`, `18:00-23:00`, and fixed times such as `21:00 America/Panama`.
+- Add Dream schedule parsing for human time windows such as `6pm to 11pm local time`, `18:00-23:00`, and fixed times such as `21:00 Europe/London`.
 - Add regression coverage for side-chat Dream proposal application, Dream schedule recovery, and human-readable Dream time parsing.
 
 ## 0.1.15 - 2026-06-19

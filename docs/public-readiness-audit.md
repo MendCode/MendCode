@@ -70,7 +70,7 @@ Fixed active script defaults that still pointed to the old repository:
 Known remaining donor/upstream references are intentional context, not MendCode repo links:
 
 - `anomalyco/opencode` references in donor/runtime guard tests and upstream patch metadata.
-- `Obed0101/mflow` references for the mflow integration repository and legacy public relay labels.
+- Legacy mflow integration repository references and public relay labels.
 
 Public Git history/PR metadata still includes old branch names and merge messages:
 

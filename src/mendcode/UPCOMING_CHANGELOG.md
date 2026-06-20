@@ -5,7 +5,7 @@ Target ref: v0.1.16
 ### Fixed
 - Fix accepting Memory side-chat Dream schedule proposals so they configure Dream scheduler state instead of only applying an ordinary memory proposal.
 - Recover schedule state from already-applied Dream proposals created before this fix.
-- Parse common human Dream windows such as `6pm a 11pm en Panama`, `18:00-23:00`, and fixed `21:00 America/Panama` requests.
+- Parse common human Dream windows such as `6pm to 11pm local time`, `18:00-23:00`, and fixed `21:00 Europe/London` requests.
 
 ## Memory
 ### Added
