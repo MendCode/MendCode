@@ -116,7 +116,7 @@ entries, and themes.
 </details>
 </td>
 <td valign="top" width="50%">
-<details>
+<details open>
 <summary><strong>Option B: mascot welcome</strong></summary>
 <p><img src="docs/assets/screenshots/home-mascot-centered.png" alt="MendCode centered mascot welcome"></p>
 </details>
@@ -138,7 +138,7 @@ entries, and themes.
 </details>
 </td>
 <td valign="top" width="50%">
-<details>
+<details open>
 <summary><strong>Option B: mascot with Agent View</strong></summary>
 <p><img src="docs/assets/screenshots/home-mascot-agent-view-centered.png" alt="MendCode mascot Agent View"></p>
 </details>
@@ -160,7 +160,7 @@ entries, and themes.
 </details>
 </td>
 <td valign="top" width="50%">
-<details>
+<details open>
 <summary><strong>Option B: mascot actions</strong></summary>
 <p><img src="docs/assets/screenshots/home-mascot-actions.png" alt="MendCode mascot actions"></p>
 </details>
@@ -205,7 +205,7 @@ entries, and themes.
 </details>
 </td>
 <td valign="top" width="50%">
-<details>
+<details open>
 <summary><strong>Command palette entries</strong></summary>
 <pre><code>Ctrl+P -> Home identity
 Ctrl+P -> Home welcome mode
@@ -234,7 +234,7 @@ Ctrl+P -> Usage Insights</code></pre>
 </details>
 </td>
 <td valign="top" width="50%">
-<details>
+<details open>
 <summary><strong>What can be themed</strong></summary>
 <p>Home layout, title identity, mascot mode, prompt frame, prompt lead, status
 placement, chat presentation, activity states, widgets, slots, custom routes,
@@ -459,8 +459,19 @@ context, then verify live code before changing behavior.
 - Plan Mode is an explicit review gate before implementation.
 - Memory is approval-first: global/project scopes, explicit add/search/preview
   flows, generated proposals, and apply/reject/edit review.
-- Memory page, categories, graph, Dream, and side chat belong to the local
-  memory work and should be promoted publicly only after validation.
+- Memory Center is the user-facing memory workspace: saved global/project
+  memories, pending proposals, project grouping, category graph, category
+  policy, Dream status/logs, inspector, and constrained memory side chat.
+- The memory side agent can answer memory-specific questions, inspect saved
+  entries/categories/policies, explain why context is being retrieved, and draft
+  reviewable proposals for memory/category/policy changes. It should be
+  described as powerful for memory stewardship, not as a general coding agent.
+- Dream is the manual/scheduled memory maintenance loop. It can consolidate
+  stale or duplicated knowledge, surface conflicts, generate safety evidence,
+  and create proposals through the `memoryDream` role; it should not be claimed
+  to edit source files, mutate git, or apply memory silently.
+- Generated memory mutations remain proposals unless the user explicitly applies
+  them. This applies to extraction, side chat, and Dream.
 - Usage Insights is local observability, not cloud analytics and not a
   productivity guarantee.
 - Smart permissions can route risky actions through a configured reviewer role.
@@ -483,6 +494,8 @@ context, then verify live code before changing behavior.
 - [TUI plugins and widgets](docs/tui-plugins-and-widgets.md): dynamic TUI
   extension points.
 - [Plan Mode](docs/plan-mode.md): plan review flow.
+- [Memory Center](docs/memory-center.md): saved/pending memories, categories,
+  Dream maintenance, and the constrained memory side agent.
 - [Usage Insights](docs/usage-insights.md): local activity dashboard.
 - [mflow](docs/mflow.md): local-first coordination.
 - [TSM and worktrees](docs/tsm-and-worktrees.md): terminal/worktree orchestration.
