@@ -1,20 +1,20 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { existsSync, mkdtempSync } from "fs"
-import { mkdir, writeFile } from "fs/promises"
+import { mkdir, rm, writeFile } from "fs/promises"
 import { tmpdir as osTmpdir } from "os"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
 import { appendMemoryEntry, deleteMemoryEntry, memoryStatus, readMemoryEntries, updateMemoryEntry } from "../../src/mend/memory/store"
 import { retrieveMemory } from "../../src/mend/memory/retrieve"
-import { readMemoryConfig, writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../../src/mend/memory/config"
+import { memoryPaths, readMemoryConfig, writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../../src/mend/memory/config"
 import { applyMemoryProposal, autoProposeMemoriesFromSession, extractorPrompt, importCodexMemories, listMemoryProposals, memoryExtractorCandidateMessage, memoryExtractorFailureReason, proposeMemoriesFromExtractorText, proposeMemoriesWithExtractor, proposeMemory, readMemoryExtractorContext, rejectMemoryProposal, updateMemoryProposal } from "../../src/mend/memory/proposals"
 import { DEFAULT_MEMORY_CATEGORIES, inferMemoryCategoryIDs, normalizeMemoryCategoryPolicies, readMemoryCategoryPolicies, scopeReasonForMemory, writeMemoryCategoryPolicy } from "../../src/mend/memory/categories"
 import { readMemoryFacts, repairMemoryGraph, upsertMemoryFact, validateMemoryGraph } from "../../src/mend/memory/graph"
 import { registerMemoryWorkspace, memoryWorkspaceOverview, writeWorkspaceRegistry } from "../../src/mend/memory/workspaces"
 import { allowedDreamGitCommands, collectDreamFileEvidence, isDreamFileAllowed } from "../../src/mend/memory/dream-sources"
 import { latestDreamStatus, runMemoryDream } from "../../src/mend/memory/dream"
-import { evaluateDreamSchedule, readDreamScheduleState, runScheduledMemoryDream } from "../../src/mend/memory/dream-scheduler"
+import { dreamScheduleWindowFromText, evaluateDreamSchedule, readDreamScheduleState, runScheduledMemoryDream } from "../../src/mend/memory/dream-scheduler"
 import { listMemorySideChats, memoryAssistantFailureReason, parseMemorySideChatResponse, resolveMemoryAssistantRole, resolveMemoryAssistantRuntimeRole, sendMemorySideChatMessage, startMemorySideChat } from "../../src/mend/memory/side-chat"
 import { memoryOverview } from "../../src/mend/memory/overview"
 import { GlobalBus } from "../../src/bus/global"
@@ -947,6 +947,68 @@ describe("mend memory", () => {
     expect(result.proposals[1]?.text).toContain("Dream proposal")
     expect(result.proposals[1]?.tags).toContain("dream-dry-run")
     expect(result.session.proposals).toEqual(result.proposals.map((proposal) => proposal.id))
+  })
+
+  test("applying a side chat Dream proposal configures the Dream schedule", async () => {
+    await using dir = await tmpdir()
+    const chat = await startMemorySideChat({ root: dir.path, selectedCategoryID: "memory.dream" })
+    const result = await sendMemorySideChatMessage({
+      session: chat,
+      message: "Set Dream from 6pm to 11pm in Panama.",
+      responder: async () => ({
+        text: "Prepared a reviewable Dream schedule proposal.",
+        actions: [{
+          kind: "dream-dry-run",
+          text: "Configure Dream to run in the 18:00-23:00 America/Panama window and only draft proposals.",
+          scope: "project",
+          categoryIDs: ["memory.dream"],
+        }],
+      }),
+    })
+
+    const applied = await applyMemoryProposal(result.proposals[0]!.id, dir.path)
+    const schedule = await readDreamScheduleState(dir.path)
+    const entries = await readMemoryEntries("project", dir.path)
+
+    expect(applied.entry).toBe(null)
+    expect(applied.dreamSchedule?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" })
+    expect(schedule?.status).toBe("scheduled")
+    expect(schedule?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" })
+    expect(entries).toHaveLength(0)
+  })
+
+  test("Dream schedule parser accepts human time ranges", () => {
+    expect(dreamScheduleWindowFromText("setea el dream de 6pm a 11pm en Panama")).toMatchObject({
+      enabled: true,
+      start: "18:00",
+      end: "23:00",
+      timezone: "America/Panama",
+    })
+    expect(dreamScheduleWindowFromText("Run Dream at 21:00 America/Panama")).toMatchObject({
+      enabled: true,
+      start: "21:00",
+      end: "21:00",
+      timezone: "America/Panama",
+    })
+  })
+
+  test("Dream schedule state recovers from already-applied Dream proposals", async () => {
+    await using dir = await tmpdir()
+    const proposal = await proposeMemory({
+      text: "Dream proposal: Configure Dream to run in the 18:00-23:00 America/Panama window and only draft proposals.",
+      scope: "project",
+      tags: ["side-chat", "dream-dry-run", "memory.dream"],
+      categoryIDs: ["memory.dream"],
+      source: "memory-side-chat",
+    }, dir.path)
+    await applyMemoryProposal(proposal.id, dir.path)
+    await rm(path.join(memoryPaths(dir.path).projectDir, "dream", "schedule.json"), { force: true })
+
+    const recovered = await readDreamScheduleState(dir.path)
+
+    expect(recovered?.status).toBe("scheduled")
+    expect(recovered?.reason).toBe("Recovered from applied Dream proposal")
+    expect(recovered?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" })
   })
 
   test("side chat default responder is honest when no assistant model is configured", async () => {

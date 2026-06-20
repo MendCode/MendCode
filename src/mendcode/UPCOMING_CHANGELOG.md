@@ -1,5 +1,11 @@
-Last release: v0.1.14
-Target ref: v0.1.15
+Last release: v0.1.15
+Target ref: v0.1.16
+
+## Memory Center
+### Fixed
+- Fix accepting Memory side-chat Dream schedule proposals so they configure Dream scheduler state instead of only applying an ordinary memory proposal.
+- Recover schedule state from already-applied Dream proposals created before this fix.
+- Parse common human Dream windows such as `6pm a 11pm en Panama`, `18:00-23:00`, and fixed `21:00 America/Panama` requests.
 
 ## Memory
 ### Added
