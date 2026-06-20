@@ -26,7 +26,7 @@ This is one complete ordered spec. The order is for safety and dependency manage
 | Project definition | A folder/root becomes a project/workspace once it has at least one MendCode session with one user message. |
 | Project registry | Store project/workspace registry in user-global MendCode state, not a repo-local database. |
 | Default discovery | Default to known MendCode session roots and user-selected roots; do not blind-scan the whole home directory. |
-| Obed local grouping | Obed's default local group root is `/Users/obed/Code`. |
+| Local grouping | A user's default local group root can be any configured workspace directory, for example `~/Code`. |
 | General grouping | Users can configure roots/groups in their global MendCode state. |
 | Group views | Support automatic folder/root groups and manual user-defined groups. Group views aggregate read/review surfaces without merging ownership scopes. |
 | Scope default | Project/repo/product facts default to `project`; global is only for explicit cross-project or person-level preferences. |
