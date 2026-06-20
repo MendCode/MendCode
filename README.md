@@ -8,10 +8,12 @@ The customizable coding terminal.
 [![Docs](https://img.shields.io/badge/docs-github-2563eb)](docs/README.md)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-16a34a)](CONTRIBUTING.md)
 
-MendCode is a terminal-first coding-agent harness you can make your own: a public
-`mendcode` CLI, configurable model roles, review gates, memory policy, reusable
-team packages, local workflow coordination, Usage Insights, and a TUI that can
-be shaped without patching runtime internals.
+MendCode is a terminal-first coding-agent harness you can make your own: a
+public `mendcode` CLI, configurable model roles, review gates, Memory Center,
+Plan Mode Markdown, Agent View, reusable team packages, project MCP config,
+Herdr/mflow/worktree coordination, Usage Insights, release/security gates, and a
+customizable TUI for home identity, prompt chrome, widgets, panels, dialogs, and
+themes without patching runtime internals.
 
 [Website](https://www.mendcode.online/) · [Docs](docs/README.md) · [Feature map](docs/features.md) · [Acknowledgements](ACKNOWLEDGEMENTS.md)
 
@@ -97,12 +99,86 @@ Useful commands after setup:
 
 ### Custom Terminal UI
 
-MendCode turns the terminal into a profile instead of hardcoded chrome.
+MendCode turns the terminal into a configurable product surface: home identity,
+prompt frame, prompt marker, status row, split panels, Agent View, action
+menus, chat presentation, widgets, slots, custom routes, dialogs, footer
+entries, and themes.
 
-![MendCode centered wordmark welcome](docs/assets/screenshots/home-wordmark-centered.png)
+<table>
+<tr>
+<td colspan="2"><strong>Choose the home identity</strong></td>
+</tr>
+<tr>
+<td valign="top" width="50%">
+<details open>
+<summary><strong>Option A: wordmark welcome</strong></summary>
+<p><img src="docs/assets/screenshots/home-wordmark-centered.png" alt="MendCode centered wordmark welcome"></p>
+</details>
+</td>
+<td valign="top" width="50%">
+<details>
+<summary><strong>Option B: mascot welcome</strong></summary>
+<p><img src="docs/assets/screenshots/home-mascot-centered.png" alt="MendCode centered mascot welcome"></p>
+</details>
+</td>
+</tr>
+</table>
 
-```jsonc
-{
+<br>
+
+<table>
+<tr>
+<td colspan="2"><strong>Choose the working layout</strong></td>
+</tr>
+<tr>
+<td valign="top" width="50%">
+<details open>
+<summary><strong>Option A: wordmark with Agent View</strong></summary>
+<p><img src="docs/assets/screenshots/home-wordmark-agent-view-centered.png" alt="MendCode wordmark Agent View"></p>
+</details>
+</td>
+<td valign="top" width="50%">
+<details>
+<summary><strong>Option B: mascot with Agent View</strong></summary>
+<p><img src="docs/assets/screenshots/home-mascot-agent-view-centered.png" alt="MendCode mascot Agent View"></p>
+</details>
+</td>
+</tr>
+</table>
+
+<br>
+
+<table>
+<tr>
+<td colspan="2"><strong>Choose the action surface</strong></td>
+</tr>
+<tr>
+<td valign="top" width="50%">
+<details open>
+<summary><strong>Option A: wordmark actions</strong></summary>
+<p><img src="docs/assets/screenshots/home-wordmark-actions.png" alt="MendCode wordmark actions"></p>
+</details>
+</td>
+<td valign="top" width="50%">
+<details>
+<summary><strong>Option B: mascot actions</strong></summary>
+<p><img src="docs/assets/screenshots/home-mascot-actions.png" alt="MendCode mascot actions"></p>
+</details>
+</td>
+</tr>
+</table>
+
+<br>
+
+<table>
+<tr>
+<td colspan="2"><strong>Configure the terminal profile</strong></td>
+</tr>
+<tr>
+<td valign="top" width="50%">
+<details open>
+<summary><strong>Example profile JSON</strong></summary>
+<pre><code class="language-jsonc">{
   "identity": {
     "logoMode": "mascot",
     "productName": "MendCode"
@@ -116,7 +192,7 @@ MendCode turns the terminal into a profile instead of hardcoded chrome.
   "promptChrome": {
     "preset": "top-bottom",
     "glyphs": {
-      "leadText": "mendcode>"
+      "leadText": "mendcode&gt;"
     }
   },
   "promptStatus": {
@@ -125,28 +201,48 @@ MendCode turns the terminal into a profile instead of hardcoded chrome.
       "ascii-box": "inside"
     }
   }
-}
-```
-
-Configurable surfaces include prompt frame, prompt marker, status row, home
-title or mascot, centered/split home layout, Agent View, chat presentation,
-activity states, widgets, slots, custom routes, dialogs, footer entries, and
-themes.
-
-![MendCode centered Agent View](docs/assets/screenshots/home-wordmark-agent-view-centered.png)
-
-Most visual changes are reachable from the command palette:
-
-```text
-Ctrl+P -> Home identity
+}</code></pre>
+</details>
+</td>
+<td valign="top" width="50%">
+<details>
+<summary><strong>Command palette entries</strong></summary>
+<pre><code>Ctrl+P -> Home identity
 Ctrl+P -> Home welcome mode
 Ctrl+P -> Home split panel
 Ctrl+P -> Prompt chrome
 Ctrl+P -> Prompt lead string
 Ctrl+P -> Prompt status placement
 Ctrl+P -> Chat presentation
-Ctrl+P -> Usage Insights
-```
+Ctrl+P -> Usage Insights</code></pre>
+</details>
+</td>
+</tr>
+</table>
+
+<br>
+
+<table>
+<tr>
+<td colspan="2"><strong>Agent View as a first-class terminal surface</strong></td>
+</tr>
+<tr>
+<td valign="top" width="50%">
+<details open>
+<summary><strong>Full Agent View</strong></summary>
+<p><img src="docs/assets/screenshots/home-agent-view.png" alt="MendCode Agent View home surface"></p>
+</details>
+</td>
+<td valign="top" width="50%">
+<details>
+<summary><strong>What can be themed</strong></summary>
+<p>Home layout, title identity, mascot mode, prompt frame, prompt lead, status
+placement, chat presentation, activity states, widgets, slots, custom routes,
+dialogs, footer entries, and theme tokens.</p>
+</details>
+</td>
+</tr>
+</table>
 
 ### Package Your Harness
 
@@ -217,6 +313,8 @@ reviewable workspace. See [Memory Center](docs/memory-center.md).
 Usage Insights is local observability for the coding harness, not cloud
 analytics and not a productivity claim.
 
+![MendCode Usage Insights dashboard](docs/assets/screenshots/usage-insights-overview.png)
+
 It can show global/project/directory scope, token heatmaps, sessions, active
 days, prompt volume, AI generation time, tool runtime, changed files, top tools,
 top agents, top models, cache mix, and optional weather.
@@ -283,7 +381,13 @@ normal test entrypoint; run focused tests from the package that owns the change.
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=MendCode/MendCode&type=Date)](https://www.star-history.com/#MendCode/MendCode&Date)
+<a href="https://www.star-history.com/#MendCode/MendCode&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=MendCode/MendCode&type=date&theme=dark&legend=top-left">
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=MendCode/MendCode&type=date&legend=top-left">
+    <img alt="MendCode Star History Chart" src="https://api.star-history.com/chart?repos=MendCode/MendCode&type=date&legend=top-left">
+  </picture>
+</a>
 
 ## For Agents
 
