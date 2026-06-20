@@ -5,6 +5,7 @@ import { memoryPaths, readMemoryConfig, type MemoryScope } from "./config"
 import { appendMemoryEntry, deleteMemoryEntry, readMemoryEntries, updateMemoryEntry, type MemoryEntry, type MemorySensitivity } from "./store"
 import { inferMemoryCategoryIDs, normalizeMemoryCategoryIDs, scopeReasonForMemory } from "./categories"
 import { legacyScopeForFact, upsertMemoryFact } from "./graph"
+import { configureDreamScheduleFromText, type DreamScheduleState } from "./dream-scheduler"
 import { resolveModelRoles } from "../config/models"
 import { runProviderAdapter } from "../runtime/provider-adapters"
 
@@ -666,7 +667,10 @@ export async function applyMemoryProposal(id: string, root?: string) {
   if (proposal.status !== "pending") throw new Error(`Memory proposal ${id} is ${proposal.status}`)
   const operation = proposal.operation ?? "add"
   let entry: MemoryEntry | null = null
-  if (operation === "add") {
+  let dreamSchedule: DreamScheduleState | null = null
+  if (proposal.tags.includes("dream-dry-run")) {
+    dreamSchedule = await configureDreamScheduleFromText(root, proposal.text)
+  } else if (operation === "add") {
     entry = await appendMemoryEntry({
       scope: proposal.scope,
       text: proposal.text,
@@ -747,7 +751,7 @@ export async function applyMemoryProposal(id: string, root?: string) {
   }
   const next: MemoryProposal = { ...proposal, operation, status: "applied", updatedAt: new Date().toISOString(), appliedEntryID: entry?.id ?? null }
   await writeProposal(next, root)
-  return { proposal: next, entry }
+  return { proposal: next, entry, dreamSchedule }
 }
 
 export async function rejectMemoryProposal(id: string, root?: string) {
