@@ -2,6 +2,7 @@ import { test, expect, mock, beforeEach } from "bun:test"
 import { InstanceRuntime } from "../../src/project/instance-runtime"
 import { Effect } from "effect"
 import type { MCP as MCPNS } from "../../src/mcp/index"
+import { mkdir } from "fs/promises"
 
 // --- Mock infrastructure ---
 
@@ -263,6 +264,41 @@ function withInstance(
     })
   }
 }
+
+// ========================================================================
+// Test: first-class MendCode project MCP files are loaded by runtime status
+// ========================================================================
+
+test("status includes project .mendcode/mcp definitions", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        `${dir}/mendcode.json`,
+        JSON.stringify({
+          $schema: "https://mendcode.ai/config.json",
+          mcp: {},
+        }),
+      )
+      await mkdir(`${dir}/.mendcode/mcp`, { recursive: true })
+      await Bun.write(
+        `${dir}/.mendcode/mcp/project-local.json`,
+        JSON.stringify({
+          type: "local",
+          command: ["echo", "project"],
+        }),
+      )
+    },
+  })
+
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const status = await Effect.runPromise(MCP.Service.use((mcp) => mcp.status()).pipe(Effect.provide(MCP.defaultLayer)))
+      expect(status["project-local"]?.status).toBe("connected")
+      await InstanceRuntime.disposeInstance(Instance.current)
+    },
+  })
+})
 
 // ========================================================================
 // Test: tools() are cached after connect

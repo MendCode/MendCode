@@ -273,6 +273,34 @@ export function providerLiveUsage(
   }
 }
 
+function memoryMessageText(message: { content?: unknown }) {
+  const content = message.content
+  if (typeof content === "string") return content.trim()
+  if (!Array.isArray(content)) return ""
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part
+      if (isRecord(part) && typeof part.text === "string") return part.text
+      return ""
+    })
+    .filter(Boolean)
+    .join("\n")
+    .trim()
+}
+
+function memoryConversationWindow(messages: Array<{ role?: string; content?: unknown }>, maxMessages = 6) {
+  return messages
+    .slice(0, -1)
+    .slice(-maxMessages)
+    .map((message) => {
+      const role = typeof message.role === "string" ? message.role.toUpperCase() : "UNKNOWN"
+      const text = memoryMessageText(message)
+      return text ? `${role}:\n${text.slice(0, 1800)}` : ""
+    })
+    .filter(Boolean)
+    .join("\n\n")
+}
+
 export type Result = "compact" | "stop" | "continue"
 
 export type Event = LLM.Event
@@ -348,6 +376,7 @@ interface ProcessorContext extends Input {
   currentText: MessageV2.TextPart | undefined
   assistantText: string
   memoryQuery: string | null
+  streamMessages: LLM.StreamInput["messages"]
   streamUser: MessageV2.User | undefined
   reasoningMap: Record<string, MessageV2.ReasoningPart>
   liveTokenOutputText: string
@@ -409,6 +438,7 @@ export const layer: Layer.Layer<
           currentText: undefined,
           assistantText: "",
           memoryQuery: null,
+          streamMessages: [],
           streamUser: undefined,
           reasoningMap: {},
         liveTokenOutputText: "",
@@ -861,7 +891,9 @@ export const layer: Layer.Layer<
               ? messagePartsText(MessageV2.parts(ctx.assistantMessage.parentID))
               : ""
             const memoryUserText = ctx.memoryQuery || persistedUserText
+            const recentContext = memoryConversationWindow(ctx.streamMessages)
             const memoryTurnText = [
+              recentContext ? `<recent_context>\n${recentContext}\n</recent_context>` : "",
               memoryUserText ? `USER:\n${memoryUserText}` : "",
               ctx.assistantText.trim() ? `ASSISTANT:\n${ctx.assistantText.trim()}` : "",
             ].filter(Boolean).join("\n\n")
@@ -1157,6 +1189,7 @@ export const layer: Layer.Layer<
             ctx.liveTokenOutputText = ""
             ctx.liveTokenUpdatedAt = 0
             ctx.reasoningMap = {}
+            ctx.streamMessages = streamInput.messages
             ctx.streamUser = streamInput.user
             ctx.assistantMessage.liveUsage = {
               source: "estimate",

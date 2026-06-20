@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   sessionContentWidth,
+  sessionPendingInputSessionIDs,
   sessionTopMetricsWidth,
   sessionTopbarLeftLabel,
   sessionTopbarLeftWidth,
@@ -23,12 +24,42 @@ describe("session layout", () => {
   test("hides the prompt while blocking prompts are active", () => {
     expect(
       sessionPromptVisible({
+        isChildSession: false,
+        permissionCount: 1,
+        questionCount: 0,
+        planReviewCount: 0,
+      }),
+    ).toBe(false)
+  })
+
+  test("hides the prompt for child sessions while their own blocking prompts are active", () => {
+    expect(
+      sessionPromptVisible({
         isChildSession: true,
         permissionCount: 1,
         questionCount: 0,
         planReviewCount: 0,
       }),
     ).toBe(false)
+  })
+
+  test("uses the current child session for pending input", () => {
+    expect(
+      sessionPendingInputSessionIDs({
+        sessionID: "child-2",
+        parentID: "parent-1",
+        visibleSessionIDs: ["parent-1", "child-1", "child-2"],
+      }),
+    ).toEqual(["child-2"])
+  })
+
+  test("uses the visible parent family for parent pending input", () => {
+    expect(
+      sessionPendingInputSessionIDs({
+        sessionID: "parent-1",
+        visibleSessionIDs: ["parent-1", "child-1", "child-2"],
+      }),
+    ).toEqual(["parent-1", "child-1", "child-2"])
   })
 
   test("subtracts session side padding from the resize-sensitive content width", () => {

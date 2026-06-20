@@ -43,12 +43,6 @@ mendcode setup plan
 mendcode setup doctor
 ```
 
-Screenshot slot:
-
-| File | Capture |
-| --- | --- |
-| `docs/assets/screenshots/setup-status.png` | Setup/status page showing provider, models, budget, prompt, package, TUI, memory, and permissions. Do not show API keys, OAuth tokens, or personal paths. |
-
 Completing setup records local project state. It does not mean provider credentials are committed. Provider credentials, OAuth tokens, API keys, local mflow room secrets, caches, and machine-local state must stay outside shared packages and repository docs.
 
 ## Configuration Files
@@ -131,6 +125,8 @@ Common roles:
 - `compaction`
 - `summary`
 - `memoryExtractor`
+- `memoryDream`
+- `memoryAssistant`
 - `permissionReviewer`
 
 Example:
@@ -140,21 +136,29 @@ version: 0
 enabled: true
 roles:
   default:
-    providerID: "openai"
-    modelID: "gpt-5.2"
-    authMode: "api-key"
+    providerID: "<provider>"
+    modelID: "<default-model>"
+    authMode: "<auth-mode>"
   build:
-    providerID: "openai"
-    modelID: "gpt-5.2-codex"
-    authMode: "api-key"
+    providerID: "<provider>"
+    modelID: "<model-for-build>"
+    authMode: "<auth-mode>"
   small:
-    providerID: "openai"
-    modelID: "gpt-5-mini"
-    authMode: "api-key"
+    providerID: "<provider>"
+    modelID: "<model-for-lightweight-tasks>"
+    authMode: "<auth-mode>"
+  memoryDream:
+    providerID: "<provider>"
+    modelID: "<model-for-memory-maintenance>"
+    authMode: "<auth-mode>"
+  memoryAssistant:
+    providerID: "<provider>"
+    modelID: "<model-for-memory-side-chat>"
+    authMode: "<auth-mode>"
   permissionReviewer:
-    providerID: "openai"
-    modelID: "gpt-5-mini"
-    authMode: "api-key"
+    providerID: "<provider>"
+    modelID: "<model-for-permission-review>"
+    authMode: "<auth-mode>"
 ```
 
 Commands:
@@ -162,12 +166,12 @@ Commands:
 ```bash
 mendcode models status
 mendcode models presets
-mendcode models set-default openai gpt-5.2 --auth-mode api-key --enable
-mendcode models use-preset openai-api-gpt-5.2-codex --enable
+mendcode models set-default <provider> <model> --auth-mode <auth-mode> --enable
+mendcode models use-preset <preset-id> --enable
 mendcode models plan
 ```
 
-The CLI currently writes the default model role directly. For non-default roles such as `build`, `review`, `subagent`, `memoryExtractor`, or `permissionReviewer`, edit `models.yaml` and run `mendcode models plan` / `mendcode models status` to verify projection.
+The CLI currently writes the default model role directly. For non-default roles such as `build`, `review`, `subagent`, `memoryExtractor`, `memoryDream`, `memoryAssistant`, or `permissionReviewer`, edit `models.yaml` and run `mendcode models plan` / `mendcode models status` to verify projection. Public docs should keep model examples provider-neutral; teams can pin their own provider and model choices in local or package-specific config.
 
 ## Permissions And Memory
 
@@ -209,6 +213,7 @@ Memory behavior:
 - Generated memory proposals are approval-gated.
 - Direct `mendcode memory add` is for explicit user requests to save memory.
 - `mendcode memory search` and `mendcode memory preview` are the right commands before editing, deleting, applying, or rejecting entries/proposals.
+- The [Memory Center](memory-center.md) view adds saved/pending views, category policy, Dream status/logs, workspace awareness, and constrained side chat.
 
 Example:
 
@@ -220,13 +225,6 @@ mendcode memory search "release workflow"
 mendcode memory preview "release workflow"
 mendcode memory add "Use docs screenshots with the public mendcode command." --scope project
 ```
-
-Screenshot slots:
-
-| File | Capture |
-| --- | --- |
-| `docs/assets/screenshots/permissions-smart.png` | A permission prompt or smart-approval status with no dangerous command, no secrets, and no sensitive path. |
-| `docs/assets/screenshots/memory-preview.png` | `mendcode memory search` or `preview` using demo data, not personal memory content. |
 
 ## Packages, mflow, TSM, And Worktrees
 

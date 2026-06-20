@@ -2,6 +2,8 @@
 
 Plan Mode turns planning into an explicit review step before implementation. The agent prepares a Markdown plan, calls the `plan_review` tool, and MendCode renders that plan in an interactive TUI modal.
 
+![MendCode Plan Mode review modal](assets/screenshots/plan-review-modal.png)
+
 The important behavior is simple:
 
 1. The plan is displayed in the terminal, not buried in normal assistant prose.
@@ -18,14 +20,11 @@ The `plan_review` tool accepts:
 
 The TUI route renders the Markdown plan in a centered modal. It supports normal Markdown rendering and uses the plan Markdown renderer for terminal-friendly output. Mermaid/flowcharts are appropriate when they clarify sequencing, but the plan should still be readable as Markdown if a terminal cannot render the diagram cleanly.
 
-Screenshot slots:
-
-| File | Capture |
-| --- | --- |
-| `docs/assets/screenshots/plan-review-modal.png` | Preview stage with a concise plan and visible action hints. |
-| `docs/assets/screenshots/plan-review-edit.png` | Edit or comment stage showing that the user can change the plan before implementation. |
-
-Do not add image links until the files exist.
+The modal keeps the draft plan separate from the chat transcript behind it. In
+the screenshot, the plan contains headings, numbered sections, inline color
+chips, and a Mermaid flowchart preview; the action row at the bottom is the
+review gate. `Enter` implements the approved plan, `e` edits it, `c` adds
+comments, and `r` rejects it.
 
 ## Review Actions
 
@@ -84,16 +83,6 @@ Use this behavior to separate planning from writing:
 - Planning agents should produce the plan and call `plan_review`.
 - Implementation agents should edit files only after approval.
 - If the user edits or rejects the plan, the edited Markdown or rejection reason overrides the previous draft.
-
-## Capture Prompt
-
-Use a demo repo with no secrets:
-
-```text
-Create a plan with a Mermaid flowchart for adding a docs page about packages. Wait for approval before editing.
-```
-
-For a cleaner screenshot, avoid huge file lists and keep the plan under one modal scroll page when possible.
 
 ## Source Map
 

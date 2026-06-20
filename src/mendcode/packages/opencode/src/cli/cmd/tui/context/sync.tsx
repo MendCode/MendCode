@@ -86,6 +86,19 @@ function mergeFetchedParts(current: Part[] | undefined, incoming: Part[]) {
   return merged.toSorted((a, b) => a.id.localeCompare(b.id))
 }
 
+function mergeMessageInfo(current: Message | undefined, incoming: Message): Message {
+  if (!current || current.role !== incoming.role) return incoming
+  if (incoming.role !== "assistant" || current.role !== "assistant") return incoming
+
+  return {
+    ...current,
+    ...incoming,
+    providerID: incoming.providerID || current.providerID,
+    modelID: incoming.modelID || current.modelID,
+    variant: incoming.variant ?? current.variant,
+  }
+}
+
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
   init: () => {
@@ -446,7 +459,12 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           }
           const result = Binary.search(messages, event.properties.info.id, (m) => m.id)
           if (result.found) {
-            setStore("message", event.properties.info.sessionID, result.index, reconcile(event.properties.info))
+            setStore(
+              "message",
+              event.properties.info.sessionID,
+              result.index,
+              reconcile(mergeMessageInfo(messages[result.index], event.properties.info)),
+            )
             break
           }
           setStore(

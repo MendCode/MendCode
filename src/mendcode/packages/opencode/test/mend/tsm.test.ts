@@ -7,6 +7,7 @@ import { activateTsm, deactivateTsm, removeTsm, tsmPlan, tsmStatePath, tsmStatus
 import { createWorktreeRecord, planTsmWorktreeOpen } from "../../src/mend/worktree"
 
 const previousBinary = process.env.MENDCODE_TSM_BINARY
+const controlPlane = path.resolve(import.meta.dir, "../../src/mend/cli/control-plane.ts")
 
 afterEach(() => {
   if (previousBinary === undefined) delete process.env.MENDCODE_TSM_BINARY
@@ -80,6 +81,25 @@ describe("TSM lifecycle", () => {
     expect(removed.removesExternalTsm).toBe(false)
     expect(removed.killsSessions).toBe(false)
     expect(removed.status.lifecycle).toBe("installed-inactive")
+  })
+
+  test("control-plane TSM commands render text by default and JSON on request", async () => {
+    await using dir = await tmpdir({ git: true })
+    process.env.MENDCODE_TSM_BINARY = await fakeTsm(dir.path)
+    const env = {
+      ...process.env,
+      MENDCODE_SHELL_CWD: dir.path,
+    }
+
+    const text = spawnSync("bun", [controlPlane, "tsm", "activate"], { env, encoding: "utf8" })
+    const json = spawnSync("bun", [controlPlane, "tsm", "status", "--json"], { env, encoding: "utf8" })
+
+    expect(text.status).toBe(0)
+    expect(text.stdout.trim()).toStartWith("TSM: active")
+    expect(text.stdout).toContain("Enabled: yes")
+    expect(text.stdout.trim()).not.toStartWith("{")
+    expect(json.status).toBe(0)
+    expect(JSON.parse(json.stdout)).toMatchObject({ lifecycle: "active", enabled: true })
   })
 
   test("TSM executor plans through fake CLI without taking ownership gates", async () => {

@@ -7,6 +7,7 @@ import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js"
 import { type Tool as MCPToolDef, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js"
 import { Config } from "@/config/config"
 import { ConfigMCP } from "../config/mcp"
+import { readMendMcpConfig } from "@/mend/config/mcp"
 import * as Log from "@mendcode/core/util/log"
 import { NamedError } from "@mendcode/core/util/error"
 import z from "zod/v4"
@@ -447,11 +448,24 @@ export const layer = Layer.effect(
       })
     }
 
+    const effectiveConfig = Effect.fn("MCP.effectiveConfig")(function* () {
+      const cfg = yield* cfgSvc.get()
+      const directory = yield* InstanceState.directory
+      const project = yield* Effect.promise(() => readMendMcpConfig(directory)).pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            log.warn("failed to read project .mendcode/mcp config", { error: String(error) })
+            return undefined
+          }),
+        ),
+      )
+      return { ...(cfg.mcp ?? {}), ...(project?.servers ?? {}) } as Record<string, McpEntry>
+    })
+
     const state = yield* InstanceState.make<State>(
       Effect.fn("MCP.state")(function* () {
-        const cfg = yield* cfgSvc.get()
         const bridge = yield* EffectBridge.make()
-        const config = cfg.mcp ?? {}
+        const config = yield* effectiveConfig()
         const s: State = {
           status: {},
           clients: {},
@@ -538,8 +552,7 @@ export const layer = Layer.effect(
     const status = Effect.fn("MCP.status")(function* () {
       const s = yield* InstanceState.get(state)
 
-      const cfg = yield* cfgSvc.get()
-      const config = cfg.mcp ?? {}
+      const config = yield* effectiveConfig()
       const result: Record<string, Status> = {}
 
       for (const [key, mcp] of Object.entries(config)) {
@@ -596,7 +609,7 @@ export const layer = Layer.effect(
       const s = yield* InstanceState.get(state)
 
       const cfg = yield* cfgSvc.get()
-      const config = cfg.mcp ?? {}
+      const config = yield* effectiveConfig()
       const defaultTimeout = cfg.experimental?.mcp_timeout
 
       const connectedClients = Object.entries(s.clients).filter(
@@ -655,7 +668,7 @@ export const layer = Layer.effect(
         s,
         (c, timeout) => McpCatalog.prompts(c, timeout),
         "prompts",
-        cfg.mcp ?? {},
+        yield* effectiveConfig(),
         cfg.experimental?.mcp_timeout,
       )
     })
@@ -667,7 +680,7 @@ export const layer = Layer.effect(
         s,
         (c, timeout) => McpCatalog.resources(c, timeout),
         "resources",
-        cfg.mcp ?? {},
+        yield* effectiveConfig(),
         cfg.experimental?.mcp_timeout,
       )
     })
@@ -685,7 +698,8 @@ export const layer = Layer.effect(
         return undefined
       }
       const cfg = yield* cfgSvc.get()
-      const mcpConfig = cfg.mcp?.[clientName]
+      const config = yield* effectiveConfig()
+      const mcpConfig = config[clientName]
       const entry = mcpConfig && isMcpConfigured(mcpConfig) ? mcpConfig : undefined
       const timeout = entry?.timeout ?? cfg.experimental?.mcp_timeout
       return yield* Effect.tryPromise({
@@ -714,8 +728,8 @@ export const layer = Layer.effect(
     })
 
     const getMcpConfig = Effect.fnUntraced(function* (mcpName: string) {
-      const cfg = yield* cfgSvc.get()
-      const mcpConfig = cfg.mcp?.[mcpName]
+      const config = yield* effectiveConfig()
+      const mcpConfig = config[mcpName]
       if (!mcpConfig || !isMcpConfigured(mcpConfig)) return undefined
       return mcpConfig
     })

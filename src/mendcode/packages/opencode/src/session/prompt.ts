@@ -58,9 +58,6 @@ import { SessionEvent } from "@/v2/session-event"
 import { Modelv2 } from "@/v2/model"
 import { AgentAttachment, FileAttachment, Source } from "@/v2/session-prompt"
 import * as DateTime from "effect/DateTime"
-import { eq } from "@/storage/db"
-import * as Database from "@/storage/db"
-import { SessionTable } from "./session.sql"
 import { readPromptMode } from "@/mend/prompt/mode"
 import { composePromptPolicy } from "@/mend/prompt/compose"
 import { enforceMflowBeforeEdit, releaseMflowLocks, waitMflowBeforeRead } from "@/mend/config/mflow"
@@ -173,6 +170,76 @@ export const layer = Layer.effect(
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* elog.info("cancel", { sessionID })
       yield* state.cancel(sessionID)
+    })
+
+    const syncSessionSelection = Effect.fn("SessionPrompt.syncSessionSelection")(function* (input: {
+      sessionID: SessionID
+      agent: string
+      model: {
+        providerID: string
+        modelID: string
+        variant?: string
+      }
+      time: number
+    }) {
+      const current = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      const nextModel = {
+        id: ModelID.make(input.model.modelID),
+        providerID: ProviderID.make(input.model.providerID),
+        variant: input.model.variant,
+      }
+      const agentChanged = current.agent !== input.agent
+      const modelChanged =
+        current.model?.providerID !== nextModel.providerID ||
+        current.model?.id !== nextModel.id ||
+        current.model?.variant !== nextModel.variant
+
+      if (!agentChanged && !modelChanged) return
+
+      yield* sessions.setAgentModel({
+        sessionID: input.sessionID,
+        agent: input.agent,
+        model: nextModel,
+        time: input.time,
+      })
+
+      if (agentChanged) {
+        try {
+          EventV2.run(SessionEvent.AgentSwitched.Sync, {
+            sessionID: input.sessionID,
+            timestamp: DateTime.makeUnsafe(input.time),
+            agent: input.agent,
+          })
+        } catch (error) {
+          log.warn("failed to publish v2 agent switch", {
+            sessionID: input.sessionID,
+            agent: input.agent,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+
+      if (modelChanged) {
+        try {
+          EventV2.run(SessionEvent.ModelSwitched.Sync, {
+            sessionID: input.sessionID,
+            timestamp: DateTime.makeUnsafe(input.time),
+            model: {
+              id: Modelv2.ID.make(input.model.modelID),
+              providerID: Modelv2.ProviderID.make(input.model.providerID),
+              variant: Modelv2.VariantID.make(input.model.variant ?? "default"),
+            },
+          })
+        } catch (error) {
+          log.warn("failed to publish v2 model switch", {
+            sessionID: input.sessionID,
+            providerID: input.model.providerID,
+            modelID: input.model.modelID,
+            variant: input.model.variant,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
     })
 
     const resolvePromptParts = Effect.fn("SessionPrompt.resolvePromptParts")(function* (template: string) {
@@ -960,6 +1027,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               model: { providerID: model.providerID, modelID: model.modelID },
             }
             yield* sessions.updateMessage(userMsg)
+            yield* syncSessionSelection({
+              sessionID: input.sessionID,
+              agent: input.agent,
+              model: userMsg.model,
+              time: userMsg.time.created,
+            })
             const userPart: MessageV2.Part = {
               type: "text",
               id: PartID.ascending(),
@@ -1170,36 +1243,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         },
         system: input.system,
         format: input.format,
-      }
-
-      const current = Database.use((db) =>
-        db
-          .select({ agent: SessionTable.agent, model: SessionTable.model })
-          .from(SessionTable)
-          .where(eq(SessionTable.id, input.sessionID))
-          .get(),
-      )
-      if (current?.agent !== info.agent) {
-        EventV2.run(SessionEvent.AgentSwitched.Sync, {
-          sessionID: input.sessionID,
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          agent: info.agent,
-        })
-      }
-      if (
-        current?.model?.providerID !== info.model.providerID ||
-        current.model.id !== info.model.modelID ||
-        current.model.variant !== info.model.variant
-      ) {
-        EventV2.run(SessionEvent.ModelSwitched.Sync, {
-          sessionID: input.sessionID,
-          timestamp: DateTime.makeUnsafe(info.time.created),
-          model: {
-            id: Modelv2.ID.make(info.model.modelID),
-            providerID: Modelv2.ProviderID.make(info.model.providerID),
-            variant: Modelv2.VariantID.make(info.model.variant ?? "default"),
-          },
-        })
       }
 
       yield* Effect.addFinalizer(() => instruction.clear(info.id))
@@ -1517,6 +1560,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       })
 
       yield* sessions.updateMessage(info)
+      yield* syncSessionSelection({
+        sessionID: input.sessionID,
+        agent: info.agent,
+        model: info.model,
+        time: info.time.created,
+      })
       for (const part of parts) yield* sessions.updatePart(part)
       const nextPrompt = parts.reduce(
         (result, part) => {

@@ -92,6 +92,11 @@ function routeNavigate(route: ReturnType<typeof useRoute>, name: string, params?
     return
   }
 
+  if (name === "memory") {
+    route.navigate({ type: "memory" })
+    return
+  }
+
   route.navigate({ type: "plugin", id: name, data: params })
 }
 
@@ -122,6 +127,11 @@ function routeCurrent(route: ReturnType<typeof useRoute>): TuiPluginApi["route"]
   if (route.data.type === "stats") {
     return {
       name: "stats",
+    }
+  }
+  if (route.data.type === "memory") {
+    return {
+      name: "memory",
     }
   }
 

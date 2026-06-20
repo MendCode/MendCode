@@ -33,7 +33,8 @@ import { TimelineDiff } from "@/cli/cmd/tui/routes/session/renderers/diff"
 import { formatDuration } from "@/util/format"
 import { rawReasoningDisplay, shouldDisplayReasoning, unavailableReasoningLabel } from "@/mend/tui/presentation"
 import { sessionContentWidth } from "@/cli/cmd/tui/util/session-layout"
-import { renderPlanMarkdown } from "@/cli/cmd/tui/util/plan-markdown"
+import { hasMermaidFence, renderPlanMarkdown, renderPlanMarkdownStatic } from "@/cli/cmd/tui/util/plan-markdown"
+import { StyledPlanMarkdown } from "@/cli/cmd/tui/component/styled-plan-markdown"
 
 const id = "internal:session-v2-debug"
 const route = "session.v2.messages"
@@ -331,6 +332,7 @@ function AssistantMessage(props: {
                 messageID={props.message.id}
                 part={part as SessionMessageAssistantText}
                 syntax={props.syntax}
+                completed={!!props.message.time.completed}
               />
             </Match>
             <Match when={part.type === "reasoning"}>
@@ -383,22 +385,42 @@ function AssistantMessage(props: {
   )
 }
 
-function AssistantText(props: { messageID: string; part: SessionMessageAssistantText; syntax: SyntaxStyle }) {
+function AssistantText(props: { messageID: string; part: SessionMessageAssistantText; syntax: SyntaxStyle; completed: boolean }) {
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
   const dimensions = useTerminalDimensions()
   const textID = createMemo(() => props.part.text.slice(0, 32).replace(/\W+/g, "-"))
+  const textPaddingLeft = 3
   const source = createMemo(() => props.part.text.trim())
   const renderer = createMemo(() => mend.profile.presentation.message.renderer)
-  const richInput = createMemo(() => {
+  const messageWidth = createMemo(() => sessionContentWidth(dimensions().width, false))
+  const markdownWidth = createMemo(() => Math.max(1, messageWidth() - textPaddingLeft))
+  const richRenderWidth = createMemo(() => Math.min(markdownWidth(), 100))
+  const streaming = createMemo(() => !props.completed)
+  const hasMermaid = createMemo(() => hasMermaidFence(source()))
+  const richStaticContent = createMemo(() => {
     if (renderer() !== "rich") return
-    return { text: source(), width: sessionContentWidth(dimensions().width, false) }
+    if (streaming()) return
+    return renderPlanMarkdownStatic(source(), richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" })
   })
-  const [richContent] = createResource(richInput, async (input) => renderPlanMarkdown(input.text, input.width))
-  const markdownContent = createMemo(() => (renderer() === "rich" ? (richContent() ?? source()) : source()))
+  const richInput = createMemo(() => {
+    if (renderer() !== "rich" || !hasMermaid()) return
+    if (streaming()) return
+    return { text: source(), width: richRenderWidth() }
+  })
+  const [richContent] = createResource(richInput, async (input) =>
+    renderPlanMarkdown(input.text, input.width, { tableMode: "grid", markdownMode: "tables-only" }),
+  )
+  const markdownContent = createMemo(() => (renderer() === "rich" ? (richStaticContent() ?? richContent() ?? source()) : source()))
   return (
     <Show when={source()}>
-      <box paddingLeft={3} marginTop={1} flexShrink={0} id={`text-${props.messageID}-${textID()}`}>
+      <box
+        width={messageWidth()}
+        paddingLeft={textPaddingLeft}
+        marginTop={1}
+        flexShrink={0}
+        id={`text-${props.messageID}-${textID()}`}
+      >
         <Switch>
           <Match when={renderer() === "plain"}>
             <box flexDirection="column">
@@ -406,13 +428,16 @@ function AssistantText(props: { messageID: string; part: SessionMessageAssistant
             </box>
           </Match>
           <Match when={true}>
-            <markdown
+            <StyledPlanMarkdown
               syntaxStyle={props.syntax}
-              streaming={true}
+              width={markdownWidth()}
               content={markdownContent()}
+              tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
               conceal={true}
               fg={theme.markdownText}
               bg={theme.background}
+              stableTextMode={streaming()}
+              colorizeHex={!streaming()}
             />
           </Match>
         </Switch>
@@ -431,6 +456,7 @@ function AssistantReasoning(props: {
   const mend = useMendTuiProfile()
   const content = createMemo(() => props.part.text.replace("[REDACTED]", "").trim())
   const raw = createMemo(() => mend.profile.presentation.profile === "raw")
+  const full = createMemo(() => mend.profile.presentation.profile === "mendcode")
   const encryptedReasoning = createMemo(() =>
     Boolean((props.part as unknown as { metadata?: Record<string, any> }).metadata?.openai?.reasoningEncryptedContent),
   )
@@ -469,6 +495,29 @@ function AssistantReasoning(props: {
                 />
               </box>
             </Show>
+          </box>
+        </Match>
+        <Match when={full()}>
+          <box
+            id={`reasoning-${props.messageID}-${props.part.id}`}
+            paddingLeft={2}
+            marginTop={1}
+            flexDirection="column"
+            border={["left"]}
+            customBorderChars={SplitBorder.customBorderChars}
+            borderColor={theme.backgroundElement}
+            flexShrink={0}
+          >
+            <ReasoningHeader done={props.completed} title={display().title} />
+            <code
+              filetype="markdown"
+              drawUnstyledText={false}
+              streaming={false}
+              syntaxStyle={props.subtleSyntax}
+              content={display().body}
+              conceal={true}
+              fg={theme.textMuted}
+            />
           </box>
         </Match>
         <Match when={true}>
@@ -620,7 +669,7 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
     <Show
       when={mend.profile.presentation.profile === "mendcode"}
       fallback={
-        <box paddingLeft={3} marginTop={1} flexShrink={0}>
+        <box paddingLeft={3} marginTop={0} flexShrink={0}>
           <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>
             {icon()} {detail()}
           </text>
@@ -630,14 +679,14 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
       <Show
         when={event().lines.length > 0}
         fallback={
-          <box paddingLeft={3} marginTop={1} flexShrink={0}>
+          <box paddingLeft={3} marginTop={0} flexShrink={0}>
             <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>
               {icon()} {title()}
             </text>
           </box>
         }
       >
-        <box paddingLeft={3} marginTop={1} flexShrink={0} flexDirection="column">
+        <box paddingLeft={3} marginTop={0} flexShrink={0} flexDirection="column">
           <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>╭─ {title()}</text>
           <For each={event().lines}>{(line) => <text fg={theme.textMuted}>│ {line}</text>}</For>
           <Show when={event().result}>{(result) => <text fg={theme.textMuted}>╰─ {result()}</text>}</Show>
@@ -803,13 +852,14 @@ function BlockTool(props: {
   titleAttributes?: typeof TextAttributes.BOLD
   contentGap?: number
   marginTop?: number
+  paddingBottom?: number
 }) {
   const { theme } = useTheme()
   const renderer = useRenderer()
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error.message : undefined))
   return (
     <box
-      paddingBottom={1}
+      paddingBottom={props.paddingBottom ?? 1}
       paddingLeft={3}
       gap={props.contentGap ?? 1}
       marginTop={props.marginTop ?? 0}
@@ -892,6 +942,7 @@ function Bash(props: ToolProps) {
           titleColor={theme.primary}
           titleAttributes={TextAttributes.BOLD}
           contentGap={0}
+          paddingBottom={0}
           onClick={overflow() ? () => setExpanded((prev) => !prev) : undefined}
         >
           <CommandOutput
@@ -1111,7 +1162,7 @@ function MarkdownChecklist(props: { content: string }) {
   return (
     <markdown
       syntaxStyle={syntax()}
-      streaming={true}
+      streaming={false}
       content={props.content}
       fg={theme.markdownText}
       bg={theme.background}

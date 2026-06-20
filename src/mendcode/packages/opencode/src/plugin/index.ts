@@ -12,6 +12,7 @@ import { createOpencodeClient } from "@mendcode/sdk"
 import { Flag } from "@mendcode/core/flag/flag"
 import { ServerAuth } from "@/server/auth"
 import { CodexAuthPlugin } from "./codex"
+import { HerdrAgentStatePlugin } from "./herdr"
 import { Session } from "@/session/session"
 import { NamedError } from "@mendcode/core/util/error"
 import { CopilotAuthPlugin } from "./github-copilot/copilot"
@@ -57,6 +58,7 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Pl
 
 // Built-in plugins that are directly imported (not installed from npm)
 const INTERNAL_PLUGINS: PluginInstance[] = [
+  HerdrAgentStatePlugin,
   CodexAuthPlugin,
   CopilotAuthPlugin,
   GitlabAuthPlugin,

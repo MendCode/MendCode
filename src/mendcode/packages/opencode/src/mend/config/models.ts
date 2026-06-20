@@ -95,6 +95,16 @@ export const defaultModelsConfig: ModelsConfig = {
       modelID: null,
       reason: "Hidden memory extractor model for approval-gated memory proposals.",
     },
+    memoryDream: {
+      providerID: null,
+      modelID: null,
+      reason: "Hidden memory Dream model for reviewable memory maintenance proposals.",
+    },
+    memoryAssistant: {
+      providerID: null,
+      modelID: null,
+      reason: "Memory page side-chat assistant model for constrained memory questions and proposals.",
+    },
     permissionReviewer: {
       providerID: null,
       modelID: null,
@@ -355,6 +365,8 @@ export async function modelRoleProjection(root?: string, focus = "codex") {
     compaction: roles.compaction?.runtimeModel || resolved.defaultModel,
     summary: roles.summary?.runtimeModel || roles.small?.runtimeModel || resolved.defaultModel,
     memoryExtractor: roles.memoryExtractor?.runtimeModel || null,
+    memoryDream: roles.memoryDream?.runtimeModel || roles.memoryExtractor?.runtimeModel || roles.small?.runtimeModel || resolved.defaultModel,
+    memoryAssistant: roles.memoryAssistant?.runtimeModel || roles.memoryExtractor?.runtimeModel || roles.small?.runtimeModel || resolved.defaultModel,
     permissionReviewer: roles.permissionReviewer?.runtimeModel || roles.small?.runtimeModel || null,
   }
   const projected = Object.fromEntries(
@@ -366,7 +378,7 @@ export async function modelRoleProjection(root?: string, focus = "codex") {
   const failures: string[] = []
   if (resolved.enabled) {
     for (const [role, info] of Object.entries(projected)) {
-      if (role === "small" || role === "subagent" || role === "memoryExtractor" || role === "permissionReviewer")
+      if (role === "small" || role === "subagent" || role === "memoryExtractor" || role === "memoryDream" || role === "memoryAssistant" || role === "permissionReviewer")
         continue
       if (!(info as any).configured) failures.push(`models.yaml enabled=true but ${role} role cannot be projected`)
     }
