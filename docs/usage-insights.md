@@ -2,6 +2,8 @@
 
 Usage Insights is a TUI dashboard for local MendCode activity. It helps you see how the harness is being used without turning local stats into unsupported productivity claims.
 
+![MendCode Usage Insights dashboard](assets/screenshots/usage-insights-overview.png)
+
 It reports:
 
 - daily token activity
