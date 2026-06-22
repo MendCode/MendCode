@@ -15,6 +15,7 @@ const primaryCommands = [
   "doctor",
   "setup",
   "packages",
+  "loops",
   "mflow",
   "worktree",
   "tsm",
@@ -82,6 +83,7 @@ const controlPlaneRoutes: Record<string, (args: string[]) => string[]> = {
   auth: (args) => ["auth", args[0] || "status", ...args.slice(1)],
   setup: (args) => ["setup", args[0] || "status"],
   packages: (args) => ["packages", args[0] || "status", ...args.slice(1)],
+  loops: (args) => ["loops", args[0] || "status", ...args.slice(1)],
   package: (args) => ["packages", args[0] || "status", ...args.slice(1)],
   ai: (args) => ["ai", ...args],
   runtime: (args) => {
@@ -157,6 +159,13 @@ Workflows:
   mendcode packages install-source <source-id>
   mendcode packages enable|disable <id>
                                 select or deselect a runtime package
+  mendcode loops status|list     inspect local Loop Workflows
+  mendcode loops examples        list built-in Loop templates
+  mendcode loops show|monitor <id>
+  mendcode loops tick [id]        preview one due loop iteration
+                                inspect or monitor one Loop Workflow journal
+  mendcode loops service status|start|stop
+                                manage the per-project background Loop service
   mendcode mflow status            inspect mflow activation, daemon, and locks
   mendcode mflow setup             guided mflow setup for this repo
   mendcode mflow activate --room <room> --accept-public-relay-limits
@@ -188,6 +197,11 @@ Primary public surface:
   mendcode status|doctor
   mendcode setup status|plan|doctor
   mendcode packages status|list|create|install|install-source|enable|disable|remove
+  mendcode loops status|list|examples|show|tail|monitor|tick|daemon|service|draft|activate|run|pause|resume|stop
+  mendcode loops activate <id> [--no-service]
+  mendcode loops tick <id> --execute [--report-only]
+  mendcode loops service install|start|stop|restart|status|logs|uninstall [--service-dir <path>] [--log-dir <path>]
+  mendcode loops daemon --quiet       suppress idle heartbeat lines for background services
   mendcode mflow status|setup|activate|deactivate|remove
   mendcode worktree status|plan|create|open|adopt|remove|reset|doctor
   mendcode tsm status|plan|setup|activate|deactivate|remove|doctor
@@ -246,6 +260,7 @@ function controlPlaneEnv(root: string) {
   return {
     ...runtimeEnv(root),
     MENDCODE_SHELL_CWD: process.cwd(),
+    MENDCODE_PUBLIC_BIN: path.resolve(process.argv[1] || "mendcode"),
     MENDCODE_ORIGINAL_ENV_JSON: JSON.stringify(originalEnv),
   }
 }

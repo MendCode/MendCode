@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.17 - 2026-06-20
+
+- Start the local `0.1.17` development line for Loop Workflow planning and implementation work.
+
 ## 0.1.16 - 2026-06-20
 
 - Fix Memory Center Dream scheduling proposals so accepting a side-chat `dream-dry-run` proposal writes the Dream scheduler state instead of only saving an ordinary memory proposal.

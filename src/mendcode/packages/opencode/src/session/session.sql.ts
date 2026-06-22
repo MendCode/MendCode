@@ -159,6 +159,176 @@ export const BackgroundSessionTable = sqliteTable("background_session", {
   }>(),
 })
 
+type LoopSpecData = {
+  trigger?: {
+    mode?: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced"
+    intervalMs?: number
+  }
+  stopWhen?: string[]
+  gates?: string[]
+  model?: {
+    providerID: string
+    modelID: string
+    variant?: string
+  }
+  agent?: string
+}
+
+type LoopPolicyData = {
+  maxTurns?: number
+  maxRuntimeMs?: number
+  maxChildren?: number
+  maxDepth?: number
+  requireApprovalFor?: string[]
+}
+
+type LoopMetricsData = {
+  turns?: number
+  children?: number
+  failures?: number
+  noProgress?: number
+}
+
+export const LoopWorkflowTable = sqliteTable(
+  "loop_workflow",
+  {
+    id: text().primaryKey(),
+    project_id: text()
+      .$type<ProjectID>()
+      .notNull()
+      .references(() => ProjectTable.id, { onDelete: "cascade" }),
+    workspace_id: text().$type<WorkspaceID>(),
+    owner_session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
+    root_session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
+    name: text().notNull(),
+    objective: text().notNull(),
+    state: text()
+      .$type<"draft" | "active" | "sleeping" | "working" | "needs_input" | "blocked" | "paused" | "completed" | "failed" | "stopped">()
+      .notNull(),
+    source: text().$type<"converted-session" | "objective" | "template" | "manual">().notNull(),
+    template_id: text(),
+    phase: text().notNull(),
+    next_wakeup: integer(),
+    ...Timestamps,
+    time_activated: integer(),
+    time_archived: integer(),
+    data: text({ mode: "json" })
+      .notNull()
+      .$type<{
+        spec: LoopSpecData
+        policy: LoopPolicyData
+        metrics: LoopMetricsData
+        evaluatorReason?: string
+      }>(),
+  },
+  (table) => [
+    index("loop_workflow_project_idx").on(table.project_id),
+    index("loop_workflow_state_idx").on(table.state),
+    index("loop_workflow_root_session_idx").on(table.root_session_id),
+    index("loop_workflow_owner_session_idx").on(table.owner_session_id),
+  ],
+)
+
+export const LoopRunTable = sqliteTable(
+  "loop_run",
+  {
+    id: text().primaryKey(),
+    workflow_id: text()
+      .notNull()
+      .references(() => LoopWorkflowTable.id, { onDelete: "cascade" }),
+    root_session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
+    state: text().$type<"queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped">().notNull(),
+    trigger: text().$type<"manual" | "interval" | "adaptive" | "external-signal" | "resume" | "run-once">().notNull(),
+    phase: text().notNull(),
+    next_wakeup: integer(),
+    ...Timestamps,
+    time_started: integer(),
+    time_ended: integer(),
+    data: text({ mode: "json" })
+      .notNull()
+      .$type<{
+        evaluatorReason?: string
+        budget?: LoopMetricsData
+      }>(),
+  },
+  (table) => [
+    index("loop_run_workflow_idx").on(table.workflow_id),
+    index("loop_run_state_idx").on(table.state),
+  ],
+)
+
+export const LoopEventTable = sqliteTable(
+  "loop_event",
+  {
+    id: text().primaryKey(),
+    workflow_id: text()
+      .notNull()
+      .references(() => LoopWorkflowTable.id, { onDelete: "cascade" }),
+    run_id: text().references(() => LoopRunTable.id, { onDelete: "set null" }),
+    session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
+    sequence: integer().notNull(),
+    level: text().$type<"debug" | "info" | "warning" | "error" | "decision">().notNull(),
+    type: text()
+      .$type<
+        | "created"
+        | "activated"
+        | "started"
+        | "completed"
+        | "wake"
+        | "signal"
+        | "phase"
+        | "session"
+        | "child"
+        | "gate"
+        | "budget"
+        | "action"
+        | "monitor"
+        | "paused"
+        | "resumed"
+        | "stopped"
+        | "failed"
+      >()
+      .notNull(),
+    title: text().notNull(),
+    summary: text().notNull(),
+    ...Timestamps,
+    data: text({ mode: "json" }).$type<Record<string, unknown>>(),
+  },
+  (table) => [
+    index("loop_event_workflow_sequence_idx").on(table.workflow_id, table.sequence),
+    index("loop_event_workflow_time_idx").on(table.workflow_id, table.time_created),
+  ],
+)
+
+export const LoopThreadTable = sqliteTable(
+  "loop_thread",
+  {
+    workflow_id: text()
+      .notNull()
+      .references(() => LoopWorkflowTable.id, { onDelete: "cascade" }),
+    run_id: text().references(() => LoopRunTable.id, { onDelete: "set null" }),
+    session_id: text()
+      .$type<SessionID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    role: text().$type<"root" | "implementer" | "reviewer" | "verifier" | "monitor" | "research">().notNull(),
+    purpose: text().notNull(),
+    state: text().$type<"queued" | "working" | "needs_input" | "completed" | "failed" | "stopped">().notNull(),
+    parent_session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
+    ...Timestamps,
+    data: text({ mode: "json" }).$type<{
+      budget?: LoopMetricsData
+      worktree?: string
+      branch?: string
+    }>(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.workflow_id, table.session_id] }),
+    index("loop_thread_workflow_idx").on(table.workflow_id),
+    index("loop_thread_session_idx").on(table.session_id),
+  ],
+)
+
 export const PermissionTable = sqliteTable("permission", {
   project_id: text()
     .primaryKey()

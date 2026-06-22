@@ -7,6 +7,7 @@ import type {
   SessionMessageAssistantTool,
 } from "@mendcode/sdk/v2"
 import { createStore, produce, reconcile } from "solid-js/store"
+import { onCleanup } from "solid-js"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
 
@@ -71,14 +72,61 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
 
     const event = useEvent()
     const sdk = useSDK()
+    const syncedSessions = new Set<string>()
+    const syncTimers = new Map<string, Timer>()
+    const syncInFlight = new Map<string, Promise<void>>()
+    const syncQueued = new Set<string>()
 
     function update(sessionID: string, fn: (messages: SessionMessage[]) => void) {
+      syncedSessions.add(sessionID)
       setStore(
         "messages",
         produce((draft) => {
           fn((draft[sessionID] ??= []))
         }),
       )
+    }
+
+    async function syncMessages(sessionID: string, options?: { force?: boolean }) {
+      syncedSessions.add(sessionID)
+      if (!options?.force && store.messages[sessionID]) return
+
+      const existing = syncInFlight.get(sessionID)
+      if (existing) {
+        if (options?.force) syncQueued.add(sessionID)
+        return existing
+      }
+
+      const run = sdk.client.v2.session
+        .messages({ sessionID })
+        .then((response) => {
+          setStore("messages", sessionID, reconcile(response.data?.items ?? []))
+        })
+        .finally(() => {
+          syncInFlight.delete(sessionID)
+          if (!syncQueued.delete(sessionID)) return
+          scheduleSync(sessionID, 0)
+        })
+
+      syncInFlight.set(sessionID, run)
+      return run
+    }
+
+    function scheduleSync(sessionID: string, delay: number) {
+      syncedSessions.add(sessionID)
+      const existing = syncTimers.get(sessionID)
+      if (existing) clearTimeout(existing)
+      syncTimers.set(
+        sessionID,
+        setTimeout(() => {
+          syncTimers.delete(sessionID)
+          void syncMessages(sessionID, { force: true }).catch(() => undefined)
+        }, delay),
+      )
+    }
+
+    function scheduleKnownSessionSync(delay = 0) {
+      for (const sessionID of syncedSessions) scheduleSync(sessionID, delay)
     }
 
     event.subscribe((event) => {
@@ -136,6 +184,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
             match.output = event.properties.output
             match.time.completed = event.properties.timestamp
           })
+          scheduleSync(event.properties.sessionID, 50)
           break
         case "session.next.step.started":
           update(event.properties.sessionID, (draft) => {
@@ -163,6 +212,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
             if (event.properties.snapshot)
               currentAssistant.snapshot = { ...currentAssistant.snapshot, end: event.properties.snapshot }
           })
+          scheduleSync(event.properties.sessionID, 50)
           break
         case "session.next.step.failed":
           update(event.properties.sessionID, (draft) => {
@@ -172,6 +222,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
             currentAssistant.finish = "error"
             currentAssistant.error = event.properties.error
           })
+          scheduleSync(event.properties.sessionID, 50)
           break
         case "session.next.text.started":
           update(event.properties.sessionID, (draft) => {
@@ -239,6 +290,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
             match.provider = event.properties.provider
             match.time.completed = event.properties.timestamp
           })
+          scheduleSync(event.properties.sessionID, 50)
           break
         case "session.next.tool.failed":
           update(event.properties.sessionID, (draft) => {
@@ -254,6 +306,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
             match.provider = event.properties.provider
             match.time.completed = event.properties.timestamp
           })
+          scheduleSync(event.properties.sessionID, 50)
           break
         case "session.next.reasoning.started":
           update(event.properties.sessionID, (draft) => {
@@ -302,8 +355,15 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
             match.summary = event.properties.text
             match.include = event.properties.include
           })
+          scheduleSync(event.properties.sessionID, 50)
           break
       }
+    })
+
+    const unsubscribeConnection = sdk.event.on("event", (event) => {
+      const type = event.payload.type
+      if (type === "server.connected" || (type === "server.heartbeat" && sdk.connection.recoveringSince))
+        scheduleKnownSessionSync(0)
     })
 
     const result = {
@@ -311,8 +371,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
       session: {
         message: {
           async sync(sessionID: string) {
-            const response = await sdk.client.v2.session.messages({ sessionID })
-            setStore("messages", sessionID, reconcile(response.data?.items ?? []))
+            await syncMessages(sessionID, { force: true })
           },
           fromSession(sessionID: string) {
             const messages = store.messages[sessionID]
@@ -322,6 +381,12 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
         },
       },
     }
+
+    onCleanup(() => {
+      unsubscribeConnection()
+      for (const timer of syncTimers.values()) clearTimeout(timer)
+      syncTimers.clear()
+    })
 
     return result
   },

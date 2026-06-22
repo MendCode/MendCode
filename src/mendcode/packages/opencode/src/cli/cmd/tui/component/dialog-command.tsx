@@ -26,6 +26,7 @@ export type CommandOption = DialogSelectOption<string> & {
   keybind?: string
   suggested?: boolean
   slash?: Slash
+  onSlash?: (dialog: ReturnType<typeof useDialog>, input: { name: string; arguments: string }) => void
   hidden?: boolean
   enabled?: boolean
 }
@@ -85,12 +86,13 @@ function init() {
         }
       }
     },
-    triggerSlash(name: string) {
+    triggerSlash(name: string, args = "") {
       for (const option of visibleOptions()) {
         const slash = option.slash ?? slashFallbacks[option.value]
         if (!slash) continue
         if (slash.name !== name && !slash.aliases?.includes(name)) continue
-        option.onSelect?.(dialog)
+        if (option.onSlash) option.onSlash(dialog, { name, arguments: args })
+        else option.onSelect?.(dialog)
         return true
       }
       return false
@@ -226,6 +228,7 @@ const titleOverrides: Record<string, string> = {
   "console.org.switch": "Organization",
   "mendcode.memory.status": "Memory Manager",
   "mendcode.memory.manager": "Memory Center",
+  "mendcode.loops.dashboard": "Loop Workflows",
   "mendcode.memory.input.enable": "Use memory",
   "mendcode.memory.io.enable": "Save memories",
   "mendcode.memory.disable": "Disable memory",
@@ -289,7 +292,7 @@ const titleOverrides: Record<string, string> = {
 }
 
 const slashFallbacks: Record<string, Slash> = {
-  "mendcode.permission.status": { name: "permissions" },
+  "mendcode.permission.status": { name: "permission", aliases: ["permissions", "approval"] },
   "mendcode.status": { name: "status" },
   "mendcode.ai.status": { name: "provider" },
   "mendcode.models.status": { name: "models" },
@@ -350,6 +353,7 @@ function commandCategory(option: CommandOption) {
   }
   if (
     option.value.includes("memory") ||
+    option.value.includes("loop") ||
     option.value.includes("context") ||
     option.value.includes("workspace") ||
     option.value.includes("file_context")
@@ -393,6 +397,7 @@ function commandRank(option: CommandOption) {
     "session.context": 5,
     "mendcode.memory.status": 20,
     "mendcode.memory.manager": 21,
+    "mendcode.loops.dashboard": 22,
     "model.list": 40,
     "agent.list": 41,
     "provider.connect": 42,

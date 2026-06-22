@@ -11,8 +11,7 @@ import * as Session from "./session"
 import { LLM } from "./llm"
 import { MessageV2 } from "./message-v2"
 import { isOverflow } from "./overflow"
-import { PartID } from "./schema"
-import type { SessionID } from "./schema"
+import { PartID, SessionID } from "./schema"
 import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
 import { SessionSummary } from "./summary"
@@ -24,7 +23,7 @@ import { isRecord } from "@/util/record"
 import { EventV2 } from "@/v2/event"
 import { SessionEvent } from "@/v2/session-event"
 import { Modelv2 } from "@/v2/model"
-import { readMemoryConfig } from "@/mend/memory/config"
+import { readMemoryConfig, resolveProjectMemoryRoot } from "@/mend/memory/config"
 import {
   extractorPrompt,
   memoryExtractorCandidateMessage,
@@ -144,6 +143,18 @@ function messagePartsText(parts: MessageV2.Part[]) {
     .map((part) => part.type === "text" && !part.synthetic ? part.text : "")
     .filter(Boolean)
     .join("\n")
+}
+
+function hasPersistedToolResult(parts: MessageV2.Part[]) {
+  return parts.some(
+    (part) =>
+      part.type === "tool" &&
+      (part.state.status === "completed" || part.state.status === "error"),
+  )
+}
+
+function hasToolAttempt(parts: MessageV2.Part[], basePartIDs: Set<PartID>) {
+  return parts.some((part) => part.type === "tool" && !basePartIDs.has(part.id))
 }
 
 function estimateStreamInputTokens(input: LLM.StreamInput) {
@@ -328,6 +339,7 @@ type Input = {
   assistantMessage: MessageV2.Assistant
   sessionID: SessionID
   model: Provider.Model
+  abort?: AbortSignal
 }
 
 export interface Interface {
@@ -448,10 +460,12 @@ export const layer: Layer.Layer<
       let aborted = false
       const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
 
+      const isExplicitAbort = () => input.abort?.aborted === true || aborted
+
       const parse = (e: unknown) =>
         MessageV2.fromError(e, {
           providerID: input.model.providerID,
-          aborted,
+          aborted: isExplicitAbort(),
         })
 
       const updateLiveTokenUsage = Effect.fn("SessionProcessor.updateLiveTokenUsage")(function* (force = false) {
@@ -631,6 +645,28 @@ export const layer: Layer.Layer<
         }
         yield* settleToolCall(toolCallID)
         return true
+      })
+
+      const discardRetryAttempt = Effect.fn("SessionProcessor.discardRetryAttempt")(function* (
+        basePartIDs: Set<PartID>,
+      ) {
+        for (const call of Object.values(ctx.toolcalls)) {
+          yield* Deferred.succeed(call.done, undefined).pipe(Effect.ignore)
+        }
+        ctx.toolcalls = {}
+        ctx.pendingToolUpdates = {}
+        ctx.currentText = undefined
+        ctx.reasoningMap = {}
+
+        for (const part of MessageV2.parts(ctx.assistantMessage.id)) {
+          if (basePartIDs.has(part.id)) continue
+          if (part.type === "tool") continue
+          yield* session.removePart({
+            sessionID: part.sessionID,
+            messageID: part.messageID,
+            partID: part.id,
+          })
+        }
       })
 
       const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
@@ -886,7 +922,7 @@ export const layer: Layer.Layer<
               usage: value.usage,
               metadata: value.providerMetadata,
             })
-            const memoryRoot = ctx.assistantMessage.path.root || ctx.assistantMessage.path.cwd
+            const memoryRoot = resolveProjectMemoryRoot(ctx.assistantMessage.path.root, ctx.assistantMessage.path.cwd)
             const persistedUserText = ctx.assistantMessage.parentID
               ? messagePartsText(MessageV2.parts(ctx.assistantMessage.parentID))
               : ""
@@ -899,6 +935,7 @@ export const layer: Layer.Layer<
             ].filter(Boolean).join("\n\n")
             const memoryMetadata = yield* Effect.promise(async () => {
               if (ctx.assistantMessage.summary) return undefined
+              if (!memoryRoot) return undefined
               const config = await readMemoryConfig(memoryRoot)
               const shouldReportInput = config.enabled && config.use
               const used = shouldReportInput
@@ -944,6 +981,7 @@ export const layer: Layer.Layer<
             ctx.assistantMessage.tokens = usage.tokens
             ctx.assistantMessage.liveUsage = undefined
             const shouldQueueMemory = Boolean(
+              memoryRoot &&
               memoryMetadata?.output?.enabled &&
               memoryMetadata.output.generate &&
               memoryMetadata.output.extractorRole !== "none" &&
@@ -981,7 +1019,7 @@ export const layer: Layer.Layer<
               }
               ctx.snapshot = undefined
             }
-            if (shouldQueueMemory && queuedMemoryMetadata) {
+            if (shouldQueueMemory && queuedMemoryMetadata && memoryRoot) {
               const messagePath = ctx.assistantMessage.path
               ctx.pendingMemoryExtraction = {
                 memoryMetadata: queuedMemoryMetadata,
@@ -1134,6 +1172,40 @@ export const layer: Layer.Layer<
           const part = match.part
           const end = Date.now()
           const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
+          const retainedTaskSessionID =
+            part.tool === "task" && typeof metadata.sessionId === "string" ? metadata.sessionId : undefined
+          if (retainedTaskSessionID) {
+            const childMessages = yield* session
+              .messages({ sessionID: SessionID.make(retainedTaskSessionID) })
+              .pipe(Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])))
+            const childAssistant = childMessages.findLast((item) => item.info.role === "assistant")
+            const childAborted =
+              childAssistant?.info.role === "assistant" && childAssistant.info.error?.name === "MessageAbortedError"
+            if (!childAborted) {
+              const partial = messagePartsText(childMessages.flatMap((item) => item.parts))
+              yield* session.updatePart({
+                ...part,
+                state: {
+                  status: "completed",
+                  input: "input" in part.state ? part.state.input : {},
+                  title: "title" in part.state && part.state.title ? part.state.title : "Subagent task retained",
+                  metadata: { ...metadata, status: "retained" },
+                  output: [
+                    `task_id: ${retainedTaskSessionID} (for resuming to continue this task if needed)`,
+                    "task_status: retained",
+                    "",
+                    "<task_result>",
+                    partial,
+                    "</task_result>",
+                    "",
+                    `Parent task execution stopped before collecting this subagent result. Resume this subagent chat with task_id ${retainedTaskSessionID} to inspect or continue the work.`,
+                  ].join("\n"),
+                  time: { start: "time" in part.state ? part.state.time.start : end, end },
+                },
+              })
+              continue
+            }
+          }
           yield* session.updatePart({
             ...part,
             state: {
@@ -1183,7 +1255,21 @@ export const layer: Layer.Layer<
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
         return yield* Effect.gen(function* () {
+          const processBasePartIDs = new Set(MessageV2.parts(ctx.assistantMessage.id).map((part) => part.id))
+          let attempt = 0
+          let attemptBasePartIDs = new Set<PartID>()
           yield* Effect.gen(function* () {
+            if (attempt > 0) {
+              try {
+                if (!hasPersistedToolResult(MessageV2.parts(ctx.assistantMessage.id))) {
+                  yield* discardRetryAttempt(processBasePartIDs)
+                }
+              } catch {
+                yield* discardRetryAttempt(processBasePartIDs)
+              }
+            }
+            attemptBasePartIDs = new Set(MessageV2.parts(ctx.assistantMessage.id).map((part) => part.id))
+            attempt++
             ctx.currentText = undefined
             ctx.assistantText = ""
             ctx.liveTokenOutputText = ""
@@ -1221,6 +1307,7 @@ export const layer: Layer.Layer<
           }).pipe(
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
+                if (input.abort?.aborted !== true) return
                 aborted = true
                 if (!ctx.assistantMessage.error) {
                   yield* halt(new DOMException("Aborted", "AbortError"))
@@ -1230,6 +1317,38 @@ export const layer: Layer.Layer<
             Effect.catchCauseIf(
               (cause) => !Cause.hasInterruptsOnly(cause),
               (cause) => Effect.fail(Cause.squash(cause)),
+            ),
+            Effect.catchIf(
+              (e) => {
+                if (!SessionRetry.retryable(parse(e))) return false
+                try {
+                  return hasToolAttempt(MessageV2.parts(ctx.assistantMessage.id), attemptBasePartIDs)
+                } catch {
+                  return false
+                }
+              },
+              (e) =>
+                Effect.gen(function* () {
+                  slog.warn("retry deferred to next prompt loop after visible tool attempt", {
+                    error: errorMessage(e),
+                  })
+                  yield* status.set(ctx.sessionID, { type: "busy" })
+                }),
+            ),
+            Effect.catchIf(
+              (e) => {
+                if (!SessionRetry.retryable(parse(e))) return false
+                try {
+                  return !hasPersistedToolResult(MessageV2.parts(ctx.assistantMessage.id))
+                } catch {
+                  return true
+                }
+              },
+              (e) =>
+                Effect.gen(function* () {
+                  yield* discardRetryAttempt(attemptBasePartIDs)
+                  return yield* Effect.fail(e)
+                }),
             ),
             Effect.retry(
               SessionRetry.policy({

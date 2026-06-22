@@ -111,7 +111,7 @@ export function promptSubmitParts(prompt: PromptInfo) {
   const nonTextParts = prompt.parts.filter((part) => part.type !== "text")
   const parts: PromptInfo["parts"] = []
 
-  if (prompt.input.trim()) {
+  if (prompt.input.length > 0) {
     parts.push({
       type: "text",
       text: prompt.input,

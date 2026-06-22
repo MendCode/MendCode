@@ -562,7 +562,6 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
               part,
               time: Date.now(),
             },
-            { publish: false },
           ),
         )
           .catch((error) => {

@@ -469,6 +469,29 @@ test("renderPlanMarkdownStatic renders non-mermaid chat tables synchronously", (
   expect(result).not.toContain("| Archivo | Acción | Cambio |")
 })
 
+test("styled session markdown separates generated tables from adjacent headings", () => {
+  const markdown = [
+    "## Resumen de cambios",
+    "| Archivo | Acción | Cambio |",
+    "| --- | --- | --- |",
+    "| `include/tank_config.h` | Modificado | WiFi default cada 10 min. |",
+    "## Defaults producción",
+    "Sensor ultrasónico real: cada 3 min",
+  ].join("\n")
+
+  const result = renderPlanMarkdownStatic(markdown, 96, { tableMode: "grid", markdownMode: "tables-only" })
+  const lines = visibleStyledPlanMarkdownLines(result)
+  const topBorder = lines.findIndex((line) => line.startsWith("┌"))
+  const bottomBorder = lines.findIndex((line) => line.startsWith("└"))
+
+  expect(topBorder).toBeGreaterThan(1)
+  expect(lines[topBorder - 2]).toBe("## Resumen de cambios")
+  expect(lines[topBorder - 1]).toBe("")
+  expect(bottomBorder).toBeGreaterThan(topBorder)
+  expect(lines[bottomBorder + 1]).toBe("")
+  expect(lines[bottomBorder + 2]).toBe("## Defaults producción")
+})
+
 test("renderPlanMarkdownStatic renders local Mermaid before async fallback", () => {
   const markdown = ["```mermaid", "gantt", "  title Delivery", "  dateFormat YYYY-MM-DD", "  Task :a1, 2026-06-19, 1d", "```"].join("\n")
 

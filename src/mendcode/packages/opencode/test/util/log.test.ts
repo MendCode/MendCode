@@ -42,3 +42,25 @@ test("init cleanup keeps the newest timestamped logs", async () => {
   expect(next).not.toContain(list[0]!)
   expect(next).toContain(list.at(-1)!)
 })
+
+test("file logs stop at the configured byte cap", async () => {
+  await using tmp = await tmpdir()
+  const previous = process.env.MENDCODE_LOG_MAX_BYTES
+  process.env.MENDCODE_LOG_MAX_BYTES = "512"
+  Global.Path.log = tmp.path
+  try {
+    await Log.init({ print: false, dev: true, level: "INFO" })
+    const logger = Log.create({ service: `log-cap-${Date.now()}` })
+    for (let i = 0; i < 20; i++) logger.info("x".repeat(80), { i })
+    await Bun.sleep(50)
+
+    const file = path.join(tmp.path, "dev.log")
+    const stat = await fs.stat(file)
+    const text = await fs.readFile(file, "utf8")
+    expect(stat.size).toBeLessThanOrEqual(512)
+    expect(text).not.toContain("i=19")
+  } finally {
+    if (previous === undefined) delete process.env.MENDCODE_LOG_MAX_BYTES
+    else process.env.MENDCODE_LOG_MAX_BYTES = previous
+  }
+})

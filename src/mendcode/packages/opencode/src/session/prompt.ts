@@ -61,6 +61,7 @@ import * as DateTime from "effect/DateTime"
 import { readPromptMode } from "@/mend/prompt/mode"
 import { composePromptPolicy } from "@/mend/prompt/compose"
 import { enforceMflowBeforeEdit, releaseMflowLocks, waitMflowBeforeRead } from "@/mend/config/mflow"
+import { reviewContextForAssistant } from "@/cli/cmd/tui/routes/changes/review-actions"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -169,6 +170,7 @@ export const layer = Layer.effect(
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* elog.info("cancel", { sessionID })
+      promptAbortControllers.get(sessionID)?.abort()
       yield* state.cancel(sessionID)
     })
 
@@ -1663,8 +1665,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       throw new Error("Impossible")
     })
 
-    const runLoop: (sessionID: SessionID) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.run")(
-      function* (sessionID: SessionID) {
+    const promptAbortControllers = new Map<SessionID, AbortController>()
+
+    const runLoop: (sessionID: SessionID, abort: AbortSignal) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.run")(
+      function* (sessionID: SessionID, abort: AbortSignal) {
         const ctx = yield* InstanceState.context
         const slog = elog.with({ sessionID })
         let structured: unknown
@@ -1736,6 +1740,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               sessionID,
               auto: task.auto,
               overflow: task.overflow,
+              resume: task.resume,
             })
             if (result === "stop") break
             continue
@@ -1751,7 +1756,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 reason: "no real user input since summary",
               })
             } else {
-              yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true })
+              yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true, resume: false })
               continue
             }
           }
@@ -1788,6 +1793,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             assistantMessage: msg,
             sessionID,
             model,
+            abort,
           })
 
           const outcome: "break" | "continue" = yield* Effect.gen(function* () {
@@ -1850,6 +1856,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
+            const reviewContext = reviewContextForAssistant(ctx.worktree || ctx.directory)
+            if (reviewContext) {
+              system.push(`<mendcode_review_context>\n${reviewContext}\n</mendcode_review_context>`)
+            }
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
             const result = yield* handle.process({
@@ -1904,6 +1914,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 model: lastUser.model,
                 auto: true,
                 overflow: shouldResumeAfterAutoCompaction(handle.message.finish),
+                resume: shouldResumeAfterAutoCompaction(handle.message.finish),
               })
               return "continue" as const
             }
@@ -1927,7 +1938,19 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     const loop: (input: LoopInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
-      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), runLoop(input.sessionID), {
+      const work = Effect.acquireUseRelease(
+        Effect.sync(() => {
+          const controller = new AbortController()
+          promptAbortControllers.set(input.sessionID, controller)
+          return controller
+        }),
+        (controller) => runLoop(input.sessionID, controller.signal),
+        (controller) =>
+          Effect.sync(() => {
+            if (promptAbortControllers.get(input.sessionID) === controller) promptAbortControllers.delete(input.sessionID)
+          }),
+      )
+      return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), work, {
         queue: input.queue,
       })
     })
@@ -2012,9 +2035,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       }
 
       const templateParts = yield* resolvePromptParts(template)
+      const visibleCommandText = commandInvocationText(input.command, input.arguments)
+      const syntheticTemplateParts = syntheticCommandTemplateParts(input.command, templateParts)
       const isSubtask = (agent.mode === "subagent" && cmd.subtask !== false) || cmd.subtask === true
       const parts = isSubtask
         ? [
+            {
+              type: "text" as const,
+              text: visibleCommandText,
+            },
             {
               type: "subtask" as const,
               agent: agent.name,
@@ -2024,7 +2053,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               prompt: templateParts.find((y) => y.type === "text")?.text ?? "",
             },
           ]
-        : [...templateParts, ...(input.parts ?? [])]
+        : [
+            {
+              type: "text" as const,
+              text: visibleCommandText,
+            },
+            ...syntheticTemplateParts,
+            ...(input.parts ?? []),
+          ]
 
       const userAgent = isSubtask ? (input.agent ?? (yield* agents.defaultAgent())) : agentName
       const userModel = isSubtask
@@ -2204,5 +2240,24 @@ const bashRegex = /!`([^`]+)`/g
 const argsRegex = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi
 const placeholderRegex = /\$(\d+)/g
 const quoteTrimRegex = /^["']|["']$/g
+
+export function commandInvocationText(command: string, args: string) {
+  return `/${command}${args ? ` ${args}` : ""}`
+}
+
+export function syntheticCommandTemplateParts(command: string, templateParts: PromptInput["parts"]) {
+  return templateParts.map((part) => {
+    if (part.type !== "text") return part
+    return {
+      ...part,
+      synthetic: true,
+      metadata: {
+        ...(part.metadata ?? {}),
+        kind: "command_template",
+        command,
+      },
+    }
+  })
+}
 
 export * as SessionPrompt from "./prompt"

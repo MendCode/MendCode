@@ -41,6 +41,20 @@ type BackgroundSessionInfo = AgentViewBackgroundSession & {
   } | null
 }
 
+type AgentViewLoopWorkflow = {
+  id: string
+  rootSessionID?: string
+  state: string
+  phase?: string
+  name?: string
+  time?: {
+    created?: number
+    updated?: number
+  }
+}
+
+const activeLoopWorkflowStates = new Set(["active", "sleeping", "working", "needs_input", "blocked"])
+
 let once = false
 const placeholder = {
   normal: ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"],
@@ -214,6 +228,7 @@ export function HomeSurface(props: {
   const splitShowsSideTitle = createMemo(() => logoMode() === "mascot" || !showLogo())
   const agentViewSessionWindowMs = 30 * 24 * 60 * 60 * 1000
   const [globalBackgroundSessions, setGlobalBackgroundSessions] = createSignal<BackgroundSessionInfo[]>([])
+  const [globalLoopWorkflows, setGlobalLoopWorkflows] = createSignal<AgentViewLoopWorkflow[]>([])
   const [globalSessions, setGlobalSessions] = createSignal<Session[]>([])
   const [globalStatuses, setGlobalStatuses] = createSignal<Record<string, SessionStatus>>({})
   const [globalPendingInput, setGlobalPendingInput] = createSignal<Record<string, number>>({})
@@ -314,8 +329,9 @@ export function HomeSurface(props: {
   }
 
   async function refreshAgentViewGlobalState() {
-    const [background, sessions, statuses, permissions, questions, planReviews] = await Promise.allSettled([
+    const [background, loops, sessions, statuses, permissions, questions, planReviews] = await Promise.allSettled([
       fetchAgentViewJSON<BackgroundSessionInfo[]>("/session/background"),
+      fetchAgentViewJSON<AgentViewLoopWorkflow[]>("/loop"),
       listAgentViewSessions(),
       sdk.client.session.status(),
       sdk.client.permission.list(),
@@ -323,6 +339,7 @@ export function HomeSurface(props: {
       sdk.client.planReview.list(),
     ])
     if (background.status === "fulfilled") setGlobalBackgroundSessions(background.value)
+    if (loops.status === "fulfilled") setGlobalLoopWorkflows(loops.value)
     if (sessions.status === "fulfilled") setGlobalSessions(sessions.value)
     if (statuses.status === "fulfilled") setGlobalStatuses(statuses.value.data ?? {})
     setGlobalPendingInput(
@@ -382,7 +399,8 @@ export function HomeSurface(props: {
       type === "question.replied" ||
       type === "question.rejected" ||
       type === "plan_review.asked" ||
-      type === "plan_review.replied"
+      type === "plan_review.replied" ||
+      Boolean(type?.startsWith("loop."))
     )
   }
 
@@ -408,15 +426,56 @@ export function HomeSurface(props: {
     if (status?.type === "busy") return "working"
     return undefined
   }
+  const isLoopSession = (item: AgentViewSessionItem) =>
+    item.background.summary?.startsWith("Loop ") ||
+    item.background.session?.title?.startsWith("Loop:") ||
+    item.session?.title?.startsWith("Loop:")
+  const loopWorkflowByRootSessionID = createMemo(() => {
+    const result = new Map<string, AgentViewLoopWorkflow>()
+    for (const workflow of globalLoopWorkflows()) {
+      if (workflow.rootSessionID) result.set(workflow.rootSessionID, workflow)
+    }
+    return result
+  })
+  const loopWorkflowForSession = (sessionID: string) => loopWorkflowByRootSessionID().get(sessionID)
+  const backgroundStateForLoopWorkflow = (workflow: AgentViewLoopWorkflow): BackgroundSessionInfo["state"] => {
+    if (workflow.state === "working") return "working"
+    if (workflow.state === "needs_input") return "needs_input"
+    if (workflow.state === "failed") return "failed"
+    if (workflow.state === "stopped" || workflow.state === "paused") return "stopped"
+    if (!activeLoopWorkflowStates.has(workflow.state)) return "completed"
+    return "queued"
+  }
+  const isActiveLoopSession = (item: AgentViewSessionItem) => {
+    const workflow = loopWorkflowForSession(item.background.sessionID)
+    if (workflow) return activeLoopWorkflowStates.has(workflow.state)
+    if (!isLoopSession(item)) return false
+    return item.background.state !== "completed" && item.background.state !== "failed" && item.background.state !== "stopped"
+  }
   const agentViewSessions = createMemo(() => {
     const byID = new Map<string, Session>()
     for (const session of globalSessions()) byID.set(session.id, session)
     for (const session of sync.data.session) byID.set(session.id, session)
     const backgroundItems = globalBackgroundSessions()
-      .map((background) => ({
-        background,
-        session: byID.get(background.sessionID),
-      }))
+      .map((background) => {
+        const workflow = loopWorkflowForSession(background.sessionID)
+        const session = byID.get(background.sessionID)
+        return {
+          background: workflow
+            ? {
+                ...background,
+                state: backgroundStateForLoopWorkflow(workflow),
+                summary: `Loop ${workflow.state}: ${workflow.phase ?? "ready"}`,
+                time: {
+                  ...background.time,
+                  updated: Math.max(background.time.updated, workflow.time?.updated ?? 0),
+                },
+                session: background.session ?? session,
+              }
+            : background,
+          session,
+        }
+      })
       .filter(isInAgentViewScope)
     const backgroundIDs = new Set(backgroundItems.map((item) => item.background.sessionID))
     const foregroundItems = Array.from(byID.values())
@@ -460,24 +519,30 @@ export function HomeSurface(props: {
   })
   const agentViewState = createMemo(() => {
     const needsInput: ReturnType<typeof agentViewSessions> = []
+    const looping: ReturnType<typeof agentViewSessions> = []
     const working: ReturnType<typeof agentViewSessions> = []
     const completed: ReturnType<typeof agentViewSessions> = []
     for (const item of agentViewSessions()) {
       const sessionID = item.background.sessionID
       const status = globalStatuses()[sessionID] ?? sync.data.session_status[sessionID]
-      if (item.background.state === "failed" || item.background.state === "stopped") completed.push(item)
+      const workflow = loopWorkflowForSession(sessionID)
+      if (workflow && !activeLoopWorkflowStates.has(workflow.state)) completed.push(item)
+      else if (item.background.state === "failed" || item.background.state === "stopped") completed.push(item)
       else if (pendingInputCount(sessionID) > 0 || status?.type === "retry" || item.background.state === "needs_input") needsInput.push(item)
+      else if (isLoopSession(item) && !isActiveLoopSession(item)) completed.push(item)
+      else if (isActiveLoopSession(item)) looping.push(item)
       else if (status?.type === "busy" || item.background.state === "queued" || item.background.state === "working") working.push(item)
       else completed.push(item)
     }
-    return { needsInput, working, completed }
+    return { needsInput, looping, working, completed }
   })
   const agentViewSummary = createMemo(() => {
     const state = agentViewState()
-    return `${state.needsInput.length} awaiting input · ${state.working.length} working · ${state.completed.length} completed`
+    return `${state.needsInput.length} awaiting input · ${state.looping.length} looping · ${state.working.length} working · ${state.completed.length} completed`
   })
   const visibleAgentViewRows = createMemo(() => [
     ...agentViewState().needsInput.slice(0, 3),
+    ...agentViewState().looping.slice(0, 4),
     ...agentViewState().working.slice(0, 4),
     ...agentViewState().completed.slice(0, 3),
   ])
@@ -580,40 +645,38 @@ export function HomeSurface(props: {
     }
   })
   const logoSurface = () => (
-    <Show keyed when={homeIdentityKey()}>
-      {() => (
-        <Show
-          when={activeHomeAscii()}
-          fallback={
-            <TuiPluginRuntime.Slot name="home_logo" mode="replace">
-              <Show
-                when={useProfileIdentityLogo()}
-                fallback={
-                  <Show
-                    when={!useCompactProductName()}
-                    fallback={
-                      <text fg={mend.profile.theme.tokens.foreground}>{mend.profile.identity.productName}</text>
-                    }
-                  >
-                    <Logo />
-                  </Show>
-                }
-              >
+    <Show when={homeIdentityKey()}>
+      <Show
+        when={activeHomeAscii()}
+        fallback={
+          <TuiPluginRuntime.Slot name="home_logo" mode="replace">
+            <Show
+              when={useProfileIdentityLogo()}
+              fallback={
                 <Show
                   when={!useCompactProductName()}
-                  fallback={<text fg={mend.profile.theme.tokens.foreground}>{mend.profile.identity.productName}</text>}
+                  fallback={
+                    <text fg={mend.profile.theme.tokens.foreground}>{mend.profile.identity.productName}</text>
+                  }
                 >
-                  <box paddingBottom={logoBottomPad()}>
-                    <SurfaceLines text={customProductAscii()} />
-                  </box>
+                  <Logo />
                 </Show>
+              }
+            >
+              <Show
+                when={!useCompactProductName()}
+                fallback={<text fg={mend.profile.theme.tokens.foreground}>{mend.profile.identity.productName}</text>}
+              >
+                <box paddingBottom={logoBottomPad()}>
+                  <SurfaceLines text={customProductAscii()} />
+                </box>
               </Show>
-            </TuiPluginRuntime.Slot>
-          }
-        >
-          {(text) => <SurfaceLines text={text()} />}
-        </Show>
-      )}
+            </Show>
+          </TuiPluginRuntime.Slot>
+        }
+      >
+        {(text) => <SurfaceLines text={text()} />}
+      </Show>
     </Show>
   )
   const homeActionsSurface = (options?: {
@@ -736,6 +799,7 @@ export function HomeSurface(props: {
         >
           <text fg={mend.profile.theme.tokens.muted} wrapMode="none">{agentViewSummary()}</text>
           {section("Needs input", agentViewState().needsInput, () => "✱", mend.profile.theme.tokens.accent, 3, { elapsed: true })}
+          {section("Looping", agentViewState().looping, () => "↻", mend.profile.theme.tokens.accent, 4, { elapsed: true })}
           {section(
             "Working",
             agentViewState().working,
@@ -901,6 +965,7 @@ export function HomeSurface(props: {
                     <Prompt
                       ref={props.bind}
                       disabled={props.disabled}
+                      historyScope={`project:${project.workspace.current()}`}
                       workspaceID={project.workspace.current()}
                       right={
                         <TuiPluginRuntime.Slot name="home_prompt_right" workspace_id={project.workspace.current()} />

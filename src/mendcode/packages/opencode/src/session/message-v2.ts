@@ -233,6 +233,7 @@ export const CompactionPart = Schema.Struct({
   type: Schema.Literal("compaction"),
   auto: Schema.Boolean,
   overflow: Schema.optional(Schema.Boolean),
+  resume: Schema.optional(Schema.Boolean),
   instructions: Schema.optional(Schema.String),
   tail_start_id: Schema.optional(MessageID),
 })
@@ -1175,7 +1176,7 @@ export function fromError(
   ctx: { providerID: ProviderID; aborted?: boolean },
 ): NonNullable<Assistant["error"]> {
   const networkError = retryableNetworkError(e)
-  if (networkError && !ctx.aborted) {
+  if (networkError) {
     return new APIError(
       {
         message: networkError.message,
@@ -1188,11 +1189,24 @@ export function fromError(
 
   switch (true) {
     case e instanceof DOMException && e.name === "AbortError":
-      return new AbortedError(
-        { message: e.message },
+      if (ctx.aborted) {
+        return new AbortedError(
+          { message: e.message },
+          {
+            cause: e,
+          },
+        ).toObject()
+      }
+      return new APIError(
         {
-          cause: e,
+          message: e.message || "Request aborted by transport",
+          isRetryable: true,
+          metadata: {
+            name: e.name,
+            message: e.message,
+          },
         },
+        { cause: e },
       ).toObject()
     case OutputLengthError.isInstance(e):
       return e
@@ -1218,9 +1232,6 @@ export function fromError(
         { cause: e },
       ).toObject()
     case e instanceof Error && (e as FetchDecompressionError).code === "ZlibError":
-      if (ctx.aborted) {
-        return new AbortedError({ message: e.message }, { cause: e }).toObject()
-      }
       return new APIError(
         {
           message: "Response decompression failed",

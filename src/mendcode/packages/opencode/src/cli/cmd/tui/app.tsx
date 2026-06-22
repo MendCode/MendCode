@@ -48,6 +48,8 @@ import { Session } from "@tui/routes/session"
 import { Setup } from "@tui/routes/setup"
 import { Stats } from "@tui/routes/stats"
 import { Memory } from "@tui/routes/memory"
+import { Changes } from "@tui/routes/changes"
+import { Loops } from "@tui/routes/loops"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -127,7 +129,7 @@ import {
   removeMendPackage,
   setMendPackageEnabled,
 } from "@/mend/runtime/packages"
-import { writeProjectMemoryConfig, type MemoryConfig } from "@/mend/memory/config"
+import { resolveProjectMemoryRoot, writeProjectMemoryConfig, type MemoryConfig } from "@/mend/memory/config"
 import { readPermissionsConfig } from "@/mend/config/permissions"
 import {
   appendMemoryEntry,
@@ -481,6 +483,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   const routes: RouteMap = new Map()
   const [routeRev, setRouteRev] = createSignal(0)
   const [homeRevision, setHomeRevision] = createSignal(0)
+  const promptRouteActive = createMemo(() => route.data.type === "home" || route.data.type === "session")
   const routeView = (name: string) => {
     routeRev()
     return routes.get(name)?.at(-1)?.render
@@ -531,6 +534,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
 
   useKeyboard((evt) => {
     if (evt.defaultPrevented || dialog.stack.length > 0) return
+    if (!promptRouteActive()) return
     if (!keybind.match("agent_mode_picker", evt)) return
     evt.preventDefault()
     evt.stopPropagation()
@@ -592,6 +596,14 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     renderer.clearSelection()
   })
 
+  createEffect(() => {
+    if (promptRouteActive()) return
+    promptRef.current?.blur()
+    const focus = renderer.currentFocusedRenderable
+    if (!focus || focus.isDestroyed) return
+    focus.blur()
+  })
+
   // Wire up console copy-to-clipboard via opentui's onCopySelection callback
   renderer.console.onCopySelection = async (text: string) => {
     if (!text || text.length === 0) return
@@ -640,6 +652,16 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
 
     if (route.data.type === "memory") {
       renderer.setTerminalTitle(`${productName()} | Memory`)
+      return
+    }
+
+    if (route.data.type === "changes") {
+      renderer.setTerminalTitle(`${productName()} | Changes`)
+      return
+    }
+
+    if (route.data.type === "loops") {
+      renderer.setTerminalTitle(`${productName()} | Loops`)
     }
   })
 
@@ -740,7 +762,8 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
 
   const connected = useConnected()
   const mendCategory = "System"
-  const memoryRoot = () => project.instance.path().worktree || project.instance.path().directory || mend.root
+  const memoryRoot = () =>
+    resolveProjectMemoryRoot(project.instance.path().worktree, project.instance.path().directory) || mend.root
   const currentSessionReturn = () =>
     route.data.type === "session" ? ({ type: "session", sessionID: route.data.sessionID } as const) : undefined
   const setupRoute = (step?: "provider" | "models" | "budget") => {
@@ -751,6 +774,14 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   const statsRoute = (scope: "global" | "project") => {
     const returnTo = currentSessionReturn()
     return returnTo ? { type: "stats" as const, scope, returnTo } : { type: "stats" as const, scope }
+  }
+  const changesRoute = () => {
+    const returnTo = currentSessionReturn()
+    return returnTo ? { type: "changes" as const, returnTo } : { type: "changes" as const }
+  }
+  const loopsRoute = (selectedID?: string) => {
+    const returnTo = currentSessionReturn()
+    return returnTo ? { type: "loops" as const, selectedID, returnTo } : { type: "loops" as const, selectedID }
   }
   const showMendStatus = async (title = "MendCode Status") => {
     await DialogAlert.show(dialog, title, await mendStatusSummary(mend.root))
@@ -1335,6 +1366,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         }))}
         onSelect={(option) => {
           local.agent.set(option.value)
+          local.model.pinCurrent()
           toast.show({
             variant: "info",
             message: `Mode is now ${option.value}.`,
@@ -3138,6 +3170,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       keybind: "agent_mode_picker",
       category: mendCategory,
       suggested: true,
+      enabled: promptRouteActive(),
       onSelect: showAgentModePicker,
     },
     {
@@ -3389,6 +3422,28 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
     },
     {
+      title: "Loop Workflows",
+      value: "mendcode.loops.dashboard",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "loops", aliases: ["loop-dashboard", "loop-center"] },
+      onSelect: (dialog) => {
+        route.navigate(loopsRoute())
+        dialog.clear()
+      },
+    },
+    {
+      title: "Changes Review",
+      value: "mendcode.changes.review",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "changes", aliases: ["diff", "review-changes"] },
+      onSelect: (dialog) => {
+        route.navigate(changesRoute())
+        dialog.clear()
+      },
+    },
+    {
       title: "Skills, commands, prompt assets",
       value: "mendcode.assets",
       category: mendCategory,
@@ -3497,6 +3552,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       keybind: "model_list",
       suggested: true,
       category: "Agent",
+      enabled: promptRouteActive(),
       slash: {
         name: "models",
       },
@@ -3510,6 +3566,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       keybind: "model_cycle_recent",
       category: "Agent",
       hidden: true,
+      enabled: promptRouteActive(),
       onSelect: () => {
         local.model.cycle(1)
       },
@@ -3520,6 +3577,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       keybind: "model_cycle_recent_reverse",
       category: "Agent",
       hidden: true,
+      enabled: promptRouteActive(),
       onSelect: () => {
         local.model.cycle(-1)
       },
@@ -3530,6 +3588,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       keybind: "model_cycle_favorite",
       category: "Agent",
       hidden: true,
+      enabled: promptRouteActive(),
       onSelect: () => {
         local.model.cycleFavorite(1)
       },
@@ -3540,6 +3599,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       keybind: "model_cycle_favorite_reverse",
       category: "Agent",
       hidden: true,
+      enabled: promptRouteActive(),
       onSelect: () => {
         local.model.cycleFavorite(-1)
       },
@@ -3549,6 +3609,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       value: "agent.list",
       keybind: "agent_list",
       category: "Agent",
+      enabled: promptRouteActive(),
       slash: {
         name: "agents",
       },
@@ -3573,8 +3634,10 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       keybind: "agent_cycle",
       category: "Agent",
       hidden: true,
+      enabled: promptRouteActive(),
       onSelect: () => {
         local.agent.move(1)
+        local.model.pinCurrent()
       },
     },
     {
@@ -3582,6 +3645,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       value: "variant.cycle",
       keybind: "variant_cycle",
       category: "Agent",
+      enabled: promptRouteActive(),
       onSelect: () => {
         local.model.variant.cycle()
       },
@@ -3592,6 +3656,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       keybind: "variant_list",
       category: "Agent",
       hidden: local.model.variant.list().length === 0,
+      enabled: promptRouteActive(),
       slash: {
         name: "variants",
       },
@@ -3605,8 +3670,10 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       keybind: "agent_cycle_reverse",
       category: "Agent",
       hidden: true,
+      enabled: promptRouteActive(),
       onSelect: () => {
         local.agent.move(-1)
+        local.model.pinCurrent()
       },
     },
     {
@@ -3962,6 +4029,12 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           </Match>
           <Match when={route.data.type === "memory"}>
             <Memory />
+          </Match>
+          <Match when={route.data.type === "changes"}>
+            <Changes />
+          </Match>
+          <Match when={route.data.type === "loops"}>
+            <Loops />
           </Match>
         </Switch>
       </Show>

@@ -226,3 +226,11 @@ describe("ConfigMarkdown: frontmatter has weird model id", async () => {
     expect(result.content.trim()).toBe("Strictly follow da rules")
   })
 })
+
+describe("ConfigMarkdown: frontmatter has bracket argument hint", async () => {
+  const result = await ConfigMarkdown.parse(import.meta.dir + "/fixtures/frontmatter-argument-hint.md")
+
+  test("should parse argument-hint literally", () => {
+    expect(result.data["argument-hint"]).toBe("[readme|api|component|architecture] [scope]")
+  })
+})

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
+import { readFile } from "fs/promises"
 import { APICallError } from "ai"
 import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect"
 import * as Stream from "effect/Stream"
@@ -594,6 +595,7 @@ describe("session.compaction.create", () => {
           model: ref,
           auto: true,
           overflow: true,
+          resume: true,
           instructions: "focus on active UI work",
         })
 
@@ -605,6 +607,7 @@ describe("session.compaction.create", () => {
           type: "compaction",
           auto: true,
           overflow: true,
+          resume: true,
           instructions: "focus on active UI work",
         })
 
@@ -840,7 +843,7 @@ describe("session.compaction.process", () => {
     })
   })
 
-  test("publishes compacted event on continue", async () => {
+  test("publishes compacted event after manual compaction", async () => {
     await using tmp = await tmpdir()
     await WithInstance.provide({
       directory: tmp.path,
@@ -880,7 +883,7 @@ describe("session.compaction.process", () => {
               throw new Error("timed out waiting for compacted event")
             }),
           ])
-          expect(result).toBe("continue")
+          expect(result).toBe("stop")
           expect(seen).toBe(true)
         } finally {
           unsub?.()
@@ -928,7 +931,7 @@ describe("session.compaction.process", () => {
     })
   })
 
-  test("does not add synthetic continue prompt for normal auto compaction", async () => {
+  test("stops after normal auto compaction without adding synthetic continue prompt", async () => {
     await using tmp = await tmpdir()
     await WithInstance.provide({
       directory: tmp.path,
@@ -951,7 +954,7 @@ describe("session.compaction.process", () => {
 
           const all = await svc.messages({ sessionID: session.id })
 
-          expect(result).toBe("continue")
+          expect(result).toBe("stop")
           expect(
             all.some(
               (msg) =>
@@ -1019,7 +1022,64 @@ describe("session.compaction.process", () => {
     })
   })
 
-  test("does not add synthetic continue prompt for manual compaction", async () => {
+  test("does not resume overflow compaction when the compaction task disables resume", async () => {
+    await using tmp = await tmpdir()
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        await user(session.id, "hello")
+        const rt = runtime("continue", Plugin.defaultLayer, wide())
+        try {
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.create({
+                sessionID: session.id,
+                agent: "build",
+                model: ref,
+                auto: true,
+                overflow: true,
+                resume: false,
+              }),
+            ),
+          )
+
+          const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)
+          if (!parent) throw new Error("missing compaction parent")
+          const result = await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent.info.id,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+                overflow: true,
+                resume: true,
+              }),
+            ),
+          )
+
+          const all = await svc.messages({ sessionID: session.id })
+          expect(result).toBe("stop")
+          expect(
+            all.some(
+              (msg) =>
+                msg.info.role === "user" &&
+                msg.parts.some(
+                  (part) =>
+                    part.type === "text" && part.synthetic && part.metadata?.compaction_continue === true,
+                ),
+            ),
+          ).toBe(false)
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
+  test("stops after manual compaction without adding synthetic continue prompt", async () => {
     await using tmp = await tmpdir()
     await WithInstance.provide({
       directory: tmp.path,
@@ -1041,7 +1101,7 @@ describe("session.compaction.process", () => {
           )
 
           const all = await svc.messages({ sessionID: session.id })
-          expect(result).toBe("continue")
+          expect(result).toBe("stop")
           expect(
             all.some(
               (msg) =>
@@ -1328,7 +1388,7 @@ describe("session.compaction.process", () => {
     })
   })
 
-  test("allows plugins to disable synthetic continue prompt", async () => {
+  test("allows plugins to disable overflow auto-continue", async () => {
     await using tmp = await tmpdir()
     await WithInstance.provide({
       directory: tmp.path,
@@ -1345,6 +1405,7 @@ describe("session.compaction.process", () => {
                 messages: msgs,
                 sessionID: session.id,
                 auto: true,
+                overflow: true,
               }),
             ),
           )
@@ -1352,7 +1413,7 @@ describe("session.compaction.process", () => {
           const all = await svc.messages({ sessionID: session.id })
           const last = all.at(-1)
 
-          expect(result).toBe("continue")
+          expect(result).toBe("stop")
           expect(last?.info.role).toBe("assistant")
           expect(
             all.some(
@@ -1401,6 +1462,7 @@ describe("session.compaction.process", () => {
           model: ref,
           auto: true,
           overflow: true,
+          resume: true,
         })
 
         const rt = liveRuntime(stub.layer, wide())
@@ -1990,6 +2052,95 @@ describe("session.compaction.process", () => {
     })
   })
 
+  test("compaction prompt includes recent tool command output as operational context", async () => {
+    const stub = llm()
+    let captured = ""
+    stub.push(
+      reply("summary", (input) => {
+        captured = JSON.stringify(input.messages)
+      }),
+    )
+
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        const msg = await user(session.id, "continua el flash si quedo a medias")
+        const a = await assistant(session.id, msg.id, tmp.path)
+        await svc.updatePart({
+          id: PartID.ascending(),
+          messageID: a.id,
+          sessionID: session.id,
+          type: "tool",
+          callID: crypto.randomUUID(),
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: {
+              command: "pnpm --dir firmware flash --port /dev/cu.usbmodem101",
+              cwd: "/Users/obed/Code/kontrologs",
+            },
+            output: [
+              "Writing at 0x00120800... 100%",
+              "Full output saved to: /Users/obed/.local/share/mendcode/tool-output/tool_flash_123",
+              "Verifying written data...",
+            ].join("\n"),
+            title: "firmware flash",
+            metadata: {},
+            time: { start: Date.now(), end: Date.now() },
+          },
+        })
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: true,
+        })
+
+        const rt = liveRuntime(stub.layer, wide())
+        try {
+          const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+              }),
+            ),
+          )
+
+          expect(captured).toContain("Recent Operational Context")
+          expect(captured).toContain("## Request Trace")
+          expect(captured).toContain("### Progress Against Latest Request")
+          expect(captured).toContain("Latest Real User Request Evidence")
+          expect(captured).toContain("Full Transcript Reference")
+          expect(captured).toContain("continua el flash si quedo a medias")
+          expect(captured).toContain("pnpm --dir firmware flash --port /dev/cu.usbmodem101")
+          expect(captured).toContain("/Users/obed/Code/kontrologs")
+          expect(captured).toContain("/Users/obed/.local/share/mendcode/tool-output/tool_flash_123")
+          expect(captured).toContain("Verifying written data")
+          expect(captured).toContain("Use recent operational context as first-class state evidence")
+          expect(captured).toContain("Read the Full Transcript Reference")
+
+          const transcriptPath = captured.match(/markdown: ([^\\"]+)/)?.[1]
+          expect(transcriptPath).toBeTruthy()
+          const transcript = await readFile(transcriptPath!, "utf8")
+          expect(transcript).toContain("# MendCode Full Session Transcript")
+          expect(transcript).toContain("continua el flash si quedo a medias")
+          expect(transcript).toContain("pnpm --dir firmware flash --port /dev/cu.usbmodem101")
+          expect(transcript).toContain("/Users/obed/.local/share/mendcode/tool-output/tool_flash_123")
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
   test("compaction prompt includes subagent task outputs as context", async () => {
     const stub = llm()
     let captured = ""
@@ -2065,6 +2216,63 @@ describe("session.compaction.process", () => {
         }
       },
     })
+  })
+
+  test("extracts the final structured summary and ignores tool-call-looking text parts", () => {
+    const structured = [
+      "## Goal",
+      "- Continue compaction hardening.",
+      "",
+      "## Current User Intent",
+      "- Latest explicit user request: improve compaction.",
+      "- Explicitly not requested: push or version bump.",
+      "",
+      "## Request Trace",
+      "- Latest User Message: improve compaction.",
+      "",
+      "## Resume Anchor",
+      "- Current task in progress: add tests.",
+      "",
+      "## Session State Snapshot",
+      "- Running or failed tools: (none)",
+      "",
+      "## Transcript Reference",
+      "- Full transcript: /tmp/session.md",
+      "",
+      "## Relevant Files",
+      "- src/session/compaction.ts: summary extraction.",
+    ].join("\n")
+    const msg = {
+      parts: [
+        {
+          type: "text",
+          text: [
+            "Need to enrich the anchor with audit findings before writing it.",
+            'to=multi_tool_use.parallel {"tool_uses":[{"recipient_name":"functions.read","parameters":{"filePath":"/tmp/file"}}]}',
+          ].join("\n"),
+        },
+        { type: "text", text: structured },
+      ],
+    } as MessageV2.WithParts
+
+    expect(SessionCompaction.extractCompactionSummaryText(msg)).toBe(structured)
+  })
+
+  test("drops tool-call-looking text when no structured compaction summary exists", () => {
+    const msg = {
+      parts: [
+        {
+          type: "text",
+          text: 'to=functions.read {"filePath":"/tmp/file","offset":254,"limit":120}',
+        },
+        {
+          type: "text",
+          text: "Plain fallback summary with useful state.",
+        },
+      ],
+    } as MessageV2.WithParts
+
+    expect(SessionCompaction.extractCompactionSummaryText(msg)).toBe("Plain fallback summary with useful state.")
   })
 
   test("anchors repeated compactions with the previous summary", async () => {

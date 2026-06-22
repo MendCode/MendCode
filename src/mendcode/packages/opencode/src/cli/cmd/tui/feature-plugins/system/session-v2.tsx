@@ -4,9 +4,11 @@ import { useSync } from "@tui/context/sync"
 import { SplitBorder } from "@tui/component/border"
 import { Spinner } from "@tui/component/spinner"
 import { useTheme } from "@tui/context/theme"
+import { useRoute } from "@tui/context/route"
+import { useSDK } from "@tui/context/sdk"
 import { useLocal } from "@tui/context/local"
 import { useKeyboard, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import { RGBA, TextAttributes, type BoxRenderable, type SyntaxStyle } from "@opentui/core"
+import { RGBA, TextAttributes, type BoxRenderable, type ScrollBoxRenderable, type SyntaxStyle } from "@opentui/core"
 import { Locale } from "@/util/locale"
 import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
 import path from "path"
@@ -26,15 +28,17 @@ import type {
   ToolFileContent,
   ToolTextContent,
 } from "@mendcode/sdk/v2"
-import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
 import { useMendTuiProfile } from "@tui/context/mend"
 import { normalizeToolEvent, shouldRenderCompactTool } from "@/mend/tui/timeline/normalize"
 import { TimelineDiff } from "@/cli/cmd/tui/routes/session/renderers/diff"
 import { formatDuration } from "@/util/format"
-import { rawReasoningDisplay, shouldDisplayReasoning, unavailableReasoningLabel } from "@/mend/tui/presentation"
+import { rawReasoningDisplay, reasoningSummary, shouldDisplayReasoning, unavailableReasoningLabel } from "@/mend/tui/presentation"
 import { sessionContentWidth } from "@/cli/cmd/tui/util/session-layout"
+import { isScrollboxAtBottom } from "@/cli/cmd/tui/util/scroll"
 import { hasMermaidFence, renderPlanMarkdown, renderPlanMarkdownStatic } from "@/cli/cmd/tui/util/plan-markdown"
 import { StyledPlanMarkdown } from "@/cli/cmd/tui/component/styled-plan-markdown"
+import { visibleUserMessageText } from "@/cli/cmd/tui/routes/session/user-message-display"
 
 const id = "internal:session-v2-debug"
 const route = "session.v2.messages"
@@ -54,6 +58,65 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
   const messages = createMemo(() => sync.data.messages[props.sessionID] ?? [])
   const renderedMessages = createMemo(() => messages().toReversed())
   const lastAssistant = createMemo(() => renderedMessages().findLast((message) => message.type === "assistant"))
+  let scroll: ScrollBoxRenderable | undefined
+  const [followSessionOutput, setFollowSessionOutput] = createSignal(true)
+  let scrollAnchor: { id: string; offset: number } | undefined
+  let lastObservedScrollTop = 0
+  let lastObservedScrollHeight = 0
+
+  const captureScrollAnchor = () => {
+    if (!scroll || scroll.isDestroyed) {
+      scrollAnchor = undefined
+      return
+    }
+
+    const top = scroll.y
+    const child = scroll
+      .getChildren()
+      .filter((item) => item.id && item.y >= top)
+      .sort((a, b) => a.y - b.y)[0]
+    scrollAnchor = child?.id ? { id: child.id, offset: child.y - top } : undefined
+  }
+
+  const restoreScrollAnchor = () => {
+    if (!scroll || scroll.isDestroyed || !scrollAnchor) return
+    const child = scroll.getChildren().find((item) => item.id === scrollAnchor?.id)
+    if (!child) {
+      captureScrollAnchor()
+      return
+    }
+
+    const delta = child.y - scroll.y - scrollAnchor.offset
+    if (delta !== 0) scroll.scrollBy(delta)
+  }
+
+  const syncScrollFollowMode = () => {
+    if (!scroll || scroll.isDestroyed) return
+    const scrollTop = scroll.scrollTop
+    const scrollHeight = scroll.scrollHeight
+
+    if (isScrollboxAtBottom(scroll)) {
+      setFollowSessionOutput(true)
+      scrollAnchor = undefined
+      lastObservedScrollTop = scrollTop
+      lastObservedScrollHeight = scrollHeight
+      return
+    }
+
+    setFollowSessionOutput(false)
+
+    const userMovedViewport =
+      Math.abs(scrollTop - lastObservedScrollTop) > 1 && Math.abs(scrollHeight - lastObservedScrollHeight) <= 1
+    if (userMovedViewport || !scrollAnchor) {
+      captureScrollAnchor()
+    } else {
+      restoreScrollAnchor()
+      captureScrollAnchor()
+    }
+
+    lastObservedScrollTop = scroll.scrollTop
+    lastObservedScrollHeight = scroll.scrollHeight
+  }
   const lastUserCreated = (index: number) =>
     renderedMessages()
       .slice(0, index)
@@ -61,6 +124,11 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
 
   createEffect(() => {
     void sync.session.message.sync(props.sessionID)
+  })
+
+  onMount(() => {
+    const timer = setInterval(syncScrollFollowMode, 80)
+    onCleanup(() => clearInterval(timer))
   })
 
   useKeyboard((event) => {
@@ -75,9 +143,10 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
       <box flexDirection="row">
         <box width={contentWidth()} flexGrow={0} paddingBottom={1} paddingLeft={2} paddingRight={2} gap={1}>
           <scrollbox
+            ref={(value: ScrollBoxRenderable) => (scroll = value)}
             viewportOptions={{ paddingRight: 0 }}
             verticalScrollbarOptions={{ visible: false }}
-            stickyScroll={true}
+            stickyScroll={followSessionOutput()}
             stickyStart="bottom"
             flexGrow={1}
           >
@@ -157,6 +226,7 @@ function MissingData(props: { label: string; detail: string }) {
 function UserMessage(props: { message: SessionMessageUser; index: number }) {
   const { theme } = useTheme()
   const attachments = createMemo(() => [...(props.message.files ?? []), ...(props.message.agents ?? [])])
+  const text = createMemo(() => visibleUserMessageText(props.message.text))
   return (
     <box
       id={props.message.id}
@@ -170,7 +240,7 @@ function UserMessage(props: { message: SessionMessageUser; index: number }) {
       paddingLeft={2}
       backgroundColor={theme.backgroundPanel}
     >
-      <text fg={theme.text}>{props.message.text}</text>
+      <text fg={theme.text}>{text()}</text>
       <Show when={attachments().length}>
         <box flexDirection="row" paddingTop={1} gap={1} flexWrap="wrap">
           <For each={props.message.files ?? []}>
@@ -470,6 +540,12 @@ function AssistantReasoning(props: {
     }),
   )
   const streaming = createMemo(() => !props.completed)
+  const fullReasoningTitle = createMemo(() => {
+    const summary = reasoningSummary(content())
+    const line = (summary.title ?? summary.body.split(/\r?\n/).find((item) => item.trim()) ?? "").trim()
+    if (!line) return display().title
+    return Locale.truncate(line.replace(/^#+\s*/, "").replace(/^\*\*([^*]+)\*\*$/, "$1"), 120)
+  })
   return (
     <Show when={hasReasoningEvidence() && shouldDisplayReasoning(mend.profile, { completed: props.completed })}>
       <Switch>
@@ -501,23 +577,14 @@ function AssistantReasoning(props: {
           <box
             id={`reasoning-${props.messageID}-${props.part.id}`}
             paddingLeft={2}
-            marginTop={1}
+            marginTop={streaming() ? 0 : 1}
             flexDirection="column"
             border={["left"]}
             customBorderChars={SplitBorder.customBorderChars}
             borderColor={theme.backgroundElement}
             flexShrink={0}
           >
-            <ReasoningHeader done={props.completed} title={display().title} />
-            <code
-              filetype="markdown"
-              drawUnstyledText={false}
-              streaming={false}
-              syntaxStyle={props.subtleSyntax}
-              content={display().body}
-              conceal={true}
-              fg={theme.textMuted}
-            />
+            <ReasoningHeader done={props.completed} title={fullReasoningTitle()} />
           </box>
         </Match>
         <Match when={true}>
@@ -581,6 +648,7 @@ function AssistantTool(props: { part: SessionMessageAssistantTool }) {
   const rowOnly = createMemo(() => {
     const profile = mend.profile.presentation.profile
     if (props.part.name === "bash" || props.part.name === "shell") return false
+    if (props.part.name === "loop") return false
     return shouldRenderCompactTool(profile, props.part.name)
   })
   const toolprops = {
@@ -638,6 +706,9 @@ function AssistantTool(props: { part: SessionMessageAssistantTool }) {
       </Match>
       <Match when={props.part.name === "skill"}>
         <Skill {...toolprops} />
+      </Match>
+      <Match when={props.part.name === "loop"}>
+        <Loop {...toolprops} />
       </Match>
       <Match when={props.part.name === "task"}>
         <Task {...toolprops} />
@@ -744,6 +815,7 @@ function InlineTool(props: {
   complete: unknown
   pending: string
   spinner?: boolean
+  onClick?: () => void
   children: JSX.Element
   part: SessionMessageAssistantTool
 }) {
@@ -783,8 +855,12 @@ function InlineTool(props: {
         onMouseOver={() => error() && setHover(true)}
         onMouseOut={() => setHover(false)}
         onMouseUp={() => {
-          if (!error()) return
           if (renderer.getSelection()?.getSelectedText()) return
+          if (!error() && props.onClick) {
+            props.onClick()
+            return
+          }
+          if (!error()) return
           setShowError((prev) => !prev)
         }}
         renderBefore={function () {
@@ -905,8 +981,8 @@ function CommandOutput(props: {
         </text>
       </box>
       <Show when={props.output}>
-        <box paddingLeft={2}>
-          <text fg={theme.textMuted}>{props.output}</text>
+        <box paddingLeft={2} flexDirection="column">
+          <For each={props.output?.split("\n") ?? []}>{(line) => <text fg={theme.textMuted}>{line || " "}</text>}</For>
         </box>
       </Show>
       <Show when={!props.output}>{props.empty}</Show>
@@ -1248,6 +1324,267 @@ function Skill(props: ToolProps) {
     <InlineTool icon="→" pending="Loading skill..." complete={toolComplete(props.part)} part={props.part}>
       Skill "{stringValue(props.input.name) ?? pendingInput(props.part)}"
     </InlineTool>
+  )
+}
+
+function Loop(props: ToolProps) {
+  const { navigate } = useRoute()
+  const sdk = useSDK()
+  const dimensions = useTerminalDimensions()
+  const { theme } = useTheme()
+  const [tick, setTick] = createSignal(Date.now())
+  const [refresh, setRefresh] = createSignal(0)
+  const action = createMemo(() => stringValue(props.input.action) ?? "loop")
+  const workflowID = createMemo(() => stringValue(props.metadata.workflowID))
+  const rootSessionID = createMemo(() => stringValue(props.metadata.rootSessionID ?? props.metadata.sessionId))
+  const state = createMemo(() => stringValue(props.metadata.state))
+  const phase = createMemo(() => stringValue(props.metadata.phase))
+  const workflowList = createMemo(() =>
+    arrayValue(props.metadata.workflows).flatMap((item) =>
+      isRecord(item) && stringValue(item.workflowID)
+        ? [
+            {
+              workflowID: stringValue(item.workflowID)!,
+              rootSessionID: stringValue(item.rootSessionID),
+              state: stringValue(item.state) ?? "unknown",
+              phase: stringValue(item.phase) ?? "ready",
+              name: stringValue(item.name),
+              turns: typeof item.turns === "number" ? item.turns : undefined,
+              maxTurns: typeof item.maxTurns === "number" ? item.maxTurns : undefined,
+            },
+          ]
+        : [],
+    ),
+  )
+
+  async function fetchLoopSnapshot() {
+    const id = workflowID()
+    if (!id) return undefined
+    const response = await sdk.fetch(`${sdk.url}/loop/${id}`, { headers: { accept: "application/json" } })
+    if (!response.ok) return undefined
+    return response.json().catch(() => undefined) as Promise<
+      | {
+          workflow?: {
+            id?: string
+            name?: string
+            objective?: string
+            state?: string
+            phase?: string
+            rootSessionID?: string
+            nextWakeup?: number
+            policy?: { maxTurns?: number }
+            metrics?: { turns?: number; failures?: number }
+            time?: { created?: number; updated?: number; activated?: number }
+          }
+          runs?: unknown[]
+          events?: unknown[]
+        }
+      | undefined
+    >
+  }
+
+  const [snapshot] = createResource(
+    () => `${workflowID() || ""}:${refresh()}`,
+    fetchLoopSnapshot,
+  )
+
+  onMount(() => {
+    const clock = setInterval(() => setTick(Date.now()), 1_000)
+    const poll = setInterval(() => setRefresh((value) => value + 1), 2_000)
+    const unsubscribe = sdk.event.on("event", (evt) => {
+      const type = evt.payload?.type as string | undefined
+      const id = ((evt.payload as { properties?: Record<string, unknown> } | undefined)?.properties)?.workflowID
+      if (type?.startsWith("loop.") && (!workflowID() || id === workflowID())) setRefresh((value) => value + 1)
+    })
+    onCleanup(() => {
+      clearInterval(clock)
+      clearInterval(poll)
+      unsubscribe()
+    })
+  })
+
+  const workflow = createMemo(() => snapshot.latest?.workflow)
+  const liveState = createMemo(() => workflow()?.state ?? state() ?? (props.part.state.status === "running" ? "working" : "unknown"))
+  const livePhase = createMemo(() => workflow()?.phase ?? phase() ?? action())
+  const liveRootSessionID = createMemo(() => workflow()?.rootSessionID ?? rootSessionID())
+  const liveCreatedAt = createMemo(() => workflow()?.time?.activated ?? workflow()?.time?.created)
+  const liveAge = createMemo(() => {
+    const started = liveCreatedAt()
+    if (!started) return "unknown"
+    return formatDuration(Math.max(0, Math.round((tick() - started) / 1000)))
+  })
+  const liveProgress = createMemo(() => {
+    const turns = workflow()?.metrics?.turns ?? 0
+    const maxTurns = workflow()?.policy?.maxTurns
+    return maxTurns ? `${turns}/${maxTurns}` : `${turns}/unlimited`
+  })
+  const liveNextWakeup = createMemo(() => {
+    const next = workflow()?.nextWakeup
+    if (!next) return "manual/self-paced"
+    const seconds = Math.max(0, Math.round((next - tick()) / 1000))
+    return `${formatDuration(seconds)} (${new Date(next).toLocaleTimeString()})`
+  })
+  const [hover, setHover] = createSignal(false)
+  const panelWidth = createMemo(() => Math.max(52, Math.min(88, dimensions().width - 12)))
+  const valueWidth = createMemo(() => Math.max(18, panelWidth() - 20))
+  const compact = (value: string, width = valueWidth()) => Locale.truncateMiddle(value.replace(/\s+/g, " ").trim(), width)
+  const stateColor = createMemo(() => {
+    const state = liveState()
+    if (state === "working" || state === "active" || state === "sleeping") return theme.primary
+    if (state === "completed") return theme.success
+    if (state === "failed") return theme.error
+    if (state === "stopped" || state === "paused") return theme.warning
+    return theme.textMuted
+  })
+  const progressBar = createMemo(() => {
+    const turns = workflow()?.metrics?.turns ?? 0
+    const maxTurns = workflow()?.policy?.maxTurns
+    if (!maxTurns) return "unbounded"
+    const width = 14
+    const filled = Math.max(0, Math.min(width, Math.round((turns / Math.max(1, maxTurns)) * width)))
+    return `${"■".repeat(filled)}${"·".repeat(width - filled)} ${turns}/${maxTurns}`
+  })
+  const rows = createMemo(() => {
+    const item = workflow()
+    const id = workflowID() ?? "pending"
+    const root = liveRootSessionID() ?? "pending"
+    const objective = item?.objective ?? stringValue(props.input.objective) ?? "Loop workflow"
+    return [
+      { label: "workflow", value: item?.name ?? compact(id, 32), color: theme.text },
+      { label: "state", value: `${liveState()} / ${livePhase()}`, color: stateColor() },
+      { label: "progress", value: progressBar(), color: stateColor() },
+      { label: "runtime", value: liveAge(), color: theme.text },
+      { label: "next", value: liveNextWakeup(), color: theme.text },
+      { label: "runs", value: String(snapshot.latest?.runs?.length ?? 0), color: theme.text },
+      { label: "root", value: root, color: liveRootSessionID() ? theme.secondary : theme.textMuted },
+      { label: "goal", value: objective, color: theme.text },
+    ]
+  })
+  const liveLabel = createMemo(() => (snapshot.loading ? "refreshing" : "live SSE"))
+  const listGroups = createMemo(() => {
+    const groups = new Map<string, number>()
+    for (const item of workflowList()) groups.set(item.state, (groups.get(item.state) ?? 0) + 1)
+    return Array.from(groups.entries())
+      .map(([state, count]) => `${state} ${count}`)
+      .join(" · ")
+  })
+  const listRows = createMemo(() =>
+    workflowList().slice(0, 8).map((item) => ({
+      name: item.name ?? item.workflowID,
+      state: `${item.state} / ${item.phase}`,
+      progress:
+        typeof item.turns === "number" && typeof item.maxTurns === "number"
+          ? `${item.turns}/${item.maxTurns}`
+          : typeof item.turns === "number"
+            ? `${item.turns}/unbounded`
+            : "unbounded",
+    })),
+  )
+  const openFirstLoop = () => {
+    const sessionID = liveRootSessionID() ?? workflowList().find((item) => item.rootSessionID)?.rootSessionID
+    if (sessionID) navigate({ type: "session", sessionID })
+  }
+
+  if (action() === "list" && !workflowID()) {
+    return (
+      <BlockTool title="# ↻ Loop Workflows" titleColor={theme.secondary} contentGap={0} part={props.part} onClick={openFirstLoop}>
+        <box width="100%" alignItems="center">
+          <box
+            flexDirection="column"
+            width={panelWidth()}
+            flexShrink={0}
+            borderStyle="single"
+            borderColor={hover() ? theme.secondary : theme.border}
+            paddingLeft={1}
+            paddingRight={1}
+            paddingTop={1}
+            paddingBottom={1}
+            gap={0}
+            onMouseOver={() => setHover(true)}
+            onMouseOut={() => setHover(false)}
+          >
+            <box flexDirection="row">
+              <text fg={theme.secondary} attributes={TextAttributes.BOLD}>↻ Loop Workflows</text>
+              <box flexGrow={1} />
+              <text fg={theme.textMuted}>{workflowList().length} total</text>
+            </box>
+            <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
+              <Show when={workflowList().length > 0} fallback={<text fg={theme.textMuted}>No loop workflows found.</text>}>
+                <text fg={theme.textMuted}>{listGroups()}</text>
+                <box marginTop={1} flexDirection="column">
+                  <For each={listRows()}>
+                    {(item) => (
+                      <box flexDirection="row">
+                        <text fg={theme.text} wrapMode="none">{compact(item.name, Math.max(18, panelWidth() - 34))}</text>
+                        <box flexGrow={1} />
+                        <text fg={theme.textMuted} wrapMode="none">{item.state}</text>
+                        <text fg={theme.textMuted} wrapMode="none"> {item.progress}</text>
+                      </box>
+                    )}
+                  </For>
+                </box>
+              </Show>
+            </box>
+            <Show when={workflowList().some((item) => item.rootSessionID)}>
+              <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="row">
+                <text fg={hover() ? theme.secondary : theme.textMuted}>open first loop chat</text>
+                <box flexGrow={1} />
+                <text fg={theme.textMuted}>click</text>
+              </box>
+            </Show>
+          </box>
+        </box>
+      </BlockTool>
+    )
+  }
+
+  return (
+    <BlockTool
+      title="# ↻ Loop Workflow"
+      titleColor={stateColor()}
+      contentGap={0}
+      part={props.part}
+      spinner={props.part.state.status === "running" && !workflowID()}
+      onClick={openFirstLoop}
+    >
+      <box width="100%" alignItems="center">
+        <box
+          flexDirection="column"
+          width={panelWidth()}
+          flexShrink={0}
+          borderStyle="single"
+          borderColor={hover() ? stateColor() : theme.border}
+          paddingLeft={1}
+          paddingRight={1}
+          paddingTop={1}
+          paddingBottom={1}
+          gap={0}
+          onMouseOver={() => setHover(true)}
+          onMouseOut={() => setHover(false)}
+        >
+          <box flexDirection="row">
+            <text fg={stateColor()} attributes={TextAttributes.BOLD}>↻ {compact(workflow()?.name ?? "Loop Workflow", Math.max(18, panelWidth() - 36))}</text>
+            <box flexGrow={1} />
+            <text fg={theme.textMuted}>{liveLabel()}</text>
+          </box>
+          <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
+            <For each={rows()}>
+              {(row) => (
+                <box flexDirection="row">
+                  <text fg={theme.textMuted} wrapMode="none">{row.label.padEnd(9)}</text>
+                  <text fg={row.color} wrapMode="none">{compact(row.value)}</text>
+                </box>
+              )}
+            </For>
+          </box>
+          <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="row">
+            <text fg={hover() ? stateColor() : theme.textMuted}>open loop chat</text>
+            <box flexGrow={1} />
+            <text fg={theme.textMuted}>click</text>
+          </box>
+        </box>
+      </box>
+    </BlockTool>
   )
 }
 

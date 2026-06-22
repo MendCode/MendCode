@@ -7,6 +7,12 @@ export type SlashCommandInvocation = {
   arguments: string
 }
 
+export type SlashCommandToken = {
+  name: string
+  start: number
+  end: number
+}
+
 export function findSlashAutocompleteTrigger(value: string, offset: number): SlashAutocompleteTrigger | undefined {
   if (offset <= 0) return
 
@@ -29,16 +35,35 @@ export function findSlashCommandInvocation(
 ): SlashCommandInvocation | undefined {
   const firstLineEnd = inputText.indexOf("\n")
   const firstLine = firstLineEnd === -1 ? inputText : inputText.slice(0, firstLineEnd)
-  const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
-  const match = firstLine.match(/^\s*\/([^\s/]+)(?=\s|$)/)
-  const name = match?.[1]
+  const match = firstLine.match(/^(\s*)\/([^\s/]+)(?=\s|$)/)
+  const name = match?.[2]
   if (!name || !commandExists(name)) return
 
-  const after = firstLine.slice(match[0].length).trim()
+  const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
+  const tokenEnd = match[1].length + name.length + 1
+  const after = firstLine.slice(tokenEnd).trim()
   const args = after
 
   return {
     name,
     arguments: args + (restOfInput ? (args ? "\n" : "") + restOfInput : ""),
+  }
+}
+
+export function findSlashCommandToken(
+  inputText: string,
+  commandExists: (name: string) => boolean,
+): SlashCommandToken | undefined {
+  const tokenRegex = /(^|\s)\/([^\s/]+)(?=\s|$)/g
+  for (const match of inputText.matchAll(tokenRegex)) {
+    const name = match[2]
+    if (!name || !commandExists(name)) continue
+
+    const start = match.index + match[1].length
+    return {
+      name,
+      start,
+      end: start + name.length + 1,
+    }
   }
 }
