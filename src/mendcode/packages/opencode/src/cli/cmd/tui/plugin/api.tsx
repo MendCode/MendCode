@@ -134,6 +134,11 @@ function routeCurrent(route: ReturnType<typeof useRoute>): TuiPluginApi["route"]
       name: "memory",
     }
   }
+  if (route.data.type === "changes") {
+    return {
+      name: "changes",
+    }
+  }
 
   return {
     name: route.data.id,

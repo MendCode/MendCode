@@ -390,6 +390,10 @@ export type CompactionPart = {
   messageID: string
   type: "compaction"
   auto: boolean
+  overflow?: boolean
+  resume?: boolean
+  instructions?: string
+  tail_start_id?: string
 }
 
 export type Part =
@@ -712,6 +716,13 @@ export type EventServerConnected = {
   }
 }
 
+export type EventServerHeartbeat = {
+  type: "server.heartbeat"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
 export type Event =
   | EventServerInstanceDisposed
   | EventInstallationUpdated
@@ -745,6 +756,7 @@ export type Event =
   | EventPtyExited
   | EventPtyDeleted
   | EventServerConnected
+  | EventServerHeartbeat
 
 export type GlobalEvent = {
   directory: string

@@ -3,6 +3,37 @@ export type StyledPlanMarkdownSegment = {
   content: string
 }
 
+function isMarkdownHeading(line: string | undefined) {
+  return /^ {0,3}#{1,6}\s+\S/.test(line ?? "")
+}
+
+function firstLine(content: string) {
+  return content.split("\n")[0]
+}
+
+function lastLine(content: string) {
+  return content.split("\n").at(-1)
+}
+
+function separateGeneratedTextFromHeadings(segments: StyledPlanMarkdownSegment[]) {
+  return segments.map((segment, index) => {
+    if (segment.kind !== "markdown") return segment
+
+    const previous = segments[index - 1]
+    const next = segments[index + 1]
+    let content = segment.content
+
+    if (previous?.kind === "text" && isMarkdownHeading(firstLine(content))) {
+      content = `\n${content}`
+    }
+    if (next?.kind === "text" && isMarkdownHeading(lastLine(content))) {
+      content = `${content}\n`
+    }
+
+    return content === segment.content ? segment : { ...segment, content }
+  })
+}
+
 export function styledPlanMarkdownSegments(content: string): StyledPlanMarkdownSegment[] {
   const segments: StyledPlanMarkdownSegment[] = []
   const markdown: string[] = []
@@ -37,7 +68,7 @@ export function styledPlanMarkdownSegments(content: string): StyledPlanMarkdownS
 
   flushText()
   flushMarkdown()
-  return segments
+  return separateGeneratedTextFromHeadings(segments)
 }
 
 export function visibleStyledPlanMarkdownLines(content: string) {

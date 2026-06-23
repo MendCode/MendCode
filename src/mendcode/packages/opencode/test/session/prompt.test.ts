@@ -31,13 +31,19 @@ import { SessionCompaction } from "../../src/session/compaction"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
-import { SessionPrompt, shouldResumeAfterAutoCompaction, shouldSkipAutoCompaction } from "../../src/session/prompt"
+import {
+  SessionPrompt,
+  shouldCheckFinishedAssistantForAutoCompaction,
+  shouldResumeAfterAutoCompaction,
+  shouldSkipAutoCompaction,
+} from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "../../src/v2/session"
 import { Skill } from "../../src/skill"
+import { LoopWorkflow } from "../../src/session/loop"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
 import { Snapshot } from "../../src/snapshot"
@@ -185,6 +191,7 @@ function makeHttp() {
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(Ripgrep.defaultLayer),
     Layer.provide(Format.defaultLayer),
+    Layer.provide(LoopWorkflow.defaultLayer),
     Layer.provideMerge(todo),
     Layer.provideMerge(question),
     Layer.provideMerge(planReview),
@@ -272,6 +279,35 @@ test("auto compaction resumes only for active or incomplete assistant turns", ()
   expect(shouldResumeAfterAutoCompaction("length")).toBe(true)
   expect(shouldResumeAfterAutoCompaction("unknown")).toBe(true)
   expect(shouldResumeAfterAutoCompaction("stop")).toBe(false)
+})
+
+test("auto compaction ignores a finished assistant that is older than queued user input", () => {
+  const olderAssistant = {
+    id: MessageID.ascending(),
+    role: "assistant",
+    finish: "stop",
+    summary: false,
+  } as unknown as MessageV2.Assistant
+  const queuedUser = {
+    id: MessageID.ascending(),
+    role: "user",
+  } as unknown as MessageV2.User
+  const newerAssistant = {
+    id: MessageID.ascending(),
+    role: "assistant",
+    finish: "stop",
+    summary: false,
+  } as unknown as MessageV2.Assistant
+  const summaryAssistant = {
+    id: MessageID.ascending(),
+    role: "assistant",
+    finish: "stop",
+    summary: true,
+  } as unknown as MessageV2.Assistant
+
+  expect(shouldCheckFinishedAssistantForAutoCompaction({ lastUser: queuedUser, lastFinished: olderAssistant })).toBe(false)
+  expect(shouldCheckFinishedAssistantForAutoCompaction({ lastUser: queuedUser, lastFinished: newerAssistant })).toBe(true)
+  expect(shouldCheckFinishedAssistantForAutoCompaction({ lastUser: queuedUser, lastFinished: summaryAssistant })).toBe(false)
 })
 
 // Config that registers a custom "test" provider with a "test-model" model

@@ -4,9 +4,11 @@ import { InstanceState } from "@/effect/instance-state"
 import { zod } from "@/util/effect-zod"
 import { namedSchemaError } from "@/util/named-schema-error"
 import { optionalOmitUndefined, withStatics } from "@/util/schema"
+import { Config } from "@/config/config"
 import { Plugin } from "../plugin"
 import { ProviderID } from "./schema"
 import { Array as Arr, Effect, Layer, Record, Result, Context, Schema } from "effect"
+import { ClaudeCode } from "./claude-code"
 
 const When = Schema.Struct({
   key: Schema.String,
@@ -102,14 +104,16 @@ export interface Interface {
 interface State {
   hooks: Record<ProviderID, Hook>
   pending: Map<ProviderID, AuthOAuthResult>
+  claudeCodePending: Map<ProviderID, ClaudeCode.Settings>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ProviderAuth") {}
 
-export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.effect(
+export const layer: Layer.Layer<Service, never, Auth.Service | Config.Service | Plugin.Service> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const auth = yield* Auth.Service
+    const config = yield* Config.Service
     const plugin = yield* Plugin.Service
     const state = yield* InstanceState.make<State>(
       Effect.fn("ProviderAuth.state")(function* () {
@@ -123,6 +127,7 @@ export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> =
             ),
           ),
           pending: new Map<ProviderID, AuthOAuthResult>(),
+          claudeCodePending: new Map<ProviderID, ClaudeCode.Settings>(),
         }
       }),
     )
@@ -131,38 +136,58 @@ export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> =
     const methods = Effect.fn("ProviderAuth.methods")(function* () {
       const hooks = (yield* InstanceState.get(state)).hooks
       return decode(
-        Record.map(hooks, (item) =>
-          item.methods.map((method) => ({
-            type: method.type,
-            label: method.label,
-            ...(method.prompts && {
-              prompts: method.prompts.map((prompt) => {
-                if (prompt.type === "select") {
+        {
+          [ClaudeCode.ID]: [
+            {
+              type: "oauth" as const,
+              label: "Claude Code CLI",
+            },
+          ],
+          ...Record.map(hooks, (item) =>
+            item.methods.map((method) => ({
+              type: method.type,
+              label: method.label,
+              ...(method.prompts && {
+                prompts: method.prompts.map((prompt) => {
+                  if (prompt.type === "select") {
+                    return {
+                      type: "select" as const,
+                      key: prompt.key,
+                      message: prompt.message,
+                      options: prompt.options,
+                      ...(prompt.when && { when: prompt.when }),
+                    }
+                  }
                   return {
-                    type: "select" as const,
+                    type: "text" as const,
                     key: prompt.key,
                     message: prompt.message,
-                    options: prompt.options,
+                    ...(prompt.placeholder && { placeholder: prompt.placeholder }),
                     ...(prompt.when && { when: prompt.when }),
                   }
-                }
-                return {
-                  type: "text" as const,
-                  key: prompt.key,
-                  message: prompt.message,
-                  ...(prompt.placeholder && { placeholder: prompt.placeholder }),
-                  ...(prompt.when && { when: prompt.when }),
-                }
+                }),
               }),
-            }),
-          })),
-        ),
+            })),
+          ),
+        },
       )
     })
 
     const authorize = Effect.fn("ProviderAuth.authorize")(function* (
       input: { providerID: ProviderID } & AuthorizeInput,
     ) {
+      if (input.providerID === ClaudeCode.ID) {
+        const { claudeCodePending } = yield* InstanceState.get(state)
+        const cfg = yield* config.get()
+        const options = cfg.provider?.[ClaudeCode.ID]?.options
+        claudeCodePending.set(input.providerID, ClaudeCode.settingsFromConfig(options))
+        return {
+          url: "local://claude-code",
+          method: "auto" as const,
+          instructions: "MendCode will validate the local Claude Code CLI.",
+        }
+      }
+
       const { hooks, pending } = yield* InstanceState.get(state)
       const method = hooks[input.providerID].methods[input.method]
       if (method.type !== "oauth") return
@@ -186,6 +211,31 @@ export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> =
     })
 
     const callback = Effect.fn("ProviderAuth.callback")(function* (input: { providerID: ProviderID } & CallbackInput) {
+      if (input.providerID === ClaudeCode.ID) {
+        const pending = (yield* InstanceState.get(state)).claudeCodePending
+        const cfg = yield* config.get()
+        const settings = pending.get(input.providerID) ?? ClaudeCode.settingsFromConfig(cfg.provider?.[ClaudeCode.ID]?.options)
+        const result = yield* Effect.promise(() => ClaudeCode.validate(settings)).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ValidationFailed({
+                field: "binaryPath",
+                message: String(cause),
+              }),
+          ),
+        )
+        if (!result.ok) {
+          return yield* Effect.fail(new ValidationFailed({ field: "binaryPath", message: result.error }))
+        }
+        yield* auth.set(input.providerID, {
+          type: "api",
+          key: ClaudeCode.AUTH_KEY,
+          metadata: ClaudeCode.metadata(settings),
+        })
+        pending.delete(input.providerID)
+        return
+      }
+
       const pending = (yield* InstanceState.get(state)).pending
       const match = pending.get(input.providerID)
       if (!match) return yield* Effect.fail(new OauthMissing({ providerID: input.providerID }))
@@ -222,7 +272,7 @@ export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> =
 )
 
 export const defaultLayer = Layer.suspend(() =>
-  layer.pipe(Layer.provide(Auth.defaultLayer), Layer.provide(Plugin.defaultLayer)),
+  layer.pipe(Layer.provide(Auth.defaultLayer), Layer.provide(Config.defaultLayer), Layer.provide(Plugin.defaultLayer)),
 )
 
 export * as ProviderAuth from "./auth"

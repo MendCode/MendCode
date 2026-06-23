@@ -72,6 +72,10 @@ export type DailyUsage = {
   userMessages: number
   userWords: number
   tokens: number
+  inputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  cacheTokens: number
   cost: number
   aiResponseMs: number
   toolMs: number
@@ -173,7 +177,8 @@ function streak(days: DailyUsage[]) {
   }
 
   for (let index = days.length - 1; index >= 0; index--) {
-    if (!active.has(days[index].day)) break
+    const day = days[index]
+    if (!day || !active.has(day.day)) break
     current++
   }
 
@@ -200,6 +205,10 @@ export function buildUsageInsights(input: SessionInsightInput[], options: { star
       userMessages: 0,
       userWords: 0,
       tokens: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheTokens: 0,
       cost: 0,
       aiResponseMs: 0,
       toolMs: 0,
@@ -251,6 +260,10 @@ export function buildUsageInsights(input: SessionInsightInput[], options: { star
             : undefined
 
         day.tokens += messageTokens
+        day.inputTokens += safe(tokens?.input)
+        day.outputTokens += safe(tokens?.output)
+        day.reasoningTokens += safe(tokens?.reasoning)
+        day.cacheTokens += safe(tokens?.cache?.read) + safe(tokens?.cache?.write)
         day.cost += cost
         day.aiResponseMs += responseMs
         inputTokens += safe(tokens?.input)
@@ -333,6 +346,51 @@ export function buildUsageInsights(input: SessionInsightInput[], options: { star
       .sort((a, b) => b[1].tokens - a[1].tokens || a[0].localeCompare(b[0]))
       .slice(0, 8)
       .map(([name, value]) => ({ name, count: value.count, tokens: value.tokens, cost: value.cost })),
+  } satisfies UsageInsights
+}
+
+export function normalizeUsageInsights(input: UsageInsights | undefined) {
+  if (!input) return undefined
+  return {
+    ...input,
+    days: input.days.map((day) => ({
+      ...day,
+      sessions: safe(day.sessions),
+      messages: safe(day.messages),
+      userMessages: safe(day.userMessages),
+      userWords: safe(day.userWords),
+      tokens: safe(day.tokens),
+      inputTokens: safe(day.inputTokens),
+      outputTokens: safe(day.outputTokens),
+      reasoningTokens: safe(day.reasoningTokens),
+      cacheTokens: safe(day.cacheTokens),
+      cost: safe(day.cost),
+      aiResponseMs: safe(day.aiResponseMs),
+      toolMs: safe(day.toolMs),
+      changedFiles: safe(day.changedFiles),
+    })),
+    totals: {
+      ...input.totals,
+      sessions: safe(input.totals.sessions),
+      messages: safe(input.totals.messages),
+      userMessages: safe(input.totals.userMessages),
+      userWords: safe(input.totals.userWords),
+      tokens: safe(input.totals.tokens),
+      inputTokens: safe(input.totals.inputTokens),
+      outputTokens: safe(input.totals.outputTokens),
+      reasoningTokens: safe(input.totals.reasoningTokens),
+      cacheTokens: safe(input.totals.cacheTokens),
+      cost: safe(input.totals.cost),
+      aiResponseMs: safe(input.totals.aiResponseMs),
+      toolMs: safe(input.totals.toolMs),
+      changedFiles: safe(input.totals.changedFiles),
+      activeDays: safe(input.totals.activeDays),
+      currentStreak: safe(input.totals.currentStreak),
+      longestStreak: safe(input.totals.longestStreak),
+      peakTokens: safe(input.totals.peakTokens),
+      longestTaskMs: safe(input.totals.longestTaskMs),
+      sessionsWithCodeChanges: safe(input.totals.sessionsWithCodeChanges),
+    },
   } satisfies UsageInsights
 }
 

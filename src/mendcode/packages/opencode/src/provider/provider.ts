@@ -28,6 +28,7 @@ import { optionalOmitUndefined, withStatics } from "@/util/schema"
 
 import * as ProviderTransform from "./transform"
 import { ModelID, ProviderID } from "./schema"
+import { ClaudeCode } from "./claude-code"
 
 const log = Log.create({ service: "provider" })
 const DEFAULT_CHUNK_TIMEOUT = 60_000
@@ -115,6 +116,7 @@ const BUNDLED_PROVIDERS: Record<string, () => Promise<(opts: any) => BundledSDK>
   "gitlab-ai-provider": () => import("gitlab-ai-provider").then((m) => m.createGitLab),
   "@ai-sdk/github-copilot": () => import("./sdk/copilot/copilot-provider").then((m) => m.createOpenaiCompatible),
   "venice-ai-sdk-provider": () => import("venice-ai-sdk-provider").then((m) => m.createVenice),
+  [ClaudeCode.NPM]: () => import("./claude-code").then((m) => m.createClaudeCode),
 }
 
 type CustomModelLoader = (sdk: any, modelID: string, options?: Record<string, any>) => Promise<any>
@@ -1099,8 +1101,10 @@ const layer: Layer.Layer<
         using _ = log.time("state")
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
+        const directory = yield* InstanceState.directory
         const modelsDev = yield* modelsDevSvc.get()
         const database = mapValues(modelsDev, fromModelsDevProvider)
+        database[ClaudeCode.ID] = ClaudeCode.providerInfo()
 
         const providers: Record<ProviderID, Info> = {} as Record<ProviderID, Info>
         const languages = new Map<string, LanguageModelV3>()
@@ -1290,6 +1294,23 @@ const layer: Layer.Layer<
           const providerID = ProviderID.make(id)
           if (disabled.has(providerID)) continue
           if (provider.type === "api") {
+            if (providerID === ClaudeCode.ID) {
+              const authSettings = ClaudeCode.settingsFromAuth(provider)
+              const settings = ClaudeCode.settingsFromConfig(cfg.provider?.[ClaudeCode.ID]?.options, authSettings)
+              const result = yield* Effect.promise(() => ClaudeCode.validate(settings)).pipe(
+                Effect.catch(() => Effect.succeed({ ok: false, error: "Claude Code validation failed" } as const)),
+              )
+              if (!result.ok) continue
+              database[providerID] = ClaudeCode.providerInfo(settings, result.version)
+              mergeProvider(providerID, {
+                source: "api",
+                options: {
+                  ...ClaudeCode.metadata(settings),
+                  workingDirectory: directory,
+                },
+              })
+              continue
+            }
             mergeProvider(providerID, {
               source: "api",
               key: provider.key,
@@ -1340,6 +1361,7 @@ const layer: Layer.Layer<
         // load config - re-apply with updated data
         for (const [id, provider] of configProviders) {
           const providerID = ProviderID.make(id)
+          if (providerID === ClaudeCode.ID && !providers[providerID]) continue
           const partial: Partial<Info> = { source: "config" }
           if (provider.env) partial.env = provider.env
           if (provider.name) partial.name = provider.name

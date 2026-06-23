@@ -131,6 +131,55 @@ function stateFromSessionStatus(status: unknown): {
   }
 }
 
+function isIdleAction(action: HerdrAction | undefined) {
+  return action?.kind === "report" && action.state === "idle"
+}
+
+async function childSessions(client: PluginInput["client"], sessionID: string) {
+  try {
+    const response = await client.session.children({ sessionID })
+    return response.data ?? []
+  } catch {
+    return []
+  }
+}
+
+async function activeChildState(client: PluginInput["client"], sessionID: string) {
+  const children = await childSessions(client, sessionID)
+  if (children.length === 0) return undefined
+
+  try {
+    const statuses = (await client.session.status()).data ?? {}
+    for (const child of children) {
+      const childID = typeof child.id === "string" ? child.id : undefined
+      if (!childID) continue
+      const reported = stateFromSessionStatus(statuses[childID])
+      if (reported?.state === "blocked" || reported?.state === "working") return { state: "working" as const }
+    }
+  } catch {
+    return undefined
+  }
+}
+
+async function selectedChildSessionID(client: PluginInput["client"], parentSessionID: string, eventSessionID: string) {
+  const children = await childSessions(client, parentSessionID)
+  return children.some((child) => child.id === eventSessionID) ? eventSessionID : undefined
+}
+
+async function isRootSession(client: PluginInput["client"], sessionID: string) {
+  try {
+    const response = await client.session.get({ sessionID })
+    return !response.data?.parentID
+  } catch {
+    return true
+  }
+}
+
+async function shouldHandleHookSession(client: PluginInput["client"], state: HerdrPluginState, sessionID: string) {
+  if (state.currentSessionID) return sessionID === state.currentSessionID
+  return isRootSession(client, sessionID)
+}
+
 export function herdrActionForEvent(event: HerdrEvent, state?: HerdrPluginState): HerdrAction | undefined {
   const type = event?.type
   const properties = event?.properties
@@ -276,10 +325,18 @@ function reportDisplayAgent() {
   })
 }
 
+async function reportInitialAgentPresence() {
+  await requestState("pane.report_agent", { state: "idle" })
+  await reportDisplayAgent()
+}
+
 async function syncSelectedSessionStatus(client: PluginInput["client"], sessionID: string) {
   try {
     const response = await client.session.status()
-    const reported = stateFromSessionStatus(response.data?.[sessionID]) ?? { state: "idle" as const }
+    const reported =
+      (await activeChildState(client, sessionID)) ?? stateFromSessionStatus(response.data?.[sessionID]) ?? {
+        state: "idle" as const,
+      }
     await applyHerdrAction({
       kind: "report",
       ...reported,
@@ -288,6 +345,69 @@ async function syncSelectedSessionStatus(client: PluginInput["client"], sessionI
   } catch {
     // Ignore sync failures here; live session events still update Herdr.
   }
+}
+
+async function reportCurrentSessionStatus(client: PluginInput["client"], sessionID: string, fallback: HerdrState) {
+  try {
+    const response = await client.session.status()
+    const reported =
+      (await activeChildState(client, sessionID)) ?? stateFromSessionStatus(response.data?.[sessionID]) ?? {
+        state: fallback,
+      }
+    await applyHerdrAction({
+      kind: "report",
+      ...reported,
+      sessionID,
+    })
+  } catch {
+    await applyHerdrAction({
+      kind: "report",
+      state: fallback,
+      sessionID,
+    })
+  }
+}
+
+async function herdrActionForPluginEvent(
+  client: PluginInput["client"],
+  event: HerdrEvent,
+  state: HerdrPluginState,
+) {
+  const type = event?.type
+  const eventSessionID = sessionIDFromProperties(event.properties)
+  const currentSessionID = state.currentSessionID
+
+  if (type === "tui.session.select") return herdrActionForEvent(event, state)
+
+  if (
+    currentSessionID &&
+    eventSessionID &&
+    eventSessionID !== currentSessionID
+  ) {
+    const childID = await selectedChildSessionID(client, currentSessionID, eventSessionID)
+    if (childID) {
+      if (type === "session.created" || type === "session.updated") {
+        return { kind: "report" as const, state: "working" as const, sessionID: currentSessionID }
+      }
+      if (type === "session.status") {
+        const reported = stateFromSessionStatus(event.properties?.status)
+        if (!reported || reported.state === "idle") return undefined
+        return { kind: "report" as const, state: "working" as const, sessionID: currentSessionID }
+      }
+    }
+    return undefined
+  }
+
+  if (!currentSessionID && eventSessionID && !(await isRootSession(client, eventSessionID))) {
+    return undefined
+  }
+
+  const action = herdrActionForEvent(event, state)
+  if (isIdleAction(action) && action.sessionID) {
+    const activeChild = await activeChildState(client, action.sessionID)
+    if (activeChild) return { kind: "report" as const, ...activeChild, sessionID: action.sessionID }
+  }
+  return action
 }
 
 async function applyHerdrAction(action: HerdrAction | undefined) {
@@ -317,10 +437,11 @@ export const HerdrAgentStatePlugin: Plugin = async (input) => {
   if (!shouldEnableHerdrAgentStatePlugin()) return {}
 
   const state: HerdrPluginState = {}
-  await reportDisplayAgent()
+  await reportInitialAgentPresence()
 
   return {
     "chat.message": async ({ sessionID }) => {
+      if (!(await shouldHandleHookSession(input.client, state, sessionID))) return
       state.currentSessionID = sessionID
       await applyHerdrAction({
         kind: "session",
@@ -333,6 +454,7 @@ export const HerdrAgentStatePlugin: Plugin = async (input) => {
       })
     },
     "tool.execute.before": async ({ sessionID }) => {
+      if (!(await shouldHandleHookSession(input.client, state, sessionID))) return
       state.currentSessionID = sessionID
       await applyHerdrAction({
         kind: "report",
@@ -341,16 +463,13 @@ export const HerdrAgentStatePlugin: Plugin = async (input) => {
       })
     },
     "tool.execute.after": async ({ sessionID }) => {
+      if (!(await shouldHandleHookSession(input.client, state, sessionID))) return
       state.currentSessionID = sessionID
-      await applyHerdrAction({
-        kind: "report",
-        state: "working",
-        sessionID,
-      })
+      await reportCurrentSessionStatus(input.client, sessionID, "working")
     },
     event: async ({ event }) => {
       const herdrEvent = event as HerdrEvent
-      await applyHerdrAction(herdrActionForEvent(herdrEvent, state))
+      await applyHerdrAction(await herdrActionForPluginEvent(input.client, herdrEvent, state))
       if (herdrEvent.type !== "tui.session.select") return
       const sessionID = sessionIDFromProperties(herdrEvent.properties)
       if (!sessionID) return

@@ -60,6 +60,20 @@ describe("prompt submit parts", () => {
     })
   })
 
+  test("preserves whitespace-only prompt input as an intentional user message", () => {
+    const result = promptSubmitParts({
+      input: " ",
+      parts: [],
+    })
+
+    expect(result.parts).toEqual([
+      {
+        type: "text",
+        text: " ",
+      },
+    ])
+  })
+
   test("restores reverted pasted content placeholders with the real text part intact", () => {
     const pasted = "large pasted context\n".repeat(20)
     const label = pastedContentLabel(pasted)

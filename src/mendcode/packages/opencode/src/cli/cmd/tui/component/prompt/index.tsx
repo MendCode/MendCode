@@ -28,7 +28,7 @@ import { editorSelectionKey, useEditorContext, type EditorSelection } from "@tui
 import { MessageID, PartID } from "@/session/schema"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { useKeybind } from "@tui/context/keybind"
-import { usePromptHistory, type PromptInfo } from "./history"
+import { usePromptHistory, type PromptHistoryScope, type PromptInfo } from "./history"
 import { computePromptTraits } from "./traits"
 import { resolveActivePromptAgentName, resolveSelectedPromptModel, resolveSelectedPromptVariant } from "./agent"
 import * as Model from "../../util/model"
@@ -40,7 +40,7 @@ import {
   promptSubmitParts,
   shouldSummarizePastedContentWithThreshold,
 } from "./submit-parts"
-import { findSlashCommandInvocation } from "./slash-command"
+import { findSlashCommandInvocation, findSlashCommandToken } from "./slash-command"
 import { usePromptStash } from "./stash"
 import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
@@ -95,9 +95,19 @@ import {
 } from "@/mend/tui/prompt-status"
 
 const NATIVE_COMPACTION_SLASHES = new Set(["compact", "summarize"])
+const ACTIVE_LOOP_STATES = new Set(["active", "sleeping", "working", "needs_input", "blocked"])
+
+type LoopWorkflowInfo = {
+  id: string
+  state: string
+  phase?: string
+  rootSessionID?: string
+  nextWakeup?: number
+}
 
 export type PromptProps = {
   sessionID?: string
+  historyScope?: PromptHistoryScope
   workspaceID?: string
   permissionMode?: string
   permissionModeLabel?: string
@@ -408,8 +418,45 @@ export function Prompt(props: PromptProps) {
   const fileStyleId = syntax().getStyleId("extmark.file")!
   const agentStyleId = syntax().getStyleId("extmark.agent")!
   const pasteStyleId = syntax().getStyleId("extmark.paste")!
+  const slashCommandStyleIds = new Map<string, number>()
   let promptPartTypeId = 0
+  let slashCommandTypeId = 0
   const event = useEvent()
+  const [loopRefreshTick, setLoopRefreshTick] = createSignal(0)
+
+  async function fetchLoopWorkflows() {
+    const response = await sdk.fetch(`${sdk.url}/loop`, { headers: { accept: "application/json" } })
+    if (!response.ok) return [] as LoopWorkflowInfo[]
+    const data = await response.json().catch(() => undefined)
+    return Array.isArray(data) ? (data as LoopWorkflowInfo[]) : []
+  }
+
+  const [loopWorkflows] = createResource(loopRefreshTick, fetchLoopWorkflows)
+  const [availableSkills] = createResource(async () => {
+    const result = await sdk.client.app.skills()
+    return result.data ?? []
+  })
+  const skillNames = createMemo(() => new Set((availableSkills() ?? []).map((skill) => skill.name)))
+  const activeLoopCount = createMemo(
+    () => loopWorkflows.latest?.filter((loop) => ACTIVE_LOOP_STATES.has(loop.state)).length ?? 0,
+  )
+  const loopStatusText = createMemo(() => {
+    const count = activeLoopCount()
+    if (!count) return
+    return `↻ ${count} loop${count === 1 ? "" : "s"}`
+  })
+  onMount(() => {
+    setLoopRefreshTick((tick) => tick + 1)
+    const timer = setInterval(() => setLoopRefreshTick((tick) => tick + 1), 2_000)
+    const unsubscribe = sdk.event.on("event", (evt) => {
+      const type = evt.payload?.type as string | undefined
+      if (type?.startsWith("loop.")) setLoopRefreshTick((tick) => tick + 1)
+    })
+    onCleanup(() => {
+      clearInterval(timer)
+      unsubscribe()
+    })
+  })
 
   event.on(TuiEvent.PromptAppend.type, (evt) => {
     if (!input || input.isDestroyed) return
@@ -803,12 +850,14 @@ export function Prompt(props: PromptProps) {
           dialog.replace(() => (
             <DialogSkill
               onSelect={(skill) => {
-                input.setText(`/${skill} `)
+                const next = `/${skill} `
+                input.setText(next)
                 setStore("prompt", {
-                  input: `/${skill} `,
+                  input: next,
                   parts: [],
                 })
                 input.gotoBufferEnd()
+                syncSlashCommandExtmark(next)
               }}
             />
           ))
@@ -884,6 +933,7 @@ export function Prompt(props: PromptProps) {
   })
 
   onCleanup(() => {
+    if (input.focused) input.blur()
     if (store.prompt.input) {
       stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset }
     }
@@ -989,6 +1039,53 @@ export function Prompt(props: PromptProps) {
     )
   }
 
+  function slashCommandExists(name: string) {
+    if (NATIVE_COMPACTION_SLASHES.has(name)) return true
+    if (skillNames().has(name)) return true
+    if (sync.data.command.some((item) => item.name === name)) return true
+    return command
+      .slashes()
+      .some((item) => item.display === `/${name}` || item.aliases?.some((alias) => alias === `/${name}`))
+  }
+
+  async function findSkill(name: string) {
+    const loaded = availableSkills.latest ?? availableSkills()
+    const existing = loaded?.find((skill) => skill.name === name)
+    if (existing) return existing
+    const result = await sdk.client.app.skills()
+    return result.data?.find((skill) => skill.name === name)
+  }
+
+  function slashCommandStyleId() {
+    const color = highlight()
+    const key = `${color.r}:${color.g}:${color.b}:${color.a}`
+    const existing = slashCommandStyleIds.get(key)
+    if (existing !== undefined) return existing
+    const styleId = syntax().registerStyle(`prompt.slash-command.${slashCommandStyleIds.size}`, {
+      fg: color,
+      bold: true,
+    })
+    slashCommandStyleIds.set(key, styleId)
+    return styleId
+  }
+
+  function syncSlashCommandExtmark(value?: string) {
+    if (!input || input.isDestroyed || slashCommandTypeId === 0) return
+    for (const extmark of input.extmarks.getAllForTypeId(slashCommandTypeId)) input.extmarks.delete(extmark.id)
+    if (store.mode === "shell") return
+
+    const token = findSlashCommandToken(value ?? input.plainText ?? store.prompt.input, slashCommandExists)
+    if (!token) return
+
+    input.extmarks.create({
+      start: token.start,
+      end: token.end,
+      styleId: slashCommandStyleId(),
+      typeId: slashCommandTypeId,
+      priority: 10,
+    })
+  }
+
   command.register(() => [
     {
       title: "Stash prompt",
@@ -1071,7 +1168,7 @@ export function Prompt(props: PromptProps) {
         .slashes()
         .some((item) => item.display === `/${name}` || item.aliases?.some((alias) => alias === `/${name}`))
     })
-    if (store.mode !== "shell" && uiSlashInvocation && command.triggerSlash(uiSlashInvocation.name)) {
+    if (store.mode !== "shell" && uiSlashInvocation && command.triggerSlash(uiSlashInvocation.name, uiSlashInvocation.arguments)) {
       input.extmarks.clear()
       input.clear()
       setStore("prompt", { input: "", parts: [] })
@@ -1195,10 +1292,16 @@ export function Prompt(props: PromptProps) {
             },
           ]
         : []
-    const slashInvocation = findSlashCommandInvocation(
-      inputText,
-      (command) => NATIVE_COMPACTION_SLASHES.has(command) || sync.data.command.some((x) => x.name === command),
-    )
+    const slashInvocation = findSlashCommandInvocation(inputText, () => true)
+    const slashServerCommand = slashInvocation
+      ? sync.data.command.find((command) => command.name === slashInvocation.name)
+      : undefined
+    const skillInvocation =
+      slashInvocation &&
+      !NATIVE_COMPACTION_SLASHES.has(slashInvocation.name) &&
+      !slashServerCommand
+        ? await findSkill(slashInvocation.name)
+        : undefined
 
     if (store.mode === "shell") {
       void sdk.client.session.shell({
@@ -1228,7 +1331,47 @@ export function Prompt(props: PromptProps) {
             duration: 5000,
           })
         })
-    } else if (slashInvocation) {
+    } else if (slashInvocation && skillInvocation) {
+      const visible = `/${slashInvocation.name}${slashInvocation.arguments ? ` ${slashInvocation.arguments}` : ""}`
+      sdk.client.session
+        .promptAsync({
+          sessionID,
+          ...selectedModel,
+          messageID,
+          agent: agent.name,
+          model: selectedModel,
+          variant,
+          parts: [
+            {
+              id: PartID.ascending(),
+              type: "text",
+              text: visible,
+            },
+            {
+              id: PartID.ascending(),
+              type: "text",
+              text: `Use the skill tool to load "${skillInvocation.name}", then follow its instructions for: ${slashInvocation.arguments}`,
+              synthetic: true,
+              metadata: {
+                kind: "skill_invocation",
+                skill: skillInvocation.name,
+              },
+            },
+            ...editorParts,
+            ...nonTextParts,
+          ],
+        })
+        .catch((error) => {
+          toast.show({
+            title: "Prompt not sent",
+            message:
+              error instanceof Error && error.message ? error.message : "Connection failed. MendCode is reconnecting.",
+            variant: "error",
+            duration: 5000,
+          })
+        })
+      if (editorParts.length > 0) editor.markSelectionSent()
+    } else if (slashInvocation && slashServerCommand) {
       void sdk.client.session.command({
         sessionID,
         command: slashInvocation.name,
@@ -1266,10 +1409,13 @@ export function Prompt(props: PromptProps) {
         })
       if (editorParts.length > 0) editor.markSelectionSent()
     }
-    history.append({
-      ...store.prompt,
-      mode: currentMode,
-    })
+    history.append(
+      {
+        ...store.prompt,
+        mode: currentMode,
+      },
+      props.historyScope,
+    )
     input.extmarks.clear()
     setStore("prompt", {
       input: "",
@@ -1382,6 +1528,8 @@ export function Prompt(props: PromptProps) {
     if (!agent) return theme.border
     return local.agent.color(agent.name)
   })
+
+  createEffect(on(highlight, () => syncSlashCommandExtmark(), { defer: true }))
 
   const showVariant = createMemo(() => {
     const selectedModel = selectedPromptModel()
@@ -1902,7 +2050,10 @@ export function Prompt(props: PromptProps) {
     const currentStatus = status()
     return resolveActivityPhase({
       status: currentStatus.type,
-      statusKind: currentStatus.type === "busy" ? currentStatus.kind : undefined,
+      statusKind:
+        currentStatus.type === "busy" && "kind" in currentStatus && typeof currentStatus.kind === "string"
+          ? currentStatus.kind
+          : undefined,
       retry: currentStatus.type === "retry",
       connection: effectiveConnectionStatus(),
       toolNames: activityToolNames(),
@@ -1948,7 +2099,7 @@ export function Prompt(props: PromptProps) {
     return formatDuration(Math.max(0, Math.round((workingTick() - started) / 1000)))
   })
   const workingRightMeta = createMemo(() => {
-    const items = [workingIndicatorConfig().showModel ? currentModelLabel() : undefined].filter(Boolean)
+    const items = [loopStatusText(), workingIndicatorConfig().showModel ? currentModelLabel() : undefined].filter(Boolean)
     return items.length ? items.join(" ") : undefined
   })
   const hoverMascot = createMemo(() => activityMascotHoverText(mend.profile))
@@ -2071,6 +2222,7 @@ export function Prompt(props: PromptProps) {
     if (customFooter()) return true
     if (promptStatusUsesOuterMeta() && (promptStatusLeftSegments().length || promptStatusRightSegments().length))
       return true
+    if (loopStatusText()) return true
     if (promptStatusUsesOuterMeta() && (statusEntries().length || footerEntries().length)) return true
     if (promptStatusUsesOuterMeta() && editorContextLabelState() !== "none" && editorFileLabelDisplay()) return true
     return false
@@ -2255,6 +2407,7 @@ export function Prompt(props: PromptProps) {
                   setStore("prompt", "input", value)
                   autocomplete.onInput(value)
                   syncExtmarksWithPromptParts()
+                  syncSlashCommandExtmark(value)
                 }}
                 keyBindings={textareaKeybindings()}
                 onKeyDown={async (e) => {
@@ -2317,7 +2470,7 @@ export function Prompt(props: PromptProps) {
                       (keybind.match("history_next", e) && input.cursorOffset === input.plainText.length)
                     ) {
                       const direction = keybind.match("history_previous", e) ? -1 : 1
-                      const item = history.move(direction, input.plainText)
+                      const item = history.move(direction, input.plainText, props.historyScope)
 
                       if (item) {
                         input.setText(item.input)
@@ -2451,6 +2604,9 @@ export function Prompt(props: PromptProps) {
                   input = r
                   if (promptPartTypeId === 0) {
                     promptPartTypeId = input.extmarks.registerType("prompt-part")
+                  }
+                  if (slashCommandTypeId === 0) {
+                    slashCommandTypeId = input.extmarks.registerType("slash-command")
                   }
                   props.ref?.(ref)
                   setTimeout(() => {
@@ -2643,6 +2799,9 @@ export function Prompt(props: PromptProps) {
                 when={customFooter()}
                 fallback={
                   <box gap={2} flexDirection="row">
+                    <Show when={loopStatusText()}>
+                      {(label) => <text fg={theme.secondary}>{label()}</text>}
+                    </Show>
                     <For each={statusEntries()}>{(item) => <text fg={theme.textMuted}>{item.value}</text>}</For>
                     <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
                       {(file) => (

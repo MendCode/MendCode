@@ -149,7 +149,7 @@ export function DialogModel(props: { providerID?: string }) {
       keybind={[
         {
           keybind: keybind.all.model_provider_list?.[0],
-          title: connected() ? "Connect provider" : "View all providers",
+          title: connected() ? "Connect Provider" : "View all providers",
           onTrigger() {
             dialog.replace(() => <DialogProvider />)
           },

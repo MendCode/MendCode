@@ -1446,7 +1446,7 @@ export function Setup() {
               <Switch>
               <Match when={active() === "provider"}>
                 <box flexDirection="column" gap={1}>
-                  <text fg={theme.primary}>Provider</text>
+                  <text fg={theme.primary}>Connect Provider</text>
                   <text>Provider: {providerLabel()}</text>
                   <text>
                     Auth: {providerStatusText()} · {auth()?.authMode || "not pinned in project config"}

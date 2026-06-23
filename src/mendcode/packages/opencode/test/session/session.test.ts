@@ -236,6 +236,73 @@ describe("live part delta persistence", () => {
   )
 
   test(
+    "publishes coalesced part updates for cross-process followers",
+    async () => {
+      await WithInstance.provide({
+        directory: projectRoot,
+        fn: async () => {
+          const info = await create({})
+          const messageID = MessageID.ascending()
+          await updateMessage({
+            id: messageID,
+            sessionID: info.id,
+            role: "assistant",
+            time: { created: Date.now() },
+            agent: "build",
+            model: { providerID: "test", modelID: "test" },
+            path: { cwd: projectRoot, root: projectRoot },
+            summary: false,
+            cost: 0,
+            tokens: {
+              input: 0,
+              output: 0,
+              reasoning: 0,
+              cache: { read: 0, write: 0 },
+            },
+          } as unknown as MessageV2.Info)
+
+          const part = await updatePart({
+            id: PartID.ascending(),
+            messageID,
+            sessionID: info.id,
+            type: "text",
+            text: "",
+            time: { start: Date.now() },
+          })
+
+          const received = new Promise<MessageV2.Part>((resolve) => {
+            let unsub = () => {}
+            unsub = Bus.subscribe(MessageV2.Event.PartUpdated, (event) => {
+              const updated = event.properties.part as MessageV2.Part
+              if (updated.id !== part.id) return
+              unsub()
+              resolve(updated)
+            })
+          })
+
+          await updatePartDelta({
+            sessionID: info.id,
+            messageID,
+            partID: part.id,
+            field: "text",
+            delta: "stream",
+          })
+
+          const updated = await Promise.race([
+            received,
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Timed out waiting for delta flush")), 1_500)),
+          ])
+          if (updated.type !== "text") throw new Error("Expected text part update")
+          expect(updated.text).toBe("stream")
+
+          await remove(info.id)
+        },
+      })
+    },
+    { timeout: 30000 },
+  )
+
+  test(
     "final part update wins over pending live delta snapshots",
     async () => {
       await WithInstance.provide({

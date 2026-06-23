@@ -10,6 +10,7 @@ import { ProjectProvider } from "../../../../src/cli/cmd/tui/context/project"
 import { SDKProvider, type EventSource } from "../../../../src/cli/cmd/tui/context/sdk"
 import type { GlobalEvent } from "@mendcode/sdk/v2"
 import { SyncProvider, useSync } from "../../../../src/cli/cmd/tui/context/sync"
+import { SyncProviderV2, useSyncV2 } from "../../../../src/cli/cmd/tui/context/sync-v2"
 import { tmpdir } from "../../../fixture/fixture"
 
 const worktree = "/tmp/opencode"
@@ -127,6 +128,46 @@ function Probe(props: { onReady: (ctx: { kv: ReturnType<typeof useKV>; sync: Ret
 
   onMount(() => {
     props.onReady({ kv, sync })
+  })
+
+  return <box />
+}
+
+async function mountV2(
+  overrides: Record<string, unknown | ((url: URL) => unknown)> = {},
+  options: { events?: EventSource } = {},
+) {
+  const calls = createFetch(overrides)
+  let sync!: ReturnType<typeof useSyncV2>
+  let done!: () => void
+  const ready = new Promise<void>((resolve) => {
+    done = resolve
+  })
+
+  const app = await testRender(() => (
+    <SDKProvider url="http://test" directory={directory} fetch={calls.fetch} events={options.events ?? eventSource()}>
+      <ProjectProvider>
+        <SyncProviderV2>
+          <ProbeV2
+            onReady={(ctx) => {
+              sync = ctx.sync
+              done()
+            }}
+          />
+        </SyncProviderV2>
+      </ProjectProvider>
+    </SDKProvider>
+  ))
+
+  await ready
+  return { app, sync }
+}
+
+function ProbeV2(props: { onReady: (ctx: { sync: ReturnType<typeof useSyncV2> }) => void }) {
+  const sync = useSyncV2()
+
+  onMount(() => {
+    props.onReady({ sync })
   })
 
   return <box />
@@ -263,6 +304,109 @@ describe("tui sync", () => {
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous
+    }
+  })
+
+  test("sync payload message part updates feed live session state", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    let emit!: (event: GlobalEvent) => void
+    const sessionID = "ses_sync_live"
+    const messageID = "msg_sync_live"
+    const partID = "prt_sync_live"
+    const initialPart = {
+      id: partID,
+      messageID,
+      sessionID,
+      type: "text",
+      text: "hel",
+      time: { start: 1 },
+    }
+    const updatedPart = {
+      ...initialPart,
+      text: "hello from loop",
+    }
+
+    const { app, sync } = await mount(
+      {},
+      {
+        events: eventSource({
+          onSubscribe: (handler) => {
+            emit = handler
+          },
+        }),
+      },
+    )
+
+    try {
+      sync.set("part", messageID, [initialPart as any])
+
+      emit({
+        directory,
+        project: "proj_test",
+        payload: {
+          type: "sync",
+          syncEvent: {
+            id: "evt_sync_part",
+            seq: 1,
+            aggregateID: sessionID,
+            type: "message.part.updated.1",
+            data: { sessionID, part: updatedPart, time: 2 },
+          },
+        },
+      } as GlobalEvent)
+
+      await wait(() => sync.data.part[messageID]?.[0]?.text === updatedPart.text)
+      expect(sync.data.part[messageID]?.[0]).toMatchObject(updatedPart)
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("v2 message sync refetches known sessions after reconnect", async () => {
+    let emit!: (event: GlobalEvent) => void
+    const sessionID = "ses_v2_reconnect"
+    let fetchCount = 0
+    const messages = [
+      [{ id: "msg_before", type: "user", text: "before", time: { created: 1 } }],
+      [{ id: "msg_after", type: "user", text: "after", time: { created: 2 } }],
+    ]
+
+    const { app, sync } = await mountV2(
+      {
+        [`/api/session/${sessionID}/message`]: () => ({ items: messages[Math.min(fetchCount++, messages.length - 1)] }),
+      },
+      {
+        events: eventSource({
+          onSubscribe: (handler) => {
+            emit = handler
+          },
+        }),
+      },
+    )
+
+    try {
+      await sync.session.message.sync(sessionID)
+      expect(sync.data.messages[sessionID]?.[0]).toMatchObject({ id: "msg_before", text: "before" })
+
+      emit({
+        directory,
+        project: "proj_test",
+        payload: {
+          id: "evt_connected",
+          type: "server.connected",
+          properties: {},
+        },
+      } as GlobalEvent)
+
+      await wait(() => sync.data.messages[sessionID]?.[0]?.id === "msg_after")
+      expect(sync.data.messages[sessionID]?.[0]).toMatchObject({ id: "msg_after", text: "after" })
+    } finally {
+      app.renderer.destroy()
     }
   })
 })

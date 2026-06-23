@@ -2,6 +2,7 @@ import { ProviderAuth } from "@/provider/auth"
 import { Config } from "@/config/config"
 import { ModelsDev } from "@/provider/models"
 import { Provider } from "@/provider/provider"
+import { ClaudeCode } from "@/provider/claude-code"
 import { ProviderID } from "@/provider/schema"
 import { mapValues } from "remeda"
 import { Effect, Schema } from "effect"
@@ -24,9 +25,16 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       for (const [key, value] of Object.entries(all)) {
         if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) filtered[key] = value
       }
+      const allProviders = mapValues(filtered, (item) => Provider.fromModelsDevProvider(item))
+      if (
+        !disabled.has(ClaudeCode.ID) &&
+        (enabled ? enabled.has(ClaudeCode.ID) : true)
+      ) {
+        allProviders[ClaudeCode.ID] = ClaudeCode.providerInfo()
+      }
       const connected = yield* provider.list()
       const providers = Object.assign(
-        mapValues(filtered, (item) => Provider.fromModelsDevProvider(item)),
+        allProviders,
         connected,
       )
       return {

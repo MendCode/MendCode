@@ -35,6 +35,8 @@ const Data = Schema.Struct({
 })
 type Data = Schema.Schema.Type<typeof Data>
 
+const terminalStates = new Set<State>(["completed", "failed", "stopped"])
+
 const InfoFields = {
   sessionID: SessionID,
   state: State,
@@ -147,13 +149,15 @@ function fromRow(row: Row): Info {
 }
 
 function nextData(input: RegisterInput, current?: Data): Data {
+  const state = input.state ?? current?.state ?? "queued"
   return {
     ...current,
-    state: input.state ?? current?.state ?? "queued",
+    state,
     summary: input.summary ?? current?.summary,
     error: input.error ?? current?.error,
     pinned: input.pinned ?? current?.pinned,
     process: input.process ?? current?.process,
+    writer: terminalStates.has(state) ? undefined : current?.writer,
   }
 }
 

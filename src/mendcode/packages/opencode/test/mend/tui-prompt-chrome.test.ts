@@ -150,7 +150,7 @@ describe("mend tui prompt chrome", () => {
     expect(resolveTuiPresentation({ profile: "mendcode" }).reasoning.defaultVisibility).toBe("collapsed")
   })
 
-  test("raw presentation shows reasoning without persisted thinking toggle or completion gate", () => {
+  test("raw and full presentations can show reasoning before completion", () => {
     const raw = mergeMendTuiProfile({
       presentation: {
         profile: "raw",
@@ -179,9 +179,23 @@ describe("mend tui prompt chrome", () => {
         { completed: false, showThinking: false },
       ),
     ).toBe(true)
-    expect(shouldDisplayReasoning(mendcode, { completed: false, showThinking: true })).toBe(false)
+    expect(shouldDisplayReasoning(mendcode, { completed: false, showThinking: true })).toBe(true)
+    expect(shouldDisplayReasoning(mendcode, { completed: false, showThinking: false })).toBe(true)
     expect(shouldDisplayReasoning(mendcode, { completed: true, showThinking: false })).toBe(true)
     expect(shouldDisplayReasoning(mendcode, { completed: true, showThinking: true })).toBe(true)
+    expect(
+      shouldDisplayReasoning(
+        mergeMendTuiProfile({
+          presentation: {
+            profile: "mendcode",
+            reasoning: {
+              defaultVisibility: "hidden",
+            },
+          },
+        }),
+        { completed: true, showThinking: true },
+      ),
+    ).toBe(false)
   })
 
   test("presentation profile changes preserve configured activity text", () => {

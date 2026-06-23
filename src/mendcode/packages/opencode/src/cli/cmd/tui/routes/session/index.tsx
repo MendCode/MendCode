@@ -60,6 +60,7 @@ import type { WebSearchTool } from "@/tool/websearch"
 import type { TaskTool } from "@/tool/task"
 import type { QuestionTool } from "@/tool/question"
 import type { SkillTool } from "@/tool/skill"
+import type { LoopTool } from "@/tool/loop"
 import { useKeyboard, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "@tui/context/sdk"
 import { useEditorContext } from "@tui/context/editor"
@@ -102,7 +103,7 @@ import { formatAssistantUsage, formatLatestAssistantContextUsage } from "../../u
 import { formatTranscript } from "../../util/transcript"
 import { UI } from "@/cli/ui.ts"
 import { useTuiConfig } from "../../context/tui-config"
-import { getScrollAcceleration } from "../../util/scroll"
+import { getScrollAcceleration, isScrollboxAtBottom } from "../../util/scroll"
 import {
   sessionContentWidth,
   sessionDiffStatsLabel,
@@ -127,6 +128,7 @@ import { subagentTaskColorIndex, type SubagentTaskColorEntry } from "../../util/
 import {
   presentationReasoningVisible,
   rawReasoningDisplay,
+  reasoningSummary,
   shouldDisplayReasoning,
   unavailableReasoningLabel,
 } from "@/mend/tui/presentation"
@@ -137,7 +139,7 @@ import { reviewPermissionRequestWithModel, shouldTriggerSmartApproval } from "@/
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import { normalizeToolEvent, shouldRenderCompactTool } from "@/mend/tui/timeline/normalize"
 import { groupTimelineParts, isTimelineStackStart } from "@/mend/tui/timeline/group"
-import type { TimelineRow } from "@/mend/tui/timeline/types"
+import type { TimelineCollapse, TimelineRow } from "@/mend/tui/timeline/types"
 import { TimelineDiff } from "./renderers/diff"
 import {
   expandPastedContentPlaceholders,
@@ -145,7 +147,13 @@ import {
   userMessageDisplayText,
   type PastedContentDisplayPart,
 } from "./user-message-display"
-import { hasMermaidFence, planReviewInlineTitle, renderPlanMarkdown, renderPlanMarkdownStatic } from "../../util/plan-markdown"
+import {
+  hasMermaidFence,
+  planReviewInlineTitle,
+  renderPlanMarkdown,
+  renderPlanMarkdownStatic,
+  renderStreamingMarkdownTail,
+} from "../../util/plan-markdown"
 
 addDefaultParsers(parsers.parsers)
 
@@ -159,6 +167,8 @@ const context = createContext<{
   showGenericToolOutput: () => boolean
   diffWrapMode: () => "word" | "none"
   providers: () => ReadonlyMap<string, Provider>
+  loopWorkflows: () => readonly SessionLoopWorkflow[]
+  refreshLoopWorkflows: () => Promise<readonly SessionLoopWorkflow[]>
   sync: ReturnType<typeof useSync>
   tui: ReturnType<typeof useTuiConfig>
 }>()
@@ -200,11 +210,71 @@ type SessionMemoryMetadata = {
 type BackgroundWriterInfo = {
   sessionID: string
   state: "queued" | "working" | "needs_input" | "completed" | "failed" | "stopped"
+  summary?: string
+  error?: string
+  pinned?: boolean
+  time?: {
+    created: number
+    updated: number
+  }
   writer?: {
     clientID: string
     acquired: number
     expires: number
   } | null
+}
+
+const activeBackgroundWriterStates = new Set<BackgroundWriterInfo["state"]>(["working", "needs_input"])
+
+type SessionLoopWorkflow = {
+  id: string
+  ownerSessionID?: string
+  rootSessionID?: string
+  state: string
+  phase?: string
+  name?: string
+  nextWakeup?: number
+  metrics?: {
+    turns?: number
+  }
+  policy?: {
+    maxTurns?: number
+  }
+  time?: {
+    created?: number
+    updated?: number
+    activated?: number
+  }
+}
+
+function formatLoopWorkflowState(state: string, phase?: string) {
+  if (!phase || phase === state) return state
+  return `${state}: ${phase}`
+}
+
+function loopWorkflowSignature(items: readonly SessionLoopWorkflow[]) {
+  return items
+    .map((item) =>
+      [
+        item.id,
+        item.ownerSessionID ?? "",
+        item.rootSessionID ?? "",
+        item.state,
+        item.phase ?? "",
+        item.name ?? "",
+        item.nextWakeup ?? "",
+        item.metrics?.turns ?? "",
+        item.policy?.maxTurns ?? "",
+        item.time?.created ?? "",
+        item.time?.updated ?? "",
+        item.time?.activated ?? "",
+      ].join("|"),
+    )
+    .join("\n")
+}
+
+function sessionMatchesLoopWorkflow(workflow: Pick<SessionLoopWorkflow, "rootSessionID" | "ownerSessionID">, sessionID: string) {
+  return workflow.rootSessionID === sessionID || workflow.ownerSessionID === sessionID
 }
 
 type BackgroundWriterAcquireResult =
@@ -362,12 +432,33 @@ export function Session() {
       usage: topUsage(),
     }),
   )
-  const subagentTopNavLabel = createMemo(() => {
-    if (!session()?.parentID) return ""
-    return `↖ Parent ${keybind.print("session_parent")}  ← Prev ${keybind.print("session_child_cycle_reverse")}  → Next ${keybind.print("session_child_cycle")}`
+  const [loopSessionWorkflows, setLoopSessionWorkflows] = createSignal<SessionLoopWorkflow[]>([])
+  const setLoopSessionWorkflowsIfChanged = (items: SessionLoopWorkflow[]) => {
+    const next = items
+      .slice()
+      .toSorted((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0) || a.id.localeCompare(b.id))
+    if (loopWorkflowSignature(next) === loopWorkflowSignature(loopSessionWorkflows())) return
+    setLoopSessionWorkflows(next)
+  }
+  const currentLoopWorkflow = createMemo(() =>
+    loopSessionWorkflows().find((workflow) => workflow.rootSessionID === route.sessionID),
+  )
+  const loopRootWorkflows = createMemo(() =>
+    loopSessionWorkflows()
+      .filter((workflow) => workflow.rootSessionID)
+      .toSorted((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0) || a.id.localeCompare(b.id)),
+  )
+  const sessionTopNavLabel = createMemo(() => {
+    if (session()?.parentID) {
+      return `↖ Parent ${keybind.print("session_parent")}  ← Prev ${keybind.print("session_child_cycle_reverse")}  → Next ${keybind.print("session_child_cycle")}`
+    }
+    if (!currentLoopWorkflow()) return ""
+    const parent = currentLoopWorkflow()?.ownerSessionID ? "Parent" : "Agent View"
+    if (loopRootWorkflows().length <= 1) return `↖ ${parent} ${keybind.print("session_parent")}`
+    return `↖ ${parent} ${keybind.print("session_parent")}  ← Prev loop ${keybind.print("session_child_cycle_reverse")}  → Next loop ${keybind.print("session_child_cycle")}`
   })
   const topbarReservedWidth = createMemo(() => {
-    const navWidth = Bun.stringWidth(subagentTopNavLabel())
+    const navWidth = Bun.stringWidth(sessionTopNavLabel())
     const metricsWidth = topMetricsWidth()
     return navWidth + metricsWidth + (navWidth > 0 && metricsWidth > 0 ? 1 : 0)
   })
@@ -448,9 +539,23 @@ export function Session() {
   >("unmanaged")
   const [backgroundWriterOwner, setBackgroundWriterOwner] = createSignal<string>()
   const [backgroundWriterOwns, setBackgroundWriterOwns] = createSignal(false)
+  const [backgroundWriterState, setBackgroundWriterState] = createSignal<BackgroundWriterInfo["state"]>()
+  const [loopBackgroundSummary, setLoopBackgroundSummary] = createSignal<string>()
   const backgroundWriterLocked = createMemo(() => {
     const mode = backgroundWriterMode()
-    return mode === "attaching" || mode === "following"
+    const state = backgroundWriterState()
+    return (mode === "attaching" || mode === "following") && !!state && activeBackgroundWriterStates.has(state)
+  })
+  const loopStatusLabel = createMemo(() => {
+    const workflow = currentLoopWorkflow()
+    const summary = loopBackgroundSummary()
+    if (!workflow && !summary) return undefined
+    const turns = workflow?.metrics?.turns ?? 0
+    const maxTurns = workflow?.policy?.maxTurns
+    const progress = maxTurns ? `${turns}/${maxTurns}` : `${turns}/unlimited`
+    const state = workflow ? formatLoopWorkflowState(workflow.state, workflow.phase ?? "ready") : summary?.replace(/^Loop\s+/i, "")
+    const name = workflow?.name ? `${workflow.name} · ` : ""
+    return Locale.truncate(`${name}${state}${workflow ? ` · ${progress}` : ""}`, Math.max(12, contentWidth() - 16))
   })
   const showSessionBottomDock = createMemo(() => showTodos() && !disabled() && !backgroundWriterLocked())
   const promptDisabled = createMemo(() => disabled() || backgroundWriterLocked())
@@ -864,7 +969,7 @@ export function Session() {
       }
       editor.reconnect(result.data.directory)
       await sync.session.sync(sessionID)
-      if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
+      if (route.sessionID === sessionID && scroll) toBottom()
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
       toast.show({
@@ -930,25 +1035,49 @@ export function Session() {
         mode: backgroundWriterMode(),
         sessionID: route.sessionID,
         status: sync.data.session_status?.[route.sessionID]?.type,
+        loopState: currentLoopWorkflow()?.state,
+        title: session()?.title ?? "",
       }),
-      ({ mode, status }) => {
+      ({ mode, status, loopState, title }) => {
+        const isLoopSession = Boolean(loopState) || title.startsWith("Loop:")
         if (eventlessFollowTimer) clearInterval(eventlessFollowTimer)
         eventlessFollowTimer = undefined
-        if (mode === "attached") return
-        if (status !== "busy" && status !== "retry") return
+        if (mode === "attached" && !isLoopSession) return
+        if (!isLoopSession && status !== "busy" && status !== "retry") return
+        const intervalMs =
+          status === "busy" || status === "retry" || loopState === "working"
+            ? 600
+            : isLoopSession
+              ? 900
+              : 600
         eventlessFollowTimer = setInterval(() => {
-          if (Date.now() - lastFollowSyncAt < 1_200) return
+          if (Date.now() - lastFollowSyncAt < intervalMs) return
           scheduleFollowSync(0)
-        }, 1_200)
+        }, intervalMs)
       },
     ),
   )
 
   const eventSessionID = (evt: { properties?: unknown }) => {
     const properties = evt.properties as
-      | { sessionID?: string; info?: { sessionID?: string }; part?: { sessionID?: string } }
+      | {
+          sessionID?: string
+          info?: { sessionID?: string; rootSessionID?: string }
+          part?: { sessionID?: string }
+          run?: { rootSessionID?: string }
+          thread?: { sessionID?: string }
+          event?: { sessionID?: string }
+        }
       | undefined
-    return properties?.sessionID ?? properties?.info?.sessionID ?? properties?.part?.sessionID
+    return (
+      properties?.sessionID ??
+      properties?.info?.sessionID ??
+      properties?.info?.rootSessionID ??
+      properties?.run?.rootSessionID ??
+      properties?.thread?.sessionID ??
+      properties?.event?.sessionID ??
+      properties?.part?.sessionID
+    )
   }
 
   const immediateFollowEvents = new Set([
@@ -976,6 +1105,10 @@ export function Session() {
     "session.next.shell.ended",
     "session.next.compaction.started",
     "session.next.compaction.ended",
+    "loop.workflow.updated",
+    "loop.run.updated",
+    "loop.event.created",
+    "loop.thread.updated",
   ])
   const liveFollowEvents = new Set([
     "message.part.delta",
@@ -1078,18 +1211,25 @@ export function Session() {
 
     if (part.tool === "plan_exit") {
       local.agent.set((part.state.metadata as { planExitAgent?: string } | undefined)?.planExitAgent || "build")
+      local.model.pinCurrent()
       lastSwitch = part.id
     } else if (part.tool === "plan_review" && part.state.title === "Plan approved") {
       local.agent.set((part.state.metadata as { planExitAgent?: string } | undefined)?.planExitAgent || "build")
+      local.model.pinCurrent()
       lastSwitch = part.id
     } else if (part.tool === "plan_enter") {
       local.agent.set("plan")
+      local.model.pinCurrent()
       lastSwitch = part.id
     }
   })
 
   let seeded = false
   let scroll: ScrollBoxRenderable
+  const [followSessionOutput, setFollowSessionOutput] = createSignal(true)
+  let scrollAnchor: { id: string; offset: number } | undefined
+  let lastObservedScrollTop = 0
+  let lastObservedScrollHeight = 0
   let prompt: PromptRef | undefined
   const bind = (r: PromptRef | undefined) => {
     prompt = r
@@ -1104,6 +1244,78 @@ export function Session() {
 
   // Keep the child-session exit shortcut for states where the prompt is not mounted.
   const exit = useExit()
+
+  const captureScrollAnchor = () => {
+    if (!scroll || scroll.isDestroyed) {
+      scrollAnchor = undefined
+      return
+    }
+
+    const top = scroll.y
+    const child = scroll
+      .getChildren()
+      .filter((item) => item.id && item.y >= top)
+      .sort((a, b) => a.y - b.y)[0]
+    scrollAnchor = child?.id ? { id: child.id, offset: child.y - top } : undefined
+  }
+
+  const restoreScrollAnchor = () => {
+    if (!scroll || scroll.isDestroyed || !scrollAnchor) return
+    const child = scroll.getChildren().find((item) => item.id === scrollAnchor?.id)
+    if (!child) {
+      captureScrollAnchor()
+      return
+    }
+
+    const delta = child.y - scroll.y - scrollAnchor.offset
+    if (delta !== 0) scroll.scrollBy(delta)
+  }
+
+  const syncScrollFollowMode = () => {
+    if (!scroll || scroll.isDestroyed) return
+    const scrollTop = scroll.scrollTop
+    const scrollHeight = scroll.scrollHeight
+
+    if (isScrollboxAtBottom(scroll)) {
+      setFollowSessionOutput(true)
+      scrollAnchor = undefined
+      lastObservedScrollTop = scrollTop
+      lastObservedScrollHeight = scrollHeight
+      return
+    }
+
+    setFollowSessionOutput(false)
+
+    const userMovedViewport =
+      Math.abs(scrollTop - lastObservedScrollTop) > 1 && Math.abs(scrollHeight - lastObservedScrollHeight) <= 1
+    if (userMovedViewport || !scrollAnchor) {
+      captureScrollAnchor()
+    } else {
+      restoreScrollAnchor()
+      captureScrollAnchor()
+    }
+
+    lastObservedScrollTop = scroll.scrollTop
+    lastObservedScrollHeight = scroll.scrollHeight
+  }
+
+  const markScrollDetached = () => {
+    setFollowSessionOutput(false)
+    setTimeout(captureScrollAnchor, 0)
+  }
+  const scrollBySession = (delta: number) => {
+    scroll.scrollBy(delta)
+    setTimeout(syncScrollFollowMode, 0)
+  }
+  const scrollToSession = (position: number) => {
+    scroll.scrollTo(position)
+    setTimeout(syncScrollFollowMode, 0)
+  }
+
+  onMount(() => {
+    const timer = setInterval(syncScrollFollowMode, 80)
+    onCleanup(() => clearInterval(timer))
+  })
 
   createEffect(() => {
     const title = Locale.truncate(session()?.title ?? "", 50)
@@ -1167,17 +1379,23 @@ export function Session() {
     const targetID = findNextVisibleMessage(direction)
 
     if (!targetID) {
-      scroll.scrollBy(direction === "next" ? scroll.height : -scroll.height)
+      if (direction === "prev") markScrollDetached()
+      scrollBySession(direction === "next" ? scroll.height : -scroll.height)
       dialog.clear()
       return
     }
 
     const child = scroll.getChildren().find((c) => c.id === targetID)
-    if (child) scroll.scrollBy(child.y - scroll.y - 1)
+    if (child) {
+      if (direction === "prev") markScrollDetached()
+      scrollBySession(child.y - scroll.y - 1)
+    }
     dialog.clear()
   }
 
   function toBottom() {
+    setFollowSessionOutput(true)
+    scrollAnchor = undefined
     setTimeout(() => {
       if (!scroll || scroll.isDestroyed) return
       scroll.scrollTo(scroll.scrollHeight)
@@ -1245,6 +1463,28 @@ export function Session() {
     }
   }
 
+  function moveLoop(direction: number) {
+    const workflows = loopRootWorkflows()
+    if (workflows.length <= 1) return
+    let next = workflows.findIndex((workflow) => workflow.rootSessionID === route.sessionID) - direction
+    if (next >= workflows.length) next = 0
+    if (next < 0) next = workflows.length - 1
+    const sessionID = workflows[next]?.rootSessionID
+    if (sessionID) {
+      navigate({
+        type: "session",
+        sessionID,
+      })
+    }
+  }
+
+  function navigateToLoopOwner(dialog: DialogContext) {
+    const ownerSessionID = currentLoopWorkflow()?.ownerSessionID
+    if (ownerSessionID) navigate({ type: "session", sessionID: ownerSessionID })
+    else navigate({ type: "home" })
+    dialog.clear()
+  }
+
   function childSessionHandler(func: (dialog: DialogContext) => void) {
     return (dialog: DialogContext) => {
       if (!session()?.parentID || dialog.stack.length > 0) return
@@ -1271,6 +1511,27 @@ export function Session() {
     return items.find((item) => item.sessionID === sessionID)
   }
 
+  const refreshLoopWorkflows = async () => {
+    const loopItems = await backgroundJSON<SessionLoopWorkflow[]>("/loop").catch(() => [])
+    setLoopSessionWorkflowsIfChanged(loopItems)
+    return loopItems
+  }
+
+  const refreshLoopBackgroundSummary = async (sessionID: string) => {
+    const info = await currentBackgroundSession(sessionID)
+    if (route.sessionID !== sessionID) return
+    const title = session()?.title
+    const loopItems = await refreshLoopWorkflows()
+    const workflow = loopItems.find((item) => item.rootSessionID === sessionID)
+    if (workflow) {
+      setLoopBackgroundSummary(`Loop ${formatLoopWorkflowState(workflow.state, workflow.phase ?? "ready")}`)
+      return
+    }
+    const summary = info?.summary
+    const isLoop = summary?.startsWith("Loop ") || title?.startsWith("Loop:")
+    setLoopBackgroundSummary(isLoop ? (summary ?? title) : undefined)
+  }
+
   const acquireBackgroundWriter = async (sessionID: string) =>
     backgroundJSON<BackgroundWriterAcquireResult>(`/session/${sessionID}/background/writer`, {
       method: "POST",
@@ -1290,6 +1551,16 @@ export function Session() {
       setBackgroundWriterMode("unmanaged")
       setBackgroundWriterOwner(undefined)
       setBackgroundWriterOwns(false)
+      setBackgroundWriterState(undefined)
+      await refreshLoopBackgroundSummary(sessionID).catch(() => undefined)
+      return
+    }
+    setBackgroundWriterState(info.state)
+    if (!activeBackgroundWriterStates.has(info.state)) {
+      setBackgroundWriterMode("unmanaged")
+      setBackgroundWriterOwner(info.writer?.clientID)
+      setBackgroundWriterOwns(false)
+      await refreshLoopBackgroundSummary(sessionID).catch(() => undefined)
       return
     }
     if (!backgroundWriterOwns()) setBackgroundWriterMode("attaching")
@@ -1297,7 +1568,9 @@ export function Session() {
     if (route.sessionID !== sessionID) return
     setBackgroundWriterOwner(result.info?.writer?.clientID)
     setBackgroundWriterOwns(result.acquired)
+    setBackgroundWriterState(result.info?.state ?? info.state)
     setBackgroundWriterMode(result.acquired ? "attached" : "following")
+    await refreshLoopBackgroundSummary(sessionID).catch(() => undefined)
     if (notify) {
       toast.show({
         variant: result.acquired ? "success" : "info",
@@ -1312,11 +1585,15 @@ export function Session() {
       () => route.sessionID,
       (sessionID) => {
         let released = false
+        setLoopBackgroundSummary(undefined)
+        setLoopSessionWorkflows([])
         void refreshBackgroundWriter(sessionID).catch(() => {
           if (route.sessionID !== sessionID) return
           setBackgroundWriterMode("unmanaged")
           setBackgroundWriterOwner(undefined)
           setBackgroundWriterOwns(false)
+          setBackgroundWriterState(undefined)
+          void refreshLoopBackgroundSummary(sessionID).catch(() => undefined)
         })
         const timer = setInterval(() => {
           if (!backgroundWriterOwns()) return
@@ -1325,19 +1602,38 @@ export function Session() {
               if (route.sessionID !== sessionID) return
               setBackgroundWriterOwner(result.info?.writer?.clientID)
               setBackgroundWriterOwns(result.acquired)
+              setBackgroundWriterState(result.info?.state)
               setBackgroundWriterMode(result.acquired ? "attached" : "following")
             })
             .catch(() => undefined)
         }, 15_000)
+        const loopPoll = setInterval(() => {
+          void refreshLoopWorkflows()
+            .then((items) => {
+              if (route.sessionID !== sessionID) return
+              const workflow = items.find((item) => item.rootSessionID === sessionID)
+              if (workflow) {
+                setLoopBackgroundSummary(`Loop ${formatLoopWorkflowState(workflow.state, workflow.phase ?? "ready")}`)
+              }
+            })
+            .catch(() => undefined)
+        }, 2_000)
         const unsubscribe = sdk.event.on("event", (event) => {
           const payload = event.payload as { type?: string; properties?: { sessionID?: string } }
           const type = payload.type
-          if (type !== "background_session.updated" && type !== "background_session.deleted") return
-          if (payload.properties?.sessionID && payload.properties.sessionID !== sessionID) return
-          void refreshBackgroundWriter(sessionID).catch(() => undefined)
+          if (type === "background_session.updated" || type === "background_session.deleted") {
+            if (payload.properties?.sessionID && payload.properties.sessionID !== sessionID) return
+            void refreshBackgroundWriter(sessionID).catch(() => undefined)
+            void refreshLoopBackgroundSummary(sessionID).catch(() => undefined)
+            return
+          }
+          if (type?.startsWith("loop.")) {
+            void refreshLoopBackgroundSummary(sessionID).catch(() => undefined)
+          }
         })
         onCleanup(() => {
           clearInterval(timer)
+          clearInterval(loopPoll)
           unsubscribe()
           if (released || !backgroundWriterOwns()) return
           released = true
@@ -1366,6 +1662,7 @@ export function Session() {
     await releaseBackgroundWriter(route.sessionID)
     setBackgroundWriterOwns(false)
     setBackgroundWriterMode("following")
+    setBackgroundWriterState(state)
     setBackgroundWriterOwner(undefined)
     dialog?.clear()
     toast.show({
@@ -1377,12 +1674,47 @@ export function Session() {
   }
 
   const command = useCommandDialog()
+  function fillSessionPrompt(value: string) {
+    setTimeout(() => {
+      prompt?.set({ input: value, parts: [] })
+      prompt?.focus()
+    }, 0)
+  }
+
+  function submitGeneratedSessionPrompt(value: string) {
+    setTimeout(() => {
+      prompt?.set({ input: value, parts: [] })
+      setTimeout(() => void prompt?.submit(), 0)
+    }, 0)
+  }
+
+  function submitLoopSlashPrompt(args: string) {
+    const request = args.trim()
+    submitGeneratedSessionPrompt(
+      [
+        request
+          ? `Create or control a MendCode Loop Workflow for this request:\n${request}`
+          : "Start a guided MendCode Loop Workflow setup for this session.",
+        "",
+        "Use exactly the `loop` tool, not shell commands. If the request already includes the objective, cadence, iteration limit, permission mode, and stop conditions, your first loop tool call must be action `activate`. Do not call `show` or `list` before creating the loop.",
+        "If the request is to stop, remove, delete, pause, resume, or run the current loop and no loop id is visible, call the matching `loop` action without `workflowID`; the tool resolves the current session's contextual loop.",
+        "Ask with the `question` tool only when a critical setting is missing: objective, iteration limit or unbounded mode, cadence, model/provider, max wall-clock runtime, permission mode, or stop condition.",
+        "Default to report-only unless I explicitly allow edits. For interval cadence, set `triggerMode: \"interval\"` and convert the interval to `intervalMs`. Preserve the current session model by omitting `model` unless I choose one.",
+        "Do not hand-render Markdown tables or duplicate status cards after the tool call. Let the Loop Workflow card render from tool metadata, then give a one-line confirmation.",
+      ].join("\n"),
+    )
+  }
+
   command.register(() => [
     {
       title: "Permission mode",
       value: "session.permission.status",
       category: "Permissions",
       description: permissionModeDescription(),
+      slash: {
+        name: "permission",
+        aliases: ["permissions", "approval"],
+      },
       onSelect: () => {
         showPermissionMode()
       },
@@ -1426,6 +1758,41 @@ export function Session() {
       },
       onSelect: (dialog) => {
         dialog.replace(() => <DialogSessionRename session={route.sessionID} />)
+      },
+    },
+    {
+      title: "Create Loop Workflow",
+      value: "session.loop.create",
+      category: "Session",
+      description: "Create or configure a monitored loop for this session.",
+      slash: {
+        name: "loop",
+      },
+      onSlash: (dialog, input) => {
+        dialog.clear()
+        submitLoopSlashPrompt(input.arguments)
+      },
+      onSelect: (dialog) => {
+        dialog.clear()
+        submitLoopSlashPrompt("")
+      },
+    },
+    {
+      title: "Loop Workflows",
+      value: "session.loop.list",
+      category: "Session",
+      description: "Open the live loop workflow dashboard.",
+      slash: {
+        name: "loops",
+      },
+      onSlash: (dialog, input) => {
+        dialog.clear()
+        const selectedID = input.arguments.trim() || undefined
+        navigate({ type: "loops", selectedID, returnTo: { type: "session", sessionID: route.sessionID } })
+      },
+      onSelect: (dialog) => {
+        dialog.clear()
+        navigate({ type: "loops", returnTo: { type: "session", sessionID: route.sessionID } })
       },
     },
     {
@@ -1483,7 +1850,10 @@ export function Session() {
               const child = scroll.getChildren().find((child) => {
                 return child.id === messageID
               })
-              if (child) scroll.scrollBy(child.y - scroll.y - 1)
+              if (child) {
+                markScrollDetached()
+                scrollBySession(child.y - scroll.y - 1)
+              }
             }}
             sessionID={route.sessionID}
             setPrompt={(promptInfo) => prompt?.set(promptInfo)}
@@ -1507,7 +1877,10 @@ export function Session() {
               const child = scroll.getChildren().find((child) => {
                 return child.id === messageID
               })
-              if (child) scroll.scrollBy(child.y - scroll.y - 1)
+              if (child) {
+                markScrollDetached()
+                scrollBySession(child.y - scroll.y - 1)
+              }
             }}
             sessionID={route.sessionID}
           />
@@ -1680,7 +2053,8 @@ export function Session() {
       category: "Session",
       hidden: true,
       onSelect: (dialog) => {
-        scroll.scrollBy(-scroll.height / 2)
+        markScrollDetached()
+        scrollBySession(-scroll.height / 2)
         dialog.clear()
       },
     },
@@ -1691,7 +2065,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       onSelect: (dialog) => {
-        scroll.scrollBy(scroll.height / 2)
+        scrollBySession(scroll.height / 2)
         dialog.clear()
       },
     },
@@ -1702,7 +2076,8 @@ export function Session() {
       category: "Session",
       disabled: true,
       onSelect: (dialog) => {
-        scroll.scrollBy(-1)
+        markScrollDetached()
+        scrollBySession(-1)
         dialog.clear()
       },
     },
@@ -1713,7 +2088,7 @@ export function Session() {
       category: "Session",
       disabled: true,
       onSelect: (dialog) => {
-        scroll.scrollBy(1)
+        scrollBySession(1)
         dialog.clear()
       },
     },
@@ -1724,7 +2099,8 @@ export function Session() {
       category: "Session",
       hidden: true,
       onSelect: (dialog) => {
-        scroll.scrollBy(-scroll.height / 4)
+        markScrollDetached()
+        scrollBySession(-scroll.height / 4)
         dialog.clear()
       },
     },
@@ -1735,7 +2111,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       onSelect: (dialog) => {
-        scroll.scrollBy(scroll.height / 4)
+        scrollBySession(scroll.height / 4)
         dialog.clear()
       },
     },
@@ -1746,7 +2122,8 @@ export function Session() {
       category: "Session",
       hidden: true,
       onSelect: (dialog) => {
-        scroll.scrollTo(0)
+        markScrollDetached()
+        scrollToSession(0)
         dialog.clear()
       },
     },
@@ -1757,7 +2134,8 @@ export function Session() {
       category: "Session",
       hidden: true,
       onSelect: (dialog) => {
-        scroll.scrollTo(scroll.scrollHeight)
+        setFollowSessionOutput(true)
+        scrollToSession(scroll.scrollHeight)
         dialog.clear()
       },
     },
@@ -1787,7 +2165,10 @@ export function Session() {
             const child = scroll.getChildren().find((child) => {
               return child.id === message.id
             })
-            if (child) scroll.scrollBy(child.y - scroll.y - 1)
+            if (child) {
+              markScrollDetached()
+              scrollBySession(child.y - scroll.y - 1)
+            }
             break
           }
         }
@@ -1961,8 +2342,13 @@ export function Session() {
       keybind: "session_parent",
       category: "Session",
       hidden: true,
-      enabled: !!session()?.parentID,
-      onSelect: childSessionHandler((dialog) => {
+      enabled: !!session()?.parentID || !!currentLoopWorkflow(),
+      onSelect: (dialog) => {
+        if (dialog.stack.length > 0) return
+        if (!session()?.parentID && currentLoopWorkflow()) {
+          navigateToLoopOwner(dialog)
+          return
+        }
         const parentID = session()?.parentID
         if (parentID) {
           navigate({
@@ -1971,7 +2357,7 @@ export function Session() {
           })
         }
         dialog.clear()
-      }),
+      },
     },
     {
       title: "Next child session",
@@ -1979,11 +2365,17 @@ export function Session() {
       keybind: "session_child_cycle",
       category: "Session",
       hidden: true,
-      enabled: !!session()?.parentID,
-      onSelect: childSessionHandler((dialog) => {
+      enabled: !!session()?.parentID || loopRootWorkflows().length > 1,
+      onSelect: (dialog) => {
+        if (!session()?.parentID && currentLoopWorkflow()) {
+          moveLoop(1)
+          dialog.clear()
+          return
+        }
+        if (!session()?.parentID || dialog.stack.length > 0) return
         moveChild(1)
         dialog.clear()
-      }),
+      },
     },
     {
       title: "Previous child session",
@@ -1991,11 +2383,17 @@ export function Session() {
       keybind: "session_child_cycle_reverse",
       category: "Session",
       hidden: true,
-      enabled: !!session()?.parentID,
-      onSelect: childSessionHandler((dialog) => {
+      enabled: !!session()?.parentID || loopRootWorkflows().length > 1,
+      onSelect: (dialog) => {
+        if (!session()?.parentID && currentLoopWorkflow()) {
+          moveLoop(-1)
+          dialog.clear()
+          return
+        }
+        if (!session()?.parentID || dialog.stack.length > 0) return
         moveChild(-1)
         dialog.clear()
-      }),
+      },
     },
   ])
 
@@ -2039,6 +2437,8 @@ export function Session() {
         showGenericToolOutput,
         diffWrapMode,
         providers,
+        loopWorkflows: loopSessionWorkflows,
+        refreshLoopWorkflows,
         sync,
         tui: tuiConfig,
       }}
@@ -2063,11 +2463,32 @@ export function Session() {
                   {topbarLeftLabel()}
                 </text>
               </box>
-              <Show when={session()?.parentID}>
-                <SessionSubagentTopNav />
+              <Show when={session()?.parentID || currentLoopWorkflow()}>
+                <SessionTopNav mode={session()?.parentID ? "subagent" : "loop"} canCycle={session()?.parentID ? true : loopRootWorkflows().length > 1} hasParent={!!currentLoopWorkflow()?.ownerSessionID} />
               </Show>
               <SessionTopMetrics diff={topDiffStats()} usage={topUsage()} />
             </box>
+            <Show when={loopStatusLabel()}>
+              {(label) => (
+                <box
+                  width="100%"
+                  height={1}
+                  flexDirection="row"
+                  flexShrink={0}
+                  paddingLeft={contentInset()}
+                  paddingRight={contentInset()}
+                  overflow="hidden"
+                >
+                  <text fg={theme.accent} wrapMode="none">
+                    ↻ Loop
+                  </text>
+                  <text fg={theme.textMuted} wrapMode="none">
+                    {" "}
+                    {label()}
+                  </text>
+                </box>
+              )}
+            </Show>
             <box position="relative" flexGrow={1} width="100%">
               <scrollbox
                 ref={(r) => (scroll = r)}
@@ -2082,7 +2503,7 @@ export function Session() {
                     foregroundColor: theme.border,
                   },
                 }}
-                stickyScroll={true}
+                stickyScroll={followSessionOutput()}
                 stickyStart="bottom"
                 flexGrow={1}
                 width="100%"
@@ -2215,7 +2636,7 @@ export function Session() {
               <Show when={!backgroundWriterLocked() && permissions().length === 0 && questions().length > 0}>
                 <QuestionPrompt request={questions()[0]} />
               </Show>
-              <Show when={backgroundWriterMode() === "following"}>
+              <Show when={backgroundWriterMode() === "following" && backgroundWriterLocked()}>
                 <box paddingLeft={contentInset()} paddingRight={contentInset()} width={insetRowWidth()}>
                   <text fg={theme.textMuted} wrapMode="none">
                     Following read-only · attached in another terminal
@@ -2287,6 +2708,7 @@ export function Session() {
                             visible={visible()}
                             ref={bind}
                             disabled={promptDisabled()}
+                            historyScope={`session:${route.sessionID}`}
                             onSubmit={() => {
                               toBottom()
                             }}
@@ -2346,7 +2768,7 @@ function SessionTopMetrics(props: { diff?: GitDiffStats; usage?: ReturnType<type
   )
 }
 
-function SessionSubagentTopNav() {
+function SessionTopNav(props: { mode: "subagent" | "loop"; canCycle?: boolean; hasParent?: boolean }) {
   const { theme } = useTheme()
   const keybind = useKeybind()
   const command = useCommandDialog()
@@ -2373,9 +2795,11 @@ function SessionSubagentTopNav() {
 
   return (
     <box flexDirection="row" flexShrink={0} gap={2}>
-      {item("parent", "↖", "Parent", "session_parent", "session.parent")}
-      {item("prev", "←", "Prev", "session_child_cycle_reverse", "session.child.previous")}
-      {item("next", "→", "Next", "session_child_cycle", "session.child.next")}
+      {item("parent", "↖", props.mode === "loop" ? (props.hasParent ? "Parent" : "Agent View") : "Parent", "session_parent", "session.parent")}
+      <Show when={props.mode === "subagent" || props.canCycle}>
+        {item("prev", "←", props.mode === "loop" ? "Prev loop" : "Prev", "session_child_cycle_reverse", "session.child.previous")}
+        {item("next", "→", props.mode === "loop" ? "Next loop" : "Next", "session_child_cycle", "session.child.next")}
+      </Show>
     </box>
   )
 }
@@ -3292,6 +3716,12 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
   const activeReasoningLabel = createMemo(() => "Thinking")
   const display = createMemo(() => rawReasoningDisplay(content()))
   const streaming = createMemo(() => !isDone())
+  const fullReasoningTitle = createMemo(() => {
+    const summary = reasoningSummary(content())
+    const line = (summary.title ?? summary.body.split(/\r?\n/).find((item) => item.trim()) ?? "").trim()
+    if (!line) return display().title
+    return Locale.truncate(line.replace(/^#+\s*/, "").replace(/^\*\*([^*]+)\*\*$/, "$1"), 120)
+  })
 
   return (
     <Show when={visible()}>
@@ -3333,7 +3763,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
           <box
             id={`reasoning-${props.message.id}-${props.part.id}`}
             paddingLeft={2}
-            marginTop={1}
+            marginTop={streaming() ? 0 : 1}
             flexDirection="column"
             border={["left"]}
             customBorderChars={SplitBorder.customBorderChars}
@@ -3345,17 +3775,8 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
               open={true}
               done={isDone()}
               activeLabel={activeReasoningLabel()}
-              title={display().title}
+              title={fullReasoningTitle()}
               duration={headerDetail() || undefined}
-            />
-            <code
-              filetype="markdown"
-              drawUnstyledText={false}
-              streaming={false}
-              syntaxStyle={subtleSyntax()}
-              content={display().body}
-              conceal={ctx.conceal()}
-              fg={theme.textMuted}
             />
           </box>
         </Match>
@@ -3448,15 +3869,22 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   const mend = useMendTuiProfile()
   const dimensions = useTerminalDimensions()
   const textPaddingLeft = 3
-  const source = createMemo(() => props.part.text.trim())
   const renderer = createMemo(() => mend.profile.presentation.message.renderer)
+  const streaming = createMemo(() => props.last && !props.message.time.completed)
+  const source = createMemo(() => (streaming() ? props.part.text.trimStart() : props.part.text.trim()))
   const messageWidth = createMemo(() =>
     sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)),
   )
   const markdownWidth = createMemo(() => Math.max(1, messageWidth() - textPaddingLeft))
   const richRenderWidth = createMemo(() => Math.min(markdownWidth(), 100))
-  const streaming = createMemo(() => props.last && !props.message.time.completed)
   const hasMermaid = createMemo(() => hasMermaidFence(source()))
+  const streamingMarkdownContent = createMemo(() => {
+    if (!streaming()) return
+    if (renderer() !== "markdown" && renderer() !== "rich") {
+      return
+    }
+    return { content: "", tail: source() }
+  })
   const markdownStaticContent = createMemo(() => {
     if (renderer() !== "markdown" && renderer() !== "rich") return
     if (streaming()) return
@@ -3473,9 +3901,15 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   const [richContent] = createResource(richInput, async (input) =>
     renderPlanMarkdown(input.text, input.width, { tableMode: "grid", markdownMode: "tables-only" }),
   )
-  const markdownContent = createMemo(() => markdownStaticContent() ?? richContent() ?? source())
+  const markdownContent = createMemo(() => streamingMarkdownContent()?.content ?? markdownStaticContent() ?? richContent() ?? source())
+  const markdownTail = createMemo(() => {
+    const tail = streamingMarkdownContent()?.tail ?? ""
+    return renderStreamingMarkdownTail(tail, richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" }, {
+      finalized: !streaming(),
+    })
+  })
   return (
-    <Show when={source()}>
+    <Show when={source().trim().length > 0}>
       <box
         id={`text-${props.message.id}-${props.part.id}`}
         width={messageWidth()}
@@ -3498,8 +3932,10 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
               conceal={ctx.conceal()}
               fg={theme.markdownText}
               bg={theme.background}
-              stableTextMode={streaming()}
-              colorizeHex={!streaming()}
+              stableTextMode={false}
+              colorizeHex={true}
+              streamingTail={markdownTail()}
+              streamingTailColorizeHex={true}
             />
           </Match>
           <Match when={true}>
@@ -3529,6 +3965,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
     const profile = mend.profile.presentation.profile
     if (props.part.tool === ShellID.ToolID) return false
     if (props.part.tool === "plan_review") return false
+    if (props.part.tool === "loop") return false
     return shouldRenderCompactTool(profile, props.part.tool)
   })
 
@@ -3609,6 +4046,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         </Match>
         <Match when={props.part.tool === "skill"}>
           <Skill {...toolprops} />
+        </Match>
+        <Match when={props.part.tool === "loop"}>
+          <Loop {...toolprops} />
         </Match>
         <Match when={true}>
           <GenericTool {...toolprops} />
@@ -4543,6 +4983,109 @@ function Skill(props: ToolProps<typeof SkillTool>) {
     <InlineTool icon="→" pending="Loading skill..." complete={props.input.name} part={props.part}>
       Skill "{props.input.name}"
     </InlineTool>
+  )
+}
+
+function Loop(props: ToolProps<typeof LoopTool>) {
+  const session = use()
+  const dimensions = useTerminalDimensions()
+  const { theme } = useTheme()
+  const { navigate } = useRoute()
+  const [hover, setHover] = createSignal(false)
+
+  const action = createMemo(() => (typeof props.input.action === "string" ? props.input.action : "loop"))
+  const workflowID = createMemo(() => (typeof props.metadata.workflowID === "string" ? props.metadata.workflowID : undefined))
+  const rootSessionID = createMemo(() => {
+    const root = props.metadata.rootSessionID ?? props.metadata.sessionId
+    return typeof root === "string" ? root : undefined
+  })
+  const firstWorkflow = createMemo(() => {
+    const workflows = props.metadata.workflows
+    if (!Array.isArray(workflows)) return undefined
+    return workflows.find((item): item is {
+      workflowID?: string
+      rootSessionID?: string
+      name?: string
+    } => Boolean(item && typeof item === "object"))
+  })
+  const resolvedWorkflowID = createMemo(() => workflowID() ?? firstWorkflow()?.workflowID)
+  const resolvedRootSessionID = createMemo(() => rootSessionID() ?? firstWorkflow()?.rootSessionID)
+  const title = createMemo(() => {
+    const name = firstWorkflow()?.name ?? (typeof props.input.name === "string" ? props.input.name : undefined)
+    if (name?.trim()) return name.trim()
+    if (action() === "list") return "Loop dashboard"
+    if (action() === "draft") return "Loop draft"
+    return "Loop workflow"
+  })
+  const objective = createMemo(() => {
+    const value = typeof props.input.objective === "string" ? props.input.objective.trim() : ""
+    return value || undefined
+  })
+  const panelWidth = createMemo(() => Math.max(48, Math.min(82, dimensions().width - 12)))
+  const compact = (value: string, width = Math.max(16, panelWidth() - 18)) => Locale.truncateMiddle(value.replace(/\s+/g, " ").trim(), width)
+  const rows = createMemo(() => [
+    { label: "workflow", value: resolvedWorkflowID() ?? "pending", color: resolvedWorkflowID() ? theme.secondary : theme.textMuted },
+    { label: "chat", value: resolvedRootSessionID() ?? "created on activation", color: resolvedRootSessionID() ? theme.secondary : theme.textMuted },
+    { label: "dashboard", value: "/loops", color: theme.textMuted },
+    { label: "goal", value: objective() ?? "configured by loop tool", color: theme.text },
+  ])
+  const openTarget = () => {
+    const root = resolvedRootSessionID()
+    if (root) {
+      navigate({ type: "session", sessionID: root })
+      return
+    }
+    navigate({ type: "loops", selectedID: resolvedWorkflowID(), returnTo: { type: "session", sessionID: session.sessionID } })
+  }
+  const openLabel = createMemo(() => resolvedRootSessionID() ? "open loop chat" : "open loops dashboard")
+
+  return (
+    <BlockTool
+      title="↻ Loop Workflow"
+      titleColor={theme.secondary}
+      contentGap={0}
+      part={props.part}
+      spinner={props.part.state.status === "running" && !resolvedWorkflowID()}
+      onClick={openTarget}
+    >
+      <box width="100%" alignItems="center">
+        <box
+          flexDirection="column"
+          width={panelWidth()}
+          flexShrink={0}
+          borderStyle="single"
+          borderColor={hover() ? theme.secondary : theme.border}
+          paddingLeft={1}
+          paddingRight={1}
+          paddingTop={1}
+          paddingBottom={1}
+          gap={0}
+          onMouseOver={() => setHover(true)}
+          onMouseOut={() => setHover(false)}
+        >
+          <box flexDirection="row">
+            <text fg={theme.secondary} attributes={TextAttributes.BOLD}>↻ {compact(title(), Math.max(18, panelWidth() - 24))}</text>
+            <box flexGrow={1} />
+            <text fg={theme.textMuted}>receipt</text>
+          </box>
+          <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
+            <For each={rows()}>
+              {(row) => (
+                <box flexDirection="row">
+                  <text fg={theme.textMuted} wrapMode="none">{row.label.padEnd(9)}</text>
+                  <text fg={row.color} wrapMode="none">{compact(row.value)}</text>
+                </box>
+              )}
+            </For>
+          </box>
+          <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="row">
+            <text fg={hover() ? theme.secondary : theme.textMuted}>{openLabel()}</text>
+            <box flexGrow={1} />
+            <text fg={theme.textMuted}>click</text>
+          </box>
+        </box>
+      </box>
+    </BlockTool>
   )
 }
 

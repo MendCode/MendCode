@@ -43,6 +43,11 @@ export const defaultMendConfig = {
   },
   tui: { profile: "default", rollbackOnError: true },
   worktree: { mode: "off" },
+  loop: {
+    serviceDir: null,
+    logDir: null,
+    defaultServiceMode: "report-only",
+  },
 }
 
 export const focusProfiles: Record<string, any> = {
@@ -129,6 +134,7 @@ const commands: Record<string, { description: string; template: string }> = {
   mflow: { description: "MendCode Mflow safety status and dry-run planning", template: "MendCode Mflow command. Report Mflow mode and safety gates from .mendcode/worktree/policy.yaml. Plan optional mflow-sdk integration only as dry-run unless explicit user approval enables live sync." },
   tsm: { description: "MendCode TSM worktree/session orchestration plan", template: "MendCode TSM command. Treat github.com/adibhanna/tsm as an external terminal-session/worktree orchestration candidate. Inspect and plan only; do not install tsm, run tsm wt add/rm/prune, or create git worktrees without explicit approval." },
   ai: { description: "MendCode AI runtime readiness", template: "MendCode AI command. Report if a real AI run is possible from MendCode-owned configuration. If provider/model credentials are not configured, say blocked and show the minimal setup path. Do not call donor runtime or provider APIs by default." },
+  loop: { description: "MendCode Loop Workflow creation and monitoring", template: "MendCode Loop Workflow command. When the user asks to turn the current session into a loop or create a loop for an objective, create a reviewable loop draft first, use report-only mode unless the user explicitly allows edits, activate only after the objective/iteration count/stop condition are clear, and rely on the project loop service for durable wakeups. For a test loop, prefer five bounded report-only iterations that inspect the current directory, record what changed or was newly learned each iteration, then summarize final findings. Do not push, merge, release, version bump, externally send, or run destructive shell commands from a loop without explicit saved policy approval." },
 }
 
 function readJsonSync<T>(file: string, fallback: T): T {

@@ -5,6 +5,16 @@ import { rawReasoningDisplay, unavailableReasoningLabel } from "../../src/mend/t
 import { groupTimelineParts, isTimelineStackStart } from "../../src/mend/tui/timeline/group"
 import { normalizeToolEvent, shouldRenderCompactTool, toolClass, toolSummary } from "../../src/mend/tui/timeline/normalize"
 
+function timelineNodeLabel(node: ReturnType<typeof groupTimelineParts>[number]) {
+  if (node.type === "row") return (node as { title: string }).title
+  if (node.type === "collapse") return `◇ ${(node as { count: number }).count} more`
+  return node.type
+}
+
+function isTimelineRowWithTitle(node: ReturnType<typeof groupTimelineParts>[number], title: string) {
+  return node.type === "row" && (node as { title: string }).title === title
+}
+
 describe("mend tui presentation renderers", () => {
   test("classifies tool events by presentation class", () => {
     expect(toolClass("read")).toBe("simple-read")
@@ -115,12 +125,12 @@ describe("mend tui presentation renderers", () => {
       {
         questions: [
           {
-            header: "Formato",
-            question: "¿En qué formato quieres que deje el reporte editable/final para poder revisar simulaciones, capturas, evidencias y anexos sin que el bloque se rompa visualmente?",
+            header: "Format",
+            question: "Which editable and final report format should I use so simulations, screenshots, evidence, and appendices stay readable without breaking the block layout?",
             options: [
-              { label: "DOCX y PDF" },
-              { label: "Solo PDF" },
-              { label: "Markdown primero" },
+              { label: "DOCX and PDF" },
+              { label: "PDF only" },
+              { label: "Markdown first" },
             ],
           },
         ],
@@ -128,7 +138,7 @@ describe("mend tui presentation renderers", () => {
       {
         answers: [
           [
-            "markdown para que vayas armando todo luego lo montas a docx y pdf completo con imagenes de las simulaciones etc todo completo bien organizado",
+            "markdown first so the report can be assembled progressively, then turn it into complete docx and pdf files with simulation images, evidence, appendices, and a clean structure",
           ],
         ],
       },
@@ -136,9 +146,9 @@ describe("mend tui presentation renderers", () => {
     expect(longQuestion.title).toBe("Question")
     expect(longQuestion.lines.length).toBeGreaterThan(4)
     expect(longQuestion.lines.every((line) => Bun.stringWidth(line) <= 76)).toBe(true)
-    expect(longQuestion.lines).toContain("  choices: DOCX y PDF, Solo PDF, Markdown primero")
-    expect(longQuestion.lines.some((line) => line.startsWith("  poder revisar"))).toBe(true)
-    expect(longQuestion.lines.some((line) => line.startsWith("  con imagenes"))).toBe(true)
+    expect(longQuestion.lines).toContain("  choices: DOCX and PDF, PDF only, Markdown first")
+    expect(longQuestion.lines.some((line) => line.startsWith("  simulations"))).toBe(true)
+    expect(longQuestion.lines.some((line) => line.startsWith("  appendices"))).toBe(true)
   })
 
   test("mendcode keeps artifact and command tools on rich renderers", () => {
@@ -148,10 +158,12 @@ describe("mend tui presentation renderers", () => {
     expect(shouldRenderCompactTool("mendcode", "apply_patch")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "bash")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "task")).toBe(false)
+    expect(shouldRenderCompactTool("mendcode", "loop")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "todowrite")).toBe(true)
     expect(shouldRenderCompactTool("minimal", "edit")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "apply_patch")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "task")).toBe(false)
+    expect(shouldRenderCompactTool("minimal", "loop")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "todowrite")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "bash")).toBe(true)
     expect(shouldRenderCompactTool("raw", "read")).toBe(false)
@@ -175,7 +187,7 @@ describe("mend tui presentation renderers", () => {
       },
     ], { completed: true, showReasoningRows: true })
 
-    const labels = nodes.map((node) => (node.type === "row" ? node.title : node.type === "collapse" ? `◇ ${node.count} more` : node.type))
+    const labels = nodes.map(timelineNodeLabel)
     expect(labels).toEqual([
       "◇ 6 more",
       ...Array.from({ length: 10 }, (_, index) => `Read file-${index + 7}.ts`),
@@ -189,7 +201,7 @@ describe("mend tui presentation renderers", () => {
         expect.objectContaining({ title: `Read file-${index + 1}.ts` }),
       ),
     })
-    expect(nodes.find((node) => node.type === "row" && node.title === 'Search web "docs"')).toMatchObject({
+    expect(nodes.find((node) => isTimelineRowWithTitle(node, 'Search web "docs"'))).toMatchObject({
       type: "row",
       state: "running",
     })
@@ -212,7 +224,7 @@ describe("mend tui presentation renderers", () => {
       },
     ])
 
-    const labels = nodes.map((node) => (node.type === "row" ? node.title : node.type === "collapse" ? `◇ ${node.count} more` : node.type))
+    const labels = nodes.map(timelineNodeLabel)
     expect(labels[0]).toBe("◇ 10 more")
     expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 10 more"])
     expect(labels.at(-1)).toBe("Read /tmp/current.ts (5-14)")
@@ -242,10 +254,10 @@ describe("mend tui presentation renderers", () => {
       },
     ], { completed: true, showReasoningRows: true })
 
-    const labels = nodes.map((node) => (node.type === "row" ? node.title : node.type === "collapse" ? `◇ ${node.count} more` : node.type))
+    const labels = nodes.map(timelineNodeLabel)
     expect(labels[0]).toBe("◇ 3 more")
     expect(labels).toContain("Todos")
-    expect(nodes.find((node) => node.type === "row" && node.title === "Todos")).toMatchObject({
+    expect(nodes.find((node) => isTimelineRowWithTitle(node, "Todos"))).toMatchObject({
       lines: ["✓ Ship the UI"],
     })
     expect(labels.at(-1)).toBe('Search web "docs"')
@@ -271,7 +283,7 @@ describe("mend tui presentation renderers", () => {
     ]
 
     const nodes = groupTimelineParts("mendcode", parts, { completed: true, showReasoningRows: true })
-    const labels = nodes.map((node) => (node.type === "row" ? node.title : node.type === "collapse" ? `◇ ${node.count} more` : node.type))
+    const labels = nodes.map(timelineNodeLabel)
 
     expect(labels[0]).toBe("◇ 4 more")
     expect(labels).not.toContain("part")
@@ -535,6 +547,33 @@ describe("mend tui presentation renderers", () => {
       "export const client = createClient()",
       "export default client",
     ])
+  })
+
+  test("timeline diff parser omits binary-looking patches instead of rendering bytes", () => {
+    const diff = [
+      "Index: /repo/public/blog/hero.png",
+      "===================================================================",
+      "--- /repo/public/blog/hero.png",
+      "+++ /repo/public/blog/hero.png",
+      "@@ -1,2 +0,0 @@",
+      "-\ufffdPNG",
+      "-\u0000\u0000\u0000\rIHDR\u0000\u0000",
+    ].join("\n")
+    const rows = parseTimelineDiffRows(diff)
+
+    expect(rows).toEqual([
+      { kind: "file", text: "/repo/public/blog/hero.png" },
+      { kind: "meta", text: expect.stringContaining("Binary/non-text patch omitted") },
+    ])
+    expect(rows.map((row) => row.text).join("\n")).not.toContain("\ufffdPNG")
+  })
+
+  test("timeline diff parser caps very large text diffs", () => {
+    const body = Array.from({ length: 2_000 }, (_, index) => `+line ${index}`).join("\n")
+    const rows = parseTimelineDiffRows(["+++ b/huge.ts", "@@ -0,0 +1,2000 @@", body].join("\n"))
+
+    expect(rows.length).toBeLessThanOrEqual(1_201)
+    expect(rows.at(-1)).toEqual({ kind: "meta", text: expect.stringContaining("Diff preview truncated") })
   })
 
   test("timeline diff detects complete created files", () => {

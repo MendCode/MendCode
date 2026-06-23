@@ -22,6 +22,12 @@ export type PastedContentDisplayPart = {
   }
 }
 
+export const BLANK_USER_MESSAGE_DISPLAY_TEXT = "[blank message]"
+
+export function visibleUserMessageText(text: string) {
+  return text.trim().length === 0 ? BLANK_USER_MESSAGE_DISPLAY_TEXT : text
+}
+
 export function isPastedContentPart(part: unknown): part is PastedContentDisplayPart {
   if (!part || typeof part !== "object") return false
   const value = part as PastedContentDisplayPart & { type?: unknown; synthetic?: unknown }
@@ -78,7 +84,7 @@ export function userMessageDisplayText(text: string, options: UserMessageDisplay
   const hiddenChars = Math.max(0, text.length - visible.length)
 
   return {
-    text: compacted ? visible.trimEnd() : text,
+    text: visibleUserMessageText(compacted ? visible.trimEnd() : text),
     compacted,
     hiddenLines,
     hiddenChars,

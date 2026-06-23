@@ -15,6 +15,7 @@ import { Question } from "../../src/question"
 import { Provider } from "@/provider/provider"
 import { defaultModelsConfig, writeModelsConfig } from "@/mend/config/models"
 import { writeProjectMemoryConfig } from "@/mend/memory/config"
+import { listMemoryProposals } from "@/mend/memory/proposals"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Session } from "@/session/session"
 import { LLM } from "../../src/session/llm"
@@ -413,6 +414,103 @@ it.live("session.processor routes automatic memory extraction through LLM servic
   ),
 )
 
+it.live("session.processor writes automatic memory proposals under cwd when message root is filesystem root", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const root = path.resolve(dir)
+        const previousXdgConfigHome = process.env.XDG_CONFIG_HOME
+        process.env.XDG_CONFIG_HOME = path.join(root, ".xdg")
+        try {
+          yield* Effect.promise(() => writeProjectMemoryConfig({
+            enabled: true,
+            use: false,
+            generate: true,
+            extractorRole: "memoryExtractor",
+          }, root))
+          yield* Effect.promise(() => writeModelsConfig({
+            ...defaultModelsConfig,
+            enabled: true,
+            roles: {
+              ...defaultModelsConfig.roles,
+              default: { providerID: "test", modelID: "test-model" },
+              memoryExtractor: { providerID: "test", modelID: "test-model" },
+            },
+          }, root))
+          const { processors, session, provider } = yield* boot()
+
+          yield* llm.text("Understood.")
+          yield* llm.text(JSON.stringify({
+            proposals: [{
+              shouldRemember: true,
+              scope: "project",
+              text: "For non-git folders, automatic memory proposals should be stored under the session cwd.",
+              tags: ["memory", "workflow"],
+              durability: 0.95,
+              confidence: 0.9,
+              changeRisk: 0.05,
+              reason: "Durable project memory routing rule.",
+            }],
+          }))
+
+          const chat = yield* session.create({})
+          const parent = yield* user(chat.id, "remember this non-git folder memory rule")
+          const msg: MessageV2.Assistant = {
+            id: MessageID.ascending(),
+            role: "assistant",
+            sessionID: chat.id,
+            mode: "build",
+            agent: "build",
+            path: { cwd: root, root: "/" },
+            cost: 0,
+            tokens: { total: 0, input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            modelID: ref.modelID,
+            providerID: ref.providerID,
+            parentID: parent.id,
+            time: { created: Date.now() },
+            finish: "end_turn",
+          }
+          yield* session.updateMessage(msg)
+          const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+          const handle = yield* processors.create({
+            assistantMessage: msg,
+            sessionID: chat.id,
+            model: mdl,
+          })
+
+          yield* handle.process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies MessageV2.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "remember this non-git folder memory rule" }],
+            tools: {},
+          })
+          yield* handle.flushMemory()
+
+          const proposals = yield* Effect.promise(() => listMemoryProposals(root, "pending"))
+
+          expect(yield* llm.calls).toBe(2)
+          expect(proposals).toHaveLength(1)
+          expect(proposals[0]?.cwd).toBe(root)
+          expect(proposals[0]?.text).toContain("non-git folders")
+        } finally {
+          if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
+          else process.env.XDG_CONFIG_HOME = previousXdgConfigHome
+        }
+      }),
+    { git: false, config: (url) => providerCfg(url) },
+  ),
+)
+
 it.live("session.processor effect tests preserve text start time", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>
@@ -635,6 +733,56 @@ it.live("session.processor effect tests retry idle llm streams instead of stayin
         expect(value).toBe("continue")
         expect(yield* llm.calls).toBe(2)
         expect(parts.some((part) => part.type === "text" && part.text === "recovered")).toBe(true)
+      }),
+    { git: true, config: (url) => providerCfg(url) },
+  ),
+)
+
+it.live("session.processor effect tests discard abandoned attempt parts before retry", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        process.env.MENDCODE_LLM_STREAM_IDLE_TIMEOUT_MS = "25"
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.push(
+          reply().text("stale partial attempt").hang(),
+          reply().text("recovered after retry").stop(),
+        )
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "run slow command")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const value = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies MessageV2.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "run slow command" }],
+          tools: {},
+        })
+
+        const parts = MessageV2.parts(msg.id)
+
+        expect(value).toBe("continue")
+        expect(yield* llm.calls).toBe(2)
+        expect(parts.some((part) => part.type === "text" && part.text === "recovered after retry")).toBe(true)
+        expect(parts.some((part) => part.type === "text" && part.text === "stale partial attempt")).toBe(false)
       }),
     { git: true, config: (url) => providerCfg(url) },
   ),
@@ -1047,6 +1195,141 @@ it.live("session.processor effect tests publish retry status updates", () =>
   ),
 )
 
+it.live("session.processor effect tests defer retry to prompt loop after persisted tool output", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.push(reply().streamError(new Error("LLM stream timed out after 250ms without events")))
+        yield* llm.push(reply().text("should not be used").stop())
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "flash the device")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        yield* session.updatePart({
+          id: PartID.ascending(),
+          messageID: msg.id,
+          sessionID: chat.id,
+          type: "tool",
+          callID: "call_long_command",
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: { command: "sleep 120 && flash-device" },
+            output: "Writing at 0x00120800... 100%\nVerifying written data... interrupted after provider retry",
+            title: "sleep 120 && flash-device",
+            metadata: {},
+            time: { start: Date.now() - 1_000, end: Date.now() },
+          },
+        })
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const value = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies MessageV2.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "flash the device" }],
+          tools: {},
+        })
+
+        const parts = MessageV2.parts(msg.id)
+        const currentStatus = yield* SessionStatus.Service.use((svc) => svc.get(chat.id))
+
+        expect(value).toBe("continue")
+        expect(yield* llm.calls).toBe(1)
+        expect(currentStatus.type).toBe("busy")
+        expect(parts.some((part) => part.type === "text" && part.text.includes("should not be used"))).toBe(false)
+        expect(
+          parts.some(
+            (part) =>
+              part.type === "tool" &&
+              part.tool === "bash" &&
+              part.state.status === "completed" &&
+              part.state.output.includes("Verifying written data"),
+          ),
+        ).toBe(true)
+      }),
+    { git: true, config: (url) => providerCfg(url) },
+  ),
+)
+
+it.live("session.processor effect tests preserve visible text and tool attempt on retryable stream error", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.push(
+          reply()
+            .text("Voy a ejecutar la compilacion larga.")
+            .pendingTool("bash", { command: "pnpm build:windows --target production --verbose" })
+            .streamError(new Error("Network connection lost")),
+        )
+        yield* llm.push(reply().text("should not be used").stop())
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "compila windows")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const value = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies MessageV2.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "compila windows" }],
+          tools: {},
+        })
+
+        const parts = MessageV2.parts(msg.id)
+        const currentStatus = yield* SessionStatus.Service.use((svc) => svc.get(chat.id))
+
+        expect(value).toBe("continue")
+        expect(yield* llm.calls).toBe(1)
+        expect(currentStatus.type).toBe("busy")
+        expect(parts.some((part) => part.type === "text" && part.text.includes("compilacion larga"))).toBe(true)
+        expect(
+          parts.some(
+            (part) =>
+              part.type === "tool" &&
+              part.tool === "bash" &&
+              JSON.stringify(part.state).includes("pnpm build:windows"),
+          ),
+        ).toBe(true)
+        expect(parts.some((part) => part.type === "text" && part.text.includes("should not be used"))).toBe(false)
+      }),
+    { git: true, config: (url) => providerCfg(url) },
+  ),
+)
+
 it.live("session.processor effect tests retry silent provider streams", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>
@@ -1212,6 +1495,102 @@ it.live("session.processor effect tests mark pending tools as aborted on cleanup
   ),
 )
 
+it.live("session.processor effect tests retain pending task tools with child sessions on cleanup", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.toolHang("task", {
+          description: "inspect bug",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+        })
+
+        const chat = yield* session.create({})
+        const child = yield* session.create({
+          parentID: chat.id,
+          title: "inspect bug (@general subagent)",
+          agent: "general",
+        })
+        const childParent = yield* user(child.id, "look into the cache key path")
+        const childAssistant = yield* assistant(child.id, childParent.id, path.resolve(dir))
+        yield* session.updatePart({
+          id: PartID.ascending(),
+          messageID: childAssistant.id,
+          sessionID: child.id,
+          type: "text",
+          text: "partial child investigation",
+        })
+
+        const parent = yield* user(chat.id, "tool retain")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const run = yield* handle
+          .process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies MessageV2.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "tool retain" }],
+            tools: {},
+          })
+          .pipe(Effect.forkChild)
+
+        yield* llm.wait(1)
+        for (let i = 0; i < 50; i++) {
+          const parts = MessageV2.parts(msg.id)
+          const part = parts.find((item): item is MessageV2.ToolPart => item.type === "tool")
+          if (part) {
+            yield* session.updatePart({
+              ...part,
+              state: {
+                ...part.state,
+                metadata: {
+                  ...("metadata" in part.state && part.state.metadata ? part.state.metadata : {}),
+                  sessionId: child.id,
+                },
+              },
+            })
+            break
+          }
+          yield* Effect.sleep("10 millis")
+        }
+        yield* Fiber.interrupt(run)
+
+        const exit = yield* Fiber.await(run)
+        const parts = MessageV2.parts(msg.id)
+        const call = parts.find((part): part is MessageV2.ToolPart => part.type === "tool")
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(yield* llm.calls).toBe(1)
+        expect(call?.state.status).toBe("completed")
+        if (call?.state.status === "completed") {
+          expect(call.state.metadata.status).toBe("retained")
+          expect(call.state.output).toContain(`task_id: ${child.id}`)
+          expect(call.state.output).toContain("task_status: retained")
+          expect(call.state.output).toContain("partial child investigation")
+          expect(call.state.output).not.toContain("interrupted")
+        }
+      }),
+    { git: true, config: (url) => providerCfg(url) },
+  ),
+)
+
 it.live("session.processor effect tests record aborted errors and idle state", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>
@@ -1227,6 +1606,7 @@ it.live("session.processor effect tests record aborted errors and idle state", (
         const parent = yield* user(chat.id, "abort")
         const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
         const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const controller = new AbortController()
         const errs: string[] = []
         const off = yield* bus.subscribeCallback(Session.Event.Error, (evt) => {
           if (evt.properties.sessionID !== chat.id) return
@@ -1238,6 +1618,7 @@ it.live("session.processor effect tests record aborted errors and idle state", (
           assistantMessage: msg,
           sessionID: chat.id,
           model: mdl,
+          abort: controller.signal,
         })
 
         const run = yield* handle
@@ -1260,6 +1641,7 @@ it.live("session.processor effect tests record aborted errors and idle state", (
           .pipe(Effect.forkChild)
 
         yield* llm.wait(1)
+        controller.abort()
         yield* Fiber.interrupt(run)
 
         const exit = yield* Fiber.await(run)
@@ -1284,7 +1666,7 @@ it.live("session.processor effect tests record aborted errors and idle state", (
   ),
 )
 
-it.live("session.processor effect tests mark interruptions aborted without manual abort", () =>
+it.live("session.processor effect tests do not mark interruptions aborted without manual abort", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>
       Effect.gen(function* () {
@@ -1330,12 +1712,12 @@ it.live("session.processor effect tests mark interruptions aborted without manua
         const state = yield* sts.get(chat.id)
 
         expect(Exit.isFailure(exit)).toBe(true)
-        expect(handle.message.error?.name).toBe("MessageAbortedError")
+        expect(handle.message.error).toBeUndefined()
         expect(stored.info.role).toBe("assistant")
         if (stored.info.role === "assistant") {
-          expect(stored.info.error?.name).toBe("MessageAbortedError")
+          expect(stored.info.error).toBeUndefined()
         }
-        expect(state).toMatchObject({ type: "idle" })
+        expect(state?.type).toBe("busy")
       }),
     { git: true, config: (url) => providerCfg(url) },
   ),

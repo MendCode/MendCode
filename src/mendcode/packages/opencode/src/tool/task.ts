@@ -188,6 +188,7 @@ export const TaskTool = Tool.define(
 
       const messageID = MessageID.ascending()
       const cancel = ops.cancel(nextSession.id)
+      let parentAborted = ctx.abort.aborted
 
       const output = (input: { status: "completed" | "interrupted" | "failed"; text?: string; error?: unknown }) => {
         const lines = [
@@ -226,12 +227,14 @@ export const TaskTool = Tool.define(
         })
 
       function onAbort() {
+        parentAborted = true
         runCancel.fork(cancel)
       }
 
       return yield* Effect.acquireUseRelease(
         Effect.sync(() => {
           ctx.abort.addEventListener("abort", onAbort)
+          if (ctx.abort.aborted) onAbort()
         }),
         () =>
           Effect.gen(function* () {
@@ -257,7 +260,10 @@ export const TaskTool = Tool.define(
                 Effect.matchCauseEffect({
                   onFailure: (cause) => {
                     const error = Cause.squash(cause)
-                    return errorOutput({ error, interrupted: Cause.hasInterrupts(cause) || isAbortError(error) })
+                    return errorOutput({
+                      error,
+                      interrupted: parentAborted && (Cause.hasInterrupts(cause) || isAbortError(error)),
+                    })
                   },
                   onSuccess: (result) => {
                     const error = result.info.role === "assistant" ? result.info.error : undefined
@@ -271,7 +277,7 @@ export const TaskTool = Tool.define(
           }),
         (_, exit) =>
           Effect.gen(function* () {
-            if (Exit.hasInterrupts(exit)) yield* cancel
+            if (Exit.hasInterrupts(exit) && parentAborted) yield* cancel
           }).pipe(
             Effect.ensuring(
               Effect.sync(() => {
