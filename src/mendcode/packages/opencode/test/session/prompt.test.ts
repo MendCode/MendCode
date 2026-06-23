@@ -34,6 +34,7 @@ import { SessionProcessor } from "../../src/session/processor"
 import {
   SessionPrompt,
   shouldCheckFinishedAssistantForAutoCompaction,
+  shouldResumeAfterActiveCompaction,
   shouldResumeAfterAutoCompaction,
   shouldSkipAutoCompaction,
 } from "../../src/session/prompt"
@@ -279,6 +280,14 @@ test("auto compaction resumes only for active or incomplete assistant turns", ()
   expect(shouldResumeAfterAutoCompaction("length")).toBe(true)
   expect(shouldResumeAfterAutoCompaction("unknown")).toBe(true)
   expect(shouldResumeAfterAutoCompaction("stop")).toBe(false)
+})
+
+test("active provider compaction always resumes after writing the summary", () => {
+  expect(shouldResumeAfterActiveCompaction(undefined)).toBe(true)
+  expect(shouldResumeAfterActiveCompaction("tool-calls")).toBe(true)
+  expect(shouldResumeAfterActiveCompaction("length")).toBe(true)
+  expect(shouldResumeAfterActiveCompaction("unknown")).toBe(true)
+  expect(shouldResumeAfterActiveCompaction("stop")).toBe(true)
 })
 
 test("auto compaction ignores a finished assistant that is older than queued user input", () => {

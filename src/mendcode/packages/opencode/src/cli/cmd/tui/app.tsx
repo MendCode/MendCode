@@ -2659,6 +2659,27 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       slashes.map((item) => `${item.display}  ${item.description || ""}`).join("\n") || "No slash commands available.",
     )
   }
+  function loopSlashPrompt(args: string) {
+    const request = args.trim()
+    return [
+      request
+        ? `Create or control a MendCode Loop Workflow for this request:\n${request}`
+        : "Start a guided MendCode Loop Workflow setup for this session.",
+      "",
+      "Use exactly the `loop` tool, not shell commands. If the request already includes the objective, cadence, iteration limit, permission mode, and stop conditions, your first loop tool call must be action `activate`. Do not call `show` or `list` before creating the loop.",
+      "If the request is to stop, remove, delete, pause, resume, or run the current loop and no loop id is visible, call the matching `loop` action without `workflowID`; the tool resolves the current session's contextual loop.",
+      "Ask with the `question` tool only when a critical setting is missing: objective, iteration limit or unbounded mode, cadence, model/provider, max wall-clock runtime, permission mode, or stop condition.",
+      "Default to report-only unless I explicitly allow edits. Spanish/English requests such as codear, implementar, fixear, editar, hacer cambios, probar, compilar, run tests, or build are explicit edit permission for the loop; use permissionMode `normal` or `custom`, set `reportOnly: false`, and keep safety gates for push/merge/release/destructive shell. If I choose a model and reasoning effort/variant, pass `model` as provider/model and pass the effort as `variant` (for example `variant: \"medium\"`), or use provider/model#variant. For interval cadence, set `triggerMode: \"interval\"` and convert the interval to `intervalMs`. Preserve the current session model by omitting `model` unless I choose one.",
+      "Do not hand-render Markdown tables or duplicate status cards after the tool call. Let the Loop Workflow card render from tool metadata, then give a one-line confirmation.",
+    ].join("\n")
+  }
+  function fillLoopSlashPrompt(args = "", submit = false) {
+    const ref = promptRef.current
+    if (!ref) return
+    ref.set({ input: submit ? loopSlashPrompt(args) : `/loop ${args}`.trimEnd(), parts: [] })
+    ref.focus()
+    if (submit) setTimeout(() => promptRef.current?.submit(), 0)
+  }
   const showCustomizationCapabilities = async () => {
     await DialogAlert.show(
       dialog,
@@ -3430,6 +3451,24 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       onSelect: (dialog) => {
         route.navigate(loopsRoute())
         dialog.clear()
+      },
+    },
+    {
+      title: "Create Loop Workflow",
+      value: "mendcode.loop.create",
+      category: mendCategory,
+      description: "Create or control a Loop Workflow from the current prompt",
+      slash: { name: "loop" },
+      enabled: route.data.type !== "session",
+      onSelect: (dialog) => {
+        dialog.clear()
+        route.navigate({ type: "home" })
+        setTimeout(() => fillLoopSlashPrompt(""), 0)
+      },
+      onSlash: (dialog, input) => {
+        dialog.clear()
+        route.navigate({ type: "home" })
+        setTimeout(() => fillLoopSlashPrompt(input.arguments, true), 0)
       },
     },
     {

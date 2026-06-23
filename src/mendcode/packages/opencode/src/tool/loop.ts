@@ -44,10 +44,12 @@ export const Parameters = Schema.Struct({
     description: "Maximum recursive/delegation depth for loop work.",
   }),
   model: Schema.optional(Schema.String).annotate({
-    description: "Optional model for loop iterations in provider/model-id format. Must be available in the user's configured providers.",
+    description:
+      "Optional model for loop iterations in provider/model-id format. A trailing #variant is accepted, for example openai/gpt-5.5#medium.",
   }),
   variant: Schema.optional(Schema.String).annotate({
-    description: "Optional model variant for loop iterations.",
+    description:
+      "Optional model variant/reasoning effort for loop iterations, for example low, medium, high, or max. Use this when the user says reasoning medium/high/etc.",
   }),
   agent: Schema.optional(Schema.String).annotate({
     description: "Optional MendCode agent/profile name to use when the loop runner wakes this workflow.",
@@ -76,9 +78,21 @@ type Metadata = {
   workflowID?: string
   sessionId?: string
   rootSessionID?: string
+  ownerSessionID?: string
   state?: string
   phase?: string
   nextWakeup?: number
+  name?: string
+  objective?: string
+  triggerMode?: string
+  intervalMs?: number
+  permissionMode?: "report-only" | "normal" | "custom"
+  model?: {
+    providerID: string
+    modelID: string
+    variant?: string
+  }
+  agent?: string
   count?: number
   serviceEnsured?: boolean
   workflows?: Array<{
@@ -91,10 +105,51 @@ type Metadata = {
     nextWakeup?: number
     turns?: number
     maxTurns?: number
+    objective?: string
+    triggerMode?: string
+    intervalMs?: number
+    permissionMode?: "report-only" | "normal" | "custom"
+    model?: {
+      providerID: string
+      modelID: string
+      variant?: string
+    }
+    agent?: string
     created?: number
     activated?: number
     updated?: number
   }>
+}
+
+const reportOnlyApprovalGates = ["edit", "write", "apply_patch", "shell", "subagent"]
+const normalApprovalGates = ["push", "merge", "release", "version-bump", "external-send", "destructive-shell", "broad-refactor"]
+
+function permissionModeFor(workflow: LoopWorkflow.Info): "report-only" | "normal" | "custom" {
+  const gates = workflow.spec.gates ?? []
+  if (gates.some((gate) => /report-only|do not edit/i.test(gate))) return "report-only"
+  const approvals = new Set(workflow.policy.requireApprovalFor ?? [])
+  if (reportOnlyApprovalGates.every((gate) => approvals.has(gate))) return "report-only"
+  return approvals.size ? "custom" : "normal"
+}
+
+function modelMetadata(model?: LoopWorkflow.Info["spec"]["model"] | { providerID: string; modelID: string; variant?: string }) {
+  if (!model) return undefined
+  return {
+    providerID: model.providerID,
+    modelID: model.modelID,
+    variant: model.variant,
+  }
+}
+
+function parseLoopModel(input: string, explicitVariant?: string) {
+  const [modelName, hashVariant] = input.split("#", 2)
+  const parsed = Provider.parseModel(modelName)
+  const variant = explicitVariant?.trim() || hashVariant?.trim() || undefined
+  return {
+    providerID: parsed.providerID,
+    modelID: parsed.modelID,
+    variant,
+  }
 }
 
 function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: Tool.Context["sessionID"]) {
@@ -105,7 +160,7 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
       .trim()
       .replace(/\s+/g, " ")
       .slice(0, 80)
-  const model = params.model ? Provider.parseModel(params.model) : undefined
+  const model = params.model ? parseLoopModel(params.model, params.variant) : undefined
   const reportOnly = params.permissionMode === "report-only" || (params.permissionMode !== "normal" && params.reportOnly !== false)
   const trigger =
     params.triggerMode || params.intervalMs
@@ -129,7 +184,7 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
       ? {
           providerID: model.providerID,
           modelID: model.modelID,
-          variant: params.variant,
+          variant: model.variant,
         }
       : undefined,
     agent: params.agent?.trim() || undefined,
@@ -138,10 +193,7 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
       maxRuntimeMs: params.maxRuntimeMs,
       maxChildren: params.maxChildren,
       maxDepth: params.maxDepth,
-      requireApprovalFor:
-        !reportOnly
-          ? undefined
-          : ["edit", "write", "apply_patch", "shell", "subagent", "push", "merge", "release"],
+      requireApprovalFor: reportOnly ? [...reportOnlyApprovalGates, "push", "merge", "release"] : normalApprovalGates,
     },
   } satisfies LoopWorkflow.CreateDraftInput
 }
@@ -221,14 +273,24 @@ function createFromShowInput(params: Schema.Schema.Type<typeof Parameters>) {
   return params.action === "show" && !params.workflowID && (!!params.name?.trim() || !!params.objective?.trim())
 }
 
-function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean): Metadata {
+function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean, rootSessionModel?: { providerID: string; modelID: string; variant?: string }): Metadata {
+  const permissionMode = permissionModeFor(workflow)
+  const model = modelMetadata(workflow.spec.model ?? rootSessionModel)
   return {
     workflowID: workflow.id,
     sessionId: workflow.rootSessionID,
     rootSessionID: workflow.rootSessionID,
+    ownerSessionID: workflow.ownerSessionID,
     state: workflow.state,
     phase: workflow.phase,
     nextWakeup: workflow.nextWakeup,
+    name: workflow.name,
+    objective: workflow.objective,
+    triggerMode: workflow.spec.trigger?.mode,
+    intervalMs: workflow.spec.trigger?.intervalMs,
+    permissionMode,
+    model,
+    agent: workflow.spec.agent,
     serviceEnsured,
     workflows: [
       {
@@ -241,6 +303,12 @@ function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean): Metada
         nextWakeup: workflow.nextWakeup,
         turns: workflow.metrics.turns,
         maxTurns: workflow.policy.maxTurns,
+        objective: workflow.objective,
+        triggerMode: workflow.spec.trigger?.mode,
+        intervalMs: workflow.spec.trigger?.intervalMs,
+        permissionMode,
+        model,
+        agent: workflow.spec.agent,
         created: workflow.time.created,
         activated: workflow.time.activated,
         updated: workflow.time.updated,
@@ -310,6 +378,7 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
             const instance = yield* InstanceState.context
             const draft = workflow ?? (yield* workflows.createDraft(createInput(params, ctx.sessionID)))
             workflow = yield* workflows.activate({ id: draft.id, reason: params.reason ?? "Activated from loop tool." })
+            const snapshot = yield* workflows.snapshot(workflow.id, 1)
             let serviceEnsured = false
             if (params.ensureService !== false) {
               yield* Effect.promise(() =>
@@ -329,7 +398,7 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
                   ? "Loop service was started or confirmed for this project."
                   : "Loop service was not confirmed. The workflow is durable, but scheduled wakeups need an active loop service.",
               ].join("\n"),
-              metadata: metadata(workflow, serviceEnsured),
+              metadata: metadata(workflow, serviceEnsured, snapshot.rootSession?.model),
             }
           }
 
@@ -346,7 +415,7 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
                 `threads: ${snapshot.threads.length}`,
                 `events: ${snapshot.events.length}`,
               ].join("\n"),
-              metadata: metadata(snapshot.workflow),
+              metadata: metadata(snapshot.workflow, undefined, snapshot.rootSession?.model),
             }
           }
 

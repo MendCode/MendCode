@@ -427,6 +427,35 @@ function transcriptReferenceContext(filepath: string | undefined) {
   ]
 }
 
+function compactionTriggerContext(input: {
+  compactionPart?: MessageV2.CompactionPart
+  messages: MessageV2.WithParts[]
+}) {
+  const part = input.compactionPart
+  if (!part?.auto || !part.overflow) return []
+  const trigger = part.tail_start_id
+    ? input.messages.find((message) => message.info.id === part.tail_start_id)
+    : input.messages.findLast((message) => message.info.role === "assistant" && message.info.summary !== true)
+  if (!trigger || trigger.info.role !== "assistant") return []
+  const finish = trigger.info.finish
+  const isFinal = finish === "stop" || finish === "end_turn"
+  const activeTools = trigger.parts.filter(
+    (item) => item.type === "tool" && item.state.status !== "completed" && item.state.status !== "error",
+  )
+  return [
+    [
+      "Auto-Compaction Trigger:",
+      `- interruptedAssistantMessageID: ${trigger.info.id}`,
+      `- finish: ${finish ?? "(none)"}`,
+      part.tail_start_id ? `- preservedTailStartID: ${part.tail_start_id}` : undefined,
+      activeTools.length ? `- activeToolParts: ${activeTools.map((item) => item.id).join(", ")}` : undefined,
+      isFinal
+        ? "- Interpretation: this compaction happened after a final assistant turn; only continue if Still required or Active Work says required work remains."
+        : "- Interpretation: this compaction interrupted a non-final assistant turn. Do not mark the latest request complete unless the preserved tail or transcript proves every required action and verification finished.",
+    ].filter(Boolean).join("\n"),
+  ]
+}
+
 function buildPrompt(input: { previousSummary?: string; context: string[]; instructions?: string }) {
   const anchor = input.previousSummary
     ? [
@@ -849,6 +878,7 @@ export const layer: Layer.Layer<
       const context = [
         ...latestUserRequestContext(summaryHistory),
         ...transcriptReferenceContext(transcriptPath),
+        ...compactionTriggerContext({ compactionPart, messages: history }),
         ...todoContext(persistedTodos),
         ...recentOperationalContext(summaryHistory),
         ...subagentTaskContext(summaryHistory),

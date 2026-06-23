@@ -257,7 +257,7 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
       "type": "number",
     },
     "model": {
-      "description": "Optional model for loop iterations in provider/model-id format. Must be available in the user's configured providers.",
+      "description": "Optional model for loop iterations in provider/model-id format. A trailing #variant is accepted, for example openai/gpt-5.5#medium.",
       "type": "string",
     },
     "name": {
@@ -304,7 +304,7 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
       "type": "string",
     },
     "variant": {
-      "description": "Optional model variant for loop iterations.",
+      "description": "Optional model variant/reasoning effort for loop iterations, for example low, medium, high, or max. Use this when the user says reasoning medium/high/etc.",
       "type": "string",
     },
     "workflowID": {
