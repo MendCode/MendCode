@@ -248,12 +248,52 @@ describe("plugin.herdr", () => {
     process.env.HERDR_PANE_ID = "w1:p1"
     delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
 
-    const hooks = await HerdrAgentStatePlugin({} as any)
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "ses_chat" } }),
+        },
+      },
+    } as any)
 
     expect(typeof hooks["chat.message"]).toBe("function")
     expect(typeof hooks["tool.execute.before"]).toBe("function")
     expect(typeof hooks["tool.execute.after"]).toBe("function")
     expect(typeof hooks.event).toBe("function")
+  })
+
+  test("reports MendCode presence on startup before any session event", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    await HerdrAgentStatePlugin({} as any)
+
+    expect(requests[0]).toMatchObject({
+      method: "pane.report_agent",
+      params: {
+        source: "mendcode:state",
+        agent: "mendcode",
+        state: "idle",
+      },
+    })
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_metadata" &&
+          request.params.source === "mendcode:display" &&
+          request.params.display_agent === "mendcode",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent_session" ||
+          (request.method === "pane.report_agent" && request.params.source === "herdr:opencode"),
+      ),
+    ).toBe(false)
   })
 
   test("syncs the live MendCode session state when selecting an already-active session", async () => {
@@ -279,6 +319,7 @@ describe("plugin.herdr", () => {
         },
       },
     } as any)
+    requests.length = 0
 
     await hooks.event?.({
       event: {
@@ -334,6 +375,7 @@ describe("plugin.herdr", () => {
         },
       },
     } as any)
+    requests.length = 0
 
     await hooks.event?.({
       event: {
@@ -361,6 +403,164 @@ describe("plugin.herdr", () => {
           request.params.agent_session_id === "ses_idle",
       ),
     ).toBe(true)
+  })
+
+  test("keeps Herdr working when selected parent idles while a subagent child is busy", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          status: async () => ({
+            data: {
+              ses_parent: { type: "idle" },
+              ses_child: { type: "busy", message: "subagent working" },
+            },
+          }),
+          children: async ({ sessionID }: { sessionID: string }) => ({
+            data: sessionID === "ses_parent" ? [{ id: "ses_child", parentID: "ses_parent" }] : [],
+          }),
+        },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "tui.session.select",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "session.idle",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.state === "working" &&
+          request.params.message === undefined,
+      ),
+    ).toBe(true)
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.state === "idle",
+      ),
+    ).toBe(false)
+  })
+
+  test("does not switch Herdr session or emit finished when a subagent child idles", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          status: async () => ({ data: {} }),
+          children: async ({ sessionID }: { sessionID: string }) => ({
+            data: sessionID === "ses_parent" ? [{ id: "ses_child", parentID: "ses_parent" }] : [],
+          }),
+        },
+      },
+    } as any)
+
+    await hooks.event?.({
+      event: {
+        type: "tui.session.select",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "session.idle",
+        properties: { sessionID: "ses_child" },
+      },
+    } as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.state === "idle",
+      ),
+    ).toBe(false)
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent_session" &&
+          request.params.agent_session_id === "ses_child",
+      ),
+    ).toBe(false)
+  })
+
+  test("does not switch Herdr session when a subagent child session is created", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          status: async () => ({ data: {} }),
+          children: async ({ sessionID }: { sessionID: string }) => ({
+            data: sessionID === "ses_parent" ? [{ id: "ses_child", parentID: "ses_parent" }] : [],
+          }),
+        },
+      },
+    } as any)
+
+    await hooks.event?.({
+      event: {
+        type: "tui.session.select",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "session.created",
+        properties: { sessionID: "ses_child" },
+      },
+    } as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.state === "working",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent_session" &&
+          request.params.agent_session_id === "ses_child",
+      ),
+    ).toBe(false)
   })
 
   test("reports MendCode-branded state while preserving the official OpenCode session identity", async () => {
@@ -400,5 +600,175 @@ describe("plugin.herdr", () => {
           request.params.agent_session_id === "ses_chat",
       ),
     ).toBe(true)
+  })
+
+  test("does not leave Herdr working when a direct tool hook observes an idle session", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "ses_done" } }),
+          status: async () => ({ data: { ses_done: { type: "idle" } } }),
+          children: async () => ({ data: [] }),
+        },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks["tool.execute.after"]?.({ sessionID: "ses_done" } as any, {} as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "idle",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some((request) => request.method === "pane.report_agent" && request.params.state === "working"),
+    ).toBe(false)
+  })
+
+  test("ignores child session input events when the parent MendCode session is selected", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          children: async () => ({ data: [{ id: "ses_child", parentID: "ses_parent" }] }),
+          get: async ({ sessionID }: { sessionID: string }) => ({
+            data: { id: sessionID, parentID: sessionID === "ses_child" ? "ses_parent" : undefined },
+          }),
+          status: async () => ({ data: {} }),
+        },
+      },
+    } as any)
+
+    await hooks.event?.({
+      event: {
+        type: "tui.session.select",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+    const before = requests.length
+
+    await hooks.event?.({
+      event: {
+        type: "question.asked",
+        properties: { sessionID: "ses_child" },
+      },
+    } as any)
+
+    expect(requests.length).toBe(before)
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.state === "blocked" &&
+          request.params.custom_status === "needs input",
+      ),
+    ).toBe(false)
+  })
+
+  test("does not let child session chat hooks replace the selected parent session", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          children: async () => ({ data: [{ id: "ses_child", parentID: "ses_parent" }] }),
+          get: async ({ sessionID }: { sessionID: string }) => ({
+            data: { id: sessionID, parentID: sessionID === "ses_child" ? "ses_parent" : undefined },
+          }),
+          status: async () => ({ data: {} }),
+        },
+      },
+    } as any)
+
+    await hooks.event?.({
+      event: {
+        type: "tui.session.select",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+    const before = requests.length
+
+    await hooks["chat.message"]?.(
+      {
+        sessionID: "ses_child",
+      } as any,
+      {
+        message: {} as any,
+        parts: [],
+      },
+    )
+
+    expect(requests.length).toBe(before)
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent_session" && request.params.agent_session_id === "ses_child",
+      ),
+    ).toBe(false)
+  })
+
+  test("keeps the parent session working when it reports idle while a child session is active", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          children: async () => ({ data: [{ id: "ses_child", parentID: "ses_parent" }] }),
+          get: async ({ sessionID }: { sessionID: string }) => ({ data: { id: sessionID } }),
+          status: async () => ({ data: { ses_child: { type: "busy", message: "subagent running" } } }),
+        },
+      },
+    } as any)
+
+    await hooks.event?.({
+      event: {
+        type: "tui.session.select",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "session.status",
+        properties: { sessionID: "ses_parent", status: { type: "idle" } },
+      },
+    } as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "working",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some((request) => request.method === "pane.report_agent" && request.params.state === "idle"),
+    ).toBe(false)
   })
 })

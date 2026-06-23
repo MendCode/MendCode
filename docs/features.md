@@ -4,25 +4,28 @@ This page is the product-facing inventory for MendCode. It is meant to be the so
 
 ## What MendCode Is
 
-MendCode is a terminal-first coding harness you can shape around your own workflow. The public surface is the `mendcode` CLI plus the TUI, setup flow, model-role configuration, permission policy, memory system, runtime packages, optional mflow coordination, optional TSM/worktree orchestration, Usage Insights, Plan Mode, and TUI customization.
+MendCode is a terminal-first coding harness you can shape around your own workflow. The public surface is the `mendcode` CLI plus the TUI, setup flow, model-role configuration, permission policy, memory system, runtime packages, optional mflow coordination, optional TSM/worktree orchestration, Usage Insights, Plan Mode, Changes Review, and TUI customization.
 
 The pitch is not “another chat box.” The pitch is a configurable coding terminal: prompt chrome, status rows, model roles, memory policy, team packages, workflow coordination, and review gates live together.
 
 ## Headline Features
 
-| Feature | What it gives users | Where to go deeper |
-| --- | --- | --- |
-| Custom terminal UI | Prompt frame, input marker, status row, home logo, split home, Agent View, chat presentation, themes, widgets, and plugin-driven surfaces. | [Customization](customization.md), [TUI plugins and widgets](tui-plugins-and-widgets.md) |
-| Package system | Bundle commands, agents, modes, skills, prompts, MCP config, TUI profile, widgets, model roles, permission defaults, memory defaults, and worktree policy. | [Packages and team sharing](packages-and-team-sharing.md) |
-| Plan Mode | The agent presents a Markdown plan inside a TUI review modal; the user can approve, edit, comment, or reject before implementation starts. Approval switches into the configured implementation agent. | [Plan Mode](plan-mode.md) |
-| Usage Insights | Local activity dashboard for tokens, sessions, AI time, words, tools, agents, models, changed files, daily activity, cache mix, and optional weather. | [Usage Insights](usage-insights.md) |
-| Approval-gated memory | Memory can retrieve context without silently turning every session into permanent state. Generated memories become reviewable proposals first. | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory) |
-| Memory Center, graph, and Dream | Route-level memory workspace with saved/pending memories, categories, policy controls, Dream logs, and constrained memory side chat. | [Memory Center](memory-center.md) |
-| Smart permissions | Choose `approval`, `smart`, or `full_access`. Smart mode can route risky permission decisions through a configured `permissionReviewer` role. | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory) |
-| Model roles | Configure task-specific roles for default, small, plan, build, review, subagent, title, compaction, summary, memory extraction, Dream, memory side chat, and permission review. | [CLI, setup, and configuration](cli-setup-configuration.md#models) |
-| mflow coordination | Optional local-first coordination and locks for multiple agents working around the same repo. | [mflow coordination](mflow.md) |
-| TSM and worktrees | Open MendCode in managed/adopted worktrees or TSM terminal workspaces with preview-first safety. | [TSM and worktrees](tsm-and-worktrees.md) |
-| Plugins and widgets | Add status entries, editor widgets, slots, command palette entries, slash commands, routes, dialogs, themes, and package-distributed TUI behavior. | [TUI plugins and widgets](tui-plugins-and-widgets.md) |
+| Feature                         | What it gives users                                                                                                                                                                                    | Where to go deeper                                                                       |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| Custom terminal UI              | Prompt frame, input marker, status row, home logo, split home, Agent View, chat presentation, themes, widgets, and plugin-driven surfaces.                                                             | [Customization](customization.md), [TUI plugins and widgets](tui-plugins-and-widgets.md) |
+| Package system                  | Bundle commands, agents, modes, skills, prompts, MCP config, TUI profile, widgets, model roles, permission defaults, memory defaults, and worktree policy.                                             | [Packages and team sharing](packages-and-team-sharing.md)                                |
+| Plan Mode                       | The agent presents a Markdown plan inside a TUI review modal; the user can approve, edit, comment, or reject before implementation starts. Approval switches into the configured implementation agent. | [Plan Mode](plan-mode.md)                                                                |
+| Changes Review                  | `/changes` opens a responsive TUI diff workspace with file/block/line navigation, comments, reload, return-to-chat behavior, and agent-visible review context between model turns.                     | [Changes Review](changes-review.md)                                                      |
+| Loop Workflows                  | Durable, monitorable agent loops with draft/activate/tick controls, Agent View loop sessions, terminal monitor, report-only safety mode, and a per-project OS background service.                      | [Loop Workflows](loop-workflows.md)                                                      |
+| Usage Insights                  | Local activity dashboard for tokens, sessions, AI time, words, tools, agents, models, changed files, daily activity, selected-day detail, cache mix, and optional weather.                              | [Usage Insights](usage-insights.md)                                                      |
+| Approval-gated memory           | Memory can retrieve context without silently turning every session into permanent state. Generated memories become reviewable proposals first.                                                         | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory)       |
+| Memory Center, graph, and Dream | Route-level memory workspace with saved/pending memories, categories, policy controls, Dream logs, and constrained memory side chat.                                                                   | [Memory Center](memory-center.md)                                                        |
+| Smart permissions               | Choose `approval`, `smart`, or `full_access`. Smart mode can route risky permission decisions through a configured `permissionReviewer` role.                                                          | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory)       |
+| Model roles                     | Configure task-specific roles for default, small, plan, build, review, subagent, title, compaction, summary, memory extraction, Dream, memory side chat, and permission review.                        | [CLI, setup, and configuration](cli-setup-configuration.md#models)                       |
+| Local provider bridges          | Connect local provider CLIs such as Claude Code through validated setup/auth surfaces while keeping credentials in local tool state.                                                                    | [CLI, setup, and configuration](cli-setup-configuration.md#connect-provider)             |
+| mflow coordination              | Optional local-first coordination and locks for multiple agents working around the same repo.                                                                                                          | [mflow coordination](mflow.md)                                                           |
+| TSM and worktrees               | Open MendCode in managed/adopted worktrees or TSM terminal workspaces with preview-first safety.                                                                                                       | [TSM and worktrees](tsm-and-worktrees.md)                                                |
+| Plugins and widgets             | Add status entries, editor widgets, slots, command palette entries, slash commands, routes, dialogs, themes, and package-distributed TUI behavior.                                                     | [TUI plugins and widgets](tui-plugins-and-widgets.md)                                    |
 
 ## Terminal Workflow
 
@@ -55,6 +58,7 @@ mendcode permissions status
 mendcode memory status
 mendcode packages status
 mendcode mflow status
+mendcode loops status
 mendcode worktree status
 mendcode tsm status
 ```
@@ -73,19 +77,19 @@ Normal public docs should use `mendcode`. A local `mend` shim may exist in devel
 
 These are good demo moments because they show MendCode as a product surface, not just a model wrapper.
 
-| Input | Behavior |
-| --- | --- |
-| `Ctrl+P` | Command palette. Search for Usage Insights, Memory, Home, Prompt, Presentation, Status, Worktrees, TSM, mflow, packages, models, themes, or help. |
-| `Shift+Tab` | Open the mode picker. This is the fast path for switching the operating mode without typing a command. |
-| `Tab` | Cycle primary agents. |
-| `F2` / `Shift+F2` | Cycle recently used models forward/back. |
-| `F3` / `Shift+F3` | Cycle or list model variants. |
-| `Ctrl+X`, then `m` | Open model list through the leader key binding. |
-| `Ctrl+X`, then `a` | Open primary agent list through the leader key binding. |
-| `Ctrl+X`, then `s` | Open runtime status. |
-| `Ctrl+X`, then `l` | Switch/resume sessions. |
-| `Ctrl+X`, then `n` | Start a new session. |
-| `Esc` | Interrupt the current session or leave focused route views. |
+| Input              | Behavior                                                                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Ctrl+P`           | Command palette. Search for Usage Insights, Memory, Home, Prompt, Presentation, Status, Worktrees, TSM, mflow, packages, models, themes, or help. |
+| `Shift+Tab`        | Open the mode picker. This is the fast path for switching the operating mode without typing a command.                                            |
+| `Tab`              | Cycle primary agents.                                                                                                                             |
+| `F2` / `Shift+F2`  | Cycle recently used models forward/back.                                                                                                          |
+| `F3` / `Shift+F3`  | Cycle or list model variants.                                                                                                                     |
+| `Ctrl+X`, then `m` | Open model list through the leader key binding.                                                                                                   |
+| `Ctrl+X`, then `a` | Open primary agent list through the leader key binding.                                                                                           |
+| `Ctrl+X`, then `s` | Open runtime status.                                                                                                                              |
+| `Ctrl+X`, then `l` | Switch/resume sessions.                                                                                                                           |
+| `Ctrl+X`, then `n` | Start a new session.                                                                                                                              |
+| `Esc`              | Interrupt the current session or leave focused route views.                                                                                       |
 
 Slash commands are also registered for common surfaces:
 
@@ -94,6 +98,9 @@ Slash commands are also registered for common surfaces:
 /usage
 /insights
 /activity
+/changes
+/diff
+/review-changes
 /stats-project
 /project-usage
 /memory
@@ -138,26 +145,26 @@ Good demo profile:
 {
   "identity": {
     "logoMode": "mascot",
-    "productName": "MendCode"
+    "productName": "MendCode",
   },
   "surfaces": {
     "homeWelcome": {
       "mode": "split",
-      "rightPanel": "agentManager"
-    }
+      "rightPanel": "agentManager",
+    },
   },
   "promptChrome": {
     "preset": "top-bottom",
     "glyphs": {
-      "leadText": "mendcode>"
-    }
+      "leadText": "mendcode>",
+    },
   },
   "promptStatus": {
     "placementByPreset": {
       "top-bottom": "outside",
-      "ascii-box": "inside"
-    }
-  }
+      "ascii-box": "inside",
+    },
+  },
 }
 ```
 
@@ -211,6 +218,58 @@ The flow:
 
 This is stronger than a normal “is this okay?” message because approval is an explicit terminal action and the implementation agent receives the reviewed plan.
 
+## Changes Review
+
+Changes Review is the review surface for the current working-tree diff:
+
+```text
+/changes
+```
+
+It provides a responsive terminal diff viewer with a file sidebar on wide
+terminals and a stacked scroll layout on compact terminals. Users can move by
+file, diff block, or line, add comments, reload the diff, and leave the route with
+`Esc` or `q` without stopping the active chat/session.
+
+The agent integration is intentionally bounded. MendCode injects compact
+`<mendcode_review_context>` into model turns when a review is active, including
+the selected file/block/line and comments. If a user comments while an agent is
+working, the agent can see that updated review context on the next model turn,
+including the turn after a tool call completes. MendCode does not interrupt an
+already-running token stream to splice in new comments mid-generation.
+
+The assistant can also use the `review` tool to inspect the active selection,
+read a specific file summary, navigate, reload, and manage comments. The route
+does not require any external diff review app to be installed; it is
+MendCode-native and uses `@pierre/diffs` for patch structure.
+
+## Loop Workflows
+
+Loop Workflows are durable agent workflows for objectives that should run across multiple inspected iterations.
+
+Core commands:
+
+```bash
+mendcode loops examples
+mendcode loops draft --template research-digest --name "Loop test"
+mendcode loops activate loop_...
+mendcode loops tick loop_... --execute --report-only
+mendcode loops monitor loop_...
+mendcode loops service start
+```
+
+The safe testing path is `--execute --report-only`: MendCode wakes the loop root session and records transcript activity, but denies edit, write, patch, shell, and subagent tools. Full execution requires `--execute` for manual ticks or `mendcode loops service start --allow-edits` for the OS service.
+
+See [Loop Workflows](loop-workflows.md) for lifecycle, monitor, Agent View behavior, and service details.
+
+Important release notes for this page:
+
+- loops are durable database records, not just long-running prompts
+- activation creates a root session visible in Agent View under `Looping`
+- run journals record created, activated, wake, started, completed, failed, paused, resumed, and stopped events
+- report-only execution wakes the agent while denying mutation and shell/subagent tools
+- service mode is per project and defaults to report-only for safer background operation
+
 ## Memory, Memory Page, And Dream
 
 Baseline memory behavior:
@@ -260,6 +319,8 @@ It can show:
 
 - global, project, or directory scope
 - daily token heatmap
+- keyboard/mouse day selection
+- selected-day token, cache, session, prompt, word, file, AI time, and tool runtime details
 - sessions and active days
 - user prompts and user words
 - AI generation time
@@ -289,6 +350,31 @@ Or with slash commands:
 /activity
 /project-usage
 ```
+
+## Markdown, Streaming Output, And Shell Feedback
+
+MendCode renders assistant output inside a terminal, so Markdown support has to
+work while text is still streaming and after messages complete.
+
+Current rendering surfaces include:
+
+- headings, lists, links, inline code, bold/italic text, code fences, tables, and blockquotes
+- terminal-friendly Mermaid text diagrams for common chart/diagram shapes
+- styled Plan Mode and compaction summaries
+- progressive streaming Markdown tails that avoid rendering incomplete tables or fences too early
+- hex color swatches in rich Markdown output
+- live shell output that deduplicates replayed deltas while commands are still running
+
+This keeps long model answers, plans, shell commands, and compaction summaries
+readable without waiting for the entire response to finish.
+
+## Local Provider Bridges
+
+MendCode can expose local provider CLIs through the same provider/model setup
+surface used by hosted providers. The Claude Code bridge validates the local
+`claude` binary, checks local CLI auth status, reads version-compatible models,
+and keeps credentials in the Claude Code CLI's own local state instead of
+placing secrets in MendCode packages or repository files.
 
 ## Model Roles
 
@@ -322,11 +408,11 @@ Examples:
 
 Permission modes:
 
-| Mode | Behavior |
-| --- | --- |
-| `approval` | Manual approval remains the normal review posture. |
-| `smart` | Risky prompts can be routed to a configured `permissionReviewer` model role. If the role is not usable, MendCode asks instead of silently approving. |
-| `full_access` | Reduces prompts for the current trust posture, while explicit deny rules still matter. |
+| Mode          | Behavior                                                                                                                                             |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `approval`    | Manual approval remains the normal review posture.                                                                                                   |
+| `smart`       | Risky prompts can be routed to a configured `permissionReviewer` model role. If the role is not usable, MendCode asks instead of silently approving. |
+| `full_access` | Reduces prompts for the current trust posture, while explicit deny rules still matter.                                                               |
 
 Safety principles:
 

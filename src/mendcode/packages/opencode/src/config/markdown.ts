@@ -1,10 +1,36 @@
 import { NamedError } from "@mendcode/core/util/error"
 import matter from "gray-matter"
+import { createRequire } from "module"
+import path from "path"
 import { z } from "zod"
 import { Filesystem } from "@/util/filesystem"
 
 export const FILE_REGEX = /(?<![\w`])@(\.?[^\s`,.]*(?:\.[^\s`,.]+)*)/g
 export const SHELL_REGEX = /!`([^`]+)`/g
+
+type YamlCompatModule = {
+  load: (input: string) => unknown
+  dump: (input: object) => string
+}
+
+const require = createRequire(import.meta.url)
+type MatterOptions = NonNullable<Parameters<typeof matter>[1]>
+const yamlMatterOptions = (() => {
+  try {
+    const matterPath = require.resolve("gray-matter")
+    const yaml = require(path.join(path.dirname(matterPath), "..", "js-yaml")) as YamlCompatModule
+    return {
+      engines: {
+        yaml: {
+          parse: (input: string) => (yaml.load(input) ?? {}) as object,
+          stringify: (input: object) => yaml.dump(input),
+        },
+      },
+    } satisfies MatterOptions
+  } catch {
+    return undefined
+  }
+})()
 
 export function files(template: string) {
   return Array.from(template.matchAll(FILE_REGEX))
@@ -38,7 +64,7 @@ export function fallbackSanitization(content: string): string {
     }
 
     // match key: value pattern
-    const kvMatch = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$/)
+    const kvMatch = line.match(/^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*)$/)
     if (!kvMatch) {
       result.push(line)
       continue
@@ -53,8 +79,8 @@ export function fallbackSanitization(content: string): string {
       continue
     }
 
-    // if value contains a colon, convert to block scalar
-    if (value.includes(":")) {
+    // if value contains yaml flow syntax, convert to block scalar
+    if (value.includes(":") || /[\[\]{}]/.test(value)) {
       result.push(`${key}: |-`)
       result.push(`  ${value}`)
       continue
@@ -71,11 +97,11 @@ export async function parse(filePath: string) {
   const template = await Filesystem.readText(filePath)
 
   try {
-    const md = matter(template)
+    const md = matter(template, yamlMatterOptions)
     return md
   } catch {
     try {
-      return matter(fallbackSanitization(template))
+      return matter(fallbackSanitization(template), yamlMatterOptions)
     } catch (err) {
       throw new FrontmatterError(
         {

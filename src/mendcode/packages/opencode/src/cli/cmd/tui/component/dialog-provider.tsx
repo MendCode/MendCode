@@ -21,8 +21,9 @@ const PROVIDER_PRIORITY: Record<string, number> = {
   opencode: 1,
   "opencode-go": 2,
   "github-copilot": 3,
-  anthropic: 4,
-  google: 5,
+  "claude-code": 4,
+  anthropic: 5,
+  google: 6,
 }
 
 function providerErrorMessage(error: unknown) {
@@ -30,6 +31,10 @@ function providerErrorMessage(error: unknown) {
   if (typeof error === "object" && error !== null) {
     if ("message" in error && typeof error.message === "string") return error.message
     if ("error" in error && typeof error.error === "string") return error.error
+    if ("data" in error && typeof error.data === "object" && error.data !== null) {
+      const data = error.data
+      if ("message" in data && typeof data.message === "string") return data.message
+    }
   }
   return "Provider authorization failed."
 }
@@ -57,6 +62,7 @@ export function createDialogProviderOptions() {
             openai: "(ChatGPT Plus/Pro or API key)",
             opencode: "(opencode Zen)",
             "opencode-go": "(Bring your own Go provider access)",
+            "claude-code": "(Claude Code CLI)",
           }[provider.id],
           footer: consoleManaged ? sync.data.console_state.activeOrgName : undefined,
           category: provider.id in PROVIDER_PRIORITY ? "Popular" : "Other",
@@ -187,6 +193,10 @@ function AutoMethod(props: AutoMethodProps) {
       method: props.index,
     })
     if (result.error) {
+      toast.show({
+        variant: "error",
+        message: providerErrorMessage(result.error),
+      })
       dialog.clear()
       return
     }

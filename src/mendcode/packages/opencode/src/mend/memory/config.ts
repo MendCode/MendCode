@@ -84,6 +84,19 @@ export function globalMemoryDir() {
   return path.join(Global.Path.data, "memory")
 }
 
+function isFilesystemRoot(input: string) {
+  return path.resolve(input) === path.parse(path.resolve(input)).root
+}
+
+export function resolveProjectMemoryRoot(root?: string | null, cwd?: string | null) {
+  for (const candidate of [root, cwd]) {
+    if (typeof candidate !== "string" || !candidate.trim()) continue
+    const resolved = path.resolve(candidate)
+    if (!isFilesystemRoot(resolved)) return resolved
+  }
+  return undefined
+}
+
 export function memoryPaths(root?: string) {
   const project = mendPaths(root)
   const globalDir = globalMemoryDir()

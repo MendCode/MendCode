@@ -6,6 +6,7 @@ import * as Log from "@mendcode/core/util/log"
 import { BusEvent } from "@/bus/bus-event"
 import { Bus } from "@/bus"
 import { AsyncQueue } from "@/util/queue"
+import "@/server/event"
 
 const log = Log.create({ service: "server" })
 

@@ -1,6 +1,7 @@
 import { createStore, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import type { PromptInfo } from "../component/prompt/history"
+import { routeReturnTarget as routeReturnTargetBase } from "./route-return"
 
 export type HomeRoute = {
   type: "home"
@@ -33,13 +34,32 @@ export type MemoryRoute = {
   returnTo?: HomeRoute | SessionRoute
 }
 
+export type ChangesRoute = {
+  type: "changes"
+  returnTo?: HomeRoute | SessionRoute
+}
+
+export type LoopsRoute = {
+  type: "loops"
+  selectedID?: string
+  returnTo?: HomeRoute | SessionRoute
+}
+
 export type PluginRoute = {
   type: "plugin"
   id: string
   data?: Record<string, unknown>
 }
 
-export type Route = HomeRoute | SessionRoute | SetupRoute | StatsRoute | MemoryRoute | PluginRoute
+export type Route =
+  | HomeRoute
+  | SessionRoute
+  | SetupRoute
+  | StatsRoute
+  | MemoryRoute
+  | ChangesRoute
+  | LoopsRoute
+  | PluginRoute
 
 export const { use: useRoute, provider: RouteProvider } = createSimpleContext({
   name: "Route",
@@ -72,6 +92,5 @@ export function useRouteData<T extends Route["type"]>(type: T) {
 }
 
 export function routeReturnTarget(route: Route): HomeRoute | SessionRoute {
-  if ((route.type === "setup" || route.type === "stats" || route.type === "memory") && route.returnTo) return route.returnTo
-  return { type: "home" }
+  return routeReturnTargetBase(route) as HomeRoute | SessionRoute
 }

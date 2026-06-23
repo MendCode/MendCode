@@ -1,12 +1,15 @@
 import { BusEvent } from "@/bus/bus-event"
 import { Bus } from "@/bus"
+import { mkdir, writeFile } from "fs/promises"
 import * as Session from "./session"
 import { SessionID, MessageID, PartID } from "./schema"
 import { Provider } from "@/provider/provider"
 import { MessageV2 } from "./message-v2"
 import z from "zod"
+import path from "path"
 import { Token } from "@/util/token"
 import * as Log from "@mendcode/core/util/log"
+import { Global } from "@mendcode/core/global"
 import { SessionProcessor } from "./processor"
 import { Agent } from "@/agent/agent"
 import { Plugin } from "@/plugin"
@@ -37,6 +40,9 @@ export const Event = {
 export const PRUNE_MINIMUM = 20_000
 export const PRUNE_PROTECT = 40_000
 const TOOL_OUTPUT_MAX_CHARS = 2_000
+const RECENT_OPERATIONAL_CONTEXT_MAX_MESSAGES = 24
+const RECENT_OPERATIONAL_CONTEXT_MAX_ITEMS = 18
+const RECENT_OPERATIONAL_CONTEXT_MAX_OUTPUT_CHARS = 1_200
 const SUBAGENT_CONTEXT_MAX_TASKS = 12
 const SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS = 2_500
 const PRUNE_PROTECTED_TOOLS = ["skill"]
@@ -51,6 +57,18 @@ const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <te
 ## Current User Intent
 - Latest explicit user request: [the latest direct ask, or "(none)"]
 - Explicitly not requested: [things the user did not ask to continue/do, or "(none)"]
+
+## Request Trace
+### Latest User Message
+- Verbatim: [quote or faithful paraphrase of the latest real user request]
+- Required outcome: [what must be true for the request to be done]
+- Constraints: [explicit constraints such as no push, no version bump, local only, or "(none)"]
+
+### Progress Against Latest Request
+- Completed: [evidence-backed work completed against the latest request, or "(none)"]
+- In progress: [work started but not verified/finished, or "(none)"]
+- Still required: [missing work required by the latest request, or "(none)"]
+- Verification status: [tests/checks/commands already run and result, or "(none)"]
 
 ## Resume Anchor
 ### Active Work
@@ -73,35 +91,59 @@ const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <te
 ## Critical Context
 - [important technical facts, errors, open questions, or "(none)"]
 
+## Commands / Evidence
+- [recent command/tool/status/output path and what it proves, or "(none)"]
+
+## Session State Snapshot
+- TODOs: [in_progress/pending/completed TODO evidence relevant to the latest request, or "(none)"]
+- Subagents / delegated work: [last known subagent/task outputs, blockers, changed files, or "(none)"]
+- Running or failed tools: [tools that were running/failed/interrupted and their state, or "(none)"]
+- Active files / directories: [paths most likely needed to continue, or "(none)"]
+
+## Transcript Reference
+- Full transcript: [local transcript path from context, or "(none)"]
+- Use when: [why/when the next agent should inspect it, or "(none)"]
+
 ## Relevant Files
 - [file or directory path: why it matters, or "(none)"]
 </template>
 
 Rules:
 - Keep every section, even when empty.
-- Use terse bullets, not prose paragraphs.
+- Respond with the final Markdown summary only. Do not include prefaces, reasoning notes, status updates, analysis blocks, or commentary about what you are about to do.
+- Compaction has no tools. Never request, simulate, print, or narrate tool calls. Do not output strings such as "to=...", "recipient_name", "parameters", "functions.*", "multi_tool_use.parallel", or XML/JSON tool invocation blocks. If a fact is not available in the supplied context, say "(not available in context)" and point to the Full Transcript Reference when present.
+- Use concise but sufficiently detailed bullets. Do not collapse active state to one-liners when code paths, files, commands, outputs, tests, or blockers matter.
 - The instruction "Create a new anchored summary..." or "Update the anchored summary..." is an internal summarization request. Never copy it into Current User Intent and never treat it as the user's latest explicit request.
 - Current User Intent must come from the user's real conversation messages, not from this summary prompt.
+- Request Trace is mandatory. Compare the latest user's required outcome against actual completed work, active tools, TODOs, and verification evidence. Do not mark work complete unless every required outcome is satisfied or the summary explicitly names the remaining gap.
+- All user messages are evidence: preserve the latest real user message, major corrections, cancellations, constraints, and changed intent. Do not let older assistant plans override newer user corrections.
+- Still required must include required unfinished work even if the previous assistant sounded confident or partially summarized completion.
 - If the latest real user request was an implementation/debugging request and Active Work/TODO/subagents show unfinished work, Active Work must not be "(none)".
+- If a command/tool was running, failed, interrupted, retried, or had output truncated/saved to a path, put that exact state under Running or failed tools and Commands / Evidence. Do not infer that it must be rerun unless the evidence says the required outcome is still missing.
 - Convert older summaries into this format. Map old Progress/Done into Confirmed Done, old Progress/In Progress into Resume Anchor/Active Work, old Blocked into Blocked / Needs User, and old Next Steps into Active Work only when the latest user request or preserved tail makes them required; otherwise put them under Optional Follow-ups.
 - Only list a Next required action when it is explicitly required by the latest user request or by unfinished active work.
 - Treat Optional Follow-ups, possible next steps, polish, cleanup, and ideas as non-instructions.
 - Preserve exact file paths, commands, error strings, and identifiers when known.
+- Read the Full Transcript Reference when the preserved recent messages and summary disagree, when a tool output was truncated, or when Active Work/Still required is ambiguous.
 - Read the Current TODO List context when present. Treat in_progress/pending TODOs as evidence for Resume Anchor / Active Work only when they match the latest user intent; completed/cancelled TODOs belong in Confirmed Done or Optional Follow-ups as appropriate.
+- Read the Recent Operational Context when present. Commands, cwd, saved tool-output paths, running/failed tools, and verification output are evidence for Commands / Evidence, Relevant Files, and Progress Against Latest Request.
 - Read the Subagent Task Context when present. Summarize each subagent's concrete output, files changed, blocker, or current status. Running/pending subagents are active work unless clearly stale or contradicted by a newer real user message.
+- Session State Snapshot must preserve the actionable state from TODOs, subagents, running/failed tools, active files, and cwd even when it makes the summary longer.
 - Do not mention the summary process or that context was compacted.`
 const COMPACTION_RESUME_PROMPT = `The conversation hit a context overflow while handling the current request, so the conversation was compacted.
 
 Resume using this priority:
 1. Latest explicit user request from the preserved recent messages.
-2. Resume Anchor / Active Work from the summary.
-3. Critical Context from the summary.
-4. Older summary details.
+2. Request Trace and Progress Against Latest Request from the summary.
+3. Resume Anchor / Active Work from the summary.
+4. Critical Context, Commands / Evidence, and Transcript Reference from the summary.
+5. Older summary details.
 
 Overflow compaction is a pause, not a user cancellation. If the latest explicit user request or Resume Anchor / Active Work describes unfinished implementation, debugging, review, testing, or investigation, continue exactly from the next required action or the safest required next step.
 Optional Follow-ups are not instructions. Do not execute optional ideas, possible next steps, cleanup, polish, or suggestions unless the user explicitly asked for them after compaction.
 Stop only when the summary clearly says the work is complete, blocked, or there is no active user request to continue.
-Do not ask for confirmation before continuing required active work. Ask a concise clarification only when Blocked / Needs User contains a real blocker or the required next action cannot be inferred from the latest user request, Active Work, TODOs, or Critical Context.`
+If Still required conflicts with a confident previous assistant message, trust Still required and the transcript evidence.
+Do not ask for confirmation before continuing required active work. Ask a concise clarification only when Blocked / Needs User contains a real blocker or the required next action cannot be inferred from the latest user request, Request Trace, Active Work, TODOs, Critical Context, or the transcript reference.`
 type Turn = {
   start: number
   end: number
@@ -119,14 +161,59 @@ type CompletedCompaction = {
   summary: string | undefined
 }
 
+const REQUIRED_SUMMARY_HEADINGS = [
+  "## Goal",
+  "## Current User Intent",
+  "## Request Trace",
+  "## Resume Anchor",
+  "## Session State Snapshot",
+  "## Transcript Reference",
+  "## Relevant Files",
+]
+
+const TOOL_CALL_COSPLAY_PATTERNS = [
+  /^\s*to=[\w.-]+/im,
+  /\bmulti_tool_use\.parallel\b/,
+  /"recipient_name"\s*:\s*"[^"]+"/,
+  /"parameters"\s*:\s*\{/,
+  /\bfunctions\.[a-zA-Z_][\w.-]*\b/,
+  /<tool_call\b/i,
+  /<\/tool_call>/i,
+]
+
+function looksLikeStructuredCompactionSummary(text: string) {
+  return REQUIRED_SUMMARY_HEADINGS.every((heading) => text.includes(heading))
+}
+
+function looksLikeToolCallCosplay(text: string) {
+  return TOOL_CALL_COSPLAY_PATTERNS.some((pattern) => pattern.test(text))
+}
+
+export function extractCompactionSummaryText(message: MessageV2.WithParts) {
+  const texts = message.parts
+    .filter((part): part is MessageV2.TextPart => part.type === "text")
+    .map((part) => part.text.trim())
+    .filter(Boolean)
+  const structured = texts.findLast((text) => looksLikeStructuredCompactionSummary(text))
+  if (structured) return structured
+  const text = texts
+    .filter((item) => !looksLikeToolCallCosplay(item))
+    .join("\n\n")
+    .trim()
+  return text || undefined
+}
+
 function summaryText(message: MessageV2.WithParts) {
-  const text = message.parts
+  return extractCompactionSummaryText(message)
+}
+
+function messageText(message: MessageV2.WithParts) {
+  return message.parts
     .filter((part): part is MessageV2.TextPart => part.type === "text")
     .map((part) => part.text.trim())
     .filter(Boolean)
     .join("\n\n")
     .trim()
-  return text || undefined
 }
 
 function completedCompactions(messages: MessageV2.WithParts[]) {
@@ -145,6 +232,199 @@ function completedCompactions(messages: MessageV2.WithParts[]) {
     if (userIndex === undefined) return []
     return [{ userIndex, assistantIndex, summary: summaryText(msg) }]
   })
+}
+
+function safePathSegment(value: string) {
+  return value.replace(/[^a-zA-Z0-9_.-]/g, "_")
+}
+
+function fence(lang: string, value: string) {
+  return [`\`\`\`${lang}`, value.replaceAll("```", "``\\`"), "```"].join("\n")
+}
+
+function stringify(value: unknown) {
+  try {
+    return JSON.stringify(value, null, 2)
+  } catch {
+    return String(value)
+  }
+}
+
+function toolOutputForTranscript(state: MessageV2.ToolState) {
+  if (state.status === "completed") return state.output
+  if (state.status === "error") return state.metadata?.output ?? state.error
+  if (state.status === "running" || state.status === "pending") return `Tool is still ${state.status}.`
+  return ""
+}
+
+function transcriptPart(part: MessageV2.Part) {
+  switch (part.type) {
+    case "text":
+      return [`#### text ${part.id}${part.synthetic ? " (synthetic)" : ""}`, part.text].join("\n\n")
+    case "reasoning":
+      return [`#### reasoning ${part.id}`, part.text].join("\n\n")
+    case "tool":
+      return [
+        `#### tool ${part.tool} ${part.id}`,
+        `callID: ${part.callID}`,
+        `status: ${part.state.status}`,
+        "",
+        "input:",
+        fence("json", stringify(part.state.input)),
+        "",
+        "output:",
+        fence("text", toolOutputForTranscript(part.state)),
+      ].join("\n")
+    case "file":
+      return [
+        `#### file ${part.id}`,
+        `mime: ${part.mime}`,
+        part.filename ? `filename: ${part.filename}` : undefined,
+        `url: ${part.url}`,
+        part.source ? ["source:", fence("json", stringify(part.source))].join("\n") : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    case "compaction":
+      return [
+        `#### compaction ${part.id}`,
+        `auto: ${part.auto}`,
+        `overflow: ${part.overflow ?? false}`,
+        `resume: ${part.resume ?? false}`,
+        part.tail_start_id ? `tail_start_id: ${part.tail_start_id}` : undefined,
+        part.instructions ? ["instructions:", fence("text", part.instructions)].join("\n") : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    case "patch":
+      return [`#### patch ${part.id}`, `hash: ${part.hash}`, "files:", ...part.files.map((file) => `- ${file}`)].join("\n")
+    case "snapshot":
+      return [`#### snapshot ${part.id}`, part.snapshot].join("\n\n")
+    case "step-start":
+      return [`#### step-start ${part.id}`, part.snapshot ? `snapshot: ${part.snapshot}` : ""].join("\n").trim()
+    case "step-finish":
+      return [
+        `#### step-finish ${part.id}`,
+        `reason: ${part.reason}`,
+        `tokens: ${stringify(part.tokens)}`,
+        part.snapshot ? `snapshot: ${part.snapshot}` : undefined,
+      ]
+        .filter(Boolean)
+        .join("\n")
+    case "agent":
+      return [`#### agent ${part.id}`, `name: ${part.name}`, part.source ? fence("json", stringify(part.source)) : ""]
+        .filter(Boolean)
+        .join("\n\n")
+    case "subtask":
+      return [
+        `#### subtask ${part.id}`,
+        `agent: ${part.agent}`,
+        `description: ${part.description}`,
+        part.command ? `command: ${part.command}` : undefined,
+        "",
+        fence("text", part.prompt),
+      ]
+        .filter(Boolean)
+        .join("\n")
+    case "retry":
+      return [`#### retry ${part.id}`, `attempt: ${part.attempt}`, fence("json", stringify(part.error))].join("\n\n")
+    default:
+      return [`#### part ${(part as any).id ?? "(unknown)"}`, fence("json", stringify(part))].join("\n\n")
+  }
+}
+
+function transcriptMarkdown(input: {
+  sessionID: SessionID
+  parentID: MessageID
+  messages: MessageV2.WithParts[]
+  cwd?: string
+  root?: string
+}) {
+  const header = [
+    "# MendCode Full Session Transcript",
+    "",
+    `sessionID: ${input.sessionID}`,
+    `compactionParentID: ${input.parentID}`,
+    `generatedAt: ${new Date().toISOString()}`,
+    input.cwd ? `cwd: ${input.cwd}` : undefined,
+    input.root ? `root: ${input.root}` : undefined,
+    "",
+    "Use this file when the compaction summary is ambiguous, when a command output was truncated, or when the next action is unclear.",
+  ].filter(Boolean)
+
+  const body = input.messages.flatMap((message, index) => {
+    const info = message.info
+    return [
+      "",
+      `## ${index + 1}. ${info.role} ${info.id}`,
+      "",
+      `createdAt: ${new Date(info.time.created).toISOString()}`,
+      "agent" in info && info.agent ? `agent: ${info.agent}` : undefined,
+      "modelID" in info && info.modelID ? `model: ${info.providerID}/${info.modelID}` : undefined,
+      "finish" in info && info.finish ? `finish: ${info.finish}` : undefined,
+      "error" in info && info.error ? ["error:", fence("json", stringify(info.error))].join("\n") : undefined,
+      "",
+      ...message.parts.map(transcriptPart),
+    ].filter((item): item is string => typeof item === "string")
+  })
+
+  return [...header, ...body, ""].join("\n")
+}
+
+function transcriptPaths(sessionID: SessionID, parentID: MessageID) {
+  const dir = path.join(Global.Path.data, "session-transcripts", safePathSegment(sessionID))
+  return {
+    dir,
+    snapshot: path.join(dir, `${safePathSegment(parentID)}.md`),
+    latest: path.join(dir, "latest.md"),
+  }
+}
+
+function writeTranscript(input: {
+  sessionID: SessionID
+  parentID: MessageID
+  messages: MessageV2.WithParts[]
+  cwd?: string
+  root?: string
+}) {
+  return Effect.promise(async () => {
+    const target = transcriptPaths(input.sessionID, input.parentID)
+    const content = transcriptMarkdown(input)
+    await mkdir(target.dir, { recursive: true })
+    await writeFile(target.snapshot, content)
+    await writeFile(target.latest, content)
+    return target.latest
+  })
+}
+
+function latestUserRequestContext(messages: MessageV2.WithParts[]) {
+  const latest = messages.findLast((msg) => msg.info.role === "user" && !msg.parts.some((part) => part.type === "compaction"))
+  if (!latest) return []
+  const text = compactText(messageText(latest), 2_500) || "(empty user message)"
+  return [
+    [
+      "Latest Real User Request Evidence:",
+      `- messageID: ${latest.info.id}`,
+      `- createdAt: ${new Date(latest.info.time.created).toISOString()}`,
+      "- text:",
+      ...text.split("\n").map((line) => `  ${line}`),
+      "",
+      "Use this as the source of truth for Request Trace. Compare completed work and remaining work against this request, not against assistant confidence.",
+    ].join("\n"),
+  ]
+}
+
+function transcriptReferenceContext(filepath: string | undefined) {
+  if (!filepath) return []
+  return [
+    [
+      "Full Transcript Reference:",
+      `- markdown: ${filepath}`,
+      "- This file is the local full-session transcript at compaction time.",
+      "- If the summary is unclear, incomplete, or conflicts with recent messages, inspect this transcript before continuing.",
+      "- Use it to recover exact user requests, assistant claims, command inputs, tool statuses, file paths, and saved output paths.",
+    ].join("\n"),
+  ]
 }
 
 function buildPrompt(input: { previousSummary?: string; context: string[]; instructions?: string }) {
@@ -183,6 +463,70 @@ function todoContext(todos: Todo.Info[]) {
 function toolInputValue(input: Record<string, any>, key: string) {
   const value = input[key]
   return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+function compactText(text: string, maxChars: number) {
+  const trimmed = text.trim()
+  if (trimmed.length <= maxChars) return trimmed
+  return `${trimmed.slice(0, maxChars)}\n[truncated]`
+}
+
+function toolStateOutput(state: MessageV2.ToolState) {
+  if (state.status === "completed") return state.output
+  if (state.status === "error") return state.metadata?.output ?? state.error
+  if (state.status === "running" || state.status === "pending") return `Tool is still ${state.status}.`
+  return ""
+}
+
+function toolInputSummary(input: Record<string, any>) {
+  const keys = ["command", "cmd", "cwd", "path", "filePath", "file", "pattern", "url", "description"]
+  const picked = keys.flatMap((key) => {
+    const value = input[key]
+    if (typeof value === "string" && value.trim()) return [`${key}=${JSON.stringify(value.trim())}`]
+    return []
+  })
+  if (picked.length) return picked.join(" ")
+  try {
+    const json = JSON.stringify(input)
+    return json && json !== "{}" ? compactText(json, 500) : ""
+  } catch {
+    return ""
+  }
+}
+
+function recentOperationalContext(messages: MessageV2.WithParts[]) {
+  const items: string[] = []
+  for (const msg of messages.slice(-RECENT_OPERATIONAL_CONTEXT_MAX_MESSAGES)) {
+    if (msg.info.role !== "assistant") continue
+    for (const part of msg.parts) {
+      if (part.type !== "tool" || part.tool === "task") continue
+      const input = toolInputSummary(part.state.input)
+      const output = compactText(toolStateOutput(part.state), RECENT_OPERATIONAL_CONTEXT_MAX_OUTPUT_CHARS)
+      items.push(
+        [
+          `- ${part.tool} - ${part.state.status}${input ? ` - ${input}` : ""}`,
+          output
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => `  ${line}`)
+            .join("\n"),
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      )
+    }
+  }
+
+  const recent = items.slice(-RECENT_OPERATIONAL_CONTEXT_MAX_ITEMS)
+  if (!recent.length) return []
+  return [
+    [
+      "Recent Operational Context:",
+      ...recent,
+      "",
+      "Use recent operational context as first-class state evidence for commands, files, directories, saved tool-output paths, failed/running tools, and the next required action.",
+    ].join("\n"),
+  ]
 }
 
 function taskOutput(state: MessageV2.ToolState) {
@@ -295,6 +639,7 @@ export interface Interface {
     sessionID: SessionID
     auto: boolean
     overflow?: boolean
+    resume?: boolean
   }) => Effect.Effect<"continue" | "stop">
   readonly create: (input: {
     sessionID: SessionID
@@ -302,6 +647,7 @@ export interface Interface {
     model: { providerID: ProviderID; modelID: ModelID }
     auto: boolean
     overflow?: boolean
+    resume?: boolean
     instructions?: string
   }) => Effect.Effect<void>
 }
@@ -451,6 +797,7 @@ export const layer: Layer.Layer<
       sessionID: SessionID
       auto: boolean
       overflow?: boolean
+      resume?: boolean
     }) {
       const parent = input.messages.findLast((m) => m.info.id === input.parentID)
       if (!parent || parent.info.role !== "user") {
@@ -470,8 +817,9 @@ export const layer: Layer.Layer<
       const prior = completedCompactions(history)
       const hidden = new Set(prior.flatMap((item) => [item.userIndex, item.assistantIndex]))
       const previousSummary = prior.at(-1)?.summary
+      const visibleHistory = history.filter((_, index) => !hidden.has(index))
       const selected = yield* select({
-        messages: history.filter((_, index) => !hidden.has(index)),
+        messages: visibleHistory,
         cfg,
         model,
       })
@@ -482,9 +830,28 @@ export const layer: Layer.Layer<
         { context: [], prompt: undefined },
       )
       const persistedTodos = yield* todos.get(input.sessionID).pipe(Effect.catch(() => Effect.succeed([])))
+      const summaryHistory = selected.head
+      const ctx = yield* InstanceState.context
+      const transcriptPath = yield* writeTranscript({
+        sessionID: input.sessionID,
+        parentID: input.parentID,
+        messages: history,
+        cwd: ctx.directory,
+        root: ctx.worktree,
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            log.warn("failed to write compaction transcript", { error: String(error) })
+            return undefined
+          }),
+        ),
+      )
       const context = [
+        ...latestUserRequestContext(summaryHistory),
+        ...transcriptReferenceContext(transcriptPath),
         ...todoContext(persistedTodos),
-        ...subagentTaskContext(history.filter((_, index) => !hidden.has(index))),
+        ...recentOperationalContext(summaryHistory),
+        ...subagentTaskContext(summaryHistory),
         ...compacting.context,
       ]
       const nextPrompt =
@@ -495,7 +862,6 @@ export const layer: Layer.Layer<
         stripMedia: true,
         toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
       })
-      const ctx = yield* InstanceState.context
       const msg: MessageV2.Assistant = {
         id: MessageID.ascending(),
         role: "assistant",
@@ -560,7 +926,10 @@ export const layer: Layer.Layer<
         })
       }
 
-      if (result === "continue" && input.auto && input.overflow) {
+      const resumeRequested = compactionPart?.resume ?? input.resume ?? (input.auto && input.overflow)
+      let shouldResume = result === "continue" && resumeRequested === true
+
+      if (shouldResume) {
         const info = yield* provider.getProvider(userMessage.model.providerID)
         if (
           (yield* plugin.trigger(
@@ -607,6 +976,8 @@ export const layer: Layer.Layer<
               end: Date.now(),
             },
           })
+        } else {
+          shouldResume = false
         }
       }
 
@@ -626,7 +997,7 @@ export const layer: Layer.Layer<
         })
         yield* bus.publish(Event.Compacted, { sessionID: input.sessionID })
       }
-      return result
+      return shouldResume ? "continue" : "stop"
     })
 
     const create = Effect.fn("SessionCompaction.create")(function* (input: {
@@ -635,6 +1006,7 @@ export const layer: Layer.Layer<
       model: { providerID: ProviderID; modelID: ModelID }
       auto: boolean
       overflow?: boolean
+      resume?: boolean
       instructions?: string
     }) {
       const msg = yield* session.updateMessage({
@@ -652,6 +1024,7 @@ export const layer: Layer.Layer<
         type: "compaction",
         auto: input.auto,
         overflow: input.overflow,
+        resume: input.resume ?? false,
         instructions: input.instructions?.trim() || undefined,
       })
       EventV2.run(SessionEvent.Compaction.Started.Sync, {
@@ -700,6 +1073,7 @@ export const create = fn(
     model: z.object({ providerID: ProviderID.zod, modelID: ModelID.zod }),
     auto: z.boolean(),
     overflow: z.boolean().optional(),
+    resume: z.boolean().optional(),
     instructions: z.string().optional(),
   }),
   (input) => runPromise((svc) => svc.create(input)),

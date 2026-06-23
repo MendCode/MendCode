@@ -203,6 +203,122 @@ exports[`tool parameters JSON Schema (wire shape) lsp 1`] = `
 }
 `;
 
+exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "action": {
+      "description": "Loop workflow action. Use activate to create/start a loop, draft to create a reviewable draft, show/list to inspect, and pause/resume/stop/run_once for control.",
+      "enum": [
+        "draft",
+        "activate",
+        "show",
+        "list",
+        "pause",
+        "resume",
+        "stop",
+        "run_once",
+      ],
+      "type": "string",
+    },
+    "agent": {
+      "description": "Optional MendCode agent/profile name to use when the loop runner wakes this workflow.",
+      "type": "string",
+    },
+    "ensureService": {
+      "description": "When activating, best-effort start the project loop service so wakeups continue outside the TUI.",
+      "type": "boolean",
+    },
+    "gates": {
+      "description": "Review, permission, safety, or quality gates the loop must respect.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "intervalMs": {
+      "description": "Interval in milliseconds when triggerMode is interval.",
+      "type": "number",
+    },
+    "maxChildren": {
+      "description": "Maximum child/subagent sessions the loop should create while working.",
+      "type": "number",
+    },
+    "maxDepth": {
+      "description": "Maximum recursive/delegation depth for loop work.",
+      "type": "number",
+    },
+    "maxRuntimeMs": {
+      "description": "Maximum wall-clock runtime in milliseconds before the loop should stop.",
+      "type": "number",
+    },
+    "maxTurns": {
+      "description": "Maximum number of loop iterations before stopping. Use this for bounded test loops.",
+      "type": "number",
+    },
+    "model": {
+      "description": "Optional model for loop iterations in provider/model-id format. Must be available in the user's configured providers.",
+      "type": "string",
+    },
+    "name": {
+      "description": "Short workflow name when creating a draft or activating a new loop.",
+      "type": "string",
+    },
+    "objective": {
+      "description": "Durable loop objective. Required when creating a draft or activating a new loop.",
+      "type": "string",
+    },
+    "permissionMode": {
+      "description": "Loop execution permission mode. Use report-only by default, normal only after explicit user approval, or custom with gates/approval lists.",
+      "enum": [
+        "report-only",
+        "normal",
+        "custom",
+      ],
+      "type": "string",
+    },
+    "reason": {
+      "description": "Short reason recorded in the loop journal for this action.",
+      "type": "string",
+    },
+    "reportOnly": {
+      "description": "Whether the loop should inspect and report without editing. Defaults to true for newly created loops.",
+      "type": "boolean",
+    },
+    "stopWhen": {
+      "description": "Natural-language stop conditions for the loop.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "triggerMode": {
+      "description": "How the loop wakes up. Use manual for on-demand tests or interval for scheduled background loops.",
+      "enum": [
+        "manual",
+        "interval",
+        "adaptive",
+        "external-signal",
+        "self-paced",
+      ],
+      "type": "string",
+    },
+    "variant": {
+      "description": "Optional model variant for loop iterations.",
+      "type": "string",
+    },
+    "workflowID": {
+      "description": "Existing loop workflow id. Provide it for precise show, pause, resume, stop, and run_once actions. If omitted, the tool may resolve the current session's contextual loop or fall back to a list.",
+      "type": "string",
+    },
+  },
+  "required": [
+    "action",
+  ],
+  "type": "object",
+}
+`;
+
 exports[`tool parameters JSON Schema (wire shape) plan 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -295,6 +411,84 @@ exports[`tool parameters JSON Schema (wire shape) read 1`] = `
   },
   "required": [
     "filePath",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`tool parameters JSON Schema (wire shape) review 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "action": {
+      "description": "Review workspace action.",
+      "enum": [
+        "current",
+        "summary",
+        "file",
+        "navigate",
+        "reload",
+        "comment_add",
+        "comment_list",
+        "comment_clear",
+      ],
+      "type": "string",
+    },
+    "author": {
+      "description": "Comment author. Defaults to assistant.",
+      "enum": [
+        "user",
+        "agent",
+        "assistant",
+      ],
+      "type": "string",
+    },
+    "blockIndex": {
+      "description": "Zero-based diff block index for navigate or comment_add.",
+      "type": "number",
+    },
+    "body": {
+      "description": "Comment body for comment_add.",
+      "type": "string",
+    },
+    "direction": {
+      "description": "Navigation direction for navigate.",
+      "enum": [
+        "next-file",
+        "prev-file",
+        "next-block",
+        "prev-block",
+      ],
+      "type": "string",
+    },
+    "filePath": {
+      "description": "File path for file, navigate, comment_add, or comment_clear.",
+      "type": "string",
+    },
+    "includePatch": {
+      "description": "For file action only. Include raw patch for the selected or requested file.",
+      "type": "boolean",
+    },
+    "line": {
+      "description": "Line number for comment_add.",
+      "type": "number",
+    },
+    "side": {
+      "description": "Diff side for comment_add line anchors.",
+      "enum": [
+        "old",
+        "new",
+        "both",
+      ],
+      "type": "string",
+    },
+    "staleOnly": {
+      "description": "For comment_clear only. Clear only stale comments.",
+      "type": "boolean",
+    },
+  },
+  "required": [
+    "action",
   ],
   "type": "object",
 }

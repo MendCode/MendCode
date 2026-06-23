@@ -123,6 +123,7 @@ export const Flag = {
     (!falsyOpen("OPENCODE_EXPERIMENTAL_HTTPAPI") && HTTPAPI_DEFAULT_ON_CHANNELS.has(InstallationChannel)),
   OPENCODE_EXPERIMENTAL_WORKSPACES: OPENCODE_EXPERIMENTAL || truthyOpen("OPENCODE_EXPERIMENTAL_WORKSPACES"),
   OPENCODE_EXPERIMENTAL_EVENT_SYSTEM: OPENCODE_EXPERIMENTAL || truthyOpen("OPENCODE_EXPERIMENTAL_EVENT_SYSTEM"),
+  OPENCODE_EXPERIMENTAL_SESSION_V2_DEBUG: truthyOpen("OPENCODE_EXPERIMENTAL_SESSION_V2_DEBUG"),
 
   // Evaluated at access time (not module load) because tests, the CLI, and
   // external tooling set these env vars at runtime.

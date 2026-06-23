@@ -7,7 +7,7 @@ import path from "path"
 import { tmpdir } from "../fixture/fixture"
 import { appendMemoryEntry, deleteMemoryEntry, memoryStatus, readMemoryEntries, updateMemoryEntry } from "../../src/mend/memory/store"
 import { retrieveMemory } from "../../src/mend/memory/retrieve"
-import { memoryPaths, readMemoryConfig, writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../../src/mend/memory/config"
+import { memoryPaths, readMemoryConfig, resolveProjectMemoryRoot, writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../../src/mend/memory/config"
 import { applyMemoryProposal, autoProposeMemoriesFromSession, extractorPrompt, importCodexMemories, listMemoryProposals, memoryExtractorCandidateMessage, memoryExtractorFailureReason, proposeMemoriesFromExtractorText, proposeMemoriesWithExtractor, proposeMemory, readMemoryExtractorContext, rejectMemoryProposal, updateMemoryProposal } from "../../src/mend/memory/proposals"
 import { DEFAULT_MEMORY_CATEGORIES, inferMemoryCategoryIDs, normalizeMemoryCategoryPolicies, readMemoryCategoryPolicies, scopeReasonForMemory, writeMemoryCategoryPolicy } from "../../src/mend/memory/categories"
 import { readMemoryFacts, repairMemoryGraph, upsertMemoryFact, validateMemoryGraph } from "../../src/mend/memory/graph"
@@ -54,6 +54,13 @@ describe("mend memory", () => {
     expect(status.retrievalCallsProviders).toBe(false)
     expect(status.outputCallsProviders).toBe(false)
     expect(status.readsSecrets).toBe(false)
+  })
+
+  test("project memory root falls back from filesystem root to cwd", async () => {
+    await using dir = await tmpdir()
+
+    expect(resolveProjectMemoryRoot("/", dir.path)).toBe(path.resolve(dir.path))
+    expect(resolveProjectMemoryRoot("/", "/")).toBeUndefined()
   })
 
   test("retrieves project memory by query without provider calls", async () => {

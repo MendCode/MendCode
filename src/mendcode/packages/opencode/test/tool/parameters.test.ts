@@ -15,9 +15,11 @@ import { Parameters as Glob } from "../../src/tool/glob"
 import { Parameters as Grep } from "../../src/tool/grep"
 import { Parameters as Invalid } from "../../src/tool/invalid"
 import { Parameters as Lsp } from "../../src/tool/lsp"
+import { Parameters as Loop } from "../../src/tool/loop"
 import { Parameters as Plan } from "../../src/tool/plan"
 import { Parameters as Question } from "../../src/tool/question"
 import { Parameters as Read } from "../../src/tool/read"
+import { Parameters as Review } from "../../src/tool/review"
 import { Parameters as Shell } from "../../src/tool/shell"
 import { Parameters as Skill } from "../../src/tool/skill"
 import { Parameters as Task } from "../../src/tool/task"
@@ -41,9 +43,11 @@ describe("tool parameters", () => {
     test("grep", () => expect(toJsonSchema(Grep)).toMatchSnapshot())
     test("invalid", () => expect(toJsonSchema(Invalid)).toMatchSnapshot())
     test("lsp", () => expect(toJsonSchema(Lsp)).toMatchSnapshot())
+    test("loop", () => expect(toJsonSchema(Loop)).toMatchSnapshot())
     test("plan", () => expect(toJsonSchema(Plan)).toMatchSnapshot())
     test("question", () => expect(toJsonSchema(Question)).toMatchSnapshot())
     test("read", () => expect(toJsonSchema(Read)).toMatchSnapshot())
+    test("review", () => expect(toJsonSchema(Review)).toMatchSnapshot())
     test("skill", () => expect(toJsonSchema(Skill)).toMatchSnapshot())
     test("task", () => expect(toJsonSchema(Task)).toMatchSnapshot())
     test("todo", () => expect(toJsonSchema(Todo)).toMatchSnapshot())
@@ -153,6 +157,35 @@ describe("tool parameters", () => {
     })
   })
 
+  describe("loop", () => {
+    test("accepts activate with loop creation fields", () => {
+      const parsed = parse(Loop, {
+        action: "activate",
+        name: "Report-only file watch",
+        objective: "Run 5 report-only inspections and summarize differences.",
+        triggerMode: "interval",
+        intervalMs: 60000,
+        maxTurns: 5,
+        maxRuntimeMs: 300000,
+        maxChildren: 2,
+        maxDepth: 1,
+        model: "openai/gpt-5.5",
+        variant: "medium",
+        agent: "build",
+        permissionMode: "report-only",
+        reportOnly: true,
+      })
+      expect(parsed.action).toBe("activate")
+      expect(parsed.maxTurns).toBe(5)
+      expect(parsed.model).toBe("openai/gpt-5.5")
+      expect(parsed.permissionMode).toBe("report-only")
+    })
+
+    test("rejects unknown action", () => {
+      expect(accepts(Loop, { action: "loop" })).toBe(false)
+    })
+  })
+
   describe("plan", () => {
     test("accepts empty object", () => {
       expect(parse(Plan, {})).toEqual({})
@@ -186,6 +219,35 @@ describe("tool parameters", () => {
       const parsed = parse(Read, { filePath: "/a", offset: 10, limit: 100 })
       expect(parsed.offset).toBe(10)
       expect(parsed.limit).toBe(100)
+    })
+  })
+
+  describe("review", () => {
+    test("accepts summary action", () => {
+      expect(parse(Review, { action: "summary" })).toEqual({ action: "summary" })
+    })
+    test("accepts comment_add with an anchored line", () => {
+      const parsed = parse(Review, {
+        action: "comment_add",
+        filePath: "src/app.ts",
+        blockIndex: 0,
+        line: 12,
+        side: "new",
+        body: "Check this branch.",
+        author: "assistant",
+      })
+      expect(parsed.action).toBe("comment_add")
+      expect(parsed.side).toBe("new")
+    })
+    test("accepts navigate direction", () => {
+      const parsed = parse(Review, { action: "navigate", direction: "next-block" })
+      expect(parsed.direction).toBe("next-block")
+    })
+    test("rejects unknown action", () => {
+      expect(accepts(Review, { action: "approve" })).toBe(false)
+    })
+    test("rejects unknown side", () => {
+      expect(accepts(Review, { action: "comment_add", side: "right" })).toBe(false)
     })
   })
 

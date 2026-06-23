@@ -88,7 +88,7 @@ export const layer = Layer.effect(
       return Effect.gen(function* () {
         const s = yield* InstanceState.get(state)
         const payload: Payload = { id: options?.id ?? createID(), type: def.type, properties }
-        log.info("publishing", { type: def.type })
+        if (def.type !== "message.part.delta") log.debug("publishing", { type: def.type })
 
         const ps = s.typed.get(def.type)
         if (ps) yield* PubSub.publish(ps, payload)

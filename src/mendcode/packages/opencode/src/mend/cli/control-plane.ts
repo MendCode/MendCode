@@ -21,6 +21,7 @@ import { accumulateSessionTelemetry, buildRunPlan, executeRunPlan, parseRunArgs,
 import { providerRunAdapterInventory, providerSmoke } from "../runtime/provider-adapters"
 import { providerLogin } from "../runtime/auth"
 import { exportPlan } from "../runtime/export"
+import { loopServiceArgsFromConfig, loopServiceInstall, loopServicePlan, loopServiceStart, loopServiceStatus, loopServiceStop, loopServiceUninstall, type LoopServicePlan, type LoopServiceStatus } from "../runtime/loop-service"
 import { adapterStatus, checkRuntime, collectStatus, doctorLines, donorConfigPathsReport, ownedRuntimeStatus, toolchainStatus, upstreamInspect, upstreamStatus } from "../runtime/system"
 import { adoptOwnedRuntime, ownedRuntimePlan } from "../runtime/adoption"
 import { runBenchmark } from "../runtime/bench"
@@ -31,6 +32,12 @@ import { formatMemoryBlock, retrieveMemory } from "../memory/retrieve"
 import { writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../memory/config"
 import { applyMemoryProposal, autoProposeMemoriesFromSession, importCodexMemories, listMemoryProposals, proposeMemoriesWithExtractor, proposeMemory, rejectMemoryProposal } from "../memory/proposals"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "../config/permissions"
+import { Effect } from "effect"
+import { AppRuntime } from "@/effect/app-runtime"
+import { bootstrap } from "@/cli/bootstrap"
+import { LoopID, LoopWorkflow } from "@/session/loop"
+import { LoopRunner } from "@/session/loop-runner"
+import { LoopTemplates } from "@/session/loop-templates"
 
 async function readJson(file: string) {
   return JSON.parse(await readFile(file, "utf8"))
@@ -96,6 +103,319 @@ function yes(value: boolean) {
 function formatList(title: string, items: string[]) {
   if (!items.length) return `${title}: none`
   return [`${title}:`, ...items.map((item) => `  - ${item}`)].join("\n")
+}
+
+function formatLoopTime(value?: number) {
+  if (!value) return "none"
+  const diff = value - Date.now()
+  if (Math.abs(diff) < 1000) return "now"
+  const abs = Math.abs(diff)
+  const unit =
+    abs >= 60 * 60 * 1000
+      ? `${Math.round(abs / (60 * 60 * 1000))}h`
+      : abs >= 60 * 1000
+        ? `${Math.round(abs / (60 * 1000))}m`
+        : `${Math.round(abs / 1000)}s`
+  return diff > 0 ? `in ${unit}` : `${unit} ago`
+}
+
+function formatLoopSummary(loop: LoopWorkflow.Info) {
+  return `${loop.id}  ${loop.state.padEnd(10)}  ${loop.name}  phase=${loop.phase}  next=${formatLoopTime(loop.nextWakeup)}`
+}
+
+function loopServiceOptions(args: string[]) {
+  const interval = optionValue(args, "--interval-ms")
+  const limit = optionValue(args, "--limit")
+  const serviceDir = optionValue(args, "--service-dir") ?? undefined
+  const logDir = optionValue(args, "--log-dir") ?? undefined
+  const allowEdits = args.includes("--allow-edits") || args.includes("--full")
+  const dryRun = args.includes("--dry-run")
+  return loopServiceArgsFromConfig(shellProjectRoot(), {
+    intervalMs: interval ? Number(interval) : undefined,
+    limit: limit ? Number(limit) : undefined,
+    execute: dryRun ? false : undefined,
+    reportOnly: dryRun ? false : allowEdits ? false : undefined,
+    serviceDir,
+    logDir,
+  })
+}
+
+function formatLoopServicePlan(plan: LoopServicePlan) {
+  return [
+    `Loop service: ${plan.label}`,
+    `Backend: ${plan.backend} (${plan.platform})`,
+    `Project: ${plan.projectRoot}`,
+    `Mode: ${plan.mode}`,
+    `Interval: ${plan.intervalMs}ms`,
+    `Limit: ${plan.limit}`,
+    `Definition: ${plan.definitionPath}`,
+    `Logs: ${plan.stdoutPath}`,
+    `Errors: ${plan.stderrPath}`,
+    `Command: ${plan.programArguments.join(" ")}`,
+    `Install: ${plan.installCommand.join(" ")}`,
+  ].join("\n")
+}
+
+function formatLoopServiceStatus(status: LoopServiceStatus) {
+  return [
+    `Loop service: ${status.label}`,
+    `Backend: ${status.backend} (${status.platform})`,
+    `Installed: ${yes(status.installed)}`,
+    `Loaded: ${yes(status.loaded)}`,
+    `Mode: ${status.mode}`,
+    `Definition: ${status.definitionPath}`,
+    `Logs: ${status.stdoutPath}`,
+    `Errors: ${status.stderrPath}`,
+  ].join("\n")
+}
+
+async function loopServiceLogs(args: string[]) {
+  const status = await loopServiceStatus(loopServiceOptions(args))
+  const lines = Number(optionValue(args, "--lines") ?? 80)
+  const readTail = async (file: string) => {
+    try {
+      return (await readFile(file, "utf8")).split("\n").slice(-lines).join("\n").trim()
+    } catch {
+      return ""
+    }
+  }
+  const stdout = await readTail(status.stdoutPath)
+  const stderr = await readTail(status.stderrPath)
+  return [
+    `== ${status.stdoutPath} ==`,
+    stdout || "(empty)",
+    "",
+    `== ${status.stderrPath} ==`,
+    stderr || "(empty)",
+  ].join("\n")
+}
+
+function formatLoopSnapshot(snapshot: LoopWorkflow.Snapshot) {
+  const loop = snapshot.workflow
+  return [
+    `Loop Workflow: ${loop.name}`,
+    `ID: ${loop.id}`,
+    `State: ${loop.state}    Phase: ${loop.phase}    Next: ${formatLoopTime(loop.nextWakeup)}`,
+    `Budget: ${loop.metrics.turns ?? 0}/${loop.policy.maxTurns ?? "?"} turns    Children: ${snapshot.threads.length}`,
+    `Root session: ${loop.rootSessionID ?? "none"}`,
+    "",
+    "Objective",
+    `  ${loop.objective}`,
+    "",
+    "Children",
+    ...(snapshot.threads.length
+      ? snapshot.threads.map((thread) => `  ${thread.role.padEnd(11)} ${thread.state.padEnd(11)} ${thread.purpose}`)
+      : ["  none"]),
+    "",
+    "Journal",
+    ...(snapshot.events.length
+      ? snapshot.events.map((event) => `  ${new Date(event.time.created).toLocaleTimeString()} ${event.type.padEnd(10)} ${event.title}`)
+      : ["  none"]),
+  ].join("\n")
+}
+
+function loopIDArg(value?: string) {
+  if (!value) throw new Error("Usage: mendcode loops <show|tail|monitor|tick|activate|run|pause|resume|stop> <loop-id>")
+  return LoopID.make(value)
+}
+
+async function withLoopService<T>(fn: (loop: LoopWorkflow.Interface) => Promise<T>, options: { disposeRuntime?: boolean } = {}) {
+  try {
+    return await bootstrap(shellProjectRoot(), async () =>
+      Effect.runPromise(LoopWorkflow.Service.use((loop) => Effect.promise(() => fn(loop))).pipe(Effect.provide(LoopWorkflow.defaultLayer))),
+    )
+  } finally {
+    if (options.disposeRuntime !== false) await AppRuntime.dispose().catch(() => undefined)
+  }
+}
+
+async function withLoopRunner<T>(
+  fn: (runner: LoopRunner.Interface) => Effect.Effect<T, unknown, unknown>,
+  options: { disposeRuntime?: boolean } = {},
+) {
+  try {
+    return await bootstrap(shellProjectRoot(), async () =>
+      AppRuntime.runPromise(LoopRunner.Service.use(fn) as Parameters<typeof AppRuntime.runPromise>[0]) as Promise<T>,
+    )
+  } finally {
+    if (options.disposeRuntime !== false) await AppRuntime.dispose().catch(() => undefined)
+  }
+}
+
+async function loops(args: string[]) {
+  const sub = args[0] || "status"
+  if (sub === "status" || sub === "list") {
+    const items = await withLoopService((loop) => Effect.runPromise(loop.list()))
+    printResult(args, items, (value: LoopWorkflow.Info[]) =>
+      value.length ? value.map(formatLoopSummary).join("\n") : "Loop workflows: none",
+    )
+    return
+  }
+  if (sub === "examples" || sub === "templates") {
+    printResult(args, LoopTemplates.templates, (value: LoopTemplates.LoopTemplate[]) => value.map(LoopTemplates.format).join("\n"))
+    return
+  }
+  if (sub === "draft") {
+    const template = LoopTemplates.get(optionValue(args, "--template"))
+    const name = optionValue(args, "--name") ?? template?.name ?? args[1]
+    const objective = optionValue(args, "--objective") ?? template?.objective ?? args.slice(name ? 2 : 1).filter((item) => !item.startsWith("--")).join(" ")
+    if (!name || !objective) throw new Error("Usage: mendcode loops draft --name <name> --objective <objective>")
+    const interval = optionValue(args, "--interval-ms")
+    const draft = await withLoopService((loop) =>
+      Effect.runPromise(
+        loop.createDraft({
+          name,
+          objective,
+          templateID: template?.id,
+          trigger: interval ? { mode: "interval", intervalMs: Number(interval) } : template?.trigger,
+          gates: template?.gates,
+          stopWhen: template?.stopWhen,
+          policy: template?.policy,
+        }),
+      ),
+    )
+    printResult(args, draft, (value: LoopWorkflow.Info) => `Created loop draft: ${formatLoopSummary(value)}`)
+    return
+  }
+  if (sub === "show") {
+    const id = loopIDArg(args[1])
+    const snapshot = await withLoopService((loop) => Effect.runPromise(loop.snapshot(id)))
+    printResult(args, snapshot, formatLoopSnapshot)
+    return
+  }
+  if (sub === "tail") {
+    const id = loopIDArg(args[1])
+    const events = await withLoopService((loop) => Effect.runPromise(loop.events(id, Number(optionValue(args, "--limit") ?? 50))))
+    if (args.includes("--json")) {
+      for (const event of events) console.log(JSON.stringify(event))
+    } else {
+      console.log(events.map((event) => `${new Date(event.time.created).toLocaleTimeString()} ${event.type.padEnd(10)} ${event.title}`).join("\n") || "No loop events.")
+    }
+    return
+  }
+  if (sub === "monitor") {
+    const id = loopIDArg(args[1])
+    const once = async () => {
+      const snapshot = await withLoopService((loop) => Effect.runPromise(loop.snapshot(id)), { disposeRuntime: false })
+      console.clear()
+      console.log(formatLoopSnapshot(snapshot))
+    }
+    await once()
+    if (!process.stdout.isTTY || args.includes("--once")) return
+    const interval = Number(optionValue(args, "--interval-ms") ?? 2000)
+    while (true) {
+      await new Promise((resolve) => setTimeout(resolve, interval))
+      await once()
+    }
+  }
+  if (sub === "tick") {
+    const id = args[1] && !args[1].startsWith("--") ? loopIDArg(args[1]) : undefined
+    const limit = Number(optionValue(args, "--limit") ?? 1)
+    const execute = args.includes("--execute")
+    const reportOnly = args.includes("--report-only")
+    const result = id
+      ? await withLoopRunner((runner) => runner.runOne({ id, execute, reportOnly }))
+      : await withLoopRunner((runner) => runner.runDue({ limit, execute, reportOnly }))
+    printResult(args, result, (value: LoopRunner.TickResult | LoopRunner.TickResult[]) => {
+      const items = Array.isArray(value) ? value : [value]
+      if (!items.length) return "No loop workflows due."
+      return items.map((item) => `${item.workflowID} ${item.state}${item.runID ? ` run=${item.runID}` : ""} ${item.summary}`).join("\n")
+    })
+    return
+  }
+  if (sub === "daemon") {
+    const interval = Number(optionValue(args, "--interval-ms") ?? 30_000)
+    const limit = Number(optionValue(args, "--limit") ?? 1)
+    const execute = args.includes("--execute")
+    const reportOnly = args.includes("--report-only")
+    const quiet = args.includes("--quiet")
+    if (!quiet) console.log(`Loop daemon started. interval=${interval}ms limit=${limit} mode=${execute ? (reportOnly ? "report-only" : "execute") : "dry-run"}`)
+    while (true) {
+      const started = new Date().toLocaleTimeString()
+      const results = await withLoopRunner((runner) => runner.runDue({ limit, execute, reportOnly }), { disposeRuntime: false })
+      if (results.length) {
+        for (const item of results) {
+          console.log(`${started} ${item.workflowID} ${item.state}${item.runID ? ` run=${item.runID}` : ""} ${item.summary}`)
+        }
+      } else if (!quiet) {
+        console.log(`${started} no loops due`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, interval))
+    }
+  }
+  if (sub === "service") {
+    const action = args[1] || "status"
+    const serviceArgs = args.slice(2)
+    const options = loopServiceOptions(serviceArgs)
+    if (action === "plan") {
+      const plan = loopServicePlan(options)
+      printResult(args, plan, formatLoopServicePlan)
+      return
+    }
+    if (action === "install") {
+      const plan = await loopServiceInstall(options)
+      printResult(args, plan, (value: LoopServicePlan) => `Loop service installed.\n${formatLoopServicePlan(value)}`)
+      return
+    }
+    if (action === "start") {
+      const plan = await loopServiceStart(options)
+      printResult(args, plan, (value: LoopServicePlan) => `Loop service started.\n${formatLoopServicePlan(value)}`)
+      return
+    }
+    if (action === "restart") {
+      await loopServiceStop(options).catch(() => undefined)
+      const plan = await loopServiceStart(options)
+      printResult(args, plan, (value: LoopServicePlan) => `Loop service restarted.\n${formatLoopServicePlan(value)}`)
+      return
+    }
+    if (action === "stop") {
+      const plan = await loopServiceStop(options)
+      printResult(args, plan, (value: LoopServicePlan) => `Loop service stopped.\n${formatLoopServicePlan(value)}`)
+      return
+    }
+    if (action === "uninstall" || action === "remove") {
+      const plan = await loopServiceUninstall(options)
+      printResult(args, plan, (value: LoopServicePlan) => `Loop service uninstalled.\n${formatLoopServicePlan(value)}`)
+      return
+    }
+    if (action === "status") {
+      const status = await loopServiceStatus(options)
+      printResult(args, status, formatLoopServiceStatus)
+      return
+    }
+    if (action === "logs") {
+      const logs = await loopServiceLogs(serviceArgs)
+      console.log(logs)
+      return
+    }
+    throw new Error("Usage: mendcode loops service <plan|install|start|stop|restart|status|logs|uninstall> [--interval-ms N] [--limit N] [--dry-run|--allow-edits]")
+  }
+  if (sub === "run") {
+    const id = loopIDArg(args[1])
+    const reason = optionValue(args, "--reason") ?? undefined
+    const result = await withLoopService((loop) => Effect.runPromise(loop.runOnce({ id, reason })))
+    printResult(args, result, (value: LoopWorkflow.RunInfo) => `Loop run recorded: ${value.id} ${value.state}`)
+    return
+  }
+  const control = ["activate", "pause", "resume", "stop"]
+  if (control.includes(sub)) {
+    const id = loopIDArg(args[1])
+    const reason = optionValue(args, "--reason") ?? undefined
+    const result = await withLoopService((loop) => {
+      if (sub === "activate") return Effect.runPromise(loop.activate({ id, reason }))
+      if (sub === "pause") return Effect.runPromise(loop.pause({ id, reason }))
+      if (sub === "resume") return Effect.runPromise(loop.resume({ id, reason }))
+      return Effect.runPromise(loop.stop({ id, reason }))
+    })
+    if (sub === "activate" && !args.includes("--no-service")) {
+      await loopServiceStart(loopServiceOptions(args.slice(2))).catch((error) => {
+        console.error(`WARN: loop service did not start automatically: ${error instanceof Error ? error.message : String(error)}`)
+      })
+    }
+    printResult(args, result, (value: LoopWorkflow.Info) => `Loop updated: ${formatLoopSummary(value)}`)
+    return
+  }
+  throw new Error("Usage: mendcode loops <status|list|examples|draft|show|tail|monitor|tick|daemon|service|activate|run|pause|resume|stop>")
 }
 
 function formatTsmResult(result: any): string {
@@ -1304,6 +1624,12 @@ async function main() {
   if (cmd === "auth") return auth(args)
   if (cmd === "setup") return setup(args)
   if (cmd === "packages") return packages(args)
+  if (cmd === "loops") {
+    await loops(args)
+    const sub = args[0] || "status"
+    if (sub !== "monitor" && sub !== "daemon") process.exit(process.exitCode ?? 0)
+    return
+  }
   if (cmd === "ai") return ai(args)
   if (cmd === "export") return exportCommand(args)
   if (cmd === "system") return system(args)
@@ -1319,7 +1645,7 @@ async function main() {
     console.log(await integrationStatus("tsm"))
     return
   }
-  throw new Error("Usage: mend-control-plane <status|runtime|runtime-config|bench|tui|prompt|models|budget|providers|mcp|memory|permissions|auth|setup|packages|ai|export|system|project|worktree|mflow|tsm|mflow-status|tsm-status>")
+  throw new Error("Usage: mend-control-plane <status|runtime|runtime-config|bench|tui|prompt|models|budget|providers|mcp|memory|permissions|auth|setup|packages|loops|ai|export|system|project|worktree|mflow|tsm|mflow-status|tsm-status>")
 }
 
 main().catch((error) => {

@@ -18,10 +18,12 @@ type StyledPlanMarkdownProps = {
   }
   stableTextMode?: boolean
   colorizeHex?: boolean
+  streamingTail?: string
+  streamingTailColorizeHex?: boolean
 }
 
-const HEX_PATTERN = /#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})(?![0-9A-Fa-f])/g
-const HEX_TEST_PATTERN = /#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})(?![0-9A-Fa-f])/
+const HEX_PATTERN = /(^|[^A-Za-z0-9_])(#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}))(?![A-Za-z0-9_])/g
+const HEX_TEST_PATTERN = /(^|[^A-Za-z0-9_])#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})(?![A-Za-z0-9_])/
 
 export function hasStyledHexColors(content: string) {
   return HEX_TEST_PATTERN.test(content)
@@ -43,9 +45,10 @@ function HexStyledLine(props: { line: string; fallback: RGBA; colorize?: boolean
     let cursor = 0
     HEX_PATTERN.lastIndex = 0
     for (const match of props.line.matchAll(HEX_PATTERN)) {
-      const index = match.index ?? 0
+      const prefix = match[1] ?? ""
+      const index = (match.index ?? 0) + prefix.length
       if (index > cursor) items.push({ text: props.line.slice(cursor, index) })
-      const display = match[0]
+      const display = match[2] ?? ""
       const hex = normalizeHexColor(display)
       items.push({ text: display, hex })
       cursor = index + display.length
@@ -145,6 +148,7 @@ function MarkdownSegment(props: StyledPlanMarkdownProps & { content: string }) {
 
 export function StyledPlanMarkdown(props: StyledPlanMarkdownProps) {
   const segments = createMemo(() => styledPlanMarkdownSegments(props.content))
+  const streamingTail = createMemo(() => props.streamingTail ?? "")
 
   return (
     <box flexDirection="column" flexShrink={0}>
@@ -160,6 +164,13 @@ export function StyledPlanMarkdown(props: StyledPlanMarkdownProps) {
           </Switch>
         )}
       </For>
+      <Show when={streamingTail().length > 0}>
+        <HexStyledLines
+          content={streamingTail()}
+          fallback={props.fg}
+          colorize={props.streamingTailColorizeHex ?? props.colorizeHex}
+        />
+      </Show>
     </box>
   )
 }

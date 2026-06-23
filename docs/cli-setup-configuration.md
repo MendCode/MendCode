@@ -45,6 +45,44 @@ mendcode setup doctor
 
 Completing setup records local project state. It does not mean provider credentials are committed. Provider credentials, OAuth tokens, API keys, local mflow room secrets, caches, and machine-local state must stay outside shared packages and repository docs.
 
+## Connect Provider
+
+The setup provider step is labeled `Connect Provider` because it is the place
+where MendCode validates the provider/auth path the runtime can actually use.
+Provider credentials are local user state, not package or repository content.
+
+The provider picker can include:
+
+- hosted/API providers configured through the normal MendCode auth path;
+- the upstream `opencode` provider surface when available;
+- local CLI-backed providers such as `Claude Code`.
+
+`Claude Code` is a local CLI bridge. MendCode validates that the `claude`
+binary is installed, that `claude auth status --json` reports an authenticated
+local account, and then exposes version-compatible Claude Code models through
+the normal model picker. Optional config can override the binary path, home
+path, and launch arguments for machines that keep Claude Code state outside the
+default shell environment.
+
+Example provider options:
+
+```jsonc
+{
+  "provider": {
+    "claude-code": {
+      "options": {
+        "binaryPath": "claude",
+        "homePath": "",
+        "launchArgs": ""
+      }
+    }
+  }
+}
+```
+
+Keep this config free of secrets. It should point to local tools and local state
+only; the CLI remains responsible for its own login/session files.
+
 ## Configuration Files
 
 Common MendCode config paths:

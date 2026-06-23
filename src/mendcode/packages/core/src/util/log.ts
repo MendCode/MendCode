@@ -17,6 +17,8 @@ const levelPriority: Record<Level, number> = {
   ERROR: 3,
 }
 const keep = 10
+const defaultMaxFileBytes = 16 * 1024 * 1024
+const defaultMaxEntryBytes = 128 * 1024
 
 let level: Level = "INFO"
 
@@ -54,9 +56,32 @@ let logpath = ""
 export function file() {
   return logpath
 }
-let write = (msg: any) => {
+let write: (msg: string) => number | Promise<number> = (msg) => {
   process.stderr.write(msg)
   return msg.length
+}
+
+function envBytes(name: string, fallback: number) {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+}
+
+function truncateEntry(msg: string, maxBytes: number) {
+  if (Buffer.byteLength(msg) <= maxBytes) return msg
+  let next = msg.slice(0, Math.max(0, maxBytes - 256))
+  while (Buffer.byteLength(next) > maxBytes - 128 && next.length > 0) {
+    next = next.slice(0, Math.floor(next.length * 0.9))
+  }
+  return next.replace(/\n?$/, "") + " [log entry truncated]\n"
+}
+
+function streamWrite(stream: ReturnType<typeof createWriteStream>, msg: string) {
+  return new Promise<number>((resolve, reject) => {
+    stream.write(msg, (err) => {
+      if (err) reject(err)
+      else resolve(Buffer.byteLength(msg))
+    })
+  })
 }
 
 export async function init(options: Options) {
@@ -69,13 +94,27 @@ export async function init(options: Options) {
   )
   await fs.truncate(logpath).catch(() => {})
   const stream = createWriteStream(logpath, { flags: "a" })
-  write = async (msg: any) => {
-    return new Promise((resolve, reject) => {
-      stream.write(msg, (err) => {
-        if (err) reject(err)
-        else resolve(msg.length)
-      })
-    })
+  const maxFileBytes = envBytes("MENDCODE_LOG_MAX_BYTES", defaultMaxFileBytes)
+  const maxEntryBytes = envBytes("MENDCODE_LOG_ENTRY_MAX_BYTES", defaultMaxEntryBytes)
+  let bytesWritten = 0
+  let capped = false
+  write = async (input) => {
+    if (capped) return 0
+    const msg = truncateEntry(String(input), maxEntryBytes)
+    const bytes = Buffer.byteLength(msg)
+    if (bytesWritten + bytes > maxFileBytes) {
+      capped = true
+      const notice = `WARN  ${new Date().toISOString().split(".")[0]} +0ms service=log file log cap reached; suppressing further file logs max_bytes=${maxFileBytes}\n`
+      const noticeBytes = Buffer.byteLength(notice)
+      if (bytesWritten + noticeBytes <= maxFileBytes) {
+        bytesWritten += noticeBytes
+        await streamWrite(stream, notice)
+      }
+      return 0
+    }
+    bytesWritten += bytes
+    await streamWrite(stream, msg)
+    return bytes
   }
 }
 

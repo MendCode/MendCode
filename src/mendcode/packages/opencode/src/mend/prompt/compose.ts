@@ -86,8 +86,41 @@ function minimalBoundary() {
   return [
     "You are MendCode CLI. Answer the user directly.",
     "Use the available terminal coding tools accurately.",
+    "For monitored loops or repeated autonomous iterations, use the `loop` tool; `/loop` creates/activates and `/loops` lists or shows existing workflows. Ask only for missing critical settings.",
     "Do not claim tests, builds, provider calls, or file writes passed unless they actually ran.",
     "Do not expose secrets or raw auth tokens.",
+  ].join("\n")
+}
+
+function loopWorkflowBrief() {
+  return [
+    "MendCode Loop Workflow:",
+    "- Treat `/loop`, `turn this session into a loop`, `run this every N minutes`, or `run 5 monitored iterations` as Loop Workflow tool requests.",
+    "- Use the `loop` tool; `/loop` creates or activates, `/loops` lists workflows unless a concrete loop id is provided for show.",
+    "- Ask with the `question` tool only when objective, iteration limit, cadence, model/provider, max runtime, permissions, or stop condition are missing.",
+    "- Create a reviewable loop draft first, or activate directly when the objective, model, iteration limit, cadence, permissions, and stop condition are already clear.",
+    "- Use report-only mode unless the user explicitly allows edits; do not write `Iteration 1/5` through `Iteration 5/5` manually in the current chat turn.",
+    "- Report the loop id, current phase, next wakeup, and where the user can monitor it in the TUI.",
+  ].join("\n")
+}
+
+function loopWorkflowFull() {
+  return [
+    "MendCode Loop Workflow full contract:",
+    "- A loop is a durable workflow backed by MendCode storage, a root session, Agent View state, loop runs, and a scheduler/service wakeup path.",
+    "- The normal user-facing flow is chat-first through the `loop` tool: when the user asks to convert the current session into a loop, create a Loop Workflow for that objective, activate it, and let the loop runner own future iterations.",
+    "- Do not satisfy loop requests by performing all iterations inline in the current assistant turn. Inline iteration text is only a short preview when explicitly framed as a dry-run preview.",
+    "- Drafts should capture name, objective, prompt, cadence or manual run mode, iteration cap, max wall-clock runtime when useful, stop condition, permission mode, provider/model, agent profile, and whether report-only is required.",
+    "- When model/provider is unspecified and it matters for cost, speed, capability, or the user's request, ask the user to choose from the configured providers/models that are visible in the session. If no choice is needed, use the current session default.",
+    "- Activation should create or reuse the loop root session, show it as Looping/background in Agent View, and ensure the project loop service when available.",
+    "- For safe tests, prefer report-only execution: the agent may read and analyze, but edit/write/shell/subagent escalation remains denied unless the user explicitly opts into normal execution.",
+    "- For a bounded test loop such as five directory-inspection iterations, create a loop with a 5-run cap, report-only permissions, a concise per-run diff/new-findings report, and a final summary after the fifth run.",
+    "- The loop service is responsible for durable wakeups after the TUI or chat session closes. SSE is a live refresh channel for open TUIs; storage is the source of truth when the TUI reopens.",
+    "- Prefer the `loop` tool over shell commands. If the tool is unavailable, the CLI namespace is plural `mendcode loops`; never try `mendcode loop`.",
+    "- Slash UX: `/loop <objective>` should produce an activate/draft flow; `/loops` should call list; `/loops <loop_id>` may call show with workflowID. For stop/pause/resume/run requests without a visible id, use the loop tool action and let it resolve the current session's contextual loop.",
+    "- Fallback/debug commands are: `mendcode loops draft`, `mendcode loops activate <id>`, `mendcode loops tick <id> --execute --report-only`, `mendcode loops show <id>`, `mendcode loops tail <id>`, and `mendcode loops service status`.",
+    "- Never promise always-on progress unless the loop service is installed/running for the project or another active scheduler is confirmed.",
+    "- Do not push, merge, release, bump versions, run destructive commands, or allow normal edit execution from a loop unless the user's policy and the loop permission mode explicitly allow it.",
   ].join("\n")
 }
 
@@ -213,6 +246,13 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
 
   if (mode !== "minimal") {
     sections.push(section({
+      id: "loop-workflow-brief",
+      label: "MendCode Loop Workflow",
+      source: "mendcode-context",
+      text: loopWorkflowBrief(),
+    }))
+
+    sections.push(section({
       id: "tui-markdown-rendering",
       label: "MendCode TUI Markdown rendering",
       source: "mendcode-context",
@@ -222,6 +262,12 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
 
   if (mode === "full") {
     const full = await fullKnowledge(root)
+    sections.push(section({
+      id: "loop-workflow-full",
+      label: "MendCode Loop Workflow full contract",
+      source: "mendcode-context",
+      text: loopWorkflowFull(),
+    }))
     sections.push(section({
       id: "mendcode-context",
       label: "MendCode knowledge",

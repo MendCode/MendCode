@@ -247,7 +247,7 @@ export function presentationReasoningVisible(profile: MendTuiProfile) {
 export function shouldDisplayReasoning(profile: MendTuiProfile, input: { completed: boolean; showThinking?: boolean }) {
   if (profile.presentation.profile === "raw") return true
   if (profile.presentation.profile === "mendcode") {
-    return profile.presentation.reasoning.defaultVisibility !== "hidden" && input.completed
+    return profile.presentation.reasoning.defaultVisibility !== "hidden"
   }
   if (!presentationReasoningVisible(profile)) return false
   return input.completed && input.showThinking === true
