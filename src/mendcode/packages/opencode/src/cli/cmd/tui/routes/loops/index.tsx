@@ -24,7 +24,7 @@ type LoopWorkflow = {
   nextWakeup?: number
   spec?: {
     trigger?: { mode?: string; intervalMs?: number }
-    model?: { providerID?: string; modelID?: string }
+    model?: { providerID?: string; modelID?: string; variant?: string }
   }
   policy?: { maxTurns?: number }
   metrics?: { turns?: number; failures?: number }
@@ -79,8 +79,13 @@ function stateLabel(workflow: Pick<LoopWorkflow, "state" | "phase">) {
 
 function progressLabel(workflow: LoopWorkflow) {
   const turns = workflow.metrics?.turns ?? 0
+  const state = workflow.state.toLowerCase()
+  const phase = workflow.phase?.toLowerCase()
+  const running = state === "working" || phase === "executing"
+  const visible = running ? turns + 1 : turns
   const maxTurns = workflow.policy?.maxTurns
-  return typeof maxTurns === "number" ? `${turns}/${maxTurns}` : `${turns}/open`
+  const current = typeof maxTurns === "number" ? Math.min(visible, maxTurns) : visible
+  return typeof maxTurns === "number" ? `${current}/${maxTurns}` : `${current}/open`
 }
 
 function relativeWakeup(workflow: LoopWorkflow) {
@@ -104,14 +109,27 @@ function displayModel(providers: Parameters<typeof Model.name>[0], model: { prov
   return model.variant ? `${name}/${model.variant}` : name
 }
 
+function optionalModelVariant(model: unknown) {
+  if (!model || typeof model !== "object" || !("variant" in model)) return undefined
+  return typeof model.variant === "string" ? model.variant : undefined
+}
+
 function modelLabel(
   providers: Parameters<typeof Model.name>[0],
   workflow: LoopWorkflow,
   rootSession?: LoopSnapshot["rootSession"],
 ) {
   const model = workflow.spec?.model
-  if (model?.providerID && model.modelID) return displayModel(providers, model)
-  if (rootSession?.model) return `default: ${displayModel(providers, rootSession.model)}`
+  if (model?.providerID && model.modelID) {
+    return displayModel(providers, { providerID: model.providerID, modelID: model.modelID, variant: optionalModelVariant(model) })
+  }
+  if (rootSession?.model?.providerID && rootSession.model.modelID) {
+    return `default: ${displayModel(providers, {
+      providerID: rootSession.model.providerID,
+      modelID: rootSession.model.modelID,
+      variant: optionalModelVariant(rootSession.model),
+    })}`
+  }
   return "default: current session model"
 }
 
@@ -122,6 +140,11 @@ function eventTimeLabel(event: LoopEvent) {
 
 function compact(value: string | undefined, width: number) {
   return Locale.truncateMiddle((value || "").replace(/\s+/g, " ").trim(), Math.max(4, width))
+}
+
+function fixedCell(value: string | undefined, width: number) {
+  const text = compact(value, width)
+  return text + " ".repeat(Math.max(0, width - Bun.stringWidth(text)))
 }
 
 function timestamp(workflow: LoopWorkflow) {
@@ -621,10 +644,11 @@ function TimelineEvent(props: { event: LoopEvent; width: number; last: boolean }
 function DetailRow(props: { label: string; value: string; width: number; emphasize?: boolean }) {
   const { theme } = useTheme()
   const labelWidth = 10
+  const valueWidth = createMemo(() => Math.max(8, props.width - labelWidth - 1))
   return (
     <box flexDirection="row" height={1} overflow="hidden">
-      <text fg={theme.textMuted} width={labelWidth} wrapMode="none">{props.label.padEnd(labelWidth)}</text>
-      <text fg={props.emphasize ? theme.secondary : theme.text} wrapMode="none">{compact(props.value, Math.max(8, props.width - labelWidth - 1))}</text>
+      <text fg={theme.textMuted} width={labelWidth} wrapMode="none">{fixedCell(props.label, labelWidth)}</text>
+      <text fg={props.emphasize ? theme.secondary : theme.text} width={valueWidth()} wrapMode="none">{fixedCell(props.value, valueWidth())}</text>
     </box>
   )
 }

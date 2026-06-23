@@ -311,13 +311,8 @@ export async function loopServiceUninstall(args: LoopServiceArgs) {
 }
 
 export async function loopServiceStart(args: LoopServiceArgs) {
-  const plan = loopServicePlan(args)
+  const plan = await loopServiceInstall(args)
   if (platform() !== plan.platform) throw new Error(`Loop service start target is ${plan.platform}, current platform is ${process.platform}.`)
-  try {
-    await readFile(plan.definitionPath, "utf8")
-  } catch {
-    await loopServiceInstall(args)
-  }
   const existing = serviceLoaded(plan)
   if (existing.loaded) runServiceCommand(plan, plan.stopCommand)
   const result = runServiceCommand(plan, plan.startCommand)
