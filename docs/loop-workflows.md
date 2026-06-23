@@ -4,6 +4,16 @@ Loop Workflows are durable, monitorable agent loops for work that should keep mo
 
 The design goal is simple: a user can turn an objective into a loop, see it in Agent View, inspect every wakeup, and choose how much execution power the loop gets.
 
+![MendCode Loop Workflow receipt in chat](assets/screenshots/loop-workflow-created.png)
+
+![MendCode Loop Workflows dashboard](assets/screenshots/loop-workflows-dashboard.png)
+
+## What The Screenshots Show
+
+The receipt view confirms that a report-only workflow has been created, shows the durable loop id, cadence, iteration limit, next wakeup, and the loop card that can be opened from chat.
+
+The dashboard view shows the active loop list, current iteration progress, next wakeup, execution mode, linked root session, recent runs, and journal events. It is the persistent monitor surface for checking whether a loop is sleeping, running, paused, or ready for inspection.
+
 ## Mental Model
 
 A loop has four layers:
