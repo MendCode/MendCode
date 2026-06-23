@@ -74,6 +74,22 @@ function reportOnlyTools() {
   }
 }
 
+const reportOnlyApprovalGates = ["edit", "write", "apply_patch", "shell", "subagent"]
+const editAllowedApprovalGates = ["push", "merge", "release", "version-bump", "external-send", "destructive-shell", "broad-refactor"]
+
+function workflowIsReportOnly(workflow: LoopWorkflow.Info) {
+  const gates = workflow.spec.gates ?? []
+  if (gates.some((gate) => /report-only|do not edit/i.test(gate))) return true
+  const approvals = new Set(workflow.policy.requireApprovalFor ?? [])
+  return reportOnlyApprovalGates.every((gate) => approvals.has(gate))
+}
+
+function workflowExplicitlyAllowsEdits(workflow: LoopWorkflow.Info) {
+  const approvals = new Set(workflow.policy.requireApprovalFor ?? [])
+  if (workflowIsReportOnly(workflow)) return false
+  return editAllowedApprovalGates.some((gate) => approvals.has(gate))
+}
+
 function promptModel(workflow: LoopWorkflow.Info) {
   const model = workflow.spec.model
   if (!model) return undefined
@@ -124,14 +140,15 @@ export const layer = Layer.effect(
           })),
         )
       }
+      const reportOnly = workflowIsReportOnly(current) || (input.reportOnly === true && !workflowExplicitlyAllowsEdits(current))
       const result = yield* prompt
         .prompt({
           sessionID: current.rootSessionID,
           agent: current.spec.agent,
           model: promptModel(current),
           variant: current.spec.model?.variant,
-          tools: input.reportOnly ? reportOnlyTools() : undefined,
-          parts: [{ type: "text", text: input.reportOnly ? reportOnlyPrompt(current) : iterationPrompt(current) }],
+          tools: reportOnly ? reportOnlyTools() : undefined,
+          parts: [{ type: "text", text: reportOnly ? reportOnlyPrompt(current) : iterationPrompt(current) }],
         })
         .pipe(Effect.exit)
       if (result._tag === "Failure") {

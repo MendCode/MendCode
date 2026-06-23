@@ -115,6 +115,10 @@ export function shouldResumeAfterAutoCompaction(finish: string | undefined) {
   return finish !== "stop"
 }
 
+export function shouldResumeAfterActiveCompaction(_finish: string | undefined) {
+  return true
+}
+
 export function shouldCheckFinishedAssistantForAutoCompaction(input: {
   lastUser: MessageV2.User
   lastFinished: MessageV2.Assistant
@@ -1920,8 +1924,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 agent: lastUser.agent,
                 model: lastUser.model,
                 auto: true,
-                overflow: shouldResumeAfterAutoCompaction(handle.message.finish),
-                resume: shouldResumeAfterAutoCompaction(handle.message.finish),
+                overflow: shouldResumeAfterActiveCompaction(handle.message.finish),
+                resume: shouldResumeAfterActiveCompaction(handle.message.finish),
               })
               return "continue" as const
             }

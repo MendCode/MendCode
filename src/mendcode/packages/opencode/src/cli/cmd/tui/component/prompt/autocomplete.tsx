@@ -514,6 +514,30 @@ export function Autocomplete(props: {
     selected.onSelect?.()
   }
 
+  function completeSlashText() {
+    if (store.visible !== "/") return false
+    const selected = options()[store.selected]
+    if (!selected) return false
+    const slash = selected.display.trim().split(/\s+/)[0]?.replace(/:(mcp|skill)$/, "")
+    if (slash !== "/loop") return false
+
+    const input = props.input()
+    const cursor = input.logicalCursor
+    const previousOffset = input.cursorOffset
+    input.cursorOffset = store.index
+    const start = input.logicalCursor
+    input.cursorOffset = previousOffset
+    input.deleteRange(start.row, start.col, cursor.row, cursor.col)
+    input.insertText(`${slash} `)
+    input.cursorOffset = store.index + Bun.stringWidth(`${slash} `)
+    props.setPrompt((draft) => {
+      draft.input = input.plainText
+    })
+    command.keybinds(true)
+    setStore("visible", false)
+    return true
+  }
+
   function expandDirectory() {
     const selected = options()[store.selected]
     if (!selected) return
@@ -647,6 +671,10 @@ export function Autocomplete(props: {
             return
           }
           if (name === "tab") {
+            if (completeSlashText()) {
+              e.preventDefault()
+              return
+            }
             const selected = options()[store.selected]
             if (selected?.isDirectory) {
               expandDirectory()

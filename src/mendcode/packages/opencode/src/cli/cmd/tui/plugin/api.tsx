@@ -139,6 +139,14 @@ function routeCurrent(route: ReturnType<typeof useRoute>): TuiPluginApi["route"]
       name: "changes",
     }
   }
+  if (route.data.type === "loops") {
+    return {
+      name: "loops",
+      params: {
+        selectedID: route.data.selectedID,
+      },
+    }
+  }
 
   return {
     name: route.data.id,

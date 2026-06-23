@@ -28,13 +28,15 @@ function run<A, E>(fx: Effect.Effect<A, E, LoopWorkflowService>) {
 
 function runRunner<A, E>(fx: Effect.Effect<A, E, LoopRunner.Service | LoopWorkflowService | SessionPrompt.Service>) {
   let prompts = 0
+  const promptCalls: any[] = []
   const promptLayer = Layer.succeed(
     SessionPrompt.Service,
     SessionPrompt.Service.of({
       cancel: () => Effect.void,
-      prompt: () =>
+      prompt: (input: any) =>
         Effect.sync(() => {
           prompts++
+          promptCalls.push(input)
           return { info: {}, parts: [] } as any
         }),
       loop: () => Effect.succeed({ info: {}, parts: [] } as any),
@@ -44,7 +46,7 @@ function runRunner<A, E>(fx: Effect.Effect<A, E, LoopRunner.Service | LoopWorkfl
     }),
   )
   return Effect.runPromise(fx.pipe(Effect.provide(Layer.mergeAll(loopWorkflowLayer, LoopRunner.defaultLayer, promptLayer)))).then(
-    (value) => ({ value, prompts }),
+    (value) => ({ value, prompts, promptCalls }),
   )
 }
 
@@ -386,6 +388,30 @@ describe("loop workflow service", () => {
         expect(executed.value.state).toBe("completed")
         expect(executed.prompts).toBe(1)
         expect((await svc.snapshot(draft.id)).workflow.metrics.turns).toBe(1)
+      },
+    })
+  })
+
+  test("loop runner does not force report-only for workflows that explicitly allow implementation edits", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Implementation loop",
+          objective: "Code and test the requested fix.",
+          policy: {
+            maxTurns: 3,
+            requireApprovalFor: ["push", "merge", "release", "version-bump", "external-send", "destructive-shell", "broad-refactor"],
+          },
+        })
+        await svc.activate(draft.id)
+
+        const executed = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true, reportOnly: true })))
+        expect(executed.value.state).toBe("completed")
+        expect(executed.prompts).toBe(1)
+        expect(executed.promptCalls[0]?.tools).toBeUndefined()
+        expect(executed.promptCalls[0]?.parts?.[0]?.text).not.toContain("REPORT-ONLY MODE")
       },
     })
   })
