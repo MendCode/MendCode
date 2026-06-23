@@ -299,6 +299,10 @@ review workspace, not just static patch text: move by file, hunk, or line; add
 comments; reload the diff; then press `Esc` or `q` to return to chat without
 stopping the active session.
 
+<p align="center">
+  <img src="docs/assets/screenshots/changes-review-diff.png" alt="MendCode Changes Review diff workspace" width="980">
+</p>
+
 ```text
 /changes
 ```
@@ -317,6 +321,14 @@ Loop Workflows are durable, monitorable agent loops for objectives that should
 keep moving across controlled iterations. A loop starts as a draft, becomes an
 activated root session, records run/journal events, appears in Agent View, and
 can be woken manually or by a per-project background service.
+
+<p align="center">
+  <img src="docs/assets/screenshots/loop-workflow-created.png" alt="MendCode Loop Workflow receipt in chat" width="980">
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/loop-workflows-dashboard.png" alt="MendCode Loop Workflows dashboard" width="980">
+</p>
 
 ```bash
 mendcode loops examples

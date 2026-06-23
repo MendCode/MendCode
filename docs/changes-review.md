@@ -14,6 +14,8 @@ Open it from the command palette or slash command:
 /review-changes
 ```
 
+![MendCode Changes Review diff workspace](assets/screenshots/changes-review-diff.png)
+
 ## What The View Shows
 
 The route loads the active workspace diff and renders it as a terminal-native
