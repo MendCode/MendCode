@@ -115,6 +115,13 @@ export function shouldResumeAfterAutoCompaction(finish: string | undefined) {
   return finish !== "stop"
 }
 
+export function shouldCheckFinishedAssistantForAutoCompaction(input: {
+  lastUser: MessageV2.User
+  lastFinished: MessageV2.Assistant
+}) {
+  return input.lastFinished.summary !== true && input.lastUser.id < input.lastFinished.id
+}
+
 function hasRunnableToolCalls(parts: MessageV2.Part[]) {
   return parts.some((part) => part.type === "tool" && !part.metadata?.providerExecuted)
 }
@@ -1748,7 +1755,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
           if (
             lastFinished &&
-            lastFinished.summary !== true &&
+            shouldCheckFinishedAssistantForAutoCompaction({ lastUser, lastFinished }) &&
             (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
           ) {
             if (shouldSkipAutoCompaction(msgs)) {

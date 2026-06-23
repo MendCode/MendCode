@@ -443,6 +443,10 @@ exports[`tool parameters JSON Schema (wire shape) review 1`] = `
       ],
       "type": "string",
     },
+    "blockIndex": {
+      "description": "Zero-based diff block index for navigate or comment_add.",
+      "type": "number",
+    },
     "body": {
       "description": "Comment body for comment_add.",
       "type": "string",
@@ -452,18 +456,14 @@ exports[`tool parameters JSON Schema (wire shape) review 1`] = `
       "enum": [
         "next-file",
         "prev-file",
-        "next-hunk",
-        "prev-hunk",
+        "next-block",
+        "prev-block",
       ],
       "type": "string",
     },
     "filePath": {
       "description": "File path for file, navigate, comment_add, or comment_clear.",
       "type": "string",
-    },
-    "hunkIndex": {
-      "description": "Zero-based hunk index for navigate or comment_add.",
-      "type": "number",
     },
     "includePatch": {
       "description": "For file action only. Include raw patch for the selected or requested file.",

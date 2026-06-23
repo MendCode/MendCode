@@ -2,11 +2,15 @@ import { afterEach, expect, test } from "bun:test"
 import { chmodSync, mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import path from "path"
+import { hasStyledHexColors } from "../../../src/cli/cmd/tui/component/styled-plan-markdown"
 import {
   hasMermaidFence,
   planReviewInlineTitle,
   renderPlanMarkdown,
   renderPlanMarkdownStatic,
+  renderPlanMarkdownStreaming,
+  renderStreamingMarkdownTail,
+  streamingMarkdownCommitIndex,
 } from "../../../src/cli/cmd/tui/util/plan-markdown"
 import { styledPlanMarkdownSegments, visibleStyledPlanMarkdownLines } from "../../../src/cli/cmd/tui/util/styled-plan-lines"
 
@@ -469,6 +473,180 @@ test("renderPlanMarkdownStatic renders non-mermaid chat tables synchronously", (
   expect(result).not.toContain("| Archivo | Acción | Cambio |")
 })
 
+test("streaming markdown keeps unfinished blocks as a plain tail", () => {
+  const markdown = ["## Listo", "", "| Archivo | Acción |", "| --- | --- |", "| `src/main.cpp` | Modificado |"].join("\n")
+
+  const result = renderPlanMarkdownStreaming(markdown, 96, { tableMode: "grid", markdownMode: "tables-only" })
+  expect(result.content).toBe("## Listo\n\n")
+  expect(result.tail).toContain("| Archivo | Acción |")
+  expect(result.tail).toContain("| `src/main.cpp` | Modificado |")
+  expect(result.content).not.toContain("┌")
+})
+
+test("streaming markdown freezes completed tables and keeps later tokens in the tail", () => {
+  const markdown = [
+    "## Listo",
+    "",
+    "| Archivo | Acción |",
+    "| --- | --- |",
+    "| `src/main.cpp` | Modificado |",
+    "",
+    "Siguiente pa",
+  ].join("\n")
+
+  const result = renderPlanMarkdownStreaming(markdown, 96, { tableMode: "grid", markdownMode: "tables-only" })
+  expect(result.content).toContain("```text")
+  expect(result.content).toContain("┌")
+  expect(result.content).toContain("src/main.cpp")
+  expect(result.tail).toBe("Siguiente pa")
+})
+
+test("streaming markdown keeps unfinished fences out of the rendered prefix", () => {
+  const openFence = renderPlanMarkdownStreaming("Antes\n\n```ts\nconst value = 1", 96, {
+    tableMode: "grid",
+    markdownMode: "tables-only",
+  })
+  expect(openFence.content).toBe("Antes\n\n")
+  expect(openFence.tail).toBe("```ts\nconst value = 1")
+
+  const closedFence = renderPlanMarkdownStreaming("Antes\n\n```ts\nconst value = 1\n```\nTail", 96, {
+    tableMode: "grid",
+    markdownMode: "tables-only",
+  })
+  expect(closedFence.content).toContain("```ts")
+  expect(closedFence.content).toContain("const value = 1")
+  expect(closedFence.tail).toBe("Tail")
+})
+
+test("streaming markdown tail renders active tables without waiting for block completion", () => {
+  const tail = [
+    "| Archivo | Acción | Cambio |",
+    "| --- | --- | --- |",
+    "| `src/main.cpp` | Modificado | Cambiando token",
+  ].join("\n")
+
+  const rendered = renderStreamingMarkdownTail(tail, 96, { tableMode: "grid", markdownMode: "tables-only" })
+  expect(rendered).toContain("┌")
+  expect(rendered).toContain("src/main.cpp")
+  expect(rendered).toContain("Cambiando token")
+  expect(rendered).not.toContain("```text")
+})
+
+test("streaming markdown tail keeps hex colors available for live table styling", () => {
+  const tail = ["| Nombre | Color |", "| --- | --- |", "| Selene | #8B5CF6 |"].join("\n")
+
+  const rendered = renderStreamingMarkdownTail(tail, 96, { tableMode: "grid", markdownMode: "tables-only" })
+  expect(rendered).toContain("#8B5CF6")
+  expect(hasStyledHexColors(rendered)).toBe(true)
+})
+
+test("streaming markdown tail renders stable headings after completion without remounting", () => {
+  const rendered = renderStreamingMarkdownTail("## Historia breve\n\nTexto final", 96, {
+    tableMode: "grid",
+    markdownMode: "tables-only",
+  }, { finalized: true })
+
+  expect(rendered).toContain("Historia breve")
+  expect(rendered).toContain("──────────────")
+  expect(rendered).not.toContain("## Historia breve")
+})
+
+test("streaming markdown tail renders finalized inline markdown and fences without remounting", () => {
+  const rendered = renderStreamingMarkdownTail(
+    [
+      "No parece mal.",
+      "",
+      "- `Pulse acum.` / pulsos: **igual en todas las filas**",
+      "- Entonces `Consumo delta`: **0**, correctamente.",
+      "",
+      "```txt",
+      "consumo_delta = lectura_actual_acumulada - lectura_anterior_acumulada",
+      "```",
+      "",
+      "1. **Consumo real oficial**",
+      "   Se arregla en el origen.",
+    ].join("\n"),
+    96,
+    { tableMode: "grid", markdownMode: "tables-only" },
+    { finalized: true },
+  )
+
+  expect(rendered).toContain("• Pulse acum. / pulsos: igual en todas las filas")
+  expect(rendered).toContain("• Entonces Consumo delta: 0, correctamente.")
+  expect(rendered).toContain("consumo_delta = lectura_actual_acumulada - lectura_anterior_acumulada")
+  expect(rendered).toContain("1. Consumo real oficial")
+  expect(rendered).not.toContain("```")
+  expect(rendered).not.toContain("**")
+  expect(rendered).not.toContain("`Pulse acum.`")
+})
+
+test("streaming markdown tail wraps long text lines to the render width", () => {
+  const rendered = renderStreamingMarkdownTail(
+    "Dile: No es problema del dashboard; el medidor Pulse está enviando lecturas con el totalizador y pulsos sin avanzar, por eso Teca calcula consumo 0 aunque sí reciba datos.",
+    72,
+    { tableMode: "grid", markdownMode: "tables-only" },
+    { finalized: true },
+  )
+
+  expect(rendered.split("\n").length).toBeGreaterThan(1)
+  for (const line of rendered.split("\n")) {
+    expect(Bun.stringWidth(line)).toBeLessThanOrEqual(72)
+  }
+})
+
+test("streaming markdown tail renders closed inline markdown on the live final line", () => {
+  const rendered = renderStreamingMarkdownTail(
+    'Dile:\n\n**"Sí, ya quedó ajustado: la gráfica sale por horas."**',
+    96,
+    { tableMode: "grid", markdownMode: "tables-only" },
+  )
+
+  expect(rendered).toContain('"Sí, ya quedó ajustado: la gráfica sale por horas."')
+  expect(rendered).not.toContain("**")
+})
+
+test("streaming markdown tail leaves the active final line unstyled while typing", () => {
+  const rendered = renderStreamingMarkdownTail("## Historia breve\n\n## Still typing", 96, {
+    tableMode: "grid",
+    markdownMode: "tables-only",
+  })
+
+  expect(rendered).toContain("Historia breve")
+  expect(rendered).toContain("──────────────")
+  expect(rendered).toContain("## Still typing")
+})
+
+test("streaming markdown tail keeps live table width stable as cell text grows", () => {
+  const first = renderStreamingMarkdownTail(
+    ["| Archivo | Acción | Cambio |", "| --- | --- | --- |", "| `src/main.cpp` | Modificado | Ca"].join("\n"),
+    96,
+    { tableMode: "grid", markdownMode: "tables-only" },
+  )
+  const second = renderStreamingMarkdownTail(
+    ["| Archivo | Acción | Cambio |", "| --- | --- | --- |", "| `src/main.cpp` | Modificado | Cambiando tokens largos"].join("\n"),
+    96,
+    { tableMode: "grid", markdownMode: "tables-only" },
+  )
+
+  expect(first.split("\n")[0]).toBe(second.split("\n")[0])
+})
+
+test("streaming markdown reuses frozen rendered content while only the tail changes", () => {
+  const first = renderPlanMarkdownStreaming("## Bloque\n\nTail uno", 96, {
+    tableMode: "grid",
+    markdownMode: "tables-only",
+  })
+  const second = renderPlanMarkdownStreaming("## Bloque\n\nTail dos", 96, {
+    tableMode: "grid",
+    markdownMode: "tables-only",
+  }, first.state)
+
+  expect(streamingMarkdownCommitIndex("## Bloque\n\nTail dos")).toBe("## Bloque\n\n".length)
+  expect(second.content).toBe(first.content)
+  expect(second.state).toBe(first.state)
+  expect(second.tail).toBe("Tail dos")
+})
+
 test("styled session markdown separates generated tables from adjacent headings", () => {
   const markdown = [
     "## Resumen de cambios",
@@ -532,6 +710,11 @@ test("styled plan markdown hides generated text fences around hex tables", () =>
     { kind: "text", content: "│ Hex │ Preview │\n│ #1E88E5 │ #1E88E5 │" },
     { kind: "markdown", content: "After" },
   ])
+})
+
+test("styled plan markdown does not colorize macro-style hashtags", () => {
+  expect(hasStyledHexColors("#define TANK_USE_MOCK_SENSOR 1")).toBe(false)
+  expect(hasStyledHexColors("Use #abc here")).toBe(true)
 })
 
 test("renderPlanMarkdownStatic preserves non-table markdown in rich chat mode", () => {

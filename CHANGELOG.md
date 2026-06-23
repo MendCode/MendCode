@@ -1,8 +1,38 @@
 # Changelog
 
-## 0.1.17 - 2026-06-20
+## 0.1.17 - 2026-06-23
 
-- Start the local `0.1.17` development line for Loop Workflow planning and implementation work.
+### Added
+
+- Loop Workflows: durable workflow records, draft/activate/tick lifecycle, run journals, loop root sessions, Agent View grouping, terminal monitor, HTTP routes, SDK types, and a built-in `loop` assistant tool.
+- Safe loop execution modes: dry-run ticks, `--execute --report-only` wakeups that deny mutation/shell/subagent tools, full execution for trusted contexts, and per-project OS service support for macOS LaunchAgent, Linux user systemd, and Windows Task Scheduler.
+- Built-in loop templates for PR watching, CI repair, research digests, and repo maintenance, plus CLI/status/monitor docs for loop lifecycle, daemon, service, logs, and troubleshooting.
+- Changes Review: a MendCode-native `/changes` TUI route for working-tree diffs with file navigation, diff-block navigation, line selection, reload, responsive layouts, inline comments, and stale-comment reconciliation.
+- Assistant-visible review context through bounded `<mendcode_review_context>` summaries and a `review` tool for current selection, file summaries, navigation, reload, comment creation, listing, and clearing.
+- Local review-state persistence keyed by workspace root so comments and selection can be recovered across route/process boundaries without writing raw patches into the repository.
+- Richer Usage Insights: selected-day keyboard/mouse navigation, a GitHub-style daily token grid, month markers, selected-day token/session/prompt/word/file/time details, improved clock layout, and expanded aggregation for tool/runtime activity.
+- Project Usage Insights shortcuts and docs for global, project, and directory scopes.
+- Streaming Markdown rendering for assistant output so headings, inline formatting, tables, code fences, Mermaid text, and hex color swatches can appear progressively without waiting for a completed message.
+- Claude Code CLI provider discovery and validation: provider list entry, local CLI auth validation, version-aware model listing, optional binary/home/launch-arg settings, and API-provider wiring once the local CLI is authenticated.
+- Frontmatter argument-hint parsing and prompt metadata improvements for command/prompt surfaces.
+
+### Changed
+
+- Render compaction summaries through the styled Markdown path so tables and formatted summaries stay readable in the session timeline.
+- Rename provider setup surfaces from generic `Provider` to `Connect Provider` where the UI is specifically about connecting/authenticating a provider.
+- Refresh README screenshots, feature mapping, setup/configuration docs, and usage-insights docs for the 0.1.17 surfaces.
+- Update package, lockfile, and Zed extension metadata to `0.1.17`.
+
+### Fixed
+
+- Prevent incomplete streaming Markdown tables and code fences from rendering early before they can display coherently.
+- Deduplicate live shell-output deltas so repeated command output does not replay the same latest line while a tool is still streaming.
+- Report missing Claude Code CLI binaries as validation errors instead of letting provider discovery throw raw `ENOENT` exceptions.
+- Preserve the `0.1.16` reasoning-history behavior after the local OpenAI reasoning replay experiment was reverted.
+
+### Tests
+
+- Add coverage for loop services/routes/session/tool behavior, Changes Review state/actions/comments/context, Usage Insights selection and aggregation, streaming Plan Markdown, shell-output replay prevention, Claude Code provider settings/validation, prompt metadata, and TUI route behavior.
 
 ## 0.1.16 - 2026-06-20
 

@@ -17,11 +17,12 @@ The pitch is not “another chat box.” The pitch is a configurable coding term
 | Plan Mode                       | The agent presents a Markdown plan inside a TUI review modal; the user can approve, edit, comment, or reject before implementation starts. Approval switches into the configured implementation agent. | [Plan Mode](plan-mode.md)                                                                |
 | Changes Review                  | `/changes` opens a responsive TUI diff workspace with file/block/line navigation, comments, reload, return-to-chat behavior, and agent-visible review context between model turns.                     | [Changes Review](changes-review.md)                                                      |
 | Loop Workflows                  | Durable, monitorable agent loops with draft/activate/tick controls, Agent View loop sessions, terminal monitor, report-only safety mode, and a per-project OS background service.                      | [Loop Workflows](loop-workflows.md)                                                      |
-| Usage Insights                  | Local activity dashboard for tokens, sessions, AI time, words, tools, agents, models, changed files, daily activity, cache mix, and optional weather.                                                  | [Usage Insights](usage-insights.md)                                                      |
+| Usage Insights                  | Local activity dashboard for tokens, sessions, AI time, words, tools, agents, models, changed files, daily activity, selected-day detail, cache mix, and optional weather.                              | [Usage Insights](usage-insights.md)                                                      |
 | Approval-gated memory           | Memory can retrieve context without silently turning every session into permanent state. Generated memories become reviewable proposals first.                                                         | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory)       |
 | Memory Center, graph, and Dream | Route-level memory workspace with saved/pending memories, categories, policy controls, Dream logs, and constrained memory side chat.                                                                   | [Memory Center](memory-center.md)                                                        |
 | Smart permissions               | Choose `approval`, `smart`, or `full_access`. Smart mode can route risky permission decisions through a configured `permissionReviewer` role.                                                          | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory)       |
 | Model roles                     | Configure task-specific roles for default, small, plan, build, review, subagent, title, compaction, summary, memory extraction, Dream, memory side chat, and permission review.                        | [CLI, setup, and configuration](cli-setup-configuration.md#models)                       |
+| Local provider bridges          | Connect local provider CLIs such as Claude Code through validated setup/auth surfaces while keeping credentials in local tool state.                                                                    | [CLI, setup, and configuration](cli-setup-configuration.md#connect-provider)             |
 | mflow coordination              | Optional local-first coordination and locks for multiple agents working around the same repo.                                                                                                          | [mflow coordination](mflow.md)                                                           |
 | TSM and worktrees               | Open MendCode in managed/adopted worktrees or TSM terminal workspaces with preview-first safety.                                                                                                       | [TSM and worktrees](tsm-and-worktrees.md)                                                |
 | Plugins and widgets             | Add status entries, editor widgets, slots, command palette entries, slash commands, routes, dialogs, themes, and package-distributed TUI behavior.                                                     | [TUI plugins and widgets](tui-plugins-and-widgets.md)                                    |
@@ -261,6 +262,14 @@ The safe testing path is `--execute --report-only`: MendCode wakes the loop root
 
 See [Loop Workflows](loop-workflows.md) for lifecycle, monitor, Agent View behavior, and service details.
 
+Important release notes for this page:
+
+- loops are durable database records, not just long-running prompts
+- activation creates a root session visible in Agent View under `Looping`
+- run journals record created, activated, wake, started, completed, failed, paused, resumed, and stopped events
+- report-only execution wakes the agent while denying mutation and shell/subagent tools
+- service mode is per project and defaults to report-only for safer background operation
+
 ## Memory, Memory Page, And Dream
 
 Baseline memory behavior:
@@ -310,6 +319,8 @@ It can show:
 
 - global, project, or directory scope
 - daily token heatmap
+- keyboard/mouse day selection
+- selected-day token, cache, session, prompt, word, file, AI time, and tool runtime details
 - sessions and active days
 - user prompts and user words
 - AI generation time
@@ -339,6 +350,31 @@ Or with slash commands:
 /activity
 /project-usage
 ```
+
+## Markdown, Streaming Output, And Shell Feedback
+
+MendCode renders assistant output inside a terminal, so Markdown support has to
+work while text is still streaming and after messages complete.
+
+Current rendering surfaces include:
+
+- headings, lists, links, inline code, bold/italic text, code fences, tables, and blockquotes
+- terminal-friendly Mermaid text diagrams for common chart/diagram shapes
+- styled Plan Mode and compaction summaries
+- progressive streaming Markdown tails that avoid rendering incomplete tables or fences too early
+- hex color swatches in rich Markdown output
+- live shell output that deduplicates replayed deltas while commands are still running
+
+This keeps long model answers, plans, shell commands, and compaction summaries
+readable without waiting for the entire response to finish.
+
+## Local Provider Bridges
+
+MendCode can expose local provider CLIs through the same provider/model setup
+surface used by hosted providers. The Claude Code bridge validates the local
+`claude` binary, checks local CLI auth status, reads version-compatible models,
+and keeps credentials in the Claude Code CLI's own local state instead of
+placing secrets in MendCode packages or repository files.
 
 ## Model Roles
 

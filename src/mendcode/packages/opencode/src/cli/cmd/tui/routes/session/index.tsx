@@ -147,7 +147,13 @@ import {
   userMessageDisplayText,
   type PastedContentDisplayPart,
 } from "./user-message-display"
-import { hasMermaidFence, planReviewInlineTitle, renderPlanMarkdown, renderPlanMarkdownStatic } from "../../util/plan-markdown"
+import {
+  hasMermaidFence,
+  planReviewInlineTitle,
+  renderPlanMarkdown,
+  renderPlanMarkdownStatic,
+  renderStreamingMarkdownTail,
+} from "../../util/plan-markdown"
 
 addDefaultParsers(parsers.parsers)
 
@@ -3863,15 +3869,22 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   const mend = useMendTuiProfile()
   const dimensions = useTerminalDimensions()
   const textPaddingLeft = 3
-  const source = createMemo(() => props.part.text.trim())
   const renderer = createMemo(() => mend.profile.presentation.message.renderer)
+  const streaming = createMemo(() => props.last && !props.message.time.completed)
+  const source = createMemo(() => (streaming() ? props.part.text.trimStart() : props.part.text.trim()))
   const messageWidth = createMemo(() =>
     sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)),
   )
   const markdownWidth = createMemo(() => Math.max(1, messageWidth() - textPaddingLeft))
   const richRenderWidth = createMemo(() => Math.min(markdownWidth(), 100))
-  const streaming = createMemo(() => props.last && !props.message.time.completed)
   const hasMermaid = createMemo(() => hasMermaidFence(source()))
+  const streamingMarkdownContent = createMemo(() => {
+    if (!streaming()) return
+    if (renderer() !== "markdown" && renderer() !== "rich") {
+      return
+    }
+    return { content: "", tail: source() }
+  })
   const markdownStaticContent = createMemo(() => {
     if (renderer() !== "markdown" && renderer() !== "rich") return
     if (streaming()) return
@@ -3888,9 +3901,15 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   const [richContent] = createResource(richInput, async (input) =>
     renderPlanMarkdown(input.text, input.width, { tableMode: "grid", markdownMode: "tables-only" }),
   )
-  const markdownContent = createMemo(() => markdownStaticContent() ?? richContent() ?? source())
+  const markdownContent = createMemo(() => streamingMarkdownContent()?.content ?? markdownStaticContent() ?? richContent() ?? source())
+  const markdownTail = createMemo(() => {
+    const tail = streamingMarkdownContent()?.tail ?? ""
+    return renderStreamingMarkdownTail(tail, richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" }, {
+      finalized: !streaming(),
+    })
+  })
   return (
-    <Show when={source()}>
+    <Show when={source().trim().length > 0}>
       <box
         id={`text-${props.message.id}-${props.part.id}`}
         width={messageWidth()}
@@ -3913,8 +3932,10 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
               conceal={ctx.conceal()}
               fg={theme.markdownText}
               bg={theme.background}
-              stableTextMode={streaming()}
-              colorizeHex={!streaming()}
+              stableTextMode={false}
+              colorizeHex={true}
+              streamingTail={markdownTail()}
+              streamingTailColorizeHex={true}
             />
           </Match>
           <Match when={true}>

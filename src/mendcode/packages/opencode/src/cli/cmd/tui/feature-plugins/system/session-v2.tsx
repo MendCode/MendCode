@@ -36,7 +36,12 @@ import { formatDuration } from "@/util/format"
 import { rawReasoningDisplay, reasoningSummary, shouldDisplayReasoning, unavailableReasoningLabel } from "@/mend/tui/presentation"
 import { sessionContentWidth } from "@/cli/cmd/tui/util/session-layout"
 import { isScrollboxAtBottom } from "@/cli/cmd/tui/util/scroll"
-import { hasMermaidFence, renderPlanMarkdown, renderPlanMarkdownStatic } from "@/cli/cmd/tui/util/plan-markdown"
+import {
+  hasMermaidFence,
+  renderPlanMarkdown,
+  renderPlanMarkdownStatic,
+  renderStreamingMarkdownTail,
+} from "@/cli/cmd/tui/util/plan-markdown"
 import { StyledPlanMarkdown } from "@/cli/cmd/tui/component/styled-plan-markdown"
 import { visibleUserMessageText } from "@/cli/cmd/tui/routes/session/user-message-display"
 
@@ -307,6 +312,15 @@ function ShellMessage(props: { message: SessionMessageShell }) {
 
 function CompactionMessage(props: { message: SessionMessageCompaction }) {
   const { theme, syntax } = useTheme()
+  const dimensions = useTerminalDimensions()
+  const messageWidth = createMemo(() => sessionContentWidth(dimensions().width, false))
+  const contentWidth = createMemo(() => Math.max(1, messageWidth() - 3))
+  const renderWidth = createMemo(() => Math.min(contentWidth(), 100))
+  const summaryContent = createMemo(() => {
+    const summary = props.message.summary?.trim()
+    if (!summary) return ""
+    return renderPlanMarkdownStatic(summary, renderWidth(), { tableMode: "grid", markdownMode: "tables-only" })
+  })
   return (
     <box
       marginTop={1}
@@ -317,16 +331,18 @@ function CompactionMessage(props: { message: SessionMessageCompaction }) {
       flexShrink={0}
     >
       <Show when={props.message.summary}>
-        {(summary) => (
+        {() => (
           <box paddingLeft={3} paddingTop={1}>
-            <code
-              filetype="markdown"
-              drawUnstyledText={false}
-              streaming={false}
+            <StyledPlanMarkdown
               syntaxStyle={syntax()}
-              content={summary().trim()}
+              width={contentWidth()}
+              content={summaryContent()}
+              tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
               conceal={true}
               fg={theme.text}
+              bg={theme.background}
+              stableTextMode={false}
+              colorizeHex={true}
             />
           </box>
         )}
@@ -461,13 +477,20 @@ function AssistantText(props: { messageID: string; part: SessionMessageAssistant
   const dimensions = useTerminalDimensions()
   const textID = createMemo(() => props.part.text.slice(0, 32).replace(/\W+/g, "-"))
   const textPaddingLeft = 3
-  const source = createMemo(() => props.part.text.trim())
   const renderer = createMemo(() => mend.profile.presentation.message.renderer)
+  const streaming = createMemo(() => !props.completed)
+  const source = createMemo(() => (streaming() ? props.part.text.trimStart() : props.part.text.trim()))
   const messageWidth = createMemo(() => sessionContentWidth(dimensions().width, false))
   const markdownWidth = createMemo(() => Math.max(1, messageWidth() - textPaddingLeft))
   const richRenderWidth = createMemo(() => Math.min(markdownWidth(), 100))
-  const streaming = createMemo(() => !props.completed)
   const hasMermaid = createMemo(() => hasMermaidFence(source()))
+  const streamingMarkdownContent = createMemo(() => {
+    if (!streaming()) return
+    if (renderer() !== "rich") {
+      return
+    }
+    return { content: "", tail: source() }
+  })
   const richStaticContent = createMemo(() => {
     if (renderer() !== "rich") return
     if (streaming()) return
@@ -481,9 +504,17 @@ function AssistantText(props: { messageID: string; part: SessionMessageAssistant
   const [richContent] = createResource(richInput, async (input) =>
     renderPlanMarkdown(input.text, input.width, { tableMode: "grid", markdownMode: "tables-only" }),
   )
-  const markdownContent = createMemo(() => (renderer() === "rich" ? (richStaticContent() ?? richContent() ?? source()) : source()))
+  const markdownContent = createMemo(() =>
+    renderer() === "rich" ? (streamingMarkdownContent()?.content ?? richStaticContent() ?? richContent() ?? source()) : source(),
+  )
+  const markdownTail = createMemo(() => {
+    const tail = streamingMarkdownContent()?.tail ?? ""
+    return renderStreamingMarkdownTail(tail, richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" }, {
+      finalized: !streaming(),
+    })
+  })
   return (
-    <Show when={source()}>
+    <Show when={source().trim().length > 0}>
       <box
         width={messageWidth()}
         paddingLeft={textPaddingLeft}
@@ -506,8 +537,10 @@ function AssistantText(props: { messageID: string; part: SessionMessageAssistant
               conceal={true}
               fg={theme.markdownText}
               bg={theme.background}
-              stableTextMode={streaming()}
-              colorizeHex={!streaming()}
+              stableTextMode={renderer() !== "rich"}
+              colorizeHex={renderer() === "rich"}
+              streamingTail={markdownTail()}
+              streamingTailColorizeHex={renderer() === "rich"}
             />
           </Match>
         </Switch>

@@ -14,6 +14,8 @@ import path from "path"
 import {
   buildUsageInsights,
   formatInsightDuration,
+  normalizeUsageInsights,
+  type DailyUsage,
   type SessionInsightInput,
   type UsageInsights,
 } from "@tui/util/usage-insights"
@@ -23,7 +25,8 @@ const DEFAULT_DAYS = 365
 const ADVANCED_DAYS = 365
 const WEATHER_KV_KEY = "stats_weather"
 export const STATS_CACHE_KEY = "stats_insights"
-const HEATMAP_COLUMNS = Math.ceil(DEFAULT_DAYS / 7)
+const HEATMAP_ROWS = 7
+const HEATMAP_COLUMNS = Math.ceil(DEFAULT_DAYS / HEATMAP_ROWS)
 
 type HeatMode = "daily" | "weekly" | "cumulative"
 type StatsScope = "global" | "project" | "directory"
@@ -71,7 +74,7 @@ function intensity(value: number, peak: number) {
 }
 
 function heatGlyph(value: number, peak: number) {
-  return ["·", "░", "▒", "▓", "█"][intensity(value, peak)]
+  return ["■", "■", "■", "■", "■"][intensity(value, peak)]
 }
 
 function heatColor(theme: ReturnType<typeof useTheme>["theme"], value: number, peak: number) {
@@ -147,9 +150,10 @@ function MetricRows(props: {
 function Header(props: { advanced: boolean; scope: StatsScope; narrow: boolean }) {
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
-  const view = props.scope === "global" ? "global stats" : props.scope === "project" ? "project stats" : "directory stats"
+  const view =
+    props.scope === "global" ? "global stats" : props.scope === "project" ? "project stats" : "directory stats"
   const status = `${mend.profile.identity.productName} · ${view} · daily · 365d${props.advanced ? "" : " · compact"}`
-  const shortcuts = "a details · w weather · esc"
+  const shortcuts = "↑/↓ day · ←/→ week · a details · r refresh · w weather · esc"
   return (
     <Switch>
       <Match when={props.narrow}>
@@ -192,7 +196,10 @@ function Header(props: { advanced: boolean; scope: StatsScope; narrow: boolean }
 
 type ThemeColorValue = ReturnType<typeof useTheme>["theme"]["text"]
 
-function ListRows(props: { items: Array<{ name: string; right: string; color?: ThemeColorValue }>; nameWidth: number }) {
+function ListRows(props: {
+  items: Array<{ name: string; right: string; color?: ThemeColorValue }>
+  nameWidth: number
+}) {
   const { theme } = useTheme()
   return (
     <For each={props.items}>
@@ -229,26 +236,22 @@ function BigNumber(props: { label: string; value: string; detail?: string; accen
 }
 
 const CLOCK_DIGITS: Record<string, string[]> = {
-  "0": ["████", "█  █", "█  █", "█  █", "████"],
-  "1": ["  █ ", "  █ ", "  █ ", "  █ ", "  █ "],
-  "2": ["████", "   █", "████", "█   ", "████"],
-  "3": ["████", "   █", "████", "   █", "████"],
-  "4": ["█  █", "█  █", "████", "   █", "   █"],
-  "5": ["████", "█   ", "████", "   █", "████"],
-  "6": ["████", "█   ", "████", "█  █", "████"],
-  "7": ["████", "   █", "   █", "   █", "   █"],
-  "8": ["████", "█  █", "████", "█  █", "████"],
-  "9": ["████", "█  █", "████", "   █", "████"],
-  ":": ["    ", " ██ ", "    ", " ██ ", "    "],
+  "0": ["█████", "█   █", "█   █", "█   █", "█   █", "█   █", "█████"],
+  "1": ["  █  ", " ██  ", "  █  ", "  █  ", "  █  ", "  █  ", "█████"],
+  "2": ["█████", "    █", "    █", "█████", "█    ", "█    ", "█████"],
+  "3": ["█████", "    █", "    █", "█████", "    █", "    █", "█████"],
+  "4": ["█   █", "█   █", "█   █", "█████", "    █", "    █", "    █"],
+  "5": ["█████", "█    ", "█    ", "█████", "    █", "    █", "█████"],
+  "6": ["█████", "█    ", "█    ", "█████", "█   █", "█   █", "█████"],
+  "7": ["█████", "    █", "    █", "   █ ", "  █  ", "  █  ", "  █  "],
+  "8": ["█████", "█   █", "█   █", "█████", "█   █", "█   █", "█████"],
+  "9": ["█████", "█   █", "█   █", "█████", "    █", "    █", "█████"],
+  ":": ["     ", "  █  ", "  █  ", "     ", "  █  ", "  █  ", "     "],
 }
 
 function clockAscii(value: string) {
   const chars = value.replace(/\s[AP]M$/, "").split("")
-  return Array.from({ length: 5 }, (_, row) =>
-    chars
-      .map((char) => CLOCK_DIGITS[char]?.[row] ?? "    ")
-      .join(" "),
-  )
+  return Array.from({ length: 7 }, (_, row) => chars.map((char) => CLOCK_DIGITS[char]?.[row] ?? "     ").join(" "))
 }
 
 function ClockWidget(props: { tall?: boolean }) {
@@ -257,9 +260,11 @@ function ClockWidget(props: { tall?: boolean }) {
   const timer = setInterval(() => setNow(new Date()), 30_000)
   onCleanup(() => clearInterval(timer))
   const time = createMemo(() => now().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
-  const date = createMemo(() => now().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" }))
+  const date = createMemo(() =>
+    now().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" }),
+  )
   return (
-    <Panel title="Clock" height={props.tall ? 13 : 11}>
+    <Panel title="Clock" height={props.tall ? 14 : 12}>
       <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={0}>
         <For each={clockAscii(time())}>
           {(line) => (
@@ -362,7 +367,14 @@ function WeatherWidget(props: {
       <Show
         when={props.config.enabled && props.weather}
         fallback={
-          <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" gap={1} overflow="hidden">
+          <box
+            flexDirection="column"
+            flexGrow={1}
+            justifyContent="center"
+            alignItems="center"
+            gap={1}
+            overflow="hidden"
+          >
             <text fg={props.error ? theme.error : theme.text} wrapMode="none">
               {props.loading ? "Loading weather..." : props.error ? Locale.truncate(props.error, 34) : "Weather is off"}
             </text>
@@ -385,7 +397,8 @@ function WeatherWidget(props: {
             </box>
             <box flexDirection="column" minWidth={0} overflow="hidden" gap={0}>
               <text fg={theme.text} wrapMode="none">
-                {weather().label} {weather().temperature === undefined ? "" : `${Math.round(weather().temperature ?? 0)}°C`}
+                {weather().label}{" "}
+                {weather().temperature === undefined ? "" : `${Math.round(weather().temperature ?? 0)}°C`}
               </text>
               <text fg={theme.textMuted} wrapMode="none">
                 {Locale.truncate(weather().detail, 22)}
@@ -447,12 +460,48 @@ function LoadingStats(props: { tiny: boolean }) {
   )
 }
 
+function selectedDayRows(day: DailyUsage) {
+  const number = (value: number | undefined) => Locale.number(value ?? 0)
+  return [
+    stat("tokens", number(day.tokens), `${number(day.cacheTokens)} cache`),
+    stat(
+      "mix",
+      `${number(day.inputTokens)} in`,
+      `${number(day.outputTokens)} out · ${number(day.reasoningTokens)} reasoning`,
+    ),
+    stat("sessions", number(day.sessions), `${number(day.userMessages)} prompts`),
+    stat("words", number(day.userWords), `${number(day.changedFiles)} changed files`),
+    stat("AI generating", formatInsightDuration(day.aiResponseMs), `${formatInsightDuration(day.toolMs)} tool runtime`),
+  ]
+}
+
+function SelectedDayDetail(props: { day?: DailyUsage; width: number; compact?: boolean }) {
+  const { theme } = useTheme()
+  return (
+    <Show when={props.day}>
+      {(day) => (
+        <box flexDirection="column" paddingTop={1} gap={0} overflow="hidden">
+          <box height={1} overflow="hidden">
+            <text fg={theme.primary} wrapMode="none">
+              {Locale.truncate(`selected day · ${day().day}`, props.width)}
+            </text>
+          </box>
+          <MetricRows items={selectedDayRows(day()).slice(0, props.compact ? 4 : 5)} maxWidth={props.width} dense />
+        </box>
+      )}
+    </Show>
+  )
+}
+
 function CompactStats(props: {
   headline: Array<{ label: string; value: string; detail?: string }>
   insights: UsageInsights
   mode: HeatMode
   columns: number
   contentWidth: number
+  selectedDay?: DailyUsage
+  selectedDayIndex?: number
+  onSelectDay?: (index: number) => void
   tokenRows?: Array<{ label: string; value: string; detail?: string }>
   responseRows?: Array<{ label: string; value: string; detail?: string }>
   statusRows?: Array<{ label: string; value: string; detail?: string }>
@@ -464,7 +513,17 @@ function CompactStats(props: {
         <MetricRows items={props.headline.slice(0, 4)} maxWidth={props.contentWidth} />
       </Panel>
       <Panel title="Token activity · daily · 365 days" grow>
-        <UsageHeatmap insights={props.insights} mode={props.mode} columns={props.columns} cellWidth={1} rows={7} labels={true} />
+        <UsageHeatmap
+          insights={props.insights}
+          mode={props.mode}
+          columns={props.columns}
+          cellWidth={2}
+          rows={7}
+          labels={true}
+          selectedIndex={props.selectedDayIndex}
+          onSelectDay={props.onSelectDay}
+        />
+        <SelectedDayDetail day={props.selectedDay} width={props.contentWidth} compact />
       </Panel>
       <Show when={props.tall}>
         <box flexDirection="column" gap={1} height={20} minHeight={0}>
@@ -489,6 +548,9 @@ function MainDashboard(props: {
   mode: HeatMode
   heatColumns: number
   heatCellWidth: number
+  selectedDay?: DailyUsage
+  selectedDayIndex?: number
+  onSelectDay: (index: number) => void
   kpis: Array<{ label: string; value: string; detail?: string }>
   tokenRows: Array<{ label: string; value: string; detail?: string }>
   responseRows: Array<{ label: string; value: string; detail?: string }>
@@ -502,12 +564,14 @@ function MainDashboard(props: {
   onConfigureWeather: () => void
 }) {
   const { theme } = useTheme()
-  const peakWidth = createMemo(() => (props.roomy ? 34 : 24))
+  const peakWidth = createMemo(() => (props.roomy ? 18 : 14))
   return (
     <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
       <box flexDirection="row" gap={1} height={props.roomy ? 8 : 7}>
         <For each={props.kpis}>
-          {(item, index) => <BigNumber label={item.label} value={item.value} detail={item.detail} accent={index() === 0} />}
+          {(item, index) => (
+            <BigNumber label={item.label} value={item.value} detail={item.detail} accent={index() === 0} />
+          )}
         </For>
       </box>
 
@@ -520,7 +584,10 @@ function MainDashboard(props: {
               columns={props.heatColumns}
               cellWidth={props.heatCellWidth}
               labels={props.roomy}
+              selectedIndex={props.selectedDayIndex}
+              onSelectDay={props.onSelectDay}
             />
+            <SelectedDayDetail day={props.selectedDay} width={props.contentWidth} />
           </Panel>
           <box flexDirection="row" gap={1} height={props.roomy ? 8 : 6}>
             <Panel title="Token Mix" grow>
@@ -531,7 +598,11 @@ function MainDashboard(props: {
             </Panel>
             <Panel title="Peak Pressure" width={props.roomy ? 42 : 34}>
               <ProgressBar
-                value={props.data.totals.peakTokens > 0 ? (props.data.days.at(-1)?.tokens ?? 0) / props.data.totals.peakTokens : 0}
+                value={
+                  props.data.totals.peakTokens > 0
+                    ? (props.data.days.at(-1)?.tokens ?? 0) / props.data.totals.peakTokens
+                    : 0
+                }
                 width={peakWidth()}
                 color={theme.success}
               />
@@ -563,7 +634,9 @@ function MainDashboard(props: {
               </Panel>
               <Panel title="Agents & Models" width={42}>
                 <ListRows
-                  items={props.data.topAgents.slice(0, 3).map((item) => ({ name: item.name, right: Locale.number(item.count) }))}
+                  items={props.data.topAgents
+                    .slice(0, 3)
+                    .map((item) => ({ name: item.name, right: Locale.number(item.count) }))}
                   nameWidth={22}
                 />
                 <ListRows
@@ -601,23 +674,56 @@ function ProgressBar(props: { value: number; width: number; color?: ThemeColorVa
   const filled = createMemo(() => Math.max(0, Math.min(props.width, Math.round(props.value * props.width))))
   return (
     <text fg={props.color ?? theme.primary} wrapMode="none">
-      {"█".repeat(filled())}
-      <span style={{ fg: theme.border }}>{"░".repeat(Math.max(0, props.width - filled()))}</span>
+      {"██".repeat(filled())}
+      <span style={{ fg: theme.border }}>{"□□".repeat(Math.max(0, props.width - filled()))}</span>
     </text>
   )
+}
+
+function timelineLabel(day: DailyUsage | undefined) {
+  if (!day) return ""
+  const date = new Date(day.time)
+  const month = date.toLocaleDateString([], { month: "short" })
+  return `${month} ${String(date.getFullYear()).slice(2)}`
+}
+
+function timelineLabels(days: DailyUsage[]) {
+  if (days.length === 0) return []
+  const positions = [0, 0.25, 0.5, 0.75, 1].map((value) =>
+    Math.min(days.length - 1, Math.round((days.length - 1) * value)),
+  )
+  return [...new Set(positions)].map((index) => timelineLabel(days[index]))
+}
+
+function cacheAgeLabel(updated: number | undefined) {
+  if (!updated) return "cold"
+  const elapsed = Date.now() - updated
+  if (elapsed < 60_000) return "fresh"
+  return `${formatInsightDuration(elapsed)} old`
+}
+
+type HeatCell = {
+  day?: DailyUsage
+  index?: number
+  value: number
 }
 
 function UsageHeatmap(props: {
   insights: UsageInsights
   mode: HeatMode
   columns: number
-  cellWidth: number
+  cellWidth?: number
   rows?: number
   labels?: boolean
+  selectedIndex?: number
+  onSelectDay?: (index: number) => void
 }) {
   const { theme } = useTheme()
   const rowCount = createMemo(() => props.rows ?? 7)
   const visible = createMemo(() => props.insights.days.slice(-props.columns * rowCount()))
+  const visibleStart = createMemo(() => Math.max(0, props.insights.days.length - visible().length))
+  const columnCount = createMemo(() => Math.max(1, Math.ceil(visible().length / rowCount())))
+  const cellWidth = createMemo(() => Math.max(1, props.cellWidth ?? 2))
   const values = createMemo(() => {
     if (props.mode === "weekly") {
       const daily = visible().map((day) => day.tokens + day.userWords * 3 + day.sessions * 500)
@@ -638,23 +744,44 @@ function UsageHeatmap(props: {
     })
   })
   const peak = createMemo(() => Math.max(1, ...values()))
-  const rows = createMemo(() => {
+  const rows = createMemo<HeatCell[][]>(() => {
     const days = visible()
-    return Array.from({ length: rowCount() }, (_, row) =>
-      days.filter((_, index) => index % rowCount() === row).map((day, index) => ({ day, value: values()[index * rowCount() + row] ?? 0 })),
-    )
+    const metrics = values()
+    return Array.from({ length: rowCount() }, (_, row) => {
+      return Array.from({ length: columnCount() }, (_, column) => {
+        const localIndex = column * rowCount() + row
+        const day = days[localIndex]
+        if (!day) return { value: 0 }
+        return {
+          day,
+          index: visibleStart() + localIndex,
+          value: metrics[localIndex] ?? 0,
+        }
+      })
+    })
   })
+  const labels = createMemo(() => timelineLabels(visible()))
+  const cellText = (cell: HeatCell) => {
+    if (cell.index === undefined) return "".padEnd(cellWidth())
+    if (cell.index === props.selectedIndex) return "▣".padEnd(cellWidth())
+    return heatGlyph(cell.value, peak()).padEnd(cellWidth())
+  }
 
   return (
-    <box flexDirection="column" gap={0}>
+    <box flexDirection="column" flexGrow={1} minHeight={0} gap={0}>
       <box flexDirection="column" flexGrow={1} justifyContent="center" gap={0}>
         <For each={rows()}>
           {(row) => (
-            <box flexDirection="row" gap={0} height={1} justifyContent="center" width="100%">
+            <box flexDirection="row" gap={0} height={1} justifyContent="space-between" width="100%">
               <For each={row}>
                 {(cell) => (
-                  <text fg={heatColor(theme, cell.value, peak())} wrapMode="none">
-                    {heatGlyph(cell.value, peak()).repeat(props.cellWidth)}
+                  <text
+                    fg={cell.index === props.selectedIndex ? theme.warning : heatColor(theme, cell.value, peak())}
+                    wrapMode="none"
+                    onMouseOver={() => cell.index !== undefined && props.onSelectDay?.(cell.index)}
+                    onMouseUp={() => cell.index !== undefined && props.onSelectDay?.(cell.index)}
+                  >
+                    {cellText(cell)}
                   </text>
                 )}
               </For>
@@ -663,16 +790,19 @@ function UsageHeatmap(props: {
         </For>
       </box>
       <Show when={props.labels ?? true}>
-        <box flexDirection="row" justifyContent="space-between" paddingTop={1}>
-          <text fg={theme.textMuted}>{visible()[0]?.day ?? ""}</text>
-          <text fg={theme.textMuted}>{visible().at(-1)?.day ?? ""}</text>
+        <box flexDirection="row" justifyContent="space-between" paddingTop={1} overflow="hidden">
+          <For each={labels()}>{(label) => <text fg={theme.textMuted}>{label}</text>}</For>
         </box>
       </Show>
     </box>
   )
 }
 
-function statsURL(sdk: ReturnType<typeof useSDK>, route: string, query: Record<string, string | number | boolean | undefined>) {
+function statsURL(
+  sdk: ReturnType<typeof useSDK>,
+  route: string,
+  query: Record<string, string | number | boolean | undefined>,
+) {
   const url = new URL(route, sdk.url)
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined) url.searchParams.set(key, String(value))
@@ -743,12 +873,17 @@ export function Stats() {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const [advanced, setAdvanced] = createSignal(true)
-  const [scope] = createSignal<StatsScope>(route.data.type === "stats" ? route.data.scope ?? "global" : "global")
+  const [scope] = createSignal<StatsScope>(route.data.type === "stats" ? (route.data.scope ?? "global") : "global")
   const mode = () => "daily" as const
   const [weatherConfig, setWeatherConfig] = createSignal<StatsWeatherConfig>({ enabled: false })
   const [weatherRefresh, setWeatherRefresh] = createSignal(0)
   const [weatherError, setWeatherError] = createSignal<string | undefined>()
   const [weatherReady, setWeatherReady] = createSignal(false)
+  const [selectedDayIndex, setSelectedDayIndex] = createSignal<number | undefined>()
+  const [cacheUpdated, setCacheUpdated] = createSignal<number | undefined>()
+  const [cacheReady, setCacheReady] = createSignal(false)
+  const [insightRefreshRequest, setInsightRefreshRequest] = createSignal(0)
+  const [refreshingInsights, setRefreshingInsights] = createSignal(false)
   const tiny = createMemo(() => dimensions().width < 92 || dimensions().height < 26)
   const narrow = createMemo(() => !tiny() && dimensions().width < 124)
   const wide = createMemo(() => dimensions().width >= 142 && dimensions().height >= 34)
@@ -759,7 +894,12 @@ export function Stats() {
   const heatColumns = createMemo(() => {
     return HEATMAP_COLUMNS
   })
-  const heatCellWidth = createMemo(() => (roomy() ? 3 : wide() ? 2 : 1))
+  const heatCellWidth = createMemo(() => {
+    const sideColumn = wide() ? 46 : 0
+    const panelChrome = 8
+    const available = Math.max(HEATMAP_COLUMNS, dimensions().width - sideColumn - panelChrome)
+    return Math.max(2, Math.min(4, Math.floor(available / HEATMAP_COLUMNS)))
+  })
   const scopeQuery = createMemo<SessionScopeQuery>(() => {
     if (scope() === "global") return {}
     if (scope() === "project") return { scope: "project" }
@@ -776,23 +916,47 @@ export function Stats() {
   const [cachedInsights, setCachedInsights] = createSignal<UsageInsights | undefined>()
   createEffect(() => {
     if (!kv.ready) return
+    setCacheReady(false)
     const cached = kv.get(statsCacheKey()) as StatsCachePayload | UsageInsights | undefined
-    setCachedInsights(cached && typeof cached === "object" && "data" in cached ? cached.data : cached)
+    if (cached && typeof cached === "object" && "data" in cached) {
+      setCachedInsights(normalizeUsageInsights(cached.data))
+      setCacheUpdated(cached.updated)
+      setCacheReady(true)
+      return
+    }
+    setCachedInsights(normalizeUsageInsights(cached))
+    setCacheUpdated(undefined)
+    setCacheReady(true)
   })
   createEffect(() => {
     if (!kv.ready) return
     setWeatherConfig(kv.get(WEATHER_KV_KEY, { enabled: false }) as StatsWeatherConfig)
   })
   const [insights] = createResource(
-    () => ({ ready: kv.ready, advanced: advanced(), scope: scope(), query: scopeQuery(), cached: cachedInsights() }),
+    () => ({
+      ready: kv.ready && cacheReady(),
+      advanced: advanced(),
+      scope: scope(),
+      query: scopeQuery(),
+      refresh: insightRefreshRequest(),
+    }),
     async (input) => {
-      if (!input.ready) return input.cached
-      if (input.cached) return input.cached
-      const next = await loadInsights(sdk, input)
-      const payload = { updated: Date.now(), data: next }
-      setCachedInsights(next)
-      kv.set(statsCacheKey(), payload)
-      return next
+      if (!input.ready) return undefined
+      const cached = cachedInsights()
+      if (cached && input.refresh === 0) return cached
+      setRefreshingInsights(true)
+      try {
+        const next = await loadInsights(sdk, input)
+        const updated = Date.now()
+        const normalized = normalizeUsageInsights(next)
+        const payload = { updated, data: normalized ?? next }
+        setCachedInsights(normalized)
+        setCacheUpdated(updated)
+        kv.set(statsCacheKey(), payload)
+        return next
+      } finally {
+        setRefreshingInsights(false)
+      }
     },
   )
   const [weather] = createResource(
@@ -857,6 +1021,32 @@ export function Stats() {
     }
   }
 
+  const visibleInsights = createMemo(() => cachedInsights() ?? insights())
+  createEffect(() => {
+    const data = visibleInsights()
+    if (!data || data.days.length === 0) return
+    const current = selectedDayIndex()
+    if (current === undefined || current < 0 || current >= data.days.length) {
+      setSelectedDayIndex(data.days.length - 1)
+    }
+  })
+
+  function selectDay(index: number) {
+    const data = visibleInsights()
+    if (!data || data.days.length === 0) return
+    setSelectedDayIndex(Math.max(0, Math.min(data.days.length - 1, index)))
+  }
+
+  function moveSelectedDay(delta: number) {
+    const data = visibleInsights()
+    if (!data || data.days.length === 0) return
+    selectDay((selectedDayIndex() ?? data.days.length - 1) + delta)
+  }
+
+  function moveSelectedColumn(delta: number) {
+    moveSelectedDay(delta * HEATMAP_ROWS)
+  }
+
   useKeyboard((evt) => {
     if (evt.name === "escape") {
       route.navigate(routeReturnTarget(route.data))
@@ -868,15 +1058,50 @@ export function Stats() {
       setAdvanced((value) => !value)
       return
     }
+    if (evt.name === "r") {
+      evt.preventDefault()
+      evt.stopPropagation()
+      setInsightRefreshRequest((value) => value + 1)
+      return
+    }
     if (evt.name === "w") {
       evt.preventDefault()
       evt.stopPropagation()
       configureWeather()
       return
     }
+    if (evt.name === "left" || evt.name === "h") {
+      evt.preventDefault()
+      evt.stopPropagation()
+      moveSelectedColumn(-1)
+      return
+    }
+    if (evt.name === "right" || evt.name === "l") {
+      evt.preventDefault()
+      evt.stopPropagation()
+      moveSelectedColumn(1)
+      return
+    }
+    if (evt.name === "up" || evt.name === "k") {
+      evt.preventDefault()
+      evt.stopPropagation()
+      moveSelectedDay(-1)
+      return
+    }
+    if (evt.name === "down" || evt.name === "j") {
+      evt.preventDefault()
+      evt.stopPropagation()
+      moveSelectedDay(1)
+      return
+    }
   })
 
-  const visibleInsights = createMemo(() => insights() ?? cachedInsights())
+  const selectedDay = createMemo(() => {
+    const data = visibleInsights()
+    const index = selectedDayIndex()
+    if (!data || index === undefined) return undefined
+    return data.days[index]
+  })
   const totals = createMemo(() => visibleInsights()?.totals)
   const headline = createMemo(() => {
     const current = totals()
@@ -884,7 +1109,11 @@ export function Stats() {
     return [
       stat("tokens", Locale.number(current.tokens), `${Locale.number(current.peakTokens)} peak day`),
       stat("sessions", Locale.number(current.sessions), `${Locale.number(current.activeDays)} active days`),
-      stat("AI generating", formatInsightDuration(current.aiResponseMs), `${formatInsightDuration(current.longestTaskMs)} longest`),
+      stat(
+        "AI generating",
+        formatInsightDuration(current.aiResponseMs),
+        `${formatInsightDuration(current.longestTaskMs)} longest`,
+      ),
       stat("user words", Locale.number(current.userWords), `${Locale.number(current.userMessages)} prompts`),
       stat("cache tokens", Locale.number(current.cacheTokens)),
       stat("streak", `${current.currentStreak} days`, `${current.longestStreak} longest`),
@@ -896,7 +1125,11 @@ export function Stats() {
     return [
       stat("tokens", Locale.number(current.tokens), `${Locale.number(current.peakTokens)} peak`),
       stat("sessions", Locale.number(current.sessions), `${Locale.number(current.activeDays)} days`),
-      stat("AI time", formatInsightDuration(current.aiResponseMs), `${formatInsightDuration(current.longestTaskMs)} longest`),
+      stat(
+        "AI time",
+        formatInsightDuration(current.aiResponseMs),
+        `${formatInsightDuration(current.longestTaskMs)} longest`,
+      ),
       stat("words", Locale.number(current.userWords), `${Locale.number(current.userMessages)} prompts`),
     ]
   })
@@ -932,6 +1165,7 @@ export function Stats() {
       stat("prompts", Locale.number(current.userMessages)),
       stat("streak", `${current.currentStreak}d`, `${current.longestStreak} longest`),
       stat("cache tokens", Locale.number(current.cacheTokens)),
+      stat("cache age", cacheAgeLabel(cacheUpdated()), refreshingInsights() ? "refreshing" : "ready"),
       stat("changed files", Locale.number(current.changedFiles)),
       stat("code sessions", Locale.number(current.sessionsWithCodeChanges)),
     ]
@@ -946,7 +1180,16 @@ export function Stats() {
     ]
   })
   return (
-    <box flexDirection="column" width="100%" height="100%" paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} gap={1}>
+    <box
+      flexDirection="column"
+      width="100%"
+      height="100%"
+      paddingLeft={1}
+      paddingRight={1}
+      paddingTop={1}
+      paddingBottom={1}
+      gap={1}
+    >
       <Header advanced={showDetails()} scope={scope()} narrow={tiny()} />
       <Switch>
         <Match when={!visibleInsights()}>
@@ -954,59 +1197,64 @@ export function Stats() {
         </Match>
         <Match when={visibleInsights()}>
           {(data) => (
-          <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
-            <Switch>
-              <Match when={tiny()}>
-                <scrollbox
-                  flexGrow={1}
-                  minHeight={0}
-                  horizontalScrollbarOptions={{ visible: false }}
-                  verticalScrollbarOptions={{
-                    visible: true,
-                    trackOptions: {
-                      backgroundColor: theme.backgroundPanel,
-                      foregroundColor: theme.border,
-                    },
-                  }}
-                >
-                  <CompactStats
-                    headline={headline()}
-                    insights={data()}
+            <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
+              <Switch>
+                <Match when={tiny()}>
+                  <scrollbox
+                    flexGrow={1}
+                    minHeight={0}
+                    horizontalScrollbarOptions={{ visible: false }}
+                    verticalScrollbarOptions={{
+                      visible: true,
+                      trackOptions: {
+                        backgroundColor: theme.backgroundPanel,
+                        foregroundColor: theme.border,
+                      },
+                    }}
+                  >
+                    <CompactStats
+                      headline={headline()}
+                      insights={data()}
+                      mode={mode()}
+                      columns={heatColumns()}
+                      contentWidth={contentWidth()}
+                      selectedDay={selectedDay()}
+                      selectedDayIndex={selectedDayIndex()}
+                      onSelectDay={selectDay}
+                      tokenRows={tokenRows()}
+                      responseRows={responseRows()}
+                      statusRows={statusRows()}
+                      tall={true}
+                    />
+                  </scrollbox>
+                </Match>
+                <Match when={!tiny()}>
+                  <MainDashboard
+                    data={data()}
+                    wide={wide()}
+                    roomy={roomy()}
+                    details={showDetails()}
                     mode={mode()}
-                    columns={heatColumns()}
-                    contentWidth={contentWidth()}
+                    heatColumns={heatColumns()}
+                    heatCellWidth={heatCellWidth()}
+                    selectedDay={selectedDay()}
+                    selectedDayIndex={selectedDayIndex()}
+                    onSelectDay={selectDay}
+                    kpis={kpis()}
                     tokenRows={tokenRows()}
                     responseRows={responseRows()}
+                    outcomeRows={outcomeRows()}
                     statusRows={statusRows()}
-                    tall={true}
+                    contentWidth={contentWidth()}
+                    weatherConfig={weatherConfig()}
+                    weather={weather()}
+                    weatherLoading={weather.loading || (weatherConfig().enabled && !weatherReady())}
+                    weatherError={weatherError()}
+                    onConfigureWeather={configureWeather}
                   />
-                </scrollbox>
-              </Match>
-              <Match when={!tiny()}>
-                <MainDashboard
-                  data={data()}
-                  wide={wide()}
-                  roomy={roomy()}
-                  details={showDetails()}
-                  mode={mode()}
-                  heatColumns={heatColumns()}
-                  heatCellWidth={heatCellWidth()}
-                  kpis={kpis()}
-                  tokenRows={tokenRows()}
-                  responseRows={responseRows()}
-                  outcomeRows={outcomeRows()}
-                  statusRows={statusRows()}
-                  contentWidth={contentWidth()}
-                  weatherConfig={weatherConfig()}
-                  weather={weather()}
-                  weatherLoading={weather.loading || (weatherConfig().enabled && !weatherReady())}
-                  weatherError={weatherError()}
-                  onConfigureWeather={configureWeather}
-                />
-              </Match>
-            </Switch>
-
-          </box>
+                </Match>
+              </Switch>
+            </box>
           )}
         </Match>
       </Switch>

@@ -3130,7 +3130,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
     },
     {
-      title: "Configure Provider",
+      title: "Connect Provider",
       value: "mendcode.ai.status",
       category: mendCategory,
       onSelect: () => {
@@ -3677,7 +3677,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
     },
     {
-      title: "Connect provider",
+      title: "Connect Provider",
       value: "provider.connect",
       suggested: !connected(),
       slash: {
@@ -3686,7 +3686,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       onSelect: () => {
         dialog.replace(() => <DialogProviderList />)
       },
-      category: "Provider",
+      category: "Connect Provider",
     },
     ...(sync.data.console_state.switchableOrgCount > 1
       ? [

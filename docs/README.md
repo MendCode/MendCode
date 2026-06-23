@@ -115,5 +115,11 @@ CLI profile inspection exists for compatibility/debugging, but it is not the nor
 - `src/mendcode/packages/opencode/src/tool/plan-review.ts`: Plan Review tool and post-approval agent switch.
 - `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/changes/`: Changes Review route, diff loading, comments, responsive renderer, and review state.
 - `src/mendcode/packages/opencode/src/tool/review.ts`: assistant-facing review workspace tool.
+- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/loops/`: Loop Workflows dashboard route.
+- `src/mendcode/packages/opencode/src/mend/runtime/loop-service.ts`: durable loop service, status, activation, and run state.
+- `src/mendcode/packages/opencode/src/session/loop.ts`: loop workflow model and lifecycle.
+- `src/mendcode/packages/opencode/src/session/loop-runner.ts`: loop wakeup execution path.
+- `src/mendcode/packages/opencode/src/tool/loop.ts`: assistant-facing loop workflow tool.
 - `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/stats/index.tsx`: Usage Insights TUI route.
+- `src/mendcode/packages/opencode/src/provider/claude-code.ts`: local Claude Code CLI provider bridge and validation.
 - `src/mendcode/packages/plugin/src/tui.ts`: public TUI plugin/widget types.

@@ -7,6 +7,7 @@ Usage Insights is a TUI dashboard for local MendCode activity. It helps you see 
 It reports:
 
 - daily token activity
+- selected-day token mix and activity detail
 - global/project/directory scope
 - sessions and active days
 - user prompts and user words
@@ -50,12 +51,14 @@ The route header shows the scope:
 
 Inside the dashboard:
 
-| Key | Action |
-| --- | --- |
-| `a` | Toggle detail/advanced panels when the terminal is large enough. |
-| `w` | Configure optional weather. |
-| `r` | Refresh insights. |
-| `Esc` | Return home. |
+| Key              | Action                                                           |
+| ---------------- | ---------------------------------------------------------------- |
+| `Up` / `Down`    | Move the selected token-activity day backward or forward.        |
+| `Left` / `Right` | Move the selected token-activity day by one week column.         |
+| `a`              | Toggle detail/advanced panels when the terminal is large enough. |
+| `w`              | Configure optional weather.                                      |
+| `r`              | Refresh insights.                                                |
+| `Esc`            | Return home.                                                     |
 
 ## Dashboard Sections
 
@@ -69,6 +72,15 @@ Core totals:
 - `user words`: approximate user prompt volume.
 - `cache tokens`: cached read/write token activity.
 - `streak`: active-day streaks.
+
+Token activity:
+
+- daily cells for the loaded window, arranged like a GitHub activity grid: weeks go horizontally, days go vertically inside each week
+- month markers below the grid
+- click or hover a cell to select a day
+- keyboard selection with `Up`, `Down`, `Left`, and `Right`
+- selected-day totals for tokens, cache, sessions, prompts, words, changed files, AI time, and tool runtime
+- normalized cache data from the global TUI stats cache so the page can show a loading state instead of presenting zeroed metrics as real data
 
 Token mix:
 
@@ -123,5 +135,5 @@ If a provider or session does not supply a field, that field may be zero or abse
 
 - `src/mendcode/packages/opencode/src/cli/cmd/tui/app.tsx`: command palette entries and slash aliases.
 - `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/stats/index.tsx`: Usage Insights route, responsive layout, shortcuts, cache, scope handling, and weather integration.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/util/usage-insights.ts`: aggregation for days, totals, tools, agents, models, token mix, duration, and streaks.
-- `src/mendcode/packages/opencode/test/tui/usage-insights.test.ts`: regression coverage for token aggregation, user words, response time, tools, and active-day streaks.
+- `src/mendcode/packages/opencode/src/cli/cmd/tui/util/usage-insights.ts`: aggregation and normalization for days, totals, tools, agents, models, token mix, duration, cache data, selected-day detail, and streaks.
+- `src/mendcode/packages/opencode/test/tui/usage-insights.test.ts`: regression coverage for token aggregation, user words, response time, tools, active-day streaks, selected-day activity, and normalized cache input.

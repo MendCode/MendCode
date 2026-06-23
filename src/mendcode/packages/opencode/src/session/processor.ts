@@ -45,6 +45,19 @@ function llmStreamIdleTimeoutMs() {
   return DEFAULT_LLM_STREAM_IDLE_TIMEOUT_MS
 }
 
+function normalizeToolInput(input: unknown): Record<string, any> {
+  if (isRecord(input)) return input
+  if (typeof input === "string") {
+    try {
+      const parsed = JSON.parse(input)
+      if (isRecord(parsed)) return parsed
+    } catch {}
+    return input.length > 0 ? { raw: input } : {}
+  }
+  if (input === undefined || input === null) return {}
+  return { value: input }
+}
+
 function timeoutStreamUnless<A, E, R>(
   self: Stream.Stream<A, E, R>,
   input: {
@@ -777,13 +790,14 @@ export const layer: Layer.Layer<
             if (ctx.assistantMessage.summary) {
               throw new Error(`Tool call not allowed while generating summary: ${value.toolName}`)
             }
+            const toolInput = normalizeToolInput(value.input)
             const toolCall = yield* readToolCall(value.toolCallId)
             // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
             EventV2.run(SessionEvent.Tool.Called.Sync, {
               sessionID: ctx.sessionID,
               callID: value.toolCallId,
               tool: value.toolName,
-              input: value.input,
+              input: toolInput,
               provider: {
                 executed: toolCall?.part.metadata?.providerExecuted === true,
                 ...(value.providerMetadata ? { metadata: value.providerMetadata } : {}),
@@ -796,7 +810,7 @@ export const layer: Layer.Layer<
               state: {
                 ...match.state,
                 status: "running",
-                input: value.input,
+                input: toolInput,
                 time: { start: Date.now() },
               },
               metadata: match.metadata?.providerExecuted
@@ -814,7 +828,7 @@ export const layer: Layer.Layer<
                   part.type === "tool" &&
                   part.tool === value.toolName &&
                   part.state.status !== "pending" &&
-                  JSON.stringify(part.state.input) === JSON.stringify(value.input),
+                  JSON.stringify(part.state.input) === JSON.stringify(toolInput),
               )
             ) {
               return
@@ -825,7 +839,7 @@ export const layer: Layer.Layer<
               permission: "doom_loop",
               patterns: [value.toolName],
               sessionID: ctx.assistantMessage.sessionID,
-              metadata: { tool: value.toolName, input: value.input },
+              metadata: { tool: value.toolName, input: toolInput },
               always: [value.toolName],
               ruleset: agent.permission,
             })

@@ -10,6 +10,7 @@ import { createStore, produce, reconcile } from "solid-js/store"
 import { onCleanup } from "solid-js"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
+import { appendLiveShellOutput } from "./shell-output"
 
 type ShellOutputEvent = {
   id: string
@@ -135,7 +136,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
         update(shellOutputEvent.properties.sessionID, (draft) => {
           const match = activeShell(draft, shellOutputEvent.properties.callID)
           if (!match || match.time.completed) return
-          match.output += shellOutputEvent.properties.delta
+          match.output = appendLiveShellOutput(match.output, shellOutputEvent.properties.delta)
         })
         return
       }

@@ -18,4 +18,10 @@ describe("hex color extraction", () => {
   test("does not treat markdown headings as colors", () => {
     expect(extractHexColors("# Heading\n## Another\nUse #123456")).toEqual([{ hex: "#123456", display: "#123456" }])
   })
+
+  test("does not treat macros or hashtags as short hex colors", () => {
+    expect(extractHexColors("#define TANK_USE_MOCK_SENSOR 1\n#definitely-not-a-color\nUse #abc")).toEqual([
+      { hex: "#aabbcc", display: "#abc" },
+    ])
+  })
 })

@@ -3,6 +3,7 @@ import { describeRoute, validator, resolver } from "hono-openapi"
 import z from "zod"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
+import { ClaudeCode } from "@/provider/claude-code"
 import { ModelsDev } from "@/provider/models"
 import { ProviderAuth } from "@/provider/auth"
 import { ProviderID } from "@/provider/schema"
@@ -45,9 +46,13 @@ export const ProviderRoutes = lazy(() =>
               filtered[key] = value
             }
           }
+          const allProviders = mapValues(filtered, (x) => Provider.fromModelsDevProvider(x))
+          if (!disabled.has(ClaudeCode.ID) && (enabled ? enabled.has(ClaudeCode.ID) : true)) {
+            allProviders[ClaudeCode.ID] = ClaudeCode.providerInfo()
+          }
           const connected = yield* svc.list()
           const providers = Object.assign(
-            mapValues(filtered, (x) => Provider.fromModelsDevProvider(x)),
+            allProviders,
             connected,
           )
           return {

@@ -3,7 +3,7 @@ export type HexColorSwatch = {
   display: string
 }
 
-const HEX_COLOR_PATTERN = /(^|[^A-Za-z0-9_])#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})(?![0-9A-Fa-f])/g
+const HEX_COLOR_PATTERN = /(^|[^A-Za-z0-9_])#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})(?![A-Za-z0-9_])/g
 
 export function normalizeHexColor(value: string) {
   const trimmed = value.trim()

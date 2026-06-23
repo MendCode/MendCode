@@ -230,7 +230,7 @@ describe("tool parameters", () => {
       const parsed = parse(Review, {
         action: "comment_add",
         filePath: "src/app.ts",
-        hunkIndex: 0,
+        blockIndex: 0,
         line: 12,
         side: "new",
         body: "Check this branch.",
@@ -240,8 +240,8 @@ describe("tool parameters", () => {
       expect(parsed.side).toBe("new")
     })
     test("accepts navigate direction", () => {
-      const parsed = parse(Review, { action: "navigate", direction: "next-hunk" })
-      expect(parsed.direction).toBe("next-hunk")
+      const parsed = parse(Review, { action: "navigate", direction: "next-block" })
+      expect(parsed.direction).toBe("next-block")
     })
     test("rejects unknown action", () => {
       expect(accepts(Review, { action: "approve" })).toBe(false)

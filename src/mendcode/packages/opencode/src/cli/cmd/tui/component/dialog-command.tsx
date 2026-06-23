@@ -224,7 +224,7 @@ const titleOverrides: Record<string, string> = {
   "agent.list": "Agent",
   "mcp.list": "MCP",
   "variant.list": "Variant",
-  "provider.connect": "Provider",
+  "provider.connect": "Connect Provider",
   "console.org.switch": "Organization",
   "mendcode.memory.status": "Memory Manager",
   "mendcode.memory.manager": "Memory Center",
@@ -363,6 +363,7 @@ function commandCategory(option: CommandOption) {
   if (
     option.category === "Agent" ||
     option.category === "Provider" ||
+    option.category === "Connect Provider" ||
     option.value.includes("model") ||
     option.value.includes("agent") ||
     option.value.includes("provider") ||

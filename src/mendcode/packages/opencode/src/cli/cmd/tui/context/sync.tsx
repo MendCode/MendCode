@@ -33,14 +33,7 @@ import * as Log from "@mendcode/core/util/log"
 import { emptyConsoleState, type ConsoleState } from "@/config/console-state"
 import path from "path"
 import { useKV } from "./kv"
-
-const LIVE_SHELL_OUTPUT_PREVIEW_LIMIT = 30_000
-
-function appendLiveShellOutput(current: unknown, delta: string) {
-  const next = String(current ?? "") + delta
-  if (next.length <= LIVE_SHELL_OUTPUT_PREVIEW_LIMIT) return next
-  return "...\n\n" + next.slice(-LIVE_SHELL_OUTPUT_PREVIEW_LIMIT)
-}
+import { appendLiveShellOutput } from "./shell-output"
 
 type ShellOutputEvent = {
   type: "session.next.shell.output"

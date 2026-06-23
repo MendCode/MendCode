@@ -42,10 +42,11 @@ Most coding agents give you a chat box. MendCode gives you the harness around it
 | Share a tuned setup with a team | Runtime packages for commands, agents, modes, skills, prompts, MCP config, plugins, TUI profile, model roles, permissions, memory defaults, and worktree policy. |
 | Review before implementation | Plan Mode renders Markdown, including Mermaid when supported, inside a TUI review modal before switching to the implementation agent. |
 | Review current code changes | `/changes` opens a responsive TUI diff workspace with comments and agent-visible review context between model turns. |
+| Keep repeat work moving | Loop Workflows create durable, monitorable agent loops with safe report-only wakeups, Agent View sessions, and optional per-project OS services. |
 | Keep risky actions explicit | Permission modes, smart permission review, preview-first worktree actions, and approval-gated memory proposals. |
 | Route work to the right model | Model roles for planning, building, review, subagents, summaries, compaction, memory extraction, Dream, memory side chat, and permission review. |
 | Coordinate parallel terminal work | Optional mflow locks plus optional TSM/worktree orchestration for multi-session work. |
-| See local activity without cloud analytics | Usage Insights for tokens, sessions, AI time, prompt volume, changed files, top tools, top agents, top models, cache mix, and daily activity. |
+| See local activity without cloud analytics | Usage Insights for tokens, sessions, AI time, prompt volume, changed files, top tools, top agents, top models, cache mix, daily activity, and selected-day details. |
 
 The short version: MendCode is not just "run a model in a terminal." It is a
 configurable coding terminal with packaging, review, memory, permissions, and
@@ -310,6 +311,28 @@ does not splice new comments into an already-running token stream.
 
 See [Changes Review](docs/changes-review.md).
 
+### Loop Workflows
+
+Loop Workflows are durable, monitorable agent loops for objectives that should
+keep moving across controlled iterations. A loop starts as a draft, becomes an
+activated root session, records run/journal events, appears in Agent View, and
+can be woken manually or by a per-project background service.
+
+```bash
+mendcode loops examples
+mendcode loops draft --template research-digest --name "Loop test"
+mendcode loops activate loop_...
+mendcode loops tick loop_... --execute --report-only
+mendcode loops monitor loop_...
+```
+
+The safe test path is `--execute --report-only`: the agent wakes and writes
+transcript activity, but edit/write/patch/shell/subagent tools are denied.
+Full execution remains explicit through `--execute` or
+`mendcode loops service start --allow-edits`.
+
+See [Loop Workflows](docs/loop-workflows.md).
+
 ### Memory With Control
 
 MendCode memory is approval-first by design. It can retrieve useful project
@@ -370,6 +393,7 @@ mendcode tsm setup
 | Extend the TUI with code | [TUI plugins and widgets](docs/tui-plugins-and-widgets.md) |
 | Use plan review gates | [Plan Mode](docs/plan-mode.md) |
 | Review working-tree changes | [Changes Review](docs/changes-review.md) |
+| Run durable agent loops | [Loop Workflows](docs/loop-workflows.md) |
 | Inspect local activity | [Usage Insights](docs/usage-insights.md) |
 | Coordinate multi-session work | [mflow](docs/mflow.md), [TSM and worktrees](docs/tsm-and-worktrees.md) |
 | Understand source layout and ownership | [Architecture](docs/architecture.md) |
