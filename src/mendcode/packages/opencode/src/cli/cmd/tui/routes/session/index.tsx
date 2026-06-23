@@ -252,6 +252,21 @@ function formatLoopWorkflowState(state: string, phase?: string) {
   return `${state}: ${phase}`
 }
 
+function activeLoopIteration(workflow: SessionLoopWorkflow) {
+  const turns = workflow.metrics?.turns ?? 0
+  const state = workflow.state.toLowerCase()
+  const phase = workflow.phase?.toLowerCase()
+  const running = state === "working" || phase === "executing"
+  const visible = running ? turns + 1 : turns
+  const maxTurns = workflow.policy?.maxTurns
+  return typeof maxTurns === "number" ? Math.min(visible, maxTurns) : visible
+}
+
+function loopProgressLabel(workflow: SessionLoopWorkflow) {
+  const maxTurns = workflow.policy?.maxTurns
+  return maxTurns ? `${activeLoopIteration(workflow)}/${maxTurns}` : `${activeLoopIteration(workflow)}/unlimited`
+}
+
 function loopWorkflowSignature(items: readonly SessionLoopWorkflow[]) {
   return items
     .map((item) =>
@@ -550,12 +565,10 @@ export function Session() {
     const workflow = currentLoopWorkflow()
     const summary = loopBackgroundSummary()
     if (!workflow && !summary) return undefined
-    const turns = workflow?.metrics?.turns ?? 0
-    const maxTurns = workflow?.policy?.maxTurns
-    const progress = maxTurns ? `${turns}/${maxTurns}` : `${turns}/unlimited`
+    const progress = workflow ? loopProgressLabel(workflow) : undefined
     const state = workflow ? formatLoopWorkflowState(workflow.state, workflow.phase ?? "ready") : summary?.replace(/^Loop\s+/i, "")
     const name = workflow?.name ? `${workflow.name} · ` : ""
-    return Locale.truncate(`${name}${state}${workflow ? ` · ${progress}` : ""}`, Math.max(12, contentWidth() - 16))
+    return Locale.truncate(`${name}${state}${progress ? ` · ${progress}` : ""}`, Math.max(12, contentWidth() - 16))
   })
   const showSessionBottomDock = createMemo(() => showTodos() && !disabled() && !backgroundWriterLocked())
   const promptDisabled = createMemo(() => disabled() || backgroundWriterLocked())
@@ -1699,7 +1712,7 @@ export function Session() {
         "Use exactly the `loop` tool, not shell commands. If the request already includes the objective, cadence, iteration limit, permission mode, and stop conditions, your first loop tool call must be action `activate`. Do not call `show` or `list` before creating the loop.",
         "If the request is to stop, remove, delete, pause, resume, or run the current loop and no loop id is visible, call the matching `loop` action without `workflowID`; the tool resolves the current session's contextual loop.",
         "Ask with the `question` tool only when a critical setting is missing: objective, iteration limit or unbounded mode, cadence, model/provider, max wall-clock runtime, permission mode, or stop condition.",
-        "Default to report-only unless I explicitly allow edits. For interval cadence, set `triggerMode: \"interval\"` and convert the interval to `intervalMs`. Preserve the current session model by omitting `model` unless I choose one.",
+        "Default to report-only unless I explicitly allow edits. Spanish/English requests such as codear, implementar, fixear, editar, hacer cambios, probar, compilar, run tests, or build are explicit edit permission for the loop; use permissionMode `normal` or `custom`, set `reportOnly: false`, and keep safety gates for push/merge/release/destructive shell. If I choose a model and reasoning effort/variant, pass `model` as provider/model and pass the effort as `variant` (for example `variant: \"medium\"`), or use provider/model#variant. For interval cadence, set `triggerMode: \"interval\"` and convert the interval to `intervalMs`. Preserve the current session model by omitting `model` unless I choose one.",
         "Do not hand-render Markdown tables or duplicate status cards after the tool call. Let the Loop Workflow card render from tool metadata, then give a one-line confirmation.",
       ].join("\n"),
     )
@@ -1775,24 +1788,6 @@ export function Session() {
       onSelect: (dialog) => {
         dialog.clear()
         submitLoopSlashPrompt("")
-      },
-    },
-    {
-      title: "Loop Workflows",
-      value: "session.loop.list",
-      category: "Session",
-      description: "Open the live loop workflow dashboard.",
-      slash: {
-        name: "loops",
-      },
-      onSlash: (dialog, input) => {
-        dialog.clear()
-        const selectedID = input.arguments.trim() || undefined
-        navigate({ type: "loops", selectedID, returnTo: { type: "session", sessionID: route.sessionID } })
-      },
-      onSelect: (dialog) => {
-        dialog.clear()
-        navigate({ type: "loops", returnTo: { type: "session", sessionID: route.sessionID } })
       },
     },
     {
@@ -5002,11 +4997,7 @@ function Loop(props: ToolProps<typeof LoopTool>) {
   const firstWorkflow = createMemo(() => {
     const workflows = props.metadata.workflows
     if (!Array.isArray(workflows)) return undefined
-    return workflows.find((item): item is {
-      workflowID?: string
-      rootSessionID?: string
-      name?: string
-    } => Boolean(item && typeof item === "object"))
+    return workflows.find((item) => Boolean(item && typeof item === "object"))
   })
   const resolvedWorkflowID = createMemo(() => workflowID() ?? firstWorkflow()?.workflowID)
   const resolvedRootSessionID = createMemo(() => rootSessionID() ?? firstWorkflow()?.rootSessionID)
@@ -5018,16 +5009,43 @@ function Loop(props: ToolProps<typeof LoopTool>) {
     return "Loop workflow"
   })
   const objective = createMemo(() => {
-    const value = typeof props.input.objective === "string" ? props.input.objective.trim() : ""
+    const metadataObjective = typeof props.metadata.objective === "string" ? props.metadata.objective.trim() : ""
+    const workflowObjective = firstWorkflow()?.objective?.trim() ?? ""
+    const inputObjective = typeof props.input.objective === "string" ? props.input.objective.trim() : ""
+    const value = metadataObjective || workflowObjective || inputObjective
     return value || undefined
   })
-  const panelWidth = createMemo(() => Math.max(48, Math.min(82, dimensions().width - 12)))
-  const compact = (value: string, width = Math.max(16, panelWidth() - 18)) => Locale.truncateMiddle(value.replace(/\s+/g, " ").trim(), width)
+  const triggerLabel = createMemo(() => {
+    const mode = props.metadata.triggerMode ?? firstWorkflow()?.triggerMode ?? props.input.triggerMode
+    const interval = props.metadata.intervalMs ?? firstWorkflow()?.intervalMs ?? props.input.intervalMs
+    if (mode === "interval" && typeof interval === "number" && interval > 0) return `interval · every ${Math.round(interval / 60000)}m`
+    if (mode) return String(mode)
+    return "manual"
+  })
+  const permissionLabel = createMemo(() => {
+    if (props.metadata.permissionMode) return props.metadata.permissionMode
+    if (firstWorkflow()?.permissionMode) return firstWorkflow()?.permissionMode
+    if (props.input.permissionMode) return props.input.permissionMode
+    if (props.input.reportOnly === false) return "normal"
+    if (props.input.reportOnly === true) return "report-only"
+    return "session default"
+  })
+  const modelLabel = createMemo(() => {
+    const model = props.metadata.model ?? firstWorkflow()?.model
+    if (model?.providerID && model.modelID) return `${model.providerID}/${model.modelID}${model.variant ? `#${model.variant}` : ""}`
+    if (typeof props.input.model === "string" && props.input.model.trim()) return props.input.model.trim()
+    return "session default"
+  })
+  const agentLabel = createMemo(() => props.metadata.agent ?? firstWorkflow()?.agent ?? props.input.agent ?? "session default")
+  const panelWidth = createMemo(() => Math.max(52, Math.min(90, dimensions().width - 12)))
+  const compact = (value: string, width = Math.max(16, panelWidth() - 22)) => Locale.truncateMiddle(value.replace(/\s+/g, " ").trim(), width)
   const rows = createMemo(() => [
     { label: "workflow", value: resolvedWorkflowID() ?? "pending", color: resolvedWorkflowID() ? theme.secondary : theme.textMuted },
     { label: "chat", value: resolvedRootSessionID() ?? "created on activation", color: resolvedRootSessionID() ? theme.secondary : theme.textMuted },
-    { label: "dashboard", value: "/loops", color: theme.textMuted },
-    { label: "goal", value: objective() ?? "configured by loop tool", color: theme.text },
+    { label: "event", value: triggerLabel(), color: theme.text },
+    { label: "mode", value: permissionLabel() ?? "session default", color: permissionLabel() === "report-only" ? theme.warning : theme.text },
+    { label: "model", value: modelLabel(), color: theme.text },
+    { label: "agent", value: agentLabel(), color: theme.text },
   ])
   const openTarget = () => {
     const root = resolvedRootSessionID()
@@ -5055,8 +5073,8 @@ function Loop(props: ToolProps<typeof LoopTool>) {
           flexShrink={0}
           borderStyle="single"
           borderColor={hover() ? theme.secondary : theme.border}
-          paddingLeft={1}
-          paddingRight={1}
+          paddingLeft={2}
+          paddingRight={2}
           paddingTop={1}
           paddingBottom={1}
           gap={0}
@@ -5072,11 +5090,15 @@ function Loop(props: ToolProps<typeof LoopTool>) {
             <For each={rows()}>
               {(row) => (
                 <box flexDirection="row">
-                  <text fg={theme.textMuted} wrapMode="none">{row.label.padEnd(9)}</text>
+                  <text fg={theme.textMuted} wrapMode="none">{row.label.padEnd(10)}</text>
                   <text fg={row.color} wrapMode="none">{compact(row.value)}</text>
                 </box>
               )}
             </For>
+            <box marginTop={1} flexDirection="column">
+              <text fg={theme.textMuted}>goal</text>
+              <text fg={theme.text} wrapMode="word">{compact(objective() ?? "configured by loop tool", Math.max(24, panelWidth() - 8))}</text>
+            </box>
           </box>
           <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="row">
             <text fg={hover() ? theme.secondary : theme.textMuted}>{openLabel()}</text>

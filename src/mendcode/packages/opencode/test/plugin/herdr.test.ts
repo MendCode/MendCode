@@ -463,6 +463,152 @@ describe("plugin.herdr", () => {
     ).toBe(false)
   })
 
+  test("keeps a selected loop session working between iterations until the workflow completes", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          status: async () => ({ data: { ses_loop: { type: "idle" } } }),
+          children: async () => ({ data: [] }),
+        },
+      },
+    } as any)
+
+    await hooks.event?.({
+      event: {
+        type: "tui.session.select",
+        properties: { sessionID: "ses_loop" },
+      },
+    } as any)
+
+    await hooks.event?.({
+      event: {
+        type: "loop.workflow.updated",
+        properties: {
+          workflowID: "loop_test",
+          info: {
+            id: "loop_test",
+            rootSessionID: "ses_loop",
+            state: "sleeping",
+            phase: "waiting",
+          },
+        },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "session.idle",
+        properties: { sessionID: "ses_loop" },
+      },
+    } as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "working" &&
+          request.params.custom_status === "loop waiting",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some((request) => request.method === "pane.report_agent" && request.params.state === "idle"),
+    ).toBe(false)
+
+    requests.length = 0
+    await hooks.event?.({
+      event: {
+        type: "loop.workflow.updated",
+        properties: {
+          workflowID: "loop_test",
+          info: {
+            id: "loop_test",
+            rootSessionID: "ses_loop",
+            state: "completed",
+            phase: "completed",
+          },
+        },
+      },
+    } as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "idle" &&
+          request.params.custom_status === "loop completed",
+      ),
+    ).toBe(true)
+  })
+
+  test("reports a selected loop session from the loop dashboard state without waiting for a loop event", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: "loop_test",
+            rootSessionID: "ses_loop",
+            state: "working",
+            phase: "executing",
+          },
+        ]),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    )
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      serverUrl: new URL("http://127.0.0.1:4096"),
+      client: {
+        session: {
+          status: async () => ({ data: { ses_loop: { type: "idle" } } }),
+          children: async () => ({ data: [] }),
+        },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "tui.session.select",
+        properties: { sessionID: "ses_loop" },
+      },
+    } as any)
+
+    expect(fetch).toHaveBeenCalledWith(new URL("/loop", "http://127.0.0.1:4096"), expect.any(Object))
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "working" &&
+          request.params.custom_status === "loop executing",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some((request) => request.method === "pane.report_agent" && request.params.state === "idle"),
+    ).toBe(false)
+  })
+
   test("does not switch Herdr session or emit finished when a subagent child idles", async () => {
     process.env.HERDR_ENV = "1"
     process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"

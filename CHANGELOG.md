@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.18 - 2026-06-23
+
+### Fixed
+
+- Fix Loop Workflow execution so implementation loops that explicitly allow edits are not downgraded to report-only by a conservative background service.
+- Refresh Loop Workflow receipts with clearer spacing plus model, mode, trigger/event, agent, chat, workflow, and goal details.
+- Keep loop session headers and the `/loops` dashboard aligned with the currently running iteration instead of lagging one completed run behind.
+- Keep Herdr loop-session panes in a working loop state between iterations and only report completion after the workflow reaches a terminal state.
+- Resume active provider compaction automatically and add trigger context so compaction summaries do not falsely close unfinished work.
+- Keep the active loop count only in the prompt footer, expose `/loop` from the new-chat screen, make `/loop` Tab completion non-submitting, and remove duplicate `/loops` slash entries.
+- Accept loop model variants through the `variant` field or provider/model#variant syntax for any provider.
+
 ## 0.1.17 - 2026-06-23
 
 ### Added

@@ -2099,7 +2099,7 @@ export function Prompt(props: PromptProps) {
     return formatDuration(Math.max(0, Math.round((workingTick() - started) / 1000)))
   })
   const workingRightMeta = createMemo(() => {
-    const items = [loopStatusText(), workingIndicatorConfig().showModel ? currentModelLabel() : undefined].filter(Boolean)
+    const items = [workingIndicatorConfig().showModel ? currentModelLabel() : undefined].filter(Boolean)
     return items.length ? items.join(" ") : undefined
   })
   const hoverMascot = createMemo(() => activityMascotHoverText(mend.profile))
