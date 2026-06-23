@@ -14,6 +14,13 @@ type RenderPlanMarkdownOptions = {
   tableMode?: TableRenderMode
   markdownMode?: "all" | "tables-only"
 }
+export type StreamingPlanMarkdownState = {
+  sourceCursor: number
+  sourcePrefix: string
+  renderedPrefix: string
+  width: number
+  optionsKey: string
+}
 const MERMAID_FENCE_PATTERN = /```[ \t]*mermaid[^\r\n]*\r?\n/i
 
 function resolveTermaid() {
@@ -119,6 +126,61 @@ function isMarkdownTableRow(line: string) {
   return trimmed.includes("|") && !trimmed.startsWith("```")
 }
 
+function isFenceLine(line: string) {
+  return /^\s*```/.test(line)
+}
+
+type CompleteLine = {
+  text: string
+  start: number
+  end: number
+}
+
+function completedLines(input: string): CompleteLine[] {
+  const lines: CompleteLine[] = []
+  let start = 0
+  for (let index = 0; index < input.length; index++) {
+    if (input[index] !== "\n") continue
+    const end = index + 1
+    lines.push({ text: input.slice(start, index).replace(/\r$/, ""), start, end })
+    start = end
+  }
+  return lines
+}
+
+export function streamingMarkdownCommitIndex(input: string) {
+  const lines = completedLines(input)
+  let safe = 0
+  let inFence = false
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]
+
+    if (isFenceLine(line.text)) {
+      inFence = !inFence
+      if (!inFence) safe = line.end
+      continue
+    }
+
+    if (inFence) continue
+
+    const next = lines[index + 1]
+    if (next && isMarkdownTableRow(line.text) && isMarkdownTableSeparator(next.text)) {
+      index += 2
+      while (index < lines.length && isMarkdownTableRow(lines[index].text)) index++
+
+      const tableTerminator = lines[index]
+      if (!tableTerminator) break
+      safe = tableTerminator.end
+      continue
+    }
+
+    safe = line.end
+  }
+
+  return safe
+}
+
 function splitMarkdownTableRow(line: string) {
   return line
     .trim()
@@ -137,6 +199,78 @@ function cleanInlineMarkdownForText(input: string) {
     .replace(/__([^_]+)__/g, "$1")
     .replace(/\*([^*\s][^*]*?)\*/g, "$1")
     .trim()
+}
+
+function renderInlineMarkdownForStreaming(input: string) {
+  return stripAnsi(input)
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/\*([^*\s][^*]*?)\*/g, "$1")
+}
+
+function renderStreamingMarkdownText(markdown: string) {
+  const structural = renderMarkdownHeadingsAsText(renderMarkdownListsAsText(markdown))
+  const result: string[] = []
+  let inFence = false
+
+  for (const line of structural.split("\n")) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      continue
+    }
+    result.push(inFence ? stripAnsi(line) : renderInlineMarkdownForStreaming(line))
+  }
+
+  return result.join("\n")
+}
+
+function renderLiveStreamingLine(line: string) {
+  if (/^ {0,3}#{1,6}\s+\S/.test(line)) return line
+  return renderInlineMarkdownForStreaming(line)
+}
+
+function wrapStreamingTextLine(line: string, width: number) {
+  const maxWidth = Math.max(1, width)
+  if (Bun.stringWidth(line) <= maxWidth) return [line]
+
+  const lines: string[] = []
+  let current = ""
+  for (const word of line.split(/(\s+)/)) {
+    if (!word) continue
+    const next = `${current}${word}`
+    if (!current || Bun.stringWidth(next) <= maxWidth) {
+      current = next
+      continue
+    }
+    lines.push(current.trimEnd())
+    if (Bun.stringWidth(word) <= maxWidth) {
+      current = word.trimStart()
+      continue
+    }
+    let chunk = ""
+    for (const char of word) {
+      const chunkNext = `${chunk}${char}`
+      if (Bun.stringWidth(chunkNext) <= maxWidth) {
+        chunk = chunkNext
+        continue
+      }
+      if (chunk) lines.push(chunk)
+      chunk = char
+    }
+    current = chunk
+  }
+  if (current) lines.push(current.trimEnd())
+  return lines.length > 0 ? lines : [line]
+}
+
+function wrapStreamingText(markdown: string, width: number) {
+  return markdown
+    .split("\n")
+    .flatMap((line) => wrapStreamingTextLine(line, width))
+    .join("\n")
 }
 
 function wrapTextLine(prefix: string, text: string, width: number) {
@@ -279,7 +413,61 @@ function renderMarkdownTableAsGrid(table: string[], width: number) {
   return renderGridRows(headers, displayRows, columns)
 }
 
-function renderGridRows(headers: string[], rows: string[][], columns: number[]) {
+function liveGridColumns(headers: string[], rows: string[][], width: number) {
+  const columnCount = Math.max(headers.length, ...rows.map((row) => row.length), 1)
+  const available = Math.max(40, Math.min(120, width))
+  const borderWidth = columnCount + 1
+  const paddingWidth = columnCount * 2
+  const cellBudget = Math.max(columnCount * 8, available - borderWidth - paddingWidth)
+  const headerWidths = Array.from({ length: columnCount }, (_, index) =>
+    Math.max(Bun.stringWidth(cleanInlineMarkdownForText(headers[index] ?? "")), 8),
+  )
+
+  if (
+    columnCount === 3 &&
+    /\b(archivo|file|path)\b/i.test(cleanInlineMarkdownForText(headers[0] ?? "")) &&
+    /\b(acción|accion|action)\b/i.test(cleanInlineMarkdownForText(headers[1] ?? ""))
+  ) {
+    const actionWidth = Math.min(Math.max(headerWidths[1], 8), 12)
+    const firstBudget = Math.max(24, Math.min(52, cellBudget - actionWidth - 24))
+    const firstWidth = Math.min(Math.max(headerWidths[0], 24), firstBudget)
+    const lastWidth = Math.max(16, cellBudget - firstWidth - actionWidth)
+    return [firstWidth, actionWidth, lastWidth]
+  }
+
+  const baseWidth = Math.max(8, Math.floor(cellBudget / columnCount))
+  const columns = headerWidths.map((natural) => Math.min(natural, baseWidth))
+  let remaining = cellBudget - columns.reduce((sum, column) => sum + column, 0)
+  while (remaining > 0) {
+    for (let index = 0; index < columns.length && remaining > 0; index++) {
+      columns[index] += 1
+      remaining -= 1
+    }
+  }
+  return columns
+}
+
+function renderLiveMarkdownTableAsGrid(table: string[], width: number) {
+  const headers = splitMarkdownTableRow(table[0])
+  const rows = table.slice(2).map(splitMarkdownTableRow)
+  const hexIndex = headers.findIndex((header) => /\bhex\b/i.test(cleanInlineMarkdownForText(header)))
+  const previewIndex = headers.findIndex((header) => /\bpreview\b/i.test(cleanInlineMarkdownForText(header)))
+  const displayRows = rows.map((row) => {
+    const next = [...row]
+    const hex = hexIndex >= 0 ? normalizeHexColor(cleanInlineMarkdownForText(next[hexIndex] ?? "")) : undefined
+    if (previewIndex >= 0 && hex) next[previewIndex] = hex
+    return next.map((cell, index) =>
+      renderTableCellForGrid(cell, {
+        header: headers[index],
+        headers,
+      }),
+    )
+  })
+
+  return renderGridRows(headers, displayRows, liveGridColumns(headers, displayRows, width), false)
+}
+
+function renderGridRows(headers: string[], rows: string[][], columns: number[], fenced = true) {
   const border = (left: string, middle: string, right: string) =>
     `${left}${columns.map((column) => "─".repeat(column + 2)).join(middle)}${right}`
   const renderRow = (row: string[]) => {
@@ -290,8 +478,7 @@ function renderGridRows(headers: string[], rows: string[][], columns: number[]) 
     )
   }
 
-  return [
-    "```text",
+  const lines = [
     border("┌", "┬", "┐"),
     ...renderRow(headers),
     border("├", "┼", "┤"),
@@ -300,8 +487,9 @@ function renderGridRows(headers: string[], rows: string[][], columns: number[]) 
       return index === rows.length - 1 ? rendered : [...rendered, border("├", "┼", "┤")]
     }),
     border("└", "┴", "┘"),
-    "```",
   ]
+
+  return fenced ? ["```text", ...lines, "```"] : lines
 }
 
 function renderWideTablesAsText(markdown: string, width: number, mode: TableRenderMode = "wide") {
@@ -1773,6 +1961,109 @@ export function renderPlanMarkdownStatic(
 
   result += source.slice(cursor)
   return renderMarkdownForTui(result, width, options)
+}
+
+function streamingOptionsKey(options: RenderPlanMarkdownOptions) {
+  return `${options.tableMode ?? ""}:${options.markdownMode ?? ""}`
+}
+
+export function renderPlanMarkdownStreaming(
+  markdown: string,
+  width: number,
+  options: RenderPlanMarkdownOptions = {},
+  previous?: StreamingPlanMarkdownState,
+): { content: string; tail: string; state: StreamingPlanMarkdownState } {
+  const optionsKey = streamingOptionsKey(options)
+  const commitIndex = streamingMarkdownCommitIndex(markdown)
+  const previousIsReusable =
+    !!previous &&
+    previous.width === width &&
+    previous.optionsKey === optionsKey &&
+    commitIndex >= previous.sourceCursor &&
+    markdown.slice(0, previous.sourceCursor) === previous.sourcePrefix
+
+  let state: StreamingPlanMarkdownState = previousIsReusable
+    ? previous
+    : {
+        sourceCursor: 0,
+        sourcePrefix: "",
+        renderedPrefix: "",
+        width,
+        optionsKey,
+      }
+
+  if (commitIndex > state.sourceCursor) {
+    const sourcePrefix = markdown.slice(0, commitIndex)
+    state = {
+      sourceCursor: commitIndex,
+      sourcePrefix,
+      renderedPrefix: renderPlanMarkdownStatic(sourcePrefix, width, options),
+      width,
+      optionsKey,
+    }
+  }
+
+  return {
+    content: state.renderedPrefix,
+    tail: markdown.slice(state.sourceCursor),
+    state,
+  }
+}
+
+function renderStableStreamingMarkdown(markdown: string, finalized: boolean, width: number) {
+  if (finalized || markdown.endsWith("\n")) return wrapStreamingText(renderStreamingMarkdownText(markdown), width)
+
+  const lastLineStart = markdown.lastIndexOf("\n") + 1
+  if (lastLineStart <= 0) return wrapStreamingText(markdown, width)
+
+  const stable = markdown.slice(0, lastLineStart)
+  const live = markdown.slice(lastLineStart)
+  return `${wrapStreamingText(renderStreamingMarkdownText(stable), width)}${wrapStreamingText(renderLiveStreamingLine(live), width)}`
+}
+
+export function renderStreamingMarkdownTail(
+  markdown: string,
+  width: number,
+  options: RenderPlanMarkdownOptions = {},
+  state: { finalized?: boolean } = {},
+) {
+  if (options.tableMode !== "grid") return renderStableStreamingMarkdown(markdown, state.finalized ?? false, width)
+
+  const lines = markdown.split("\n")
+  const result: string[] = []
+  let inFence = false
+
+  for (let index = 0; index < lines.length; index++) {
+    const current = lines[index] ?? ""
+
+    if (isFenceLine(current)) {
+      inFence = !inFence
+      result.push(current)
+      continue
+    }
+
+    if (inFence) {
+      result.push(current)
+      continue
+    }
+
+    const next = lines[index + 1]
+    if (next && isMarkdownTableRow(current) && isMarkdownTableSeparator(next)) {
+      const table = [current, next]
+      index += 2
+      while (index < lines.length && isMarkdownTableRow(lines[index] ?? "")) {
+        table.push(lines[index] ?? "")
+        index++
+      }
+      result.push(...renderLiveMarkdownTableAsGrid(table, width))
+      index--
+      continue
+    }
+
+    result.push(...wrapStreamingTextLine(current, width))
+  }
+
+  return renderStableStreamingMarkdown(result.join("\n"), state.finalized ?? false, width)
 }
 
 export function hasMermaidFence(markdown: string): boolean {

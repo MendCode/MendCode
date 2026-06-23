@@ -1,0 +1,26 @@
+Create, activate, inspect, pause, resume, stop, or record a MendCode Loop Workflow.
+
+Use this tool when the user asks to convert the current session into a loop, run monitored repeated iterations, keep working in the background, or create a durable workflow that can be watched from Agent View.
+
+Do not use shell commands to discover the loop CLI for normal chat workflows. Prefer this tool. The `mendcode loops ...` CLI is a fallback/debug surface when this tool is unavailable.
+
+Before creating a loop, use the question tool when important parameters are missing or ambiguous:
+- objective and success/stop condition
+- iteration cap or whether it should run until stopped
+- cadence: manual, self-paced, or interval
+- max wall-clock runtime when applicable
+- permission mode: report-only, normal execution, or custom gates
+- provider/model and agent profile when the user wants a specific runtime
+
+Common patterns:
+- Use `action: "draft"` to create a reviewable loop without starting it.
+- Use `action: "activate"` to start an existing draft, or provide name/objective fields to create and activate in one call.
+- Use `action: "list"` when the user asks to see loops and did not provide a loop id.
+- Use `action: "show"` with a concrete `workflowID` for details. If no `workflowID` is available, prefer `list`; the tool will fall back to the contextual active loop or list.
+- For pause, resume, stop, and run_once, provide `workflowID` when visible. If the user says "stop/delete/remove the loop" without an id, the tool may resolve the current session's contextual loop.
+- Use report-only mode unless the user explicitly allows edits.
+- Use a bounded `maxTurns` plus clear stop conditions for test loops.
+- Use `model` in provider/model-id format when the user selected a model for loop iterations.
+- After a list result identifies a concrete loop id, use `action: "show"` with that `workflowID` for detailed status.
+
+The TUI renders Loop Workflow cards from tool metadata. Do not manually recreate the card as a Markdown table in the assistant response after calling this tool.

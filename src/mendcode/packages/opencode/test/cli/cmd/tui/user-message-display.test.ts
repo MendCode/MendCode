@@ -1,14 +1,27 @@
 import { describe, expect, test } from "bun:test"
 import {
+  BLANK_USER_MESSAGE_DISPLAY_TEXT,
   expandPastedContentPlaceholders,
   isPastedContentPart,
   userMessageDisplayText,
+  visibleUserMessageText,
 } from "../../../../src/cli/cmd/tui/routes/session/user-message-display"
 
 describe("user message display text", () => {
   test("keeps short user messages unchanged", () => {
     expect(userMessageDisplayText("hello")).toEqual({
       text: "hello",
+      compacted: false,
+      hiddenLines: 0,
+      hiddenChars: 0,
+    })
+  })
+
+  test("shows whitespace-only user messages with a visible placeholder", () => {
+    expect(visibleUserMessageText(" ")).toBe(BLANK_USER_MESSAGE_DISPLAY_TEXT)
+    expect(visibleUserMessageText("\n\t")).toBe(BLANK_USER_MESSAGE_DISPLAY_TEXT)
+    expect(userMessageDisplayText(" ")).toEqual({
+      text: BLANK_USER_MESSAGE_DISPLAY_TEXT,
       compacted: false,
       hiddenLines: 0,
       hiddenChars: 0,

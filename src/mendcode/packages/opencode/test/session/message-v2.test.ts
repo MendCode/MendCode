@@ -1277,7 +1277,29 @@ describe("session.message-v2.fromError", () => {
     expect((result as MessageV2.APIError).data.message).toInclude("decompression")
   })
 
-  test("classifies ZlibError as AbortedError when abort context is provided", () => {
+  test("keeps retryable network errors retryable when abort context is provided", () => {
+    const result = MessageV2.fromError(new Error("fetch failed"), { providerID, aborted: true })
+
+    expect(MessageV2.APIError.isInstance(result)).toBe(true)
+    expect((result as MessageV2.APIError).data.isRetryable).toBe(true)
+    expect((result as MessageV2.APIError).data.message).toBe("Network connection lost")
+  })
+
+  test("keeps transport AbortError retryable without explicit abort context", () => {
+    const result = MessageV2.fromError(new DOMException("network stream closed", "AbortError"), { providerID })
+
+    expect(MessageV2.APIError.isInstance(result)).toBe(true)
+    expect((result as MessageV2.APIError).data.isRetryable).toBe(true)
+    expect((result as MessageV2.APIError).data.message).toBe("network stream closed")
+  })
+
+  test("keeps explicit AbortError classified as MessageAbortedError", () => {
+    const result = MessageV2.fromError(new DOMException("Aborted", "AbortError"), { providerID, aborted: true })
+
+    expect(result.name).toBe("MessageAbortedError")
+  })
+
+  test("classifies ZlibError as retryable APIError when abort context is provided", () => {
     const zlibError = new Error(
       'ZlibError fetching "https://opencode.cloudflare.dev/anthropic/messages". For more information, pass `verbose: true` in the second argument to fetch()',
     )
@@ -1286,6 +1308,8 @@ describe("session.message-v2.fromError", () => {
 
     const result = MessageV2.fromError(zlibError, { providerID, aborted: true })
 
-    expect(result.name).toBe("MessageAbortedError")
+    expect(MessageV2.APIError.isInstance(result)).toBe(true)
+    expect((result as MessageV2.APIError).data.isRetryable).toBe(true)
+    expect((result as MessageV2.APIError).data.message).toInclude("decompression")
   })
 })

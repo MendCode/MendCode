@@ -15,6 +15,20 @@ function layer(directory: string, plugins: string[]) {
   return ProviderAuth.layer.pipe(
     Layer.provide(Auth.defaultLayer),
     Layer.provide(
+      TestConfig.layer({
+        get: () =>
+          Effect.succeed({
+            plugin: plugins,
+            plugin_origins: plugins.map((plugin) => ({
+              spec: plugin,
+              source: path.join(directory, "mendcode.json"),
+              scope: "local" as const,
+            })),
+          }),
+        directories: () => Effect.succeed([directory]),
+      }),
+    ),
+    Layer.provide(
       Plugin.layer.pipe(
         Layer.provide(Bus.layer),
         Layer.provide(

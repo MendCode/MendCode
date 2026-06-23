@@ -9,7 +9,6 @@ import { zod, ZodOverride } from "@/util/effect-zod"
 import { withStatics } from "@/util/schema"
 import { Config } from "@/config/config"
 import { MCP } from "../mcp"
-import { Skill } from "../skill"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 
@@ -73,7 +72,6 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const config = yield* Config.Service
     const mcp = yield* MCP.Service
-    const skill = yield* Skill.Service
 
     const init = Effect.fn("Command.state")(function* (ctx: InstanceContext) {
       const cfg = yield* config.get()
@@ -144,19 +142,6 @@ export const layer = Layer.effect(
         }
       }
 
-      for (const item of yield* skill.all()) {
-        if (commands[item.name]) continue
-        commands[item.name] = {
-          name: item.name,
-          description: item.description,
-          source: "skill",
-          get template() {
-            return item.content
-          },
-          hints: [],
-        }
-      }
-
       return {
         commands,
       }
@@ -181,7 +166,6 @@ export const layer = Layer.effect(
 export const defaultLayer = layer.pipe(
   Layer.provide(Config.defaultLayer),
   Layer.provide(MCP.defaultLayer),
-  Layer.provide(Skill.defaultLayer),
 )
 
 export * as Command from "."

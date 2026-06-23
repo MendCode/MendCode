@@ -4,7 +4,7 @@ import type { SetupStepID } from "@tui/context/route"
 import { useTheme } from "@tui/context/theme"
 
 const labels: Record<SetupStepID, string> = {
-  provider: "Provider",
+  provider: "Connect Provider",
   models: "Models",
   budget: "Budget",
   package: "Package",

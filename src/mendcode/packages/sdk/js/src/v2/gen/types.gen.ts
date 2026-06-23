@@ -79,6 +79,7 @@ export type Event =
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
   | EventServerConnected
+  | EventServerHeartbeat
   | EventGlobalDisposed
 
 export type OAuth = {
@@ -729,6 +730,8 @@ export type CompactionPart = {
   type: "compaction"
   auto: boolean
   overflow?: boolean
+  resume?: boolean
+  instructions?: string
   tail_start_id?: string
 }
 
@@ -881,6 +884,7 @@ export type GlobalEvent = {
     | EventSessionNextCompactionDelta
     | EventSessionNextCompactionEnded
     | EventServerConnected
+    | EventServerHeartbeat
     | EventGlobalDisposed
     | SyncEventMessageUpdated
     | SyncEventMessageRemoved
@@ -3044,6 +3048,14 @@ export type EventSessionNextCompactionEnded = {
 export type EventServerConnected = {
   id: string
   type: "server.connected"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
+export type EventServerHeartbeat = {
+  id: string
+  type: "server.heartbeat"
   properties: {
     [key: string]: unknown
   }

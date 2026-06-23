@@ -24,6 +24,7 @@ export function DialogAgent() {
       options={options()}
       onSelect={(option) => {
         local.agent.set(option.value)
+        local.model.pinCurrent()
         dialog.clear()
       }}
     />

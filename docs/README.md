@@ -1,6 +1,6 @@
 # MendCode Docs
 
-These docs describe the MendCode-owned product surface: the public `mendcode` CLI, `.mendcode/` configuration, setup flow, runtime packages, model roles, prompt modes, memory, permissions, TUI customization, Plan Mode, Usage Insights, mflow, optional TSM/worktrees, and release/security policy.
+These docs describe the MendCode-owned product surface: the public `mendcode` CLI, `.mendcode/` configuration, setup flow, runtime packages, model roles, prompt modes, memory, permissions, TUI customization, Plan Mode, Changes Review, Loop Workflows, Usage Insights, mflow, optional TSM/worktrees, and release/security policy.
 
 If you are deciding what to show on GitHub or the website, start with [Feature Map](features.md). If you only read one setup page after this index, read [CLI, setup, and configuration](cli-setup-configuration.md). If you are shaping the visual product experience, read [Customization](customization.md).
 
@@ -10,9 +10,11 @@ If you are deciding what to show on GitHub or the website, start with [Feature M
 2. [CLI, setup, and configuration](cli-setup-configuration.md): install/open commands, setup state, config paths, focus profiles, model roles, prompt modes, budget posture, permissions, and memory.
 3. [Customization](customization.md): prompt input, input marker, prompt status, home centered/split modes, Agent View, ASCII title/mascot, activity states, and team profile examples.
 4. [Plan Mode](plan-mode.md): interactive plan review modal, approve/edit/comment/reject flow, Mermaid support, and post-approval implementation handoff.
-5. [Memory Center](memory-center.md): saved memories, proposals, categories, Dream status, project grouping, and the constrained memory side agent for questions, explanations, and draft proposals.
-6. [Usage Insights](usage-insights.md): global/project activity dashboard, token heatmap, AI time, top tools/agents/models, cache behavior, and weather.
-7. [Packages and team sharing](packages-and-team-sharing.md): package commands, agents, modes, skills, prompts, MCP files, widgets, TUI profiles, model policy, permissions, memory, and worktree policy for teams.
+5. [Changes Review](changes-review.md): `/changes` diff workspace, keybinds, comments, responsive layout, and agent-visible review context.
+6. [Loop Workflows](loop-workflows.md): durable loop workflows, Agent View loop sessions, dry-run/report-only/full execution modes, terminal monitor, and OS background service.
+7. [Memory Center](memory-center.md): saved memories, proposals, categories, Dream status, project grouping, and the constrained memory side agent for questions, explanations, and draft proposals.
+8. [Usage Insights](usage-insights.md): global/project activity dashboard, token heatmap, AI time, top tools/agents/models, cache behavior, and weather.
+9. [Packages and team sharing](packages-and-team-sharing.md): package commands, agents, modes, skills, prompts, MCP files, widgets, TUI profiles, model policy, permissions, memory, and worktree policy for teams.
 
 ## Configure The Harness
 
@@ -29,6 +31,8 @@ If you are deciding what to show on GitHub or the website, start with [Feature M
 ## Review, Memory, And Observability
 
 - [Plan Mode](plan-mode.md): planning without silent implementation.
+- [Changes Review](changes-review.md): working-tree diff review with comments, keybinds, and agent-visible review context.
+- [Loop Workflows](loop-workflows.md): long-running, monitorable agent loops with explicit safety modes.
 - [Memory Center](memory-center.md): approval-first memory review, Dream maintenance, and constrained side-agent proposals.
 - [Usage Insights](usage-insights.md): local usage visibility without overclaiming productivity.
 - [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory): permission modes, smart reviewer role, memory scopes, search/preview, and approval-gated proposals.
@@ -109,5 +113,13 @@ CLI profile inspection exists for compatibility/debugging, but it is not the nor
 - `src/mendcode/packages/opencode/src/mend/runtime/packages.ts`: installed package state and active package projection.
 - `src/mendcode/packages/opencode/src/mend/profile.ts`: TUI profile schema and defaults.
 - `src/mendcode/packages/opencode/src/tool/plan-review.ts`: Plan Review tool and post-approval agent switch.
+- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/changes/`: Changes Review route, diff loading, comments, responsive renderer, and review state.
+- `src/mendcode/packages/opencode/src/tool/review.ts`: assistant-facing review workspace tool.
+- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/loops/`: Loop Workflows dashboard route.
+- `src/mendcode/packages/opencode/src/mend/runtime/loop-service.ts`: durable loop service, status, activation, and run state.
+- `src/mendcode/packages/opencode/src/session/loop.ts`: loop workflow model and lifecycle.
+- `src/mendcode/packages/opencode/src/session/loop-runner.ts`: loop wakeup execution path.
+- `src/mendcode/packages/opencode/src/tool/loop.ts`: assistant-facing loop workflow tool.
 - `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/stats/index.tsx`: Usage Insights TUI route.
+- `src/mendcode/packages/opencode/src/provider/claude-code.ts`: local Claude Code CLI provider bridge and validation.
 - `src/mendcode/packages/plugin/src/tui.ts`: public TUI plugin/widget types.

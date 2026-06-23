@@ -14,5 +14,5 @@ export const INTERNAL_TUI_PLUGINS: InternalTuiPlugin[] = [
   HomeFooter,
   HomeTips,
   PluginManager,
-  ...(Flag.OPENCODE_EXPERIMENTAL_EVENT_SYSTEM ? [SessionV2Debug] : []),
+  ...(Flag.OPENCODE_EXPERIMENTAL_SESSION_V2_DEBUG ? [SessionV2Debug] : []),
 ]

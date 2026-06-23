@@ -436,7 +436,56 @@ describe("tool.task", () => {
     }),
   )
 
-  it.instance("execute returns partial child output when the subagent aborts after writing text", () =>
+  it.instance("execute does not cancel child session when task effect is interrupted without abort signal", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const ready = defer<void>()
+      let cancelled = false
+      const promptOps: TaskPromptOps = {
+        cancel: () =>
+          Effect.sync(() => {
+            cancelled = true
+          }),
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: () =>
+          Effect.gen(function* () {
+            ready.resolve()
+            return yield* Effect.never
+          }),
+      }
+
+      const fiber = yield* def
+        .execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Effect.promise(() => ready.promise)
+      yield* Fiber.interrupt(fiber)
+      const exit = yield* Fiber.await(fiber)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(cancelled).toBe(false)
+    }),
+  )
+
+  it.instance("execute returns partial child output when the subagent aborts internally after writing text", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
       const { chat, assistant } = yield* seed()
@@ -492,10 +541,10 @@ describe("tool.task", () => {
       )
 
       expect(result.output).toContain(`task_id: ${result.metadata.sessionId}`)
-      expect(result.output).toContain("task_status: interrupted")
+      expect(result.output).toContain("task_status: failed")
       expect(result.output).toContain("task_error: Aborted")
       expect(result.output).toContain("partial investigation result")
-      expect(result.metadata.status).toBe("interrupted")
+      expect(result.metadata.status).toBe("failed")
     }),
   )
 
@@ -578,6 +627,60 @@ describe("tool.task", () => {
       expect(result.output).toContain("saved child text before abort")
       expect(result.output).not.toContain("task_status: completed")
       expect(result.metadata.status).toBe("interrupted")
+    }),
+  )
+
+  it.instance("execute reports retryable child provider errors as failed, not interrupted", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) =>
+          Effect.succeed({
+            info: {
+              id: MessageID.ascending(),
+              role: "assistant",
+              parentID: input.messageID ?? MessageID.ascending(),
+              sessionID: input.sessionID,
+              mode: input.agent ?? "general",
+              agent: input.agent ?? "general",
+              cost: 0,
+              path: { cwd: "/tmp", root: "/tmp" },
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              modelID: input.model?.modelID ?? ref.modelID,
+              providerID: input.model?.providerID ?? ref.providerID,
+              time: { created: Date.now() },
+              error: new MessageV2.APIError({ message: "Network connection lost", isRetryable: true }).toObject(),
+            },
+            parts: [],
+          }),
+      }
+
+      const result = yield* def.execute(
+        {
+          description: "inspect bug",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.output).toContain("task_status: failed")
+      expect(result.output).toContain("task_error: Network connection lost")
+      expect(result.output).not.toContain("task_status: interrupted")
+      expect(result.metadata.status).toBe("failed")
     }),
   )
 

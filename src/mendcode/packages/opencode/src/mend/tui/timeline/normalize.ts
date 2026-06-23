@@ -22,6 +22,7 @@ export function toolClass(tool: string, state?: TimelineToolState): TimelineTool
 export function shouldRenderCompactTool(profile: MendPresentationProfile, tool: string) {
   if (profile === "raw") return false
   if (tool === "task") return false
+  if (tool === "loop") return false
   if (tool === "todowrite") return profile === "mendcode"
   if (toolClass(tool) === "artifact") return false
   if (profile === "minimal") return true

@@ -78,7 +78,7 @@
     },
     "packages/opencode": {
       "name": "mendcode",
-      "version": "0.1.16",
+      "version": "0.1.17",
       "bin": {
         "mendcode": "./bin/opencode",
         "mendcode-runtime": "./bin/opencode",

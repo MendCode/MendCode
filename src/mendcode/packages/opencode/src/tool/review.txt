@@ -1,0 +1,17 @@
+Inspect and control the active MendCode /changes review workspace.
+
+Use this when the user is reviewing changed files in /changes and asks you to look at the selected diff block, navigate the review, add review comments, list comments, clear comments, or reload the review after edits.
+
+The tool returns structured review context. It does not edit files, stage changes, revert changes, submit PR reviews, or require an external diff review app.
+
+Actions:
+- current: return the current selected file/block/line.
+- summary: return bounded review context for changed files and comments.
+- file: return one file summary and optionally its raw patch.
+- navigate: move the visible review selection.
+- reload: reload the working-tree diff and re-anchor comments where possible.
+- comment_add: add a user-visible review comment.
+- comment_list: list review comments.
+- comment_clear: clear review comments.
+
+Keep raw patch requests narrow. Prefer summary/current first, then request a single file patch only when needed.

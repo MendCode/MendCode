@@ -15,6 +15,8 @@ import { FileWatcher } from "@/file/watcher"
 import { Ripgrep } from "@/file/ripgrep"
 import { Format } from "@/format"
 import { LSP } from "@/lsp/lsp"
+import { LoopWorkflow } from "@/session/loop"
+import { LoopRunner } from "@/session/loop-runner"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
 import { Installation } from "@/installation"
@@ -59,6 +61,7 @@ import { experimentalHandlers } from "./handlers/experimental"
 import { fileHandlers } from "./handlers/file"
 import { globalHandlers } from "./handlers/global"
 import { instanceHandlers } from "./handlers/instance"
+import { loopRoute } from "./handlers/loop"
 import { memoryHandlers } from "./handlers/memory"
 import { mcpHandlers } from "./handlers/mcp"
 import { permissionHandlers } from "./handlers/permission"
@@ -131,7 +134,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   ]),
 )
 
-const rawInstanceRoutes = Layer.mergeAll(ptyConnectRoute).pipe(Layer.provide(instanceRouterLayer))
+const rawInstanceRoutes = Layer.mergeAll(ptyConnectRoute, loopRoute).pipe(Layer.provide(instanceRouterLayer))
 const instanceRoutes = Layer.mergeAll(rawInstanceRoutes, instanceApiRoutes).pipe(
   Layer.provide([
     authorizationLayer.pipe(Layer.provide(ServerAuth.Config.defaultLayer)),
@@ -163,6 +166,8 @@ export function createRoutes(corsOptions?: CorsOptions) {
       FileWatcher.defaultLayer,
       Format.defaultLayer,
       LSP.defaultLayer,
+      LoopWorkflow.defaultLayer,
+      LoopRunner.defaultLayer,
       Installation.defaultLayer,
       MCP.defaultLayer,
       ModelsDev.defaultLayer,
