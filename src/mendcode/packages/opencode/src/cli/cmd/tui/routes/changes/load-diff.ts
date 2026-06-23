@@ -79,6 +79,5 @@ export function normalizeNoIndexPatch(diff: string, file: string) {
   const escaped = file.replace(/\\/g, "/")
   return diff
     .replace(/^diff --git a\/dev\/null b\/(.+)$/m, `diff --git a/${escaped} b/${escaped}`)
-    .replace(/^--- \/dev\/null$/m, "--- /dev/null")
     .replace(/^\+\+\+ b\/(.+)$/m, `+++ b/${escaped}`)
 }
