@@ -11,6 +11,7 @@
 - Resume active provider compaction automatically and add trigger context so compaction summaries do not falsely close unfinished work.
 - Keep the active loop count only in the prompt footer, expose `/loop` from the new-chat screen, make `/loop` Tab completion non-submitting, and remove duplicate `/loops` slash entries.
 - Accept loop model variants through the `variant` field or provider/model#variant syntax for any provider.
+- Keep the `/loops` dashboard cursor out of read-only detail rows so the `updated` field no longer looks editable.
 
 ## 0.1.17 - 2026-06-23
 

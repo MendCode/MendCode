@@ -566,30 +566,33 @@ function LoopDetail(props: {
             <box flexDirection="column" gap={1}>
               <box flexDirection="column" gap={0}>
                 <box flexDirection="row" height={1} overflow="hidden">
-                  <text fg={theme.secondary} attributes={TextAttributes.BOLD} wrapMode="none">
+                  <text fg={theme.secondary} attributes={TextAttributes.BOLD} wrapMode="none" selectable={false}>
                     {compact(item().name || item().objective || item().id, Math.max(12, props.width - 18))}
                   </text>
                   <box flexGrow={1} />
-                  <text fg={theme.textMuted} wrapMode="none">{compact(item().id, 16)}</text>
+                  <text fg={theme.textMuted} wrapMode="none" selectable={false}>{compact(item().id, 16)}</text>
                 </box>
-                <text fg={theme.textMuted} wrapMode="none">{compact(item().objective, props.width)}</text>
+                <text fg={theme.textMuted} wrapMode="none" selectable={false}>{compact(item().objective, props.width)}</text>
               </box>
 
               <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
                 <Show when={props.error}>
-                  {(error) => <text fg={theme.warning} wrapMode="none">snapshot unavailable · {compact(error(), Math.max(12, props.width - 23))}</text>}
+                  {(error) => <text fg={theme.warning} wrapMode="none" selectable={false}>snapshot unavailable · {compact(error(), Math.max(12, props.width - 23))}</text>}
                 </Show>
                 <For each={props.rows}>
                   {(row) => <DetailRow label={row[0]} value={row[1]} width={props.width} emphasize={row[0] === "chat"} />}
                 </For>
+                <text fg={theme.backgroundPanel} bg={theme.backgroundPanel} width={props.width} wrapMode="none" selectable={false}>
+                  {fixedCell("", props.width)}
+                </text>
               </box>
 
               <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
-                <text fg={theme.textMuted} wrapMode="none">recent runs</text>
-                <Show when={props.runs.length} fallback={<text fg={theme.textMuted} wrapMode="none">no runs yet</text>}>
+                <text fg={theme.textMuted} wrapMode="none" selectable={false}>recent runs</text>
+                <Show when={props.runs.length} fallback={<text fg={theme.textMuted} wrapMode="none" selectable={false}>no runs yet</text>}>
                   <For each={props.runs}>
                     {(run) => (
-                      <text fg={run.state === "failed" ? theme.error : theme.text} wrapMode="none">
+                      <text fg={run.state === "failed" ? theme.error : theme.text} wrapMode="none" selectable={false}>
                         {compact(`${run.state} · ${run.trigger || "run"} · ${run.evaluatorReason || run.phase || ""}`, props.width)}
                       </text>
                     )}
@@ -598,8 +601,8 @@ function LoopDetail(props: {
               </box>
 
               <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
-                <text fg={theme.textMuted} wrapMode="none">events</text>
-                <Show when={props.events.length} fallback={<text fg={theme.textMuted} wrapMode="none">no events yet</text>}>
+                <text fg={theme.textMuted} wrapMode="none" selectable={false}>events</text>
+                <Show when={props.events.length} fallback={<text fg={theme.textMuted} wrapMode="none" selectable={false}>no events yet</text>}>
                   <For each={props.events}>
                     {(event, index) => <TimelineEvent event={event} width={props.width} last={index() === props.events.length - 1} />}
                   </For>
@@ -630,10 +633,10 @@ function TimelineEvent(props: { event: LoopEvent; width: number; last: boolean }
         <text fg={props.last ? theme.textMuted : theme.border} wrapMode="none">{props.last ? " " : "│"}</text>
       </box>
       <box flexDirection="column" flexGrow={1} minWidth={0}>
-        <text fg={color()} wrapMode="none">
+        <text fg={color()} wrapMode="none" selectable={false}>
           {compact(`${eventTimeLabel(props.event)} · ${props.event.type} · ${props.event.title}`, titleWidth())}
         </text>
-        <text fg={theme.textMuted} wrapMode="none">
+        <text fg={theme.textMuted} wrapMode="none" selectable={false}>
           {compact(props.event.summary, summaryWidth())}
         </text>
       </box>
@@ -647,8 +650,8 @@ function DetailRow(props: { label: string; value: string; width: number; emphasi
   const valueWidth = createMemo(() => Math.max(8, props.width - labelWidth - 1))
   return (
     <box flexDirection="row" height={1} overflow="hidden">
-      <text fg={theme.textMuted} width={labelWidth} wrapMode="none">{fixedCell(props.label, labelWidth)}</text>
-      <text fg={props.emphasize ? theme.secondary : theme.text} width={valueWidth()} wrapMode="none">{fixedCell(props.value, valueWidth())}</text>
+      <text fg={theme.textMuted} width={labelWidth} wrapMode="none" selectable={false}>{fixedCell(props.label, labelWidth)}</text>
+      <text fg={props.emphasize ? theme.secondary : theme.text} width={valueWidth()} wrapMode="none" selectable={false}>{fixedCell(props.value, valueWidth())}</text>
     </box>
   )
 }
