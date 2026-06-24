@@ -72,6 +72,7 @@ type LoopView = "active" | "history"
 
 const ACTIVE_STATES = new Set(["active", "sleeping", "working", "needs_input", "blocked", "paused"])
 const TERMINAL_STATES = new Set(["completed", "failed", "stopped"])
+const LOOP_EVENT_LIMIT = 200
 
 function stateLabel(workflow: Pick<LoopWorkflow, "state" | "phase">) {
   return workflow.phase && workflow.phase !== "ready" ? `${workflow.state}: ${workflow.phase}` : workflow.state
@@ -228,7 +229,7 @@ export function Loops() {
   }
 
   async function fetchSnapshot(id: string) {
-    const response = await sdk.fetch(`${sdk.url}/loop/${id}`, { headers: { accept: "application/json" } })
+    const response = await sdk.fetch(`${sdk.url}/loop/${id}?limit=${LOOP_EVENT_LIMIT}`, { headers: { accept: "application/json" } })
     if (!response.ok) {
       setSnapshotError(`Loop snapshot failed: ${response.status}`)
       return undefined
@@ -411,7 +412,7 @@ export function Loops() {
     ]
   })
 
-  const events = createMemo(() => (snapshot.latest?.events ?? []).slice().reverse().slice(0, 10))
+  const events = createMemo(() => (snapshot.latest?.events ?? []).slice().reverse())
   const runs = createMemo(() => (snapshot.latest?.runs ?? []).slice(0, 6))
 
   return (
@@ -550,6 +551,9 @@ function LoopDetail(props: {
   width: number
 }) {
   const { theme } = useTheme()
+  const eventRows = createMemo(() => props.events.length * 3)
+  const eventViewportHeight = createMemo(() => Math.min(18, Math.max(3, eventRows())))
+  const eventScrollbarVisible = createMemo(() => eventRows() > eventViewportHeight())
   return (
     <box flexDirection="column" minHeight={0} flexGrow={1}>
       <Show when={props.detail} fallback={<text fg={theme.textMuted} wrapMode="none">Select a loop.</text>}>
@@ -558,10 +562,7 @@ function LoopDetail(props: {
             flexGrow={1}
             minHeight={0}
             horizontalScrollbarOptions={{ visible: false }}
-            verticalScrollbarOptions={{
-              visible: true,
-              trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border },
-            }}
+            verticalScrollbarOptions={{ visible: false }}
           >
             <box flexDirection="column" gap={1}>
               <box flexDirection="column" gap={0}>
@@ -598,11 +599,35 @@ function LoopDetail(props: {
               </box>
 
               <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
-                <text fg={theme.textMuted} wrapMode="none" selectable={false}>events</text>
+                <box flexDirection="row" height={1} overflow="hidden">
+                  <text fg={theme.textMuted} wrapMode="none" selectable={false}>events</text>
+                  <box flexGrow={1} />
+                  <Show when={props.events.length >= LOOP_EVENT_LIMIT}>
+                    <text fg={theme.textMuted} wrapMode="none" selectable={false}>latest {LOOP_EVENT_LIMIT}</text>
+                  </Show>
+                </box>
                 <Show when={props.events.length} fallback={<text fg={theme.textMuted} wrapMode="none" selectable={false}>no events yet</text>}>
-                  <For each={props.events}>
-                    {(event, index) => <TimelineEvent event={event} width={props.width} last={index() === props.events.length - 1} />}
-                  </For>
+                  <Show
+                    when={eventScrollbarVisible()}
+                    fallback={
+                      <For each={props.events}>
+                        {(event, index) => <TimelineEvent event={event} width={props.width} last={index() === props.events.length - 1} />}
+                      </For>
+                    }
+                  >
+                    <scrollbox
+                      height={eventViewportHeight()}
+                      horizontalScrollbarOptions={{ visible: false }}
+                      verticalScrollbarOptions={{
+                        visible: true,
+                        trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border },
+                      }}
+                    >
+                      <For each={props.events}>
+                        {(event, index) => <TimelineEvent event={event} width={props.width - 2} last={index() === props.events.length - 1} />}
+                      </For>
+                    </scrollbox>
+                  </Show>
                 </Show>
               </box>
             </box>
@@ -626,8 +651,8 @@ function TimelineEvent(props: { event: LoopEvent; width: number; last: boolean }
   return (
     <box flexDirection="row" height={3} overflow="hidden">
       <box flexDirection="column" width={3} alignItems="center">
-        <text fg={color()} wrapMode="none">●</text>
-        <text fg={props.last ? theme.textMuted : theme.border} wrapMode="none">{props.last ? " " : "│"}</text>
+        <text fg={color()} wrapMode="none" selectable={false}>●</text>
+        <text fg={props.last ? theme.textMuted : theme.border} wrapMode="none" selectable={false}>{props.last ? " " : "│"}</text>
       </box>
       <box flexDirection="column" flexGrow={1} minWidth={0}>
         <text fg={color()} wrapMode="none" selectable={false}>

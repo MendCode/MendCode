@@ -252,6 +252,10 @@ function suggestCommand(value: string, candidates = [...primaryCommands, ...adva
   return match && match.score <= Math.max(2, Math.floor(value.length / 3)) ? match.candidate : undefined
 }
 
+function shellCwd() {
+  return path.resolve(process.env.MENDCODE_SHELL_CWD || process.cwd())
+}
+
 function controlPlaneEnv(root: string) {
   const originalEnv: Record<string, string> = {}
   for (const key of ["MENDCODE_CONFIG_DIR", "OPENCODE_CONFIG_DIR", "MENDCODE_TUI_CONFIG", "OPENCODE_TUI_CONFIG", "MENDCODE_CONFIG", "OPENCODE_CONFIG", "MENDCODE_DB", "OPENCODE_DB", "MENDCODE_GLOBAL_LAYOUT", "OPENCODE_GLOBAL_LAYOUT"]) {
@@ -259,7 +263,7 @@ function controlPlaneEnv(root: string) {
   }
   return {
     ...runtimeEnv(root),
-    MENDCODE_SHELL_CWD: process.cwd(),
+    MENDCODE_SHELL_CWD: shellCwd(),
     MENDCODE_PUBLIC_BIN: path.resolve(process.argv[1] || "mendcode"),
     MENDCODE_ORIGINAL_ENV_JSON: JSON.stringify(originalEnv),
   }
@@ -390,7 +394,10 @@ export function resolveWorktreeShortcutTarget(
 async function runWorktreeShortcut(args: string[]) {
   const target = args[0]
   if (args.length > 1) throw new Error("Usage: mendcode --worktree [branch|path|id]")
-  const status = await worktreeStatus(process.cwd())
+  const status = await worktreeStatus(shellCwd())
+  if (!status.git.ok) {
+    throw new Error(`Worktree shortcut requires a git repository. Current path is not inside git: ${status.workspace.currentPath}`)
+  }
   const resolved = resolveWorktreeShortcutTarget(status, target, "worktree")
   return runRuntime([resolved.path])
 }
@@ -399,14 +406,43 @@ async function runTsmShortcut(args: string[]) {
   const all = args[0] === "--all"
   const target = all ? undefined : args[0]
   if (args.length > 1) throw new Error("Usage: mendcode --tsm [branch|path|id|--all]")
-  const status = await worktreeStatus(process.cwd())
-  const tsm = await tsmStatus(process.cwd())
+  const cwd = shellCwd()
+  const status = await worktreeStatus(cwd)
+  const tsm = await tsmStatus(cwd)
   if (tsm.lifecycle !== "active" || !tsm.worktreeCapable) {
     throw new Error(`TSM is not active for this repo (${tsm.lifecycle}). Run \`mendcode tsm status\` and \`mendcode tsm activate\`.`)
   }
-  const branches = all ? [] : [resolveWorktreeShortcutTarget(status, target, "tsm").branch].filter((branch): branch is string => Boolean(branch))
+  if (!status.git.ok) {
+    throw new Error(`TSM worktree shortcut requires a git repository. Current path is not inside git: ${status.workspace.currentPath}`)
+  }
+  if (!tsm.gitHead) {
+    throw new Error("TSM worktree shortcut requires an initial git commit before creating or opening worktrees. Commit once and retry.")
+  }
+  const binary = tsm.binaryPath || "tsm"
+  let shouldCreate = false
+  const branches = all ? [] : (() => {
+    try {
+      return [resolveWorktreeShortcutTarget(status, target, "tsm").branch].filter((branch): branch is string => Boolean(branch))
+    } catch (error) {
+      if (!target) throw error
+      const checked = spawnSync("git", ["check-ref-format", "--branch", target], {
+        cwd: status.workspace.repoRoot,
+        encoding: "utf8",
+      })
+      if (checked.status !== 0) throw error
+      shouldCreate = true
+      return [target]
+    }
+  })()
   if (!all && !branches.length) throw new Error("TSM shortcut requires a branch-backed worktree target.")
-  const result = spawnSync("tsm", ["wt", "open", ...branches, "--split", "mendcode"], {
+  if (shouldCreate) {
+    const created = spawnSync(binary, ["wt", "add", ...branches], {
+      cwd: status.workspace.repoRoot,
+      stdio: "inherit",
+    })
+    if ((created.status ?? 1) !== 0) process.exit(created.status ?? 1)
+  }
+  const result = spawnSync(binary, ["wt", "open", ...branches, "--split", "mendcode"], {
     cwd: status.workspace.repoRoot,
     stdio: "inherit",
   })

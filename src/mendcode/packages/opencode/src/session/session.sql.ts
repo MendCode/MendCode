@@ -164,6 +164,14 @@ type LoopSpecData = {
     mode?: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced"
     intervalMs?: number
   }
+  budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
+  completionCriteria?: string[]
+  successChecks?: string[]
+  strategy?: {
+    targetTurns?: number
+    reserveTurns?: number
+    notifyOwnerOnComplete?: boolean
+  }
   stopWhen?: string[]
   gates?: string[]
   model?: {
@@ -249,6 +257,13 @@ export const LoopRunTable = sqliteTable(
       .$type<{
         evaluatorReason?: string
         budget?: LoopMetricsData
+        checkpoint?: {
+          status?: "complete" | "continue" | "needs_input" | "blocked"
+          summary?: string
+          evidence?: string[]
+          nextAction?: string
+          confidence?: string
+        }
       }>(),
   },
   (table) => [

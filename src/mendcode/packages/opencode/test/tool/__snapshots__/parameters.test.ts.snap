@@ -225,6 +225,22 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
       "description": "Optional MendCode agent/profile name to use when the loop runner wakes this workflow.",
       "type": "string",
     },
+    "budgetMode": {
+      "description": "Loop budget semantics: fixed runs exactly to maxTurns, max-goal uses maxTurns as a cap and completes as soon as the goal is verified, unbounded-monitor runs until stopped/blocker.",
+      "enum": [
+        "fixed",
+        "max-goal",
+        "unbounded-monitor",
+      ],
+      "type": "string",
+    },
+    "completionCriteria": {
+      "description": "Concrete criteria that prove the loop goal is complete. Required for max-goal implementation loops.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
     "ensureService": {
       "description": "When activating, best-effort start the project loop service so wakeups continue outside the TUI.",
       "type": "boolean",
@@ -253,7 +269,7 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
       "type": "number",
     },
     "maxTurns": {
-      "description": "Maximum number of loop iterations before stopping. Use this for bounded test loops.",
+      "description": "Iteration budget/cap. For goal work this is a maximum, not a plan to spend every iteration. Use budgetMode=fixed only for exactly-N iteration jobs.",
       "type": "number",
     },
     "model": {
@@ -263,6 +279,10 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
     "name": {
       "description": "Short workflow name when creating a draft or activating a new loop.",
       "type": "string",
+    },
+    "notifyOwnerOnComplete": {
+      "description": "When true, wake the parent session with a loop completion summary after a max-goal loop completes.",
+      "type": "boolean",
     },
     "objective": {
       "description": "Durable loop objective. Required when creating a draft or activating a new loop.",
@@ -285,12 +305,27 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
       "description": "Whether the loop should inspect and report without editing. Defaults to true for newly created loops.",
       "type": "boolean",
     },
+    "reserveTurns": {
+      "description": "Number of final budget turns reserved for validation, cleanup, retry, or blocker reporting.",
+      "type": "number",
+    },
     "stopWhen": {
       "description": "Natural-language stop conditions for the loop.",
       "items": {
         "type": "string",
       },
       "type": "array",
+    },
+    "successChecks": {
+      "description": "Validation commands, inspections, or review checks the loop should run before reporting complete.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "targetTurns": {
+      "description": "Soft target number of iterations to finish the goal before using the remaining budget for recovery/verification.",
+      "type": "number",
     },
     "triggerMode": {
       "description": "How the loop wakes up. Use manual for on-demand tests or interval for scheduled background loops.",

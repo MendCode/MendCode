@@ -520,6 +520,71 @@ describe("ProviderTransform.providerOptions", () => {
       groq: { reasoningFormat: "parsed" },
     })
   })
+
+  test("removes command frontmatter metadata from opencode provider options", () => {
+    const model = createModel({
+      providerID: "opencode-go",
+      api: {
+        id: "glm-5.2",
+        url: "https://opencode.ai/zen/go/v1",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    })
+
+    expect(
+      ProviderTransform.providerOptions(model, {
+        "argument-hint": "[feature to build]",
+        reasoningEffort: "max",
+      }),
+    ).toEqual({
+      "opencode-go": {
+        reasoningEffort: "max",
+      },
+    })
+  })
+})
+
+describe("ProviderTransform.schema - opencode strict schema cleanup", () => {
+  const opencodeGoModel = {
+    providerID: "opencode-go",
+    api: {
+      id: "glm-5.2",
+    },
+  } as any
+
+  test("removes command frontmatter metadata rejected by opencode providers", () => {
+    const result = ProviderTransform.schema(opencodeGoModel, {
+      type: "object",
+      "argument-hint": "[feature to build]",
+      properties: {
+        prompt: {
+          type: "string",
+          "argument-hint": "[prompt]",
+        },
+      },
+    } as any) as any
+
+    expect(result["argument-hint"]).toBeUndefined()
+    expect(result.properties.prompt["argument-hint"]).toBeUndefined()
+    expect(result.properties.prompt.type).toBe("string")
+  })
+
+  test("preserves command metadata for other providers", () => {
+    const result = ProviderTransform.schema(
+      {
+        providerID: "openai",
+        api: {
+          id: "gpt-5",
+        },
+      } as any,
+      {
+        type: "object",
+        "argument-hint": "[feature to build]",
+      } as any,
+    ) as any
+
+    expect(result["argument-hint"]).toBe("[feature to build]")
+  })
 })
 
 describe("ProviderTransform.schema - gemini array items", () => {
@@ -1875,8 +1940,8 @@ describe("ProviderTransform.message - strip openai metadata when store=false", (
 
     const result = ProviderTransform.message(msgs, opencodeModel, { store: false }) as any[]
 
-    expect(result[0].content[0].providerOptions?.mendcode?.itemId).toBe("msg_123")
-    expect(result[0].content[0].providerOptions?.mendcode?.otherOption).toBe("value")
+    expect(result[0].content[0].providerOptions?.opencode?.itemId).toBe("msg_123")
+    expect(result[0].content[0].providerOptions?.opencode?.otherOption).toBe("value")
   })
 
   test("preserves itemId across all providerOptions keys", () => {
@@ -1914,10 +1979,10 @@ describe("ProviderTransform.message - strip openai metadata when store=false", (
     const result = ProviderTransform.message(msgs, opencodeModel, { store: false }) as any[]
 
     expect(result[0].providerOptions?.openai?.itemId).toBe("msg_root")
-    expect(result[0].providerOptions?.mendcode?.itemId).toBe("msg_opencode")
+    expect(result[0].providerOptions?.opencode?.itemId).toBe("msg_opencode")
     expect(result[0].providerOptions?.extra?.itemId).toBe("msg_extra")
     expect(result[0].content[0].providerOptions?.openai?.itemId).toBe("msg_openai_part")
-    expect(result[0].content[0].providerOptions?.mendcode?.itemId).toBe("msg_opencode_part")
+    expect(result[0].content[0].providerOptions?.opencode?.itemId).toBe("msg_opencode_part")
     expect(result[0].content[0].providerOptions?.extra?.itemId).toBe("msg_extra_part")
   })
 
@@ -2383,6 +2448,69 @@ describe("ProviderTransform.variants", () => {
     expect(result).toEqual({})
   })
 
+  test("opencode go exposes max reasoning only for GLM-5.2", () => {
+    const model = createMockModel({
+      id: "glm-5.2",
+      providerID: "opencode-go",
+      api: {
+        id: "glm-5.2",
+        url: "https://mendcode.ai/zen/go/v1",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    })
+    const result = ProviderTransform.variants(model)
+    expect(result).toEqual({
+      high: { reasoningEffort: "high" },
+      max: { reasoningEffort: "max" },
+    })
+  })
+
+  test("opencode go does not expose generic variants for non-GLM-5.2 GLM models", () => {
+    const model = createMockModel({
+      id: "glm-5",
+      providerID: "opencode-go",
+      api: {
+        id: "glm-5",
+        url: "https://mendcode.ai/zen/go/v1",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    })
+    const result = ProviderTransform.variants(model)
+    expect(result).toEqual({})
+  })
+
+  test("opencode go exposes MiniMax M3 adaptive thinking variants", () => {
+    const model = createMockModel({
+      id: "minimax-m3",
+      providerID: "opencode-go",
+      api: {
+        id: "minimax-m3",
+        url: "https://mendcode.ai/zen/go/v1",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    })
+    const result = ProviderTransform.variants(model)
+    expect(result).toEqual({
+      none: { thinking: { type: "disabled" } },
+      thinking: { thinking: { type: "adaptive" } },
+    })
+  })
+
+  test("opencode go does not expose variants for Kimi or Qwen models", () => {
+    for (const id of ["kimi-k2.6", "qwen3.6-plus"]) {
+      const model = createMockModel({
+        id,
+        providerID: "opencode-go",
+        api: {
+          id,
+          url: "https://mendcode.ai/zen/go/v1",
+          npm: "@ai-sdk/openai-compatible",
+        },
+      })
+      expect(ProviderTransform.variants(model)).toEqual({})
+    }
+  })
+
   test("mistral models with reasoning support return variants", () => {
     const model = createMockModel({
       id: "mistral/mistral-small-latest",
@@ -2448,7 +2576,7 @@ describe("ProviderTransform.variants", () => {
   })
 
   describe("@openrouter/ai-sdk-provider", () => {
-    test("returns empty object for non-qualifying models", () => {
+    test("returns widely supported reasoning efforts for non-OpenAI models", () => {
       const model = createMockModel({
         id: "openrouter/test-model",
         providerID: "openrouter",
@@ -2459,7 +2587,8 @@ describe("ProviderTransform.variants", () => {
         },
       })
       const result = ProviderTransform.variants(model)
-      expect(result).toEqual({})
+      expect(Object.keys(result)).toEqual(["low", "medium", "high"])
+      expect(result.high).toEqual({ reasoning: { effort: "high" } })
     })
 
     test("gpt models return OPENAI_EFFORTS with reasoning", () => {
@@ -2478,7 +2607,7 @@ describe("ProviderTransform.variants", () => {
       expect(result.high).toEqual({ reasoning: { effort: "high" } })
     })
 
-    test("gemini-3 returns OPENAI_EFFORTS with reasoning", () => {
+    test("gemini-3 returns widely supported reasoning efforts", () => {
       const model = createMockModel({
         id: "openrouter/gemini-3-5-pro",
         providerID: "openrouter",
@@ -2489,7 +2618,7 @@ describe("ProviderTransform.variants", () => {
         },
       })
       const result = ProviderTransform.variants(model)
-      expect(Object.keys(result)).toEqual(["none", "minimal", "low", "medium", "high", "xhigh"])
+      expect(Object.keys(result)).toEqual(["low", "medium", "high"])
     })
 
     test("grok-4 returns empty object", () => {

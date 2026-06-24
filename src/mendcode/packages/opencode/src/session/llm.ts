@@ -334,14 +334,15 @@ const live: Layer.Layer<
         Object.keys(tools).length === 0 &&
         hasToolCalls(input.messages)
       ) {
+        const noopSchema = ProviderTransform.schema(input.model, {
+          type: "object",
+          properties: {
+            reason: { type: "string", description: "Unused" },
+          },
+        })
         tools["_noop"] = tool({
           description: "Do not call this tool. It exists only for API compatibility and must never be invoked.",
-          inputSchema: jsonSchema({
-            type: "object",
-            properties: {
-              reason: { type: "string", description: "Unused" },
-            },
-          }),
+          inputSchema: jsonSchema(noopSchema),
           execute: async () => ({ output: "", title: "", metadata: {} }),
         })
       }

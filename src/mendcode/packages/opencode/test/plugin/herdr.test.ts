@@ -782,6 +782,40 @@ describe("plugin.herdr", () => {
     ).toBe(false)
   })
 
+  test("does not leave Herdr working when session status omits the completed session", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "ses_done" } }),
+          status: async () => ({ data: {} }),
+          children: async () => ({ data: [] }),
+        },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks["tool.execute.after"]?.({ sessionID: "ses_done" } as any, {} as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "idle",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some((request) => request.method === "pane.report_agent" && request.params.state === "working"),
+    ).toBe(false)
+  })
+
   test("ignores child session input events when the parent MendCode session is selected", async () => {
     process.env.HERDR_ENV = "1"
     process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"

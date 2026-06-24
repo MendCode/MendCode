@@ -631,7 +631,7 @@ export const HerdrAgentStatePlugin: Plugin = async (input) => {
     "tool.execute.after": async ({ sessionID }) => {
       if (!(await shouldHandleHookSession(input.client, state, sessionID))) return
       state.currentSessionID = sessionID
-      await reportCurrentSessionStatus(input.client, state, sessionID, "working")
+      await reportCurrentSessionStatus(input.client, state, sessionID, "idle")
     },
     event: async ({ event }) => {
       const herdrEvent = event as HerdrEvent

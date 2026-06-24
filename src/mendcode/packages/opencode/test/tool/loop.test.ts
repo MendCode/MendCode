@@ -54,6 +54,7 @@ describe("tool.loop", () => {
               model: "opencode/gpt-5#medium",
               agent: "build",
               permissionMode: "report-only",
+              budgetMode: "fixed",
               reportOnly: true,
               ensureService: false,
             },
@@ -73,6 +74,7 @@ describe("tool.loop", () => {
           expect(result.output).toContain("root_session_id:")
           expect(result.output).toContain("model: opencode/gpt-5#medium")
           expect(result.output).toContain("agent: build")
+          expect(result.output).toContain("budget_mode: fixed")
           expect(result.output).toContain("max_runtime_ms: 300000")
           expect(result.output).toContain("Loop service was not confirmed")
 

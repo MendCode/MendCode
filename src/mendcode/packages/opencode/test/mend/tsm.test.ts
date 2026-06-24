@@ -83,6 +83,34 @@ describe("TSM lifecycle", () => {
     expect(removed.status.lifecycle).toBe("installed-inactive")
   })
 
+  test("status warns when TSM is active outside a git repository", async () => {
+    await using dir = await tmpdir()
+    process.env.MENDCODE_TSM_BINARY = await fakeTsm(dir.path)
+
+    const active = await activateTsm(dir.path)
+
+    expect(active.lifecycle).toBe("active")
+    expect(active.rootGit).toBe(false)
+    expect(active.warnings).toContain(`current path is not inside a git repository: ${dir.path}`)
+  })
+
+  test("status warns when git repository has no initial commit", async () => {
+    await using dir = await tmpdir({
+      init: async (root) => {
+        spawnSync("git", ["init"], { cwd: root, encoding: "utf8" })
+        spawnSync("git", ["config", "core.fsmonitor", "false"], { cwd: root, encoding: "utf8" })
+      },
+    })
+    process.env.MENDCODE_TSM_BINARY = await fakeTsm(dir.path)
+
+    const active = await activateTsm(dir.path)
+
+    expect(active.lifecycle).toBe("active")
+    expect(active.rootGit).toBe(true)
+    expect(active.gitHead).toBe(false)
+    expect(active.warnings).toContain("git repository has no commits yet; create an initial commit before using TSM worktrees")
+  })
+
   test("control-plane TSM commands render text by default and JSON on request", async () => {
     await using dir = await tmpdir({ git: true })
     process.env.MENDCODE_TSM_BINARY = await fakeTsm(dir.path)
