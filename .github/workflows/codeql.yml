@@ -2,10 +2,35 @@ name: CodeQL
 
 on:
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "src/mendcode/packages/web/src/content/docs/**"
+      - "src/mendcode/packages/web/public/**"
+      - "src/mendcode/packages/web/README.md"
+      - "CHANGELOG.md"
+      - "ACKNOWLEDGEMENTS.md"
+      - "CODE_OF_CONDUCT.md"
+      - "CONTRIBUTING.md"
+      - "LICENSE"
+      - "SECURITY.md"
+      - "SUPPORT.md"
   push:
     branches:
       - main
-      - dev
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - "src/mendcode/packages/web/src/content/docs/**"
+      - "src/mendcode/packages/web/public/**"
+      - "src/mendcode/packages/web/README.md"
+      - "CHANGELOG.md"
+      - "ACKNOWLEDGEMENTS.md"
+      - "CODE_OF_CONDUCT.md"
+      - "CONTRIBUTING.md"
+      - "LICENSE"
+      - "SECURITY.md"
+      - "SUPPORT.md"
   schedule:
     - cron: "31 13 * * 1"
   workflow_dispatch:

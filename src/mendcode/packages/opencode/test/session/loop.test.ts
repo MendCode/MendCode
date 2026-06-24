@@ -10,6 +10,7 @@ import {
 } from "@/session/loop"
 import { LoopRunner } from "@/session/loop-runner"
 import { SessionPrompt } from "@/session/prompt"
+import * as Session from "@/session/session"
 import { Database } from "@/storage/db"
 import {
   BackgroundSessionTable,
@@ -26,7 +27,10 @@ function run<A, E>(fx: Effect.Effect<A, E, LoopWorkflowService>) {
   return Effect.runPromise(fx.pipe(Effect.provide(loopWorkflowLayer)))
 }
 
-function runRunner<A, E>(fx: Effect.Effect<A, E, LoopRunner.Service | LoopWorkflowService | SessionPrompt.Service>) {
+function runRunner<A, E>(
+  fx: Effect.Effect<A, E, LoopRunner.Service | LoopWorkflowService | SessionPrompt.Service>,
+  promptText?: string | ((call: number) => string),
+) {
   let prompts = 0
   const promptCalls: any[] = []
   const promptLayer = Layer.succeed(
@@ -37,7 +41,8 @@ function runRunner<A, E>(fx: Effect.Effect<A, E, LoopRunner.Service | LoopWorkfl
         Effect.sync(() => {
           prompts++
           promptCalls.push(input)
-          return { info: {}, parts: [] } as any
+          const text = typeof promptText === "function" ? promptText(prompts) : promptText
+          return { info: {}, parts: text ? [{ type: "text", text }] : [] } as any
         }),
       loop: () => Effect.succeed({ info: {}, parts: [] } as any),
       shell: () => Effect.succeed({ info: {}, parts: [] } as any),
@@ -162,7 +167,7 @@ describe("loop workflow service", () => {
           objective: "Summarize stale work every morning.",
         })
 
-        await svc.activate(draft.id)
+        const active = await svc.activate(draft.id)
         const paused = await svc.pause(draft.id)
         expect(paused.state).toBe("paused")
 
@@ -412,6 +417,124 @@ describe("loop workflow service", () => {
         expect(executed.prompts).toBe(1)
         expect(executed.promptCalls[0]?.tools).toBeUndefined()
         expect(executed.promptCalls[0]?.parts?.[0]?.text).not.toContain("REPORT-ONLY MODE")
+      },
+    })
+  })
+
+  test("max-goal loops complete early when the checkpoint proves the goal is done", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Goal budget",
+          objective: "Fix the bug and verify it.",
+          budgetMode: "max-goal",
+          completionCriteria: ["bug fixed", "focused tests pass"],
+          successChecks: ["bun test focused"],
+          strategy: { targetTurns: 3, reserveTurns: 1 },
+          policy: { maxTurns: 18 },
+        })
+        await svc.activate(draft.id)
+
+        const checkpoint = [
+          "Done.",
+          "LOOP_CHECKPOINT:",
+          "status: complete",
+          "summary: Bug fixed and focused tests pass.",
+          "evidence:",
+          "- bun test focused passed",
+          "next_action: stop",
+          "confidence: high",
+        ].join("\n")
+        const executed = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+
+        expect(executed.value.state).toBe("completed")
+        expect(executed.prompts).toBe(1)
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.metrics.turns).toBe(1)
+        expect(snapshot.workflow.state).toBe("completed")
+        expect(snapshot.workflow.phase).toBe("completed")
+        expect(snapshot.workflow.evaluatorReason).toBe("Bug fixed and focused tests pass.")
+        expect(snapshot.runs[0]?.evaluatorReason).toBe("Bug fixed and focused tests pass.")
+        expect(snapshot.events.at(-1)?.summary).toBe("Loop completed after the goal checkpoint reported success.")
+      },
+    })
+  })
+
+  test("max-goal loops block instead of claiming success when the budget is exhausted", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Goal cap",
+          objective: "Finish only when verified.",
+          budgetMode: "max-goal",
+          completionCriteria: ["verified done"],
+          policy: { maxTurns: 1 },
+        })
+        await svc.activate(draft.id)
+
+        const checkpoint = [
+          "Still working.",
+          "LOOP_CHECKPOINT:",
+          "status: continue",
+          "summary: More work remains.",
+          "evidence:",
+          "- tests still failing",
+          "next_action: ask for more budget",
+          "confidence: medium",
+        ].join("\n")
+        await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.metrics.turns).toBe(1)
+        expect(snapshot.workflow.state).toBe("blocked")
+        expect(snapshot.workflow.phase).toBe("budget_exhausted")
+        expect(snapshot.workflow.evaluatorReason).toContain("maximum iteration budget")
+        expect(snapshot.events.at(-1)?.summary).toContain("maximum iteration budget")
+      },
+    })
+  })
+
+  test("completed max-goal loops can wake the owner session with a summary", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const owner = await Effect.runPromise(
+          Session.Service.use((session) => session.create({ title: "Loop owner" })).pipe(Effect.provide(Session.defaultLayer)),
+        )
+        const draft = await svc.createDraft({
+          name: "Notify owner",
+          objective: "Complete and report back.",
+          ownerSessionID: owner.id,
+          budgetMode: "max-goal",
+          strategy: { notifyOwnerOnComplete: true },
+          policy: { maxTurns: 5 },
+        })
+        const active = await svc.activate(draft.id)
+
+        const checkpoint = [
+          "Ready.",
+          "LOOP_CHECKPOINT:",
+          "status: complete",
+          "summary: The loop goal is complete.",
+          "evidence:",
+          "- final validation passed",
+          "next_action: stop",
+          "confidence: high",
+        ].join("\n")
+        const executed = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          (call) => (call === 1 ? checkpoint : "Parent acknowledged."),
+        )
+
+        expect(executed.prompts).toBe(2)
+        expect(executed.promptCalls[0]?.sessionID).toBe(active.rootSessionID)
+        expect(executed.promptCalls[1]?.sessionID).toBe(owner.id)
+        expect(executed.promptCalls[1]?.parts?.[0]?.text).toContain("Loop workflow completed: Notify owner")
       },
     })
   })

@@ -69,6 +69,33 @@ const ref = {
   modelID: ModelID.make("test-model"),
 }
 
+function testAgent(name: string): Agent.Info {
+  return {
+    name,
+    mode: "primary",
+    native: true,
+    hidden: name === "compaction",
+    prompt: name === "compaction" ? "Summarize the session." : undefined,
+    permission: [],
+    options: {},
+  }
+}
+
+const agentLayer = Layer.succeed(
+  Agent.Service,
+  Agent.Service.of({
+    get: (name) => Effect.succeed(testAgent(name)),
+    list: () => Effect.succeed([testAgent("build"), testAgent("compaction")]),
+    defaultAgent: () => Effect.succeed("build"),
+    generate: () =>
+      Effect.succeed({
+        identifier: "test",
+        whenToUse: "test",
+        systemPrompt: "test",
+      }),
+  }),
+)
+
 afterEach(() => {
   mock.restore()
 })
@@ -232,7 +259,7 @@ function runtime(
       Layer.provide(provider.layer),
       Layer.provide(SessionNs.defaultLayer),
       Layer.provide(layer(result)),
-      Layer.provide(Agent.defaultLayer),
+      Layer.provide(agentLayer),
       Layer.provide(plugin),
       Layer.provide(bus),
       Layer.provide(config),
@@ -244,7 +271,7 @@ function runtime(
 const deps = Layer.mergeAll(
   ProviderTest.fake().layer,
   layer("continue"),
-  Agent.defaultLayer,
+  agentLayer,
   Plugin.defaultLayer,
   Bus.layer,
   Config.defaultLayer,
@@ -293,7 +320,7 @@ function liveRuntime(layer: Layer.Layer<LLM.Service>, provider = ProviderTest.fa
       Layer.provide(layer),
       Layer.provide(Permission.defaultLayer),
       Layer.provide(PlanReview.defaultLayer),
-      Layer.provide(Agent.defaultLayer),
+      Layer.provide(agentLayer),
       Layer.provide(Plugin.defaultLayer),
       Layer.provide(status),
       Layer.provide(bus),
@@ -1373,8 +1400,11 @@ describe("session.compaction.process", () => {
           const part = await lastCompactionPart(session.id)
           expect(part?.type).toBe("compaction")
           expect(part?.tail_start_id).toBe(keep.id)
+          const history = JSON.stringify(JSON.parse(captured).slice(0, -1))
           expect(captured).toContain("zzzz")
-          expect(captured).not.toContain("keep tail")
+          expect(history).not.toContain("keep tail")
+          expect(captured).toContain("Preserved Recent Tail Snapshot")
+          expect(captured).toContain("keep tail")
 
           const filtered = MessageV2.filterCompacted(MessageV2.stream(session.id))
           expect(filtered.map((msg) => msg.info.id).slice(0, 3)).toEqual([parent!, expect.any(String), keep.id])
@@ -1818,9 +1848,13 @@ describe("session.compaction.process", () => {
           )
 
           expect(captured).toContain("older context")
-          expect(captured).not.toContain("keep this turn")
-          expect(captured).not.toContain("and this one too")
-          expect(captured).not.toContain("What did we do so far?")
+          const history = JSON.stringify(JSON.parse(captured).slice(0, -1))
+          expect(history).not.toContain("keep this turn")
+          expect(history).not.toContain("and this one too")
+          expect(captured).toContain("Preserved Recent Tail Snapshot")
+          expect(captured).toContain("keep this turn")
+          expect(captured).toContain("and this one too")
+          expect(history).not.toContain("What did we do so far?")
         } finally {
           await rt.dispose()
         }
@@ -2134,6 +2168,108 @@ describe("session.compaction.process", () => {
           expect(transcript).toContain("continua el flash si quedo a medias")
           expect(transcript).toContain("pnpm --dir firmware flash --port /dev/cu.usbmodem101")
           expect(transcript).toContain("/Users/obed/.local/share/mendcode/tool-output/tool_flash_123")
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
+  test("compaction prompt includes a snapshot of the retained recent tail", async () => {
+    const stub = llm()
+    let captured = ""
+    stub.push(
+      reply("summary", (input) => {
+        captured = JSON.stringify(input.messages)
+      }),
+    )
+
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        await user(session.id, "older completed work")
+        const latest = await user(session.id, "align logic names to IF / THEN and finish the DMG")
+        const active: MessageV2.Assistant = {
+          id: MessageID.ascending(),
+          role: "assistant",
+          sessionID: session.id,
+          mode: "build",
+          agent: "build",
+          path: { cwd: tmp.path, root: tmp.path },
+          cost: 0,
+          tokens: {
+            output: 0,
+            input: 0,
+            reasoning: 0,
+            cache: { read: 0, write: 0 },
+          },
+          modelID: ref.modelID,
+          providerID: ref.providerID,
+          parentID: latest.id,
+          time: { created: Date.now() },
+        }
+        await svc.updateMessage(active)
+        await svc.updatePart({
+          id: PartID.ascending(),
+          messageID: active.id,
+          sessionID: session.id,
+          type: "text",
+          text: "Voy a ir un paso mas para no dejar OUT OF RANGE bloqueado.",
+        })
+        await svc.updatePart({
+          id: PartID.ascending(),
+          messageID: active.id,
+          sessionID: session.id,
+          type: "tool",
+          callID: crypto.randomUUID(),
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: {
+              command: "sed -n '1,80p' lib/components/defs/computed/in-range.ts",
+              cwd: "/Users/obed/Code/kontrologs/kontrolog-ide",
+            },
+            output: "export const inRange = defineComputedComponent({ type: 'In Range' })",
+            title: "read in-range primitive",
+            metadata: {},
+            time: { start: Date.now(), end: Date.now() },
+          },
+        })
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: true,
+          overflow: true,
+        })
+
+        const rt = liveRuntime(stub.layer, wide(), cfg({ tail_turns: 1, preserve_recent_tokens: 10_000 }))
+        try {
+          const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+                overflow: true,
+              }),
+            ),
+          )
+
+          expect(captured).toContain("Latest Real User Request Evidence")
+          expect(captured).toContain("align logic names to IF / THEN and finish the DMG")
+          expect(captured).toContain("Preserved Recent Tail Snapshot")
+          expect(captured).toContain(`tail_start_id: ${latest.id}`)
+          expect(captured).toContain("finish=(none)")
+          expect(captured).toContain("OUT OF RANGE")
+          expect(captured).toContain("lib/components/defs/computed/in-range.ts")
+          expect(captured).toContain("read in-range primitive")
         } finally {
           await rt.dispose()
         }

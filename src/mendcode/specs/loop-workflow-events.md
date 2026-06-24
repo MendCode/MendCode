@@ -11,6 +11,7 @@ Loop Workflows now support durable scheduler state, a TUI dashboard, a static ch
 - Add a timeline-style event view that explains what happened per run.
 - Expose useful run output summaries without dumping giant loop sessions into the parent chat.
 - Add a real signal/event trigger path instead of only labels such as `external-signal`.
+- Treat Loop Workflows as goal-driven workflows with iteration budgets, not as blind "repeat this prompt N times" scripts.
 - Preserve safe defaults: report-only unless the user clearly asks to code/edit/build/test.
 
 ## Non-Goals
@@ -49,6 +50,17 @@ Loop Workflows now support durable scheduler state, a TUI dashboard, a static ch
 - `/loops` SHOULD show latest run summaries without loading the full session transcript.
 - Opening the loop chat remains the source of truth for raw token-by-token details.
 
+### Goal Semantics
+
+- A Loop Workflow MUST distinguish `fixed`, `max-goal`, and `unbounded-monitor` budget modes.
+- `fixed` means the workflow is expected to run exactly up to its iteration cap unless blocked or stopped.
+- `max-goal` means `maxTurns` is a budget cap, not a schedule. The loop MUST try to complete the goal in the minimum responsible number of iterations and stop early when the goal is verified.
+- `unbounded-monitor` means the loop continues until stopped, blocked, or a stop condition is met.
+- Goal loops SHOULD store completion criteria, success checks, target turns, and reserved verification/recovery turns.
+- Every executed iteration SHOULD end with a machine-readable checkpoint containing status, summary, evidence, next action, and confidence.
+- A `max-goal` loop that exhausts its iteration budget before a `complete` checkpoint MUST become blocked/needs-input instead of reporting completed success.
+- When configured, a completed goal loop SHOULD wake the owner session with a bounded completion summary so the parent conversation can decide the next step.
+
 ### Signal Triggers
 
 - Add a durable `loop_signal` queue or equivalent table.
@@ -71,11 +83,14 @@ Loop Workflows now support durable scheduler state, a TUI dashboard, a static ch
 3. Add signal queue schema and local `mendcode loops signal <id>` command.
 4. Add `/loops` actions for waking a loop with a signal.
 5. Add API route for signal enqueue with local auth first.
+6. Promote checkpoint/evaluator data from run JSON into first-class dashboard summaries.
 
 ## Acceptance Checks
 
 - A report-only loop never mutates files even if the service is in execute mode.
 - A coding loop created from text like `codea/fixea/implementa y prueba` can edit/test in its loop session.
+- A max-goal loop completes before its iteration cap when its checkpoint proves the goal is done.
+- A max-goal loop blocks instead of claiming success when it reaches its cap without a complete checkpoint.
 - `/loops` shows active loops first and history separately.
 - A completed run appears as a readable timeline group with a bounded summary.
 - A queued signal wakes an `external-signal` loop without waiting for its normal interval.

@@ -2668,7 +2668,8 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       "",
       "Use exactly the `loop` tool, not shell commands. If the request already includes the objective, cadence, iteration limit, permission mode, and stop conditions, your first loop tool call must be action `activate`. Do not call `show` or `list` before creating the loop.",
       "If the request is to stop, remove, delete, pause, resume, or run the current loop and no loop id is visible, call the matching `loop` action without `workflowID`; the tool resolves the current session's contextual loop.",
-      "Ask with the `question` tool only when a critical setting is missing: objective, iteration limit or unbounded mode, cadence, model/provider, max wall-clock runtime, permission mode, or stop condition.",
+      "Ask with the `question` tool only when a critical setting is missing: objective, budget mode, iteration cap or unbounded mode, cadence, model/provider, max wall-clock runtime, permission mode, or stop condition.",
+      "Before activating, design the loop strategy from the goal: choose `budgetMode` as `fixed` only for exactly-N iteration jobs, `max-goal` when maxTurns is a budget cap to complete a goal as early as possible, and `unbounded-monitor` for ongoing monitors. For `max-goal`, provide concrete `completionCriteria`, `successChecks`, `targetTurns`, and `reserveTurns`; do not divide the work across every max iteration. Aim to finish in the minimum responsible turns, then use remaining turns only for retry/verification if needed. Set `notifyOwnerOnComplete: true` for goal-completion loops so the parent session gets a completion summary.",
       "Default to report-only unless I explicitly allow edits. Spanish/English requests such as codear, implementar, fixear, editar, hacer cambios, probar, compilar, run tests, or build are explicit edit permission for the loop; use permissionMode `normal` or `custom`, set `reportOnly: false`, and keep safety gates for push/merge/release/destructive shell. If I choose a model and reasoning effort/variant, pass `model` as provider/model and pass the effort as `variant` (for example `variant: \"medium\"`), or use provider/model#variant. For interval cadence, set `triggerMode: \"interval\"` and convert the interval to `intervalMs`. Preserve the current session model by omitting `model` unless I choose one.",
       "Do not hand-render Markdown tables or duplicate status cards after the tool call. Let the Loop Workflow card render from tool metadata, then give a one-line confirmation.",
     ].join("\n")
@@ -3352,7 +3353,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       value: "mendcode.marketplace",
       category: mendCategory,
       suggested: true,
-      slash: { name: "marketplace", aliases: ["registry", "packs"] },
+      slash: { name: "marketplace" },
       onSelect: () => void showRegistryMarketplace(),
     },
     {
@@ -3486,7 +3487,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       title: "Skills, commands, prompt assets",
       value: "mendcode.assets",
       category: mendCategory,
-      slash: { name: "mend-assets", aliases: ["commands"] },
+      slash: { name: "mend-assets" },
       onSelect: () => void showMendAssets(),
     },
     {

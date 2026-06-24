@@ -19,7 +19,12 @@ Common patterns:
 - Use `action: "show"` with a concrete `workflowID` for details. If no `workflowID` is available, prefer `list`; the tool will fall back to the contextual active loop or list.
 - For pause, resume, stop, and run_once, provide `workflowID` when visible. If the user says "stop/delete/remove the loop" without an id, the tool may resolve the current session's contextual loop.
 - Use report-only mode unless the user explicitly allows edits.
-- Use a bounded `maxTurns` plus clear stop conditions for test loops.
+- Choose `budgetMode` deliberately:
+  - `fixed`: exactly-N iteration jobs, such as "run 5 inspections and stop".
+  - `max-goal`: goal work with a maximum iteration budget; complete early as soon as the goal is verified.
+  - `unbounded-monitor`: ongoing monitoring until stopped, blocked, or externally signaled.
+- For `max-goal`, provide `completionCriteria`, `successChecks`, `targetTurns`, and `reserveTurns`. Do not divide work across every available iteration; use `maxTurns` as a cap/budget, not a schedule.
+- Use a bounded `maxTurns` plus clear stop conditions for test loops and max-goal loops.
 - Use `model` in provider/model-id format when the user selected a model for loop iterations.
 - After a list result identifies a concrete loop id, use `action: "show"` with that `workflowID` for detailed status.
 

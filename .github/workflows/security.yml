@@ -137,51 +137,10 @@ jobs:
               sys.exit(1)
           PY
 
-  secrets:
-    name: Secrets scan
+  deep-scanners:
+    name: Deep security scanners
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Run gitleaks
-        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            -v "$PWD:/repo" \
-            ghcr.io/gitleaks/gitleaks:v8.29.0@sha256:71d3ee5990f2176f763b438298453fc37e87b119122045e176ca9d44ff00b08b \
-            detect --source=/repo --no-git --redact --verbose
-
-  dependencies:
-    name: Dependency vulnerabilities
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-        with:
-          persist-credentials: false
-
-      - name: Run OSV-Scanner
-        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' || github.event_name == 'pull_request' || github.event_name == 'push' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker run --rm \
-            -v "$PWD:/src" \
-            ghcr.io/google/osv-scanner:v2.3.8@sha256:64e86bec6df2466feea5137fc7c78fb3b7c21ec077f014d7130f64810e50676b \
-            scan --recursive /src/src/mendcode
-
-  github-actions:
-    name: GitHub Actions audit
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     permissions:
       contents: read
       actions: read
@@ -191,26 +150,40 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Run gitleaks
+        id: gitleaks
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks:v8.29.0@sha256:71d3ee5990f2176f763b438298453fc37e87b119122045e176ca9d44ff00b08b \
+            detect --source=/repo --no-git --redact --verbose
+
+      - name: Run OSV-Scanner
+        id: osv
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD:/src" \
+            ghcr.io/google/osv-scanner:v2.3.8@sha256:64e86bec6df2466feea5137fc7c78fb3b7c21ec077f014d7130f64810e50676b \
+            scan --recursive /src/src/mendcode
+
       - name: Run zizmor
-        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' }}
+        id: zizmor
+        continue-on-error: true
         uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d
         with:
           advanced-security: false
           annotations: true
           version: "v1.25.2"
 
-  semgrep:
-    name: Semgrep custom rules
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
-        with:
-          persist-credentials: false
-
       - name: Run Semgrep CLI
-        continue-on-error: ${{ env.SECURITY_GUARD_BLOCK_SCANNERS != '1' }}
+        id: semgrep
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -218,3 +191,30 @@ jobs:
             -v "$PWD:/src" \
             semgrep/semgrep:1.165.0@sha256:f4791a54c891eabe1188248135574e6e03dfc31dfd3f3b747c7bec7079bfed1b \
             semgrep scan --error --config /src/.github/semgrep/security-guard.yml /src/src/mendcode
+
+      - name: Enforce scanner policy
+        if: always()
+        shell: bash
+        env:
+          GITLEAKS_OUTCOME: ${{ steps.gitleaks.outcome }}
+          OSV_OUTCOME: ${{ steps.osv.outcome }}
+          ZIZMOR_OUTCOME: ${{ steps.zizmor.outcome }}
+          SEMGREP_OUTCOME: ${{ steps.semgrep.outcome }}
+        run: |
+          set -euo pipefail
+          if [ "${SECURITY_GUARD_BLOCK_SCANNERS}" != "1" ]; then
+            exit 0
+          fi
+
+          failures=()
+          [ "${GITLEAKS_OUTCOME}" = "failure" ] && failures+=("gitleaks")
+          [ "${ZIZMOR_OUTCOME}" = "failure" ] && failures+=("zizmor")
+          [ "${SEMGREP_OUTCOME}" = "failure" ] && failures+=("semgrep")
+          if [ "${GITHUB_EVENT_NAME}" != "pull_request" ] && [ "${GITHUB_EVENT_NAME}" != "push" ]; then
+            [ "${OSV_OUTCOME}" = "failure" ] && failures+=("osv-scanner")
+          fi
+
+          if [ "${#failures[@]}" -gt 0 ]; then
+            printf 'Blocking scanner failures: %s\n' "${failures[*]}" >&2
+            exit 1
+          fi

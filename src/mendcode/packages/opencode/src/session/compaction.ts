@@ -43,6 +43,9 @@ const TOOL_OUTPUT_MAX_CHARS = 2_000
 const RECENT_OPERATIONAL_CONTEXT_MAX_MESSAGES = 24
 const RECENT_OPERATIONAL_CONTEXT_MAX_ITEMS = 18
 const RECENT_OPERATIONAL_CONTEXT_MAX_OUTPUT_CHARS = 1_200
+const PRESERVED_TAIL_SNAPSHOT_MAX_MESSAGES = 12
+const PRESERVED_TAIL_SNAPSHOT_MAX_PART_CHARS = 900
+const PRESERVED_TAIL_SNAPSHOT_MAX_TOOL_OUTPUT_CHARS = 700
 const SUBAGENT_CONTEXT_MAX_TASKS = 12
 const SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS = 2_500
 const PRUNE_PROTECTED_TOOLS = ["skill"]
@@ -500,6 +503,87 @@ function compactText(text: string, maxChars: number) {
   return `${trimmed.slice(0, maxChars)}\n[truncated]`
 }
 
+function preservedTailPartSnapshot(part: MessageV2.Part) {
+  if (part.type === "text" && !part.ignored) {
+    return [
+      `text${part.synthetic ? " (synthetic)" : ""}:`,
+      compactText(part.text, PRESERVED_TAIL_SNAPSHOT_MAX_PART_CHARS),
+    ].join("\n")
+  }
+  if (part.type === "reasoning") {
+    return ["reasoning:", compactText(part.text, PRESERVED_TAIL_SNAPSHOT_MAX_PART_CHARS)].join("\n")
+  }
+  if (part.type === "tool") {
+    const input = toolInputSummary(part.state.input)
+    const output = compactText(toolStateOutput(part.state), PRESERVED_TAIL_SNAPSHOT_MAX_TOOL_OUTPUT_CHARS)
+    const title =
+      part.state.status === "running" || part.state.status === "completed" ? part.state.title : undefined
+    return [
+      `tool ${part.tool} - ${part.state.status}${input ? ` - ${input}` : ""}`,
+      title ? `title: ${title}` : undefined,
+      output ? `output:\n${output}` : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  }
+  if (part.type === "file") return `file: ${part.filename ?? part.mime} (${part.mime})`
+  if (part.type === "patch") return `patch: ${part.files.join(", ")}`
+  if (part.type === "step-start") return part.snapshot ? `step-start snapshot: ${part.snapshot}` : "step-start"
+  if (part.type === "step-finish") {
+    return [
+      `step-finish: ${part.reason}`,
+      `tokens: ${stringify(part.tokens)}`,
+      part.snapshot ? `snapshot: ${part.snapshot}` : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n")
+  }
+  if (part.type === "subtask") {
+    return [
+      `subtask: ${part.description} (${part.agent})`,
+      part.command ? `command: ${part.command}` : undefined,
+      compactText(part.prompt, PRESERVED_TAIL_SNAPSHOT_MAX_PART_CHARS),
+    ]
+      .filter(Boolean)
+      .join("\n")
+  }
+  if (part.type === "agent") return `agent: ${part.name}`
+  if (part.type === "retry") return `retry attempt ${part.attempt}: ${stringify(part.error)}`
+  if (part.type === "snapshot") return `snapshot: ${compactText(part.snapshot, PRESERVED_TAIL_SNAPSHOT_MAX_PART_CHARS)}`
+  return ""
+}
+
+function preservedTailSnapshotContext(input: {
+  messages: MessageV2.WithParts[]
+  tailStartID: MessageID | undefined
+}) {
+  if (!input.tailStartID) return []
+  const start = input.messages.findIndex((message) => message.info.id === input.tailStartID)
+  if (start === -1) return []
+  const preserved = input.messages.slice(start)
+  const recent = preserved.slice(-PRESERVED_TAIL_SNAPSHOT_MAX_MESSAGES)
+  const omitted = preserved.length - recent.length
+  const lines = [
+    "Preserved Recent Tail Snapshot:",
+    `- tail_start_id: ${input.tailStartID}`,
+    "- Meaning: this is the exact recent conversation slice kept after the summary. Treat it as the best evidence of what was happening immediately before compaction.",
+    "- If the latest user request, unfinished assistant work, running tools, or verification gaps appear here, preserve them under Request Trace, Resume Anchor, Session State Snapshot, and Relevant Files.",
+    omitted > 0 ? `- Older preserved tail messages omitted from this snapshot: ${omitted}` : undefined,
+  ].filter(Boolean) as string[]
+
+  for (const message of recent) {
+    const finish = message.info.role === "assistant" ? ` finish=${message.info.finish ?? "(none)"}` : ""
+    const parts = message.parts
+      .map(preservedTailPartSnapshot)
+      .filter(Boolean)
+      .flatMap((part) => part.split("\n").map((line) => `  ${line}`))
+    lines.push(`- ${message.info.role} ${message.info.id}${finish}`)
+    if (parts.length) lines.push(...parts)
+  }
+
+  return [lines.join("\n")]
+}
+
 function toolStateOutput(state: MessageV2.ToolState) {
   if (state.status === "completed") return state.output
   if (state.status === "error") return state.metadata?.output ?? state.error
@@ -876,12 +960,13 @@ export const layer: Layer.Layer<
         ),
       )
       const context = [
-        ...latestUserRequestContext(summaryHistory),
+        ...latestUserRequestContext(visibleHistory),
+        ...preservedTailSnapshotContext({ messages: visibleHistory, tailStartID: selected.tail_start_id }),
         ...transcriptReferenceContext(transcriptPath),
         ...compactionTriggerContext({ compactionPart, messages: history }),
         ...todoContext(persistedTodos),
-        ...recentOperationalContext(summaryHistory),
-        ...subagentTaskContext(summaryHistory),
+        ...recentOperationalContext(visibleHistory),
+        ...subagentTaskContext(visibleHistory),
         ...compacting.context,
       ]
       const nextPrompt =

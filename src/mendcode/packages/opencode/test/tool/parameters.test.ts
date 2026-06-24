@@ -173,12 +173,20 @@ describe("tool parameters", () => {
         variant: "medium",
         agent: "build",
         permissionMode: "report-only",
+        budgetMode: "max-goal",
+        completionCriteria: ["requested report is complete"],
+        successChecks: ["inspect files"],
+        targetTurns: 3,
+        reserveTurns: 1,
+        notifyOwnerOnComplete: true,
         reportOnly: true,
       })
       expect(parsed.action).toBe("activate")
       expect(parsed.maxTurns).toBe(5)
       expect(parsed.model).toBe("openai/gpt-5.5")
       expect(parsed.permissionMode).toBe("report-only")
+      expect(parsed.budgetMode).toBe("max-goal")
+      expect(parsed.targetTurns).toBe(3)
     })
 
     test("rejects unknown action", () => {

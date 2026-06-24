@@ -5,6 +5,7 @@ import { DialogSelect } from "@tui/ui/dialog-select"
 import { useDialog } from "@tui/ui/dialog"
 import { useSDK } from "../context/sdk"
 import { DialogPrompt } from "../ui/dialog-prompt"
+import { DialogConfirm } from "../ui/dialog-confirm"
 import { Link } from "../ui/link"
 import { useTheme } from "../context/theme"
 import { TextAttributes } from "@opentui/core"
@@ -15,6 +16,7 @@ import * as Clipboard from "@tui/util/clipboard"
 import { useToast } from "../ui/toast"
 import { isConsoleManagedProvider, providerDisplayName } from "@tui/util/provider-origin"
 import { useConnected } from "./use-connected"
+import { Keybind } from "@/util/keybind"
 
 const PROVIDER_PRIORITY: Record<string, number> = {
   openai: 0,
@@ -37,6 +39,28 @@ function providerErrorMessage(error: unknown) {
     }
   }
   return "Provider authorization failed."
+}
+
+function ProviderKeyDescription(props: { providerID: string }) {
+  const { theme } = useTheme()
+  const isZen = props.providerID === "opencode"
+  const isGo = props.providerID === "opencode-go"
+  if (!isZen && !isGo) return undefined
+
+  return (
+    <box gap={1} paddingBottom={1}>
+      <text fg={theme.textMuted} wrapMode="word">
+        {isZen
+          ? "opencode Zen gives you access to top coding models through a single API key."
+          : "opencode Go is a subscription provider for reliable access to popular open coding models."}
+      </text>
+      <box flexDirection="row" gap={1}>
+        <text fg={theme.text}>Go to</text>
+        <Link href="https://opencode.ai/zen" fg={theme.primary} />
+        <text fg={theme.text}>{isGo ? "and enable opencode Go" : "to get a key"}</text>
+      </box>
+    </box>
+  )
 }
 
 export function createDialogProviderOptions() {
@@ -161,8 +185,77 @@ export function createDialogProviderOptions() {
 }
 
 export function DialogProvider() {
+  const sync = useSync()
+  const dialog = useDialog()
+  const sdk = useSDK()
+  const toast = useToast()
   const options = createDialogProviderOptions()
-  return <DialogSelect title="Connect a provider" options={options()} />
+  const [selectedProviderID, setSelectedProviderID] = createSignal<string>()
+
+  function canDisconnect(providerID: string | undefined) {
+    if (!providerID) return false
+    const provider = sync.data.provider_next.all.find((provider) => provider.id === providerID)
+    if (!provider) return false
+    if (provider.source === "api") {
+      return !isConsoleManagedProvider(sync.data.console_state.consoleManagedProviders, providerID)
+    }
+    if (provider.source !== "custom") return false
+    if (!sync.data.provider_auth[providerID]?.length) return false
+    return !isConsoleManagedProvider(sync.data.console_state.consoleManagedProviders, providerID)
+  }
+
+  const selectedProvider = createMemo(() => {
+    const providerID = selectedProviderID() ?? options()[0]?.value
+    if (!providerID) return
+    return sync.data.provider_next.all.find((provider) => provider.id === providerID)
+  })
+
+  const disconnectKeybind = createMemo(() => {
+    const provider = selectedProvider()
+    if (!provider || !canDisconnect(provider.id)) return []
+    return [
+      {
+        keybind: Keybind.parse("d")[0],
+        title: "Disconnect provider",
+        onTrigger: async () => {
+          const confirmed = await DialogConfirm.show(
+            dialog,
+            "Remove saved auth",
+            `Disconnect ${providerDisplayName(provider)}? You can reconnect this provider later.`,
+          )
+          if (!confirmed) return
+
+          const result = await sdk.client.auth.remove({ providerID: provider.id })
+          if (result.error) {
+            toast.show({
+              variant: "error",
+              message: providerErrorMessage(result.error),
+            })
+            dialog.replace(() => <DialogProvider />)
+            return
+          }
+
+          await sdk.client.instance.dispose()
+          await sync.bootstrap()
+          const stillDetected = sync.data.provider_next.connected.includes(provider.id)
+          toast.show({
+            variant: "success",
+            message: stillDetected ? "Saved auth removed. Provider still detected." : "Provider disconnected.",
+          })
+          dialog.replace(() => <DialogProvider />)
+        },
+      },
+    ]
+  })
+
+  return (
+    <DialogSelect
+      title="Connect a provider"
+      options={options()}
+      onMove={(option) => setSelectedProviderID(option.value)}
+      keybind={disconnectKeybind()}
+    />
+  )
 }
 
 interface AutoMethodProps {
@@ -280,26 +373,12 @@ function ApiMethod(props: ApiMethodProps) {
   const dialog = useDialog()
   const sdk = useSDK()
   const sync = useSync()
-  const { theme } = useTheme()
 
   return (
     <DialogPrompt
       title={props.title}
       placeholder="API key"
-      description={
-        {
-          "opencode-go": (
-            <box gap={1}>
-              <text fg={theme.textMuted}>
-                Use this only if you already have access. MendCode will not treat this as a free or default provider.
-              </text>
-              <text fg={theme.text}>
-                For normal setup, OpenAI/Codex or another direct provider is safer and clearer.
-              </text>
-            </box>
-          ),
-        }[props.providerID] ?? undefined
-      }
+      description={() => <ProviderKeyDescription providerID={props.providerID} />}
       onConfirm={async (value) => {
         if (!value) return
         await sdk.client.auth.set({

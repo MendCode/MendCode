@@ -106,6 +106,11 @@ function isGitCheckout(root: string) {
   return result.status === 0 && Boolean(String(result.stdout || "").trim())
 }
 
+function hasGitHead(root: string) {
+  const result = spawnSync("git", ["rev-parse", "--verify", "HEAD"], { cwd: root, encoding: "utf8", timeout: 1000 })
+  return result.status === 0
+}
+
 function isWorktreeCapable(version: string | null, help: string) {
   if (/\bwt\b|worktree/i.test(help)) return true
   if (!version) return false
@@ -149,6 +154,7 @@ export async function tsmStatus(root?: string) {
   const detected = detectTsm()
   const policy = await readWorktreePolicy(paths.root)
   const rootGit = isGitCheckout(paths.root)
+  const gitHead = rootGit && hasGitHead(paths.root)
   const currentState = lifecycle(state.enabled, detected.available, detected.worktreeCapable)
   return {
     ok: currentState !== "degraded",
@@ -176,6 +182,7 @@ export async function tsmStatus(root?: string) {
     },
     policy,
     rootGit,
+    gitHead,
     safety: {
       installsTsm: false,
       startsSessions: false,
@@ -185,6 +192,8 @@ export async function tsmStatus(root?: string) {
       statusExecutesReadOnlyVersionProbe: Boolean(detected.binaryPath),
     },
     warnings: [
+      ...(!rootGit ? [`current path is not inside a git repository: ${paths.root}`] : []),
+      ...(rootGit && !gitHead ? ["git repository has no commits yet; create an initial commit before using TSM worktrees"] : []),
       ...(!detected.available ? ["tsm binary not found on PATH"] : []),
       ...(detected.available && !detected.worktreeCapable ? ["detected tsm does not advertise worktree capabilities"] : []),
       ...(detected.detectionError ? [`tsm detection warning: ${detected.detectionError}`] : []),

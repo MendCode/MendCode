@@ -1,17 +1,50 @@
 # Changelog
 
-## 0.1.18 - 2026-06-23
+## 0.1.18 - 2026-06-24
+
+### Added
+
+- Add goal-driven Loop Workflow budget modes: `fixed`, `max-goal`, and `unbounded-monitor`.
+- Add Loop Workflow completion criteria, success checks, target turns, reserved verification turns, machine-readable checkpoints, and optional owner-session completion notifications.
+- Add provider disconnect support from the Connect Provider dialog for locally saved provider auth.
+- Add TSM shortcut support for creating an explicit missing branch before opening it in a split MendCode pane.
 
 ### Fixed
 
 - Fix Loop Workflow execution so implementation loops that explicitly allow edits are not downgraded to report-only by a conservative background service.
 - Refresh Loop Workflow receipts with clearer spacing plus model, mode, trigger/event, agent, chat, workflow, and goal details.
-- Keep loop session headers and the `/loops` dashboard aligned with the currently running iteration instead of lagging one completed run behind.
+- Keep loop session headers, run checkpoints, and the `/loops` dashboard aligned with the currently running iteration instead of lagging one completed run behind.
 - Keep Herdr loop-session panes in a working loop state between iterations and only report completion after the workflow reaches a terminal state.
 - Resume active provider compaction automatically and add trigger context so compaction summaries do not falsely close unfinished work.
+- Preserve a bounded snapshot of the retained recent tail during compaction so summaries keep the latest unfinished request, tool output, and resume context.
 - Keep the active loop count only in the prompt footer, expose `/loop` from the new-chat screen, make `/loop` Tab completion non-submitting, and remove duplicate `/loops` slash entries.
 - Accept loop model variants through the `variant` field or provider/model#variant syntax for any provider.
 - Keep the `/loops` dashboard cursor out of read-only detail rows so the `updated` field no longer looks editable.
+- Keep Herdr agent state from staying `working` after a session finishes and no longer appears in status output.
+- Report clearer `--worktree` and `--tsm` errors outside git repositories or before the first commit.
+- Strip command frontmatter metadata from opencode provider schemas/options so strict providers do not reject structured output or noop tool schemas.
+
+### Changed
+
+- Treat `maxTurns` as an iteration budget for goal work instead of a requirement to spend every available loop turn.
+- Improve `/loops` timeline loading and scrolling so recent workflow events remain inspectable without overwhelming compact terminals.
+- Scope model variant selection to the newly selected model before deciding whether to open the variant picker.
+- Refresh opencode Go/OpenRouter reasoning variant mapping for GLM-5.2, MiniMax M3, and widely supported effort levels.
+- Clean up slash-command fallbacks and aliases so command names do not collide.
+
+### CI
+
+- Skip CodeQL for docs-only, changelog-only, and public asset-only PRs while keeping CodeQL on source changes, main pushes, scheduled runs, and manual dispatch.
+- Consolidate Security Guard scanners into one deep-scanner job while preserving gitleaks, OSV, zizmor, and Semgrep policy enforcement.
+- Reduce release workflow artifact retention from 30 days to 7 days to cut Actions storage pressure.
+
+### Docs
+
+- Update the Loop Workflow events spec with goal semantics, checkpoint behavior, budget exhaustion rules, and acceptance checks.
+
+### Tests
+
+- Add coverage for goal-budget loop completion/blocking, owner notifications, compaction tail snapshots, provider schema cleanup, reasoning variants, TSM/worktree shortcut edge cases, Herdr idle reporting, and structured-output schema transformation.
 
 ## 0.1.17 - 2026-06-23
 

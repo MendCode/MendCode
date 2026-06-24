@@ -9,6 +9,7 @@ import { Provider } from "@/provider/provider"
 const Action = Schema.Literals(["draft", "activate", "show", "list", "pause", "resume", "stop", "run_once"])
 const TriggerMode = Schema.Literals(["manual", "interval", "adaptive", "external-signal", "self-paced"])
 const PermissionMode = Schema.Literals(["report-only", "normal", "custom"])
+const BudgetMode = Schema.Literals(["fixed", "max-goal", "unbounded-monitor"])
 
 export const Parameters = Schema.Struct({
   action: Action.annotate({
@@ -32,7 +33,8 @@ export const Parameters = Schema.Struct({
     description: "Interval in milliseconds when triggerMode is interval.",
   }),
   maxTurns: Schema.optional(Schema.Number).annotate({
-    description: "Maximum number of loop iterations before stopping. Use this for bounded test loops.",
+    description:
+      "Iteration budget/cap. For goal work this is a maximum, not a plan to spend every iteration. Use budgetMode=fixed only for exactly-N iteration jobs.",
   }),
   maxRuntimeMs: Schema.optional(Schema.Number).annotate({
     description: "Maximum wall-clock runtime in milliseconds before the loop should stop.",
@@ -56,6 +58,25 @@ export const Parameters = Schema.Struct({
   }),
   permissionMode: Schema.optional(PermissionMode).annotate({
     description: "Loop execution permission mode. Use report-only by default, normal only after explicit user approval, or custom with gates/approval lists.",
+  }),
+  budgetMode: Schema.optional(BudgetMode).annotate({
+    description:
+      "Loop budget semantics: fixed runs exactly to maxTurns, max-goal uses maxTurns as a cap and completes as soon as the goal is verified, unbounded-monitor runs until stopped/blocker.",
+  }),
+  completionCriteria: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description: "Concrete criteria that prove the loop goal is complete. Required for max-goal implementation loops.",
+  }),
+  successChecks: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description: "Validation commands, inspections, or review checks the loop should run before reporting complete.",
+  }),
+  targetTurns: Schema.optional(Schema.Number).annotate({
+    description: "Soft target number of iterations to finish the goal before using the remaining budget for recovery/verification.",
+  }),
+  reserveTurns: Schema.optional(Schema.Number).annotate({
+    description: "Number of final budget turns reserved for validation, cleanup, retry, or blocker reporting.",
+  }),
+  notifyOwnerOnComplete: Schema.optional(Schema.Boolean).annotate({
+    description: "When true, wake the parent session with a loop completion summary after a max-goal loop completes.",
   }),
   stopWhen: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Natural-language stop conditions for the loop.",
@@ -87,6 +108,7 @@ type Metadata = {
   triggerMode?: string
   intervalMs?: number
   permissionMode?: "report-only" | "normal" | "custom"
+  budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
   model?: {
     providerID: string
     modelID: string
@@ -109,6 +131,7 @@ type Metadata = {
     triggerMode?: string
     intervalMs?: number
     permissionMode?: "report-only" | "normal" | "custom"
+    budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
     model?: {
       providerID: string
       modelID: string
@@ -152,6 +175,25 @@ function parseLoopModel(input: string, explicitVariant?: string) {
   }
 }
 
+function inferBudgetMode(params: Schema.Schema.Type<typeof Parameters>): "fixed" | "max-goal" | "unbounded-monitor" {
+  if (params.budgetMode) return params.budgetMode
+  const objective = params.objective ?? ""
+  const fixedLanguage = /\b(exactly|fixed|solo|solamente|exactamente)\b.*\b(iteration|iterations|iteracion|iteraciones|veces)\b/i
+  if (params.maxTurns && fixedLanguage.test(objective)) return "fixed"
+  if (!params.maxTurns && (params.triggerMode === "interval" || params.triggerMode === "external-signal")) return "unbounded-monitor"
+  return "max-goal"
+}
+
+function defaultTargetTurns(maxTurns: number | undefined) {
+  if (!maxTurns) return undefined
+  return Math.max(1, Math.min(8, Math.ceil(maxTurns * 0.6)))
+}
+
+function defaultReserveTurns(maxTurns: number | undefined) {
+  if (!maxTurns || maxTurns < 4) return undefined
+  return Math.max(1, Math.min(3, Math.floor(maxTurns * 0.2)))
+}
+
 function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: Tool.Context["sessionID"]) {
   if (!params.objective?.trim()) throw new Error("objective is required when creating a loop workflow")
   const name =
@@ -162,6 +204,7 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
       .slice(0, 80)
   const model = params.model ? parseLoopModel(params.model, params.variant) : undefined
   const reportOnly = params.permissionMode === "report-only" || (params.permissionMode !== "normal" && params.reportOnly !== false)
+  const budgetMode = inferBudgetMode(params)
   const trigger =
     params.triggerMode || params.intervalMs
       ? {
@@ -175,6 +218,14 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
     source: "converted-session" as const,
     ownerSessionID: sessionID,
     trigger,
+    budgetMode,
+    completionCriteria: params.completionCriteria,
+    successChecks: params.successChecks,
+    strategy: {
+      targetTurns: params.targetTurns ?? (budgetMode === "max-goal" ? defaultTargetTurns(params.maxTurns) : undefined),
+      reserveTurns: params.reserveTurns ?? (budgetMode === "max-goal" ? defaultReserveTurns(params.maxTurns) : undefined),
+      notifyOwnerOnComplete: params.notifyOwnerOnComplete ?? budgetMode === "max-goal",
+    },
     stopWhen: params.stopWhen,
     gates: [
       ...(reportOnly ? ["report-only; do not edit files"] : []),
@@ -207,6 +258,7 @@ function formatWorkflow(workflow: LoopWorkflow.Info) {
     `root_session_id: ${workflow.rootSessionID ?? "none"}`,
     `owner_session_id: ${workflow.ownerSessionID ?? "none"}`,
     `next_wakeup: ${workflow.nextWakeup ? new Date(workflow.nextWakeup).toISOString() : "none"}`,
+    `budget_mode: ${workflow.spec.budgetMode ?? "legacy"}`,
     `max_turns: ${workflow.policy.maxTurns ?? "unlimited"}`,
     `max_runtime_ms: ${workflow.policy.maxRuntimeMs ?? "unlimited"}`,
     `model: ${
@@ -215,6 +267,9 @@ function formatWorkflow(workflow: LoopWorkflow.Info) {
         : "session default"
     }`,
     `agent: ${workflow.spec.agent ?? "session default"}`,
+    `target_turns: ${workflow.spec.strategy?.targetTurns ?? "auto"}`,
+    `reserve_turns: ${workflow.spec.strategy?.reserveTurns ?? "auto"}`,
+    `notify_owner_on_complete: ${workflow.spec.strategy?.notifyOwnerOnComplete === true ? "true" : "false"}`,
     "",
     "<loop_objective>",
     workflow.objective,
@@ -289,6 +344,7 @@ function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean, rootSes
     triggerMode: workflow.spec.trigger?.mode,
     intervalMs: workflow.spec.trigger?.intervalMs,
     permissionMode,
+    budgetMode: workflow.spec.budgetMode,
     model,
     agent: workflow.spec.agent,
     serviceEnsured,
@@ -307,6 +363,7 @@ function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean, rootSes
         triggerMode: workflow.spec.trigger?.mode,
         intervalMs: workflow.spec.trigger?.intervalMs,
         permissionMode,
+        budgetMode: workflow.spec.budgetMode,
         model,
         agent: workflow.spec.agent,
         created: workflow.time.created,
