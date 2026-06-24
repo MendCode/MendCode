@@ -582,9 +582,6 @@ function LoopDetail(props: {
                 <For each={props.rows}>
                   {(row) => <DetailRow label={row[0]} value={row[1]} width={props.width} emphasize={row[0] === "chat"} />}
                 </For>
-                <text fg={theme.backgroundPanel} bg={theme.backgroundPanel} width={props.width} wrapMode="none" selectable={false}>
-                  {fixedCell("", props.width)}
-                </text>
               </box>
 
               <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
