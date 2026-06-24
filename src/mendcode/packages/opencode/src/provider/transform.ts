@@ -591,14 +591,40 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
   if (!model.capabilities.reasoning) return {}
 
   const id = model.id.toLowerCase()
+  const apiId = model.api.id.toLowerCase()
+  const glm52 = ["glm-5.2", "glm-5-2", "glm-5p2"].some((name) => id.includes(name) || apiId.includes(name))
+  if (apiId.includes("minimax-m3") && ["@ai-sdk/anthropic", "@ai-sdk/openai-compatible"].includes(model.api.npm)) {
+    return {
+      none: { thinking: { type: "disabled" } },
+      thinking: { thinking: { type: "adaptive" } },
+    }
+  }
   const adaptiveEfforts = anthropicAdaptiveEfforts(model.api.id)
+  if (glm52 && model.api.npm === "@openrouter/ai-sdk-provider") {
+    return {
+      high: { reasoning: { effort: "high" } },
+      xhigh: { reasoning: { effort: "xhigh" } },
+    }
+  }
+  if (glm52 && model.api.npm === "@ai-sdk/openai-compatible") {
+    return {
+      high: { reasoningEffort: "high" },
+      max: { reasoningEffort: "max" },
+    }
+  }
+  if (glm52 && model.api.npm === "@ai-sdk/anthropic") {
+    return {
+      high: { effort: "high" },
+      max: { effort: "max" },
+    }
+  }
   if (
     id.includes("deepseek-chat") ||
     id.includes("deepseek-reasoner") ||
     id.includes("deepseek-r1") ||
     id.includes("deepseek-v3") ||
     id.includes("minimax") ||
-    id.includes("glm") ||
+    (id.includes("glm") && !glm52) ||
     id.includes("kimi") ||
     id.includes("k2p") ||
     id.includes("qwen") ||
@@ -623,8 +649,12 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
 
   switch (model.api.npm) {
     case "@openrouter/ai-sdk-provider":
-      if (!model.id.includes("gpt") && !model.id.includes("gemini-3") && !model.id.includes("claude")) return {}
-      return Object.fromEntries(OPENAI_EFFORTS.map((effort) => [effort, { reasoning: { effort } }]))
+      return Object.fromEntries(
+        (model.api.id.startsWith("openai/") || id.includes("gpt")
+          ? openaiCompatibleReasoningEfforts(model.api.id)
+          : WIDELY_SUPPORTED_EFFORTS
+        ).map((effort) => [effort, { reasoning: { effort } }]),
+      )
 
     case "ai-gateway-provider": {
       // Cloudflare AI Gateway routes every upstream through its OpenAI-compatible
@@ -1183,7 +1213,26 @@ const SLUG_OVERRIDES: Record<string, string> = {
   amazon: "bedrock",
 }
 
+function sanitizeOpencodeOptions(options: Record<string, any>) {
+  const sanitize = (obj: unknown): unknown => {
+    if (obj === null || typeof obj !== "object") return obj
+    if (Array.isArray(obj)) return obj.map(sanitize)
+
+    const result: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(obj)) {
+      if (key === "argument-hint") continue
+      result[key] = sanitize(value)
+    }
+    return result
+  }
+  return sanitize(options) as Record<string, any>
+}
+
 export function providerOptions(model: Provider.Model, options: { [x: string]: any }) {
+  if (model.providerID.startsWith("opencode")) {
+    options = sanitizeOpencodeOptions(options)
+  }
+
   if (model.api.npm === "@ai-sdk/gateway") {
     // Gateway providerOptions are split across two namespaces:
     // - `gateway`: gateway-native routing/caching controls (order, only, byok, etc.)
@@ -1238,6 +1287,22 @@ export function maxOutputTokens(model: Provider.Model): number {
 }
 
 export function schema(model: Provider.Model, schema: JSONSchema.BaseSchema | JSONSchema7): JSONSchema7 {
+  if (model.providerID.startsWith("opencode")) {
+    const sanitizeOpencodeSchema = (obj: unknown): unknown => {
+      if (obj === null || typeof obj !== "object") return obj
+      if (Array.isArray(obj)) return obj.map(sanitizeOpencodeSchema)
+
+      const result: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(obj)) {
+        if (key === "argument-hint") continue
+        result[key] = sanitizeOpencodeSchema(value)
+      }
+      return result
+    }
+
+    schema = sanitizeOpencodeSchema(schema) as JSONSchema.BaseSchema | JSONSchema7
+  }
+
   /*
   if (["openai", "azure"].includes(providerID)) {
     if (schema.type === "object" && schema.properties) {

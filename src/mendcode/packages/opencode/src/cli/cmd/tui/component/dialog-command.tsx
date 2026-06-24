@@ -293,9 +293,8 @@ const titleOverrides: Record<string, string> = {
 
 const slashFallbacks: Record<string, Slash> = {
   "mendcode.permission.status": { name: "permission", aliases: ["permissions", "approval"] },
-  "mendcode.status": { name: "status" },
+  "mendcode.status": { name: "health", aliases: ["mend-status"] },
   "mendcode.ai.status": { name: "provider" },
-  "mendcode.models.status": { name: "models" },
   "mendcode.budget.status": { name: "budget" },
   "mendcode.home.identity": { name: "home" },
   "mendcode.home.welcome": { name: "welcome" },

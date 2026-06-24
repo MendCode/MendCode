@@ -80,6 +80,16 @@ export const TriggerMode = Schema.Literals(["manual", "interval", "adaptive", "e
 )
 export type TriggerMode = Schema.Schema.Type<typeof TriggerMode>
 
+export const BudgetMode = Schema.Literals(["fixed", "max-goal", "unbounded-monitor"]).pipe(
+  withStatics((s) => ({ zod: zod(s) })),
+)
+export type BudgetMode = Schema.Schema.Type<typeof BudgetMode>
+
+export const GoalStatus = Schema.Literals(["complete", "continue", "needs_input", "blocked"]).pipe(
+  withStatics((s) => ({ zod: zod(s) })),
+)
+export type GoalStatus = Schema.Schema.Type<typeof GoalStatus>
+
 export const RunTrigger = Schema.Literals(["manual", "interval", "adaptive", "external-signal", "resume", "run-once"]).pipe(
   withStatics((s) => ({ zod: zod(s) })),
 )
@@ -116,6 +126,16 @@ const Spec = Schema.Struct({
     Schema.Struct({
       mode: Schema.optional(TriggerMode),
       intervalMs: Schema.optional(NonNegativeInt),
+    }),
+  ),
+  budgetMode: Schema.optional(BudgetMode),
+  completionCriteria: Schema.optional(Schema.Array(Schema.String)),
+  successChecks: Schema.optional(Schema.Array(Schema.String)),
+  strategy: Schema.optional(
+    Schema.Struct({
+      targetTurns: Schema.optional(NonNegativeInt),
+      reserveTurns: Schema.optional(NonNegativeInt),
+      notifyOwnerOnComplete: Schema.optional(Schema.Boolean),
     }),
   ),
   stopWhen: Schema.optional(Schema.Array(Schema.String)),
@@ -265,6 +285,14 @@ export type CreateDraftInput = {
   ownerSessionID?: SessionID
   templateID?: string
   trigger?: { mode?: TriggerMode; intervalMs?: number }
+  budgetMode?: BudgetMode
+  completionCriteria?: string[]
+  successChecks?: string[]
+  strategy?: {
+    targetTurns?: number
+    reserveTurns?: number
+    notifyOwnerOnComplete?: boolean
+  }
   stopWhen?: string[]
   gates?: string[]
   model?: {
@@ -302,6 +330,14 @@ export type CompleteRunInput = {
   runID: RunID
   reason?: string
   nextWakeup?: number
+  goalStatus?: GoalStatus
+  checkpoint?: {
+    status?: GoalStatus
+    summary?: string
+    evidence?: string[]
+    nextAction?: string
+    confidence?: string
+  }
 }
 
 export type FailRunInput = {
@@ -412,6 +448,7 @@ function threadStateForWorkflow(state: WorkflowState): ThreadInfo["state"] {
 function reachedTurnLimit(row: WorkflowRow) {
   const metrics = row.data.metrics
   const policy = row.data.policy
+  if (row.data.spec.budgetMode === "max-goal") return false
   return (
     !terminalWorkflowStates.has(row.state) &&
     typeof policy.maxTurns === "number" &&
@@ -884,6 +921,10 @@ export const layer = Layer.effect(
       const policy = defaultPolicy(input.policy)
       const spec = {
         trigger: input.trigger,
+        budgetMode: input.budgetMode,
+        completionCriteria: input.completionCriteria,
+        successChecks: input.successChecks,
+        strategy: input.strategy,
         stopWhen: input.stopWhen,
         gates: input.gates,
         model: input.model,
@@ -1170,11 +1211,30 @@ export const layer = Layer.effect(
       const now = Date.now()
       const nextWakeup = input.nextWakeup ?? nextWakeupFor(current.spec, now)
       const metrics = { ...current.metrics, turns: (current.metrics.turns ?? 0) + 1 }
-      const computedNext = completionState({ metrics, policy: current.policy, nextWakeup })
-      const pauseAfterRun = current.state === "paused" && !computedNext.completed
+      const budgetMode = current.spec.budgetMode
+      const reachedMaxTurns = typeof current.policy.maxTurns === "number" && metrics.turns >= current.policy.maxTurns
+      const checkpointStatus = input.goalStatus ?? input.checkpoint?.status
+      const goalComplete = checkpointStatus === "complete" && budgetMode !== "fixed"
+      const budgetExhaustedBeforeGoal = budgetMode === "max-goal" && reachedMaxTurns && !goalComplete
+      const computedNext =
+        goalComplete
+          ? ({ state: "completed" as const, phase: "completed", completed: true, nextWakeup: undefined })
+          : budgetExhaustedBeforeGoal
+            ? ({ state: "blocked" as const, phase: "budget_exhausted", completed: false, nextWakeup: undefined })
+            : checkpointStatus === "needs_input"
+              ? ({ state: "needs_input" as const, phase: "needs_input", completed: false, nextWakeup: undefined })
+              : checkpointStatus === "blocked"
+                ? ({ state: "blocked" as const, phase: "blocked", completed: false, nextWakeup: undefined })
+                : completionState({ metrics, policy: current.policy, nextWakeup })
+      const pauseAfterRun = current.state === "paused" && !computedNext.completed && computedNext.state !== "blocked" && computedNext.state !== "needs_input"
       const next = pauseAfterRun
         ? { state: "paused" as const, phase: "paused", completed: false, nextWakeup: undefined }
         : computedNext
+      const evaluatorReason = goalComplete
+        ? (input.reason ?? input.checkpoint?.summary ?? "Loop goal completed and verified by checkpoint.")
+        : budgetExhaustedBeforeGoal
+          ? `Loop reached its maximum iteration budget (${metrics.turns}/${current.policy.maxTurns}) before the goal was marked complete. Last checkpoint: ${input.reason ?? input.checkpoint?.summary ?? "no checkpoint summary"}`
+          : (input.reason ?? input.checkpoint?.summary ?? "Loop run completed.")
       const runRow = Database.transaction((db) => {
         db.update(LoopRunTable)
           .set({
@@ -1184,8 +1244,9 @@ export const layer = Layer.effect(
             time_updated: now,
             time_ended: now,
             data: {
-              evaluatorReason: input.reason ?? "Loop run completed.",
+              evaluatorReason,
               budget: metrics,
+              checkpoint: input.checkpoint,
             },
           })
           .where(eq(LoopRunTable.id, input.runID))
@@ -1200,7 +1261,7 @@ export const layer = Layer.effect(
               spec: current.spec,
               policy: current.policy,
               metrics,
-              evaluatorReason: input.reason,
+              evaluatorReason,
             },
           })
           .where(eq(LoopWorkflowTable.id, current.id))
@@ -1216,12 +1277,16 @@ export const layer = Layer.effect(
         sessionID: workflow.rootSessionID,
         type: "completed",
         title: "Loop run completed",
-        summary: next.completed
-          ? "Loop completed after reaching its iteration limit."
-          : pauseAfterRun
-            ? "Loop paused after completing the current run."
-            : (input.reason ?? `Next phase: ${workflow.phase}`),
-        data: { nextWakeup: next.nextWakeup, completed: next.completed },
+        summary: goalComplete
+          ? "Loop completed after the goal checkpoint reported success."
+          : budgetExhaustedBeforeGoal
+            ? `Loop blocked after reaching its maximum iteration budget (${metrics.turns}/${current.policy.maxTurns}) before completion.`
+            : next.completed
+              ? "Loop completed after reaching its fixed iteration limit."
+              : pauseAfterRun
+                ? "Loop paused after completing the current run."
+                : evaluatorReason,
+        data: { nextWakeup: next.nextWakeup, completed: next.completed, goalStatus: checkpointStatus, checkpoint: input.checkpoint },
       })
       yield* upsertRootThread(workflow, run.id)
       yield* publishRun(run)

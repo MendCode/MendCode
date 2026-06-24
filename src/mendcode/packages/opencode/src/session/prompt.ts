@@ -1824,6 +1824,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             if (lastUser.format?.type === "json_schema") {
               tools["StructuredOutput"] = createStructuredOutputTool({
                 schema: lastUser.format.schema,
+                model,
                 onSuccess(output) {
                   structured = output
                 },
@@ -2221,14 +2222,16 @@ export type CommandInput = Schema.Schema.Type<typeof CommandInput>
 /** @internal Exported for testing */
 export function createStructuredOutputTool(input: {
   schema: Record<string, any>
+  model?: Provider.Model
   onSuccess: (output: unknown) => void
 }): AITool {
   // Remove $schema property if present (not needed for tool input)
   const { $schema: _, ...toolSchema } = input.schema
+  const transformed = input.model ? ProviderTransform.schema(input.model, toolSchema as JSONSchema7) : (toolSchema as JSONSchema7)
 
   return tool({
     description: STRUCTURED_OUTPUT_DESCRIPTION,
-    inputSchema: jsonSchema(toolSchema as JSONSchema7),
+    inputSchema: jsonSchema(transformed),
     async execute(args) {
       // AI SDK validates args against inputSchema before calling execute()
       input.onSuccess(args)
