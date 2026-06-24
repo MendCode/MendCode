@@ -146,7 +146,7 @@ jobs:
             src/mendcode/packages/opencode/dist/RELEASE-MANIFEST.txt
             src/mendcode/packages/opencode/dist/mendcode.spdx.json
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
 
   publish-release:
     name: Create draft GitHub Release

@@ -205,6 +205,33 @@ describe("structured-output.createStructuredOutputTool", () => {
     expect(inputSchema.jsonSchema?.$schema).toBeUndefined()
   })
 
+  test("applies provider schema cleanup when model is supplied", () => {
+    const tool = SessionPrompt.createStructuredOutputTool({
+      schema: {
+        type: "object",
+        "argument-hint": "[feature to build]",
+        properties: {
+          prompt: {
+            type: "string",
+            "argument-hint": "[prompt]",
+          },
+        },
+      },
+      model: {
+        providerID: "opencode-go",
+        api: {
+          id: "glm-5.2",
+        },
+      } as any,
+      onSuccess: () => {},
+    })
+
+    const inputSchema = tool.inputSchema as any
+    expect(inputSchema.jsonSchema?.["argument-hint"]).toBeUndefined()
+    expect(inputSchema.jsonSchema?.properties?.prompt?.["argument-hint"]).toBeUndefined()
+    expect(inputSchema.jsonSchema?.properties?.prompt?.type).toBe("string")
+  })
+
   test("execute calls onSuccess with valid args", async () => {
     let capturedOutput: unknown
 

@@ -129,15 +129,16 @@ export function DialogModel(props: { providerID?: string }) {
   })
 
   function onSelect(providerID: string, modelID: string) {
-    local.model.set({ providerID, modelID }, { recent: true })
-    const list = local.model.variant.list()
-    const cur = local.model.variant.selected()
+    const selectedModel = { providerID, modelID }
+    local.model.set(selectedModel, { recent: true })
+    const list = local.model.variant.list(selectedModel)
+    const cur = local.model.variant.selected(selectedModel)
     if (cur === "default" || (cur && list.includes(cur))) {
       dialog.clear()
       return
     }
     if (list.length > 0) {
-      dialog.replace(() => <DialogVariant />)
+      dialog.replace(() => <DialogVariant model={selectedModel} />)
       return
     }
     dialog.clear()
