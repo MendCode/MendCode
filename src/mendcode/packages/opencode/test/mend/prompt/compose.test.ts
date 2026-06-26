@@ -32,6 +32,9 @@ describe("mend prompt composition", () => {
     expect(minimal.policyInstructions).toContain("monitored loops or repeated autonomous iterations")
     expect(minimal.policyInstructions).toContain("/loop` creates/activates")
     expect(minimal.policyInstructions).toContain("/loops` lists or shows existing workflows")
+    expect(minimal.policyInstructions).toContain("Never set loop maxTurns to 0")
+    expect(minimal.policyInstructions).toContain("normal execution rather than report-only")
+    expect(minimal.policyInstructions).toContain("completed 0/0")
     expect(minimal.sections.find((item) => item.id === "loop-workflow-brief")).toBeUndefined()
 
     const brief = focus.sections.find((item) => item.id === "loop-workflow-brief")
@@ -40,6 +43,9 @@ describe("mend prompt composition", () => {
     expect(brief?.text).toContain("model/provider")
     expect(brief?.text).toContain("report-only mode")
     expect(brief?.text).toContain("do not write `Iteration 1/5`")
+    expect(brief?.text).toContain("Never use `maxTurns: 0`")
+    expect(brief?.text).toContain("explicit edit approval")
+    expect(brief?.text).toContain("creating replacement loops repeatedly")
     expect(focus.sections.find((item) => item.id === "loop-workflow-full")).toBeUndefined()
 
     const fullContract = full.sections.find((item) => item.id === "loop-workflow-full")
@@ -48,5 +54,8 @@ describe("mend prompt composition", () => {
     expect(fullContract?.text).toContain("provider/model")
     expect(fullContract?.text).toContain("SSE is a live refresh channel")
     expect(fullContract?.text).toContain("mendcode loops activate <id>")
+    expect(fullContract?.text).toContain("zero iteration cap")
+    expect(fullContract?.text).toContain("explicit normal-execution intent")
+    expect(fullContract?.text).toContain("completed 0/0")
   })
 })

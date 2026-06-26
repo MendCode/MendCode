@@ -1,7 +1,7 @@
 import { Bus } from "@/bus"
 import { BusEvent } from "@/bus/bus-event"
 import { InstanceState } from "@/effect/instance-state"
-import { and, Database, desc, eq } from "@/storage/db"
+import { and, Database, desc, eq, type TxOrDb } from "@/storage/db"
 import { NotFoundError } from "@/storage/storage"
 import { zod } from "@/util/effect-zod"
 import { NonNegativeInt, withStatics } from "@/util/schema"
@@ -360,6 +360,7 @@ export interface Interface {
   readonly pause: (input: UpdateStateInput) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
   readonly resume: (input: UpdateStateInput) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
   readonly stop: (input: UpdateStateInput) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
+  readonly delete: (id: LoopID) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
   readonly runOnce: (input: RunOnceInput) => Effect.Effect<RunInfo, InstanceType<typeof NotFoundError>>
 }
 
@@ -390,9 +391,15 @@ const riskyDefaults = [
   "broad-refactor",
 ]
 
-function defaultPolicy(input?: Policy): Policy {
+function positiveInt(value: number | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined
+  return Math.floor(value)
+}
+
+function defaultPolicy(input?: Policy, budgetMode?: BudgetMode): Policy {
+  const maxTurns = positiveInt(input?.maxTurns)
   return {
-    maxTurns: input?.maxTurns ?? 30,
+    maxTurns: maxTurns ?? (budgetMode === "unbounded-monitor" ? undefined : 30),
     maxRuntimeMs: input?.maxRuntimeMs ?? 8 * 60 * 60 * 1000,
     maxChildren: input?.maxChildren ?? 3,
     maxDepth: input?.maxDepth ?? 1,
@@ -454,6 +461,12 @@ function reachedTurnLimit(row: WorkflowRow) {
     typeof policy.maxTurns === "number" &&
     (metrics.turns ?? 0) >= policy.maxTurns
   )
+}
+
+function deleteSessionTree(db: TxOrDb, sessionID: SessionID) {
+  const children = db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.parent_id, sessionID)).all()
+  for (const child of children) deleteSessionTree(db, child.id)
+  db.delete(SessionTable).where(eq(SessionTable.id, sessionID)).run()
 }
 
 function reconcileTerminalWorkflow(row: WorkflowRow): WorkflowRow {
@@ -842,7 +855,9 @@ export const layer = Layer.effect(
       return items
         .filter((item) => {
           if (item.state !== "active" && item.state !== "sleeping") return false
-          return !item.nextWakeup || item.nextWakeup <= now
+          const mode = item.spec.trigger?.mode
+          if (mode !== "interval" && mode !== "adaptive") return false
+          return typeof item.nextWakeup === "number" && item.nextWakeup <= now
         })
         .slice(0, limit)
     })
@@ -918,7 +933,7 @@ export const layer = Layer.effect(
     const createDraft = Effect.fn("LoopWorkflow.createDraft")(function* (input: CreateDraftInput) {
       const ctx = yield* InstanceState.context
       const now = Date.now()
-      const policy = defaultPolicy(input.policy)
+      const policy = defaultPolicy(input.policy, input.budgetMode)
       const spec = {
         trigger: input.trigger,
         budgetMode: input.budgetMode,
@@ -1134,6 +1149,15 @@ export const layer = Layer.effect(
 
     const stop = (input: UpdateStateInput) =>
       setWorkflowState({ ...input, state: "stopped", phase: "stopped", type: "stopped", title: "Loop stopped" })
+
+    const deleteWorkflow = Effect.fn("LoopWorkflow.delete")(function* (id: LoopID) {
+      const current = yield* get(id)
+      Database.transaction((db) => {
+        db.delete(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, current.id)).run()
+        if (current.rootSessionID) deleteSessionTree(db, current.rootSessionID)
+      })
+      return current
+    })
 
     const startRun = Effect.fn("LoopWorkflow.startRun")(function* (input: StartRunInput) {
       let current = yield* get(input.id)
@@ -1439,6 +1463,7 @@ export const layer = Layer.effect(
       pause,
       resume,
       stop,
+      delete: deleteWorkflow,
       runOnce,
     })
   }),

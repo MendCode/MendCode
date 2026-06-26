@@ -62,5 +62,13 @@ export const loopRoute = HttpRouter.use((router) =>
     yield* router.add("POST", "/loop/:loopID/resume", control("resume"))
     yield* router.add("POST", "/loop/:loopID/run-once", control("run-once"))
     yield* router.add("POST", "/loop/:loopID/stop", control("stop"))
+    yield* router.add(
+      "DELETE",
+      "/loop/:loopID",
+      Effect.gen(function* () {
+        const params = yield* HttpRouter.schemaPathParams(LoopParams)
+        return HttpServerResponse.jsonUnsafe(yield* loop.delete(params.loopID))
+      }),
+    )
   }),
 )

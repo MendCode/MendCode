@@ -450,7 +450,7 @@ describe("plugin.herdr", () => {
           request.method === "pane.report_agent" &&
           request.params.source === "mendcode:state" &&
           request.params.state === "working" &&
-          request.params.message === undefined,
+          request.params.message === "subagent working",
       ),
     ).toBe(true)
     expect(
@@ -606,6 +606,90 @@ describe("plugin.herdr", () => {
     ).toBe(true)
     expect(
       requests.some((request) => request.method === "pane.report_agent" && request.params.state === "idle"),
+    ).toBe(false)
+  })
+
+  test("refreshes stale loop cache before keeping an idle session working", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: "loop_test",
+            rootSessionID: "ses_loop",
+            state: "completed",
+            phase: "completed",
+          },
+        ]),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    )
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      serverUrl: new URL("http://127.0.0.1:4096"),
+      client: {
+        session: {
+          status: async () => ({ data: { ses_loop: { type: "idle" } } }),
+          children: async () => ({ data: [] }),
+        },
+      },
+    } as any)
+
+    await hooks.event?.({
+      event: {
+        type: "tui.session.select",
+        properties: { sessionID: "ses_loop" },
+      },
+    } as any)
+    await hooks.event?.({
+      event: {
+        type: "loop.workflow.updated",
+        properties: {
+          workflowID: "loop_test",
+          info: {
+            id: "loop_test",
+            rootSessionID: "ses_loop",
+            state: "sleeping",
+            phase: "waiting",
+          },
+        },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "session.idle",
+        properties: { sessionID: "ses_loop" },
+      },
+    } as any)
+
+    expect(fetch).toHaveBeenCalledWith(new URL("/loop", "http://127.0.0.1:4096"), expect.any(Object))
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "idle",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "working",
+      ),
     ).toBe(false)
   })
 
@@ -766,7 +850,7 @@ describe("plugin.herdr", () => {
     } as any)
     requests.length = 0
 
-    await hooks["tool.execute.after"]?.({ sessionID: "ses_done" } as any, {} as any)
+    await hooks["tool.execute.after"]?.({ sessionID: "ses_done", callID: "call_done", tool: "bash" } as any, {} as any)
 
     expect(
       requests.some(
@@ -779,6 +863,119 @@ describe("plugin.herdr", () => {
     ).toBe(true)
     expect(
       requests.some((request) => request.method === "pane.report_agent" && request.params.state === "working"),
+    ).toBe(false)
+  })
+
+  test("keeps Herdr working while another local tool call remains active", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "ses_busy" } }),
+          status: async () => ({ data: { ses_busy: { type: "idle" } } }),
+          children: async () => ({ data: [] }),
+        },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks["tool.execute.before"]?.({ sessionID: "ses_busy", callID: "call_1", tool: "bash" } as any, {} as any)
+    await hooks["tool.execute.before"]?.({ sessionID: "ses_busy", callID: "call_2", tool: "read" } as any, {} as any)
+    requests.length = 0
+
+    await hooks["tool.execute.after"]?.({ sessionID: "ses_busy", callID: "call_1", tool: "bash" } as any, {} as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "working",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some((request) => request.method === "pane.report_agent" && request.params.state === "idle"),
+    ).toBe(false)
+  })
+
+  test("keeps Herdr working when overlapping same-tool hooks omit callID", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "ses_busy" } }),
+          status: async () => ({ data: { ses_busy: { type: "idle" } } }),
+          children: async () => ({ data: [] }),
+        },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks["tool.execute.before"]?.({ sessionID: "ses_busy", tool: "bash" } as any, {} as any)
+    await hooks["tool.execute.before"]?.({ sessionID: "ses_busy", tool: "bash" } as any, {} as any)
+    requests.length = 0
+
+    await hooks["tool.execute.after"]?.({ sessionID: "ses_busy", tool: "bash" } as any, {} as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "working",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some((request) => request.method === "pane.report_agent" && request.params.state === "idle"),
+    ).toBe(false)
+  })
+
+  test("keeps Herdr working when session status omits a session with an active local tool", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "ses_done" } }),
+          status: async () => ({ data: {} }),
+          children: async () => ({ data: [] }),
+        },
+      },
+    } as any)
+
+    await hooks["tool.execute.before"]?.({ sessionID: "ses_done", callID: "call_1", tool: "bash" } as any, {} as any)
+    await hooks["tool.execute.before"]?.({ sessionID: "ses_done", callID: "call_2", tool: "read" } as any, {} as any)
+    requests.length = 0
+
+    await hooks["tool.execute.after"]?.({ sessionID: "ses_done", callID: "call_1", tool: "bash" } as any, {} as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "working",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some((request) => request.method === "pane.report_agent" && request.params.state === "idle"),
     ).toBe(false)
   })
 
@@ -800,7 +997,7 @@ describe("plugin.herdr", () => {
     } as any)
     requests.length = 0
 
-    await hooks["tool.execute.after"]?.({ sessionID: "ses_done" } as any, {} as any)
+    await hooks["tool.execute.after"]?.({ sessionID: "ses_done", callID: "call_done", tool: "bash" } as any, {} as any)
 
     expect(
       requests.some(
@@ -813,6 +1010,94 @@ describe("plugin.herdr", () => {
     ).toBe(true)
     expect(
       requests.some((request) => request.method === "pane.report_agent" && request.params.state === "working"),
+    ).toBe(false)
+  })
+
+  test("keeps the selected session working when it reports idle while a local tool is active", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "ses_parent" } }),
+          status: async () => ({ data: { ses_parent: { type: "idle" } } }),
+          children: async () => ({ data: [] }),
+        },
+      },
+    } as any)
+
+    await hooks["tool.execute.before"]?.({ sessionID: "ses_parent", callID: "call_busy", tool: "bash" } as any, {} as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "session.status",
+        properties: { sessionID: "ses_parent", status: { type: "idle" } },
+      },
+    } as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "working",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some((request) => request.method === "pane.report_agent" && request.params.state === "idle"),
+    ).toBe(false)
+  })
+
+  test("does not emit idle before a later blocked event when another tool call is still active", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "ses_parent" } }),
+          status: async () => ({ data: { ses_parent: { type: "idle" } } }),
+          children: async () => ({ data: [] }),
+        },
+      },
+    } as any)
+
+    await hooks["tool.execute.before"]?.({ sessionID: "ses_parent", callID: "call_1", tool: "bash" } as any, {} as any)
+    await hooks["tool.execute.before"]?.({ sessionID: "ses_parent", callID: "call_2", tool: "read" } as any, {} as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "session.idle",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+    await hooks["tool.execute.after"]?.({ sessionID: "ses_parent", callID: "call_1", tool: "bash" } as any, {} as any)
+    await hooks.event?.({
+      event: {
+        type: "question.asked",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.state === "blocked" &&
+          request.params.custom_status === "needs input",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some((request) => request.method === "pane.report_agent" && request.params.state === "idle"),
     ).toBe(false)
   })
 
@@ -907,6 +1192,89 @@ describe("plugin.herdr", () => {
     ).toBe(false)
   })
 
+  test("keeps the selected parent working while a subagent child has active tool hooks", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          children: async ({ sessionID }: { sessionID: string }) => ({
+            data: sessionID === "ses_parent" ? [{ id: "ses_child", parentID: "ses_parent" }] : [],
+          }),
+          get: async ({ sessionID }: { sessionID: string }) => ({
+            data: { id: sessionID, parentID: sessionID === "ses_child" ? "ses_parent" : undefined },
+          }),
+          status: async () => ({ data: { ses_parent: { type: "idle" } } }),
+        },
+      },
+    } as any)
+
+    await hooks.event?.({
+      event: {
+        type: "tui.session.select",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks["tool.execute.before"]?.({ sessionID: "ses_child", callID: "call_child", tool: "bash" } as any, {} as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.state === "working",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some(
+        (request) => request.method === "pane.report_agent_session" && request.params.agent_session_id === "ses_child",
+      ),
+    ).toBe(false)
+
+    requests.length = 0
+    await hooks.event?.({
+      event: {
+        type: "session.idle",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.state === "working",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some((request) => request.method === "pane.report_agent" && request.params.state === "idle"),
+    ).toBe(false)
+
+    requests.length = 0
+    await hooks["tool.execute.after"]?.({ sessionID: "ses_child", callID: "call_child", tool: "bash" } as any, {} as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.state === "idle",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some(
+        (request) => request.method === "pane.report_agent_session" && request.params.agent_session_id === "ses_child",
+      ),
+    ).toBe(false)
+  })
+
   test("keeps the parent session working when it reports idle while a child session is active", async () => {
     process.env.HERDR_ENV = "1"
     process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
@@ -950,5 +1318,98 @@ describe("plugin.herdr", () => {
     expect(
       requests.some((request) => request.method === "pane.report_agent" && request.params.state === "idle"),
     ).toBe(false)
+  })
+
+  test("surfaces blocked when the selected parent session is idle but a child session is blocked", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          children: async () => ({ data: [{ id: "ses_child", parentID: "ses_parent" }] }),
+          get: async ({ sessionID }: { sessionID: string }) => ({ data: { id: sessionID } }),
+          status: async () => ({ data: { ses_child: { type: "retry", message: "approval needed" } } }),
+        },
+      },
+    } as any)
+
+    await hooks.event?.({
+      event: {
+        type: "tui.session.select",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "session.status",
+        properties: { sessionID: "ses_parent", status: { type: "idle" } },
+      },
+    } as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "blocked" &&
+          request.params.message === "approval needed" &&
+          request.params.custom_status === "retry",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some((request) => request.method === "pane.report_agent" && request.params.state === "working"),
+    ).toBe(false)
+  })
+
+  test("surfaces blocked when a child session status update reports a blocked state", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          children: async () => ({ data: [{ id: "ses_child", parentID: "ses_parent" }] }),
+          get: async ({ sessionID }: { sessionID: string }) => ({
+            data: { id: sessionID, parentID: sessionID === "ses_child" ? "ses_parent" : undefined },
+          }),
+          status: async () => ({ data: {} }),
+        },
+      },
+    } as any)
+
+    await hooks.event?.({
+      event: {
+        type: "tui.session.select",
+        properties: { sessionID: "ses_parent" },
+      },
+    } as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "session.status",
+        properties: { sessionID: "ses_child", status: { type: "retry", message: "approval needed" } },
+      },
+    } as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "blocked" &&
+          request.params.message === "approval needed" &&
+          request.params.custom_status === "retry",
+      ),
+    ).toBe(true)
   })
 })

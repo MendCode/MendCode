@@ -1128,6 +1128,39 @@ describe("tool.shell abort", () => {
     })
   }, 15_000)
 
+  test("does not label non-user aborts as user aborted", async () => {
+    await WithInstance.provide({
+      directory: projectRoot,
+      fn: async () => {
+        const bash = await initShell()
+        const controller = new AbortController()
+        const res = await Effect.runPromise(
+          bash.execute(
+            {
+              command: `echo before && sleep 30`,
+              description: "Connection abort command",
+            },
+            {
+              ...ctx,
+              abort: controller.signal,
+              extra: { abortReason: () => undefined },
+              metadata: (input) =>
+                Effect.sync(() => {
+                  const output = (input.metadata as { output?: string })?.output
+                  if (output && output.includes("before") && !controller.signal.aborted) {
+                    controller.abort()
+                  }
+                }),
+            },
+          ),
+        )
+        expect(res.output).toContain("before")
+        expect(res.output).toContain("Command output interrupted before completion")
+        expect(res.output).not.toContain("User aborted the command")
+      },
+    })
+  }, 15_000)
+
   test("terminates command on timeout", async () => {
     await WithInstance.provide({
       directory: projectRoot,
