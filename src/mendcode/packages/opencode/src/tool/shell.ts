@@ -75,6 +75,13 @@ type Part = {
   text: string
 }
 
+function isExplicitUserAbort(ctx: Tool.Context) {
+  const reason = ctx.extra?.abortReason
+  if (typeof reason === "function") return reason() === "user"
+  if (typeof reason === "string") return reason === "user"
+  return ctx.abort.aborted
+}
+
 type Scan = {
   dirs: Set<string>
   patterns: Set<string>
@@ -457,7 +464,7 @@ export const ShellTool = Tool.define(
       let sink: ReturnType<typeof createWriteStream> | undefined
       let cut = false
       let expired = false
-      let aborted = false
+      let aborted: "user" | "external" | undefined
       let lastMetadataUpdate = 0
       let pendingOutputDelta = ""
       let lastOutputEvent = 0
@@ -627,7 +634,7 @@ export const ShellTool = Tool.define(
         Effect.gen(function* () {
           const exit = yield* runPipe
 
-          if (exit.kind === "abort") aborted = true
+          if (exit.kind === "abort") aborted = isExplicitUserAbort(ctx) ? "user" : "external"
           if (exit.kind === "timeout") expired = true
           return exit.kind === "exit" ? exit.code : null
         }),
@@ -641,7 +648,13 @@ export const ShellTool = Tool.define(
           `shell tool terminated command after exceeding timeout ${input.timeout} ms. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value in milliseconds.`,
         )
       }
-      if (aborted) meta.push("User aborted the command")
+      if (aborted) {
+        meta.push(
+          aborted === "user"
+            ? "User aborted the command"
+            : "Command output interrupted before completion; no explicit user cancel was recorded",
+        )
+      }
       const raw = list.map((item) => item.text).join("")
       const end = tail(raw, limits.maxLines, limits.maxBytes)
       if (end.cut) cut = true

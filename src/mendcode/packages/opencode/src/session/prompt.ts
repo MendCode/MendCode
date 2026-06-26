@@ -11,7 +11,7 @@ import { Provider } from "@/provider/provider"
 import { ModelID, ProviderID } from "../provider/schema"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
-import { SessionCompaction } from "./compaction"
+import { SessionCompaction, hasAcceptedPlanReview, latestAcceptedPlanReviewContext } from "./compaction"
 import { Bus } from "../bus"
 import { ProviderTransform } from "@/provider/transform"
 import { SystemPrompt } from "./system"
@@ -168,6 +168,9 @@ export const layer = Layer.effect(
     const summary = yield* SessionSummary.Service
     const sys = yield* SystemPrompt.Service
     const llm = yield* LLM.Service
+    const promptAbortControllers = new Map<SessionID, AbortController>()
+    const promptAbortReasons = new Map<SessionID, "user">()
+    const isManualAbort = (sessionID: SessionID) => promptAbortReasons.get(sessionID) === "user"
     const runner = Effect.fn("SessionPrompt.runner")(function* () {
       return yield* EffectBridge.make()
     })
@@ -181,8 +184,9 @@ export const layer = Layer.effect(
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* elog.info("cancel", { sessionID })
+      promptAbortReasons.set(sessionID, "user")
       promptAbortControllers.get(sessionID)?.abort()
-      yield* state.cancel(sessionID)
+      yield* state.cancel(sessionID).pipe(Effect.ensuring(Effect.sync(() => promptAbortReasons.delete(sessionID))))
     })
 
     const syncSessionSelection = Effect.fn("SessionPrompt.syncSessionSelection")(function* (input: {
@@ -617,7 +621,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         abort: options.abortSignal!,
         messageID: input.processor.message.id,
         callID: options.toolCallId,
-        extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps },
+        extra: {
+          model: input.model,
+          bypassAgentCheck: input.bypassAgentCheck,
+          promptOps,
+          abortReason: () => (isManualAbort(input.session.id) ? "user" : undefined),
+        },
         agent: input.agent.name,
         messages: input.messages,
         metadata: (val) =>
@@ -895,7 +904,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           sessionID,
           abort: taskAbort.signal,
           callID: part.callID,
-          extra: { bypassAgentCheck: true, promptOps },
+          extra: { bypassAgentCheck: true, promptOps, abortReason: () => (isManualAbort(sessionID) ? "user" : undefined) },
           messages: msgs,
           metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
             Effect.gen(function* () {
@@ -1100,12 +1109,20 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           const sh = Shell.preferred(cfg.shell)
           const args = Shell.args(sh, input.command, cwd)
           let output = ""
-          let aborted = false
+          let aborted: "user" | "external" | undefined
 
           const finish = Effect.uninterruptible(
             Effect.gen(function* () {
               if (aborted) {
-                output += "\n\n" + ["<metadata>", "User aborted the command", "</metadata>"].join("\n")
+                output +=
+                  "\n\n" +
+                  [
+                    "<metadata>",
+                    aborted === "user"
+                      ? "User aborted the command"
+                      : "Command output interrupted before completion; no explicit user cancel was recorded",
+                    "</metadata>",
+                  ].join("\n")
               }
               const completed = Date.now()
               if (part.state.status === "running") {
@@ -1184,7 +1201,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           ).pipe(Effect.exit)
 
           if (Exit.isFailure(exit) && Cause.hasInterrupts(exit.cause) && !Cause.hasDies(exit.cause)) {
-            aborted = true
+            aborted = isManualAbort(input.sessionID) ? "user" : "external"
           }
           yield* finish
 
@@ -1676,8 +1693,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       throw new Error("Impossible")
     })
 
-    const promptAbortControllers = new Map<SessionID, AbortController>()
-
     const runLoop: (sessionID: SessionID, abort: AbortSignal) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.run")(
       function* (sessionID: SessionID, abort: AbortSignal) {
         const ctx = yield* InstanceState.context
@@ -1805,6 +1820,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             sessionID,
             model,
             abort,
+            isManualAbort: () => isManualAbort(sessionID),
           })
 
           const outcome: "break" | "continue" = yield* Effect.gen(function* () {
@@ -1868,6 +1884,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
+            const memoryMode = promptMemoryMode(msgs, lastUser)
+            const latestPlanReview =
+              memoryMode === "after-compaction" && !hasAcceptedPlanReview(msgs)
+                ? latestAcceptedPlanReviewContext(yield* sessions.messages({ sessionID }))
+                : undefined
+            if (latestPlanReview) system.push(latestPlanReview)
             const reviewContext = reviewContextForAssistant(ctx.worktree || ctx.directory)
             if (reviewContext) {
               system.push(`<mendcode_review_context>\n${reviewContext}\n</mendcode_review_context>`)
@@ -1884,7 +1906,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               root: ctx.worktree,
               system,
               messages: [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
-              memoryMode: promptMemoryMode(msgs, lastUser),
+              memoryMode,
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
@@ -1970,7 +1992,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     const shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.shell")(
       function* (input: ShellInput) {
         const ready = yield* Latch.make()
-        return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
+        return yield* state.startShell(
+          input.sessionID,
+          lastAssistant(input.sessionID),
+          shellImpl(input, ready).pipe(Effect.ensuring(Effect.sync(() => promptAbortReasons.delete(input.sessionID)))),
+          ready,
+        )
       },
     )
 

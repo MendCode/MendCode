@@ -221,53 +221,110 @@ function makeHttp() {
 const it = testEffect(makeHttp())
 const unix = process.platform !== "win32" ? it.live : it.live.skip
 
-test("auto compaction guard waits for real user input after a synthetic resume", () => {
-  const oldUser = {
+function promptUser(parts: Array<Omit<MessageV2.TextPart, "sessionID" | "messageID">>, id = MessageID.ascending()): MessageV2.WithParts {
+  const sessionID = SessionID.make("test-session")
+  return {
     info: {
-      id: MessageID.ascending(),
+      id,
       role: "user",
+      sessionID,
+      time: { created: Date.now() },
+      agent: "build",
+      model: ref,
     },
-    parts: [{ type: "text", text: "original request" }],
-  } as unknown as MessageV2.WithParts
-  const oldAssistant = {
+    parts: parts.map((part) => ({ ...part, sessionID, messageID: id })),
+  }
+}
+
+function promptAssistant(
+  info: Pick<MessageV2.Assistant, "id" | "finish" | "summary" | "parentID">,
+  parts: MessageV2.Part[] = [],
+): MessageV2.WithParts {
+  return {
     info: {
-      id: MessageID.ascending(),
+      id: info.id,
       role: "assistant",
-      finish: "stop",
-      summary: false,
-    },
-    parts: [],
-  } as unknown as MessageV2.WithParts
-  const summary = {
-    info: {
-      id: MessageID.ascending(),
-      role: "assistant",
-      summary: true,
-      finish: "stop",
-    },
-    parts: [],
-  } as unknown as MessageV2.WithParts
-  const syntheticResume = {
-    info: {
-      id: MessageID.ascending(),
-      role: "user",
-    },
-    parts: [
-      {
-        type: "text",
-        text: "resume",
-        synthetic: true,
-        metadata: { compaction_continue: true },
+      sessionID: SessionID.make("test-session"),
+      time: { created: Date.now() },
+      parentID: info.parentID,
+      modelID: ref.modelID,
+      providerID: ref.providerID,
+      mode: "build",
+      agent: "build",
+      path: { cwd: "/tmp", root: "/tmp" },
+      cost: 0,
+      tokens: {
+        input: 0,
+        output: 0,
+        reasoning: 0,
+        cache: { read: 0, write: 0 },
       },
-    ],
-  } as unknown as MessageV2.WithParts
-  const realUser = {
-    info: {
-      id: MessageID.ascending(),
-      role: "user",
+      finish: info.finish,
+      summary: info.summary,
     },
-    parts: [{ type: "text", text: "continue now" }],
-  } as unknown as MessageV2.WithParts
+    parts,
+  }
+}
+
+function assistantInfo(input: Pick<MessageV2.Assistant, "id" | "finish" | "summary" | "parentID">): MessageV2.Assistant {
+  return {
+    id: input.id,
+    role: "assistant",
+    sessionID: SessionID.make("test-session"),
+    time: { created: Date.now() },
+    parentID: input.parentID,
+    modelID: ref.modelID,
+    providerID: ref.providerID,
+    mode: "build",
+    agent: "build",
+    path: { cwd: "/tmp", root: "/tmp" },
+    cost: 0,
+    tokens: {
+      input: 0,
+      output: 0,
+      reasoning: 0,
+      cache: { read: 0, write: 0 },
+    },
+    finish: input.finish,
+    summary: input.summary,
+  }
+}
+
+function userInfo(id = MessageID.ascending()): MessageV2.User {
+  return {
+    id,
+    role: "user",
+    sessionID: SessionID.make("test-session"),
+    time: { created: Date.now() },
+    agent: "build",
+    model: ref,
+  }
+}
+
+test("auto compaction guard waits for real user input after a synthetic resume", () => {
+  const oldUser = promptUser([{ type: "text", id: PartID.ascending(), text: "original request" }])
+  const oldAssistant = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "stop",
+    summary: false,
+    parentID: oldUser.info.id,
+  })
+  const summary = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "stop",
+    summary: true,
+    parentID: oldUser.info.id,
+  })
+  const syntheticResume = promptUser([
+    {
+      type: "text",
+      id: PartID.ascending(),
+      text: "resume",
+      synthetic: true,
+      metadata: { compaction_continue: true },
+    },
+  ])
+  const realUser = promptUser([{ type: "text", id: PartID.ascending(), text: "continue now" }])
 
   expect(shouldSkipAutoCompaction([summary, syntheticResume])).toBe(true)
   expect(shouldSkipAutoCompaction([summary, oldUser, oldAssistant, syntheticResume])).toBe(true)
@@ -291,28 +348,26 @@ test("active provider compaction always resumes after writing the summary", () =
 })
 
 test("auto compaction ignores a finished assistant that is older than queued user input", () => {
-  const olderAssistant = {
+  const seedUser = userInfo()
+  const olderAssistant = assistantInfo({
     id: MessageID.ascending(),
-    role: "assistant",
     finish: "stop",
     summary: false,
-  } as unknown as MessageV2.Assistant
-  const queuedUser = {
+    parentID: seedUser.id,
+  })
+  const queuedUser = userInfo()
+  const newerAssistant = assistantInfo({
     id: MessageID.ascending(),
-    role: "user",
-  } as unknown as MessageV2.User
-  const newerAssistant = {
-    id: MessageID.ascending(),
-    role: "assistant",
     finish: "stop",
     summary: false,
-  } as unknown as MessageV2.Assistant
-  const summaryAssistant = {
+    parentID: queuedUser.id,
+  })
+  const summaryAssistant = assistantInfo({
     id: MessageID.ascending(),
-    role: "assistant",
     finish: "stop",
     summary: true,
-  } as unknown as MessageV2.Assistant
+    parentID: queuedUser.id,
+  })
 
   expect(shouldCheckFinishedAssistantForAutoCompaction({ lastUser: queuedUser, lastFinished: olderAssistant })).toBe(false)
   expect(shouldCheckFinishedAssistantForAutoCompaction({ lastUser: queuedUser, lastFinished: newerAssistant })).toBe(true)
@@ -483,6 +538,213 @@ it.live("loop calls LLM and returns assistant message", () =>
       const parts = result.parts.filter((p) => p.type === "text")
       expect(parts.some((p) => p.type === "text" && p.text === "world")).toBe(true)
       expect(yield* llm.hits).toHaveLength(1)
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("injects the latest approved plan review as runtime context after compaction", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ dir, llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      const oldPlan = "# Old approved plan\n\n- stale step"
+      const latestPlan = [
+        "# Latest approved plan",
+        "",
+        "## Requirements",
+        "- Keep this whole plan verbatim after compaction.",
+        "- Do not merge it with older plans.",
+      ].join("\n")
+
+      const planUser = yield* user(chat.id, "please plan the work")
+      for (const item of [
+        { title: "Old", markdown: oldPlan },
+        { title: "Latest", markdown: latestPlan },
+      ]) {
+        const assistant: MessageV2.Assistant = {
+          id: MessageID.ascending(),
+          role: "assistant",
+          parentID: planUser.id,
+          sessionID: chat.id,
+          mode: "build",
+          agent: "build",
+          cost: 0,
+          path: { cwd: dir, root: dir },
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: ref.modelID,
+          providerID: ref.providerID,
+          time: { created: Date.now() },
+          finish: "tool-calls",
+        }
+        yield* sessions.updateMessage(assistant)
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: assistant.id,
+          sessionID: chat.id,
+          type: "tool",
+          callID: crypto.randomUUID(),
+          tool: "plan_review",
+          state: {
+            status: "completed",
+            input: item,
+            output: "User approved the plan and switched to build. Continue by implementing the approved plan.",
+            title: "Plan approved",
+            metadata: {},
+            time: { start: Date.now(), end: Date.now() },
+          },
+        })
+      }
+
+      const compacted = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        time: { created: Date.now() },
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: compacted.id,
+        sessionID: chat.id,
+        type: "compaction",
+        auto: true,
+        overflow: true,
+      })
+      const summaryAssistant: MessageV2.Assistant = {
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: compacted.id,
+        sessionID: chat.id,
+        mode: "compaction",
+        agent: "compaction",
+        cost: 0,
+        path: { cwd: dir, root: dir },
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ref.modelID,
+        providerID: ref.providerID,
+        time: { created: Date.now() },
+        summary: true,
+        finish: "end_turn",
+      }
+      yield* sessions.updateMessage(summaryAssistant)
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: summaryAssistant.id,
+        sessionID: chat.id,
+        type: "text",
+        text: "## Goal\n- compacted summary without the approved plan",
+      })
+      yield* user(chat.id, "continue implementing the approved plan")
+      yield* llm.text("done")
+
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const body = JSON.stringify(yield* llm.inputs)
+      const start = body.indexOf("<latest_accepted_plan_review>")
+      const end = body.indexOf("</latest_accepted_plan_review>", start)
+      const planContext = body.slice(start, end).replaceAll("\\n", "\n")
+      expect(start).toBeGreaterThanOrEqual(0)
+      expect(end).toBeGreaterThan(start)
+      expect(planContext).toContain(latestPlan)
+      expect(planContext).toContain("title: Latest")
+      expect(planContext).not.toContain(oldPlan)
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("does not duplicate approved plan context when the preserved tail already contains it", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ dir, llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      const latestPlan = ["# Latest approved plan", "", "- preserved in tail"].join("\n")
+
+      const planUser = yield* user(chat.id, "please plan the work")
+      const approved = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: planUser.id,
+        sessionID: chat.id,
+        mode: "build",
+        agent: "build",
+        cost: 0,
+        path: { cwd: dir, root: dir },
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ref.modelID,
+        providerID: ref.providerID,
+        time: { created: Date.now() },
+        finish: "tool-calls",
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: approved.id,
+        sessionID: chat.id,
+        type: "tool",
+        callID: crypto.randomUUID(),
+        tool: "plan_review",
+        state: {
+          status: "completed",
+          input: { title: "Latest", markdown: latestPlan },
+          output: "User approved the plan.",
+          title: "Plan approved",
+          metadata: {},
+          time: { start: Date.now(), end: Date.now() },
+        },
+      })
+
+      const compacted = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        time: { created: Date.now() },
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: compacted.id,
+        sessionID: chat.id,
+        type: "compaction",
+        auto: true,
+        overflow: true,
+        tail_start_id: planUser.id,
+      })
+      const summaryAssistant: MessageV2.Assistant = {
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: compacted.id,
+        sessionID: chat.id,
+        mode: "compaction",
+        agent: "compaction",
+        cost: 0,
+        path: { cwd: dir, root: dir },
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ref.modelID,
+        providerID: ref.providerID,
+        time: { created: Date.now() },
+        summary: true,
+        finish: "end_turn",
+      }
+      yield* sessions.updateMessage(summaryAssistant)
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: summaryAssistant.id,
+        sessionID: chat.id,
+        type: "text",
+        text: "## Goal\n- compacted summary",
+      })
+      yield* user(chat.id, "continue implementing the approved plan")
+      yield* llm.text("done")
+
+      yield* prompt.loop({ sessionID: chat.id })
+
+      const body = JSON.stringify(yield* llm.inputs)
+      expect(body).not.toContain("<latest_accepted_plan_review>")
     }),
     { git: true, config: providerCfg },
   ),

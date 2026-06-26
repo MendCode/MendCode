@@ -128,6 +128,7 @@ Rules:
 - Treat Optional Follow-ups, possible next steps, polish, cleanup, and ideas as non-instructions.
 - Preserve exact file paths, commands, error strings, and identifiers when known.
 - Read the Full Transcript Reference when the preserved recent messages and summary disagree, when a tool output was truncated, or when Active Work/Still required is ambiguous.
+- Read the Latest Assistant Phase Context when present. If it shows finish: tool-calls, recent tools, active/incomplete tools, or hasFinalText: no, Progress Against Latest Request must not be marked complete. Put pending handoff, pending response, pending verification, or continue-tools work under Still required.
 - Read the Current TODO List context when present. Treat in_progress/pending TODOs as evidence for Resume Anchor / Active Work only when they match the latest user intent; completed/cancelled TODOs belong in Confirmed Done or Optional Follow-ups as appropriate.
 - Read the Recent Operational Context when present. Commands, cwd, saved tool-output paths, running/failed tools, and verification output are evidence for Commands / Evidence, Relevant Files, and Progress Against Latest Request.
 - Read the Subagent Task Context when present. Summarize each subagent's concrete output, files changed, blocker, or current status. Running/pending subagents are active work unless clearly stale or contradicted by a newer real user message.
@@ -260,6 +261,11 @@ function toolOutputForTranscript(state: MessageV2.ToolState) {
   return ""
 }
 
+function unknownPartID(part: unknown) {
+  if (part && typeof part === "object" && "id" in part && typeof part.id === "string") return part.id
+  return "(unknown)"
+}
+
 function transcriptPart(part: MessageV2.Part) {
   switch (part.type) {
     case "text":
@@ -332,7 +338,7 @@ function transcriptPart(part: MessageV2.Part) {
     case "retry":
       return [`#### retry ${part.id}`, `attempt: ${part.attempt}`, fence("json", stringify(part.error))].join("\n\n")
     default:
-      return [`#### part ${(part as any).id ?? "(unknown)"}`, fence("json", stringify(part))].join("\n\n")
+      return [`#### part ${unknownPartID(part)}`, fence("json", stringify(part))].join("\n\n")
   }
 }
 
@@ -430,6 +436,71 @@ function transcriptReferenceContext(filepath: string | undefined) {
   ]
 }
 
+function latestAssistantPhaseSnapshot(input: {
+  history: MessageV2.WithParts[]
+  visibleHistory: MessageV2.WithParts[]
+}) {
+  const lastHiddenSummaryIndex = input.history.findLastIndex(
+    (message) => message.info.role === "assistant" && message.info.summary === true,
+  )
+  const assistant = input.visibleHistory.findLast((message) => {
+    if (message.info.role !== "assistant" || message.info.summary === true) return false
+    const assistantIndex = input.history.findIndex((item) => item.info.id === message.info.id)
+    return assistantIndex > lastHiddenSummaryIndex
+  })
+  if (!assistant || assistant.info.role !== "assistant") return
+  const assistantIndex = input.history.findIndex((message) => message.info.id === assistant.info.id)
+  const toolParts = assistant.parts.filter((part): part is MessageV2.ToolPart => part.type === "tool")
+  const activeTools = toolParts.filter((part) => part.state.status === "running" || part.state.status === "pending")
+  const hasFinalText = assistant.parts.some(
+    (part) => part.type === "text" && !part.ignored && Boolean(part.text.trim()),
+  )
+  const hasRealUserInputAfter =
+    assistantIndex >= 0 &&
+    input.history
+      .slice(assistantIndex + 1)
+      .some((message) => message.info.role === "user" && !message.parts.some((part) => part.type === "compaction"))
+  const isFinal = (assistant.info.finish === "stop" || assistant.info.finish === "end_turn") && hasFinalText
+  return {
+    assistant,
+    toolParts,
+    activeTools,
+    hasFinalText,
+    hasRealUserInputAfter,
+    isFinal,
+  }
+}
+
+function latestAssistantPhaseContext(input: {
+  history: MessageV2.WithParts[]
+  visibleHistory: MessageV2.WithParts[]
+}) {
+  const snapshot = latestAssistantPhaseSnapshot(input)
+  if (!snapshot) return []
+  const lastTool = snapshot.toolParts.at(-1)
+  const toolStatuses = snapshot.toolParts.length
+    ? snapshot.toolParts.map((part) => `${part.tool}:${part.state.status}`).join(", ")
+    : "(none)"
+  return [
+    [
+      "Latest Assistant Phase Context:",
+      `- messageID: ${snapshot.assistant.info.id}`,
+      `- finish: ${"finish" in snapshot.assistant.info ? snapshot.assistant.info.finish ?? "(none)" : "(none)"}`,
+      `- hasFinalText: ${snapshot.hasFinalText ? "yes" : "no"}`,
+      `- toolCount: ${snapshot.toolParts.length}`,
+      `- toolStatuses: ${toolStatuses}`,
+      lastTool ? `- lastTool: ${lastTool.tool} (${lastTool.state.status})` : "- lastTool: (none)",
+      snapshot.activeTools.length
+        ? `- activeOrIncompleteTools: ${snapshot.activeTools.map((part) => `${part.tool}:${part.state.status}`).join(", ")}`
+        : "- activeOrIncompleteTools: (none)",
+      `- realUserInputAfterAssistant: ${snapshot.hasRealUserInputAfter ? "yes" : "no"}`,
+      snapshot.isFinal
+        ? "- Interpretation: this assistant turn can be treated as final only if Request Trace and verification evidence show the latest request was actually satisfied."
+        : "- Interpretation: this assistant turn is not final. Do not mark Progress Against Latest Request complete. Put any pending handoff, pending response, pending verification, or continue-tools work under Still required.",
+    ].join("\n"),
+  ]
+}
+
 function compactionTriggerContext(input: {
   compactionPart?: MessageV2.CompactionPart
   messages: MessageV2.WithParts[]
@@ -441,7 +512,8 @@ function compactionTriggerContext(input: {
     : input.messages.findLast((message) => message.info.role === "assistant" && message.info.summary !== true)
   if (!trigger || trigger.info.role !== "assistant") return []
   const finish = trigger.info.finish
-  const isFinal = finish === "stop" || finish === "end_turn"
+  const snapshot = latestAssistantPhaseSnapshot({ history: input.messages, visibleHistory: input.messages })
+  const isFinal = snapshot?.assistant.info.id === trigger.info.id ? snapshot.isFinal : false
   const activeTools = trigger.parts.filter(
     (item) => item.type === "tool" && item.state.status !== "completed" && item.state.status !== "error",
   )
@@ -492,7 +564,7 @@ function todoContext(todos: Todo.Info[]) {
   ]
 }
 
-function toolInputValue(input: Record<string, any>, key: string) {
+function toolInputValue(input: Record<string, unknown>, key: string) {
   const value = input[key]
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
@@ -553,6 +625,52 @@ function preservedTailPartSnapshot(part: MessageV2.Part) {
   return ""
 }
 
+function planReviewInputMarkdown(input: Record<string, unknown>) {
+  const markdown = input.markdown
+  return typeof markdown === "string" && markdown.trim() ? markdown : undefined
+}
+
+function approvedPlanReviewEntry(message: MessageV2.WithParts, part: MessageV2.Part) {
+  if (part.type !== "tool" || part.tool !== "plan_review") return
+  if (part.state.status !== "completed" || part.state.title !== "Plan approved") return
+  const markdown = planReviewInputMarkdown(part.state.input)
+  if (!markdown) return
+  const title = part.state.input.title
+  return {
+    messageID: message.info.id,
+    callID: part.callID,
+    title: typeof title === "string" && title.trim() ? title.trim() : undefined,
+    markdown,
+  }
+}
+
+export function hasAcceptedPlanReview(messages: MessageV2.WithParts[]) {
+  return messages.some((message) => message.parts.some((part) => Boolean(approvedPlanReviewEntry(message, part))))
+}
+
+export function latestAcceptedPlanReviewContext(messages: MessageV2.WithParts[]) {
+  const approved = messages
+    .flatMap((message) => message.parts.flatMap((part) => approvedPlanReviewEntry(message, part) ?? []))
+    .at(-1)
+  if (!approved) return
+  return [
+    "<latest_accepted_plan_review>",
+    "This is session-local runtime context recovered deterministically from the latest approved plan_review tool call after compaction.",
+    "Use this complete approved plan as implementation source-of-truth when it matches the latest real user request.",
+    "Do not summarize, paraphrase, merge with older plans, or persist this block as global/project memory.",
+    `messageID: ${approved.messageID}`,
+    `callID: ${approved.callID}`,
+    approved.title ? `title: ${approved.title}` : undefined,
+    "",
+    "<approved_plan_markdown>",
+    approved.markdown,
+    "</approved_plan_markdown>",
+    "</latest_accepted_plan_review>",
+  ]
+    .filter((line): line is string => typeof line === "string")
+    .join("\n")
+}
+
 function preservedTailSnapshotContext(input: {
   messages: MessageV2.WithParts[]
   tailStartID: MessageID | undefined
@@ -591,7 +709,7 @@ function toolStateOutput(state: MessageV2.ToolState) {
   return ""
 }
 
-function toolInputSummary(input: Record<string, any>) {
+function toolInputSummary(input: Record<string, unknown>) {
   const keys = ["command", "cmd", "cwd", "path", "filePath", "file", "pattern", "url", "description"]
   const picked = keys.flatMap((key) => {
     const value = input[key]
@@ -961,6 +1079,7 @@ export const layer: Layer.Layer<
       )
       const context = [
         ...latestUserRequestContext(visibleHistory),
+        ...latestAssistantPhaseContext({ history, visibleHistory }),
         ...preservedTailSnapshotContext({ messages: visibleHistory, tailStartID: selected.tail_start_id }),
         ...transcriptReferenceContext(transcriptPath),
         ...compactionTriggerContext({ compactionPart, messages: history }),

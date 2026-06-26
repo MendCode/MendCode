@@ -2,7 +2,12 @@ import { afterEach, expect, test } from "bun:test"
 import { chmodSync, mkdtempSync, rmSync } from "fs"
 import { tmpdir } from "os"
 import path from "path"
-import { hasStyledHexColors } from "../../../src/cli/cmd/tui/component/styled-plan-markdown"
+import {
+  hasStyledHexColors,
+  shouldColorizeHexMarkdownLine,
+  wrapMarkdownDisplayCodeBlocks,
+  wrapPlainDisplayText,
+} from "../../../src/cli/cmd/tui/component/styled-plan-markdown"
 import {
   hasMermaidFence,
   planReviewInlineTitle,
@@ -712,9 +717,81 @@ test("styled plan markdown hides generated text fences around hex tables", () =>
   ])
 })
 
+test("styled plan markdown wraps long fenced code lines to the message width", () => {
+  const markdown = [
+    "2. Abre MendCode ahí y pide:",
+    "",
+    "```text",
+    "/loop Cada minuto edita el archivo ./loop-smoke.txt agregando una línea nueva con timestamp y el número de iteración. Ejecuta exactamente 2 iteraciones y detente.",
+    "```",
+    "",
+    "Qué deberías ver",
+  ].join("\n")
+
+  const result = wrapMarkdownDisplayCodeBlocks(markdown, 64)
+  const lines = result.split("\n")
+  expect(lines).toContain("```text")
+  expect(lines).toContain("```")
+  expect(lines.at(-1)).toBe("Qué deberías ver")
+  expect(lines.some((line) => line.startsWith("/loop Cada minuto"))).toBe(true)
+  expect(lines.some((line) => line.includes("detente."))).toBe(true)
+  expect(lines.filter((line) => !line.startsWith("```") && line.trim()).every((line) => Bun.stringWidth(line) <= 63)).toBe(true)
+})
+
+test("styled plan markdown does not wrap long lines outside fenced code blocks", () => {
+  const longProse = "Este párrafo fuera del bloque debe mantenerse intacto aunque exceda el ancho porque el problema del screenshot era específico a fences visibles en chat."
+  const fenced = "/loop Cada minuto edita el archivo ./loop-smoke.txt agregando una línea nueva con timestamp y el número de iteración. Ejecuta exactamente 2 iteraciones y detente."
+  const markdown = [longProse, "", "```text", fenced, "```"].join("\n")
+
+  const result = wrapMarkdownDisplayCodeBlocks(markdown, 64)
+  const lines = result.split("\n")
+  expect(lines[0]).toBe(longProse)
+  expect(lines.filter((line) => line.includes("screenshot era específico"))).toHaveLength(1)
+  expect(lines.some((line) => line.startsWith("/loop Cada minuto"))).toBe(true)
+  expect(lines.filter((line) => !line.startsWith("```") && line !== longProse && line.trim()).every((line) => Bun.stringWidth(line) <= 63)).toBe(true)
+})
+
+test("styled plan markdown wraps text-fence segments used by minimal and full chat presentation", () => {
+  const content = [
+    "/loop Cada minuto edita el archivo ./loop-smoke.txt agregando una línea nueva con timestamp y el número de iteración. Ejecuta exactamente 2 iteraciones y detente.",
+    "│ Box drawing rows stay intact even if they are wider than the viewport │",
+  ].join("\n")
+
+  const result = wrapPlainDisplayText(content, 44)
+  const lines = result.split("\n")
+  expect(lines.some((line) => line.startsWith("/loop Cada minuto"))).toBe(true)
+  expect(lines.some((line) => line.includes("detente."))).toBe(true)
+  expect(lines.find((line) => line.startsWith("│"))).toBe("│ Box drawing rows stay intact even if they are wider than the viewport │")
+  expect(lines.filter((line) => !line.startsWith("│") && line.trim()).every((line) => Bun.stringWidth(line) <= 43)).toBe(true)
+})
+
+test("styled plan markdown wraps fenced unicode lines by display width", () => {
+  const markdown = [
+    "```text",
+    "const status = '界界界界界界界界界界界界界界界界界界界界 ✅ listo para probar';",
+    "```",
+  ].join("\n")
+
+  const result = wrapMarkdownDisplayCodeBlocks(markdown, 20)
+  const lines = result.split("\n")
+  expect(lines).toContain("```text")
+  expect(lines).toContain("```")
+  expect(lines.filter((line) => !line.startsWith("```") && line.trim()).every((line) => Bun.stringWidth(line) <= 19)).toBe(true)
+  expect(lines.some((line) => line.includes("✅"))).toBe(true)
+})
+
 test("styled plan markdown does not colorize macro-style hashtags", () => {
   expect(hasStyledHexColors("#define TANK_USE_MOCK_SENSOR 1")).toBe(false)
   expect(hasStyledHexColors("Use #abc here")).toBe(true)
+})
+
+test("styled plan markdown keeps markdown tables with hex values in markdown flow", () => {
+  expect(shouldColorizeHexMarkdownLine("| Color | #1E88E5 |", false)).toBe(false)
+})
+
+test("styled plan markdown keeps fenced code lines with hex values in markdown flow", () => {
+  expect(shouldColorizeHexMarkdownLine("background: #1E88E5;", true)).toBe(false)
+  expect(shouldColorizeHexMarkdownLine("Use #1E88E5 here", false)).toBe(true)
 })
 
 test("renderPlanMarkdownStatic preserves non-table markdown in rich chat mode", () => {

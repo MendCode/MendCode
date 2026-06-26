@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.19 - 2026-06-25
+
+### Fixed
+
+- Distinguish explicit user cancels from transport, WiFi, lid-sleep, or connection aborts so interrupted session state no longer falsely implies the user stopped the run.
+- Preserve partial shell/task output with non-user-disconnect metadata instead of labeling it as `User aborted the command`.
+- Prevent Loop Workflows from completing as `0/0`, reject invalid fixed zero-turn budgets, and keep unbounded monitors open instead of storing `maxTurns: 0`.
+- Keep manual and signal-driven Loop Workflows from auto-running on every scheduler tick; only interval/adaptive loops become due from `nextWakeup`.
+- Let implementation loops run with normal execution when the objective explicitly asks to write, edit, fix, implement, code, or create files, while preserving explicit report-only and custom-gated modes.
+- Delete loop-owned root chat sessions when deleting a Loop Workflow and expose delete parity across legacy and raw HttpApi loop routes.
+- Keep minimal/full chat presentation from clipping long fenced or text-fence lines by wrapping to the visible display width.
+
+### Changed
+
+- Improve Loop Workflow tool/prompt guidance so assistants inspect existing loops before recreating them, never use `maxTurns: 0`, and report invalid `completed 0/0` states instead of spawning duplicates.
+- Expand Loop Workflow tool metadata for TUI cards with permission mode, trigger, budget, model, objective, agent, and timestamps.
+- Add `/loops` dashboard warnings for legacy invalid zero-turn budgets.
+- Preserve unfinished assistant/tool phases through compaction and keep Herdr status accurate while local tools, child sessions, and loop workflows are still active.
+
+### Tests
+
+- Add regression coverage for non-user abort classification in shell, task, and message error handling.
+- Add Loop Workflow regressions for zero-turn budgets, due scheduling, permission inference, delete lifecycle, legacy/HttpApi route parity, and loop prompt guidance.
+- Add chat presentation regressions for fenced long-line wrapping, Unicode display width, text-fence wrapping, hex color handling, and table preservation.
+
 ## 0.1.18 - 2026-06-24
 
 ### Added

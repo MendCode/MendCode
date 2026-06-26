@@ -29,6 +29,67 @@ export function hasStyledHexColors(content: string) {
   return HEX_TEST_PATTERN.test(content)
 }
 
+function wrapDisplayLine(line: string, width: number) {
+  const maxWidth = Math.max(1, Math.floor(width))
+  if (!line || Bun.stringWidth(line) <= maxWidth) return [line]
+
+  const lines: string[] = []
+  let current = ""
+  const pushWideWord = (word: string) => {
+    let chunk = ""
+    for (const char of word) {
+      const next = `${chunk}${char}`
+      if (Bun.stringWidth(next) <= maxWidth) {
+        chunk = next
+        continue
+      }
+      if (chunk) lines.push(chunk)
+      chunk = char
+    }
+    return chunk
+  }
+
+  for (const part of line.split(/(\s+)/)) {
+    if (!part) continue
+    const next = `${current}${part}`
+    if (!current || Bun.stringWidth(next) <= maxWidth) {
+      current = next
+      continue
+    }
+    lines.push(current.trimEnd())
+    current = Bun.stringWidth(part) <= maxWidth ? part.trimStart() : pushWideWord(part.trimStart())
+  }
+  if (current) lines.push(current.trimEnd())
+  return lines.length ? lines : [line]
+}
+
+export function wrapMarkdownDisplayCodeBlocks(content: string, width: number | undefined) {
+  if (!width || width <= 0) return content
+  let inFence = false
+  const wrapped: string[] = []
+  for (const line of content.split("\n")) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      wrapped.push(line)
+      continue
+    }
+    wrapped.push(...(inFence ? wrapDisplayLine(line, Math.max(1, width - 1)) : [line]))
+  }
+  return wrapped.join("\n")
+}
+
+function isBoxDrawingLine(line: string) {
+  return /^\s*[│├┌┐└┘┬┴┼╭╮╰╯─━╞╪╡]/.test(line)
+}
+
+export function wrapPlainDisplayText(content: string, width: number | undefined) {
+  if (!width || width <= 0) return content
+  return content
+    .split("\n")
+    .flatMap((line) => (isBoxDrawingLine(line) ? [line] : wrapDisplayLine(line, Math.max(1, width - 1))))
+    .join("\n")
+}
+
 function foregroundFor(hex: string) {
   const color = normalizeHexColor(hex)
   if (!color) return RGBA.fromInts(255, 255, 255)
@@ -37,6 +98,16 @@ function foregroundFor(hex: string) {
   const blue = Number.parseInt(color.slice(5, 7), 16)
   const luminance = (0.2126 * red + 0.7152 * green + 0.0722 * blue) / 255
   return luminance > 0.55 ? RGBA.fromInts(0, 0, 0) : RGBA.fromInts(255, 255, 255)
+}
+
+function isMarkdownTableLine(line: string) {
+  return /^\s*\|(?:.*\|)+\s*$/.test(line)
+}
+
+export function shouldColorizeHexMarkdownLine(line: string, inFence = false) {
+  if (inFence) return false
+  if (isMarkdownTableLine(line)) return false
+  return hasStyledHexColors(line)
 }
 
 function HexStyledLine(props: { line: string; fallback: RGBA; colorize?: boolean }) {
@@ -85,10 +156,11 @@ function HexStyledLine(props: { line: string; fallback: RGBA; colorize?: boolean
   )
 }
 
-function HexStyledLines(props: { content: string; fallback: RGBA; colorize?: boolean }) {
+function HexStyledLines(props: { content: string; fallback: RGBA; colorize?: boolean; width?: number }) {
+  const content = createMemo(() => wrapPlainDisplayText(props.content, props.width))
   return (
     <box flexDirection="column" flexShrink={0}>
-      <For each={props.content.split("\n")}>
+      <For each={content().split("\n")}>
         {(line) => <HexStyledLine line={line} fallback={props.fallback} colorize={props.colorize} />}
       </For>
     </box>
@@ -96,6 +168,7 @@ function HexStyledLines(props: { content: string; fallback: RGBA; colorize?: boo
 }
 
 function MarkdownSegment(props: StyledPlanMarkdownProps & { content: string }) {
+  const displayContent = createMemo(() => wrapMarkdownDisplayCodeBlocks(props.content, props.width))
   const chunks = createMemo(() => {
     const result: Array<{ kind: "markdown" | "hex"; content: string }> = []
     const markdown: string[] = []
@@ -105,8 +178,14 @@ function MarkdownSegment(props: StyledPlanMarkdownProps & { content: string }) {
       markdown.length = 0
     }
 
-    for (const line of props.content.split("\n")) {
-      if (hasStyledHexColors(line)) {
+    let inFence = false
+    for (const line of displayContent().split("\n")) {
+      if (/^\s*```/.test(line)) {
+        markdown.push(line)
+        inFence = !inFence
+        continue
+      }
+      if (shouldColorizeHexMarkdownLine(line, inFence)) {
         flushMarkdown()
         result.push({ kind: "hex", content: line })
         continue
@@ -156,7 +235,7 @@ export function StyledPlanMarkdown(props: StyledPlanMarkdownProps) {
         {(segment) => (
           <Switch>
             <Match when={props.stableTextMode || segment.kind === "text"}>
-              <HexStyledLines content={segment.content} fallback={props.fg} colorize={props.colorizeHex} />
+              <HexStyledLines content={segment.content} fallback={props.fg} colorize={props.colorizeHex} width={props.width} />
             </Match>
             <Match when={true}>
               <MarkdownSegment {...props} content={segment.content} />

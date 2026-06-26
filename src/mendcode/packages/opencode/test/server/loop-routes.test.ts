@@ -66,6 +66,10 @@ describe("loop routes", () => {
         })
         expect(stopResponse.status).toBe(200)
         expect((await stopResponse.json()) as LoopWorkflow.Info).toMatchObject({ state: "stopped" })
+
+        const deleteResponse = await app.request(`/loop/${draft.id}`, { method: "DELETE" })
+        expect(deleteResponse.status).toBe(200)
+        expect((await deleteResponse.json()) as LoopWorkflow.Info).toMatchObject({ id: draft.id, state: "stopped" })
       },
     })
   })
@@ -114,6 +118,10 @@ describe("loop routes", () => {
         })
         expect(stopResponse.status).toBe(200)
         expect((await stopResponse.json()) as LoopWorkflow.Info).toMatchObject({ state: "stopped" })
+
+        const deleteResponse = await effect.request(`/loop/${draft.id}`, { method: "DELETE", headers })
+        expect(deleteResponse.status).toBe(200)
+        expect((await deleteResponse.json()) as LoopWorkflow.Info).toMatchObject({ id: draft.id, state: "stopped" })
       },
     })
   })

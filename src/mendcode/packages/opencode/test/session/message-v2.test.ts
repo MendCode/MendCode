@@ -1293,6 +1293,17 @@ describe("session.message-v2.fromError", () => {
     expect((result as MessageV2.APIError).data.message).toBe("network stream closed")
   })
 
+  test("keeps transport AbortError retryable when abort context is explicitly false", () => {
+    const result = MessageV2.fromError(new DOMException("lid sleep disconnected stream", "AbortError"), {
+      providerID,
+      aborted: false,
+    })
+
+    expect(MessageV2.APIError.isInstance(result)).toBe(true)
+    expect((result as MessageV2.APIError).data.isRetryable).toBe(true)
+    expect((result as MessageV2.APIError).data.message).toBe("lid sleep disconnected stream")
+  })
+
   test("keeps explicit AbortError classified as MessageAbortedError", () => {
     const result = MessageV2.fromError(new DOMException("Aborted", "AbortError"), { providerID, aborted: true })
 
