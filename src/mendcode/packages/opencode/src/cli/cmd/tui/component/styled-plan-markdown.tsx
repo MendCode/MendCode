@@ -101,7 +101,8 @@ function foregroundFor(hex: string) {
 }
 
 function isMarkdownTableLine(line: string) {
-  return /^\s*\|(?:.*\|)+\s*$/.test(line)
+  const trimmed = line.trim()
+  return trimmed.length > 1 && trimmed.startsWith("|") && trimmed.endsWith("|")
 }
 
 export function shouldColorizeHexMarkdownLine(line: string, inFence = false) {

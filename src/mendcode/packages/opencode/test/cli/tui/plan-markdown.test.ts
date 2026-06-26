@@ -787,6 +787,7 @@ test("styled plan markdown does not colorize macro-style hashtags", () => {
 
 test("styled plan markdown keeps markdown tables with hex values in markdown flow", () => {
   expect(shouldColorizeHexMarkdownLine("| Color | #1E88E5 |", false)).toBe(false)
+  expect(shouldColorizeHexMarkdownLine(`${"|".repeat(10_000)} #1E88E5 |`, false)).toBe(false)
 })
 
 test("styled plan markdown keeps fenced code lines with hex values in markdown flow", () => {
