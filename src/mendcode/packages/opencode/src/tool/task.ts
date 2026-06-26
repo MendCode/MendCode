@@ -8,7 +8,7 @@ import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
 import { ConfigModelID } from "@/config/model-id"
 import { Provider } from "@/provider/provider"
-import { Cause, Effect, Exit, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 
 export interface TaskPromptOps {
@@ -39,6 +39,13 @@ function isAbortError(error: unknown) {
     (error instanceof Error && error.name === "MessageAbortedError") ||
     (typeof error === "object" && error !== null && "name" in error && error.name === "MessageAbortedError")
   )
+}
+
+function isExplicitUserAbort(ctx: Tool.Context) {
+  const reason = ctx.extra?.abortReason
+  if (typeof reason === "function") return reason() === "user"
+  if (typeof reason === "string") return reason === "user"
+  return ctx.abort.aborted
 }
 
 function errorText(error: unknown) {
@@ -75,6 +82,7 @@ export const TaskTool = Tool.define(
     const config = yield* Config.Service
     const provider = yield* Provider.Service
     const sessions = yield* Session.Service
+    const scope = yield* Scope.Scope
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -185,10 +193,11 @@ export const TaskTool = Tool.define(
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
       const runCancel = yield* EffectBridge.make()
+      const abortEvent = yield* Deferred.make<"user" | "external">()
 
       const messageID = MessageID.ascending()
       const cancel = ops.cancel(nextSession.id)
-      let parentAborted = ctx.abort.aborted
+      let parentAborted = isExplicitUserAbort(ctx)
 
       const output = (input: { status: "completed" | "interrupted" | "failed"; text?: string; error?: unknown }) => {
         const lines = [
@@ -227,8 +236,10 @@ export const TaskTool = Tool.define(
         })
 
       function onAbort() {
-        parentAborted = true
-        runCancel.fork(cancel)
+        const reason = isExplicitUserAbort(ctx) ? "user" : "external"
+        parentAborted = reason === "user"
+        runCancel.fork(Deferred.succeed(abortEvent, reason))
+        if (parentAborted) runCancel.fork(cancel)
       }
 
       return yield* Effect.acquireUseRelease(
@@ -239,7 +250,7 @@ export const TaskTool = Tool.define(
         () =>
           Effect.gen(function* () {
             const parts = yield* ops.resolvePromptParts(params.prompt)
-            const result = yield* ops
+            const child = yield* ops
               .prompt({
                 messageID,
                 sessionID: nextSession.id,
@@ -256,20 +267,34 @@ export const TaskTool = Tool.define(
                 },
                 parts,
               })
+              .pipe(Effect.forkIn(scope))
+
+            const result = yield* Fiber.await(child)
               .pipe(
-                Effect.matchCauseEffect({
-                  onFailure: (cause) => {
-                    const error = Cause.squash(cause)
+                Effect.map((exit) => ({ type: "exit" as const, exit })),
+                Effect.raceFirst(
+                  Deferred.await(abortEvent).pipe(Effect.map((reason) => ({ type: "abort" as const, reason }))),
+                ),
+                Effect.flatMap((outcome) => {
+                  if (outcome.type === "abort") {
+                    return errorOutput({
+                      error: new DOMException(
+                        outcome.reason === "user" ? "Aborted" : "Connection interrupted before task completed",
+                        "AbortError",
+                      ),
+                      interrupted: outcome.reason === "user",
+                    })
+                  }
+                  if (Exit.isFailure(outcome.exit)) {
+                    const error = Cause.squash(outcome.exit.cause)
                     return errorOutput({
                       error,
-                      interrupted: parentAborted && (Cause.hasInterrupts(cause) || isAbortError(error)),
+                      interrupted: parentAborted && (Cause.hasInterrupts(outcome.exit.cause) || isAbortError(error)),
                     })
-                  },
-                  onSuccess: (result) => {
-                    const error = result.info.role === "assistant" ? result.info.error : undefined
-                    if (error) return errorOutput({ error, interrupted: isAbortError(error) })
-                    return Effect.succeed(output({ status: "completed", text: lastText(result.parts) }))
-                  },
+                  }
+                  const error = outcome.exit.value.info.role === "assistant" ? outcome.exit.value.info.error : undefined
+                  if (error) return errorOutput({ error, interrupted: isAbortError(error) })
+                  return Effect.succeed(output({ status: "completed", text: lastText(outcome.exit.value.parts) }))
                 }),
               )
 

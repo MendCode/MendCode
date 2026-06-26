@@ -413,6 +413,7 @@ describe("tool.task", () => {
             description: "inspect bug",
             prompt: "look into the cache key path",
             subagent_type: "general",
+            model: "test/test-model",
           },
           {
             sessionID: chat.id,
@@ -433,6 +434,65 @@ describe("tool.task", () => {
 
       const exit = yield* Fiber.await(fiber)
       expect(Exit.isSuccess(exit)).toBe(true)
+    }),
+  )
+
+  it.instance("execute does not cancel child session when abort signal is not a user cancel", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const ready = defer<SessionPrompt.PromptInput>()
+      const done = defer<void>()
+      const abort = new AbortController()
+      let cancelled = false
+      const promptOps: TaskPromptOps = {
+        cancel: () =>
+          Effect.sync(() => {
+            cancelled = true
+          }),
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) =>
+          Effect.promise(() => {
+            ready.resolve(input)
+            return done.promise
+          }).pipe(Effect.as(reply(input, "retained child result"))),
+      }
+
+      const fiber = yield* def
+        .execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+            model: "test/test-model",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: abort.signal,
+            extra: { promptOps, abortReason: () => undefined },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Effect.promise(() => ready.promise)
+      abort.abort()
+      yield* Effect.sleep("10 millis")
+      expect(cancelled).toBe(false)
+      done.resolve()
+
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isSuccess(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) {
+        expect(exit.value.output).toContain("task_status: failed")
+        expect(exit.value.output).toContain("Connection interrupted before task completed")
+        expect(exit.value.output).not.toContain("task_status: interrupted")
+      }
     }),
   )
 

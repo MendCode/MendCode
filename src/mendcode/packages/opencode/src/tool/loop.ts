@@ -6,7 +6,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { loopServiceArgsFromConfig, loopServiceStart } from "@/mend/runtime/loop-service"
 import { Provider } from "@/provider/provider"
 
-const Action = Schema.Literals(["draft", "activate", "show", "list", "pause", "resume", "stop", "run_once"])
+const Action = Schema.Literals(["draft", "activate", "show", "list", "pause", "resume", "stop", "delete", "run_once"])
 const TriggerMode = Schema.Literals(["manual", "interval", "adaptive", "external-signal", "self-paced"])
 const PermissionMode = Schema.Literals(["report-only", "normal", "custom"])
 const BudgetMode = Schema.Literals(["fixed", "max-goal", "unbounded-monitor"])
@@ -14,7 +14,7 @@ const BudgetMode = Schema.Literals(["fixed", "max-goal", "unbounded-monitor"])
 export const Parameters = Schema.Struct({
   action: Action.annotate({
     description:
-      "Loop workflow action. Use activate to create/start a loop, draft to create a reviewable draft, show/list to inspect, and pause/resume/stop/run_once for control.",
+      "Loop workflow action. Use activate to create/start a loop, draft to create a reviewable draft, show/list to inspect, and pause/resume/stop/delete/run_once for control.",
   }),
   workflowID: Schema.optional(LoopWorkflow.LoopID).annotate({
     description:
@@ -147,12 +147,18 @@ type Metadata = {
 const reportOnlyApprovalGates = ["edit", "write", "apply_patch", "shell", "subagent"]
 const normalApprovalGates = ["push", "merge", "release", "version-bump", "external-send", "destructive-shell", "broad-refactor"]
 
+function sameStringSet(values: Set<string>, expected: string[]) {
+  return values.size === expected.length && expected.every((item) => values.has(item))
+}
+
 function permissionModeFor(workflow: LoopWorkflow.Info): "report-only" | "normal" | "custom" {
   const gates = workflow.spec.gates ?? []
   if (gates.some((gate) => /report-only|do not edit/i.test(gate))) return "report-only"
   const approvals = new Set(workflow.policy.requireApprovalFor ?? [])
   if (reportOnlyApprovalGates.every((gate) => approvals.has(gate))) return "report-only"
-  return approvals.size ? "custom" : "normal"
+  if (gates.length > 0) return "custom"
+  if (!approvals.size || sameStringSet(approvals, normalApprovalGates)) return "normal"
+  return "custom"
 }
 
 function modelMetadata(model?: LoopWorkflow.Info["spec"]["model"] | { providerID: string; modelID: string; variant?: string }) {
@@ -194,6 +200,25 @@ function defaultReserveTurns(maxTurns: number | undefined) {
   return Math.max(1, Math.min(3, Math.floor(maxTurns * 0.2)))
 }
 
+function positiveMaxTurns(value: number | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined
+  return Math.floor(value)
+}
+
+function maxTurnsFor(params: Schema.Schema.Type<typeof Parameters>, budgetMode: "fixed" | "max-goal" | "unbounded-monitor") {
+  const maxTurns = positiveMaxTurns(params.maxTurns)
+  if (budgetMode === "fixed" && !maxTurns) throw new Error("fixed loop workflows require maxTurns > 0; do not use 0")
+  if (budgetMode === "max-goal" && params.maxTurns !== undefined && !maxTurns) throw new Error("max-goal maxTurns must be > 0; omit it for no cap")
+  return maxTurns
+}
+
+function objectiveExplicitlyRequestsEdits(objective: string | undefined) {
+  const text = objective ?? ""
+  if (/\b(report-only|read-only|inspect only|solo report|solo inspecci[oó]n|solo lectura|sin editar)\b/i.test(text)) return false
+  if (/\b(make|hacer)\s+(code changes|changes|cambios)\b/i.test(text)) return true
+  return /\b(write|edit|modify|update|fix|implement|code|delete|remove|rename|refactor|apply|patch|arregl\w*|corr(?:eg|ig)\w*|implement\w*|code\w*|escrib\w*|modific\w*|actualiz\w*|elimin\w*|borr\w*|renombr\w*|aplic\w*|parch\w*|cambi(?:ar|a|e|en|emos|ando|ado))\b/i.test(text)
+}
+
 function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: Tool.Context["sessionID"]) {
   if (!params.objective?.trim()) throw new Error("objective is required when creating a loop workflow")
   const name =
@@ -203,8 +228,13 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
       .replace(/\s+/g, " ")
       .slice(0, 80)
   const model = params.model ? parseLoopModel(params.model, params.variant) : undefined
-  const reportOnly = params.permissionMode === "report-only" || (params.permissionMode !== "normal" && params.reportOnly !== false)
+  const allowEditsFromObjective = params.permissionMode === undefined && params.reportOnly === undefined && objectiveExplicitlyRequestsEdits(params.objective)
+  const reportOnly =
+    params.permissionMode === "report-only" ||
+    params.reportOnly === true ||
+    (params.permissionMode === undefined && params.reportOnly !== false && !allowEditsFromObjective)
   const budgetMode = inferBudgetMode(params)
+  const maxTurns = maxTurnsFor(params, budgetMode)
   const trigger =
     params.triggerMode || params.intervalMs
       ? {
@@ -222,8 +252,8 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
     completionCriteria: params.completionCriteria,
     successChecks: params.successChecks,
     strategy: {
-      targetTurns: params.targetTurns ?? (budgetMode === "max-goal" ? defaultTargetTurns(params.maxTurns) : undefined),
-      reserveTurns: params.reserveTurns ?? (budgetMode === "max-goal" ? defaultReserveTurns(params.maxTurns) : undefined),
+      targetTurns: params.targetTurns ?? (budgetMode === "max-goal" ? defaultTargetTurns(maxTurns) : undefined),
+      reserveTurns: params.reserveTurns ?? (budgetMode === "max-goal" ? defaultReserveTurns(maxTurns) : undefined),
       notifyOwnerOnComplete: params.notifyOwnerOnComplete ?? budgetMode === "max-goal",
     },
     stopWhen: params.stopWhen,
@@ -240,7 +270,7 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
       : undefined,
     agent: params.agent?.trim() || undefined,
     policy: {
-      maxTurns: params.maxTurns,
+      maxTurns,
       maxRuntimeMs: params.maxRuntimeMs,
       maxChildren: params.maxChildren,
       maxDepth: params.maxDepth,
@@ -307,6 +337,13 @@ function listOutput(items: LoopWorkflow.Info[]) {
         nextWakeup: item.nextWakeup,
         turns: item.metrics.turns,
         maxTurns: item.policy.maxTurns,
+        objective: item.objective,
+        triggerMode: item.spec.trigger?.mode,
+        intervalMs: item.spec.trigger?.intervalMs,
+        permissionMode: permissionModeFor(item),
+        budgetMode: item.spec.budgetMode,
+        model: modelMetadata(item.spec.model),
+        agent: item.spec.agent,
         created: item.time.created,
         activated: item.time.activated,
         updated: item.time.updated,
@@ -318,6 +355,7 @@ function listOutput(items: LoopWorkflow.Info[]) {
 const terminalStates = new Set(["completed", "failed", "stopped"])
 
 function canControl(action: Schema.Schema.Type<typeof Action>, workflow: LoopWorkflow.Info) {
+  if (action === "delete") return true
   if (action === "resume") return workflow.state === "paused"
   if (action === "show") return true
   if (action === "run_once") return workflow.state !== "paused" && !terminalStates.has(workflow.state)
@@ -473,6 +511,15 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
                 `events: ${snapshot.events.length}`,
               ].join("\n"),
               metadata: metadata(snapshot.workflow, undefined, snapshot.rootSession?.model),
+            }
+          }
+
+          if (action === "delete") {
+            const deleted = yield* workflows.delete(workflow.id)
+            return {
+              title: `Deleted loop ${deleted.id}`,
+              output: [`deleted_loop_id: ${deleted.id}`, `deleted_loop_name: ${deleted.name}`].join("\n"),
+              metadata: metadata(deleted),
             }
           }
 

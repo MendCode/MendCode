@@ -77,9 +77,20 @@ function section(input: Omit<PromptSection, "bytes" | "preview">): PromptSection
   }
 }
 
+type PromptSourceMetadata = {
+  sourceRepo?: string | null
+  sourceCommit?: string | null
+  copiedAt?: string | null
+}
+
 function relativePath(root: string, file: string | null) {
   if (!file) return null
   return file.startsWith(root) ? file.slice(root.length + 1) : file
+}
+
+function promptSourceMetadata(value: unknown): PromptSourceMetadata | null {
+  if (!value || typeof value !== "object") return null
+  return value as PromptSourceMetadata
 }
 
 function minimalBoundary() {
@@ -87,6 +98,9 @@ function minimalBoundary() {
     "You are MendCode CLI. Answer the user directly.",
     "Use the available terminal coding tools accurately.",
     "For monitored loops or repeated autonomous iterations, use the `loop` tool; `/loop` creates/activates and `/loops` lists or shows existing workflows. Ask only for missing critical settings.",
+    "Before creating another loop for the same goal, list/show existing workflows; if a loop shows completed 0/0 or no next wakeup unexpectedly, report the invalid zero-budget state instead of recreating loops.",
+    "Never set loop maxTurns to 0. Use a positive cap, or omit maxTurns for unlimited/unbounded monitoring.",
+    "If the user asks the loop to write, edit, fix, implement, code, or create files, use normal execution rather than report-only; report-only is for inspection/monitoring/reporting objectives.",
     "Do not claim tests, builds, provider calls, or file writes passed unless they actually ran.",
     "Do not expose secrets or raw auth tokens.",
   ].join("\n")
@@ -100,6 +114,9 @@ function loopWorkflowBrief() {
     "- Ask with the `question` tool only when objective, iteration limit, cadence, model/provider, max runtime, permissions, or stop condition are missing.",
     "- Create a reviewable loop draft first, or activate directly when the objective, model, iteration limit, cadence, permissions, and stop condition are already clear.",
     "- Use report-only mode unless the user explicitly allows edits; do not write `Iteration 1/5` through `Iteration 5/5` manually in the current chat turn.",
+    "- A user request to write, edit, fix, implement, code, or create files is explicit edit approval for that loop; create it with normal execution instead of report-only.",
+    "- Never use `maxTurns: 0`; fixed/max-goal loops need a positive cap, while unbounded-monitor loops should omit the cap.",
+    "- If a loop appears completed without runs, `completed 0/0`, or missing an expected next wakeup, inspect it with list/show and report the invalid state instead of creating replacement loops repeatedly.",
     "- Report the loop id, current phase, next wakeup, and where the user can monitor it in the TUI.",
   ].join("\n")
 }
@@ -114,7 +131,10 @@ function loopWorkflowFull() {
     "- When model/provider is unspecified and it matters for cost, speed, capability, or the user's request, ask the user to choose from the configured providers/models that are visible in the session. If no choice is needed, use the current session default.",
     "- Activation should create or reuse the loop root session, show it as Looping/background in Agent View, and ensure the project loop service when available.",
     "- For safe tests, prefer report-only execution: the agent may read and analyze, but edit/write/shell/subagent escalation remains denied unless the user explicitly opts into normal execution.",
+    "- If the requested loop objective includes writing, editing, fixing, implementing, coding, or creating files, that is explicit normal-execution intent; do not downgrade it to report-only just because it is a loop.",
     "- For a bounded test loop such as five directory-inspection iterations, create a loop with a 5-run cap, report-only permissions, a concise per-run diff/new-findings report, and a final summary after the fifth run.",
+    "- Never use a zero iteration cap. Use positive maxTurns for bounded/fixed work; omit maxTurns for unbounded-monitor cadence so scheduled loops do not complete as 0/0 before their first run.",
+    "- Before recreating a loop, inspect existing workflows with list/show. A loop in completed 0/0, no-runs, or missing-next-wakeup state is an invalid workflow to report or fix, not a reason to create more loops blindly.",
     "- The loop service is responsible for durable wakeups after the TUI or chat session closes. SSE is a live refresh channel for open TUIs; storage is the source of truth when the TUI reopens.",
     "- Prefer the `loop` tool over shell commands. If the tool is unavailable, the CLI namespace is plural `mendcode loops`; never try `mendcode loop`.",
     "- Slash UX: `/loop <objective>` should produce an activate/draft flow; `/loops` should call list; `/loops <loop_id>` may call show with workflowID. For stop/pause/resume/run requests without a visible id, use the loop tool action and let it resolve the current session's contextual loop.",
@@ -295,7 +315,7 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
     .filter((item) => item.id !== "harness")
     .map((item) => item.text)
     .join("\n\n")
-  const metadata = harness?.metadata as any
+  const metadata = promptSourceMetadata(harness?.metadata)
   return {
     mode,
     focusID,

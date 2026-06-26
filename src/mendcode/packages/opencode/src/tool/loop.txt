@@ -1,4 +1,4 @@
-Create, activate, inspect, pause, resume, stop, or record a MendCode Loop Workflow.
+Create, activate, inspect, pause, resume, stop, delete, or record a MendCode Loop Workflow.
 
 Use this tool when the user asks to convert the current session into a loop, run monitored repeated iterations, keep working in the background, or create a durable workflow that can be watched from Agent View.
 
@@ -18,7 +18,9 @@ Common patterns:
 - Use `action: "list"` when the user asks to see loops and did not provide a loop id.
 - Use `action: "show"` with a concrete `workflowID` for details. If no `workflowID` is available, prefer `list`; the tool will fall back to the contextual active loop or list.
 - For pause, resume, stop, and run_once, provide `workflowID` when visible. If the user says "stop/delete/remove the loop" without an id, the tool may resolve the current session's contextual loop.
-- Use report-only mode unless the user explicitly allows edits.
+- Use report-only mode unless the user explicitly allows edits. A user request to write, edit, fix, implement, code, or create files counts as edit approval for that loop; use normal execution instead of report-only for those objectives.
+- Never set `maxTurns` to 0. Use a positive cap, or omit `maxTurns` for unlimited/unbounded monitoring.
+- Before creating another loop for the same goal, use `list`/`show` to inspect existing workflows. If a loop appears as `completed 0/0` or has `next_wakeup: none` unexpectedly, report the invalid zero-budget state instead of recreating loops repeatedly.
 - Choose `budgetMode` deliberately:
   - `fixed`: exactly-N iteration jobs, such as "run 5 inspections and stop".
   - `max-goal`: goal work with a maximum iteration budget; complete early as soon as the goal is verified.

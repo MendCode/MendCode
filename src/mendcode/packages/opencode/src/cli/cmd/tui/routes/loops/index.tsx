@@ -78,6 +78,10 @@ function stateLabel(workflow: Pick<LoopWorkflow, "state" | "phase">) {
   return workflow.phase && workflow.phase !== "ready" ? `${workflow.state}: ${workflow.phase}` : workflow.state
 }
 
+function hasInvalidZeroBudget(workflow: LoopWorkflow) {
+  return workflow.policy?.maxTurns === 0
+}
+
 function progressLabel(workflow: LoopWorkflow) {
   const turns = workflow.metrics?.turns ?? 0
   const state = workflow.state.toLowerCase()
@@ -85,6 +89,7 @@ function progressLabel(workflow: LoopWorkflow) {
   const running = state === "working" || phase === "executing"
   const visible = running ? turns + 1 : turns
   const maxTurns = workflow.policy?.maxTurns
+  if (maxTurns === 0) return `${visible}/invalid`
   const current = typeof maxTurns === "number" ? Math.min(visible, maxTurns) : visible
   return typeof maxTurns === "number" ? `${current}/${maxTurns}` : `${current}/open`
 }
@@ -397,13 +402,14 @@ export function Loops() {
     }
   })
 
-  const detailRows = createMemo(() => {
+  const detailRows = createMemo<string[][]>(() => {
     const item = detail()
     if (!item) return []
     now()
     return [
       ["state", stateLabel(item)],
       ["iteration", progressLabel(item)],
+      ...(hasInvalidZeroBudget(item) ? [["budget", "invalid maxTurns=0; recreate with positive cap or unlimited"]] : []),
       ["next", relativeWakeup(item)],
       ["cadence", cadenceLabel(item)],
       ["model", modelLabel(sync.data.provider, item, snapshot.latest?.rootSession)],

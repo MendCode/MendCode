@@ -29,7 +29,7 @@ const DraftBody = z.object({
   gates: z.array(z.string()).optional(),
   policy: z
     .object({
-      maxTurns: z.number().int().nonnegative().optional(),
+      maxTurns: z.number().int().positive().optional(),
       maxRuntimeMs: z.number().int().nonnegative().optional(),
       maxChildren: z.number().int().nonnegative().optional(),
       maxDepth: z.number().int().nonnegative().optional(),
@@ -118,5 +118,11 @@ export const LoopRoutes = lazy(() =>
         const loop = yield* LoopWorkflow.Service
         return yield* loop.stop({ id: loopID(c.req.param("loopID")), reason: body.reason })
       })
-    }),
+    })
+    .delete("/:loopID", async (c) =>
+      jsonRequest("LoopRoutes.delete", c, function* () {
+        const loop = yield* LoopWorkflow.Service
+        return yield* loop.delete(loopID(c.req.param("loopID")))
+      }),
+    ),
 )
