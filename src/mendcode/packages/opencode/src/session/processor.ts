@@ -353,6 +353,7 @@ type Input = {
   sessionID: SessionID
   model: Provider.Model
   abort?: AbortSignal
+  isManualAbort?: () => boolean
 }
 
 export interface Interface {
@@ -460,12 +461,12 @@ export const layer: Layer.Layer<
         snapshot: initialSnapshot,
         blocked: false,
         needsCompaction: false,
-          currentText: undefined,
-          assistantText: "",
-          memoryQuery: null,
-          streamMessages: [],
-          streamUser: undefined,
-          reasoningMap: {},
+        currentText: undefined,
+        assistantText: "",
+        memoryQuery: null,
+        streamMessages: [],
+        streamUser: undefined,
+        reasoningMap: {},
         liveTokenOutputText: "",
         liveTokenUpdatedAt: 0,
         pendingMemoryExtraction: undefined,
@@ -473,7 +474,7 @@ export const layer: Layer.Layer<
       let aborted = false
       const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
 
-      const isExplicitAbort = () => input.abort?.aborted === true || aborted
+      const isExplicitAbort = () => aborted || (input.isManualAbort ? input.isManualAbort() : input.abort?.aborted === true)
 
       const parse = (e: unknown) =>
         MessageV2.fromError(e, {
@@ -1220,13 +1221,14 @@ export const layer: Layer.Layer<
               continue
             }
           }
+          const explicitAbort = isExplicitAbort()
           yield* session.updatePart({
             ...part,
             state: {
               ...part.state,
               status: "error",
-              error: "Tool execution interrupted",
-              metadata: { ...metadata, interrupted: true },
+              error: explicitAbort ? "Tool execution interrupted" : "Tool execution stopped before completion",
+              metadata: { ...metadata, interrupted: explicitAbort },
               time: { start: "time" in part.state ? part.state.time.start : end, end },
             },
           })
@@ -1321,7 +1323,7 @@ export const layer: Layer.Layer<
           }).pipe(
             Effect.onInterrupt(() =>
               Effect.gen(function* () {
-                if (input.abort?.aborted !== true) return
+                if (!isExplicitAbort()) return
                 aborted = true
                 if (!ctx.assistantMessage.error) {
                   yield* halt(new DOMException("Aborted", "AbortError"))

@@ -14,6 +14,7 @@ import * as Session from "@/session/session"
 import { Database } from "@/storage/db"
 import {
   BackgroundSessionTable,
+  LoopEventTable,
   LoopRunTable,
   LoopThreadTable,
   LoopWorkflowTable,
@@ -70,6 +71,12 @@ const svc = {
   },
   stop(id: LoopID) {
     return run(LoopWorkflowService.use((loop) => loop.stop({ id, reason: "test stop" })))
+  },
+  delete(id: LoopID) {
+    return run(LoopWorkflowService.use((loop) => loop.delete(id)))
+  },
+  list() {
+    return run(LoopWorkflowService.use((loop) => loop.list()))
   },
   runOnce(id: LoopID) {
     return run(LoopWorkflowService.use((loop) => loop.runOnce({ id, reason: "test run once" })))
@@ -157,6 +164,85 @@ describe("loop workflow service", () => {
     })
   })
 
+  test("zero maxTurns cannot archive an interval loop before its first run", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Hourly watch",
+          objective: "Run a briefing every hour.",
+          trigger: { mode: "interval", intervalMs: 3_600_000 },
+          policy: { maxTurns: 0 },
+        })
+        const active = await svc.activate(draft.id)
+
+        expect(active.policy.maxTurns).toBe(30)
+        expect(active.state).toBe("sleeping")
+        expect(active.nextWakeup).toBeLessThanOrEqual(Date.now())
+        expect((await svc.list()).find((item) => item.id === draft.id)).toMatchObject({ state: "sleeping" })
+        expect((await svc.due(Date.now())).map((item) => item.id)).toContain(draft.id)
+      },
+    })
+  })
+
+  test("unbounded monitor loops omit the turn cap instead of storing zero", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Unbounded hourly watch",
+          objective: "Keep monitoring until stopped.",
+          trigger: { mode: "interval", intervalMs: 3_600_000 },
+          budgetMode: "unbounded-monitor",
+          policy: { maxTurns: 0 },
+        })
+        const active = await svc.activate(draft.id)
+
+        expect(active.policy.maxTurns).toBeUndefined()
+        expect(active.state).toBe("sleeping")
+        expect(active.nextWakeup).toBeLessThanOrEqual(Date.now())
+        expect((await svc.list()).find((item) => item.id === draft.id)).toMatchObject({ state: "sleeping" })
+      },
+    })
+  })
+
+  test("due excludes non-interval loops without an explicit wakeup", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const manual = await svc.createDraft({
+          name: "Manual loop",
+          objective: "Only run on demand.",
+          trigger: { mode: "manual" },
+        })
+        const signal = await svc.createDraft({
+          name: "Signal loop",
+          objective: "Wait for an explicit signal.",
+          trigger: { mode: "external-signal" },
+        })
+        const interval = await svc.createDraft({
+          name: "Interval loop",
+          objective: "Wake on schedule.",
+          trigger: { mode: "interval", intervalMs: 60_000 },
+        })
+
+        const activeManual = await svc.activate(manual.id)
+        const activeSignal = await svc.activate(signal.id)
+        const activeInterval = await svc.activate(interval.id)
+        const due = await svc.due(Date.now())
+
+        expect(activeManual.nextWakeup).toBeUndefined()
+        expect(activeSignal.nextWakeup).toBeUndefined()
+        expect(due.map((item) => item.id)).toContain(activeInterval.id)
+        expect(due.map((item) => item.id)).not.toContain(activeManual.id)
+        expect(due.map((item) => item.id)).not.toContain(activeSignal.id)
+      },
+    })
+  })
+
   test("pause, resume, and stop are explicit workflow controls", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
@@ -179,6 +265,42 @@ describe("loop workflow service", () => {
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.events.map((event) => event.type)).toEqual(["created", "activated", "paused", "resumed", "stopped"])
+      },
+    })
+  })
+
+  test("delete removes a loop workflow and its dependent rows", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Delete me",
+          objective: "Temporary workflow that should not stay in the database.",
+        })
+        const active = await svc.activate(draft.id)
+        await svc.runOnce(active.id)
+
+        const deleted = await svc.delete(active.id)
+        expect(deleted.id).toBe(active.id)
+        expect((await svc.list()).map((item) => item.id)).not.toContain(active.id)
+
+        const rows = Database.use((db) => ({
+          workflows: db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, active.id)).all().length,
+          runs: db.select().from(LoopRunTable).where(eq(LoopRunTable.workflow_id, active.id)).all().length,
+          events: db.select().from(LoopEventTable).where(eq(LoopEventTable.workflow_id, active.id)).all().length,
+          threads: db.select().from(LoopThreadTable).where(eq(LoopThreadTable.workflow_id, active.id)).all().length,
+          background: active.rootSessionID
+            ? db.select().from(BackgroundSessionTable).where(eq(BackgroundSessionTable.session_id, active.rootSessionID)).all().length
+            : 0,
+          status: active.rootSessionID
+            ? db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, active.rootSessionID)).all().length
+            : 0,
+          session: active.rootSessionID
+            ? db.select().from(SessionTable).where(eq(SessionTable.id, active.rootSessionID)).all().length
+            : 0,
+        }))
+        expect(rows).toEqual({ workflows: 0, runs: 0, events: 0, threads: 0, background: 0, status: 0, session: 0 })
       },
     })
   })

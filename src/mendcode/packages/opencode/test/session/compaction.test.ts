@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 import { readFile } from "fs/promises"
-import { APICallError } from "ai"
+import { APICallError, type LanguageModelUsage } from "ai"
 import { Cause, Effect, Exit, Layer, ManagedRuntime } from "effect"
 import * as Stream from "effect/Stream"
 import z from "zod"
@@ -8,7 +8,7 @@ import { Bus } from "../../src/bus"
 import { Config } from "@/config/config"
 import { Agent } from "../../src/agent/agent"
 import { LLM } from "../../src/session/llm"
-import { SessionCompaction } from "../../src/session/compaction"
+import { SessionCompaction, latestAcceptedPlanReviewContext } from "../../src/session/compaction"
 import { Token } from "@/util/token"
 import { Instance } from "../../src/project/instance"
 import { WithInstance } from "../../src/project/with-instance"
@@ -151,7 +151,7 @@ async function user(sessionID: SessionID, text: string) {
   return msg
 }
 
-async function assistant(sessionID: SessionID, parentID: MessageID, root: string) {
+async function assistant(sessionID: SessionID, parentID: MessageID, root: string, finish = "end_turn") {
   const msg: MessageV2.Assistant = {
     id: MessageID.ascending(),
     role: "assistant",
@@ -170,7 +170,7 @@ async function assistant(sessionID: SessionID, parentID: MessageID, root: string
     providerID: ref.providerID,
     parentID,
     time: { created: Date.now() },
-    finish: "end_turn",
+    finish,
   }
   await svc.updateMessage(msg)
   return msg
@@ -330,6 +330,24 @@ function liveRuntime(layer: Layer.Layer<LLM.Service>, provider = ProviderTest.fa
   )
 }
 
+function llmInputText(input: LLM.StreamInput) {
+  return input.messages
+    .map((message) => {
+      if (typeof message.content === "string") return message.content
+      if (Array.isArray(message.content)) {
+        return message.content
+          .map((part) => {
+            if (typeof part === "string") return part
+            if (part && typeof part === "object" && "text" in part && typeof part.text === "string") return part.text
+            return JSON.stringify(part)
+          })
+          .join("\n")
+      }
+      return JSON.stringify(message.content)
+    })
+    .join("\n")
+}
+
 function reply(
   text: string,
   capture?: (input: LLM.StreamInput) => void,
@@ -384,6 +402,72 @@ function reply(
     )
   }
 }
+
+function planReviewMessage(input: { markdown: string; title: string; stateTitle?: string }): MessageV2.WithParts {
+  const sessionID = SessionID.descending()
+  const info: MessageV2.Assistant = {
+    id: MessageID.ascending(),
+    role: "assistant",
+    parentID: MessageID.ascending(),
+    sessionID,
+    mode: "build",
+    agent: "build",
+    cost: 0,
+    path: { cwd: "/tmp", root: "/tmp" },
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    modelID: ref.modelID,
+    providerID: ref.providerID,
+    time: { created: Date.now() },
+    finish: "tool-calls",
+  }
+  const part: MessageV2.ToolPart = {
+    id: PartID.ascending(),
+    messageID: info.id,
+    sessionID,
+    type: "tool",
+    callID: crypto.randomUUID(),
+    tool: "plan_review",
+    state: {
+      status: "completed",
+      input: {
+        title: input.title,
+        markdown: input.markdown,
+      },
+      output: input.stateTitle ?? "User approved the plan.",
+      title: input.stateTitle ?? "Plan approved",
+      metadata: {},
+      time: { start: Date.now(), end: Date.now() },
+    },
+  }
+  return { info, parts: [part] }
+}
+
+describe("session.compaction.latestAcceptedPlanReviewContext", () => {
+  test("preserves only the latest approved plan review verbatim", () => {
+    const oldPlan = "# Old plan\n\n- do old thing"
+    const latestPlan = ["# Latest approved plan", "", "1. Keep this exact checklist", "2. Do not summarize it"].join("\n")
+
+    const context = latestAcceptedPlanReviewContext([
+      planReviewMessage({ title: "Old", markdown: oldPlan }),
+      planReviewMessage({ title: "Rejected", markdown: "# Rejected", stateTitle: "Plan rejected" }),
+      planReviewMessage({ title: "Latest", markdown: latestPlan }),
+    ])
+
+    expect(context).toContain("<latest_accepted_plan_review>")
+    expect(context).toContain("title: Latest")
+    expect(context).toContain(latestPlan)
+    expect(context).not.toContain(oldPlan)
+    expect(context).not.toContain("# Rejected")
+  })
+
+  test("returns nothing when no plan review was approved", () => {
+    expect(
+      latestAcceptedPlanReviewContext([
+        planReviewMessage({ title: "Edited", markdown: "# Edited only", stateTitle: "Plan edited" }),
+      ]),
+    ).toBeUndefined()
+  })
+})
 
 function wait(ms = 50) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -2277,6 +2361,224 @@ describe("session.compaction.process", () => {
     })
   })
 
+  test("compaction prompt preserves non-final assistant tool-call phase context", async () => {
+    const stub = llm()
+    let captured = ""
+    stub.push(
+      reply("summary", (input) => {
+        captured = llmInputText(input)
+      }),
+    )
+
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        const latest = await user(session.id, "continue Sprint 2 compaction preservation")
+        const active = await assistant(session.id, latest.id, tmp.path, "tool-calls")
+        await svc.updatePart({
+          id: PartID.ascending(),
+          messageID: active.id,
+          sessionID: session.id,
+          type: "tool",
+          callID: crypto.randomUUID(),
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: {
+              command: "bun test test/session/compaction.test.ts",
+              cwd: tmp.path,
+            },
+            output: "1 test passed",
+            title: "run compaction test",
+            metadata: {},
+            time: { start: Date.now(), end: Date.now() },
+          },
+        })
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: true,
+          overflow: true,
+        })
+
+        const rt = liveRuntime(stub.layer, wide(), cfg({ tail_turns: 1, preserve_recent_tokens: 10_000 }))
+        try {
+          const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+                overflow: true,
+              }),
+            ),
+          )
+
+          expect(captured).toContain(`Latest Assistant Phase Context:\n- messageID: ${active.id}`)
+          expect(captured).toContain("finish: tool-calls")
+          expect(captured).toContain("hasFinalText: no")
+          expect(captured).toContain("toolCount: 1")
+          expect(captured).toContain("toolStatuses: bash:completed")
+          expect(captured).toContain("lastTool: bash (completed)")
+          expect(captured).toContain("realUserInputAfterAssistant: no")
+          expect(captured).toContain("Do not mark Progress Against Latest Request complete")
+          expect(captured).toContain("Put any pending handoff, pending response, pending verification, or continue-tools work under Still required")
+          expect(captured).toContain("If it shows finish: tool-calls")
+          expect(captured).toContain("Auto-Compaction Trigger")
+          expect(captured).toContain("interrupted a non-final assistant turn")
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
+  test("compaction prompt can treat stop plus final text as final assistant context", async () => {
+    const stub = llm()
+    let captured = ""
+    stub.push(
+      reply("summary", (input) => {
+        captured = llmInputText(input)
+      }),
+    )
+
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        const latest = await user(session.id, "continue Sprint 2 compaction preservation")
+        const done = await assistant(session.id, latest.id, tmp.path, "stop")
+        await svc.updatePart({
+          id: PartID.ascending(),
+          messageID: done.id,
+          sessionID: session.id,
+          type: "text",
+          text: "Implemented compaction preservation and verified the focused scenario.",
+        })
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: true,
+          overflow: true,
+        })
+
+        const rt = liveRuntime(stub.layer, wide(), cfg({ tail_turns: 1, preserve_recent_tokens: 10_000 }))
+        try {
+          const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+                overflow: true,
+              }),
+            ),
+          )
+
+          expect(captured).toContain(`Latest Assistant Phase Context:\n- messageID: ${done.id}`)
+          expect(captured).toContain("finish: stop")
+          expect(captured).toContain("hasFinalText: yes")
+          expect(captured).toContain("toolCount: 0")
+          expect(captured).toContain("this assistant turn can be treated as final")
+          expect(captured).toContain("Auto-Compaction Trigger")
+          expect(captured).toContain("this compaction happened after a final assistant turn")
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
+  test("compaction prompt does not revive assistant phase context from before a hidden prior summary", async () => {
+    const stub = llm()
+    let captured = ""
+    stub.push(
+      reply("summary", (input) => {
+        captured = llmInputText(input)
+      }),
+    )
+
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        const original = await user(session.id, "old request")
+        const oldAssistant = await assistant(session.id, original.id, tmp.path, "tool-calls")
+        await svc.updatePart({
+          id: PartID.ascending(),
+          messageID: oldAssistant.id,
+          sessionID: session.id,
+          type: "tool",
+          callID: crypto.randomUUID(),
+          tool: "bash",
+          state: {
+            status: "completed",
+            input: { command: "git status", cwd: tmp.path },
+            output: "old output",
+            title: "old work",
+            metadata: {},
+            time: { start: Date.now(), end: Date.now() },
+          },
+        })
+        const compacted = await user(session.id, "internal compaction")
+        await svc.updatePart({
+          id: PartID.ascending(),
+          messageID: compacted.id,
+          sessionID: session.id,
+          type: "compaction",
+          auto: true,
+          overflow: true,
+        })
+        await summaryAssistant(session.id, compacted.id, tmp.path, "## Goal\n- old summary")
+        const latest = await user(session.id, "new request after prior summary")
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: true,
+          overflow: true,
+        })
+
+        const rt = liveRuntime(stub.layer, wide(), cfg({ tail_turns: 1, preserve_recent_tokens: 10_000 }))
+        try {
+          const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+                overflow: true,
+              }),
+            ),
+          )
+
+          expect(captured).not.toContain("Latest Assistant Phase Context:\n- messageID:")
+          expect(captured).not.toContain(`Latest Assistant Phase Context:\n- messageID: ${oldAssistant.id}`)
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
   test("compaction prompt includes subagent task outputs as context", async () => {
     const stub = llm()
     let captured = ""
@@ -2785,9 +3087,7 @@ describe("SessionNs.getUsage", () => {
 
   test("separates OpenAI Responses reasoning tokens from raw usage", () => {
     const model = createModel({ context: 100_000, output: 32_000 })
-    const result = SessionNs.getUsage({
-      model,
-      usage: {
+      const usage: LanguageModelUsage = {
         inputTokens: 1000,
         outputTokens: 500,
         totalTokens: 1500,
@@ -2808,8 +3108,11 @@ describe("SessionNs.getUsage", () => {
             reasoning_tokens: 125,
           },
         },
-      } as any,
-    })
+      }
+      const result = SessionNs.getUsage({
+        model,
+        usage,
+      })
 
     expect(result.tokens.output).toBe(375)
     expect(result.tokens.reasoning).toBe(125)
@@ -2817,9 +3120,7 @@ describe("SessionNs.getUsage", () => {
 
   test("separates Chat Completions reasoning tokens from raw usage", () => {
     const model = createModel({ context: 100_000, output: 32_000 })
-    const result = SessionNs.getUsage({
-      model,
-      usage: {
+      const usage: LanguageModelUsage = {
         inputTokens: 1000,
         outputTokens: 500,
         totalTokens: 1500,
@@ -2840,8 +3141,11 @@ describe("SessionNs.getUsage", () => {
             reasoning_tokens: 90,
           },
         },
-      } as any,
-    })
+      }
+      const result = SessionNs.getUsage({
+        model,
+        usage,
+      })
 
     expect(result.tokens.output).toBe(410)
     expect(result.tokens.reasoning).toBe(90)
