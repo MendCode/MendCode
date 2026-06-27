@@ -1222,13 +1222,32 @@ export const layer: Layer.Layer<
             }
           }
           const explicitAbort = isExplicitAbort()
+          if (!explicitAbort) {
+            yield* session.updatePart({
+              ...part,
+              state: {
+                status: "completed",
+                input: "input" in part.state ? part.state.input : {},
+                title: "title" in part.state && part.state.title ? part.state.title : `${part.tool} retained`,
+                metadata: { ...metadata, interrupted: false, status: "retained" },
+                output: [
+                  "tool_status: retained",
+                  "",
+                  "Tool execution stopped because the parent run lost its connection before collecting the result.",
+                  "This was not treated as a user cancel or tool failure.",
+                ].join("\n"),
+                time: { start: "time" in part.state ? part.state.time.start : end, end },
+              },
+            })
+            continue
+          }
           yield* session.updatePart({
             ...part,
             state: {
               ...part.state,
               status: "error",
-              error: explicitAbort ? "Tool execution interrupted" : "Tool execution stopped before completion",
-              metadata: { ...metadata, interrupted: explicitAbort },
+              error: "Tool execution interrupted",
+              metadata: { ...metadata, interrupted: true },
               time: { start: "time" in part.state ? part.state.time.start : end, end },
             },
           })

@@ -7,6 +7,7 @@ const labels: Record<SetupStepID, string> = {
   provider: "Connect Provider",
   models: "Models",
   budget: "Budget",
+  health: "Health",
   package: "Package",
   prompt: "Prompt",
   tui: "TUI Profile",
@@ -23,13 +24,17 @@ export function setupRailStepStatus(
 ): SetupRailStepStatus {
   if (step === "provider" && summary?.authBlocked) return "auth blocked"
   if (state?.completedSteps.includes(step)) return "complete"
-  if (step === "package" || step === "tui" || step === "memory" || step === "permissions") return "optional"
+  if (step === "health" || step === "package" || step === "tui" || step === "memory" || step === "permissions") return "optional"
   return "pending"
 }
 
 export function summaryLabel(label: string, value: string | undefined) {
   const text = `${label} ${value || "unset"}`
   return text.length > 22 ? `${text.slice(0, 21)}...` : text
+}
+
+function compactStepLabel(step: SetupStepID, index: number, status: SetupRailStepStatus) {
+  return `${index + 1}/${setupSteps.length} ${labels[step]} · ${status}`
 }
 
 function statusColor(status: SetupRailStepStatus, theme: ReturnType<typeof useTheme>["theme"]) {
@@ -57,26 +62,41 @@ export function SetupRail(props: {
   onSelect: (step: SetupStepID) => void
 }) {
   const { theme } = useTheme()
+  const activeIndex = () => Math.max(0, setupSteps.indexOf(props.active))
+  const activeStatus = () => setupRailStepStatus(props.active, props.state, props.summary)
   return (
-    <box width={props.narrow ? "100%" : 30} flexShrink={0} borderColor={theme.border} borderStyle="single" paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1}>
-      <For each={setupSteps}>
-        {(step, index) => {
-          const status = () => setupRailStepStatus(step, props.state, props.summary)
-          return (
-            <box flexDirection="row" justifyContent="space-between" onMouseDown={() => props.onSelect(step)}>
-              <text fg={props.active === step ? theme.primary : theme.text}>
-                {index() + 1}. {labels[step]}
-              </text>
-              <text fg={statusColor(status(), theme)}>{status()}</text>
-            </box>
-          )
-        }}
-      </For>
-      <box height={1} />
-      <text fg={props.complete ? theme.success : theme.textMuted}>
-        {props.complete ? "Ready to finish" : props.minimal ? "Minimal mode active" : "Incomplete setup visible"}
-      </text>
-      <Show when={!props.narrow}>
+    <box width={props.narrow ? "100%" : 30} flexShrink={0} borderColor={theme.border} borderStyle="single" paddingLeft={1} paddingRight={1} paddingTop={props.narrow ? 0 : 1} paddingBottom={props.narrow ? 0 : 1}>
+      <Show
+        when={!props.narrow}
+        fallback={
+          <box flexDirection="row" width="100%" overflow="hidden">
+            <text fg={theme.primary} wrapMode="none">
+              {compactStepLabel(props.active, activeIndex(), activeStatus())}
+            </text>
+            <box flexGrow={1} />
+            <text fg={props.complete ? theme.success : theme.textMuted} wrapMode="none">
+              {props.complete ? "ready" : props.minimal ? "minimal" : "setup"}
+            </text>
+          </box>
+        }
+      >
+        <For each={setupSteps}>
+          {(step, index) => {
+            const status = () => setupRailStepStatus(step, props.state, props.summary)
+            return (
+              <box flexDirection="row" justifyContent="space-between" onMouseDown={() => props.onSelect(step)}>
+                <text fg={props.active === step ? theme.primary : theme.text}>
+                  {index() + 1}. {labels[step]}
+                </text>
+                <text fg={statusColor(status(), theme)}>{status()}</text>
+              </box>
+            )
+          }}
+        </For>
+        <box height={1} />
+        <text fg={props.complete ? theme.success : theme.textMuted}>
+          {props.complete ? "Ready to finish" : props.minimal ? "Minimal mode active" : "Incomplete setup visible"}
+        </text>
         <box flexGrow={1} />
         <box flexDirection="column">
           <text fg={theme.primary}>Live Summary</text>

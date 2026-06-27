@@ -1,4 +1,6 @@
 import { createStore, reconcile } from "solid-js/store"
+import type { SetupStepID } from "@/mend/setup/state"
+export type { SetupStepID } from "@/mend/setup/state"
 import { createSimpleContext } from "./helper"
 import type { PromptInfo } from "../component/prompt/history"
 import { routeReturnTarget as routeReturnTargetBase } from "./route-return"
@@ -13,8 +15,6 @@ export type SessionRoute = {
   sessionID: string
   prompt?: PromptInfo
 }
-
-export type SetupStepID = "provider" | "models" | "budget" | "package" | "prompt" | "tui" | "memory" | "permissions"
 
 export type SetupRoute = {
   type: "setup"

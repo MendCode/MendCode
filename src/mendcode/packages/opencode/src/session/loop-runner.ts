@@ -57,6 +57,17 @@ function remainingBudget(workflow: LoopWorkflow.Info) {
   return Math.max(0, workflow.policy.maxTurns - (workflow.metrics.turns ?? 0))
 }
 
+function checkpointGuidance(workflow: LoopWorkflow.Info) {
+  if (workflow.spec.budgetMode === "unbounded-monitor") {
+    return [
+      "This is an unbounded monitor. A successful check is an iteration checkpoint, not workflow completion.",
+      "For normal healthy monitoring iterations, report status: continue and next_action: sleep_until_next_interval.",
+      "Only report status: stop when an explicit stop condition is met or the user asked the loop to stop. Use blocked/needs_input for blockers.",
+    ].join("\n")
+  }
+  return "Work autonomously toward completing the objective, not toward consuming every iteration. If the goal is already complete, verify it and report status: complete instead of making more changes."
+}
+
 function iterationPrompt(workflow: LoopWorkflow.Info) {
   const turn = (workflow.metrics.turns ?? 0) + 1
   const maxTurns = workflow.policy.maxTurns ?? "unlimited"
@@ -93,16 +104,18 @@ function iterationPrompt(workflow: LoopWorkflow.Info) {
     `Approval required for: ${approval}`,
     "",
     reserveNote,
-    "Work autonomously toward completing the objective, not toward consuming every iteration. If the goal is already complete, verify it and report status: complete instead of making more changes.",
+    checkpointGuidance(workflow),
     "Do not push, merge, publish releases, send external messages, or perform destructive shell actions unless the user has explicitly approved that action in this session.",
     "",
     "End your final message with this exact machine-readable block:",
     "LOOP_CHECKPOINT:",
-    "status: complete | continue | needs_input | blocked",
+    "status: complete | continue | needs_input | blocked | stop",
     "summary: one concise sentence",
     "evidence:",
     "- validation, file, or observation",
-    "next_action: next useful action, or stop if complete",
+    workflow.spec.budgetMode === "unbounded-monitor"
+      ? "next_action: sleep_until_next_interval, stop, unblock steps, or next monitoring action"
+      : "next_action: next useful action, or stop if complete",
     "confidence: high | medium | low",
   ]
     .filter((line): line is string => Boolean(line))
@@ -146,6 +159,12 @@ function workflowExplicitlyAllowsEdits(workflow: LoopWorkflow.Info) {
   return editAllowedApprovalGates.some((gate) => approvals.has(gate))
 }
 
+function runTriggerFor(workflow: LoopWorkflow.Info): LoopWorkflow.RunTrigger {
+  const mode = workflow.spec.trigger?.mode
+  if (mode === "interval" || mode === "adaptive" || mode === "external-signal" || mode === "self-paced") return mode
+  return "manual"
+}
+
 function promptModel(workflow: LoopWorkflow.Info) {
   const model = workflow.spec.model
   if (!model) return undefined
@@ -172,7 +191,7 @@ function parseCheckpoint(text: string): LoopCheckpoint {
   }
   const statusRaw = lineValue("status")?.toLowerCase()
   const status =
-    statusRaw === "complete" || statusRaw === "continue" || statusRaw === "needs_input" || statusRaw === "blocked"
+    statusRaw === "complete" || statusRaw === "continue" || statusRaw === "needs_input" || statusRaw === "blocked" || statusRaw === "stop"
       ? statusRaw
       : undefined
   const evidence: string[] = []
@@ -241,7 +260,7 @@ export const layer = Layer.effect(
         } satisfies TickResult
       }
       const prompt = yield* SessionPrompt.Service
-      const run = yield* workflow.startRun({ id, trigger: before.spec.trigger?.mode === "interval" ? "interval" : "adaptive" })
+      const run = yield* workflow.startRun({ id, trigger: runTriggerFor(before) })
       const current = yield* workflow.get(id)
       if (!current.rootSessionID) {
         return yield* workflow.failRun({ id, runID: run.id, error: "Loop has no root session after activation." }).pipe(

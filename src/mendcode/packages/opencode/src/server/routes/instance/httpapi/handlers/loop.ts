@@ -19,6 +19,19 @@ function readReasonBody(request: HttpServerRequest.HttpServerRequest) {
   })
 }
 
+function readAgentBody(request: HttpServerRequest.HttpServerRequest) {
+  return Effect.promise(async () => {
+    const body = await webSource(request)?.json().catch(() => ({}))
+    if (!body || typeof body !== "object") return {}
+    const agent = (body as { agent?: unknown }).agent
+    const reason = (body as { reason?: unknown }).reason
+    return {
+      agent: typeof agent === "string" ? agent : undefined,
+      reason: typeof reason === "string" ? reason : undefined,
+    }
+  })
+}
+
 export const loopRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const loop = yield* LoopWorkflow.Service
@@ -60,6 +73,16 @@ export const loopRoute = HttpRouter.use((router) =>
 
     yield* router.add("POST", "/loop/:loopID/pause", control("pause"))
     yield* router.add("POST", "/loop/:loopID/resume", control("resume"))
+    yield* router.add(
+      "POST",
+      "/loop/:loopID/agent",
+      Effect.gen(function* () {
+        const params = yield* HttpRouter.schemaPathParams(LoopParams)
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const body = yield* readAgentBody(request)
+        return HttpServerResponse.jsonUnsafe(yield* loop.updateAgent({ id: params.loopID, ...body }))
+      }),
+    )
     yield* router.add("POST", "/loop/:loopID/run-once", control("run-once"))
     yield* router.add("POST", "/loop/:loopID/stop", control("stop"))
     yield* router.add(

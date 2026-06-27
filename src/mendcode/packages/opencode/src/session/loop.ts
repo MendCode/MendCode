@@ -85,12 +85,12 @@ export const BudgetMode = Schema.Literals(["fixed", "max-goal", "unbounded-monit
 )
 export type BudgetMode = Schema.Schema.Type<typeof BudgetMode>
 
-export const GoalStatus = Schema.Literals(["complete", "continue", "needs_input", "blocked"]).pipe(
+export const GoalStatus = Schema.Literals(["complete", "continue", "needs_input", "blocked", "stop"]).pipe(
   withStatics((s) => ({ zod: zod(s) })),
 )
 export type GoalStatus = Schema.Schema.Type<typeof GoalStatus>
 
-export const RunTrigger = Schema.Literals(["manual", "interval", "adaptive", "external-signal", "resume", "run-once"]).pipe(
+export const RunTrigger = Schema.Literals(["manual", "interval", "adaptive", "external-signal", "self-paced", "resume", "run-once"]).pipe(
   withStatics((s) => ({ zod: zod(s) })),
 )
 export type RunTrigger = Schema.Schema.Type<typeof RunTrigger>
@@ -208,6 +208,13 @@ export const RunInfo = Schema.Struct({
   nextWakeup: Schema.optional(NonNegativeInt),
   evaluatorReason: Schema.optional(Schema.String),
   budget: Schema.optional(Metrics),
+  checkpoint: Schema.optional(Schema.Struct({
+    status: Schema.optional(GoalStatus),
+    summary: Schema.optional(Schema.String),
+    evidence: Schema.optional(Schema.Array(Schema.String)),
+    nextAction: Schema.optional(Schema.String),
+    confidence: Schema.optional(Schema.String),
+  })),
   time: Schema.Struct({
     created: NonNegativeInt,
     updated: NonNegativeInt,
@@ -309,6 +316,12 @@ export type UpdateStateInput = {
   reason?: string
 }
 
+export type UpdateAgentInput = {
+  id: LoopID
+  agent?: string
+  reason?: string
+}
+
 export type RunOnceInput = {
   id: LoopID
   reason?: string
@@ -360,6 +373,7 @@ export interface Interface {
   readonly pause: (input: UpdateStateInput) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
   readonly resume: (input: UpdateStateInput) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
   readonly stop: (input: UpdateStateInput) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
+  readonly updateAgent: (input: UpdateAgentInput) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
   readonly delete: (id: LoopID) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
   readonly runOnce: (input: RunOnceInput) => Effect.Effect<RunInfo, InstanceType<typeof NotFoundError>>
 }
@@ -408,11 +422,12 @@ function defaultPolicy(input?: Policy, budgetMode?: BudgetMode): Policy {
 }
 
 function nextWakeupFor(
-  info: { trigger?: { mode?: TriggerMode; intervalMs?: number } },
+  info: { trigger?: { mode?: TriggerMode; intervalMs?: number }; budgetMode?: BudgetMode },
   now = Date.now(),
   options?: { immediate?: boolean },
 ) {
   if (!info.trigger || info.trigger.mode === "manual") return undefined
+  if (info.trigger.mode === "self-paced") return info.budgetMode === "unbounded-monitor" ? undefined : now
   if (!info.trigger.intervalMs) return undefined
   if (options?.immediate) return now
   return now + info.trigger.intervalMs
@@ -587,6 +602,7 @@ function fromRunRow(row: RunRow): RunInfo {
     nextWakeup: row.next_wakeup ?? undefined,
     evaluatorReason: row.data.evaluatorReason,
     budget: row.data.budget,
+    checkpoint: row.data.checkpoint,
     time: {
       created: row.time_created,
       updated: row.time_updated,
@@ -856,7 +872,7 @@ export const layer = Layer.effect(
         .filter((item) => {
           if (item.state !== "active" && item.state !== "sleeping") return false
           const mode = item.spec.trigger?.mode
-          if (mode !== "interval" && mode !== "adaptive") return false
+          if (mode !== "interval" && mode !== "adaptive" && mode !== "self-paced") return false
           return typeof item.nextWakeup === "number" && item.nextWakeup <= now
         })
         .slice(0, limit)
@@ -1147,6 +1163,39 @@ export const layer = Layer.effect(
       return info
     })
 
+    const updateAgent = Effect.fn("LoopWorkflow.updateAgent")(function* (input: UpdateAgentInput) {
+      const current = yield* get(input.id)
+      const now = Date.now()
+      const nextSpec = { ...current.spec, agent: input.agent?.trim() || undefined }
+      const row = Database.transaction((db) => {
+        db.update(LoopWorkflowTable)
+          .set({
+            time_updated: now,
+            data: {
+              spec: nextSpec,
+              policy: current.policy,
+              metrics: current.metrics,
+              evaluatorReason: input.reason ?? `Agent set to ${nextSpec.agent ?? "default"}.`,
+            },
+          })
+          .where(eq(LoopWorkflowTable.id, current.id))
+          .run()
+        return db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, current.id)).get()!
+      })
+      const info = fromWorkflowRow(row)
+      const event = appendEvent({
+        workflowID: info.id,
+        sessionID: info.rootSessionID,
+        type: "action",
+        title: "Loop agent updated",
+        summary: input.reason ?? `Agent: ${info.spec.agent ?? "default"}`,
+        data: { agent: info.spec.agent ?? null },
+      })
+      yield* publishWorkflow(info)
+      yield* publishEvent(event)
+      return info
+    })
+
     const stop = (input: UpdateStateInput) =>
       setWorkflowState({ ...input, state: "stopped", phase: "stopped", type: "stopped", title: "Loop stopped" })
 
@@ -1238,27 +1287,32 @@ export const layer = Layer.effect(
       const budgetMode = current.spec.budgetMode
       const reachedMaxTurns = typeof current.policy.maxTurns === "number" && metrics.turns >= current.policy.maxTurns
       const checkpointStatus = input.goalStatus ?? input.checkpoint?.status
-      const goalComplete = checkpointStatus === "complete" && budgetMode !== "fixed"
+      const goalComplete = checkpointStatus === "complete" && budgetMode !== "fixed" && budgetMode !== "unbounded-monitor"
+      const explicitStop = checkpointStatus === "stop"
       const budgetExhaustedBeforeGoal = budgetMode === "max-goal" && reachedMaxTurns && !goalComplete
       const computedNext =
-        goalComplete
-          ? ({ state: "completed" as const, phase: "completed", completed: true, nextWakeup: undefined })
-          : budgetExhaustedBeforeGoal
-            ? ({ state: "blocked" as const, phase: "budget_exhausted", completed: false, nextWakeup: undefined })
-            : checkpointStatus === "needs_input"
-              ? ({ state: "needs_input" as const, phase: "needs_input", completed: false, nextWakeup: undefined })
-              : checkpointStatus === "blocked"
-                ? ({ state: "blocked" as const, phase: "blocked", completed: false, nextWakeup: undefined })
-                : completionState({ metrics, policy: current.policy, nextWakeup })
+        explicitStop
+          ? ({ state: "stopped" as const, phase: "stopped", completed: false, nextWakeup: undefined })
+          : goalComplete
+            ? ({ state: "completed" as const, phase: "completed", completed: true, nextWakeup: undefined })
+            : budgetExhaustedBeforeGoal
+              ? ({ state: "blocked" as const, phase: "budget_exhausted", completed: false, nextWakeup: undefined })
+              : checkpointStatus === "needs_input"
+                ? ({ state: "needs_input" as const, phase: "needs_input", completed: false, nextWakeup: undefined })
+                : checkpointStatus === "blocked"
+                  ? ({ state: "blocked" as const, phase: "blocked", completed: false, nextWakeup: undefined })
+                  : completionState({ metrics, policy: current.policy, nextWakeup })
       const pauseAfterRun = current.state === "paused" && !computedNext.completed && computedNext.state !== "blocked" && computedNext.state !== "needs_input"
       const next = pauseAfterRun
         ? { state: "paused" as const, phase: "paused", completed: false, nextWakeup: undefined }
         : computedNext
       const evaluatorReason = goalComplete
         ? (input.reason ?? input.checkpoint?.summary ?? "Loop goal completed and verified by checkpoint.")
-        : budgetExhaustedBeforeGoal
-          ? `Loop reached its maximum iteration budget (${metrics.turns}/${current.policy.maxTurns}) before the goal was marked complete. Last checkpoint: ${input.reason ?? input.checkpoint?.summary ?? "no checkpoint summary"}`
-          : (input.reason ?? input.checkpoint?.summary ?? "Loop run completed.")
+        : explicitStop
+          ? (input.reason ?? input.checkpoint?.summary ?? "Loop checkpoint requested stop.")
+          : budgetExhaustedBeforeGoal
+            ? `Loop reached its maximum iteration budget (${metrics.turns}/${current.policy.maxTurns}) before the goal was marked complete. Last checkpoint: ${input.reason ?? input.checkpoint?.summary ?? "no checkpoint summary"}`
+            : (input.reason ?? input.checkpoint?.summary ?? "Loop run completed.")
       const runRow = Database.transaction((db) => {
         db.update(LoopRunTable)
           .set({
@@ -1303,13 +1357,15 @@ export const layer = Layer.effect(
         title: "Loop run completed",
         summary: goalComplete
           ? "Loop completed after the goal checkpoint reported success."
-          : budgetExhaustedBeforeGoal
-            ? `Loop blocked after reaching its maximum iteration budget (${metrics.turns}/${current.policy.maxTurns}) before completion.`
-            : next.completed
-              ? "Loop completed after reaching its fixed iteration limit."
-              : pauseAfterRun
-                ? "Loop paused after completing the current run."
-                : evaluatorReason,
+          : explicitStop
+            ? "Loop stopped after the checkpoint requested stop."
+            : budgetExhaustedBeforeGoal
+              ? `Loop blocked after reaching its maximum iteration budget (${metrics.turns}/${current.policy.maxTurns}) before completion.`
+              : next.completed
+                ? "Loop completed after reaching its fixed iteration limit."
+                : pauseAfterRun
+                  ? "Loop paused after completing the current run."
+                  : evaluatorReason,
         data: { nextWakeup: next.nextWakeup, completed: next.completed, goalStatus: checkpointStatus, checkpoint: input.checkpoint },
       })
       yield* upsertRootThread(workflow, run.id)
@@ -1462,6 +1518,7 @@ export const layer = Layer.effect(
       failRun,
       pause,
       resume,
+      updateAgent,
       stop,
       delete: deleteWorkflow,
       runOnce,

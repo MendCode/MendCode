@@ -5,8 +5,10 @@ import type { Tool } from "@/tool/tool"
 import { LoopTool } from "../../src/tool/loop"
 import { ToolRegistry } from "@/tool/registry"
 import { Session } from "@/session/session"
+import { LoopWorkflow } from "@/session/loop"
+import { MessageV2 } from "@/session/message-v2"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
-import { SessionID, MessageID } from "../../src/session/schema"
+import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { testEffect } from "../lib/effect"
 
@@ -24,7 +26,7 @@ afterEach(async () => {
   await disposeAllInstances()
 })
 
-const it = testEffect(Layer.mergeAll(ToolRegistry.defaultLayer, Session.defaultLayer, CrossSpawnSpawner.defaultLayer))
+const it = testEffect(Layer.mergeAll(ToolRegistry.defaultLayer, Session.defaultLayer, LoopWorkflow.defaultLayer, CrossSpawnSpawner.defaultLayer))
 
 describe("tool.loop", () => {
   it.live("registry exposes loop tool and activation creates a durable workflow", () =>
@@ -78,6 +80,22 @@ describe("tool.loop", () => {
           expect(result.output).toContain("budget_mode: fixed")
           expect(result.output).toContain("max_runtime_ms: 300000")
           expect(result.output).toContain("Loop service was not confirmed")
+
+          const updatedAgent = yield* tool.execute(
+            {
+              action: "update_agent",
+              workflowID: result.metadata.workflowID,
+              agent: "fix",
+            },
+            {
+              ...baseCtx,
+              sessionID: parent.id,
+              ask: () => Effect.void,
+            },
+          )
+          expect(updatedAgent.title).toContain("Updated loop agent")
+          expect(updatedAgent.metadata.agent).toBe("fix")
+          expect(updatedAgent.output).toContain("agent: fix")
 
           const listed = yield* tool.execute(
             { action: "list" },
@@ -264,6 +282,136 @@ describe("tool.loop", () => {
           ).pipe(Effect.exit)
 
           expect(Exit.isFailure(fixedZero)).toBe(true)
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("shows latest run context, changed files, and loop message", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const registry = yield* ToolRegistry.Service
+          const sessions = yield* Session.Service
+          const workflows = yield* LoopWorkflow.Service
+          const parent = yield* sessions.create({ title: "Parent loop context test" })
+          const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
+          const tool = (yield* registry.tools({
+            providerID: ProviderID.opencode,
+            modelID: ModelID.make("gpt-5"),
+            agent,
+          })).find((tool) => tool.id === LoopTool.id)
+          if (!tool) throw new Error("Loop tool not found")
+
+          const activated = yield* tool.execute(
+            {
+              action: "activate",
+              objective: "Inspect the repo and report changed files.",
+              triggerMode: "manual",
+              maxTurns: 3,
+              ensureService: false,
+            },
+            {
+              ...baseCtx,
+              sessionID: parent.id,
+              ask: () => Effect.void,
+            },
+          )
+          const workflowID = activated.metadata.workflowID
+          const rootSessionID = activated.metadata.rootSessionID
+          if (!workflowID || !rootSessionID) throw new Error("Loop did not activate with a root session")
+
+          yield* sessions.setSummary({
+            sessionID: rootSessionID,
+            summary: {
+              additions: 12,
+              deletions: 3,
+              files: 2,
+              diffs: [
+                { file: "src/loop-context.ts", additions: 10, deletions: 1, status: "modified", patch: "@@ fake" },
+                { file: "test/loop-context.test.ts", additions: 2, deletions: 2, status: "added", patch: "@@ fake" },
+              ],
+            },
+          })
+
+          const userID = MessageID.ascending()
+          yield* sessions.updateMessage({
+            id: userID,
+            role: "user",
+            sessionID: rootSessionID,
+            agent: "build",
+            model: { providerID: ProviderID.opencode, modelID: ModelID.make("gpt-5") },
+            time: { created: Date.now() },
+          } satisfies MessageV2.User)
+          const assistantID = MessageID.ascending()
+          yield* sessions.updateMessage({
+            id: assistantID,
+            role: "assistant",
+            parentID: userID,
+            sessionID: rootSessionID,
+            mode: "build",
+            agent: "build",
+            cost: 0,
+            path: { cwd: "/tmp", root: "/tmp" },
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            modelID: ModelID.make("gpt-5"),
+            providerID: ProviderID.opencode,
+            time: { created: Date.now(), completed: Date.now() },
+            finish: "stop",
+          } satisfies MessageV2.Assistant)
+          yield* sessions.updatePart({
+            id: PartID.ascending(),
+            messageID: assistantID,
+            sessionID: rootSessionID,
+            type: "text",
+            text: "Último reporte del loop: cambié dos archivos y dejé la validación lista.",
+          })
+
+          const run = yield* workflows.startRun({ id: workflowID, trigger: "manual", reason: "Manual context test." })
+          yield* workflows.completeRun({
+            id: workflowID,
+            runID: run.id,
+            reason: "Context summary from checkpoint.",
+            checkpoint: {
+              status: "continue",
+              summary: "Se tocaron dos archivos del contexto del loop.",
+              evidence: ["src/loop-context.ts changed", "test/loop-context.test.ts changed"],
+              nextAction: "Run focused tests.",
+              confidence: "high",
+            },
+          })
+
+          const shown = yield* tool.execute(
+            { action: "show", workflowID },
+            {
+              ...baseCtx,
+              sessionID: parent.id,
+              ask: () => Effect.void,
+            },
+          )
+
+          expect(shown.output).toContain("<loop_context>")
+          expect(shown.output).toContain("latest_checkpoint:")
+          expect(shown.output).toContain("summary: Se tocaron dos archivos del contexto del loop.")
+          expect(shown.output).toContain("src/loop-context.ts (+10 -1 modified)")
+          expect(shown.output).toContain("latest_loop_message:")
+          expect(shown.output).toContain("Último reporte del loop")
+          expect(shown.metadata.latestCheckpoint?.nextAction).toBe("Run focused tests.")
+          expect((shown.metadata.changedFiles ?? []).map((file: { file: string }) => file.file)).toContain("test/loop-context.test.ts")
+          expect(shown.metadata.lastMessage).toContain("cambié dos archivos")
+
+          const listed = yield* tool.execute(
+            { action: "list" },
+            {
+              ...baseCtx,
+              sessionID: parent.id,
+              ask: () => Effect.void,
+            },
+          )
+          const listedWorkflow = listed.metadata.workflows?.find((item: { workflowID: string }) => item.workflowID === workflowID)
+          expect(listed.output).toContain("last_summary: Context summary from checkpoint.")
+          expect(listedWorkflow?.latestCheckpoint?.summary).toBe("Se tocaron dos archivos del contexto del loop.")
+          expect(listedWorkflow?.lastMessage).toContain("Último reporte del loop")
         }),
       { git: true },
     ),

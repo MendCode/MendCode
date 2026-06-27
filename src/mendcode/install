@@ -28,9 +28,13 @@ Options:
     -v, --version <version> Install a specific version (e.g., 1.0.180)
     -b, --binary <path>     Install from a local binary instead of downloading
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
+        --setup             Open MendCode setup after install
+        --skip-setup        Do not ask to open setup after install
 
 Examples:
     curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash
+    curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash -s -- --setup
+    curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash -s -- --skip-setup
     curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash -s -- --version 1.0.180
     ./install --binary /path/to/mendcode
 EOF
@@ -39,6 +43,8 @@ EOF
 requested_version=${VERSION:-}
 no_modify_path=false
 binary_path=""
+setup_mode="ask"
+already_installed=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -66,6 +72,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-modify-path)
             no_modify_path=true
+            shift
+            ;;
+        --setup)
+            setup_mode="run"
+            shift
+            ;;
+        --skip-setup)
+            setup_mode="skip"
             shift
             ;;
         *)
@@ -230,13 +244,13 @@ print_message() {
 
 print_banner() {
     echo -e ""
-    echo -e "${MOSS_BG}${PARCHMENT} MendCode harness ${NC} ${MOSS_SOFT}terminal-first coding${NC}"
+    echo -e "${MOSS_BG}${PARCHMENT} MendCode install deck ${NC} ${MOSS_SOFT}terminal-first coding${NC}"
     printf "%b%s%b\n" "$PARCHMENT" "█▄ ▄█  █▀▀▀  █▄  █  █▀▀▄  █▀▀▀  █▀▀█  █▀▀▄  █▀▀▀ " "$NC"
     printf "%b%s%b\n" "$PARCHMENT" "█ ▀ █  █▀▀▀  █ ▀ █  █  █  █     █  █  █  █  █▀▀▀ " "$NC"
     printf "%b%s%b\n" "$PARCHMENT" "▀   ▀  ▀▀▀▀  ▀   ▀  ▀▀▀   ▀▀▀▀  ▀▀▀▀  ▀▀▀   ▀▀▀▀ " "$NC"
     echo -e ""
-    printf "%b%s%b\n" "$MOSS_SOFT" "      .-." "$NC"
-    printf "%b%s%b\n" "$MOSS_SOFT" "     (o o)" "$NC"
+    printf "%b%s%b\n" "$MOSS_SOFT" '      .-.' "$NC"
+    printf "%b%s%b\n" "$MOSS_SOFT" '     (o o)' "$NC"
     printf "%b%s%b\n" "$MOSS_SOFT" '    /|[+]|\' "$NC"
     printf "%b%s%b\n" "$MOSS_SOFT" '   /_|___|_\' "$NC"
     printf "%b%s%b\n" "$MOSS_SOFT" '      \_/' "$NC"
@@ -250,11 +264,11 @@ print_step() {
     local current="$1"
     local total="$2"
     local message="$3"
-    echo -e "${CORAL}[$current/$total]${NC} ${BOLD}$message${NC}"
+    echo -e "${CORAL}◆ $current/$total${NC} ${BOLD}$message${NC}"
 }
 
 print_success() {
-    echo -e "${GREEN}OK${NC} $1"
+    echo -e "${GREEN}✓${NC} $1"
 }
 
 STEP_TOTAL=4
@@ -274,7 +288,7 @@ check_version() {
             print_message info "${MUTED}Installed version: ${NC}$installed_version."
         else
             print_message info "${MUTED}Version ${NC}$specific_version${MUTED} already installed"
-            exit 0
+            already_installed=true
         fi
     fi
 }
@@ -302,11 +316,11 @@ print_progress() {
     local off=$(( width - on ))
 
     local filled=$(printf "%*s" "$on" "")
-    filled=${filled// /#}
+    filled=${filled// /█}
     local empty=$(printf "%*s" "$off" "")
-    empty=${empty// /-}
+    empty=${empty// /·}
 
-    printf "\r${MOSS_SOFT}[%s%s] %3d%%${NC}" "$filled" "$empty" "$percent" >&4
+    printf "\r${MOSS_SOFT}%s%s${NC} ${PARCHMENT}%3d%%${NC}" "$filled" "$empty" "$percent" >&4
 }
 
 download_with_progress() {
@@ -421,7 +435,9 @@ if [ -n "$binary_path" ]; then
     install_from_binary
 else
     check_version
-    download_and_install
+    if [ "$already_installed" != "true" ]; then
+        download_and_install
+    fi
 fi
 
 
@@ -514,6 +530,55 @@ if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
     print_message info "Added $INSTALL_DIR to \$GITHUB_PATH"
 fi
 
+launch_setup() {
+    local bin_path="$INSTALL_DIR/$BINARY_NAME"
+    if [ ! -x "$bin_path" ]; then
+        print_message warning "Setup is available after the binary is executable: $bin_path"
+        return 0
+    fi
+
+    echo -e ""
+    print_message info "${MOSS_SOFT}Opening MendCode setup...${NC}"
+    OPENCODE_ROUTE='{"type":"setup"}' "$bin_path"
+}
+
+print_setup_command() {
+    local route='{"type":"setup"}'
+    print_message info "${MUTED}Setup later:${NC} OPENCODE_ROUTE='$route' \"$INSTALL_DIR/$BINARY_NAME\""
+}
+
+maybe_launch_setup() {
+    if [ "$setup_mode" = "skip" ]; then
+        print_setup_command
+        return 0
+    fi
+
+    if [ "$setup_mode" = "run" ]; then
+        launch_setup
+        return 0
+    fi
+
+    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+        print_setup_command
+        return 0
+    fi
+
+    echo -e ""
+    echo -e "${BOLD}${PARCHMENT}Finish setup now?${NC} ${MOSS_SOFT}Providers, models, packages, memory, and permissions.${NC}"
+    printf "%b" "${CORAL}Open setup now?${NC} ${MUTED}[Y/n]${NC} " > /dev/tty
+    local answer=""
+    read -r answer < /dev/tty || answer=""
+    answer=$(printf "%s" "$answer" | tr '[:upper:]' '[:lower:]')
+    case "$answer" in
+        ""|y|yes|s|si|sí|setup|open)
+            launch_setup
+            ;;
+        *)
+            print_setup_command
+            ;;
+    esac
+}
+
 echo -e ""
 echo -e "${GREEN}MendCode is ready.${NC}"
 echo -e ""
@@ -524,5 +589,6 @@ echo -e "${MUTED}Open a new terminal to use:${NC} mendcode"
 echo -e "${MUTED}Or update this terminal now:${NC} export PATH=$INSTALL_DIR:\$PATH"
 echo -e ""
 echo -e "${MUTED}Docs and releases:${NC} $GITHUB_BASE_URL"
+maybe_launch_setup
 echo -e ""
 echo -e ""

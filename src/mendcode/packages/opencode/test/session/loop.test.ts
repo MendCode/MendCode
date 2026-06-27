@@ -7,6 +7,7 @@ import {
   RunID,
   Service as LoopWorkflowService,
   type CreateDraftInput,
+  type GoalStatus,
 } from "@/session/loop"
 import { LoopRunner } from "@/session/loop-runner"
 import { SessionPrompt } from "@/session/prompt"
@@ -69,6 +70,9 @@ const svc = {
   resume(id: LoopID) {
     return run(LoopWorkflowService.use((loop) => loop.resume({ id, reason: "test resume" })))
   },
+  updateAgent(id: LoopID, agent?: string) {
+    return run(LoopWorkflowService.use((loop) => loop.updateAgent({ id, agent, reason: "test agent update" })))
+  },
   stop(id: LoopID) {
     return run(LoopWorkflowService.use((loop) => loop.stop({ id, reason: "test stop" })))
   },
@@ -87,8 +91,8 @@ const svc = {
   startRun(id: LoopID) {
     return run(LoopWorkflowService.use((loop) => loop.startRun({ id, trigger: "interval", reason: "test start" })))
   },
-  completeRun(id: LoopID, runID: RunID) {
-    return run(LoopWorkflowService.use((loop) => loop.completeRun({ id, runID, reason: "test complete" })))
+  completeRun(id: LoopID, runID: RunID, checkpoint?: { status?: GoalStatus; summary?: string }) {
+    return run(LoopWorkflowService.use((loop) => loop.completeRun({ id, runID, reason: "test complete", checkpoint })))
   },
   failRun(id: LoopID, runID: RunID) {
     return run(LoopWorkflowService.use((loop) => loop.failRun({ id, runID, error: "boom" })))
@@ -122,6 +126,30 @@ describe("loop workflow service", () => {
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.events).toHaveLength(1)
         expect(snapshot.events[0]).toMatchObject({ type: "created", title: "Loop draft created" })
+      },
+    })
+  })
+
+  test("updates the loop agent and can reset to default", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Agent editable loop",
+          objective: "Keep this loop easy to retarget.",
+          agent: "build",
+        })
+
+        const updated = await svc.updateAgent(draft.id, "fix")
+        expect(updated.spec.agent).toBe("fix")
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.spec.agent).toBe("fix")
+        expect(snapshot.events.find((event) => event.title === "Loop agent updated")?.data?.agent).toBe("fix")
+
+        const reset = await svc.updateAgent(draft.id, "")
+        expect(reset.spec.agent).toBeUndefined()
       },
     })
   })
@@ -208,6 +236,57 @@ describe("loop workflow service", () => {
     })
   })
 
+  test("unbounded interval monitors keep sleeping when a checkpoint reports complete", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Hourly monitor",
+          objective: "Monitor forever until explicitly stopped.",
+          trigger: { mode: "interval", intervalMs: 3_600_000 },
+          budgetMode: "unbounded-monitor",
+        })
+        await svc.activate(draft.id)
+
+        const started = await svc.startRun(draft.id)
+        await svc.completeRun(draft.id, started.id, { status: "complete", summary: "Healthy check completed." })
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("sleeping")
+        expect(snapshot.workflow.phase).toBe("waiting")
+        expect(snapshot.workflow.nextWakeup).toBeGreaterThan(Date.now())
+        expect(snapshot.workflow.metrics.turns).toBe(1)
+        expect(snapshot.events.at(-1)?.data?.completed).toBe(false)
+      },
+    })
+  })
+
+  test("unbounded interval monitors stop only when checkpoint explicitly asks to stop", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Hourly monitor stop",
+          objective: "Monitor until stop condition.",
+          trigger: { mode: "interval", intervalMs: 3_600_000 },
+          budgetMode: "unbounded-monitor",
+        })
+        await svc.activate(draft.id)
+
+        const started = await svc.startRun(draft.id)
+        await svc.completeRun(draft.id, started.id, { status: "stop", summary: "Stop condition met." })
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("stopped")
+        expect(snapshot.workflow.phase).toBe("stopped")
+        expect(snapshot.workflow.nextWakeup).toBeUndefined()
+        expect(snapshot.events.at(-1)?.summary).toBe("Loop stopped after the checkpoint requested stop.")
+      },
+    })
+  })
+
   test("due excludes non-interval loops without an explicit wakeup", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
@@ -239,6 +318,69 @@ describe("loop workflow service", () => {
         expect(due.map((item) => item.id)).toContain(activeInterval.id)
         expect(due.map((item) => item.id)).not.toContain(activeManual.id)
         expect(due.map((item) => item.id)).not.toContain(activeSignal.id)
+      },
+    })
+  })
+
+  test("self-paced loops are due immediately and keep advancing after continue checkpoints", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Self-paced goal",
+          objective: "Keep working until the goal is verified.",
+          trigger: { mode: "self-paced" },
+          budgetMode: "max-goal",
+          policy: { maxTurns: 3 },
+        })
+        const active = await svc.activate(draft.id)
+
+        expect(active.state).toBe("sleeping")
+        expect(active.nextWakeup).toBeLessThanOrEqual(Date.now())
+        expect((await svc.due(Date.now())).map((item) => item.id)).toContain(draft.id)
+
+        const checkpoint = [
+          "Still working.",
+          "LOOP_CHECKPOINT:",
+          "status: continue",
+          "summary: More work remains.",
+          "evidence:",
+          "- first pass completed",
+          "next_action: continue",
+          "confidence: medium",
+        ].join("\n")
+        await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.metrics.turns).toBe(1)
+        expect(snapshot.workflow.state).toBe("sleeping")
+        expect(snapshot.workflow.phase).toBe("waiting")
+        expect(snapshot.workflow.nextWakeup).toBeLessThanOrEqual(Date.now())
+        expect(snapshot.runs[0]?.trigger).toBe("self-paced")
+        expect((await svc.due(Date.now())).map((item) => item.id)).toContain(draft.id)
+      },
+    })
+  })
+
+  test("self-paced unbounded monitors do not hot-loop without an interval", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Unbounded self-paced monitor",
+          objective: "Do not burn turns without a cadence.",
+          trigger: { mode: "self-paced" },
+          budgetMode: "unbounded-monitor",
+          policy: { maxTurns: 0 },
+        })
+        const active = await svc.activate(draft.id)
+
+        expect(active.policy.maxTurns).toBeUndefined()
+        expect(active.state).toBe("active")
+        expect(active.nextWakeup).toBeUndefined()
+        expect((await svc.due(Date.now())).map((item) => item.id)).not.toContain(draft.id)
       },
     })
   })

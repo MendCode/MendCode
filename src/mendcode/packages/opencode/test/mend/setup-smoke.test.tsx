@@ -1,21 +1,25 @@
 import { describe, expect, test } from "bun:test"
-import { setupSteps, requiredSetupSteps } from "../../src/mend/setup/state"
+import { setupSteps, requiredSetupSteps, type SetupState } from "../../src/mend/setup/state"
 import { routeReturnTarget } from "../../src/cli/cmd/tui/context/route"
 import {
+  isPublicGitHubURL,
   setupExtractorAuthMessage,
   setupLabelValueLine,
+  setupMemoryDialogCurrentValue,
   setupMemoryLearningStatus,
   setupProviderAuthMessage,
   setupShouldShowExtractorAuthBlocker,
   truncateSetupText,
 } from "../../src/cli/cmd/tui/routes/setup"
 import { setupRailStepStatus } from "../../src/cli/cmd/tui/routes/setup/setup-rail"
+import { loopRouteColumns, loopRouteFrameLayout, loopRouteKeyHint, loopRouteStackedListHeight } from "../../src/cli/cmd/tui/routes/loops"
 import { memoryLayoutForDimensions, memoryPreviewText, memorySidebarProjectWorkspaces, shouldMemoryRouteHandleKey, sideChatInputArtifacts } from "../../src/cli/cmd/tui/routes/memory"
 
 describe("setup route smoke", () => {
-  test("includes optional package, tui, memory, and permissions steps in the setup flow contract", () => {
-    expect(setupSteps).toEqual(["provider", "models", "budget", "package", "tui", "prompt", "memory", "permissions"])
+  test("includes optional health, package, tui, memory, and permissions steps in the setup flow contract", () => {
+    expect(setupSteps).toEqual(["provider", "models", "budget", "health", "package", "tui", "prompt", "memory", "permissions"])
     expect(requiredSetupSteps).toEqual(["provider", "models", "budget", "prompt"])
+    expect(setupRailStepStatus("health")).toBe("optional")
   })
 
   test("keeps setup status copy within terminal row budgets", () => {
@@ -29,7 +33,7 @@ describe("setup route smoke", () => {
   })
 
   test("keeps provider setup status honest when live auth is blocked", () => {
-    const state = {
+    const state: SetupState = {
       version: 0 as const,
       completedOnce: false,
       completedSteps: ["provider"],
@@ -68,6 +72,22 @@ describe("setup route smoke", () => {
     })).toBe(false)
   })
 
+  test("accepts only canonical public GitHub repo URLs for package import", () => {
+    expect(isPublicGitHubURL("https://github.com/org/repo")).toBe(true)
+    expect(isPublicGitHubURL("https://github.com/org/repo.git")).toBe(true)
+    expect(isPublicGitHubURL("https://github.com/org/repo/tree/main")).toBe(false)
+    expect(isPublicGitHubURL("https://github.com/org/repo/issues/1")).toBe(false)
+    expect(isPublicGitHubURL("https://token@github.com/org/repo")).toBe(false)
+    expect(isPublicGitHubURL("https://github.com/org/repo?token=secret")).toBe(false)
+    expect(isPublicGitHubURL("file:///tmp/repo")).toBe(false)
+  })
+
+  test("memory dialog highlights generated proposals when learning is enabled", () => {
+    expect(setupMemoryDialogCurrentValue({ enabled: true, generate: true })).toBe("generate")
+    expect(setupMemoryDialogCurrentValue({ enabled: true, generate: false })).toBe("enable-use")
+    expect(setupMemoryDialogCurrentValue({ enabled: false, generate: false })).toBe("disable")
+  })
+
   test("memory route returns to its caller instead of losing session context", () => {
     expect(routeReturnTarget({
       type: "memory",
@@ -89,6 +109,36 @@ describe("setup route smoke", () => {
     expect(layout.medium).toBe(true)
     expect(layout.tiny).toBe(false)
     expect(layout.contentWidth).toBe(174)
+  })
+
+  test("loops route does not force a wider frame than compact terminals", () => {
+    expect(loopRouteFrameLayout(44)).toEqual({
+      compact: true,
+      paddingX: 0,
+      width: 44,
+      narrow: true,
+      stacked: true,
+    })
+
+    expect(loopRouteFrameLayout(60)).toMatchObject({ compact: true, paddingX: 1, width: 58, stacked: true })
+    expect(loopRouteFrameLayout(72)).toMatchObject({ compact: true, paddingX: 1, width: 70, stacked: true })
+    expect(loopRouteFrameLayout(88)).toMatchObject({ compact: true, paddingX: 1, width: 86, stacked: true })
+    expect(loopRouteFrameLayout(95)).toMatchObject({ compact: true, stacked: true })
+    expect(loopRouteFrameLayout(96)).toMatchObject({ compact: false, stacked: false })
+    expect(loopRouteColumns({ width: 44, stacked: true })).toEqual({ listWidth: 44, detailWidth: 44 })
+    expect(loopRouteColumns({ width: 120, stacked: false })).toEqual({ listWidth: 38, detailWidth: 79 })
+  })
+
+  test("loops route keeps stacked widths intentional", () => {
+    expect(loopRouteStackedListHeight(1, true)).toBe(6)
+    expect(loopRouteStackedListHeight(1, false)).toBe(8)
+    expect(loopRouteStackedListHeight(12, true)).toBe(10)
+    expect(loopRouteStackedListHeight(12, false)).toBe(16)
+    expect(loopRouteStackedListHeight(12, true, 14)).toBe(6)
+    expect(loopRouteStackedListHeight(12, true, 12)).toBe(4)
+    expect(loopRouteStackedListHeight(12, false, 20)).toBe(8)
+    expect(loopRouteKeyHint({ width: 46, narrow: true, compact: true })).toBe("a/h · o · q")
+    expect(loopRouteKeyHint({ width: 88, narrow: true, compact: true })).toBe("a/h view · o chat · q back")
   })
 
   test("memory route keeps the side chat pane visible on medium-height terminals", () => {

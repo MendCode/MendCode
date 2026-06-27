@@ -941,9 +941,7 @@ function InlineTool(props: {
             </Switch>
           </box>
           <Show when={showError() && error()}>
-            <box>
-              <text fg={theme.error}>{error()}</text>
-            </box>
+            {(message) => <ToolErrorText message={message()} />}
           </Show>
         </box>
       </box>
@@ -990,8 +988,23 @@ function BlockTool(props: {
       </Show>
       {props.children}
       <Show when={error()}>
-        <text fg={theme.error}>{error()}</text>
+        {(message) => <ToolErrorText message={message()} />}
       </Show>
+    </box>
+  )
+}
+
+function ToolErrorText(props: { message: string }) {
+  const { theme } = useTheme()
+  return (
+    <box flexDirection="column" width="100%" overflow="hidden">
+      <For each={props.message.split("\n")}>
+        {(line) => (
+          <text fg={theme.error} wrapMode="word" width="100%">
+            {line || " "}
+          </text>
+        )}
+      </For>
     </box>
   )
 }

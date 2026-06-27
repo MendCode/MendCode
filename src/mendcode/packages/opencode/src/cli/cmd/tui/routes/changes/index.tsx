@@ -53,7 +53,7 @@ export function Changes() {
     const data = loaded()
     if (data?.error) return data.error
     if (data?.skipped.length)
-      return `Working tree diff review - skipped ${data.skipped.length} untracked binary/large files`
+      return `Working tree diff review - skipped ${data.skipped.length} large/binary files`
     return "Working tree diff review"
   })
 

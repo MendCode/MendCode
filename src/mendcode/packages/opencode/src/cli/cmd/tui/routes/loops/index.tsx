@@ -9,6 +9,7 @@ import { useTheme } from "@tui/context/theme"
 import { useToast } from "@tui/ui/toast"
 import { useDialog } from "@tui/ui/dialog"
 import { DialogConfirm } from "@tui/ui/dialog-confirm"
+import { DialogPrompt } from "@tui/ui/dialog-prompt"
 import { Locale } from "@/util/locale"
 import { formatDuration } from "@/util/format"
 import * as Model from "../../util/model"
@@ -25,6 +26,7 @@ type LoopWorkflow = {
   spec?: {
     trigger?: { mode?: string; intervalMs?: number }
     model?: { providerID?: string; modelID?: string; variant?: string }
+    agent?: string
   }
   policy?: { maxTurns?: number }
   metrics?: { turns?: number; failures?: number }
@@ -73,6 +75,44 @@ type LoopView = "active" | "history"
 const ACTIVE_STATES = new Set(["active", "sleeping", "working", "needs_input", "blocked", "paused"])
 const TERMINAL_STATES = new Set(["completed", "failed", "stopped"])
 const LOOP_EVENT_LIMIT = 200
+
+export function loopRouteFrameLayout(terminalWidth: number) {
+  const stacked = terminalWidth < 96
+  const compact = terminalWidth < 72 || stacked
+  const paddingX = terminalWidth < 56 ? 0 : compact ? 1 : 2
+  const contentWidth = Math.max(24, terminalWidth - paddingX * 2)
+  return {
+    compact,
+    paddingX,
+    width: contentWidth,
+    narrow: terminalWidth < 118,
+    stacked,
+  }
+}
+
+export function loopRouteColumns(input: { width: number; stacked: boolean }) {
+  if (input.stacked) return { listWidth: input.width, detailWidth: input.width }
+  const listWidth = Math.max(30, Math.min(56, Math.floor(input.width * 0.32)))
+  return {
+    listWidth,
+    detailWidth: Math.max(30, input.width - listWidth - 3),
+  }
+}
+
+export function loopRouteStackedListHeight(itemCount: number, compact: boolean, terminalHeight?: number) {
+  const rowHeight = compact ? 2 : 4
+  const preferred = Math.min(compact ? 10 : 16, Math.max(compact ? 5 : 7, itemCount * rowHeight + 4))
+  if (typeof terminalHeight !== "number") return preferred
+  const viewportCap = Math.max(compact ? 4 : 6, terminalHeight - (compact ? 8 : 12))
+  return Math.min(preferred, viewportCap)
+}
+
+export function loopRouteKeyHint(input: { width: number; narrow: boolean; compact: boolean }) {
+  if (input.width < 48) return "a/h · o · q"
+  if (input.compact) return "a/h view · o chat · q back"
+  if (input.narrow) return "a active · h history · e agent · o open · q back"
+  return "a active · h history · r refresh · j/k select · o open chat · e edit agent · p pause · u resume · s stop · q back"
+}
 
 function stateLabel(workflow: Pick<LoopWorkflow, "state" | "phase">) {
   return workflow.phase && workflow.phase !== "ready" ? `${workflow.state}: ${workflow.phase}` : workflow.state
@@ -265,14 +305,12 @@ export function Loops() {
     },
   )
   const detail = createMemo(() => snapshot.latest?.workflow ?? selected())
-  const width = createMemo(() => Math.max(50, dimensions().width - 4))
-  const narrow = createMemo(() => dimensions().width < 118)
-  const stacked = createMemo(() => dimensions().width < 96)
-  const listWidth = createMemo(() => {
-    if (stacked()) return width()
-    return Math.max(38, Math.min(56, Math.floor(width() * 0.32)))
-  })
-  const detailWidth = createMemo(() => stacked() ? width() : Math.max(42, width() - listWidth() - 3))
+  const frame = createMemo(() => loopRouteFrameLayout(dimensions().width))
+  const width = createMemo(() => frame().width)
+  const narrow = createMemo(() => frame().narrow)
+  const stacked = createMemo(() => frame().stacked)
+  const listWidth = createMemo(() => loopRouteColumns({ width: width(), stacked: stacked() }).listWidth)
+  const detailWidth = createMemo(() => loopRouteColumns({ width: width(), stacked: stacked() }).detailWidth)
   const activeCount = createMemo(() => primaryLoops().length)
   const historyCount = createMemo(() => historyLoops().length)
   const projectFolder = createMemo(() => folderName(project.instance.path().directory || project.instance.path().worktree))
@@ -336,6 +374,29 @@ export function Loops() {
     toast.show({ variant: "success", message: `Loop ${action} requested.`, duration: 2500 })
   }
 
+  async function editAgent() {
+    const item = selected()
+    if (!item) return
+    const current = detail()?.spec?.agent ?? ""
+    const value = await DialogPrompt.show(dialog, "Loop agent", {
+      placeholder: current || "build (blank = default)",
+      value: current,
+    })
+    dialog.clear()
+    if (value === null) return
+    const agent = value.trim() || undefined
+    const headers = new Headers(sdk.headers)
+    headers.set("content-type", "application/json")
+    const response = await sdk.fetch(`${sdk.url}/loop/${item.id}/agent`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ agent, reason: `TUI agent set to ${agent ?? "default"}` }),
+    })
+    if (!response.ok) throw new Error(`agent update failed: ${response.status}`)
+    setRefresh((value) => value + 1)
+    toast.show({ variant: "success", message: `Loop agent: ${agent ?? "default"}.`, duration: 2500 })
+  }
+
   function openChat() {
     const root = detail()?.rootSessionID
     if (!root) {
@@ -386,6 +447,11 @@ export function Loops() {
       openChat()
       return
     }
+    if (evt.name === "e") {
+      consume()
+      void editAgent().catch((error) => toast.error(error))
+      return
+    }
     if (evt.name === "p") {
       consume()
       void workflowAction("pause").catch((error) => toast.error(error))
@@ -413,6 +479,7 @@ export function Loops() {
       ["next", relativeWakeup(item)],
       ["cadence", cadenceLabel(item)],
       ["model", modelLabel(sync.data.provider, item, snapshot.latest?.rootSession)],
+      ["agent", item.spec?.agent ?? "default"],
       ["chat", item.rootSessionID ?? "none yet"],
       ["updated", item.time?.updated ? new Date(item.time.updated).toLocaleTimeString() : "unknown"],
     ]
@@ -422,8 +489,8 @@ export function Loops() {
   const runs = createMemo(() => (snapshot.latest?.runs ?? []).slice(0, 6))
 
   return (
-    <box flexDirection="column" width="100%" height="100%" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1} gap={1}>
-      <Header view={view()} activeCount={activeCount()} historyCount={historyCount()} width={width()} narrow={narrow()} />
+    <box flexDirection="column" width="100%" height="100%" paddingLeft={frame().paddingX} paddingRight={frame().paddingX} paddingTop={frame().compact ? 0 : 1} paddingBottom={frame().compact ? 0 : 1} gap={frame().compact ? 0 : 1}>
+      <Header view={view()} activeCount={activeCount()} historyCount={historyCount()} width={width()} narrow={narrow()} compact={frame().compact} />
 
       <Show
         when={allLoops().length}
@@ -431,11 +498,11 @@ export function Loops() {
       >
         <Show
           when={!stacked()}
-          fallback={<StackedView view={view()} items={visibleLoops()} selected={selected()} select={setSelectedID} detail={detail()} detailRows={detailRows()} events={events()} runs={runs()} error={snapshotError()} width={width()} projectFolder={projectFolder()} />}
+          fallback={<StackedView view={view()} items={visibleLoops()} selected={selected()} select={setSelectedID} detail={detail()} detailRows={detailRows()} events={events()} runs={runs()} error={snapshotError()} width={width()} compact={frame().compact} projectFolder={projectFolder()} />}
         >
           <box flexDirection="row" flexGrow={1} minHeight={0} gap={1}>
             <box width={listWidth()} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-              <LoopList view={view()} items={visibleLoops()} selected={selected()} select={setSelectedID} width={listWidth() - 4} projectFolder={projectFolder()} />
+              <LoopList view={view()} items={visibleLoops()} selected={selected()} select={setSelectedID} width={listWidth() - 4} compact={frame().compact} projectFolder={projectFolder()} />
             </box>
             <box flexGrow={1} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
               <LoopDetail detail={detail()} rows={detailRows()} events={events()} runs={runs()} error={snapshotError()} width={detailWidth() - 4} />
@@ -447,18 +514,19 @@ export function Loops() {
   )
 }
 
-function Header(props: { view: LoopView; activeCount: number; historyCount: number; width: number; narrow: boolean }) {
+function Header(props: { view: LoopView; activeCount: number; historyCount: number; width: number; narrow: boolean; compact: boolean }) {
   const { theme } = useTheme()
   const summary = () => `active ${props.activeCount} · history ${props.historyCount} · ${props.view}`
-  const keys = () => props.narrow ? "a active · h history · r refresh · o open · q back" : "a active · h history · r refresh · j/k select · o open chat · p pause · u resume · s stop · q back"
   return (
-    <box flexDirection={props.narrow ? "column" : "row"} width="100%" gap={props.narrow ? 0 : 1}>
-      <box flexDirection="row" width={props.narrow ? "100%" : Math.max(36, Math.floor(props.width * 0.42))}>
+    <box flexDirection={props.narrow ? "column" : "row"} width="100%" gap={props.narrow ? 0 : 1} overflow="hidden">
+      <box flexDirection="row" width={props.narrow ? "100%" : Math.max(36, Math.floor(props.width * 0.42))} overflow="hidden">
         <text fg={theme.secondary} attributes={TextAttributes.BOLD} wrapMode="none">Loop Workflows</text>
-        <text fg={theme.textMuted} wrapMode="none"> · {Locale.truncate(summary(), Math.max(14, props.width - 18))}</text>
+        <Show when={props.width >= 42 && !props.compact}>
+          <text fg={theme.textMuted} wrapMode="none"> · {Locale.truncate(summary(), Math.max(14, props.width - 18))}</text>
+        </Show>
       </box>
       <Show when={!props.narrow}><box flexGrow={1} /></Show>
-      <text fg={theme.textMuted} wrapMode="none">{Locale.truncate(keys(), Math.max(20, props.width - 2))}</text>
+      <text fg={theme.textMuted} wrapMode="none">{Locale.truncate(loopRouteKeyHint(props), Math.max(10, props.width - 2))}</text>
     </box>
   )
 }
@@ -469,6 +537,7 @@ function LoopList(props: {
   selected?: LoopWorkflow
   select: (id: string) => void
   width: number
+  compact?: boolean
   projectFolder: string
 }) {
   const { theme } = useTheme()
@@ -498,6 +567,7 @@ function LoopList(props: {
                   selected={props.selected?.id === item.id}
                   latest={props.view === "history" && index() === 0}
                   width={props.width}
+                  compact={props.compact}
                   projectFolder={props.projectFolder}
                   onSelect={() => props.select(item.id)}
                 />
@@ -515,6 +585,7 @@ function LoopRow(props: {
   selected: boolean
   latest: boolean
   width: number
+  compact?: boolean
   projectFolder: string
   onSelect: () => void
 }) {
@@ -525,23 +596,26 @@ function LoopRow(props: {
         isPrimaryLoop(props.item) ? theme.secondary :
           theme.textMuted,
   )
-  const titleWidth = createMemo(() => Math.max(10, props.width - 10))
-  const detailWidth = createMemo(() => Math.max(10, props.width - 2))
+  const titleWidth = createMemo(() => Math.max(8, props.width - (props.compact ? 2 : 10)))
+  const detailWidth = createMemo(() => Math.max(8, props.width - 2))
   const detail = createMemo(() => {
     const when = timeLabel(timestamp(props.item))
     const status = isPrimaryLoop(props.item) ? `${stateLabel(props.item)} · next ${relativeWakeup(props.item)}` : stateLabel(props.item)
     const chat = props.item.rootSessionID ? "chat ready" : cadenceLabel(props.item)
     const lead = props.latest ? "latest · " : ""
+    if (props.compact) return `${lead}${status} · ${chat}`
     return `${lead}${when} · ${props.projectFolder} · ${status} · ${chat}`
   })
   return (
-    <box flexDirection="column" height={3} overflow="hidden" marginBottom={1} onMouseUp={props.onSelect}>
+    <box flexDirection="column" height={props.compact ? 2 : 3} overflow="hidden" marginBottom={props.compact ? 0 : 1} onMouseUp={props.onSelect}>
       <box flexDirection="row" height={1} overflow="hidden">
         <text fg={props.selected ? theme.primary : color()} attributes={props.selected ? TextAttributes.BOLD : undefined} wrapMode="none">
           {props.selected ? "› " : "  "}{compact(props.item.name || props.item.objective || props.item.id, titleWidth())}
         </text>
         <box flexGrow={1} />
-        <text fg={color()} wrapMode="none">{compact(progressLabel(props.item), 8)}</text>
+        <Show when={!props.compact}>
+          <text fg={color()} wrapMode="none">{compact(progressLabel(props.item), 8)}</text>
+        </Show>
       </box>
       <text fg={props.selected ? theme.text : theme.textMuted} wrapMode="none">  {compact(detail(), detailWidth())}</text>
     </box>
@@ -695,9 +769,11 @@ function StackedView(props: {
   runs: LoopRun[]
   error?: string
   width: number
+  compact?: boolean
   projectFolder: string
 }) {
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
   return (
     <scrollbox
       flexGrow={1}
@@ -708,22 +784,69 @@ function StackedView(props: {
         trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border },
       }}
     >
-      <box flexDirection="column" gap={1}>
-        <box borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
+      <box flexDirection="column" gap={props.compact ? 0 : 1}>
+        <box borderStyle="single" borderColor={theme.border} paddingLeft={props.compact ? 0 : 1} paddingRight={props.compact ? 0 : 1} height={loopRouteStackedListHeight(props.items.length, Boolean(props.compact), dimensions().height)} flexShrink={0}>
           <LoopList
             view={props.view}
             items={props.items}
             selected={props.selected}
             select={props.select}
-            width={props.width - 4}
+            width={Math.max(20, props.width - (props.compact ? 2 : 4))}
+            compact={props.compact}
             projectFolder={props.projectFolder}
           />
         </box>
-        <box borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-          <LoopDetail detail={props.detail} rows={props.detailRows} events={props.events} runs={props.runs} error={props.error} width={props.width - 4} />
-        </box>
+        <Show
+          when={!props.compact}
+          fallback={
+            <CompactLoopDetail detail={props.detail} rows={props.detailRows} events={props.events} runs={props.runs} error={props.error} width={Math.max(20, props.width - 2)} />
+          }
+        >
+          <box borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
+            <LoopDetail detail={props.detail} rows={props.detailRows} events={props.events} runs={props.runs} error={props.error} width={props.width - 4} />
+          </box>
+        </Show>
       </box>
     </scrollbox>
+  )
+}
+
+function CompactLoopDetail(props: {
+  detail?: LoopWorkflow
+  rows: string[][]
+  events: LoopEvent[]
+  runs: LoopRun[]
+  error?: string
+  width: number
+}) {
+  const { theme } = useTheme()
+  const latestRun = createMemo(() => props.runs[0])
+  const latestEvent = createMemo(() => props.events[0])
+  const rowValue = (label: string) => props.rows.find((row) => row[0] === label)?.[1]
+  return (
+    <box borderStyle="single" borderColor={theme.border} paddingLeft={0} paddingRight={0} flexDirection="column">
+      <Show when={props.detail} fallback={<text fg={theme.textMuted} wrapMode="none">Select a loop.</text>}>
+        {(item) => (
+          <box flexDirection="column" overflow="hidden">
+            <text fg={theme.secondary} attributes={TextAttributes.BOLD} wrapMode="none" selectable={false}>
+              {compact(item().name || item().objective || item().id, props.width)}
+            </text>
+            <text fg={theme.textMuted} wrapMode="none" selectable={false}>
+              {compact(`${stateLabel(item())} · ${progressLabel(item())} · ${rowValue("chat") ?? "no chat"}`, props.width)}
+            </text>
+            <Show when={props.error}>
+              {(error) => <text fg={theme.warning} wrapMode="none" selectable={false}>{compact(`snapshot unavailable · ${error()}`, props.width)}</text>}
+            </Show>
+            <Show when={latestRun()}>
+              {(run) => <text fg={run().state === "failed" ? theme.error : theme.text} wrapMode="none" selectable={false}>{compact(`run · ${run().state} · ${run().evaluatorReason || run().phase || ""}`, props.width)}</text>}
+            </Show>
+            <Show when={latestEvent()}>
+              {(event) => <text fg={theme.textMuted} wrapMode="none" selectable={false}>{compact(`event · ${event().type} · ${event().summary}`, props.width)}</text>}
+            </Show>
+          </box>
+        )}
+      </Show>
+    </box>
   )
 }
 

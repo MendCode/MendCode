@@ -13,6 +13,11 @@ const ReasonBody = z.object({
   ensureService: z.boolean().optional(),
 })
 
+const AgentBody = z.object({
+  agent: z.string().optional(),
+  reason: z.string().optional(),
+})
+
 const DraftBody = z.object({
   name: z.string().min(1),
   objective: z.string().min(1),
@@ -103,6 +108,13 @@ export const LoopRoutes = lazy(() =>
       return jsonRequest("LoopRoutes.resume", c, function* () {
         const loop = yield* LoopWorkflow.Service
         return yield* loop.resume({ id: loopID(c.req.param("loopID")), reason: body.reason })
+      })
+    })
+    .post("/:loopID/agent", async (c) => {
+      const body = await readJson(c, AgentBody)
+      return jsonRequest("LoopRoutes.updateAgent", c, function* () {
+        const loop = yield* LoopWorkflow.Service
+        return yield* loop.updateAgent({ id: loopID(c.req.param("loopID")), agent: body.agent, reason: body.reason })
       })
     })
     .post("/:loopID/run-once", async (c) => {

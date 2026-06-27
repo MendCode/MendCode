@@ -33,6 +33,51 @@ function lastText(parts: readonly MessageV2.Part[]) {
   return ""
 }
 
+const GENERIC_TASK_RESULTS = new Set(["done", "listo", "ok", "complete", "completed"])
+
+function isGenericTaskResult(text: string) {
+  const normalized = text.trim().toLowerCase().replace(/[.!]+$/, "")
+  return normalized.length > 0 && normalized.length <= 24 && GENERIC_TASK_RESULTS.has(normalized)
+}
+
+function changedFiles(parts: readonly MessageV2.Part[]) {
+  return parts.flatMap((part) => (part.type === "patch" ? part.files : []))
+}
+
+function unique(items: string[]) {
+  return Array.from(new Set(items))
+}
+
+function childEvidenceText(history: readonly MessageV2.WithParts[], fallbackText: string, extraParts: readonly MessageV2.Part[] = []) {
+  const trimmedFallback = fallbackText.trim()
+  const text = (() => {
+    for (let i = history.length - 1; i >= 0; i--) {
+      const message = history[i]
+      if (message?.info.role !== "assistant") continue
+      for (let j = message.parts.length - 1; j >= 0; j--) {
+        const part = message.parts[j]
+        if (part?.type !== "text") continue
+        const value = part.text.trim()
+        if (!value || value === trimmedFallback || isGenericTaskResult(value)) continue
+        return value
+      }
+    }
+    return ""
+  })()
+  const files = unique([
+    ...history.flatMap((message) => changedFiles(message.parts)),
+    ...changedFiles(extraParts),
+  ])
+  if (!text && files.length === 0) return trimmedFallback
+
+  const lines = trimmedFallback ? [trimmedFallback] : []
+  if (text) lines.push("", "Subagent session evidence:", text)
+  if (files.length) {
+    lines.push("", "Subagent changed files:", ...files.map((file) => `- ${file}`))
+  }
+  return lines.join("\n")
+}
+
 function isAbortError(error: unknown) {
   return (
     (error instanceof DOMException && error.name === "AbortError") ||
@@ -199,7 +244,7 @@ export const TaskTool = Tool.define(
       const cancel = ops.cancel(nextSession.id)
       let parentAborted = isExplicitUserAbort(ctx)
 
-      const output = (input: { status: "completed" | "interrupted" | "failed"; text?: string; error?: unknown }) => {
+      const output = (input: { status: "completed" | "interrupted" | "failed" | "retained"; text?: string; error?: unknown }) => {
         const lines = [
           `task_id: ${nextSession.id} (for resuming to continue this task if needed)`,
           `task_status: ${input.status}`,
@@ -208,7 +253,9 @@ export const TaskTool = Tool.define(
           lines.push(`task_error: ${errorText(input.error)}`)
         }
         lines.push("", "<task_result>", input.text ?? "", "</task_result>")
-        if (input.status !== "completed") {
+        if (input.status === "retained") {
+          lines.push("", `Parent execution stopped before the subagent finished. Resume this subagent chat with task_id ${nextSession.id} to inspect or continue the work.`)
+        } else if (input.status !== "completed") {
           lines.push("", `Resume this subagent chat with task_id ${nextSession.id} to inspect or continue the work.`)
         }
         return {
@@ -222,14 +269,14 @@ export const TaskTool = Tool.define(
         }
       }
 
-      const errorOutput = (input: { error: unknown; interrupted: boolean }) =>
+      const errorOutput = (input: { error: unknown; interrupted: boolean; status?: "failed" | "interrupted" | "retained" }) =>
         Effect.gen(function* () {
           const history = yield* sessions
             .messages({ sessionID: nextSession.id })
             .pipe(Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])))
-          const partial = lastText(history.flatMap((item) => item.parts))
+          const partial = childEvidenceText(history, lastText(history.flatMap((item) => item.parts)))
           return output({
-            status: input.interrupted ? "interrupted" : "failed",
+            status: input.status ?? (input.interrupted ? "interrupted" : "failed"),
             text: partial,
             error: input.error,
           })
@@ -279,10 +326,11 @@ export const TaskTool = Tool.define(
                   if (outcome.type === "abort") {
                     return errorOutput({
                       error: new DOMException(
-                        outcome.reason === "user" ? "Aborted" : "Connection interrupted before task completed",
+                        outcome.reason === "user" ? "Aborted" : "Connection interrupted; subagent session retained",
                         "AbortError",
                       ),
                       interrupted: outcome.reason === "user",
+                      status: outcome.reason === "user" ? "interrupted" : "retained",
                     })
                   }
                   if (Exit.isFailure(outcome.exit)) {
@@ -292,9 +340,18 @@ export const TaskTool = Tool.define(
                       interrupted: parentAborted && (Cause.hasInterrupts(outcome.exit.cause) || isAbortError(error)),
                     })
                   }
-                  const error = outcome.exit.value.info.role === "assistant" ? outcome.exit.value.info.error : undefined
+                  const childMessage = outcome.exit.value
+                  const error = childMessage.info.role === "assistant" ? childMessage.info.error : undefined
                   if (error) return errorOutput({ error, interrupted: isAbortError(error) })
-                  return Effect.succeed(output({ status: "completed", text: lastText(outcome.exit.value.parts) }))
+                  return sessions
+                    .messages({ sessionID: nextSession.id })
+                    .pipe(
+                      Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])),
+                      Effect.map((history) => output({
+                        status: "completed",
+                        text: childEvidenceText(history, lastText(childMessage.parts), childMessage.parts),
+                      })),
+                    )
                 }),
               )
 

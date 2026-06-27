@@ -1439,10 +1439,13 @@ it.live("session.processor effect tests mark pending tools as aborted on cleanup
         const parent = yield* user(chat.id, "tool abort")
         const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
         const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const controller = new AbortController()
         const handle = yield* processors.create({
           assistantMessage: msg,
           sessionID: chat.id,
           model: mdl,
+          abort: controller.signal,
+          isManualAbort: () => controller.signal.aborted,
         })
 
         const run = yield* handle
@@ -1473,6 +1476,7 @@ it.live("session.processor effect tests mark pending tools as aborted on cleanup
             await Bun.sleep(10)
           }
         })
+        controller.abort()
         yield* Fiber.interrupt(run)
 
         const exit = yield* Fiber.await(run)
@@ -1489,6 +1493,72 @@ it.live("session.processor effect tests mark pending tools as aborted on cleanup
           expect(call.state.error).toBe("Tool execution interrupted")
           expect(call.state.metadata?.interrupted).toBe(true)
           expect(call.state.time.end).toBeDefined()
+        }
+      }),
+    { git: true, config: (url) => providerCfg(url) },
+  ),
+)
+
+it.live("session.processor effect tests retain pending tools on non-user cleanup", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.toolHang("bash", { cmd: "pwd" })
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "tool retained")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const run = yield* handle
+          .process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies MessageV2.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "tool retained" }],
+            tools: {},
+          })
+          .pipe(Effect.forkChild)
+
+        yield* llm.wait(1)
+        yield* Effect.promise(async () => {
+          const end = Date.now() + 500
+          while (Date.now() < end) {
+            const parts = await MessageV2.parts(msg.id)
+            if (parts.some((part) => part.type === "tool")) return
+            await Bun.sleep(10)
+          }
+        })
+        yield* Fiber.interrupt(run)
+
+        const exit = yield* Fiber.await(run)
+        const parts = MessageV2.parts(msg.id)
+        const call = parts.find((part): part is MessageV2.ToolPart => part.type === "tool")
+
+        expect(Exit.isFailure(exit)).toBe(true)
+        expect(yield* llm.calls).toBe(1)
+        expect(call?.state.status).toBe("completed")
+        if (call?.state.status === "completed") {
+          expect(call.state.metadata.status).toBe("retained")
+          expect(call.state.metadata.interrupted).toBe(false)
+          expect(call.state.output).toContain("tool_status: retained")
+          expect(call.state.output).toContain("not treated as a user cancel or tool failure")
         }
       }),
     { git: true, config: (url) => providerCfg(url) },

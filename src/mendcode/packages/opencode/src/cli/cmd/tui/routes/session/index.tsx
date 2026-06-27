@@ -107,8 +107,10 @@ import { getScrollAcceleration, isScrollboxAtBottom } from "../../util/scroll"
 import {
   sessionContentWidth,
   sessionDiffStatsLabel,
+  sessionTaskContinuation,
   sessionPendingInputSessionIDs,
   sessionPromptVisible,
+  sessionLoopReceipt,
   sessionTopMetricsWidth,
   sessionTopbarLeftLabel,
   sessionTopbarLeftWidth,
@@ -4266,11 +4268,26 @@ function InlineTool(props: {
             </text>
           </Match>
         </Switch>
-        <Show when={error() && !denied()}>
-          <text fg={theme.error}>{error()}</text>
+        <Show when={denied() ? undefined : error()}>
+          {(message) => <ToolErrorText message={message()} />}
         </Show>
       </box>
     </Show>
+  )
+}
+
+function ToolErrorText(props: { message: string }) {
+  const { theme } = useTheme()
+  return (
+    <box flexDirection="column" width="100%" overflow="hidden">
+      <For each={props.message.split("\n")}>
+        {(line) => (
+          <text fg={theme.error} wrapMode="word" width="100%">
+            {line || " "}
+          </text>
+        )}
+      </For>
+    </box>
   )
 }
 
@@ -4308,7 +4325,7 @@ function BlockTool(props: {
       {title()}
       {props.children}
       <Show when={error()}>
-        <text fg={theme.error}>{error()}</text>
+        {(message) => <ToolErrorText message={message()} />}
       </Show>
     </>
   )
@@ -4615,6 +4632,30 @@ function Task(props: ToolProps<typeof TaskTool>) {
   )
 
   const isRunning = createMemo(() => props.part.state.status === "running")
+  const continuationEntries = createMemo(() => {
+    return (sync.data.message[ctx.sessionID] ?? []).flatMap((message) =>
+      (sync.data.part[message.id] ?? [])
+        .filter((part): part is ToolPart => part.type === "tool" && part.tool === "task")
+        .map((part) => {
+          const state = part.state as { input?: Record<string, unknown>; metadata?: Record<string, unknown> }
+          return {
+            callID: part.callID,
+            sessionID: typeof state.metadata?.sessionId === "string" ? state.metadata.sessionId : undefined,
+            taskID: typeof state.input?.task_id === "string" ? state.input.task_id : undefined,
+            status: part.state.status,
+          }
+        }),
+    )
+  })
+  const continuation = createMemo(() =>
+    sessionTaskContinuation({
+      entries: continuationEntries(),
+      callID: props.part.callID,
+      sessionID: props.metadata.sessionId,
+      taskID: props.input.task_id,
+    }),
+  )
+  const isTaskActive = createMemo(() => isRunning() || continuation().activeResume)
   const subagentType = createMemo(() => normalizeSubagentLabel(props.input.subagent_type ?? "General"))
   const subagentName = createMemo(() => {
     return Locale.titlecase(subagentType())
@@ -4727,6 +4768,8 @@ function Task(props: ToolProps<typeof TaskTool>) {
     const connection = connectionStatusLabel()
     if (connection) content.push(connection)
 
+    if (continuation().activeResume) content.push("↳ resumed in same subagent")
+
     const child = childStatusLabel()
     if (child) content.push(child)
 
@@ -4754,32 +4797,34 @@ function Task(props: ToolProps<typeof TaskTool>) {
   })
 
   return (
-    <InlineTool
-      icon="│"
-      spinner={isRunning()}
-      complete={props.input.description}
-      pending="Delegating..."
-      part={props.part}
-      onClick={() => {
-        if (props.metadata.sessionId) {
-          navigate({ type: "session", sessionID: props.metadata.sessionId })
-        }
-      }}
-    >
-      <Show when={props.input.description} fallback={content().join("\n")}>
-        <span style={{ bg: subagentColor(), fg: subagentForeground(), bold: true }}> {subagentName()} </span>{" "}
-        {props.input.description}
-        <Show when={modelLabel()}>{(label) => <span style={{ fg: theme.textMuted }}> · {label()}</span>}</Show>
-        <For each={content()}>
-          {(line) => (
-            <>
-              {"\n"}
-              <span style={{ fg: contentColor(line) }}>{line}</span>
-            </>
-          )}
-        </For>
-      </Show>
-    </InlineTool>
+    <Show when={!continuation().duplicate}>
+      <InlineTool
+        icon="│"
+        spinner={isTaskActive()}
+        complete={props.input.description}
+        pending="Delegating..."
+        part={props.part}
+        onClick={() => {
+          if (props.metadata.sessionId) {
+            navigate({ type: "session", sessionID: props.metadata.sessionId })
+          }
+        }}
+      >
+        <Show when={props.input.description} fallback={content().join("\n")}>
+          <span style={{ bg: subagentColor(), fg: subagentForeground(), bold: true }}> {subagentName()} </span>{" "}
+          {props.input.description}
+          <Show when={modelLabel()}>{(label) => <span style={{ fg: theme.textMuted }}> · {label()}</span>}</Show>
+          <For each={content()}>
+            {(line) => (
+              <>
+                {"\n"}
+                <span style={{ fg: contentColor(line) }}>{line}</span>
+              </>
+            )}
+          </For>
+        </Show>
+      </InlineTool>
+    </Show>
   )
 }
 
@@ -5037,6 +5082,20 @@ function Loop(props: ToolProps<typeof LoopTool>) {
     return "session default"
   })
   const agentLabel = createMemo(() => props.metadata.agent ?? firstWorkflow()?.agent ?? props.input.agent ?? "session default")
+  const receipt = createMemo(() => sessionLoopReceipt({
+    action: action(),
+    toolStatus: props.part.state.status,
+    workflowState: props.metadata.state ?? firstWorkflow()?.state,
+    workflowPhase: props.metadata.phase ?? firstWorkflow()?.phase,
+  }))
+  const receiptColor = createMemo(() => {
+    if (receipt().tone === "success") return theme.success
+    if (receipt().tone === "warning") return theme.warning
+    if (receipt().tone === "danger") return theme.error
+    if (receipt().tone === "active") return theme.primary
+    if (receipt().tone === "muted") return theme.textMuted
+    return theme.secondary
+  })
   const panelWidth = createMemo(() => Math.max(52, Math.min(90, dimensions().width - 12)))
   const compact = (value: string, width = Math.max(16, panelWidth() - 22)) => Locale.truncateMiddle(value.replace(/\s+/g, " ").trim(), width)
   const rows = createMemo(() => [
@@ -5060,7 +5119,7 @@ function Loop(props: ToolProps<typeof LoopTool>) {
   return (
     <BlockTool
       title="↻ Loop Workflow"
-      titleColor={theme.secondary}
+      titleColor={receiptColor()}
       contentGap={0}
       part={props.part}
       spinner={props.part.state.status === "running" && !resolvedWorkflowID()}
@@ -5072,7 +5131,7 @@ function Loop(props: ToolProps<typeof LoopTool>) {
           width={panelWidth()}
           flexShrink={0}
           borderStyle="single"
-          borderColor={hover() ? theme.secondary : theme.border}
+          borderColor={hover() ? theme.secondary : receiptColor()}
           paddingLeft={2}
           paddingRight={2}
           paddingTop={1}
@@ -5082,9 +5141,9 @@ function Loop(props: ToolProps<typeof LoopTool>) {
           onMouseOut={() => setHover(false)}
         >
           <box flexDirection="row">
-            <text fg={theme.secondary} attributes={TextAttributes.BOLD}>↻ {compact(title(), Math.max(18, panelWidth() - 24))}</text>
+            <text fg={receiptColor()} attributes={TextAttributes.BOLD}>↻ {compact(title(), Math.max(18, panelWidth() - 24))}</text>
             <box flexGrow={1} />
-            <text fg={theme.textMuted}>receipt</text>
+            <text fg={receiptColor()}>{receipt().label}</text>
           </box>
           <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
             <For each={rows()}>

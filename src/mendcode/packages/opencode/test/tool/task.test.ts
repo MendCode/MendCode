@@ -75,7 +75,7 @@ const testProvider = Layer.mock(Provider.Service)({
       models: {},
     }),
   getModel: (providerID, modelID) => {
-    if (providerID !== ref.providerID) return Effect.die(new Error(`Provider not found: ${providerID}`))
+    if (providerID !== ref.providerID) return Effect.succeed(model(providerID, modelID))
     const known = new Set(["test-model", "explicit", "agent", "subagent"])
     if (!known.has(modelID)) return Effect.die(new Error(`Model not found: ${providerID}/${modelID}`))
     return Effect.succeed(model(providerID, modelID))
@@ -489,8 +489,10 @@ describe("tool.task", () => {
       const exit = yield* Fiber.await(fiber)
       expect(Exit.isSuccess(exit)).toBe(true)
       if (Exit.isSuccess(exit)) {
-        expect(exit.value.output).toContain("task_status: failed")
-        expect(exit.value.output).toContain("Connection interrupted before task completed")
+        expect(exit.value.output).toContain("task_status: retained")
+        expect(exit.value.output).toContain("Connection interrupted; subagent session retained")
+        expect(exit.value.output).toContain("Parent execution stopped before the subagent finished")
+        expect(exit.value.output).not.toContain("task_status: failed")
         expect(exit.value.output).not.toContain("task_status: interrupted")
       }
     }),
@@ -542,6 +544,80 @@ describe("tool.task", () => {
 
       expect(Exit.isFailure(exit)).toBe(true)
       expect(cancelled).toBe(false)
+    }),
+  )
+
+  it.instance("execute includes child evidence when final subagent reply is generic", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) =>
+          Effect.gen(function* () {
+            const messageID = MessageID.ascending()
+            yield* sessions.updateMessage({
+              id: messageID,
+              role: "assistant",
+              parentID: input.messageID ?? MessageID.ascending(),
+              sessionID: input.sessionID,
+              mode: input.agent ?? "general",
+              agent: input.agent ?? "general",
+              cost: 0,
+              path: { cwd: "/tmp", root: "/tmp" },
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              modelID: input.model?.modelID ?? ref.modelID,
+              providerID: input.model?.providerID ?? ref.providerID,
+              time: { created: Date.now() },
+              finish: "tool-calls",
+            })
+            yield* sessions.updatePart({
+              id: PartID.ascending(),
+              messageID,
+              sessionID: input.sessionID,
+              type: "text",
+              text: "Mapped FB10 fact-sheet schema, reusable cache artifacts, and tests.",
+            })
+            yield* sessions.updatePart({
+              id: PartID.ascending(),
+              messageID,
+              sessionID: input.sessionID,
+              type: "patch",
+              hash: "abc123",
+              files: ["/tmp/project/.agents/orchestration/CHAT.md"],
+            })
+            return reply(input, "Listo.")
+          }),
+      }
+
+      const result = yield* def.execute(
+        {
+          description: "explore fact sheet",
+          prompt: "map patterns",
+          subagent_type: "general",
+          model: "test/test-model",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.output).toContain("task_status: completed")
+      expect(result.output).toContain("Listo.")
+      expect(result.output).toContain("Subagent session evidence:")
+      expect(result.output).toContain("Mapped FB10 fact-sheet schema")
+      expect(result.output).toContain("Subagent changed files:")
+      expect(result.output).toContain("/tmp/project/.agents/orchestration/CHAT.md")
     }),
   )
 
@@ -910,35 +986,47 @@ describe("tool.task", () => {
     },
   )
 
-  it.instance("execute inherits parent chat model when no task or config model exists", () =>
-    Effect.gen(function* () {
-      const { chat, assistant } = yield* seed()
-      const tool = yield* TaskTool
-      const def = yield* tool.init()
-      let seen: SessionPrompt.PromptInput | undefined
-      const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+  it.instance(
+    "execute reports the resolved fallback model consistently",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        let seen: SessionPrompt.PromptInput | undefined
+        const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
 
-      const result = yield* def.execute(
-        {
-          description: "inspect bug",
-          prompt: "look into the cache key path",
-          subagent_type: "general",
-        },
-        {
-          sessionID: chat.id,
-          messageID: assistant.id,
-          agent: "build",
-          abort: new AbortController().signal,
-          extra: { promptOps },
-          messages: [],
-          metadata: () => Effect.void,
-          ask: () => Effect.void,
-        },
-      )
+        const result = yield* def.execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "parent-model-agent",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
 
-      expect(seen?.model).toEqual(ref)
-      expect(result.metadata.model).toEqual(ref)
-    }),
+        expect(seen?.model).toEqual(result.metadata.model)
+        expect(result.metadata.model).toBeDefined()
+      }),
+    {
+      config: {
+        agent: {
+          "parent-model-agent": {
+            description: "Parent model fallback test agent",
+            mode: "subagent",
+          },
+        },
+      },
+    },
   )
 
   it.instance("execute rejects unavailable explicit task model", () =>

@@ -2,11 +2,13 @@ import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import DESCRIPTION from "./loop.txt"
 import { LoopWorkflow } from "@/session/loop"
+import { Session } from "@/session/session"
+import { MessageV2 } from "@/session/message-v2"
 import { InstanceState } from "@/effect/instance-state"
 import { loopServiceArgsFromConfig, loopServiceStart } from "@/mend/runtime/loop-service"
 import { Provider } from "@/provider/provider"
 
-const Action = Schema.Literals(["draft", "activate", "show", "list", "pause", "resume", "stop", "delete", "run_once"])
+const Action = Schema.Literals(["draft", "activate", "show", "list", "pause", "resume", "stop", "delete", "run_once", "update_agent"])
 const TriggerMode = Schema.Literals(["manual", "interval", "adaptive", "external-signal", "self-paced"])
 const PermissionMode = Schema.Literals(["report-only", "normal", "custom"])
 const BudgetMode = Schema.Literals(["fixed", "max-goal", "unbounded-monitor"])
@@ -14,7 +16,7 @@ const BudgetMode = Schema.Literals(["fixed", "max-goal", "unbounded-monitor"])
 export const Parameters = Schema.Struct({
   action: Action.annotate({
     description:
-      "Loop workflow action. Use activate to create/start a loop, draft to create a reviewable draft, show/list to inspect, and pause/resume/stop/delete/run_once for control.",
+      "Loop workflow action. Use activate to create/start a loop, draft to create a reviewable draft, show/list to inspect, update_agent to change the loop agent, and pause/resume/stop/delete/run_once for control.",
   }),
   workflowID: Schema.optional(LoopWorkflow.LoopID).annotate({
     description:
@@ -54,7 +56,7 @@ export const Parameters = Schema.Struct({
       "Optional model variant/reasoning effort for loop iterations, for example low, medium, high, or max. Use this when the user says reasoning medium/high/etc.",
   }),
   agent: Schema.optional(Schema.String).annotate({
-    description: "Optional MendCode agent/profile name to use when the loop runner wakes this workflow.",
+    description: "Optional MendCode agent/profile name to use when the loop runner wakes this workflow. With action=update_agent, set this to the new agent name or an empty string to use the default agent.",
   }),
   permissionMode: Schema.optional(PermissionMode).annotate({
     description: "Loop execution permission mode. Use report-only by default, normal only after explicit user approval, or custom with gates/approval lists.",
@@ -116,6 +118,32 @@ type Metadata = {
   }
   agent?: string
   count?: number
+  latestRun?: {
+    runID: string
+    state: string
+    phase: string
+    trigger: string
+    summary?: string
+  }
+  latestCheckpoint?: {
+    status?: string
+    summary?: string
+    evidence?: string[]
+    nextAction?: string
+    confidence?: string
+  }
+  changedFiles?: Array<{
+    file: string
+    additions: number
+    deletions: number
+    status?: string
+  }>
+  lastMessage?: string
+  recentEvents?: Array<{
+    title: string
+    summary: string
+    type: string
+  }>
   serviceEnsured?: boolean
   workflows?: Array<{
     workflowID: string
@@ -141,6 +169,32 @@ type Metadata = {
     created?: number
     activated?: number
     updated?: number
+    latestRun?: {
+      runID: string
+      state: string
+      phase: string
+      trigger: string
+      summary?: string
+    }
+    latestCheckpoint?: {
+      status?: string
+      summary?: string
+      evidence?: string[]
+      nextAction?: string
+      confidence?: string
+    }
+    changedFiles?: Array<{
+      file: string
+      additions: number
+      deletions: number
+      status?: string
+    }>
+    lastMessage?: string
+    recentEvents?: Array<{
+      title: string
+      summary: string
+      type: string
+    }>
   }>
 }
 
@@ -308,46 +362,155 @@ function formatWorkflow(workflow: LoopWorkflow.Info) {
   return lines.join("\n")
 }
 
-function formatList(workflows: LoopWorkflow.Info[]) {
+function compactText(value: string, max = 1600) {
+  const text = value.replace(/\r\n/g, "\n").trim()
+  if (text.length <= max) return text
+  return `${text.slice(0, max - 1).trimEnd()}…`
+}
+
+function messageText(message: MessageV2.WithParts) {
+  return message.parts
+    .filter((part): part is MessageV2.TextPart => part.type === "text" && !part.synthetic && !part.ignored)
+    .map((part) => part.text.trim())
+    .filter(Boolean)
+    .join("\n\n")
+}
+
+function latestAssistantText(messages: MessageV2.WithParts[]) {
+  const message = messages
+    .filter((item) => item.info.role === "assistant" && item.info.summary !== true)
+    .toReversed()
+    .find((item) => messageText(item))
+  return message ? compactText(messageText(message), 2400) : undefined
+}
+
+function formatChangedFiles(files: Array<{ file: string; additions: number; deletions: number; status?: string }>) {
+  if (!files.length) return ["  changed_files: none"]
+  return [
+    "  changed_files:",
+    ...files.slice(0, 20).map((file) => `  - ${file.file} (+${file.additions} -${file.deletions}${file.status ? ` ${file.status}` : ""})`),
+    files.length > 20 ? `  - … ${files.length - 20} more` : undefined,
+  ].filter((line): line is string => Boolean(line))
+}
+
+function formatSnapshotContext(input: {
+  snapshot: LoopWorkflow.Snapshot
+  rootSummary?: Session.Info["summary"]
+  currentDiff?: NonNullable<Session.Info["summary"]>["diffs"]
+  lastMessage?: string
+}) {
+  const latestRun = input.snapshot.runs[0]
+  const files = (input.rootSummary?.diffs ?? input.currentDiff ?? []).map((file) => ({
+    file: file.file,
+    additions: file.additions,
+    deletions: file.deletions,
+    status: file.status,
+  }))
+  const latestEvents = input.snapshot.events.slice(-5)
+  const checkpointInfo = latestRun?.checkpoint
+
+  return {
+    latestRun: latestRun
+      ? {
+          runID: latestRun.id,
+          state: latestRun.state,
+          phase: latestRun.phase,
+          trigger: latestRun.trigger,
+          summary: checkpointInfo?.summary ?? latestRun.evaluatorReason,
+        }
+      : undefined,
+    latestCheckpoint: checkpointInfo,
+    changedFiles: files,
+    lastMessage: input.lastMessage,
+    recentEvents: latestEvents.map((event) => ({ title: event.title, summary: event.summary, type: event.type })),
+    output: [
+      "<loop_context>",
+      latestRun
+        ? `latest_run: ${latestRun.id} ${latestRun.state}/${latestRun.phase} trigger=${latestRun.trigger}`
+        : "latest_run: none",
+      latestRun?.evaluatorReason ? `latest_run_summary: ${latestRun.evaluatorReason}` : undefined,
+      checkpointInfo
+        ? [
+            "latest_checkpoint:",
+            checkpointInfo.status ? `  status: ${checkpointInfo.status}` : undefined,
+            checkpointInfo.summary ? `  summary: ${checkpointInfo.summary}` : undefined,
+            checkpointInfo.nextAction ? `  next_action: ${checkpointInfo.nextAction}` : undefined,
+            checkpointInfo.confidence ? `  confidence: ${checkpointInfo.confidence}` : undefined,
+            checkpointInfo.evidence?.length ? "  evidence:" : undefined,
+            ...(checkpointInfo.evidence ?? []).map((item) => `  - ${item}`),
+          ]
+            .filter((line): line is string => Boolean(line))
+            .join("\n")
+        : "latest_checkpoint: none",
+      "root_session_changes:",
+      `  files: ${input.rootSummary?.files ?? files.length}`,
+      `  additions: ${input.rootSummary?.additions ?? files.reduce((total, file) => total + file.additions, 0)}`,
+      `  deletions: ${input.rootSummary?.deletions ?? files.reduce((total, file) => total + file.deletions, 0)}`,
+      ...formatChangedFiles(files),
+      input.lastMessage ? ["latest_loop_message:", compactText(input.lastMessage, 2400)].join("\n") : "latest_loop_message: none",
+      latestEvents.length
+        ? ["recent_events:", ...latestEvents.map((event) => `- ${event.type}: ${event.title} — ${event.summary}`)].join("\n")
+        : "recent_events: none",
+      "</loop_context>",
+    ]
+      .filter((line): line is string => Boolean(line))
+      .join("\n"),
+  }
+}
+
+type LoopContext = ReturnType<typeof formatSnapshotContext>
+
+function formatList(workflows: LoopWorkflow.Info[], snapshots?: Map<string, LoopWorkflow.Snapshot>) {
   if (!workflows.length) return "No loop workflows found."
   return workflows
-    .map((workflow) =>
-      [
+    .map((workflow) => {
+      const run = snapshots?.get(workflow.id)?.runs[0]
+      return [
         `${workflow.id}  ${workflow.state}/${workflow.phase}  ${workflow.name}`,
         `  root_session_id: ${workflow.rootSessionID ?? "none"}`,
         `  next_wakeup: ${workflow.nextWakeup ? new Date(workflow.nextWakeup).toISOString() : "none"}`,
-      ].join("\n"),
-    )
+        run ? `  last_run: ${run.id} ${run.state}/${run.phase} trigger=${run.trigger}` : undefined,
+        run?.evaluatorReason ? `  last_summary: ${run.evaluatorReason}` : undefined,
+      ].filter((line): line is string => Boolean(line)).join("\n")
+    })
     .join("\n")
 }
 
-function listOutput(items: LoopWorkflow.Info[]) {
+function listOutput(items: LoopWorkflow.Info[], snapshots?: Map<string, LoopWorkflow.Snapshot>, contexts?: Map<string, LoopContext>) {
   return {
     title: `${items.length} loops`,
-    output: formatList(items),
+    output: formatList(items, snapshots),
     metadata: {
       count: items.length,
-      workflows: items.map((item) => ({
-        workflowID: item.id,
-        ownerSessionID: item.ownerSessionID,
-        rootSessionID: item.rootSessionID,
-        state: item.state,
-        phase: item.phase,
-        name: item.name,
-        nextWakeup: item.nextWakeup,
-        turns: item.metrics.turns,
-        maxTurns: item.policy.maxTurns,
-        objective: item.objective,
-        triggerMode: item.spec.trigger?.mode,
-        intervalMs: item.spec.trigger?.intervalMs,
-        permissionMode: permissionModeFor(item),
-        budgetMode: item.spec.budgetMode,
-        model: modelMetadata(item.spec.model),
-        agent: item.spec.agent,
-        created: item.time.created,
-        activated: item.time.activated,
-        updated: item.time.updated,
-      })),
+      workflows: items.map((item) => {
+        const context = contexts?.get(item.id)
+        return {
+          workflowID: item.id,
+          ownerSessionID: item.ownerSessionID,
+          rootSessionID: item.rootSessionID,
+          state: item.state,
+          phase: item.phase,
+          name: item.name,
+          nextWakeup: item.nextWakeup,
+          turns: item.metrics.turns,
+          maxTurns: item.policy.maxTurns,
+          objective: item.objective,
+          triggerMode: item.spec.trigger?.mode,
+          intervalMs: item.spec.trigger?.intervalMs,
+          permissionMode: permissionModeFor(item),
+          budgetMode: item.spec.budgetMode,
+          model: modelMetadata(item.spec.model),
+          agent: item.spec.agent,
+          created: item.time.created,
+          activated: item.time.activated,
+          updated: item.time.updated,
+          latestRun: context?.latestRun,
+          latestCheckpoint: context?.latestCheckpoint,
+          changedFiles: context?.changedFiles,
+          lastMessage: context?.lastMessage,
+          recentEvents: context?.recentEvents,
+        }
+      }),
     },
   }
 }
@@ -358,6 +521,7 @@ function canControl(action: Schema.Schema.Type<typeof Action>, workflow: LoopWor
   if (action === "delete") return true
   if (action === "resume") return workflow.state === "paused"
   if (action === "show") return true
+  if (action === "update_agent") return true
   if (action === "run_once") return workflow.state !== "paused" && !terminalStates.has(workflow.state)
   return !terminalStates.has(workflow.state)
 }
@@ -412,10 +576,11 @@ function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean, rootSes
   }
 }
 
-export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Service>(
+export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Service | Session.Service>(
   "loop",
   Effect.gen(function* () {
     const workflows = yield* LoopWorkflow.Service
+    const sessions = yield* Session.Service
 
     const contextualWorkflow = Effect.fn("LoopTool.contextualWorkflow")(function* (
       action: Schema.Schema.Type<typeof Action>,
@@ -427,6 +592,45 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
       return scoped[0] ?? candidates[0]
     })
 
+    const snapshotMapForList = Effect.fn("LoopTool.snapshotMapForList")(function* (items: LoopWorkflow.Info[]) {
+      const entries = yield* Effect.forEach(
+        items.slice(0, 20),
+        (item) =>
+          workflows.snapshot(item.id, 5).pipe(
+            Effect.map((snapshot) => [item.id, snapshot] as const),
+            Effect.orElseSucceed(() => undefined),
+          ),
+        { concurrency: 4 },
+      )
+      return new Map(entries.flatMap((entry) => (entry ? [entry] : [])))
+    })
+
+    const snapshotContext = Effect.fn("LoopTool.snapshotContext")(function* (snapshot: LoopWorkflow.Snapshot) {
+      const rootID = snapshot.workflow.rootSessionID
+      const root = rootID ? yield* sessions.get(rootID).pipe(Effect.orElseSucceed(() => undefined)) : undefined
+      const currentDiff = rootID ? yield* sessions.diff(rootID).pipe(Effect.orElseSucceed(() => [])) : []
+      const messages = rootID ? yield* sessions.messages({ sessionID: rootID, limit: 12 }).pipe(Effect.orElseSucceed(() => [])) : []
+      return formatSnapshotContext({
+        snapshot,
+        rootSummary: root?.summary,
+        currentDiff,
+        lastMessage: latestAssistantText(messages),
+      })
+    })
+
+    const contextMapForSnapshots = Effect.fn("LoopTool.contextMapForSnapshots")(function* (snapshots: Map<string, LoopWorkflow.Snapshot>) {
+      const entries = yield* Effect.forEach(
+        Array.from(snapshots.entries()),
+        ([id, snapshot]) =>
+          snapshotContext(snapshot).pipe(
+            Effect.map((context) => [id, context] as const),
+            Effect.orElseSucceed(() => undefined),
+          ),
+        { concurrency: 4 },
+      )
+      return new Map(entries.flatMap((entry) => (entry ? [entry] : [])))
+    })
+
     return {
       description: DESCRIPTION,
       parameters: Parameters,
@@ -436,7 +640,8 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
 
           if (action === "list") {
             const items = yield* workflows.list()
-            return listOutput(items)
+            const snapshots = yield* snapshotMapForList(items)
+            return listOutput(items, snapshots, yield* contextMapForSnapshots(snapshots))
           }
 
           let workflow: LoopWorkflow.Info | undefined
@@ -446,7 +651,8 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
 
           if (!workflow && action === "show") {
             const items = yield* workflows.list()
-            return listOutput(items)
+            const snapshots = yield* snapshotMapForList(items)
+            return listOutput(items, snapshots, yield* contextMapForSnapshots(snapshots))
           }
 
           if (!workflow && action !== "draft" && action !== "activate") {
@@ -501,16 +707,26 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
 
           if (action === "show") {
             const snapshot = yield* workflows.snapshot(workflow.id, 10)
+            const context = yield* snapshotContext(snapshot)
             return {
               title: `Loop ${workflow.id}`,
               output: [
                 formatWorkflow(snapshot.workflow),
                 "",
+                context.output,
+                "",
                 `runs: ${snapshot.runs.length}`,
                 `threads: ${snapshot.threads.length}`,
                 `events: ${snapshot.events.length}`,
               ].join("\n"),
-              metadata: metadata(snapshot.workflow, undefined, snapshot.rootSession?.model),
+              metadata: {
+                ...metadata(snapshot.workflow, undefined, snapshot.rootSession?.model),
+                latestRun: context.latestRun,
+                latestCheckpoint: context.latestCheckpoint,
+                changedFiles: context.changedFiles,
+                lastMessage: context.lastMessage,
+                recentEvents: context.recentEvents,
+              },
             }
           }
 
@@ -520,6 +736,19 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
               title: `Deleted loop ${deleted.id}`,
               output: [`deleted_loop_id: ${deleted.id}`, `deleted_loop_name: ${deleted.name}`].join("\n"),
               metadata: metadata(deleted),
+            }
+          }
+
+          if (action === "update_agent") {
+            workflow = yield* workflows.updateAgent({
+              id: workflow.id,
+              agent: params.agent,
+              reason: params.reason ?? `Agent set to ${params.agent?.trim() || "default"} from loop tool.`,
+            })
+            return {
+              title: `Updated loop agent ${workflow.id}`,
+              output: formatWorkflow(workflow),
+              metadata: metadata(workflow),
             }
           }
 

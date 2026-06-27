@@ -3,7 +3,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { routeReturnTarget, useRoute, useRouteData, type SetupStepID } from "@tui/context/route"
 import { useTheme } from "@tui/context/theme"
 import { useSync } from "@tui/context/sync"
-import { createDialogProviderOptions } from "@tui/component/dialog-provider"
+import { DialogProvider } from "@tui/component/dialog-provider"
 import { providerDisplayName } from "@tui/util/provider-origin"
 import { useLocal } from "@tui/context/local"
 import { useDialog } from "@tui/ui/dialog"
@@ -12,7 +12,7 @@ import { DialogPrompt } from "@tui/ui/dialog-prompt"
 import { DialogSelect } from "@tui/ui/dialog-select"
 import { useToast } from "@tui/ui/toast"
 import { useMendTuiProfile } from "@tui/context/mend"
-import { setupReadiness, aiStatus, providerAuthStatus } from "@/mend/runtime/readiness"
+import { setupDoctor, setupPlan, setupReadiness, aiStatus, providerAuthStatus } from "@/mend/runtime/readiness"
 import { budgetStatus, writeBudgetPolicy } from "@/mend/runtime/budget"
 import {
   modelPresets,
@@ -31,7 +31,14 @@ import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } fr
 import { packageMetadata, packageMetadataSet, syncGlobalPrimaryAgentModels, syncProject } from "@/mend/config/project"
 import { applyRuntimePack } from "@/mend/runtime/pack"
 import { disableAllMendPackages, listMendPackages, removeMendPackage, setMendPackageEnabled } from "@/mend/runtime/packages"
-import { runtimeRegistryAdd, runtimeRegistryApplySource, runtimeRegistryInstallPack, runtimeRegistrySearch } from "@/mend/runtime/registry"
+import {
+  runtimeRegistryAdd,
+  runtimeRegistryApplySource,
+  runtimeRegistryInstallPack,
+  runtimeRegistryList,
+  runtimeRegistryRemove,
+  runtimeRegistrySearch,
+} from "@/mend/runtime/registry"
 import { mendTuiCapabilityVersion, visibleCustomizationCapabilities } from "@/mend/tui/capabilities"
 import { listActiveCustomizations } from "@/mend/tui/customization-state"
 import { applyTuiPreset, readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
@@ -88,7 +95,7 @@ const roleDescriptions: Record<string, string> = {
   build: "Model used when the TUI is in build mode.",
   plan: "Model used when the TUI is in plan mode.",
   review: "Review/checking role for future and projected role routing.",
-  subagent: "Default model for background subagent task sessions.",
+  subagent: "Default model for new background subagent task sessions. Individual agent configs can still override it.",
   small: "Runtime small-model fallback for title generation and lightweight internal work.",
   title: "Hidden runtime agent that generates conversation titles.",
   compaction: "Hidden runtime agent that compacts long context.",
@@ -199,8 +206,37 @@ export function setupShouldShowExtractorAuthBlocker(input: {
   return !(auth.providerID && input.connectedProviderIDs?.includes(auth.providerID))
 }
 
+export function setupMemoryDialogCurrentValue(memory?: { enabled?: boolean; generate?: boolean } | null) {
+  if (memory?.generate) return "generate"
+  return memory?.enabled ? "enable-use" : "disable"
+}
+
 function normalizeProductName(value: string) {
   return value.trim() || "MendCode"
+}
+
+function registrySourceIDFromURL(value: string) {
+  const clean = value.trim().replace(/\.git$/, "")
+  const last = clean.split(/[/:]/).filter(Boolean).at(-1) || "package-source"
+  const slug = last.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "")
+  return `url-${slug || "package-source"}`.slice(0, 64)
+}
+
+export function isPublicGitHubURL(value: string) {
+  try {
+    const url = new URL(value.trim())
+    return (
+      url.protocol === "https:" &&
+      url.hostname.toLowerCase() === "github.com" &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      url.pathname.split("/").filter(Boolean).length === 2
+    )
+  } catch {
+    return false
+  }
 }
 
 function presetRole(preset: (typeof modelPresets)[keyof typeof modelPresets]): ModelRole {
@@ -231,7 +267,6 @@ export function Setup() {
   const [selected, setSelected] = createSignal<SetupStepID>(initialStep)
   const [refresh, setRefresh] = createSignal(0)
   const reload = () => setRefresh((value) => value + 1)
-  const providerOptions = createDialogProviderOptions()
 
   const [summary] = createResource(refresh, async () => {
     const root = mend.root
@@ -268,13 +303,14 @@ export function Setup() {
 
   const setupSummary = createMemo(() => summary.latest ?? summary())
   const narrow = createMemo(() => dimensions().width < 110)
+  const compact = createMemo(() => dimensions().width < 72)
   const current = createMemo(() => setupSummary()?.state.currentStep || selected())
   const active = createMemo(() => selected() || current())
   const complete = createMemo(() => {
     const state = setupSummary()?.state
     return state ? isSetupComplete(state) : false
   })
-  const promptPanelWidth = createMemo(() => Math.max(56, dimensions().width - (narrow() ? 12 : 44)))
+  const promptPanelWidth = createMemo(() => Math.max(20, dimensions().width - (compact() ? 4 : narrow() ? 12 : 44)))
   const connectedProviderIDs = createMemo(() => sync.data.provider_next.connected)
   const connectedProviderNames = createMemo(() =>
     connectedProviderIDs().map(
@@ -335,34 +371,7 @@ export function Setup() {
   }
 
   const chooseProvider = async () => {
-    const auth = setupSummary()?.auth as any
-    dialog.replace(() => (
-      <DialogSelect
-        title="Connect a provider"
-        current={currentProviderID()}
-        options={providerOptions().map((option) => ({
-          ...option,
-          gutter: option.value === currentProviderID() ? undefined : option.gutter,
-          onSelect: async () => {
-            const alreadyReady = auth?.mendRunReady && auth?.providerID === option.value
-            if (!alreadyReady) {
-              await option.onSelect?.()
-            }
-            reload()
-            if (alreadyReady) {
-              await mark("provider")
-              toast.show({ variant: "success", message: "Provider step accepted.", duration: 3000 })
-              return
-            }
-            toast.show({
-              variant: "warning",
-              message: "Provider auth must be ready before this step is complete.",
-              duration: 5000,
-            })
-          },
-        }))}
-      />
-    ))
+    dialog.replace(() => <DialogProvider postAuth="close" onAuthReady={reload} />)
   }
 
   const setupModelRoles = createMemo<SetupModelRole[]>(() => {
@@ -500,18 +509,81 @@ export function Setup() {
     dialog.replace(() => <DialogSelect title={`Model role: ${roleName}`} options={options} />)
   }
 
+  const applyModelOnboardingPreset = async (preset: "subscription" | "api-balanced" | "api-budget") => {
+    const config = await readModelsConfig(mend.root)
+    const primary = preset === "subscription"
+      ? presetRole(modelPresets["openai-codex-subscription-gpt-5.2-codex"])
+      : preset === "api-balanced"
+        ? presetRole(modelPresets["openai-api-gpt-5.2-codex"])
+        : presetRole(modelPresets["openai-api-gpt-5-mini"])
+    const defaultRole = preset === "subscription"
+      ? presetRole(modelPresets["openai-codex-subscription-gpt-5.2"])
+      : preset === "api-balanced"
+        ? presetRole(modelPresets["openai-api-gpt-5.2"])
+        : presetRole(modelPresets["openai-api-gpt-5-mini"])
+    const helper = preset === "api-balanced"
+      ? presetRole(modelPresets["openai-api-gpt-5-mini"])
+      : preset === "api-budget"
+        ? presetRole(modelPresets["openai-api-gpt-5-nano"])
+        : defaultRole
+    config.enabled = true
+    config.roles.default = defaultRole
+    config.roles.build = primary
+    config.roles.code = primary
+    config.roles.plan = defaultRole
+    config.roles.review = defaultRole
+    config.roles.subagent = primary
+    config.roles.small = helper
+    config.roles.title = helper
+    config.roles.compaction = helper
+    config.roles.summary = helper
+    config.roles.memoryExtractor = helper
+    config.roles.memoryDream = helper
+    config.roles.memoryAssistant = helper
+    config.roles.permissionReviewer = helper
+    await writeGlobalModelsConfig(config)
+    await syncGlobalPrimaryAgentModels(mend.root)
+    await refreshGeneratedRuntimeModelConfig(mend.root)
+    await mark("models")
+    dialog.clear()
+    toast.show({ variant: "success", message: "Model onboarding preset applied.", duration: 4000 })
+  }
+
   const chooseModelRoleMenu = () => {
     dialog.replace(() => (
       <DialogSelect
         title="Model Roles"
-        options={setupModelRoles().map((role) => ({
-          title: roleLabel(role),
-          value: role,
-          category: roleCategory(role),
-          description: roleDescriptions[role] || "Additional primary agent role.",
-          footer: roleLabels[role] ? `role id: ${role}` : undefined,
-          onSelect: () => chooseModelRole(role),
-        }))}
+        options={[
+          {
+            title: "ChatGPT subscription preset",
+            value: "subscription",
+            category: "Onboarding presets",
+            description: "Use Codex OAuth defaults; no API-key billing contract is written.",
+            onSelect: async () => applyModelOnboardingPreset("subscription"),
+          },
+          {
+            title: "OpenAI API balanced preset",
+            value: "api-balanced",
+            category: "Onboarding presets",
+            description: "Use stronger primary roles and cheaper helper roles; requires OPENAI_API_KEY.",
+            onSelect: async () => applyModelOnboardingPreset("api-balanced"),
+          },
+          {
+            title: "OpenAI API budget preset",
+            value: "api-budget",
+            category: "Onboarding presets",
+            description: "Use mini/nano API presets for lower-cost onboarding and smoke tests.",
+            onSelect: async () => applyModelOnboardingPreset("api-budget"),
+          },
+          ...setupModelRoles().map((role) => ({
+            title: roleLabel(role),
+            value: role,
+            category: roleCategory(role),
+            description: roleDescriptions[role] || "Additional primary agent role.",
+            footer: roleLabels[role] ? `role id: ${role}` : undefined,
+            onSelect: () => chooseModelRole(role),
+          })),
+        ]}
       />
     ))
   }
@@ -637,7 +709,7 @@ export function Setup() {
     dialog.replace(() => (
       <DialogSelect
         title="Memory"
-        current={current?.enabled ? "enabled" : "disabled"}
+        current={setupMemoryDialogCurrentValue(current)}
         options={[
           {
             title: "Enable memory use (opt-in)",
@@ -830,6 +902,50 @@ export function Setup() {
     reload()
   }
 
+  const exportSafeRuntimeSnapshot = async () => {
+    const confirmed = await DialogConfirm.show(
+      dialog,
+      "Export safe runtime snapshot",
+      [
+        "Writes mend-package.json and .mendcode/runtime-pack.json for shareable setup config.",
+        "Secrets, auth files, sessions, runs, cache, and local provider tokens are excluded.",
+      ].join("\n"),
+    )
+    if (!confirmed) return
+    try {
+      const snapshot = await applyRuntimePack(mend.root)
+      await mark("package")
+      reload()
+      toast.show({
+        variant: "success",
+        message: `Safe snapshot exported: ${snapshot.packPath}`,
+        duration: 5000,
+      })
+      dialog.clear()
+    } catch (error) {
+      toast.show({
+        variant: "error",
+        message: error instanceof Error ? error.message : "Safe runtime snapshot export failed.",
+        duration: 7000,
+      })
+    }
+  }
+
+  const ensureRegistrySourceIDAvailable = async (sourceID: string) => {
+    const registry = await runtimeRegistryList(mend.root)
+    if (registry.entries.some((entry) => entry.id === sourceID)) {
+      throw new Error(`Registry source already exists: ${sourceID}. Choose a new source id.`)
+    }
+  }
+
+  const removeFailedRegistrySource = async (sourceID: string) => {
+    try {
+      await runtimeRegistryRemove(sourceID, mend.root)
+    } catch {
+      // Best effort cleanup only; the visible error should stay focused on the failed install.
+    }
+  }
+
   const chooseOfficialPackage = async () => {
     try {
       const result = await runtimeRegistrySearch("", "official", mend.root)
@@ -892,8 +1008,11 @@ export function Setup() {
       description: () => <text fg={theme.textMuted}>Stable id for this local registry source.</text>,
     })
     if (!sourceID?.trim()) return
+    let sourceAdded = false
     try {
+      await ensureRegistrySourceIDAvailable(sourceID.trim())
       await runtimeRegistryAdd([sourceID.trim(), "--type", "local", "--url", sourcePath.trim(), "--note", "Setup-added local package source."], mend.root)
+      sourceAdded = true
       const preview = await runtimeRegistryApplySource(sourceID.trim(), mend.root)
       await syncPackageRuntime()
       toast.show({
@@ -902,9 +1021,104 @@ export function Setup() {
         duration: 5000,
       })
     } catch (error) {
+      if (sourceAdded) await removeFailedRegistrySource(sourceID.trim())
       toast.show({
         variant: "error",
         message: error instanceof Error ? error.message : "Local package install failed.",
+        duration: 7000,
+      })
+    }
+  }
+
+  const installGitHubPackageUrl = async () => {
+    const sourceURL = await DialogPrompt.show(dialog, "GitHub package URL", {
+      value: "",
+      placeholder: "https://github.com/org/mendcode-package.git",
+      description: () => (
+        <text fg={theme.textMuted}>Public git URL containing a MendCode package or marketplace catalog.</text>
+      ),
+    })
+    if (!sourceURL?.trim()) return
+    if (!isPublicGitHubURL(sourceURL)) {
+      toast.show({
+        variant: "error",
+        message: "Package URL must be a public https://github.com/<org>/<repo> URL. Use local path for filesystem packages.",
+        duration: 7000,
+      })
+      return
+    }
+    const sourceID = await DialogPrompt.show(dialog, "Source id", {
+      value: registrySourceIDFromURL(sourceURL),
+      placeholder: "url-my-package",
+      description: () => <text fg={theme.textMuted}>Saved in .mendcode/registry.json; no credentials are stored.</text>,
+    })
+    if (!sourceID?.trim()) return
+    const confirmed = await DialogConfirm.show(
+      dialog,
+      "Install package URL",
+      [
+        `Source: ${sourceURL.trim()}`,
+        `Registry id: ${sourceID.trim()}`,
+        "This will fetch a public git source into MendCode registry cache.",
+        "Only allowlisted MendCode package files are installed into the local overlay.",
+      ].join("\n"),
+    )
+    if (!confirmed) return
+    let sourceAdded = false
+    try {
+      await ensureRegistrySourceIDAvailable(sourceID.trim())
+      await runtimeRegistryAdd([sourceID.trim(), "--type", "github", "--url", sourceURL.trim(), "--note", "Setup-added GitHub package source."], mend.root)
+      sourceAdded = true
+      const result = await runtimeRegistrySearch("", sourceID.trim(), mend.root)
+      if (result.results.length > 1) {
+        dialog.replace(() => (
+          <DialogSelect
+            title="Packages from URL"
+            options={result.results.map((pack) => ({
+              title: pack.title || pack.id,
+              value: pack.id,
+              category: pack.channel || "url",
+              description: pack.description || `${pack.runtime?.commands || 0} commands · ${pack.runtime?.skills || 0} skills`,
+              footer: pack.version,
+              onSelect: async () => {
+                try {
+                  const installed = await runtimeRegistryInstallPack(pack.id, sourceID.trim(), mend.root)
+                  await syncPackageRuntime()
+                  toast.show({ variant: "success", message: `Installed package: ${installed.package.id}.`, duration: 5000 })
+                  dialog.clear()
+                } catch (error) {
+                  await removeFailedRegistrySource(sourceID.trim())
+                  toast.show({
+                    variant: "error",
+                    message: error instanceof Error ? error.message : "Package URL install failed.",
+                    duration: 7000,
+                  })
+                }
+              },
+            }))}
+          />
+        ))
+        return
+      }
+      if (result.results.length === 1) {
+        const installed = await runtimeRegistryInstallPack(result.results[0]!.id, sourceID.trim(), mend.root)
+        await syncPackageRuntime()
+        toast.show({ variant: "success", message: `Installed package: ${installed.package.id}.`, duration: 5000 })
+        dialog.clear()
+        return
+      }
+      const preview = await runtimeRegistryApplySource(sourceID.trim(), mend.root)
+      await syncPackageRuntime()
+      toast.show({
+        variant: "success",
+        message: `Installed package source: ${preview.package?.id || sourceID.trim()}.`,
+        duration: 5000,
+      })
+    } catch (error) {
+      if (sourceAdded) await removeFailedRegistrySource(sourceID.trim())
+      toast.show({
+        variant: "error",
+        message: error instanceof Error ? error.message : "Package URL install failed.",
         duration: 7000,
       })
     }
@@ -991,11 +1205,25 @@ export function Setup() {
             onSelect: () => void chooseOfficialPackage(),
           },
           {
-            title: "Install local package path",
+            title: "Import local package path",
             value: "local-path",
-            category: "Install",
-            description: "Install a local package directory or manifest as an overlay.",
+            category: "Import",
+            description: "Import a local package directory or manifest as an overlay; secrets remain local.",
             onSelect: () => void installLocalPackagePath(),
+          },
+          {
+            title: "Import GitHub package URL",
+            value: "github-url",
+            category: "Import",
+            description: "Add a public package repository or marketplace catalog, then import from it.",
+            onSelect: () => void installGitHubPackageUrl(),
+          },
+          {
+            title: "Export safe config snapshot",
+            value: "export-safe",
+            category: "Export",
+            description: "Write mend-package.json + runtime-pack without auth, sessions, runs, cache, or secrets.",
+            onSelect: () => void exportSafeRuntimeSnapshot(),
           },
           {
             title: "Create/update local package",
@@ -1284,6 +1512,28 @@ export function Setup() {
     ))
   }
 
+  const runHealthCheck = async () => {
+    try {
+      const doctor = await setupDoctor(mend.root)
+      const plan = await setupPlan(mend.root)
+      await mark("health")
+      reload()
+      toast.show({
+        variant: doctor.ok ? "success" : "warning",
+        message: doctor.ok
+          ? `Health ok; setup plan written to ${plan.path}.`
+          : `Health has ${doctor.failures.length} failure(s), ${doctor.warnings.length} warning(s). Plan: ${plan.path}`,
+        duration: 6000,
+      })
+    } catch (error) {
+      toast.show({
+        variant: "error",
+        message: error instanceof Error ? error.message : "Setup health check failed.",
+        duration: 7000,
+      })
+    }
+  }
+
   const finish = async () => {
     const state = setupSummary()?.state
     if (!state || !isSetupComplete(state)) {
@@ -1301,6 +1551,7 @@ export function Setup() {
     if (step === "provider") return chooseProvider()
     if (step === "models") return chooseModelRoleMenu()
     if (step === "budget") return chooseBudget()
+    if (step === "health") return runHealthCheck()
     if (step === "package") return choosePackageMetadata()
     if (step === "tui") return chooseTuiProfile()
     if (step === "prompt") return choosePromptMode()
@@ -1330,9 +1581,6 @@ export function Setup() {
     if (!providerID) return "not selected"
     return sync.data.provider.find((provider) => provider.id === providerID)?.name ?? providerID
   })
-  const currentProviderID = createMemo(
-    () => auth()?.providerID || activeRuntimeProviderID() || connectedProviderIDs()[0] || undefined,
-  )
   const providerReady = createMemo(() => {
     const status = auth()
     if (status?.providerID) return status.mendRunReady === true || connectedProviderIDs().includes(status.providerID)
@@ -1386,17 +1634,19 @@ export function Setup() {
       width="100%"
       height="100%"
       flexDirection="column"
-      paddingLeft={2}
-      paddingRight={2}
-      paddingTop={1}
-      paddingBottom={1}
+      paddingLeft={compact() ? 0 : 2}
+      paddingRight={compact() ? 0 : 2}
+      paddingTop={compact() ? 0 : 1}
+      paddingBottom={compact() ? 0 : 1}
     >
       <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
         <text fg={theme.text}>MendCode Setup</text>
-        <text fg={theme.textMuted}>j/k move · enter configure · esc leave</text>
+        <Show when={!compact()}>
+          <text fg={theme.textMuted}>j/k move · enter configure · esc leave</text>
+        </Show>
       </box>
-      <box height={1} />
-      <box flexGrow={1} minHeight={0} flexDirection={narrow() ? "column" : "row"} gap={2}>
+      <Show when={!compact()}><box height={1} /></Show>
+      <box flexGrow={1} minHeight={0} flexDirection={narrow() ? "column" : "row"} gap={compact() ? 0 : 2}>
         <SetupRail
           active={active()}
           state={setupSummary()?.state}
@@ -1426,9 +1676,9 @@ export function Setup() {
           minHeight={0}
           borderColor={theme.border}
           borderStyle="single"
-          paddingLeft={1}
-          paddingRight={1}
-          paddingTop={1}
+          paddingLeft={compact() ? 0 : 1}
+          paddingRight={compact() ? 0 : 1}
+          paddingTop={compact() ? 0 : 1}
         >
           <scrollbox
             flexGrow={1}
@@ -1446,8 +1696,11 @@ export function Setup() {
               <Switch>
               <Match when={active() === "provider"}>
                 <box flexDirection="column" gap={1}>
-                  <text fg={theme.primary}>Connect Provider</text>
-                  <text>Provider: {providerLabel()}</text>
+                  <text fg={theme.primary}>Provider Manager</text>
+                  <text>Primary runtime provider: {providerLabel()}</text>
+                  <text>
+                    Connected providers: {connectedProviderNames().length ? connectedProviderNames().join(", ") : "none"}
+                  </text>
                   <text>
                     Auth: {providerStatusText()} · {auth()?.authMode || "not pinned in project config"}
                   </text>
@@ -1476,8 +1729,8 @@ export function Setup() {
                   </Show>
                   <Show when={!narrow()}>
                     <text fg={theme.textMuted}>
-                      Enter opens the full provider picker. Configure auth here, then choose runtime models in the
-                      Models step.
+                      Enter opens Provider Manager. Select a provider to add or refresh auth; press d on saved auth to
+                      disconnect it. Multiple providers can stay connected, then Models decides which roles use them.
                     </text>
                   </Show>
                 </box>
@@ -1486,7 +1739,8 @@ export function Setup() {
                 <box flexDirection="column" gap={1}>
                   <text fg={theme.primary}>Models</text>
                   <text fg={theme.textMuted}>
-                    Pick the main models first. Background helpers can use cheaper models.
+                    Pick the main models first. The Subagents role sets the default for background workers, but each
+                    subagent can still override its model in that agent's own config.
                   </text>
                   <For each={primaryModelRoles}>
                     {(role) => (
@@ -1516,7 +1770,7 @@ export function Setup() {
                     </text>
                   </Show>
                   <box flexGrow={1} />
-                  <text fg={theme.textMuted}>Enter opens all model roles. Click any visible row to edit it.</text>
+                  <text fg={theme.textMuted}>Enter opens onboarding presets plus all model roles. Click any visible row to edit it.</text>
                 </box>
               </Match>
               <Match when={active() === "budget"}>
@@ -1532,6 +1786,31 @@ export function Setup() {
                   </text>
                   <text fg={theme.textMuted}>
                     API-key priced models can warn/stop by USD thresholds before provider calls.
+                  </text>
+                </box>
+              </Match>
+              <Match when={active() === "health"}>
+                <box flexDirection="column" gap={1}>
+                  <text fg={theme.primary}>Health Check</text>
+                  <text>Status: {setupSummary()?.setup.blockers.length ? "needs attention" : "ready"}</text>
+                  <text>AI ready: {setupSummary()?.ai.ready ? "yes" : "no"}</text>
+                  <text>Default model: {setupSummary()?.setup.defaultModel || "not set"}</text>
+                  <text>Generated config: {setupSummary()?.setup.generatedConfig ? "yes" : "no"}</text>
+                  <text>Local bin: {setupSummary()?.setup.localBin || "missing"}</text>
+                  <text>PATH link points here: {setupSummary()?.setup.pathPointsHere ? "yes" : "no"}</text>
+                  <Show when={setupSummary()?.setup.blockers.length}>
+                    <box flexDirection="column" gap={0}>
+                      <text fg={theme.warning}>Blockers / warnings:</text>
+                      <For each={(setupSummary()?.setup.blockers || []).slice(0, 5)}>
+                        {(blocker) => <text fg={theme.warning}>{truncateSetupText(String(blocker), promptPanelWidth())}</text>}
+                      </For>
+                    </box>
+                  </Show>
+                  <text fg={theme.textMuted}>
+                    Enter runs setupDoctor + setupPlan and writes .mendcode/setup/plan.json for local inspection.
+                  </text>
+                  <text fg={theme.textMuted}>
+                    This step reads readiness only; it does not call providers, run donor auth, or print secrets.
                   </text>
                 </box>
               </Match>
@@ -1590,7 +1869,7 @@ export function Setup() {
               </Match>
               <Match when={active() === "package"}>
                 <box flexDirection="column" gap={1}>
-                  <text fg={theme.primary}>Package Metadata</text>
+                  <text fg={theme.primary}>Packages Store & Manager</text>
                   <text>ID: {setupSummary()?.pkg.id || "generated from local runtime"}</text>
                   <text>Title: {setupSummary()?.pkg.title || "unset"}</text>
                   <text>Description: {setupSummary()?.pkg.description || "unset"}</text>
@@ -1601,14 +1880,15 @@ export function Setup() {
                     Installed packages: {setupSummary()?.packages.installed.length || 0} · active{" "}
                     {setupSummary()?.packages.enabled.length || 0}
                   </text>
-                  <text>Install: official registry, local package path, or authored local snapshot</text>
-                  <text>Snapshot: mend-package.json + .mendcode/runtime-pack.json</text>
+                  <text>Import: official registry, public GitHub package URL, or local package path</text>
+                  <text>Manage: activate/deactivate installed overlays, remove snapshots, or update local metadata</text>
+                  <text>Export: mend-package.json + .mendcode/runtime-pack.json safe config snapshot</text>
                   <text fg={theme.textMuted}>
                     This metadata feeds generated `mend-package.json`, runtime-pack snapshots, and registry previews.
                   </text>
                   <text fg={theme.textMuted}>
-                    Enter opens package actions. Package overlays install under .mendcode/packages/installed and do not
-                    replace local sessions, auth, runs, cache, or customization files.
+                    Enter opens import/export/package actions. Package overlays install under .mendcode/packages/installed
+                    and do not replace local sessions, auth, runs, cache, or customization files.
                   </text>
                 </box>
               </Match>
@@ -1713,12 +1993,14 @@ export function Setup() {
               </Switch>
             </Show>
           </scrollbox>
-          <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
-            <text fg={theme.textMuted}>
-              Required: provider, models, budget, prompt · optional: package, tui, memory, permissions
+          <box flexDirection={compact() ? "column" : "row"} justifyContent="space-between" flexShrink={0}>
+            <text fg={theme.textMuted} wrapMode="none">
+              {compact()
+                ? truncateSetupText("Required: provider, models, budget, prompt", promptPanelWidth())
+                : "Required: provider, models, budget, prompt · optional: health, package, tui, memory, permissions"}
             </text>
-            <text fg={complete() ? theme.success : theme.textMuted} onMouseDown={() => void finish()}>
-              Finish setup
+            <text fg={complete() ? theme.success : theme.textMuted} wrapMode="none" onMouseDown={() => void finish()}>
+              {complete() ? "Finish setup" : "Setup incomplete"}
             </text>
           </box>
         </box>
