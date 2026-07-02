@@ -185,6 +185,22 @@ describe("Truncate", () => {
       }),
     )
 
+    it.live("caps saved output excerpts for disk safety", () =>
+      Effect.gen(function* () {
+        const svc = yield* Truncate.Service
+        const content = "a".repeat(Truncate.MAX_SAVED_BYTES + 100_000)
+        const result = yield* svc.output(content, { maxBytes: 100 })
+
+        expect(result.truncated).toBe(true)
+        expect(result.content).toContain("Output excerpt saved to:")
+        if (!result.truncated) throw new Error("expected truncated")
+
+        const written = yield* Effect.promise(() => Filesystem.readText(result.outputPath))
+        expect(Buffer.byteLength(written, "utf8")).toBeLessThanOrEqual(Truncate.MAX_SAVED_BYTES)
+        expect(written).toContain("Saved output capped for disk safety")
+      }),
+    )
+
     it.live("suggests Task tool when agent has task permission", () =>
       Effect.gen(function* () {
         const svc = yield* Truncate.Service
@@ -235,15 +251,15 @@ describe("Truncate", () => {
   describe("cleanup", () => {
     const DAY_MS = 24 * 60 * 60 * 1000
 
-    it.live("deletes files older than 7 days and preserves recent files", () =>
+    it.live("deletes files older than 1 day and preserves recent files", () =>
       Effect.gen(function* () {
         const svc = yield* Truncate.Service
         const fs = yield* FileSystem.FileSystem
 
         yield* fs.makeDirectory(Truncate.DIR, { recursive: true })
 
-        const old = path.join(Truncate.DIR, Identifier.create("tool", "ascending", Date.now() - 10 * DAY_MS))
-        const recent = path.join(Truncate.DIR, Identifier.create("tool", "ascending", Date.now() - 3 * DAY_MS))
+        const old = path.join(Truncate.DIR, Identifier.create("tool", "ascending", Date.now() - 2 * DAY_MS))
+        const recent = path.join(Truncate.DIR, Identifier.create("tool", "ascending", Date.now() - 12 * 60 * 60 * 1000))
 
         yield* writeFileStringScoped(old, "old content")
         yield* writeFileStringScoped(recent, "recent content")

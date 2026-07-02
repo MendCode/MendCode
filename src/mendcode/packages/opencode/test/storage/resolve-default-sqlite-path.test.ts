@@ -36,6 +36,18 @@ describe("resolve-default-sqlite-path", () => {
     }
   })
 
+  test("dual-read falls back to base legacy db before creating an empty channel db", () => {
+    const base = path.join(tmpdir(), `mend-sqlite-test-${Date.now()}`)
+    mkdirSync(base, { recursive: true })
+    try {
+      const baseLegacy = path.join(base, "opencode.db")
+      writeFileSync(baseLegacy, "")
+      expect(resolveDualReadDbPathFromLayout(base, "local", false)).toBe(baseLegacy)
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
   test("OPENCODE_DB relative joins dataDir", () => {
     const base = "/tmp/x"
     expect(

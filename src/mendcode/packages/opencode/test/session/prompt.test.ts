@@ -470,6 +470,97 @@ const seed = Effect.fn("test.seed")(function* (sessionID: SessionID, opts?: { fi
   return { user: msg, assistant }
 })
 
+it.live("cancel finalizes an orphaned unfinished assistant message", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({})
+      const msg = yield* user(chat.id, "hello")
+      const assistant = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: msg.id,
+        sessionID: chat.id,
+        mode: "build",
+        agent: "build",
+        cost: 0,
+        path: { cwd: "/tmp", root: "/tmp" },
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ref.modelID,
+        providerID: ref.providerID,
+        time: { created: Date.now() },
+      } satisfies MessageV2.Assistant)
+
+      yield* prompt.cancel(chat.id)
+
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const repaired = messages.find((item) => item.info.id === assistant.id)?.info
+      expect(repaired?.role).toBe("assistant")
+      if (repaired?.role !== "assistant") return
+      expect(repaired.time.completed).toBeNumber()
+      expect(repaired.finish).toBe("error")
+      expect(repaired.error?.name).toBe("MessageAbortedError")
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("cancel only finalizes the targeted orphaned assistant message", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({})
+      const firstUser = yield* user(chat.id, "first")
+      const firstAssistant = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: firstUser.id,
+        sessionID: chat.id,
+        mode: "build",
+        agent: "build",
+        cost: 0,
+        path: { cwd: "/tmp", root: "/tmp" },
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ref.modelID,
+        providerID: ref.providerID,
+        time: { created: Date.now() - 1_000 },
+      } satisfies MessageV2.Assistant)
+      const secondUser = yield* user(chat.id, "second")
+      const secondAssistant = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: secondUser.id,
+        sessionID: chat.id,
+        mode: "build",
+        agent: "build",
+        cost: 0,
+        path: { cwd: "/tmp", root: "/tmp" },
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ref.modelID,
+        providerID: ref.providerID,
+        time: { created: Date.now() },
+      } satisfies MessageV2.Assistant)
+
+      yield* prompt.cancel(chat.id)
+
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const older = messages.find((item) => item.info.id === firstAssistant.id)?.info
+      const targeted = messages.find((item) => item.info.id === secondAssistant.id)?.info
+      expect(older?.role).toBe("assistant")
+      expect(targeted?.role).toBe("assistant")
+      if (older?.role !== "assistant" || targeted?.role !== "assistant") return
+      expect(older.time.completed).toBeUndefined()
+      expect(older.finish).toBeUndefined()
+      expect(targeted.time.completed).toBeNumber()
+      expect(targeted.finish).toBe("error")
+      expect(targeted.error?.name).toBe("MessageAbortedError")
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
 const addSubtask = (sessionID: SessionID, messageID: MessageID, model = ref) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
@@ -540,6 +631,64 @@ it.live("loop calls LLM and returns assistant message", () =>
       expect(yield* llm.hits).toHaveLength(1)
     }),
     { git: true, config: providerCfg },
+  ),
+)
+
+it.live("preflights oversized prompt and compacts before calling provider", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const marker = "END_MARKER_SHOULD_NOT_REACH_PROVIDER"
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: `${"x".repeat(240_000)}${marker}` }],
+      })
+      yield* llm.text("## Goal\n- rescued summary")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      const inputs = yield* llm.inputs
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+
+      expect(result.info.role).toBe("assistant")
+      expect(inputs.length).toBeGreaterThanOrEqual(1)
+      expect(JSON.stringify(inputs[0])).not.toContain(marker)
+      expect(messages.some((msg) => msg.parts.some((part) => part.type === "compaction" && part.auto))).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url) => {
+        const next = providerCfg(url)
+        return {
+          ...next,
+          compaction: { auto: false },
+          agent: {
+            build: { model: "test/test-model" },
+            compaction: { model: "test/test-model" },
+          },
+          provider: {
+            ...next.provider,
+            test: {
+              ...next.provider.test,
+              models: {
+                ...next.provider.test.models,
+                "test-model": {
+                  ...next.provider.test.models["test-model"],
+                  limit: { context: 60_000, output: 5_000 },
+                },
+              },
+            },
+          },
+        }
+      },
+    },
   ),
 )
 
@@ -2071,7 +2220,7 @@ unix(
           expect(tool.state.metadata.truncated).toBe(true)
           expect(typeof tool.state.metadata.outputPath).toBe("string")
           expect(tool.state.output).toMatch(/\.\.\.output truncated\.\.\./)
-          expect(tool.state.output).toMatch(/Full output saved to:\s+\S+/)
+          expect(tool.state.output).toMatch(/Output excerpt saved to:\s+\S+/)
           expect(tool.state.output).not.toContain("Tool execution aborted")
         }),
       { git: true, config: providerCfg },

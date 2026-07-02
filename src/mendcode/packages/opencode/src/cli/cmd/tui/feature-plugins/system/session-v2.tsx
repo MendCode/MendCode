@@ -30,17 +30,29 @@ import type {
 } from "@mendcode/sdk/v2"
 import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
 import { useMendTuiProfile } from "@tui/context/mend"
-import { normalizeToolEvent, shouldRenderCompactTool } from "@/mend/tui/timeline/normalize"
+import { normalizeToolEvent, shouldRenderCompactTool, toolPresentationIcon, toolPresentationIconForProfile } from "@/mend/tui/timeline/normalize"
 import { TimelineDiff } from "@/cli/cmd/tui/routes/session/renderers/diff"
+import { diffStatsFromPatch, formatDiffStats, patchFileTitle } from "@/cli/cmd/tui/routes/session/renderers/diff-label"
 import { formatDuration } from "@/util/format"
-import { rawReasoningDisplay, reasoningSummary, shouldDisplayReasoning, unavailableReasoningLabel } from "@/mend/tui/presentation"
+import {
+  compactPreviewLine,
+  compactionArcadeFrames,
+  compactionStageStates,
+  rawReasoningDisplay,
+  reasoningSummary,
+  shouldDisplayReasoning,
+  unavailableReasoningLabel,
+} from "@/mend/tui/presentation"
 import { sessionContentWidth } from "@/cli/cmd/tui/util/session-layout"
 import { isScrollboxAtBottom } from "@/cli/cmd/tui/util/scroll"
 import {
   hasMermaidFence,
   renderPlanMarkdown,
   renderPlanMarkdownStatic,
+  renderPlanMarkdownStreaming,
   renderStreamingMarkdownTail,
+  type StreamingPlanMarkdownState,
+  visibleStreamingMarkdownPreview,
 } from "@/cli/cmd/tui/util/plan-markdown"
 import { StyledPlanMarkdown } from "@/cli/cmd/tui/component/styled-plan-markdown"
 import { visibleUserMessageText } from "@/cli/cmd/tui/routes/session/user-message-display"
@@ -310,42 +322,152 @@ function ShellMessage(props: { message: SessionMessageShell }) {
   )
 }
 
+function compactionMetadataValue(metadata: unknown, key: string) {
+  if (typeof metadata !== "object" || metadata === null) return
+  const value = (metadata as Record<string, unknown>)[key]
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined
+}
+
+function compactionMetadataFlag(metadata: unknown, key: string) {
+  if (typeof metadata !== "object" || metadata === null) return undefined
+  const value = (metadata as Record<string, unknown>)[key]
+  return typeof value === "boolean" ? value : undefined
+}
+
 function CompactionMessage(props: { message: SessionMessageCompaction }) {
   const { theme, syntax } = useTheme()
+  const mend = useMendTuiProfile()
   const dimensions = useTerminalDimensions()
+  const config = createMemo(() => mend.profile.presentation.compaction)
   const messageWidth = createMemo(() => sessionContentWidth(dimensions().width, false))
   const contentWidth = createMemo(() => Math.max(1, messageWidth() - 3))
   const renderWidth = createMemo(() => Math.min(contentWidth(), 100))
+  const resume = createMemo(() => compactionMetadataFlag(props.message.metadata, "resume"))
+  const overflow = createMemo(() => compactionMetadataFlag(props.message.metadata, "overflow"))
+  const tailStartID = createMemo(() => compactionMetadataValue(props.message.metadata, "tail_start_id"))
+  const chips = createMemo(() =>
+    [
+      props.message.reason,
+      overflow() ? "overflow" : undefined,
+      resume() ? "resume" : undefined,
+      props.message.include ? "transcript kept" : undefined,
+      tailStartID() ? "preserved tail" : undefined,
+    ].filter((value): value is string => Boolean(value)),
+  )
+  const stages = createMemo(() =>
+    compactionStageStates({
+      hasSummary: Boolean(props.message.summary?.trim()),
+      resume: resume(),
+      include: props.message.include,
+      tailStartID: tailStartID(),
+    }),
+  )
+  const transcriptPreview = createMemo(() => compactPreviewLine(props.message.include, 112))
+  const arcadeFrames = createMemo(() => (config().style === "arcade" ? compactionArcadeFrames(config().arcade) : []))
   const summaryContent = createMemo(() => {
     const summary = props.message.summary?.trim()
     if (!summary) return ""
     return renderPlanMarkdownStatic(summary, renderWidth(), { tableMode: "grid", markdownMode: "tables-only" })
   })
+  if (config().style === "quiet") {
+    return (
+      <box
+        marginTop={1}
+        border={["top"]}
+        title={props.message.reason === "auto" ? " Auto Compaction " : " Compaction "}
+        titleAlignment="center"
+        borderColor={theme.borderActive}
+        flexShrink={0}
+      />
+    )
+  }
   return (
     <box
       marginTop={1}
-      border={["top"]}
-      title={props.message.reason === "auto" ? " Auto Compaction " : " Compaction "}
-      titleAlignment="center"
+      border={config().style === "minimal" ? ["left"] : ["left", "top"]}
+      customBorderChars={SplitBorder.customBorderChars}
       borderColor={theme.borderActive}
+      backgroundColor={theme.backgroundPanel}
+      paddingLeft={2}
+      paddingRight={2}
+      paddingTop={1}
+      paddingBottom={1}
       flexShrink={0}
     >
-      <Show when={props.message.summary}>
-        {() => (
-          <box paddingLeft={3} paddingTop={1}>
-            <StyledPlanMarkdown
-              syntaxStyle={syntax()}
-              width={contentWidth()}
-              content={summaryContent()}
-              tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
-              conceal={true}
-              fg={theme.text}
-              bg={theme.background}
-              stableTextMode={false}
-              colorizeHex={true}
-            />
-          </box>
-        )}
+      <box flexDirection="row" justifyContent="space-between" width="100%" gap={2}>
+        <text fg={theme.text} wrapMode="none">
+          <span style={{ fg: theme.borderActive, bold: true }}>◈</span> Compaction cockpit
+        </text>
+        <text fg={theme.textMuted} wrapMode="none">
+          {props.message.reason}
+        </text>
+      </box>
+      <Show when={chips().length > 0}>
+        <box flexDirection="row" gap={1} flexWrap="wrap" paddingTop={1}>
+          <For each={chips()}>
+            {(chip) => (
+              <text fg={theme.text}>
+                <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}> {chip} </span>
+              </text>
+            )}
+          </For>
+        </box>
+      </Show>
+      <Show when={config().showProgress}>
+        <box flexDirection="row" gap={1} flexWrap="wrap" paddingTop={1}>
+          <For each={stages()}>
+            {(stage, index) => {
+              const color = createMemo(() => {
+                if (stage.state === "done") return theme.borderActive
+                if (stage.state === "active") return theme.primary
+                return theme.textMuted
+              })
+              const glyph = createMemo(() => {
+                if (stage.state === "done") return "●"
+                if (stage.state === "active") return "◐"
+                return "○"
+              })
+              return (
+                <text fg={theme.textMuted} wrapMode="none">
+                  <span style={{ fg: color() }}>{glyph()} {stage.label}</span>
+                  <Show when={index() < stages().length - 1}>
+                    <span style={{ fg: theme.textMuted }}> ─ </span>
+                  </Show>
+                </text>
+              )
+            }}
+          </For>
+        </box>
+      </Show>
+      <Show when={transcriptPreview()}>
+        <box paddingTop={1}>
+          <text fg={theme.textMuted}>Transcript anchor: {transcriptPreview()}</text>
+        </box>
+      </Show>
+      <Show when={Boolean(props.message.summary)}>
+        <box paddingTop={1}>
+          <StyledPlanMarkdown
+            syntaxStyle={syntax()}
+            width={contentWidth()}
+            content={summaryContent()}
+            tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
+            conceal={true}
+            fg={theme.text}
+            bg={theme.background}
+            stableTextMode={false}
+            colorizeHex={true}
+          />
+        </box>
+      </Show>
+      <Show when={arcadeFrames().length > 0}>
+        <box paddingTop={1} flexDirection="column">
+          <For each={arcadeFrames()}>{(line) => <text fg={theme.primary}>{line}</text>}</For>
+        </box>
+      </Show>
+      <Show when={config().allowScratchpad}>
+        <box paddingTop={1}>
+          <text fg={theme.textMuted}>Scratchpad planned · not wired into transcript writes</text>
+        </box>
       </Show>
     </box>
   )
@@ -479,20 +601,31 @@ function AssistantText(props: { messageID: string; part: SessionMessageAssistant
   const textPaddingLeft = 3
   const renderer = createMemo(() => mend.profile.presentation.message.renderer)
   const streaming = createMemo(() => !props.completed)
-  const source = createMemo(() => (streaming() ? props.part.text.trimStart() : props.part.text.trim()))
+  const source = createMemo(() => {
+    const text = streaming() ? props.part.text.trimStart() : props.part.text.trim()
+    if (streaming() && (renderer() === "markdown" || renderer() === "rich")) return visibleStreamingMarkdownPreview(text)
+    return text
+  })
   const messageWidth = createMemo(() => sessionContentWidth(dimensions().width, false))
   const markdownWidth = createMemo(() => Math.max(1, messageWidth() - textPaddingLeft))
   const richRenderWidth = createMemo(() => Math.min(markdownWidth(), 100))
   const hasMermaid = createMemo(() => hasMermaidFence(source()))
+  let streamingMarkdownState: StreamingPlanMarkdownState | undefined
   const streamingMarkdownContent = createMemo(() => {
-    if (!streaming()) return
-    if (renderer() !== "rich") {
+    if (!streaming()) {
+      streamingMarkdownState = undefined
       return
     }
-    return { content: "", tail: source() }
+    if (renderer() !== "markdown" && renderer() !== "rich") {
+      streamingMarkdownState = undefined
+      return
+    }
+    const result = renderPlanMarkdownStreaming(source(), richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" }, streamingMarkdownState)
+    streamingMarkdownState = result.state
+    return result
   })
   const richStaticContent = createMemo(() => {
-    if (renderer() !== "rich") return
+    if (renderer() !== "markdown" && renderer() !== "rich") return
     if (streaming()) return
     return renderPlanMarkdownStatic(source(), richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" })
   })
@@ -505,12 +638,15 @@ function AssistantText(props: { messageID: string; part: SessionMessageAssistant
     renderPlanMarkdown(input.text, input.width, { tableMode: "grid", markdownMode: "tables-only" }),
   )
   const markdownContent = createMemo(() =>
-    renderer() === "rich" ? (streamingMarkdownContent()?.content ?? richStaticContent() ?? richContent() ?? source()) : source(),
+    streamingMarkdownContent()?.content ??
+    (renderer() === "markdown" || renderer() === "rich" ? (richStaticContent() ?? richContent() ?? source()) : source()),
   )
   const markdownTail = createMemo(() => {
+    if (streaming()) return ""
     const tail = streamingMarkdownContent()?.tail ?? ""
     return renderStreamingMarkdownTail(tail, richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" }, {
       finalized: !streaming(),
+      output: streaming() ? "text" : "markdown",
     })
   })
   return (
@@ -537,10 +673,11 @@ function AssistantText(props: { messageID: string; part: SessionMessageAssistant
               conceal={true}
               fg={theme.markdownText}
               bg={theme.background}
-              stableTextMode={renderer() !== "rich"}
+              stableTextMode={renderer() !== "markdown" && renderer() !== "rich"}
               colorizeHex={renderer() === "rich"}
               streamingTail={markdownTail()}
               streamingTailColorizeHex={renderer() === "rich"}
+              streamingTailMode={streaming() ? "text" : "markdown"}
             />
           </Match>
         </Switch>
@@ -759,12 +896,14 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
   const pending = createMemo(() => props.state === "pending" || props.state === "running")
   const errored = createMemo(() => props.state === "error")
   const event = createMemo(() => normalizeToolEvent({ tool: props.tool, state: props.state, input: props.input }))
-  const icon = createMemo(() => {
-    if (mend.profile.presentation.profile === "minimal") return props.state === "completed" ? "←" : "→"
-    if (errored()) return "×"
-    return "◈"
-  })
+  const icon = createMemo(() => toolPresentationIconForProfile(mend.profile.presentation.profile, props.tool, errored() ? "failure" : event().class))
   const title = createMemo(() => event().title)
+  const plainTool = createMemo(() => event().class === "simple-read" || event().class === "artifact")
+  const rowColor = createMemo(() => {
+    if (errored()) return theme.error
+    if (pending() || plainTool()) return theme.text
+    return theme.textMuted
+  })
   const detail = createMemo(() => {
     if (mend.profile.presentation.profile === "minimal") return title()
     return title()
@@ -774,8 +913,9 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
       when={mend.profile.presentation.profile === "mendcode"}
       fallback={
         <box paddingLeft={3} marginTop={0} flexShrink={0}>
-          <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>
-            {icon()} {detail()}
+          <text fg={rowColor()}>
+            <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+            {detail()}
           </text>
         </box>
       }
@@ -784,14 +924,18 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
         when={event().lines.length > 0}
         fallback={
           <box paddingLeft={3} marginTop={0} flexShrink={0}>
-            <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>
-              {icon()} {title()}
+            <text fg={rowColor()}>
+              <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+              {title()}
             </text>
           </box>
         }
       >
         <box paddingLeft={3} marginTop={0} flexShrink={0} flexDirection="column">
-          <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>╭─ {title()}</text>
+          <text fg={rowColor()}>
+            ╭─ <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+            {title()}
+          </text>
           <For each={event().lines}>{(line) => <text fg={theme.textMuted}>│ {line}</text>}</For>
           <Show when={event().result}>{(result) => <text fg={theme.textMuted}>╰─ {result()}</text>}</Show>
         </box>
@@ -822,7 +966,7 @@ function GenericTool(props: ToolProps) {
     <Show
       when={output()}
       fallback={
-        <InlineTool icon="⚙" pending="Writing command..." complete={toolComplete(props.part)} part={props.part}>
+        <InlineTool icon={toolPresentationIcon(props.part.name)} pending="Writing command..." complete={toolComplete(props.part)} part={props.part}>
           {props.part.name} {input(props.input)}
         </InlineTool>
       }
@@ -853,6 +997,7 @@ function InlineTool(props: {
   part: SessionMessageAssistantTool
 }) {
   const { theme } = useTheme()
+  const mend = useMendTuiProfile()
   const renderer = useRenderer()
   const [margin, setMargin] = createSignal(0)
   const [hover, setHover] = createSignal(false)
@@ -876,6 +1021,7 @@ function InlineTool(props: {
   })
   const attributes = createMemo(() => (denied() ? TextAttributes.STRIKETHROUGH : undefined))
   const shouldRender = createMemo(() => Boolean(complete() || error()))
+  const showIcon = createMemo(() => mend.profile.presentation.profile !== "minimal")
   return (
     <Show when={shouldRender()}>
       <box
@@ -908,23 +1054,25 @@ function InlineTool(props: {
           if (previous.id.startsWith("text")) setMargin(1)
         }}
       >
-        <box flexShrink={0}>
-          <Switch>
-            <Match when={props.spinner}>
-              <Spinner color={theme.text} />
-            </Match>
-            <Match when={complete()}>
-              <text fg={fg()} attributes={attributes()}>
-                {props.icon}
-              </text>
-            </Match>
-            <Match when={true}>
-              <text fg={fg()} attributes={attributes()}>
-                ~
-              </text>
-            </Match>
-          </Switch>
-        </box>
+        <Show when={showIcon()}>
+          <box flexShrink={0}>
+            <Switch>
+              <Match when={props.spinner}>
+                <Spinner color={theme.text} />
+              </Match>
+              <Match when={complete()}>
+                <text fg={fg()} attributes={attributes()}>
+                  {props.icon}
+                </text>
+              </Match>
+              <Match when={true}>
+                <text fg={fg()} attributes={attributes()}>
+                  ~
+                </text>
+              </Match>
+            </Switch>
+          </box>
+        </Show>
         <box flexGrow={1}>
           <box>
             <Switch>
@@ -1077,7 +1225,7 @@ function Bash(props: ToolProps) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="$" pending="Writing command..." complete={command()} part={props.part}>
+        <InlineTool icon={toolPresentationIcon("bash")} pending="Writing command..." complete={command()} part={props.part}>
           {command()}
         </InlineTool>
       </Match>
@@ -1087,7 +1235,7 @@ function Bash(props: ToolProps) {
 
 function Glob(props: ToolProps) {
   return (
-    <InlineTool icon="✱" pending="Finding files..." complete={toolComplete(props.part)} part={props.part}>
+    <InlineTool icon={toolPresentationIcon("glob")} pending="Finding files..." complete={toolComplete(props.part)} part={props.part}>
       Glob "{stringValue(props.input.pattern) ?? pendingInput(props.part)}"{" "}
       <Show when={stringValue(props.input.path)}>in {normalizePath(stringValue(props.input.path))} </Show>
       <Show when={numberValue(props.metadata.count)}>
@@ -1109,7 +1257,7 @@ function Read(props: ToolProps) {
   return (
     <>
       <InlineTool
-        icon="→"
+        icon={toolPresentationIcon("read")}
         pending="Reading file..."
         complete={stringValue(props.input.filePath) ?? pendingInput(props.part)}
         spinner={props.part.state.status === "running"}
@@ -1133,7 +1281,7 @@ function Read(props: ToolProps) {
 
 function Grep(props: ToolProps) {
   return (
-    <InlineTool icon="✱" pending="Searching content..." complete={toolComplete(props.part)} part={props.part}>
+    <InlineTool icon={toolPresentationIcon("grep")} pending="Searching content..." complete={toolComplete(props.part)} part={props.part}>
       Grep "{stringValue(props.input.pattern) ?? pendingInput(props.part)}"{" "}
       <Show when={stringValue(props.input.path)}>in {normalizePath(stringValue(props.input.path))} </Show>
       <Show when={numberValue(props.metadata.matches)}>
@@ -1149,7 +1297,7 @@ function Grep(props: ToolProps) {
 
 function WebFetch(props: ToolProps) {
   return (
-    <InlineTool icon="%" pending="Fetching from the web..." complete={toolComplete(props.part)} part={props.part}>
+    <InlineTool icon={toolPresentationIcon("webfetch")} pending="Fetching from the web..." complete={toolComplete(props.part)} part={props.part}>
       WebFetch {stringValue(props.input.url) ?? pendingInput(props.part)}
     </InlineTool>
   )
@@ -1157,7 +1305,7 @@ function WebFetch(props: ToolProps) {
 
 function CodeSearch(props: ToolProps) {
   return (
-    <InlineTool icon="◇" pending="Searching code..." complete={toolComplete(props.part)} part={props.part}>
+    <InlineTool icon={toolPresentationIcon("codesearch")} pending="Searching code..." complete={toolComplete(props.part)} part={props.part}>
       Exa Code Search "{stringValue(props.input.query) ?? pendingInput(props.part)}"{" "}
       <Show when={numberValue(props.metadata.results)}>{(results) => <>({results()} results)</>}</Show>
     </InlineTool>
@@ -1166,7 +1314,7 @@ function CodeSearch(props: ToolProps) {
 
 function WebSearch(props: ToolProps) {
   return (
-    <InlineTool icon="◈" pending="Searching web..." complete={toolComplete(props.part)} part={props.part}>
+    <InlineTool icon={toolPresentationIcon("websearch")} pending="Searching web..." complete={toolComplete(props.part)} part={props.part}>
       Exa Web Search "{stringValue(props.input.query) ?? pendingInput(props.part)}"{" "}
       <Show when={numberValue(props.metadata.numResults)}>{(results) => <>({results()} results)</>}</Show>
     </InlineTool>
@@ -1181,9 +1329,11 @@ function Write(props: ToolProps) {
     <Switch>
       <Match when={content() && props.part.state.status === "completed"}>
         <BlockTool
-          title={"# Wrote " + normalizePath(filePath())}
+          title={"Added " + normalizePath(filePath())}
           titleColor={theme.diffHighlightAdded}
           part={props.part}
+          contentGap={0}
+          paddingBottom={0}
         >
           <box backgroundColor={theme.diffAddedBg}>
             <line_number fg={theme.diffHighlightAdded} minWidth={3} paddingRight={1}>
@@ -1200,7 +1350,7 @@ function Write(props: ToolProps) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="←" pending="Preparing write..." complete={filePath()} part={props.part}>
+        <InlineTool icon={toolPresentationIcon("write")} pending="Preparing write..." complete={filePath()} part={props.part}>
           Write {normalizePath(filePath())}
         </InlineTool>
       </Match>
@@ -1212,12 +1362,13 @@ function Edit(props: ToolProps) {
   const { syntax } = useTheme()
   const filePath = createMemo(() => stringValue(props.input.filePath) ?? "")
   const diff = createMemo(() => stringValue(props.metadata.diff))
+  const title = createMemo(() => `Edited ${normalizePath(filePath())} ${formatDiffStats(diffStatsFromPatch(diff() ?? ""))}`.trim())
   return (
     <Switch>
       <Match when={diff()}>
         {(diff) => (
-          <BlockTool title={"← Edit " + normalizePath(filePath())} part={props.part}>
-            <box paddingLeft={1}>
+          <BlockTool title={title()} part={props.part} contentGap={0} paddingBottom={0}>
+            <box>
               <TimelineDiff diff={diff()} filetype={filetype(filePath())} syntaxStyle={syntax()} />
             </box>
             <Diagnostics diagnostics={props.metadata.diagnostics} filePath={filePath()} />
@@ -1225,7 +1376,7 @@ function Edit(props: ToolProps) {
         )}
       </Match>
       <Match when={true}>
-        <InlineTool icon="←" pending="Preparing edit..." complete={filePath()} part={props.part}>
+        <InlineTool icon={toolPresentationIcon("edit")} pending="Preparing edit..." complete={filePath()} part={props.part}>
           Edit {normalizePath(filePath())} {input({ replaceAll: props.input.replaceAll })}
         </InlineTool>
       </Match>
@@ -1238,12 +1389,7 @@ function ApplyPatch(props: ToolProps) {
   const files = createMemo(() => arrayValue(props.metadata.files).flatMap((item) => (isRecord(item) ? [item] : [])))
   const fullDiff = createMemo(() => stringValue(props.metadata.diff))
   const fileTitle = (file: Record<string, unknown>) => {
-    const type = stringValue(file.type)
-    const relativePath = stringValue(file.relativePath) ?? stringValue(file.filePath) ?? "patch"
-    if (type === "delete") return "# Deleted " + relativePath
-    if (type === "add") return "# Created " + relativePath
-    if (type === "move") return "# Moved " + normalizePath(stringValue(file.filePath)) + " → " + relativePath
-    return "← Patched " + relativePath
+    return patchFileTitle(file, patchForFile(file) ?? "")
   }
   const fileTitleColor = (file: Record<string, unknown>) => {
     const type = stringValue(file.type)
@@ -1257,8 +1403,14 @@ function ApplyPatch(props: ToolProps) {
       <Match when={files().length > 0}>
         <For each={files()}>
           {(file) => (
-            <BlockTool title={fileTitle(file)} titleColor={fileTitleColor(file)} part={props.part}>
-              <box paddingLeft={1}>
+            <BlockTool
+              title={fileTitle(file)}
+              titleColor={fileTitleColor(file)}
+              part={props.part}
+              contentGap={0}
+              paddingBottom={0}
+            >
+              <box>
                 <TimelineDiff
                   diff={patchForFile(file) ?? ""}
                   view="unified"
@@ -1271,7 +1423,7 @@ function ApplyPatch(props: ToolProps) {
         </For>
       </Match>
       <Match when={true}>
-        <InlineTool icon="%" pending="Preparing patch..." complete={false} part={props.part}>
+        <InlineTool icon={toolPresentationIcon("apply_patch")} pending="Preparing patch..." complete={false} part={props.part}>
           Patch
         </InlineTool>
       </Match>
@@ -1328,7 +1480,7 @@ function TodoWrite(props: ToolProps) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="⚙" pending="Updating todos..." complete={false} part={props.part}>
+        <InlineTool icon={toolPresentationIcon("todowrite")} pending="Updating todos..." complete={false} part={props.part}>
           Updating todos...
         </InlineTool>
       </Match>
@@ -1357,7 +1509,7 @@ function Question(props: ToolProps) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="→" pending="Asking questions..." complete={questions().length} part={props.part}>
+        <InlineTool icon={toolPresentationIcon("question")} pending="Asking questions..." complete={questions().length} part={props.part}>
           Asked {questions().length} question{questions().length === 1 ? "" : "s"}
         </InlineTool>
       </Match>
@@ -1367,7 +1519,7 @@ function Question(props: ToolProps) {
 
 function Skill(props: ToolProps) {
   return (
-    <InlineTool icon="→" pending="Loading skill..." complete={toolComplete(props.part)} part={props.part}>
+    <InlineTool icon={toolPresentationIcon("skill")} pending="Loading skill..." complete={toolComplete(props.part)} part={props.part}>
       Skill "{stringValue(props.input.name) ?? pendingInput(props.part)}"
     </InlineTool>
   )

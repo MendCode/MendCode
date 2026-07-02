@@ -1128,7 +1128,7 @@ describe("tool.shell abort", () => {
     })
   }, 15_000)
 
-  test("does not label non-user aborts as user aborted", async () => {
+  test("does not label non-user aborts as interrupted or user aborted", async () => {
     await WithInstance.provide({
       directory: projectRoot,
       fn: async () => {
@@ -1155,7 +1155,9 @@ describe("tool.shell abort", () => {
           ),
         )
         expect(res.output).toContain("before")
-        expect(res.output).toContain("Command output interrupted before completion")
+        expect(res.output).toContain("Command execution stopped before completion")
+        expect(res.output).toContain("no explicit user cancel was recorded")
+        expect(res.output).not.toContain("Command output interrupted before completion")
         expect(res.output).not.toContain("User aborted the command")
       },
     })
@@ -1328,7 +1330,7 @@ describe("tool.shell truncation", () => {
         )
         mustTruncate(result)
         expect(result.output).toMatch(/\.\.\.output truncated\.\.\./)
-        expect(result.output).toMatch(/Full output saved to:\s+\S+/)
+        expect(result.output).toMatch(/(?:Full output|Output excerpt) saved to:\s+\S+/)
       },
     })
   })
@@ -1350,7 +1352,7 @@ describe("tool.shell truncation", () => {
         )
         mustTruncate(result)
         expect(result.output).toMatch(/\.\.\.output truncated\.\.\./)
-        expect(result.output).toMatch(/Full output saved to:\s+\S+/)
+        expect(result.output).toMatch(/(?:Full output|Output excerpt) saved to:\s+\S+/)
       },
     })
   })
@@ -1375,16 +1377,18 @@ describe("tool.shell truncation", () => {
     })
   })
 
-  test("full output is saved to file when truncated", async () => {
+  test("retained output excerpt is bounded on disk when truncated", async () => {
     await WithInstance.provide({
       directory: projectRoot,
       fn: async () => {
         const bash = await initShell()
-        const lineCount = Truncate.MAX_LINES + 100
+        const byteCount = Truncate.MAX_SAVED_BYTES + 100_000
+        const code = "process.stdout.write(String.fromCharCode(83,84,65,82,84,45)+String.fromCharCode(97).repeat(Number(Bun.argv[1]))+String.fromCharCode(45,69,78,68))"
+        const command = `${bin} -e ${evalarg(code)} ${byteCount}`
         const result = await Effect.runPromise(
           bash.execute(
             {
-              command: fill("lines", lineCount),
+              command: PS.has(sh()) ? `& ${command}` : command,
               description: "Generate lines for file check",
             },
             ctx,
@@ -1396,10 +1400,11 @@ describe("tool.shell truncation", () => {
         expect(filepath).toBeTruthy()
 
         const saved = await Filesystem.readText(filepath!)
-        const lines = saved.trim().split(/\r?\n/)
-        expect(lines.length).toBe(lineCount)
-        expect(lines[0]).toBe("1")
-        expect(lines[lineCount - 1]).toBe(String(lineCount))
+        expect(saved).toContain("START-")
+        expect(saved).toContain("-END")
+        expect(saved).toContain("Saved output excerpt: omitted")
+        expect(Buffer.byteLength(saved, "utf8")).toBeLessThan(byteCount)
+        expect(Buffer.byteLength(saved, "utf8")).toBeLessThanOrEqual(Truncate.MAX_SAVED_BYTES)
       },
     })
   })

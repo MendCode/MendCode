@@ -214,7 +214,7 @@ describe("loop workflow service", () => {
     })
   })
 
-  test("unbounded monitor loops omit the turn cap instead of storing zero", async () => {
+  test("unbounded monitor loops omit the turn cap even when maxTurns is supplied", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
       directory: tmp.path,
@@ -224,7 +224,7 @@ describe("loop workflow service", () => {
           objective: "Keep monitoring until stopped.",
           trigger: { mode: "interval", intervalMs: 3_600_000 },
           budgetMode: "unbounded-monitor",
-          policy: { maxTurns: 0 },
+          policy: { maxTurns: 1 },
         })
         const active = await svc.activate(draft.id)
 
@@ -656,7 +656,33 @@ describe("loop workflow service", () => {
         const executed = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true, reportOnly: true })))
         expect(executed.value.state).toBe("completed")
         expect(executed.prompts).toBe(1)
+        expect(executed.promptCalls[0]?.tools).toEqual({ loop: false })
+        expect(executed.promptCalls[0]?.parts?.[0]?.text).toContain("Do not call the loop tool from inside a loop iteration")
         expect((await svc.snapshot(draft.id)).workflow.metrics.turns).toBe(1)
+      },
+    })
+  })
+
+  test("loop runner disables self-loop tool calls and mutating tools in report-only workflows", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Report-only monitor",
+          objective: "Inspect status and report findings without editing files.",
+          gates: ["report-only"],
+          policy: {
+            requireApprovalFor: ["edit", "write", "apply_patch", "shell", "subagent", "push", "merge", "release", "version-bump", "external-send", "destructive-shell", "broad-refactor"],
+          },
+        })
+        await svc.activate(draft.id)
+
+        const executed = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true, reportOnly: true })))
+
+        expect(executed.value.state).toBe("completed")
+        expect(executed.promptCalls[0]?.tools).toEqual({ loop: false, edit: false, write: false, apply_patch: false, bash: false, task: false })
+        expect(executed.promptCalls[0]?.parts?.[0]?.text).toContain("REPORT-ONLY MODE")
       },
     })
   })
@@ -679,7 +705,7 @@ describe("loop workflow service", () => {
         const executed = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true, reportOnly: true })))
         expect(executed.value.state).toBe("completed")
         expect(executed.prompts).toBe(1)
-        expect(executed.promptCalls[0]?.tools).toBeUndefined()
+        expect(executed.promptCalls[0]?.tools).toEqual({ loop: false })
         expect(executed.promptCalls[0]?.parts?.[0]?.text).not.toContain("REPORT-ONLY MODE")
       },
     })

@@ -1,9 +1,25 @@
 import { describe, expect, test } from "bun:test"
+import type { ParsedKey } from "@opentui/core"
 import { Keybind } from "../../../src/util/keybind"
 import {
   isTextareaNewlineKey,
   textareaKeybindingsFromConfig,
 } from "../../../src/cli/cmd/tui/component/textarea-keybindings"
+
+function key(input: Pick<ParsedKey, "name"> & Partial<ParsedKey>): ParsedKey {
+  return {
+    ctrl: false,
+    meta: false,
+    shift: false,
+    super: false,
+    option: false,
+    leader: false,
+    sequence: input.name,
+    number: false,
+    raw: input.name,
+    ...input,
+  } as ParsedKey
+}
 
 describe("textarea keybindings", () => {
   test("puts newline bindings before submit so shift+enter inserts a line break", () => {
@@ -30,10 +46,10 @@ describe("textarea keybindings", () => {
       input_newline: Keybind.parse("shift+return,ctrl+return,alt+return,ctrl+j"),
     }
 
-    expect(isTextareaNewlineKey({ name: "return", shift: true, ctrl: false, meta: false }, keybinds)).toBe(true)
-    expect(isTextareaNewlineKey({ name: "return", ctrl: true, shift: false, meta: false }, keybinds)).toBe(true)
-    expect(isTextareaNewlineKey({ name: "return", meta: true, ctrl: false, shift: false }, keybinds)).toBe(true)
-    expect(isTextareaNewlineKey({ name: "j", ctrl: true, shift: false, meta: false }, keybinds)).toBe(true)
-    expect(isTextareaNewlineKey({ name: "return", ctrl: false, shift: false, meta: false }, keybinds)).toBe(false)
+    expect(isTextareaNewlineKey(key({ name: "return", shift: true }), keybinds)).toBe(true)
+    expect(isTextareaNewlineKey(key({ name: "return", ctrl: true }), keybinds)).toBe(true)
+    expect(isTextareaNewlineKey(key({ name: "return", meta: true }), keybinds)).toBe(true)
+    expect(isTextareaNewlineKey(key({ name: "j", ctrl: true }), keybinds)).toBe(true)
+    expect(isTextareaNewlineKey(key({ name: "return" }), keybinds)).toBe(false)
   })
 })

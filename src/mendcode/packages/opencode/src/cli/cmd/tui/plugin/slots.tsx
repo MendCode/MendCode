@@ -1,5 +1,6 @@
 import type { TuiPluginApi, TuiSlotContext, TuiSlotMap, TuiSlotProps } from "@mendcode/plugin/tui"
 import { createSlot, createSolidSlotRegistry, type JSX, type SolidPlugin } from "@opentui/solid"
+import { ErrorBoundary } from "solid-js"
 import { isRecord } from "@/util/record"
 
 type RuntimeSlotMap = TuiSlotMap<Record<string, object>>
@@ -15,13 +16,54 @@ export type HostSlots = {
   }
 }
 
-function empty<Name extends string>(_props: TuiSlotProps<Name>) {
-  return null
+function empty<Name extends string>(props: TuiSlotProps<Name>) {
+  return props.children ?? null
 }
 
 let view: Slot = empty
 
-export const Slot: Slot = (props) => view(props)
+const protectedFallbackSlots = new Set(["home_prompt", "session_prompt"])
+
+function slotFallback<Name extends string>(props: TuiSlotProps<Name>, error?: unknown) {
+  if (error) {
+    console.error("[tui.slot] render error", {
+      slot: props.name,
+      message: error instanceof Error ? error.message : String(error),
+    })
+  }
+  return props.children ?? null
+}
+
+function normalizeSlotValue<Name extends string>(value: unknown, props: TuiSlotProps<Name>) {
+  if (value === null || value === undefined || typeof value === "boolean") return props.children ?? null
+  if (typeof value === "string" || typeof value === "number") {
+    return props.children ?? <text wrapMode="word">{String(value)}</text>
+  }
+  return value as JSX.Element
+}
+
+export const Slot: Slot = (props) => (
+  <ErrorBoundary fallback={(error) => slotFallback(props, error)}>
+    {normalizeSlotValue(view(props), props)}
+  </ErrorBoundary>
+)
+
+function sanitizeSlotPlugin(plugin: HostSlotPlugin<Record<string, object>>): HostSlotPlugin<Record<string, object>> {
+  const slots: Record<string, (ctx: TuiSlotContext, props: object) => JSX.Element | null> = {}
+  for (const [name, render] of Object.entries(plugin.slots)) {
+    if (!render) continue
+    if (protectedFallbackSlots.has(name)) continue
+    slots[name] = (ctx, props) => {
+      const slotProps = { name, ...(isRecord(props) ? props : {}) } as TuiSlotProps<string>
+      try {
+        return normalizeSlotValue(render(ctx as never, slotProps as never), slotProps)
+      } catch (error) {
+        return slotFallback(slotProps, error)
+      }
+    }
+  }
+  return { ...plugin, slots }
+}
 
 function isHostSlotPlugin(value: unknown): value is HostSlotPlugin<Record<string, object>> {
   if (!isRecord(value)) return false
@@ -54,7 +96,7 @@ export function setupSlots(api: HostPluginApi): HostSlots {
   return {
     register(plugin: HostSlotPlugin) {
       if (!isHostSlotPlugin(plugin)) return () => {}
-      return reg.register(plugin)
+      return reg.register(sanitizeSlotPlugin(plugin))
     },
   }
 }

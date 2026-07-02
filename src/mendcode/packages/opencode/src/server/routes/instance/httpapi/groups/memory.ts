@@ -34,6 +34,7 @@ const MemorySideChatAction = Schema.Struct({
     "propose-policy",
     "explain-state",
     "dream-dry-run",
+    "dream-service-start",
     "create-memory",
     "edit-memory",
     "delete-memory",

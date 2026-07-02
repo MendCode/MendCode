@@ -32,3 +32,7 @@ export function isScrollboxAtBottom(scroll: ScrollboxPosition, tolerance = 1) {
   const maxScrollTop = Math.max(0, scroll.scrollHeight - scroll.viewport.height)
   return scroll.scrollTop >= maxScrollTop - tolerance
 }
+
+export function isScrollboxAtTop(scroll: Pick<ScrollboxPosition, "scrollTop">, tolerance = 0) {
+  return scroll.scrollTop <= tolerance
+}

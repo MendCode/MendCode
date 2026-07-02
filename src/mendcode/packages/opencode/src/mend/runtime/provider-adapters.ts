@@ -6,8 +6,7 @@ import { mendPaths } from "../config/paths"
 import { providerAuthPreset, providerEnvRequirements } from "./readiness"
 import { budgetEnforcementStatus } from "./budget"
 import { providerAuthStateFile, readProviderAuthState } from "./auth-state"
-
-const MEND_VERSION = "0.2.0-phase2"
+import { mendRuntimeVersion } from "./version"
 
 const genericAiSdkPackages: Record<string, { factory: string }> = {
   "@ai-sdk/anthropic": { factory: "createAnthropic" },
@@ -18,6 +17,12 @@ const genericAiSdkPackages: Record<string, { factory: string }> = {
   "@ai-sdk/cohere": { factory: "createCohere" },
   "@ai-sdk/perplexity": { factory: "createPerplexity" },
   "@openrouter/ai-sdk-provider": { factory: "createOpenRouter" },
+}
+
+type PricingPer1MTokens = {
+  inputUsd: number
+  cachedInputUsd?: number
+  outputUsd: number
 }
 
 async function readJsonIfExists(file: string, fallback: any) {
@@ -117,7 +122,7 @@ function normalizeUsage(rawUsage: any) {
 
 function estimateRunCost(input: { providerID?: string | null; modelID?: string | null; usage: any; authMode?: string | null }) {
   const preset = providerAuthPreset(input.providerID, input.modelID, input.authMode)
-  const pricing = preset?.pricingPer1MTokens || null
+  const pricing: PricingPer1MTokens | null = preset?.pricingPer1MTokens || null
   const resolvedAuthMode = preset?.authMode || input.authMode || "unknown"
   const normalized = normalizeUsage(input.usage)
   if (!normalized.available) {
@@ -243,7 +248,7 @@ async function runOpenAISubscriptionPrompt(root: string, input: any) {
     "Content-Type": "application/json",
     Authorization: `Bearer ${auth.access}`,
     originator: "mendcode",
-    "User-Agent": `mendcode/${MEND_VERSION} (${process.platform}; ${process.arch})`,
+    "User-Agent": `mendcode/${mendRuntimeVersion()} (${process.platform}; ${process.arch})`,
     session_id: `mend-${Date.now()}`,
   }
   if (auth.accountId) headers["ChatGPT-Account-Id"] = auth.accountId
@@ -257,7 +262,7 @@ async function runOpenAIAPIKeyPrompt(input: any) {
   const startedAt = Date.now()
   const response = await fetch(openaiApiResponsesEndpoint(), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}`, "User-Agent": `mendcode/${MEND_VERSION} (${process.platform}; ${process.arch})` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}`, "User-Agent": `mendcode/${mendRuntimeVersion()} (${process.platform}; ${process.arch})` },
     body: JSON.stringify(responseRequestBody(input)),
   })
   return parseResponsesResult({ ...input, authMode: "api-key", response, text: await response.text(), elapsedMs: Date.now() - startedAt })
@@ -418,7 +423,7 @@ export async function providerSmoke(args: string[], root?: string) {
     const result = await runProviderAdapter(paths.root, {
       providerID,
       authMode,
-      modelID,
+      modelID: modelID!,
       prompt: "respond only: ok",
       instructions: "You are MendCode provider smoke test. Respond with exactly: ok",
     })

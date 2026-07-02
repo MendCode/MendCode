@@ -7,6 +7,8 @@ export type MendMessageRenderer = "plain" | "markdown" | "rich"
 export type MendReasoningVisibility = "visible" | "collapsed" | "hidden"
 export type MendActivityPlacement = "current" | "left-docked" | "footer"
 export type MendActivityStyle = "raw" | "minimal" | "signal"
+export type MendCompactionStyle = "minimal" | "cockpit" | "arcade" | "quiet"
+export type MendCompactionArcade = "off" | "snake" | "stars"
 export type MendActivityPhase =
   | "sending"
   | "thinking"
@@ -20,6 +22,7 @@ export type MendActivityPhase =
   | "uploading"
   | "downloading"
   | "testing"
+  | "subagents"
   | "planning"
   | "memory"
   | "retrying"
@@ -48,6 +51,12 @@ export type MendPresentationConfig = {
     messages: MendActivityMessages
     mascot: MendActivityMascotConfig
   }
+  compaction: {
+    style: MendCompactionStyle
+    showProgress: boolean
+    allowScratchpad: boolean
+    arcade: MendCompactionArcade
+  }
   symbols: {
     assistantDone: string
   }
@@ -66,6 +75,7 @@ const activityMessages: MendActivityMessages = {
   uploading: ["Uploading..."],
   downloading: ["Downloading..."],
   testing: ["Testing..."],
+  subagents: ["Waiting for subagents..."],
   planning: ["Planning..."],
   memory: ["Preparing memory..."],
   retrying: ["Retrying..."],
@@ -86,6 +96,27 @@ const neutralActivityConfig: MendPresentationConfig["activity"] = {
   mascot: defaultActivityMascotConfig,
 }
 
+const cockpitCompactionConfig: MendPresentationConfig["compaction"] = {
+  style: "cockpit",
+  showProgress: true,
+  allowScratchpad: false,
+  arcade: "off",
+}
+
+const minimalCompactionConfig: MendPresentationConfig["compaction"] = {
+  style: "minimal",
+  showProgress: true,
+  allowScratchpad: false,
+  arcade: "off",
+}
+
+const quietCompactionConfig: MendPresentationConfig["compaction"] = {
+  style: "quiet",
+  showProgress: false,
+  allowScratchpad: false,
+  arcade: "off",
+}
+
 export const defaultPresentationConfig: MendPresentationConfig = {
   profile: "mendcode",
   message: {
@@ -95,6 +126,7 @@ export const defaultPresentationConfig: MendPresentationConfig = {
     defaultVisibility: "collapsed",
   },
   activity: neutralActivityConfig,
+  compaction: cockpitCompactionConfig,
   symbols: {
     assistantDone: "◈",
   },
@@ -109,6 +141,7 @@ const rawPresentationConfig: MendPresentationConfig = {
     defaultVisibility: "visible",
   },
   activity: neutralActivityConfig,
+  compaction: quietCompactionConfig,
   symbols: {
     assistantDone: "▣",
   },
@@ -123,6 +156,7 @@ const minimalPresentationConfig: MendPresentationConfig = {
     defaultVisibility: "collapsed",
   },
   activity: neutralActivityConfig,
+  compaction: minimalCompactionConfig,
   symbols: {
     assistantDone: "◈",
   },
@@ -176,6 +210,16 @@ function asStyle(value: unknown, fallback: MendActivityStyle): MendActivityStyle
   return fallback
 }
 
+function asCompactionStyle(value: unknown, fallback: MendCompactionStyle): MendCompactionStyle {
+  if (value === "minimal" || value === "cockpit" || value === "arcade" || value === "quiet") return value
+  return fallback
+}
+
+function asCompactionArcade(value: unknown, fallback: MendCompactionArcade): MendCompactionArcade {
+  if (value === "off" || value === "snake" || value === "stars") return value
+  return fallback
+}
+
 function asMessages(value: unknown, fallback: MendActivityMessages): MendActivityMessages {
   if (!isRecord(value)) return fallback
   const next: MendActivityMessages = { ...fallback }
@@ -209,6 +253,7 @@ export function resolveTuiPresentation(input: unknown): MendPresentationConfig {
   const defaults = profileDefaults[profile]
   const message = isRecord(raw.message) ? raw.message : {}
   const activity = isRecord(raw.activity) ? raw.activity : {}
+  const compaction = isRecord(raw.compaction) ? raw.compaction : {}
   const reasoning = isRecord(raw.reasoning) ? raw.reasoning : {}
   const symbols = isRecord(raw.symbols) ? raw.symbols : {}
 
@@ -233,6 +278,13 @@ export function resolveTuiPresentation(input: unknown): MendPresentationConfig {
         typeof activity.showInterruptHint === "boolean" ? activity.showInterruptHint : defaults.activity.showInterruptHint,
       messages: asMessages(activity.messages, defaults.activity.messages),
       mascot: asMascot(activity.mascot, defaults.activity.mascot),
+    },
+    compaction: {
+      style: asCompactionStyle(compaction.style, defaults.compaction.style),
+      showProgress: typeof compaction.showProgress === "boolean" ? compaction.showProgress : defaults.compaction.showProgress,
+      allowScratchpad:
+        typeof compaction.allowScratchpad === "boolean" ? compaction.allowScratchpad : defaults.compaction.allowScratchpad,
+      arcade: asCompactionArcade(compaction.arcade, defaults.compaction.arcade),
     },
     symbols: {
       assistantDone: typeof symbols.assistantDone === "string" && symbols.assistantDone ? symbols.assistantDone : defaults.symbols.assistantDone,
@@ -278,4 +330,37 @@ export function activityMessagesForPhase(profile: MendTuiProfile, phase: MendAct
   if (messages?.length) return [messages[0]]
   const fallback = profile.workingIndicator.messages
   return fallback?.length ? [fallback[0]] : ["Thinking..."]
+}
+
+export function compactPreviewLine(text: string | undefined, max = 88) {
+  if (!text) return
+  const normalized = text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[-*#>\s]+/, "").trim())
+    .find(Boolean)
+  if (!normalized) return
+  return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…` : normalized
+}
+
+export function compactionStageStates(input: {
+  hasSummary?: boolean
+  resume?: boolean
+  include?: string
+  tailStartID?: string
+}) {
+  const hasTail = Boolean(input.include || input.tailStartID)
+  return [
+    { label: "Capture", state: "done" as const },
+    { label: "Anchor", state: input.hasSummary ? ("done" as const) : ("active" as const) },
+    {
+      label: input.resume ? "Resume" : "Tail",
+      state: input.hasSummary ? (hasTail || input.resume ? ("done" as const) : ("pending" as const)) : ("pending" as const),
+    },
+  ]
+}
+
+export function compactionArcadeFrames(mode: MendCompactionArcade) {
+  if (mode !== "stars") return []
+  return ["✦ · ˚ ✦ · ˚ ✦", "  ˚ ✦ ·  ✧ · ✦", "✧ · ✦ · ˚ · ✧"]
 }

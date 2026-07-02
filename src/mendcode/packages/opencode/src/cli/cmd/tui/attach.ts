@@ -6,6 +6,7 @@ import { TuiConfig } from "@/cli/cmd/tui/config/tui"
 import { errorMessage } from "@/util/error"
 import { validateSession } from "./validate-session"
 import { ServerAuth } from "@/server/auth"
+import { loadMendTuiProfile } from "@/mend/profile"
 
 export const AttachCommand = cmd({
   command: "attach <url>",
@@ -68,6 +69,7 @@ export const AttachCommand = cmd({
       })()
       const headers = ServerAuth.headers({ password: args.password, username: args.username })
       const config = await TuiConfig.get()
+      const mendProfile = await loadMendTuiProfile(directory ?? process.cwd(), config)
 
       try {
         await validateSession({
@@ -85,6 +87,7 @@ export const AttachCommand = cmd({
       await tui({
         url: args.url,
         config,
+        mendProfile,
         args: {
           continue: args.continue,
           sessionID: args.session,

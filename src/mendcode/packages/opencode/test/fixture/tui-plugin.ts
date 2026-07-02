@@ -83,8 +83,13 @@ function themeCurrent(): HostPluginApi["theme"]["current"] {
 type Opts = {
   client?: HostPluginApi["client"] | (() => HostPluginApi["client"])
   renderer?: HostPluginApi["renderer"]
+  pty?: Partial<HostPluginApi["pty"]>
   count?: Count
   keybind?: Partial<HostPluginApi["keybind"]>
+  ui?: {
+    overlay?: Partial<HostPluginApi["ui"]["overlay"]>
+    runtime?: Partial<HostPluginApi["ui"]["runtime"]>
+  }
   tuiConfig?: HostPluginApi["tuiConfig"]
   app?: Partial<HostPluginApi["app"]>
   state?: {
@@ -172,6 +177,35 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
         }
       },
     },
+    shell: {
+      spawn: () => ({
+        pid: undefined,
+        write: () => false,
+        stop: async () => {},
+        output: () => "",
+        stderr: () => "",
+        onOutput: () => () => {},
+        onExit: () => () => {},
+        exited: Promise.resolve(0),
+      }),
+    },
+    pty: {
+      spawn:
+        opts.pty?.spawn ??
+        (async () => ({
+          id: "fixture-pty",
+          pid: undefined,
+          write: () => false,
+          resize: () => {},
+          stop: async () => {},
+          output: () => "",
+          screen: () => "",
+          rows: () => [],
+          onOutput: () => () => {},
+          onExit: () => () => {},
+          exited: Promise.resolve(0),
+        })),
+    },
     renderer,
     slots: {
       register: () => "fixture-slot",
@@ -246,16 +280,22 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
           return depth > 0
         },
       },
+      overlay: {
+        open: opts.ui?.overlay?.open ?? (() => true),
+        close: opts.ui?.overlay?.close ?? (() => true),
+      },
       runtime: {
-        setStatus: () => true,
-        clearStatus: () => true,
-        setWidget: () => true,
-        clearWidget: () => true,
-        setFooter: () => true,
-        setFooterEntry: () => true,
-        setWorkingIndicator: () => true,
-        setEditorVisual: () => true,
-        setEditor: () => true,
+        setStatus: opts.ui?.runtime?.setStatus ?? (() => true),
+        clearStatus: opts.ui?.runtime?.clearStatus ?? (() => true),
+        setWidget: opts.ui?.runtime?.setWidget ?? (() => true),
+        clearWidget: opts.ui?.runtime?.clearWidget ?? (() => true),
+        focusWidget: opts.ui?.runtime?.focusWidget ?? (() => true),
+        blurWidget: opts.ui?.runtime?.blurWidget ?? (() => true),
+        setFooter: opts.ui?.runtime?.setFooter ?? (() => true),
+        setFooterEntry: opts.ui?.runtime?.setFooterEntry ?? (() => true),
+        setWorkingIndicator: opts.ui?.runtime?.setWorkingIndicator ?? (() => true),
+        setEditorVisual: opts.ui?.runtime?.setEditorVisual ?? (() => true),
+        setEditor: opts.ui?.runtime?.setEditor ?? (() => true),
       },
     },
     keybind: {

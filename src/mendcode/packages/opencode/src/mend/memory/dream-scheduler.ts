@@ -1,9 +1,13 @@
 import { existsSync } from "fs"
 import { mkdir, readFile, readdir, rm, writeFile } from "fs/promises"
+import { networkInterfaces } from "os"
 import path from "path"
-import { memoryPaths } from "./config"
-import { readDreamRuns, runMemoryDream, type DreamModelAdapter } from "./dream"
+import { memoryPaths, readGlobalMemoryConfig, writeGlobalMemoryConfig } from "./config"
+import { readDreamRuns, runMemoryDream, type DreamModelAdapter, type DreamRun } from "./dream"
 import type { DreamSourcePermissions } from "./dream-sources"
+import { memoryWorkspaceOverview, type MemoryWorkspace } from "./workspaces"
+
+const OVERNIGHT_MISSED_GRACE_MINUTES = 60
 
 export type DreamScheduleWindow = {
   enabled: boolean
@@ -22,11 +26,22 @@ export type DreamScheduleState = {
 }
 
 function schedulerDir(root?: string) {
-  return path.join(memoryPaths(root).projectDir, "dream")
+  return path.join(memoryPaths(root).globalDir, "dream")
 }
 
 function lockFile(root: string | undefined, key: string) {
   return path.join(schedulerDir(root), `${key}.lock`)
+}
+
+async function acquireDreamLock(root: string | undefined, key: string) {
+  const file = lockFile(root, key)
+  await mkdir(path.dirname(file), { recursive: true })
+  return writeFile(file, JSON.stringify({ startedAt: new Date().toISOString() }), { flag: "wx" })
+    .then(() => file)
+    .catch((error) => {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") return null
+      throw error
+    })
 }
 
 function minutes(value: string) {
@@ -38,8 +53,54 @@ function minutes(value: string) {
   return hour * 60 + minute
 }
 
-function localDate(now: Date) {
-  return now.toISOString().slice(0, 10)
+function localClock(now: Date, timezone?: string) {
+  if (timezone) {
+    try {
+      const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }).formatToParts(now)
+      const value = (type: Intl.DateTimeFormatPartTypes) => parts.find((part) => part.type === type)?.value ?? ""
+      const hour = Number(value("hour"))
+      const minute = Number(value("minute"))
+      return {
+        date: `${value("year")}-${value("month")}-${value("day")}`,
+        current: (hour === 24 ? 0 : hour) * 60 + minute,
+      }
+    } catch {
+      // Invalid user-provided timezone should not break Dream status rendering.
+    }
+  }
+  return {
+    date: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`,
+    current: now.getHours() * 60 + now.getMinutes(),
+  }
+}
+
+function previousDate(date: string) {
+  const [year, month, day] = date.split("-").map(Number)
+  if (!year || !month || !day) return date
+  return new Date(Date.UTC(year, month - 1, day - 1)).toISOString().slice(0, 10)
+}
+
+function localDate(now: Date, timezone?: string) {
+  return localClock(now, timezone).date
+}
+
+function scheduleDate(now: Date, window: DreamScheduleWindow) {
+  const start = minutes(window.start)
+  const end = minutes(window.end)
+  const clock = localClock(now, window.timezone)
+  if (start !== null && end !== null && start > end) {
+    if (clock.current <= end) return previousDate(clock.date)
+    if (clock.current > end && clock.current < start && clock.current - end <= OVERNIGHT_MISSED_GRACE_MINUTES) return previousDate(clock.date)
+  }
+  return clock.date
 }
 
 function padTime(hour: number, minute: number) {
@@ -88,7 +149,7 @@ function insideWindow(now: Date, window: DreamScheduleWindow) {
   const start = minutes(window.start)
   const end = minutes(window.end)
   if (start === null || end === null) return false
-  const current = now.getHours() * 60 + now.getMinutes()
+  const current = localClock(now, window.timezone).current
   return start <= end ? current >= start && current <= end : current >= start || current <= end
 }
 
@@ -100,19 +161,23 @@ export async function evaluateDreamSchedule(input: {
   groupID?: string | null
 }) {
   const now = input.now ?? new Date()
-  const date = localDate(now)
+  const date = scheduleDate(now, input.window)
   const runs = await readDreamRuns(input.root)
   const completedToday = runs.some((run) =>
     run.status === "completed" &&
-    run.startedAt.slice(0, 10) === date &&
+    scheduleDate(new Date(run.startedAt), input.window) === date &&
     (input.workspaceID ? run.workspaceID === input.workspaceID : true) &&
     (input.groupID ? run.groupID === input.groupID : true))
   if (!input.window.enabled) return { action: "disabled" as const, date, reason: "Dream schedule disabled" }
   if (completedToday) return { action: "skip" as const, date, reason: "Dream already ran today" }
   if (insideWindow(now, input.window)) return { action: "run" as const, date, reason: "Inside configured Dream window" }
+  const start = minutes(input.window.start)
   const end = minutes(input.window.end)
-  const current = now.getHours() * 60 + now.getMinutes()
-  if (end !== null && current > end) return { action: "missed" as const, date, reason: "Dream window missed; manual trigger required" }
+  const current = localClock(now, input.window.timezone).current
+  if (start !== null && end !== null && start <= end && current > end) return { action: "missed" as const, date, reason: "Dream window missed; manual trigger required" }
+  if (start !== null && end !== null && start > end && current > end && current < start && current - end <= OVERNIGHT_MISSED_GRACE_MINUTES) {
+    return { action: "missed" as const, date, reason: "Dream window missed; manual trigger required" }
+  }
   return { action: "wait" as const, date, reason: "Waiting for Dream window" }
 }
 
@@ -124,12 +189,13 @@ async function writeDreamScheduleState(root: string | undefined, state: DreamSch
 
 export async function configureDreamSchedule(root: string | undefined, window: DreamScheduleWindow, reason = "Dream schedule configured") {
   const state = {
-    date: localDate(new Date()),
+    date: localDate(new Date(), window.timezone),
     status: window.enabled ? "scheduled" : "disabled",
     reason,
     manualTriggerRequired: false,
     window,
   }
+  await writeGlobalMemoryConfig({ dreamWindow: window }, root)
   await writeDreamScheduleState(root, state)
   return state
 }
@@ -171,6 +237,18 @@ async function recoverDreamScheduleFromAppliedProposal(root?: string) {
   return configureDreamScheduleFromText(root, latest.text, "Recovered from applied Dream proposal")
 }
 
+async function dreamScheduleFromSettings() {
+  const config = await readGlobalMemoryConfig().catch(() => null)
+  if (!config?.dreamWindow) return null
+  return {
+    date: localDate(new Date(), config.dreamWindow.timezone),
+    status: config.dreamWindow.enabled ? "scheduled" : "disabled",
+    reason: "Dream window configured in memory settings",
+    manualTriggerRequired: false,
+    window: config.dreamWindow,
+  } satisfies DreamScheduleState
+}
+
 export async function markDreamMissed(root: string | undefined, date: string, reason: string, window?: DreamScheduleWindow) {
   const state = { date, status: "missed" as const, reason, manualTriggerRequired: true, window }
   await writeDreamScheduleState(root, state)
@@ -200,10 +278,8 @@ export async function runScheduledMemoryDream(input: {
     return state
   }
   const key = `dream-${input.workspaceID ?? input.groupID ?? "default"}`
-  const lock = lockFile(input.root, key)
-  await mkdir(path.dirname(lock), { recursive: true })
-  if (existsSync(lock)) return { status: "locked" as const, reason: "Dream already running", date: evaluation.date }
-  await writeFile(lock, JSON.stringify({ startedAt: new Date().toISOString() }))
+  const lock = await acquireDreamLock(input.root, key)
+  if (!lock) return { status: "locked" as const, reason: "Dream already running", date: evaluation.date }
   try {
     return await runMemoryDream({ ...input, source: "scheduled" })
   } finally {
@@ -212,7 +288,103 @@ export async function runScheduledMemoryDream(input: {
 }
 
 export async function readDreamScheduleState(root?: string) {
+  const configured = await dreamScheduleFromSettings()
   const file = path.join(schedulerDir(root), "schedule.json")
-  if (!existsSync(file)) return recoverDreamScheduleFromAppliedProposal(root)
-  return JSON.parse(await readFile(file, "utf8")) as DreamScheduleState
+  if (!existsSync(file)) return configured ?? recoverDreamScheduleFromAppliedProposal(root)
+  const persisted = JSON.parse(await readFile(file, "utf8")) as DreamScheduleState
+  if (!configured) return persisted
+  return {
+    ...persisted,
+    window: persisted.window ?? configured.window,
+  }
+}
+
+export function hasUsableNetworkInterface() {
+  return Object.values(networkInterfaces()).some((items) =>
+    items?.some((item) => !item.internal && (item.family === "IPv4" || item.family === "IPv6")),
+  )
+}
+
+export async function runGlobalDreamSchedulerTick(input: {
+  now?: Date
+  permissions?: DreamSourcePermissions
+  model?: DreamModelAdapter
+  networkAvailable?: () => boolean | Promise<boolean>
+  workspaces?: MemoryWorkspace[]
+} = {}) {
+  const config = await readGlobalMemoryConfig()
+  const window = config.dreamWindow ?? (await readDreamScheduleState())?.window
+  if (!window) return { status: "not-configured" as const, reason: "Global Dream window is not configured", runs: [] as DreamRun[] }
+
+  const online = await (input.networkAvailable?.() ?? hasUsableNetworkInterface())
+  if (!online) {
+    const state = {
+      date: localDate(input.now ?? new Date(), window.timezone),
+      status: "wait",
+      reason: "Waiting for network before running global Dream",
+      manualTriggerRequired: false,
+      window,
+    } satisfies DreamScheduleState
+    await writeDreamScheduleState(undefined, state)
+    return { status: "offline" as const, reason: state.reason, state, runs: [] as DreamRun[] }
+  }
+
+  const overview = input.workspaces ? null : await memoryWorkspaceOverview(undefined)
+  const workspaces = (input.workspaces ?? overview?.activeWorkspaces ?? [])
+    .filter((workspace) => !workspace.archived)
+  if (!workspaces.length) {
+    const evaluation = await evaluateDreamSchedule({ window, now: input.now })
+    const state = {
+      date: evaluation.date,
+      status: evaluation.action === "run" ? "wait" : evaluation.action,
+      reason: evaluation.action === "run" ? "No registered workspaces for global Dream" : evaluation.reason,
+      manualTriggerRequired: evaluation.action === "missed",
+      window,
+    } satisfies DreamScheduleState
+    await writeDreamScheduleState(undefined, state)
+    return { status: "no-workspaces" as const, reason: state.reason, state, runs: [] as DreamRun[] }
+  }
+
+  const runs: DreamRun[] = []
+  for (const workspace of workspaces) {
+    const result = await runScheduledMemoryDream({
+      root: workspace.root,
+      window,
+      now: input.now,
+      workspaceID: workspace.id,
+      permissions: input.permissions,
+      model: input.model,
+    })
+    if ("id" in result) runs.push(result)
+  }
+  return { status: "checked" as const, reason: `Checked ${workspaces.length} global Dream workspace${workspaces.length === 1 ? "" : "s"}`, runs }
+}
+
+let backgroundTimer: ReturnType<typeof setInterval> | undefined
+
+export function startGlobalDreamBackgroundService(input: {
+  intervalMs?: number
+  permissions?: DreamSourcePermissions
+  model?: DreamModelAdapter
+  networkAvailable?: () => boolean | Promise<boolean>
+} = {}) {
+  if (backgroundTimer) return { started: false, reason: "Global Dream background service already running" }
+  const tick = () => {
+    void runGlobalDreamSchedulerTick(input).catch(() => {})
+  }
+  backgroundTimer = setInterval(tick, input.intervalMs ?? 60_000)
+  backgroundTimer.unref?.()
+  tick()
+  return { started: true, reason: "Global Dream background service started" }
+}
+
+export function stopGlobalDreamBackgroundService() {
+  if (!backgroundTimer) return false
+  clearInterval(backgroundTimer)
+  backgroundTimer = undefined
+  return true
+}
+
+export function isGlobalDreamBackgroundServiceRunning() {
+  return Boolean(backgroundTimer)
 }

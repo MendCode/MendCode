@@ -32,6 +32,7 @@ import { ProviderTest } from "../fake/provider"
 import { testEffect } from "../lib/effect"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { TestConfig } from "../fixture/config"
+import { Question } from "../../src/question"
 
 void Log.init({ print: false })
 
@@ -311,9 +312,10 @@ function llm() {
 function liveRuntime(layer: Layer.Layer<LLM.Service>, provider = ProviderTest.fake(), config = Config.defaultLayer) {
   const bus = Bus.layer
   const status = SessionStatus.layer.pipe(Layer.provide(bus))
+  const question = Question.layer.pipe(Layer.provide(bus))
   const processor = SessionProcessorModule.SessionProcessor.layer.pipe(Layer.provide(summary))
   return ManagedRuntime.make(
-    Layer.mergeAll(SessionCompaction.layer.pipe(Layer.provide(processor)), processor, bus, status).pipe(
+    (Layer.mergeAll(SessionCompaction.layer.pipe(Layer.provide(processor)), processor, bus, status).pipe(
       Layer.provide(provider.layer),
       Layer.provide(SessionNs.defaultLayer),
       Layer.provide(Snapshot.defaultLayer),
@@ -322,11 +324,12 @@ function liveRuntime(layer: Layer.Layer<LLM.Service>, provider = ProviderTest.fa
       Layer.provide(PlanReview.defaultLayer),
       Layer.provide(agentLayer),
       Layer.provide(Plugin.defaultLayer),
+      Layer.provide(question),
       Layer.provide(status),
       Layer.provide(bus),
       Layer.provide(config),
       Layer.provide(Todo.defaultLayer),
-    ),
+    ) as unknown as Layer.Layer<SessionCompaction.Service | Bus.Service, never, never>),
   )
 }
 
@@ -508,12 +511,12 @@ function autocontinue(enabled: boolean) {
 
 describe("session.compaction.isOverflow", () => {
   it.live(
-    "returns true when token count exceeds usable context",
+    "returns true when token count exceeds model threshold",
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
         const compact = yield* SessionCompaction.Service
         const model = createModel({ context: 100_000, output: 32_000 })
-        const tokens = { input: 75_000, output: 5_000, reasoning: 0, cache: { read: 0, write: 0 } }
+        const tokens = { input: 94_000, output: 1_000, reasoning: 0, cache: { read: 0, write: 0 } }
         expect(yield* compact.isOverflow({ tokens, model })).toBe(true)
       }),
     ),
@@ -537,7 +540,7 @@ describe("session.compaction.isOverflow", () => {
       Effect.gen(function* () {
         const compact = yield* SessionCompaction.Service
         const model = createModel({ context: 100_000, output: 32_000 })
-        const tokens = { input: 60_000, output: 10_000, reasoning: 0, cache: { read: 10_000, write: 0 } }
+        const tokens = { input: 85_000, output: 0, reasoning: 0, cache: { read: 10_000, write: 0 } }
         expect(yield* compact.isOverflow({ tokens, model })).toBe(true)
       }),
     ),
@@ -579,17 +582,24 @@ describe("session.compaction.isOverflow", () => {
     ),
   )
 
-  // ─── Bug reproduction tests ───────────────────────────────────────────
-  // These tests demonstrate that when limit.input is set, isOverflow()
-  // does not subtract any headroom for the next model response. This means
-  // compaction only triggers AFTER we've already consumed the full input
-  // budget, leaving zero room for the next API call's output tokens.
-  //
-  // Compare: without limit.input, usable = context - output (reserves space).
-  // With limit.input, usable = limit.input (reserves nothing).
-  //
-  // Related issues: #10634, #8089, #11086, #12621
-  // Open PRs: #6875, #12924
+  it.live(
+    "uses the hard provider limit for pre-dispatch prompt overflow checks",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const model = createModel({ context: 100_000, output: 32_000 })
+
+        expect(yield* compact.isPromptOverflow({ tokens: 96_000, model })).toBe(true)
+        expect(yield* compact.isPromptOverflow({ tokens: 96_000, model, respectAuto: false, mode: "hard" })).toBe(false)
+        expect(yield* compact.isPromptOverflow({ tokens: 100_000, model, respectAuto: false, mode: "hard" })).toBe(true)
+      }),
+    ),
+  )
+
+  // ─── Input-limit parity tests ─────────────────────────────────────────
+  // Auto-compaction threshold is user-facing policy: 95 means 95% of the
+  // actual model input/context limit, while hard dispatch checks still protect
+  // provider calls before request send.
 
   it.live(
     "BUG: no headroom when limit.input is set — compaction should trigger near boundary but does not",
@@ -638,7 +648,7 @@ describe("session.compaction.isOverflow", () => {
   )
 
   it.live(
-    "BUG: asymmetry — limit.input model allows 30K more usage before compaction than equivalent model without it",
+    "input-limit and context-only models agree below the configured threshold",
     provideTmpdirInstance(() =>
       Effect.gen(function* () {
         const compact = yield* SessionCompaction.Service
@@ -646,15 +656,14 @@ describe("session.compaction.isOverflow", () => {
         const withInputLimit = createModel({ context: 200_000, input: 200_000, output: 32_000 })
         const withoutInputLimit = createModel({ context: 200_000, output: 32_000 })
 
-        // 170K total tokens — well above context-output (168K) but below input limit (200K)
+        // 181K total tokens is below the default 95% threshold for both models.
         const tokens = { input: 166_000, output: 10_000, reasoning: 0, cache: { read: 5_000, write: 0 } }
 
         const withLimit = yield* compact.isOverflow({ tokens, model: withInputLimit })
         const withoutLimit = yield* compact.isOverflow({ tokens, model: withoutInputLimit })
 
-        // Both models have identical real capacity — they should agree:
-        expect(withLimit).toBe(true) // should compact (170K leaves no room for 32K output)
-        expect(withoutLimit).toBe(true) // correctly compacts (170K > 168K)
+        expect(withLimit).toBe(false)
+        expect(withoutLimit).toBe(false)
       }),
     ),
   )
@@ -684,6 +693,107 @@ describe("session.compaction.isOverflow", () => {
       {
         config: {
           compaction: { auto: false },
+        },
+      },
+    ),
+  )
+
+  it.live(
+    "defaults auto-compaction threshold to 95 percent of model context",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const model = createModel({ context: 100_000, output: 20_000 })
+        expect(
+          yield* compact.isOverflow({
+            tokens: { input: 94_999, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            model,
+          }),
+        ).toBe(false)
+        expect(
+          yield* compact.isOverflow({
+            tokens: { input: 95_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            model,
+          }),
+        ).toBe(true)
+      }),
+    ),
+  )
+
+  it.live(
+    "does not auto-compact from cumulative total when detailed context is below threshold",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const model = createModel({ context: 252_000, output: 20_000 })
+        const tokens = {
+          total: 8_600_000,
+          input: 29_900,
+          output: 188,
+          reasoning: 230,
+          cache: { read: 0, write: 0 },
+        }
+        expect(yield* compact.isOverflow({ tokens, model })).toBe(false)
+      }),
+    ),
+  )
+
+  it.live(
+    "counts reasoning tokens toward auto-compaction threshold",
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const compact = yield* SessionCompaction.Service
+        const model = createModel({ context: 100_000, output: 20_000 })
+        const tokens = { input: 94_700, output: 0, reasoning: 300, cache: { read: 0, write: 0 } }
+        expect(yield* compact.isOverflow({ tokens, model })).toBe(true)
+      }),
+    ),
+  )
+
+  it.live(
+    "uses configured global auto-compaction threshold",
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const model = createModel({ context: 100_000, output: 20_000 })
+          const tokens = { input: 89_000, output: 1_000, reasoning: 0, cache: { read: 0, write: 0 } }
+          expect(yield* compact.isOverflow({ tokens, model })).toBe(true)
+        }),
+      {
+        config: {
+          compaction: { threshold: 90 },
+        },
+      },
+    ),
+  )
+
+  it.live(
+    "uses provider and model auto-compaction threshold overrides",
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const model = createModel({ context: 100_000, output: 20_000 })
+          const providerOnlyModel = { ...model, id: "provider-only-model" } as Provider.Model
+          const underProviderThreshold = { input: 69_999, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+          const overProviderThreshold = { input: 70_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+          const overModelThreshold = { input: 80_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+          expect(yield* compact.isOverflow({ tokens: underProviderThreshold, model: providerOnlyModel })).toBe(false)
+          expect(yield* compact.isOverflow({ tokens: overProviderThreshold, model: providerOnlyModel })).toBe(true)
+          expect(yield* compact.isOverflow({ tokens: overModelThreshold, model })).toBe(true)
+        }),
+      {
+        config: {
+          compaction: { threshold: 95 },
+          provider: {
+            test: {
+              compaction: { threshold: 70 },
+              models: {
+                "test-model": { compaction: { threshold: 80 }, limit: { context: 100_000, output: 20_000 } },
+              },
+            },
+          },
         },
       },
     ),
@@ -1004,7 +1114,7 @@ describe("session.compaction.process", () => {
     })
   })
 
-  test("marks summary message as errored on compact result", async () => {
+  test("writes local rescue summary on compact result", async () => {
     await using tmp = await tmpdir()
     await WithInstance.provide({
       directory: tmp.path,
@@ -1032,8 +1142,10 @@ describe("session.compaction.process", () => {
           expect(result).toBe("stop")
           expect(summary?.info.role).toBe("assistant")
           if (summary?.info.role === "assistant") {
-            expect(summary.info.finish).toBe("error")
-            expect(JSON.stringify(summary.info.error)).toContain("Session too large to compact")
+            expect(summary.info.finish).toBe("stop")
+            expect(summary.info.error).toBeUndefined()
+            expect(summary.parts.some((part) => part.type === "text" && part.text.includes("## Goal"))).toBe(true)
+            expect(summary.parts.some((part) => part.type === "text" && part.text.includes("local rescue summary"))).toBe(true)
           }
         } finally {
           await rt.dispose()
@@ -1368,7 +1480,7 @@ describe("session.compaction.process", () => {
     })
   })
 
-  test("falls back to full summary when retained tail media exceeds preserve token budget", async () => {
+  test("retains image tail with compact attachment context when media payload exceeds preserve token budget", async () => {
     await using tmp = await tmpdir({ git: true })
     const stub = llm()
     let captured = ""
@@ -1391,6 +1503,11 @@ describe("session.compaction.process", () => {
           mime: "image/png",
           filename: "big.png",
           url: `data:image/png;base64,${"a".repeat(4_000)}`,
+          source: {
+            type: "file",
+            path: "clipboard",
+            text: { value: "[Image 1]", start: 0, end: 9 },
+          },
         })
         await SessionCompaction.create({
           sessionID: session.id,
@@ -1417,9 +1534,14 @@ describe("session.compaction.process", () => {
 
           const part = await lastCompactionPart(session.id)
           expect(part?.type).toBe("compaction")
-          expect(part?.tail_start_id).toBeUndefined()
+          expect(part?.tail_start_id).toBe(recent.id)
           expect(captured).toContain("recent image turn")
-          expect(captured).toContain("Attached image/png: big.png")
+          expect(captured).toContain("Preserved Recent Tail Snapshot")
+          expect(captured).toContain("Image Attachment Context")
+          expect(captured).toContain("sourceLabel: [Image 1]")
+          expect(captured).toContain("embeddedSize: 3KB")
+          expect(captured).toContain("visualContentPolicy")
+          expect(captured).toContain("do not claim the image is irrelevant just because only a placeholder is visible")
         } finally {
           await rt.dispose()
         }
@@ -1569,6 +1691,11 @@ describe("session.compaction.process", () => {
           mime: "image/png",
           filename: "cat.png",
           url: "https://example.com/cat.png",
+          source: {
+            type: "file",
+            path: "clipboard",
+            text: { value: "[Image 1]", start: 0, end: 9 },
+          },
         })
         await SessionCompaction.create({
           sessionID: session.id,
@@ -1607,6 +1734,10 @@ describe("session.compaction.process", () => {
           expect(result).toBe("continue")
           expect(captured).toContain("image")
           expect(captured).toContain("Attached image/png: cat.png")
+          expect(captured).toContain("Image Attachment Context")
+          expect(captured).toContain("sourceLabel: [Image 1]")
+          expect(captured).toContain("url: remote/local reference")
+          expect(captured).toContain("visualContentPolicy")
           expect(visibleLatestCopies).toHaveLength(1)
           expect(last?.info.role).toBe("user")
           expect(last?.parts[0]).toMatchObject({
@@ -2201,8 +2332,10 @@ describe("session.compaction.process", () => {
             },
             output: [
               "Writing at 0x00120800... 100%",
+              "middle log chunk ".repeat(3000),
               "Full output saved to: /Users/obed/.local/share/mendcode/tool-output/tool_flash_123",
               "Verifying written data...",
+              "FINAL FLASH RESULT: success",
             ].join("\n"),
             title: "firmware flash",
             metadata: {},
@@ -2247,11 +2380,15 @@ describe("session.compaction.process", () => {
 
           const transcriptPath = captured.match(/markdown: ([^\\"]+)/)?.[1]
           expect(transcriptPath).toBeTruthy()
+          expect(transcriptPath).not.toMatch(/latest\.md$/)
           const transcript = await readFile(transcriptPath!, "utf8")
           expect(transcript).toContain("# MendCode Full Session Transcript")
           expect(transcript).toContain("continua el flash si quedo a medias")
+          expect(transcript).toContain("Writing at 0x00120800... 100%")
           expect(transcript).toContain("pnpm --dir firmware flash --port /dev/cu.usbmodem101")
           expect(transcript).toContain("/Users/obed/.local/share/mendcode/tool-output/tool_flash_123")
+          expect(transcript).toContain("FINAL FLASH RESULT: success")
+          expect(transcript).toContain("Showing start and final tail")
         } finally {
           await rt.dispose()
         }
@@ -2646,6 +2783,7 @@ describe("session.compaction.process", () => {
 
           expect(captured).toContain("Subagent Task Context")
           expect(captured).toContain("Auth admin implementation (convex-expert)")
+          expect(captured).toContain("subagentSessionID: sub-session-1")
           expect(captured).toContain("Mapped Convex Auth")
           expect(captured).toContain("Changed files: convex/auth.ts, convex/lib/auth.ts")
           expect(captured).toContain("Use subagent task outputs as first-class state evidence")
@@ -2948,6 +3086,27 @@ describe("util.token.estimate", () => {
 
   test("returns 0 for empty string", () => {
     expect(Token.estimate("")).toBe(0)
+  })
+
+  test("estimatePayload treats data-url media as a small placeholder", () => {
+    const raw = Token.estimate(JSON.stringify({ url: `data:image/png;base64,${"A".repeat(1_000_000)}` }))
+    const safe = Token.estimatePayload({ url: `data:image/png;base64,${"A".repeat(1_000_000)}` })
+
+    expect(raw).toBeGreaterThan(200_000)
+    expect(safe).toBeLessThan(100)
+  })
+
+  test("estimatePayload omits raw base64 media fields", () => {
+    const safe = Token.estimatePayload({
+      content: [
+        {
+          type: "image",
+          data: "A".repeat(1_000_000),
+        },
+      ],
+    })
+
+    expect(safe).toBeLessThan(100)
   })
 })
 

@@ -14,6 +14,8 @@ const primaryCommands = [
   "status",
   "doctor",
   "setup",
+  "install",
+  "marketplace",
   "packages",
   "loops",
   "mflow",
@@ -52,7 +54,7 @@ const deprecatedAliases = ["init", "sync", "package", "prompts"]
 const deprecationMessages: Record<string, string> = {
   init: "Deprecated alias: `mendcode init` is kept for compatibility. Use `mendcode setup status` for setup checks; project init remains internal.",
   sync: "Deprecated alias: `mendcode sync` is kept for compatibility. Use `mendcode setup status` or `mendcode status` for normal workflows.",
-  package: "Deprecated alias: `mendcode package` is kept for compatibility. Use `mendcode packages`.",
+  package: "Deprecated alias: `mendcode package` is kept for compatibility. Use `mendcode marketplace`.",
   prompts: "Deprecated alias: `mendcode prompts` is kept for compatibility. Prompt internals are not part of the public workflow.",
 }
 const internalCommandWarning =
@@ -82,9 +84,11 @@ const controlPlaneRoutes: Record<string, (args: string[]) => string[]> = {
   permissions: (args) => ["permissions", args[0] || "status", ...args.slice(1)],
   auth: (args) => ["auth", args[0] || "status", ...args.slice(1)],
   setup: (args) => ["setup", args[0] || "status"],
-  packages: (args) => ["packages", args[0] || "status", ...args.slice(1)],
+  install: (args) => ["marketplace", "install", ...args],
+  marketplace: (args) => ["marketplace", args[0] || "status", ...args.slice(1)],
+  packages: (args) => ["marketplace", args[0] || "status", ...args.slice(1)],
   loops: (args) => ["loops", args[0] || "status", ...args.slice(1)],
-  package: (args) => ["packages", args[0] || "status", ...args.slice(1)],
+  package: (args) => ["marketplace", args[0] || "status", ...args.slice(1)],
   ai: (args) => ["ai", ...args],
   runtime: (args) => {
     const sub = args[0] || "status"
@@ -152,13 +156,16 @@ Workflows:
   mendcode doctor                  run local diagnostics
   mendcode setup status|plan|doctor
                                 inspect setup readiness and local diagnostics
-  mendcode packages status|list    inspect installed/active MendCode packages
-  mendcode packages create --id <id> --title <name> [--include skills,modes,plugins]
+  mendcode marketplace status|list
+                                inspect installed/active marketplace packs
+  mendcode marketplace create --id <id> --title <name> [--include skills,modes,tools,pages,widgets]
                                 package selected local harness config
-  mendcode packages install <pack-id> [source-id]
-  mendcode packages install-source <source-id>
-  mendcode packages enable|disable <id>
-                                select or deselect a runtime package
+  mendcode marketplace install <pack-id> [source-id]
+  mendcode install <pack-id> [source-id]
+                                install a marketplace pack from the official or named source
+  mendcode marketplace install-source <source-id>
+  mendcode marketplace enable|disable <id>
+                                select or deselect a marketplace pack
   mendcode loops status|list     inspect local Loop Workflows
   mendcode loops examples        list built-in Loop templates
   mendcode loops show|monitor <id>
@@ -166,6 +173,8 @@ Workflows:
                                 inspect or monitor one Loop Workflow journal
   mendcode loops service status|start|stop
                                 manage the per-project background Loop service
+  mendcode memory dream service status|start|stop
+                                manage the global background Dream service
   mendcode mflow status            inspect mflow activation, daemon, and locks
   mendcode mflow setup             guided mflow setup for this repo
   mendcode mflow activate --room <room> --accept-public-relay-limits
@@ -196,12 +205,16 @@ Primary public surface:
   mendcode --tsm [branch|path|id|--all]
   mendcode status|doctor
   mendcode setup status|plan|doctor
-  mendcode packages status|list|create|install|install-source|enable|disable|remove
+  mendcode marketplace status|list|create|install|install-source|enable|disable|remove
+  mendcode packages status|list|create|install|install-source|enable|disable|remove  compatibility alias
   mendcode loops status|list|examples|show|tail|monitor|tick|daemon|service|draft|activate|run|pause|resume|stop
   mendcode loops activate <id> [--no-service]
   mendcode loops tick <id> --execute [--report-only]
   mendcode loops service install|start|stop|restart|status|logs|uninstall [--service-dir <path>] [--log-dir <path>]
-  mendcode loops daemon --quiet       suppress idle heartbeat lines for background services
+  mendcode loops daemon --once --quiet  run one due-loop pass for scheduled background services
+  mendcode memory dream tick|daemon|service
+  mendcode memory dream daemon --once   run one scheduled Dream pass and exit
+  mendcode memory dream service install|start|stop|restart|status|logs|uninstall [--service-dir <path>] [--log-dir <path>]
   mendcode mflow status|setup|activate|deactivate|remove
   mendcode worktree status|plan|create|open|adopt|remove|reset|doctor
   mendcode tsm status|plan|setup|activate|deactivate|remove|doctor
@@ -221,7 +234,7 @@ Internal/debug-only surface, intentionally hidden from normal help:
 Deprecated legacy aliases kept for compatibility:
   init -> project init
   sync -> project sync
-  package -> packages
+  package -> marketplace
   prompts -> prompt
 `
   ;(exitCode ? console.error : console.log)(out)
@@ -463,18 +476,18 @@ function runTuiWithMessage(args: string[]) {
     else message.push(arg)
   }
   if (!message.length) throw new Error("Usage: mendcode run [message..]")
-  return runRuntime([process.cwd(), "--initial-message", message.join(" "), ...passthrough])
+  return runRuntime([shellCwd(), "--initial-message", message.join(" "), ...passthrough])
 }
 
 export async function main(argv = process.argv.slice(2)) {
   const [cmd, ...args] = argv
   try {
-    if (!cmd) return runRuntime([process.cwd()])
+    if (!cmd) return runRuntime([shellCwd()])
     if (cmd === "help" && args[0] === "advanced") advancedUsage(0)
     if (cmd === "help" || cmd === "-h" || cmd === "--help") usage(0)
     if (cmd === "--worktree") return await runWorktreeShortcut(args)
     if (cmd === "--tsm") return await runTsmShortcut(args)
-    if (cmd.startsWith("-")) return runRuntime([process.cwd(), cmd, ...args])
+    if (cmd.startsWith("-")) return runRuntime([shellCwd(), cmd, ...args])
     if (cmd === "opencode") {
       const donorArgs = args[0] === "--" ? args.slice(1) : args
       enforceDonorIdentityGuard(donorArgs)

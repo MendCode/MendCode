@@ -105,6 +105,7 @@ function iterationPrompt(workflow: LoopWorkflow.Info) {
     "",
     reserveNote,
     checkpointGuidance(workflow),
+    "Do not call the loop tool from inside a loop iteration; execute this workflow objective directly, and use the checkpoint block to report loop state.",
     "Do not push, merge, publish releases, send external messages, or perform destructive shell actions unless the user has explicitly approved that action in this session.",
     "",
     "End your final message with this exact machine-readable block:",
@@ -133,8 +134,10 @@ function reportOnlyPrompt(workflow: LoopWorkflow.Info) {
   ].join("\n")
 }
 
-function reportOnlyTools() {
+function loopIterationTools(reportOnly: boolean): Record<string, boolean> {
+  if (!reportOnly) return { loop: false }
   return {
+    loop: false,
     edit: false,
     write: false,
     apply_patch: false,
@@ -279,7 +282,7 @@ export const layer = Layer.effect(
           agent: current.spec.agent,
           model: promptModel(current),
           variant: current.spec.model?.variant,
-          tools: reportOnly ? reportOnlyTools() : undefined,
+          tools: loopIterationTools(reportOnly),
           parts: [{ type: "text", text: reportOnly ? reportOnlyPrompt(current) : iterationPrompt(current) }],
         })
         .pipe(Effect.exit)

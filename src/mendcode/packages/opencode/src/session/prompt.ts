@@ -45,6 +45,7 @@ import { AppFileSystem } from "@mendcode/core/filesystem"
 import { Truncate } from "@/tool/truncate"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
+import { Token } from "@/util/token"
 import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 import { zod } from "@/util/effect-zod"
 import { withStatics } from "@/util/schema"
@@ -68,10 +69,51 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 
 const SHELL_OUTPUT_UPDATE_INTERVAL = 250
 const SHELL_LIVE_OUTPUT_MAX_CHARS = 30_000
+const RETAINED_SUBTASK_OUTPUT_MAX_CHARS = 32_000
 
 function shellLiveOutput(text: string) {
   if (text.length <= SHELL_LIVE_OUTPUT_MAX_CHARS) return text
   return "...\n\n" + text.slice(-SHELL_LIVE_OUTPUT_MAX_CHARS)
+}
+
+function retainedSubtaskText(input: string) {
+  if (input.length <= RETAINED_SUBTASK_OUTPUT_MAX_CHARS) return input
+  return `${input.slice(0, RETAINED_SUBTASK_OUTPUT_MAX_CHARS)}\n[retained subagent output truncated: omitted ${input.length - RETAINED_SUBTASK_OUTPUT_MAX_CHARS} chars]`
+}
+
+function retainedSubtaskEvidence(history: readonly MessageV2.WithParts[]) {
+  const text = (() => {
+    for (let i = history.length - 1; i >= 0; i--) {
+      const message = history[i]
+      if (message?.info.role !== "assistant") continue
+      for (let j = message.parts.length - 1; j >= 0; j--) {
+        const part = message.parts[j]
+        if (part?.type !== "text") continue
+        const value = part.text.trim()
+        if (value) return value
+      }
+    }
+    return ""
+  })()
+  const files = Array.from(new Set(history.flatMap((message) => message.parts.flatMap((part) => (part.type === "patch" ? part.files : [])))))
+  if (!text && files.length === 0) return ""
+  return [text, files.length ? ["Subagent changed files:", ...files.map((file) => `- ${file}`)].join("\n") : undefined]
+    .filter(Boolean)
+    .join("\n\n")
+}
+
+function retainedSubtaskOutput(input: { taskID: string; text: string; error: Error }) {
+  return [
+    `task_id: ${input.taskID} (for resuming to continue this task if needed)`,
+    "task_status: retained",
+    `task_error: ${input.error.message}`,
+    "",
+    "<task_result>",
+    retainedSubtaskText(input.text),
+    "</task_result>",
+    "",
+    `Parent execution stopped before the subagent finished. Resume this subagent chat with task_id ${input.taskID} to inspect or continue the work.`,
+  ].join("\n")
 }
 
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
@@ -182,11 +224,41 @@ export const layer = Layer.effect(
       } satisfies TaskPromptOps
     })
 
+    const findOrphanedAssistantOnCancel = Effect.fn("SessionPrompt.findOrphanedAssistantOnCancel")(function* (
+      sessionID: SessionID,
+    ) {
+      return yield* sessions.findMessage(sessionID, (msg) => msg.info.role === "assistant" && !msg.info.time.completed)
+    })
+
+    const finishOrphanedAssistantOnCancel = Effect.fn("SessionPrompt.finishOrphanedAssistantOnCancel")(function* (
+      sessionID: SessionID,
+      messageID: MessageID,
+    ) {
+      const match = yield* sessions.findMessage(sessionID, (msg) => msg.info.id === messageID)
+      if (Option.isNone(match)) return
+      const message = match.value.info
+      if (message.role !== "assistant" || message.time.completed) return
+      message.error = new MessageV2.AbortedError({ message: "Cancelled" }).toObject()
+      message.finish = "error"
+      message.time.completed = Date.now()
+      yield* sessions.updateMessage(message)
+    })
+
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* elog.info("cancel", { sessionID })
       promptAbortReasons.set(sessionID, "user")
       promptAbortControllers.get(sessionID)?.abort()
-      yield* state.cancel(sessionID).pipe(Effect.ensuring(Effect.sync(() => promptAbortReasons.delete(sessionID))))
+      const orphanedAssistant = yield* findOrphanedAssistantOnCancel(sessionID)
+      yield* state
+        .cancel(sessionID)
+        .pipe(
+          Effect.ensuring(Effect.sync(() => promptAbortReasons.delete(sessionID))),
+          Effect.andThen(
+            Option.isSome(orphanedAssistant)
+              ? finishOrphanedAssistantOnCancel(sessionID, orphanedAssistant.value.info.id)
+              : Effect.void,
+          ),
+        )
     })
 
     const syncSessionSelection = Effect.fn("SessionPrompt.syncSessionSelection")(function* (input: {
@@ -928,7 +1000,34 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             const defect = Cause.squash(cause)
             error = defect instanceof Error ? defect : new Error(String(defect))
             log.error("subtask execution failed", { error, agent: task.agent, description: task.description })
-            return Effect.void
+            const metadata = part.state.status === "pending" ? undefined : part.state.metadata
+            const childSessionID = typeof metadata?.sessionId === "string" ? metadata.sessionId : undefined
+            if (!childSessionID) return Effect.succeed(undefined)
+            return sessions
+              .messages({ sessionID: SessionID.make(childSessionID), view: "tui" })
+              .pipe(
+                Effect.map((history) => {
+                  const text = retainedSubtaskEvidence(history)
+                  const title =
+                    "title" in part.state && typeof part.state.title === "string" ? part.state.title : task.description
+                  return {
+                    title,
+                    metadata: {
+                      ...(metadata ?? {}),
+                      sessionId: SessionID.make(childSessionID),
+                      model: { providerID: taskModel.providerID, modelID: taskModel.id },
+                      status: "retained" as const,
+                    },
+                    output: retainedSubtaskOutput({
+                      taskID: childSessionID,
+                      text,
+                      error: error!,
+                    }),
+                    attachments: [],
+                  }
+                }),
+                Effect.catchCause(() => Effect.succeed(undefined)),
+              )
           }),
           Effect.onInterrupt(() =>
             Effect.gen(function* () {
@@ -1120,7 +1219,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     "<metadata>",
                     aborted === "user"
                       ? "User aborted the command"
-                      : "Command output interrupted before completion; no explicit user cancel was recorded",
+                      : "Command execution stopped before completion because the parent run lost its connection; no explicit user cancel was recorded",
                     "</metadata>",
                   ].join("\n")
               }
@@ -1877,11 +1976,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 modelID: model.api.id || model.id,
               }),
             )
+            const stripMediaForResume = shouldSkipAutoCompaction(msgs)
             const [skills, env, instructions, modelMsgs] = yield* Effect.all([
               promptPolicy.includeSkillsByDefault ? sys.skills(agent) : Effect.succeed(undefined),
               sys.environment(model),
               promptPolicy.includeProjectInstructions ? instruction.system().pipe(Effect.orDie) : Effect.succeed([]),
-              MessageV2.toModelMessagesEffect(msgs, model),
+              MessageV2.toModelMessagesEffect(msgs, model, { stripMedia: stripMediaForResume }),
             ])
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
             const memoryMode = promptMemoryMode(msgs, lastUser)
@@ -1896,6 +1996,48 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             }
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+            const streamMessages = [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])]
+            const promptTokens = Token.estimatePayload({
+              system,
+              messages: streamMessages,
+              tools: Object.fromEntries(
+                Object.entries(tools).map(([name, item]) => {
+                  const toolInfo = item as Record<string, unknown>
+                  return [
+                    name,
+                    {
+                      description: toolInfo.description,
+                      inputSchema: toolInfo.inputSchema ?? toolInfo.parameters,
+                    },
+                  ]
+                }),
+              ),
+            })
+            if (yield* compaction.isPromptOverflow({ tokens: promptTokens, model, respectAuto: false, mode: "hard" })) {
+              const duplicateAutoCompaction = shouldSkipAutoCompaction(msgs)
+              yield* slog.warn("pre-provider compaction", {
+                promptTokens,
+                reason: duplicateAutoCompaction
+                  ? "synthetic resume still exceeded effective provider/model threshold before request dispatch"
+                  : "prompt estimate exceeded effective provider/model threshold before request dispatch",
+              })
+              yield* sessions
+                .removeMessage({ sessionID, messageID: handle.message.id })
+                .pipe(Effect.catch(() => Effect.void))
+              yield* compaction.create({
+                sessionID,
+                agent: lastUser.agent,
+                model: lastUser.model,
+                auto: true,
+                overflow: true,
+                resume: !duplicateAutoCompaction,
+                instructions:
+                  duplicateAutoCompaction
+                    ? "Synthetic resume still exceeded the provider/model context before dispatch. Produce the smallest useful rescue summary and do not auto-resume again; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
+                    : "The provider prompt exceeded the effective context threshold before dispatch. Preserve the active request, latest TODO/tool state, changed files, and verification evidence; if provider compaction is also too large, use local rescue.",
+              })
+              return "continue" as const
+            }
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -1905,7 +2047,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               cwd: ctx.directory,
               root: ctx.worktree,
               system,
-              messages: [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
+              messages: streamMessages,
               memoryMode,
               tools,
               model,
@@ -1934,13 +2076,29 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             if (result === "stop") return "break" as const
             if (result === "compact") {
               if (shouldSkipAutoCompaction(msgs)) {
-                handle.message.error = new MessageV2.ContextOverflowError({
-                  message:
-                    "Automatic compaction already ran and the synthetic resume still exceeds the model context. Waiting for a new user instruction instead of compacting again.",
-                }).toObject()
-                handle.message.finish = "error"
-                yield* sessions.updateMessage(handle.message)
-                return "break" as const
+                yield* slog.warn("duplicate auto compaction requires rescue", {
+                  reason: "synthetic resume still exceeded provider/model context",
+                })
+                const handleParts = MessageV2.parts(handle.message.id)
+                const hasUsefulParts = handleParts.some(
+                  (part) => part.type === "text" || part.type === "tool" || part.type === "patch" || part.type === "file",
+                )
+                if (!handle.message.finish && !hasUsefulParts) {
+                  yield* sessions
+                    .removeMessage({ sessionID, messageID: handle.message.id })
+                    .pipe(Effect.catch(() => Effect.void))
+                }
+                yield* compaction.create({
+                  sessionID,
+                  agent: lastUser.agent,
+                  model: lastUser.model,
+                  auto: true,
+                  overflow: true,
+                  resume: false,
+                  instructions:
+                    "Synthetic resume still exceeded the provider/model context. Produce a smaller rescue summary without auto-resuming again; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference.",
+                })
+                return "continue" as const
               }
               yield* compaction.create({
                 sessionID,

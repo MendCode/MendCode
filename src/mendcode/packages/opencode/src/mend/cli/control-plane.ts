@@ -22,6 +22,7 @@ import { providerRunAdapterInventory, providerSmoke } from "../runtime/provider-
 import { providerLogin } from "../runtime/auth"
 import { exportPlan } from "../runtime/export"
 import { loopServiceArgsFromConfig, loopServiceInstall, loopServicePlan, loopServiceStart, loopServiceStatus, loopServiceStop, loopServiceUninstall, type LoopServicePlan, type LoopServiceStatus } from "../runtime/loop-service"
+import { dreamServiceInstall, dreamServicePlan, dreamServiceStart, dreamServiceStatus, dreamServiceStop, dreamServiceUninstall, type DreamServiceArgs, type DreamServicePlan, type DreamServiceStatus } from "../runtime/dream-service"
 import { adapterStatus, checkRuntime, collectStatus, doctorLines, donorConfigPathsReport, ownedRuntimeStatus, toolchainStatus, upstreamInspect, upstreamStatus } from "../runtime/system"
 import { adoptOwnedRuntime, ownedRuntimePlan } from "../runtime/adoption"
 import { runBenchmark } from "../runtime/bench"
@@ -30,6 +31,8 @@ import { disableAllMendPackages, listMendPackages, removeMendPackage, setMendPac
 import { appendMemoryEntry, deleteMemoryEntry, memoryStatus, readMemoryEntries, refreshMemoryIndex, updateMemoryEntry } from "../memory/store"
 import { formatMemoryBlock, retrieveMemory } from "../memory/retrieve"
 import { writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../memory/config"
+import { readDreamRuns } from "../memory/dream"
+import { readDreamScheduleState, runGlobalDreamSchedulerTick } from "../memory/dream-scheduler"
 import { applyMemoryProposal, autoProposeMemoriesFromSession, importCodexMemories, listMemoryProposals, proposeMemoriesWithExtractor, proposeMemory, rejectMemoryProposal } from "../memory/proposals"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "../config/permissions"
 import { Effect } from "effect"
@@ -190,6 +193,67 @@ async function loopServiceLogs(args: string[]) {
   ].join("\n")
 }
 
+function dreamServiceOptions(args: string[]): DreamServiceArgs {
+  const interval = optionValue(args, "--interval-ms")
+  const intervalMs = interval ? Number(interval) : undefined
+  if (intervalMs !== undefined && (!Number.isFinite(intervalMs) || intervalMs <= 0)) throw new Error("--interval-ms must be a positive number")
+  const serviceDir = optionValue(args, "--service-dir") ?? undefined
+  const logDir = optionValue(args, "--log-dir") ?? undefined
+  return {
+    intervalMs,
+    serviceDir,
+    logDir,
+  }
+}
+
+function formatDreamServicePlan(plan: DreamServicePlan) {
+  return [
+    `Dream service: ${plan.label}`,
+    `Backend: ${plan.backend} (${plan.platform})`,
+    `Interval: ${plan.intervalMs}ms`,
+    `Working directory: ${plan.workingDirectory}`,
+    `Definition: ${plan.definitionPath}`,
+    `Logs: ${plan.stdoutPath}`,
+    `Errors: ${plan.stderrPath}`,
+    `Command: ${plan.programArguments.join(" ")}`,
+    `Install: ${plan.installCommand.join(" ")}`,
+  ].join("\n")
+}
+
+function formatDreamServiceStatus(status: DreamServiceStatus) {
+  return [
+    `Dream service: ${status.label}`,
+    `Backend: ${status.backend} (${status.platform})`,
+    `Installed: ${yes(status.installed)}`,
+    `Loaded: ${yes(status.loaded)}`,
+    `Interval: ${status.intervalMs}ms`,
+    `Definition: ${status.definitionPath}`,
+    `Logs: ${status.stdoutPath}`,
+    `Errors: ${status.stderrPath}`,
+  ].join("\n")
+}
+
+async function dreamServiceLogs(args: string[]) {
+  const status = await dreamServiceStatus(dreamServiceOptions(args))
+  const lines = Number(optionValue(args, "--lines") ?? 80)
+  const readTail = async (file: string) => {
+    try {
+      return (await readFile(file, "utf8")).split("\n").slice(-lines).join("\n").trim()
+    } catch {
+      return ""
+    }
+  }
+  const stdout = await readTail(status.stdoutPath)
+  const stderr = await readTail(status.stderrPath)
+  return [
+    `== ${status.stdoutPath} ==`,
+    stdout || "(empty)",
+    "",
+    `== ${status.stderrPath} ==`,
+    stderr || "(empty)",
+  ].join("\n")
+}
+
 function formatLoopSnapshot(snapshot: LoopWorkflow.Snapshot) {
   const loop = snapshot.workflow
   return [
@@ -329,10 +393,10 @@ async function loops(args: string[]) {
     const execute = args.includes("--execute")
     const reportOnly = args.includes("--report-only")
     const quiet = args.includes("--quiet")
-    if (!quiet) console.log(`Loop daemon started. interval=${interval}ms limit=${limit} mode=${execute ? (reportOnly ? "report-only" : "execute") : "dry-run"}`)
-    while (true) {
+    const once = args.includes("--once")
+    const runTick = async (disposeRuntime: boolean) => {
       const started = new Date().toLocaleTimeString()
-      const results = await withLoopRunner((runner) => runner.runDue({ limit, execute, reportOnly }), { disposeRuntime: false })
+      const results = await withLoopRunner((runner) => runner.runDue({ limit, execute, reportOnly }), { disposeRuntime })
       if (results.length) {
         for (const item of results) {
           console.log(`${started} ${item.workflowID} ${item.state}${item.runID ? ` run=${item.runID}` : ""} ${item.summary}`)
@@ -340,6 +404,14 @@ async function loops(args: string[]) {
       } else if (!quiet) {
         console.log(`${started} no loops due`)
       }
+    }
+    if (!quiet) console.log(`Loop daemon started. interval=${interval}ms limit=${limit} mode=${execute ? (reportOnly ? "report-only" : "execute") : "dry-run"}${once ? " once=true" : ""}`)
+    if (once) {
+      await runTick(true)
+      return
+    }
+    while (true) {
+      await runTick(false)
       await new Promise((resolve) => setTimeout(resolve, interval))
     }
   }
@@ -1094,9 +1166,96 @@ async function mcp(args: string[]) {
   throw new Error("Usage: mend-control-plane mcp <status|preview|add-local>")
 }
 
+async function memoryDream(args: string[], root: string) {
+  const sub = args[0] || "status"
+  if (sub === "status") {
+    const [schedule, runs, service] = await Promise.all([
+      readDreamScheduleState(root),
+      readDreamRuns(root).then((items) => items.slice(0, 5)),
+      dreamServiceStatus(dreamServiceOptions(args.slice(1))).catch((error) => ({ error: error instanceof Error ? error.message : String(error) })),
+    ])
+    console.log(JSON.stringify({ schedule, runs, service }, null, 2))
+    return
+  }
+  if (sub === "tick") {
+    const result = await runGlobalDreamSchedulerTick()
+    printResult(args, result, (value) => `${value.status}: ${value.reason}${value.runs?.length ? ` (${value.runs.length} run${value.runs.length === 1 ? "" : "s"})` : ""}`)
+    return
+  }
+  if (sub === "daemon") {
+    const interval = Number(optionValue(args, "--interval-ms") ?? 60_000)
+    if (!Number.isFinite(interval) || interval <= 0) throw new Error("--interval-ms must be a positive number")
+    const quiet = args.includes("--quiet")
+    const once = args.includes("--once")
+    const runTick = async () => {
+      const started = new Date().toLocaleTimeString()
+      const result = await runGlobalDreamSchedulerTick()
+      if (result.runs.length) console.log(`${started} ${result.status} ${result.reason} runs=${result.runs.length}`)
+      else if (!quiet) console.log(`${started} ${result.status} ${result.reason}`)
+    }
+    if (!quiet) console.log(`Dream daemon started. interval=${interval}ms${once ? " once=true" : ""}`)
+    if (once) {
+      await runTick()
+      return
+    }
+    while (true) {
+      await runTick()
+      await new Promise((resolve) => setTimeout(resolve, interval))
+    }
+  }
+  if (sub === "service") {
+    const action = args[1] || "status"
+    const serviceArgs = args.slice(2)
+    const options = dreamServiceOptions(serviceArgs)
+    if (action === "plan") {
+      const plan = dreamServicePlan(options)
+      printResult(args, plan, formatDreamServicePlan)
+      return
+    }
+    if (action === "install") {
+      const plan = await dreamServiceInstall(options)
+      printResult(args, plan, (value: DreamServicePlan) => `Dream service installed.\n${formatDreamServicePlan(value)}`)
+      return
+    }
+    if (action === "start") {
+      const plan = await dreamServiceStart(options)
+      printResult(args, plan, (value: DreamServicePlan) => `Dream service started.\n${formatDreamServicePlan(value)}`)
+      return
+    }
+    if (action === "restart") {
+      await dreamServiceStop(options).catch(() => undefined)
+      const plan = await dreamServiceStart(options)
+      printResult(args, plan, (value: DreamServicePlan) => `Dream service restarted.\n${formatDreamServicePlan(value)}`)
+      return
+    }
+    if (action === "stop") {
+      const plan = await dreamServiceStop(options)
+      printResult(args, plan, (value: DreamServicePlan) => `Dream service stopped.\n${formatDreamServicePlan(value)}`)
+      return
+    }
+    if (action === "uninstall" || action === "remove") {
+      const plan = await dreamServiceUninstall(options)
+      printResult(args, plan, (value: DreamServicePlan) => `Dream service uninstalled.\n${formatDreamServicePlan(value)}`)
+      return
+    }
+    if (action === "status") {
+      const status = await dreamServiceStatus(options)
+      printResult(args, status, formatDreamServiceStatus)
+      return
+    }
+    if (action === "logs") {
+      console.log(await dreamServiceLogs(serviceArgs))
+      return
+    }
+    throw new Error("Usage: mendcode memory dream service <plan|install|start|stop|restart|status|logs|uninstall> [--interval-ms N] [--service-dir <path>] [--log-dir <path>]")
+  }
+  throw new Error("Usage: mendcode memory dream <status|tick|daemon|service>")
+}
+
 async function memory(args: string[]) {
   const sub = args[0] || "status"
   const root = shellProjectRoot()
+  if (sub === "dream") return memoryDream(args.slice(1), root)
   if (sub === "status") {
     console.log(JSON.stringify(await memoryStatus(root), null, 2))
     return
@@ -1218,7 +1377,7 @@ async function memory(args: string[]) {
   }
   if (sub === "apply") {
     const result = await applyMemoryProposal(args[1] || "", root)
-    console.log(JSON.stringify({ ok: true, proposal: result.proposal, entry: result.entry, callsProviders: false, readsSecrets: false }, null, 2))
+    console.log(JSON.stringify({ ok: true, proposal: result.proposal, entry: result.entry, dreamSchedule: result.dreamSchedule, dreamService: result.dreamService, callsProviders: false, readsSecrets: false }, null, 2))
     return
   }
   if (sub === "reject") {
@@ -1260,7 +1419,7 @@ async function memory(args: string[]) {
     console.log(JSON.stringify({ ...result, callsProviders: false, readsSecrets: false }, null, 2))
     return
   }
-  throw new Error("Usage: mend-control-plane memory <status|search <query>|preview <query>|add <text>|edit <entry-id> <text>|delete <entry-id>|propose <text|--from-file path>|list [--status pending|applied|rejected|all]|apply <proposal-id>|reject <proposal-id>|import-codex [--from path] [--apply]|index|config [--enable|--disable|--input|--no-input|--output|--no-output|--use|--no-use|--generate|--no-generate|--max-prompt-tokens n|--max-entries n|--project-max-entries n|--global-compaction-max-entries n|--project]>")
+  throw new Error("Usage: mend-control-plane memory <status|dream <status|tick|daemon|service>|search <query>|preview <query>|add <text>|edit <entry-id> <text>|delete <entry-id>|propose <text|--from-file path>|list [--status pending|applied|rejected|all]|apply <proposal-id>|reject <proposal-id>|import-codex [--from path] [--apply]|index|config [--enable|--disable|--input|--no-input|--output|--no-output|--use|--no-use|--generate|--no-generate|--max-prompt-tokens n|--max-entries n|--project-max-entries n|--global-compaction-max-entries n|--project]>")
 }
 
 async function auth(args: string[]) {
@@ -1290,7 +1449,7 @@ async function setup(args: string[]) {
   if ("ok" in result && result.ok === false) process.exitCode = 1
 }
 
-const selectablePackageArtifacts = ["commands", "agents", "modes", "skills", "plugins", "prompts", "mcp", "context", "extensions"] as const
+const selectablePackageArtifacts = ["commands", "agents", "modes", "skills", "plugins", "tools", "prompts", "mcp", "context", "pages", "widgets", "extensions"] as const
 const selectablePackageSettings = ["models", "focus", "budget", "memory", "permissions", "tuiProfile", "worktreePolicy"] as const
 
 function packageOptionValue(args: string[], name: string) {
@@ -1335,7 +1494,7 @@ async function packageSelectionFromArgs(args: string[], root: string) {
 }
 
 async function packages(args: string[]) {
-  const root = mendPaths().root
+  const root = shellProjectRoot()
   const sub = args[0] || "status"
   if (sub === "status" || sub === "list") {
     console.log(JSON.stringify(await listMendPackages(root), null, 2))
@@ -1370,14 +1529,14 @@ async function packages(args: string[]) {
   }
   if (sub === "install" || sub === "use") {
     const packID = args[1]
-    if (!packID) throw new Error("Usage: mendcode packages install <pack-id> [source-id]")
+    if (!packID) throw new Error("Usage: mendcode marketplace install <pack-id> [source-id]")
     const result = await runtimeRegistryInstallPack(packID, args[2] || "official", root)
     console.log(JSON.stringify(result, null, 2))
     return
   }
   if (sub === "install-source" || sub === "use-source") {
     const sourceID = args[1]
-    if (!sourceID) throw new Error("Usage: mendcode packages install-source <source-id>")
+    if (!sourceID) throw new Error("Usage: mendcode marketplace install-source <source-id>")
     const result = await runtimeRegistryApplySource(sourceID, root)
     console.log(JSON.stringify(result, null, 2))
     return
@@ -1426,7 +1585,7 @@ async function packages(args: string[]) {
     console.log(JSON.stringify(await runtimeRegistryRemove(args[1], root), null, 2))
     return
   }
-  throw new Error("Usage: mend-control-plane packages <status|list|create [--id id] [--title name] [--description text] [--include all|skills,modes,...] [--exclude models,budget,...] [--version x.y.z]|update ...|delete-local|install <pack-id> [source-id]|install-source <source-id>|enable <id>|disable <id>|disable-all|remove <id>|search [query] [source-id]|show <pack-id> [source-id]|sources|add-source ...|remove-source <source-id>>")
+  throw new Error("Usage: mend-control-plane marketplace <status|list|create [--id id] [--title name] [--description text] [--include all|skills,modes,tools,pages,widgets,...] [--exclude models,budget,...] [--version x.y.z]|update ...|delete-local|install <pack-id> [source-id]|install-source <source-id>|enable <id>|disable <id>|disable-all|remove <id>|search [query] [source-id]|show <pack-id> [source-id]|sources|add-source ...|remove-source <source-id>>")
 }
 
 function parsePermissionMode(value: string | null): PermissionMode {
@@ -1623,7 +1782,7 @@ async function main() {
   if (cmd === "permissions") return permissions(args)
   if (cmd === "auth") return auth(args)
   if (cmd === "setup") return setup(args)
-  if (cmd === "packages") return packages(args)
+  if (cmd === "packages" || cmd === "marketplace") return packages(args)
   if (cmd === "loops") {
     await loops(args)
     const sub = args[0] || "status"
@@ -1645,7 +1804,7 @@ async function main() {
     console.log(await integrationStatus("tsm"))
     return
   }
-  throw new Error("Usage: mend-control-plane <status|runtime|runtime-config|bench|tui|prompt|models|budget|providers|mcp|memory|permissions|auth|setup|packages|loops|ai|export|system|project|worktree|mflow|tsm|mflow-status|tsm-status>")
+  throw new Error("Usage: mend-control-plane <status|runtime|runtime-config|bench|tui|prompt|models|budget|providers|mcp|memory|permissions|auth|setup|marketplace|packages|loops|ai|export|system|project|worktree|mflow|tsm|mflow-status|tsm-status>")
 }
 
 main().catch((error) => {

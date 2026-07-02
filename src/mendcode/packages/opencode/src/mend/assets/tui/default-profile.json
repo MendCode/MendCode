@@ -141,7 +141,7 @@
     "model": { "visible": true, "format": "provider/model" },
     "provider": { "visible": true, "format": "provider" },
     "status": { "visible": true, "mode": "guarded-runtime" },
-    "homeLogo": { "size": "default" },
+    "homeLogo": {},
     "homeWelcome": { "mode": "centered", "rightPanel": "agentManager" }
   },
   "rollback": {

@@ -30,6 +30,9 @@ const svc = {
   updatePart<T extends MessageV2.Part>(part: T) {
     return run(SessionNs.Service.use((svc) => svc.updatePart(part)))
   },
+  messages(input: { sessionID: SessionID; limit?: number; view?: MessageV2.PageView }) {
+    return run(SessionNs.Service.use((svc) => svc.messages(input)))
+  },
   fork(input: { sessionID: SessionID; messageID?: MessageID }) {
     return run(SessionNs.Service.use((svc) => svc.fork(input)))
   },
@@ -122,6 +125,29 @@ async function addCompactionPart(sessionID: SessionID, messageID: MessageID, tai
   } as any)
 }
 
+async function addLargeToolPart(sessionID: SessionID, messageID: MessageID, text: string) {
+  await svc.updatePart({
+    id: PartID.ascending(),
+    sessionID,
+    messageID,
+    type: "tool",
+    callID: "call_large",
+    tool: "bash",
+    state: {
+      status: "completed",
+      input: { command: "large-output" },
+      output: text,
+      title: "large output",
+      metadata: {
+        output: text,
+        diff: text,
+        outputPath: "/tmp/full-output",
+      },
+      time: { start: Date.now(), end: Date.now() },
+    },
+  } as any)
+}
+
 describe("MessageV2.page", () => {
   test("returns sync result", async () => {
     await WithInstance.provide({
@@ -161,6 +187,29 @@ describe("MessageV2.page", () => {
         expect(c.items.map((item) => item.info.id)).toEqual(ids.slice(0, 2))
         expect(c.more).toBe(false)
         expect(c.cursor).toBeUndefined()
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+
+  test("pages forward with opaque cursors", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const ids = await fill(session.id, 6, (i) => i)
+        const afterFirstPair = MessageV2.cursor.encode({ id: ids[1]!, time: 1 })
+
+        const a = MessageV2.page({ sessionID: session.id, limit: 2, after: afterFirstPair })
+        expect(a.items.map((item) => item.info.id)).toEqual(ids.slice(2, 4))
+        expect(a.more).toBe(true)
+        expect(a.cursor).toBeTruthy()
+
+        const b = MessageV2.page({ sessionID: session.id, limit: 2, after: a.cursor! })
+        expect(b.items.map((item) => item.info.id)).toEqual(ids.slice(4, 6))
+        expect(b.more).toBe(false)
+        expect(b.cursor).toBeUndefined()
 
         await svc.remove(session.id)
       },
@@ -219,6 +268,70 @@ describe("MessageV2.page", () => {
         expect(result.items.map((item) => item.info.id)).toEqual(ids)
         expect(result.more).toBe(false)
         expect(result.cursor).toBeUndefined()
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+
+  test("tui view trims heavyweight part payloads without changing full pages", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const messageID = await addUser(session.id, "show history")
+        const large = "x".repeat(160 * 1024)
+        await addLargeToolPart(session.id, messageID, large)
+        await svc.updatePart({
+          id: PartID.ascending(),
+          sessionID: session.id,
+          messageID,
+          type: "file",
+          mime: "image/png",
+          filename: "large.png",
+          url: `data:image/png;base64,${"a".repeat(64 * 1024)}`,
+        } as any)
+
+        const full = MessageV2.page({ sessionID: session.id, limit: 1 })
+        const tui = MessageV2.page({ sessionID: session.id, limit: 1, view: "tui" })
+        const fullTool = full.items[0]?.parts.find((part) => part.type === "tool")
+        const tuiTool = tui.items[0]?.parts.find((part) => part.type === "tool")
+        const tuiFile = tui.items[0]?.parts.find((part) => part.type === "file")
+
+        expect(fullTool?.type === "tool" && fullTool.state.status === "completed" && fullTool.state.output).toBe(large)
+        expect(tuiTool?.type === "tool" && tuiTool.state.status === "completed" && tuiTool.state.output.length).toBeLessThan(
+          large.length,
+        )
+        expect(
+          tuiTool?.type === "tool" &&
+            tuiTool.state.status === "completed" &&
+            String(tuiTool.state.metadata.outputPath),
+        ).toBe("/tmp/full-output")
+        expect(tuiFile?.type === "file" && tuiFile.url.length).toBeLessThan(16 * 1024)
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+
+  test("session messages honors tui view for unpaginated reads", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const messageID = await addUser(session.id, "show history")
+        const large = "x".repeat(64 * 1024)
+        await addLargeToolPart(session.id, messageID, large)
+
+        const full = await svc.messages({ sessionID: session.id })
+        const tui = await svc.messages({ sessionID: session.id, view: "tui" })
+        const fullTool = full[0]?.parts.find((part) => part.type === "tool")
+        const tuiTool = tui[0]?.parts.find((part) => part.type === "tool")
+
+        expect(fullTool?.type === "tool" && fullTool.state.status === "completed" && fullTool.state.output).toBe(large)
+        expect(tuiTool?.type === "tool" && tuiTool.state.status === "completed" && tuiTool.state.output.length).toBeLessThan(
+          large.length,
+        )
 
         await svc.remove(session.id)
       },

@@ -68,10 +68,10 @@ export const make = <A, E = never>(
   const idleIfCurrent = () =>
     SynchronizedRef.modify(ref, (st) => [st._tag === "Idle" ? idle : Effect.void, st] as const).pipe(Effect.flatten)
 
-  const finishRun = (id: number, done: Deferred.Deferred<A, E | Cancelled>, exit: Exit.Exit<A, E>) =>
+  const finishRun = (id: number, done: Deferred.Deferred<A, E | Cancelled>, exit: Exit.Exit<A, E>): Effect.Effect<void> =>
     SynchronizedRef.modifyEffect(
       ref,
-      Effect.fnUntraced(function* (st) {
+      (st) => Effect.gen(function* () {
         if (st._tag === "Running" && st.run.id === id) {
           return [
             Effect.gen(function* () {
@@ -87,9 +87,9 @@ export const make = <A, E = never>(
         }
         return [complete(done, exit), st] as const
       }),
-    ).pipe(Effect.flatten)
+    ).pipe(Effect.flatten) as Effect.Effect<void>
 
-  const startRun = (work: Effect.Effect<A, E>, done: Deferred.Deferred<A, E | Cancelled>) =>
+  const startRun = (work: Effect.Effect<A, E>, done: Deferred.Deferred<A, E | Cancelled>): Effect.Effect<RunHandle<A, E>> =>
     Effect.gen(function* () {
       const id = next()
       const fiber = yield* work.pipe(
@@ -97,12 +97,12 @@ export const make = <A, E = never>(
         Effect.forkIn(scope),
       )
       return { id, done, fiber } satisfies RunHandle<A, E>
-    })
+    }) as Effect.Effect<RunHandle<A, E>>
 
-  const finishShell = (id: number) =>
+  const finishShell = (id: number): Effect.Effect<void> =>
     SynchronizedRef.modifyEffect(
       ref,
-      Effect.fnUntraced(function* (st) {
+      (st) => Effect.gen(function* () {
         if (st._tag === "Shell" && st.shell.id === id) {
           return [idle, { _tag: "Idle" }] as const
         }
@@ -112,7 +112,7 @@ export const make = <A, E = never>(
         }
         return [Effect.void, st] as const
       }),
-    ).pipe(Effect.flatten)
+    ).pipe(Effect.flatten) as Effect.Effect<void>
 
   const stopShell = (shell: ShellHandle<A, E>) =>
     Effect.gen(function* () {
@@ -130,10 +130,10 @@ export const make = <A, E = never>(
       } satisfies PendingHandle<A, E>
     })
 
-  const ensureRunning = (work: Effect.Effect<A, E>, options?: { queue?: boolean }) =>
+  const ensureRunning = (work: Effect.Effect<A, E>, options?: { queue?: boolean }): Effect.Effect<A, E> =>
     SynchronizedRef.modifyEffect(
       ref,
-      Effect.fnUntraced(function* (st) {
+      (st) => Effect.gen(function* () {
         switch (st._tag) {
           case "Running":
             if (options?.queue) {
@@ -157,9 +157,9 @@ export const make = <A, E = never>(
           }
         }
       }),
-    ).pipe(Effect.flatten)
+    ).pipe(Effect.flatten) as Effect.Effect<A, E>
 
-  const startShell = (work: Effect.Effect<A, E>, ready?: Latch.Latch) =>
+  const startShell = (work: Effect.Effect<A, E>, ready?: Latch.Latch): Effect.Effect<A, E> =>
     SynchronizedRef.modifyEffect(
       ref,
       Effect.fnUntraced(function* (st) {
@@ -175,7 +175,7 @@ export const make = <A, E = never>(
         yield* busy
         const id = next()
         const cancelled = yield* Deferred.make<void>()
-        const fiber = yield* work.pipe(Effect.ensuring(finishShell(id)), Effect.forkChild)
+        const fiber = yield* work.pipe(Effect.ensuring(finishShell(id)), Effect.forkIn(scope))
         const shell = { id, cancelled, ready, fiber } satisfies ShellHandle<A, E>
         return [
           Effect.gen(function* () {
@@ -193,7 +193,7 @@ export const make = <A, E = never>(
           { _tag: "Shell", shell },
         ] as const
       }),
-    ).pipe(Effect.flatten)
+    ).pipe(Effect.flatten) as Effect.Effect<A, E>
 
   const cancel = SynchronizedRef.modify(ref, (st) => {
     switch (st._tag) {

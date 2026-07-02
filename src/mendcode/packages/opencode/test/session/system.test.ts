@@ -110,15 +110,29 @@ describe("session.system", () => {
 
     expect(output).toContain("Mode: minimal")
     expect(output).toContain("<mendcode_prompt_policy>")
-    expect(output).toContain("Do not call `mendcode memory add`")
-    expect(output).toContain("post-turn memory extractor")
-    expect(output).toContain("approval-gated pending proposals")
-    expect(output).toContain("only when the user explicitly asks to save")
-    expect(output).toContain("preference, future-facing rule, or repo convention")
-    expect(output).toContain("equivalent explicit memory wording in the user's language")
+    expect(output).toContain("Use the `memory` tool")
+    expect(output).toContain("durable correction, user preference, project rule")
+    expect(output).toContain("Use `memory_graph` only when relationships matter")
+    expect(output).toContain("skips the automatic post-turn memory extractor")
+    expect(output).toContain("Do not save transient task status")
     expect(output).not.toContain(".agents")
     expect(output).not.toContain("AGENTS.md")
     expect(output).not.toContain("MendCode policy layering")
+  })
+
+  test("keeps focus prompt policy sparse", async () => {
+    await using tmp = await tmpdir()
+    const promptModePath = path.join(tmp.path, ".mendcode", "prompt-mode.json")
+    await mkdir(path.dirname(promptModePath), { recursive: true })
+    await writeFile(promptModePath, JSON.stringify({ version: 0, mode: "focus", live: "runtime-run-chat" }))
+
+    const output = await SystemPrompt.mendPromptPolicy(fakeModel("openai", "gpt-5.2"), tmp.path)
+
+    expect(output).toContain("Mode: focus")
+    expect(output).toContain("monitored loops or repeated autonomous iterations")
+    expect(output).not.toContain("Persistent memory operations")
+    expect(output).not.toContain("MendCode CLI map")
+    expect(output).not.toContain("MendCode marketplace and extension contract")
   })
 
   test("formats persistent memory as soft context when enabled", async () => {

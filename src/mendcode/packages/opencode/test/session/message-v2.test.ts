@@ -9,6 +9,13 @@ import { Question } from "../../src/question"
 
 const sessionID = SessionID.make("session")
 const providerID = ProviderID.make("test")
+const png1x1Base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+type FetchDecompressionErrorFixture = Error & {
+  code: "ZlibError"
+  errno: number
+  path?: string
+}
+
 const model: Provider.Model = {
   id: ModelID.make("test-model"),
   providerID,
@@ -60,31 +67,30 @@ const model: Provider.Model = {
 
 function userInfo(id: string): MessageV2.User {
   return {
-    id,
+    id: MessageID.make(id),
     sessionID,
     role: "user",
     time: { created: 0 },
     agent: "user",
     model: { providerID, modelID: ModelID.make("test") },
     tools: {},
-    mode: "",
-  } as unknown as MessageV2.User
+  }
 }
 
 function assistantInfo(
   id: string,
   parentID: string,
   error?: MessageV2.Assistant["error"],
-  meta?: { providerID: string; modelID: string },
+  meta?: { providerID: ProviderID; modelID: ModelID },
 ): MessageV2.Assistant {
-  const infoModel = meta ?? { providerID: model.providerID, modelID: model.api.id }
+  const infoModel = meta ?? { providerID: model.providerID, modelID: model.id }
   return {
-    id,
+    id: MessageID.make(id),
     sessionID,
     role: "assistant",
     time: { created: 0 },
     error,
-    parentID,
+    parentID: MessageID.make(parentID),
     modelID: infoModel.modelID,
     providerID: infoModel.providerID,
     mode: "",
@@ -97,7 +103,18 @@ function assistantInfo(
       reasoning: 0,
       cache: { read: 0, write: 0 },
     },
-  } as unknown as MessageV2.Assistant
+  }
+}
+
+function zlibFetchError(url: string, options?: { path?: string }): FetchDecompressionErrorFixture {
+  return Object.assign(
+    new Error(`ZlibError fetching "${url}". For more information, pass \`verbose: true\` in the second argument to fetch()`),
+    {
+      code: "ZlibError" as const,
+      errno: 0,
+      path: options?.path,
+    },
+  )
 }
 
 function basePart(messageID: string, id: string) {
@@ -268,6 +285,168 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
+  test("keeps embedded data-url attachments inline instead of making the SDK download them", async () => {
+    const messageID = "m-user"
+
+    const input: MessageV2.WithParts[] = [
+      {
+        info: userInfo(messageID),
+        parts: [
+          {
+            ...basePart(messageID, "p1"),
+            type: "file",
+            mime: "image/png",
+            filename: "screen.png",
+            url: `data:image/png;base64,${png1x1Base64}`,
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "file",
+            mediaType: "image/png",
+            filename: "screen.png",
+            data: new Uint8Array(Buffer.from(png1x1Base64, "base64")),
+          },
+        ],
+      },
+    ])
+  })
+
+  test("replaces corrupt embedded image attachments with model-visible text", async () => {
+    const messageID = "m-user-corrupt-image"
+
+    const input: MessageV2.WithParts[] = [
+      {
+        info: userInfo(messageID),
+        parts: [
+          {
+            ...basePart(messageID, "p1-corrupt-image"),
+            type: "file",
+            mime: "image/png",
+            filename: "broken.png",
+            url: "data:image/png;base64,aGVsbG8=",
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "ERROR: Attached image/png file (broken.png) is empty or corrupted. Ask the user to re-attach it.",
+          },
+        ],
+      },
+    ])
+  })
+
+  test("replaces truncated embedded png attachments with model-visible text", async () => {
+    const messageID = "m-user-truncated-png"
+    const truncatedPngBase64 = Buffer.from(Buffer.from(png1x1Base64, "base64").subarray(0, 24)).toString("base64")
+
+    const input: MessageV2.WithParts[] = [
+      {
+        info: userInfo(messageID),
+        parts: [
+          {
+            ...basePart(messageID, "p1-truncated-png"),
+            type: "file",
+            mime: "image/png",
+            filename: "truncated.png",
+            url: `data:image/png;base64,${truncatedPngBase64}`,
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "ERROR: Attached image/png file (truncated.png) is empty or corrupted. Ask the user to re-attach it.",
+          },
+        ],
+      },
+    ])
+  })
+
+  test("keeps parameterized embedded data-url attachments inline", async () => {
+    const messageID = "m-user-parameterized"
+
+    const input: MessageV2.WithParts[] = [
+      {
+        info: userInfo(messageID),
+        parts: [
+          {
+            ...basePart(messageID, "p1-parameterized"),
+            type: "file",
+            mime: "image/svg+xml",
+            filename: "diagram.svg",
+            url: "data:image/svg+xml;charset=utf-8;base64,PHN2Zz4=",
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "file",
+            mediaType: "image/svg+xml",
+            filename: "diagram.svg",
+            data: new Uint8Array(Buffer.from("PHN2Zz4=", "base64")),
+          },
+        ],
+      },
+    ])
+  })
+
+  test("keeps non-base64 embedded data-url attachments inline", async () => {
+    const messageID = "m-user-inline"
+
+    const input: MessageV2.WithParts[] = [
+      {
+        info: userInfo(messageID),
+        parts: [
+          {
+            ...basePart(messageID, "p1-inline"),
+            type: "file",
+            mime: "image/svg+xml",
+            filename: "diagram.svg",
+            url: "data:image/svg+xml,%3Csvg%3Ehello%3C/svg%3E",
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          {
+            type: "file",
+            mediaType: "image/svg+xml",
+            filename: "diagram.svg",
+            data: new Uint8Array(Buffer.from("<svg>hello</svg>")),
+          },
+        ],
+      },
+    ])
+  })
+
   test("converts assistant tool completion into tool-call + tool-result messages with attachments", async () => {
     const userID = "m-user"
     const assistantID = "m-assistant"
@@ -310,7 +489,7 @@ describe("session.message-v2.toModelMessage", () => {
                   type: "file",
                   mime: "image/png",
                   filename: "attachment.png",
-                  url: "data:image/png;base64,Zm9v",
+                  url: `data:image/png;base64,${png1x1Base64}`,
                 },
               ],
             },
@@ -350,10 +529,174 @@ describe("session.message-v2.toModelMessage", () => {
               type: "content",
               value: [
                 { type: "text", text: "ok" },
-                { type: "media", mediaType: "image/png", data: "Zm9v" },
+                { type: "media", mediaType: "image/png", data: png1x1Base64 },
               ],
             },
             providerOptions: { openai: { tool: "meta" } },
+          },
+        ],
+      },
+    ])
+  })
+
+  test("normalizes non-base64 tool-result media attachments inline", async () => {
+    const userID = "m-user-inline-tool"
+    const assistantID = "m-assistant-inline-tool"
+
+    const input: MessageV2.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [
+          {
+            ...basePart(userID, "u1-inline-tool"),
+            type: "text",
+            text: "run tool",
+          },
+        ] as MessageV2.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1-inline-tool"),
+            type: "tool",
+            callID: "call-inline-tool-1",
+            tool: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "/tmp/inline.svg" },
+              output: "ok",
+              title: "Read",
+              metadata: {},
+              time: { start: 0, end: 1 },
+              attachments: [
+                {
+                  ...basePart(assistantID, "file-inline-tool-1"),
+                  type: "file",
+                  mime: "image/svg+xml",
+                  filename: "inline.svg",
+                  url: "data:image/svg+xml,%3Csvg%3Ehello%3C/svg%3E",
+                },
+              ],
+            },
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "run tool" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call-inline-tool-1",
+            toolName: "read",
+            input: { filePath: "/tmp/inline.svg" },
+            providerExecuted: undefined,
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call-inline-tool-1",
+            toolName: "read",
+            output: {
+              type: "content",
+              value: [
+                { type: "text", text: "ok" },
+                { type: "media", mediaType: "image/svg+xml", data: Buffer.from("<svg>hello</svg>").toString("base64") },
+              ],
+            },
+          },
+        ],
+      },
+    ])
+  })
+
+  test("replaces corrupt tool-result image attachments with model-visible text", async () => {
+    const userID = "m-user-corrupt-tool"
+    const assistantID = "m-assistant-corrupt-tool"
+
+    const input: MessageV2.WithParts[] = [
+      {
+        info: userInfo(userID),
+        parts: [
+          {
+            ...basePart(userID, "u1-corrupt-tool"),
+            type: "text",
+            text: "run tool",
+          },
+        ] as MessageV2.Part[],
+      },
+      {
+        info: assistantInfo(assistantID, userID),
+        parts: [
+          {
+            ...basePart(assistantID, "a1-corrupt-tool"),
+            type: "tool",
+            callID: "call-corrupt-tool-1",
+            tool: "read",
+            state: {
+              status: "completed",
+              input: { filePath: "/tmp/broken.png" },
+              output: "ok",
+              title: "Read",
+              metadata: {},
+              time: { start: 0, end: 1 },
+              attachments: [
+                {
+                  ...basePart(assistantID, "file-corrupt-tool-1"),
+                  type: "file",
+                  mime: "image/png",
+                  filename: "broken.png",
+                  url: "data:image/png;base64,aGVsbG8=",
+                },
+              ],
+            },
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    expect(await MessageV2.toModelMessages(input, model)).toStrictEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "run tool" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call-corrupt-tool-1",
+            toolName: "read",
+            input: { filePath: "/tmp/broken.png" },
+            providerExecuted: undefined,
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call-corrupt-tool-1",
+            toolName: "read",
+            output: {
+              type: "content",
+              value: [
+                { type: "text", text: "ok" },
+                { type: "text", text: "ERROR: Attached image/png file is empty or corrupted. Ask the user to re-attach it." },
+              ],
+            },
           },
         ],
       },
@@ -459,7 +802,10 @@ describe("session.message-v2.toModelMessage", () => {
         ] as MessageV2.Part[],
       },
       {
-        info: assistantInfo(assistantID, userID, undefined, { providerID: "other", modelID: "other" }),
+        info: assistantInfo(assistantID, userID, undefined, {
+          providerID: ProviderID.make("other"),
+          modelID: ModelID.make("other"),
+        }),
         parts: [
           {
             ...basePart(assistantID, "a1"),
@@ -1263,18 +1609,58 @@ describe("session.message-v2.fromError", () => {
   })
 
   test("classifies ZlibError from fetch as retryable APIError", () => {
-    const zlibError = new Error(
-      'ZlibError fetching "https://opencode.cloudflare.dev/anthropic/messages". For more information, pass `verbose: true` in the second argument to fetch()',
-    )
-    ;(zlibError as any).code = "ZlibError"
-    ;(zlibError as any).errno = 0
-    ;(zlibError as any).path = ""
+    const zlibError = zlibFetchError("https://opencode.cloudflare.dev/anthropic/messages", { path: "" })
 
     const result = MessageV2.fromError(zlibError, { providerID })
 
     expect(MessageV2.APIError.isInstance(result)).toBe(true)
     expect((result as MessageV2.APIError).data.isRetryable).toBe(true)
     expect((result as MessageV2.APIError).data.message).toInclude("decompression")
+  })
+
+  test("does not retry embedded data-url download errors as network failures", () => {
+    const error = Object.assign(new Error("Download failed: fetch failed"), {
+      name: "AI_DownloadError",
+      url: "data:image/png;base64,aGVsbG8=",
+    })
+    const result = MessageV2.fromError(error, { providerID })
+
+    expect(MessageV2.APIError.isInstance(result)).toBe(true)
+    expect((result as MessageV2.APIError).data.isRetryable).toBe(false)
+    expect((result as MessageV2.APIError).data.message).toContain("Embedded image/png attachment")
+  })
+
+  test("does not leak inline data payloads when classifying embedded data-url download errors", () => {
+    const error = Object.assign(new Error("Download failed: fetch failed"), {
+      name: "AI_DownloadError",
+      url: "data:,super-secret-inline-payload",
+    })
+    const result = MessageV2.fromError(error, { providerID }) as MessageV2.APIError
+
+    expect(MessageV2.APIError.isInstance(result)).toBe(true)
+    expect(result.data.isRetryable).toBe(false)
+    expect(result.data.message).toContain("Embedded file attachment")
+    expect(result.data.message).not.toContain("super-secret-inline-payload")
+    expect(result.data.metadata?.mediaType).toBe("file")
+  })
+
+  test("finds nested embedded data-url download errors through wrapped causes and preserves media type", () => {
+    const error = Object.assign(new Error("outer fetch failed"), {
+      cause: new AggregateError(
+        [
+          Object.assign(new Error("inner download failed"), {
+            name: "AI_DownloadError",
+            url: new URL("data:image/svg+xml;charset=utf-8;base64,PHN2Zz4="),
+          }),
+        ],
+        "aggregate",
+      ),
+    })
+    const result = MessageV2.fromError(error, { providerID })
+
+    expect(MessageV2.APIError.isInstance(result)).toBe(true)
+    expect((result as MessageV2.APIError).data.isRetryable).toBe(false)
+    expect((result as MessageV2.APIError).data.message).toContain("Embedded image/svg+xml attachment")
   })
 
   test("keeps retryable network errors retryable when abort context is provided", () => {
@@ -1311,11 +1697,7 @@ describe("session.message-v2.fromError", () => {
   })
 
   test("classifies ZlibError as retryable APIError when abort context is provided", () => {
-    const zlibError = new Error(
-      'ZlibError fetching "https://opencode.cloudflare.dev/anthropic/messages". For more information, pass `verbose: true` in the second argument to fetch()',
-    )
-    ;(zlibError as any).code = "ZlibError"
-    ;(zlibError as any).errno = 0
+    const zlibError = zlibFetchError("https://opencode.cloudflare.dev/anthropic/messages")
 
     const result = MessageV2.fromError(zlibError, { providerID, aborted: true })
 

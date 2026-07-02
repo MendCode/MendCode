@@ -1,6 +1,5 @@
 import { DateTime, Effect, Stream } from "effect"
 import os from "os"
-import { createWriteStream } from "node:fs"
 import * as Tool from "./tool"
 import path from "path"
 import { Bus } from "@/bus"
@@ -238,6 +237,55 @@ function preview(text: string) {
   return "...\n\n" + text.slice(-MAX_METADATA_LENGTH)
 }
 
+function utf8Start(text: string, maxBytes: number) {
+  const buffer = Buffer.from(text, "utf8")
+  if (buffer.byteLength <= maxBytes) return text
+  let end = Math.max(0, maxBytes)
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) end--
+  return buffer.subarray(0, end).toString("utf8")
+}
+
+function utf8End(text: string, maxBytes: number) {
+  const buffer = Buffer.from(text, "utf8")
+  if (buffer.byteLength <= maxBytes) return text
+  let start = Math.max(0, buffer.byteLength - maxBytes)
+  while (start < buffer.byteLength && (buffer[start] & 0xc0) === 0x80) start++
+  return buffer.subarray(start).toString("utf8")
+}
+
+function createSavedOutputExcerpt() {
+  const budget = Math.max(1024, Truncate.MAX_SAVED_BYTES - 512)
+  const headBudget = Math.floor(budget / 2)
+  const tailBudget = budget - headBudget
+  let head = ""
+  let tail = ""
+  let totalBytes = 0
+
+  return {
+    append(text: string) {
+      const size = Buffer.byteLength(text, "utf8")
+      totalBytes += size
+      const headRemaining = headBudget - Buffer.byteLength(head, "utf8")
+      if (headRemaining > 0) {
+        const nextHead = utf8Start(text, headRemaining)
+        head += nextHead
+        tail += text.slice(nextHead.length)
+      } else {
+        tail += text
+      }
+      tail = utf8End(tail, tailBudget)
+    },
+    text() {
+      const capturedBytes = Buffer.byteLength(head, "utf8") + Buffer.byteLength(tail, "utf8")
+      if (totalBytes <= capturedBytes) return { text: head + tail, complete: true }
+      return {
+        text: `${head}\n\n[Saved output excerpt: omitted ${totalBytes - capturedBytes} bytes]\n\n${tail}`,
+        complete: false,
+      }
+    },
+  }
+}
+
 function tail(text: string, maxLines: number, maxBytes: number) {
   const lines = text.split("\n")
   if (lines.length <= maxLines && Buffer.byteLength(text, "utf-8") <= maxBytes) {
@@ -456,12 +504,12 @@ export const ShellTool = Tool.define(
     ) {
       const limits = yield* trunc.limits()
       const keep = limits.maxBytes * 2
-      let full = ""
       let last = ""
       const list: Chunk[] = []
       let used = 0
       let file = ""
-      let sink: ReturnType<typeof createWriteStream> | undefined
+      let savedOutputComplete = true
+      const savedOutput = createSavedOutputExcerpt()
       let cut = false
       let expired = false
       let aborted: "user" | "external" | undefined
@@ -566,6 +614,7 @@ export const ShellTool = Tool.define(
         }
         previousStoredEndedWithNewline = outputChunk.endsWith("\n")
         const size = Buffer.byteLength(outputChunk, "utf-8")
+        savedOutput.append(outputChunk)
         list.push({ text: outputChunk, size })
         used += size
         while (used > keep && list.length > 1) {
@@ -577,25 +626,6 @@ export const ShellTool = Tool.define(
 
         last = preview(updateTerminalPreview(chunk))
         if (!rewrite) pendingOutputDelta += outputChunk
-
-        if (file) {
-          sink?.write(outputChunk)
-        } else {
-          full += outputChunk
-          if (Buffer.byteLength(full, "utf-8") > limits.maxBytes) {
-            return trunc.write(full).pipe(
-              Effect.andThen((next) =>
-                Effect.sync(() => {
-                  file = next
-                  cut = true
-                  sink = createWriteStream(next, { flags: "a" })
-                  full = ""
-                }),
-              ),
-              Effect.andThen(flushMetadata(true)),
-            )
-          }
-        }
 
         return flushMetadata().pipe(Effect.andThen(() => flushOutputEvent()))
       }
@@ -652,37 +682,30 @@ export const ShellTool = Tool.define(
         meta.push(
           aborted === "user"
             ? "User aborted the command"
-            : "Command output interrupted before completion; no explicit user cancel was recorded",
+            : "Command execution stopped before completion because the parent run lost its connection; no explicit user cancel was recorded",
         )
       }
       const raw = list.map((item) => item.text).join("")
       const end = tail(raw, limits.maxLines, limits.maxBytes)
       if (end.cut) cut = true
-      if (!file && end.cut) {
-        file = yield* trunc.write(raw)
+      if (!file && cut) {
+        const excerpt = savedOutput.text()
+        const saved = yield* trunc.writeOutput(excerpt.text, { complete: excerpt.complete })
+        file = saved.path
+        savedOutputComplete = saved.complete
       }
 
       let output = end.text
       if (!output) output = "(no output)"
 
       if (cut && file) {
-        output = `...output truncated...\n\nFull output saved to: ${file}\n\n` + output
+        const savedLine = savedOutputComplete ? `Full output saved to: ${file}` : `Output excerpt saved to: ${file}`
+        output = `...output truncated...\n\n${savedLine}\n\n` + output
       }
 
       if (meta.length > 0) {
         output += "\n\n<shell_metadata>\n" + meta.join("\n") + "\n</shell_metadata>"
       }
-      if (sink) {
-        const stream = sink
-        yield* Effect.promise(
-          () =>
-            new Promise<void>((resolve) => {
-              stream.end(() => resolve())
-              stream.on("error", () => resolve())
-            }),
-        )
-      }
-
       return {
         title: input.description,
         metadata: {

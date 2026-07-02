@@ -254,6 +254,7 @@ export const SetRevertInput = Schema.Struct({
 export const MessagesInput = Schema.Struct({
   sessionID: SessionID,
   limit: Schema.optional(NonNegativeInt),
+  view: Schema.optional(Schema.Literals(["full", "tui"])),
 }).pipe(withStatics((s) => ({ zod: zod(s) })))
 export type ListInput = {
   directory?: string
@@ -488,7 +489,11 @@ export interface Interface {
   readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void>
   readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
-  readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<MessageV2.WithParts[]>
+  readonly messages: (input: {
+    sessionID: SessionID
+    limit?: number
+    view?: MessageV2.PageView
+  }) => Effect.Effect<MessageV2.WithParts[]>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
   readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
   readonly updateMessage: <T extends MessageV2.Info>(msg: T) => Effect.Effect<T>
@@ -555,14 +560,21 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
         const version = pending.version
         const part = structuredClone(pending.part)
         pending.flush = Effect.runPromise(
-          sync.run(
-            MessageV2.Event.PartUpdated,
-            {
-              sessionID: part.sessionID,
-              part,
-              time: Date.now(),
-            },
-          ),
+          Effect.gen(function* () {
+            const hasInstance = yield* InstanceState.directory.pipe(
+              Effect.as(true),
+              Effect.catchCause(() => Effect.succeed(false)),
+            )
+            if (!hasInstance) return
+            yield* sync.run(
+              MessageV2.Event.PartUpdated,
+              {
+                sessionID: part.sessionID,
+                part,
+                time: Date.now(),
+              },
+            )
+          }),
         )
           .catch((error) => {
             log.warn("live part delta persist failed", {
@@ -857,11 +869,15 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
         .pipe(Effect.orElseSucceed((): Snapshot.FileDiff[] => []))
     })
 
-    const messages = Effect.fn("Session.messages")(function* (input: { sessionID: SessionID; limit?: number }) {
+    const messages = Effect.fn("Session.messages")(function* (input: {
+      sessionID: SessionID
+      limit?: number
+      view?: MessageV2.PageView
+    }) {
       if (input.limit) {
-        return MessageV2.page({ sessionID: input.sessionID, limit: input.limit }).items
+        return MessageV2.page({ sessionID: input.sessionID, limit: input.limit, view: input.view }).items
       }
-      return Array.from(MessageV2.stream(input.sessionID)).reverse()
+      return Array.from(MessageV2.stream(input.sessionID, { view: input.view })).reverse()
     })
 
     const removeMessage = Effect.fn("Session.removeMessage")(function* (input: {

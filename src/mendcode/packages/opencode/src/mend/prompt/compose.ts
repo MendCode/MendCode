@@ -162,6 +162,20 @@ function tuiMarkdownRendering() {
   ].join("\n")
 }
 
+function marketplaceExtensionContract() {
+  return [
+    "MendCode marketplace and extension contract:",
+    "- Marketplace packages are reusable .mendcode bundles, not npm runtime installs. Prefer `mendcode marketplace install <pack-id> [source-id]` and package registry sources over installing arbitrary npm packages.",
+    "- Packages may include commands, agents, modes, skills, prompts, MCP config, context files, TUI profiles, themes, plugins, widgets/components/scripts, custom pages, and assistant-facing custom tools under `.mendcode/tools`.",
+    "- Use the public TUI plugin API from `@mendcode/plugin/tui` for command palette entries, slash commands, routes/pages, dialogs, slots, footer/status entries, themes, KV state, lifecycle cleanup, and simple shell-backed widgets.",
+    "- Custom pages can build terminal-native ASCII/Solid UIs similar to built-in Usage, Memory Center, or Loop pages when the required state is available through the public API.",
+    "- Shell-backed widgets use `api.shell.spawn()` for bounded stdout/stderr streams. This is not a PTY; do not implement full-screen terminal apps, cursor-addressing programs, alternate-screen apps, Doom, or real cava by piping stdout into the main TUI.",
+    "- If a package needs private MendCode runtime data, add or request a public API first. Do not import private runtime internals from packages.",
+    "- Packages must not include provider tokens, OAuth state, `.env*`, `.mendcode/auth`, local databases, room secrets, cache files, or machine-local run state.",
+    "- Disabling a marketplace package should deselect it without deleting project config; removing a package deletes only the installed package copy and state entry.",
+  ].join("\n")
+}
+
 async function fullKnowledge(root: string) {
   const [config, policy, mflow, tsm] = await Promise.all([
     Promise.resolve(readMendConfig(root)),
@@ -183,15 +197,16 @@ async function fullKnowledge(root: string) {
     "- Health/setup: `mendcode status`, `mendcode doctor`, `mendcode check`, `mendcode setup status|plan|doctor`.",
     "- Models/providers/auth: `mendcode models status|show|plan|presets|set-default|use-preset`, `mendcode providers status`, `mendcode auth status|login-plan|login`.",
     "- Prompt/runtime internals are debug-only and should not be presented as the normal user workflow.",
-    "- Memory inspection: `mendcode memory status|search|preview|list|index|config`.",
-    "- Project controls: `mendcode focus status|list|show|use`, `mendcode packages status|list|create|install|enable|disable|remove|search|show`.",
+    "- Memory inspection: use the `memory` tool for status, categories, list, search, context, add, update, and delete.",
+    "- Project controls: `mendcode focus status|list|show|use`, `mendcode marketplace status|list|create|install|enable|disable|remove|search|show`.",
     "- Collaboration: `mendcode worktree status|plan|create|open|adopt|remove|reset|doctor`, `mendcode mflow status|setup|activate|deactivate|remove|plan|doctor`, `mendcode tsm status|plan|setup|activate|deactivate|remove|doctor`.",
     "",
     "Memory operating contract:",
-    "- Do not call `mendcode memory add` or `mendcode memory propose` for implicit preferences, corrections, rules, or durable future-use candidates.",
-    "- Let the post-turn memory extractor create approval-gated pending proposals from normal chat content.",
-    "- Use direct memory mutation commands only when the user explicitly asks to save, remember, add, edit, delete, apply, or reject memory now, including equivalent explicit memory wording in the user's language.",
-    "- List/search before editing, deleting, applying, or rejecting memory IDs.",
+    "- Use `memory` when you detect a durable correction, user preference, project rule, or explicit memory-management request. Scope cross-project behavior as global and repo-specific behavior as project.",
+    "- Use `memory_graph` only when relationships matter, such as conflicts, supersedes, supports, related facts, or graph validation.",
+    "- Search/list/categories before update/delete unless the exact memory id was just returned by a memory tool.",
+    "- If `memory` or `memory_graph` is used in a turn, the automatic post-turn extractor is skipped; do not duplicate the same fact through proposals.",
+    "- Do not save transient task status, raw logs, secrets, or one-off debugging facts as durable memory.",
     "- Treat injected memories as soft context; current user instructions and repository evidence win.",
   ]
   const integration: string[] = []
@@ -222,10 +237,10 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
   const harness = await readPromptSource(source, sourceInput)
   const found = source ? resolvePromptSourceFile(source, sourceInput) : null
   const sections: PromptSection[] = []
-  const includeProjectInstructions = true
-  const includeSkillsByDefault = mode !== "minimal"
-  const includeCustomInstructions = true
-  const includeMcpContext = true
+  const includeProjectInstructions = mode === "full"
+  const includeSkillsByDefault = mode === "full"
+  const includeCustomInstructions = mode === "full"
+  const includeMcpContext = mode === "full"
 
   sections.push(section({
     id: "mode-boundary",
@@ -264,7 +279,7 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
     }
   }
 
-  if (mode !== "minimal") {
+  if (mode === "full") {
     sections.push(section({
       id: "loop-workflow-brief",
       label: "MendCode Loop Workflow",
@@ -293,6 +308,12 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
       label: "MendCode knowledge",
       source: "mendcode-context",
       text: full.knowledge,
+    }))
+    sections.push(section({
+      id: "marketplace-extension-contract",
+      label: "MendCode marketplace and extension contract",
+      source: "mendcode-context",
+      text: marketplaceExtensionContract(),
     }))
     if (full.integration) {
       sections.push(section({

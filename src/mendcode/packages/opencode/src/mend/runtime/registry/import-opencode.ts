@@ -30,8 +30,9 @@ export async function inspectOpencodeSettings(stageDir: string) {
     .filter((file) => existsSync(file))
   let config: Record<string, any> = {}
   if (configFiles[0]) {
-    config = ConfigParse.jsonc(await readFile(configFiles[0], "utf8"), configFiles[0])
-    if (!isRecord(config)) throw new Error(`OpenCode settings config must be an object: ${configFiles[0]}`)
+    const parsed = ConfigParse.jsonc(await readFile(configFiles[0], "utf8"), configFiles[0])
+    if (!isRecord(parsed)) throw new Error(`OpenCode settings config must be an object: ${configFiles[0]}`)
+    config = parsed
   }
   const supported = new Set(["$schema", "model", "small_model", "subagent_model", "agent", "mcp"])
   return {

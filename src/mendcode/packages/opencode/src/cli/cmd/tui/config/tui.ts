@@ -21,6 +21,7 @@ import * as Log from "@mendcode/core/util/log"
 import { ConfigVariable } from "@/config/variable"
 import { Npm } from "@mendcode/core/npm"
 import path from "path"
+import { activeMendPackageProjection } from "@/mend/runtime/packages"
 
 const log = Log.create({ service: "tui.config" })
 
@@ -177,6 +178,20 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
     for (const file of ConfigPaths.fileInDirectory(dir, "tui")) {
       yield* mergeFile(acc, file)
     }
+  }
+
+  const packages = yield* Effect.promise(() => activeMendPackageProjection(ctx.directory).catch(() => undefined))
+  if (packages?.plugin.length) {
+    const plugins = ConfigPlugin.deduplicatePluginOrigins([
+      ...(acc.result.plugin_origins ?? []),
+      ...packages.plugin.map((spec) => ({
+        spec,
+        scope: "local" as const,
+        source: path.join(ctx.directory, ".mendcode", "packages", "state.json"),
+      })),
+    ])
+    acc.result.plugin = plugins.map((item) => item.spec)
+    acc.result.plugin_origins = plugins
   }
 
   const keybinds = { ...(acc.result.keybinds ?? {}) }

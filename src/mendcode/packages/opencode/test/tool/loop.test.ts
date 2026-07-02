@@ -225,7 +225,7 @@ describe("tool.loop", () => {
     ),
   )
 
-  it.live("normalizes zero maxTurns for interval monitors and rejects fixed zero caps", () =>
+  it.live("normalizes maxTurns for unbounded monitors and rejects fixed zero caps", () =>
     provideTmpdirInstance(
       () =>
         Effect.gen(function* () {
@@ -246,9 +246,10 @@ describe("tool.loop", () => {
               objective: "Run an hourly status monitor until stopped.",
               triggerMode: "interval",
               intervalMs: 3_600_000,
-              maxTurns: 0,
+              maxTurns: 1,
               permissionMode: "report-only",
               reportOnly: true,
+              budgetMode: "unbounded-monitor",
               ensureService: false,
             },
             {

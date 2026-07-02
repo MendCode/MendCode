@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { resolvePromptFocus } from "@/mend/prompt/focus-resolver"
+import { resolvePromptFocus, type PromptFocusID } from "@/mend/prompt/focus-resolver"
 
 describe("mend prompt focus resolver", () => {
   test.each([
@@ -11,7 +11,7 @@ describe("mend prompt focus resolver", () => {
     ["mistral", "codestral-latest", "mistral"],
     ["ollama", "qwen3-coder", "local"],
   ])("resolves %s/%s to %s", (providerID, modelID, focusID) => {
-    expect(resolvePromptFocus({ providerID, modelID }).focusID).toBe(focusID)
+    expect(resolvePromptFocus({ providerID, modelID }).focusID).toBe(focusID as PromptFocusID)
   })
 
   test("model family wins over provider transport", () => {

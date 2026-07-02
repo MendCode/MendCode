@@ -170,6 +170,24 @@ export async function upsertMemoryFact(input: Partial<MemoryFact> & { text: stri
   return fact
 }
 
+export async function upsertMemoryFactLink(
+  input: Omit<MemoryFactLink, "id" | "createdAt"> & Partial<Pick<MemoryFactLink, "id" | "createdAt">>,
+  root?: string,
+) {
+  const graph = await readMemoryGraph(root)
+  const link: MemoryFactLink = {
+    id: input.id || nowID("memlink"),
+    from: input.from,
+    to: input.to,
+    kind: input.kind,
+    createdAt: input.createdAt || new Date().toISOString(),
+  }
+  const links = graph.links.filter((item) => item.id !== link.id)
+  links.push(link)
+  await writeMemoryGraph({ ...graph, links }, root)
+  return link
+}
+
 export async function legacyFacts(root?: string) {
   const [globalEntries, projectEntries] = await Promise.all([
     readMemoryEntries("global", root).catch(() => []),
@@ -189,7 +207,7 @@ export async function readMemoryFacts(root?: string) {
 
 export async function validateMemoryGraph(root?: string) {
   const graph = await readMemoryGraph(root)
-  const factIDs = new Set(graph.facts.map((fact) => fact.id))
+  const factIDs = new Set((await readMemoryFacts(root)).map((fact) => fact.id))
   const issues: Array<{ code: string; message: string; repairable: boolean }> = []
   for (const fact of graph.facts) {
     for (const categoryID of fact.categoryIDs) {
@@ -208,7 +226,7 @@ export async function validateMemoryGraph(root?: string) {
 
 export async function repairMemoryGraph(root?: string) {
   const graph = await readMemoryGraph(root)
-  const factIDs = new Set(graph.facts.map((fact) => fact.id))
+  const factIDs = new Set((await readMemoryFacts(root)).map((fact) => fact.id))
   const facts = graph.facts.map((fact) => normalizeMemoryFact({
     ...fact,
     categoryIDs: normalizeMemoryCategoryIDs(fact.categoryIDs),

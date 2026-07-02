@@ -883,9 +883,30 @@ export const SessionRoutes = lazy(() =>
                 },
                 { message: "Invalid cursor" },
               ),
+            after: z
+              .string()
+              .optional()
+              .meta({ description: "Opaque cursor for loading newer messages" })
+              .refine(
+                (value) => {
+                  if (!value) return true
+                  try {
+                    MessageV2.cursor.decode(value)
+                    return true
+                  } catch {
+                    return false
+                  }
+                },
+                { message: "Invalid cursor" },
+              ),
+            view: z.enum(["full", "tui"]).optional(),
           })
-          .refine((value) => !value.before || value.limit !== undefined, {
-            message: "before requires limit",
+          .refine((value) => !value.before || !value.after, {
+            message: "before and after are mutually exclusive",
+            path: ["after"],
+          })
+          .refine((value) => (!value.before && !value.after) || value.limit !== undefined, {
+            message: "before/after requires limit",
             path: ["before"],
           }),
       ),
@@ -899,7 +920,7 @@ export const SessionRoutes = lazy(() =>
             Effect.gen(function* () {
               const session = yield* Session.Service
               yield* session.get(sessionID)
-              return yield* session.messages({ sessionID })
+              return yield* session.messages({ sessionID, view: query.view })
             }),
           )
           return c.json(messages)
@@ -909,11 +930,14 @@ export const SessionRoutes = lazy(() =>
           sessionID,
           limit: query.limit,
           before: query.before,
+          after: query.after,
+          view: query.view,
         })
         if (page.cursor) {
           const url = new URL(c.req.url)
           url.searchParams.set("limit", query.limit.toString())
-          url.searchParams.set("before", page.cursor)
+          if (query.after) url.searchParams.set("after", page.cursor)
+          else url.searchParams.set("before", page.cursor)
           c.header("Access-Control-Expose-Headers", "Link, X-Next-Cursor")
           c.header("Link", `<${url.toString()}>; rel="next"`)
           c.header("X-Next-Cursor", page.cursor)

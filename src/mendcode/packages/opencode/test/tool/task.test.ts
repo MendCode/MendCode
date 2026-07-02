@@ -4,6 +4,7 @@ import { Agent } from "../../src/agent/agent"
 import { Config } from "@/config/config"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { Session } from "@/session/session"
+import { BUSY_STATUS_STALE_MS, SessionStatus } from "@/session/status"
 import { MessageV2 } from "../../src/session/message-v2"
 import type { SessionPrompt } from "../../src/session/prompt"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
@@ -93,6 +94,7 @@ const it = testEffect(
     testProvider,
     CrossSpawnSpawner.defaultLayer,
     Session.defaultLayer,
+    SessionStatus.defaultLayer,
     Truncate.defaultLayer,
     ToolRegistry.defaultLayer,
   ),
@@ -298,6 +300,56 @@ describe("tool.task", () => {
       expect(result.metadata.sessionId).toBe(child.id)
       expect(result.output).toContain(`task_id: ${child.id}`)
       expect(seen?.sessionID).toBe(child.id)
+    }),
+  )
+
+  it.instance("execute marks parent as waiting for subagent with a non-stale TTL", () =>
+    Effect.gen(function* () {
+      const status = yield* SessionStatus.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const ready = defer<void>()
+      const done = defer<void>()
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) =>
+          Effect.promise(() => {
+            ready.resolve()
+            return done.promise
+          }).pipe(Effect.as(reply(input, "finished child"))),
+      }
+
+      const fiber = yield* def
+        .execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Effect.promise(() => ready.promise)
+      const waiting = yield* status.get(chat.id)
+      expect(waiting).toMatchObject({ type: "busy", kind: "subagent-wait", message: "Waiting for general subagent..." })
+      if (waiting.type === "busy") expect(waiting.until).toBeGreaterThan(Date.now() + BUSY_STATUS_STALE_MS)
+
+      done.resolve()
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(yield* status.get(chat.id)).toEqual({ type: "busy" })
     }),
   )
 

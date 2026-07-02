@@ -7,18 +7,19 @@ import path from "path"
 import { tmpdir } from "../fixture/fixture"
 import { appendMemoryEntry, deleteMemoryEntry, memoryStatus, readMemoryEntries, updateMemoryEntry } from "../../src/mend/memory/store"
 import { retrieveMemory } from "../../src/mend/memory/retrieve"
-import { memoryPaths, readMemoryConfig, resolveProjectMemoryRoot, writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../../src/mend/memory/config"
+import { memoryPaths, readGlobalMemoryConfig, readMemoryConfig, resolveProjectMemoryRoot, writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../../src/mend/memory/config"
 import { applyMemoryProposal, autoProposeMemoriesFromSession, extractorPrompt, importCodexMemories, listMemoryProposals, memoryExtractorCandidateMessage, memoryExtractorFailureReason, proposeMemoriesFromExtractorText, proposeMemoriesWithExtractor, proposeMemory, readMemoryExtractorContext, rejectMemoryProposal, updateMemoryProposal } from "../../src/mend/memory/proposals"
 import { DEFAULT_MEMORY_CATEGORIES, inferMemoryCategoryIDs, normalizeMemoryCategoryPolicies, readMemoryCategoryPolicies, scopeReasonForMemory, writeMemoryCategoryPolicy } from "../../src/mend/memory/categories"
-import { readMemoryFacts, repairMemoryGraph, upsertMemoryFact, validateMemoryGraph } from "../../src/mend/memory/graph"
+import { readMemoryFacts, repairMemoryGraph, upsertMemoryFact, upsertMemoryFactLink, validateMemoryGraph } from "../../src/mend/memory/graph"
 import { registerMemoryWorkspace, memoryWorkspaceOverview, writeWorkspaceRegistry } from "../../src/mend/memory/workspaces"
 import { allowedDreamGitCommands, collectDreamFileEvidence, isDreamFileAllowed } from "../../src/mend/memory/dream-sources"
-import { latestDreamStatus, runMemoryDream } from "../../src/mend/memory/dream"
-import { dreamScheduleWindowFromText, evaluateDreamSchedule, readDreamScheduleState, runScheduledMemoryDream } from "../../src/mend/memory/dream-scheduler"
+import { latestDreamStatus, readDreamRunDetail, readDreamRuns, runMemoryDream } from "../../src/mend/memory/dream"
+import { dreamScheduleWindowFromText, evaluateDreamSchedule, readDreamScheduleState, runGlobalDreamSchedulerTick, runScheduledMemoryDream } from "../../src/mend/memory/dream-scheduler"
 import { listMemorySideChats, memoryAssistantFailureReason, parseMemorySideChatResponse, resolveMemoryAssistantRole, resolveMemoryAssistantRuntimeRole, sendMemorySideChatMessage, startMemorySideChat } from "../../src/mend/memory/side-chat"
 import { memoryOverview } from "../../src/mend/memory/overview"
 import { GlobalBus } from "../../src/bus/global"
 import { writeModelsConfig } from "../../src/mend/config/models"
+import { dreamServicePlan } from "../../src/mend/runtime/dream-service"
 import { MemorySideChatResponse } from "../../src/server/routes/instance/httpapi/groups/memory"
 
 async function writeJson(file: string, value: unknown) {
@@ -700,12 +701,20 @@ describe("mend memory", () => {
       categoryIDs: ["memory.policy"],
       ownerWorkspaceIDs: [dir.path],
     }, dir.path)
+    const link = await upsertMemoryFactLink({
+      from: fact.id,
+      to: `legacy_${entry.id}`,
+      kind: "supports",
+    }, dir.path)
     const facts = await readMemoryFacts(dir.path)
+    const overview = await memoryOverview(dir.path)
     const validation = await validateMemoryGraph(dir.path)
     const repaired = await repairMemoryGraph(dir.path)
 
     expect(facts.some((item) => item.legacyEntryID === entry.id)).toBe(true)
     expect(facts.some((item) => item.id === fact.id && item.categoryIDs.includes("memory.policy"))).toBe(true)
+    expect(overview.links.some((item) => item.id === link.id && item.kind === "supports")).toBe(true)
+    expect(link.kind).toBe("supports")
     expect(validation.ok).toBe(true)
     expect(repaired.facts).toBeGreaterThan(0)
   })
@@ -782,8 +791,9 @@ describe("mend memory", () => {
     expect(roots).toContain(projectB)
   })
 
-  test("Dream default reads memory and proposals only, writes logs and proposals", async () => {
+  test("Dream default reads memories plus safe project files, writes logs and reviewable proposals", async () => {
     await using dir = await tmpdir()
+    await writeFile(path.join(dir.path, "AGENTS.md"), "Always run focused memory tests from packages/opencode.\n")
     await appendMemoryEntry({
       scope: "project",
       text: "MendCode memory Dream must keep generated mutations reviewable.",
@@ -793,7 +803,8 @@ describe("mend memory", () => {
       root: dir.path,
       model: async ({ evidence }) => {
         expect(evidence.some((item) => item.sourceType === "memory")).toBe(true)
-        expect(evidence.some((item) => item.sourceType === "file")).toBe(false)
+        expect(evidence.some((item) => item.sourceType === "file" && item.sourcePath?.endsWith("AGENTS.md"))).toBe(true)
+        expect(evidence.some((item) => item.sourcePath?.includes(".mendcode"))).toBe(false)
         return [{
           text: "Dream should propose memory changes instead of applying them directly.",
           categoryIDs: ["memory.policy"],
@@ -807,7 +818,39 @@ describe("mend memory", () => {
     expect(run.status).toBe("completed")
     expect(status?.id).toBe(run.id)
     expect(proposals.some((proposal) => proposal.source === "memory-dream")).toBe(true)
+    expect(proposals.some((proposal) => proposal.evidenceRefs.includes(`dream:${run.id}`))).toBe(true)
+    expect((await readDreamRunDetail(dir.path, run.id))?.events.at(-1)?.status).toBe("completed")
     expect((await readMemoryEntries("project", dir.path)).length).toBe(1)
+  })
+
+  test("Dream keeps default analyzer context bounded", async () => {
+    await using dir = await tmpdir()
+    for (let i = 0; i < 40; i++) {
+      await appendMemoryEntry({
+        scope: "project",
+        text: `Memory fact ${i}: Always keep Dream analyzer payloads bounded for low RAM background execution.`,
+        tags: ["memory"],
+      }, dir.path)
+      await proposeMemory({
+        scope: "project",
+        text: `Pending proposal ${i}: Keep Dream proposal context bounded.`,
+        source: "test",
+      }, dir.path)
+    }
+
+    const run = await runMemoryDream({
+      root: dir.path,
+      model: async ({ facts, proposals, evidence }) => {
+        expect(facts).toHaveLength(32)
+        expect(proposals).toHaveLength(32)
+        expect(evidence.filter((item) => item.sourceType === "memory")).toHaveLength(32)
+        expect(evidence.filter((item) => item.sourceType === "proposal")).toHaveLength(32)
+        return []
+      },
+    })
+
+    expect(run.permissionSnapshot.maxFiles).toBe(4)
+    expect(run.permissionSnapshot.maxBytes).toBe(16_000)
   })
 
   test("Dream emits global status events for SSE consumers", async () => {
@@ -828,6 +871,47 @@ describe("mend memory", () => {
     expect(events).toContain("completed")
   })
 
+  test("Dream default analyzer proposes missing project conventions from safe code scan", async () => {
+    await using dir = await tmpdir()
+    await writeFile(path.join(dir.path, "AGENTS.md"), "Always run bun test test/mend/memory.test.ts from packages/opencode for memory changes.\n")
+
+    const run = await runMemoryDream({ root: dir.path })
+    const proposals = await listMemoryProposals(dir.path, "pending")
+
+    expect(run.status).toBe("completed")
+    expect(proposals.some((proposal) => proposal.source === "memory-dream" && proposal.text.includes("Project convention from AGENTS.md"))).toBe(true)
+    expect(proposals.some((proposal) => proposal.evidenceRefs.some((ref) => ref.startsWith("file:")))).toBe(true)
+    expect((await readMemoryEntries("project", dir.path))).toHaveLength(0)
+  })
+
+  test("Dream run listing is isolated by project root", async () => {
+    await using first = await tmpdir()
+    await using second = await tmpdir()
+    const firstRun = await runMemoryDream({ root: first.path, model: async () => [] })
+    const secondRun = await runMemoryDream({ root: second.path, model: async () => [] })
+
+    expect((await readDreamRuns(first.path)).map((run) => run.id)).toEqual([firstRun.id])
+    expect((await readDreamRuns(second.path)).map((run) => run.id)).toEqual([secondRun.id])
+    expect(await readDreamRunDetail(first.path, secondRun.id)).toBeNull()
+  })
+
+  test("Dream failure preserves already-created proposal ledger", async () => {
+    await using dir = await tmpdir()
+    const run = await runMemoryDream({
+      root: dir.path,
+      model: async () => [
+        { text: "Dream should preserve audit trails for partial proposal failures.", categoryIDs: ["memory.policy"] },
+        { text: "   ", categoryIDs: ["memory.policy"] },
+      ],
+    })
+    const proposals = await listMemoryProposals(dir.path, "pending")
+    const detail = await readDreamRunDetail(dir.path, run.id)
+
+    expect(run.status).toBe("failed")
+    expect(run.proposals).toEqual(proposals.map((proposal) => proposal.id))
+    expect(detail?.proposals.map((proposal) => proposal.id)).toEqual(proposals.map((proposal) => proposal.id))
+  })
+
   test("Dream sources require opt-in, redact files, and keep git commands bounded", async () => {
     await using dir = await tmpdir()
     const allowed = path.join(dir.path, "README.md")
@@ -839,6 +923,7 @@ describe("mend memory", () => {
     expect(isDreamFileAllowed(blocked, [dir.path])).toBe(false)
     expect(allowedDreamGitCommands({ git: false })).toEqual([])
     expect(allowedDreamGitCommands({ git: true }).some((command) => command.includes("diff --name-only"))).toBe(true)
+    expect(allowedDreamGitCommands({ git: true, allowRawDiff: true })).toContain("git diff --no-ext-diff --unified=0")
 
     const disabled = await collectDreamFileEvidence({ roots: [dir.path] })
     const enabled = await collectDreamFileEvidence({ files: true, roots: [dir.path], maxFiles: 4 })
@@ -867,6 +952,47 @@ describe("mend memory", () => {
     expect(state.status).toBe("missed")
     expect(persisted?.manualTriggerRequired).toBe(true)
     expect(persisted?.window).toEqual({ enabled: true, start: "01:00", end: "02:00" })
+  })
+
+  test("Dream schedule respects overnight windows and configured timezone", async () => {
+    await using dir = await tmpdir()
+    const overnight = await evaluateDreamSchedule({
+      root: dir.path,
+      window: { enabled: true, start: "23:00", end: "02:00" },
+      now: new Date("2026-06-17T15:00:00"),
+    })
+    const overnightMissed = await evaluateDreamSchedule({
+      root: dir.path,
+      window: { enabled: true, start: "23:00", end: "02:00" },
+      now: new Date("2026-06-18T03:00:00"),
+    })
+    const panama = await evaluateDreamSchedule({
+      root: dir.path,
+      window: { enabled: true, start: "20:00", end: "21:00", timezone: "America/Panama" },
+      now: new Date("2026-06-17T01:30:00Z"),
+    })
+
+    expect(overnight.action).toBe("wait")
+    expect(overnightMissed.action).toBe("missed")
+    expect(panama.action).toBe("run")
+    expect(panama.date).toBe("2026-06-16")
+  })
+
+  test("Dream schedule falls back safely when timezone is invalid", async () => {
+    await using dir = await tmpdir()
+    const now = new Date("2026-06-17T01:30:00Z")
+    const plain = await evaluateDreamSchedule({
+      root: dir.path,
+      window: { enabled: true, start: "20:00", end: "21:00" },
+      now,
+    })
+    const invalidTimezone = await evaluateDreamSchedule({
+      root: dir.path,
+      window: { enabled: true, start: "20:00", end: "21:00", timezone: "Mars/OlympusMons" },
+      now,
+    })
+
+    expect(invalidTimezone).toEqual(plain)
   })
 
   test("side chat keeps separate history and creates reviewable proposals only", async () => {
@@ -956,8 +1082,39 @@ describe("mend memory", () => {
     expect(result.session.proposals).toEqual(result.proposals.map((proposal) => proposal.id))
   })
 
+  test("side chat creates reviewable Dream night activation proposals", async () => {
+    await using dir = await tmpdir()
+    const chat = await startMemorySideChat({ root: dir.path, selectedCategoryID: "memory.dream" })
+    const result = await sendMemorySideChatMessage({
+      session: chat,
+      message: "activa Dream de noche",
+      responder: async () => ({
+        text: "Prepared reviewable Dream night activation proposals.",
+        actions: [{
+          kind: "dream-dry-run",
+          text: "Configure Dream to run in the 18:00-23:00 America/Panama night window and keep output pending.",
+          scope: "global",
+          categoryIDs: ["memory.dream"],
+        }, {
+          kind: "dream-service-start",
+          text: "Enable the durable global Dream background service so scheduled Dream runs even when the TUI is closed.",
+          categoryIDs: ["memory.dream"],
+        }],
+      }),
+    })
+
+    expect(result.proposals).toHaveLength(2)
+    expect(result.proposals[0]).toMatchObject({ scope: "global" })
+    expect(result.proposals[0]?.tags).toContain("dream-dry-run")
+    expect(result.proposals[1]).toMatchObject({ scope: "global" })
+    expect(result.proposals[1]?.text).toContain("Dream service proposal")
+    expect(result.proposals[1]?.tags).toContain("dream-service-start")
+    expect(result.proposals[1]?.tags).toContain("memory.dream")
+  })
+
   test("applying a side chat Dream proposal configures the Dream schedule", async () => {
     await using dir = await tmpdir()
+    await using other = await tmpdir()
     const chat = await startMemorySideChat({ root: dir.path, selectedCategoryID: "memory.dream" })
     const result = await sendMemorySideChatMessage({
       session: chat,
@@ -975,13 +1132,93 @@ describe("mend memory", () => {
 
     const applied = await applyMemoryProposal(result.proposals[0]!.id, dir.path)
     const schedule = await readDreamScheduleState(dir.path)
+    const otherSchedule = await readDreamScheduleState(other.path)
+    const globalConfig = await readGlobalMemoryConfig()
+    const tick = await runGlobalDreamSchedulerTick({ now: new Date("2026-06-18T00:30:00Z"), networkAvailable: () => false })
     const entries = await readMemoryEntries("project", dir.path)
 
     expect(applied.entry).toBe(null)
     expect(applied.dreamSchedule?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" })
     expect(schedule?.status).toBe("scheduled")
     expect(schedule?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" })
+    expect(otherSchedule?.window).toMatchObject(schedule?.window ?? {})
+    expect(globalConfig.dreamWindow).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" })
+    expect(tick.status).toBe("offline")
     expect(entries).toHaveLength(0)
+  })
+
+  test("applying a side chat Dream service proposal starts the durable service after approval", async () => {
+    await using dir = await tmpdir()
+    const chat = await startMemorySideChat({ root: dir.path, selectedCategoryID: "memory.dream" })
+    const result = await sendMemorySideChatMessage({
+      session: chat,
+      message: "keep Dream active in the background at night",
+      responder: async () => ({
+        text: "Prepared the reviewable Dream service proposal.",
+        actions: [{
+          kind: "dream-service-start",
+          text: "Enable the durable global Dream background service so scheduled Dream runs even when the TUI is closed.",
+          scope: "global",
+          categoryIDs: ["memory.dream"],
+        }],
+      }),
+    })
+    const plan = dreamServicePlan({ platform: "darwin", command: "/usr/local/bin/mendcode", intervalMs: 5000, workingDirectory: "/Users/test" })
+    const applied = await applyMemoryProposal(result.proposals[0]!.id, dir.path, {
+      startDreamService: async () => plan,
+    })
+    const entries = await readMemoryEntries("global", dir.path)
+
+    expect(applied.entry).toBe(null)
+    expect(applied.dreamSchedule).toBe(null)
+    expect(applied.dreamService).toEqual(plan)
+    expect(applied.proposal.status).toBe("applied")
+    expect(entries).toHaveLength(0)
+  })
+
+  test("Dream service proposals reject project scope before starting a global service", async () => {
+    await using dir = await tmpdir()
+    const proposal = await proposeMemory({
+      scope: "project",
+      text: "Dream service proposal: enable the durable Dream background service.",
+      tags: ["side-chat", "dream-service-start", "memory.dream"],
+      categoryIDs: ["memory.dream"],
+      source: "memory-side-chat",
+    }, dir.path)
+    let started = false
+
+    await expect(applyMemoryProposal(proposal.id, dir.path, {
+      startDreamService: async () => {
+        started = true
+        return dreamServicePlan({ platform: "darwin", command: "/usr/local/bin/mendcode", intervalMs: 5000, workingDirectory: "/Users/test" })
+      },
+    })).rejects.toThrow("must use global scope")
+
+    expect(started).toBe(false)
+    expect((await listMemoryProposals(dir.path, "pending")).map((item) => item.id)).toContain(proposal.id)
+  })
+
+  test("Dream service proposals reject mixed schedule and service actions before side effects", async () => {
+    await using dir = await tmpdir()
+    const proposal = await proposeMemory({
+      scope: "global",
+      text: "Dream proposal: configure Dream from 18:00-23:00 and enable the durable service.",
+      tags: ["side-chat", "dream-dry-run", "dream-service-start", "memory.dream"],
+      categoryIDs: ["memory.dream"],
+      source: "memory-side-chat",
+    }, dir.path)
+    let started = false
+
+    await expect(applyMemoryProposal(proposal.id, dir.path, {
+      startDreamService: async () => {
+        started = true
+        return dreamServicePlan({ platform: "darwin", command: "/usr/local/bin/mendcode", intervalMs: 5000, workingDirectory: "/Users/test" })
+      },
+    })).rejects.toThrow("separate approvals")
+
+    expect(started).toBe(false)
+    expect(await readDreamScheduleState(dir.path)).toBe(null)
+    expect((await listMemoryProposals(dir.path, "pending")).map((item) => item.id)).toContain(proposal.id)
   })
 
   test("Dream schedule parser accepts human time ranges", () => {
@@ -999,6 +1236,181 @@ describe("mend memory", () => {
     })
   })
 
+  test("Dream schedule comes from global memory settings", async () => {
+    await using dir = await tmpdir()
+    await using other = await tmpdir()
+    await writeGlobalMemoryConfig({
+      dreamWindow: {
+        enabled: true,
+        start: "18:00",
+        end: "23:00",
+        timezone: "America/Panama",
+      },
+    }, dir.path)
+
+    const schedule = await readDreamScheduleState(dir.path)
+    const otherSchedule = await readDreamScheduleState(other.path)
+
+    expect(schedule?.status).toBe("scheduled")
+    expect(schedule?.reason).toBe("Dream window configured in memory settings")
+    expect(schedule?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" })
+    expect(otherSchedule?.window).toMatchObject(schedule?.window ?? {})
+  })
+
+  test("global memory config writes do not inherit project Dream settings", async () => {
+    await using dir = await tmpdir()
+    await writeProjectMemoryConfig({
+      dreamWindow: { enabled: true, start: "01:00", end: "02:00", timezone: "America/Panama" },
+    }, dir.path)
+    await writeGlobalMemoryConfig({ use: true }, dir.path)
+
+    const global = await readGlobalMemoryConfig()
+    const schedule = await readDreamScheduleState(dir.path)
+
+    expect(global.use).toBe(true)
+    expect(global.configScope).toBe("global")
+    expect(global.dreamWindow).toBe(null)
+    expect(schedule).toBe(null)
+  })
+
+  test("Dream runtime state keeps missed/manual status even when settings define a window", async () => {
+    await using dir = await tmpdir()
+    await writeGlobalMemoryConfig({
+      dreamWindow: {
+        enabled: true,
+        start: "01:00",
+        end: "02:00",
+        timezone: "America/Panama",
+      },
+    }, dir.path)
+    await runScheduledMemoryDream({
+      root: dir.path,
+      window: { enabled: true, start: "01:00", end: "02:00", timezone: "America/Panama" },
+      now: new Date("2026-06-17T03:00:00"),
+    })
+
+    const schedule = await readDreamScheduleState(dir.path)
+
+    expect(schedule?.status).toBe("missed")
+    expect(schedule?.manualTriggerRequired).toBe(true)
+    expect(schedule?.window).toMatchObject({ enabled: true, start: "01:00", end: "02:00", timezone: "America/Panama" })
+  })
+
+  test("global Dream scheduler runs due windows across registered workspaces", async () => {
+    await using first = await tmpdir()
+    await using second = await tmpdir()
+    await writeGlobalMemoryConfig({
+      dreamWindow: { enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" },
+    }, first.path)
+    await registerMemoryWorkspace({ root: first.path, source: "user-added-root" }, first.path)
+    await registerMemoryWorkspace({ root: second.path, source: "user-added-root" }, second.path)
+    const workspaces = [
+      {
+        id: "ws_first",
+        root: first.path,
+        displayName: "first",
+        firstUserMessageAt: "2026-06-17T00:00:00.000Z",
+        lastActiveAt: "2026-06-17T00:00:00.000Z",
+        gitRoot: null,
+        repoFingerprint: null,
+        worktreePath: null,
+        source: "user-added-root" as const,
+        groupIDs: [],
+        archived: false,
+      },
+      {
+        id: "ws_second",
+        root: second.path,
+        displayName: "second",
+        firstUserMessageAt: "2026-06-17T00:00:00.000Z",
+        lastActiveAt: "2026-06-17T00:00:00.000Z",
+        gitRoot: null,
+        repoFingerprint: null,
+        worktreePath: null,
+        source: "user-added-root" as const,
+        groupIDs: [],
+        archived: false,
+      },
+    ]
+
+    const result = await runGlobalDreamSchedulerTick({
+      now: new Date("2026-06-18T00:30:00Z"),
+      networkAvailable: () => true,
+      workspaces,
+      model: async () => [],
+    })
+    const runs = await readDreamRuns()
+    const rerun = await runGlobalDreamSchedulerTick({
+      now: new Date("2026-06-18T00:45:00Z"),
+      networkAvailable: () => true,
+      workspaces,
+      model: async () => [],
+    })
+
+    expect(result.status).toBe("checked")
+    expect(result.runs).toHaveLength(2)
+    expect(runs.map((run) => run.workspaceID).sort()).toEqual(result.runs.map((run) => run.workspaceID).sort())
+    expect(rerun.runs).toHaveLength(0)
+  })
+
+  test("scheduled Dream uses an atomic lock for concurrent ticks", async () => {
+    await using dir = await tmpdir()
+    let release!: () => void
+    const hold = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const calls: string[] = []
+    const first = runScheduledMemoryDream({
+      root: dir.path,
+      window: { enabled: true, start: "00:00", end: "23:59" },
+      now: new Date("2026-06-18T00:30:00Z"),
+      workspaceID: "ws_first",
+      model: async () => {
+        calls.push("first")
+        await hold
+        return []
+      },
+    })
+
+    for (let attempt = 0; attempt < 50 && calls.length === 0; attempt++) await Bun.sleep(2)
+    const second = await runScheduledMemoryDream({
+      root: dir.path,
+      window: { enabled: true, start: "00:00", end: "23:59" },
+      now: new Date("2026-06-18T00:30:00Z"),
+      workspaceID: "ws_first",
+      model: async () => {
+        calls.push("second")
+        return []
+      },
+    })
+
+    release()
+    const firstResult = await first
+    const runs = await readDreamRuns(dir.path)
+
+    expect("id" in firstResult).toBe(true)
+    expect(second).toMatchObject({ status: "locked", reason: "Dream already running" })
+    expect(calls).toEqual(["first"])
+    expect(runs).toHaveLength(1)
+  })
+
+  test("global Dream scheduler records online gating instead of running offline", async () => {
+    await using dir = await tmpdir()
+    await writeGlobalMemoryConfig({
+      dreamWindow: { enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" },
+    }, dir.path)
+
+    const result = await runGlobalDreamSchedulerTick({
+      now: new Date("2026-06-18T00:30:00Z"),
+      networkAvailable: () => false,
+    })
+    const schedule = await readDreamScheduleState(dir.path)
+
+    expect(result.status).toBe("offline")
+    expect(schedule?.reason).toContain("network")
+    expect(await readDreamRuns(dir.path)).toHaveLength(0)
+  })
+
   test("Dream schedule state recovers from already-applied Dream proposals", async () => {
     await using dir = await tmpdir()
     const proposal = await proposeMemory({
@@ -1009,7 +1421,8 @@ describe("mend memory", () => {
       source: "memory-side-chat",
     }, dir.path)
     await applyMemoryProposal(proposal.id, dir.path)
-    await rm(path.join(memoryPaths(dir.path).projectDir, "dream", "schedule.json"), { force: true })
+    await writeGlobalMemoryConfig({ dreamWindow: null }, dir.path)
+    await rm(path.join(memoryPaths(dir.path).globalDir, "dream", "schedule.json"), { force: true })
 
     const recovered = await readDreamScheduleState(dir.path)
 
@@ -1075,6 +1488,26 @@ describe("mend memory", () => {
     }
   })
 
+  test("side chat responder failures return to idle with an assistant error", async () => {
+    await using dir = await tmpdir()
+    const chat = await startMemorySideChat({ root: dir.path })
+    const result = await sendMemorySideChatMessage({
+      session: chat,
+      message: "activate Dream tonight",
+      responder: async () => {
+        throw new Error("provider unavailable")
+      },
+    })
+    const persisted = await listMemorySideChats(dir.path)
+
+    expect(result.canceled).toBe(false)
+    expect(result.session.status).toBe("idle")
+    expect(result.session.history.map((message) => message.role)).toEqual(["user", "assistant"])
+    expect(result.session.history.at(-1)?.text).toContain("provider unavailable")
+    expect(result.proposals).toHaveLength(0)
+    expect(persisted[0]?.status).toBe("idle")
+  })
+
   test("side chat resolves setup model for the server provider runtime", async () => {
     await using dir = await tmpdir()
     const originalApiKey = process.env.OPENAI_API_KEY
@@ -1134,6 +1567,11 @@ describe("mend memory", () => {
         text: "Run Dream tonight as a dry-run and keep output pending.",
         scope: "project",
         categoryIDs: ["memory.dream"],
+      }, {
+        kind: "dream-service-start",
+        text: "Enable the durable Dream service.",
+        scope: "global",
+        categoryIDs: ["memory.dream"],
       }],
     }))
 
@@ -1155,6 +1593,11 @@ describe("mend memory", () => {
       text: "Run Dream tonight as a dry-run and keep output pending.",
       scope: "project",
       categoryIDs: ["memory.dream"],
+    }, {
+      kind: "dream-service-start",
+      text: "Enable the durable Dream service.",
+      scope: "global",
+      categoryIDs: ["memory.dream"],
     }])
   })
 
@@ -1169,12 +1612,75 @@ describe("mend memory", () => {
         targetScope: "project",
         categoryID: "project.security",
         categoryIDs: ["memory.policy"],
+      }, {
+        kind: "dream-service-start",
+        text: "Enable durable Dream service.",
+        scope: "global",
+        categoryIDs: ["memory.dream"],
       }],
     })
 
     expect(decoded.actions[0]?.kind).toBe("move-memory")
     expect(decoded.actions[0]?.targetID).toBe("mem_keepassxc")
     expect(decoded.actions[0]?.categoryID).toBe("project.security")
+    expect(decoded.actions[1]?.kind).toBe("dream-service-start")
+  })
+
+  test("side chat HTTP response schema stays aligned with non-Dream action kinds", () => {
+    const decoded = Schema.decodeUnknownSync(MemorySideChatResponse)({
+      text: "Drafted reviewable actions.",
+      actions: [{
+        kind: "create-memory",
+        text: "Create a durable project memory for the release workflow.",
+        scope: "project",
+        categoryIDs: ["project.release"],
+      }, {
+        kind: "edit-memory",
+        text: "Refine the existing memory text.",
+        scope: "project",
+        targetID: "mem_existing",
+        targetScope: "project",
+        categoryIDs: ["memory.policy"],
+      }, {
+        kind: "delete-memory",
+        text: "Remove the stale memory after review.",
+        scope: "project",
+        targetID: "mem_stale",
+        targetScope: "project",
+        categoryIDs: ["memory.policy"],
+      }, {
+        kind: "create-category",
+        text: "Create a category for release procedures.",
+        scope: "project",
+        categoryID: "project.release",
+        categoryIDs: ["memory.policy"],
+      }, {
+        kind: "edit-category",
+        text: "Tighten the write policy for this category.",
+        scope: "project",
+        categoryID: "project.release",
+        categoryIDs: ["memory.policy"],
+      }, {
+        kind: "delete-category",
+        text: "Remove the temporary category after migration.",
+        scope: "project",
+        categoryID: "project.temporary",
+        categoryIDs: ["memory.policy"],
+      }, {
+        kind: "explain-state",
+        text: "Explain the current saved-memory state.",
+      }],
+    })
+
+    expect(decoded.actions.map((action) => action.kind)).toEqual([
+      "create-memory",
+      "edit-memory",
+      "delete-memory",
+      "create-category",
+      "edit-category",
+      "delete-category",
+      "explain-state",
+    ])
   })
 
   test("side chat turns provider bad request into a usable assistant message", () => {

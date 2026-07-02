@@ -1,7 +1,6 @@
 import { Prompt, type PromptRef } from "@tui/component/prompt"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, onCleanup, onMount, Show, type JSX } from "solid-js"
-import { Logo } from "../component/logo"
 import { useProject } from "../context/project"
 import { useSync } from "../context/sync"
 import { Toast } from "../ui/toast"
@@ -17,20 +16,49 @@ import { SplitBorder } from "../component/border"
 import { Spinner } from "../component/spinner"
 import { useDialog } from "../ui/dialog"
 import { renderMendEditor } from "@/mend/tui/editor-host"
-import { asciiTextWidth, renderAsciiText, type HomeLogoFont } from "../component/ascii-text"
+import { renderAsciiText, type HomeLogoFont } from "../component/ascii-text"
 import { homeMascotText } from "@/mend/tui/mascot"
-import { logo as mendLogo } from "@/cli/logo"
 import { Locale } from "@/util/locale"
 import { Global } from "@mendcode/core/global"
 import { Installation } from "@/installation"
 import type { GlobalEvent, PermissionRequest, PlanReviewRequest, QuestionRequest, Session, SessionStatus } from "@mendcode/sdk/v2"
+import type { MendTuiProfile } from "@/mend/profile"
 import {
   isAgentViewSessionFallbackVisible,
   isAgentViewSessionVisible,
+  formatAgentViewDetailLabel,
+  formatAgentViewPathLabel,
   formatAgentViewSessionTime,
   type AgentViewBackgroundSession,
   type AgentViewSessionItem,
 } from "../util/agent-view"
+
+const HOME_LOGO_FIT_ORDER: HomeLogoFont[] = ["small", "classic", "mendcode", "opencode", "standard", "shadow"]
+
+export function fittedHomeLogoText(input: { value: string; font: HomeLogoFont; maxWidth: number; maxHeight?: number }) {
+  const fonts = [input.font, ...HOME_LOGO_FIT_ORDER].filter((font, index, list) => list.indexOf(font) === index)
+  const maxWidth = Math.max(1, Math.floor(input.maxWidth))
+  const maxHeight = Math.max(1, Math.floor(input.maxHeight ?? Number.MAX_SAFE_INTEGER))
+  for (const font of fonts) {
+    const text = renderAsciiText(input.value || "MendCode", font)
+    if (maxLineWidth(text) <= maxWidth && countLines(text) <= maxHeight) return text
+  }
+  return Locale.truncate(input.value || "MendCode", maxWidth)
+}
+
+export function configuredHomeLogoText(input: { profile: MendTuiProfile; surfaceHomeAscii?: string; maxWidth?: number; maxHeight?: number }) {
+  if (input.surfaceHomeAscii?.trimEnd()) return input.surfaceHomeAscii.trimEnd()
+  if ((input.profile.identity.logoMode || "title") === "mascot") return homeMascotText(input.profile)
+  if (input.maxWidth) {
+    return fittedHomeLogoText({
+      value: input.profile.identity.productName || "MendCode",
+      font: input.profile.identity.logoFont || "classic",
+      maxWidth: input.maxWidth,
+      maxHeight: input.maxHeight,
+    })
+  }
+  return renderAsciiText(input.profile.identity.productName || "MendCode", input.profile.identity.logoFont || "classic")
+}
 
 type BackgroundSessionInfo = AgentViewBackgroundSession & {
   pinned?: boolean | null
@@ -55,6 +83,42 @@ type AgentViewLoopWorkflow = {
 
 const activeLoopWorkflowStates = new Set(["active", "sleeping", "working", "needs_input", "blocked"])
 
+export function resolveHomePromptTarget(input: { workspaceID?: string; selectedAgentViewSessionID?: string }) {
+  return {
+    historyScope: `project:${input.workspaceID ?? "local"}`,
+    sessionID: undefined as string | undefined,
+  }
+}
+
+export function homePromptPlaceholderText(input?: { selectedTitle?: string }) {
+  if (!input?.selectedTitle) return placeholder.normal
+  return [`New task here — Enter starts /new. Selected session: ${Locale.truncate(input.selectedTitle, 32)}`]
+}
+
+export function homeSplitIdentityWidth(input: {
+  logoWidth: number
+  titleWidth: number
+  panelWidth: number
+  agentMinWidth?: number
+}) {
+  const reservedAgentWidth = input.agentMinWidth ?? 42
+  const maxIdentityWidth = Math.max(24, input.panelWidth - reservedAgentWidth - 4)
+  return Math.max(24, Math.min(Math.max(input.logoWidth, input.titleWidth) + 2, maxIdentityWidth))
+}
+
+export function homeAgentViewPanelWidth(input: { available: number }) {
+  return Math.min(54, Math.max(30, input.available))
+}
+
+export function homeSplitLogoMaxWidth(input: {
+  terminalWidth: number
+  split: boolean
+  rightPanel?: string
+}) {
+  if (!input.split || (input.rightPanel ?? "agentManager") !== "agentManager") return Math.max(8, input.terminalWidth - 8)
+  return Math.max(8, input.terminalWidth - homeAgentViewPanelWidth({ available: Math.max(24, input.terminalWidth - 10) }) - 16)
+}
+
 let once = false
 const placeholder = {
   normal: ["Fix a TODO in the codebase", "What is the tech stack of this project?", "Fix broken tests"],
@@ -62,7 +126,7 @@ const placeholder = {
 }
 
 function SurfaceLines(props: { text: string }) {
-  const width = props.text.split("\n").reduce((max, line) => Math.max(max, line.length), 0)
+  const width = props.text.split("\n").reduce((max, line) => Math.max(max, Bun.stringWidth(line)), 0)
   return (
     <box flexDirection="column" width={width}>
       {props.text.split("\n").map((line) => (
@@ -79,11 +143,7 @@ function countLines(text: string | undefined) {
 
 function maxLineWidth(text: string | undefined) {
   if (!text) return 0
-  return text.split("\n").reduce((max, line) => Math.max(max, line.length), 0)
-}
-
-function logoShapeWidth(shape: { left: string[]; right: string[] }) {
-  return shape.left.reduce((max, line, index) => Math.max(max, line.length + 1 + (shape.right[index]?.length ?? 0)), 0)
+  return text.split("\n").reduce((max, line) => Math.max(max, Bun.stringWidth(line)), 0)
 }
 
 export function HomeSurface(props: {
@@ -107,13 +167,22 @@ export function HomeSurface(props: {
   const dimensions = useTerminalDimensions()
   const logoFont = createMemo<HomeLogoFont>(() => mend.profile.identity.logoFont || "classic")
   const logoMode = createMemo(() => mend.profile.identity.logoMode || "title")
-  const useProfileIdentityLogo = createMemo(() => mend.profile.identity.productName !== "MendCode")
   const customProductAscii = createMemo(() => renderAsciiText(mend.profile.identity.productName, logoFont()))
-  const configuredHomeAscii = createMemo(() => (logoMode() === "mascot" ? homeMascotText(mend.profile) : undefined))
-  const activeHomeAscii = createMemo(() => props.surface?.homeAscii || configuredHomeAscii())
+  const activeHomeAscii = createMemo(() =>
+    configuredHomeLogoText({
+      profile: mend.profile,
+      surfaceHomeAscii: props.surface?.homeAscii,
+      maxWidth: homeSplitLogoMaxWidth({
+        terminalWidth: dimensions().width,
+        split: (mend.profile.surfaces.homeWelcome?.mode || "centered") === "split" && dimensions().height > 23 && dimensions().width >= 76,
+        rightPanel: mend.profile.surfaces.homeWelcome?.rightPanel,
+      }),
+      maxHeight: Math.max(1, dimensions().height - 14),
+    }),
+  )
   const homeIdentityKey = createMemo(
     () =>
-      `${props.revision ?? 0}:${mend.profile.identity.productName}:${logoFont()}:${logoMode()}:${activeHomeAscii() ?? ""}`,
+      `${props.revision ?? 0}:${mend.profile.identity.productName}:${logoFont()}:${logoMode()}:${activeHomeAscii()}`,
   )
   const homeDensity = createMemo<"full" | "compact" | "tiny">(() => {
     const height = dimensions().height
@@ -123,14 +192,11 @@ export function HomeSurface(props: {
   })
   const logoLines = createMemo(() => {
     const homeAscii = activeHomeAscii()
-    if (homeAscii) return countLines(homeAscii)
-    return useProfileIdentityLogo() ? countLines(customProductAscii()) : 7
+    return countLines(homeAscii)
   })
   const splitLogoWidth = createMemo(() => {
     const homeAscii = activeHomeAscii()
-    if (homeAscii) return maxLineWidth(homeAscii)
-    if (useProfileIdentityLogo()) return asciiTextWidth(mend.profile.identity.productName, logoFont())
-    return logoShapeWidth(mendLogo)
+    return maxLineWidth(homeAscii)
   })
   const showLogo = createMemo(() => {
     if (homeDensity() === "tiny") return false
@@ -138,7 +204,7 @@ export function HomeSurface(props: {
   })
   const useCompactProductName = createMemo(() => {
     if (homeDensity() !== "full") return true
-    return dimensions().width < asciiTextWidth(mend.profile.identity.productName, logoFont()) + 12
+    return dimensions().width < maxLineWidth(activeHomeAscii()) + 12
   })
   const logoBottomPad = createMemo(() => (homeDensity() === "full" && logoFont() === "shadow" ? 1 : 0))
   const logoPromptGap = createMemo(() => (homeDensity() === "full" && logoFont() === "shadow" ? 0 : 0))
@@ -162,8 +228,16 @@ export function HomeSurface(props: {
   const launcherCompact = createMemo(() => homeDensity() === "compact")
   const launcherWidth = createMemo(() => Math.min(44, Math.max(28, dimensions().width - sidePadding() * 4)))
   const splitPanelInnerWidth = createMemo(() => Math.max(24, dimensions().width - sidePadding() * 2 - 6))
-  const splitIdentityMinWidth = createMemo(() => (showLogo() ? splitLogoWidth() + 3 : 0) + 24)
-  const splitAgentPanelMinWidth = 54
+  const splitTitleRawWidth = createMemo(() => maxLineWidth(customProductAscii()))
+  const splitAgentPanelMinWidth = 42
+  const splitIdentityMinWidth = createMemo(() =>
+    homeSplitIdentityWidth({
+      logoWidth: showLogo() ? splitLogoWidth() : 0,
+      titleWidth: logoMode() === "mascot" || !showLogo() ? splitTitleRawWidth() : 0,
+      panelWidth: splitPanelInnerWidth(),
+      agentMinWidth: splitAgentPanelMinWidth,
+    }),
+  )
   const splitTwoColumnWelcome = createMemo(
     () =>
       splitWelcome() &&
@@ -175,14 +249,14 @@ export function HomeSurface(props: {
     const available = splitTwoColumnWelcome()
       ? splitPanelInnerWidth() - splitIdentityMinWidth() - 4
       : splitPanelInnerWidth()
-    return Math.min(82, Math.max(36, available))
+    return homeAgentViewPanelWidth({ available })
   })
   const splitRootLabel = createMemo(() => {
     const value = project.instance.path().directory || project.instance.path().worktree || mend.root
     const label = value.replace(/^\/Users\/[^/]+/, "~")
     const available = splitTwoColumnWelcome()
-      ? splitPanelInnerWidth() - rightPanelWidth() - (showLogo() ? splitLogoWidth() + 8 : 6)
-      : splitPanelInnerWidth() - (showLogo() ? splitLogoWidth() + 8 : 4)
+      ? splitPanelInnerWidth() - rightPanelWidth() - 6
+      : splitPanelInnerWidth() - 4
     return Locale.truncateMiddle(label, Math.max(18, available))
   })
   const launcherTopPadding = createMemo(() => (launcherCompact() ? 1 : 2))
@@ -201,22 +275,17 @@ export function HomeSurface(props: {
   const splitTitleAvailableWidth = createMemo(() =>
     Math.max(
       24,
-      splitTwoColumnWelcome()
-        ? splitPanelInnerWidth() - rightPanelWidth() - (showLogo() ? splitLogoWidth() + 10 : 6)
-        : splitPanelInnerWidth() - (showLogo() ? splitLogoWidth() + 8 : 4),
+      splitTwoColumnWelcome() ? splitPanelInnerWidth() - rightPanelWidth() - 6 : splitPanelInnerWidth() - 4,
     ),
   )
-  const splitProductAscii = createMemo(() => {
-    const productName = mend.profile.identity.productName
-    const configured = customProductAscii()
-    if (countLines(configured) <= 3 && maxLineWidth(configured) <= splitTitleAvailableWidth()) return configured
-
-    for (const font of ["mendcode", "classic"] satisfies HomeLogoFont[]) {
-      const compact = renderAsciiText(productName, font)
-      if (maxLineWidth(compact) <= splitTitleAvailableWidth()) return compact
-    }
-    return renderAsciiText(productName, "classic")
-  })
+  const splitProductAscii = createMemo(() =>
+    fittedHomeLogoText({
+      value: mend.profile.identity.productName || "MendCode",
+      font: logoFont(),
+      maxWidth: splitTitleAvailableWidth(),
+      maxHeight: 6,
+    }),
+  )
   const splitTitleAsciiWidth = createMemo(() => maxLineWidth(splitProductAscii()))
   const showSplitAsciiTitle = createMemo(() => {
     if (homeDensity() !== "full") return false
@@ -300,7 +369,13 @@ export function HomeSurface(props: {
       start: Date.now() - agentViewSessionWindowMs,
     })
     if (recent.length > 0) return recent
-    return listAgentViewSessionsWithQuery(baseQuery)
+    const scoped = await listAgentViewSessionsWithQuery(baseQuery)
+    if (scoped.length > 0) return scoped
+    if (!baseQuery.directory) return scoped
+    return listAgentViewSessionsWithQuery({
+      roots: true,
+      limit: baseQuery.limit,
+    })
   }
 
   async function listAgentViewSessionsWithQuery(query: {
@@ -553,6 +628,12 @@ export function HomeSurface(props: {
     if (!agentViewHomeActive()) return undefined
     return selectedAgentViewItem()?.background.sessionID
   })
+  const homePromptTarget = createMemo(() =>
+    resolveHomePromptTarget({
+      workspaceID: project.workspace.current(),
+      selectedAgentViewSessionID: selectedAgentViewPromptSessionID(),
+    }),
+  )
   const moveAgentViewSelection = (direction: 1 | -1) => {
     const rows = visibleAgentViewRows()
     if (rows.length === 0) {
@@ -602,16 +683,23 @@ export function HomeSurface(props: {
       (item.background.state === "completed" && item.background.summary === "working")
     const summaryIsAgent = Boolean(agentName && item.background.summary === agentName)
     if (item.background.summary && !summaryIsState && !summaryIsAgent) {
-      return Locale.truncateMiddle(item.background.summary, Math.max(12, rightPanelWidth() - 22))
+      return Locale.truncateMiddle(formatAgentViewDetailLabel(item.background.summary) ?? item.background.summary, Math.max(12, rightPanelWidth() - 22))
     }
     const status = globalStatuses()[item.background.sessionID] ?? sync.data.session_status[item.background.sessionID]
     if (status?.type === "retry") return Locale.truncateMiddle(status.message, Math.max(12, rightPanelWidth() - 22))
-    if (status?.type === "busy") return item.background.summary || item.background.session?.path || item.session?.path || "working"
+    if (status?.type === "busy") {
+      return (
+        formatAgentViewDetailLabel(item.background.summary) ||
+        formatAgentViewPathLabel(item.background.session?.path) ||
+        formatAgentViewPathLabel(item.session?.path) ||
+        "working"
+      )
+    }
     return (
-      item.background.session?.path ||
-      item.session?.path ||
-      item.background.session?.directory ||
-      item.session?.directory ||
+      formatAgentViewPathLabel(item.background.session?.path) ||
+      formatAgentViewPathLabel(item.session?.path) ||
+      formatAgentViewPathLabel(item.background.session?.directory) ||
+      formatAgentViewPathLabel(item.session?.directory) ||
       item.background.session?.agent ||
       item.session?.agent ||
       item.background.state
@@ -641,42 +729,21 @@ export function HomeSurface(props: {
     if (!selected) return placeholder
     return {
       ...placeholder,
-      normal: [`Reply to selected session: ${Locale.truncate(sessionTitle(selected), 40)}`],
+      normal: homePromptPlaceholderText({ selectedTitle: sessionTitle(selected) }),
     }
   })
   const logoSurface = () => (
     <Show when={homeIdentityKey()}>
-      <Show
-        when={activeHomeAscii()}
-        fallback={
-          <TuiPluginRuntime.Slot name="home_logo" mode="replace">
-            <Show
-              when={useProfileIdentityLogo()}
-              fallback={
-                <Show
-                  when={!useCompactProductName()}
-                  fallback={
-                    <text fg={mend.profile.theme.tokens.foreground}>{mend.profile.identity.productName}</text>
-                  }
-                >
-                  <Logo />
-                </Show>
-              }
-            >
-              <Show
-                when={!useCompactProductName()}
-                fallback={<text fg={mend.profile.theme.tokens.foreground}>{mend.profile.identity.productName}</text>}
-              >
-                <box paddingBottom={logoBottomPad()}>
-                  <SurfaceLines text={customProductAscii()} />
-                </box>
-              </Show>
-            </Show>
-          </TuiPluginRuntime.Slot>
-        }
-      >
-        {(text) => <SurfaceLines text={text()} />}
-      </Show>
+      <TuiPluginRuntime.Slot name="home_logo" mode="replace">
+        <Show
+          when={logoMode() === "mascot" || props.surface?.homeAscii || !useCompactProductName()}
+          fallback={<text fg={mend.profile.theme.tokens.foreground}>{mend.profile.identity.productName}</text>}
+        >
+          <box paddingBottom={logoBottomPad()}>
+            <SurfaceLines text={activeHomeAscii()} />
+          </box>
+        </Show>
+      </TuiPluginRuntime.Slot>
     </Show>
   )
   const homeActionsSurface = (options?: {
@@ -725,8 +792,8 @@ export function HomeSurface(props: {
   )
   const homeAgentManagerSurface = (options?: { paddingTop?: number; width?: number }) => {
     const width = options?.width ?? launcherWidth()
-    const nameWidth = createMemo(() => Math.min(26, Math.max(14, Math.floor(width * 0.32))))
-    const timeWidth = createMemo(() => (width >= 68 ? 18 : width >= 54 ? 14 : 10))
+    const nameWidth = createMemo(() => Math.min(20, Math.max(12, Math.floor(width * 0.34))))
+    const timeWidth = createMemo(() => (width >= 48 ? 12 : 8))
     const detailWidth = createMemo(() => Math.max(10, width - nameWidth() - timeWidth() - 4))
     const row = (
       item: AgentViewSessionItem,
@@ -890,24 +957,25 @@ export function HomeSurface(props: {
                 paddingRight={2}
               >
                 <box
-                  flexDirection="row"
-                  width={splitTwoColumnWelcome() ? undefined : "100%"}
+                  flexDirection="column"
+                  width={splitTwoColumnWelcome() ? splitTitleAvailableWidth() : "100%"}
                   flexGrow={splitTwoColumnWelcome() ? 1 : 0}
                   minWidth={splitTwoColumnWelcome() ? 32 : 0}
                   alignItems="center"
+                  justifyContent="center"
                 >
                   <Show when={showLogo()}>
                     <box flexShrink={0} alignItems="center">
                       {logoSurface()}
                     </box>
                   </Show>
-                  <box width={3} flexShrink={0} />
                   <box
                     flexDirection="column"
-                    width={splitTwoColumnWelcome() ? splitTitleAvailableWidth() : undefined}
-                    flexGrow={splitTwoColumnWelcome() ? 0 : 1}
+                    width={splitTwoColumnWelcome() ? splitTitleAvailableWidth() : "100%"}
+                    flexGrow={0}
                     minWidth={Math.min(20, splitTitleAvailableWidth())}
                     justifyContent="center"
+                    alignItems="center"
                   >
                     <Show when={splitShowsSideTitle()}>
                       <Show
@@ -965,12 +1033,12 @@ export function HomeSurface(props: {
                     <Prompt
                       ref={props.bind}
                       disabled={props.disabled}
-                      historyScope={`project:${project.workspace.current()}`}
+                      historyScope={homePromptTarget().historyScope}
                       workspaceID={project.workspace.current()}
                       right={
                         <TuiPluginRuntime.Slot name="home_prompt_right" workspace_id={project.workspace.current()} />
                       }
-                      sessionID={selectedAgentViewPromptSessionID()}
+                      sessionID={homePromptTarget().sessionID}
                       placeholders={promptPlaceholders()}
                     />
                   ),
@@ -987,7 +1055,7 @@ export function HomeSurface(props: {
   )
 }
 
-export function Home(props: { revision?: number }) {
+export function Home(props: { revision?: number; pluginsReady?: boolean }) {
   const sync = useSync()
   const route = useRouteData("home")
   const promptRef = usePromptRef()
@@ -1020,12 +1088,12 @@ export function Home(props: { revision?: number }) {
     const r = ref()
     if (sent) return
     if (!r) return
-    if (!sync.ready || !local.model.ready) return
+    if (props.pluginsReady === false || !sync.ready || !sync.providerMetadataReady || !local.model.ready) return
     if (!args.prompt) return
     if (r.current.input !== args.prompt) return
     sent = true
     r.submit()
   })
 
-  return <HomeSurface bind={bind} revision={props.revision} />
+  return <HomeSurface bind={bind} revision={props.revision} disabled={false} />
 }

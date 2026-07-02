@@ -1,6 +1,7 @@
 import * as Tool from "./tool"
 import DESCRIPTION from "./task.txt"
 import { Session } from "@/session/session"
+import { SessionStatus } from "@/session/status"
 import { SessionID, MessageID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
@@ -18,6 +19,7 @@ export interface TaskPromptOps {
 }
 
 const id = "task"
+const SUBAGENT_WAIT_STATUS_TTL_MS = 6 * 60 * 60 * 1000
 
 export function normalizeSubagentType(value: string) {
   return value.trim().replace(/^(sub[/-])+/i, "")
@@ -127,6 +129,7 @@ export const TaskTool = Tool.define(
     const config = yield* Config.Service
     const provider = yield* Provider.Service
     const sessions = yield* Session.Service
+    const status = yield* SessionStatus.Service
     const scope = yield* Scope.Scope
 
     const run = Effect.fn("TaskTool.execute")(function* (
@@ -316,6 +319,13 @@ export const TaskTool = Tool.define(
               })
               .pipe(Effect.forkIn(scope))
 
+            yield* status.set(ctx.sessionID, {
+              type: "busy",
+              kind: "subagent-wait",
+              message: `Waiting for ${next.name} subagent...`,
+              until: Date.now() + SUBAGENT_WAIT_STATUS_TTL_MS,
+            })
+
             const result = yield* Fiber.await(child)
               .pipe(
                 Effect.map((exit) => ({ type: "exit" as const, exit })),
@@ -353,6 +363,7 @@ export const TaskTool = Tool.define(
                       })),
                     )
                 }),
+                Effect.ensuring(status.set(ctx.sessionID, { type: "busy" })),
               )
 
             return result

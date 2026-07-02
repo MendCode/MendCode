@@ -74,7 +74,7 @@ Most visual changes can be made from the command palette:
 Ctrl+P -> Home identity
 Ctrl+P -> Home title text
 Ctrl+P -> Home title font
-Ctrl+P -> Home ASCII size
+Ctrl+P -> Home mascot ASCII
 Ctrl+P -> Home welcome mode
 Ctrl+P -> Home split panel
 Ctrl+P -> Prompt chrome

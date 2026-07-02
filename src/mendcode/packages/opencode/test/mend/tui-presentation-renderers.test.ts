@@ -1,13 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
 import { parseTimelineDiffRows, timelineDiffFileStatus } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
+import { diffStatsFromPatch, formatDiffStats, patchFileTitle } from "../../src/cli/cmd/tui/routes/session/renderers/diff-label"
 import { rawReasoningDisplay, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
-import { groupTimelineParts, isTimelineStackStart } from "../../src/mend/tui/timeline/group"
-import { normalizeToolEvent, shouldRenderCompactTool, toolClass, toolSummary } from "../../src/mend/tui/timeline/normalize"
+import { groupTimelineParts, isTimelineStackStart, timelineCollapseLabel } from "../../src/mend/tui/timeline/group"
+import { normalizeToolEvent, shouldRenderCompactTool, toolClass, toolPresentationIcon, toolPresentationIconForProfile, toolSummary } from "../../src/mend/tui/timeline/normalize"
 
 function timelineNodeLabel(node: ReturnType<typeof groupTimelineParts>[number]) {
   if (node.type === "row") return (node as { title: string }).title
-  if (node.type === "collapse") return `◇ ${(node as { count: number }).count} more`
+  if (node.type === "collapse" && "rows" in node) return `◇ ${timelineCollapseLabel(node)}`
   return node.type
 }
 
@@ -23,7 +24,36 @@ describe("mend tui presentation renderers", () => {
     expect(toolClass("edit")).toBe("artifact")
     expect(toolClass("bash")).toBe("command")
     expect(toolClass("task")).toBe("planning")
+    expect(toolClass("loop")).toBe("planning")
+    expect(toolClass("plan_review")).toBe("planning")
+    expect(toolClass("playwright_browser_click")).toBe("web")
     expect(toolClass("read", "error")).toBe("failure")
+  })
+
+  test("uses stable terminal-safe tool symbols with deterministic ASCII fallbacks", () => {
+    expect(toolPresentationIcon("bash")).toBe("$")
+    expect(toolPresentationIcon("read")).toBe("□")
+    expect(toolPresentationIcon("grep")).toBe("⌕")
+    expect(toolPresentationIcon("edit")).toBe("✎")
+    expect(toolPresentationIcon("webfetch")).toBe("⌁")
+    expect(toolPresentationIcon("task")).toBe("◔")
+    expect(toolPresentationIcon("review")).toBe("◫")
+    expect(toolPresentationIcon("memory")).toBe("◉")
+    expect(toolPresentationIcon("memory_graph")).toBe("◎")
+    expect(toolPresentationIcon("loop")).toBe("⟳")
+    expect(toolPresentationIcon("playwright_browser_click")).toBe("▣")
+
+    expect(toolPresentationIcon("read", undefined, { asciiOnly: true })).toBe("R")
+    expect(toolPresentationIcon("grep", undefined, { asciiOnly: true })).toBe("S")
+    expect(toolPresentationIcon("edit", undefined, { asciiOnly: true })).toBe("E")
+    expect(toolPresentationIcon("memory_graph", undefined, { asciiOnly: true })).toBe("G")
+    expect(toolPresentationIcon("loop", undefined, { asciiOnly: true })).toBe("L")
+    expect(toolPresentationIcon("playwright_browser_click", undefined, { asciiOnly: true })).toBe("B")
+    expect(toolPresentationIconForProfile("minimal", "read")).toBe("□")
+    expect(toolPresentationIconForProfile("minimal", "loop")).toBe("⟳")
+    expect(toolPresentationIconForProfile("minimal", undefined, "failure")).toBe("×")
+    expect(toolPresentationIconForProfile("mendcode", "read")).toBe("□")
+    expect(toolPresentationIconForProfile("mendcode", undefined, "failure")).toBe("×")
   })
 
   test("webfetch uses a domain summary instead of raw input dumps", () => {
@@ -38,15 +68,29 @@ describe("mend tui presentation renderers", () => {
     expect(event.lines).toEqual([])
   })
 
-  test("websearch uses a query summary", () => {
+  test("websearch uses a query summary and shows full result URLs", () => {
     const event = normalizeToolEvent({
       tool: "websearch",
       state: "completed",
       input: { query: "example domain", limit: 3 },
+      metadata: {
+        numResults: 4,
+        results: [
+          { url: "example.com/docs" },
+          { href: "https://www.example.com/blog/post" },
+          { link: "https://docs.example.com/guide" },
+          { url: "https://ignored.example.com/fourth" },
+        ],
+      },
     })
 
-    expect(event.title).toBe('Search web "example domain"')
-    expect(event.lines).toEqual([])
+    expect(event.title).toBe('Search web "example domain" (4 results)')
+    expect(event.lines).toEqual([
+      "https://example.com/docs",
+      "https://www.example.com/blog/post",
+      "https://docs.example.com/guide",
+    ])
+    expect(event.lines.every((line) => line.startsWith("https://"))).toBe(true)
   })
 
   test("one-line mendcode events have no empty block lines", () => {
@@ -92,6 +136,36 @@ describe("mend tui presentation renderers", () => {
     expect(toolSummary("glob", { pattern: "src/**/*.ts" }, { count: 4 }).title).toBe("List src/**/*.ts (4 matches)")
     expect(toolSummary("grep", { pattern: "query" }, { matches: 3 }).title).toBe('Search "query" (3 matches)')
     expect(toolSummary("websearch", { query: "query" }, { numResults: 3 }).title).toBe('Search web "query" (3 results)')
+    expect(
+      toolSummary(
+        "websearch",
+        { query: "query" },
+        undefined,
+        JSON.stringify({
+          results: [
+            { url: "https://example.com/a" },
+            { href: "https://example.com/b" },
+            { link: "https://example.com/c" },
+            { url: "https://example.com/d" },
+          ],
+        }),
+      ).lines,
+    ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"])
+    expect(
+      toolSummary(
+        "memory",
+        { action: "status", scope: "project", id: "", query: "", text: "" },
+        undefined,
+        "enabled: true\nproject entries: 5\npending proposals: 2\ncategories: 13\nignored",
+      ),
+    ).toEqual({
+      title: "Memory status [project]",
+      lines: ["enabled: true", "project entries: 5", "pending proposals: 2", "categories: 13"],
+    })
+    expect(toolSummary("memory_graph", { action: "overview", query: "" }, undefined, "facts: 13\nlinks: 0")).toEqual({
+      title: "Memory graph overview",
+      lines: ["facts: 13", "links: 0"],
+    })
     expect(
       toolSummary("todowrite", {
         todos: [
@@ -170,6 +244,48 @@ describe("mend tui presentation renderers", () => {
     expect(shouldRenderCompactTool("raw", "edit")).toBe(false)
   })
 
+  test("diff block titles keep action, path, and stats on one line", () => {
+    const patch = [
+      "diff --git a/src/app.ts b/src/app.ts",
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "-const oldValue = true",
+      "+const newValue = true",
+      "+const extraValue = false",
+    ].join("\n")
+
+    expect(formatDiffStats(diffStatsFromPatch(patch))).toBe("(+2 -1)")
+    expect(patchFileTitle({ type: "add", relativePath: "src/new.ts", additions: 3, deletions: 0 })).toBe(
+      "Added src/new.ts (+3)",
+    )
+    expect(patchFileTitle({ type: "delete", relativePath: "src/old.ts", additions: 0, deletions: 2 })).toBe(
+      "Deleted src/old.ts (-2)",
+    )
+    expect(patchFileTitle({ type: "update", relativePath: "src/app.ts" }, patch)).toBe("Patched src/app.ts (+2 -1)")
+    expect(patchFileTitle({ type: "move", filePath: "src/old.ts", movePath: "src/new.ts" })).toBe(
+      "Patched src/old.ts -> src/new.ts",
+    )
+  })
+
+  test("loop tools stay on the rich card renderer in compact profiles", () => {
+    const nodes = groupTimelineParts("minimal", [
+      {
+        id: "loop-tool",
+        type: "tool",
+        tool: "loop",
+        state: {
+          status: "completed",
+          input: { action: "show", workflowID: "loop_test" },
+          metadata: { workflowID: "loop_test", state: "sleeping", phase: "waiting" },
+          output: "loop_id: loop_test",
+        },
+      },
+    ], { completed: true, showReasoningRows: true })
+
+    expect(nodes).toHaveLength(1)
+    expect(nodes[0]).toMatchObject({ type: "tool", tool: "loop" })
+  })
+
   test("groups old completed timeline rows behind a single more row", () => {
     const completedReads = Array.from({ length: 16 }, (_, index) => ({
       id: `read-${index + 1}`,
@@ -189,19 +305,17 @@ describe("mend tui presentation renderers", () => {
 
     const labels = nodes.map(timelineNodeLabel)
     expect(labels).toEqual([
-      "◇ 6 more",
-      ...Array.from({ length: 10 }, (_, index) => `Read file-${index + 7}.ts`),
-      'Search web "docs"',
+      "◇ 11 tools more",
+      ...Array.from({ length: 5 }, (_, index) => `file-${index + 12}.ts`),
+      '"docs"',
     ])
-    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 6 more"])
+    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 11 tools more"])
     expect(nodes.find((node) => node.type === "collapse")).toMatchObject({
       type: "collapse",
-      count: 6,
-      rows: Array.from({ length: 6 }, (_, index) =>
-        expect.objectContaining({ title: `Read file-${index + 1}.ts` }),
-      ),
+      count: 11,
+      rows: Array.from({ length: 11 }, (_, index) => expect.objectContaining({ title: `file-${index + 1}.ts` })),
     })
-    expect(nodes.find((node) => isTimelineRowWithTitle(node, 'Search web "docs"'))).toMatchObject({
+    expect(nodes.find((node) => isTimelineRowWithTitle(node, '"docs"'))).toMatchObject({
       type: "row",
       state: "running",
     })
@@ -225,10 +339,10 @@ describe("mend tui presentation renderers", () => {
     ])
 
     const labels = nodes.map(timelineNodeLabel)
-    expect(labels[0]).toBe("◇ 10 more")
-    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 10 more"])
-    expect(labels.at(-1)).toBe("Read /tmp/current.ts (5-14)")
-    expect(nodes.filter((node) => node.type === "row")).toHaveLength(11)
+    expect(labels[0]).toBe("◇ 15 tools more")
+    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 15 tools more"])
+    expect(labels.at(-1)).toBe("/tmp/current.ts (5-14)")
+    expect(nodes.filter((node) => node.type === "row")).toHaveLength(6)
   })
 
   test("mendcode keeps todo writes inside compact timeline stacks", () => {
@@ -255,13 +369,13 @@ describe("mend tui presentation renderers", () => {
     ], { completed: true, showReasoningRows: true })
 
     const labels = nodes.map(timelineNodeLabel)
-    expect(labels[0]).toBe("◇ 3 more")
+    expect(labels[0]).toBe("◇ 8 tools more")
     expect(labels).toContain("Todos")
     expect(nodes.find((node) => isTimelineRowWithTitle(node, "Todos"))).toMatchObject({
       lines: ["✓ Ship the UI"],
     })
-    expect(labels.at(-1)).toBe('Search web "docs"')
-    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 3 more"])
+    expect(labels.at(-1)).toBe('"docs"')
+    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 8 tools more"])
   })
 
   test("empty parts do not split compact timeline stacks", () => {
@@ -285,9 +399,9 @@ describe("mend tui presentation renderers", () => {
     const nodes = groupTimelineParts("mendcode", parts, { completed: true, showReasoningRows: true })
     const labels = nodes.map(timelineNodeLabel)
 
-    expect(labels[0]).toBe("◇ 4 more")
+    expect(labels[0]).toBe("◇ 9 tools more")
     expect(labels).not.toContain("part")
-    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 4 more"])
+    expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 9 tools more"])
   })
 
   test("minimal and mendcode compact errored tools into the same timeline stack", () => {
@@ -320,7 +434,7 @@ describe("mend tui presentation renderers", () => {
           tool: "read",
           class: "simple-read",
           state: "completed",
-          title: "Read ok.md",
+          title: "ok.md",
         },
         {
           type: "row",
@@ -328,7 +442,7 @@ describe("mend tui presentation renderers", () => {
           tool: "read",
           class: "failure",
           state: "error",
-          title: "Read missing.md (1-80)",
+          title: "missing.md (1-80)",
         },
         {
           type: "row",
@@ -336,10 +450,41 @@ describe("mend tui presentation renderers", () => {
           tool: "read",
           class: "simple-read",
           state: "completed",
-          title: "Read after.md",
+          title: "after.md",
         },
       ])
     }
+  })
+
+  test("compact grouped rows use shorter safe titles for high-volume tools", () => {
+    expect(
+      groupTimelineParts("mendcode", [
+        {
+          id: "read-short",
+          type: "tool",
+          tool: "read",
+          state: { status: "completed", input: { filePath: "src/file.ts", offset: 5, limit: 10 }, output: "" },
+        },
+        {
+          id: "grep-short",
+          type: "tool",
+          tool: "grep",
+          state: { status: "completed", input: { pattern: "query" }, metadata: { matches: 2 }, output: "" },
+        },
+        {
+          id: "web-short",
+          type: "tool",
+          tool: "websearch",
+          state: { status: "completed", input: { query: "docs" }, metadata: { numResults: 3 }, output: "" },
+        },
+        {
+          id: "todo-short",
+          type: "tool",
+          tool: "todowrite",
+          state: { status: "completed", input: { todos: [{ content: "Ship", status: "completed" }] }, output: "" },
+        },
+      ]).map(timelineNodeLabel),
+    ).toEqual(["src/file.ts (5-14)", '"query" (2 matches)', '"docs" (3 results)', "Todos"])
   })
 
   test("timeline stacks only add top spacing after visible assistant text", () => {
@@ -472,7 +617,7 @@ describe("mend tui presentation renderers", () => {
         tool: "read",
         class: "simple-read",
         state: "completed",
-        title: "Read a.ts",
+        title: "a.ts",
       },
       parts[1],
     ])
@@ -483,7 +628,7 @@ describe("mend tui presentation renderers", () => {
         tool: "read",
         class: "simple-read",
         state: "completed",
-        title: "Read a.ts",
+        title: "a.ts",
       },
       parts[1],
     ])

@@ -35,6 +35,30 @@ function normalizePath(value: string) {
   return value.replaceAll("\\", "/")
 }
 
+export function isAgentViewPathLike(value: string | undefined | null) {
+  if (!value) return false
+  const normalized = normalizePath(value.trim())
+  return normalized.startsWith("/") || normalized.startsWith("~/") || /^[a-z]:\//i.test(normalized)
+}
+
+export function formatAgentViewPathLabel(value: string | undefined | null) {
+  if (!value) return undefined
+  const normalized = normalizePath(value.trim()).replace(/\/+$/, "")
+  if (!normalized) return undefined
+  const homeLabel = normalized.replace(/^\/Users\/[^/]+/, "~")
+  const parts = homeLabel.split("/").filter(Boolean)
+  if (homeLabel.startsWith("~/") && parts.length >= 2) return `${parts.at(-2)}/${parts.at(-1)}`
+  if (/^[a-z]:$/i.test(parts[0] ?? "") && parts.length >= 3) return `${parts.at(-2)}/${parts.at(-1)}`
+  if (parts.length >= 2) return `${parts.at(-2)}/${parts.at(-1)}`
+  return homeLabel
+}
+
+export function formatAgentViewDetailLabel(value: string | undefined | null) {
+  if (!value) return undefined
+  if (isAgentViewPathLike(value)) return formatAgentViewPathLabel(value)
+  return value
+}
+
 export function isTemporaryAgentViewDirectory(value: string | undefined) {
   if (!value) return false
   const normalized = normalizePath(value)

@@ -92,7 +92,8 @@ Useful commands after setup:
 | `mendcode chat "summarize current status"` | You want a quick control-plane turn without entering the full TUI. |
 | `mendcode status` / `mendcode doctor` | You want readiness or diagnostics. |
 | `mendcode setup status` | You want to inspect setup state after the guided setup screen. |
-| `mendcode packages status` | You want to inspect active team/runtime packages. |
+| `mendcode marketplace status` | You want to inspect active team/runtime marketplace packages. |
+| `mendcode install <pack-id>` | You want the short marketplace install path for a package. |
 | `mendcode mflow status` | You are coordinating multiple agents around the same repo. |
 | `mendcode --worktree feature-branch` | You want to open MendCode against a branch/path/id worktree target. |
 | `mendcode --tsm feature-branch` | You want a TSM workspace with a MendCode split. |
@@ -246,9 +247,9 @@ dialogs, footer entries, and theme tokens.</p>
 </tr>
 </table>
 
-### Package Your Harness
+### Marketplace Your Harness
 
-A MendCode package captures the reusable parts of a team setup:
+A MendCode marketplace package captures the reusable parts of a team setup:
 
 ```text
 .mendcode/
@@ -258,23 +259,27 @@ A MendCode package captures the reusable parts of a team setup:
   skills/
   prompts/
   plugins/
+  tools/
+  pages/
   tui/
   widgets/
 ```
 
 Packages can include MCP config, context docs, scripts, TUI profiles, theme
-tokens, model roles, focus defaults, budget posture, permission defaults,
-memory defaults, and worktree policy.
+tokens, custom tool calls, custom TUI pages, shell-backed widgets, model roles,
+focus defaults, budget posture, permission defaults, memory defaults, and
+worktree policy.
 
 Packages must not include provider tokens, OAuth state, `.env*`,
 `.mendcode/auth`, local databases, room secrets, or machine-local cache/run
 state.
 
 ```bash
-mendcode packages create --id acme-standard --title "Acme Standard" --include skills,modes,plugins
-mendcode packages list
-mendcode packages install acme-standard
-mendcode packages enable acme-standard
+mendcode marketplace create --id acme-standard --title "Acme Standard" --include skills,modes,plugins,tools,pages
+mendcode marketplace list
+mendcode install acme-standard
+mendcode marketplace install acme-standard
+mendcode marketplace enable acme-standard
 ```
 
 ### Plan Mode
@@ -401,7 +406,7 @@ mendcode tsm setup
 | Understand the whole product surface | [Feature map](docs/features.md) |
 | Install, configure, and check readiness | [CLI, setup, and configuration](docs/cli-setup-configuration.md) |
 | Shape the visual terminal experience | [Customization](docs/customization.md) |
-| Share team packages | [Packages and team sharing](docs/packages-and-team-sharing.md) |
+| Share marketplace packages | [Marketplace and team sharing](docs/packages-and-team-sharing.md) |
 | Extend the TUI with code | [TUI plugins and widgets](docs/tui-plugins-and-widgets.md) |
 | Use plan review gates | [Plan Mode](docs/plan-mode.md) |
 | Review working-tree changes | [Changes Review](docs/changes-review.md) |
@@ -472,7 +477,7 @@ context, then verify live code before changing behavior.
 - Source of truth: `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`.
 - Re-run public help before adding command examples.
 - Primary public surfaces include opening the TUI, `run`, `chat`, `status`,
-  `doctor`, `setup`, `packages`, `mflow`, `worktree`, and `tsm`.
+  `doctor`, `setup`, `marketplace`, `mflow`, `worktree`, and `tsm`.
 - Support surfaces include `models`, `providers`, `auth`, `permissions`,
   `memory`, and `focus`.
 - Internal debug surfaces such as `adapter`, `ai`, `bench`, `budget`, `config`,
@@ -482,11 +487,11 @@ context, then verify live code before changing behavior.
 ### Core product story
 
 - MendCode is the customizable coding terminal: CLI, TUI, setup flow, model
-  roles, permission policy, memory, runtime packages, Plan Mode, Usage Insights,
-  optional mflow coordination, optional TSM and worktree orchestration, widgets,
-  plugins, and TUI profiles.
+  roles, permission policy, memory, runtime marketplace packages, Plan Mode,
+  Usage Insights, optional mflow coordination, optional TSM and worktree
+  orchestration, widgets, plugins, and TUI profiles.
 - The pitch is not another chat prompt. The pitch is a configurable harness:
-  prompt chrome, status rows, model roles, memory policy, team packages,
+  prompt chrome, status rows, model roles, memory policy, marketplace packages,
   workflow coordination, review gates, and local observability.
 
 ### TUI customization
@@ -501,13 +506,13 @@ context, then verify live code before changing behavior.
 - Good demo profile: mascot identity, split home, `agentManager` right panel,
   `top-bottom` prompt chrome, `mendcode>` lead text, and outside prompt status.
 
-### Packages
+### Marketplace Packages
 
-- Main docs: [Packages and team sharing](docs/packages-and-team-sharing.md).
-- Packages can include commands, agents, modes, skills, prompts, MCP config,
-  context docs, scripts, plugins, widgets, components, TUI profile, themes,
-  model roles, focus defaults, budget posture, permission defaults, memory
-  defaults, and worktree policy.
+- Main docs: [Marketplace and team sharing](docs/packages-and-team-sharing.md).
+- Marketplace packages can include commands, agents, modes, skills, prompts,
+  MCP config, context docs, scripts, plugins, widgets, components, custom tools,
+  custom pages, TUI profile, themes, model roles, focus defaults, budget
+  posture, permission defaults, memory defaults, and worktree policy.
 - Packages must not include provider tokens, OAuth state, `.env*`, auth state,
   local databases, room secrets, or machine-local run/cache state.
 

@@ -413,7 +413,7 @@ function positiveInt(value: number | undefined) {
 function defaultPolicy(input?: Policy, budgetMode?: BudgetMode): Policy {
   const maxTurns = positiveInt(input?.maxTurns)
   return {
-    maxTurns: maxTurns ?? (budgetMode === "unbounded-monitor" ? undefined : 30),
+    maxTurns: budgetMode === "unbounded-monitor" ? undefined : maxTurns ?? 30,
     maxRuntimeMs: input?.maxRuntimeMs ?? 8 * 60 * 60 * 1000,
     maxChildren: input?.maxChildren ?? 3,
     maxDepth: input?.maxDepth ?? 1,

@@ -12,7 +12,7 @@ Most visual settings are also available from the command palette inside the TUI:
 Ctrl+P -> Home identity
 Ctrl+P -> Home title text
 Ctrl+P -> Home title font
-Ctrl+P -> Home ASCII size
+Ctrl+P -> Home mascot ASCII
 Ctrl+P -> Home welcome mode
 Ctrl+P -> Home split panel
 Ctrl+P -> Prompt chrome
@@ -296,29 +296,18 @@ That keeps the home screen logo textual and brand-like. It is the better choice 
 
 ## Mascot
 
-Mascot mode uses ASCII art as the home identity and, when enabled, as compact activity feedback.
+Mascot mode uses ASCII art as the home identity. Session activity mascot states are configured separately and can stay enabled with either Home identity mode.
 
 ```jsonc
 {
   "identity": {
     "productName": "MendCode",
     "logoMode": "mascot"
-  },
-  "surfaces": {
-    "homeLogo": {
-      "size": "default"
-    }
   }
 }
 ```
 
-Supported `surfaces.homeLogo.size` values:
-
-- `compact`
-- `default`
-- `large`
-
-You can replace the home mascot completely with `surfaces.homeLogo.text`:
+You can replace the home mascot completely with `surfaces.homeLogo.text` or `home.logo.text` in config:
 
 ```jsonc
 {
@@ -337,7 +326,7 @@ Keep custom mascot art monospaced, low-height, and visually stable. The home scr
 
 ## Default Home Mascot
 
-Default `surfaces.homeLogo.size: "default"`:
+Default mascot:
 
 ```text
       .-.
@@ -345,31 +334,11 @@ Default `surfaces.homeLogo.size: "default"`:
     /|[+]|\
    /_|___|_\
       \_/
-```
-
-Compact uses the same default art:
-
-```text
-      .-.
-     (o o)
-    /|[+]|\
-   /_|___|_\
-      \_/
-```
-
-Large:
-
-```text
-        .-.
-     .-(o o)-.
-    /  |[+]|  \
-   /___|___|___\
-       \___/
 ```
 
 ## Activity Mascot States
 
-When `identity.logoMode` is `mascot`, the compact activity mascot can change with the current phase.
+The compact activity mascot above the session prompt can change with the current phase. It is independent from the Home identity mode, so Home can use a generated title while the session prompt still uses state-specific mascot art.
 
 The config lives at:
 
@@ -668,9 +637,6 @@ Good power-user setup:
     "logoFont": "mendcode"
   },
   "surfaces": {
-    "homeLogo": {
-      "size": "default"
-    },
     "homeWelcome": {
       "mode": "split",
       "rightPanel": "agentManager"
@@ -780,9 +746,6 @@ This fragment combines mascot home, split Agent View, compact status, custom act
     "logoFont": "mendcode"
   },
   "surfaces": {
-    "homeLogo": {
-      "size": "default"
-    },
     "homeWelcome": {
       "mode": "split",
       "rightPanel": "agentManager"

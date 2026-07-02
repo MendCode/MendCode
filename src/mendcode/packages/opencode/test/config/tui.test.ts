@@ -11,6 +11,7 @@ import { AppRuntime } from "../../src/effect/app-runtime"
 import { Effect, Layer } from "effect"
 import { CurrentWorkingDirectory } from "@/cli/cmd/tui/config/cwd"
 import { ConfigPlugin } from "@/config/plugin"
+import { runtimeRegistryAdd, runtimeRegistryApply } from "@/mend/runtime/registry"
 
 const wintest = process.platform === "win32" ? test : test.skip
 const clear = async (wait = false) => {
@@ -127,6 +128,31 @@ test("loads tui config with the same precedence order as server config paths", a
   const config = await getTuiConfig(tmp.path)
   expect(config.theme).toBe("local")
   expect(config.diff_style).toBe("stacked")
+})
+
+test("includes active marketplace package tui plugins", async () => {
+  await using tmp = await tmpdir()
+  await using source = await tmpdir({
+    init: async (dir) => {
+      await fs.mkdir(path.join(dir, ".mendcode", "plugins"), { recursive: true })
+      await Bun.write(
+        path.join(dir, ".mendcode", "mendcode.json"),
+        JSON.stringify({ version: 0, focus: { default: "codex" }, worktree: { mode: "off" } }, null, 2),
+      )
+      await Bun.write(
+        path.join(dir, ".mendcode", "plugins", "package-widget.ts"),
+        "export default { id: 'package-widget', async tui() {} }\n",
+      )
+    },
+  })
+
+  await runtimeRegistryAdd(["package-widget", "--type", "local", "--url", source.path], tmp.path)
+  await runtimeRegistryApply("package-widget", tmp.path)
+
+  const config = await getTuiConfig(tmp.path)
+  const specs = (config.plugin ?? []).map((item) => ConfigPlugin.pluginSpecifier(item))
+  expect(specs.some((spec) => spec.endsWith("/.mendcode/plugins/package-widget.ts"))).toBe(true)
+  expect(config.plugin_origins?.some((origin) => origin.source.endsWith("/.mendcode/packages/state.json"))).toBe(true)
 })
 
 test("migrates tui-specific keys from mendcode.json when tui.json does not exist", async () => {

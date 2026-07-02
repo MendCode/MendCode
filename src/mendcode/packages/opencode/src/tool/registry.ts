@@ -1,6 +1,7 @@
 import { PlanExitTool } from "./plan"
 import { PlanReviewTool } from "./plan-review"
 import { Session } from "@/session/session"
+import { SessionStatus } from "@/session/status"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
 import { EditTool } from "./edit"
@@ -15,6 +16,8 @@ import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
 import { LoopTool } from "./loop"
 import { ReviewTool } from "./review"
+import { MemoryTool } from "./memory"
+import { MemoryGraphTool } from "./memory_graph"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@mendcode/plugin"
@@ -86,6 +89,7 @@ export const layer: Layer.Layer<
   | Agent.Service
   | Skill.Service
   | Session.Service
+  | SessionStatus.Service
   | Provider.Service
   | LSP.Service
   | Instruction.Service
@@ -125,6 +129,8 @@ export const layer: Layer.Layer<
     const skilltool = yield* SkillTool
     const looptool = yield* LoopTool
     const reviewtool = yield* ReviewTool
+    const memorytool = yield* MemoryTool
+    const memorygraphtool = yield* MemoryGraphTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -220,6 +226,8 @@ export const layer: Layer.Layer<
           skill: Tool.init(skilltool),
           loop: Tool.init(looptool),
           review: Tool.init(reviewtool),
+          memory: Tool.init(memorytool),
+          memoryGraph: Tool.init(memorygraphtool),
           patch: Tool.init(patchtool),
           question: Tool.init(question),
           planReview: Tool.init(planReview),
@@ -245,6 +253,8 @@ export const layer: Layer.Layer<
             tool.skill,
             tool.loop,
             tool.review,
+            tool.memory,
+            tool.memoryGraph,
             tool.patch,
             tool.planReview,
             ...(Flag.OPENCODE_EXPERIMENTAL_LSP_TOOL ? [tool.lsp] : []),
@@ -378,6 +388,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Skill.defaultLayer),
     Layer.provide(Agent.defaultLayer),
     Layer.provide(Session.defaultLayer),
+    Layer.provide(SessionStatus.defaultLayer),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(LSP.defaultLayer),
     Layer.provide(Instruction.defaultLayer),

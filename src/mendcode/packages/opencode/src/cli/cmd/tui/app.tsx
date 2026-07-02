@@ -14,7 +14,9 @@ import {
   onCleanup,
   batch,
   Show,
+  For,
   on,
+  type JSX,
 } from "solid-js"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
 import { Flag } from "@mendcode/core/flag/flag"
@@ -27,7 +29,7 @@ import { ProjectProvider, useProject } from "@tui/context/project"
 import { EditorContextProvider } from "@tui/context/editor"
 import { useEvent } from "@tui/context/event"
 import { SDKProvider, useSDK } from "@tui/context/sdk"
-import { StartupLoading } from "@tui/component/startup-loading"
+import { StartupLoading, startupLoadingText } from "@tui/component/startup-loading"
 import { SyncProvider, useSync } from "@tui/context/sync"
 import { SyncProviderV2 } from "@tui/context/sync-v2"
 import { LocalProvider, useLocal } from "@tui/context/local"
@@ -73,6 +75,7 @@ import { createTuiApi } from "@/cli/cmd/tui/plugin/api"
 import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import type { RouteMap } from "@/cli/cmd/tui/plugin/api"
 import { FormatError, FormatUnknownError } from "@/cli/error"
+import { Locale } from "@/util/locale"
 
 import type { EventSource } from "./context/sdk"
 import { DialogVariant } from "./component/dialog-variant"
@@ -87,6 +90,8 @@ import {
   mflowControlStatus,
   removeMflowConfig,
   scanMflowRelays,
+  startMflowDaemon,
+  stopMflowDaemon,
   type MflowRelayMode,
 } from "@/mend/config/mflow"
 import {
@@ -121,7 +126,7 @@ import { cyclePromptMode, writePromptMode, type MendPromptMode } from "@/mend/pr
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import { setupReadiness } from "@/mend/runtime/readiness"
 import { isSetupComplete, readSetupState } from "@/mend/setup/state"
-import { runtimeRegistryApplySource, runtimeRegistryInstallPack, runtimeRegistryPreview, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistryStatus } from "@/mend/runtime/registry"
+import { runtimeRegistryInstallPack, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistryStatus } from "@/mend/runtime/registry"
 import type { RegistryMarketplacePackManifest } from "@/mend/runtime/registry/marketplace"
 import {
   disableAllMendPackages,
@@ -131,6 +136,7 @@ import {
 } from "@/mend/runtime/packages"
 import { resolveProjectMemoryRoot, writeProjectMemoryConfig, type MemoryConfig } from "@/mend/memory/config"
 import { readPermissionsConfig } from "@/mend/config/permissions"
+import { initialTuiPluginReady, themeModeWaitMs, tuiFastBootEnabled } from "@/cli/cmd/tui/util/fast-boot"
 import {
   appendMemoryEntry,
   deleteMemoryEntry,
@@ -155,6 +161,8 @@ import {
   type MendMessageRenderer,
   type MendPresentationProfile,
 } from "@/mend/tui/presentation"
+import { defaultHomeMascot } from "@/mend/tui/mascot"
+import { clearMendOverlay, focusMendOverlay, listMendOverlays, mendOverlayRenderContext, readFocusedMendOverlayID, type MendOverlayEntry } from "@/mend/tui/overlays"
 
 function rendererConfig(_config: TuiConfig.Info): CliRendererConfig {
   const mouseEnabled = !Flag.OPENCODE_DISABLE_MOUSE && (_config.mouse ?? true)
@@ -213,9 +221,100 @@ function errorMessage(error: unknown) {
   return FormatUnknownError(error)
 }
 
+function overlaySize(value: MendOverlayEntry["width"], total: number, fallback: number) {
+  if (typeof value === "number") return Math.max(1, Math.min(total, value))
+  if (typeof value === "string" && value.endsWith("%")) return Math.max(1, Math.min(total, Math.floor((total * Number(value.slice(0, -1))) / 100)))
+  return Math.max(1, Math.min(total, fallback))
+}
+
+function overlayFrame(item: MendOverlayEntry, dimensions: { width: number; height: number }) {
+  const margin = item.margin
+  const availableWidth = Math.max(1, dimensions.width - margin.left - margin.right)
+  const availableHeight = Math.max(1, dimensions.height - margin.top - margin.bottom)
+  const width = overlaySize(item.width, availableWidth, Math.min(90, availableWidth))
+  const maxHeight = overlaySize(item.maxHeight, availableHeight, availableHeight)
+  const height = Math.min(overlaySize(item.height, availableHeight, Math.min(12, availableHeight)), maxHeight)
+  const centerLeft = margin.left + Math.max(0, Math.floor((availableWidth - width) / 2))
+  const centerTop = margin.top + Math.max(0, Math.floor((availableHeight - height) / 2))
+  return {
+    width,
+    height,
+    left: item.anchor.endsWith("right") ? dimensions.width - margin.right - width : item.anchor.endsWith("left") ? margin.left : centerLeft,
+    top: item.anchor.startsWith("bottom") ? dimensions.height - margin.bottom - height : item.anchor.startsWith("top") ? margin.top : centerTop,
+  }
+}
+
+function RenderMendOverlay(props: { item: MendOverlayEntry; dimensions: { width: number; height: number } }) {
+  const { theme } = useTheme()
+  const renderer = useRenderer()
+  const frame = createMemo(() => overlayFrame(props.item, props.dimensions))
+  const focused = createMemo(() => readFocusedMendOverlayID() === props.item.id)
+  const rendered = createMemo(() => props.item.render(mendOverlayRenderContext(props.item)))
+  const primitive = createMemo(() => {
+    const value = rendered()
+    if (typeof value === "string" || typeof value === "number") return String(value)
+    if (typeof value === "boolean") return value ? "true" : ""
+    return undefined
+  })
+  const fallback = (error: unknown) => (
+    <box width="100%" height="100%" paddingLeft={1} paddingRight={1} overflow="hidden">
+      <text fg={theme.error} wrapMode="word">Overlay error · {errorMessage(error)}</text>
+    </box>
+  )
+  return (
+    <box
+      position="absolute"
+      zIndex={2750}
+      left={frame().left}
+      top={frame().top}
+      width={frame().width}
+      height={frame().height}
+      border={props.item.modal || focused() ? ["top", "bottom", "left", "right"] : ["left"]}
+      borderColor={focused() ? theme.borderActive : theme.border}
+      backgroundColor={theme.backgroundPanel}
+      paddingLeft={1}
+      paddingRight={1}
+      paddingTop={props.item.title ? 1 : 0}
+      paddingBottom={0}
+      overflow="hidden"
+      onMouseDown={(event) => {
+        if (props.item.nonCapturing) return
+        focusMendOverlay(props.item.id)
+        event.target?.focus()
+      }}
+      onKeyDown={(event) => {
+        if (props.item.nonCapturing) return
+        if (event.name !== "escape") return
+        if (renderer.getSelection()?.getSelectedText()) return
+        clearMendOverlay(props.item.id)
+        event.preventDefault()
+        event.stopPropagation()
+      }}
+    >
+      <Show when={props.item.title}>
+        {(title) => <text fg={theme.textMuted} wrapMode="none">{title()}</text>}
+      </Show>
+      <ErrorBoundary fallback={fallback}>
+        <Show when={primitive() !== undefined} fallback={rendered() as JSX.Element}>
+          <text fg={theme.text} wrapMode="word">{primitive()}</text>
+        </Show>
+      </ErrorBoundary>
+    </box>
+  )
+}
+
+function MendOverlayHost(props: { dimensions: { width: number; height: number } }) {
+  return <For each={listMendOverlays()}>{(item) => <RenderMendOverlay item={item} dimensions={props.dimensions} />}</For>
+}
+
 function cleanMarketplaceVersion(version: string | undefined) {
   if (!version || version === "0") return "unversioned"
   return version
+}
+
+function OptionalSyncProviderV2(props: { children: JSX.Element }) {
+  if (!Flag.OPENCODE_EXPERIMENTAL_SESSION_V2_DEBUG) return props.children
+  return <SyncProviderV2>{props.children}</SyncProviderV2>
 }
 
 function marketplaceRuntimeSummary(pack: RegistryMarketplacePackManifest) {
@@ -226,6 +325,9 @@ function marketplaceRuntimeSummary(pack: RegistryMarketplacePackManifest) {
     ["modes", runtime.modes],
     ["skills", runtime.skills],
     ["plugins", runtime.plugins],
+    ["tools", runtime.tools],
+    ["pages", runtime.pages],
+    ["widgets", runtime.widgets],
     ["prompts", runtime.prompts],
     ["MCP", runtime.mcpFiles],
     ["extensions", runtime.extensions],
@@ -233,6 +335,10 @@ function marketplaceRuntimeSummary(pack: RegistryMarketplacePackManifest) {
     .filter(([, count]) => typeof count === "number" && count > 0)
     .map(([label, count]) => `${count} ${label}`)
   return items.length ? items.join(" · ") : "No runtime artifacts advertised"
+}
+
+function marketplaceShortSummary(pack: RegistryMarketplacePackManifest) {
+  return Locale.truncate(marketplaceRuntimeSummary(pack), 90)
 }
 
 function marketplacePackDetails(pack: RegistryMarketplacePackManifest, sourceID: string) {
@@ -257,6 +363,30 @@ function marketplacePackDetails(pack: RegistryMarketplacePackManifest, sourceID:
     `- Signature: ${pack.signature ? `${pack.signature.algorithm}:${pack.signature.value.slice(0, 12)}...` : "not signed"}`,
   ]
   return lines.filter((line): line is string => line !== null).join("\n")
+}
+
+function PluginRouteError(props: { id: string; error: unknown }) {
+  const { theme } = useTheme()
+  const message = props.error instanceof Error ? props.error.message : String(props.error)
+
+  onMount(() => {
+    console.error("[tui.plugin.route] render error", {
+      route: props.id,
+      message,
+    })
+  })
+
+  return (
+    <box width="100%" height="100%" paddingLeft={2} paddingRight={2} paddingTop={1} overflow="hidden">
+      <box flexDirection="column" gap={1}>
+        <text fg={theme.error}>Plugin route failed: {props.id}</text>
+        <text fg={theme.textMuted} wrapMode="word">
+          {message}
+        </text>
+        <text fg={theme.textMuted}>esc or command palette can return to a normal route.</text>
+      </box>
+    </box>
+  )
 }
 
 function registryStatusText(status: Awaited<ReturnType<typeof runtimeRegistryStatus>>) {
@@ -376,10 +506,11 @@ export function tui(input: {
       await TuiPluginRuntime.dispose()
     }
 
+    const fastBoot = tuiFastBootEnabled()
     const renderer = await createCliRenderer(rendererConfig(input.config))
     // Prewarm palette before ThemeProvider mounts so `system` theme avoids a first-paint fallback flash.
     void renderer.getPalette({ size: 16 }).catch(() => undefined)
-    const mode = (await renderer.waitForThemeMode(1000)) ?? "dark"
+    const mode = (await renderer.waitForThemeMode(themeModeWaitMs(fastBoot))) ?? "dark"
 
     await render(() => {
       return (
@@ -418,7 +549,7 @@ export function tui(input: {
                         >
                           <ProjectProvider>
                             <SyncProvider>
-                              <SyncProviderV2>
+                              <OptionalSyncProviderV2>
                                 <ThemeProvider mode={mode}>
                                   <LocalProvider>
                                     <KeybindProvider>
@@ -440,7 +571,7 @@ export function tui(input: {
                                     </KeybindProvider>
                                   </LocalProvider>
                                 </ThemeProvider>
-                              </SyncProviderV2>
+                              </OptionalSyncProviderV2>
                             </SyncProvider>
                           </ProjectProvider>
                         </SDKProvider>
@@ -505,17 +636,32 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     toast,
     renderer,
   })
-  const [ready, setReady] = createSignal(false)
-  TuiPluginRuntime.init({
-    api,
-    config: tuiConfig,
+  const fastBoot = tuiFastBootEnabled()
+  const [ready, setReady] = createSignal(initialTuiPluginReady(fastBoot))
+  const [pluginsReady, setPluginsReady] = createSignal(false)
+  onMount(() => {
+    const loadPlugins = () => {
+      void TuiPluginRuntime.init({
+        api,
+        config: tuiConfig,
+      })
+        .catch((error) => {
+          console.error("Failed to load TUI plugins", error)
+        })
+        .finally(() => {
+          setPluginsReady(true)
+          setReady(true)
+        })
+    }
+
+    if (!fastBoot) {
+      loadPlugins()
+      return
+    }
+
+    const pluginTimer = setTimeout(loadPlugins, 0)
+    if (typeof pluginTimer === "object") pluginTimer.unref()
   })
-    .catch((error) => {
-      console.error("Failed to load TUI plugins", error)
-    })
-    .finally(() => {
-      setReady(true)
-    })
 
   const permissionConfigSummary = createMemo(() => {
     const permission = sync.data.config.permission
@@ -802,8 +948,12 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       locks: status.locks.checked ? "locks available" : "locks unavailable",
     }
   }
-  const mflowDaemonValue = (output: string | undefined, label: string) => {
-    return output?.match(new RegExp(`^\\s*${label}:\\s*(.+)$`, "m"))?.[1]?.trim() ?? "unknown"
+  const mflowDaemonValue = (status: Awaited<ReturnType<typeof mflowControlStatus>>, label: string) => {
+    const parsed = status.daemon.output?.match(new RegExp(`^\\s*${label}:\\s*(.+)$`, "m"))?.[1]?.trim()
+    if (parsed) return parsed
+    if (!status.daemon.checked) return label === "State" ? "not checked" : "unavailable"
+    if (!status.daemon.running) return label === "State" ? "not running" : "unavailable"
+    return "unknown"
   }
   const showTsmManager = async () => {
     const status = await tsmStatus(mend.root)
@@ -1007,6 +1157,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     const config = status.config
     const dashboard = status.daemon.output?.match(/https:\/\/\S+\/dashboard/)?.[0] ?? "https://mflow-signal.obed0101.deno.net/dashboard"
     const locksText = status.locks.output?.trim() || "No lock output."
+    const localRelayHelp = config.relayMode === "local" && !status.daemon.running
+      ? "Local relay is configured but not running; use the start commands from mflow details."
+      : undefined
     dialog.replace(() => (
       <DialogSelect
         title="mflow details"
@@ -1024,7 +1177,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             title: config.relayMode === "local" ? "Local relay" : config.relayMode === "legacy-public" || config.signaling.includes("mflow-signal.obed0101.deno.net") ? "Legacy public relay" : "Public relay URL",
             value: "relay",
             category: "Connection",
-            description: config.signaling,
+            description: localRelayHelp ?? config.signaling,
             onSelect: () => {},
           },
           {
@@ -1035,17 +1188,19 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             onSelect: () => {},
           },
           {
-            title: mflowDaemonValue(status.daemon.output, "State"),
+            title: mflowDaemonValue(status, "State"),
             value: "daemon",
             category: "Daemon",
-            description: `${mflowDaemonValue(status.daemon.output, "Peers")} peers · ${mflowDaemonValue(status.daemon.output, "Files")} · ${mflowDaemonValue(status.daemon.output, "Ops/s")} ops/s`,
+            description: status.daemon.running
+              ? `${mflowDaemonValue(status, "Peers")} peers · ${mflowDaemonValue(status, "Files")} · ${mflowDaemonValue(status, "Ops/s")} ops/s`
+              : status.daemon.output,
             onSelect: () => {},
           },
           {
-            title: mflowDaemonValue(status.daemon.output, "Uptime"),
+            title: mflowDaemonValue(status, "Uptime"),
             value: "uptime",
             category: "Daemon",
-            description: `memory ${mflowDaemonValue(status.daemon.output, "Memory")}`,
+            description: status.daemon.running ? `memory ${mflowDaemonValue(status, "Memory")}` : "daemon metrics unavailable while stopped",
             onSelect: () => {},
           },
           {
@@ -1061,6 +1216,22 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             category: "Links",
             description: dashboard,
             onSelect: () => {},
+          },
+          {
+            title: "Start daemon",
+            value: "start-daemon",
+            category: "Actions",
+            description: status.config.enabled ? "Run mflow start with saved config." : "Configure and turn on mflow first.",
+            disabled: !status.config.enabled || status.daemon.running,
+            onSelect: () => void startMflowDaemonFromTui(),
+          },
+          {
+            title: "Stop daemon",
+            value: "stop-daemon",
+            category: "Actions",
+            description: "Run mflow stop for this repo.",
+            disabled: !status.daemon.running,
+            onSelect: () => void stopMflowDaemonFromTui(),
           },
           {
             title: "Back",
@@ -1084,7 +1255,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           () => (
             <DialogSelect
               title="local mflow relay"
-              current={scan[0]?.url ?? "start"}
+              current={scan[0]?.url ?? "localhost"}
               renderFilter={false}
               options={[
                 ...scan.map((relay) => ({
@@ -1095,18 +1266,18 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
                   onSelect: () => resolve(relay.url),
                 })),
                 {
-                  title: "Start local relay",
+                  title: "Show relay start commands",
                   value: "start",
                   category: "Actions",
-                  description: guide.commands[0],
-                  onSelect: () => void showDialogObject(dialog, "Start local mflow relay", guide).then(() => resolve(null)),
+                  description: "Show relay-server commands; use localhost after starting one.",
+                  onSelect: () => void showDialogObject(dialog, "Start local mflow relay", guide).then(() => showLocalRelayPicker().then(resolve)),
                 },
                 {
-                  title: "Copy LAN relay URL",
+                  title: "Show LAN relay URL",
                   value: "copy",
                   category: "Actions",
                   description: guide.lanUrlExample,
-                  onSelect: () => void showDialogObject(dialog, "LAN relay URL", guide).then(() => resolve(null)),
+                  onSelect: () => void showDialogObject(dialog, "LAN relay URL", guide).then(() => showLocalRelayPicker().then(resolve)),
                 },
                 {
                   title: "Refresh scan",
@@ -1119,7 +1290,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
                   title: "Use localhost:8787",
                   value: "localhost",
                   category: "Actions",
-                  description: "Use the default local relay URL even if the scan did not detect it.",
+                  description: "Configure MendCode for this relay URL; start the relay separately if scan did not detect it.",
                   onSelect: () => resolve(guide.recommendedUrl),
                 },
               ]}
@@ -1264,6 +1435,24 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     toast.show({ variant: "success", message: "mflow config removed.", duration: 4000 })
     await showMflowManager()
   }
+  const startMflowDaemonFromTui = async () => {
+    const result = await startMflowDaemon(mend.root).catch((error) => {
+      toast.show({ variant: "error", message: `mflow daemon did not start: ${error instanceof Error ? error.message : String(error)}`, duration: 7000 })
+      return undefined
+    })
+    if (!result) return
+    toast.show({ variant: "success", message: result.daemon.running ? "mflow daemon started." : "mflow start ran, but daemon is not detected yet.", duration: 5000 })
+    await showMflowManager()
+  }
+  const stopMflowDaemonFromTui = async () => {
+    const result = await stopMflowDaemon(mend.root).catch((error) => {
+      toast.show({ variant: "error", message: `mflow daemon did not stop: ${error instanceof Error ? error.message : String(error)}`, duration: 7000 })
+      return undefined
+    })
+    if (!result) return
+    toast.show({ variant: "success", message: "mflow daemon stopped.", duration: 4000 })
+    await showMflowManager()
+  }
   const showMflowManager = async () => {
     const current = await mflowStatusLine()
     dialog.replace(() => (
@@ -1285,6 +1474,24 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             category: "Actions",
             description: "Choose local/public relay, room, secret handling, and queue priority.",
             onSelect: () => void configureAndActivateMflowFromTui(),
+          },
+          {
+            title: "Start daemon",
+            value: "start-daemon",
+            category: "Actions",
+            description: current.status.config.enabled
+              ? "Run mflow start for this repo using the saved room/relay/secret."
+              : "Configure and turn on mflow first.",
+            disabled: !current.status.config.enabled || current.status.daemon.running,
+            onSelect: () => void startMflowDaemonFromTui(),
+          },
+          {
+            title: "Stop daemon",
+            value: "stop-daemon",
+            category: "Actions",
+            description: "Run mflow stop for this repo.",
+            disabled: !current.status.daemon.running,
+            onSelect: () => void stopMflowDaemonFromTui(),
           },
           {
             title: "Turn off",
@@ -1482,14 +1689,14 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             title: "ASCII mascot",
             value: "mascot",
             category: "Home",
-            description: "Use the MendBug mascot on home and as compact activity feedback.",
+            description: "Use ASCII mascot art as the Home identity.",
             onSelect: () =>
               void updatePromptChrome(
                 (profile) => ({
                   ...profile,
                   identity: { ...profile.identity, logoMode: "mascot" },
                 }),
-                "Home identity now uses the MendBug mascot.",
+                "Home identity now uses the default mascot.",
               ),
           },
         ]}
@@ -1510,6 +1717,28 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         ...profile,
         identity: { ...profile.identity, productName: normalizeProductName(value) },
       }),
+    )
+  }
+  const showHomeMascotText = async () => {
+    const value = await DialogPrompt.show(dialog, "Home mascot ASCII", {
+      value: mend.profile.surfaces.homeLogo?.text || "",
+      placeholder: defaultHomeMascot,
+      description: () => (
+        <text fg={theme.textMuted}>Paste custom ASCII for Home. Blank resets to the default mascot.</text>
+      ),
+    })
+    if (value === undefined || value === null) return
+    const text = value.trimEnd()
+    await updatePromptChrome(
+      (profile) => ({
+        ...profile,
+        identity: { ...profile.identity, logoMode: "mascot" },
+        surfaces: {
+          ...profile.surfaces,
+          homeLogo: text ? { ...(profile.surfaces.homeLogo || {}), text } : {},
+        },
+      }),
+      text ? "Home mascot ASCII updated." : "Home mascot reset to the default ASCII.",
     )
   }
   const showHomeLogoFont = () => {
@@ -1540,37 +1769,6 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
                 identity: { ...profile.identity, logoFont: item.value },
               }),
               `Home title font is now ${item.value}.`,
-            ),
-        }))}
-      />
-    ))
-  }
-  const showHomeLogoSize = () => {
-    const current = mend.profile.surfaces.homeLogo?.size || "default"
-    const options: Array<{ title: string; value: "compact" | "default" | "large"; description: string }> = [
-      { title: "Compact", value: "compact", description: "Small MendBug for tighter home screens." },
-      { title: "Default", value: "default", description: "Larger MendBug default identity." },
-      { title: "Large", value: "large", description: "Big MendBug for spacious terminal starts." },
-    ]
-    dialog.replace(() => (
-      <DialogSelect
-        title="Home ASCII size"
-        current={current}
-        options={options.map((item) => ({
-          title: item.title,
-          value: item.value,
-          category: "Home",
-          description: item.description,
-          onSelect: () =>
-            void updatePromptChrome(
-              (profile) => ({
-                ...profile,
-                surfaces: {
-                  ...profile.surfaces,
-                  homeLogo: { ...(profile.surfaces.homeLogo || {}), size: item.value },
-                },
-              }),
-              `Home ASCII size is now ${item.value}.`,
             ),
         }))}
       />
@@ -1614,7 +1812,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     ]
     dialog.replace(() => (
       <DialogSelect
-        title="Home activity panel"
+        title="Home split panel"
         current={current}
         options={options.map((item) => ({
           title: item.title,
@@ -1630,7 +1828,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
                   homeWelcome: { ...(profile.surfaces.homeWelcome || {}), rightPanel: item.value },
                 },
               }),
-              `Home activity panel is now ${item.title}.`,
+              `Home split panel is now ${item.title}.`,
             ),
         }))}
       />
@@ -2151,7 +2349,23 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       "Prompt status separator updated.",
     )
   }
+  const showDialogLoading = (title: string, message: string) => {
+    dialog.replace(() => (
+      <box paddingLeft={4} paddingRight={4} paddingBottom={1} flexDirection="column" gap={1}>
+        <box flexDirection="row" justifyContent="space-between">
+          <text fg={theme.text}>{title}</text>
+          <text fg={theme.textMuted}>esc</text>
+        </box>
+        <text fg={theme.textMuted}>{message}</text>
+      </box>
+    ))
+    dialog.setSize("medium")
+  }
   const showRegistryMarketplace = async (initialSourceID = "local") => {
+    showDialogLoading(
+      initialSourceID === "local" ? "Loading local packages" : "Loading marketplace",
+      initialSourceID === "local" ? "Reading local package catalog..." : "Fetching package catalog...",
+    )
     let sourceID = initialSourceID
     let sourceRoot = sourceID === "local" ? await prepareGlobalRuntimePackAuthorRoot() : mend.root
     const result = await runtimeRegistrySearch("", sourceID, sourceRoot).catch(async (error) => {
@@ -2172,9 +2386,11 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           title: pack.title || pack.id,
           value: pack.id,
           category: pack.channel ? `${sourceID} / ${pack.channel}` : sourceID,
-          description: pack.description ? `${pack.description} · ${marketplaceRuntimeSummary(pack)}` : marketplaceRuntimeSummary(pack),
+          description: marketplaceShortSummary(pack),
+          searchText: [pack.id, pack.title, pack.description, marketplaceRuntimeSummary(pack), ...(pack.tags || [])].filter(Boolean).join(" "),
           footer: cleanMarketplaceVersion(pack.version),
           onSelect: async () => {
+            showDialogLoading("Loading package", `Reading ${pack.id}...`)
             const detail = await runtimeRegistryShow(pack.id, sourceID, sourceRoot)
             if (sourceID === "local") {
               await DialogAlert.show(dialog, detail.pack.title || detail.pack.id, marketplacePackDetails(detail.pack, sourceID))
@@ -2239,17 +2455,20 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     })
     if (version === undefined || version === null) return
     const selection: RuntimePackSelection = { ...(metadata.selection as RuntimePackSelection) }
-    type PackageFileCategoryKey = "commands" | "agents" | "modes" | "skills" | "plugins" | "prompts" | "mcp" | "context" | "extensions"
+    type PackageFileCategoryKey = "commands" | "agents" | "modes" | "skills" | "plugins" | "tools" | "prompts" | "mcp" | "context" | "pages" | "widgets" | "extensions"
     const fileCategories: Array<{ key: PackageFileCategoryKey; title: string; files: string[] }> = [
       { key: "commands", title: "Commands", files: candidates.commands },
       { key: "agents", title: "Agents", files: candidates.agents },
       { key: "modes", title: "Modes", files: candidates.modes },
       { key: "skills", title: "Skills", files: candidates.skills },
       { key: "plugins", title: "Plugins", files: candidates.plugins },
+      { key: "tools", title: "Tool calls", files: candidates.tools },
       { key: "prompts", title: "Prompt templates", files: candidates.prompts },
       { key: "mcp", title: "MCP files", files: candidates.mcp },
       { key: "context", title: "Context files", files: candidates.context },
-      { key: "extensions", title: "Widgets, components, scripts", files: candidates.extensions },
+      { key: "pages", title: "TUI pages", files: candidates.pages },
+      { key: "widgets", title: "TUI widgets", files: candidates.widgets },
+      { key: "extensions", title: "Extension support files", files: candidates.extensions },
     ]
     const boolCategories: Array<{ key: "tuiProfile" | "worktreePolicy" | "models" | "focus" | "budget" | "memory" | "permissions"; title: string }> = [
       { key: "models", title: "Model roles (global config)" },
@@ -2270,17 +2489,20 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       selection[key] !== false
     const configSelectedCount = () => boolCategories.filter((category) => boolEnabled(category.key)).length
     const packageSummaryLine = () =>
-      `${selectedCount("commands", candidates.commands)} cmd · ${selectedCount("agents", candidates.agents)} agents · ${selectedCount("skills", candidates.skills)} skills · ${selectedCount("mcp", candidates.mcp)} MCP · ${configSelectedCount()}/${boolCategories.length} config`
+      `${selectedCount("commands", candidates.commands)} cmd · ${selectedCount("agents", candidates.agents)} agents · ${selectedCount("skills", candidates.skills)} skills · ${selectedCount("tools", candidates.tools)} tools · ${configSelectedCount()}/${boolCategories.length} config`
     const packageSummaryText = () => [
       `Commands: ${selectedCount("commands", candidates.commands)}/${candidates.commands.length}`,
       `Agents/subagents: ${selectedCount("agents", candidates.agents)}/${candidates.agents.length}`,
       `Modes: ${selectedCount("modes", candidates.modes)}/${candidates.modes.length}`,
       `Skills: ${selectedCount("skills", candidates.skills)}/${candidates.skills.length}`,
       `Plugins: ${selectedCount("plugins", candidates.plugins)}/${candidates.plugins.length}`,
+      `Tool calls: ${selectedCount("tools", candidates.tools)}/${candidates.tools.length}`,
       `Prompt templates: ${selectedCount("prompts", candidates.prompts)}/${candidates.prompts.length}`,
       `MCP files: ${selectedCount("mcp", candidates.mcp)}/${candidates.mcp.length}`,
       `Context files: ${selectedCount("context", candidates.context)}/${candidates.context.length}`,
-      `Widgets/components/scripts: ${selectedCount("extensions", candidates.extensions)}/${candidates.extensions.length}`,
+      `TUI pages: ${selectedCount("pages", candidates.pages)}/${candidates.pages.length}`,
+      `TUI widgets: ${selectedCount("widgets", candidates.widgets)}/${candidates.widgets.length}`,
+      `Extension support files: ${selectedCount("extensions", candidates.extensions)}/${candidates.extensions.length}`,
       `Config groups: ${configSelectedCount()}/${boolCategories.length}`,
       "",
       "Package source: global MendCode configuration, not the currently opened project folder.",
@@ -2464,7 +2686,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     const installed = state.installed
     dialog.replace(() => (
       <DialogSelect
-        title="MendCode Packages"
+        title="MendCode Marketplace"
         options={[
           {
             title: "Create package",
@@ -2477,46 +2699,46 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             title: "Install source",
             value: "install-source",
             category: "Install",
-            description: "Apply a source id.",
+            description: "Install a single-pack source or browse a multi-pack source.",
             onSelect: async () => {
               const source = await DialogPrompt.show(dialog, "Package source id", {
                 value: "official",
                 placeholder: "official",
               })
               if (!source?.trim()) return
-              const preview = await runtimeRegistryPreview(source.trim(), mend.root)
+              const sourceID = source.trim()
+              showDialogLoading("Loading source", `Checking ${sourceID}...`)
+              const catalog = await runtimeRegistrySearch("", sourceID, mend.root)
+              if (catalog.results.length !== 1) {
+                toast.show({
+                  variant: "info",
+                  message: `${sourceID} has ${catalog.results.length} packages. Choose one to install.`,
+                  duration: 4000,
+                })
+                await showRegistryMarketplace(sourceID)
+                return
+              }
+              const detail = await runtimeRegistryShow(catalog.results[0]!.id, sourceID, mend.root)
               const stateBefore = await listMendPackages(mend.root)
               const confirmed = await DialogConfirm.show(
                 dialog,
-                "Install package source",
+                detail.pack.title || detail.pack.id,
                 [
-                  `Source: ${source.trim()}`,
-                  `Fetches network: ${preview.fetchesNetwork ? "yes" : "no"}`,
-                  `Pack: ${preview.package?.title || preview.package?.id || source.trim()}`,
-                  "",
-                  "Will update for next message:",
-                  `Commands: ${preview.pack?.commands.length || 0}`,
-                  `Agents: ${preview.pack?.agents.length || 0}`,
-                  `Modes: ${preview.pack?.modes.length || 0}`,
-                  `Skills: ${preview.pack?.skills.length || 0}`,
-                  `Plugins: ${preview.pack?.plugins.length || 0}`,
-                  `MCP files: ${preview.pack?.mcp.files.length || 0}`,
-                  `Prompt mode: ${preview.pack?.prompts.mode || "unchanged"}`,
-                  `TUI profile/chrome: ${preview.pack && Object.keys(preview.pack.tui || {}).length ? "included" : "unchanged"}`,
-                  `Model roles: ${preview.pack && Object.keys(preview.pack.models.roles || {}).length ? "included" : "unchanged"}`,
+                  marketplacePackDetails(detail.pack, sourceID),
                   "",
                   `Active before: ${stateBefore.active.join(", ") || "none"}`,
-                  `Active after: ${preview.package?.id || source.trim()}`,
+                  `Active after: ${detail.pack.id}`,
                   "",
                   "Will not touch local skills/modes/sessions/auth.",
                 ].join("\n"),
               )
               if (!confirmed) return
-              const result = await runtimeRegistryApplySource(source.trim(), mend.root)
+              showDialogLoading("Installing package", `Installing ${detail.pack.id}...`)
+              const result = await runtimeRegistryInstallPack(detail.pack.id, sourceID, mend.root)
               await mend.reload()
               toast.show({
                 variant: "success",
-                message: `Package installed from ${result.source.id}.`,
+                message: `Package installed: ${result.package.id}.`,
                 duration: 5000,
               })
               await showPackageManager()
@@ -3283,16 +3505,16 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       onSelect: () => void showHomeTitleText(),
     },
     {
+      title: "Home mascot ASCII",
+      value: "mendcode.home.logo.text",
+      category: mendCategory,
+      onSelect: () => void showHomeMascotText(),
+    },
+    {
       title: "Home title font",
       value: "mendcode.home.font",
       category: mendCategory,
       onSelect: showHomeLogoFont,
-    },
-    {
-      title: "Home ASCII size",
-      value: "mendcode.home.logo.size",
-      category: mendCategory,
-      onSelect: showHomeLogoSize,
     },
     {
       title: "Home welcome mode",
@@ -3302,7 +3524,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       onSelect: showHomeWelcomeMode,
     },
     {
-      title: "Home activity panel",
+      title: "Home split panel",
       value: "mendcode.home.split.panel",
       category: mendCategory,
       suggested: true,
@@ -4032,8 +4254,19 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     if (route.data.type !== "plugin") return
     const render = routeView(route.data.id)
     if (!render) return <PluginRouteMissing id={route.data.id} onHome={() => route.navigate({ type: "home" })} />
-    return render({ params: route.data.data })
+    const value = render({ params: route.data.data }) as unknown
+    if (typeof value === "string" || typeof value === "number") {
+      return (
+        <box width="100%" height="100%" paddingLeft={2} paddingRight={2} paddingTop={1} overflow="hidden">
+          <text wrapMode="word">{String(value)}</text>
+        </box>
+      )
+    }
+    if (typeof value === "boolean") return null
+    return value as JSX.Element
   })
+  const startupReady = createMemo(() => ready() && pluginsReady() && sync.status !== "loading")
+  const startupMessage = createMemo(() => startupLoadingText({ pluginsReady: pluginsReady(), syncLoading: sync.status === "loading" }))
 
   return (
     <box
@@ -4056,7 +4289,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       <Show when={ready()}>
         <Switch>
           <Match when={route.data.type === "home"}>
-            <Home revision={homeRevision()} />
+            <Home revision={homeRevision()} pluginsReady={pluginsReady()} />
           </Match>
           <Match when={route.data.type === "session"}>
             <Session />
@@ -4078,9 +4311,12 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           </Match>
         </Switch>
       </Show>
-      {plugin()}
+      <ErrorBoundary fallback={(error) => <PluginRouteError id={route.data.type === "plugin" ? route.data.id : "unknown"} error={error} />}>
+        {plugin()}
+      </ErrorBoundary>
       <TuiPluginRuntime.Slot name="app" />
-      <StartupLoading ready={ready} />
+      <MendOverlayHost dimensions={dimensions()} />
+      <StartupLoading ready={startupReady} text={startupMessage} delayMs={fastBoot ? 0 : 500} />
     </box>
   )
 }

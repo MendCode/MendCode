@@ -264,15 +264,71 @@ export type TuiKV = {
 
 export type TuiWidgetPlacement = "aboveEditor" | "belowEditor" | "sessionBottomDock"
 
+export type TuiWidgetSize = number | "auto"
+
+export type TuiWidgetRenderContext = {
+  requestRender: () => void
+  maxFps: number
+}
+
+export type TuiWidgetOptions = {
+  placement?: TuiWidgetPlacement
+  order?: number
+  title?: string
+  width?: TuiWidgetSize
+  minWidth?: number
+  maxWidth?: number
+  height?: TuiWidgetSize
+  interactive?: boolean
+  onVisible?: () => boolean | void
+  onFocus?: () => boolean | void
+  onKey?: (event: ParsedKey) => boolean | void
+  maxFps?: number
+  requestRender?: () => void
+  dispose?: TuiDispose
+}
+
+export type TuiOverlayAnchor = "top-center" | "center" | "bottom-center" | "top-left" | "top-right" | "bottom-left" | "bottom-right"
+export type TuiOverlaySize = number | `${number}%` | "auto"
+export type TuiOverlayRenderContext = {
+  close: () => boolean
+  requestRender: () => void
+}
+export type TuiOverlayOptions = {
+  anchor?: TuiOverlayAnchor
+  width?: TuiOverlaySize
+  height?: TuiOverlaySize
+  maxHeight?: TuiOverlaySize
+  margin?: {
+    top?: number
+    right?: number
+    bottom?: number
+    left?: number
+  }
+  nonCapturing?: boolean
+  modal?: boolean
+  allowStack?: boolean
+  title?: string
+  onFocus?: () => boolean | void
+  onClose?: TuiDispose
+  requestRender?: () => void
+}
+export type TuiOverlayApi = {
+  open: (id: string, render: (context: TuiOverlayRenderContext) => JSX.Element | string | number | null, options?: TuiOverlayOptions) => boolean
+  close: (id: string) => boolean
+}
+
 export type TuiRuntimeApi = {
   setStatus: (id: string, value?: string, input?: { order?: number }) => boolean
   clearStatus: (id: string) => boolean
   setWidget: (
     id: string,
-    render?: (() => JSX.Element | null) | undefined,
-    input?: { placement?: TuiWidgetPlacement; order?: number },
+    render?: ((context: TuiWidgetRenderContext) => JSX.Element | null) | undefined,
+    input?: TuiWidgetOptions,
   ) => boolean
   clearWidget: (id: string) => boolean
+  focusWidget: (id: string) => boolean
+  blurWidget: (id?: string) => boolean
   setFooter: (renderer?: (() => JSX.Element | null) | undefined) => boolean
   setFooterEntry: (id: string, render?: (() => JSX.Element | null) | undefined, input?: { order?: number }) => boolean
   setWorkingIndicator: (input?: { frames?: string[]; intervalMs?: number; visible?: boolean }) => boolean
@@ -428,6 +484,79 @@ export type TuiEventBus = {
   on: <Type extends Event["type"]>(type: Type, handler: (event: Extract<Event, { type: Type }>) => void) => () => void
 }
 
+export type TuiShellOutputEvent = {
+  stream: "stdout" | "stderr"
+  text: string
+  output: string
+}
+
+export type TuiShellExitEvent = {
+  code: number
+  output: string
+  stderr: string
+}
+
+export type TuiShellSpawnOptions = {
+  cwd?: string
+  env?: Record<string, string | undefined>
+  shell?: boolean | string
+  maxBuffer?: number
+}
+
+export type TuiShellProcess = {
+  readonly pid: number | undefined
+  write: (data: string | Uint8Array) => boolean
+  stop: () => Promise<void>
+  output: () => string
+  stderr: () => string
+  onOutput: (handler: (event: TuiShellOutputEvent) => void) => () => void
+  onExit: (handler: (event: TuiShellExitEvent) => void) => () => void
+  exited: Promise<number>
+}
+
+export type TuiShellApi = {
+  spawn: (command: string | string[], options?: TuiShellSpawnOptions) => TuiShellProcess
+}
+
+export type TuiPtyOutputEvent = {
+  text: string
+  output: string
+  screen: string
+  rows: string[]
+}
+
+export type TuiPtyExitEvent = {
+  code: number
+  output: string
+}
+
+export type TuiPtySpawnOptions = {
+  cwd?: string
+  env?: Record<string, string | undefined>
+  cols?: number
+  rows?: number
+  maxBuffer?: number
+  term?: string
+}
+
+export type TuiPtyProcess = {
+  readonly id: string
+  readonly pid: number | undefined
+  write: (data: string | Uint8Array) => boolean
+  resize: (cols: number, rows: number) => void
+  stop: () => Promise<void>
+  output: () => string
+  screen: () => string
+  rows: () => string[]
+  onOutput: (handler: (event: TuiPtyOutputEvent) => void) => () => void
+  onExit: (handler: (event: TuiPtyExitEvent) => void) => () => void
+  exited: Promise<number>
+}
+
+export type TuiPtyApi = {
+  spawn: (command: string | string[], options?: TuiPtySpawnOptions) => Promise<TuiPtyProcess>
+}
+
 export type TuiDispose = () => void | Promise<void>
 
 export type TuiLifecycle = {
@@ -508,6 +637,7 @@ export type TuiPluginApi = {
     Prompt: (props: TuiPromptProps) => JSX.Element
     toast: (input: TuiToast) => void
     dialog: TuiDialogStack
+    overlay: TuiOverlayApi
     runtime: TuiRuntimeApi
   }
   keybind: {
@@ -521,6 +651,8 @@ export type TuiPluginApi = {
   theme: TuiTheme
   client: OpencodeClient
   event: TuiEventBus
+  shell: TuiShellApi
+  pty: TuiPtyApi
   renderer: CliRenderer
   slots: TuiSlots
   plugins: {

@@ -19,6 +19,7 @@ const MEMORY_SIDE_CHAT_ACTION_KINDS = [
   "propose-policy",
   "explain-state",
   "dream-dry-run",
+  "dream-service-start",
   "create-memory",
   "edit-memory",
   "delete-memory",
@@ -120,13 +121,13 @@ function extractJsonObject(text: string) {
 function normalizeAction(input: unknown): MemorySideChatAction | null {
   if (!input || typeof input !== "object") return null
   const action = input as Record<string, unknown>
-  const kind = action.kind
-  if (!MEMORY_SIDE_CHAT_ACTION_KINDS.includes(kind as MemorySideChatActionKind)) return null
+  const kind = typeof action.kind === "string" ? action.kind : null
+  if (!kind || !MEMORY_SIDE_CHAT_ACTION_KINDS.includes(kind as MemorySideChatActionKind)) return null
   if (typeof action.text !== "string" || !action.text.trim()) return null
   const scope = action.scope === "global" || action.scope === "project" ? action.scope : undefined
   const targetScope = action.targetScope === "global" || action.targetScope === "project" ? action.targetScope : undefined
   return {
-    kind,
+    kind: kind as MemorySideChatActionKind,
     text: action.text.trim(),
     scope,
     targetScope,
@@ -214,54 +215,59 @@ export function memorySideChatInstructions() {
     "Use the selected page context first when answering questions about what is visible or selected in the Memory page.",
     "You cannot run shell commands, browse git state, or silently apply changes.",
     "You can help configure memory behavior by drafting reviewable control actions for memory facts, category/policy rules, and Dream scheduling/source rules.",
-    "You can draft actions to create, edit, delete, or move memories; create, edit, or delete categories; update category policies; and prepare Dream dry runs.",
+    "You can draft actions to create, edit, delete, or move memories; create, edit, or delete categories; update category policies; prepare Dream dry runs; and enable the durable Dream service.",
     "When the user asks to change memory state, use the most specific action kind instead of only explaining.",
     "Do not say you cannot configure memory or Dream when the user asks. Explain that you can prepare a reviewable proposal and include the action.",
     "If selected page context or saved memory is present, do not claim that no context exists.",
     "Use propose-memory for durable facts/preferences/rules to remember.",
     "Use propose-policy for category, scope, prompt, write policy, extraction, or save-behavior changes.",
     "Use dream-dry-run for Dream schedule, cadence, source permissions, and dry-run requests.",
+    "Use dream-service-start when the user asks to activate, enable, start, or keep Dream running automatically in the background.",
+    "When the user asks to activate Dream at night, include both a dream-dry-run action for the night window and a dream-service-start action for the durable background service.",
     "For Dream scheduling, prefer a flexible time window/range over a fixed exact time unless the user explicitly demands a fixed time.",
     "When a user asks for a fixed Dream time like 21:00, suggest a nearby window such as 18:00-23:00 and draft that window as the reviewable action.",
     "Use explain-state only when the user asks how the current memory state works and no proposal is needed.",
     "Every action is reviewable and pending. Never imply that the change was already applied.",
     "Return strict JSON only:",
-    '{"reply":"short helpful answer","actions":[{"kind":"move-memory","targetID":"memory-id","categoryID":"project.security","text":"Move this memory into Security for review.","scope":"project","categoryIDs":["memory.policy"]},{"kind":"dream-dry-run","text":"reviewable Dream config or dry-run request","scope":"project","categoryIDs":["memory.dream"]}]}',
+    '{"reply":"short helpful answer","actions":[{"kind":"move-memory","targetID":"memory-id","categoryID":"project.security","text":"Move this memory into Security for review.","scope":"project","categoryIDs":["memory.policy"]},{"kind":"dream-dry-run","text":"configure Dream for the 18:00-23:00 America/Panama night window and keep output pending","scope":"global","categoryIDs":["memory.dream"]},{"kind":"dream-service-start","text":"enable the durable global Dream background service so scheduled Dream runs even when the TUI is closed","scope":"global","categoryIDs":["memory.dream"]}]}',
     "Use an empty actions array when no proposal is needed.",
   ].join("\n")
 }
 
 function sideChatProposalForAction(action: MemorySideChatAction) {
   if (action.kind === "explain-state") return null
+  const dreamAction = action.kind === "dream-dry-run" || action.kind === "dream-service-start"
   const categoryIDs = action.categoryIDs?.length
     ? action.categoryIDs
-    : action.kind === "dream-dry-run"
+    : dreamAction
       ? ["memory.dream"]
       : action.kind === "propose-policy" || action.kind.includes("category") || action.kind === "move-memory" || action.kind === "edit-memory" || action.kind === "delete-memory"
         ? ["memory.policy"]
         : undefined
   const label = action.kind === "dream-dry-run"
     ? "Dream proposal"
-    : action.kind === "propose-policy"
-      ? "Memory policy proposal"
-      : action.kind === "create-memory"
-        ? "Create memory proposal"
-        : action.kind === "edit-memory"
-          ? "Edit memory proposal"
-          : action.kind === "delete-memory"
-            ? "Delete memory proposal"
-            : action.kind === "move-memory"
-              ? "Move memory proposal"
-              : action.kind.includes("category")
-                ? "Category proposal"
-                : "Memory proposal"
+    : action.kind === "dream-service-start"
+      ? "Dream service proposal"
+      : action.kind === "propose-policy"
+        ? "Memory policy proposal"
+        : action.kind === "create-memory"
+          ? "Create memory proposal"
+          : action.kind === "edit-memory"
+            ? "Edit memory proposal"
+            : action.kind === "delete-memory"
+              ? "Delete memory proposal"
+              : action.kind === "move-memory"
+                ? "Move memory proposal"
+                : action.kind.includes("category")
+                  ? "Category proposal"
+                  : "Memory proposal"
   const details = [
     action.targetID ? `target=${action.targetID}` : "",
     action.targetScope ? `targetScope=${action.targetScope}` : "",
     action.categoryID ? `category=${action.categoryID}` : "",
   ].filter(Boolean).join(" · ")
   return {
-    scope: action.scope ?? "project",
+    scope: action.scope ?? (dreamAction ? "global" : "project"),
     text: action.kind === "propose-memory" ? action.text : `${label}${details ? ` (${details})` : ""}: ${action.text}`,
     categoryIDs,
     tags: ["side-chat", action.kind, ...(categoryIDs ?? [])],
@@ -478,38 +484,53 @@ export async function sendMemorySideChatMessage(input: {
   const userMessage: MemorySideChatMessage = { id: nowID("msg"), role: "user", text: input.message.trim(), createdAt: now }
   let session = await writeMemorySideChat({ ...input.session, status: "running", history: [...input.session.history, userMessage] }, input.session.root)
   const responder = input.responder ?? ((payload) => defaultMemorySideChatResponder(session.root, payload))
-  const response = await responder({
-    message: input.message,
-    history: session.history,
-    context: {
-      selectedWorkspaceID: session.selectedWorkspaceID,
-      selectedGroupID: session.selectedGroupID,
-      selectedCategoryID: session.selectedCategoryID,
-      pageContext: input.pageContext ?? null,
-    },
-    signal: input.signal,
-  })
-  if (input.signal?.aborted) {
-    const canceled = await writeMemorySideChat({ ...session, status: "canceled" }, session.root)
-    return { session: canceled, proposals: [] as MemoryProposal[], canceled: true }
-  }
   const proposals: MemoryProposal[] = []
-  for (const action of response.actions ?? []) {
-    const proposal = sideChatProposalForAction(action)
-    if (!proposal) continue
-    proposals.push(await proposeMemory({
-      ...proposal,
-      source: "memory-side-chat",
-    }, session.root))
+  try {
+    const response = await responder({
+      message: input.message,
+      history: session.history,
+      context: {
+        selectedWorkspaceID: session.selectedWorkspaceID,
+        selectedGroupID: session.selectedGroupID,
+        selectedCategoryID: session.selectedCategoryID,
+        pageContext: input.pageContext ?? null,
+      },
+      signal: input.signal,
+    })
+    if (input.signal?.aborted) {
+      const canceled = await writeMemorySideChat({ ...session, status: "canceled" }, session.root)
+      return { session: canceled, proposals: [] as MemoryProposal[], canceled: true }
+    }
+    for (const action of response.actions ?? []) {
+      const proposal = sideChatProposalForAction(action)
+      if (!proposal) continue
+      proposals.push(await proposeMemory({
+        ...proposal,
+        source: "memory-side-chat",
+      }, session.root))
+    }
+    const assistantMessage: MemorySideChatMessage = { id: nowID("msg"), role: "assistant", text: response.text, createdAt: new Date().toISOString() }
+    session = await writeMemorySideChat({
+      ...session,
+      status: "idle",
+      history: [...session.history, assistantMessage],
+      proposals: [...session.proposals, ...proposals.map((proposal) => proposal.id)],
+    }, session.root)
+    return { session, proposals, canceled: false }
+  } catch (error) {
+    if (input.signal?.aborted) {
+      const canceled = await writeMemorySideChat({ ...session, status: "canceled" }, session.root)
+      return { session: canceled, proposals: [] as MemoryProposal[], canceled: true }
+    }
+    const assistantMessage: MemorySideChatMessage = { id: nowID("msg"), role: "assistant", text: memoryAssistantFailureReason(error), createdAt: new Date().toISOString() }
+    session = await writeMemorySideChat({
+      ...session,
+      status: "idle",
+      history: [...session.history, assistantMessage],
+      proposals: [...session.proposals, ...proposals.map((proposal) => proposal.id)],
+    }, session.root)
+    return { session, proposals, canceled: false }
   }
-  const assistantMessage: MemorySideChatMessage = { id: nowID("msg"), role: "assistant", text: response.text, createdAt: new Date().toISOString() }
-  session = await writeMemorySideChat({
-    ...session,
-    status: "idle",
-    history: [...session.history, assistantMessage],
-    proposals: [...session.proposals, ...proposals.map((proposal) => proposal.id)],
-  }, session.root)
-  return { session, proposals, canceled: false }
 }
 
 export async function cancelMemorySideChat(session: MemorySideChatSession) {

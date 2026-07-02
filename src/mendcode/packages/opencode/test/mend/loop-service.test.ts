@@ -31,6 +31,7 @@ describe("loop service plans", () => {
       "3",
       "--execute",
       "--report-only",
+      "--once",
       "--quiet",
     ])
   })
@@ -62,7 +63,9 @@ describe("loop service plans", () => {
     expect(plist).toContain("<key>ProgramArguments</key>")
     expect(plist).toContain("<key>WorkingDirectory</key>")
     expect(plist).toContain("/tmp/acme &amp; &quot;repo&quot;")
-    expect(plist).toContain("<key>KeepAlive</key>")
+    expect(plist).toContain("<key>StartInterval</key>")
+    expect(plist).toContain("<integer>60</integer>")
+    expect(plist).not.toContain("<key>KeepAlive</key>")
   })
 
   test("builds a Linux user systemd unit with configurable directories", () => {
@@ -102,6 +105,7 @@ describe("loop service plans", () => {
     expect(plan.installCommand[0]).toBe("schtasks.exe")
     expect(loopServiceWindowsCommand(plan)).toContain("mendcode.exe loops daemon")
     expect(loopServiceWindowsCommand(plan)).toContain("--execute --report-only")
+    expect(loopServiceWindowsCommand(plan)).toContain("--once")
     expect(loopServiceWindowsCommand(plan)).toContain("--quiet")
   })
 })

@@ -250,7 +250,7 @@ export async function writeMemoryCategoryPolicy(
 ) {
   const category = memoryCategoryByID(categoryID)
   const file = policyFile(scope, root)
-  const current = await readPolicyOverrides(scope, root).catch(() => ({}))
+  const current: Record<string, unknown> = await readPolicyOverrides(scope, root).catch(() => ({}))
   const existing = typeof current[category.id] === "object" && current[category.id] !== null
     ? current[category.id] as Record<string, unknown>
     : {}

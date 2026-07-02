@@ -181,6 +181,12 @@ export function streamingMarkdownCommitIndex(input: string) {
   return safe
 }
 
+export function visibleStreamingMarkdownPreview(input: string) {
+  const end = input.lastIndexOf("\n")
+  if (end < 0) return ""
+  return input.slice(0, end + 1)
+}
+
 function splitMarkdownTableRow(line: string) {
   return line
     .trim()
@@ -2021,12 +2027,58 @@ function renderStableStreamingMarkdown(markdown: string, finalized: boolean, wid
   return `${wrapStreamingText(renderStreamingMarkdownText(stable), width)}${wrapStreamingText(renderLiveStreamingLine(live), width)}`
 }
 
+type StreamingMarkdownTailState = {
+  finalized?: boolean
+  output?: "text" | "markdown"
+}
+
+function renderStreamingMarkdownTailAsMarkdown(markdown: string, width: number, options: RenderPlanMarkdownOptions = {}) {
+  if (options.tableMode !== "grid") return markdown
+
+  const lines = markdown.split("\n")
+  const result: string[] = []
+  let inFence = false
+
+  for (let index = 0; index < lines.length; index++) {
+    const current = lines[index] ?? ""
+
+    if (isFenceLine(current)) {
+      inFence = !inFence
+      result.push(current)
+      continue
+    }
+
+    if (inFence) {
+      result.push(current)
+      continue
+    }
+
+    const next = lines[index + 1]
+    if (next && isMarkdownTableRow(current) && isMarkdownTableSeparator(next)) {
+      const table = [current, next]
+      index += 2
+      while (index < lines.length && isMarkdownTableRow(lines[index] ?? "")) {
+        table.push(lines[index] ?? "")
+        index++
+      }
+      result.push("```text", ...renderLiveMarkdownTableAsGrid(table, width), "```")
+      index--
+      continue
+    }
+
+    result.push(current)
+  }
+
+  return result.join("\n")
+}
+
 export function renderStreamingMarkdownTail(
   markdown: string,
   width: number,
   options: RenderPlanMarkdownOptions = {},
-  state: { finalized?: boolean } = {},
+  state: StreamingMarkdownTailState = {},
 ) {
+  if (state.output === "markdown") return renderStreamingMarkdownTailAsMarkdown(markdown, width, options)
   if (options.tableMode !== "grid") return renderStableStreamingMarkdown(markdown, state.finalized ?? false, width)
 
   const lines = markdown.split("\n")

@@ -82,6 +82,15 @@ function defaultCommand() {
   return process.env.MENDCODE_PUBLIC_BIN || "mendcode"
 }
 
+function servicePath() {
+  const fallback = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+  const seen = new Set<string>()
+  const entries = (process.env.PATH || fallback)
+    .split(path.delimiter)
+    .filter((entry) => entry && !entry.includes("/.codex/tmp/") && !seen.has(entry) && seen.add(entry))
+  return entries.join(path.delimiter) || fallback
+}
+
 function defaultServiceDir(platformValue: LoopServicePlatform) {
   const configured = process.env.MENDCODE_LOOP_SERVICE_DIR
   if (configured) return path.resolve(configured)
@@ -111,10 +120,22 @@ function stringNode(value: string) {
   return `<string>${escapedXML(value)}</string>`
 }
 
-function loopDaemonArgs(args: Required<Pick<LoopServiceArgs, "intervalMs" | "limit">> & Pick<LoopServiceArgs, "execute" | "reportOnly" | "quiet">) {
+function serviceRunsOneShot(platformValue: LoopServicePlatform) {
+  return platformValue === "darwin" || platformValue === "win32"
+}
+
+function serviceIntervalSeconds(intervalMs: number) {
+  return Math.max(60, Math.ceil(intervalMs / 1000))
+}
+
+function loopDaemonArgs(
+  args: Required<Pick<LoopServiceArgs, "intervalMs" | "limit">> & Pick<LoopServiceArgs, "execute" | "reportOnly" | "quiet">,
+  options: { once?: boolean } = {},
+) {
   const daemonArgs = ["loops", "daemon", "--interval-ms", String(args.intervalMs), "--limit", String(args.limit)]
   if (args.execute) daemonArgs.push("--execute")
   if (args.reportOnly) daemonArgs.push("--report-only")
+  if (options.once) daemonArgs.push("--once")
   if (args.quiet !== false) daemonArgs.push("--quiet")
   return daemonArgs
 }
@@ -149,11 +170,12 @@ export function loopServicePlan(args: LoopServiceArgs): LoopServicePlan {
   const command = args.command ?? defaultCommand()
   const serviceDir = path.resolve(args.serviceDir || defaultServiceDir(platformValue))
   const logDir = path.resolve(args.logDir || defaultLogDir(platformValue))
+  const oneShot = serviceRunsOneShot(platformValue)
   const programArguments = [
     "/usr/bin/env",
-    `PATH=${process.env.PATH || "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"}`,
+    `PATH=${servicePath()}`,
     command,
-    ...loopDaemonArgs({ intervalMs, limit, execute: args.execute, reportOnly: args.reportOnly, quiet: args.quiet }),
+    ...loopDaemonArgs({ intervalMs, limit, execute: args.execute, reportOnly: args.reportOnly, quiet: args.quiet }, { once: oneShot }),
   ]
   const definitionPath =
     platformValue === "darwin"
@@ -229,8 +251,8 @@ export function loopServicePlist(plan: LoopServicePlan) {
   ${stringNode(plan.projectRoot)}
   <key>RunAtLoad</key>
   <true/>
-  <key>KeepAlive</key>
-  <true/>
+  <key>StartInterval</key>
+  <integer>${serviceIntervalSeconds(plan.intervalMs)}</integer>
   <key>StandardOutPath</key>
   ${stringNode(plan.stdoutPath)}
   <key>StandardErrorPath</key>

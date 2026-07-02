@@ -8,12 +8,23 @@ import {
   setupMemoryDialogCurrentValue,
   setupMemoryLearningStatus,
   setupProviderAuthMessage,
+  setupShouldChooseHomeSplitPanel,
   setupShouldShowExtractorAuthBlocker,
   truncateSetupText,
 } from "../../src/cli/cmd/tui/routes/setup"
 import { setupRailStepStatus } from "../../src/cli/cmd/tui/routes/setup/setup-rail"
 import { loopRouteColumns, loopRouteFrameLayout, loopRouteKeyHint, loopRouteStackedListHeight } from "../../src/cli/cmd/tui/routes/loops"
-import { memoryLayoutForDimensions, memoryPreviewText, memorySidebarProjectWorkspaces, shouldMemoryRouteHandleKey, sideChatInputArtifacts } from "../../src/cli/cmd/tui/routes/memory"
+import { memoryGraphMiniMap, memoryLayoutForDimensions, memoryPreviewText, memorySidebarProjectWorkspaces, memoryTabCellWidths, shouldMemoryRouteHandleKey, sideChatInputArtifacts } from "../../src/cli/cmd/tui/routes/memory"
+import { contextAutoCompactLabel, contextInventoryRows, contextUsageBarCells, contextUsageGridCells, contextUsageGridLayout, contextUsageGridLegend, contextUsageGridRows } from "../../src/cli/cmd/tui/routes/session/dialog-context-usage"
+import { startupLoadingText } from "../../src/cli/cmd/tui/component/startup-loading"
+import {
+  initialTuiPluginReady,
+  isCurrentTuiBootstrap,
+  syncBootstrapReadiness,
+  syncReadyForStatus,
+  themeModeWaitMs,
+  tuiFastBootEnabled,
+} from "../../src/cli/cmd/tui/util/fast-boot"
 
 describe("setup route smoke", () => {
   test("includes optional health, package, tui, memory, and permissions steps in the setup flow contract", () => {
@@ -88,6 +99,11 @@ describe("setup route smoke", () => {
     expect(setupMemoryDialogCurrentValue({ enabled: false, generate: false })).toBe("disable")
   })
 
+  test("centered home welcome skips the split-panel follow-up", () => {
+    expect(setupShouldChooseHomeSplitPanel("centered")).toBe(false)
+    expect(setupShouldChooseHomeSplitPanel("split")).toBe(true)
+  })
+
   test("memory route returns to its caller instead of losing session context", () => {
     expect(routeReturnTarget({
       type: "memory",
@@ -149,10 +165,182 @@ describe("setup route smoke", () => {
     expect(layout.tiny).toBe(false)
   })
 
+  test("memory graph mini map renders terminal-native nodes and links", () => {
+    const graph = memoryGraphMiniMap({
+      width: 48,
+      height: 8,
+      categories: [
+        { id: "project.commands", label: "Commands", count: 1 },
+        { id: "memory.policy", label: "Memory policy", count: 1 },
+      ],
+      facts: [
+        { id: "a", scope: "project", categoryIDs: ["project.commands"], text: "Run focused memory tests from packages/opencode." },
+        { id: "b", scope: "project", categoryIDs: ["memory.policy"], text: "Memory graph uses typed links." },
+      ],
+      links: [{ from: "a", to: "b", kind: "supports" }],
+    })
+
+    expect(graph.rows.join("\n")).toContain("·")
+    expect(graph.legend.join("\n")).toContain("Commands")
+    expect(graph.status).toContain("2/2 materialized")
+    expect(graph.status).toContain("0 legacy-derived")
+    expect(graph.status).toContain("1 explicit")
+  })
+
+  test("memory graph mini map infers compact fallback edges when links are absent", () => {
+    const graph = memoryGraphMiniMap({
+      width: 42,
+      height: 7,
+      categories: [
+        { id: "project.commands", label: "Commands", count: 2 },
+        { id: "architecture", label: "Architecture", count: 1 },
+      ],
+      facts: [
+        { id: "a", scope: "project", categoryIDs: ["project.commands"], text: "Run focused memory tests from packages/opencode." },
+        { id: "b", scope: "project", categoryIDs: ["project.commands"], text: "Use the package directory for Bun tests." },
+        { id: "c", scope: "project", categoryIDs: ["architecture"], text: "Memory graph stores categories beside facts." },
+      ],
+      links: [],
+    })
+
+    expect(graph.rows.join("\n")).toContain("┈")
+    expect(graph.status).toContain("3/3 materialized")
+    expect(graph.status).toContain("0 explicit")
+    expect(graph.status).toContain("2 inferred")
+    expect(graph.legend.join("\n")).toContain("Commands")
+  })
+
+  test("memory graph mini map keeps empty state honest when nothing is materialized", () => {
+    const graph = memoryGraphMiniMap({
+      width: 42,
+      categories: [{ id: "project.commands", label: "Commands", count: 1 }],
+      facts: [],
+      links: [],
+    })
+
+    expect(graph.rows).toEqual([])
+    expect(graph.emptyState).toBe("empty")
+    expect(graph.status).toContain("0/0 materialized")
+    expect(graph.status).toContain("0 legacy-derived")
+  })
+
+  test("memory graph mini map reports legacy-derived facts without inventing graph nodes", () => {
+    const graph = memoryGraphMiniMap({
+      width: 48,
+      categories: [{ id: "project.commands", label: "Commands", count: 2 }],
+      facts: [
+        { id: "legacy_a", scope: "project", categoryIDs: ["project.commands"], text: "Run Bun tests from the package directory.", materialized: false },
+        { id: "legacy_b", scope: "project", categoryIDs: ["project.commands"], text: "Keep memory graph links explicit.", materialized: false },
+      ],
+      links: [],
+    })
+
+    expect(graph.rows).toEqual([])
+    expect(graph.emptyState).toBe("legacy-only")
+    expect(graph.status).toContain("0/2 materialized")
+    expect(graph.status).toContain("2 legacy-derived")
+    expect(graph.status).toContain("0 explicit")
+    expect(graph.status).toContain("0 inferred")
+  })
+
+  test("memory graph mini map separates materialized facts from legacy-derived counts", () => {
+    const graph = memoryGraphMiniMap({
+      width: 48,
+      categories: [{ id: "project.commands", label: "Commands", count: 2 }],
+      facts: [
+        { id: "graph_a", scope: "project", categoryIDs: ["project.commands"], text: "Materialized fact A." },
+        { id: "graph_b", scope: "project", categoryIDs: ["project.commands"], text: "Materialized fact B." },
+        { id: "legacy_a", scope: "project", categoryIDs: ["project.commands"], text: "Legacy-only fact.", materialized: false },
+      ],
+      links: [{ from: "graph_a", to: "graph_b", kind: "supports" }],
+    })
+
+    expect(graph.rows.join("\n")).toContain("·")
+    expect(graph.status).toContain("2/3 materialized")
+    expect(graph.status).toContain("1 legacy-derived")
+    expect(graph.status).toContain("1 explicit")
+  })
+
+  test("memory graph mini map legend only describes visible categories", () => {
+    const categories = Array.from({ length: 8 }, (_, index) => ({
+      id: `category.${index}`,
+      label: `Category ${index}`,
+      count: 1,
+    }))
+    const graph = memoryGraphMiniMap({
+      width: 48,
+      height: 8,
+      categories,
+      facts: Array.from({ length: 20 }, (_, index) => ({
+        id: `fact_${index.toString().padStart(2, "0")}`,
+        scope: "project",
+        categoryIDs: [`category.${index % categories.length}`],
+        text: `Memory graph fact ${index}`,
+        retrievalPriority: index,
+      })),
+      links: [],
+    })
+
+    expect(graph.labels.join("\n")).toContain("Memory graph fact 0")
+    expect(graph.legend.join("\n")).toContain("Category 0")
+    expect(graph.legend.join("\n")).not.toContain("Category 5")
+  })
+
   test("memory route hotkeys stay inactive while a prompt dialog is open", () => {
     expect(shouldMemoryRouteHandleKey({ dialogOpen: false })).toBe(true)
     expect(shouldMemoryRouteHandleKey({ dialogOpen: true })).toBe(false)
     expect(shouldMemoryRouteHandleKey({ dialogOpen: false, defaultPrevented: true })).toBe(false)
+    expect(shouldMemoryRouteHandleKey({ dialogOpen: false, textInputActive: true })).toBe(false)
+  })
+
+  test("memory tabs distribute across available width", () => {
+    expect(memoryTabCellWidths({ width: 60, count: 5 })).toEqual([12, 11, 11, 11, 11])
+    expect(memoryTabCellWidths({ width: 14, count: 5 }).reduce((sum, value) => sum + value, 0)).toBe(10)
+  })
+
+  test("context usage label reflects configured compaction threshold", () => {
+    expect(contextAutoCompactLabel({ usage: { context: 70, contextLimit: 100 }, thresholdPercent: 85 })).toBe(
+      "Auto-compact at 85% · ~15 tokens remaining",
+    )
+    expect(contextAutoCompactLabel({ usage: { context: 99, contextLimit: 100 }, thresholdPercent: 100 })).toBe(
+      "Auto-compact at 100% · ~1 tokens remaining",
+    )
+    expect(contextUsageBarCells({ context: 25, contextLimit: 100 }).filter(Boolean)).toHaveLength(12)
+    expect(contextUsageGridCells({
+      usage: { context: 50, contextLimit: 100, rawInput: 20, cacheRead: 5, cacheWrite: 0, rawOutput: 10, reasoning: 15 },
+      messages: 4,
+      toolCalls: 2,
+    }).map((cell) => cell.symbol).join("")).toContain("⚙")
+    expect(contextUsageGridCells({
+      usage: { context: 3, contextLimit: 144, rawInput: 1, cacheRead: 0, cacheWrite: 0, rawOutput: 1, reasoning: 1 },
+      messages: 1,
+      toolCalls: 1,
+    }).filter((cell) => cell.kind !== "free")).toHaveLength(1)
+    const gridRows = contextUsageGridRows(contextUsageGridCells({
+      usage: { context: 50, contextLimit: 100, rawInput: 20, cacheRead: 5, cacheWrite: 0, rawOutput: 10, reasoning: 15 },
+      messages: 4,
+      toolCalls: 2,
+    }))
+    expect(gridRows).toHaveLength(6)
+    expect(gridRows.every((row) => row.length === 8)).toBe(true)
+    expect(contextUsageGridLayout(80)).toEqual({ cells: 48, columns: 8, compactLegend: true })
+    expect(contextUsageGridLayout(130)).toEqual({ cells: 128, columns: 16, compactLegend: false })
+    expect(contextUsageGridLayout(170)).toEqual({ cells: 240, columns: 24, compactLegend: false })
+    expect(contextUsageGridRows(contextUsageGridCells({
+      usage: { context: 50, contextLimit: 100, rawInput: 20, cacheRead: 5, cacheWrite: 0, rawOutput: 10, reasoning: 15 },
+      messages: 4,
+      toolCalls: 2,
+      cellCount: contextUsageGridLayout(170).cells,
+    }), contextUsageGridLayout(170).columns)).toHaveLength(10)
+    expect(contextUsageGridLegend(true).map((item) => item.label)).toEqual(["input", "tools", "cache", "think", "output", "free"])
+    expect(contextInventoryRows({ messages: 10, turns: 4, textParts: 6, toolCalls: 2, reasoningParts: 4, compactions: 0 })).toEqual([
+      { label: "Messages", value: "10" },
+      { label: "Turns", value: "4" },
+      { label: "Text", value: "6" },
+      { label: "Tools", value: "2" },
+      { label: "Reasoning", value: "4" },
+      { label: "Compactions", value: "0" },
+    ])
   })
 
   test("memory side chat summarizes pasted text in the input chrome", () => {
@@ -183,5 +371,52 @@ describe("setup route smoke", () => {
       currentRoot: "/repo/current/",
       workspaces: [otherOld, current, otherNew],
     }).map((workspace) => workspace.id)).toEqual(["new", "old"])
+  })
+
+  test("fast boot allows first paint without treating loading sync as hydrated", () => {
+    expect(tuiFastBootEnabled({})).toBe(true)
+    expect(tuiFastBootEnabled({ OPENCODE_FAST_BOOT: "1" })).toBe(true)
+    expect(tuiFastBootEnabled({ OPENCODE_FAST_BOOT: "0" })).toBe(false)
+    expect(tuiFastBootEnabled({ OPENCODE_FAST_BOOT: "1", MENDCODE_FAST_BOOT: "false" })).toBe(false)
+    expect(initialTuiPluginReady(true)).toBe(true)
+    expect(initialTuiPluginReady(false)).toBe(false)
+    expect(syncReadyForStatus("loading")).toBe(false)
+    expect(syncReadyForStatus("partial")).toBe(true)
+    expect(syncReadyForStatus("complete")).toBe(true)
+    expect(syncBootstrapReadiness({ fastBoot: true })).toEqual({
+      blockProviderUxMetadata: false,
+      blockSessionList: false,
+    })
+    expect(syncBootstrapReadiness({ fastBoot: true, continueSession: true })).toEqual({
+      blockProviderUxMetadata: false,
+      blockSessionList: true,
+    })
+    expect(syncBootstrapReadiness({ fastBoot: false })).toEqual({
+      blockProviderUxMetadata: true,
+      blockSessionList: false,
+    })
+    expect(isCurrentTuiBootstrap({
+      generation: 2,
+      currentGeneration: 2,
+      workspace: "workspace-a",
+      currentWorkspace: "workspace-a",
+    })).toBe(true)
+    expect(isCurrentTuiBootstrap({
+      generation: 1,
+      currentGeneration: 2,
+      workspace: "workspace-a",
+      currentWorkspace: "workspace-a",
+    })).toBe(false)
+    expect(isCurrentTuiBootstrap({
+      generation: 2,
+      currentGeneration: 2,
+      workspace: "workspace-a",
+      currentWorkspace: "workspace-b",
+    })).toBe(false)
+    expect(themeModeWaitMs(true)).toBe(50)
+    expect(themeModeWaitMs(false)).toBe(1000)
+    expect(startupLoadingText({ pluginsReady: false })).toBe("Loading plugins...")
+    expect(startupLoadingText({ pluginsReady: true, syncLoading: true })).toBe("Loading workspace...")
+    expect(startupLoadingText({ pluginsReady: true, syncLoading: false })).toBe("Finishing startup...")
   })
 })

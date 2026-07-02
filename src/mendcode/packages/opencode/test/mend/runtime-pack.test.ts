@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, writeFile } from "fs/promises"
 import path from "path"
 import { Global } from "@mendcode/core/global"
 import { tmpdir } from "../fixture/fixture"
+import { ConfigPlugin } from "../../src/config/plugin"
 import { generatedConfigNeedsSync, packageMetadata, packageMetadataSet, syncProject } from "../../src/mend/config/project"
 import { mendMcpStatus } from "../../src/mend/config/mcp"
 import { readModelsConfig } from "../../src/mend/config/models"
@@ -55,25 +56,54 @@ describe("runtime pack", () => {
     await writeText(path.join(dir.path, ".mendcode", "modes", "build.md"), "---\nmode: primary\n---\nBuild carefully.\n")
     await writeText(path.join(dir.path, ".mendcode", "skills", "deploy", "SKILL.md"), "---\nname: deploy\ndescription: Deploy safely\n---\nUse deployment flow.\n")
     await writeText(path.join(dir.path, ".mendcode", "plugins", "status.ts"), "export const plugin = {}\n")
+    await writeText(path.join(dir.path, ".mendcode", "tools", "memory-inspect.ts"), "export const tool = {}\n")
     await writeText(path.join(dir.path, ".mendcode", "prompts", "incident.md"), "Incident prompt template.\n")
     await writeJson(path.join(dir.path, ".mendcode", "mcp", "servers", "local.json"), {
       localstdio: { type: "local", command: ["node", "server.js"] },
     })
     await writeText(path.join(dir.path, ".mendcode", "context", "project.md"), "Project context.\n")
+    await writeText(path.join(dir.path, ".mendcode", "pages", "memory-dashboard.tsx"), "export default function Page() { return null }\n")
     await writeText(path.join(dir.path, ".mendcode", "widgets", "panel.ts"), "export const panel = {}\n")
 
     const pack = await buildLocalRuntimePack(dir.path)
+    const manifest = await buildLocalMendPackageManifest(dir.path, pack)
 
     expect(pack.commands).toEqual([".mendcode/commands/release.md"])
     expect(pack.agents).toEqual([".mendcode/agents/reviewer.md"])
     expect(pack.modes).toEqual([".mendcode/modes/build.md"])
     expect(pack.skills).toEqual([".mendcode/skills/deploy/SKILL.md"])
     expect(pack.plugins).toEqual([".mendcode/plugins/status.ts"])
+    expect(pack.tools).toEqual([".mendcode/tools/memory-inspect.ts"])
     expect(pack.prompts.templates).toEqual([".mendcode/prompts/incident.md"])
     expect(pack.mcp.files).toEqual([".mendcode/mcp/servers/local.json"])
     expect(pack.mcp.config).toHaveProperty("localstdio")
     expect(pack.prompts.mode).toBe("full")
-    expect(pack.extensions).toEqual([".mendcode/widgets/panel.ts"])
+    expect(pack.pages).toEqual([".mendcode/pages/memory-dashboard.tsx"])
+    expect(pack.widgets).toEqual([".mendcode/widgets/panel.ts"])
+    expect(pack.extensions).toEqual([
+      ".mendcode/pages/memory-dashboard.tsx",
+      ".mendcode/tools/memory-inspect.ts",
+      ".mendcode/widgets/panel.ts",
+    ])
+    expect(manifest.artifacts?.tools).toEqual([".mendcode/tools/memory-inspect.ts"])
+    expect(manifest.artifacts?.pages).toEqual([".mendcode/pages/memory-dashboard.tsx"])
+    expect(manifest.artifacts?.widgets).toEqual([".mendcode/widgets/panel.ts"])
+  })
+
+  test("ships a package example with a custom graph page", async () => {
+    const root = path.resolve(import.meta.dir, "../../examples/memory-graph-page-package")
+    const candidates = await runtimePackArtifactCandidates(root)
+    const pack = await buildLocalRuntimePack(root)
+    const plugins = await ConfigPlugin.load(path.join(root, ".mendcode"))
+    const manifest = JSON.parse(await readFile(path.join(root, "mend-package.json"), "utf8"))
+    const page = await readFile(path.join(root, ".mendcode", "pages", "memory-graph.tsx"), "utf8")
+
+    expect(manifest.id).toBe("memory-graph-page-example")
+    expect(candidates.pages).toEqual([".mendcode/pages/memory-graph.tsx"])
+    expect(pack.pages).toEqual([".mendcode/pages/memory-graph.tsx"])
+    expect(plugins.some((item) => String(item).endsWith("/.mendcode/pages/memory-graph.tsx"))).toBe(true)
+    expect(page).toContain("api.route.register")
+    expect(page).toContain("example-memory-graph")
   })
 
   test("reports project and global skills separately for package authoring", async () => {
@@ -565,6 +595,7 @@ describe("runtime pack", () => {
       worktree: { mode: "off" },
     })
     await writeText(path.join(source.path, ".mendcode", "commands", "from-registry.md"), "registry command\n")
+    await writeText(path.join(source.path, ".mendcode", "plugins", "from-registry.ts"), "export default { id: 'from-registry', async tui() {} }\n")
     await writeJson(path.join(source.path, ".mendcode", "auth", "mcp", "token.json"), { token: "never-copy" })
 
     await runtimeRegistryAdd(["external", "--type", "local", "--url", source.path], dir.path)
@@ -572,6 +603,7 @@ describe("runtime pack", () => {
 
     expect(applied.ok).toBe(true)
     expect(applied.copied).toContain(".mendcode/commands/from-registry.md")
+    expect(applied.copied).toContain(".mendcode/plugins/from-registry.ts")
     expect(applied.skipped).toContain(".mendcode/auth/mcp/token.json")
     await expect(readFile(path.join(dir.path, ".mendcode", "commands", "from-registry.md"), "utf8")).rejects.toThrow()
     expect(await readFile(path.join(dir.path, ".mendcode", "packages", "installed", "external", ".mendcode", "commands", "from-registry.md"), "utf8")).toBe("registry command\n")
@@ -579,7 +611,9 @@ describe("runtime pack", () => {
 
     const packages = await listMendPackages(dir.path)
     expect(packages.enabled.map((item) => item.id)).toEqual(["external"])
-    expect((await activeMendPackageProjection(dir.path)).command).toHaveProperty("from-registry")
+    const projection = await activeMendPackageProjection(dir.path)
+    expect(projection.command).toHaveProperty("from-registry")
+    expect(projection.plugin.some((spec) => String(spec).endsWith("/.mendcode/plugins/from-registry.ts"))).toBe(true)
     const generated = JSON.parse(
       await readFile(path.join(dir.path, ".mendcode", "generated", "opencode.json"), "utf8"),
     ) as { command?: Record<string, unknown> }

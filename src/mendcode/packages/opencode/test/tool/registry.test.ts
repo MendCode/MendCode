@@ -15,6 +15,7 @@ import { Todo } from "@/session/todo"
 import { Skill } from "@/skill"
 import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
+import { SessionStatus } from "@/session/status"
 import { Provider } from "@/provider/provider"
 import { LSP } from "@/lsp/lsp"
 import { Instruction } from "@/session/instruction"
@@ -51,6 +52,7 @@ const registryLayer = ToolRegistry.layer.pipe(
   Layer.provide(Skill.defaultLayer),
   Layer.provide(Agent.defaultLayer),
   Layer.provide(Session.defaultLayer),
+  Layer.provide(SessionStatus.defaultLayer),
   Layer.provide(Provider.defaultLayer),
   Layer.provide(LSP.defaultLayer),
   Layer.provide(Instruction.defaultLayer),
@@ -82,6 +84,8 @@ describe("tool.registry", () => {
 
       expect(ids).toContain("apply_patch")
       expect(ids).toContain("edit")
+      expect(ids).toContain("memory")
+      expect(ids).toContain("memory_graph")
       expect(ids).toContain("review")
       expect(ids).toContain("write")
     }),

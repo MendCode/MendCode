@@ -36,7 +36,7 @@ export const Parameters = Schema.Struct({
   }),
   maxTurns: Schema.optional(Schema.Number).annotate({
     description:
-      "Iteration budget/cap. For goal work this is a maximum, not a plan to spend every iteration. Use budgetMode=fixed only for exactly-N iteration jobs.",
+      "Iteration budget/cap. Omit for budgetMode=unbounded-monitor; unbounded monitor loops run until stopped and ignore maxTurns.",
   }),
   maxRuntimeMs: Schema.optional(Schema.Number).annotate({
     description: "Maximum wall-clock runtime in milliseconds before the loop should stop.",
@@ -63,7 +63,7 @@ export const Parameters = Schema.Struct({
   }),
   budgetMode: Schema.optional(BudgetMode).annotate({
     description:
-      "Loop budget semantics: fixed runs exactly to maxTurns, max-goal uses maxTurns as a cap and completes as soon as the goal is verified, unbounded-monitor runs until stopped/blocker.",
+      "Loop budget semantics: fixed runs exactly to maxTurns, max-goal uses maxTurns as a cap and completes as soon as the goal is verified, unbounded-monitor omits maxTurns and runs until stopped/blocker.",
   }),
   completionCriteria: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Concrete criteria that prove the loop goal is complete. Required for max-goal implementation loops.",
@@ -261,6 +261,7 @@ function positiveMaxTurns(value: number | undefined) {
 
 function maxTurnsFor(params: Schema.Schema.Type<typeof Parameters>, budgetMode: "fixed" | "max-goal" | "unbounded-monitor") {
   const maxTurns = positiveMaxTurns(params.maxTurns)
+  if (budgetMode === "unbounded-monitor") return undefined
   if (budgetMode === "fixed" && !maxTurns) throw new Error("fixed loop workflows require maxTurns > 0; do not use 0")
   if (budgetMode === "max-goal" && params.maxTurns !== undefined && !maxTurns) throw new Error("max-goal maxTurns must be > 0; omit it for no cap")
   return maxTurns

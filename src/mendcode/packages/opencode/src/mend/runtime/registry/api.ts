@@ -6,6 +6,7 @@ import semver from "semver"
 import { mendPaths } from "../../config/paths"
 import { applyRuntimePack, buildLocalRuntimePack } from "../pack"
 import { installMendPackageFromStage, listMendPackages } from "../packages"
+import { syncProject } from "../../config/project"
 import { detectRegistryConflicts, writeRegistryApplyReport } from "./conflicts"
 import { normalizeOpencodeSettingsToMendcode, opencodeSettingsPreview } from "./import-opencode"
 import { readMarketplaceCatalog, runtimeRegistrySearchCatalog, runtimeRegistryShowCatalog, type RegistryMarketplacePackManifest } from "./marketplace"
@@ -77,6 +78,21 @@ function verifyPackDigest(pack: RegistryMarketplacePackManifest | null, digest: 
   if (!pack?.digest) return
   if (pack.digest.algorithm !== digest.algorithm || pack.digest.value !== digest.value) {
     throw new Error(`Marketplace pack ${pack.id} digest mismatch: expected sha256:${pack.digest.value}, got sha256:${digest.value}`)
+  }
+}
+
+function emptyOverlayConflicts() {
+  return {
+    entries: [],
+    summary: {
+      missing: 0,
+      same: 0,
+      changed: 0,
+      blocked: 0,
+      unsupported: 0,
+      destructive: 0,
+    },
+    requiresApproval: false,
   }
 }
 
@@ -303,7 +319,7 @@ export async function runtimeRegistryApplySource(id: string | undefined, root = 
 }
 
 export async function runtimeRegistryInstallPack(packID: string | undefined, sourceID = "official", root = mendPaths().root) {
-  if (!packID) throw new Error("Usage: mendcode packages install <pack-id> [source-id]")
+  if (!packID) throw new Error("Usage: mendcode marketplace install <pack-id> [source-id]")
   const state = await readRuntimeRegistry(root)
   const entry = state.entries.find((item) => item.id === sourceID)
   if (!entry) throw new Error(`Unknown registry source: ${sourceID}`)
@@ -316,8 +332,8 @@ export async function runtimeRegistryInstallPack(packID: string | undefined, sou
     packID,
   })
   const runtimeVersion = await readRuntimePackageVersion(root)
-  const conflicts = await detectRegistryConflicts(sourceStageDir, root)
-  const approvalRequired = entry.type === "team" && (entry.team?.requireApproval || conflicts.requiresApproval)
+  const conflicts = emptyOverlayConflicts()
+  const approvalRequired = entry.type === "team" && Boolean(entry.team?.requireApproval)
   if (approvalRequired && !process.env.MENDCODE_TEAM_PACK_APPROVED) {
     throw new Error(`Team registry source ${entry.id} requires approval; set MENDCODE_TEAM_PACK_APPROVED=1 for this apply after review`)
   }
@@ -333,7 +349,24 @@ export async function runtimeRegistryInstallPack(packID: string | undefined, sou
 
   const copied = [...installedPackage.copied]
   const skipped = [...installedPackage.skipped]
-  const applyPlan = await applyRuntimePack(root)
+  await syncProject(root)
+  const applyPlan = {
+    action: "sync-package-projection",
+    root,
+    changes: [
+      {
+        target: ".mendcode/generated/opencode.json",
+        action: "write",
+        reason: "Regenerate generated runtime config from active marketplace package overlays.",
+      },
+      {
+        target: ".mendcode/generated/model-role-projection.json",
+        action: "write",
+        reason: "Keep generated model role projection in sync after package activation.",
+      },
+    ],
+    secretsIncluded: false,
+  }
   const reportPath = await writeRegistryApplyReport(root, {
     version: 0,
     appliedAt: new Date().toISOString(),
@@ -412,7 +445,8 @@ export async function runtimeRegistryInstallPack(packID: string | undefined, sou
     applyPlan,
     reportPath,
     localStatePath: path.relative(root, registryLocalStatePath(root)),
-    writesConfig: true,
+    writesConfig: false,
+    projectionSynced: true,
     fetchesNetwork: fetched.fetchesNetwork,
     secretsIncluded: false,
   }
@@ -584,8 +618,11 @@ export async function runtimeRegistryPublishPlan(id = "local", root = mendPaths(
       modes: pack.modes.length,
       skills: pack.skills.length,
       plugins: pack.plugins.length,
+      tools: pack.tools?.length || 0,
       prompts: pack.prompts.templates.length,
       mcpFiles: pack.mcp.files.length,
+      pages: pack.pages?.length || 0,
+      widgets: pack.widgets?.length || 0,
       extensions: pack.extensions.length,
     },
     ...(packageManifest?.path ? { packageManifestPath: packageManifest.path } : {}),

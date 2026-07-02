@@ -1,5 +1,13 @@
 import type { ParsedKey } from "@opentui/core"
-import type { TuiDialogSelectOption, TuiPluginApi, TuiRouteDefinition, TuiSlotProps } from "@mendcode/plugin/tui"
+import type {
+  TuiDialogSelectOption,
+  TuiPluginApi,
+  TuiPtyApi,
+  TuiRouteDefinition,
+  TuiShellApi,
+  TuiShellOutputEvent,
+  TuiSlotProps,
+} from "@mendcode/plugin/tui"
 import type { MendExtensionApi, MendRouteDefinition, MendRouteName, MendSlotRegistration } from "@/mend/sdk"
 import type { useCommandDialog } from "@tui/component/dialog-command"
 import type { useEvent } from "@tui/context/event"
@@ -22,10 +30,12 @@ import type { useToast } from "../ui/toast"
 import { InstallationVersion } from "@mendcode/core/installation/version"
 import { visibleCustomizationCapabilities } from "@/mend/tui/capabilities"
 import { clearMendStatus, setMendStatus } from "@/mend/tui/status"
-import { clearMendWidget, setMendWidget } from "@/mend/tui/widgets"
+import { blurMendWidget, clearMendWidget, focusMendWidget, setMendWidget, type MendWidgetRenderContext } from "@/mend/tui/widgets"
+import { clearMendOverlay, setMendOverlay, type MendOverlayRenderContext } from "@/mend/tui/overlays"
 import { setMendFooter, setMendFooterEntry } from "@/mend/tui/footer"
 import { setMendWorkingIndicator } from "@/mend/tui/working-indicator"
 import { setMendEditor, setMendEditorVisual } from "@/mend/tui/editor-host"
+import { Process } from "@/util/process"
 
 type RouteEntry = {
   key: symbol
@@ -177,6 +187,98 @@ function mapOptionCb<Value>(cb?: (item: TuiDialogSelectOption<Value>) => void) {
   return (item: SelectOption<Value>) => cb(pickOption(item))
 }
 
+const DEFAULT_SHELL_BUFFER = 64_000
+
+function commandArgs(command: string | string[]) {
+  if (Array.isArray(command)) return command
+  return process.platform === "win32" ? ["cmd.exe", "/d", "/s", "/c", command] : ["sh", "-lc", command]
+}
+
+function capShellBuffer(text: string, max: number) {
+  if (max <= 0) return ""
+  if (text.length <= max) return text
+  return text.slice(text.length - max)
+}
+
+function shellApi(): TuiShellApi {
+  return {
+    spawn(command, options = {}) {
+      const maxBuffer = Math.max(0, options.maxBuffer ?? DEFAULT_SHELL_BUFFER)
+      const outputHandlers = new Set<(event: TuiShellOutputEvent) => void>()
+      const exitHandlers = new Set<(event: { code: number; output: string; stderr: string }) => void>()
+      let output = ""
+      let stderr = ""
+
+      const proc = Process.spawn(commandArgs(command), {
+        cwd: options.cwd,
+        env: options.env as NodeJS.ProcessEnv | undefined,
+        shell: Array.isArray(command) ? options.shell : false,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+
+      const emit = (stream: "stdout" | "stderr", chunk: unknown) => {
+        const text = Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk)
+        output = capShellBuffer(output + text, maxBuffer)
+        if (stream === "stderr") stderr = capShellBuffer(stderr + text, maxBuffer)
+        const event = { stream, text, output }
+        for (const handler of outputHandlers) handler(event)
+      }
+
+      proc.stdout?.on("data", (chunk) => emit("stdout", chunk))
+      proc.stderr?.on("data", (chunk) => emit("stderr", chunk))
+
+      const exited = proc.exited.then((code) => {
+        const event = { code, output, stderr }
+        for (const handler of exitHandlers) handler(event)
+        return code
+      })
+      void exited.catch(() => undefined)
+
+      return {
+        get pid() {
+          return proc.pid
+        },
+        write(data) {
+          if (!proc.stdin || proc.stdin.destroyed) return false
+          return proc.stdin.write(data)
+        },
+        async stop() {
+          await Process.stop(proc)
+        },
+        output() {
+          return output
+        },
+        stderr() {
+          return stderr
+        },
+        onOutput(handler) {
+          outputHandlers.add(handler)
+          return () => {
+            outputHandlers.delete(handler)
+          }
+        },
+        onExit(handler) {
+          exitHandlers.add(handler)
+          return () => {
+            exitHandlers.delete(handler)
+          }
+        },
+        exited,
+      }
+    },
+  }
+}
+
+function ptyApi(): TuiPtyApi {
+  return {
+    async spawn() {
+      throw new Error("TUI PTY widgets are disabled in this build. Use the widget/overlay substrate for interactive UI and api.shell.spawn only for non-interactive output.")
+    },
+  }
+}
+
 function stateApi(sync: ReturnType<typeof useSync>): TuiPluginApi["state"] {
   return {
     get ready() {
@@ -250,6 +352,10 @@ function mendAppApi(): MendExtensionApi["app"] {
         "route.navigate",
         "ui.dialog",
         "ui.slot",
+        "ui.overlay",
+        "shell.spawn",
+        "overlay.custom",
+        "overlay.nonCapturing",
         "theme.set",
         "state.read",
         "lifecycle.dispose",
@@ -369,6 +475,17 @@ export function createTuiApi(input: Input): TuiPluginApi & MendExtensionApi {
           return input.dialog.stack.length > 0
         },
       },
+      overlay: {
+        open(id, render, options) {
+          return setMendOverlay(id, render as (context: MendOverlayRenderContext) => unknown, {
+            ...options,
+            requestRender: options?.requestRender ?? (() => input.renderer.requestRender()),
+          })
+        },
+        close(id) {
+          return clearMendOverlay(id)
+        },
+      },
       runtime: {
         setStatus(id, value, options) {
           return setMendStatus(id, value, options)
@@ -377,10 +494,19 @@ export function createTuiApi(input: Input): TuiPluginApi & MendExtensionApi {
           return clearMendStatus(id)
         },
         setWidget(id, render, options) {
-          return setMendWidget(id, render, options)
+          return setMendWidget(id, render as ((context: MendWidgetRenderContext) => unknown) | undefined, {
+            ...options,
+            requestRender: options?.requestRender ?? (() => input.renderer.requestRender()),
+          })
         },
         clearWidget(id) {
           return clearMendWidget(id)
+        },
+        focusWidget(id) {
+          return focusMendWidget(id)
+        },
+        blurWidget(id) {
+          return blurMendWidget(id)
         },
         setFooter(renderer) {
           return setMendFooter(renderer)
@@ -436,6 +562,8 @@ export function createTuiApi(input: Input): TuiPluginApi & MendExtensionApi {
       return input.sdk.client
     },
     event: input.event,
+    shell: shellApi(),
+    pty: ptyApi(),
     renderer: input.renderer,
       slots: {
         register(...args: any[]) {

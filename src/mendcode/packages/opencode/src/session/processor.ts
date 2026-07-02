@@ -380,6 +380,8 @@ type PendingMemoryExtraction = {
       generate: boolean
       extractorRole?: string
       queued: boolean
+      skipped?: boolean
+      reason?: string | null
       saved: unknown[]
       proposals: unknown[]
     }
@@ -408,6 +410,7 @@ interface ProcessorContext extends Input {
   liveTokenOutputText: string
   liveTokenUpdatedAt: number
   pendingMemoryExtraction: PendingMemoryExtraction | undefined
+  usedExplicitMemoryTool: boolean
 }
 
 type StreamEvent = Event
@@ -425,6 +428,7 @@ export const layer: Layer.Layer<
   | LLM.Service
   | Permission.Service
   | PlanReview.Service
+  | Question.Service
   | Provider.Service
   | Plugin.Service
   | SessionSummary.Service
@@ -440,6 +444,7 @@ export const layer: Layer.Layer<
     const llm = yield* LLM.Service
     const permission = yield* Permission.Service
     const planReview = yield* PlanReview.Service
+    const question = yield* Question.Service
     const provider = yield* Provider.Service
     const plugin = yield* Plugin.Service
     const summary = yield* SessionSummary.Service
@@ -470,6 +475,7 @@ export const layer: Layer.Layer<
         liveTokenOutputText: "",
         liveTokenUpdatedAt: 0,
         pendingMemoryExtraction: undefined,
+        usedExplicitMemoryTool: false,
       }
       let aborted = false
       const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
@@ -526,20 +532,42 @@ export const layer: Layer.Layer<
         return { call, part }
       })
 
+      const taskChildSessionIDs = Effect.fn("SessionProcessor.taskChildSessionIDs")(function* () {
+        const result = new Set<SessionID>()
+        for (const toolCallID of Object.keys(ctx.toolcalls)) {
+          const match = yield* readToolCall(toolCallID)
+          if (match?.part.tool !== "task") continue
+          if (match.part.state.status !== "running" && match.part.state.status !== "pending") continue
+          const metadata = "metadata" in match.part.state && isRecord(match.part.state.metadata) ? match.part.state.metadata : {}
+          if (typeof metadata.sessionId === "string") result.add(SessionID.make(metadata.sessionId))
+        }
+        return result
+      })
+
       const hasPendingHumanInteraction = Effect.fn("SessionProcessor.hasPendingHumanInteraction")(function* () {
+        const sessionIDs = new Set<SessionID>([ctx.sessionID, ...(yield* taskChildSessionIDs())])
+        for (const sessionID of sessionIDs) {
+          const current = yield* status.get(sessionID)
+          if (sessionID !== ctx.sessionID && (current.type === "busy" || current.type === "retry")) return true
+        }
         for (const toolCallID of Object.keys(ctx.toolcalls)) {
           const match = yield* readToolCall(toolCallID)
           if (match?.part.tool === "question" && match.part.state.status === "running") return true
         }
+        for (const request of yield* question.list()) {
+          if (sessionIDs.has(request.sessionID)) return true
+        }
         for (const request of yield* permission.list()) {
-          if (request.sessionID !== ctx.sessionID) continue
+          if (!sessionIDs.has(request.sessionID)) continue
+          if (request.sessionID !== ctx.sessionID) return true
           const callID = request.tool?.callID
           if (!callID) continue
           const match = yield* readToolCall(callID)
           if (match?.part.state.status === "running" || match?.part.state.status === "pending") return true
         }
         for (const request of yield* planReview.list()) {
-          if (request.sessionID !== ctx.sessionID) continue
+          if (!sessionIDs.has(request.sessionID)) continue
+          if (request.sessionID !== ctx.sessionID) return true
           const callID = request.tool?.callID
           if (!callID) continue
           const match = yield* readToolCall(callID)
@@ -626,6 +654,13 @@ export const layer: Layer.Layer<
       ) {
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return
+        if (
+          match.part.tool === "memory" ||
+          match.part.tool === "memory_graph" ||
+          Boolean(output.metadata?.mendMemoryTool)
+        ) {
+          ctx.usedExplicitMemoryTool = true
+        }
         yield* session.updatePart({
           ...match.part,
           state: {
@@ -644,6 +679,9 @@ export const layer: Layer.Layer<
       const failToolCall = Effect.fn("SessionProcessor.failToolCall")(function* (toolCallID: string, error: unknown) {
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return false
+        if (match.part.tool === "memory" || match.part.tool === "memory_graph") {
+          ctx.usedExplicitMemoryTool = true
+        }
         yield* session.updatePart({
           ...match.part,
           state: {
@@ -1000,12 +1038,20 @@ export const layer: Layer.Layer<
               memoryMetadata?.output?.enabled &&
               memoryMetadata.output.generate &&
               memoryMetadata.output.extractorRole !== "none" &&
+              !ctx.usedExplicitMemoryTool &&
               memoryTurnText.trim(),
             )
             const queuedMemoryMetadata = memoryMetadata
               ? {
                   ...memoryMetadata,
-                  output: { ...memoryMetadata.output, queued: shouldQueueMemory },
+                  output: {
+                    ...memoryMetadata.output,
+                    queued: shouldQueueMemory,
+                    skipped: ctx.usedExplicitMemoryTool,
+                    reason: ctx.usedExplicitMemoryTool
+                      ? "explicit memory tool used"
+                      : null,
+                  },
                 }
               : undefined
             const finishPart = yield* session.updatePart({
@@ -1505,6 +1551,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(PlanReview.defaultLayer),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
+    Layer.provide(Question.defaultLayer),
     Layer.provide(SessionSummary.defaultLayer),
     Layer.provide(SessionStatus.defaultLayer),
     Layer.provide(Bus.layer),

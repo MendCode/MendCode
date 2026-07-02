@@ -1,6 +1,6 @@
 # TUI Plugins and Widgets
 
-MendCode TUI plugins are local or packaged JavaScript/TypeScript modules that extend the terminal UI without editing runtime internals. They are the right place for company dashboards, status lines, prompt-side context, custom footers, command palettes, dialogs, routes, themes, and editor widgets.
+MendCode TUI plugins are local or packaged JavaScript/TypeScript modules that extend the terminal UI without editing runtime internals. They are the right place for company dashboards, status lines, prompt-side context, custom footers, command palettes, dialogs, routes, themes, shell-backed widgets, and editor widgets.
 
 The public API is exported from `@mendcode/plugin/tui`. The active host implementation lives in `src/mendcode/packages/opencode/src/cli/cmd/tui/plugin/`, and the type contract lives in `src/mendcode/packages/plugin/src/tui.ts`.
 
@@ -61,6 +61,13 @@ Use `api.ui.runtime.setWidget()` for persistent widgets around the editor. Suppo
 - `belowEditor`
 - `sessionBottomDock`
 
+Widgets can declare sizing metadata:
+
+- `width`, `minWidth`, `maxWidth`: terminal columns for dock widgets.
+- `height`: terminal rows, or `auto`.
+- `interactive`: marks the widget as expecting key/input handling.
+- `title`: display/debug metadata for package UIs.
+
 ```tsx
 /** @jsxImportSource @opentui/solid */
 
@@ -78,6 +85,7 @@ export default {
       {
         placement: "aboveEditor",
         order: 10,
+        width: "auto",
       },
     )
 
@@ -89,6 +97,55 @@ export default {
 ```
 
 Use unique widget IDs. Reusing an ID replaces the previous render function for that widget.
+
+## Shell-Backed Widgets
+
+Use `api.shell.spawn()` when a widget needs live command output. The process output is streamed to plugin code and kept in a capped in-memory tail. It is intended for low-overhead widgets such as status panes, `neofetch`-style summaries, notes exporters, todo dashboards, log tails, and simple command monitors.
+
+```tsx
+/** @jsxImportSource @opentui/solid */
+import { createSignal, onCleanup } from "solid-js"
+import { useKeyboard } from "@opentui/solid"
+
+function CommandWidget(props: { api: any }) {
+  const [output, setOutput] = createSignal("")
+  const proc = props.api.shell.spawn("printf 'ready\\n'; while true; do date; sleep 2; done", {
+    maxBuffer: 8_000,
+  })
+
+  proc.onOutput((event) => setOutput(event.output))
+  onCleanup(() => void proc.stop())
+
+  useKeyboard((event) => {
+    if (event.name === "escape") void proc.stop()
+    if (event.sequence) proc.write(event.sequence)
+  })
+
+  return (
+    <box flexDirection="column" paddingX={1}>
+      <text fg={props.api.theme.current.accent}>Command</text>
+      <text wrapMode="truncate">{output().split("\n").slice(-4).join("  ")}</text>
+    </box>
+  )
+}
+
+export default {
+  id: "company.shell-widget",
+  async tui(api) {
+    api.ui.runtime.setWidget("company.shell", () => <CommandWidget api={api} />, {
+      placement: "sessionBottomDock",
+      order: 40,
+      width: 32,
+      minWidth: 24,
+      height: "auto",
+      interactive: true,
+      title: "Command",
+    })
+  },
+}
+```
+
+`shell.spawn()` is not a PTY. Full-screen terminal applications that require a real TTY, cursor addressing, alternate screen buffers, or terminal audio bridges should be wrapped by a PTY-backed helper or a future `spawnPty` API. Do not fake a Doom/cava integration by assuming normal stdout pipes behave like a terminal emulator.
 
 ## Footer Entries
 
@@ -268,7 +325,7 @@ export default {
 
 ## Keybinds and State
 
-Plugins receive the active keybind map, persistent plugin KV, app state, SDK client, renderer, theme, and lifecycle signal.
+Plugins receive the active keybind map, persistent plugin KV, app state, SDK client, renderer, theme, shell runner, and lifecycle signal.
 
 ```tsx
 export default {
@@ -293,7 +350,7 @@ export default {
 
 ## Package Distribution
 
-Company packages should include plugins and widgets under `.mendcode/plugins`, `.mendcode/widgets`, or `.mendcode/components`, then activate them through package config.
+Marketplace packages should include plugins, widgets, pages, tools, and components under `.mendcode/`, then activate them through package config.
 
 ```text
 .mendcode/
@@ -301,6 +358,10 @@ Company packages should include plugins and widgets under `.mendcode/plugins`, `
   mendcode.json
   plugins/
     company-tui.ts
+  pages/
+    company-dashboard.tsx
+  tools/
+    company-status.ts
   themes/
     company-dark.json
 ```
@@ -317,10 +378,10 @@ Company packages should include plugins and widgets under `.mendcode/plugins`, `
 Use package sync for team rollout:
 
 ```bash
-mendcode packages create --include plugins,tuiProfile,themes
-mendcode packages add-source company --type github --url https://github.com/YourOrg/company-mend-package.git --channel team
-mendcode packages install company-mend-package company
-mendcode packages enable company-mend-package
+mendcode marketplace create --include plugins,tuiProfile,themes,tools,pages
+mendcode marketplace add-source company --type github --url https://github.com/YourOrg/company-mendcode-marketplace.git --channel team
+mendcode marketplace install company-mend-package company
+mendcode marketplace enable company-mend-package
 ```
 
 ## Rules

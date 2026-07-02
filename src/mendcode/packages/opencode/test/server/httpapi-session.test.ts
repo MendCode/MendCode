@@ -265,7 +265,7 @@ describe("session HttpApi", () => {
                   variant: Modelv2.VariantID.make("default"),
                 },
                 time: { created: DateTime.makeUnsafe(1) },
-                content: [],
+                content: [new SessionMessage.AssistantText({ type: "text", text: "x".repeat(9_000) })],
               })
               Database.use((db) =>
                 db
@@ -294,6 +294,19 @@ describe("session HttpApi", () => {
           (yield* requestJson<{ items: SessionMessage.Message[] }>(`/api/session/${parent.id}/message`, { headers }))
             .items,
         ).toMatchObject([{ type: "assistant" }])
+
+        const tuiMessages = (
+          yield* requestJson<{ items: SessionMessage.Message[] }>(`/api/session/${parent.id}/message?view=tui`, {
+            headers,
+          })
+        ).items
+        const assistant = tuiMessages.find((message) => message.type === "assistant")
+        const content = assistant?.type === "assistant" ? assistant.content[0] : undefined
+        expect(content).toMatchObject({
+          type: "text",
+          text: "x".repeat(9_000),
+        })
+        expect(content?.type === "text" ? content.text : "").not.toContain("TUI preview truncated")
       }),
     ),
   )

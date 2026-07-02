@@ -156,9 +156,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       query: typeof MessagesQuery.Type
     }) {
-      if (ctx.query.before && ctx.query.limit === undefined) return yield* new HttpApiError.BadRequest({})
-      if (ctx.query.before) {
-        const before = ctx.query.before
+      if ((ctx.query.before || ctx.query.after) && ctx.query.limit === undefined) return yield* new HttpApiError.BadRequest({})
+      if (ctx.query.before && ctx.query.after) return yield* new HttpApiError.BadRequest({})
+      if (ctx.query.before || ctx.query.after) {
+        const before = ctx.query.before ?? ctx.query.after!
         yield* Effect.try({
           try: () => MessageV2.cursor.decode(before),
           catch: () => new HttpApiError.BadRequest({}),
@@ -166,13 +167,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       }
       yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID))
       if (ctx.query.limit === undefined || ctx.query.limit === 0) {
-        return yield* session.messages({ sessionID: ctx.params.sessionID })
+        return yield* session.messages({ sessionID: ctx.params.sessionID, view: ctx.query.view })
       }
 
       const page = MessageV2.page({
         sessionID: ctx.params.sessionID,
         limit: ctx.query.limit,
         before: ctx.query.before,
+        after: ctx.query.after,
+        view: ctx.query.view,
       })
       if (!page.cursor) return page.items
 
@@ -181,7 +184,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       // header echoes the real origin instead of a hard-coded localhost.
       const url = Option.getOrElse(HttpServerRequest.toURL(request), () => new URL(request.url, "http://localhost"))
       url.searchParams.set("limit", ctx.query.limit.toString())
-      url.searchParams.set("before", page.cursor)
+      if (ctx.query.after) url.searchParams.set("after", page.cursor)
+      else url.searchParams.set("before", page.cursor)
       return HttpServerResponse.jsonUnsafe(page.items, {
         headers: {
           "Access-Control-Expose-Headers": "Link, X-Next-Cursor",

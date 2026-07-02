@@ -1,5 +1,5 @@
 import { spawnSync } from "child_process"
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "fs"
 import { mkdir, readFile, rm, writeFile } from "fs/promises"
 import path from "path"
 import { createHash, randomBytes } from "crypto"
@@ -192,6 +192,42 @@ function runMflowCli(root: string, args: string[], timeout = MFLOW_CLI_TIMEOUT_M
       timedOut: error?.code === "ETIMEDOUT",
       missing: error?.code === "ENOENT",
     }
+  }
+}
+
+function redactedMflowOutput(output: string) {
+  return output.replace(/\b[0-9a-f]{48,}\b/gi, "[redacted-secret]")
+}
+
+function readMflowSecret(root: string) {
+  const local = mflowSecretPath(root)
+  if (existsSync(local)) return readFileSync(local, "utf8").trim() || undefined
+  const runtime = mflowRuntimeConfigPath(root)
+  if (!existsSync(runtime)) return undefined
+  return readFileSync(runtime, "utf8").match(/^\s*secret\s*=\s*"([^"]+)"\s*$/m)?.[1]
+}
+
+function mflowDaemonProcess(root: string) {
+  const roots = [...new Set([path.resolve(root), existsSync(root) ? realpathSync(root) : undefined].filter((item): item is string => Boolean(item)))]
+  const result = spawnSync("pgrep", ["-fl", "daemon-entry.ts"], { encoding: "utf8" })
+  const lines = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.split(/\r?\n/)
+  const match = lines.find((line) => line.includes("daemon-entry.ts") && roots.some((item) => line.includes(item)))
+  return match?.match(/^\s*(\d+)/)?.[1]
+}
+
+function runMflowDaemonCommand(root: string, args: string[], timeout = 10_000) {
+  const secret = readMflowSecret(root)
+  const result = spawnSync("mflow", args, {
+    cwd: root,
+    encoding: "utf8",
+    timeout,
+    env: secret ? { ...process.env, MFLOW_SECRET: secret } : process.env,
+  })
+  const output = redactedMflowOutput([result.stdout?.trim() ?? "", result.stderr?.trim() ?? "", result.error?.message ?? ""].filter(Boolean).join("\n"))
+  return {
+    ok: result.status === 0 && !result.error,
+    status: result.status,
+    output: output || "mflow command produced no output",
   }
 }
 
@@ -558,10 +594,10 @@ export async function mflowControlStatus(root?: string) {
     }
   }
 
-  const daemon = runMflowCli(paths.root, ["status"])
-  const running = daemon.ok && /running|connected|room|peer/i.test(daemon.output)
+  const daemonPid = mflowDaemonProcess(paths.root)
+  const running = Boolean(daemonPid)
   const mode: MflowMode = running ? "running" : "enabled-stopped"
-  const locks = runMflowCli(paths.root, ["locks"])
+  const locks = running ? runMflowCli(paths.root, ["locks"]) : undefined
   return {
     ok: true,
     mode,
@@ -577,14 +613,30 @@ export async function mflowControlStatus(root?: string) {
     daemon: {
       checked: true,
       running,
-      output: daemon.output,
+      output: running ? `State: running\nPID: ${daemonPid}` : "mflow enabled; daemon process not running",
     },
     locks: {
-      checked: locks.ok,
-      output: locks.output,
+      checked: locks?.ok ?? false,
+      output: locks?.output ?? "mflow daemon not running; remote locks were not checked",
       local: localLocks,
     },
   }
+}
+
+export async function startMflowDaemon(root?: string) {
+  const paths = mendPaths(root)
+  const config = await readMflowConfig(paths.root)
+  if (!config.enabled) throw new Error("mflow is disabled; configure and turn on mflow before starting the daemon")
+  const result = runMflowDaemonCommand(paths.root, ["start", "--room", config.room, "--signaling", config.signaling], 15_000)
+  if (!result.ok) throw new Error(result.output)
+  return { ...await mflowControlStatus(paths.root), startOutput: result.output }
+}
+
+export async function stopMflowDaemon(root?: string) {
+  const paths = mendPaths(root)
+  const result = runMflowDaemonCommand(paths.root, ["stop"], 10_000)
+  if (!result.ok && !/not running|no daemon/i.test(result.output)) throw new Error(result.output)
+  return { ...await mflowControlStatus(paths.root), stopOutput: result.output }
 }
 
 export async function activateMflow(input: MflowActivateInput, root?: string, options?: { sync?: boolean }) {
@@ -709,7 +761,7 @@ async function waitForMflowReadAccess(input: {
   while (true) {
     const local = localMflowEditLocks(input.root).find((lock) => lock.file === input.file)
     const ownLocalLease = local?.owner === input.owner
-    const remoteStatus = ownLocalLease ? undefined : runMflowCli(input.root, ["locks"])
+    const remoteStatus = ownLocalLease || !mflowDaemonProcess(input.root) ? undefined : runMflowCli(input.root, ["locks"])
     const remote = remoteStatus?.ok ? hasActiveMflowLock(remoteStatus.output, input.file) : false
     const remainingMs = local && !ownLocalLease ? local.remainingMs : Math.max(0, deadline - Date.now())
     if ((!local || ownLocalLease) && !remote) return
@@ -739,12 +791,13 @@ export async function enforceMflowBeforeEdit(input: {
   if (!config.enabled) return { locked: [] as string[] }
   const targets = mflowEditTargets(input.tool, input.args, input.root)
   const owner = `pid:${process.pid}`
+  const daemonRunning = Boolean(mflowDaemonProcess(input.root))
   const localLocked: string[] = []
   try {
     for (const file of targets) {
       await acquireLocalMflowEditLockWithWait(input.root, file, owner, input.onWait)
       localLocked.push(file)
-      await acquireMflowCliLockWithWait({ root: input.root, file, onWait: input.onWait })
+      if (daemonRunning) await acquireMflowCliLockWithWait({ root: input.root, file, onWait: input.onWait })
     }
   } catch (error) {
     for (const file of localLocked) {

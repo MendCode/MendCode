@@ -192,12 +192,12 @@ describe("Mend TUI profile config overrides", () => {
     expect(validateMendTuiProfile(result).ok).toBe(true)
   })
 
-  test("home logo size and welcome mode can be overridden from TUI config", async () => {
+  test("home custom ASCII and welcome mode can be overridden from TUI config", async () => {
     const result = await loadMendTuiProfile(undefined, {
       home: {
         logo: {
           mode: "mascot",
-          size: "large",
+          text: " /\\_/\\\n( ^.^ )\n > # <",
         },
         welcome: {
           mode: "split",
@@ -217,12 +217,32 @@ describe("Mend TUI profile config overrides", () => {
     })
 
     expect(result.profile.identity.logoMode).toBe("mascot")
-    expect(result.profile.surfaces.homeLogo?.size).toBe("large")
+    expect(result.profile.surfaces.homeLogo?.text).toBe(" /\\_/\\\n( ^.^ )\n > # <")
     expect(result.profile.surfaces.homeWelcome?.mode).toBe("split")
     expect(result.profile.surfaces.homeWelcome?.rightPanel).toBe("agentManager")
-    expect(homeMascotText(result.profile)).toContain(".-(o o)-.")
+    expect(homeMascotText(result.profile)).toContain("( ^.^ )")
     expect(activityMascotText(result.profile, "idle")).not.toContain("idle")
     expect(activityMascotHoverText(result.profile)).toContain("(^ o)")
+  })
+
+  test("session activity mascot is configurable independently from home identity mode", async () => {
+    const result = await loadMendTuiProfile(undefined, {
+      identity: {
+        logoMode: "title",
+      },
+      presentation: {
+        activity: {
+          mascot: {
+            states: {
+              running: "  /\\_/\\\n (o !)",
+            },
+          },
+        },
+      },
+    })
+
+    expect(result.profile.identity.logoMode).toBe("title")
+    expect(activityMascotText(result.profile, "running")).toContain("(o !)")
   })
 
   test("home welcome right panel defaults to Agent View and validates allowed values", async () => {

@@ -211,6 +211,10 @@ export function setupMemoryDialogCurrentValue(memory?: { enabled?: boolean; gene
   return memory?.enabled ? "enable-use" : "disable"
 }
 
+export function setupShouldChooseHomeSplitPanel(welcomeMode: "centered" | "split") {
+  return welcomeMode === "split"
+}
+
 function normalizeProductName(value: string) {
   return value.trim() || "MendCode"
 }
@@ -1201,7 +1205,7 @@ export function Setup() {
             title: "Browse official packages",
             value: "official",
             category: "Install",
-            description: "Install a curated package from MendCode/mendcode-packages.",
+            description: "Install a curated package from MendCode/mendcode-marketplace.",
             onSelect: () => void chooseOfficialPackage(),
           },
           {
@@ -1265,7 +1269,7 @@ export function Setup() {
                 title: "ASCII mascot",
                 value: "mascot",
                 category: "Home",
-                description: "Use the MendBug mascot as the home logo and compact activity feedback.",
+                description: "Use ASCII mascot art as the Home logo.",
                 onSelect: async () => resolve("mascot"),
               },
             ]}
@@ -1328,45 +1332,6 @@ export function Setup() {
       )
     })
     if (logoFont === null) return
-    const logoSize =
-      identityMode === "mascot"
-        ? await new Promise<"compact" | "default" | "large" | null>((resolve) => {
-            dialog.replace(
-              () => (
-                <DialogSelect
-                  title="Home ASCII size"
-                  current={current.surfaces.homeLogo?.size || "default"}
-                  renderFilter={false}
-                  options={[
-                    {
-                      title: "Compact",
-                      value: "compact",
-                      category: "Home",
-                      description: "Small MendBug for tight terminal windows.",
-                      onSelect: async () => resolve("compact"),
-                    },
-                    {
-                      title: "Default",
-                      value: "default",
-                      category: "Home",
-                      description: "Larger default MendBug identity.",
-                      onSelect: async () => resolve("default"),
-                    },
-                    {
-                      title: "Large",
-                      value: "large",
-                      category: "Home",
-                      description: "Big MendBug for spacious home screens.",
-                      onSelect: async () => resolve("large"),
-                    },
-                  ]}
-                />
-              ),
-              () => resolve(null),
-            )
-          })
-        : current.surfaces.homeLogo?.size || "default"
-    if (logoSize === null) return
     const welcomeMode = await new Promise<"centered" | "split" | null>((resolve) => {
       dialog.replace(
         () => (
@@ -1396,34 +1361,36 @@ export function Setup() {
       )
     })
     if (welcomeMode === null) return
-    const rightPanel = await new Promise<"actions" | "agentManager" | null>((resolve) => {
-      dialog.replace(
-        () => (
-          <DialogSelect
-            title="Home activity panel"
-            current={current.surfaces.homeWelcome?.rightPanel || "agentManager"}
-            renderFilter={false}
-            options={[
-              {
-                title: "Actions",
-                value: "actions",
-                category: "Home",
-                description: "Show Resume, Open commands, and Quit in the split panel.",
-                onSelect: async () => resolve("actions"),
-              },
-              {
-                title: "Agent View",
-                value: "agentManager",
-                category: "Home",
-                description: "Show global sessions grouped by input, working, and completed.",
-                onSelect: async () => resolve("agentManager"),
-              },
-            ]}
-          />
-        ),
-        () => resolve(null),
-      )
-    })
+    const rightPanel = setupShouldChooseHomeSplitPanel(welcomeMode)
+      ? await new Promise<"actions" | "agentManager" | null>((resolve) => {
+          dialog.replace(
+            () => (
+              <DialogSelect
+                title="Home split panel"
+                current={current.surfaces.homeWelcome?.rightPanel || "agentManager"}
+                renderFilter={false}
+                options={[
+                  {
+                    title: "Actions",
+                    value: "actions",
+                    category: "Home",
+                    description: "Show Resume, Open commands, and Quit in the split panel.",
+                    onSelect: async () => resolve("actions"),
+                  },
+                  {
+                    title: "Agent View",
+                    value: "agentManager",
+                    category: "Home",
+                    description: "Show global sessions grouped by input, working, and completed.",
+                    onSelect: async () => resolve("agentManager"),
+                  },
+                ]}
+              />
+            ),
+            () => resolve(null),
+          )
+        })
+      : current.surfaces.homeWelcome?.rightPanel || "agentManager"
     if (rightPanel === null) return
     const applyTuiIdentityPreset = async (
       preset: "comfortable" | "compact" | "spacious",
@@ -1442,7 +1409,7 @@ export function Setup() {
             identity: { productName: normalizeProductName(productName), tagline: "", logoMode: identityMode, logoFont },
             surfaces: {
               ...current.surfaces,
-              homeLogo: { ...(current.surfaces.homeLogo || {}), size: logoSize },
+              homeLogo: { ...(current.surfaces.homeLogo || {}) },
               homeWelcome: { ...(current.surfaces.homeWelcome || {}), mode: welcomeMode, rightPanel },
             },
           },

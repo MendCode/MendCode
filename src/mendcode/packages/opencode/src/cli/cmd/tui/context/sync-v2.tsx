@@ -23,6 +23,61 @@ type ShellOutputEvent = {
   }
 }
 
+const PREVIEW_TEXT_LIMIT = 128 * 1024
+
+function previewText(value: string) {
+  if (value.length <= PREVIEW_TEXT_LIMIT) return value
+  const marker = `\n[Preview truncated: omitted ${value.length - PREVIEW_TEXT_LIMIT} chars; showing start and latest tail.]\n`
+  const budget = Math.max(0, PREVIEW_TEXT_LIMIT - marker.length)
+  if (budget <= 0) return value.slice(-PREVIEW_TEXT_LIMIT)
+  const head = Math.floor(budget / 3)
+  const tail = budget - head
+  return `${value.slice(0, head)}${marker}${value.slice(value.length - tail)}`
+}
+
+function previewToolContent<T>(content: T): T {
+  if (!Array.isArray(content)) return content
+  return content.map((item) => {
+    if (!item || typeof item !== "object" || !("type" in item) || item.type !== "text" || typeof item.text !== "string") return item
+    return { ...item, text: previewText(item.text) }
+  }) as T
+}
+
+function previewTool(part: SessionMessageAssistantTool): SessionMessageAssistantTool {
+  const state = part.state
+  if (state.status === "pending") return part
+  return {
+    ...part,
+    state: {
+      ...state,
+      content: previewToolContent(state.content),
+    },
+  } as SessionMessageAssistantTool
+}
+
+function previewMessage(message: SessionMessage): SessionMessage {
+  if (message.type === "shell") return { ...message, output: previewText(message.output) }
+  if (message.type === "user") return { ...message, text: previewText(message.text) }
+  if (message.type === "synthetic") return { ...message, text: previewText(message.text) }
+  if (message.type === "compaction") {
+    return {
+      ...message,
+      summary: previewText(message.summary),
+      include: message.include ? previewText(message.include) : message.include,
+    }
+  }
+  if (message.type !== "assistant") return message
+  return {
+    ...message,
+    content: message.content.map((part) => {
+      if (part.type === "text") return { ...part, text: previewText(part.text) }
+      if (part.type === "reasoning") return { ...part, text: previewText(part.text) }
+      if (part.type === "tool") return previewTool(part)
+      return part
+    }),
+  }
+}
+
 function activeAssistant(messages: SessionMessage[]) {
   const index = messages.findIndex((message) => message.type === "assistant" && !message.time.completed)
   if (index < 0) return
@@ -99,9 +154,11 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
       }
 
       const run = sdk.client.v2.session
-        .messages({ sessionID })
+        .messages({ sessionID, limit: 5_000, view: "tui" } as Parameters<
+          typeof sdk.client.v2.session.messages
+        >[0] & { limit: number; view: "tui" })
         .then((response) => {
-          setStore("messages", sessionID, reconcile(response.data?.items ?? []))
+          setStore("messages", sessionID, reconcile((response.data?.items ?? []).map(previewMessage)))
         })
         .finally(() => {
           syncInFlight.delete(sessionID)
@@ -147,7 +204,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
             draft.unshift({
               id: event.id,
               type: "user",
-              text: event.properties.prompt.text,
+              text: previewText(event.properties.prompt.text),
               files: event.properties.prompt.files,
               agents: event.properties.prompt.agents,
               time: { created: event.properties.timestamp },
@@ -161,7 +218,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
               id: event.id,
               type: "synthetic",
               sessionID: event.properties.sessionID,
-              text: event.properties.text,
+              text: previewText(event.properties.text),
               time: { created: event.properties.timestamp },
             })
           })
@@ -182,7 +239,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
           update(event.properties.sessionID, (draft) => {
             const match = activeShell(draft, event.properties.callID)
             if (!match) return
-            match.output = event.properties.output
+            match.output = previewText(event.properties.output)
             match.time.completed = event.properties.timestamp
           })
           scheduleSync(event.properties.sessionID, 50)
@@ -233,13 +290,13 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
         case "session.next.text.delta":
           update(event.properties.sessionID, (draft) => {
             const match = latestText(activeAssistant(draft))
-            if (match) match.text += event.properties.delta
+            if (match) match.text = previewText(match.text + event.properties.delta)
           })
           break
         case "session.next.text.ended":
           update(event.properties.sessionID, (draft) => {
             const match = latestText(activeAssistant(draft))
-            if (match) match.text = event.properties.text
+            if (match) match.text = previewText(event.properties.text)
           })
           break
         case "session.next.tool.input.started":
@@ -275,7 +332,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
             const match = latestTool(activeAssistant(draft), event.properties.callID)
             if (match?.state.status !== "running") return
             match.state.structured = event.properties.structured
-            match.state.content = [...event.properties.content]
+            match.state.content = previewToolContent([...event.properties.content])
           })
           break
         case "session.next.tool.success":
@@ -286,7 +343,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
               status: "completed",
               input: match.state.input,
               structured: event.properties.structured,
-              content: [...event.properties.content],
+              content: previewToolContent([...event.properties.content]),
             }
             match.provider = event.properties.provider
             match.time.completed = event.properties.timestamp
@@ -321,13 +378,13 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
         case "session.next.reasoning.delta":
           update(event.properties.sessionID, (draft) => {
             const match = latestReasoning(activeAssistant(draft), event.properties.reasoningID)
-            if (match) match.text += event.properties.delta
+            if (match) match.text = previewText(match.text + event.properties.delta)
           })
           break
         case "session.next.reasoning.ended":
           update(event.properties.sessionID, (draft) => {
             const match = latestReasoning(activeAssistant(draft), event.properties.reasoningID)
-            if (match) match.text = event.properties.text
+            if (match) match.text = previewText(event.properties.text)
           })
           break
         case "session.next.retried":
@@ -346,15 +403,15 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
         case "session.next.compaction.delta":
           update(event.properties.sessionID, (draft) => {
             const match = activeCompaction(draft)
-            if (match) match.summary += event.properties.text
+            if (match) match.summary = previewText(match.summary + event.properties.text)
           })
           break
         case "session.next.compaction.ended":
           update(event.properties.sessionID, (draft) => {
             const match = activeCompaction(draft)
             if (!match) return
-            match.summary = event.properties.text
-            match.include = event.properties.include
+            match.summary = previewText(event.properties.text)
+            match.include = event.properties.include ? previewText(event.properties.include) : event.properties.include
           })
           scheduleSync(event.properties.sessionID, 50)
           break

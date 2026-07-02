@@ -140,6 +140,25 @@ function sessionStatusEvent() {
   }
 }
 
+function syncCompactionEndedEvent(input: { directory: string; workspace?: string }): GlobalEvent {
+  return {
+    directory: input.directory,
+    workspace: input.workspace,
+    payload: {
+      type: "sync",
+      syncEvent: {
+        id: "evt_compaction_ended",
+        type: "session.next.compaction.ended.0",
+        data: {
+          sessionID: "ses_test",
+          timestamp: new Date(0).toISOString(),
+          text: "summary",
+        },
+      },
+    },
+  } as any
+}
+
 function createSseFetch() {
   const controllers: ReadableStreamDefaultController<Uint8Array>[] = []
   const handle = async () =>
@@ -259,6 +278,23 @@ describe("useEvent", () => {
       await wait(() => seen.length === 1)
 
       expect(seen).toEqual([update("1.2.3")])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("forwards sync compaction ended events for session hydration", async () => {
+    const { app, emit, seen } = await mount()
+
+    try {
+      emit(syncCompactionEndedEvent({ directory: "/tmp/root" }))
+
+      await wait(() => seen.length === 1)
+
+      expect(seen[0]).toMatchObject({
+        type: "session.next.compaction.ended",
+        properties: { sessionID: "ses_test", text: "summary" },
+      })
     } finally {
       app.renderer.destroy()
     }

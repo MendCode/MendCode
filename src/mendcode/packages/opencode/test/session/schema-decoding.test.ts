@@ -4,7 +4,7 @@ import { Schema } from "effect"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
-import { SessionStatus } from "../../src/session/status"
+import { BUSY_STATUS_STALE_MS, SessionStatus, freshStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
 import { Todo } from "../../src/session/todo"
 import { SessionID, MessageID, PartID } from "../../src/session/schema"
@@ -250,6 +250,24 @@ describe("SessionStatus.Info", () => {
   test("rejects unknown type", () => {
     expect(() => decode({ type: "bogus" })).toThrow()
     expect(() => SessionStatus.Info.zod.parse({ type: "bogus" })).toThrow()
+  })
+
+  test("recovers stale busy status while preserving explicit retry and busy deadlines", () => {
+    const now = 200_000
+    expect(freshStatus({ time_updated: now - BUSY_STATUS_STALE_MS - 1, data: { type: "busy" } }, now)).toBeUndefined()
+    expect(freshStatus({ time_updated: now - BUSY_STATUS_STALE_MS + 1, data: { type: "busy" } }, now)).toEqual({
+      type: "busy",
+    })
+    expect(freshStatus({ time_updated: 1, data: { type: "busy", until: now + 1 } }, now)).toEqual({
+      type: "busy",
+      until: now + 1,
+    })
+    expect(freshStatus({ time_updated: 1, data: { type: "retry", attempt: 1, message: "wait", next: now + 1 } }, now)).toEqual({
+      type: "retry",
+      attempt: 1,
+      message: "wait",
+      next: now + 1,
+    })
   })
 })
 

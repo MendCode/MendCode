@@ -21,7 +21,7 @@ export const Info = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("busy"),
-    kind: Schema.optional(Schema.Union([Schema.Literal("mflow-wait"), Schema.Literal("memory-extract")])),
+    kind: Schema.optional(Schema.Union([Schema.Literal("mflow-wait"), Schema.Literal("memory-extract"), Schema.Literal("subagent-wait")])),
     message: Schema.optional(Schema.String),
     until: Schema.optional(NonNegativeInt),
   }),
@@ -55,10 +55,21 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionStatus") {}
 
+export const BUSY_STATUS_STALE_MS = 60 * 1000
+const PERSISTED_STATUS_STALE_MS = 5 * 60 * 1000
+type StatusRecord = { time_updated: number; data: Info }
+
 function foreign(err: unknown) {
   if (typeof err !== "object" || err === null) return false
   if ("code" in err && err.code === "SQLITE_CONSTRAINT_FOREIGNKEY") return true
   return "message" in err && typeof err.message === "string" && err.message.includes("FOREIGN KEY constraint failed")
+}
+
+export function freshStatus(row: StatusRecord, now = Date.now()) {
+  if (row.data.type === "busy" && row.data.until && row.data.until > now) return row.data
+  if (row.data.type === "busy") return now - row.time_updated <= BUSY_STATUS_STALE_MS ? row.data : undefined
+  if (row.data.type === "retry" && row.data.next > now) return row.data
+  return now - row.time_updated <= PERSISTED_STATUS_STALE_MS ? row.data : undefined
 }
 
 export const layer = Layer.effect(
@@ -67,25 +78,36 @@ export const layer = Layer.effect(
     const bus = yield* Bus.Service
 
     const state = yield* InstanceState.make(
-      Effect.fn("SessionStatus.state")(() => Effect.succeed(new Map<SessionID, Info>())),
+      Effect.fn("SessionStatus.state")(() => Effect.succeed(new Map<SessionID, StatusRecord>())),
     )
 
     const get = Effect.fn("SessionStatus.get")(function* (sessionID: SessionID) {
       const data = yield* InstanceState.get(state)
       const local = data.get(sessionID)
-      if (local) return local
+      if (local) {
+        const fresh = freshStatus(local)
+        if (fresh) return fresh
+        data.delete(sessionID)
+      }
       const row = Database.use((db) =>
         db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, sessionID)).get(),
       )
-      return row?.data ?? { type: "idle" as const }
+      return row ? (freshStatus(row) ?? { type: "idle" as const }) : { type: "idle" as const }
     })
 
     const list = Effect.fn("SessionStatus.list")(function* () {
       const persisted = Database.use((db) => db.select().from(SessionStatusTable).all())
-      const result = new Map<SessionID, Info>(persisted.map((row) => [row.session_id, row.data]))
+      const now = Date.now()
+      const result = new Map<SessionID, Info>()
+      for (const row of persisted) {
+        const status = freshStatus(row, now)
+        if (status) result.set(row.session_id, status)
+      }
       const data = yield* InstanceState.get(state)
-      for (const [sessionID, status] of data) {
-        result.set(sessionID, status)
+      for (const [sessionID, record] of data) {
+        const status = freshStatus(record, now)
+        if (status) result.set(sessionID, status)
+        else data.delete(sessionID)
       }
       return result
     })
@@ -99,7 +121,7 @@ export const layer = Layer.effect(
         Database.use((db) => db.delete(SessionStatusTable).where(eq(SessionStatusTable.session_id, sessionID)).run())
         return
       }
-      data.set(sessionID, status)
+      data.set(sessionID, { time_updated: Date.now(), data: status })
       try {
         Database.use((db) =>
           db

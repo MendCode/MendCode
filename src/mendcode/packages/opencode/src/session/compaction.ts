@@ -20,7 +20,7 @@ import { ModelID, ProviderID } from "@/provider/schema"
 import { Effect, Layer, Context, Schema } from "effect"
 import * as DateTime from "effect/DateTime"
 import { InstanceState } from "@/effect/instance-state"
-import { isOverflow as overflow, usable } from "./overflow"
+import { isOverflow as overflow, isTokenOverflow, usable } from "./overflow"
 import { makeRuntime } from "@/effect/run-service"
 import { fn } from "@/util/fn"
 import { EventV2 } from "@/v2/event"
@@ -52,6 +52,7 @@ const PRUNE_PROTECTED_TOOLS = ["skill"]
 const DEFAULT_TAIL_TURNS = 2
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
 const MAX_PRESERVE_RECENT_TOKENS = 8_000
+const IMAGE_ATTACHMENT_CONTEXT_MAX_ITEMS = 12
 const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <template> and keep the section order unchanged. Do not include the <template> tags in your response.
 <template>
 ## Goal
@@ -132,6 +133,7 @@ Rules:
 - Read the Current TODO List context when present. Treat in_progress/pending TODOs as evidence for Resume Anchor / Active Work only when they match the latest user intent; completed/cancelled TODOs belong in Confirmed Done or Optional Follow-ups as appropriate.
 - Read the Recent Operational Context when present. Commands, cwd, saved tool-output paths, running/failed tools, and verification output are evidence for Commands / Evidence, Relevant Files, and Progress Against Latest Request.
 - Read the Subagent Task Context when present. Summarize each subagent's concrete output, files changed, blocker, or current status. Running/pending subagents are active work unless clearly stale or contradicted by a newer real user message.
+- Read the Image Attachment Context when present. Preserve more than \`[Image N]\`: include nearby user text, source labels, dimensions/filename, and any user-described screenshot/callout/error meaning. If exact visual content is unavailable, say exactly what is unavailable and point to the transcript reference.
 - Session State Snapshot must preserve the actionable state from TODOs, subagents, running/failed tools, active files, and cwd even when it makes the summary longer.
 - Do not mention the summary process or that context was compacted.`
 const COMPACTION_RESUME_PROMPT = `The conversation hit a context overflow while handling the current request, so the conversation was compacted.
@@ -220,6 +222,85 @@ function messageText(message: MessageV2.WithParts) {
     .trim()
 }
 
+function dataUrlByteSize(url: string) {
+  const marker = ";base64,"
+  const index = url.indexOf(marker)
+  if (!url.startsWith("data:") || index === -1) return
+  const base64 = url.slice(index + marker.length)
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding)
+}
+
+function pngDimensionsFromDataUrl(url: string) {
+  const marker = ";base64,"
+  const index = url.indexOf(marker)
+  if (!url.startsWith("data:image/png") || index === -1) return
+  try {
+    const header = Buffer.from(url.slice(index + marker.length, index + marker.length + 64), "base64")
+    if (header.length < 24) return
+    if (header.toString("ascii", 1, 4) !== "PNG") return
+    return {
+      width: header.readUInt32BE(16),
+      height: header.readUInt32BE(20),
+    }
+  } catch {
+    return
+  }
+}
+
+function formatBytes(bytes: number | undefined) {
+  if (bytes === undefined) return
+  if (bytes >= 1_000_000) return `${Math.round(bytes / 100_000) / 10}MB`
+  if (bytes >= 1_000) return `${Math.round(bytes / 100) / 10}KB`
+  return `${bytes}B`
+}
+
+function imageAttachmentSummary(message: MessageV2.WithParts, part: MessageV2.FilePart) {
+  const sourceText = part.source?.text.value.trim()
+  const dimensions = pngDimensionsFromDataUrl(part.url)
+  const size = formatBytes(dataUrlByteSize(part.url))
+  const surroundingText = compactText(messageText(message), 600)
+  const visualSignal = surroundingText
+    ? "derive any available visual meaning from nearbyUserText; preserve screenshot/callout/error wording if present."
+    : "exact visual content unavailable unless described elsewhere in the transcript."
+  return [
+    `- messageID: ${message.info.id}`,
+    `  partID: ${part.id}`,
+    `  file: ${part.filename ?? "clipboard"} (${part.mime})`,
+    dimensions ? `  dimensions: ${dimensions.width}x${dimensions.height}` : undefined,
+    size ? `  embeddedSize: ${size}` : part.url.startsWith("data:") ? "  embeddedSize: data-url" : "  url: remote/local reference",
+    sourceText ? `  sourceLabel: ${sourceText}` : undefined,
+    part.source ? `  sourceRange: ${part.source.text.start}-${part.source.text.end}` : undefined,
+    surroundingText ? `  nearbyUserText: ${surroundingText}` : "  nearbyUserText: (none)",
+    `  visualContentPolicy: ${visualSignal}`,
+    "  visualContent: binary image omitted from compaction prompt; do not claim the image is irrelevant just because only a placeholder is visible.",
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
+
+function imageAttachmentContext(messages: MessageV2.WithParts[]) {
+  const images = messages.flatMap((message) =>
+    message.parts
+      .filter((part): part is MessageV2.FilePart => part.type === "file" && part.mime.startsWith("image/"))
+      .map((part) => ({ message, part })),
+  )
+  if (!images.length) return []
+  const recent = images.slice(-IMAGE_ATTACHMENT_CONTEXT_MAX_ITEMS)
+  const omitted = images.length - recent.length
+  return [
+    [
+      "Image Attachment Context:",
+      "- Compact summary must preserve these image references because media binaries are omitted from the compaction prompt.",
+      "- These are deterministic lightweight descriptions from attachment metadata and surrounding user text; they are not vision-generated captions.",
+      omitted > 0 ? `- Older image attachments omitted from this context: ${omitted}` : undefined,
+      ...recent.map(({ message, part }) => imageAttachmentSummary(message, part)),
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  ]
+}
+
 function completedCompactions(messages: MessageV2.WithParts[]) {
   const users = new Map<MessageID, number>()
   for (let i = 0; i < messages.length; i++) {
@@ -254,6 +335,28 @@ function stringify(value: unknown) {
   }
 }
 
+const TRANSCRIPT_TEXT_MAX_CHARS = 64 * 1024
+const TRANSCRIPT_TOOL_OUTPUT_MAX_CHARS = 32 * 1024
+const TRANSCRIPT_JSON_MAX_CHARS = 16 * 1024
+const TRANSCRIPT_FIELD_MAX_CHARS = 4 * 1024
+
+function transcriptText(value: string, maxChars: number) {
+  const trimmed = value.trim()
+  if (trimmed.length <= maxChars) return trimmed
+  const marker = `\n[Transcript preview truncated: omitted ${
+    trimmed.length - maxChars
+  } chars. Showing start and final tail. Full content remains in session storage/tool output files.]\n`
+  const budget = Math.max(0, maxChars - marker.length)
+  if (budget <= 0) return trimmed.slice(-maxChars)
+  const head = Math.floor(budget / 3)
+  const tail = budget - head
+  return `${trimmed.slice(0, head)}${marker}${trimmed.slice(trimmed.length - tail)}`
+}
+
+function transcriptJson(value: unknown, maxChars = TRANSCRIPT_JSON_MAX_CHARS) {
+  return transcriptText(stringify(value), maxChars)
+}
+
 function toolOutputForTranscript(state: MessageV2.ToolState) {
   if (state.status === "completed") return state.output
   if (state.status === "error") return state.metadata?.output ?? state.error
@@ -269,9 +372,9 @@ function unknownPartID(part: unknown) {
 function transcriptPart(part: MessageV2.Part) {
   switch (part.type) {
     case "text":
-      return [`#### text ${part.id}${part.synthetic ? " (synthetic)" : ""}`, part.text].join("\n\n")
+      return [`#### text ${part.id}${part.synthetic ? " (synthetic)" : ""}`, transcriptText(part.text, TRANSCRIPT_TEXT_MAX_CHARS)].join("\n\n")
     case "reasoning":
-      return [`#### reasoning ${part.id}`, part.text].join("\n\n")
+      return [`#### reasoning ${part.id}`, transcriptText(part.text, TRANSCRIPT_TEXT_MAX_CHARS)].join("\n\n")
     case "tool":
       return [
         `#### tool ${part.tool} ${part.id}`,
@@ -279,18 +382,18 @@ function transcriptPart(part: MessageV2.Part) {
         `status: ${part.state.status}`,
         "",
         "input:",
-        fence("json", stringify(part.state.input)),
+        fence("json", transcriptJson(part.state.input)),
         "",
         "output:",
-        fence("text", toolOutputForTranscript(part.state)),
+        fence("text", transcriptText(toolOutputForTranscript(part.state), TRANSCRIPT_TOOL_OUTPUT_MAX_CHARS)),
       ].join("\n")
     case "file":
       return [
         `#### file ${part.id}`,
         `mime: ${part.mime}`,
         part.filename ? `filename: ${part.filename}` : undefined,
-        `url: ${part.url}`,
-        part.source ? ["source:", fence("json", stringify(part.source))].join("\n") : undefined,
+        `url: ${transcriptText(part.url, TRANSCRIPT_FIELD_MAX_CHARS)}`,
+        part.source ? ["source:", fence("json", transcriptJson(part.source, TRANSCRIPT_FIELD_MAX_CHARS))].join("\n") : undefined,
       ]
         .filter(Boolean)
         .join("\n")
@@ -301,27 +404,27 @@ function transcriptPart(part: MessageV2.Part) {
         `overflow: ${part.overflow ?? false}`,
         `resume: ${part.resume ?? false}`,
         part.tail_start_id ? `tail_start_id: ${part.tail_start_id}` : undefined,
-        part.instructions ? ["instructions:", fence("text", part.instructions)].join("\n") : undefined,
+        part.instructions ? ["instructions:", fence("text", transcriptText(part.instructions, TRANSCRIPT_FIELD_MAX_CHARS))].join("\n") : undefined,
       ]
         .filter(Boolean)
         .join("\n")
     case "patch":
       return [`#### patch ${part.id}`, `hash: ${part.hash}`, "files:", ...part.files.map((file) => `- ${file}`)].join("\n")
     case "snapshot":
-      return [`#### snapshot ${part.id}`, part.snapshot].join("\n\n")
+      return [`#### snapshot ${part.id}`, transcriptText(part.snapshot, TRANSCRIPT_FIELD_MAX_CHARS)].join("\n\n")
     case "step-start":
-      return [`#### step-start ${part.id}`, part.snapshot ? `snapshot: ${part.snapshot}` : ""].join("\n").trim()
+      return [`#### step-start ${part.id}`, part.snapshot ? `snapshot: ${transcriptText(part.snapshot, TRANSCRIPT_FIELD_MAX_CHARS)}` : ""].join("\n").trim()
     case "step-finish":
       return [
         `#### step-finish ${part.id}`,
         `reason: ${part.reason}`,
-        `tokens: ${stringify(part.tokens)}`,
-        part.snapshot ? `snapshot: ${part.snapshot}` : undefined,
+        `tokens: ${transcriptJson(part.tokens, TRANSCRIPT_FIELD_MAX_CHARS)}`,
+        part.snapshot ? `snapshot: ${transcriptText(part.snapshot, TRANSCRIPT_FIELD_MAX_CHARS)}` : undefined,
       ]
         .filter(Boolean)
         .join("\n")
     case "agent":
-      return [`#### agent ${part.id}`, `name: ${part.name}`, part.source ? fence("json", stringify(part.source)) : ""]
+      return [`#### agent ${part.id}`, `name: ${part.name}`, part.source ? fence("json", transcriptJson(part.source, TRANSCRIPT_FIELD_MAX_CHARS)) : ""]
         .filter(Boolean)
         .join("\n\n")
     case "subtask":
@@ -331,14 +434,14 @@ function transcriptPart(part: MessageV2.Part) {
         `description: ${part.description}`,
         part.command ? `command: ${part.command}` : undefined,
         "",
-        fence("text", part.prompt),
+        fence("text", transcriptText(part.prompt, TRANSCRIPT_TEXT_MAX_CHARS)),
       ]
         .filter(Boolean)
         .join("\n")
     case "retry":
-      return [`#### retry ${part.id}`, `attempt: ${part.attempt}`, fence("json", stringify(part.error))].join("\n\n")
+      return [`#### retry ${part.id}`, `attempt: ${part.attempt}`, fence("json", transcriptJson(part.error))].join("\n\n")
     default:
-      return [`#### part ${unknownPartID(part)}`, fence("json", stringify(part))].join("\n\n")
+      return [`#### part ${unknownPartID(part)}`, fence("json", transcriptJson(part))].join("\n\n")
   }
 }
 
@@ -402,7 +505,7 @@ function writeTranscript(input: {
     await mkdir(target.dir, { recursive: true })
     await writeFile(target.snapshot, content)
     await writeFile(target.latest, content)
-    return target.latest
+    return target.snapshot
   })
 }
 
@@ -569,13 +672,91 @@ function toolInputValue(input: Record<string, unknown>, key: string) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
+function toolMetadataValue(state: MessageV2.ToolState, key: string) {
+  const metadata = "metadata" in state ? state.metadata : undefined
+  const value = metadata?.[key]
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
 function compactText(text: string, maxChars: number) {
   const trimmed = text.trim()
   if (trimmed.length <= maxChars) return trimmed
-  return `${trimmed.slice(0, maxChars)}\n[truncated]`
+  const marker = `\n[truncated: omitted ${trimmed.length - maxChars} chars; showing start and latest tail]\n`
+  const budget = Math.max(0, maxChars - marker.length)
+  if (budget <= 0) return trimmed.slice(-maxChars)
+  const head = Math.floor(budget / 3)
+  const tail = budget - head
+  return `${trimmed.slice(0, head)}${marker}${trimmed.slice(trimmed.length - tail)}`
 }
 
-function preservedTailPartSnapshot(part: MessageV2.Part) {
+function localRescueSummary(input: { previousSummary?: string; context: string[]; reason: string }) {
+  const previous = input.previousSummary ? compactText(input.previousSummary, 8_000) : "(none)"
+  const evidence = compactText(input.context.filter(Boolean).join("\n\n---\n\n"), 10_000) || "(none)"
+  return [
+    "## Goal",
+    "- Continue the latest active user request from a deterministic local rescue summary.",
+    "",
+    "## Current User Intent",
+    "- Latest explicit user request: see Preserved Context Evidence below; if unclear, inspect the transcript reference.",
+    "- Explicitly not requested: (not available in local rescue context)",
+    "",
+    "## Request Trace",
+    "### Latest User Message",
+    "- Verbatim: see Preserved Context Evidence below.",
+    "- Required outcome: continue and complete the active request without sending an oversized prompt to the provider.",
+    "- Constraints: provider/model context was already too large; use this summary and transcript evidence instead of retrying the same oversized prompt.",
+    "",
+    "### Progress Against Latest Request",
+    "- Completed: local rescue summary written before an oversized provider call could be retried.",
+    "- In progress: continue from TODOs, active assistant/tool state, and preserved recent context below.",
+    "- Still required: finish the latest explicit user request; inspect transcript if this rescue summary is insufficient.",
+    "- Verification status: local rescue summary only; downstream work still needs normal verification.",
+    "",
+    "## Resume Anchor",
+    "### Active Work",
+    "- Current task in progress: see Preserved Context Evidence and Previous Summary below.",
+    "- Last completed action: local rescue compaction prevented another oversized provider request.",
+    "- Next required action: continue from the latest in-progress/pending work preserved below.",
+    "",
+    "### Blocked / Needs User",
+    "- (none known from local rescue context)",
+    "",
+    "## Confirmed Done",
+    "- See Previous Summary and Preserved Context Evidence below.",
+    "",
+    "## Key Decisions",
+    "- Oversized prompts must compact or rescue locally before calling the provider.",
+    "",
+    "## Optional Follow-ups",
+    "- (none)",
+    "",
+    "## Critical Context",
+    `- Local rescue reason: ${input.reason}`,
+    "- The previous model-generated compaction path could not be safely used because the prompt was already above the effective context threshold.",
+    "- Previous Summary:",
+    previous,
+    "",
+    "## Commands / Evidence",
+    "- Preserved Context Evidence below was collected locally before rescue compaction.",
+    "",
+    "## Session State Snapshot",
+    "- TODOs / subagents / tool state: see Preserved Context Evidence below.",
+    "- Running or failed tools: see Preserved Context Evidence below.",
+    "- Active files / directories: see Preserved Context Evidence below.",
+    "",
+    "## Transcript Reference",
+    "- Full transcript: see Preserved Context Evidence below.",
+    "- Use when: the local rescue summary is ambiguous or misses exact tool output / file paths.",
+    "",
+    "## Relevant Files",
+    "- See Preserved Context Evidence below.",
+    "",
+    "## Preserved Context Evidence",
+    evidence,
+  ].join("\n")
+}
+
+function preservedTailPartSnapshot(message: MessageV2.WithParts, part: MessageV2.Part) {
   if (part.type === "text" && !part.ignored) {
     return [
       `text${part.synthetic ? " (synthetic)" : ""}:`,
@@ -598,7 +779,10 @@ function preservedTailPartSnapshot(part: MessageV2.Part) {
       .filter(Boolean)
       .join("\n")
   }
-  if (part.type === "file") return `file: ${part.filename ?? part.mime} (${part.mime})`
+  if (part.type === "file") {
+    if (part.mime.startsWith("image/")) return `image attachment:\n${imageAttachmentSummary(message, part)}`
+    return `file: ${part.filename ?? part.mime} (${part.mime})`
+  }
   if (part.type === "patch") return `patch: ${part.files.join(", ")}`
   if (part.type === "step-start") return part.snapshot ? `step-start snapshot: ${part.snapshot}` : "step-start"
   if (part.type === "step-finish") {
@@ -692,7 +876,7 @@ function preservedTailSnapshotContext(input: {
   for (const message of recent) {
     const finish = message.info.role === "assistant" ? ` finish=${message.info.finish ?? "(none)"}` : ""
     const parts = message.parts
-      .map(preservedTailPartSnapshot)
+      .map((part) => preservedTailPartSnapshot(message, part))
       .filter(Boolean)
       .flatMap((part) => part.split("\n").map((line) => `  ${line}`))
     lines.push(`- ${message.info.role} ${message.info.id}${finish}`)
@@ -776,14 +960,13 @@ function subagentTaskContext(messages: MessageV2.WithParts[]) {
       const input = part.state.input
       const description = toolInputValue(input, "description") ?? "subagent task"
       const subagent = toolInputValue(input, "subagent_type") ?? "unknown"
+      const subagentSessionID = toolMetadataValue(part.state, "sessionId")
       const output = taskOutput(part.state).trim()
-      const excerpt =
-        output.length > SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS
-          ? `${output.slice(0, SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)}\n[truncated]`
-          : output
+      const excerpt = compactText(output, SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)
       tasks.push(
         [
           `- ${description} (${subagent}) — ${part.state.status}`,
+          subagentSessionID ? `  subagentSessionID: ${subagentSessionID}` : undefined,
           excerpt
             .split("\n")
             .filter(Boolean)
@@ -863,6 +1046,12 @@ export interface Interface {
     tokens: MessageV2.Assistant["tokens"]
     model: Provider.Model
   }) => Effect.Effect<boolean>
+  readonly isPromptOverflow: (input: {
+    tokens: number
+    model: Provider.Model
+    respectAuto?: boolean
+    mode?: "threshold" | "hard"
+  }) => Effect.Effect<boolean>
   readonly prune: (input: { sessionID: SessionID }) => Effect.Effect<void>
   readonly process: (input: {
     parentID: MessageID
@@ -915,12 +1104,27 @@ export const layer: Layer.Layer<
       return overflow({ cfg: yield* config.get(), tokens: input.tokens, model: input.model })
     })
 
+    const isPromptOverflow = Effect.fn("SessionCompaction.isPromptOverflow")(function* (input: {
+      tokens: number
+      model: Provider.Model
+      respectAuto?: boolean
+      mode?: "threshold" | "hard"
+    }) {
+      return isTokenOverflow({
+        cfg: yield* config.get(),
+        tokens: input.tokens,
+        model: input.model,
+        respectAuto: input.respectAuto,
+        mode: input.mode,
+      })
+    })
+
     const estimate = Effect.fn("SessionCompaction.estimate")(function* (input: {
       messages: MessageV2.WithParts[]
       model: Provider.Model
     }) {
       const msgs = yield* MessageV2.toModelMessagesEffect(input.messages, input.model)
-      return Token.estimate(JSON.stringify(msgs))
+      return Token.estimatePayload(msgs)
     })
 
     const select = Effect.fn("SessionCompaction.select")(function* (input: {
@@ -1079,6 +1283,7 @@ export const layer: Layer.Layer<
       )
       const context = [
         ...latestUserRequestContext(visibleHistory),
+        ...imageAttachmentContext(visibleHistory),
         ...latestAssistantPhaseContext({ history, visibleHistory }),
         ...preservedTailSnapshotContext({ messages: visibleHistory, tailStartID: selected.tail_start_id }),
         ...transcriptReferenceContext(transcriptPath),
@@ -1128,29 +1333,53 @@ export const layer: Layer.Layer<
         sessionID: input.sessionID,
         model,
       })
-      const result = yield* processor.process({
-        user: userMessage,
-        agent,
-        sessionID: input.sessionID,
-        tools: {},
-        system: [],
-        messages: [
-          ...modelMessages,
-          {
-            role: "user",
-            content: [{ type: "text", text: nextPrompt }],
-          },
-        ],
+      const compactionMessages = [
+        ...modelMessages,
+        {
+          role: "user" as const,
+          content: [{ type: "text" as const, text: nextPrompt }],
+        },
+      ]
+      const compactionPromptTokens = Token.estimatePayload(compactionMessages)
+      const compactionPromptOverflow = yield* isPromptOverflow({
+        tokens: compactionPromptTokens,
         model,
+        respectAuto: false,
+        mode: "hard",
       })
+      const result = compactionPromptOverflow
+        ? "compact"
+        : yield* processor.process({
+            user: userMessage,
+            agent,
+            sessionID: input.sessionID,
+            tools: {},
+            system: [],
+            messages: compactionMessages,
+            model,
+          })
 
       if (result === "compact") {
-        processor.message.error = new MessageV2.ContextOverflowError({
-          message: "Session too large to compact - context exceeds model limit even after stripping media",
-        }).toObject()
-        processor.message.finish = "error"
+        const rescue = localRescueSummary({
+          previousSummary,
+          context,
+          reason: compactionPromptOverflow
+            ? `compaction prompt estimate ${compactionPromptTokens} tokens exceeded the effective provider/model threshold before request dispatch`
+            : "provider/model reported compaction prompt overflow",
+        })
+        yield* session.updatePart({
+          id: PartID.ascending(),
+          messageID: processor.message.id,
+          sessionID: input.sessionID,
+          type: "text",
+          text: rescue,
+          time: { start: Date.now(), end: Date.now() },
+        })
+        processor.message.error = undefined
+        processor.message.finish = "stop"
+        processor.message.time.completed = Date.now()
+        processor.message.tokens.input = compactionPromptTokens
         yield* session.updateMessage(processor.message)
-        return "stop"
       }
 
       if (compactionPart && selected.tail_start_id && compactionPart.tail_start_id !== selected.tail_start_id) {
@@ -1161,7 +1390,7 @@ export const layer: Layer.Layer<
       }
 
       const resumeRequested = compactionPart?.resume ?? input.resume ?? (input.auto && input.overflow)
-      let shouldResume = result === "continue" && resumeRequested === true
+      let shouldResume = (result === "continue" || result === "compact") && resumeRequested === true
 
       if (shouldResume) {
         const info = yield* provider.getProvider(userMessage.model.providerID)
@@ -1216,7 +1445,7 @@ export const layer: Layer.Layer<
       }
 
       if (processor.message.error) return "stop"
-      if (result === "continue") {
+      if (result === "continue" || result === "compact") {
         const summary = summaryText(
           (yield* session.messages({ sessionID: input.sessionID })).find((item) => item.info.id === msg.id) ?? {
             info: msg,
@@ -1270,6 +1499,7 @@ export const layer: Layer.Layer<
 
     return Service.of({
       isOverflow,
+      isPromptOverflow,
       prune,
       process: processCompaction,
       create,

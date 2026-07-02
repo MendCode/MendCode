@@ -7,10 +7,26 @@ const simpleReadTools = new Set(["read", "glob", "grep", "codesearch"])
 const planningTools = new Set(["task", "todowrite", "skill"])
 const interactionTools = new Set(["question", "permission"])
 const webTools = new Set(["webfetch", "websearch"])
+const memoryTools = new Set(["memory", "memory_graph"])
+const reviewTools = new Set(["review", "plan_review", "changes", "diff"])
+const loopTools = new Set(["loop"])
+const browserTools = new Set([
+  "playwright_browser_navigate",
+  "playwright_browser_click",
+  "playwright_browser_type",
+  "playwright_browser_snapshot",
+  "playwright_browser_take_screenshot",
+  "playwright_browser_console_messages",
+  "playwright_browser_network_requests",
+])
 
 export function toolClass(tool: string, state?: TimelineToolState): TimelineToolClass {
   if (state === "error") return "failure"
   if (webTools.has(tool)) return "web"
+  if (browserTools.has(tool) || tool.startsWith("playwright_browser_")) return "web"
+  if (reviewTools.has(tool)) return "planning"
+  if (loopTools.has(tool)) return "planning"
+  if (memoryTools.has(tool)) return "planning"
   if (artifactTools.has(tool)) return "artifact"
   if (commandTools.has(tool)) return "command"
   if (simpleReadTools.has(tool)) return "simple-read"
@@ -27,6 +43,52 @@ export function shouldRenderCompactTool(profile: MendPresentationProfile, tool: 
   if (toolClass(tool) === "artifact") return false
   if (profile === "minimal") return true
   return toolClass(tool) !== "artifact" && toolClass(tool) !== "command"
+}
+
+export function toolPresentationIcon(tool?: string, klass?: string, options: { asciiOnly?: boolean } = {}) {
+  const ascii = options.asciiOnly === true
+  if (tool === "read") return ascii ? "R" : "□"
+  if (tool === "glob") return ascii ? "G" : "▦"
+  if (tool === "grep" || tool === "codesearch") return ascii ? "S" : "⌕"
+  if (tool === "write") return ascii ? "+" : "+"
+  if (tool === "edit") return ascii ? "E" : "✎"
+  if (tool === "apply_patch") return ascii ? "P" : "±"
+  if (tool === "bash" || tool === "shell") return ascii ? "$" : "$"
+  if (tool === "todowrite") return ascii ? "T" : "✓"
+  if (tool === "task") return ascii ? "A" : "◔"
+  if (tool === "webfetch" || tool === "websearch") return ascii ? "W" : "⌁"
+  if (tool === "memory") return ascii ? "M" : "◉"
+  if (tool === "memory_graph") return ascii ? "G" : "◎"
+  if (tool === "loop") return ascii ? "L" : "⟳"
+  if (tool === "review" || tool === "plan_review") return ascii ? "V" : "◫"
+  if (tool === "diff" || tool === "changes") return ascii ? "D" : "⇄"
+  if (tool?.startsWith("playwright_browser_")) return ascii ? "B" : "▣"
+  if (klass === "failure") return ascii ? "x" : "×"
+  if (klass === "planning") return ascii ? "T" : "◇"
+  if (klass === "command") return "$"
+  if (klass === "artifact") return ascii ? "F" : "◧"
+  return ascii ? "*" : "◆"
+}
+
+export function toolPresentationIconForProfile(_profile: MendPresentationProfile, tool?: string, klass?: string) {
+  return toolPresentationIcon(tool, klass, { asciiOnly: false })
+}
+
+export function compactToolTitle(
+  tool: string,
+  input: Record<string, unknown>,
+  metadata?: Record<string, unknown>,
+  output?: unknown,
+) {
+  const file = stringValue(input.filePath) || stringValue(input.path) || stringValue(input.file)
+  if (tool === "read") return `${file || compactInput(input)}${readRange(input, output)}`.trim()
+  if (tool === "grep" || tool === "codesearch")
+    return `${quote(stringValue(input.pattern) || compactInput(input))}${matchCount(metadata?.matches)}`.trim()
+  if (tool === "websearch") {
+    const query = stringValue(input.query) || stringValue(input.q) || compactInput(input)
+    return `${query ? quote(query) : "Web search"}${resultCount(metadata?.numResults)}`.trim()
+  }
+  if (tool === "todowrite") return "Todos"
 }
 
 export function normalizeToolEvent(input: {
@@ -61,7 +123,7 @@ export function toolSummary(
 ): Pick<TimelineToolEvent, "title" | "lines" | "result"> {
   const file = stringValue(input.filePath) || stringValue(input.path) || stringValue(input.file)
   if (tool === "webfetch") return webFetchSummary(input)
-  if (tool === "websearch") return webSearchSummary(input, metadata)
+  if (tool === "websearch") return webSearchSummary(input, metadata, output)
   if (tool === "read") return { title: `Read ${file || compactInput(input)}${readRange(input, output)}`.trim(), lines: [] }
   if (tool === "glob") return { title: `List ${stringValue(input.pattern) || compactInput(input)}${matchCount(metadata?.count)}`.trim(), lines: [] }
   if (tool === "grep" || tool === "codesearch")
@@ -74,7 +136,55 @@ export function toolSummary(
   if (tool === "todowrite") return todoWriteSummary(input, metadata, output)
   if (tool === "question") return questionSummary(input, metadata)
   if (tool === "skill") return { title: `Skill ${stringValue(input.name) || compactInput(input)}`.trim(), lines: [] }
+  if (tool === "memory") return memorySummary(input, output)
+  if (tool === "memory_graph") return memoryGraphSummary(input, output)
   return { title: `${tool} ${compactInput(input)}`.trim(), lines: [] }
+}
+
+function memorySummary(input: Record<string, unknown>, output?: unknown) {
+  const action = stringValue(input.action) || "status"
+  const scope = stringValue(input.scope)
+  const id = stringValue(input.id)
+  const query = stringValue(input.query)
+  const title = [
+    "Memory",
+    action.replace(/_/g, " "),
+    scope ? `[${scope}]` : "",
+    id ? id : "",
+    query ? quote(query) : "",
+  ].filter(Boolean).join(" ")
+  return {
+    title,
+    lines: memoryOutputLines(output),
+  }
+}
+
+function memoryGraphSummary(input: Record<string, unknown>, output?: unknown) {
+  const action = stringValue(input.action) || "overview"
+  const id = stringValue(input.id)
+  const from = stringValue(input.from)
+  const to = stringValue(input.to)
+  const query = stringValue(input.query)
+  const title = [
+    "Memory graph",
+    action.replace(/_/g, " "),
+    id ? id : "",
+    from && to ? `${from} → ${to}` : "",
+    query ? quote(query) : "",
+  ].filter(Boolean).join(" ")
+  return {
+    title,
+    lines: memoryOutputLines(output),
+  }
+}
+
+function memoryOutputLines(output: unknown) {
+  if (typeof output !== "string" || !output.trim()) return []
+  return output
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .slice(0, 4)
 }
 
 function webFetchSummary(input: Record<string, unknown>) {
@@ -88,13 +198,73 @@ function webFetchSummary(input: Record<string, unknown>) {
   }
 }
 
-function webSearchSummary(input: Record<string, unknown>, metadata?: Record<string, unknown>) {
+function webSearchSummary(input: Record<string, unknown>, metadata?: Record<string, unknown>, output?: unknown) {
   const query = stringValue(input.query) || stringValue(input.q) || compactInput(input)
   return {
     title: `Search web ${query ? quote(query) : ""}${resultCount(metadata?.numResults)}`.trim(),
-    lines: [],
+    lines: webSearchUrlLines(metadata, output),
     result: undefined,
   }
+}
+
+export function webSearchUrlLines(metadata?: Record<string, unknown>, output?: unknown) {
+  return [...new Set([...(extractWebSearchUrls(metadata) || []), ...(extractWebSearchUrls(output) || [])])].slice(0, 3)
+}
+
+function extractWebSearchUrls(value: unknown, depth = 0): string[] {
+  if (depth > 5 || value == null) return []
+  if (typeof value === "string") {
+    const parsed = parsedJsonValue(value)
+    if (parsed !== undefined) return extractWebSearchUrls(parsed, depth + 1)
+    return extractUrlsFromText(value)
+  }
+  if (Array.isArray(value)) return value.flatMap((item) => extractWebSearchUrls(item, depth + 1))
+  if (typeof value !== "object") return []
+
+  const record = value as Record<string, unknown>
+  return [
+    ...[record.url, record.href, record.link, record.sourceUrl, record.source_url, record.uri].flatMap(urlCandidate),
+    ...[
+      "results",
+      "items",
+      "data",
+      "organic",
+      "organicResults",
+      "searchResults",
+      "web",
+      "webPages",
+      "sources",
+      "links",
+      "entries",
+      "documents",
+      "hits",
+      "value",
+    ].flatMap((key) => extractWebSearchUrls(record[key], depth + 1)),
+  ]
+}
+
+function parsedJsonValue(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return undefined
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return undefined
+  }
+}
+
+function extractUrlsFromText(value: string) {
+  return Array.from(value.matchAll(/(?:https?:\/\/|www\.)[^\s<>")\]]+/g)).flatMap((match) => urlCandidate(match[0]))
+}
+
+function urlCandidate(value: unknown) {
+  if (typeof value !== "string") return []
+  const trimmed = value.trim().replace(/[),.;]+$/, "")
+  if (!trimmed) return []
+  if (/^https?:\/\//i.test(trimmed)) return [trimmed]
+  if (/^www\./i.test(trimmed)) return [`https://${trimmed}`]
+  if (/^[\w.-]+\.[A-Za-z]{2,}(?:[/?#].*)?$/i.test(trimmed)) return [`https://${trimmed}`]
+  return []
 }
 
 function todoWriteSummary(input: Record<string, unknown>, metadata?: Record<string, unknown>, output?: unknown) {
@@ -275,7 +445,8 @@ function usefulLines(values: Record<string, unknown>) {
 
 function compactInput(input: Record<string, unknown>) {
   const primitives = Object.entries(input).filter(([, value]) => {
-    return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
+    if (typeof value === "string") return value.trim().length > 0
+    return typeof value === "number" || typeof value === "boolean"
   })
   if (primitives.length === 0) return ""
   return `[${primitives.map(([key, value]) => `${key}=${value}`).join(", ")}]`

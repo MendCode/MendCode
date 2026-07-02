@@ -75,6 +75,12 @@ type LoopView = "active" | "history"
 const ACTIVE_STATES = new Set(["active", "sleeping", "working", "needs_input", "blocked", "paused"])
 const TERMINAL_STATES = new Set(["completed", "failed", "stopped"])
 const LOOP_EVENT_LIMIT = 200
+const loopWorkflowListCache = new Map<string, LoopWorkflow[]>()
+
+export function loopWorkflowListCacheKey(input: { directory?: string; worktree?: string }) {
+  if (!input.directory && !input.worktree) return
+  return JSON.stringify([input.directory ?? "", input.worktree ?? ""])
+}
 
 export function loopRouteFrameLayout(terminalWidth: number) {
   const stacked = terminalWidth < 96
@@ -261,16 +267,29 @@ export function Loops() {
   const [now, setNow] = createSignal(Date.now())
   const [listError, setListError] = createSignal<string>()
   const [snapshotError, setSnapshotError] = createSignal<string>()
+  const loopCacheKey = createMemo(() =>
+    loopWorkflowListCacheKey({
+      directory: project.instance.path().directory,
+      worktree: project.instance.path().worktree,
+    }),
+  )
+  const cachedLoops = () => {
+    const key = loopCacheKey()
+    if (!key) return []
+    return loopWorkflowListCache.get(key) ?? []
+  }
 
-  async function fetchList() {
+  async function fetchList(source: { refresh: number; cacheKey?: string }) {
     const response = await sdk.fetch(`${sdk.url}/loop`, { headers: { accept: "application/json" } })
     if (!response.ok) {
       setListError(`Loop list failed: ${response.status}`)
-      return []
+      return { cacheKey: source.cacheKey, items: [] as LoopWorkflow[] }
     }
     const data = await response.json().catch(() => [])
     setListError(undefined)
-    return Array.isArray(data) ? data as LoopWorkflow[] : []
+    const items = Array.isArray(data) ? data as LoopWorkflow[] : []
+    if (source.cacheKey) loopWorkflowListCache.set(source.cacheKey, items)
+    return { cacheKey: source.cacheKey, items }
   }
 
   async function fetchSnapshot(id: string) {
@@ -283,8 +302,16 @@ export function Loops() {
     return response.json() as Promise<LoopSnapshot>
   }
 
-  const [loops] = createResource(refresh, fetchList)
-  const allLoops = createMemo(() => loops.latest ?? [])
+  const [loops] = createResource(
+    () => ({ refresh: refresh(), cacheKey: loopCacheKey() }),
+    fetchList,
+    { initialValue: { cacheKey: loopCacheKey(), items: cachedLoops() } },
+  )
+  const allLoops = createMemo(() => {
+    const latest = loops.latest
+    if (latest?.cacheKey === loopCacheKey()) return latest.items
+    return cachedLoops()
+  })
   const primaryLoops = createMemo(() => allLoops().filter(isPrimaryLoop).sort(sortActiveLoops))
   const historyLoops = createMemo(() => allLoops().filter((item) => !isPrimaryLoop(item)).sort(sortHistoryLoops))
   const visibleLoops = createMemo(() => view() === "active" ? primaryLoops() : historyLoops())
@@ -397,10 +424,15 @@ export function Loops() {
     toast.show({ variant: "success", message: `Loop agent: ${agent ?? "default"}.`, duration: 2500 })
   }
 
-  function openChat() {
+  async function openChat() {
     const root = detail()?.rootSessionID
     if (!root) {
       toast.show({ variant: "info", message: "This loop has not created a chat session yet.", duration: 2500 })
+      return
+    }
+    const result = await sdk.client.session.get({ sessionID: root }).catch(() => undefined)
+    if (!result?.data) {
+      toast.show({ variant: "warning", message: `Loop chat session not found: ${root}.`, duration: 3500 })
       return
     }
     route.navigate({ type: "session", sessionID: root })
@@ -444,7 +476,7 @@ export function Loops() {
     }
     if (evt.name === "enter" || evt.name === "o") {
       consume()
-      openChat()
+      void openChat().catch((error) => toast.error(error))
       return
     }
     if (evt.name === "e") {

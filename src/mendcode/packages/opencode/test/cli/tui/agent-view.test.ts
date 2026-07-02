@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
+  formatAgentViewDetailLabel,
+  formatAgentViewPathLabel,
   formatAgentViewSessionTime,
   isAgentViewSessionFallbackVisible,
   isAgentViewSessionVisible,
@@ -35,6 +37,15 @@ describe("Agent View visibility", () => {
     expect(isTemporaryAgentViewDirectory("/private/var/folders/wk/opencode-test-123")).toBe(true)
     expect(isTemporaryAgentViewDirectory("/tmp/mendcode-test-123")).toBe(true)
     expect(isTemporaryAgentViewDirectory("/Users/obed/Code/MendCode")).toBe(false)
+  })
+
+  test("compacts path-like details to parent folder and base name", () => {
+    expect(formatAgentViewPathLabel("/Users/obed/Code/MendCode")).toBe("Code/MendCode")
+    expect(formatAgentViewPathLabel("/Users/obed/Code/MendCode/")).toBe("Code/MendCode")
+    expect(formatAgentViewPathLabel("/tmp/mendcode-test-123/session.log")).toBe("mendcode-test-123/session.log")
+    expect(formatAgentViewPathLabel("C:\\Users\\obed\\Code\\MendCode")).toBe("Code/MendCode")
+    expect(formatAgentViewDetailLabel("/Users/obed/Code/MendCode")).toBe("Code/MendCode")
+    expect(formatAgentViewDetailLabel("Loop active: ready")).toBe("Loop active: ready")
   })
 
   test("hides temp sessions before active state classification", () => {

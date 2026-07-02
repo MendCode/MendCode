@@ -59,6 +59,10 @@ export type DialogSelectRef<T> = {
   filtered: DialogSelectOption<T>[]
 }
 
+export function shouldHandleDialogSelectCustomKeybinds(input: Pick<InputRenderable, "focused"> | undefined, filter: string) {
+  return input?.focused !== true || filter.length === 0
+}
+
 export function DialogSelect<T>(props: DialogSelectProps<T>) {
   const dialog = useDialog()
   const route = useRoute()
@@ -87,14 +91,19 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     ),
   )
 
-  let input: InputRenderable
+  let input: InputRenderable | undefined
   const commandVariant = createMemo(() => props.variant === "command")
+  const optionList = createMemo(() =>
+    Array.isArray(props.options)
+      ? props.options.filter((item): item is DialogSelectOption<T> => Boolean(item) && typeof item === "object" && "value" in item)
+      : [],
+  )
 
   const filtered = createMemo(() => {
-    if (props.skipFilter || props.renderFilter === false) return props.options.filter((x) => x.disabled !== true)
+    if (props.skipFilter || props.renderFilter === false) return optionList().filter((x) => x.disabled !== true)
     const needle = store.filter.toLowerCase()
     const options = pipe(
-      props.options,
+      optionList(),
       filter((x) => x.disabled !== true),
     )
     if (!needle) return options
@@ -131,21 +140,24 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     )
     return result
   })
+  const allGroupedRows = createMemo(() => allGrouped() ?? [])
   const categories = createMemo(() =>
-    allGrouped()
+    allGroupedRows()
       .map(([category]) => category)
       .filter(Boolean),
   )
   const grouped = createMemo<[string, DialogSelectOption<T>[]][]>(() => {
-    if (!commandVariant() || flatten()) return allGrouped()
+    const all = allGroupedRows()
+    if (!commandVariant() || flatten()) return all
     const active = store.activeCategory ?? categories()[0]
-    const group = allGrouped().find(([category]) => category === active)
-    return group ? [group] : allGrouped().slice(0, 1)
+    const group = all.find(([category]) => category === active)
+    return group ? [group] : all.slice(0, 1)
   })
+  const groupedRows = createMemo(() => grouped() ?? [])
 
   const flat = createMemo(() => {
     return pipe(
-      grouped(),
+      groupedRows(),
       flatMap(([_, options]) => options),
     )
   })
@@ -276,6 +288,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
       }
     }
 
+    if (!shouldHandleDialogSelectCustomKeybinds(input, store.filter)) return
+
     for (const item of props.keybind ?? []) {
       if (item.disabled || !item.keybind) continue
       if (Keybind.match(item.keybind, keybind.parse(evt))) {
@@ -366,7 +380,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         </box>
       </Show>
       <Show
-        when={grouped().length > 0}
+        when={groupedRows().length > 0}
         fallback={
           <box paddingLeft={4} paddingRight={4} paddingTop={1}>
             <text fg={theme.textMuted}>No results found</text>
@@ -381,7 +395,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           ref={(r: ScrollBoxRenderable) => (scroll = r)}
           maxHeight={height()}
         >
-          <For each={grouped()}>
+          <For each={groupedRows()}>
             {([category, options], index) => (
               <>
                 <Show when={category && (!commandVariant() || flatten())}>
@@ -519,6 +533,15 @@ function Option(props: {
 }) {
   const { theme } = useTheme()
   const fg = selectedForeground(theme)
+  const title = createMemo(() => Locale.truncate(props.title.replace(/\s+/g, " "), props.commandVariant ? 48 : 61))
+  const description = createMemo(() => {
+    if (!props.description) return undefined
+    return Locale.truncate(props.description.replace(/\s+/g, " "), 96)
+  })
+  const footer = createMemo(() => {
+    if (typeof props.footer !== "string") return props.footer
+    return Locale.truncate(props.footer.replace(/\s+/g, " "), 24)
+  })
 
   return (
     <>
@@ -540,14 +563,14 @@ function Option(props: {
         wrapMode="none"
         paddingLeft={props.commandVariant ? 1 : 3}
       >
-        {Locale.truncate(props.title, props.commandVariant ? 48 : 61)}
-        <Show when={props.description}>
-          <span style={{ fg: props.active ? fg : theme.textMuted }}> {props.description}</span>
+        {title()}
+        <Show when={description()}>
+          {(value) => <span style={{ fg: props.active ? fg : theme.textMuted }}> {value()}</span>}
         </Show>
       </text>
-      <Show when={props.footer}>
+      <Show when={footer()}>
         <box flexShrink={0}>
-          <text fg={props.active ? fg : theme.textMuted}>{props.footer}</text>
+          <text fg={props.active ? fg : theme.textMuted}>{footer()}</text>
         </box>
       </Show>
     </>

@@ -107,6 +107,49 @@ describe("session bottom dock layout", () => {
     expect(layout.subagentsWidth).toBeGreaterThanOrEqual(28)
   })
 
+  test("reserves room for custom dock widgets before optional info panels", () => {
+    const layout = sessionBottomDockLayout({
+      width: 150,
+      customDockMinWidth: 42,
+      todos: [
+        {
+          content: "Short task",
+          status: "in_progress",
+        },
+      ],
+    })
+
+    expect(layout.customDockWidth).toBe(42)
+    expect(layout.showNotes).toBe(true)
+    expect(layout.showSubagents).toBe(true)
+    expect(layout.showInfo).toBe(false)
+    expect(layout.todoWidth + layout.remainingWidth + layout.customDockWidth).toBeLessThanOrEqual(layout.dockWidth)
+  })
+
+  test("respects profile-disabled built-in side widgets when a package owns the dock", () => {
+    const layout = sessionBottomDockLayout({
+      width: 150,
+      customDockMinWidth: 42,
+      enabled: {
+        notes: true,
+        subagents: false,
+        info: false,
+      },
+      todos: [
+        {
+          content: "Short task",
+          status: "in_progress",
+        },
+      ],
+    })
+
+    expect(layout.customDockWidth).toBe(42)
+    expect(layout.showNotes).toBe(true)
+    expect(layout.showSubagents).toBe(false)
+    expect(layout.showInfo).toBe(false)
+    expect(layout.notesWidth).toBeGreaterThanOrEqual(28)
+  })
+
   test("todo panel width uses the collapsed list instead of hidden items", () => {
     const todos = Array.from({ length: 12 }, (_, index) => ({
       content: index === 11 ? "hidden item with very very very long text that should not set collapsed width" : "short",

@@ -217,8 +217,9 @@ describe("mend public CLI help", () => {
 
     expect(result.exitCode).toBe(0)
     expect(output).toContain("mendcode                         open MendCode")
-    expect(output).toContain("mendcode packages status|list")
-    expect(output).toContain("mendcode packages install <pack-id>")
+    expect(output).toContain("mendcode marketplace status|list")
+    expect(output).toContain("mendcode marketplace install <pack-id>")
+    expect(output).toContain("mendcode install <pack-id>")
     expect(output).toContain("mendcode mflow status")
     expect(output).toContain("mendcode worktree status|plan")
     expect(output).not.toContain("mendcode tui")
@@ -247,5 +248,28 @@ describe("mend public CLI help", () => {
     expect(result.exitCode).toBe(1)
     expect(output).toContain("Unknown mendcode command: statsu")
     expect(output).toContain("Did you mean `mendcode status`?")
+  })
+
+  test("install is a shortcut for marketplace install", async () => {
+    await using dir = await tmpdir()
+    const fakeBun = path.join(dir.path, "fake-bun")
+    const log = path.join(dir.path, "fake-bun.log")
+    await writeFile(fakeBun, [
+      "#!/bin/sh",
+      `printf '%s\\n' "$*" > ${JSON.stringify(log)}`,
+      "exit 0",
+    ].join("\n"))
+    await import("fs/promises").then((fs) => fs.chmod(fakeBun, 0o755))
+
+    const result = runPublicBin(["install", "sidequest", "official"], {
+      cwd: dir.path,
+      env: {
+        MENDCODE_BUN_BIN: fakeBun,
+      },
+    })
+
+    expect(result.exitCode).toBe(0)
+    const args = await readFile(log, "utf8")
+    expect(args).toContain("control-plane.ts marketplace install sidequest official")
   })
 })

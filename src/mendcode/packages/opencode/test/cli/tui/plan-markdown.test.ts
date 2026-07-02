@@ -5,6 +5,7 @@ import path from "path"
 import {
   hasStyledHexColors,
   shouldColorizeHexMarkdownLine,
+  shouldRenderStableTextPlain,
   wrapMarkdownDisplayCodeBlocks,
   wrapPlainDisplayText,
 } from "../../../src/cli/cmd/tui/component/styled-plan-markdown"
@@ -16,6 +17,7 @@ import {
   renderPlanMarkdownStreaming,
   renderStreamingMarkdownTail,
   streamingMarkdownCommitIndex,
+  visibleStreamingMarkdownPreview,
 } from "../../../src/cli/cmd/tui/util/plan-markdown"
 import { styledPlanMarkdownSegments, visibleStyledPlanMarkdownLines } from "../../../src/cli/cmd/tui/util/styled-plan-lines"
 
@@ -41,6 +43,13 @@ test("planReviewInlineTitle removes redundant Plan prefix", () => {
   expect(planReviewInlineTitle("Plan: Theme System y Surface Cleanup")).toBe("Theme System y Surface Cleanup")
   expect(planReviewInlineTitle("Theme System y Surface Cleanup")).toBe("Theme System y Surface Cleanup")
   expect(planReviewInlineTitle("  ")).toBeUndefined()
+})
+
+test("stable text mode keeps markdown renderer for inline formatting", () => {
+  expect(shouldRenderStableTextPlain("plain streaming text", true)).toBe(true)
+  expect(shouldRenderStableTextPlain("**bold** and `inline-code`", true)).toBe(false)
+  expect(shouldRenderStableTextPlain("[docs](https://example.com)", true)).toBe(false)
+  expect(shouldRenderStableTextPlain("plain streaming text", false)).toBe(false)
 })
 
 test("renderPlanMarkdown aligns mermaid titles with diagram rows", async () => {
@@ -556,6 +565,33 @@ test("streaming markdown tail renders stable headings after completion without r
   expect(rendered).not.toContain("## Historia breve")
 })
 
+test("streaming markdown tail preserves headings for markdown rendering", () => {
+  const rendered = renderStreamingMarkdownTail(
+    "## Historia breve\n\nTexto final",
+    96,
+    { tableMode: "grid", markdownMode: "tables-only" },
+    { output: "markdown" },
+  )
+
+  expect(rendered).toContain("## Historia breve")
+  expect(rendered).not.toContain("──────────────")
+})
+
+test("streaming markdown tail preserves live table grids for markdown rendering", () => {
+  const rendered = renderStreamingMarkdownTail(
+    ["## Cambios", "", "| Archivo | Acción | Cambio |", "| --- | --- | --- |", "| `src/main.cpp` | Modificado | Cambiando token"].join("\n"),
+    96,
+    { tableMode: "grid", markdownMode: "tables-only" },
+    { output: "markdown" },
+  )
+
+  expect(rendered).toContain("## Cambios")
+  expect(rendered).toContain("```text")
+  expect(rendered).toContain("┌")
+  expect(rendered).toContain("src/main.cpp")
+  expect(rendered).not.toContain("| Archivo | Acción | Cambio |")
+})
+
 test("streaming markdown tail renders finalized inline markdown and fences without remounting", () => {
   const rendered = renderStreamingMarkdownTail(
     [
@@ -650,6 +686,18 @@ test("streaming markdown reuses frozen rendered content while only the tail chan
   expect(second.content).toBe(first.content)
   expect(second.state).toBe(first.state)
   expect(second.tail).toBe("Tail dos")
+})
+
+test("streaming markdown commits only closed paragraphs or blocks", () => {
+  expect(streamingMarkdownCommitIndex("Linea uno\nLinea dos\n")).toBe("Linea uno\nLinea dos\n".length)
+  expect(streamingMarkdownCommitIndex("Linea uno\n\nLinea dos")).toBe("Linea uno\n\n".length)
+  expect(streamingMarkdownCommitIndex("```ts\nconst value = 1\n```\nTail")).toBe("```ts\nconst value = 1\n```\n".length)
+})
+
+test("streaming markdown preview hides the active partial line", () => {
+  expect(visibleStreamingMarkdownPreview("token token")).toBe("")
+  expect(visibleStreamingMarkdownPreview("Linea lista\npartial")).toBe("Linea lista\n")
+  expect(visibleStreamingMarkdownPreview("Linea lista\nOtra lista\n")).toBe("Linea lista\nOtra lista\n")
 })
 
 test("styled session markdown separates generated tables from adjacent headings", () => {

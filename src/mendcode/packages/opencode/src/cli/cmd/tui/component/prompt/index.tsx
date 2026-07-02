@@ -1,4 +1,4 @@
-import { BoxRenderable, RGBA, TextareaRenderable, MouseEvent, PasteEvent, decodePasteBytes } from "@opentui/core"
+import { BoxRenderable, RGBA, TextareaRenderable, MouseEvent, PasteEvent, decodePasteBytes, type ParsedKey } from "@opentui/core"
 import {
   createEffect,
   createMemo,
@@ -71,6 +71,7 @@ import { readModelsConfig } from "@/mend/config/models"
 import { budgetEnforcementStatus } from "@/mend/runtime/budget"
 import { useMendTuiProfile } from "@tui/context/mend"
 import { listMendStatusEntries } from "@/mend/tui/status"
+import { listMendWidgets } from "@/mend/tui/widgets"
 import { getMendFooter, listMendFooterEntries } from "@/mend/tui/footer"
 import { readMendWorkingIndicator } from "@/mend/tui/working-indicator"
 import { readMendEditorVisual } from "@/mend/tui/editor-host"
@@ -189,6 +190,52 @@ export function resolveWorkingStartedAt(input: {
     .toSorted((a, b) => a - b)[0]
 }
 
+export function shouldClearWorkingStartedAt(input: {
+  statusType: string
+  hasActiveWorkingAssistant?: boolean
+  permissionPending?: boolean
+}) {
+  return input.statusType === "idle" && !input.hasActiveWorkingAssistant && !input.permissionPending
+}
+
+export function shouldEnableSessionInterrupt(input: {
+  statusType: string
+  hasActiveWorkingAssistant?: boolean
+  autocompleteVisible?: boolean
+}) {
+  if (input.statusType !== "idle") return true
+  return Boolean(input.hasActiveWorkingAssistant) && !input.autocompleteVisible
+}
+
+export function shouldInterruptImmediately(input: { statusType: string }) {
+  return input.statusType !== "idle"
+}
+
+export function shouldHandlePromptCursorArrow(input: Pick<ParsedKey, "name" | "ctrl" | "meta" | "shift" | "super">) {
+  if (input.ctrl || input.meta || input.shift || input.super) return false
+  return input.name === "left" || input.name === "right"
+}
+
+export function promptCursorEndOffset(text: string) {
+  return Bun.stringWidth(text)
+}
+
+export function promptCursorOffsetAfterArrow(input: { cursorOffset: number; text: string; direction: "left" | "right" }) {
+  if (input.direction === "left") return Math.max(0, input.cursorOffset - 1)
+  return Math.min(promptCursorEndOffset(input.text), input.cursorOffset + 1)
+}
+
+function removeVisibleResolvingText(value: string) {
+  return value.replace(
+    /(?:^|\s)(?:[^\w\s]\s*)*Resolving\s+\[\d+\/\d+\]\s*/giu,
+    (match) => (match.startsWith(" ") ? " " : ""),
+  )
+}
+
+function cleanPromptInputText(value: string) {
+  return removeVisibleResolvingText(value)
+}
+
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
   let anchor: BoxRenderable
@@ -224,10 +271,12 @@ export function Prompt(props: PromptProps) {
   const [mascotHover, setMascotHover] = createSignal(false)
   let clearWorkingStartTimer: Timer | undefined
   function findActiveWorkingAssistant() {
-    if (!props.sessionID) return
-    const msg = sync.data.message[props.sessionID] ?? []
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    const msg = sync.data.message[sessionID] ?? []
     return msg.findLast((item): item is AssistantMessage => item.role === "assistant" && !item.time.completed)
   }
+  const hasActiveWorkingAssistant = createMemo(() => Boolean(findActiveWorkingAssistant()))
   onCleanup(() => {
     if (clearWorkingStartTimer) clearTimeout(clearWorkingStartTimer)
   })
@@ -259,10 +308,23 @@ export function Prompt(props: PromptProps) {
           if (started) setWorkingStartedAt(started)
           return
         }
+        if (!shouldClearWorkingStartedAt({
+          statusType: status().type,
+          hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+          permissionPending: Boolean(props.permissionPending),
+        })) {
+          return
+        }
         setWorkingStartedAt(undefined)
         if (!sessionID) return
         clearWorkingStartTimer = setTimeout(() => {
-          if (status().type === "idle" && !props.permissionPending) workingStartedAtBySession.delete(sessionID)
+          if (shouldClearWorkingStartedAt({
+            statusType: status().type,
+            hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+            permissionPending: Boolean(props.permissionPending),
+          })) {
+            workingStartedAtBySession.delete(sessionID)
+          }
           clearWorkingStartTimer = undefined
         }, 1000)
       },
@@ -304,7 +366,18 @@ export function Prompt(props: PromptProps) {
   const [workspaceCreatingDots, setWorkspaceCreatingDots] = createSignal(3)
   const [warpNotice, setWarpNotice] = createSignal<string>()
   const editorVisual = createMemo(() => readMendEditorVisual())
-  const currentProviderLabel = createMemo(() => local.model.parsed().provider)
+  function stablePromptStatusText(value: string | undefined) {
+    const text = value?.trim()
+    if (!text) return undefined
+    if (isTransientPromptStatusText(text)) return undefined
+    return text
+  }
+
+  function isTransientPromptStatusText(value: string | undefined) {
+    return Boolean(value && /\b(resolving|loading|fetching)\b/i.test(value))
+  }
+
+  const currentProviderLabel = createMemo(() => stablePromptStatusText(local.model.parsed().provider))
   const hasRightContent = createMemo(() => Boolean(props.right))
   const defaultWorkspaceID = createMemo(() => props.workspaceID ?? project.workspace.current())
 
@@ -460,7 +533,9 @@ export function Prompt(props: PromptProps) {
 
   event.on(TuiEvent.PromptAppend.type, (evt) => {
     if (!input || input.isDestroyed) return
-    input.insertText(evt.properties.text)
+    const text = cleanPromptInputText(evt.properties.text)
+    if (!text) return
+    input.insertText(text)
     setTimeout(() => {
       // setTimeout is a workaround and needs to be addressed properly
       if (!input || input.isDestroyed) return
@@ -540,8 +615,9 @@ export function Prompt(props: PromptProps) {
   })
 
   const usage = createMemo(() => {
-    if (!props.sessionID) return
-    const msg = sync.data.message[props.sessionID] ?? []
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    const msg = sync.data.message[sessionID] ?? []
 
     const formatPromptUsage = (
       tokens: number,
@@ -725,32 +801,45 @@ export function Prompt(props: PromptProps) {
         value: "session.interrupt",
         keybind: "session_interrupt",
         category: "Session",
-        hidden: true,
-        enabled: status().type !== "idle",
-        onSelect: (dialog) => {
-          if (autocomplete.visible) return
-          if (!input.focused) return
-          // TODO: this should be its own command
-          if (store.mode === "shell") {
-            setStore("mode", "normal")
-            return
-          }
-          if (!props.sessionID) return
+          hidden: true,
+          enabled: shouldEnableSessionInterrupt({
+            statusType: status().type,
+            hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+            autocompleteVisible: Boolean(autocomplete?.visible),
+          }),
+          onSelect: (dialog) => {
+            const immediateInterrupt = shouldInterruptImmediately({ statusType: status().type })
+            if (autocomplete?.visible && !immediateInterrupt) return
+            if (!input.focused) return
+            // TODO: this should be its own command
+            if (store.mode === "shell") {
+              setStore("mode", "normal")
+              return
+            }
+            if (!props.sessionID) return
+            if (immediateInterrupt) {
+              void sdk.client.session.abort({
+                sessionID: props.sessionID,
+              })
+              setStore("interrupt", 0)
+              dialog.clear()
+              return
+            }
 
-          setStore("interrupt", store.interrupt + 1)
+            setStore("interrupt", store.interrupt + 1)
 
-          setTimeout(() => {
-            setStore("interrupt", 0)
-          }, 5000)
+            setTimeout(() => {
+              setStore("interrupt", 0)
+            }, 5000)
 
-          if (store.interrupt >= 2) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
-            })
-            setStore("interrupt", 0)
-          }
-          dialog.clear()
-        },
+            if (store.interrupt >= 2) {
+              void sdk.client.session.abort({
+                sessionID: props.sessionID,
+              })
+              setStore("interrupt", 0)
+            }
+            dialog.clear()
+          },
       },
       {
         title: "Open editor",
@@ -777,7 +866,8 @@ export function Prompt(props: PromptProps) {
           const content = await Editor.open({ value, renderer })
           if (!content) return
 
-          input.setText(content)
+          const cleanContent = cleanPromptInputText(content)
+          input.setText(cleanContent)
 
           // Update positions for nonTextParts based on their location in new content
           // Filter out parts whose virtual text was deleted
@@ -794,7 +884,7 @@ export function Prompt(props: PromptProps) {
 
               if (!virtualText) return part
 
-              const newStart = content.indexOf(virtualText)
+              const newStart = cleanContent.indexOf(virtualText)
               // if the virtual text is deleted, remove the part
               if (newStart === -1) return null
 
@@ -830,13 +920,13 @@ export function Prompt(props: PromptProps) {
             .filter((part) => part !== null)
 
           setStore("prompt", {
-            input: content,
+            input: cleanContent,
             // keep only the non-text parts because the text parts were
             // already expanded inline
             parts: updatedNonTextParts,
           })
           restoreExtmarksFromParts(updatedNonTextParts)
-          input.cursorOffset = Bun.stringWidth(content)
+          input.cursorOffset = Bun.stringWidth(cleanContent)
         },
       },
       {
@@ -901,8 +991,9 @@ export function Prompt(props: PromptProps) {
       input.blur()
     },
     set(prompt) {
-      input.setText(prompt.input)
-      setStore("prompt", prompt)
+      const cleanInput = cleanPromptInputText(prompt.input)
+      input.setText(cleanInput)
+      setStore("prompt", { ...prompt, input: cleanInput })
       restoreExtmarksFromParts(prompt.parts)
       input.gotoBufferEnd()
     },
@@ -925,17 +1016,21 @@ export function Prompt(props: PromptProps) {
     stashed = undefined
     if (store.prompt.input) return
     if (saved && saved.prompt.input) {
-      input.setText(saved.prompt.input)
-      setStore("prompt", saved.prompt)
+      const cleanInput = cleanPromptInputText(saved.prompt.input)
+      if (!cleanInput) return
+      input.setText(cleanInput)
+      setStore("prompt", { ...saved.prompt, input: cleanInput })
       restoreExtmarksFromParts(saved.prompt.parts)
-      input.cursorOffset = saved.cursor
+      input.cursorOffset = Math.min(saved.cursor, Bun.stringWidth(cleanInput))
     }
   })
 
   onCleanup(() => {
     if (input.focused) input.blur()
     if (store.prompt.input) {
-      stashed = { prompt: unwrap(store.prompt), cursor: input.cursorOffset }
+      const prompt = unwrap(store.prompt)
+      const cleanInput = cleanPromptInputText(prompt.input)
+      if (cleanInput) stashed = { prompt: { ...prompt, input: cleanInput }, cursor: input.cursorOffset }
     }
     props.ref?.(undefined)
   })
@@ -1113,8 +1208,9 @@ export function Prompt(props: PromptProps) {
       onSelect: (dialog) => {
         const entry = stash.pop()
         if (entry) {
-          input.setText(entry.input)
-          setStore("prompt", { input: entry.input, parts: entry.parts })
+          const cleanInput = cleanPromptInputText(entry.input)
+          input.setText(cleanInput)
+          setStore("prompt", { input: cleanInput, parts: entry.parts })
           restoreExtmarksFromParts(entry.parts)
           input.gotoBufferEnd()
         }
@@ -1130,8 +1226,9 @@ export function Prompt(props: PromptProps) {
         dialog.replace(() => (
           <DialogStash
             onSelect={(entry) => {
-              input.setText(entry.input)
-              setStore("prompt", { input: entry.input, parts: entry.parts })
+              const cleanInput = cleanPromptInputText(entry.input)
+              input.setText(cleanInput)
+              setStore("prompt", { input: cleanInput, parts: entry.parts })
               restoreExtmarksFromParts(entry.parts)
               input.gotoBufferEnd()
             }}
@@ -1148,7 +1245,16 @@ export function Prompt(props: PromptProps) {
     // composed character (e.g. Korean hangul) to the store, so read
     // plainText directly and sync before any downstream reads.
     if (input && !input.isDestroyed && input.plainText !== store.prompt.input) {
-      setStore("prompt", "input", input.plainText)
+      const next = removeVisibleResolvingText(input.plainText)
+      if (next !== input.plainText) input.setText(next)
+      setStore("prompt", "input", next)
+    }
+    if (store.prompt.input) {
+      const clean = removeVisibleResolvingText(store.prompt.input)
+      if (clean !== store.prompt.input) {
+        if (input && !input.isDestroyed && input.plainText !== clean) input.setText(clean)
+        setStore("prompt", "input", clean)
+      }
     }
     syncExtmarksWithPromptParts()
     if (props.disabled) return false
@@ -1600,13 +1706,15 @@ export function Prompt(props: PromptProps) {
   })
   const currentModelLabel = createMemo(() => {
     const selectedModel = selectedPromptModel()
-    if (!selectedModel) return local.model.parsed().model
-    return Model.name(sync.data.provider, selectedModel.providerID, selectedModel.modelID)
+    if (!selectedModel) return stablePromptStatusText(local.model.parsed().model)
+    return stablePromptStatusText(Model.name(sync.data.provider, selectedModel.providerID, selectedModel.modelID))
   })
   const currentSelectedProviderLabel = createMemo(() => {
     const selectedModel = selectedPromptModel()
     if (!selectedModel) return currentProviderLabel()
-    return sync.data.provider.find((item) => item.id === selectedModel.providerID)?.name ?? selectedModel.providerID
+    return stablePromptStatusText(
+      sync.data.provider.find((item) => item.id === selectedModel.providerID)?.name ?? selectedModel.providerID,
+    )
   })
   const currentProviderText = createMemo(() => currentSelectedProviderLabel())
   const currentReasoningLabel = createMemo(() => selectedPromptVariant() || undefined)
@@ -1704,9 +1812,13 @@ export function Prompt(props: PromptProps) {
           ? { text: Locale.titlecase(activeAgent()!.name), fg: highlight() }
           : undefined
       case "model":
-        return store.mode === "normal" ? { text: currentModelLabel(), fg: keybind.leader ? theme.textMuted : theme.text } : undefined
+        return store.mode === "normal" && currentModelLabel()
+          ? { text: currentModelLabel()!, fg: keybind.leader ? theme.textMuted : theme.text }
+          : undefined
       case "provider":
-        return store.mode === "normal" ? { text: currentProviderText(), fg: theme.textMuted } : undefined
+        return store.mode === "normal" && currentProviderText()
+          ? { text: currentProviderText()!, fg: theme.textMuted }
+          : undefined
       case "reasoning":
       case "variant":
         return store.mode === "normal" && currentReasoningLabel()
@@ -1794,9 +1906,9 @@ export function Prompt(props: PromptProps) {
       promptMode: mend.promptMode,
       promptModeLabel: currentAgentLabel(),
       agentLabel: currentAgentLabel(),
-      model: currentModelLabel(),
+      model: currentModelLabel() ?? "",
       modelLabel: currentModelLabel(),
-      provider: currentProviderText(),
+      provider: currentProviderText() ?? "",
       providerLabel: currentProviderText(),
       reasoning: currentReasoningLabel(),
       reasoningLabel: currentReasoningLabel(),
@@ -1888,7 +2000,9 @@ export function Prompt(props: PromptProps) {
       : []
     const base = items
       .map((item) => (item.type === "builtin" ? promptStatusBuiltinSegment(item.value) : undefined))
-      .filter((item): item is PromptStatusSegment => Boolean(item && item.text.trim()))
+      .filter((item): item is PromptStatusSegment =>
+        Boolean(item && item.text.trim() && !isTransientPromptStatusText(item.text)),
+      )
       .map((item, index) => ({ ...item, separatorBefore: index > 0 }))
     const currentScript = (side === "left" ? promptStatusLeftScriptResult() : promptStatusRightScriptResult()) as
       | MendPromptStatusScriptResult
@@ -1905,7 +2019,9 @@ export function Prompt(props: PromptProps) {
     if (scriptOutput?.segments?.length) {
       const separatorBefore = base.length > 0
       const next = scriptOutput.segments
-        .filter((item): item is { text: string; fg?: string; bold?: boolean } => Boolean(item.text.trim()))
+        .filter((item): item is { text: string; fg?: string; bold?: boolean } =>
+          Boolean(item.text.trim() && !isTransientPromptStatusText(item.text)),
+        )
         .map((item, index: number) => ({
           text: item.text,
           fg: resolvePromptStatusScriptColor(item.fg),
@@ -1916,7 +2032,7 @@ export function Prompt(props: PromptProps) {
       else base.push(...next)
       return base
     }
-    if (scriptOutput?.text?.trim()) {
+    if (scriptOutput?.text?.trim() && !isTransientPromptStatusText(scriptOutput.text)) {
       const next = { text: scriptOutput.text.trim(), fg: theme.textMuted, separatorBefore: base.length > 0 }
       if (script?.prepend) base.unshift(next)
       else base.push(next)
@@ -1938,11 +2054,13 @@ export function Prompt(props: PromptProps) {
       const examples = editorVisual()?.shellExamples?.length ? editorVisual()!.shellExamples! : shell()
       if (!examples.length) return undefined
       const example = examples[store.placeholder % examples.length]
-      return `${editorVisual()?.shellPrefix || "Run a command..."} "${example}"`
+      const placeholder = `${editorVisual()?.shellPrefix || "Run a command..."} "${example}"`
+      return removeVisibleResolvingText(placeholder) === placeholder ? placeholder : undefined
     }
     const examples = editorVisual()?.normalExamples?.length ? editorVisual()!.normalExamples! : list()
     if (!examples.length) return undefined
-    return `${editorVisual()?.normalPrefix || "Ask anything..."} "${examples[store.placeholder % examples.length]}"`
+    const placeholder = `${editorVisual()?.normalPrefix || "Ask anything..."} "${examples[store.placeholder % examples.length]}"`
+    return removeVisibleResolvingText(placeholder) === placeholder ? placeholder : undefined
   })
 
   const workspaceLabel = createMemo<
@@ -1995,6 +2113,15 @@ export function Prompt(props: PromptProps) {
     }
   })
   const activeWorkingAssistant = createMemo(findActiveWorkingAssistant)
+  const workingStatusActive = createMemo(
+    () =>
+      !shouldClearWorkingStartedAt({
+        statusType: status().type,
+        hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+        permissionPending: Boolean(props.permissionPending),
+      }),
+  )
+  const activityStatusType = createMemo(() => (workingStatusActive() && status().type === "idle" ? "busy" : status().type))
   const workingLiveUsage = createMemo(() => {
     const active = activeWorkingAssistant()
     if (!active) return
@@ -2037,7 +2164,7 @@ export function Prompt(props: PromptProps) {
   const effectiveConnectionStatus = createMemo(() => {
     const connection = sdk.connection
     if (
-      status().type !== "idle" &&
+      workingStatusActive() &&
       connection.status === "connected" &&
       connection.recoveringSince &&
       (!connection.lastApplicationEventAt || connection.lastApplicationEventAt < connection.recoveringSince)
@@ -2048,13 +2175,14 @@ export function Prompt(props: PromptProps) {
   })
   const activityPhase = createMemo(() => {
     const currentStatus = status()
+    const type = activityStatusType()
     return resolveActivityPhase({
-      status: currentStatus.type,
+      status: type,
       statusKind:
-        currentStatus.type === "busy" && "kind" in currentStatus && typeof currentStatus.kind === "string"
+        type === "busy" && "kind" in currentStatus && typeof currentStatus.kind === "string"
           ? currentStatus.kind
           : undefined,
-      retry: currentStatus.type === "retry",
+      retry: type === "retry",
       connection: effectiveConnectionStatus(),
       toolNames: activityToolNames(),
       activeToolNames: activeActivityToolNames(),
@@ -2087,8 +2215,9 @@ export function Prompt(props: PromptProps) {
     if (status().type === "idle") return
     const started = resolvedWorkingStartedAt()
     if (!started) return
-    if (props.sessionID && workingStartedAtBySession.get(props.sessionID) !== started) {
-      workingStartedAtBySession.set(props.sessionID, started)
+    const sessionID = props.sessionID
+    if (sessionID && workingStartedAtBySession.get(sessionID) !== started) {
+      workingStartedAtBySession.set(sessionID, started)
     }
     if (workingStartedAt() !== started) setWorkingStartedAt(started)
   })
@@ -2120,7 +2249,7 @@ export function Prompt(props: PromptProps) {
     return -3
   })
   const workingIndicatorVisible = createMemo(() => {
-    return Boolean(props.sessionID && workingIndicatorConfig().visible !== false && status().type !== "idle")
+    return Boolean(props.sessionID && workingIndicatorConfig().visible !== false && workingStatusActive())
   })
   const promptInputPadTop = createMemo(() => {
     if (promptChrome().preset === "minimal") return 1
@@ -2212,10 +2341,19 @@ export function Prompt(props: PromptProps) {
     </box>
   )
   const statusEntries = createMemo(() => listMendStatusEntries())
+  const bottomDockWidgetTitles = createMemo(() =>
+    new Set(listMendWidgets("sessionBottomDock").map((item) => item.title).filter((item): item is string => Boolean(item))),
+  )
+  const visibleStatusEntries = createMemo(() =>
+    statusEntries().filter((item) => {
+      const value = item.value
+      return Boolean(value && !isTransientPromptStatusText(value) && !bottomDockWidgetTitles().has(value))
+    }),
+  )
   const footerEntries = createMemo(() => listMendFooterEntries())
   const customFooter = createMemo(() => getMendFooter())
   const promptShowsOuterFooter = createMemo(() => {
-    if (status().type !== "idle") return true
+    if (workingStatusActive()) return true
     if (warpNotice()) return true
     if (workspaceLabel()) return true
     if (store.mode === "shell") return true
@@ -2223,7 +2361,7 @@ export function Prompt(props: PromptProps) {
     if (promptStatusUsesOuterMeta() && (promptStatusLeftSegments().length || promptStatusRightSegments().length))
       return true
     if (loopStatusText()) return true
-    if (promptStatusUsesOuterMeta() && (statusEntries().length || footerEntries().length)) return true
+    if (promptStatusUsesOuterMeta() && (visibleStatusEntries().length || footerEntries().length)) return true
     if (promptStatusUsesOuterMeta() && editorContextLabelState() !== "none" && editorFileLabelDisplay()) return true
     return false
   })
@@ -2271,7 +2409,7 @@ export function Prompt(props: PromptProps) {
             paddingRight={promptFooterPadRight()}
           >
             <box flexDirection="row" gap={1} flexShrink={1}>
-              <Show when={status().type !== "idle"}>
+              <Show when={workingStatusActive()}>
                 {(() => {
                   const retry = createMemo(() => {
                     const s = status()
@@ -2331,7 +2469,7 @@ export function Prompt(props: PromptProps) {
               </Show>
             </box>
             <box flexDirection="row" gap={2} flexShrink={0}>
-              <Show when={status().type !== "retry" && status().type !== "idle" && workingRightMeta()}>
+              <Show when={status().type !== "retry" && workingStatusActive() && workingRightMeta()}>
                 {(meta) => (
                   <text fg={theme.textMuted} wrapMode="none">
                     {meta()}
@@ -2341,14 +2479,14 @@ export function Prompt(props: PromptProps) {
             </box>
           </box>
         </Show>
-        <Show when={props.sessionID && status().type !== "idle" && workingMascot()}>
+        <Show when={props.sessionID && workingStatusActive() && workingMascot()}>
           {(mascot) => (
             <box position="absolute" right={mascotRightOffset()} top={mascotTopOffset()} zIndex={2000} flexShrink={0}>
               <MascotLines text={mascot()} hoverText={hoverMascot()} paddingTop={0} />
             </box>
           )}
         </Show>
-        <Show when={props.sessionID && status().type === "idle" && idleMascot()}>
+        <Show when={props.sessionID && !workingStatusActive() && idleMascot()}>
           {(mascot) => (
             <box position="absolute" right={mascotRightOffset()} top={mascotTopOffset()} zIndex={2000} flexShrink={0}>
               <MascotLines text={mascot()} hoverText={hoverMascot()} paddingTop={0} />
@@ -2403,7 +2541,12 @@ export function Prompt(props: PromptProps) {
                 minHeight={1}
                 maxHeight={6}
                 onContentChange={() => {
-                  const value = input.plainText
+                  const raw = input.plainText
+                  const value = removeVisibleResolvingText(raw)
+                  if (value !== raw) {
+                    input.setText(value)
+                    input.gotoBufferEnd()
+                  }
                   setStore("prompt", "input", value)
                   autocomplete.onInput(value)
                   syncExtmarksWithPromptParts()
@@ -2465,21 +2608,32 @@ export function Prompt(props: PromptProps) {
                   }
                   if (store.mode === "normal") autocomplete.onKeyDown(e)
                   if (!autocomplete.visible) {
+                    if (shouldHandlePromptCursorArrow(e)) {
+                      input.cursorOffset = promptCursorOffsetAfterArrow({
+                        cursorOffset: input.cursorOffset,
+                        text: input.plainText,
+                        direction: e.name === "left" ? "left" : "right",
+                      })
+                      e.preventDefault()
+                      return
+                    }
+
                     if (
                       (keybind.match("history_previous", e) && input.cursorOffset === 0) ||
-                      (keybind.match("history_next", e) && input.cursorOffset === input.plainText.length)
+                      (keybind.match("history_next", e) && input.cursorOffset === promptCursorEndOffset(input.plainText))
                     ) {
                       const direction = keybind.match("history_previous", e) ? -1 : 1
                       const item = history.move(direction, input.plainText, props.historyScope)
 
                       if (item) {
-                        input.setText(item.input)
-                        setStore("prompt", item)
+                        const cleanInput = cleanPromptInputText(item.input)
+                        input.setText(cleanInput)
+                        setStore("prompt", { ...item, input: cleanInput })
                         setStore("mode", item.mode ?? "normal")
                         restoreExtmarksFromParts(item.parts)
                         e.preventDefault()
                         if (direction === -1) input.cursorOffset = 0
-                        if (direction === 1) input.cursorOffset = input.plainText.length
+                        if (direction === 1) input.cursorOffset = promptCursorEndOffset(input.plainText)
                       }
                       return
                     }
@@ -2487,7 +2641,7 @@ export function Prompt(props: PromptProps) {
                     if (keybind.match("history_previous", e) && input.visualCursor.visualRow === 0)
                       input.cursorOffset = 0
                     if (keybind.match("history_next", e) && input.visualCursor.visualRow === input.height - 1)
-                      input.cursorOffset = input.plainText.length
+                      input.cursorOffset = promptCursorEndOffset(input.plainText)
                   }
                 }}
                 onSubmit={() => {
@@ -2512,7 +2666,9 @@ export function Prompt(props: PromptProps) {
                   // Normalize line endings at the boundary
                   // Windows ConPTY/Terminal often sends CR-only newlines in bracketed paste
                   // Replace CRLF first, then any remaining CR
-                  const normalizedText = decodePasteBytes(event.bytes).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+                  const normalizedText = cleanPromptInputText(
+                    decodePasteBytes(event.bytes).replace(/\r\n/g, "\n").replace(/\r/g, "\n"),
+                  )
                   const pastedContent = normalizedText.trim()
 
                   // Windows Terminal <1.25 can surface image-only clipboard as an
@@ -2570,7 +2726,8 @@ export function Prompt(props: PromptProps) {
                   if (portableImageTokens) {
                     for (const token of portableImageTokens) {
                       if (token.type === "text") {
-                        input.insertText(token.text)
+                        const text = cleanPromptInputText(token.text)
+                        if (text) input.insertText(text)
                         continue
                       }
                       await pasteAttachment({
@@ -2802,7 +2959,7 @@ export function Prompt(props: PromptProps) {
                     <Show when={loopStatusText()}>
                       {(label) => <text fg={theme.secondary}>{label()}</text>}
                     </Show>
-                    <For each={statusEntries()}>{(item) => <text fg={theme.textMuted}>{item.value}</text>}</For>
+                    <For each={visibleStatusEntries()}>{(item) => <text fg={theme.textMuted}>{item.value}</text>}</For>
                     <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
                       {(file) => (
                         <text fg={editorContextLabelState() === "pending" ? theme.secondary : theme.textMuted}>

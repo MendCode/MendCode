@@ -39,6 +39,8 @@ export const DiffQuery = Schema.Struct(Struct.omit(SessionSummary.DiffInput.fiel
 export const MessagesQuery = Schema.Struct({
   limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
   before: Schema.optional(Schema.String),
+  after: Schema.optional(Schema.String),
+  view: Schema.optional(Schema.Literals(["full", "tui"])),
 })
 export const StatusMap = Schema.Record(Schema.String, SessionStatus.Info)
 export const UpdatePayload = Schema.Struct({

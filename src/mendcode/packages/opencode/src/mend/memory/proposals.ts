@@ -8,6 +8,7 @@ import { legacyScopeForFact, upsertMemoryFact } from "./graph"
 import { configureDreamScheduleFromText, type DreamScheduleState } from "./dream-scheduler"
 import { resolveModelRoles } from "../config/models"
 import { runProviderAdapter } from "../runtime/provider-adapters"
+import { dreamServiceStart, type DreamServicePlan } from "../runtime/dream-service"
 
 export type MemoryProposalStatus = "pending" | "applied" | "rejected"
 export type MemoryProposalOperation = "add" | "update" | "remove" | "merge" | "split" | "verify" | "expire" | "recategorize" | "relink" | "demote-scope" | "promote-scope"
@@ -87,6 +88,17 @@ export type AutoMemoryResult = {
   proposals: MemoryProposal[]
   callsProviders: boolean
   writesMemory: false
+}
+
+export type ApplyMemoryProposalInput = {
+  startDreamService?: () => Promise<DreamServicePlan>
+}
+
+export type ApplyMemoryProposalResult = {
+  proposal: MemoryProposal
+  entry: MemoryEntry | null
+  dreamSchedule: DreamScheduleState | null
+  dreamService: DreamServicePlan | null
 }
 
 export const MEMORY_EXTRACTION_POLICY = [
@@ -662,15 +674,30 @@ export async function updateMemoryProposal(id: string, patch: Partial<Pick<Memor
   return next
 }
 
-export async function applyMemoryProposal(id: string, root?: string) {
+export async function applyMemoryProposal(id: string, root?: string, input: ApplyMemoryProposalInput = {}): Promise<ApplyMemoryProposalResult> {
   const proposal = await readMemoryProposal(id, root)
   if (proposal.status !== "pending") throw new Error(`Memory proposal ${id} is ${proposal.status}`)
   const operation = proposal.operation ?? "add"
   let entry: MemoryEntry | null = null
   let dreamSchedule: DreamScheduleState | null = null
-  if (proposal.tags.includes("dream-dry-run")) {
+  let dreamService: DreamServicePlan | null = null
+  const dreamScheduleProposal = proposal.tags.includes("dream-dry-run")
+  const dreamServiceProposal = proposal.tags.includes("dream-service-start")
+  if (dreamScheduleProposal && dreamServiceProposal) throw new Error(`Dream proposal ${id} must split schedule and service activation into separate approvals`)
+  const dreamControl = dreamScheduleProposal || dreamServiceProposal
+  if (dreamScheduleProposal) {
     dreamSchedule = await configureDreamScheduleFromText(root, proposal.text)
-  } else if (operation === "add") {
+  }
+  if (dreamServiceProposal) {
+    if (proposal.scope !== "global") throw new Error(`Dream service proposal ${id} must use global scope`)
+    dreamService = await (input.startDreamService ?? dreamServiceStart)()
+  }
+  if (dreamControl) {
+    const next: MemoryProposal = { ...proposal, operation, status: "applied", updatedAt: new Date().toISOString(), appliedEntryID: null }
+    await writeProposal(next, root)
+    return { proposal: next, entry, dreamSchedule, dreamService }
+  }
+  if (operation === "add") {
     entry = await appendMemoryEntry({
       scope: proposal.scope,
       text: proposal.text,
@@ -751,7 +778,7 @@ export async function applyMemoryProposal(id: string, root?: string) {
   }
   const next: MemoryProposal = { ...proposal, operation, status: "applied", updatedAt: new Date().toISOString(), appliedEntryID: entry?.id ?? null }
   await writeProposal(next, root)
-  return { proposal: next, entry, dreamSchedule }
+  return { proposal: next, entry, dreamSchedule, dreamService }
 }
 
 export async function rejectMemoryProposal(id: string, root?: string) {

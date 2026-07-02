@@ -4,6 +4,7 @@ import {
   createMemo,
   createResource,
   createSignal,
+  ErrorBoundary,
   For,
   Match,
   on,
@@ -28,6 +29,7 @@ import {
   addDefaultParsers,
   TextAttributes,
   RGBA,
+  type ParsedKey,
   type TextareaRenderable,
 } from "@opentui/core"
 import { Prompt, type PromptRef } from "@tui/component/prompt"
@@ -89,7 +91,7 @@ import { useKV } from "../../context/kv.tsx"
 import * as Editor from "../../util/editor"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
-import { listMendWidgets } from "@/mend/tui/widgets"
+import { blurMendWidget, focusMendWidget, listMendWidgets, mendWidgetRenderContext, notifyMendWidgetVisible, readFocusedMendWidgetID, type MendWidgetEntry } from "@/mend/tui/widgets"
 import { renderMendEditor } from "@/mend/tui/editor-host"
 import { useExit } from "../../context/exit"
 import { Filesystem } from "@/util/filesystem"
@@ -101,9 +103,8 @@ import { DialogExportOptions } from "../../ui/dialog-export-options"
 import * as Model from "../../util/model"
 import { formatAssistantUsage, formatLatestAssistantContextUsage } from "../../util/usage"
 import { formatTranscript } from "../../util/transcript"
-import { UI } from "@/cli/ui.ts"
 import { useTuiConfig } from "../../context/tui-config"
-import { getScrollAcceleration, isScrollboxAtBottom } from "../../util/scroll"
+import { getScrollAcceleration, isScrollboxAtBottom, isScrollboxAtTop } from "../../util/scroll"
 import {
   sessionContentWidth,
   sessionDiffStatsLabel,
@@ -122,6 +123,8 @@ import {
   sessionTodoPanelWidth,
   type SessionTodo,
 } from "../../util/session-bottom-dock"
+import { renderSessionExitSummary } from "../../util/session-exit-summary"
+import { sessionMessageVirtualWindow, stickyUserIDFromVirtualWindow } from "../../util/session-virtual-window"
 import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { restorePromptFromSubmittedParts } from "../../component/prompt/submit-parts"
@@ -129,6 +132,9 @@ import { useMendTuiProfile } from "../../context/mend"
 import { subagentTaskColorIndex, type SubagentTaskColorEntry } from "../../util/subagent-color"
 import {
   presentationReasoningVisible,
+  compactPreviewLine,
+  compactionArcadeFrames,
+  compactionStageStates,
   rawReasoningDisplay,
   reasoningSummary,
   shouldDisplayReasoning,
@@ -139,14 +145,16 @@ import { formatDuration } from "@/util/format"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
 import { reviewPermissionRequestWithModel, shouldTriggerSmartApproval } from "@/mend/permission/smart-approval"
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
-import { normalizeToolEvent, shouldRenderCompactTool } from "@/mend/tui/timeline/normalize"
-import { groupTimelineParts, isTimelineStackStart } from "@/mend/tui/timeline/group"
+import { normalizeToolEvent, shouldRenderCompactTool, toolPresentationIcon, toolPresentationIconForProfile, webSearchUrlLines } from "@/mend/tui/timeline/normalize"
+import { groupTimelineParts, isTimelineStackStart, timelineCollapseLabel } from "@/mend/tui/timeline/group"
 import type { TimelineCollapse, TimelineRow } from "@/mend/tui/timeline/types"
 import { TimelineDiff } from "./renderers/diff"
+import { diffStatsFromFile, diffStatsFromPatch, patchFilePath, type TimelineDiffStats } from "./renderers/diff-label"
 import {
   expandPastedContentPlaceholders,
   isPastedContentPart,
   userMessageDisplayText,
+  visibleUserMessageText,
   type PastedContentDisplayPart,
 } from "./user-message-display"
 import {
@@ -154,7 +162,10 @@ import {
   planReviewInlineTitle,
   renderPlanMarkdown,
   renderPlanMarkdownStatic,
+  renderPlanMarkdownStreaming,
   renderStreamingMarkdownTail,
+  type StreamingPlanMarkdownState,
+  visibleStreamingMarkdownPreview,
 } from "../../util/plan-markdown"
 
 addDefaultParsers(parsers.parsers)
@@ -235,7 +246,9 @@ type SessionLoopWorkflow = {
   state: string
   phase?: string
   name?: string
+  objective?: string
   nextWakeup?: number
+  evaluatorReason?: string
   metrics?: {
     turns?: number
   }
@@ -247,6 +260,24 @@ type SessionLoopWorkflow = {
     updated?: number
     activated?: number
   }
+}
+
+type SessionLoopSnapshot = {
+  workflow?: SessionLoopWorkflow
+  runs?: Array<{
+    state?: string
+    phase?: string
+    evaluatorReason?: string
+    checkpoint?: {
+      status?: string
+      summary?: string
+      evidence?: string[]
+      nextAction?: string
+      confidence?: string
+    }
+    time?: { created?: number; updated?: number; started?: number; ended?: number }
+  }>
+  rootSession?: { id: string; title?: string }
 }
 
 function formatLoopWorkflowState(state: string, phase?: string) {
@@ -327,6 +358,7 @@ export function Session() {
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
+  const fullHistoryStartID = createMemo(() => latestFullSessionHistoryStartID(messages()))
   const pendingInputSessionIDs = createMemo(() =>
     sessionPendingInputSessionIDs({
       sessionID: route.sessionID,
@@ -360,6 +392,9 @@ export function Session() {
   const pending = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant" && !x.time.completed)?.id
   })
+  const hasLocalActiveTurn = createMemo(() => {
+    return sessionHasLocalQueuedTurn({ messages: messages(), pendingAssistantID: pending() })
+  })
 
   const lastAssistant = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant")
@@ -376,6 +411,7 @@ export function Session() {
   const [_animationsEnabled, _setAnimationsEnabled] = kv.signal("animations_enabled", true)
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
   const [showTodos, setShowTodos] = kv.signal("session_todos_visible", false)
+  const [followSessionOutput, setFollowSessionOutput] = createSignal(true)
 
   const showTimestamps = createMemo(() => timestamps() === "show")
   const contentInset = createMemo(() => (promptEdgeToEdge() ? 0 : 4))
@@ -384,17 +420,46 @@ export function Session() {
   const providers = createMemo(() => Model.index(sync.data.provider))
   const rootSessionID = createMemo(() => session()?.parentID ?? route.sessionID)
   const rootMessages = createMemo(() => sync.data.message[rootSessionID()] ?? [])
+  const rootLatestAssistant = createMemo(() =>
+    sync.data.session_latest_assistant[rootSessionID()] ?? rootMessages().findLast((message): message is AssistantMessage => message.role === "assistant"),
+  )
   const mainAgentNames = createMemo(
     () => new Set(sync.data.agent.filter((agent) => agent.mode !== "subagent").map((agent) => agent.name)),
   )
-  const topUsage = createMemo(() => {
+  const topUsageLatest = createMemo(() => {
+    const stableLatest = rootLatestAssistant()
+    const stableMainUsage = stableLatest && mainAgentNames().has(stableLatest.agent)
+      ? formatAssistantUsage(stableLatest, providers(), { config: sync.data.config })
+      : undefined
+    return stableMainUsage ?? (stableLatest ? formatAssistantUsage(stableLatest, providers(), { config: sync.data.config }) : undefined)
+  })
+  const topUsageFromLoadedHistory = createMemo(() => {
+    const stableLatest = rootLatestAssistant()
     const assistantMessages = rootMessages().filter(
       (message): message is AssistantMessage => message.role === "assistant",
     )
-    const mainUsage = formatLatestAssistantContextUsage(assistantMessages, providers(), {
+    const usageMessages = stableLatest && !assistantMessages.some((message) => message.id === stableLatest.id)
+      ? [...assistantMessages, stableLatest]
+      : assistantMessages
+    const mainUsage = formatLatestAssistantContextUsage(usageMessages, providers(), {
       include: (message) => mainAgentNames().has(message.agent),
+      config: sync.data.config,
     })
-    return mainUsage ?? formatLatestAssistantContextUsage(assistantMessages, providers())
+    return mainUsage ?? formatLatestAssistantContextUsage(usageMessages, providers(), { config: sync.data.config })
+  })
+  const [stableTopUsage, setStableTopUsage] = createSignal<ReturnType<typeof formatAssistantUsage>>()
+  createEffect(
+    on(rootSessionID, () => setStableTopUsage(undefined)),
+  )
+  createEffect(() => {
+    const usage = topUsageLatest() ?? (!sync.session.history(rootSessionID()).hasMoreNewer ? topUsageFromLoadedHistory() : undefined)
+    if (usage) setStableTopUsage(usage)
+  })
+  const topUsage = createMemo(() => {
+    const latestUsage = topUsageLatest()
+    if (latestUsage) return latestUsage
+    if (sync.session.history(rootSessionID()).hasMoreNewer) return stableTopUsage()
+    return topUsageFromLoadedHistory()
   })
   const stickyUserHeaderEnabled = createMemo(() => {
     const sessionLayout = mend.profile.layout.zones.session
@@ -406,12 +471,17 @@ export function Session() {
     if (!id) return undefined
     return messages().find((message): message is UserMessage => message.id === id && message.role === "user")
   })
-  const sessionDirectory = createMemo(() => {
+  const latestLoadedSessionDirectory = createMemo(() => {
     for (const message of messages().toReversed()) {
       const cwd = (message as { path?: { cwd?: string } }).path?.cwd
       if (cwd) return cwd
     }
-    return project.instance.path().directory || process.cwd()
+    return session()?.directory || project.instance.path().directory || process.cwd()
+  })
+  const sessionDirectory = createMemo(() => {
+    const directory = latestLoadedSessionDirectory() || session()?.directory || project.instance.path().directory
+    if (typeof directory === "string" && directory.length > 0) return directory
+    return typeof process.cwd === "function" ? process.cwd() : ""
   })
   const [topStatsTick, setTopStatsTick] = createSignal(0)
   onMount(() => {
@@ -419,11 +489,13 @@ export function Session() {
     onCleanup(() => clearInterval(timer))
   })
   const topPathLabel = createMemo(() => {
-    return sessionDirectory().replace(Global.Path.home, "~")
+    const directory = sessionDirectory()
+    return directory ? directory.replace(Global.Path.home, "~") : ""
   })
   const [topStats] = createResource(
     () => ({ directory: sessionDirectory(), tick: topStatsTick() }),
     async ({ directory }) => {
+      if (!directory) return { added: undefined, removed: undefined, branch: "" }
       const diff = await Process.text(["git", "diff", "--numstat", "HEAD", "--"], { cwd: directory, nothrow: true })
       const branch = await Process.text(["git", "branch", "--show-current"], { cwd: directory, nothrow: true })
       const lineStats = diff.code === 0 ? parseGitNumstat(diff.text) : undefined
@@ -951,6 +1023,7 @@ export function Session() {
         partsByMessageID={sync.data.part}
         providers={providers()}
         mainAgentNames={mainAgentNames()}
+        config={sync.data.config}
       />
     ))
     dialog.setSize("large")
@@ -1050,17 +1123,18 @@ export function Session() {
         mode: backgroundWriterMode(),
         sessionID: route.sessionID,
         status: sync.data.session_status?.[route.sessionID]?.type,
+        localActive: hasLocalActiveTurn(),
         loopState: currentLoopWorkflow()?.state,
         title: session()?.title ?? "",
       }),
-      ({ mode, status, loopState, title }) => {
+      ({ mode, status, localActive, loopState, title }) => {
         const isLoopSession = Boolean(loopState) || title.startsWith("Loop:")
         if (eventlessFollowTimer) clearInterval(eventlessFollowTimer)
         eventlessFollowTimer = undefined
         if (mode === "attached" && !isLoopSession) return
-        if (!isLoopSession && status !== "busy" && status !== "retry") return
+        if (!isLoopSession && status !== "busy" && status !== "retry" && !localActive) return
         const intervalMs =
-          status === "busy" || status === "retry" || loopState === "working"
+          status === "busy" || status === "retry" || localActive || loopState === "working"
             ? 600
             : isLoopSession
               ? 900
@@ -1120,6 +1194,7 @@ export function Session() {
     "session.next.shell.ended",
     "session.next.compaction.started",
     "session.next.compaction.ended",
+    "session.compacted",
     "loop.workflow.updated",
     "loop.run.updated",
     "loop.event.created",
@@ -1241,10 +1316,13 @@ export function Session() {
 
   let seeded = false
   let scroll: ScrollBoxRenderable
-  const [followSessionOutput, setFollowSessionOutput] = createSignal(true)
   let scrollAnchor: { id: string; offset: number } | undefined
   let lastObservedScrollTop = 0
   let lastObservedScrollHeight = 0
+  let scrollPagingInFlight = false
+  let scrollPagingToken = 0
+  let suppressedPagingBoundary: "top" | "bottom" | undefined
+  const [sessionScrollTop, setSessionScrollTop] = createSignal(0)
   let prompt: PromptRef | undefined
   const bind = (r: PromptRef | undefined) => {
     prompt = r
@@ -1286,16 +1364,67 @@ export function Session() {
     if (delta !== 0) scroll.scrollBy(delta)
   }
 
+  const scrollToPagingBoundary = (boundary: "top" | "bottom") => {
+    scrollAnchor = undefined
+    suppressedPagingBoundary = boundary
+    setTimeout(() => {
+      if (!scroll || scroll.isDestroyed) return
+      scroll.scrollTo(boundary === "top" ? 0 : scroll.scrollHeight)
+      lastObservedScrollTop = scroll.scrollTop
+      lastObservedScrollHeight = scroll.scrollHeight
+      setSessionScrollTop(scroll.scrollTop)
+    }, 0)
+  }
+
   const syncScrollFollowMode = () => {
     if (!scroll || scroll.isDestroyed) return
     const scrollTop = scroll.scrollTop
     const scrollHeight = scroll.scrollHeight
+    setSessionScrollTop(scrollTop)
+    const currentSessionID = route.sessionID
+    const history = sync.session.history(currentSessionID)
+    const atTop = isScrollboxAtTop(scroll)
+    const atBottom = isScrollboxAtBottom(scroll)
 
-    if (isScrollboxAtBottom(scroll)) {
-      setFollowSessionOutput(true)
+    if (suppressedPagingBoundary === "top" && !atTop) suppressedPagingBoundary = undefined
+    if (suppressedPagingBoundary === "bottom" && !atBottom) suppressedPagingBoundary = undefined
+
+    if (atTop && history.hasMoreOlder && !history.loadingOlder && !scrollPagingInFlight) {
+      if (suppressedPagingBoundary === "top") return
+      const pagingToken = scrollPagingToken
+      setFollowSessionOutput(false)
+      scrollPagingInFlight = true
+      void sync.session.loadOlder(currentSessionID).then((loaded) => {
+        if (!loaded) return
+        if (pagingToken !== scrollPagingToken || route.sessionID !== currentSessionID) return
+        scrollToPagingBoundary("bottom")
+      }).catch(() => undefined).finally(() => {
+        if (pagingToken !== scrollPagingToken || route.sessionID !== currentSessionID) return
+        scrollPagingInFlight = false
+      })
+      return
+    }
+
+    if (atBottom) {
       scrollAnchor = undefined
       lastObservedScrollTop = scrollTop
       lastObservedScrollHeight = scrollHeight
+      if (history.hasMoreNewer && !history.loadingNewer && !scrollPagingInFlight) {
+        if (suppressedPagingBoundary === "bottom") return
+        const pagingToken = scrollPagingToken
+        setFollowSessionOutput(false)
+        scrollPagingInFlight = true
+        void sync.session.loadNewer(currentSessionID).then((loaded) => {
+          if (!loaded) return
+          if (pagingToken !== scrollPagingToken || route.sessionID !== currentSessionID) return
+          scrollToPagingBoundary("top")
+        }).catch(() => undefined).finally(() => {
+          if (pagingToken !== scrollPagingToken || route.sessionID !== currentSessionID) return
+          scrollPagingInFlight = false
+        })
+        return
+      }
+      setFollowSessionOutput(true)
       return
     }
 
@@ -1318,6 +1447,24 @@ export function Session() {
     setFollowSessionOutput(false)
     setTimeout(captureScrollAnchor, 0)
   }
+
+  createEffect(
+    on(
+      () => route.sessionID,
+      () => {
+        scrollPagingToken += 1
+        scrollPagingInFlight = false
+        suppressedPagingBoundary = undefined
+        scrollAnchor = undefined
+        lastObservedScrollTop = 0
+        lastObservedScrollHeight = 0
+        setSessionScrollTop(0)
+        setFollowSessionOutput(true)
+      },
+      { defer: true },
+    ),
+  )
+
   const scrollBySession = (delta: number) => {
     scroll.scrollBy(delta)
     setTimeout(syncScrollFollowMode, 0)
@@ -1326,6 +1473,8 @@ export function Session() {
     scroll.scrollTo(position)
     setTimeout(syncScrollFollowMode, 0)
   }
+  const [validatedExitSessionID, setValidatedExitSessionID] = createSignal<string>()
+  let exitSessionValidationToken = 0
 
   onMount(() => {
     const timer = setInterval(syncScrollFollowMode, 80)
@@ -1333,22 +1482,40 @@ export function Session() {
   })
 
   createEffect(() => {
-    const title = Locale.truncate(session()?.title ?? "", 50)
-    const pad = (text: string) => text.padEnd(10, " ")
-    const weak = (text: string) => UI.Style.TEXT_DIM + pad(text) + UI.Style.TEXT_NORMAL
-    const logo = UI.logo("  ").split(/\r?\n/)
-    return exit.message.set(
-      [
-        `${logo[0] ?? ""}`,
-        `${logo[1] ?? ""}`,
-        `${logo[2] ?? ""}`,
-        `${logo[3] ?? ""}`,
-        ``,
-        `  ${weak("Session")}${UI.Style.TEXT_NORMAL_BOLD}${title}${UI.Style.TEXT_NORMAL}`,
-        `  ${weak("Continue")}${UI.Style.TEXT_NORMAL_BOLD}mend -s ${session()?.id}${UI.Style.TEXT_NORMAL}`,
-        ``,
-      ].join("\n"),
-    )
+    const current = session()
+    const sessionID = current?.id
+    const token = ++exitSessionValidationToken
+    setValidatedExitSessionID(undefined)
+    if (!sessionID) return
+    void sdk.client.session.get({ sessionID }).then((result) => {
+      if (token !== exitSessionValidationToken) return
+      setValidatedExitSessionID(result.data?.id === sessionID ? sessionID : undefined)
+    }).catch(() => {
+      if (token !== exitSessionValidationToken) return
+      setValidatedExitSessionID(undefined)
+    })
+  })
+
+  createEffect(() => {
+    const firstUser = messages().find((message) => message.role === "user")?.time.created
+    const lastRootAssistant = rootLatestAssistant()
+    const lastCompletedAssistant = rootMessages().findLast((message) => message.role === "assistant")?.time.completed ?? lastRootAssistant?.time.completed
+    const usage = topUsage()
+    const continueID = validatedExitSessionID()
+    return exit.message.set(renderSessionExitSummary({
+      profile: mend.profile,
+      width: dimensions().width,
+      sessionTitle: session()?.title,
+      sessionID: continueID,
+      usage: {
+        usage: usage?.tokens,
+        compaction: usage?.contextLabel,
+        model: usage?.model,
+        provider: lastRootAssistant ? (providers().get(lastRootAssistant.providerID)?.name ?? lastRootAssistant.providerID) : undefined,
+        agent: lastRootAssistant?.agent,
+        elapsed: firstUser && lastCompletedAssistant ? formatDuration(Math.max(0, Math.round((lastCompletedAssistant - firstUser) / 1000))) : undefined,
+      },
+    }))
   })
 
   useKeyboard((evt) => {
@@ -1411,11 +1578,25 @@ export function Session() {
   function toBottom() {
     setFollowSessionOutput(true)
     scrollAnchor = undefined
+    void sync.session.sync(route.sessionID, { force: true }).catch(() => undefined)
     setTimeout(() => {
       if (!scroll || scroll.isDestroyed) return
       scroll.scrollTo(scroll.scrollHeight)
     }, 50)
   }
+
+  const virtualWindow = createMemo(() =>
+    sessionMessageVirtualWindow({
+      total: messages().length,
+      scrollTop: sessionScrollTop(),
+      viewportHeight: scroll && !scroll.isDestroyed ? scroll.height : dimensions().height,
+      followOutput: followSessionOutput(),
+    }),
+  )
+  const visibleMessages = createMemo(() => {
+    const window = virtualWindow()
+    return messages().slice(window.start, window.end)
+  })
 
   const updateStickyUserHeader = () => {
     if (!stickyUserHeaderEnabled() || !scroll || scroll.isDestroyed) {
@@ -1435,8 +1616,13 @@ export function Session() {
       .filter((item): item is { id: string; y: number } => Boolean(item))
       .sort((a, b) => a.y - b.y)
 
-    const stuck = [...userAnchors].reverse().find((item) => item.y < top)
-    setStickyUserMessageID(stuck?.id)
+    setStickyUserMessageID(stickyUserIDFromVirtualWindow({
+      messages: messages(),
+      window: virtualWindow(),
+      mountedUserAnchors: userAnchors,
+      top,
+      isUser: (message) => message.role === "user",
+    }))
   }
 
   createEffect(() => {
@@ -1945,8 +2131,10 @@ export function Session() {
           .then(() => {
             toBottom()
           })
-        const parts = sync.data.part[message.id]
-        prompt?.set(restorePromptFromSubmittedParts(parts))
+        const fullMessage = await sdk.client.session
+          .message({ sessionID: route.sessionID, messageID: message.id })
+          .catch(() => undefined)
+        prompt?.set(restorePromptFromSubmittedParts(fullMessage?.data?.parts ?? sync.data.part[message.id] ?? []))
         dialog.clear()
       },
     },
@@ -2131,8 +2319,7 @@ export function Session() {
       category: "Session",
       hidden: true,
       onSelect: (dialog) => {
-        setFollowSessionOutput(true)
-        scrollToSession(scroll.scrollHeight)
+        toBottom()
         dialog.clear()
       },
     },
@@ -2507,7 +2694,10 @@ export function Session() {
                 scrollAcceleration={scrollAcceleration()}
               >
                 <box height={1} />
-                <For each={messages()}>
+                <Show when={virtualWindow().topSpacer > 0}>
+                  <box height={virtualWindow().topSpacer} flexShrink={0} />
+                </Show>
+                <For each={visibleMessages()}>
                   {(message, index) => (
                     <Switch>
                       <Match when={message.id === revert()?.messageID}>
@@ -2576,7 +2766,7 @@ export function Session() {
                       </Match>
                       <Match when={message.role === "user"}>
                         <UserMessage
-                          index={index()}
+                          index={virtualWindow().start + index()}
                           onMouseUp={() => {
                             if (renderer.getSelection()?.getSelectedText()) return
                             dialog.replace(() => (
@@ -2590,6 +2780,10 @@ export function Session() {
                           message={message as UserMessage}
                           parts={sync.data.part[message.id] ?? []}
                           pending={pending()}
+                          simpleHistory={shouldUseSimpleSessionHistory({
+                            messageID: message.id,
+                            fullStartID: fullHistoryStartID(),
+                          })}
                         />
                       </Match>
                       <Match when={message.role === "assistant"}>
@@ -2597,11 +2791,18 @@ export function Session() {
                           last={lastAssistant()?.id === message.id}
                           message={message as AssistantMessage}
                           parts={sync.data.part[message.id] ?? []}
+                          simpleHistory={shouldUseSimpleSessionHistory({
+                            messageID: message.id,
+                            fullStartID: fullHistoryStartID(),
+                          })}
                         />
                       </Match>
                     </Switch>
                   )}
                 </For>
+                <Show when={virtualWindow().bottomSpacer > 0}>
+                  <box height={virtualWindow().bottomSpacer} flexShrink={0} />
+                </Show>
               </scrollbox>
               <Show when={stickyUserHeaderEnabled() && stickyUserMessage()}>
                 {(message) => (
@@ -2611,6 +2812,7 @@ export function Session() {
                       message={message()}
                       parts={sync.data.part[message().id] ?? []}
                       sticky
+                      simpleHistory={false}
                       onMouseUp={() => {
                         if (renderer.getSelection()?.getSelectedText()) return
                         dialog.replace(() => (
@@ -2675,7 +2877,7 @@ export function Session() {
                   }}
                 />
               </Show>
-              <For each={listMendWidgets("aboveEditor")}>{(item) => item.render() as any}</For>
+              <For each={listMendWidgets("aboveEditor")}>{(item) => <RenderMendWidget item={item} />}</For>
               <Show when={visible()}>
                 <box position="relative" zIndex={2500} overflow="visible" width="100%">
                   <TuiPluginRuntime.Slot
@@ -2721,7 +2923,7 @@ export function Session() {
                   </TuiPluginRuntime.Slot>
                 </box>
               </Show>
-              <For each={listMendWidgets("belowEditor")}>{(item) => item.render() as any}</For>
+              <For each={listMendWidgets("belowEditor")}>{(item) => <RenderMendWidget item={item} />}</For>
             </box>
           </Show>
           <Toast />
@@ -2890,6 +3092,169 @@ function sessionLiveStateLabel(input: {
   return "ready"
 }
 
+export function sessionHasLocalQueuedTurn(input: { messages: Array<Pick<Message, "id">>; pendingAssistantID?: string }) {
+  const pendingAssistantID = input.pendingAssistantID
+  if (!pendingAssistantID) return false
+  return input.messages.some((message) => message.id > pendingAssistantID)
+}
+
+export function latestFullSessionHistoryStartID(
+  messages: Array<{ id: string; role: string; parentID?: string; summary?: unknown; time: { created?: number; completed?: number } }>,
+) {
+  const latestCompactionSummary = messages.findLast(
+    (message) => message.role === "assistant" && message.summary === true,
+  )
+  return latestCompactionSummary?.id
+}
+
+export function shouldUseSimpleSessionHistory(input: { messageID: string; fullStartID?: string }) {
+  return Boolean(input.fullStartID && input.messageID < input.fullStartID)
+}
+
+function dockWidgetWidth(item: MendWidgetEntry) {
+  if (typeof item.width === "number") return Math.max(1, item.width)
+  return undefined
+}
+
+function dockWidgetHeight(item: MendWidgetEntry, fallback: number) {
+  if (typeof item.height === "number") return Math.max(1, Math.min(fallback, item.height))
+  return fallback
+}
+
+function dockWidgetsMinWidth(items: MendWidgetEntry[]) {
+  if (!items.length) return 0
+  return items.reduce((total, item, index) => {
+    const width = typeof item.width === "number" ? item.width : item.minWidth ?? 18
+    return total + Math.max(1, width) + (index > 0 ? 1 : 0)
+  }, 0)
+}
+
+function fixedWidgetLine(value: string, width: number) {
+  const normalized = value.replace(/\t/g, "  ")
+  const truncated = Locale.truncate(normalized, width)
+  const padding = Math.max(0, width - Bun.stringWidth(truncated))
+  return truncated + " ".repeat(padding)
+}
+
+function RenderMendWidget(props: { item: MendWidgetEntry }) {
+  const { theme } = useTheme()
+  const promptRef = usePromptRef()
+  let container: BoxRenderable | undefined
+  let notifiedVisible = false
+  const [widgetError, setWidgetError] = createSignal<string | undefined>()
+  const rendered = createMemo(() => {
+    try {
+      setWidgetError(undefined)
+      return props.item.render(mendWidgetRenderContext(props.item)) as unknown
+    } catch (err) {
+      setWidgetError(errorMessage(err))
+      return undefined
+    }
+  })
+  const primitive = createMemo(() => {
+    if (widgetError()) return `Widget error · ${widgetError()}`
+    const value = rendered()
+    if (typeof value === "string" || typeof value === "number") return String(value)
+    if (typeof value === "boolean") return value ? "true" : ""
+    return undefined
+  })
+  const primitiveWidth = createMemo(() => {
+    if (typeof props.item.width === "number") return Math.max(1, props.item.width)
+    return Math.max(1, props.item.maxWidth ?? props.item.minWidth ?? 120)
+  })
+  const primitiveHeight = createMemo(() => {
+    if (typeof props.item.height === "number") return Math.max(1, props.item.height)
+    return undefined
+  })
+  const primitiveLines = createMemo(() => {
+    const lines = (primitive() ?? "").split(/\r?\n/)
+    const height = primitiveHeight()
+    const visible = height ? lines.slice(0, height) : lines
+    return visible.map((line) => fixedWidgetLine(line, primitiveWidth()))
+  })
+  const focused = createMemo(() => readFocusedMendWidgetID() === props.item.id)
+  createEffect(() => {
+    if (!notifiedVisible) {
+      notifiedVisible = true
+      notifyMendWidgetVisible(props.item.id)
+    }
+    if (!focused()) return
+    container?.focus()
+  })
+
+  function leaveWidget(event?: { preventDefault?: () => void; stopPropagation?: () => void }) {
+    blurMendWidget(props.item.id)
+    promptRef.current?.focus()
+    event?.preventDefault?.()
+    event?.stopPropagation?.()
+  }
+
+  const fallback = (error: unknown) => {
+    const message = errorMessage(error)
+    console.error("[tui.widget] render error", {
+      id: props.item.id,
+      placement: props.item.placement,
+      message,
+    })
+    return (
+      <box width="100%" height="100%" paddingLeft={1} paddingRight={1} overflow="hidden">
+        <text fg={theme.error} wrapMode="none">
+          {fixedWidgetLine(`Widget error · ${message}`, primitiveWidth())}
+        </text>
+      </box>
+    )
+  }
+
+  return (
+    <box
+      width="100%"
+      height="100%"
+      overflow="hidden"
+      border={focused() ? ["left"] : undefined}
+      borderColor={focused() ? theme.borderActive : undefined}
+      ref={(value: BoxRenderable) => {
+        container = value
+      }}
+      onMouseDown={(event) => {
+        if (!props.item.interactive) return
+        focusMendWidget(props.item.id)
+        event.target?.focus()
+      }}
+      onKeyDown={(event) => {
+        if (!props.item.interactive) return
+        if (event.name === "escape") {
+          leaveWidget(event)
+          return
+        }
+        let handled = false
+        try {
+          handled = !!props.item.onKey?.(event)
+        } catch {
+          leaveWidget(event)
+          return
+        }
+        if (!handled) return
+        event.preventDefault()
+        event.stopPropagation()
+      }}
+    >
+      <ErrorBoundary fallback={fallback}>
+        <Show when={primitive() !== undefined} fallback={rendered() as JSX.Element}>
+          <box flexDirection="column" width="100%" height="100%" overflow="hidden">
+            <For each={primitiveLines()}>
+              {(line) => (
+                <box height={1} width="100%" overflow="hidden">
+                  <text width="100%" wrapMode="none" selectable={false}>{line}</text>
+                </box>
+              )}
+            </For>
+          </box>
+        </Show>
+      </ErrorBoundary>
+    </box>
+  )
+}
+
 function SessionBottomDock(props: {
   todos: SessionTodo[]
   subagents: SessionSubagentInfo[]
@@ -2899,8 +3264,31 @@ function SessionBottomDock(props: {
   onOpenSubagent: (sessionID: string) => void
 }) {
   const { theme } = useTheme()
+  const mend = useMendTuiProfile()
+  const dockWidgets = createMemo(() => listMendWidgets("sessionBottomDock"))
+  const builtinDockWidgetIDs = ["todo", "notes", "subagents", "info"]
+  const profileControlsBuiltins = createMemo(() => {
+    const widgets = mend.profile.widgets
+    return builtinDockWidgetIDs.some(
+      (id) => widgets.enabled.includes(id) || widgets.order.includes(id) || widgets.config[id]?.surface === "sessionBottomDock",
+    )
+  })
+  const builtinDockEnabled = (id: string) => {
+    if (!profileControlsBuiltins()) return true
+    return mend.profile.widgets.enabled.includes(id)
+  }
   const layout = createMemo(() =>
-    sessionBottomDockLayout({ todos: props.todos, width: props.width, subagentCount: props.subagents.length }),
+    sessionBottomDockLayout({
+      todos: props.todos,
+      width: props.width,
+      subagentCount: props.subagents.length,
+      customDockMinWidth: dockWidgetsMinWidth(dockWidgets()),
+      enabled: {
+        notes: builtinDockEnabled("notes"),
+        subagents: builtinDockEnabled("subagents"),
+        info: builtinDockEnabled("info"),
+      },
+    }),
   )
 
   return (
@@ -2928,15 +3316,21 @@ function SessionBottomDock(props: {
         <Show when={layout().showInfo}>
           <SessionInfoWidget info={props.info} width={layout().infoWidth} height={layout().dockHeight} />
         </Show>
-        <Show when={layout().showNotes}>
-          <For each={listMendWidgets("sessionBottomDock")}>
-            {(item) => (
-              <box flexShrink={1} minWidth={18} height={layout().dockHeight} backgroundColor={theme.backgroundPanel}>
-                {item.render() as any}
-              </box>
-            )}
-          </For>
-        </Show>
+        <For each={dockWidgets()}>
+          {(item) => (
+            <box
+              flexShrink={item.width === "auto" ? 1 : 0}
+              width={dockWidgetWidth(item)}
+              minWidth={item.minWidth ?? 18}
+              maxWidth={item.maxWidth}
+              height={dockWidgetHeight(item, layout().dockHeight)}
+              overflow="hidden"
+              backgroundColor={theme.backgroundPanel}
+            >
+              <RenderMendWidget item={item} />
+            </box>
+          )}
+        </For>
       </box>
     </box>
   )
@@ -3264,6 +3658,133 @@ const MIME_BADGE: Record<string, string> = {
   "application/x-directory": "dir",
 }
 
+function CompactionCard(props: {
+  reason: "auto" | "manual"
+  resume?: boolean
+  overflow?: boolean
+  tailStartID?: string
+  include?: string
+  summaryPreview?: string
+  transcriptPreview?: string
+  hasSummary?: boolean
+}) {
+  const { theme } = useTheme()
+  const mend = useMendTuiProfile()
+  const config = createMemo(() => mend.profile.presentation.compaction)
+  const stages = createMemo(() =>
+    compactionStageStates({
+      hasSummary: props.hasSummary,
+      resume: props.resume,
+      include: props.include,
+      tailStartID: props.tailStartID,
+    }),
+  )
+  const chips = createMemo(() =>
+    [
+      props.reason === "auto" ? "auto" : "manual",
+      props.overflow ? "overflow" : undefined,
+      props.resume ? "resume" : undefined,
+      props.tailStartID ? "preserved tail" : undefined,
+      props.include ? "transcript kept" : undefined,
+    ].filter((value): value is string => Boolean(value)),
+  )
+  const summaryPreview = createMemo(() => compactPreviewLine(props.summaryPreview, 112))
+  const transcriptPreview = createMemo(() => compactPreviewLine(props.transcriptPreview, 112))
+  const arcadeFrames = createMemo(() => (config().style === "arcade" ? compactionArcadeFrames(config().arcade) : []))
+
+  if (config().style === "quiet") {
+    return <box marginTop={1} border={["top"]} title=" Compaction " titleAlignment="center" borderColor={theme.borderActive} />
+  }
+
+  return (
+    <box
+      marginTop={1}
+      paddingLeft={2}
+      paddingRight={2}
+      paddingTop={1}
+      paddingBottom={1}
+      border={config().style === "minimal" ? ["left"] : ["left", "top"]}
+      customBorderChars={SplitBorder.customBorderChars}
+      borderColor={theme.borderActive}
+      backgroundColor={theme.backgroundPanel}
+      flexShrink={0}
+    >
+      <box flexDirection="row" justifyContent="space-between" width="100%" gap={2}>
+        <text fg={theme.text} wrapMode="none">
+          <span style={{ fg: theme.borderActive, bold: true }}>◈</span> Compaction cockpit
+        </text>
+        <text fg={theme.textMuted} wrapMode="none">
+          {props.reason === "auto" ? "auto" : "manual"}
+        </text>
+      </box>
+      <Show when={chips().length > 0}>
+        <box flexDirection="row" gap={1} flexWrap="wrap" paddingTop={1}>
+          <For each={chips()}>
+            {(chip) => (
+              <text fg={theme.text}>
+                <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}> {chip} </span>
+              </text>
+            )}
+          </For>
+        </box>
+      </Show>
+      <Show when={config().showProgress}>
+        <box flexDirection="row" gap={1} paddingTop={1} flexWrap="wrap">
+          <For each={stages()}>
+            {(stage, index) => {
+              const color = createMemo(() => {
+                if (stage.state === "done") return theme.borderActive
+                if (stage.state === "active") return theme.primary
+                return theme.textMuted
+              })
+              const glyph = createMemo(() => {
+                if (stage.state === "done") return "●"
+                if (stage.state === "active") return "◐"
+                return "○"
+              })
+              return (
+                <text fg={theme.textMuted} wrapMode="none">
+                  <span style={{ fg: color() }}>{glyph()} {stage.label}</span>
+                  <Show when={index() < stages().length - 1}>
+                    <span style={{ fg: theme.textMuted }}> ─ </span>
+                  </Show>
+                </text>
+              )
+            }}
+          </For>
+        </box>
+      </Show>
+      <Show when={summaryPreview()}>
+        <box paddingTop={1}>
+          <text fg={theme.text}>Summary: {summaryPreview()}</text>
+        </box>
+      </Show>
+      <Show when={!summaryPreview() && transcriptPreview()}>
+        <box paddingTop={1}>
+          <text fg={theme.textMuted}>Hint: {transcriptPreview()}</text>
+        </box>
+      </Show>
+      <Show when={props.include || props.tailStartID}>
+        <box paddingTop={1}>
+          <text fg={theme.textMuted}>
+            {props.include ? `Transcript anchor: ${Locale.truncate(props.include, 72)}` : `Tail start: ${Locale.truncate(props.tailStartID ?? "", 40)}`}
+          </text>
+        </box>
+      </Show>
+      <Show when={arcadeFrames().length > 0}>
+        <box paddingTop={1} flexDirection="column">
+          <For each={arcadeFrames()}>{(line) => <text fg={theme.primary}>{line}</text>}</For>
+        </box>
+      </Show>
+      <Show when={config().allowScratchpad}>
+        <box paddingTop={1}>
+          <text fg={theme.textMuted}>Scratchpad planned · not wired into transcript writes</text>
+        </box>
+      </Show>
+    </box>
+  )
+}
+
 function UserMessage(props: {
   message: UserMessage
   parts: Part[]
@@ -3271,9 +3792,12 @@ function UserMessage(props: {
   index: number
   pending?: string
   sticky?: boolean
+  simpleHistory?: boolean
 }) {
   const local = useLocal()
+  const sync = useSync()
   const [expandedText, setExpandedText] = createSignal(false)
+  const [expandedOffset, setExpandedOffset] = createSignal(0)
   const [expandedPaste, setExpandedPaste] = createSignal(false)
   const text = createMemo(() => {
     const texts = props.parts
@@ -3295,15 +3819,35 @@ function UserMessage(props: {
   })
   const files = createMemo(() => props.parts.flatMap((x) => (x.type === "file" ? [x] : [])))
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
   const [hover, setHover] = createSignal(false)
   const queued = createMemo(() => props.pending && props.message.id > props.pending)
   const color = createMemo(() => local.agent.color(props.message.agent))
   const queuedFg = createMemo(() => selectedForeground(theme, color()))
   const collapsedDisplayText = createMemo(() =>
-    userMessageDisplayText(fullText(), props.sticky ? { maxLines: 2, maxChars: 220 } : undefined),
+    userMessageDisplayText(fullText(), props.sticky || props.simpleHistory ? { maxLines: 4, maxChars: 600 } : undefined),
   )
-  const expandedDisplayText = createMemo(() => userMessageDisplayText(fullText(), { maxLines: 240, maxChars: 40_000 }))
-  const displayText = createMemo(() => (expandedText() ? expandedDisplayText() : collapsedDisplayText()))
+  const effectiveExpandedText = createMemo(() => !props.sticky && !props.simpleHistory && expandedText())
+  const expandedViewportRows = createMemo(() => Math.max(8, Math.min(28, Math.floor(dimensions().height * 0.38))))
+  const expandedLines = createMemo(() => fullText().split("\n"))
+  const expandedMaxOffset = createMemo(() => Math.max(0, expandedLines().length - expandedViewportRows()))
+  const expandedWindow = createMemo(() => {
+    const max = expandedMaxOffset()
+    const offset = Math.min(expandedOffset(), max)
+    const rows = expandedViewportRows()
+    const lines = expandedLines()
+    const visible = lines.slice(offset, offset + rows).join("\n")
+    return {
+      text: visibleUserMessageText(visible),
+      offset,
+      rows,
+      total: lines.length,
+      end: Math.min(lines.length, offset + rows),
+      hasBefore: offset > 0,
+      hasAfter: offset + rows < lines.length,
+    }
+  })
+  const displayText = createMemo(() => (effectiveExpandedText() ? expandedWindow() : collapsedDisplayText()))
   const pastedContentChars = createMemo(() => pastedContentParts().reduce((total, part) => total + part.text.length, 0))
   const togglePastedContent = (event: unknown) => {
     const maybeEvent = event as { stopPropagation?: () => void } | undefined
@@ -3313,10 +3857,39 @@ function UserMessage(props: {
   const toggleExpandedText = (event?: unknown) => {
     const maybeEvent = event as { stopPropagation?: () => void } | undefined
     maybeEvent?.stopPropagation?.()
-    setExpandedText((value) => !value)
+    setExpandedText((value) => {
+      const next = !value
+      if (!next) setExpandedOffset(0)
+      return next
+    })
+  }
+  const scrollExpandedText = (delta: number, event?: unknown) => {
+    const maybeEvent = event as { stopPropagation?: () => void } | undefined
+    maybeEvent?.stopPropagation?.()
+    setExpandedOffset((value) => Math.max(0, Math.min(expandedMaxOffset(), value + delta)))
   }
 
-  const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
+  createEffect(() => {
+    const max = expandedMaxOffset()
+    if (expandedOffset() > max) setExpandedOffset(max)
+  })
+
+  const compaction = createMemo(() => props.parts.find((x): x is Extract<Part, { type: "compaction" }> => x.type === "compaction"))
+  const summaryAssistant = createMemo(() =>
+    (sync.data.message[props.message.sessionID] ?? []).find(
+      (message): message is AssistantMessage =>
+        message.role === "assistant" && message.summary === true && message.parentID === props.message.id && !message.error,
+    ),
+  )
+  const summaryPreview = createMemo(() => {
+    const summary = summaryAssistant()
+    if (!summary) return
+    return (sync.data.part[summary.id] ?? [])
+      .filter((part): part is TextPart => part.type === "text")
+      .map((part) => part.text.trim())
+      .find(Boolean)
+  })
+  const transcriptPreview = createMemo(() => compaction()?.instructions || text())
 
   return (
     <>
@@ -3362,8 +3935,54 @@ function UserMessage(props: {
                 </text>
               </Show>
             </box>
-            <text fg={theme.text}>{displayText().text}</text>
-            <Show when={pastedContentParts().length > 0}>
+            <Show when={effectiveExpandedText() && collapsedDisplayText().compacted}>
+              <box flexDirection="row" justifyContent="space-between" width="100%" gap={2}>
+                <text
+                  fg={theme.textMuted}
+                  onMouseUp={(event) => {
+                    scrollExpandedText(-expandedViewportRows(), event)
+                  }}
+                >
+                  {expandedWindow().hasBefore ? "↑ earlier" : "  earlier"}
+                </text>
+                <text fg={theme.textMuted} wrapMode="none">
+                  lines {Locale.number(expandedWindow().offset + 1)}-{Locale.number(expandedWindow().end)} /{" "}
+                  {Locale.number(expandedWindow().total)}
+                </text>
+                <text
+                  fg={theme.textMuted}
+                  onMouseUp={(event) => {
+                    scrollExpandedText(expandedViewportRows(), event)
+                  }}
+                >
+                  {expandedWindow().hasAfter ? "later ↓" : "later  "}
+                </text>
+                <text
+                  fg={theme.textMuted}
+                  onMouseUp={(event) => {
+                    toggleExpandedText(event)
+                  }}
+                >
+                  collapse
+                </text>
+              </box>
+            </Show>
+            <Show
+              when={effectiveExpandedText() && expandedMaxOffset() > 0}
+              fallback={<text fg={theme.text}>{displayText().text}</text>}
+            >
+              <box flexDirection="row" width="100%" gap={1}>
+                <box flexGrow={1}>
+                  <text fg={theme.text}>{displayText().text}</text>
+                </box>
+                <UserMessageInternalScrollbar
+                  rows={expandedWindow().rows}
+                  offset={expandedWindow().offset}
+                  total={expandedWindow().total}
+                />
+              </box>
+            </Show>
+            <Show when={!props.sticky && !props.simpleHistory && pastedContentParts().length > 0}>
               <text
                 fg={theme.textMuted}
                 onMouseUp={(event) => {
@@ -3375,7 +3994,7 @@ function UserMessage(props: {
                 {Locale.number(pastedContentChars())} chars)
               </text>
             </Show>
-            <Show when={collapsedDisplayText().compacted}>
+            <Show when={!props.sticky && !props.simpleHistory && collapsedDisplayText().compacted}>
               <text
                 fg={theme.textMuted}
                 onMouseUp={(event) => {
@@ -3387,11 +4006,39 @@ function UserMessage(props: {
                   <span style={{ fg: theme.textMuted }}> · {Locale.number(collapsedDisplayText().hiddenLines)} more lines</span>
                 </Show>
                 <span style={{ fg: theme.textMuted }}>
-                  {" "}· click to {expandedText() ? "collapse" : "expand"}
+                  {" "}· click to {effectiveExpandedText() ? "collapse" : "expand"}
                 </span>
               </text>
             </Show>
-            <Show when={files().length}>
+            <Show when={effectiveExpandedText() && expandedMaxOffset() > 0}>
+              <box flexDirection="row" justifyContent="space-between" width="100%" gap={2}>
+                <text
+                  fg={theme.textMuted}
+                  onMouseUp={(event) => {
+                    scrollExpandedText(-expandedViewportRows(), event)
+                  }}
+                >
+                  {expandedWindow().hasBefore ? "↑ earlier" : "  earlier"}
+                </text>
+                <text
+                  fg={theme.textMuted}
+                  onMouseUp={(event) => {
+                    scrollExpandedText(expandedViewportRows(), event)
+                  }}
+                >
+                  {expandedWindow().hasAfter ? "later ↓" : "later  "}
+                </text>
+                <text
+                  fg={theme.textMuted}
+                  onMouseUp={(event) => {
+                    toggleExpandedText(event)
+                  }}
+                >
+                  collapse
+                </text>
+              </box>
+            </Show>
+            <Show when={!props.simpleHistory && files().length}>
               <box flexDirection="row" paddingTop={1} gap={1} flexWrap="wrap">
                 <For each={files()}>
                   {(file) => {
@@ -3414,15 +4061,42 @@ function UserMessage(props: {
         </box>
       </Show>
       <Show when={compaction()}>
-        <box
-          marginTop={1}
-          border={["top"]}
-          title=" Compaction "
-          titleAlignment="center"
-          borderColor={theme.borderActive}
-        />
+        {(part) => (
+          <CompactionCard
+            reason={part().auto ? "auto" : "manual"}
+            overflow={part().overflow}
+            resume={part().resume}
+            tailStartID={part().tail_start_id}
+            summaryPreview={summaryPreview()}
+            transcriptPreview={transcriptPreview()}
+            hasSummary={Boolean(summaryPreview())}
+          />
+        )}
       </Show>
     </>
+  )
+}
+
+function UserMessageInternalScrollbar(props: { rows: number; offset: number; total: number }) {
+  const { theme } = useTheme()
+  const rows = createMemo(() => Math.max(1, props.rows))
+  const total = createMemo(() => Math.max(rows(), props.total))
+  const thumbSize = createMemo(() => Math.max(1, Math.round((rows() / total()) * rows())))
+  const thumbStart = createMemo(() => {
+    const maxStart = Math.max(0, rows() - thumbSize())
+    const maxOffset = Math.max(1, total() - rows())
+    return Math.max(0, Math.min(maxStart, Math.round((props.offset / maxOffset) * maxStart)))
+  })
+
+  return (
+    <box flexDirection="column" flexShrink={0}>
+      <For each={Array.from({ length: rows() })}>
+        {(_, index) => {
+          const active = createMemo(() => index() >= thumbStart() && index() < thumbStart() + thumbSize())
+          return <text fg={active() ? theme.textMuted : theme.backgroundElement}>{active() ? "█" : "│"}</text>
+        }}
+      </For>
+    </box>
   )
 }
 
@@ -3442,7 +4116,7 @@ export function memoryToastMessage(info: SessionMemoryMetadata | undefined) {
   return `Memory checked: ${Locale.truncate(reason, 72)}`
 }
 
-function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; last: boolean }) {
+function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; last: boolean; simpleHistory?: boolean }) {
   const ctx = use()
   const local = useLocal()
   const mend = useMendTuiProfile()
@@ -3462,6 +4136,12 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   const final = createMemo(() => {
     return props.message.finish && !["tool-calls", "unknown"].includes(props.message.finish)
   })
+  const streamingCompactionSummary = createMemo(() => {
+    return props.message.summary === true && !props.message.time.completed && mend.profile.presentation.profile !== "raw"
+  })
+  const simpleTextParts = createMemo(() =>
+    props.parts.filter((part): part is TextPart => part.type === "text" && part.text.trim().length > 0),
+  )
 
   const duration = createMemo(() => {
     if (!final()) return 0
@@ -3475,6 +4155,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
     props.parts.findIndex((part) => part.type === "tool" && part.tool === "plan_review"),
   )
   const visibleParts = createMemo(() => {
+    if (streamingCompactionSummary()) return []
     const planReviewIndex = firstPlanReviewIndex()
     if (planReviewIndex < 0) return props.parts
     return props.parts.filter((part, index) => !(index < planReviewIndex && part.type === "text"))
@@ -3489,7 +4170,14 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   )
 
   return (
-    <>
+    <Switch>
+      <Match when={props.simpleHistory}>
+        <For each={simpleTextParts()}>
+          {(part) => <TextPart last={false} part={part} message={props.message} />}
+        </For>
+      </Match>
+      <Match when={true}>
+        <>
       <Show
         when={groupedTimeline()}
         fallback={
@@ -3542,6 +4230,11 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           </For>
         )}
       </Show>
+      <Show when={streamingCompactionSummary()}>
+        <box paddingLeft={3} marginTop={1} flexShrink={0}>
+          <text fg={theme.textMuted} wrapMode="none">Compacting context…</text>
+        </box>
+      </Show>
       <Show when={props.message.error && props.message.error.name !== "MessageAbortedError"}>
         <box
           border={["left"]}
@@ -3585,7 +4278,9 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           </box>
         </Match>
       </Switch>
-    </>
+        </>
+      </Match>
+    </Switch>
   )
 }
 
@@ -3605,17 +4300,25 @@ function updateToolBreakMargin(el: BoxRenderable, setMargin: (value: number) => 
 
 function TimelineRowView(props: { row: TimelineRow; stackStart?: boolean }) {
   const { theme } = useTheme()
+  const mend = useMendTuiProfile()
   const active = createMemo(() => props.row.state === "pending" || props.row.state === "running")
   const failed = createMemo(() => props.row.state === "error" || props.row.class === "failure")
   const planning = createMemo(() => props.row.class === "planning")
   const lines = createMemo(() => props.row.lines ?? [])
   const detailed = createMemo(() => lines().length > 0)
-  const color = createMemo(() =>
-    failed() ? theme.error : planning() ? theme.warning : active() ? theme.text : theme.textMuted,
-  )
-  const icon = createMemo(() => (planning() ? "" : failed() ? "×" : "◆"))
+  const color = createMemo(() => {
+    if (failed()) return theme.error
+    if (planning()) return theme.warning
+    if (active()) return theme.text
+    return theme.textMuted
+  })
+  const icon = createMemo(() => toolPresentationIconForProfile(mend.profile.presentation.profile, props.row.tool, failed() ? "failure" : props.row.class))
+  const marginTop = createMemo(() => {
+    if (mend.profile.presentation.profile === "minimal" && planning()) return 0
+    return props.stackStart ? 1 : 0
+  })
   return (
-    <box paddingLeft={3} marginTop={props.stackStart ? 1 : 0} flexShrink={0} flexDirection="column">
+    <box paddingLeft={3} marginTop={marginTop()} flexShrink={0} flexDirection="column">
       <Show
         when={detailed()}
         fallback={
@@ -3625,7 +4328,10 @@ function TimelineRowView(props: { row: TimelineRow; stackStart?: boolean }) {
           </text>
         }
       >
-        <text fg={failed() ? theme.error : active() ? theme.text : theme.textMuted}>╭─ {props.row.title}</text>
+        <text fg={failed() ? theme.error : active() ? theme.text : theme.textMuted}>
+          ╭─ <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+          {props.row.title}
+        </text>
         <For each={lines()}>{(line) => <text fg={theme.textMuted}>│ {line}</text>}</For>
         <text fg={theme.textMuted}>╰─</text>
       </Show>
@@ -3637,6 +4343,7 @@ function TimelineCollapseRow(props: { collapse: TimelineCollapse; stackStart?: b
   const { theme } = useTheme()
   const [expanded, setExpanded] = createSignal(false)
   const [hover, setHover] = createSignal(false)
+  const label = createMemo(() => timelineCollapseLabel(props.collapse))
   return (
     <box flexDirection="column" flexShrink={0} marginTop={props.stackStart ? 1 : 0}>
       <box
@@ -3646,7 +4353,7 @@ function TimelineCollapseRow(props: { collapse: TimelineCollapse; stackStart?: b
         onMouseUp={() => setExpanded((value) => !value)}
       >
         <text fg={hover() || expanded() ? theme.text : theme.textMuted}>
-          ◇ {props.collapse.count} more
+          ◇ {label()}
           <Show when={hover()}>
             <span style={{ fg: theme.textMuted }}> · click to {expanded() ? "collapse" : "expand"}</span>
           </Show>
@@ -3713,6 +4420,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
   const activeReasoningLabel = createMemo(() => "Thinking")
   const display = createMemo(() => rawReasoningDisplay(content()))
   const streaming = createMemo(() => !isDone())
+  const rawBottomMargin = createMemo(() => (display().body ? 1 : 0))
   const fullReasoningTitle = createMemo(() => {
     const summary = reasoningSummary(content())
     const line = (summary.title ?? summary.body.split(/\r?\n/).find((item) => item.trim()) ?? "").trim()
@@ -3728,6 +4436,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
             id={`reasoning-${props.message.id}-${props.part.id}`}
             paddingLeft={3}
             marginTop={1}
+            marginBottom={rawBottomMargin()}
             flexDirection="column"
             flexShrink={0}
           >
@@ -3868,19 +4577,30 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   const textPaddingLeft = 3
   const renderer = createMemo(() => mend.profile.presentation.message.renderer)
   const streaming = createMemo(() => props.last && !props.message.time.completed)
-  const source = createMemo(() => (streaming() ? props.part.text.trimStart() : props.part.text.trim()))
+  const source = createMemo(() => {
+    const text = streaming() ? props.part.text.trimStart() : props.part.text.trim()
+    if (streaming() && (renderer() === "markdown" || renderer() === "rich")) return visibleStreamingMarkdownPreview(text)
+    return text
+  })
   const messageWidth = createMemo(() =>
     sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)),
   )
   const markdownWidth = createMemo(() => Math.max(1, messageWidth() - textPaddingLeft))
   const richRenderWidth = createMemo(() => Math.min(markdownWidth(), 100))
   const hasMermaid = createMemo(() => hasMermaidFence(source()))
+  let streamingMarkdownState: StreamingPlanMarkdownState | undefined
   const streamingMarkdownContent = createMemo(() => {
-    if (!streaming()) return
-    if (renderer() !== "markdown" && renderer() !== "rich") {
+    if (!streaming()) {
+      streamingMarkdownState = undefined
       return
     }
-    return { content: "", tail: source() }
+    if (renderer() !== "markdown" && renderer() !== "rich") {
+      streamingMarkdownState = undefined
+      return
+    }
+    const result = renderPlanMarkdownStreaming(source(), richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" }, streamingMarkdownState)
+    streamingMarkdownState = result.state
+    return result
   })
   const markdownStaticContent = createMemo(() => {
     if (renderer() !== "markdown" && renderer() !== "rich") return
@@ -3900,9 +4620,11 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   )
   const markdownContent = createMemo(() => streamingMarkdownContent()?.content ?? markdownStaticContent() ?? richContent() ?? source())
   const markdownTail = createMemo(() => {
+    if (streaming()) return ""
     const tail = streamingMarkdownContent()?.tail ?? ""
     return renderStreamingMarkdownTail(tail, richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" }, {
       finalized: !streaming(),
+      output: streaming() ? "text" : "markdown",
     })
   })
   return (
@@ -3929,10 +4651,11 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
               conceal={ctx.conceal()}
               fg={theme.markdownText}
               bg={theme.background}
-              stableTextMode={false}
+              stableTextMode={!streaming()}
               colorizeHex={true}
               streamingTail={markdownTail()}
               streamingTailColorizeHex={true}
+              streamingTailMode={streaming() ? "text" : "markdown"}
             />
           </Match>
           <Match when={true}>
@@ -3969,6 +4692,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
   // Hide tool if showDetails is false and tool completed successfully
   const shouldHide = createMemo(() => {
     if (ctx.showDetails()) return false
+    if (props.part.tool === "loop") return false
     if (props.part.state.status !== "completed") return false
     return true
   })
@@ -4003,7 +4727,13 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
           <PlanReviewToolRow {...toolprops} />
         </Match>
         <Match when={rowOnly()}>
-          <PresentationToolRow tool={props.part.tool} state={props.part.state.status} input={toolprops.input} />
+          <PresentationToolRow
+            tool={props.part.tool}
+            state={props.part.state.status}
+            input={toolprops.input}
+            metadata={toolprops.metadata}
+            output={toolprops.output}
+          />
         </Match>
         <Match when={props.part.tool === ShellID.ToolID}>
           <Shell {...toolprops} />
@@ -4070,7 +4800,7 @@ function PlanReviewToolRow(props: ToolProps<any>) {
   })
   return (
     <InlineTool
-      icon="◈"
+      icon={toolPresentationIcon("plan_review", "planning")}
       iconColor={theme.warning}
       pending="Opening plan review..."
       complete={props.part.state.status !== "pending"}
@@ -4083,19 +4813,22 @@ function PlanReviewToolRow(props: ToolProps<any>) {
   )
 }
 
-function PresentationToolRow(props: { tool: string; state: string; input: Record<string, any> }) {
+function PresentationToolRow(props: { tool: string; state: string; input: Record<string, any>; metadata?: Record<string, any>; output?: unknown }) {
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
   const [margin, setMargin] = createSignal(0)
   const pending = createMemo(() => props.state === "pending" || props.state === "running")
   const errored = createMemo(() => props.state === "error")
-  const event = createMemo(() => normalizeToolEvent({ tool: props.tool, state: props.state, input: props.input }))
-  const icon = createMemo(() => {
-    if (mend.profile.presentation.profile === "minimal") return props.state === "completed" ? "←" : "→"
-    if (errored()) return "×"
-    return "◈"
-  })
+  const event = createMemo(() =>
+    normalizeToolEvent({ tool: props.tool, state: props.state, input: props.input, metadata: props.metadata, output: props.output }),
+  )
+  const icon = createMemo(() => toolPresentationIconForProfile(mend.profile.presentation.profile, props.tool, errored() ? "failure" : event().class))
   const title = createMemo(() => event().title)
+  const rowColor = createMemo(() => {
+    if (errored()) return theme.error
+    if (pending()) return theme.text
+    return theme.textMuted
+  })
   const detail = createMemo(() => {
     if (mend.profile.presentation.profile === "minimal") return title()
     return title()
@@ -4112,8 +4845,9 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
             updateToolBreakMargin(this as BoxRenderable, setMargin)
           }}
         >
-          <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>
-            {icon()} {detail()}
+          <text fg={rowColor()}>
+            <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+            {detail()}
           </text>
         </box>
       }
@@ -4129,8 +4863,9 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
               updateToolBreakMargin(this as BoxRenderable, setMargin)
             }}
           >
-            <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>
-              {icon()} {title()}
+            <text fg={rowColor()}>
+              <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+              {title()}
             </text>
           </box>
         }
@@ -4144,7 +4879,10 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
             updateToolBreakMargin(this as BoxRenderable, setMargin)
           }}
         >
-          <text fg={errored() ? theme.error : pending() ? theme.text : theme.textMuted}>╭─ {title()}</text>
+          <text fg={rowColor()}>
+            ╭─ <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+            {title()}
+          </text>
           <For each={event().lines}>{(line) => <text fg={theme.textMuted}>│ {line}</text>}</For>
           <Show when={event().result}>{(result) => <text fg={theme.textMuted}>╰─ {result()}</text>}</Show>
         </box>
@@ -4178,7 +4916,7 @@ function GenericTool(props: ToolProps<any>) {
     <Show
       when={props.output && ctx.showGenericToolOutput()}
       fallback={
-        <InlineTool icon="⚙" pending="Writing command..." complete={true} part={props.part}>
+        <InlineTool icon={toolPresentationIcon(props.tool)} pending="Writing command..." complete={true} part={props.part}>
           {props.tool} {input(props.input)}
         </InlineTool>
       }
@@ -4214,7 +4952,9 @@ function InlineTool(props: {
   const ctx = use()
   const sync = useSync()
   const renderer = useRenderer()
+  const mend = useMendTuiProfile()
   const [hover, setHover] = createSignal(false)
+  const showIcon = createMemo(() => mend.profile.presentation.profile !== "minimal")
 
   const permission = createMemo(() => {
     const callID = sync.data.permission[ctx.sessionID]?.at(0)?.tool?.callID
@@ -4263,7 +5003,10 @@ function InlineTool(props: {
           <Match when={true}>
             <text paddingLeft={3} fg={fg()} attributes={denied() ? TextAttributes.STRIKETHROUGH : undefined}>
               <Show fallback={<>~ {props.pending}</>} when={props.complete}>
-                <span style={{ fg: props.iconColor }}>{props.icon}</span> {props.children}
+                <Show when={showIcon()}>
+                  <span style={{ fg: props.iconColor }}>{props.icon}</span>{" "}
+                </Show>
+                {props.children}
               </Show>
             </text>
           </Match>
@@ -4292,11 +5035,13 @@ function ToolErrorText(props: { message: string }) {
 }
 
 function BlockTool(props: {
-  title: string
+  title: JSX.Element
   children: JSX.Element
   onClick?: () => void
   part?: ToolPart
   spinner?: boolean
+  icon?: string
+  iconColor?: RGBA
   titleColor?: RGBA
   titleAttributes?: typeof TextAttributes.BOLD
   variant?: "plain" | "left-line"
@@ -4305,19 +5050,25 @@ function BlockTool(props: {
   paddingBottom?: number
 }) {
   const { theme } = useTheme()
+  const mend = useMendTuiProfile()
   const renderer = useRenderer()
   const [margin, setMargin] = createSignal(0)
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error : undefined))
+  const showIcon = createMemo(() => Boolean(props.icon && mend.profile.presentation.profile === "mendcode"))
+  const titleText = createMemo(() => (typeof props.title === "string" ? props.title.replace(/^# /, "") : props.title))
   const title = () => (
     <Show
       when={props.spinner}
       fallback={
         <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
+          <Show when={showIcon()}>
+            <span style={{ fg: props.iconColor ?? props.titleColor ?? theme.textMuted }}>{props.icon}</span>{" "}
+          </Show>
           {props.title}
         </text>
       }
     >
-      <Spinner color={props.titleColor ?? theme.textMuted}>{props.title.replace(/^# /, "")}</Spinner>
+      <Spinner color={props.titleColor ?? theme.textMuted}>{titleText()}</Spinner>
     </Show>
   )
   const content = () => (
@@ -4369,12 +5120,11 @@ function CommandOutput(props: {
       paddingRight={1}
       gap={1}
     >
-      <box flexDirection="row" gap={1}>
-        <text fg={theme.textMuted}>$</text>
-        <text fg={theme.primary} attributes={TextAttributes.BOLD}>
-          {props.command}
+      <Show when={props.command}>
+        <text fg={theme.textMuted} wrapMode="word">
+          command: {props.command}
         </text>
-      </box>
+      </Show>
       <Show when={props.output}>
         <box paddingLeft={2} flexDirection="column">
           <For each={props.output?.split("\n") ?? []}>{(line) => <text fg={theme.textMuted}>{line || " "}</text>}</For>
@@ -4387,6 +5137,42 @@ function CommandOutput(props: {
         </text>
       </Show>
     </box>
+  )
+}
+
+function DiffStatsText(props: { stats: TimelineDiffStats }) {
+  const { theme } = useTheme()
+  const hasAdditions = () => props.stats.additions > 0
+  const hasDeletions = () => props.stats.deletions > 0
+  return (
+    <Show when={hasAdditions() || hasDeletions()}>
+      <span> (</span>
+      <Show when={hasAdditions()}>
+        <span style={{ fg: theme.diffHighlightAdded }}>+{props.stats.additions}</span>
+      </Show>
+      <Show when={hasAdditions() && hasDeletions()}>
+        <span> </span>
+      </Show>
+      <Show when={hasDeletions()}>
+        <span style={{ fg: theme.diffHighlightRemoved }}>-{props.stats.deletions}</span>
+      </Show>
+      <span>)</span>
+    </Show>
+  )
+}
+
+function PatchTitle(props: { file: { type?: unknown; filePath?: unknown; movePath?: unknown; relativePath?: unknown; additions?: unknown; deletions?: unknown }; patch: string }) {
+  const type = typeof props.file.type === "string" ? props.file.type : ""
+  const from = typeof props.file.filePath === "string" ? props.file.filePath : undefined
+  const pathLabel = patchFilePath(props.file)
+  const stats = diffStatsFromFile(props.file, props.patch)
+  const action = type === "delete" ? "Deleted" : type === "add" ? "Added" : "Patched"
+  return (
+    <>
+      {action} {type === "move" && from ? `${from} -> ` : ""}
+      {pathLabel}
+      <DiffStatsText stats={stats} />
+    </>
   )
 }
 
@@ -4422,18 +5208,27 @@ function Shell(props: ToolProps<typeof ShellTool>) {
     return match ? absolute.replace(home, "~") : absolute
   })
 
-  const title = createMemo(() => {
-    const desc = props.input.description ?? "Shell"
-    const wd = workdirDisplay()
-    if (!wd) return `# ${desc}`
-    if (desc.includes(wd)) return `# ${desc}`
-    return `# ${desc} in ${wd}`
-  })
   const elapsed = createMemo(() => {
     if (!isRunning()) return
     const start = props.part.state.status === "running" ? props.part.state.time.start : undefined
     if (!start) return
     return formatDuration(Math.max(0, Math.round((now() - start) / 1000)))
+  })
+  const title = createMemo(() => {
+    const desc = props.input.description ?? "Shell"
+    const wd = workdirDisplay()
+    const showWorkdir = wd && !desc.includes(wd)
+    return (
+      <>
+        <span>{desc}</span>
+        <Show when={showWorkdir}>
+          {(value) => <span style={{ fg: theme.textMuted }}> · {value()}</span>}
+        </Show>
+        <Show when={elapsed()}>
+          {(value) => <span style={{ fg: theme.textMuted }}> · {value()}</span>}
+        </Show>
+      </>
+    )
   })
 
   const interval = setInterval(() => setNow(Date.now()), 1000)
@@ -4445,6 +5240,7 @@ function Shell(props: ToolProps<typeof ShellTool>) {
         <BlockTool
           title={title()}
           part={props.part}
+          icon={toolPresentationIcon("bash")}
           spinner={isRunning()}
           titleColor={theme.primary}
           titleAttributes={TextAttributes.BOLD}
@@ -4455,7 +5251,12 @@ function Shell(props: ToolProps<typeof ShellTool>) {
           <CommandOutput
             command={props.input.command ?? ""}
             output={output() ? limited() : undefined}
-            empty={<text fg={theme.textMuted}>No output emitted yet · running {elapsed()}</text>}
+            empty={
+              <text fg={theme.textMuted}>
+                No output emitted yet
+                <Show when={elapsed()}>{(value) => <span> · running {value()}</span>}</Show>
+              </text>
+            }
             overflow={overflow()}
             expanded={expanded()}
             running={isRunning()}
@@ -4463,7 +5264,7 @@ function Shell(props: ToolProps<typeof ShellTool>) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="$" pending="Writing command..." complete={props.input.command} part={props.part}>
+        <InlineTool icon={toolPresentationIcon("bash")} pending="Writing command..." complete={props.input.command} part={props.part}>
           {props.input.command}
         </InlineTool>
       </Match>
@@ -4482,9 +5283,13 @@ function Write(props: ToolProps<typeof WriteTool>) {
     <Switch>
       <Match when={props.metadata.diagnostics !== undefined}>
         <BlockTool
-          title={"# Wrote " + normalizePath(props.input.filePath!)}
-          titleColor={theme.diffHighlightAdded}
+          title={"Added " + normalizePath(props.input.filePath!)}
+          icon={toolPresentationIcon("write")}
+          iconColor={theme.diffHighlightAdded}
+          titleColor={theme.text}
           part={props.part}
+          contentGap={0}
+          paddingBottom={0}
         >
           <box backgroundColor={theme.diffAddedBg}>
             <line_number fg={theme.diffHighlightAdded} minWidth={3} paddingRight={1}>
@@ -4501,7 +5306,7 @@ function Write(props: ToolProps<typeof WriteTool>) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="←" pending="Preparing write..." complete={props.input.filePath} part={props.part}>
+        <InlineTool icon={toolPresentationIcon("write")} pending="Preparing write..." complete={props.input.filePath} part={props.part}>
           Write {normalizePath(props.input.filePath!)}
         </InlineTool>
       </Match>
@@ -4511,7 +5316,7 @@ function Write(props: ToolProps<typeof WriteTool>) {
 
 function Glob(props: ToolProps<typeof GlobTool>) {
   return (
-    <InlineTool icon="✱" pending="Finding files..." complete={props.input.pattern} part={props.part}>
+    <InlineTool icon={toolPresentationIcon("glob")} pending="Finding files..." complete={props.input.pattern} part={props.part}>
       Glob "{props.input.pattern}" <Show when={props.input.path}>in {normalizePath(props.input.path)} </Show>
       <Show when={props.metadata.count}>
         ({props.metadata.count} {props.metadata.count === 1 ? "match" : "matches"})
@@ -4533,7 +5338,7 @@ function Read(props: ToolProps<typeof ReadTool>) {
   return (
     <>
       <InlineTool
-        icon="→"
+        icon={toolPresentationIcon("read")}
         pending="Reading file..."
         complete={props.input.filePath}
         spinner={isRunning()}
@@ -4556,7 +5361,7 @@ function Read(props: ToolProps<typeof ReadTool>) {
 
 function Grep(props: ToolProps<typeof GrepTool>) {
   return (
-    <InlineTool icon="✱" pending="Searching content..." complete={props.input.pattern} part={props.part}>
+    <InlineTool icon={toolPresentationIcon("grep")} pending="Searching content..." complete={props.input.pattern} part={props.part}>
       Grep "{props.input.pattern}" <Show when={props.input.path}>in {normalizePath(props.input.path)} </Show>
       <Show when={props.metadata.matches}>
         ({props.metadata.matches} {props.metadata.matches === 1 ? "match" : "matches"})
@@ -4567,18 +5372,29 @@ function Grep(props: ToolProps<typeof GrepTool>) {
 
 function WebFetch(props: ToolProps<typeof WebFetchTool>) {
   return (
-    <InlineTool icon="%" pending="Fetching from the web..." complete={props.input.url} part={props.part}>
+    <InlineTool icon={toolPresentationIcon("webfetch")} pending="Fetching from the web..." complete={props.input.url} part={props.part}>
       WebFetch {props.input.url}
     </InlineTool>
   )
 }
 
 function WebSearch(props: ToolProps<typeof WebSearchTool>) {
+  const { theme } = useTheme()
   const metadata = props.metadata as { numResults?: number }
+  const urls = createMemo(() => webSearchUrlLines(props.metadata as Record<string, unknown>, props.output))
   return (
-    <InlineTool icon="◈" pending="Searching web..." complete={props.input.query} part={props.part}>
-      Exa Web Search "{props.input.query}" <Show when={metadata.numResults}>({metadata.numResults} results)</Show>
-    </InlineTool>
+    <>
+      <InlineTool icon={toolPresentationIcon("websearch")} pending="Searching web..." complete={props.input.query} part={props.part}>
+        Web Search "{props.input.query}" <Show when={metadata.numResults}>({metadata.numResults} results)</Show>
+      </InlineTool>
+      <For each={urls()}>
+        {(url) => (
+          <box paddingLeft={6} flexShrink={0}>
+            <text fg={theme.textMuted} wrapMode="word">{url}</text>
+          </box>
+        )}
+      </For>
+    </>
   )
 }
 
@@ -4799,7 +5615,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
   return (
     <Show when={!continuation().duplicate}>
       <InlineTool
-        icon="│"
+        icon={toolPresentationIcon("task")}
         spinner={isTaskActive()}
         complete={props.input.description}
         pending="Delegating..."
@@ -4830,7 +5646,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
 
 function Edit(props: ToolProps<typeof EditTool>) {
   const ctx = use()
-  const { syntax } = useTheme()
+  const { syntax, theme } = useTheme()
 
   const view = createMemo(() => {
     const diffStyle = ctx.tui.diff_style
@@ -4846,8 +5662,21 @@ function Edit(props: ToolProps<typeof EditTool>) {
   return (
     <Switch>
       <Match when={props.metadata.diff !== undefined}>
-        <BlockTool title={"← Edit " + normalizePath(props.input.filePath!)} part={props.part}>
-          <box paddingLeft={1}>
+        <BlockTool
+          title={
+            <>
+              Edited {normalizePath(props.input.filePath!)}
+              <DiffStatsText stats={diffStatsFromPatch(diffContent() ?? "")} />
+            </>
+          }
+          icon={toolPresentationIcon("edit")}
+          iconColor={theme.textMuted}
+          titleColor={theme.text}
+          part={props.part}
+          contentGap={0}
+          paddingBottom={0}
+        >
+          <box>
             <TimelineDiff
               diff={diffContent() ?? ""}
               view={view()}
@@ -4860,7 +5689,7 @@ function Edit(props: ToolProps<typeof EditTool>) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="←" pending="Preparing edit..." complete={props.input.filePath} part={props.part}>
+        <InlineTool icon={toolPresentationIcon("edit")} pending="Preparing edit..." complete={props.input.filePath} part={props.part}>
           Edit {normalizePath(props.input.filePath!)} {input({ replaceAll: props.input.replaceAll })}
         </InlineTool>
       </Match>
@@ -4882,7 +5711,7 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
 
   function Diff(p: { diff: string; filePath: string }) {
     return (
-      <box paddingLeft={1}>
+      <box>
         <TimelineDiff
           diff={p.diff}
           view={view()}
@@ -4894,17 +5723,14 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
     )
   }
 
-  function title(file: { type: string; relativePath: string; filePath: string; deletions: number }) {
-    if (file.type === "delete") return "# Deleted " + file.relativePath
-    if (file.type === "add") return "# Created " + file.relativePath
-    if (file.type === "move") return "# Moved " + normalizePath(file.filePath) + " → " + file.relativePath
-    return "← Patched " + file.relativePath
+  function titleColor(file: { type: string }) {
+    return theme.text
   }
 
-  function titleColor(file: { type: string }) {
+  function iconColor(file: { type: string }) {
     if (file.type === "delete") return theme.diffHighlightRemoved
     if (file.type === "add") return theme.diffHighlightAdded
-    return undefined
+    return theme.textMuted
   }
 
   return (
@@ -4912,7 +5738,15 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
       <Match when={files().length > 0}>
         <For each={files()}>
           {(file) => (
-            <BlockTool title={title(file)} titleColor={titleColor(file)} part={props.part}>
+            <BlockTool
+              title={<PatchTitle file={file} patch={file.patch} />}
+              icon={file.type === "delete" ? "-" : file.type === "add" ? "+" : toolPresentationIcon("apply_patch")}
+              iconColor={iconColor(file)}
+              titleColor={titleColor(file)}
+              part={props.part}
+              contentGap={0}
+              paddingBottom={0}
+            >
               <Diff diff={file.patch} filePath={file.filePath} />
               <Diagnostics diagnostics={props.metadata.diagnostics} filePath={file.movePath ?? file.filePath} />
             </BlockTool>
@@ -4920,7 +5754,7 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
         </For>
       </Match>
       <Match when={true}>
-        <InlineTool icon="%" pending="Preparing patch..." complete={false} part={props.part}>
+        <InlineTool icon={toolPresentationIcon("apply_patch")} pending="Preparing patch..." complete={false} part={props.part}>
           Patch
         </InlineTool>
       </Match>
@@ -4978,7 +5812,7 @@ function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="⚙" pending="Updating todos..." complete={false} part={props.part}>
+        <InlineTool icon={toolPresentationIcon("todowrite")} pending="Updating todos..." complete={false} part={props.part}>
           Updating todos...
         </InlineTool>
       </Match>
@@ -5010,7 +5844,7 @@ function Question(props: ToolProps<typeof QuestionTool>) {
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="→" pending="Asking questions..." complete={count()} part={props.part}>
+        <InlineTool icon={toolPresentationIcon("question")} pending="Asking questions..." complete={count()} part={props.part}>
           Asked {count()} question{count() !== 1 ? "s" : ""}
         </InlineTool>
       </Match>
@@ -5020,7 +5854,7 @@ function Question(props: ToolProps<typeof QuestionTool>) {
 
 function Skill(props: ToolProps<typeof SkillTool>) {
   return (
-    <InlineTool icon="→" pending="Loading skill..." complete={props.input.name} part={props.part}>
+    <InlineTool icon={toolPresentationIcon("skill")} pending="Loading skill..." complete={props.input.name} part={props.part}>
       Skill "{props.input.name}"
     </InlineTool>
   )
@@ -5028,10 +5862,13 @@ function Skill(props: ToolProps<typeof SkillTool>) {
 
 function Loop(props: ToolProps<typeof LoopTool>) {
   const session = use()
+  const sdk = useSDK()
+  const toast = useToast()
   const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
   const { navigate } = useRoute()
   const [hover, setHover] = createSignal(false)
+  const [refresh, setRefresh] = createSignal(0)
 
   const action = createMemo(() => (typeof props.input.action === "string" ? props.input.action : "loop"))
   const workflowID = createMemo(() => (typeof props.metadata.workflowID === "string" ? props.metadata.workflowID : undefined))
@@ -5045,9 +5882,31 @@ function Loop(props: ToolProps<typeof LoopTool>) {
     return workflows.find((item) => Boolean(item && typeof item === "object"))
   })
   const resolvedWorkflowID = createMemo(() => workflowID() ?? firstWorkflow()?.workflowID)
-  const resolvedRootSessionID = createMemo(() => rootSessionID() ?? firstWorkflow()?.rootSessionID)
+  async function fetchLoopSnapshot() {
+    const id = resolvedWorkflowID()
+    if (!id) return undefined
+    const response = await sdk.fetch(`${sdk.url}/loop/${id}`, { headers: { accept: "application/json" } })
+    if (!response.ok) return undefined
+    return response.json().catch(() => undefined) as Promise<SessionLoopSnapshot | undefined>
+  }
+  const [snapshot] = createResource(
+    () => `${resolvedWorkflowID() ?? ""}:${refresh()}`,
+    fetchLoopSnapshot,
+  )
+  onMount(() => {
+    const unsubscribe = sdk.event.on("event", (evt) => {
+      const type = evt.payload?.type as string | undefined
+      const id = ((evt.payload as { properties?: Record<string, unknown> } | undefined)?.properties)?.workflowID
+      if (type?.startsWith("loop.") && (!resolvedWorkflowID() || id === resolvedWorkflowID())) setRefresh((value) => value + 1)
+    })
+    onCleanup(() => unsubscribe())
+  })
+  const liveWorkflow = createMemo(() => snapshot.latest?.workflow)
+  const latestRun = createMemo(() => snapshot.latest?.runs?.toSorted((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0))[0])
+  const latestCheckpoint = createMemo(() => latestRun()?.checkpoint)
+  const resolvedRootSessionID = createMemo(() => liveWorkflow()?.rootSessionID ?? rootSessionID() ?? firstWorkflow()?.rootSessionID)
   const title = createMemo(() => {
-    const name = firstWorkflow()?.name ?? (typeof props.input.name === "string" ? props.input.name : undefined)
+    const name = liveWorkflow()?.name ?? firstWorkflow()?.name ?? (typeof props.input.name === "string" ? props.input.name : undefined)
     if (name?.trim()) return name.trim()
     if (action() === "list") return "Loop dashboard"
     if (action() === "draft") return "Loop draft"
@@ -5055,7 +5914,7 @@ function Loop(props: ToolProps<typeof LoopTool>) {
   })
   const objective = createMemo(() => {
     const metadataObjective = typeof props.metadata.objective === "string" ? props.metadata.objective.trim() : ""
-    const workflowObjective = firstWorkflow()?.objective?.trim() ?? ""
+    const workflowObjective = liveWorkflow()?.objective?.trim() ?? firstWorkflow()?.objective?.trim() ?? ""
     const inputObjective = typeof props.input.objective === "string" ? props.input.objective.trim() : ""
     const value = metadataObjective || workflowObjective || inputObjective
     return value || undefined
@@ -5085,8 +5944,8 @@ function Loop(props: ToolProps<typeof LoopTool>) {
   const receipt = createMemo(() => sessionLoopReceipt({
     action: action(),
     toolStatus: props.part.state.status,
-    workflowState: props.metadata.state ?? firstWorkflow()?.state,
-    workflowPhase: props.metadata.phase ?? firstWorkflow()?.phase,
+    workflowState: liveWorkflow()?.state ?? props.metadata.state ?? firstWorkflow()?.state,
+    workflowPhase: liveWorkflow()?.phase ?? props.metadata.phase ?? firstWorkflow()?.phase,
   }))
   const receiptColor = createMemo(() => {
     if (receipt().tone === "success") return theme.success
@@ -5100,16 +5959,34 @@ function Loop(props: ToolProps<typeof LoopTool>) {
   const compact = (value: string, width = Math.max(16, panelWidth() - 22)) => Locale.truncateMiddle(value.replace(/\s+/g, " ").trim(), width)
   const rows = createMemo(() => [
     { label: "workflow", value: resolvedWorkflowID() ?? "pending", color: resolvedWorkflowID() ? theme.secondary : theme.textMuted },
-    { label: "chat", value: resolvedRootSessionID() ?? "created on activation", color: resolvedRootSessionID() ? theme.secondary : theme.textMuted },
+    {
+      label: "chat",
+      value: resolvedRootSessionID()
+        ? snapshot.latest && !snapshot.latest.rootSession ? `${resolvedRootSessionID()} (missing)` : resolvedRootSessionID()!
+        : "created on activation",
+      color: resolvedRootSessionID() ? theme.secondary : theme.textMuted,
+    },
     { label: "event", value: triggerLabel(), color: theme.text },
     { label: "mode", value: permissionLabel() ?? "session default", color: permissionLabel() === "report-only" ? theme.warning : theme.text },
     { label: "model", value: modelLabel(), color: theme.text },
     { label: "agent", value: agentLabel(), color: theme.text },
   ])
-  const openTarget = () => {
+  const statusSummary = createMemo(() => {
+    const summary = latestCheckpoint()?.summary ?? liveWorkflow()?.evaluatorReason ?? latestRun()?.evaluatorReason
+    if (!summary) return undefined
+    return compact(summary, Math.max(24, panelWidth() - 8))
+  })
+  const nextAction = createMemo(() => latestCheckpoint()?.nextAction)
+  const openTarget = async () => {
     const root = resolvedRootSessionID()
     if (root) {
-      navigate({ type: "session", sessionID: root })
+      const result = await sdk.client.session.get({ sessionID: root }).catch(() => undefined)
+      if (result?.data) {
+        navigate({ type: "session", sessionID: root })
+        return
+      }
+      toast.show({ variant: "warning", message: `Loop chat session not found: ${root}. Opening loop details.`, duration: 3500 })
+      navigate({ type: "loops", selectedID: resolvedWorkflowID(), returnTo: { type: "session", sessionID: session.sessionID } })
       return
     }
     navigate({ type: "loops", selectedID: resolvedWorkflowID(), returnTo: { type: "session", sessionID: session.sessionID } })
@@ -5118,7 +5995,8 @@ function Loop(props: ToolProps<typeof LoopTool>) {
 
   return (
     <BlockTool
-      title="↻ Loop Workflow"
+      title="Loop Workflow"
+      icon={toolPresentationIcon("loop")}
       titleColor={receiptColor()}
       contentGap={0}
       part={props.part}
@@ -5141,7 +6019,7 @@ function Loop(props: ToolProps<typeof LoopTool>) {
           onMouseOut={() => setHover(false)}
         >
           <box flexDirection="row">
-            <text fg={receiptColor()} attributes={TextAttributes.BOLD}>↻ {compact(title(), Math.max(18, panelWidth() - 24))}</text>
+            <text fg={receiptColor()} attributes={TextAttributes.BOLD}>{toolPresentationIcon("loop")} {compact(title(), Math.max(18, panelWidth() - 24))}</text>
             <box flexGrow={1} />
             <text fg={receiptColor()}>{receipt().label}</text>
           </box>
@@ -5158,6 +6036,17 @@ function Loop(props: ToolProps<typeof LoopTool>) {
               <text fg={theme.textMuted}>goal</text>
               <text fg={theme.text} wrapMode="word">{compact(objective() ?? "configured by loop tool", Math.max(24, panelWidth() - 8))}</text>
             </box>
+            <Show when={statusSummary()}>
+              {(summary) => (
+                <box marginTop={1} flexDirection="column">
+                  <text fg={theme.textMuted}>status</text>
+                  <text fg={receiptColor()} wrapMode="word">{summary()}</text>
+                  <Show when={nextAction()}>
+                    {(value) => <text fg={theme.textMuted} wrapMode="word">next: {compact(value(), Math.max(24, panelWidth() - 14))}</text>}
+                  </Show>
+                </box>
+              )}
+            </Show>
           </box>
           <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="row">
             <text fg={hover() ? theme.secondary : theme.textMuted}>{openLabel()}</text>

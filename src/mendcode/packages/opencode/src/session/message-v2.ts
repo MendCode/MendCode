@@ -2,23 +2,34 @@ import { BusEvent } from "@/bus/bus-event"
 import { SessionID, MessageID, PartID } from "./schema"
 import z from "zod"
 import { NamedError } from "@mendcode/core/util/error"
-import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
+import {
+  APICallError,
+  convertToModelMessages,
+  LoadAPIKeyError,
+  type AssistantModelMessage,
+  type FilePart as ModelFilePart,
+  type ModelMessage,
+  type UIMessage,
+  type UserModelMessage,
+} from "ai"
 import { LSP } from "@/lsp/lsp"
 import { Snapshot } from "@/snapshot"
 import { SyncEvent } from "../sync"
 import { Database } from "@/storage/db"
 import { NotFoundError } from "@/storage/storage"
 import { and } from "drizzle-orm"
+import { asc } from "drizzle-orm"
 import { desc } from "drizzle-orm"
 import { eq } from "drizzle-orm"
 import { inArray } from "drizzle-orm"
 import { lt } from "drizzle-orm"
 import { or } from "drizzle-orm"
+import { gt } from "drizzle-orm"
 import { MessageTable, PartTable, SessionTable } from "./session.sql"
 import * as ProviderError from "@/provider/error"
 import { iife } from "@/util/iife"
 import { errorMessage } from "@/util/error"
-import { isMedia } from "@/util/media"
+import { isMedia, sniffAttachmentMime } from "@/util/media"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
 import { ModelID, ProviderID } from "@/provider/schema"
@@ -51,6 +62,10 @@ const RETRYABLE_NETWORK_ERROR_CODES = new Set([
 type RetryableNetworkError = {
   message: string
   metadata: Record<string, string>
+}
+
+type EmbeddedDataUrlDownloadError = {
+  mediaType: string
 }
 
 export const SYNTHETIC_ATTACHMENT_PROMPT = "Attached image(s) from tool result:"
@@ -717,18 +732,117 @@ const info = (row: typeof MessageTable.$inferSelect) =>
     sessionID: row.session_id,
   }) as Info
 
-const part = (row: typeof PartTable.$inferSelect) =>
-  ({
+export type PageView = "full" | "tui"
+
+const TUI_TEXT_PREVIEW_CHARS = 128 * 1024
+const TUI_TOOL_OUTPUT_PREVIEW_CHARS = 16 * 1024
+const TUI_METADATA_PREVIEW_CHARS = 4 * 1024
+const TUI_FIELD_PREVIEW_CHARS = 2 * 1024
+
+function previewString(input: string, maxChars: number, _label: string) {
+  if (input.length <= maxChars) return input
+  return input.slice(0, maxChars)
+}
+
+function previewUnknown(input: unknown, maxChars: number, label: string, depth = 0): unknown {
+  if (typeof input === "string") return previewString(input, maxChars, label)
+  if (!input || typeof input !== "object") return input
+  if (depth >= 5) return input
+  if (Array.isArray(input)) return input.map((item) => previewUnknown(item, maxChars, label, depth + 1))
+
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(input)) {
+    const nextMax =
+      key === "output" || key === "diff" || key === "content"
+        ? maxChars
+        : Math.min(maxChars, TUI_FIELD_PREVIEW_CHARS)
+    result[key] = previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
+  }
+  return result
+}
+
+function previewFilePartForTui(part: FilePart): FilePart {
+  const dataUrl = part.url.startsWith("data:")
+  return {
+    ...part,
+    url: dataUrl ? previewString(part.url, TUI_FIELD_PREVIEW_CHARS, "file url") : part.url,
+    source: previewUnknown(part.source, TUI_FIELD_PREVIEW_CHARS, "file source") as FilePart["source"],
+  }
+}
+
+export function previewPartForTui(part: Part): Part {
+  switch (part.type) {
+    case "text":
+      return { ...part, text: previewString(part.text, TUI_TEXT_PREVIEW_CHARS, "text part") }
+    case "reasoning":
+      return { ...part, text: previewString(part.text, TUI_TEXT_PREVIEW_CHARS, "reasoning part") }
+    case "file":
+      return previewFilePartForTui(part)
+    case "snapshot":
+      return { ...part, snapshot: previewString(part.snapshot, TUI_FIELD_PREVIEW_CHARS, "snapshot") }
+    case "step-start":
+      return part.snapshot ? { ...part, snapshot: previewString(part.snapshot, TUI_FIELD_PREVIEW_CHARS, "snapshot") } : part
+    case "step-finish":
+      return {
+        ...part,
+        metadata: previewUnknown(part.metadata, TUI_METADATA_PREVIEW_CHARS, "step metadata") as typeof part.metadata,
+      }
+    case "tool": {
+      const state =
+        part.state.status === "pending"
+          ? {
+              ...part.state,
+              raw: previewString(part.state.raw, TUI_FIELD_PREVIEW_CHARS, "tool raw input"),
+              input: previewUnknown(part.state.input, TUI_FIELD_PREVIEW_CHARS, "tool input") as typeof part.state.input,
+            }
+          : part.state.status === "running"
+            ? {
+                ...part.state,
+                input: previewUnknown(part.state.input, TUI_FIELD_PREVIEW_CHARS, "tool input") as typeof part.state.input,
+                metadata: previewUnknown(part.state.metadata, TUI_METADATA_PREVIEW_CHARS, "tool metadata") as typeof part.state.metadata,
+              }
+            : part.state.status === "completed"
+              ? {
+                  ...part.state,
+                  input: previewUnknown(part.state.input, TUI_FIELD_PREVIEW_CHARS, "tool input") as typeof part.state.input,
+                  output: previewString(part.state.output, TUI_TOOL_OUTPUT_PREVIEW_CHARS, "tool output"),
+                  metadata: previewUnknown(part.state.metadata, TUI_METADATA_PREVIEW_CHARS, "tool metadata") as typeof part.state.metadata,
+                  attachments: part.state.attachments?.map(previewFilePartForTui),
+                }
+              : {
+                  ...part.state,
+                  input: previewUnknown(part.state.input, TUI_FIELD_PREVIEW_CHARS, "tool input") as typeof part.state.input,
+                  error: previewString(part.state.error, TUI_TOOL_OUTPUT_PREVIEW_CHARS, "tool error"),
+                  metadata: previewUnknown(part.state.metadata, TUI_METADATA_PREVIEW_CHARS, "tool metadata") as typeof part.state.metadata,
+                }
+      return {
+        ...part,
+        state,
+        metadata: previewUnknown(part.metadata, TUI_METADATA_PREVIEW_CHARS, "tool part metadata") as typeof part.metadata,
+      }
+    }
+    default:
+      return part
+  }
+}
+
+const part = (row: typeof PartTable.$inferSelect, view: PageView = "full") => {
+  const hydrated = {
     ...row.data,
     id: row.id,
     sessionID: row.session_id,
     messageID: row.message_id,
-  }) as Part
+  } as Part
+  return view === "tui" ? previewPartForTui(hydrated) : hydrated
+}
 
 const older = (row: Cursor) =>
   or(lt(MessageTable.time_created, row.time), and(eq(MessageTable.time_created, row.time), lt(MessageTable.id, row.id)))
 
-function hydrate(rows: (typeof MessageTable.$inferSelect)[]) {
+const newer = (row: Cursor) =>
+  or(gt(MessageTable.time_created, row.time), and(eq(MessageTable.time_created, row.time), gt(MessageTable.id, row.id)))
+
+function hydrate(rows: (typeof MessageTable.$inferSelect)[], options: { view?: PageView } = {}) {
   const ids = rows.map((row) => row.id)
   const partByMessage = new Map<string, Part[]>()
   if (ids.length > 0) {
@@ -741,7 +855,7 @@ function hydrate(rows: (typeof MessageTable.$inferSelect)[]) {
         .all(),
     )
     for (const row of partRows) {
-      const next = part(row)
+      const next = part(row, options.view)
       const list = partByMessage.get(row.message_id)
       if (list) list.push(next)
       else partByMessage.set(row.message_id, [next])
@@ -758,6 +872,107 @@ function providerMeta(metadata: Record<string, any> | undefined) {
   if (!metadata) return undefined
   const { providerExecuted: _, ...rest } = metadata
   return Object.keys(rest).length > 0 ? rest : undefined
+}
+
+function dataUrlBytes(url: string) {
+  if (!url.startsWith("data:")) return undefined
+  const commaIndex = url.indexOf(",")
+  if (commaIndex === -1) return undefined
+  const metadata = url.slice("data:".length, commaIndex)
+  const body = url.slice(commaIndex + 1)
+  if (metadata.includes(";base64")) return new Uint8Array(Buffer.from(body, "base64"))
+  try {
+    return new Uint8Array(Buffer.from(decodeURIComponent(body), "utf8"))
+  } catch {
+    return undefined
+  }
+}
+
+function dataUrlBase64(url: string) {
+  if (!url.startsWith("data:")) return undefined
+  const commaIndex = url.indexOf(",")
+  if (commaIndex === -1) return undefined
+  const metadata = url.slice("data:".length, commaIndex)
+  const body = url.slice(commaIndex + 1)
+  if (metadata.includes(";base64")) return body
+  try {
+    return Buffer.from(decodeURIComponent(body), "utf8").toString("base64")
+  } catch {
+    return undefined
+  }
+}
+
+function bytesEndWith(bytes: Uint8Array, suffix: number[]) {
+  if (bytes.length < suffix.length) return false
+  return suffix.every((value, index) => bytes[bytes.length - suffix.length + index] === value)
+}
+
+function hasCompleteImageBytes(bytes: Uint8Array, mediaType: string) {
+  if (mediaType === "image/png") return bytesEndWith(bytes, [0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82])
+  return true
+}
+
+function isValidEmbeddedImage(bytes: Uint8Array, mediaType: string) {
+  if (!mediaType.startsWith("image/")) return true
+  if (mediaType === "image/svg+xml") {
+    const text = new TextDecoder().decode(bytes.slice(0, Math.min(bytes.length, 512))).trimStart()
+    return text.startsWith("<svg") || text.startsWith("<?xml")
+  }
+  return sniffAttachmentMime(bytes, "") === mediaType && hasCompleteImageBytes(bytes, mediaType)
+}
+
+function invalidEmbeddedImageText(mediaType: string, filename?: string) {
+  return `ERROR: Attached ${mediaType} file${filename ? ` (${filename})` : ""} is empty or corrupted. Ask the user to re-attach it.`
+}
+
+function normalizeEmbeddedDataUrlFilePart(part: ModelFilePart): ModelFilePart | { type: "text"; text: string } {
+  if (typeof part.data !== "string") return part
+  const data = dataUrlBytes(part.data)
+  if (!data) return part
+  if (!isValidEmbeddedImage(data, part.mediaType)) {
+    return {
+      type: "text",
+      text: invalidEmbeddedImageText(part.mediaType, part.filename),
+    }
+  }
+  return { ...part, data }
+}
+
+function embeddedDataUrlMediaContent(attachment: { mime: string; url: string }) {
+  const data = dataUrlBytes(attachment.url)
+  if (data && !isValidEmbeddedImage(data, attachment.mime)) {
+    return { type: "text" as const, text: invalidEmbeddedImageText(attachment.mime) }
+  }
+  const commaIndex = attachment.url.indexOf(",")
+  return {
+    type: "media" as const,
+    mediaType: attachment.mime,
+    data: dataUrlBase64(attachment.url) ?? (commaIndex === -1 ? attachment.url : attachment.url.slice(commaIndex + 1)),
+  }
+}
+
+function normalizeEmbeddedDataUrlContent(message: UserModelMessage): UserModelMessage
+function normalizeEmbeddedDataUrlContent(message: AssistantModelMessage): AssistantModelMessage
+function normalizeEmbeddedDataUrlContent(message: UserModelMessage | AssistantModelMessage) {
+  if (typeof message.content === "string") return message
+  return {
+    ...message,
+    content: message.content.map((part) => (part.type === "file" ? normalizeEmbeddedDataUrlFilePart(part) : part)),
+  }
+}
+
+function normalizeEmbeddedDataUrlFiles(messages: ModelMessage[]): ModelMessage[] {
+  return messages.map((message) => {
+    if (message.role === "user") return normalizeEmbeddedDataUrlContent(message)
+    if (message.role === "assistant") return normalizeEmbeddedDataUrlContent(message)
+    return message
+  })
+}
+
+function dataUrlMediaType(url: string) {
+  if (!url.startsWith("data:")) return undefined
+  const metadata = url.slice("data:".length, url.indexOf(",") === -1 ? undefined : url.indexOf(","))
+  return metadata.split(";", 1)[0] || "file"
 }
 
 export const toModelMessagesEffect = Effect.fnUntraced(function* (
@@ -807,14 +1022,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
         type: "content",
         value: [
           ...(outputObject.text ? [{ type: "text", text: outputObject.text }] : []),
-          ...attachments.map((attachment) => ({
-            type: "media",
-            mediaType: attachment.mime,
-            data: iife(() => {
-              const commaIndex = attachment.url.indexOf(",")
-              return commaIndex === -1 ? attachment.url : attachment.url.slice(commaIndex + 1)
-            }),
-          })),
+          ...attachments.map(embeddedDataUrlMediaContent),
         ],
       }
     }
@@ -1014,13 +1222,15 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
 
   const tools = Object.fromEntries(Array.from(toolNames).map((toolName) => [toolName, { toModelOutput }]))
 
-  return yield* Effect.promise(() =>
-    convertToModelMessages(
-      result.filter((msg) => msg.parts.some((part) => part.type !== "step-start")),
-      {
-        //@ts-expect-error (convertToModelMessages expects a ToolSet but only actually needs tools[name]?.toModelOutput)
-        tools,
-      },
+  return yield* Effect.promise(async () =>
+    normalizeEmbeddedDataUrlFiles(
+      await convertToModelMessages(
+        result.filter((msg) => msg.parts.some((part) => part.type !== "step-start")),
+        {
+          //@ts-expect-error (convertToModelMessages expects a ToolSet but only actually needs tools[name]?.toModelOutput)
+          tools,
+        },
+      ),
     ),
   )
 })
@@ -1033,17 +1243,20 @@ export function toModelMessages(
   return Effect.runPromise(toModelMessagesEffect(input, model, options).pipe(Effect.provide(EffectLogger.layer)))
 }
 
-export function page(input: { sessionID: SessionID; limit: number; before?: string }) {
+export function page(input: { sessionID: SessionID; limit: number; before?: string; after?: string; view?: PageView }) {
   const before = input.before ? cursor.decode(input.before) : undefined
+  const after = input.after ? cursor.decode(input.after) : undefined
   const where = before
     ? and(eq(MessageTable.session_id, input.sessionID), older(before))
+    : after
+      ? and(eq(MessageTable.session_id, input.sessionID), newer(after))
     : eq(MessageTable.session_id, input.sessionID)
   const rows = Database.use((db) =>
     db
       .select()
       .from(MessageTable)
       .where(where)
-      .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
+      .orderBy(after ? asc(MessageTable.time_created) : desc(MessageTable.time_created), after ? asc(MessageTable.id) : desc(MessageTable.id))
       .limit(input.limit + 1)
       .all(),
   )
@@ -1060,8 +1273,8 @@ export function page(input: { sessionID: SessionID; limit: number; before?: stri
 
   const more = rows.length > input.limit
   const slice = more ? rows.slice(0, input.limit) : rows
-  const items = hydrate(slice)
-  items.reverse()
+  const items = hydrate(slice, { view: input.view })
+  if (!after) items.reverse()
   const tail = slice.at(-1)
   return {
     items,
@@ -1070,11 +1283,11 @@ export function page(input: { sessionID: SessionID; limit: number; before?: stri
   }
 }
 
-export function* stream(sessionID: SessionID) {
+export function* stream(sessionID: SessionID, options: { view?: PageView } = {}) {
   const size = 50
   let before: string | undefined
   while (true) {
-    const next = page({ sessionID, limit: size, before })
+    const next = page({ sessionID, limit: size, before, view: options.view })
     if (next.items.length === 0) break
     for (let i = next.items.length - 1; i >= 0; i--) {
       yield next.items[i]
@@ -1175,6 +1388,22 @@ export function fromError(
   e: unknown,
   ctx: { providerID: ProviderID; aborted?: boolean },
 ): NonNullable<Assistant["error"]> {
+  const embeddedDataUrlDownloadError = findEmbeddedDataUrlDownloadError(e)
+  if (embeddedDataUrlDownloadError) {
+    return new APIError(
+      {
+        message: `Embedded ${embeddedDataUrlDownloadError.mediaType} attachment could not be prepared for the provider. Re-attach the file or remove the attachment before retrying.`,
+        isRetryable: false,
+        metadata: {
+          name: "AI_DownloadError",
+          mediaType: embeddedDataUrlDownloadError.mediaType,
+          urlScheme: "data",
+        },
+      },
+      { cause: e },
+    ).toObject()
+  }
+
   const networkError = retryableNetworkError(e)
   if (networkError) {
     return new APIError(
@@ -1298,6 +1527,25 @@ export function fromError(
       } catch {}
       return new NamedError.Unknown({ message: JSON.stringify(e) }, { cause: e }).toObject()
   }
+}
+
+function findEmbeddedDataUrlDownloadError(e: unknown): EmbeddedDataUrlDownloadError | undefined {
+  if (typeof e !== "object" || e === null) return undefined
+
+  const err = e as { name?: unknown; url?: unknown; cause?: unknown; errors?: unknown }
+  const url = typeof err.url === "string" ? err.url : err.url instanceof URL ? err.url.toString() : undefined
+  if (err.name === "AI_DownloadError" && url?.startsWith("data:")) {
+    return { mediaType: dataUrlMediaType(url) ?? "file" }
+  }
+
+  if (Array.isArray(err.errors)) {
+    for (const nested of err.errors) {
+      const match = findEmbeddedDataUrlDownloadError(nested)
+      if (match) return match
+    }
+  }
+
+  return findEmbeddedDataUrlDownloadError(err.cause)
 }
 
 function retryableNetworkError(e: unknown): RetryableNetworkError | undefined {

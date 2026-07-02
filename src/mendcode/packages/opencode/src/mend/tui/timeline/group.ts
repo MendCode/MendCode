@@ -1,5 +1,5 @@
 import { reasoningSummary, type MendPresentationProfile } from "../presentation"
-import { normalizeToolEvent, shouldRenderCompactTool } from "./normalize"
+import { compactToolTitle, normalizeToolEvent, shouldRenderCompactTool } from "./normalize"
 import type { TimelineCollapse, TimelineRow, TimelineToolState } from "./types"
 import { Locale } from "@/util/locale"
 
@@ -31,7 +31,11 @@ export type TimelineGroupOptions = {
   completed?: boolean
 }
 
-const MAX_VISIBLE_COMPLETED_ROWS = 10
+const MAX_VISIBLE_COMPLETED_ROWS = 5
+
+function isTimelineRow(node: TimelineNode): node is TimelineRow {
+  return node.type === "row" && "title" in node && "state" in node
+}
 
 export function shouldGroupTimeline(profile: MendPresentationProfile) {
   return profile === "minimal" || profile === "mendcode"
@@ -41,6 +45,12 @@ export function isTimelineStackStart(nodes: Array<{ type: string; text?: string 
   if (index === 0) return false
   const previous = nodes[index - 1]
   return previous?.type === "text" && Boolean(previous.text?.trim())
+}
+
+export function timelineCollapseLabel(collapse: Pick<TimelineCollapse, "count" | "rows">) {
+  const toolRows = collapse.rows.filter((row) => row.tool).length
+  const noun = toolRows > 0 && toolRows === collapse.rows.length ? "tools" : "items"
+  return `${Locale.number(collapse.count)} ${noun} more`
 }
 
 export function groupTimelineParts(profile: MendPresentationProfile, parts: TimelinePart[], options: TimelineGroupOptions = {}) {
@@ -71,7 +81,7 @@ function rowNode(profile: MendPresentationProfile, part: TimelinePart, options: 
     tool: part.tool,
     class: event.class,
     state: event.state,
-    title: event.title,
+    title: compactToolTitle(part.tool, part.state.input ?? {}, part.state.metadata, part.state.output) ?? event.title,
     ...(event.lines.length > 0 ? { lines: event.lines } : {}),
   }
 }
@@ -116,7 +126,7 @@ function collapseCompletedRows(nodes: TimelineNode[]) {
 }
 
 function collapseRun(run: TimelineNode[]) {
-  const completed = run.filter((node): node is TimelineRow => node.type === "row" && node.state === "completed")
+  const completed = run.filter((node): node is TimelineRow => isTimelineRow(node) && node.state === "completed")
   const collapseCount = completed.length - MAX_VISIBLE_COMPLETED_ROWS
   if (collapseCount <= 0) return run
 
@@ -125,7 +135,7 @@ function collapseRun(run: TimelineNode[]) {
   const collapsedRows: TimelineRow[] = []
   const result: TimelineNode[] = []
   for (const node of run) {
-    if (node.type === "row" && node.state === "completed" && remainingToCollapse > 0) {
+    if (isTimelineRow(node) && node.state === "completed" && remainingToCollapse > 0) {
       remainingToCollapse -= 1
       collapsedRows.push(node)
       if (collapseIndex === -1) {

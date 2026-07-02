@@ -16,6 +16,10 @@ export function DialogMessage(props: {
   const sdk = useSDK()
   const message = createMemo(() => sync.data.message[props.sessionID]?.find((x) => x.id === props.messageID))
   const route = useRoute()
+  const fullParts = async (messageID: string) => {
+    const result = await sdk.client.session.message({ sessionID: props.sessionID, messageID }).catch(() => undefined)
+    return result?.data?.parts ?? sync.data.part[messageID] ?? []
+  }
 
   return (
     <DialogSelect
@@ -25,7 +29,7 @@ export function DialogMessage(props: {
           title: "Revert",
           value: "session.revert",
           description: "undo messages and file changes",
-          onSelect: (dialog) => {
+          onSelect: async (dialog) => {
             const msg = message()
             if (!msg) return
 
@@ -34,10 +38,7 @@ export function DialogMessage(props: {
               messageID: msg.id,
             })
 
-            if (props.setPrompt) {
-              const parts = sync.data.part[msg.id]
-              props.setPrompt(restorePromptFromSubmittedParts(parts))
-            }
+            if (props.setPrompt) props.setPrompt(restorePromptFromSubmittedParts(await fullParts(msg.id)))
 
             dialog.clear()
           },
@@ -50,8 +51,7 @@ export function DialogMessage(props: {
             const msg = message()
             if (!msg) return
 
-            const parts = sync.data.part[msg.id]
-            const clipboard = messagePartsToPortableClipboard(parts)
+            const clipboard = messagePartsToPortableClipboard(await fullParts(msg.id))
             if (!clipboard.text) return
 
             if (clipboard.imageCount === 1 && clipboard.firstImage && clipboard.text.startsWith("![")) {
@@ -73,7 +73,7 @@ export function DialogMessage(props: {
             })
             const msg = message()
             const prompt = msg
-              ? sync.data.part[msg.id].reduce(
+              ? (await fullParts(msg.id)).reduce(
                   (agg, part) => {
                     if (part.type === "text") {
                       if (!part.synthetic) agg.input += part.text

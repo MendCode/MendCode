@@ -108,6 +108,68 @@ describe("Runner", () => {
     }),
   )
 
+  it.live(
+    "ensureRunning with queue runs the next work after the active run",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const ran = yield* Ref.make<string[]>([])
+
+      const first = Effect.gen(function* () {
+        yield* Ref.update(ran, (a) => [...a, "first"])
+        yield* Effect.sleep("20 millis")
+        return "first-result"
+      })
+      const second = Effect.gen(function* () {
+        yield* Ref.update(ran, (a) => [...a, "second"])
+        return "second-result"
+      })
+
+      const [a, b] = yield* Effect.all(
+        [runner.ensureRunning(first), runner.ensureRunning(second, { queue: true })],
+        { concurrency: "unbounded" },
+      )
+
+      expect(a).toBe("first-result")
+      expect(b).toBe("second-result")
+      expect(yield* Ref.get(ran)).toEqual(["first", "second"])
+    }),
+  )
+
+  it.live(
+    "ensureRunning shares the queued run while preserving the active run",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const calls = yield* Ref.make(0)
+      const gate = yield* Deferred.make<void>()
+      const queuedGate = yield* Deferred.make<void>()
+
+      const first = yield* runner.ensureRunning(Deferred.await(gate).pipe(Effect.as("first"))).pipe(Effect.forkChild)
+      yield* Effect.sleep("10 millis")
+
+      const queued = Effect.gen(function* () {
+        yield* Ref.update(calls, (n) => n + 1)
+        yield* Deferred.await(queuedGate)
+        return "queued"
+      })
+      const a = yield* runner.ensureRunning(queued, { queue: true }).pipe(Effect.forkChild)
+      yield* Effect.gen(function* () {
+        while (runner.state._tag !== "RunningThenRun") yield* Effect.yieldNow
+      }).pipe(Effect.timeout("250 millis"))
+      const b = yield* runner.ensureRunning(queued, { queue: true }).pipe(Effect.forkChild)
+      yield* Effect.sleep("10 millis")
+
+      yield* Deferred.succeed(gate, undefined)
+      yield* Deferred.succeed(queuedGate, undefined)
+
+      expect(yield* Fiber.join(first)).toBe("first")
+      expect(yield* Fiber.join(a)).toBe("queued")
+      expect(yield* Fiber.join(b)).toBe("queued")
+      expect(yield* Ref.get(calls)).toBe(1)
+    }),
+  )
+
   // --- cancel semantics ---
 
   it.live(

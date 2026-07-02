@@ -29,13 +29,13 @@ import { useDialog } from "@tui/ui/dialog"
 import { useToast } from "@tui/ui/toast"
 
 type MemoryOverview = Awaited<ReturnType<typeof memoryOverview>>
-type ThemeColorValue = ReturnType<typeof useTheme>["theme"]["text"]
+type DreamRunDetailView = MemoryOverview["dreamRunDetails"][number]
 type MemoryTab = "overview" | "project" | "global" | "policy" | "dream"
 type Selection =
   | { kind: "entry"; entry: MemoryEntry }
   | { kind: "proposal"; proposal: MemoryProposal }
   | { kind: "policy"; category: MemoryOverview["categories"][number]; policy: MemoryCategoryPolicy }
-  | { kind: "dream" }
+  | { kind: "dream"; detail: DreamRunDetailView | null }
   | { kind: "overview" }
 
 const TABS: Array<{ id: MemoryTab; label: string }> = [
@@ -47,6 +47,10 @@ const TABS: Array<{ id: MemoryTab; label: string }> = [
 ]
 
 const WRITE_POLICIES: MemoryWritePolicy[] = ["disabled", "pending", "auto-apply-safe", "manual-only"]
+const ENTRY_ROW_LIMIT = 11
+const PROPOSAL_ROW_LIMIT = 10
+const POLICY_ROW_LIMIT = 12
+const DREAM_RUN_ROW_LIMIT = 8
 
 export function memoryLayoutForDimensions(input: { width: number; height: number }) {
   return {
@@ -102,8 +106,21 @@ export function memoryPreviewText(value: string | null | undefined, max = 96) {
   return short(redacted, max)
 }
 
-export function shouldMemoryRouteHandleKey(input: { dialogOpen: boolean; defaultPrevented?: boolean }) {
-  return !input.dialogOpen && input.defaultPrevented !== true
+export function shouldMemoryRouteHandleKey(input: {
+  dialogOpen: boolean
+  defaultPrevented?: boolean
+  textInputActive?: boolean
+}) {
+  return !input.dialogOpen && input.defaultPrevented !== true && input.textInputActive !== true
+}
+
+export function memoryTabCellWidths(input: { width: number; count?: number }) {
+  const count = Math.max(1, input.count ?? TABS.length)
+  const gaps = Math.max(0, count - 1)
+  const usable = Math.max(count, Math.floor(input.width) - gaps)
+  const base = Math.floor(usable / count)
+  const remainder = usable % count
+  return Array.from({ length: count }, (_, index) => base + (index < remainder ? 1 : 0))
 }
 
 function comparableRoot(root: string) {
@@ -154,6 +171,151 @@ function nextWritePolicy(value: MemoryWritePolicy) {
 
 function stat(label: string, value: string, detail?: string) {
   return { label, value, detail }
+}
+
+type MemoryGraphMiniFact = {
+  id: string
+  text: string
+  scope: string
+  categoryIDs: string[]
+  retrievalPriority?: number
+  materialized?: boolean
+}
+
+type MemoryGraphMiniLink = {
+  from: string
+  to: string
+  kind: string
+}
+
+type MemoryGraphMiniCategory = {
+  id: string
+  label: string
+  count: number
+}
+
+const GRAPH_GLYPHS = ["●", "◆", "■", "▲", "◇", "○", "✦", "✚", "✹", "⬟"]
+
+function memoryGraphGlyph(index: number) {
+  return GRAPH_GLYPHS[index % GRAPH_GLYPHS.length] ?? "●"
+}
+
+function memoryGraphLinePoints(from: { x: number; y: number }, to: { x: number; y: number }) {
+  const points: Array<{ x: number; y: number }> = []
+  const dx = Math.abs(to.x - from.x)
+  const dy = -Math.abs(to.y - from.y)
+  const sx = from.x < to.x ? 1 : -1
+  const sy = from.y < to.y ? 1 : -1
+  let error = dx + dy
+  let x = from.x
+  let y = from.y
+  while (true) {
+    points.push({ x, y })
+    if (x === to.x && y === to.y) return points
+    const doubleError = 2 * error
+    if (doubleError >= dy) {
+      error += dy
+      x += sx
+    }
+    if (doubleError <= dx) {
+      error += dx
+      y += sy
+    }
+  }
+}
+
+export function memoryGraphMiniMap(input: {
+  facts: MemoryGraphMiniFact[]
+  links: MemoryGraphMiniLink[]
+  categories: MemoryGraphMiniCategory[]
+  width: number
+  height?: number
+}) {
+  const width = Math.max(20, Math.min(72, Math.floor(input.width)))
+  const height = Math.max(6, Math.min(14, Math.floor(input.height ?? 10)))
+  const materializedFacts = input.facts.filter((fact) => fact.materialized !== false)
+  const legacyDerivedFacts = input.facts.length - materializedFacts.length
+  const explicitDegrees = new Map<string, number>()
+  for (const link of input.links) {
+    explicitDegrees.set(link.from, (explicitDegrees.get(link.from) ?? 0) + 1)
+    explicitDegrees.set(link.to, (explicitDegrees.get(link.to) ?? 0) + 1)
+  }
+  const facts = materializedFacts
+    .toSorted((a, b) => (explicitDegrees.get(b.id) ?? 0) - (explicitDegrees.get(a.id) ?? 0) || (a.retrievalPriority ?? 99) - (b.retrievalPriority ?? 99) || a.id.localeCompare(b.id))
+    .slice(0, width < 44 ? 8 : 16)
+  const factIDs = new Set(facts.map((fact) => fact.id))
+  const explicitLinks = input.links.filter((link) => factIDs.has(link.from) && factIDs.has(link.to)).slice(0, 28)
+  const explicitLinkKeys = new Set(explicitLinks.flatMap((link) => [`${link.from}\u0000${link.to}`, `${link.to}\u0000${link.from}`]))
+  const categoryGroups = Array.from(facts
+    .flatMap((fact) => fact.categoryIDs.map((categoryID) => ({ fact, categoryID })))
+    .reduce((groups, item) => groups.set(item.categoryID, [...(groups.get(item.categoryID) ?? []), item.fact]), new Map<string, MemoryGraphMiniFact[]>())
+    .values())
+  const inferredLinks = categoryGroups
+    .flatMap((group) => group.slice(1).map((fact, index) => ({ from: group[index]!.id, to: fact.id, kind: "category", inferred: true })))
+  const representativeFacts = input.categories
+    .map((category) => facts.find((fact) => fact.categoryIDs.includes(category.id)))
+    .filter((fact, index, all): fact is MemoryGraphMiniFact => !!fact && all.findIndex((item) => item?.id === fact.id) === index)
+  const categoryRepresentativeLinks = representativeFacts
+    .slice(1)
+    .map((fact, index) => ({ from: representativeFacts[index]!.id, to: fact.id, kind: "category", inferred: true }))
+  const links = [
+    ...explicitLinks.map((link) => ({ ...link, inferred: false })),
+    ...[...inferredLinks, ...categoryRepresentativeLinks]
+      .filter((link) => link.from !== link.to && !explicitLinkKeys.has(`${link.from}\u0000${link.to}`))
+      .filter((link, index, all) => all.findIndex((candidate) => `${candidate.from}\u0000${candidate.to}` === `${link.from}\u0000${link.to}` || `${candidate.from}\u0000${candidate.to}` === `${link.to}\u0000${link.from}`) === index)
+      .slice(0, Math.max(0, 28 - explicitLinks.length)),
+  ]
+  const visibleCategoryIDs = new Set(facts.flatMap((fact) => fact.categoryIDs))
+  const categories = input.categories.filter((category) => category.count > 0 && visibleCategoryIDs.has(category.id))
+  const categoryIndex = new Map(input.categories.map((category, index) => [category.id, index]))
+  const graphDegrees = new Map<string, number>()
+  for (const link of links) {
+    graphDegrees.set(link.from, (graphDegrees.get(link.from) ?? 0) + 1)
+    graphDegrees.set(link.to, (graphDegrees.get(link.to) ?? 0) + 1)
+  }
+  if (!facts.length) {
+    return {
+      rows: [],
+      legend: [],
+      labels: [],
+      emptyState: legacyDerivedFacts > 0 ? "legacy-only" : "empty",
+      status: `0/${input.facts.length} materialized · ${legacyDerivedFacts} legacy-derived · 0 explicit · 0 inferred`,
+    }
+  }
+  const canvas = Array.from({ length: height }, () => Array.from({ length: width }, () => " "))
+  const center = { x: Math.floor(width / 2), y: Math.floor(height / 2) }
+  const radiusX = Math.max(4, Math.floor(width / 2) - 4)
+  const radiusY = Math.max(2, Math.floor(height / 2) - 2)
+  const positions = new Map<string, { x: number; y: number }>()
+  for (const [index, fact] of facts.entries()) {
+    const angle = facts.length === 1 ? 0 : (2 * Math.PI * index) / facts.length - Math.PI / 2
+    const highDegree = index === 0 && (graphDegrees.get(fact.id) ?? 0) > 1
+    positions.set(fact.id, highDegree ? center : {
+      x: Math.max(1, Math.min(width - 2, Math.round(center.x + Math.cos(angle) * radiusX))),
+      y: Math.max(1, Math.min(height - 2, Math.round(center.y + Math.sin(angle) * radiusY))),
+    })
+  }
+  for (const link of links) {
+    const from = positions.get(link.from)
+    const to = positions.get(link.to)
+    if (!from || !to) continue
+    for (const point of memoryGraphLinePoints(from, to).slice(1, -1)) {
+      if (canvas[point.y]?.[point.x] === " ") canvas[point.y]![point.x] = link.kind === "conflicts" ? "×" : link.inferred ? "┈" : "·"
+    }
+  }
+  for (const fact of facts) {
+    const point = positions.get(fact.id)
+    if (!point) continue
+    const glyph = memoryGraphGlyph(categoryIndex.get(fact.categoryIDs[0] ?? "") ?? 0)
+    canvas[point.y]![point.x] = glyph
+  }
+  return {
+    rows: canvas.map((row) => row.join("").replace(/\s+$/, "")),
+    legend: categories.slice(0, width < 44 ? 3 : 5).map((category) => `${memoryGraphGlyph(categoryIndex.get(category.id) ?? 0)} ${category.label} ${category.count}`),
+    labels: facts.slice(0, width < 44 ? 3 : 5).map((fact) => `${memoryGraphGlyph(categoryIndex.get(fact.categoryIDs[0] ?? "") ?? 0)} ${memoryPreviewText(fact.text, 42)}`),
+    emptyState: "materialized",
+    status: `${facts.length}/${input.facts.length} materialized · ${legacyDerivedFacts} legacy-derived · ${explicitLinks.length} explicit · ${links.length - explicitLinks.length} inferred · ${categories.length} categories`,
+  }
 }
 
 function toastInput(variant: "info" | "success" | "warning" | "error", message: string) {
@@ -261,35 +423,21 @@ function MetricRows(props: { items: Array<{ label: string; value: string; detail
   )
 }
 
-function ProgressBar(props: { value: number; width: number; color?: ThemeColorValue }) {
-  const { theme } = useTheme()
-  const safeWidth = Math.max(4, Math.floor(props.width))
-  const filled = Math.max(0, Math.min(safeWidth, Math.round(safeWidth * props.value)))
-  return (
-    <box height={1} overflow="hidden">
-      <text fg={props.color ?? theme.success} wrapMode="none">
-        {"█".repeat(filled)}
-      </text>
-      <text fg={theme.border} wrapMode="none">
-        {"░".repeat(safeWidth - filled)}
-      </text>
-    </box>
-  )
-}
-
 function TabBar(props: { tab: MemoryTab; width: number; onSelect: (tab: MemoryTab) => void }) {
   const { theme } = useTheme()
+  const cellWidths = createMemo(() => memoryTabCellWidths({ width: props.width, count: TABS.length }))
   return (
     <box flexDirection="row" height={1} overflow="hidden" gap={1}>
       <For each={TABS}>
         {(tab, index) => (
-          <text
-            fg={props.tab === tab.id ? theme.success : theme.textMuted}
-            wrapMode="none"
-            onMouseUp={() => props.onSelect(tab.id)}
-          >
-            {short(`${index() + 1} ${tab.label}`, Math.max(8, Math.floor(props.width / TABS.length) - 1))}
-          </text>
+          <box width={cellWidths()[index()] ?? 8} overflow="hidden" onMouseUp={() => props.onSelect(tab.id)}>
+            <text
+              fg={props.tab === tab.id ? theme.success : theme.textMuted}
+              wrapMode="none"
+            >
+              {short(`${index() + 1} ${tab.label}`, cellWidths()[index()] ?? 8)}
+            </text>
+          </box>
         )}
       </For>
     </box>
@@ -419,43 +567,57 @@ function KpiStrip(props: { data: MemoryOverview; pending: MemoryProposal[]; widt
   )
 }
 
-function CategoryMap(props: { data: MemoryOverview; width: number }) {
+function MemoryGraphMap(props: { data: MemoryOverview; width: number }) {
   const { theme } = useTheme()
-  const rows = () => props.data.categories.filter((category) => category.count > 0).sort((a, b) => b.count - a.count)
-  const peak = () => Math.max(1, ...rows().map((row) => row.count))
+  const graph = createMemo(() => memoryGraphMiniMap({
+    facts: props.data.facts,
+    links: props.data.links,
+    categories: props.data.categories,
+    width: Math.max(20, props.width - 6),
+    height: props.width < 56 ? 7 : 10,
+  }))
   return (
-    <Panel title="Category graph" grow>
+    <Panel title="Memory graph" grow>
       <Show
-        when={rows().length > 0}
+        when={graph().rows.length > 0}
         fallback={
           <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
             <text fg={theme.textMuted} wrapMode="none">
-              No materialized memory facts yet.
+              {graph().emptyState === "legacy-only" ? "Legacy-derived memories found, but no graph facts yet." : "No materialized memory graph facts yet."}
             </text>
             <text fg={theme.primary} wrapMode="none">
-              Saved entries will appear as a graph here.
+              Use memory_graph upsert_fact/link to materialize relationships.
+            </text>
+            <text fg={theme.textMuted} wrapMode="none">
+              {short(graph().status, Math.max(18, props.width - 8))}
             </text>
           </box>
         }
       >
-        <box flexDirection="column" gap={1} overflow="hidden">
-          <For each={rows().slice(0, 10)}>
-            {(row) => (
-              <box flexDirection="row" height={1} overflow="hidden" gap={1}>
-                <box width={24} overflow="hidden">
-                  <text fg={theme.text} wrapMode="none">
-                    {short(row.label, 24)}
-                  </text>
-                </box>
-                <box flexGrow={1} overflow="hidden">
-                  <ProgressBar value={row.count / peak()} width={Math.max(6, props.width - 38)} />
-                </box>
-                <text fg={theme.textMuted} wrapMode="none">
-                  {row.count}
+        <box flexDirection={props.width < 62 ? "column" : "row"} minHeight={0} flexGrow={1} gap={1} overflow="hidden">
+          <box flexDirection="column" minWidth={0} flexGrow={1} overflow="hidden">
+            <For each={graph().rows}>
+              {(row) => (
+                <text fg={theme.primary} wrapMode="none">
+                  {short(row || " ", Math.max(10, props.width - 8))}
                 </text>
-              </box>
-            )}
-          </For>
+              )}
+            </For>
+            <text fg={theme.textMuted} wrapMode="none">
+              {short(graph().status, Math.max(10, props.width - 8))}
+            </text>
+          </box>
+          <box flexDirection="column" width={props.width < 62 ? "100%" : Math.max(22, Math.floor(props.width * 0.35))} overflow="hidden" gap={1}>
+            <text fg={theme.textMuted} wrapMode="none">
+              {`edges: ${props.data.links.length} explicit links · inferred category proximity`}
+            </text>
+            <For each={graph().legend}>
+              {(line) => <text fg={theme.text} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
+            </For>
+            <For each={graph().labels}>
+              {(line) => <text fg={theme.textMuted} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
+            </For>
+          </box>
         </box>
       </Show>
     </Panel>
@@ -475,14 +637,14 @@ function EntryRows(props: {
       fallback={<text fg={theme.textMuted}>No saved memory in this scope.</text>}
     >
       <box flexDirection="column" gap={1} overflow="hidden">
-        <For each={props.entries.slice(0, 11)}>
+        <For each={props.entries.slice(0, ENTRY_ROW_LIMIT)}>
           {(entry, index) => {
             const selected = () => props.selectedIndex === index()
             return (
               <box height={2} overflow="hidden" onMouseUp={() => props.onSelect(index())}>
                 <box flexDirection="row" justifyContent="space-between" height={1} overflow="hidden">
                   <text fg={selected() ? theme.success : entry.scope === "global" ? theme.primary : theme.text} wrapMode="none">
-                    {short(`${entry.scope} · ${(entry.categoryIDs ?? ["uncategorized"])[0] ?? "uncategorized"}`, Math.max(16, props.width - 18))}
+                    {short(`${entry.scope} · ${memoryOriginLabel(entry.source)} · ${(entry.categoryIDs ?? ["uncategorized"])[0] ?? "uncategorized"}`, Math.max(16, props.width - 18))}
                   </text>
                   <text fg={theme.textMuted} wrapMode="none">
                     {formatDate(entry.updatedAt)}
@@ -522,7 +684,7 @@ function ProposalRows(props: {
       }
     >
       <box flexDirection="column" gap={1} overflow="hidden">
-        <For each={props.proposals.slice(0, 10)}>
+        <For each={props.proposals.slice(0, PROPOSAL_ROW_LIMIT)}>
           {(proposal, index) => {
             const selected = () => props.selectedIndex === index()
             return (
@@ -534,7 +696,7 @@ function ProposalRows(props: {
               >
                 <box flexDirection="row" justifyContent="space-between" height={1} overflow="hidden">
                   <text fg={selected() ? theme.success : theme.warning} wrapMode="none">
-                    {short(`${proposal.operation} · ${proposal.scope} · ${proposal.categoryIDs[0] ?? "uncategorized"}`, Math.max(18, props.width - 18))}
+                    {short(`${proposal.operation} · ${proposal.scope} · ${memoryOriginLabel(proposal.source)} · ${proposal.categoryIDs[0] ?? "uncategorized"}`, Math.max(18, props.width - 18))}
                   </text>
                   <text fg={theme.textMuted} wrapMode="none">
                     {Math.round(proposal.confidence * 100)}%
@@ -573,7 +735,7 @@ function PolicyRows(props: {
           {short(`editing ${props.policyScope} policies · p cycle write mode · o prompt on/off`, props.width)}
         </text>
       </box>
-      <For each={rows().slice(0, 12)}>
+      <For each={rows().slice(0, POLICY_ROW_LIMIT)}>
         {(row, index) => {
           const selected = () => props.selectedIndex === index()
           return (
@@ -609,7 +771,7 @@ function OverviewContent(props: {
     <box flexDirection="column" gap={1} minHeight={0} flexGrow={1}>
       <KpiStrip data={props.data} pending={props.pending} width={props.width} stacked={props.stacked} />
       <box flexDirection={props.stacked ? "column" : "row"} gap={1} minHeight={0} flexGrow={1}>
-        <CategoryMap data={props.data} width={Math.max(40, props.width / 2)} />
+        <MemoryGraphMap data={props.data} width={Math.max(40, props.width / 2)} />
         <Panel title="Pending Queue" grow>
           <ProposalRows proposals={props.pending} selectedIndex={props.selectedIndex} width={Math.max(30, props.width / 2 - 6)} onSelect={props.onSelectProposal} />
         </Panel>
@@ -625,37 +787,145 @@ function dreamWindowLabel(window: DreamScheduleWindow | null | undefined) {
   return `window ${window.start}-${window.end}${zone}`
 }
 
-function DreamContent(props: { data: MemoryOverview; schedule: DreamScheduleState | null | undefined; width: number }) {
+function memoryOriginLabel(source: string | null | undefined) {
+  return source === "memory-dream" ? "Dream" : source || "manual"
+}
+
+function dreamRunStatusLabel(status: DreamRunDetailView["run"]["status"]) {
+  if (status === "completed") return "completed"
+  if (status === "running") return "running"
+  if (status === "failed") return "failed"
+  if (status === "canceled") return "canceled"
+  if (status === "missed") return "missed"
+  return status
+}
+
+function dreamRunStatusTone(status: DreamRunDetailView["run"]["status"], theme: ReturnType<typeof useTheme>["theme"]) {
+  if (status === "completed") return theme.success
+  if (status === "running") return theme.primary
+  if (status === "failed") return theme.error
+  if (status === "canceled" || status === "missed") return theme.warning
+  return theme.text
+}
+
+function durationLabel(start: string | null | undefined, end: string | null | undefined) {
+  if (!start || !end) return ""
+  const startDate = new Date(start)
+  const endDate = new Date(end)
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return ""
+  return Locale.duration(endDate.getTime() - startDate.getTime())
+}
+
+function dreamRunProposalCount(detail: DreamRunDetailView) {
+  return detail.run.proposals.length || detail.proposals.length
+}
+
+function dreamDetailSummary(detail: DreamRunDetailView | null | undefined) {
+  if (!detail) return "No Dream run selected"
+  const event = detail.events.at(-1)?.message
+  const evidence = detail.evidence.length ? `${detail.evidence.length} evidence refs` : "no evidence"
+  const proposals = `${dreamRunProposalCount(detail)} proposals`
+  return [event, evidence, proposals].filter(Boolean).join(" · ")
+}
+
+function DreamContent(props: {
+  data: MemoryOverview
+  schedule: DreamScheduleState | null | undefined
+  width: number
+  selectedIndex: number
+  onSelectRun: (index: number) => void
+}) {
   const { theme } = useTheme()
   const dream = () => props.data.dream
+  const details = () => props.data.dreamRunDetails ?? []
+  const runs = () => details().length ? details() : (props.data.dreamRuns ?? []).map((run) => ({ run, events: [], evidence: [], proposals: [], safety: null }))
   const schedule = () => props.schedule
   return (
     <box flexDirection="column" gap={1} minHeight={0} flexGrow={1}>
-      <Panel title="Dream status" height={9}>
-        <MetricRows
-          width={props.width}
-          items={[
-            stat("status", dream()?.status ?? "none"),
-            stat("schedule", dreamWindowLabel(schedule()?.window)),
-            stat("state", schedule()?.status ?? "not scheduled"),
-            stat("source", dream()?.source ?? schedule()?.reason ?? "not scheduled"),
-            stat("started", dream() ? formatDate(dream()!.startedAt) : "none"),
-            stat("proposals", String(dream()?.proposals.length ?? 0)),
-          ]}
-        />
+      <Panel title="Dream overview" height={10}>
+        <box flexDirection="row" gap={2} height={4} overflow="hidden">
+          <box flexDirection="column" width="32%" overflow="hidden">
+            <text fg={dream()?.status === "failed" ? theme.error : dream()?.status === "completed" ? theme.success : theme.primary} wrapMode="none">
+              {short(dream()?.status ?? "idle", Math.max(10, props.width * 0.32))}
+            </text>
+            <text fg={theme.textMuted} wrapMode="none">
+              last status
+            </text>
+          </box>
+          <box flexDirection="column" flexGrow={1} overflow="hidden">
+            <text fg={theme.text} wrapMode="none">
+              {short(dreamWindowLabel(schedule()?.window), Math.max(16, props.width * 0.42))}
+            </text>
+            <text fg={theme.textMuted} wrapMode="none">
+              {short(schedule()?.status ?? "not scheduled", Math.max(16, props.width * 0.42))}
+            </text>
+          </box>
+          <box flexDirection="column" width="20%" overflow="hidden">
+            <text fg={theme.primary} wrapMode="none">
+              {String(dream()?.proposals.length ?? 0)}
+            </text>
+            <text fg={theme.textMuted} wrapMode="none">
+              proposals
+            </text>
+          </box>
+        </box>
         <text fg={theme.primary} wrapMode="none">
-          {short("Recommend a flexible window, e.g. 18:00-23:00, instead of one fixed minute.", props.width)}
+          {short("Dream only drafts proposals. Nothing becomes memory until accepted.", props.width)}
+        </text>
+        <text fg={theme.textMuted} wrapMode="none">
+          {short(`source ${dream()?.source ?? schedule()?.reason ?? "not scheduled"} · last ${dream() ? formatDate(dream()!.startedAt) : "none"}`, props.width)}
         </text>
       </Panel>
-      <Panel title="Dream log" grow>
-        <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
-          <text fg={theme.textMuted} wrapMode="none">
-            Dream runs are logged under project memory.
-          </text>
-          <text fg={theme.primary} wrapMode="none">
-            SSE updates this panel while Dream runs.
-          </text>
-        </box>
+      <Panel title="Dream runs" grow>
+        <Show when={runs().length > 0} fallback={
+          <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
+            <text fg={theme.textMuted} wrapMode="none">
+              Dream scans safe project files, current memories, and pending proposals during the configured window.
+            </text>
+            <text fg={theme.primary} wrapMode="none">
+              No runs logged yet.
+            </text>
+          </box>
+        }>
+          <box flexDirection="column" gap={1} minHeight={0} flexGrow={1} overflow="hidden">
+            <text fg={theme.textMuted} wrapMode="none">
+              {short("Select a run to inspect events, proposals, evidence, and safety details below.", props.width)}
+            </text>
+            <For each={runs().slice(0, DREAM_RUN_ROW_LIMIT)}>
+              {(detail, index) => {
+                const run = () => detail.run
+                const selectedRun = () => props.selectedIndex === index()
+                const color = () => dreamRunStatusTone(run().status, theme)
+                const reads = () => detail.safety?.reads.length ?? detail.evidence.length
+                const redactions = () => detail.safety?.redactions ?? 0
+                const duration = () => durationLabel(run().startedAt, run().completedAt)
+                return (
+                  <box height={4} overflow="hidden" onMouseUp={() => props.onSelectRun(index())}>
+                    <box flexDirection="row" justifyContent="space-between" height={1} overflow="hidden">
+                      <text fg={selectedRun() ? theme.success : color()} wrapMode="none">
+                        {short(`${selectedRun() ? "› " : "  "}${dreamRunStatusLabel(run().status)} · ${run().workspaceID ?? "global"}`, Math.max(18, props.width - 24))}
+                      </text>
+                      <text fg={theme.textMuted} wrapMode="none">
+                        {short(`${formatDate(run().completedAt ?? run().startedAt)} ${formatTime(run().completedAt ?? run().startedAt)}`, 18)}
+                      </text>
+                    </box>
+                    <text fg={selectedRun() ? theme.text : theme.textMuted} wrapMode="none">
+                      {short(`${dreamRunProposalCount(detail)} proposals · ${detail.evidence.length} evidence · ${reads()} reads · ${redactions()} redactions${duration() ? ` · ${duration()}` : ""}`, props.width)}
+                    </text>
+                    <text fg={theme.textMuted} wrapMode="none">
+                      {short(detail.events.at(-1)?.message ?? run().failureReason ?? run().id, props.width)}
+                    </text>
+                    <Show when={selectedRun()}>
+                      <text fg={theme.primary} wrapMode="none">
+                        {short(`inspecting ${run().id}`, props.width)}
+                      </text>
+                    </Show>
+                  </box>
+                )
+              }}
+            </For>
+          </box>
+        </Show>
       </Panel>
     </box>
   )
@@ -722,6 +992,9 @@ function Inspector(props: {
               <text fg={theme.primary} wrapMode="none">
                 {short(`category: ${proposal().categoryIDs.join(", ") || "uncategorized"}`, props.width)}
               </text>
+              <text fg={proposal().source === "memory-dream" ? theme.primary : theme.textMuted} wrapMode="none">
+                {short(`source: ${memoryOriginLabel(proposal().source)}${proposal().evidence ? ` · ${proposal().evidence}` : ""}${proposal().evidenceRefs.length ? ` · refs ${proposal().evidenceRefs.length}` : ""}`, props.width)}
+              </text>
               <text fg={theme.text} wrapMode="word">
                 {memoryPreviewText(proposal().text, props.width * 8)}
               </text>
@@ -764,8 +1037,67 @@ function Inspector(props: {
             </box>
           )}
         </Match>
+        <Match when={props.selection.kind === "dream" ? props.selection.detail : undefined}>
+          {(detail) => (
+            <box flexDirection="column" gap={1} overflow="hidden">
+              <MetricRows
+                width={props.width}
+                items={[
+                  stat("run", detail().run.id),
+                  stat("status", dreamRunStatusLabel(detail().run.status), durationLabel(detail().run.startedAt, detail().run.completedAt)),
+                  stat("source", detail().run.source, detail().run.workspaceID ?? "global"),
+                  stat("proposals", String(dreamRunProposalCount(detail())), "pending review"),
+                  stat("evidence", String(detail().evidence.length), `${detail().safety?.reads.length ?? detail().evidence.length} reads`),
+                  stat("safety", `${detail().safety?.redactions ?? 0} redactions`, `${detail().safety?.skippedSources.length ?? 0} skipped`),
+                ]}
+              />
+              <Show when={detail().events.at(-1)?.message}>
+                {(message) => (
+                  <box flexDirection="column" gap={0}>
+                    <text fg={theme.primary} wrapMode="none">Last event</text>
+                    <text fg={theme.text} wrapMode="word">{memoryPreviewText(message(), props.width * 5)}</text>
+                  </box>
+                )}
+              </Show>
+              <Show when={detail().proposals.length > 0}>
+                <box flexDirection="column" gap={0}>
+                  <text fg={theme.primary} wrapMode="none">Proposals</text>
+                  <For each={detail().proposals.slice(0, 3)}>
+                    {(proposal) => (
+                      <text fg={theme.text} wrapMode="word">
+                        {memoryPreviewText(`${proposal.operation ?? "create"} · ${proposal.scope ?? "memory"} · ${proposal.text ?? proposal.id}`, props.width * 3)}
+                      </text>
+                    )}
+                  </For>
+                </box>
+              </Show>
+              <Show when={detail().evidence.length > 0}>
+                <box flexDirection="column" gap={0}>
+                  <text fg={theme.primary} wrapMode="none">Evidence</text>
+                  <For each={detail().evidence.slice(0, 3)}>
+                    {(evidence) => (
+                      <text fg={theme.textMuted} wrapMode="none">
+                        {short(`${evidence.sourceType} · ${evidence.sourcePath ?? evidence.id}`, props.width)}
+                      </text>
+                    )}
+                  </For>
+                </box>
+              </Show>
+              <Show when={detail().safety?.failures.length}>
+                <text fg={theme.error} wrapMode="word">
+                  {memoryPreviewText(`failures: ${detail().safety?.failures.join("; ")}`, props.width * 3)}
+                </text>
+              </Show>
+              <Show when={detail().safety?.skippedSources.length}>
+                <text fg={theme.warning} wrapMode="word">
+                  {memoryPreviewText(`skipped: ${detail().safety?.skippedSources.join(", ")}`, props.width * 3)}
+                </text>
+              </Show>
+            </box>
+          )}
+        </Match>
         <Match when={props.selection.kind === "dream"}>
-          <MetricRows width={props.width} items={[stat("view", "Dream"), stat("events", "SSE live"), stat("updates", "automatic")]} />
+          <MetricRows width={props.width} items={[stat("view", "Dream"), stat("events", "SSE live"), stat("updates", "reviewable proposals")]} />
         </Match>
         <Match when={true}>
           <MetricRows width={props.width} items={[stat("select", "memory/proposal/category"), stat("actions", "shown here"), stat("SSE", "automatic")]} />
@@ -866,7 +1198,7 @@ function SideChatPanel(props: {
                 Draft create/edit/delete/move memory actions for review.
               </text>
               <text fg={theme.textMuted} wrapMode="word">
-                Configure category policies and Dream dry-runs.
+                Draft reviewable category policy and Dream schedule proposals.
               </text>
             </box>
           }
@@ -1115,11 +1447,17 @@ function memorySideChatPageContext(input: {
       "</selected_policy>",
     )
   } else if (selected.kind === "dream") {
+    const detail = selected.detail
     lines.push(
       "<dream>",
       `status: ${input.data.dream?.status ?? "none"}`,
       `source: ${input.data.dream?.source ?? "not scheduled"}`,
       `proposals: ${input.data.dream?.proposals.length ?? 0}`,
+      `selectedRun: ${detail?.run.id ?? "none"}`,
+      `selectedRunStatus: ${detail?.run.status ?? "none"}`,
+      `selectedRunEvents: ${detail?.events.map((event) => `${event.status}:${event.message}`).slice(-6).join(" | ") ?? "none"}`,
+      `selectedRunEvidence: ${detail?.evidence.slice(0, 8).map((item) => `${item.sourceType}:${item.sourcePath ?? item.id}`).join(" | ") ?? "none"}`,
+      `selectedRunSafety: reads=${detail?.safety?.reads.length ?? 0} redactions=${detail?.safety?.redactions ?? 0} skipped=${detail?.safety?.skippedSources.join(", ") ?? "none"}`,
       "schedule guidance: prefer a flexible Dream window/range such as 18:00-23:00 over a fixed time like 21:00",
       "</dream>",
     )
@@ -1173,7 +1511,7 @@ export function Memory() {
   const [baseOverview, { refetch: refetchBase }] = createResource(currentRoot, memoryOverview)
   const selectedWorkspace = createMemo(() => baseOverview()?.workspaces?.activeWorkspaces.find((workspace) => workspace.id === selectedWorkspaceID()) ?? null)
   const activeRoot = createMemo(() => selectedWorkspace()?.root ?? currentRoot())
-  const [dreamSchedule, { refetch: refetchDreamSchedule }] = createResource(activeRoot, (root) => readDreamScheduleState(root))
+  const [dreamSchedule, { refetch: refetchDreamSchedule }] = createResource(() => readDreamScheduleState())
   const [overview, { refetch }] = createResource(activeRoot, memoryOverview)
   const layout = createMemo(() => memoryLayoutForDimensions(dimensions()))
   const width = createMemo(() => dimensions().width)
@@ -1184,6 +1522,7 @@ export function Memory() {
   const sidebarWidth = createMemo(() => wide() ? 32 : 30)
   const sideChatWidth = createMemo(() => Math.min(64, Math.max(48, Math.floor(width() * 0.28))))
   const mainContentWidth = createMemo(() => Math.max(44, contentWidth() - sidebarWidth() - sideChatWidth() - 2))
+  const inspectorHeight = createMemo(() => tab() === "dream" ? (wide() ? 15 : 13) : (wide() ? 7 : 8))
   const data = createMemo(() => overview())
   const pending = createMemo(() => data()?.proposals.filter((proposal) => proposal.status === "pending") ?? [])
   const projectEntries = createMemo(() => data()?.projectEntries ?? [])
@@ -1191,10 +1530,11 @@ export function Memory() {
   const visibleCount = createMemo(() => {
     const current = data()
     if (!current) return 1
-    if (tab() === "project") return Math.max(1, projectEntries().length)
-    if (tab() === "global") return Math.max(1, globalEntries().length)
-    if (tab() === "policy") return Math.max(1, current.categories.length)
-    if (tab() === "overview") return Math.max(1, pending().length)
+    if (tab() === "project") return Math.max(1, Math.min(projectEntries().length, ENTRY_ROW_LIMIT))
+    if (tab() === "global") return Math.max(1, Math.min(globalEntries().length, ENTRY_ROW_LIMIT))
+    if (tab() === "policy") return Math.max(1, Math.min(current.categories.length, POLICY_ROW_LIMIT))
+    if (tab() === "overview") return Math.max(1, Math.min(pending().length, PROPOSAL_ROW_LIMIT))
+    if (tab() === "dream") return Math.max(1, Math.min(current.dreamRunDetails.length || current.dreamRuns.length, DREAM_RUN_ROW_LIMIT))
     return 1
   })
   const selection = createMemo<Selection>(() => {
@@ -1208,7 +1548,10 @@ export function Memory() {
       const policy = category ? current.policies[category.id] : undefined
       return category && policy ? { kind: "policy", category, policy } : { kind: "overview" }
     }
-    if (tab() === "dream") return { kind: "dream" }
+    if (tab() === "dream") {
+      const details = current.dreamRunDetails.length ? current.dreamRunDetails : current.dreamRuns.map((run) => ({ run, events: [], evidence: [], proposals: [], safety: null }))
+      return { kind: "dream", detail: details[index] ?? null }
+    }
     return pending()[index] ? { kind: "proposal", proposal: pending()[index]! } : { kind: "overview" }
   })
   const activeContext = createMemo(() => {
@@ -1217,7 +1560,7 @@ export function Memory() {
     if (item.kind === "entry") return `${focus} · ${item.entry.scope} · ${(item.entry.categoryIDs ?? []).join(", ")}`
     if (item.kind === "proposal") return `${focus} · ${item.proposal.operation} proposal`
     if (item.kind === "policy") return `${focus} · ${policyScope()} policy · ${item.category.label}`
-    if (item.kind === "dream") return `${focus} · Dream`
+    if (item.kind === "dream") return `${focus} · Dream${item.detail ? ` · ${item.detail.run.status}` : ""}`
     return focus
   })
 
@@ -1401,13 +1744,14 @@ export function Memory() {
   }
 
   async function newSideChat() {
+    const item = selection()
     const session = createMemorySideChatSession({
       root: currentRoot(),
       selectedWorkspaceID: selectedWorkspaceID(),
-      selectedCategoryID: selection().kind === "policy"
-        ? selection().category.id
-        : selection().kind === "entry"
-          ? selection().entry.categoryIDs[0] ?? null
+      selectedCategoryID: item.kind === "policy"
+        ? item.category.id
+        : item.kind === "entry"
+          ? item.entry.categoryIDs[0] ?? null
           : null,
     })
     setChat(session)
@@ -1491,25 +1835,11 @@ export function Memory() {
   }
 
   useKeyboard((evt) => {
-    if (!shouldMemoryRouteHandleKey({ dialogOpen: dialog.stack.length > 0, defaultPrevented: evt.defaultPrevented })) return
-    if (sideChatInputActive()) {
-      if (evt.name === "escape") {
-        evt.preventDefault()
-        setSideChatInputActive(false)
-        return
-      }
-      if (evt.name === "n" && !sideChatInput().trim()) {
-        evt.preventDefault()
-        void newSideChat().catch((err) => toast.error(err))
-        return
-      }
-      if (evt.name === "h" && !sideChatInput().trim()) {
-        evt.preventDefault()
-        showSideChatHistory()
-        return
-      }
-      return
-    }
+    if (!shouldMemoryRouteHandleKey({
+      dialogOpen: dialog.stack.length > 0,
+      defaultPrevented: evt.defaultPrevented,
+      textInputActive: sideChatInputActive(),
+    })) return
     if (evt.name === "escape" || evt.name === "q") {
       evt.preventDefault()
       route.navigate(routeReturnTarget(route.data))
@@ -1589,10 +1919,11 @@ export function Memory() {
       source: "current-session",
     }, currentRoot()).then(() => Promise.allSettled([refetchBase(), refetch()])).catch((err) => toast.error(err))
     const unsubscribe = sdk.event.on("event", (event) => {
-      if (event.payload.type !== "memory.workspace" && event.payload.type !== "memory.dream") return
+      const type = String(event.payload.type)
+      if (type !== "memory.workspace" && type !== "memory.dream") return
       if (event.directory && event.directory !== activeRoot() && event.directory !== currentRoot()) return
       setLive(true)
-      void Promise.allSettled([refetchBase(), refetch()])
+      void Promise.allSettled([refetchBase(), refetch(), refetchDreamSchedule()])
     })
     onCleanup(() => {
       void unsubscribe?.()
@@ -1627,7 +1958,7 @@ export function Memory() {
         </Panel>
       </Match>
       <Match when={tab() === "dream"}>
-        <DreamContent data={current} schedule={dreamSchedule()} width={contentWidth()} />
+        <DreamContent data={current} schedule={dreamSchedule()} width={contentWidth()} selectedIndex={selectedIndex()} onSelectRun={setSelectedIndex} />
       </Match>
     </Switch>
   )
@@ -1665,7 +1996,7 @@ export function Memory() {
                     <box flexGrow={1} minHeight={0}>
                       {renderMain(current())}
                     </box>
-                    <box height={7} minHeight={0}>
+                    <box height={inspectorHeight()} minHeight={0}>
                       <Inspector
                         selection={selection()}
                         width={mainContentWidth()}
@@ -1716,7 +2047,7 @@ export function Memory() {
                   />
                   <box flexDirection="column" minWidth={0} minHeight={0} flexGrow={1} gap={1}>
                     {renderMain(current())}
-                    <box height={8} minHeight={0}>
+                    <box height={inspectorHeight()} minHeight={0}>
                       <Inspector
                         selection={selection()}
                         width={Math.max(40, contentWidth() - 36)}
@@ -1763,7 +2094,7 @@ export function Memory() {
                     <box height={tiny() ? 22 : 26} minHeight={0}>
                       {renderMain(current())}
                     </box>
-                    <box height={8} minHeight={0}>
+                    <box height={inspectorHeight()} minHeight={0}>
                       <Inspector
                         selection={selection()}
                         width={contentWidth()}

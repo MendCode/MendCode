@@ -240,15 +240,15 @@ export const Info = Schema.Struct({
   tool_output: Schema.optional(
     Schema.Struct({
       max_lines: Schema.optional(PositiveInt).annotate({
-        description: "Maximum lines of tool output before it is truncated and saved to disk (default: 2000)",
+        description: "Maximum lines of tool output before it is truncated (default: 2000)",
       }),
       max_bytes: Schema.optional(PositiveInt).annotate({
-        description: "Maximum bytes of tool output before it is truncated and saved to disk (default: 51200)",
+        description: "Maximum bytes of tool output before it is truncated (default: 51200)",
       }),
     }),
   ).annotate({
     description:
-      "Thresholds for truncating tool output. When output exceeds either limit, the full text is written to the truncation directory and a preview is returned.",
+      "Thresholds for truncating tool output. Truncated output keeps a bounded preview and may save a bounded excerpt to the truncation directory.",
   }),
   compaction: Schema.optional(
     Schema.Struct({
@@ -267,6 +267,10 @@ export const Info = Schema.Struct({
       }),
       reserved: Schema.optional(NonNegativeInt).annotate({
         description: "Token buffer for compaction. Leaves enough window to avoid overflow during compaction.",
+      }),
+      threshold: Schema.optional(Schema.Finite).annotate({
+        description:
+          "Auto-compaction threshold as a percent of the model input/context limit (default: 95).",
       }),
     }),
   ),

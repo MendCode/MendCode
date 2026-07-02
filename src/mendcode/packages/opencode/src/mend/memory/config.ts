@@ -8,6 +8,13 @@ import { activeMendPackageProjection } from "../runtime/packages"
 
 export type MemoryScope = "global" | "project"
 
+export type MemoryDreamWindow = {
+  enabled: boolean
+  start: string
+  end: string
+  timezone?: string
+}
+
 export type MemoryConfig = {
   version: 0
   configScope: "global" | "project"
@@ -23,6 +30,7 @@ export type MemoryConfig = {
   consolidatorRole: string
   memoryDreamRole: string
   memoryAssistantRole: string
+  dreamWindow: MemoryDreamWindow | null
   minIdleMinutes: number
   minBudgetRemainingUsd: number | null
   requireApprovalForGenerated: boolean
@@ -44,6 +52,7 @@ export const defaultMemoryConfig: MemoryConfig = {
   consolidatorRole: "none",
   memoryDreamRole: "memoryDream",
   memoryAssistantRole: "memoryAssistant",
+  dreamWindow: null,
   minIdleMinutes: 30,
   minBudgetRemainingUsd: 0.25,
   requireApprovalForGenerated: true,
@@ -77,6 +86,26 @@ function scopes(value: unknown): MemoryScope[] {
 function roleValue(value: unknown, fallback: string) {
   if (typeof value !== "string" || !value.trim()) return fallback
   return value === "summary" ? fallback : value
+}
+
+function timeValue(value: unknown) {
+  if (typeof value !== "string") return undefined
+  return /^\d{2}:\d{2}$/.test(value) ? value : undefined
+}
+
+function dreamWindow(value: unknown, fallback: MemoryDreamWindow | null) {
+  if (value === null) return null
+  if (typeof value !== "object" || value === null) return fallback
+  const raw = value as Record<string, unknown>
+  const start = timeValue(raw.start)
+  const end = timeValue(raw.end)
+  if (!start || !end) return fallback
+  return {
+    enabled: bool(raw.enabled, true),
+    start,
+    end,
+    ...(typeof raw.timezone === "string" && raw.timezone.trim() ? { timezone: raw.timezone.trim() } : {}),
+  }
 }
 
 export function globalMemoryDir() {
@@ -133,6 +162,7 @@ export function normalizeMemoryConfig(input: unknown): MemoryConfig {
     consolidatorRole: roleValue(raw.consolidatorRole, defaultMemoryConfig.consolidatorRole),
     memoryDreamRole: roleValue(raw.memoryDreamRole, defaultMemoryConfig.memoryDreamRole),
     memoryAssistantRole: roleValue(raw.memoryAssistantRole, defaultMemoryConfig.memoryAssistantRole),
+    dreamWindow: dreamWindow(raw.dreamWindow, defaultMemoryConfig.dreamWindow),
     minIdleMinutes: numberValue(raw.minIdleMinutes, defaultMemoryConfig.minIdleMinutes, 0),
     minBudgetRemainingUsd: nullableNumber(raw.minBudgetRemainingUsd, defaultMemoryConfig.minBudgetRemainingUsd, 0),
     requireApprovalForGenerated: bool(raw.requireApprovalForGenerated, defaultMemoryConfig.requireApprovalForGenerated),
@@ -165,6 +195,16 @@ export async function readMemoryConfig(root?: string): Promise<MemoryConfig> {
   })
 }
 
+export async function readGlobalMemoryConfig(): Promise<MemoryConfig> {
+  const paths = memoryPaths()
+  const globalConfig = await readJsonIfExists(paths.globalConfig).catch(() => null)
+  return normalizeMemoryConfig({
+    ...defaultMemoryConfig,
+    ...(globalConfig || {}),
+    configScope: "global",
+  })
+}
+
 export async function writeProjectMemoryConfig(config: Partial<MemoryConfig>, root?: string) {
   const paths = memoryPaths(root)
   const current = await readMemoryConfig(paths.root)
@@ -176,7 +216,7 @@ export async function writeProjectMemoryConfig(config: Partial<MemoryConfig>, ro
 
 export async function writeGlobalMemoryConfig(config: Partial<MemoryConfig>, root?: string) {
   const paths = memoryPaths(root)
-  const current = await readMemoryConfig(paths.root)
+  const current = await readGlobalMemoryConfig()
   const next = normalizeMemoryConfig({ ...current, ...config, configScope: "global" })
   await mkdir(path.dirname(paths.globalConfig), { recursive: true })
   await writeFile(paths.globalConfig, `${JSON.stringify(next, null, 2)}\n`)
