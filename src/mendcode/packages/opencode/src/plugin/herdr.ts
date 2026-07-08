@@ -4,8 +4,10 @@ import path from "path"
 import type { Plugin, PluginInput } from "@mendcode/plugin"
 import { Global } from "@mendcode/core/global"
 
-const SOURCE = "herdr:opencode"
-const AGENT = "opencode"
+const SOURCE = "herdr:mendcode"
+const AGENT = "mendcode"
+const LEGACY_SOURCE = "herdr:opencode"
+const LEGACY_AGENT = "opencode"
 const STATE_SOURCE = "mendcode:state"
 const STATE_AGENT = "mendcode"
 const DISPLAY_SOURCE = "mendcode:display"
@@ -376,6 +378,11 @@ const OFFICIAL_IDENTITY: RequestIdentity = {
   agent: AGENT,
 }
 
+const LEGACY_IDENTITY: RequestIdentity = {
+  source: LEGACY_SOURCE,
+  agent: LEGACY_AGENT,
+}
+
 const STATE_IDENTITY: RequestIdentity = {
   source: STATE_SOURCE,
   agent: STATE_AGENT,
@@ -440,6 +447,7 @@ function reportDisplayAgent() {
 }
 
 async function reportInitialAgentPresence() {
+  await socketRequest("pane.release_agent", {}, LEGACY_IDENTITY)
   await requestState("pane.report_agent", { state: "idle" })
   await reportDisplayAgent()
 }
@@ -518,6 +526,7 @@ async function applyHerdrAction(action: HerdrAction | undefined) {
   if (!action) return
   if (action.kind === "release") {
     await requestState("pane.release_agent", {})
+    await socketRequest("pane.release_agent", {}, LEGACY_IDENTITY)
     await request("pane.release_agent", {})
     return
   }

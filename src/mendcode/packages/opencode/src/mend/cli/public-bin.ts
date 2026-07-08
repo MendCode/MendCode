@@ -265,6 +265,15 @@ function suggestCommand(value: string, candidates = [...primaryCommands, ...adva
   return match && match.score <= Math.max(2, Math.floor(value.length / 3)) ? match.candidate : undefined
 }
 
+function looksLikeSessionID(value: string) {
+  return /^ses_[A-Za-z0-9]+$/.test(value)
+}
+
+export function runtimeArgsForSessionShortcut(sessionID: string, cwd = shellCwd()) {
+  if (!looksLikeSessionID(sessionID)) throw new Error(`Invalid MendCode session id: ${sessionID}`)
+  return [cwd, "--session", sessionID]
+}
+
 function shellCwd() {
   return path.resolve(process.env.MENDCODE_SHELL_CWD || process.cwd())
 }
@@ -318,6 +327,17 @@ function enforceDonorIdentityGuard(args: string[]) {
   if (!status.active) {
     console.error(`WARN: internal donor override enabled via ${status.overrideEnv}; do not use this as public MendCode UX.`)
     return
+  }
+  const sessionFlagIndex = args.findIndex((arg) => arg === "--session" || arg === "-s")
+  const legacySessionID = sessionFlagIndex >= 0 ? args[sessionFlagIndex + 1] : undefined
+  if (legacySessionID && looksLikeSessionID(legacySessionID)) {
+    throw new Error([
+      `Blocked legacy session restore command for: ${legacySessionID}`,
+      "MendCode owns session restore through its public CLI; the donor runtime is internal compatibility only.",
+      `Use: mendcode --session ${legacySessionID}`,
+      "If this came from Herdr/tmux restore, replace the saved command with the MendCode command above.",
+      `Temporary internal override: ${status.overrideEnv}=1 mendcode opencode -- ${args.join(" ") || "--help"}`,
+    ].join("\n"))
   }
   const token = args.find((arg) => arg && arg !== "--" && !arg.startsWith("-")) || "help"
   throw new Error([
@@ -485,6 +505,11 @@ export async function main(argv = process.argv.slice(2)) {
     if (!cmd) return runRuntime([shellCwd()])
     if (cmd === "help" && args[0] === "advanced") advancedUsage(0)
     if (cmd === "help" || cmd === "-h" || cmd === "--help") usage(0)
+    if (cmd.startsWith("ses_")) {
+      if (!looksLikeSessionID(cmd)) throw new Error(`Invalid MendCode session id: ${cmd}`)
+      if (args.length) throw new Error(`Usage: mendcode --session ${cmd}\nThe shortcut \`mendcode ${cmd}\` opens that session and does not accept extra arguments.`)
+      return runRuntime(runtimeArgsForSessionShortcut(cmd))
+    }
     if (cmd === "--worktree") return await runWorktreeShortcut(args)
     if (cmd === "--tsm") return await runTsmShortcut(args)
     if (cmd.startsWith("-")) return runRuntime([shellCwd(), cmd, ...args])

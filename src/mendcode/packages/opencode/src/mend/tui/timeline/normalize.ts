@@ -39,6 +39,7 @@ export function shouldRenderCompactTool(profile: MendPresentationProfile, tool: 
   if (profile === "raw") return false
   if (tool === "task") return false
   if (tool === "loop") return false
+  if (tool === "memory_graph") return false
   if (tool === "todowrite") return profile === "mendcode"
   if (toolClass(tool) === "artifact") return false
   if (profile === "minimal") return true
@@ -193,7 +194,7 @@ function webFetchSummary(input: Record<string, unknown>) {
   const title = domain ? `Web ${domain}` : `Web ${compactInput(input)}`.trim()
   return {
     title,
-    lines: usefulLines({ title: stringValue(input.title), link: url && !domain ? url : undefined }),
+    lines: [...new Set([stringValue(input.title), url].filter((line): line is string => Boolean(line?.trim())))],
     result: "fetched",
   }
 }
@@ -323,7 +324,7 @@ function questionSummary(input: Record<string, unknown>, metadata?: Record<strin
   return { title, lines }
 }
 
-function wrapTimelineLine(prefix: string, text: string, width = 76) {
+export function wrapTimelineLine(prefix: string, text: string, width = 76) {
   const words = text.split(/\s+/).filter(Boolean)
   const lines: string[] = []
   const continuation = "  "

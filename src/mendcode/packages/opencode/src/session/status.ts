@@ -24,6 +24,7 @@ export const Info = Schema.Union([
     kind: Schema.optional(Schema.Union([Schema.Literal("mflow-wait"), Schema.Literal("memory-extract"), Schema.Literal("subagent-wait")])),
     message: Schema.optional(Schema.String),
     until: Schema.optional(NonNegativeInt),
+    startedAt: Schema.optional(NonNegativeInt),
   }),
 ])
   .annotate({ identifier: "SessionStatus" })
@@ -57,7 +58,8 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Se
 
 export const BUSY_STATUS_STALE_MS = 60 * 1000
 const PERSISTED_STATUS_STALE_MS = 5 * 60 * 1000
-type StatusRecord = { time_updated: number; data: Info }
+type StoredStatus = Exclude<Info, { type: "idle" }>
+type StatusRecord = { time_created?: number; time_updated: number; data: Info }
 
 function foreign(err: unknown) {
   if (typeof err !== "object" || err === null) return false
@@ -70,6 +72,16 @@ export function freshStatus(row: StatusRecord, now = Date.now()) {
   if (row.data.type === "busy") return now - row.time_updated <= BUSY_STATUS_STALE_MS ? row.data : undefined
   if (row.data.type === "retry" && row.data.next > now) return row.data
   return now - row.time_updated <= PERSISTED_STATUS_STALE_MS ? row.data : undefined
+}
+
+export function withStartedAt(status: Info, current: StatusRecord | undefined, now = Date.now()): Info {
+  if (status.type !== "busy") return status
+  const currentFresh = current ? freshStatus(current, now) : undefined
+  const currentStartedAt = current && currentFresh?.type === "busy" ? (currentFresh.startedAt ?? current.time_created ?? current.time_updated) : undefined
+  return {
+    ...status,
+    startedAt: status.startedAt ?? currentStartedAt ?? now,
+  }
 }
 
 export const layer = Layer.effect(
@@ -114,29 +126,35 @@ export const layer = Layer.effect(
 
     const set = Effect.fn("SessionStatus.set")(function* (sessionID: SessionID, status: Info) {
       const data = yield* InstanceState.get(state)
-      yield* bus.publish(Event.Status, { sessionID, status })
+      const now = Date.now()
       if (status.type === "idle") {
+        yield* bus.publish(Event.Status, { sessionID, status })
         yield* bus.publish(Event.Idle, { sessionID })
         data.delete(sessionID)
         Database.use((db) => db.delete(SessionStatusTable).where(eq(SessionStatusTable.session_id, sessionID)).run())
         return
       }
-      data.set(sessionID, { time_updated: Date.now(), data: status })
+      const row = Database.use((db) =>
+        db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, sessionID)).get(),
+      )
+      const nextStatus = withStartedAt(status, data.get(sessionID) ?? row, now) as StoredStatus
+      yield* bus.publish(Event.Status, { sessionID, status: nextStatus })
+      data.set(sessionID, { time_created: row?.time_created ?? now, time_updated: now, data: nextStatus })
       try {
         Database.use((db) =>
           db
             .insert(SessionStatusTable)
             .values({
               session_id: sessionID,
-              time_created: Date.now(),
-              time_updated: Date.now(),
-              data: status,
+              time_created: row?.time_created ?? now,
+              time_updated: now,
+              data: nextStatus,
             })
             .onConflictDoUpdate({
               target: SessionStatusTable.session_id,
               set: {
-                time_updated: Date.now(),
-                data: status,
+                time_updated: now,
+                data: nextStatus,
               },
             })
             .run(),

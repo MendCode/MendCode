@@ -14,7 +14,7 @@ import {
 } from "../../src/cli/cmd/tui/routes/setup"
 import { setupRailStepStatus } from "../../src/cli/cmd/tui/routes/setup/setup-rail"
 import { loopRouteColumns, loopRouteFrameLayout, loopRouteKeyHint, loopRouteStackedListHeight } from "../../src/cli/cmd/tui/routes/loops"
-import { memoryGraphMiniMap, memoryLayoutForDimensions, memoryPreviewText, memorySidebarProjectWorkspaces, memoryTabCellWidths, shouldMemoryRouteHandleKey, sideChatInputArtifacts } from "../../src/cli/cmd/tui/routes/memory"
+import { dreamEvidenceLabel, dreamGraphProposalLabel, dreamLatestActivity, dreamTranscriptRows, memoryGraphMiniMap, memoryLayoutForDimensions, memoryPreviewText, memorySidebarProjectWorkspaces, memoryTabCellWidths, shouldMemoryRouteHandleKey, sideChatInputArtifacts } from "../../src/cli/cmd/tui/routes/memory"
 import { contextAutoCompactLabel, contextInventoryRows, contextUsageBarCells, contextUsageGridCells, contextUsageGridLayout, contextUsageGridLegend, contextUsageGridRows } from "../../src/cli/cmd/tui/routes/session/dialog-context-usage"
 import { startupLoadingText } from "../../src/cli/cmd/tui/component/startup-loading"
 import {
@@ -118,6 +118,103 @@ describe("setup route smoke", () => {
     expect(memoryPreviewText("token: abcdefghijklmnopqrstuvwxyz", 80)).toBe("token=<redacted>")
   })
 
+  test("dream transcript rows summarize events, proposals, graph links, and safety", () => {
+    const detail = {
+      run: { status: "completed", startedAt: "2026-07-02T10:00:00.000Z", completedAt: "2026-07-02T10:00:03.000Z", failureReason: null },
+      events: [
+        { at: "2026-07-02T10:00:00.000Z", status: "started", message: "Dream started" },
+        { at: "2026-07-02T10:00:03.000Z", status: "completed", message: "Dream completed with 1 proposals" },
+      ],
+      evidence: [{ id: "file:AGENTS.md", sourceType: "file", sourcePath: "AGENTS.md", redacted: false }],
+      proposals: [{ id: "prop_1", operation: "create", scope: "project", text: "Keep Dream reviewable." }],
+      graphProposals: [{
+        id: "dreamlink_1",
+        createdAt: "2026-07-02T10:00:02.000Z",
+        kind: "related",
+        confidence: 0.8,
+        reason: "Shared memory category: memory.policy",
+        fromSummary: "Dream policy",
+        toSummary: "Graph links",
+      }],
+      decisions: [{ at: "2026-07-02T10:00:02.500Z", status: "created-proposal", reason: "Dream proposed memory maintenance." }],
+      safety: { reads: [{}], skippedSources: [], failures: [], redactions: 0 },
+    } satisfies NonNullable<Parameters<typeof dreamTranscriptRows>[0]>
+    const rows = dreamTranscriptRows(detail)
+    const activityDetail = {
+      run: { status: "completed", startedAt: "2026-07-02T10:00:00.000Z", completedAt: "2026-07-02T10:00:03.000Z", failureReason: null },
+      events: rows.filter((row) => row.label === "completed").map((row) => ({ at: row.at, status: row.label, message: row.detail })),
+      evidence: [],
+      proposals: [],
+      graphProposals: [],
+      decisions: [],
+      safety: null,
+    } satisfies NonNullable<Parameters<typeof dreamLatestActivity>[0]>
+
+    expect(rows.map((row) => row.label)).toContain("graph proposals")
+    expect(rows.map((row) => row.label)).toContain("safety")
+    expect(rows.map((row) => row.detail).join("\n")).toContain("1 pending")
+    expect(dreamLatestActivity(activityDetail)?.label).toBe("completed")
+  })
+
+  test("dream latest activity prefers completed events over same-timestamp synthetic rows", () => {
+    expect(dreamLatestActivity({
+      run: { status: "completed", startedAt: "2026-07-02T10:00:00.000Z", completedAt: "2026-07-02T10:00:03.000Z", failureReason: null },
+      events: [{ at: "2026-07-02T10:00:03.000Z", status: "completed", message: "Dream completed with 1 proposals" }],
+      evidence: [{ id: "file:/tmp/secret/AGENTS.md", sourceType: "file", sourcePath: "/tmp/secret/AGENTS.md", redacted: true }],
+      proposals: [{ id: "prop_1", operation: "create", scope: "project", text: "Keep Dream reviewable." }],
+      graphProposals: [{ id: "dreamlink_1", createdAt: "2026-07-02T10:00:03.000Z", kind: "related", status: "pending", confidence: 0.8, reason: "Shared memory category: memory.policy", fromSummary: "Dream policy", toSummary: "Graph links" }],
+      decisions: [{ at: "2026-07-02T10:00:03.000Z", status: "created-proposal", reason: "Dream proposed memory maintenance." }],
+      safety: { reads: [{}], skippedSources: [], failures: [], redactions: 1 },
+    })?.label).toBe("completed")
+  })
+
+  test("dream transcript and latest activity surface reviewed graph proposal outcomes", () => {
+    const detail = {
+      run: { status: "completed", startedAt: "2026-07-02T10:00:00.000Z", completedAt: "2026-07-02T10:00:03.000Z", failureReason: null },
+      events: [{ at: "2026-07-02T10:00:03.000Z", status: "completed", message: "Dream completed with 1 graph proposals" }],
+      evidence: [],
+      proposals: [],
+      graphProposals: [{
+        id: "dreamlink_1",
+        createdAt: "2026-07-02T10:00:02.000Z",
+        reviewedAt: "2026-07-02T10:00:05.000Z",
+        kind: "related",
+        status: "rejected",
+        confidence: 0.8,
+        reason: "Shared memory category: memory.policy",
+        rejectionReason: "Not related enough",
+        fromSummary: "Dream policy",
+        toSummary: "Graph links",
+      }],
+      decisions: [],
+      safety: { reads: [], skippedSources: [], failures: [], redactions: 0 },
+    } as const
+
+    expect(dreamTranscriptRows(detail).some((row) => row.label === "rejected" && row.detail.includes("Not related enough"))).toBe(true)
+    expect(dreamLatestActivity(detail)?.label).toBe("rejected")
+  })
+
+  test("dream helpers avoid leaking raw evidence paths and ids", () => {
+    expect(dreamEvidenceLabel({
+      id: "file:/Users/test/private/notes.md",
+      sourceType: "file",
+      sourcePath: "/Users/test/private/notes.md",
+      redacted: true,
+    })).toBe("file · notes.md · redacted")
+    expect(dreamEvidenceLabel({
+      id: "memory:fact_secret_internal_id",
+      sourceType: "memory",
+      sourcePath: null,
+      redacted: false,
+    })).toBe("memory · saved memory")
+    expect(dreamGraphProposalLabel({
+      kind: "related",
+      reason: "Shared memory category: memory.policy",
+      fromSummary: "Do not leak filesystem evidence paths to providers.",
+      toSummary: "Use redacted Dream evidence summaries in Memory Center.",
+    })).not.toContain("fact_secret_internal_id")
+  })
+
   test("memory route uses numeric terminal dimensions for wide multipane layout", () => {
     const layout = memoryLayoutForDimensions({ width: 180, height: 40 })
 
@@ -185,6 +282,14 @@ describe("setup route smoke", () => {
     expect(graph.status).toContain("2/2 materialized")
     expect(graph.status).toContain("0 legacy-derived")
     expect(graph.status).toContain("1 explicit")
+    expect(graph.stats).toContain("connected 2")
+    expect(graph.stats).toContain("isolated 0")
+    expect(graph.minimap.length).toBeGreaterThan(0)
+    expect(graph.edgeLabels.join("\n")).toContain("supports")
+    expect(graph.labels.join("\n")).toContain("connected")
+    expect(graph.focusLines.join("\n")).toContain("focus")
+    expect(graph.relationRows.join("\n")).toContain("supports")
+    expect(graph.isolatedRows).toEqual([])
   })
 
   test("memory graph mini map infers compact fallback edges when links are absent", () => {
@@ -207,6 +312,11 @@ describe("setup route smoke", () => {
     expect(graph.status).toContain("3/3 materialized")
     expect(graph.status).toContain("0 explicit")
     expect(graph.status).toContain("2 inferred")
+    expect(graph.stats).toContain("connected 0")
+    expect(graph.stats).toContain("isolated 3")
+    expect(graph.edgeLabels).toEqual([])
+    expect(graph.relationRows.join("\n")).toContain("category*")
+    expect(graph.isolatedRows.join("\n")).toContain("Run focused memory tests")
     expect(graph.legend.join("\n")).toContain("Commands")
   })
 
@@ -220,6 +330,12 @@ describe("setup route smoke", () => {
 
     expect(graph.rows).toEqual([])
     expect(graph.emptyState).toBe("empty")
+    expect(graph.minimap).toEqual([])
+    expect(graph.edgeLabels).toEqual([])
+    expect(graph.focusLines).toEqual([])
+    expect(graph.relationRows).toEqual([])
+    expect(graph.isolatedRows).toEqual([])
+    expect(graph.stats).toContain("visible 0/0")
     expect(graph.status).toContain("0/0 materialized")
     expect(graph.status).toContain("0 legacy-derived")
   })
@@ -237,6 +353,7 @@ describe("setup route smoke", () => {
 
     expect(graph.rows).toEqual([])
     expect(graph.emptyState).toBe("legacy-only")
+    expect(graph.stats).toContain("visible 0/0")
     expect(graph.status).toContain("0/2 materialized")
     expect(graph.status).toContain("2 legacy-derived")
     expect(graph.status).toContain("0 explicit")
@@ -259,6 +376,7 @@ describe("setup route smoke", () => {
     expect(graph.status).toContain("2/3 materialized")
     expect(graph.status).toContain("1 legacy-derived")
     expect(graph.status).toContain("1 explicit")
+    expect(graph.stats).toContain("visible 2/2")
   })
 
   test("memory graph mini map legend only describes visible categories", () => {
@@ -282,6 +400,7 @@ describe("setup route smoke", () => {
     })
 
     expect(graph.labels.join("\n")).toContain("Memory graph fact 0")
+    expect(graph.labels.join("\n")).toContain("isolated")
     expect(graph.legend.join("\n")).toContain("Category 0")
     expect(graph.legend.join("\n")).not.toContain("Category 5")
   })

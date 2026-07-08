@@ -246,6 +246,35 @@ describe("Runner", () => {
   )
 
   it.live(
+    "cancel interrupts active run without dropping queued replacement work",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const started = yield* Deferred.make<void>()
+      const interrupted = yield* Deferred.make<void>()
+      const runner = Runner.make<string>(s, { onInterrupt: Effect.succeed("fallback") })
+
+      const first = Effect.gen(function* () {
+        yield* Deferred.succeed(started, undefined)
+        return yield* Effect.never.pipe(Effect.as("first"))
+      }).pipe(Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)))
+      const active = yield* runner.ensureRunning(first).pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+
+      const queued = yield* runner.ensureRunning(Effect.succeed("queued"), { queue: true }).pipe(Effect.forkChild)
+      yield* Effect.gen(function* () {
+        while (runner.state._tag !== "RunningThenRun") yield* Effect.yieldNow
+      }).pipe(Effect.timeout("250 millis"))
+
+      yield* runner.cancel
+      yield* Deferred.await(interrupted).pipe(Effect.timeout("250 millis"))
+
+      expect(yield* Fiber.join(active)).toBe("fallback")
+      expect(yield* Fiber.join(queued).pipe(Effect.timeout("250 millis"))).toBe("queued")
+      expect(runner.busy).toBe(false)
+    }),
+  )
+
+  it.live(
     "work can be started after cancel",
     Effect.gen(function* () {
       const s = yield* Scope.Scope

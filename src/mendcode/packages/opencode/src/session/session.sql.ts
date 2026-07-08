@@ -5,7 +5,7 @@ import type { SessionMessage } from "../v2/session-message"
 import type { Snapshot } from "../snapshot"
 import type { Permission } from "../permission"
 import type { ProjectID } from "../project/schema"
-import type { SessionID, MessageID, PartID } from "./schema"
+import type { SessionID, MessageID, PartID, AgentCommandID } from "./schema"
 import type { WorkspaceID } from "../control-plane/schema"
 import { Timestamps } from "../storage/schema.sql"
 
@@ -158,6 +158,66 @@ export const BackgroundSessionTable = sqliteTable("background_session", {
     }
   }>(),
 })
+
+export const AgentViewMetadataTable = sqliteTable("agent_view_metadata", {
+  session_id: text()
+    .$type<SessionID>()
+    .primaryKey()
+    .references(() => SessionTable.id, { onDelete: "cascade" }),
+  ...Timestamps,
+  data: text({ mode: "json" }).notNull().$type<{
+    title?: string
+    tags?: readonly string[]
+    group?: string
+    priority?: "low" | "normal" | "high" | "urgent"
+    notes?: string
+    pinned?: boolean
+    archived?: boolean
+  }>(),
+})
+
+export const AgentCommandTable = sqliteTable(
+  "agent_command",
+  {
+    id: text().$type<AgentCommandID>().primaryKey(),
+    source_session_id: text()
+      .$type<SessionID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    target_session_id: text()
+      .$type<SessionID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    state: text().$type<"pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired">().notNull(),
+    time_created: integer().notNull(),
+    time_updated: integer().notNull(),
+    data: text({ mode: "json" }).notNull().$type<{
+      type: "request_summary" | "rename" | "tag" | "pause_after_turn" | "stop" | "send_message"
+      payload: { instructions?: string } | { title: string } | { tags: readonly string[] } | { reason?: string } | { text: string }
+      permissions: readonly string[]
+      policy?: {
+        decision: "safe_auto" | "same_workspace" | "approval_required" | "denied"
+        permissions: readonly string[]
+        reason: string
+        ownership?: {
+          targetWriter?: {
+            clientID: string
+            expires: number
+          }
+        }
+      }
+      error?: string
+      result?: string
+      expiresAt?: number
+    }>(),
+  },
+  (table) => [
+    index("agent_command_source_idx").on(table.source_session_id),
+    index("agent_command_target_idx").on(table.target_session_id),
+    index("agent_command_state_idx").on(table.state),
+    index("agent_command_time_updated_idx").on(table.time_updated),
+  ],
+)
 
 type LoopSpecData = {
   trigger?: {

@@ -25,8 +25,11 @@ const DEFAULT_DAYS = 365
 const ADVANCED_DAYS = 365
 const WEATHER_KV_KEY = "stats_weather"
 export const STATS_CACHE_KEY = "stats_insights"
+const STATS_CACHE_STALE_MS = 5 * 60 * 1000
+const STATS_TODAY_CACHE_STALE_MS = 60 * 1000
 const HEATMAP_ROWS = 7
 const HEATMAP_COLUMNS = Math.ceil(DEFAULT_DAYS / HEATMAP_ROWS)
+const HEAT_MODES: HeatMode[] = ["daily", "weekly", "cumulative"]
 
 type HeatMode = "daily" | "weekly" | "cumulative"
 type StatsScope = "global" | "project" | "directory"
@@ -78,7 +81,38 @@ function heatGlyph(value: number, peak: number) {
 }
 
 function heatColor(theme: ReturnType<typeof useTheme>["theme"], value: number, peak: number) {
-  return [theme.textMuted, theme.border, theme.accent, theme.primary, theme.success][intensity(value, peak)]
+  return [theme.textMuted, theme.primary, theme.accent, theme.warning, theme.success][intensity(value, peak)]
+}
+
+export function statsDayTokenValue(
+  day: Pick<DailyUsage, "tokens" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheTokens">,
+) {
+  return Math.max(day.tokens, day.inputTokens + day.outputTokens + day.reasoningTokens + day.cacheTokens)
+}
+
+export function statsDayVisualValue(
+  day: Pick<DailyUsage, "tokens" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheTokens" | "sessions" | "messages" | "userMessages" | "aiResponseMs" | "toolMs">,
+) {
+  const tokens = statsDayTokenValue(day)
+  if (tokens > 0) return tokens
+  return day.messages > day.userMessages || day.sessions > 0 || day.aiResponseMs > 0 || day.toolMs > 0 ? 1 : 0
+}
+
+export function statsGraphSeries(input: { days: readonly DailyUsage[]; mode: Exclude<HeatMode, "daily">; rowCount?: number }) {
+  const rowCount = Math.max(1, input.rowCount ?? HEATMAP_ROWS)
+  let running = 0
+  return Array.from({ length: Math.ceil(input.days.length / rowCount) }, (_, column) => {
+    const start = column * rowCount
+    const slice = input.days.slice(start, start + rowCount)
+    const weekly = slice.reduce((sum, day) => sum + statsDayTokenValue(day), 0)
+    running += weekly
+    return {
+      index: start,
+      endIndex: start + Math.max(0, slice.length - 1),
+      value: input.mode === "cumulative" ? running : weekly,
+      day: slice.at(-1)?.day,
+    }
+  })
 }
 
 function stat(label: string, value: string, detail?: string) {
@@ -147,13 +181,13 @@ function MetricRows(props: {
   )
 }
 
-function Header(props: { advanced: boolean; scope: StatsScope; narrow: boolean }) {
+function Header(props: { advanced: boolean; scope: StatsScope; mode: HeatMode; narrow: boolean }) {
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
   const view =
     props.scope === "global" ? "global stats" : props.scope === "project" ? "project stats" : "directory stats"
-  const status = `${mend.profile.identity.productName} · ${view} · daily · 365d${props.advanced ? "" : " · compact"}`
-  const shortcuts = "↑/↓ day · ←/→ week · a details · r refresh · w weather · esc"
+  const status = `${mend.profile.identity.productName} · ${view} · ${props.mode} · 365d${props.advanced ? "" : " · compact"}`
+  const shortcuts = "↑/↓ day · ←/→ week · m/tab mode · 1/2/3 views · r refresh · esc"
   return (
     <Switch>
       <Match when={props.narrow}>
@@ -463,7 +497,7 @@ function LoadingStats(props: { tiny: boolean }) {
 function selectedDayRows(day: DailyUsage) {
   const number = (value: number | undefined) => Locale.number(value ?? 0)
   return [
-    stat("tokens", number(day.tokens), `${number(day.cacheTokens)} cache`),
+    stat("tokens", number(statsDayTokenValue(day)), `${number(day.cacheTokens)} cache`),
     stat(
       "mix",
       `${number(day.inputTokens)} in`,
@@ -512,8 +546,8 @@ function CompactStats(props: {
       <Panel title="Activity" height={8}>
         <MetricRows items={props.headline.slice(0, 4)} maxWidth={props.contentWidth} />
       </Panel>
-      <Panel title="Token activity · daily · 365 days" grow>
-        <UsageHeatmap
+      <Panel title={`Token activity · ${props.mode} · 365 days`} grow>
+        <TokenActivityView
           insights={props.insights}
           mode={props.mode}
           columns={props.columns}
@@ -577,8 +611,8 @@ function MainDashboard(props: {
 
       <box flexDirection={props.wide ? "row" : "column"} flexGrow={1} minHeight={0} gap={1}>
         <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0} gap={1}>
-          <Panel title="Token activity · daily · 365 days" grow>
-            <UsageHeatmap
+          <Panel title={`Token activity · ${props.mode} · 365 days`} grow>
+            <TokenActivityView
               insights={props.data}
               mode={props.mode}
               columns={props.heatColumns}
@@ -708,6 +742,107 @@ type HeatCell = {
   value: number
 }
 
+function UsageGraph(props: {
+  insights: UsageInsights
+  mode: Exclude<HeatMode, "daily">
+  columns: number
+  cellWidth?: number
+  rows?: number
+  selectedIndex?: number
+  onSelectDay?: (index: number) => void
+}) {
+  const { theme } = useTheme()
+  const rowCount = createMemo(() => props.rows ?? 7)
+  const visible = createMemo(() => props.insights.days.slice(-props.columns * rowCount()))
+  const visibleStart = createMemo(() => Math.max(0, props.insights.days.length - visible().length))
+  const series = createMemo(() => statsGraphSeries({ days: visible(), mode: props.mode, rowCount: rowCount() }))
+  const peak = createMemo(() => Math.max(1, ...series().map((point) => point.value)))
+  const cellWidth = createMemo(() => Math.max(1, props.cellWidth ?? 2))
+  const graphHeight = createMemo(() => Math.max(4, Math.min(8, rowCount())))
+  const selectedColumn = createMemo(() => {
+    const selected = props.selectedIndex
+    if (selected === undefined) return undefined
+    return series().findIndex((point) => selected >= visibleStart() + point.index && selected <= visibleStart() + point.endIndex)
+  })
+  const labels = createMemo(() => timelineLabels(visible()))
+  const graphCell = (point: ReturnType<typeof statsGraphSeries>[number], row: number) => {
+    if (point.value <= 0) return "".padEnd(cellWidth())
+    const level = Math.round((point.value / peak()) * (graphHeight() - 1))
+    const rowLevel = graphHeight() - 1 - row
+    return (rowLevel <= level ? "█" : " ").padEnd(cellWidth())
+  }
+  return (
+    <box flexDirection="column" flexGrow={1} minHeight={0} gap={0}>
+      <box flexDirection="column" flexGrow={1} justifyContent="center" gap={0}>
+        <For each={Array.from({ length: graphHeight() }, (_, index) => index)}>
+          {(row) => (
+            <box flexDirection="row" gap={0} height={1} justifyContent="space-between" width="100%">
+              <For each={series()}>
+                {(point, column) => (
+                  <text
+                    fg={column() === selectedColumn() ? theme.warning : props.mode === "cumulative" ? theme.primary : theme.success}
+                    wrapMode="none"
+                    onMouseOver={() => props.onSelectDay?.(visibleStart() + point.endIndex)}
+                    onMouseUp={() => props.onSelectDay?.(visibleStart() + point.endIndex)}
+                  >
+                    {graphCell(point, row)}
+                  </text>
+                )}
+              </For>
+            </box>
+          )}
+        </For>
+      </box>
+      <Show when={props.rows !== 7}>
+        <box flexDirection="row" justifyContent="space-between" paddingTop={1} overflow="hidden">
+          <For each={labels()}>{(label) => <text fg={theme.textMuted}>{label}</text>}</For>
+        </box>
+      </Show>
+    </box>
+  )
+}
+
+function TokenActivityView(props: {
+  insights: UsageInsights
+  mode: HeatMode
+  columns: number
+  cellWidth?: number
+  rows?: number
+  labels?: boolean
+  selectedIndex?: number
+  onSelectDay?: (index: number) => void
+}) {
+  return (
+    <box flexDirection="column" flexGrow={1} minHeight={0} gap={0}>
+      <Switch>
+        <Match when={props.mode === "daily"}>
+          <UsageHeatmap
+            insights={props.insights}
+            mode="daily"
+            columns={props.columns}
+            cellWidth={props.cellWidth}
+            rows={props.rows}
+            labels={props.labels}
+            selectedIndex={props.selectedIndex}
+            onSelectDay={props.onSelectDay}
+          />
+        </Match>
+        <Match when={props.mode === "weekly" || props.mode === "cumulative"}>
+          <UsageGraph
+            insights={props.insights}
+            mode={props.mode === "cumulative" ? "cumulative" : "weekly"}
+            columns={props.columns}
+            cellWidth={props.cellWidth}
+            rows={props.rows}
+            selectedIndex={props.selectedIndex}
+            onSelectDay={props.onSelectDay}
+          />
+        </Match>
+      </Switch>
+    </box>
+  )
+}
+
 function UsageHeatmap(props: {
   insights: UsageInsights
   mode: HeatMode
@@ -726,7 +861,7 @@ function UsageHeatmap(props: {
   const cellWidth = createMemo(() => Math.max(1, props.cellWidth ?? 2))
   const values = createMemo(() => {
     if (props.mode === "weekly") {
-      const daily = visible().map((day) => day.tokens + day.userWords * 3 + day.sessions * 500)
+      const daily = visible().map(statsDayTokenValue)
       return daily.map((_, index) => {
         const column = Math.floor(index / rowCount())
         const start = column * rowCount()
@@ -735,7 +870,7 @@ function UsageHeatmap(props: {
     }
     let running = 0
     return visible().map((day) => {
-      const value = day.tokens
+      const value = props.mode === "daily" ? statsDayVisualValue(day) : statsDayTokenValue(day)
       if (props.mode === "cumulative") {
         running += value
         return running
@@ -851,6 +986,49 @@ export function usageInsightsCacheKey(scope: StatsScope) {
   return `${STATS_CACHE_KEY}:${scope}`
 }
 
+export function statsSelectedDayIndex(input: {
+  days: readonly { day: string }[]
+  selectedDay?: string
+  selectedIndex?: number
+  followLatest: boolean
+}) {
+  if (input.days.length <= 0) return undefined
+  if (input.followLatest) return input.days.length - 1
+
+  const selectedDayIndex = input.selectedDay ? input.days.findIndex((day) => day.day === input.selectedDay) : -1
+  if (selectedDayIndex >= 0) return selectedDayIndex
+
+  if (input.selectedIndex === undefined || input.selectedIndex < 0 || input.selectedIndex >= input.days.length) {
+    return input.days.length - 1
+  }
+  return input.selectedIndex
+}
+
+function statsLocalDayKey(now = Date.now()) {
+  const date = new Date(now)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+export function statsCacheNeedsRefresh(input: {
+  updated?: number
+  days: readonly { day: string }[]
+  now?: number
+  staleMs?: number
+  todayStaleMs?: number
+}) {
+  const now = input.now ?? Date.now()
+  const staleMs = input.staleMs ?? STATS_CACHE_STALE_MS
+  const todayStaleMs = input.todayStaleMs ?? STATS_TODAY_CACHE_STALE_MS
+  if (!input.updated || now - input.updated > staleMs) return true
+  const latestDay = input.days.at(-1)?.day
+  const today = statsLocalDayKey(now)
+  if (latestDay && latestDay < today) return true
+  return Boolean(latestDay === today && now - input.updated > todayStaleMs)
+}
+
 export async function warmUsageInsightsCache(input: {
   sdk: ReturnType<typeof useSDK>
   kv: ReturnType<typeof useKV>
@@ -874,16 +1052,19 @@ export function Stats() {
   const dimensions = useTerminalDimensions()
   const [advanced, setAdvanced] = createSignal(true)
   const [scope] = createSignal<StatsScope>(route.data.type === "stats" ? (route.data.scope ?? "global") : "global")
-  const mode = () => "daily" as const
+  const [mode, setMode] = createSignal<HeatMode>("daily")
   const [weatherConfig, setWeatherConfig] = createSignal<StatsWeatherConfig>({ enabled: false })
   const [weatherRefresh, setWeatherRefresh] = createSignal(0)
   const [weatherError, setWeatherError] = createSignal<string | undefined>()
   const [weatherReady, setWeatherReady] = createSignal(false)
   const [selectedDayIndex, setSelectedDayIndex] = createSignal<number | undefined>()
+  const [selectedDayKey, setSelectedDayKey] = createSignal<string | undefined>()
+  const [followLatestDay, setFollowLatestDay] = createSignal(true)
   const [cacheUpdated, setCacheUpdated] = createSignal<number | undefined>()
   const [cacheReady, setCacheReady] = createSignal(false)
   const [insightRefreshRequest, setInsightRefreshRequest] = createSignal(0)
   const [refreshingInsights, setRefreshingInsights] = createSignal(false)
+  const [statsRefreshTick, setStatsRefreshTick] = createSignal(0)
   const tiny = createMemo(() => dimensions().width < 92 || dimensions().height < 26)
   const narrow = createMemo(() => !tiny() && dimensions().width < 124)
   const wide = createMemo(() => dimensions().width >= 142 && dimensions().height >= 34)
@@ -914,6 +1095,9 @@ export function Stats() {
   })
   const statsCacheKey = createMemo(() => usageInsightsCacheKey(scope()))
   const [cachedInsights, setCachedInsights] = createSignal<UsageInsights | undefined>()
+  let lastAutoRefreshCacheSignature: string | undefined
+  const statsRefreshPoll = setInterval(() => setStatsRefreshTick((value) => value + 1), STATS_TODAY_CACHE_STALE_MS)
+  onCleanup(() => clearInterval(statsRefreshPoll))
   createEffect(() => {
     if (!kv.ready) return
     setCacheReady(false)
@@ -959,6 +1143,17 @@ export function Stats() {
       }
     },
   )
+  createEffect(() => {
+    statsRefreshTick()
+    if (!kv.ready || !cacheReady() || refreshingInsights()) return
+    const cached = cachedInsights()
+    if (!cached) return
+    const signature = `${statsCacheKey()}:${cacheUpdated() ?? 0}:${cached.days.at(-1)?.day ?? "none"}`
+    if (lastAutoRefreshCacheSignature === signature) return
+    if (!statsCacheNeedsRefresh({ updated: cacheUpdated(), days: cached.days })) return
+    lastAutoRefreshCacheSignature = signature
+    setInsightRefreshRequest((value) => value + 1)
+  })
   const [weather] = createResource(
     () => ({ config: weatherConfig(), refresh: weatherRefresh(), ready: weatherReady() }),
     async ({ config, ready }) => {
@@ -1025,16 +1220,24 @@ export function Stats() {
   createEffect(() => {
     const data = visibleInsights()
     if (!data || data.days.length === 0) return
-    const current = selectedDayIndex()
-    if (current === undefined || current < 0 || current >= data.days.length) {
-      setSelectedDayIndex(data.days.length - 1)
-    }
+    const nextSelectedDayIndex = statsSelectedDayIndex({
+      days: data.days,
+      selectedDay: selectedDayKey(),
+      selectedIndex: selectedDayIndex(),
+      followLatest: followLatestDay(),
+    })
+    if (nextSelectedDayIndex === undefined) return
+    setSelectedDayIndex(nextSelectedDayIndex)
+    setSelectedDayKey(data.days[nextSelectedDayIndex]?.day)
   })
 
   function selectDay(index: number) {
     const data = visibleInsights()
     if (!data || data.days.length === 0) return
-    setSelectedDayIndex(Math.max(0, Math.min(data.days.length - 1, index)))
+    const next = Math.max(0, Math.min(data.days.length - 1, index))
+    setSelectedDayIndex(next)
+    setSelectedDayKey(data.days[next]?.day)
+    setFollowLatestDay(next === data.days.length - 1)
   }
 
   function moveSelectedDay(delta: number) {
@@ -1047,6 +1250,11 @@ export function Stats() {
     moveSelectedDay(delta * HEATMAP_ROWS)
   }
 
+  function cycleMode() {
+    const index = HEAT_MODES.indexOf(mode())
+    setMode(HEAT_MODES[(index + 1) % HEAT_MODES.length] ?? "daily")
+  }
+
   useKeyboard((evt) => {
     if (evt.name === "escape") {
       route.navigate(routeReturnTarget(route.data))
@@ -1056,6 +1264,18 @@ export function Stats() {
     }
     if (evt.name === "a") {
       setAdvanced((value) => !value)
+      return
+    }
+    if (evt.name === "m" || evt.name === "tab") {
+      evt.preventDefault()
+      evt.stopPropagation()
+      cycleMode()
+      return
+    }
+    if (evt.name === "1" || evt.name === "2" || evt.name === "3") {
+      evt.preventDefault()
+      evt.stopPropagation()
+      setMode(evt.name === "1" ? "daily" : evt.name === "2" ? "weekly" : "cumulative")
       return
     }
     if (evt.name === "r") {
@@ -1190,7 +1410,7 @@ export function Stats() {
       paddingBottom={1}
       gap={1}
     >
-      <Header advanced={showDetails()} scope={scope()} narrow={tiny()} />
+      <Header advanced={showDetails()} scope={scope()} mode={mode()} narrow={tiny()} />
       <Switch>
         <Match when={!visibleInsights()}>
           <LoadingStats tiny={tiny()} />

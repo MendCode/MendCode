@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import fs from "fs/promises"
+import path from "path"
 import { Effect, Exit, Fiber, Layer } from "effect"
 import { Agent } from "../../src/agent/agent"
 import { Config } from "@/config/config"
@@ -349,7 +351,7 @@ describe("tool.task", () => {
       done.resolve()
       const exit = yield* Fiber.await(fiber)
       expect(Exit.isSuccess(exit)).toBe(true)
-      expect(yield* status.get(chat.id)).toEqual({ type: "busy" })
+      expect(yield* status.get(chat.id)).toMatchObject({ type: "busy" })
     }),
   )
 
@@ -673,6 +675,141 @@ describe("tool.task", () => {
     }),
   )
 
+  it.instance("execute includes orchestration artifact contents when subagent writes CHAT", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const root = path.join("/tmp", `mendcode-task-artifact-${Date.now()}`)
+      const artifactDir = path.join(root, ".agents", "orchestration")
+      const chatPath = path.join(artifactDir, "CHAT.md")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(artifactDir, { recursive: true })
+        await Bun.write(chatPath, "### worker-1 -> ALL\n**Result**: full worker result visible to parent")
+      })
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) =>
+          Effect.gen(function* () {
+            const messageID = MessageID.ascending()
+            yield* sessions.updateMessage({
+              id: messageID,
+              role: "assistant",
+              parentID: input.messageID ?? MessageID.ascending(),
+              sessionID: input.sessionID,
+              mode: input.agent ?? "general",
+              agent: input.agent ?? "general",
+              cost: 0,
+              path: { cwd: root, root },
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              modelID: input.model?.modelID ?? ref.modelID,
+              providerID: input.model?.providerID ?? ref.providerID,
+              time: { created: Date.now() },
+              finish: "tool-calls",
+            })
+            yield* sessions.updatePart({
+              id: PartID.ascending(),
+              messageID,
+              sessionID: input.sessionID,
+              type: "patch",
+              hash: "artifact",
+              files: [chatPath],
+            })
+            return reply(input, "done")
+          }),
+      }
+
+      const result = yield* def.execute(
+        {
+          description: "read artifact",
+          prompt: "write full result to .agents/orchestration/CHAT.md",
+          subagent_type: "general",
+          model: "test/test-model",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.output).toContain("Subagent orchestration artifacts:")
+      expect(result.output).toContain("--- .agents/orchestration/CHAT.md ---")
+      expect(result.output).toContain("full worker result visible to parent")
+    }),
+  )
+
+  it.instance("execute does not read orchestration artifacts based only on mentioned paths", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const root = path.join("/tmp", `mendcode-task-artifact-mention-${Date.now()}`)
+      const artifactDir = path.join(root, ".agents", "orchestration")
+      const chatPath = path.join(artifactDir, "CHAT.md")
+      yield* Effect.promise(async () => {
+        await fs.mkdir(artifactDir, { recursive: true })
+        await Bun.write(chatPath, "### stale worker output that should stay private")
+      })
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) =>
+          Effect.gen(function* () {
+            const messageID = MessageID.ascending()
+            yield* sessions.updateMessage({
+              id: messageID,
+              role: "user",
+              sessionID: input.sessionID,
+              agent: input.agent ?? "general",
+              model: input.model ?? ref,
+              path: { cwd: root, root },
+              time: { created: Date.now() },
+            })
+            yield* sessions.updatePart({
+              id: PartID.ascending(),
+              messageID,
+              sessionID: input.sessionID,
+              type: "text",
+              text: "Please summarize .agents/orchestration/CHAT.md when you finish.",
+            })
+            return reply(input, "done")
+          }),
+      }
+
+      const result = yield* def.execute(
+        {
+          description: "read artifact",
+          prompt: "mention artifact path only",
+          subagent_type: "general",
+          model: "test/test-model",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.output).not.toContain("Subagent orchestration artifacts:")
+      expect(result.output).not.toContain("stale worker output that should stay private")
+      expect(result.output).toContain("<task_result>\ndone\n</task_result>")
+    }),
+  )
+
   it.instance("execute returns partial child output when the subagent aborts internally after writing text", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
@@ -815,6 +952,69 @@ describe("tool.task", () => {
       expect(result.output).toContain("saved child text before abort")
       expect(result.output).not.toContain("task_status: completed")
       expect(result.metadata.status).toBe("interrupted")
+    }),
+  )
+
+  it.instance("execute includes returned child parts when child message ends with error", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) => {
+          const messageID = MessageID.ascending()
+          return Effect.succeed({
+            info: {
+              id: messageID,
+              role: "assistant",
+              parentID: input.messageID ?? MessageID.ascending(),
+              sessionID: input.sessionID,
+              mode: input.agent ?? "general",
+              agent: input.agent ?? "general",
+              cost: 0,
+              path: { cwd: "/tmp", root: "/tmp" },
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              modelID: input.model?.modelID ?? ref.modelID,
+              providerID: input.model?.providerID ?? ref.providerID,
+              time: { created: Date.now() },
+              error: new MessageV2.APIError({ message: "child failed", isRetryable: false }).toObject(),
+            },
+            parts: [
+              {
+                id: PartID.ascending(),
+                messageID,
+                sessionID: input.sessionID,
+                type: "text" as const,
+                text: "returned child evidence despite error",
+              },
+            ],
+          })
+        },
+      }
+
+      const result = yield* def.execute(
+        {
+          description: "inspect bug",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.output).toContain("task_status: failed")
+      expect(result.output).toContain("returned child evidence despite error")
+      expect(result.metadata.status).toBe("failed")
     }),
   )
 

@@ -1239,13 +1239,19 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 yield* sessions.updateMessage(msg)
               }
               if (part.state.status === "running") {
+                const truncated = yield* truncate.output(output, { direction: "tail" })
                 part.state = {
                   status: "completed",
                   time: { ...part.state.time, end: completed },
                   input: part.state.input,
                   title: "",
-                  metadata: { output, description: "" },
-                  output,
+                  metadata: {
+                    output: truncated.truncated ? truncated.content : shellLiveOutput(truncated.content),
+                    description: "",
+                    truncated: truncated.truncated,
+                    ...(truncated.truncated ? { outputPath: truncated.outputPath } : {}),
+                  },
+                  output: truncated.content,
                 }
                 yield* sessions.updatePart(part)
               }

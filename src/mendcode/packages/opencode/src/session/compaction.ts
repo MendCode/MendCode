@@ -222,6 +222,21 @@ function messageText(message: MessageV2.WithParts) {
     .trim()
 }
 
+function isCompactionPostPromptPart(part: MessageV2.Part, parentID: MessageID) {
+  if (part.type !== "text") return false
+  const metadata = part.metadata
+  if (!metadata || typeof metadata !== "object") return false
+  return metadata.compaction_post_prompt === true && metadata.compaction_parent_id === parentID
+}
+
+function hasCompactionPostPromptMessage(messages: MessageV2.WithParts[], parentID: MessageID) {
+  return messages.some(
+    (message) =>
+      message.info.role === "user" &&
+      message.parts.some((part) => isCompactionPostPromptPart(part, parentID)),
+  )
+}
+
 function dataUrlByteSize(url: string) {
   const marker = ";base64,"
   const index = url.indexOf(marker)
@@ -1382,17 +1397,53 @@ export const layer: Layer.Layer<
         yield* session.updateMessage(processor.message)
       }
 
-      if (compactionPart && selected.tail_start_id && compactionPart.tail_start_id !== selected.tail_start_id) {
+      const currentMessages = yield* session.messages({ sessionID: input.sessionID })
+      const currentParent = currentMessages.find((message) => message.info.id === input.parentID)
+      const latestCompactionPart = currentParent?.parts.find(
+        (part): part is MessageV2.CompactionPart => part.type === "compaction" && part.id === compactionPart?.id,
+      ) ?? currentParent?.parts.find((part): part is MessageV2.CompactionPart => part.type === "compaction")
+
+      if (latestCompactionPart && selected.tail_start_id && latestCompactionPart.tail_start_id !== selected.tail_start_id) {
         yield* session.updatePart({
-          ...compactionPart,
+          ...latestCompactionPart,
           tail_start_id: selected.tail_start_id,
         })
       }
 
-      const resumeRequested = compactionPart?.resume ?? input.resume ?? (input.auto && input.overflow)
+      const postPrompt = latestCompactionPart?.post_prompt?.trim() || undefined
+      const resumeRequested = latestCompactionPart?.resume ?? input.resume ?? (input.auto && input.overflow)
       let shouldResume = (result === "continue" || result === "compact") && resumeRequested === true
 
-      if (shouldResume) {
+      if (!processor.message.error && postPrompt && (result === "continue" || result === "compact")) {
+        if (!hasCompactionPostPromptMessage(currentMessages, input.parentID)) {
+          const postPromptMsg = yield* session.updateMessage({
+            id: MessageID.ascending(),
+            role: "user",
+            sessionID: input.sessionID,
+            time: { created: Date.now() },
+            agent: userMessage.agent,
+            model: userMessage.model,
+          })
+          yield* session.updatePart({
+            id: PartID.ascending(),
+            messageID: postPromptMsg.id,
+            sessionID: input.sessionID,
+            type: "text",
+            metadata: {
+              compaction_post_prompt: true,
+              compaction_parent_id: input.parentID,
+            },
+            text: postPrompt,
+            time: {
+              start: Date.now(),
+              end: Date.now(),
+            },
+          })
+        }
+        shouldResume = true
+      }
+
+      if (shouldResume && !postPrompt) {
         const info = yield* provider.getProvider(userMessage.model.providerID)
         if (
           (yield* plugin.trigger(

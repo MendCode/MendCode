@@ -356,7 +356,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         </Show>
       </box>
       <Show when={commandVariant() && !flatten() && categories().length > 1}>
-        <box paddingLeft={3} paddingRight={3} flexDirection="row" gap={2}>
+        <box paddingLeft={3} paddingRight={3} flexDirection="row" gap={1} width="100%" justifyContent="space-between">
           <For each={categories()}>
             {(category) => {
               const active = createMemo(() => (store.activeCategory ?? categories()[0]) === category)
@@ -364,6 +364,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                 <text
                   fg={active() ? theme.text : theme.textMuted}
                   attributes={active() ? TextAttributes.BOLD : undefined}
+                  wrapMode="none"
                   onMouseUp={() => {
                     batch(() => {
                       setStore("activeCategory", category)

@@ -47,10 +47,11 @@ export function isTimelineStackStart(nodes: Array<{ type: string; text?: string 
   return previous?.type === "text" && Boolean(previous.text?.trim())
 }
 
-export function timelineCollapseLabel(collapse: Pick<TimelineCollapse, "count" | "rows">) {
+export function timelineCollapseLabel(collapse: Pick<TimelineCollapse, "count" | "rows">, options: { expanded?: boolean } = {}) {
   const toolRows = collapse.rows.filter((row) => row.tool).length
-  const noun = toolRows > 0 && toolRows === collapse.rows.length ? "tools" : "items"
-  return `${Locale.number(collapse.count)} ${noun} more`
+  const nounBase = toolRows > 0 && toolRows === collapse.rows.length ? "tool" : "item"
+  const noun = collapse.count === 1 ? nounBase : `${nounBase}s`
+  return `${Locale.number(collapse.count)} ${noun} ${options.expanded ? "shown" : "more"}`
 }
 
 export function groupTimelineParts(profile: MendPresentationProfile, parts: TimelinePart[], options: TimelineGroupOptions = {}) {

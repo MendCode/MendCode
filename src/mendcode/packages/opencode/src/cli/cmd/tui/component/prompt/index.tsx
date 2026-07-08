@@ -11,6 +11,7 @@ import {
   Match,
   For,
   createResource,
+  batch,
 } from "solid-js"
 import path from "path"
 import { fileURLToPath } from "url"
@@ -28,13 +29,16 @@ import { editorSelectionKey, useEditorContext, type EditorSelection } from "@tui
 import { MessageID, PartID } from "@/session/schema"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { useKeybind } from "@tui/context/keybind"
-import { usePromptHistory, type PromptHistoryScope, type PromptInfo } from "./history"
+import { movePromptHistoryItems, usePromptHistory, type PromptHistoryScope, type PromptInfo } from "./history"
 import { computePromptTraits } from "./traits"
 import { resolveActivePromptAgentName, resolveSelectedPromptModel, resolveSelectedPromptVariant } from "./agent"
 import * as Model from "../../util/model"
 import { assign } from "./part"
 import {
   DEFAULT_PASTE_SUMMARY_MIN_CHARS,
+  expandEditedPastedContentInPrompt,
+  expandPastedContentAtOffset,
+  expandPastedContentInPrompt,
   pastedContentLabel,
   parsePortableImageClipboard,
   promptSubmitParts,
@@ -49,7 +53,7 @@ import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import * as Editor from "@tui/util/editor"
 import { useExit } from "../../context/exit"
 import * as Clipboard from "../../util/clipboard"
-import type { AssistantMessage, FilePart, UserMessage } from "@mendcode/sdk/v2"
+import type { AssistantMessage, FilePart, Part, UserMessage } from "@mendcode/sdk/v2"
 import { TuiEvent } from "../../event"
 import { iife } from "@/util/iife"
 import { Locale } from "@/util/locale"
@@ -109,13 +113,14 @@ type LoopWorkflowInfo = {
 export type PromptProps = {
   sessionID?: string
   historyScope?: PromptHistoryScope
+  historyItems?: () => readonly PromptInfo[]
   workspaceID?: string
   permissionMode?: string
   permissionModeLabel?: string
   permissionPending?: number
   visible?: boolean
   disabled?: boolean
-  onSubmit?: () => void
+  onSubmit?: (info: PromptSubmitInfo) => void
   ref?: (ref: PromptRef | undefined) => void
   hint?: JSX.Element
   right?: JSX.Element
@@ -126,9 +131,63 @@ export type PromptProps = {
   }
 }
 
+export type PromptSubmitInfo = {
+  sessionID: string
+  messageID: string
+  inputRows: number
+}
+
+type OptimisticPromptPart = PromptInfo["parts"][number] & { id: string }
+
+export function optimisticUserMessage(input: {
+  sessionID: string
+  messageID: string
+  agent: string
+  model: { providerID: string; modelID: string }
+  variant?: string
+  created: number
+}): UserMessage {
+  return {
+    id: input.messageID,
+    sessionID: input.sessionID,
+    role: "user",
+    time: { created: input.created },
+    agent: input.agent,
+    model: {
+      providerID: input.model.providerID,
+      modelID: input.model.modelID,
+      variant: input.variant,
+    },
+  }
+}
+
+export function optimisticUserParts(input: {
+  sessionID: string
+  messageID: string
+  parts: OptimisticPromptPart[]
+}): Part[] {
+  return input.parts.map((part) => ({
+    ...part,
+    sessionID: input.sessionID,
+    messageID: input.messageID,
+  }) as Part)
+}
+
+export function mergeOptimisticUserParts(input: { current?: Part[]; optimistic: Part[] }) {
+  if (!input.current?.length) return input.optimistic
+  return [...input.current, ...input.optimistic.filter((part) => !input.current?.some((current) => current.id === part.id))].toSorted((a, b) =>
+    a.id.localeCompare(b.id),
+  )
+}
+
+export function supplementalSlashPromptParts<T extends { type: string; synthetic?: boolean }>(parts: readonly T[]) {
+  return parts.filter((part) => part.type !== "text" || part.synthetic)
+}
+
 export type PromptRef = {
   focused: boolean
   current: PromptInfo
+  inputRows?: number
   set(prompt: PromptInfo): void
   reset(): void
   blur(): void
@@ -207,8 +266,117 @@ export function shouldEnableSessionInterrupt(input: {
   return Boolean(input.hasActiveWorkingAssistant) && !input.autocompleteVisible
 }
 
-export function shouldInterruptImmediately(input: { statusType: string }) {
+export function shouldInterruptImmediately(input: { statusType: string; hasDraft?: boolean }) {
+  if (input.hasDraft) return false
   return input.statusType !== "idle"
+}
+
+export function shouldAcceptPromptInterruptFocus(input: { inputFocused: boolean; currentFocusedRenderable?: unknown; promptInput?: unknown }) {
+  return input.inputFocused && input.currentFocusedRenderable === input.promptInput
+}
+
+export function shouldUseStoredPromptHistoryFallback(input: {
+  historyItems?: () => readonly PromptInfo[]
+  messageHistoryCount?: number
+}) {
+  return input.historyItems === undefined
+}
+
+function stablePromptPartForHistory(part: PromptInfo["parts"][number]) {
+  if (part.type === "text" && part.source?.text) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        text: {
+          value: part.source.text.value,
+        },
+      },
+    }
+  }
+  if (part.type === "file" && part.source?.text) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        text: {
+          value: part.source.text.value,
+        },
+      },
+    }
+  }
+  if (part.type === "agent" && part.source) {
+    return {
+      ...part,
+      source: {
+        value: part.source.value,
+      },
+    }
+  }
+  return part
+}
+
+export function promptHistoryMatchesCurrent(input: {
+  currentPrompt: PromptInfo
+  currentMode: "normal" | "shell"
+  historyIndex: number
+  historyPrompt?: PromptInfo
+}) {
+  if (input.historyIndex === 0) return input.currentPrompt.input.length === 0 && input.currentPrompt.parts.length === 0
+  if (!input.historyPrompt) return false
+  if (input.currentPrompt.input !== input.historyPrompt.input) return false
+  if (input.currentMode !== (input.historyPrompt.mode ?? "normal")) return false
+  return JSON.stringify(input.currentPrompt.parts.map(stablePromptPartForHistory)) === JSON.stringify(input.historyPrompt.parts.map(stablePromptPartForHistory))
+}
+
+export function shouldPreferMessagePromptHistory(input: {
+  direction?: 1 | -1
+  currentPromptMatchesHistory: boolean
+}) {
+  if (input.direction === undefined) return false
+  return input.currentPromptMatchesHistory
+}
+
+function trailingPromptPlaceholderStart(input: { text: string; parts?: readonly PromptInfo["parts"][number][] }) {
+  const trimmedEnd = input.text.trimEnd().length
+  return input.parts
+    ?.flatMap((part) => {
+      if ((part.type === "text" || part.type === "file") && part.source?.text) return [part.source.text]
+      if (part.type === "agent" && part.source) return [part.source]
+      return []
+    })
+    .filter((source) => source.end >= trimmedEnd)
+    .map((source) => source.start)
+    .sort((a, b) => a - b)
+    .at(0)
+}
+
+export function shouldAttemptPromptHistoryNavigation(input: {
+  direction?: 1 | -1
+  cursorOffset: number
+  text: string
+  parts?: readonly PromptInfo["parts"][number][]
+}) {
+  if (input.direction === undefined) return false
+  if (input.direction === -1) return input.cursorOffset === 0
+  if (input.cursorOffset === promptCursorEndOffset(input.text)) return true
+  const placeholderStart = trailingPromptPlaceholderStart(input)
+  return placeholderStart !== undefined && input.cursorOffset >= placeholderStart
+}
+
+export function shouldSnapPromptCursorToEnd(input: {
+  direction?: 1 | -1
+  cursorOffset: number
+  text: string
+  visualRow: number
+  height: number
+}) {
+  if (input.direction !== 1) return false
+  const lastExplicitRow = input.text.includes("\n") ? input.text.split("\n").length - 1 : undefined
+  return (
+    (input.visualRow === input.height - 1 || input.visualRow === lastExplicitRow) &&
+    input.cursorOffset < promptCursorEndOffset(input.text)
+  )
 }
 
 export function shouldHandlePromptCursorArrow(input: Pick<ParsedKey, "name" | "ctrl" | "meta" | "shift" | "super">) {
@@ -217,12 +385,16 @@ export function shouldHandlePromptCursorArrow(input: Pick<ParsedKey, "name" | "c
 }
 
 export function promptCursorEndOffset(text: string) {
-  return Bun.stringWidth(text)
+  return text.length
 }
 
 export function promptCursorOffsetAfterArrow(input: { cursorOffset: number; text: string; direction: "left" | "right" }) {
   if (input.direction === "left") return Math.max(0, input.cursorOffset - 1)
   return Math.min(promptCursorEndOffset(input.text), input.cursorOffset + 1)
+}
+
+export function promptCursorOffsetFromMouse(input: { visualOffset: number; text: string }) {
+  return Math.max(0, Math.min(promptCursorEndOffset(input.text), Math.floor(input.visualOffset)))
 }
 
 function removeVisibleResolvingText(value: string) {
@@ -240,6 +412,7 @@ export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
   let anchor: BoxRenderable
   let autocomplete: AutocompleteRef
+  let lastPastedContentClick: { time: number; offset: number } | undefined
 
   const keybind = useKeybind()
   const local = useLocal()
@@ -254,6 +427,7 @@ export function Prompt(props: PromptProps) {
   const toast = useToast()
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
   const history = usePromptHistory()
+  const [messageHistoryIndex, setMessageHistoryIndex] = createSignal(0)
   const stash = usePromptStash()
   const command = useCommandDialog()
   const renderer = useRenderer()
@@ -268,8 +442,44 @@ export function Prompt(props: PromptProps) {
   const [promptStatusTick, setPromptStatusTick] = createSignal(Date.now())
   const [workingTick, setWorkingTick] = createSignal(Date.now())
   const [workingStartedAt, setWorkingStartedAt] = createSignal<number>()
+  const [compactionActive, setCompactionActive] = createSignal(false)
   const [mascotHover, setMascotHover] = createSignal(false)
   let clearWorkingStartTimer: Timer | undefined
+  const messageHistoryItems = createMemo(() => props.historyItems?.().filter((item) => item.input.length > 0 || item.parts.length > 0) ?? [])
+  const allowStoredPromptHistoryFallback = createMemo(() =>
+    shouldUseStoredPromptHistoryFallback({
+      historyItems: props.historyItems,
+      messageHistoryCount: messageHistoryItems().length,
+    }),
+  )
+  createEffect(
+    on(
+      () => [props.historyScope, messageHistoryItems()] as const,
+      () => setMessageHistoryIndex(0),
+    ),
+  )
+  function applyPromptHistoryItem(item: PromptInfo, direction: 1 | -1, event: ParsedKey & { preventDefault: () => void }) {
+    const cleanInput = cleanPromptInputText(item.input)
+    input.setText(cleanInput)
+    setStore("prompt", { ...item, input: cleanInput })
+    setStore("mode", item.mode ?? "normal")
+    restoreExtmarksFromParts(item.parts)
+    event.preventDefault()
+    if (direction === -1) input.cursorOffset = 0
+    if (direction === 1) input.cursorOffset = promptCursorEndOffset(input.plainText)
+  }
+  function moveMessageHistory(direction: 1 | -1, event: ParsedKey & { preventDefault: () => void }) {
+    const result = movePromptHistoryItems({
+      items: messageHistoryItems(),
+      index: messageHistoryIndex(),
+      direction,
+      currentPromptMatchesHistory: currentPromptMatchesMessageHistory(),
+    })
+    if (!result?.prompt) return false
+    setMessageHistoryIndex(result.index)
+    applyPromptHistoryItem(result.prompt, direction, event)
+    return true
+  }
   function findActiveWorkingAssistant() {
     const sessionID = props.sessionID
     if (!sessionID) return
@@ -290,7 +500,7 @@ export function Prompt(props: PromptProps) {
   })
   createEffect(
     on(
-      () => status().type !== "idle",
+      () => status().type !== "idle" || compactionActive(),
       (active) => {
         const sessionID = props.sessionID
         if (clearWorkingStartTimer) {
@@ -505,7 +715,7 @@ export function Prompt(props: PromptProps) {
   }
 
   const [loopWorkflows] = createResource(loopRefreshTick, fetchLoopWorkflows)
-  const [availableSkills] = createResource(async () => {
+  const [availableSkills, { refetch: refetchAvailableSkills }] = createResource(async () => {
     const result = await sdk.client.app.skills()
     return result.data ?? []
   })
@@ -524,11 +734,26 @@ export function Prompt(props: PromptProps) {
     const unsubscribe = sdk.event.on("event", (evt) => {
       const type = evt.payload?.type as string | undefined
       if (type?.startsWith("loop.")) setLoopRefreshTick((tick) => tick + 1)
+      if (type === "skill.updated") void refetchAvailableSkills()
     })
     onCleanup(() => {
       clearInterval(timer)
       unsubscribe()
     })
+  })
+
+  onMount(() => {
+    const unsubscribe = event.subscribe((evt) => {
+      const eventSessionID = (evt.properties as { sessionID?: string } | undefined)?.sessionID
+      if (!props.sessionID || eventSessionID !== props.sessionID) return
+      if (evt.type === "session.next.compaction.started") setCompactionActive(true)
+      if (evt.type === "session.next.compaction.ended" || evt.type === "session.compacted") setCompactionActive(false)
+    })
+    onCleanup(unsubscribe)
+  })
+
+  createEffect(() => {
+    if (status().type === "idle" && !hasActiveWorkingAssistant() && !props.permissionPending) setCompactionActive(false)
   })
 
   event.on(TuiEvent.PromptAppend.type, (evt) => {
@@ -638,6 +863,10 @@ export function Prompt(props: PromptProps) {
     }
 
     const active = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && !item.time.completed)
+    const selectedModel = selectedPromptModel()
+    const selectedModelInfo = selectedModel
+      ? sync.data.provider.find((item) => item.id === selectedModel.providerID)?.models[selectedModel.modelID]
+      : undefined
     if (active) {
       const previous = msg
         .slice(0, msg.indexOf(active))
@@ -661,7 +890,7 @@ export function Prompt(props: PromptProps) {
     if (!last) return
 
     const tokens = assistantTokenTotals(last).context
-    const model = sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
+    const model = selectedModelInfo ?? sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
     const contextLimit = usableContextLimit(model)
     const cost = msg.reduce((sum, item) => sum + (item.role === "assistant" ? item.cost : 0), 0)
     return formatPromptUsage(tokens, contextLimit, cost)
@@ -684,11 +913,16 @@ export function Prompt(props: PromptProps) {
     if (!live) return
     return formatWorkingLiveTokenUsage(live, { showReasoning: mend.profile.presentation.profile === "raw" })
   })
+  const pasteSummaryDefaultEnabled = createMemo(() =>
+    sync.data.config.experimental?.disable_paste_summary === undefined
+      ? mend.profile.presentation.input.pasteSummary
+      : !sync.data.config.experimental.disable_paste_summary,
+  )
   const pasteSummaryMinChars = createMemo(() => {
     const experimental = sync.data.config.experimental as
       | (typeof sync.data.config.experimental & { paste_summary_min_chars?: number })
       | undefined
-    return Math.max(1, experimental?.paste_summary_min_chars ?? DEFAULT_PASTE_SUMMARY_MIN_CHARS)
+    return Math.max(1, experimental?.paste_summary_min_chars ?? mend.profile.presentation.input.pasteSummaryMinChars ?? DEFAULT_PASTE_SUMMARY_MIN_CHARS)
   })
   const [store, setStore] = createStore<{
     prompt: PromptInfo
@@ -706,6 +940,17 @@ export function Prompt(props: PromptProps) {
     extmarkToPartIndex: new Map(),
     interrupt: 0,
   })
+  const currentMessageHistoryPrompt = createMemo(() =>
+    messageHistoryIndex() === 0 ? undefined : messageHistoryItems().at(messageHistoryIndex()),
+  )
+  const currentPromptMatchesMessageHistory = createMemo(() =>
+    promptHistoryMatchesCurrent({
+      currentPrompt: store.prompt,
+      currentMode: store.mode,
+      historyIndex: messageHistoryIndex(),
+      historyPrompt: currentMessageHistoryPrompt(),
+    }),
+  )
 
   createEffect(
     on(
@@ -808,9 +1053,12 @@ export function Prompt(props: PromptProps) {
             autocompleteVisible: Boolean(autocomplete?.visible),
           }),
           onSelect: (dialog) => {
-            const immediateInterrupt = shouldInterruptImmediately({ statusType: status().type })
+            const immediateInterrupt = shouldInterruptImmediately({
+              statusType: status().type,
+              hasDraft: store.prompt.input.trim().length > 0 || store.prompt.parts.length > 0,
+            })
             if (autocomplete?.visible && !immediateInterrupt) return
-            if (!input.focused) return
+            if (!shouldAcceptPromptInterruptFocus({ inputFocused: input.focused, currentFocusedRenderable: renderer.currentFocusedRenderable, promptInput: input })) return
             // TODO: this should be its own command
             if (store.mode === "shell") {
               setStore("mode", "normal")
@@ -926,7 +1174,7 @@ export function Prompt(props: PromptProps) {
             parts: updatedNonTextParts,
           })
           restoreExtmarksFromParts(updatedNonTextParts)
-          input.cursorOffset = Bun.stringWidth(cleanContent)
+          input.cursorOffset = cleanContent.length
         },
       },
       {
@@ -984,6 +1232,9 @@ export function Prompt(props: PromptProps) {
     get current() {
       return store.prompt
     },
+    get inputRows() {
+      return input.height
+    },
     focus() {
       input.focus()
     },
@@ -1021,7 +1272,7 @@ export function Prompt(props: PromptProps) {
       input.setText(cleanInput)
       setStore("prompt", { ...saved.prompt, input: cleanInput })
       restoreExtmarksFromParts(saved.prompt.parts)
-      input.cursorOffset = Math.min(saved.cursor, Bun.stringWidth(cleanInput))
+      input.cursorOffset = Math.min(saved.cursor, cleanInput.length)
     }
   })
 
@@ -1238,6 +1489,60 @@ export function Prompt(props: PromptProps) {
     },
   ])
 
+  function insertOptimisticUserTurn(input: {
+    sessionID: string
+    messageID: string
+    agent: string
+    model: { providerID: string; modelID: string }
+    variant?: string
+    created: number
+    parts: OptimisticPromptPart[]
+  }) {
+    const message = optimisticUserMessage(input)
+    const parts = optimisticUserParts(input)
+    const messages = sync.data.message[input.sessionID]
+
+    batch(() => {
+      if (!messages) {
+        sync.set("message", input.sessionID, [message])
+      } else if (!messages.some((item) => item.id === input.messageID)) {
+        sync.set(
+          "message",
+          input.sessionID,
+          produce((draft) => {
+            const index = draft.findIndex((item) => item.id > input.messageID)
+            draft.splice(index < 0 ? draft.length : index, 0, message)
+          }),
+        )
+      }
+
+      sync.set("part", input.messageID, mergeOptimisticUserParts({ current: sync.data.part[input.messageID], optimistic: parts }))
+    })
+  }
+
+  function removeOptimisticUserTurn(input: { sessionID: string; messageID: string; created: number }) {
+    const messages = sync.data.message[input.sessionID]
+    const index = messages?.findIndex((item) => item.id === input.messageID) ?? -1
+    const message = index >= 0 ? messages?.[index] : undefined
+    if (!messages || index < 0 || message?.time.created !== input.created) return
+
+    batch(() => {
+      sync.set(
+        "message",
+        input.sessionID,
+        produce((draft) => {
+          draft.splice(index, 1)
+        }),
+      )
+      sync.set(
+        "part",
+        produce((draft) => {
+          delete draft[input.messageID]
+        }),
+      )
+    })
+  }
+
   async function submit() {
     setWarpNotice(undefined)
 
@@ -1398,6 +1703,7 @@ export function Prompt(props: PromptProps) {
             },
           ]
         : []
+    const promptParts = [...editorParts, ...submittedPrompt.parts.map(assign)]
     const slashInvocation = findSlashCommandInvocation(inputText, () => true)
     const slashServerCommand = slashInvocation
       ? sync.data.command.find((command) => command.name === slashInvocation.name)
@@ -1439,6 +1745,34 @@ export function Prompt(props: PromptProps) {
         })
     } else if (slashInvocation && skillInvocation) {
       const visible = `/${slashInvocation.name}${slashInvocation.arguments ? ` ${slashInvocation.arguments}` : ""}`
+      const skillPromptParts = [
+        {
+          id: PartID.ascending(),
+          type: "text" as const,
+          text: visible,
+        },
+        {
+          id: PartID.ascending(),
+          type: "text" as const,
+          text: `Use the skill tool to load "${skillInvocation.name}", then follow its instructions for: ${slashInvocation.arguments}`,
+          synthetic: true,
+          metadata: {
+            kind: "skill_invocation",
+            skill: skillInvocation.name,
+          },
+        },
+        ...supplementalSlashPromptParts(promptParts),
+      ]
+      const optimisticCreated = Date.now()
+      insertOptimisticUserTurn({
+        sessionID,
+        messageID,
+        agent: agent.name,
+        model: selectedModel,
+        variant,
+        created: optimisticCreated,
+        parts: skillPromptParts,
+      })
       sdk.client.session
         .promptAsync({
           sessionID,
@@ -1447,27 +1781,10 @@ export function Prompt(props: PromptProps) {
           agent: agent.name,
           model: selectedModel,
           variant,
-          parts: [
-            {
-              id: PartID.ascending(),
-              type: "text",
-              text: visible,
-            },
-            {
-              id: PartID.ascending(),
-              type: "text",
-              text: `Use the skill tool to load "${skillInvocation.name}", then follow its instructions for: ${slashInvocation.arguments}`,
-              synthetic: true,
-              metadata: {
-                kind: "skill_invocation",
-                skill: skillInvocation.name,
-              },
-            },
-            ...editorParts,
-            ...nonTextParts,
-          ],
+          parts: skillPromptParts,
         })
         .catch((error) => {
+          removeOptimisticUserTurn({ sessionID, messageID, created: optimisticCreated })
           toast.show({
             title: "Prompt not sent",
             message:
@@ -1494,6 +1811,16 @@ export function Prompt(props: PromptProps) {
           })),
       })
     } else {
+      const optimisticCreated = Date.now()
+      insertOptimisticUserTurn({
+        sessionID,
+        messageID,
+        agent: agent.name,
+        model: selectedModel,
+        variant,
+        created: optimisticCreated,
+        parts: promptParts,
+      })
       sdk.client.session
         .promptAsync({
           sessionID,
@@ -1502,9 +1829,10 @@ export function Prompt(props: PromptProps) {
           agent: agent.name,
           model: selectedModel,
           variant,
-          parts: [...editorParts, ...submittedPrompt.parts.map(assign)],
+          parts: promptParts,
         })
         .catch((error) => {
+          removeOptimisticUserTurn({ sessionID, messageID, created: optimisticCreated })
           toast.show({
             title: "Prompt not sent",
             message:
@@ -1528,7 +1856,7 @@ export function Prompt(props: PromptProps) {
       parts: [],
     })
     setStore("extmarkToPartIndex", new Map())
-    props.onSubmit?.()
+    props.onSubmit?.({ sessionID, messageID, inputRows: input.height })
 
     // temporary hack to make sure the message is sent
     if (!props.sessionID) {
@@ -1544,6 +1872,43 @@ export function Prompt(props: PromptProps) {
     return true
   }
   const exit = useExit()
+
+  function applyExpandedPastedText(expanded: ReturnType<typeof expandPastedContentInPrompt>) {
+    if (!expanded) return false
+    input.setText(expanded.input)
+    setStore("prompt", {
+      input: expanded.input,
+      parts: expanded.parts,
+    })
+    restoreExtmarksFromParts(expanded.parts)
+    input.cursorOffset = expanded.cursorOffset
+    return true
+  }
+
+  function expandPastedText(text: string) {
+    return applyExpandedPastedText(expandPastedContentInPrompt(store.prompt, text))
+  }
+
+  function expandEditedPastedText() {
+    return applyExpandedPastedText(expandEditedPastedContentInPrompt(store.prompt))
+  }
+
+  function expandPastedTextAtCursor(offset = input.cursorOffset) {
+    return applyExpandedPastedText(expandPastedContentAtOffset(store.prompt, offset))
+  }
+
+  function handlePromptMouseDown(event: MouseEvent) {
+    event.target?.focus()
+    setTimeout(() => {
+      if (!input || input.isDestroyed) return
+      const offset = input.cursorOffset
+      const now = performance.now()
+      const previous = lastPastedContentClick
+      lastPastedContentClick = { time: now, offset }
+      if (!previous || now - previous.time > 500 || Math.abs(previous.offset - offset) > 1) return
+      expandPastedTextAtCursor(offset)
+    }, 0)
+  }
 
   function pasteText(text: string, virtualText: string) {
     const currentOffset = input.visualCursor.offset
@@ -2115,6 +2480,7 @@ export function Prompt(props: PromptProps) {
   const activeWorkingAssistant = createMemo(findActiveWorkingAssistant)
   const workingStatusActive = createMemo(
     () =>
+      compactionActive() ||
       !shouldClearWorkingStartedAt({
         statusType: status().type,
         hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
@@ -2179,9 +2545,11 @@ export function Prompt(props: PromptProps) {
     return resolveActivityPhase({
       status: type,
       statusKind:
-        type === "busy" && "kind" in currentStatus && typeof currentStatus.kind === "string"
-          ? currentStatus.kind
-          : undefined,
+        compactionActive()
+          ? "compaction"
+          : type === "busy" && "kind" in currentStatus && typeof currentStatus.kind === "string"
+            ? currentStatus.kind
+            : undefined,
       retry: type === "retry",
       connection: effectiveConnectionStatus(),
       toolNames: activityToolNames(),
@@ -2550,6 +2918,7 @@ export function Prompt(props: PromptProps) {
                   setStore("prompt", "input", value)
                   autocomplete.onInput(value)
                   syncExtmarksWithPromptParts()
+                  if (expandEditedPastedText()) return
                   syncSlashCommandExtmark(value)
                 }}
                 keyBindings={textareaKeybindings()}
@@ -2606,6 +2975,11 @@ export function Prompt(props: PromptProps) {
                       return
                     }
                   }
+                  const historyDirection = keybind.match("history_previous", e)
+                    ? -1
+                    : keybind.match("history_next", e)
+                      ? 1
+                      : undefined
                   if (store.mode === "normal") autocomplete.onKeyDown(e)
                   if (!autocomplete.visible) {
                     if (shouldHandlePromptCursorArrow(e)) {
@@ -2619,29 +2993,57 @@ export function Prompt(props: PromptProps) {
                     }
 
                     if (
-                      (keybind.match("history_previous", e) && input.cursorOffset === 0) ||
-                      (keybind.match("history_next", e) && input.cursorOffset === promptCursorEndOffset(input.plainText))
+                      shouldSnapPromptCursorToEnd({
+                        direction: historyDirection,
+                        cursorOffset: input.cursorOffset,
+                        text: input.plainText,
+                        visualRow: input.visualCursor.visualRow,
+                        height: input.height,
+                      })
                     ) {
-                      const direction = keybind.match("history_previous", e) ? -1 : 1
-                      const item = history.move(direction, input.plainText, props.historyScope)
-
-                      if (item) {
-                        const cleanInput = cleanPromptInputText(item.input)
-                        input.setText(cleanInput)
-                        setStore("prompt", { ...item, input: cleanInput })
-                        setStore("mode", item.mode ?? "normal")
-                        restoreExtmarksFromParts(item.parts)
-                        e.preventDefault()
-                        if (direction === -1) input.cursorOffset = 0
-                        if (direction === 1) input.cursorOffset = promptCursorEndOffset(input.plainText)
-                      }
+                      setTimeout(() => {
+                        if (!input || input.isDestroyed) return
+                        input.gotoBufferEnd()
+                      }, 0)
                       return
                     }
 
-                    if (keybind.match("history_previous", e) && input.visualCursor.visualRow === 0)
-                      input.cursorOffset = 0
-                    if (keybind.match("history_next", e) && input.visualCursor.visualRow === input.height - 1)
-                      input.cursorOffset = promptCursorEndOffset(input.plainText)
+                    if (
+                      historyDirection !== undefined &&
+                      shouldAttemptPromptHistoryNavigation({
+                        direction: historyDirection,
+                        cursorOffset: Math.max(input.cursorOffset, input.visualCursor.offset),
+                        text: input.plainText,
+                        parts: store.prompt.parts,
+                      })
+                    ) {
+                      const prefersMessagePromptHistory = shouldPreferMessagePromptHistory({
+                        direction: historyDirection,
+                        currentPromptMatchesHistory: currentPromptMatchesMessageHistory(),
+                      })
+                      if (prefersMessagePromptHistory && moveMessageHistory(historyDirection, e)) return
+                      if (allowStoredPromptHistoryFallback()) {
+                        const item = history.move(historyDirection, input.plainText, props.historyScope)
+                        if (item) {
+                          applyPromptHistoryItem(item, historyDirection, e)
+                          return
+                        }
+                      }
+                      if (prefersMessagePromptHistory) return
+                    }
+
+                    if (keybind.match("history_previous", e) && input.visualCursor.visualRow === 0) {
+                      setTimeout(() => {
+                        if (!input || input.isDestroyed) return
+                        input.cursorOffset = 0
+                      }, 0)
+                    }
+                    if (keybind.match("history_next", e) && input.visualCursor.visualRow === input.height - 1) {
+                      setTimeout(() => {
+                        if (!input || input.isDestroyed) return
+                        input.cursorOffset = promptCursorEndOffset(input.plainText)
+                      }, 0)
+                    }
                   }
                 }}
                 onSubmit={() => {
@@ -2741,9 +3143,9 @@ export function Prompt(props: PromptProps) {
 
                   if (
                     shouldSummarizePastedContentWithThreshold(pastedContent, pasteSummaryMinChars()) &&
-                    kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary)
+                    kv.get("paste_summary_enabled", pasteSummaryDefaultEnabled())
                   ) {
-                    pasteText(pastedContent, pastedContentLabel(pastedContent))
+                    if (!expandPastedText(pastedContent)) pasteText(pastedContent, pastedContentLabel(pastedContent))
                     return
                   }
 
@@ -2772,7 +3174,7 @@ export function Prompt(props: PromptProps) {
                     input.cursorColor = theme.text
                   }, 0)
                 }}
-                onMouseDown={(r: MouseEvent) => r.target?.focus()}
+                onMouseDown={handlePromptMouseDown}
                 focusedBackgroundColor={promptUsesPanelBackground() ? theme.backgroundElement : undefined}
                 cursorColor={
                   props.disabled

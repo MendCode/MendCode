@@ -57,6 +57,23 @@ export function promptHistoryRecordsForScope(records: readonly PromptHistoryReco
   return records.filter((record) => (scope ? record.scope === scope : !record.scope))
 }
 
+export function movePromptHistoryItems(input: {
+  items: readonly PromptInfo[]
+  index: number
+  direction: 1 | -1
+  currentPromptMatchesHistory: boolean
+}) {
+  if (!input.items.length) return undefined
+  if (!input.currentPromptMatchesHistory) return undefined
+  const next = input.index + input.direction
+  if (Math.abs(next) > input.items.length) return undefined
+  if (next > 0) return undefined
+  return {
+    index: next,
+    prompt: next === 0 ? { input: "", parts: [] } : input.items.at(next),
+  }
+}
+
 function historyScopeKey(scope?: PromptHistoryScope) {
   return scope || GLOBAL_SCOPE_KEY
 }
@@ -104,6 +121,7 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
         const scopeKey = historyScopeKey(scope)
         const scoped = promptHistoryRecordsForScope(store.history, scope)
         if (!scoped.length) return undefined
+        if (direction === 1 && input.length === 0) return undefined
         const index = store.indexByScope[scopeKey] ?? 0
         const current = scoped.at(index)?.prompt
         if (!current) return undefined

@@ -8,6 +8,7 @@ import {
 } from "../../src/mend/tui/prompt-status"
 import { resolveActivityPhase } from "../../src/cli/cmd/tui/util/activity-signal"
 import { activityMessagesForPhase, resolveTuiPresentation, shouldDisplayReasoning } from "../../src/mend/tui/presentation"
+import { activityMascotText } from "../../src/mend/tui/mascot"
 import { ConfigKeybinds } from "../../src/config/keybinds"
 
 describe("mend tui prompt chrome", () => {
@@ -20,7 +21,7 @@ describe("mend tui prompt chrome", () => {
     expect(defaultTuiProfile().workingIndicator.showTokenUsage).toBe(true)
     expect(defaultTuiProfile().presentation.profile).toBe("mendcode")
     expect(defaultTuiProfile().presentation.activity.maxLines).toBe(1)
-    expect(defaultTuiProfile().presentation.compaction.style).toBe("cockpit")
+    expect(defaultTuiProfile().presentation.compaction.style).toBe("minimal")
     expect(defaultTuiProfile().presentation.compaction.arcade).toBe("off")
     expect(defaultTuiProfile().layout.zones.session.stickyUserHeader).toBe(true)
     expect(defaultTuiProfile().layout.zones.session.submitScrollMode).toBe("bottom")
@@ -152,7 +153,7 @@ describe("mend tui prompt chrome", () => {
     expect(resolveTuiPresentation({ profile: "minimal" }).activity.maxLines).toBe(1)
     expect(resolveTuiPresentation({ profile: "minimal" }).compaction.style).toBe("minimal")
     expect(resolveTuiPresentation({ profile: "mendcode" }).reasoning.defaultVisibility).toBe("collapsed")
-    expect(resolveTuiPresentation({ profile: "mendcode" }).compaction.style).toBe("cockpit")
+    expect(resolveTuiPresentation({ profile: "mendcode" }).compaction.style).toBe("minimal")
   })
 
   test("presentation compaction overrides stay backward compatible", () => {
@@ -261,6 +262,7 @@ describe("mend tui prompt chrome", () => {
     expect(activityMessagesForPhase(profile, "testing")).toEqual(["Testing..."])
     expect(activityMessagesForPhase(profile, "subagents")).toEqual(["Waiting for subagents..."])
     expect(activityMessagesForPhase(profile, "memory")).toEqual(["Preparing memory..."])
+    expect(activityMessagesForPhase(profile, "compacting")).toEqual(["Compacting..."])
     expect(activityMessagesForPhase(profile, "blocked")).toEqual(["Waiting..."])
     expect(validateMendTuiProfile(profile).ok).toBe(true)
   })
@@ -294,6 +296,8 @@ describe("mend tui prompt chrome", () => {
     expect(resolveActivityPhase({ status: "busy", activeToolNames: ["task"] })).toBe("subagents")
     expect(resolveActivityPhase({ status: "busy", statusKind: "subagent-wait" })).toBe("subagents")
     expect(resolveActivityPhase({ status: "busy", statusKind: "memory-extract" })).toBe("memory")
+    expect(resolveActivityPhase({ status: "busy", statusKind: "compaction" })).toBe("compacting")
+    expect(activityMascotText(defaultTuiProfile(), "compacting")).toContain("c")
   })
 
   test("resolves presets into prompt border sides", () => {

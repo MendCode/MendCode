@@ -10,7 +10,7 @@ import { createStore, produce, reconcile } from "solid-js/store"
 import { onCleanup } from "solid-js"
 import { createSimpleContext } from "./helper"
 import { useSDK } from "./sdk"
-import { appendLiveShellOutput } from "./shell-output"
+import { appendLiveShellOutput, previewShellOutput } from "./shell-output"
 
 type ShellOutputEvent = {
   id: string
@@ -56,7 +56,7 @@ function previewTool(part: SessionMessageAssistantTool): SessionMessageAssistant
 }
 
 function previewMessage(message: SessionMessage): SessionMessage {
-  if (message.type === "shell") return { ...message, output: previewText(message.output) }
+  if (message.type === "shell") return { ...message, output: previewShellOutput(message.output) }
   if (message.type === "user") return { ...message, text: previewText(message.text) }
   if (message.type === "synthetic") return { ...message, text: previewText(message.text) }
   if (message.type === "compaction") {
@@ -193,7 +193,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
         update(shellOutputEvent.properties.sessionID, (draft) => {
           const match = activeShell(draft, shellOutputEvent.properties.callID)
           if (!match || match.time.completed) return
-          match.output = appendLiveShellOutput(match.output, shellOutputEvent.properties.delta)
+          match.output = appendLiveShellOutput(match.output, shellOutputEvent.properties.delta, { replayProtection: false })
         })
         return
       }
@@ -239,7 +239,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
           update(event.properties.sessionID, (draft) => {
             const match = activeShell(draft, event.properties.callID)
             if (!match) return
-            match.output = previewText(event.properties.output)
+            match.output = previewShellOutput(event.properties.output)
             match.time.completed = event.properties.timestamp
           })
           scheduleSync(event.properties.sessionID, 50)

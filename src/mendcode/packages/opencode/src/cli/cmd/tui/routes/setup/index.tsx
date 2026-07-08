@@ -39,6 +39,7 @@ import {
   runtimeRegistryRemove,
   runtimeRegistrySearch,
 } from "@/mend/runtime/registry"
+import type { RegistryMarketplacePackManifest } from "@/mend/runtime/registry/marketplace"
 import { mendTuiCapabilityVersion, visibleCustomizationCapabilities } from "@/mend/tui/capabilities"
 import { listActiveCustomizations } from "@/mend/tui/customization-state"
 import { applyTuiPreset, readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
@@ -241,6 +242,60 @@ export function isPublicGitHubURL(value: string) {
   } catch {
     return false
   }
+}
+
+function setupMarketplaceRuntimeSummary(pack: RegistryMarketplacePackManifest) {
+  const runtime = pack.runtime || {}
+  return [
+    ["commands", runtime.commands],
+    ["agents", runtime.agents],
+    ["skills", runtime.skills],
+    ["plugins", runtime.plugins],
+    ["pages", runtime.pages],
+    ["widgets", runtime.widgets],
+    ["MCP", runtime.mcpFiles],
+  ]
+    .filter(([, count]) => typeof count === "number" && count > 0)
+    .map(([label, count]) => `${count} ${label}`)
+    .join(" · ") || "No runtime artifacts advertised"
+}
+
+function setupMarketplaceBadgeTitle(title: string, badge?: string | null) {
+  return `${badge ? `[${badge}] ` : ""}${title}`
+}
+
+function setupMarketplaceCategory(input: { badge?: string | null; channel?: string | null; sourceID?: string | null }) {
+  const state = input.badge === "active" ? "Active" : input.badge === "installed" ? "Installed" : undefined
+  return [state, input.channel || input.sourceID].filter(Boolean).join(" · ") || "Packages"
+}
+
+function setupMarketplaceSearchText(parts: Array<string | null | undefined>) {
+  return parts.filter(Boolean).join(" ")
+}
+
+function setupMarketplaceInstallPreview(input: {
+  pack: RegistryMarketplacePackManifest
+  sourceID: string
+  sourceURL?: string | null
+  sourceType?: string
+  fetchesNetwork?: boolean
+  digest?: { algorithm: "sha256"; value: string }
+}) {
+  return [
+    `Source: ${input.sourceURL || input.sourceID}`,
+    `Source id: ${input.sourceID}`,
+    `Source type: ${input.sourceType || input.pack.source?.type || "unknown"}`,
+    `Package: ${input.pack.id}@${input.pack.version}`,
+    `Runtime: ${setupMarketplaceRuntimeSummary(input.pack)}`,
+    `Fetches network: ${input.fetchesNetwork ? "yes" : "no"}`,
+    `Digest: ${input.digest ? `${input.digest.algorithm}:${input.digest.value.slice(0, 12)}...` : input.pack.digest ? `${input.pack.digest.algorithm}:${input.pack.digest.value.slice(0, 12)}...` : "not pinned"}`,
+    `Signature: ${input.pack.signature ? `${input.pack.signature.algorithm}:${input.pack.signature.value.slice(0, 12)}...` : "not signed"}`,
+    "",
+    "Review before install:",
+    "- Trust only repos you expect to run MendCode package content from.",
+    "- Packages may add commands, skills, plugins, widgets, pages, scripts, and MCP config.",
+    "- MendCode copies allowlisted package files only; local sessions, auth, runs, cache, and customizations stay untouched.",
+  ].join("\n")
 }
 
 function presetRole(preset: (typeof modelPresets)[keyof typeof modelPresets]): ModelRole {
@@ -950,9 +1005,78 @@ export function Setup() {
     }
   }
 
+  const showImportedSourcePackages = async (input: {
+    sourceID: string
+    sourceURL: string
+    result: Awaited<ReturnType<typeof runtimeRegistrySearch>>
+    title: string
+    installErrorMessage: string
+  }) => {
+    let keepSource = false
+    dialog.replace(() => (
+      <DialogSelect
+        title={input.title}
+        options={input.result.results.map((pack) => ({
+          title: setupMarketplaceBadgeTitle(pack.title || pack.id),
+          value: pack.id,
+          category: setupMarketplaceCategory({ channel: pack.channel, sourceID: input.sourceID }),
+          description: pack.description || setupMarketplaceRuntimeSummary(pack),
+          searchText: setupMarketplaceSearchText([
+            pack.id,
+            pack.title,
+            pack.description,
+            setupMarketplaceRuntimeSummary(pack),
+            pack.channel,
+            input.sourceID,
+            ...(pack.tags || []),
+          ]),
+          footer: pack.version,
+          onSelect: async () => {
+            keepSource = true
+            try {
+              const confirmed = await DialogConfirm.show(
+                dialog,
+                `Install ${pack.title || pack.id}`,
+                setupMarketplaceInstallPreview({
+                  pack,
+                  sourceID: input.sourceID,
+                  sourceURL: input.result.source.url || input.sourceURL,
+                  sourceType: input.result.source.type,
+                  fetchesNetwork: input.result.fetchesNetwork,
+                  digest: input.result.digest,
+                }),
+              )
+              if (!confirmed) {
+                await removeFailedRegistrySource(input.sourceID)
+                keepSource = false
+                return
+              }
+              const installed = await runtimeRegistryInstallPack(pack.id, input.sourceID, mend.root)
+              await syncPackageRuntime()
+              toast.show({ variant: "success", message: `Installed package: ${installed.package.id}.`, duration: 5000 })
+              dialog.clear()
+            } catch (error) {
+              await removeFailedRegistrySource(input.sourceID)
+              keepSource = false
+              toast.show({
+                variant: "error",
+                message: error instanceof Error ? error.message : input.installErrorMessage,
+                duration: 7000,
+              })
+            }
+          },
+        }))}
+      />
+    ), () => {
+      if (keepSource) return
+      void removeFailedRegistrySource(input.sourceID)
+    })
+  }
+
   const chooseOfficialPackage = async () => {
     try {
       const result = await runtimeRegistrySearch("", "official", mend.root)
+      const packages = await listMendPackages(mend.root)
       if (!result.results.length) {
         toast.show({ variant: "warning", message: "No official packages found in the registry.", duration: 5000 })
         return
@@ -960,26 +1084,28 @@ export function Setup() {
       dialog.replace(() => (
         <DialogSelect
           title="Official Packages"
-          options={result.results.map((pack) => ({
-            title: pack.title || pack.id,
+          options={result.results.map((pack) => {
+            const installed = packages.installed.find((item) => item.id === pack.id)
+            const badge = installed ? installed.enabled ? "active" : "installed" : null
+            return {
+            title: setupMarketplaceBadgeTitle(pack.title || pack.id, badge),
             value: pack.id,
-            category: pack.channel || "official",
-            description: pack.description || `${pack.runtime?.commands || 0} commands · ${pack.runtime?.skills || 0} skills`,
-            footer: pack.version,
+            category: setupMarketplaceCategory({ badge, channel: pack.channel, sourceID: "official" }),
+            description: pack.description || setupMarketplaceRuntimeSummary(pack),
+            searchText: setupMarketplaceSearchText([pack.id, pack.title, pack.description, setupMarketplaceRuntimeSummary(pack), pack.channel, badge, ...(pack.tags || [])]),
+            footer: [pack.version, badge].filter(Boolean).join(" · "),
             onSelect: async () => {
               const confirmed = await DialogConfirm.show(
                 dialog,
                 `Install ${pack.title || pack.id}`,
-                [
-                  `Source: official`,
-                  `Package: ${pack.id}@${pack.version}`,
-                  `Fetches network: ${result.fetchesNetwork ? "yes" : "no"}`,
-                  `Digest: ${pack.digest ? `${pack.digest.algorithm}:${pack.digest.value.slice(0, 12)}...` : "not pinned"}`,
-                  `Signature: ${pack.signature ? `${pack.signature.algorithm}:${pack.signature.value.slice(0, 12)}...` : "not signed"}`,
-                  "",
-                  "Will activate as a package overlay for the next message.",
-                  "Will not touch local sessions, auth, runs, cache, or existing local customization files.",
-                ].join("\n"),
+                setupMarketplaceInstallPreview({
+                  pack,
+                  sourceID: "official",
+                  sourceURL: result.source.url,
+                  sourceType: result.source.type,
+                  fetchesNetwork: result.fetchesNetwork,
+                  digest: result.digest,
+                }),
               )
               if (!confirmed) return
               const installed = await runtimeRegistryInstallPack(pack.id, "official", mend.root)
@@ -987,7 +1113,8 @@ export function Setup() {
               toast.show({ variant: "success", message: `Installed package: ${installed.package.id}.`, duration: 5000 })
               dialog.clear()
             },
-          }))}
+            }
+          })}
         />
       ))
     } catch (error) {
@@ -1017,6 +1144,27 @@ export function Setup() {
       await ensureRegistrySourceIDAvailable(sourceID.trim())
       await runtimeRegistryAdd([sourceID.trim(), "--type", "local", "--url", sourcePath.trim(), "--note", "Setup-added local package source."], mend.root)
       sourceAdded = true
+      const result = await runtimeRegistrySearch("", sourceID.trim(), mend.root)
+      if (result.results.length > 1) {
+        await showImportedSourcePackages({
+          sourceID: sourceID.trim(),
+          sourceURL: sourcePath.trim(),
+          result,
+          title: "Packages from local source",
+          installErrorMessage: "Local package install failed.",
+        })
+        return
+      }
+      if (result.results.length === 1) {
+        const installed = await runtimeRegistryInstallPack(result.results[0]!.id, sourceID.trim(), mend.root)
+        await syncPackageRuntime()
+        toast.show({
+          variant: "success",
+          message: `Installed local package source: ${installed.package.id}.`,
+          duration: 5000,
+        })
+        return
+      }
       const preview = await runtimeRegistryApplySource(sourceID.trim(), mend.root)
       await syncPackageRuntime()
       toast.show({
@@ -1057,17 +1205,6 @@ export function Setup() {
       description: () => <text fg={theme.textMuted}>Saved in .mendcode/registry.json; no credentials are stored.</text>,
     })
     if (!sourceID?.trim()) return
-    const confirmed = await DialogConfirm.show(
-      dialog,
-      "Install package URL",
-      [
-        `Source: ${sourceURL.trim()}`,
-        `Registry id: ${sourceID.trim()}`,
-        "This will fetch a public git source into MendCode registry cache.",
-        "Only allowlisted MendCode package files are installed into the local overlay.",
-      ].join("\n"),
-    )
-    if (!confirmed) return
     let sourceAdded = false
     try {
       await ensureRegistrySourceIDAvailable(sourceID.trim())
@@ -1075,49 +1212,41 @@ export function Setup() {
       sourceAdded = true
       const result = await runtimeRegistrySearch("", sourceID.trim(), mend.root)
       if (result.results.length > 1) {
-        dialog.replace(() => (
-          <DialogSelect
-            title="Packages from URL"
-            options={result.results.map((pack) => ({
-              title: pack.title || pack.id,
-              value: pack.id,
-              category: pack.channel || "url",
-              description: pack.description || `${pack.runtime?.commands || 0} commands · ${pack.runtime?.skills || 0} skills`,
-              footer: pack.version,
-              onSelect: async () => {
-                try {
-                  const installed = await runtimeRegistryInstallPack(pack.id, sourceID.trim(), mend.root)
-                  await syncPackageRuntime()
-                  toast.show({ variant: "success", message: `Installed package: ${installed.package.id}.`, duration: 5000 })
-                  dialog.clear()
-                } catch (error) {
-                  await removeFailedRegistrySource(sourceID.trim())
-                  toast.show({
-                    variant: "error",
-                    message: error instanceof Error ? error.message : "Package URL install failed.",
-                    duration: 7000,
-                  })
-                }
-              },
-            }))}
-          />
-        ))
+        await showImportedSourcePackages({
+          sourceID: sourceID.trim(),
+          sourceURL: sourceURL.trim(),
+          result,
+          title: "Packages from URL",
+          installErrorMessage: "Package URL install failed.",
+        })
         return
       }
       if (result.results.length === 1) {
-        const installed = await runtimeRegistryInstallPack(result.results[0]!.id, sourceID.trim(), mend.root)
+        const pack = result.results[0]!
+        const confirmed = await DialogConfirm.show(
+          dialog,
+          `Install ${pack.title || pack.id}`,
+          setupMarketplaceInstallPreview({
+            pack,
+            sourceID: sourceID.trim(),
+            sourceURL: result.source.url || sourceURL.trim(),
+            sourceType: result.source.type,
+            fetchesNetwork: result.fetchesNetwork,
+            digest: result.digest,
+          }),
+        )
+        if (!confirmed) {
+          await removeFailedRegistrySource(sourceID.trim())
+          return
+        }
+        const installed = await runtimeRegistryInstallPack(pack.id, sourceID.trim(), mend.root)
         await syncPackageRuntime()
         toast.show({ variant: "success", message: `Installed package: ${installed.package.id}.`, duration: 5000 })
         dialog.clear()
         return
       }
-      const preview = await runtimeRegistryApplySource(sourceID.trim(), mend.root)
-      await syncPackageRuntime()
-      toast.show({
-        variant: "success",
-        message: `Installed package source: ${preview.package?.id || sourceID.trim()}.`,
-        duration: 5000,
-      })
+      await removeFailedRegistrySource(sourceID.trim())
+      toast.show({ variant: "warning", message: "No installable MendCode packages found in that GitHub repo.", duration: 6000 })
     } catch (error) {
       if (sourceAdded) await removeFailedRegistrySource(sourceID.trim())
       toast.show({
@@ -1146,10 +1275,11 @@ export function Setup() {
             },
           },
           ...packages.installed.map((item) => ({
-            title: `${item.enabled ? "[x]" : "[ ]"} ${item.title || item.id}`,
+            title: setupMarketplaceBadgeTitle(item.title || item.id, item.enabled ? "active" : "installed"),
             value: item.id,
-            category: item.enabled ? "Active" : "Installed",
+            category: setupMarketplaceCategory({ badge: item.enabled ? "active" : "installed", channel: item.channel, sourceID: item.sourceType }),
             description: item.description || item.root,
+            searchText: setupMarketplaceSearchText([item.id, item.title, item.description, item.root, item.version, item.channel, item.sourceType, item.enabled ? "active enabled selected" : "installed inactive disabled"]),
             footer: item.version || item.channel || item.sourceType,
             onSelect: async () => {
               await setMendPackageEnabled(item.id, !item.enabled, mend.root)

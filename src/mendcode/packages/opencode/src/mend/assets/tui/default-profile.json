@@ -61,6 +61,10 @@
     "reasoning": {
       "defaultVisibility": "collapsed"
     },
+    "input": {
+      "pasteSummary": true,
+      "pasteSummaryMinChars": 3000
+    },
     "activity": {
       "style": "raw",
       "placement": "current",
@@ -89,6 +93,12 @@
         "blocked": ["Waiting..."],
         "done": ["Done"]
       }
+    },
+    "compaction": {
+      "style": "minimal",
+      "showProgress": false,
+      "allowScratchpad": false,
+      "arcade": "off"
     },
     "symbols": {
       "assistantDone": "◈"
@@ -119,7 +129,7 @@
     "width": 88,
     "zones": {
       "sidebar": { "enabled": false, "compact": false, "width": 0 },
-      "header": { "enabled": true },
+      "header": { "enabled": true, "title": { "visible": false, "align": "right" } },
       "footer": { "enabled": true },
       "session": { "transcript": "main", "metadata": "footer", "stickyUserHeader": true },
       "prompt": { "position": "bottom", "rightSurface": false }

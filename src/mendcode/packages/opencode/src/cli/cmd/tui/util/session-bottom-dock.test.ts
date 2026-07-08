@@ -54,6 +54,7 @@ describe("session bottom dock layout", () => {
   test("shows notes, subagents, and info by default when all side widgets fit", () => {
     const layout = sessionBottomDockLayout({
       width: 120,
+      subagentCount: 1,
       todos: [
         {
           content:
@@ -67,8 +68,25 @@ describe("session bottom dock layout", () => {
     expect(layout.showSubagents).toBe(true)
     expect(layout.showInfo).toBe(true)
     expect(layout.notesWidth).toBeGreaterThanOrEqual(28)
-    expect(layout.subagentsWidth).toBeGreaterThanOrEqual(28)
+    expect(layout.subagentsWidth).toBeGreaterThanOrEqual(32)
     expect(layout.infoWidth).toBeGreaterThanOrEqual(24)
+  })
+
+  test("hides the subagents widget when there are no active subagents", () => {
+    const layout = sessionBottomDockLayout({
+      width: 120,
+      subagentCount: 0,
+      todos: [
+        {
+          content: "Keep the dock focused on current work",
+          status: "in_progress",
+        },
+      ],
+    })
+
+    expect(layout.showNotes).toBe(true)
+    expect(layout.showSubagents).toBe(false)
+    expect(layout.showInfo).toBe(true)
   })
 
   test("shows subagents with notes and info when all side widgets fit", () => {
@@ -86,7 +104,8 @@ describe("session bottom dock layout", () => {
     expect(layout.showNotes).toBe(true)
     expect(layout.showSubagents).toBe(true)
     expect(layout.showInfo).toBe(true)
-    expect(layout.subagentsWidth).toBeGreaterThanOrEqual(28)
+    expect(layout.subagentsWidth).toBeGreaterThanOrEqual(32)
+    expect(layout.subagentsWidth).toBeGreaterThan(layout.infoWidth)
   })
 
   test("prioritizes subagents over info when child sessions exist and width is limited", () => {
@@ -104,12 +123,30 @@ describe("session bottom dock layout", () => {
     expect(layout.showNotes).toBe(true)
     expect(layout.showSubagents).toBe(true)
     expect(layout.showInfo).toBe(false)
-    expect(layout.subagentsWidth).toBeGreaterThanOrEqual(28)
+    expect(layout.subagentsWidth).toBeGreaterThanOrEqual(32)
+  })
+
+  test("prioritizes subagents over notes when only one side widget fits", () => {
+    const layout = sessionBottomDockLayout({
+      width: 70,
+      subagentCount: 1,
+      todos: [
+        {
+          content: "Short task",
+          status: "in_progress",
+        },
+      ],
+    })
+
+    expect(layout.showSubagents).toBe(true)
+    expect(layout.showNotes).toBe(false)
+    expect(layout.showInfo).toBe(false)
   })
 
   test("reserves room for custom dock widgets before optional info panels", () => {
     const layout = sessionBottomDockLayout({
       width: 150,
+      subagentCount: 1,
       customDockMinWidth: 42,
       todos: [
         {

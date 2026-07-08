@@ -39,6 +39,9 @@ import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { BackgroundSession } from "@/session/background"
+import { AgentViewMetadata } from "@/session/agent-view-metadata"
+import { AgentView } from "@/session/agent-view"
+import { AgentCommand } from "@/session/agent-command"
 import { SessionShare } from "@/share/session"
 import { ShareNext } from "@/share/share-next"
 import { Skill } from "@/skill"
@@ -181,6 +184,9 @@ export function createRoutes(corsOptions?: CorsOptions) {
       PtyTicket.defaultLayer,
       Question.defaultLayer,
       BackgroundSession.defaultLayer,
+      AgentViewMetadata.defaultLayer,
+      AgentView.defaultLayer,
+      AgentCommand.defaultLayer,
       Ripgrep.defaultLayer,
       Session.defaultLayer,
       SessionCompaction.defaultLayer,

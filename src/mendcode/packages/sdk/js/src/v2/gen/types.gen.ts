@@ -23,9 +23,17 @@ export type Event =
   | EventPlanReviewAsked
   | EventPlanReviewReplied
   | EventTodoUpdated
+  | EventBackgroundSessionUpdated
+  | EventBackgroundSessionDeleted
+  | EventLoopWorkflowUpdated
+  | EventLoopRunUpdated
+  | EventLoopEventCreated
+  | EventLoopThreadUpdated
   | EventSessionStatus
   | EventSessionIdle
   | EventSessionNextShellOutput
+  | EventMemoryDream1
+  | EventMemoryWorkspace
   | EventSessionCompacted
   | EventTuiPromptAppend
   | EventTuiCommandExecute
@@ -283,6 +291,182 @@ export type Todo = {
   priority: string
 }
 
+export type BackgroundSession = {
+  sessionID: string
+  state: "queued" | "working" | "needs_input" | "completed" | "failed" | "stopped"
+  summary?: string
+  error?: string
+  pinned: boolean
+  process?: {
+    pid: number
+    started: number
+  }
+  writer?: {
+    clientID: string
+    acquired: number
+    expires: number
+  }
+  time: {
+    created: number
+    updated: number
+  }
+}
+
+export type LoopWorkflow = {
+  id: string
+  projectID: string
+  workspaceID?: string
+  ownerSessionID?: string
+  rootSessionID?: string
+  name: string
+  objective: string
+  state:
+    | "draft"
+    | "active"
+    | "sleeping"
+    | "working"
+    | "needs_input"
+    | "blocked"
+    | "paused"
+    | "completed"
+    | "failed"
+    | "stopped"
+  source: "converted-session" | "objective" | "template" | "manual"
+  templateID?: string
+  phase: string
+  nextWakeup?: number
+  spec: {
+    trigger?: {
+      mode?: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced"
+      intervalMs?: number
+    }
+    budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
+    completionCriteria?: Array<string>
+    successChecks?: Array<string>
+    strategy?: {
+      targetTurns?: number
+      reserveTurns?: number
+      notifyOwnerOnComplete?: boolean
+    }
+    stopWhen?: Array<string>
+    gates?: Array<string>
+    model?: {
+      providerID: string
+      modelID: string
+      variant?: string
+    }
+    agent?: string
+  }
+  policy: {
+    maxTurns?: number
+    maxRuntimeMs?: number
+    maxChildren?: number
+    maxDepth?: number
+    requireApprovalFor?: Array<string>
+  }
+  metrics: {
+    turns?: number
+    children?: number
+    failures?: number
+    noProgress?: number
+  }
+  evaluatorReason?: string
+  time: {
+    created: number
+    updated: number
+    activated?: number
+    archived?: number
+  }
+}
+
+export type LoopRun = {
+  id: string
+  workflowID: string
+  rootSessionID?: string
+  state: "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+  trigger: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced" | "resume" | "run-once"
+  phase: string
+  nextWakeup?: number
+  evaluatorReason?: string
+  budget?: {
+    turns?: number
+    children?: number
+    failures?: number
+    noProgress?: number
+  }
+  checkpoint?: {
+    status?: "complete" | "continue" | "needs_input" | "blocked" | "stop"
+    summary?: string
+    evidence?: Array<string>
+    nextAction?: string
+    confidence?: string
+  }
+  time: {
+    created: number
+    updated: number
+    started?: number
+    ended?: number
+  }
+}
+
+export type LoopEvent = {
+  id: string
+  workflowID: string
+  runID?: string
+  sessionID?: string
+  sequence: number
+  level: "debug" | "info" | "warning" | "error" | "decision"
+  type:
+    | "created"
+    | "activated"
+    | "started"
+    | "completed"
+    | "wake"
+    | "signal"
+    | "phase"
+    | "session"
+    | "child"
+    | "gate"
+    | "budget"
+    | "action"
+    | "monitor"
+    | "paused"
+    | "resumed"
+    | "stopped"
+    | "failed"
+  title: string
+  summary: string
+  data?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+  }
+}
+
+export type LoopThread = {
+  workflowID: string
+  runID?: string
+  sessionID: string
+  role: "root" | "implementer" | "reviewer" | "verifier" | "monitor" | "research"
+  purpose: string
+  state: "queued" | "working" | "needs_input" | "completed" | "failed" | "stopped"
+  parentSessionID?: string
+  budget?: {
+    turns?: number
+    children?: number
+    failures?: number
+    noProgress?: number
+  }
+  worktree?: string
+  branch?: string
+  time: {
+    created: number
+    updated: number
+  }
+}
+
 export type SessionStatus =
   | {
       type: "idle"
@@ -295,6 +479,10 @@ export type SessionStatus =
     }
   | {
       type: "busy"
+      kind?: "mflow-wait" | "memory-extract" | "subagent-wait"
+      message?: string
+      until?: number
+      startedAt?: number
     }
 
 export type EventTuiPromptAppend = {
@@ -731,6 +919,7 @@ export type CompactionPart = {
   auto: boolean
   overflow?: boolean
   resume?: boolean
+  post_prompt?: string
   instructions?: string
   tail_start_id?: string
 }
@@ -828,9 +1017,17 @@ export type GlobalEvent = {
     | EventPlanReviewAsked
     | EventPlanReviewReplied
     | EventTodoUpdated
+    | EventBackgroundSessionUpdated
+    | EventBackgroundSessionDeleted
+    | EventLoopWorkflowUpdated
+    | EventLoopRunUpdated
+    | EventLoopEventCreated
+    | EventLoopThreadUpdated
     | EventSessionStatus
     | EventSessionIdle
     | EventSessionNextShellOutput
+    | EventMemoryDream
+    | EventMemoryWorkspace
     | EventSessionCompacted
     | EventTuiPromptAppend
     | EventTuiCommandExecute
@@ -1033,8 +1230,14 @@ export type ProviderConfig = {
      * Timeout in milliseconds for requests to this provider. Default is 300000 (5 minutes). Set to false to disable timeout.
      */
     timeout?: number | false
-    chunkTimeout?: number
-    [key: string]: unknown | string | boolean | number | false | number | undefined
+    /**
+     * Timeout in milliseconds between streamed SSE chunks for this provider. Default is 60000 (1 minute). Set to false to disable chunk timeout.
+     */
+    chunkTimeout?: number | false
+    [key: string]: unknown | string | boolean | number | false | number | false | undefined
+  }
+  compaction?: {
+    threshold?: number
   }
   models?: {
     [key: string]: {
@@ -1067,6 +1270,9 @@ export type ProviderConfig = {
         context: number
         input?: number
         output: number
+      }
+      compaction?: {
+        threshold?: number
       }
       modalities?: {
         input: Array<"text" | "audio" | "image" | "video" | "pdf">
@@ -1106,6 +1312,7 @@ export type McpLocalConfig = {
    * Command and arguments to run the MCP server
    */
   command: Array<string>
+  cwd?: string
   environment?: {
     [key: string]: string
   }
@@ -1117,6 +1324,7 @@ export type McpOAuthConfig = {
   clientId?: string
   clientSecret?: string
   scope?: string
+  callbackPort?: number
   redirectUri?: string
 }
 
@@ -1186,7 +1394,10 @@ export type Config = {
   enabled_providers?: Array<string>
   model?: string
   small_model?: string
+  subagent_model?: string
+  subagent_variant?: string
   default_agent?: string
+  plan_exit_agent?: string
   username?: string
   mode?: {
     build?: AgentConfig
@@ -1270,9 +1481,11 @@ export type Config = {
     tail_turns?: number
     preserve_recent_tokens?: number
     reserved?: number
+    threshold?: number
   }
   experimental?: {
     disable_paste_summary?: boolean
+    paste_summary_min_chars?: number
     batch_tool?: boolean
     openTelemetry?: boolean
     primary_tools?: Array<string>
@@ -1660,6 +1873,38 @@ export type ProviderAuthAuthorization = {
   url: string
   method: "auto" | "code"
   instructions: string
+}
+
+export type BackgroundSessionEntry = {
+  sessionID: string
+  state: "queued" | "working" | "needs_input" | "completed" | "failed" | "stopped"
+  summary?: string
+  error?: string
+  pinned: boolean
+  process?: {
+    pid: number
+    started: number
+  }
+  writer?: {
+    clientID: string
+    acquired: number
+    expires: number
+  }
+  time: {
+    created: number
+    updated: number
+  }
+  session?: {
+    id: string
+    title: string
+    directory: string
+    path?: string
+    agent?: string
+    time: {
+      created: number
+      updated: number
+    }
+  }
 }
 
 export type TextPartInput = {
@@ -2458,6 +2703,59 @@ export type EventTodoUpdated = {
   }
 }
 
+export type EventBackgroundSessionUpdated = {
+  id: string
+  type: "background_session.updated"
+  properties: {
+    sessionID: string
+    info: BackgroundSession
+  }
+}
+
+export type EventBackgroundSessionDeleted = {
+  id: string
+  type: "background_session.deleted"
+  properties: {
+    sessionID: string
+  }
+}
+
+export type EventLoopWorkflowUpdated = {
+  id: string
+  type: "loop.workflow.updated"
+  properties: {
+    workflowID: string
+    info: LoopWorkflow
+  }
+}
+
+export type EventLoopRunUpdated = {
+  id: string
+  type: "loop.run.updated"
+  properties: {
+    workflowID: string
+    run: LoopRun
+  }
+}
+
+export type EventLoopEventCreated = {
+  id: string
+  type: "loop.event.created"
+  properties: {
+    workflowID: string
+    event: LoopEvent
+  }
+}
+
+export type EventLoopThreadUpdated = {
+  id: string
+  type: "loop.thread.updated"
+  properties: {
+    workflowID: string
+    thread: LoopThread
+  }
+}
+
 export type EventSessionStatus = {
   id: string
   type: "session.status"
@@ -2483,6 +2781,29 @@ export type EventSessionNextShellOutput = {
     sessionID: string
     callID: string
     delta: string
+  }
+}
+
+export type EventMemoryDream = {
+  id: string
+  type: "memory.dream"
+  properties: {
+    root: string
+    runID: string
+    status: "started" | "progress" | "running" | "completed" | "failed" | "canceled" | "missed"
+    message: string
+    proposalCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type EventMemoryWorkspace = {
+  id: string
+  type: "memory.workspace"
+  properties: {
+    root: string
+    workspaceID: string
+    status: "created" | "updated"
+    displayName: string
   }
 }
 
@@ -3293,6 +3614,18 @@ export type SessionMessage =
   | SessionMessageAssistant
   | SessionMessageCompaction
 
+export type EventMemoryDream1 = {
+  id: string
+  type: "memory.dream"
+  properties: {
+    root: string
+    runID: string
+    status: "started" | "progress" | "running" | "completed" | "failed" | "canceled" | "missed"
+    message: string
+    proposalCount: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
 export type EventTuiToastShow1 = {
   id: string
   type: "tui.toast.show"
@@ -3424,6 +3757,7 @@ export type GlobalHealthResponses = {
   200: {
     healthy: true
     version: string
+    channel: string
   }
 }
 
@@ -4220,6 +4554,63 @@ export type FormatterStatusResponses = {
 }
 
 export type FormatterStatusResponse = FormatterStatusResponses[keyof FormatterStatusResponses]
+
+export type MemorySideChatData = {
+  body?: {
+    root?: string
+    message: string
+    history?: Array<{
+      id: string
+      role: "user" | "assistant"
+      text: string
+      createdAt: string
+    }>
+    context?: {
+      selectedWorkspaceID?: string
+      selectedGroupID?: string
+      selectedCategoryID?: string
+      pageContext?: string
+    }
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/side-chat"
+}
+
+export type MemorySideChatResponses = {
+  /**
+   * Memory side chat response
+   */
+  200: {
+    text: string
+    actions: Array<{
+      kind:
+        | "propose-memory"
+        | "propose-policy"
+        | "explain-state"
+        | "dream-dry-run"
+        | "dream-service-start"
+        | "create-memory"
+        | "edit-memory"
+        | "delete-memory"
+        | "move-memory"
+        | "create-category"
+        | "edit-category"
+        | "delete-category"
+      text: string
+      categoryIDs?: Array<string>
+      scope?: "project" | "global"
+      targetID?: string
+      targetScope?: "project" | "global"
+      categoryID?: string
+    }>
+  }
+}
+
+export type MemorySideChatResponse = MemorySideChatResponses[keyof MemorySideChatResponses]
 
 export type McpStatusData = {
   body?: never
@@ -5186,6 +5577,34 @@ export type SessionStatusResponses = {
 
 export type SessionStatusResponse = SessionStatusResponses[keyof SessionStatusResponses]
 
+export type SessionBackgroundListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/background"
+}
+
+export type SessionBackgroundListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type SessionBackgroundListError = SessionBackgroundListErrors[keyof SessionBackgroundListErrors]
+
+export type SessionBackgroundListResponses = {
+  /**
+   * List of background sessions
+   */
+  200: Array<BackgroundSessionEntry>
+}
+
+export type SessionBackgroundListResponse = SessionBackgroundListResponses[keyof SessionBackgroundListResponses]
+
 export type SessionDeleteData = {
   body?: never
   path: {
@@ -5294,6 +5713,165 @@ export type SessionUpdateResponses = {
 
 export type SessionUpdateResponse = SessionUpdateResponses[keyof SessionUpdateResponses]
 
+export type SessionBackgroundRemoveData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/background"
+}
+
+export type SessionBackgroundRemoveErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionBackgroundRemoveError = SessionBackgroundRemoveErrors[keyof SessionBackgroundRemoveErrors]
+
+export type SessionBackgroundRemoveResponses = {
+  /**
+   * Removed background session
+   */
+  200: boolean
+}
+
+export type SessionBackgroundRemoveResponse = SessionBackgroundRemoveResponses[keyof SessionBackgroundRemoveResponses]
+
+export type SessionBackgroundRegisterData = {
+  body?: {
+    state?: "queued" | "working" | "needs_input" | "completed" | "failed" | "stopped"
+    summary?: string
+    error?: string
+    pinned?: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/background"
+}
+
+export type SessionBackgroundRegisterErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionBackgroundRegisterError = SessionBackgroundRegisterErrors[keyof SessionBackgroundRegisterErrors]
+
+export type SessionBackgroundRegisterResponses = {
+  /**
+   * Background session metadata
+   */
+  200: BackgroundSession
+}
+
+export type SessionBackgroundRegisterResponse =
+  SessionBackgroundRegisterResponses[keyof SessionBackgroundRegisterResponses]
+
+export type SessionBackgroundWriterReleaseData = {
+  body?: {
+    clientID: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/background/writer"
+}
+
+export type SessionBackgroundWriterReleaseErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionBackgroundWriterReleaseError =
+  SessionBackgroundWriterReleaseErrors[keyof SessionBackgroundWriterReleaseErrors]
+
+export type SessionBackgroundWriterReleaseResponses = {
+  /**
+   * Released writer lease
+   */
+  200: BackgroundSession
+}
+
+export type SessionBackgroundWriterReleaseResponse =
+  SessionBackgroundWriterReleaseResponses[keyof SessionBackgroundWriterReleaseResponses]
+
+export type SessionBackgroundWriterAcquireData = {
+  body?: {
+    clientID: string
+    ttlMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/background/writer"
+}
+
+export type SessionBackgroundWriterAcquireErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionBackgroundWriterAcquireError =
+  SessionBackgroundWriterAcquireErrors[keyof SessionBackgroundWriterAcquireErrors]
+
+export type SessionBackgroundWriterAcquireResponses = {
+  /**
+   * Writer lease acquisition result
+   */
+  200:
+    | {
+        acquired: true
+        info: BackgroundSession
+      }
+    | {
+        acquired: false
+        info?: BackgroundSession
+      }
+}
+
+export type SessionBackgroundWriterAcquireResponse =
+  SessionBackgroundWriterAcquireResponses[keyof SessionBackgroundWriterAcquireResponses]
+
 export type SessionChildrenData = {
   body?: never
   path: {
@@ -5394,6 +5972,8 @@ export type SessionMessagesData = {
     workspace?: string
     limit?: number
     before?: string
+    after?: string
+    view?: "full" | "tui"
   }
   url: "/session/{sessionID}/message"
 }

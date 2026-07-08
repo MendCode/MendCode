@@ -24,6 +24,8 @@ const MEMORY_SIDE_CHAT_ACTION_KINDS = [
   "edit-memory",
   "delete-memory",
   "move-memory",
+  "graph-upsert",
+  "graph-link",
   "create-category",
   "edit-category",
   "delete-category",
@@ -39,6 +41,9 @@ export type MemorySideChatAction = {
   targetID?: string
   targetScope?: "project" | "global"
   categoryID?: string
+  fromFactID?: string
+  toFactID?: string
+  linkKind?: "related" | "conflicts" | "supersedes" | "supports"
 }
 
 export type MemorySideChatSession = {
@@ -126,12 +131,16 @@ function normalizeAction(input: unknown): MemorySideChatAction | null {
   if (typeof action.text !== "string" || !action.text.trim()) return null
   const scope = action.scope === "global" || action.scope === "project" ? action.scope : undefined
   const targetScope = action.targetScope === "global" || action.targetScope === "project" ? action.targetScope : undefined
+  const linkKind = action.linkKind === "conflicts" || action.linkKind === "supersedes" || action.linkKind === "supports" ? action.linkKind : action.linkKind === "related" ? "related" : undefined
   return {
     kind: kind as MemorySideChatActionKind,
     text: action.text.trim(),
     scope,
     targetScope,
     targetID: typeof action.targetID === "string" && action.targetID.trim() ? action.targetID.trim() : undefined,
+    fromFactID: typeof action.fromFactID === "string" && action.fromFactID.trim() ? action.fromFactID.trim() : undefined,
+    toFactID: typeof action.toFactID === "string" && action.toFactID.trim() ? action.toFactID.trim() : undefined,
+    linkKind,
     categoryID: typeof action.categoryID === "string" && action.categoryID.trim() ? action.categoryID.trim() : undefined,
     categoryIDs: Array.isArray(action.categoryIDs)
       ? action.categoryIDs.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
@@ -216,6 +225,7 @@ export function memorySideChatInstructions() {
     "You cannot run shell commands, browse git state, or silently apply changes.",
     "You can help configure memory behavior by drafting reviewable control actions for memory facts, category/policy rules, and Dream scheduling/source rules.",
     "You can draft actions to create, edit, delete, or move memories; create, edit, or delete categories; update category policies; prepare Dream dry runs; and enable the durable Dream service.",
+    "Use graph-upsert to propose materializing a Memory Graph fact, and graph-link to propose connecting two known fact ids. Graph actions are reviewable and must not be described as already applied.",
     "When the user asks to change memory state, use the most specific action kind instead of only explaining.",
     "Do not say you cannot configure memory or Dream when the user asks. Explain that you can prepare a reviewable proposal and include the action.",
     "If selected page context or saved memory is present, do not claim that no context exists.",
@@ -229,7 +239,7 @@ export function memorySideChatInstructions() {
     "Use explain-state only when the user asks how the current memory state works and no proposal is needed.",
     "Every action is reviewable and pending. Never imply that the change was already applied.",
     "Return strict JSON only:",
-    '{"reply":"short helpful answer","actions":[{"kind":"move-memory","targetID":"memory-id","categoryID":"project.security","text":"Move this memory into Security for review.","scope":"project","categoryIDs":["memory.policy"]},{"kind":"dream-dry-run","text":"configure Dream for the 18:00-23:00 America/Panama night window and keep output pending","scope":"global","categoryIDs":["memory.dream"]},{"kind":"dream-service-start","text":"enable the durable global Dream background service so scheduled Dream runs even when the TUI is closed","scope":"global","categoryIDs":["memory.dream"]}]}',
+    '{"reply":"short helpful answer","actions":[{"kind":"move-memory","targetID":"memory-id","categoryID":"project.security","text":"Move this memory into Security for review.","scope":"project","categoryIDs":["memory.policy"]},{"kind":"graph-link","fromFactID":"memfact_a","toFactID":"memfact_b","linkKind":"supports","text":"Connect these facts because one supports the other.","scope":"project","categoryIDs":["memory.policy"]},{"kind":"dream-dry-run","text":"configure Dream for the 18:00-23:00 America/Panama night window and keep output pending","scope":"global","categoryIDs":["memory.dream"]},{"kind":"dream-service-start","text":"enable the durable global Dream background service so scheduled Dream runs even when the TUI is closed","scope":"global","categoryIDs":["memory.dream"]}]}',
     "Use an empty actions array when no proposal is needed.",
   ].join("\n")
 }
@@ -237,11 +247,12 @@ export function memorySideChatInstructions() {
 function sideChatProposalForAction(action: MemorySideChatAction) {
   if (action.kind === "explain-state") return null
   const dreamAction = action.kind === "dream-dry-run" || action.kind === "dream-service-start"
+  const graphAction = action.kind === "graph-upsert" || action.kind === "graph-link"
   const categoryIDs = action.categoryIDs?.length
     ? action.categoryIDs
     : dreamAction
       ? ["memory.dream"]
-      : action.kind === "propose-policy" || action.kind.includes("category") || action.kind === "move-memory" || action.kind === "edit-memory" || action.kind === "delete-memory"
+      : graphAction || action.kind === "propose-policy" || action.kind.includes("category") || action.kind === "move-memory" || action.kind === "edit-memory" || action.kind === "delete-memory"
         ? ["memory.policy"]
         : undefined
   const label = action.kind === "dream-dry-run"
@@ -250,6 +261,10 @@ function sideChatProposalForAction(action: MemorySideChatAction) {
       ? "Dream service proposal"
       : action.kind === "propose-policy"
         ? "Memory policy proposal"
+        : action.kind === "graph-upsert"
+          ? "Graph fact proposal"
+          : action.kind === "graph-link"
+            ? "Graph link proposal"
         : action.kind === "create-memory"
           ? "Create memory proposal"
           : action.kind === "edit-memory"
@@ -265,12 +280,18 @@ function sideChatProposalForAction(action: MemorySideChatAction) {
     action.targetID ? `target=${action.targetID}` : "",
     action.targetScope ? `targetScope=${action.targetScope}` : "",
     action.categoryID ? `category=${action.categoryID}` : "",
+    action.fromFactID ? `from=${action.fromFactID}` : "",
+    action.toFactID ? `to=${action.toFactID}` : "",
+    action.linkKind ? `kind=${action.linkKind}` : "",
   ].filter(Boolean).join(" · ")
   return {
     scope: action.scope ?? (dreamAction ? "global" : "project"),
+    operation: action.kind === "graph-link" ? "relink" as const : undefined,
+    targetEntryID: action.kind === "graph-link" ? action.fromFactID : action.targetID,
+    targetEntryIDs: action.kind === "graph-link" && action.fromFactID && action.toFactID ? [action.fromFactID, action.toFactID] : undefined,
     text: action.kind === "propose-memory" ? action.text : `${label}${details ? ` (${details})` : ""}: ${action.text}`,
     categoryIDs,
-    tags: ["side-chat", action.kind, ...(categoryIDs ?? [])],
+    tags: ["side-chat", action.kind, ...(action.kind === "graph-link" ? [`graph-kind:${action.linkKind ?? "related"}`] : []), ...(categoryIDs ?? [])],
     reason: `${label} drafted by Memory side chat for review.`,
   }
 }

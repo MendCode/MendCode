@@ -45,7 +45,7 @@ export type MendTuiProfile = {
     width?: number
     zones: {
       sidebar: { enabled: boolean; compact: boolean; width: number }
-      header: { enabled: boolean }
+      header: { enabled: boolean; title?: { visible?: boolean; align?: "left" | "center" | "right" } }
       footer: { enabled: boolean }
       session: Record<string, unknown>
       prompt: Record<string, unknown>
@@ -109,7 +109,7 @@ const fallbackProfile: MendTuiProfile = {
     width: 88,
     zones: {
       sidebar: { enabled: false, compact: false, width: 0 },
-      header: { enabled: true },
+      header: { enabled: true, title: { visible: false, align: "right" } },
       footer: { enabled: true },
       session: { transcript: "main", metadata: "footer", stickyUserHeader: true, submitScrollMode: "bottom" },
       prompt: { position: "bottom", rightSurface: false },
@@ -288,6 +288,15 @@ export function mergeMendTuiProfile(input: unknown): MendTuiProfile {
           ...(isRecord(input.layout) && isRecord(input.layout.zones) && isRecord(input.layout.zones.header)
             ? input.layout.zones.header
             : {}),
+          title: {
+            ...fallbackProfile.layout.zones.header.title,
+            ...(isRecord(input.layout) &&
+            isRecord(input.layout.zones) &&
+            isRecord(input.layout.zones.header) &&
+            isRecord(input.layout.zones.header.title)
+              ? input.layout.zones.header.title
+              : {}),
+          },
         },
         footer: {
           ...fallbackProfile.layout.zones.footer,
@@ -394,15 +403,32 @@ export function validateMendTuiProfile(profile: MendTuiProfile) {
     failures.push("tui promptStatus.scripts must be an object")
   }
   if (!Array.isArray(profile.workingIndicator.messages)) failures.push("tui workingIndicator.messages must be an array")
+  const headerTitle = profile.layout.zones.header.title
+  if (headerTitle?.visible !== undefined && typeof headerTitle.visible !== "boolean") {
+    failures.push("tui layout.zones.header.title.visible must be a boolean")
+  }
+  if (headerTitle?.align !== undefined && !["left", "center", "right"].includes(headerTitle.align)) {
+    failures.push("tui layout.zones.header.title.align is invalid")
+  }
   if (!["raw", "minimal", "mendcode"].includes(profile.presentation.profile))
     failures.push("tui presentation.profile is invalid")
   if (!["plain", "markdown", "rich"].includes(profile.presentation.message.renderer)) {
     failures.push("tui presentation.message.renderer is invalid")
   }
+  if (typeof profile.presentation.input.pasteSummary !== "boolean") {
+    failures.push("tui presentation.input.pasteSummary must be a boolean")
+  }
+  if (profile.presentation.input.pasteSummaryMinChars < 1) {
+    failures.push("tui presentation.input.pasteSummaryMinChars must be at least 1")
+  }
   if (!profile.presentation.compaction || !["minimal", "cockpit", "arcade", "quiet"].includes(profile.presentation.compaction.style)) {
     failures.push("tui presentation.compaction.style is invalid")
   }
-  if (!profile.presentation.compaction || !["off", "snake", "stars"].includes(profile.presentation.compaction.arcade)) {
+  if (
+    !profile.presentation.compaction ||
+    typeof profile.presentation.compaction.arcade !== "string" ||
+    profile.presentation.compaction.arcade.trim().length === 0
+  ) {
     failures.push("tui presentation.compaction.arcade is invalid")
   }
   if (!["visible", "collapsed", "hidden"].includes(profile.presentation.reasoning.defaultVisibility)) {

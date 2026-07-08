@@ -7,7 +7,9 @@ const forwardedSyncEventTypes = new Set([
   "message.removed",
   "message.part.updated",
   "message.part.removed",
+  "session.next.compaction.started",
   "session.next.compaction.ended",
+  "session.compacted",
 ])
 
 function eventFromSyncPayload(payload: unknown): Event | undefined {

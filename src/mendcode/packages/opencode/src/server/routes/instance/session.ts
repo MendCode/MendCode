@@ -1,7 +1,9 @@
 import { Hono } from "hono"
+import { HTTPException } from "hono/http-exception"
 import { stream } from "hono/streaming"
 import { describeRoute, validator, resolver } from "hono-openapi"
-import { SessionID, MessageID, PartID } from "@/session/schema"
+import { AgentCommandID, SessionID, MessageID, PartID } from "@/session/schema"
+import { NotFoundError } from "@/storage/storage"
 import z from "zod"
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
@@ -14,6 +16,10 @@ import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { BackgroundSession } from "@/session/background"
+import { AgentViewMetadata } from "@/session/agent-view-metadata"
+import { AgentView } from "@/session/agent-view"
+import { AgentCommand } from "@/session/agent-command"
+import { AgentCommandPolicy } from "@/session/agent-command-policy"
 import { Effect } from "effect"
 import { Agent } from "@/agent/agent"
 import { Snapshot } from "@/snapshot"
@@ -144,8 +150,10 @@ export const SessionRoutes = lazy(() =>
           const background = yield* BackgroundSession.Service
           const session = yield* Session.Service
           const status = yield* SessionStatus.Service
+          const metadata = yield* AgentViewMetadata.Service
           const statuses = yield* status.list()
           const items = yield* background.list()
+          const metadataBySessionID = new Map((yield* metadata.list()).map((info) => [info.sessionID, info]))
           return yield* Effect.all(
             items.map((info) =>
               session.get(info.sessionID).pipe(
@@ -153,14 +161,16 @@ export const SessionRoutes = lazy(() =>
                   BackgroundSession.toEntry({
                     info,
                     status: statuses.get(info.sessionID),
+                    metadata: metadataBySessionID.get(info.sessionID),
                     session: BackgroundSession.sessionInfo(sessionInfo),
                   }),
                 ),
-                Effect.catch(() =>
+                Effect.catchIf(NotFoundError.isInstance, () =>
                   Effect.succeed(
                     BackgroundSession.toEntry({
                       info,
                       status: statuses.get(info.sessionID),
+                      metadata: metadataBySessionID.get(info.sessionID),
                     }),
                   ),
                 ),
@@ -168,6 +178,322 @@ export const SessionRoutes = lazy(() =>
             ),
           )
         }),
+    )
+    .get(
+      "/agent-view",
+      describeRoute({
+        summary: "List Agent View sessions",
+        description: "Get aggregate read-only session rows for Agents View with status, background state, and metadata overrides.",
+        operationId: "session.agent_view.list",
+        responses: {
+          200: {
+            description: "Aggregate Agent View session rows",
+            content: {
+              "application/json": {
+                schema: resolver(BackgroundSession.Entry.zod.array()),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          directory: z.string().optional().meta({ description: "Filter foreground sessions by directory" }),
+          scope: z.enum(["project"]).optional().meta({ description: "List all foreground sessions for the current project" }),
+          path: z.string().optional().meta({ description: "Filter foreground sessions by project-relative path" }),
+          roots: QueryBoolean.optional().meta({ description: "Only include root foreground sessions" }),
+          start: z.coerce
+            .number()
+            .optional()
+            .meta({ description: "Filter foreground sessions updated on or after this timestamp (milliseconds since epoch)" }),
+          search: z.string().optional().meta({ description: "Filter foreground sessions by title (case-insensitive)" }),
+          limit: z.coerce.number().optional().meta({ description: "Maximum number of foreground sessions to return" }),
+        }),
+      ),
+      async (c) =>
+        jsonRequest("SessionRoutes.agentView.list", c, function* () {
+          const query = c.req.valid("query")
+          const agentView = yield* AgentView.Service
+          return yield* agentView.list({
+            directory: query.scope === "project" ? undefined : query.directory,
+            scope: query.scope,
+            path: query.path,
+            roots: queryBoolean(query.roots),
+            start: query.start,
+            search: query.search,
+            limit: query.limit,
+          })
+        }),
+    )
+    .get(
+      "/agent-view/metadata",
+      describeRoute({
+        summary: "List Agent View metadata",
+        description: "List local control-plane metadata overrides for Agent View sessions.",
+        operationId: "session.agent_view.metadata.list",
+        responses: {
+          200: {
+            description: "Agent View metadata entries",
+            content: {
+              "application/json": {
+                schema: resolver(AgentViewMetadata.Info.zod.array()),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      async (c) =>
+        jsonRequest("SessionRoutes.agentViewMetadata.list", c, function* () {
+          const metadata = yield* AgentViewMetadata.Service
+          return yield* metadata.list()
+        }),
+    )
+    .get(
+      "/:sessionID/agent-view/metadata",
+      describeRoute({
+        summary: "Get Agent View metadata",
+        description: "Read local control-plane metadata for a session without mutating its transcript.",
+        operationId: "session.agent_view.metadata.get",
+        responses: {
+          200: {
+            description: "Agent View metadata or null when unset",
+            content: {
+              "application/json": {
+                schema: resolver(AgentViewMetadata.Info.zod.nullable()),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: SessionID.zod,
+        }),
+      ),
+      async (c) =>
+        jsonRequest("SessionRoutes.agentViewMetadata.get", c, function* () {
+          const sessionID = c.req.valid("param").sessionID
+          const session = yield* Session.Service
+          const metadata = yield* AgentViewMetadata.Service
+          yield* session.get(sessionID)
+          return (yield* metadata.get(sessionID)) ?? null
+        }),
+    )
+    .patch(
+      "/:sessionID/agent-view/metadata",
+      describeRoute({
+        summary: "Patch Agent View metadata",
+        description: "Update local control-plane metadata such as title override, tags, group, priority, notes, pin, or archive.",
+        operationId: "session.agent_view.metadata.patch",
+        responses: {
+          200: {
+            description: "Updated Agent View metadata",
+            content: {
+              "application/json": {
+                schema: resolver(AgentViewMetadata.Info.zod),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: SessionID.zod,
+        }),
+      ),
+      validator("json", AgentViewMetadata.Patch.zod),
+      async (c) =>
+        jsonRequest("SessionRoutes.agentViewMetadata.patch", c, function* () {
+          const sessionID = c.req.valid("param").sessionID
+          const body = c.req.valid("json")
+          const session = yield* Session.Service
+          const metadata = yield* AgentViewMetadata.Service
+          yield* session.get(sessionID)
+          return yield* metadata.patch({ sessionID, ...body })
+        }),
+    )
+    .get(
+      "/agent-command/policy",
+      describeRoute({
+        summary: "List Agent Command policy matrix",
+        description: "List the local policy decisions used for structured Agent Command coordination.",
+        operationId: "session.agent_command.policy",
+        responses: {
+          200: {
+            description: "Agent Command policy matrix",
+            content: {
+              "application/json": {
+                schema: resolver(AgentCommandPolicy.MatrixItem.zod.array()),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      async (c) => c.json(AgentCommandPolicy.matrix()),
+    )
+    .get(
+      "/agent-command",
+      describeRoute({
+        summary: "List Agent Commands",
+        description: "List local control-plane command inbox entries for Agent View coordination.",
+        operationId: "session.agent_command.list",
+        responses: {
+          200: {
+            description: "Agent Command entries",
+            content: {
+              "application/json": {
+                schema: resolver(AgentCommand.Info.zod.array()),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "query",
+        z.object({
+          sourceSessionID: SessionID.zod.optional().meta({ description: "Filter commands sent by this session" }),
+          targetSessionID: SessionID.zod.optional().meta({ description: "Filter commands received by this session" }),
+          state: AgentCommand.State.zod.optional().meta({ description: "Filter commands by state" }),
+        }),
+      ),
+      async (c) =>
+        jsonRequest("SessionRoutes.agentCommand.list", c, function* () {
+          const query = c.req.valid("query")
+          const command = yield* AgentCommand.Service
+          return yield* command.list(query)
+        }),
+    )
+    .get(
+      "/:sessionID/agent-command",
+      describeRoute({
+        summary: "List incoming Agent Commands",
+        description: "List command inbox entries targeting a session.",
+        operationId: "session.agent_command.list_by_session",
+        responses: {
+          200: {
+            description: "Agent Command entries targeting this session",
+            content: {
+              "application/json": {
+                schema: resolver(AgentCommand.Info.zod.array()),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator("param", z.object({ sessionID: SessionID.zod })),
+      validator("query", z.object({ state: AgentCommand.State.zod.optional().meta({ description: "Filter commands by state" }) })),
+      async (c) =>
+        jsonRequest("SessionRoutes.agentCommand.listBySession", c, function* () {
+          const sessionID = c.req.valid("param").sessionID
+          const query = c.req.valid("query")
+          const session = yield* Session.Service
+          const command = yield* AgentCommand.Service
+          yield* session.get(sessionID)
+          return yield* command.list({ targetSessionID: sessionID, state: query.state })
+        }),
+    )
+    .post(
+      "/:sessionID/agent-command",
+      describeRoute({
+        summary: "Create Agent Command",
+        description: "Send a structured, auditable command to a session inbox without mutating its transcript.",
+        operationId: "session.agent_command.create",
+        responses: {
+          200: {
+            description: "Created Agent Command",
+            content: {
+              "application/json": {
+                schema: resolver(AgentCommand.Info.zod),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator("param", z.object({ sessionID: SessionID.zod })),
+      validator("json", AgentCommand.Create.zod),
+      async (c) => {
+        try {
+          return await jsonRequest("SessionRoutes.agentCommand.create", c, function* () {
+            const targetSessionID = c.req.valid("param").sessionID
+            const body = c.req.valid("json")
+            const session = yield* Session.Service
+            const command = yield* AgentCommand.Service
+            yield* session.get(body.sourceSessionID)
+            yield* session.get(targetSessionID)
+            return yield* command.create({ targetSessionID, ...body })
+          })
+        } catch (error) {
+          if (error instanceof NotFoundError) return c.json(error.toObject(), { status: 404 })
+          if (error instanceof HTTPException) throw error
+          throw error
+        }
+      },
+    )
+    .patch(
+      "/:sessionID/agent-command/:commandID",
+      describeRoute({
+        summary: "Update Agent Command",
+        description: "Advance or resolve an Agent Command state with an auditable update.",
+        operationId: "session.agent_command.patch",
+        responses: {
+          200: {
+            description: "Updated Agent Command",
+            content: {
+              "application/json": {
+                schema: resolver(AgentCommand.Info.zod),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator("param", z.object({ sessionID: SessionID.zod, commandID: AgentCommandID.zod })),
+      validator("json", AgentCommand.Update.zod),
+      async (c) => {
+        try {
+          return await jsonRequest("SessionRoutes.agentCommand.patch", c, function* () {
+            const params = c.req.valid("param")
+            const body = c.req.valid("json")
+            const session = yield* Session.Service
+            const command = yield* AgentCommand.Service
+            yield* session.get(params.sessionID)
+            return yield* command.update({ id: params.commandID, targetSessionID: params.sessionID, ...body })
+          })
+        } catch (error) {
+          if (error instanceof AgentCommand.InvalidStateTransitionError) {
+            return c.json(
+              {
+                success: false as const,
+                data: null,
+                errors: [
+                  {
+                    name: error.name,
+                    message: error.message,
+                    commandID: error.commandID,
+                    from: error.from,
+                    to: error.to,
+                  },
+                ],
+              },
+              { status: 400 },
+            )
+          }
+          if (error instanceof NotFoundError) return c.json(error.toObject(), { status: 404 })
+          if (error instanceof HTTPException) throw error
+          throw error
+        }
+      },
     )
     .get(
       "/:sessionID",
@@ -280,12 +606,12 @@ export const SessionRoutes = lazy(() =>
     .post(
       "/:sessionID/background/writer",
       describeRoute({
-        summary: "Acquire background writer lease",
-        description: "Acquire the single interactive writer lease for a background session.",
+        summary: "Register background writer presence",
+        description: "Register an interactive terminal for a background session without taking exclusive ownership.",
         operationId: "session.background.writer.acquire",
         responses: {
           200: {
-            description: "Writer lease acquisition result",
+            description: "Writer presence registration result",
             content: {
               "application/json": {
                 schema: resolver(
@@ -324,12 +650,12 @@ export const SessionRoutes = lazy(() =>
     .delete(
       "/:sessionID/background/writer",
       describeRoute({
-        summary: "Release background writer lease",
-        description: "Release the interactive writer lease for a background session.",
+        summary: "Release background writer presence",
+        description: "Release this terminal's background writer presence when it is still current.",
         operationId: "session.background.writer.release",
         responses: {
           200: {
-            description: "Updated background session metadata or null when the client did not own the lease",
+            description: "Updated background session metadata or null when this terminal is no longer current",
             content: {
               "application/json": {
                 schema: resolver(BackgroundSession.Info.zod.nullable()),

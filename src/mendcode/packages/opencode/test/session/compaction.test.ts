@@ -1245,6 +1245,138 @@ describe("session.compaction.process", () => {
     })
   })
 
+  test("uses post_prompt as one visible followup and suppresses synthetic compaction_continue", async () => {
+    await using tmp = await tmpdir()
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        await user(session.id, "hello")
+        const rt = runtime("continue", Plugin.defaultLayer, wide())
+        const postPrompt = "Continue implementing the approved plan."
+        try {
+          await SessionCompaction.create({
+            sessionID: session.id,
+            agent: "build",
+            model: ref,
+            auto: true,
+            overflow: true,
+            resume: true,
+          })
+          const createdMessages = await svc.messages({ sessionID: session.id })
+          const parent = createdMessages.at(-1)
+          const compactionPart = parent?.parts.find((part): part is MessageV2.CompactionPart => part.type === "compaction")
+          if (!parent || !compactionPart) throw new Error("missing compaction task")
+          await svc.updatePart({ ...compactionPart, post_prompt: postPrompt })
+          const msgs = await svc.messages({ sessionID: session.id })
+          const result = await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent.info.id,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+                overflow: true,
+                resume: true,
+              }),
+            ),
+          )
+
+          const all = await svc.messages({ sessionID: session.id })
+          const visiblePostPrompts = all.filter(
+            (item) =>
+              item.info.role === "user" &&
+              item.parts.some(
+                (part) => part.type === "text" && part.text === postPrompt && part.synthetic !== true,
+              ),
+          )
+
+          expect(result).toBe("continue")
+          expect(visiblePostPrompts).toHaveLength(1)
+          expect(
+            all.some(
+              (item) =>
+                item.info.role === "user" &&
+                item.parts.some(
+                  (part) => part.type === "text" && part.synthetic && part.metadata?.compaction_continue === true,
+                ),
+            ),
+          ).toBe(false)
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
+  test("does not duplicate post_prompt on compaction rerun", async () => {
+    await using tmp = await tmpdir()
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        await user(session.id, "hello")
+        const rt = runtime("continue", Plugin.defaultLayer, wide())
+        const postPrompt = "Continue implementing the approved plan."
+        try {
+          await SessionCompaction.create({
+            sessionID: session.id,
+            agent: "build",
+            model: ref,
+            auto: true,
+            overflow: true,
+            resume: true,
+          })
+          const createdMessages = await svc.messages({ sessionID: session.id })
+          const parent = createdMessages.at(-1)
+          const compactionPart = parent?.parts.find((part): part is MessageV2.CompactionPart => part.type === "compaction")
+          if (!parent || !compactionPart) throw new Error("missing compaction task")
+          await svc.updatePart({ ...compactionPart, post_prompt: postPrompt })
+          const runCompaction = async () => {
+            const messages = await svc.messages({ sessionID: session.id })
+            return rt.runPromise(
+              SessionCompaction.Service.use((svc) =>
+                svc.process({
+                  parentID: parent.info.id,
+                  messages,
+                  sessionID: session.id,
+                  auto: true,
+                  overflow: true,
+                  resume: true,
+                }),
+              ),
+            )
+          }
+
+          expect(await runCompaction()).toBe("continue")
+          expect(await runCompaction()).toBe("continue")
+
+          const all = await svc.messages({ sessionID: session.id })
+          const visiblePostPrompts = all.filter(
+            (item) =>
+              item.info.role === "user" &&
+              item.parts.some(
+                (part) => part.type === "text" && part.text === postPrompt && part.synthetic !== true,
+              ),
+          )
+
+          expect(visiblePostPrompts).toHaveLength(1)
+          expect(
+            all.some(
+              (item) =>
+                item.info.role === "user" &&
+                item.parts.some(
+                  (part) => part.type === "text" && part.synthetic && part.metadata?.compaction_continue === true,
+                ),
+            ),
+          ).toBe(false)
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
   test("does not resume overflow compaction when the compaction task disables resume", async () => {
     await using tmp = await tmpdir()
     await WithInstance.provide({

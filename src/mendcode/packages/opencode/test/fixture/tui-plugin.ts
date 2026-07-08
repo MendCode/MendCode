@@ -294,6 +294,8 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
         setFooter: opts.ui?.runtime?.setFooter ?? (() => true),
         setFooterEntry: opts.ui?.runtime?.setFooterEntry ?? (() => true),
         setWorkingIndicator: opts.ui?.runtime?.setWorkingIndicator ?? (() => true),
+        registerCompactionArcadeGame: opts.ui?.runtime?.registerCompactionArcadeGame ?? (() => true),
+        clearCompactionArcadeGame: opts.ui?.runtime?.clearCompactionArcadeGame ?? (() => true),
         setEditorVisual: opts.ui?.runtime?.setEditorVisual ?? (() => true),
         setEditor: opts.ui?.runtime?.setEditor ?? (() => true),
       },

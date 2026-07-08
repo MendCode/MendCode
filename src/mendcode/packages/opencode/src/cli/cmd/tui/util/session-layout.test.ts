@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { sessionTopbarLeftLabel } from "./session-layout"
+import { sessionHeaderTitleJustify, sessionTopbarLeftLabel, sessionTopbarLeftWidthWithTitle } from "./session-layout"
 
 describe("session topbar layout", () => {
   test("labels child sessions as subagents", () => {
@@ -32,5 +32,13 @@ describe("session topbar layout", () => {
     })
 
     expect(Bun.stringWidth(label)).toBeLessThanOrEqual(18)
+  })
+
+  test("reserves room for configurable header title", () => {
+    expect(sessionTopbarLeftWidthWithTitle({ contentWidth: 120, metricsWidth: 24, titleVisible: false })).toBe(95)
+    expect(sessionTopbarLeftWidthWithTitle({ contentWidth: 120, metricsWidth: 24, titleVisible: true })).toBe(50)
+    expect(sessionHeaderTitleJustify("left")).toBe("flex-start")
+    expect(sessionHeaderTitleJustify("center")).toBe("center")
+    expect(sessionHeaderTitleJustify("right")).toBe("flex-end")
   })
 })

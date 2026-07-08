@@ -1,10 +1,10 @@
 import { existsSync } from "fs"
 import { mkdir, readFile, readdir, stat, writeFile } from "fs/promises"
 import path from "path"
-import { memoryPaths, readMemoryConfig, type MemoryScope } from "./config"
+import { memoryPaths, readMemoryConfig, type GeneratedMemoryWritePolicy, type MemoryConfig, type MemoryScope } from "./config"
 import { appendMemoryEntry, deleteMemoryEntry, readMemoryEntries, updateMemoryEntry, type MemoryEntry, type MemorySensitivity } from "./store"
 import { inferMemoryCategoryIDs, normalizeMemoryCategoryIDs, scopeReasonForMemory } from "./categories"
-import { legacyScopeForFact, upsertMemoryFact } from "./graph"
+import { legacyScopeForFact, readMemoryFacts, readMemoryGraph, upsertMemoryFact, upsertMemoryFactLink, type MemoryFactLink } from "./graph"
 import { configureDreamScheduleFromText, type DreamScheduleState } from "./dream-scheduler"
 import { resolveModelRoles } from "../config/models"
 import { runProviderAdapter } from "../runtime/provider-adapters"
@@ -12,6 +12,7 @@ import { dreamServiceStart, type DreamServicePlan } from "../runtime/dream-servi
 
 export type MemoryProposalStatus = "pending" | "applied" | "rejected"
 export type MemoryProposalOperation = "add" | "update" | "remove" | "merge" | "split" | "verify" | "expire" | "recategorize" | "relink" | "demote-scope" | "promote-scope"
+export type GeneratedMemoryDisposition = "auto-apply" | "pending" | "skip"
 
 export type MemoryProposal = {
   id: string
@@ -49,6 +50,7 @@ export type ProposeMemoryInput = {
   scope?: MemoryScope
   targetEntryID?: string | null
   targetEntryScope?: MemoryScope | null
+  targetEntryIDs?: string[]
   tags?: string[]
   categoryIDs?: string[]
   cwd?: string | null
@@ -60,6 +62,7 @@ export type ProposeMemoryInput = {
   changeRisk?: number
   reason?: string | null
   evidenceRefs?: string[]
+  policyDecision?: MemoryProposal["policyDecision"]
 }
 
 export type ProposeMemoriesFromTextInput = Omit<ProposeMemoryInput, "text"> & {
@@ -87,7 +90,7 @@ export type AutoMemoryResult = {
   reason: string | null
   proposals: MemoryProposal[]
   callsProviders: boolean
-  writesMemory: false
+  writesMemory: boolean
 }
 
 export type ApplyMemoryProposalInput = {
@@ -110,7 +113,7 @@ export const MEMORY_EXTRACTION_POLICY = [
   "Reject anything about what just happened, what is currently happening, what was just checked, what should be done next, or what was already answered.",
   "Reject temporary state, one-off task details, status updates, todo-like recommendations, transient debugging context, raw logs, secrets, and anything already present in saved memory.",
   "A proposal must be self-contained, specific, and useful without the surrounding chat. If it would not help a future session, return nothing.",
-  "Generated proposals are review-only; never apply them automatically.",
+  "Generated proposals are policy-gated: the app may leave them pending, auto-apply obviously safe adds, skip them, or follow your recommendedDisposition when configured to model-decides.",
 ].join("\n")
 
 function nowID(prefix = "memprop") {
@@ -157,16 +160,41 @@ async function readJson<T>(file: string): Promise<T> {
   return JSON.parse(await readFile(file, "utf8")) as T
 }
 
-function normalizeMemoryProposal(input: MemoryProposal): MemoryProposal {
-  const categories = normalizeMemoryCategoryIDs((input as Partial<MemoryProposal>).categoryIDs?.length ? input.categoryIDs : inferMemoryCategoryIDs({ text: input.text, tags: input.tags, source: input.source }))
+function normalizeMemoryProposal(input: Partial<MemoryProposal> & Pick<MemoryProposal, "id">): MemoryProposal {
+  const text = typeof input.text === "string" && input.text.trim() ? input.text.trim() : ""
+  const tags = normalizeStringList(input.tags)
+  const source = typeof input.source === "string" && input.source.trim() ? input.source : "manual-proposal"
+  const categoryIDs = normalizeMemoryCategoryIDs(input.categoryIDs?.length ? input.categoryIDs : inferMemoryCategoryIDs({ text, tags, source }))
+  const createdAt = typeof input.createdAt === "string" && input.createdAt.trim() ? input.createdAt : typeof input.updatedAt === "string" && input.updatedAt.trim() ? input.updatedAt : new Date(0).toISOString()
+  const updatedAt = typeof input.updatedAt === "string" && input.updatedAt.trim() ? input.updatedAt : createdAt
   return {
-    ...input,
+    id: input.id,
+    version: 0,
+    status: input.status === "applied" || input.status === "rejected" ? input.status : "pending",
     operation: input.operation ?? "add",
-    categoryIDs: categories,
-    scopeReason: input.scopeReason || scopeReasonForMemory({ requestedScope: input.scope, text: input.text, tags: input.tags }).reason,
+    scope: input.scope === "global" ? "global" : "project",
+    text,
+    tags,
+    categoryIDs,
+    scopeReason: input.scopeReason || scopeReasonForMemory({ requestedScope: input.scope === "global" ? "global" : "project", text, tags }).reason,
+    cwd: typeof input.cwd === "string" && input.cwd.trim() ? input.cwd : null,
+    files: normalizeStringList(input.files),
+    source,
+    evidence: typeof input.evidence === "string" && input.evidence.trim() ? input.evidence.trim() : null,
+    confidence: typeof input.confidence === "number" && Number.isFinite(input.confidence) ? Math.max(0, Math.min(1, input.confidence)) : 0.7,
+    durability: typeof input.durability === "number" && Number.isFinite(input.durability) ? Math.max(0, Math.min(1, input.durability)) : 0.7,
+    changeRisk: typeof input.changeRisk === "number" && Number.isFinite(input.changeRisk) ? Math.max(0, Math.min(1, input.changeRisk)) : 0.3,
+    reason: typeof input.reason === "string" && input.reason.trim() ? input.reason.trim() : null,
     evidenceRefs: normalizeStringList(input.evidenceRefs),
     policyDecision: input.policyDecision === "auto-applied" || input.policyDecision === "manual-only" || input.policyDecision === "disabled" ? input.policyDecision : "pending",
-    targetEntryIDs: normalizeStringList(input.targetEntryIDs).length ? normalizeStringList(input.targetEntryIDs) : input.targetEntryID ? [input.targetEntryID] : [],
+    sensitivity: input.sensitivity === "high" || input.sensitivity === "medium" || input.sensitivity === "low" ? input.sensitivity : sensitivityFor(normalizeStringList(input.redactions), text),
+    redactions: normalizeStringList(input.redactions),
+    createdAt,
+    updatedAt,
+    targetEntryID: typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? input.targetEntryID.trim() : null,
+    targetEntryScope: input.targetEntryScope === "global" || input.targetEntryScope === "project" ? input.targetEntryScope : null,
+    targetEntryIDs: normalizeStringList(input.targetEntryIDs).length ? normalizeStringList(input.targetEntryIDs) : typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? [input.targetEntryID.trim()] : [],
+    appliedEntryID: typeof input.appliedEntryID === "string" && input.appliedEntryID.trim() ? input.appliedEntryID.trim() : null,
   }
 }
 
@@ -201,14 +229,14 @@ export async function proposeMemory(input: ProposeMemoryInput, root?: string) {
     changeRisk: typeof input.changeRisk === "number" && Number.isFinite(input.changeRisk) ? Math.max(0, Math.min(1, input.changeRisk)) : 0.3,
     reason: typeof input.reason === "string" && input.reason.trim() ? input.reason.trim() : null,
     evidenceRefs: normalizeStringList(input.evidenceRefs),
-    policyDecision: "pending",
+    policyDecision: generatedPolicyDecision(input.policyDecision),
     sensitivity: sensitivityFor(redacted.redactions, input.text),
     redactions: redacted.redactions,
     createdAt: now,
     updatedAt: now,
     targetEntryID: typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? input.targetEntryID.trim() : null,
     targetEntryScope: input.targetEntryScope === "global" || input.targetEntryScope === "project" ? input.targetEntryScope : null,
-    targetEntryIDs: typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? [input.targetEntryID.trim()] : [],
+    targetEntryIDs: normalizeStringList(input.targetEntryIDs).length ? normalizeStringList(input.targetEntryIDs) : typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? [input.targetEntryID.trim()] : [],
     appliedEntryID: null,
   }
   return writeProposal(proposal, paths.root)
@@ -273,7 +301,7 @@ export function extractorPrompt() {
     MEMORY_EXTRACTION_POLICY,
     "",
     "Return strict JSON only:",
-    '{"proposals":[{"shouldRemember":true,"operation":"add|update|remove|verify|expire|recategorize|demote-scope","scope":"project|global","categoryIDs":["project.commands"],"targetEntryID":"existing-memory-id-or-null","targetEntryScope":"project|global|null","text":"durable memory text or removal reason","tags":["short-tag"],"durability":0.0,"confidence":0.0,"changeRisk":0.0,"reason":"why this is worth changing"}]}',
+    '{"proposals":[{"shouldRemember":true,"operation":"add|update|remove|verify|expire|recategorize|demote-scope","scope":"project|global","categoryIDs":["project.commands"],"targetEntryID":"existing-memory-id-or-null","targetEntryScope":"project|global|null","text":"durable memory text or removal reason","tags":["short-tag"],"durability":0.0,"confidence":0.0,"changeRisk":0.0,"recommendedDisposition":"auto-apply|pending|skip","reason":"why this is worth changing"}]}',
     "",
     "Rules:",
     "- Return an empty proposals array unless the input contains genuinely durable future-use information that should be remembered indefinitely.",
@@ -290,6 +318,9 @@ export function extractorPrompt() {
     "- Never use operation=update or operation=remove without a concrete targetEntryID from saved_memory.",
     "- Prefer a single consolidated proposal. Return two only when there are two clearly separate durable memories. Never return more than two.",
     "- Do not split related details into multiple memories; merge them into one precise memory.",
+    "- Set recommendedDisposition=auto-apply only for obvious low-risk add memories that are durable, low-sensitivity, non-secret, highly confident, and not a rewrite/removal of existing memory.",
+    "- Set recommendedDisposition=pending for updates, removals, security-sensitive memories, broad behavior changes, or anything useful but not completely obvious.",
+    "- Set recommendedDisposition=skip when the candidate should not be saved after all.",
     "- Do not propose uncertain, provisional, likely-to-change, disputed, weakly inferred, or recently discovered facts unless the user clearly frames them as a future preference, rule, or decision.",
     "- Scope must be conservative. Use project by default.",
     "- Use project for repo/app/product-specific facts, architecture, setup, env/deploy behavior, local paths, commands, files, docs, framework choices, or limitations.",
@@ -316,6 +347,7 @@ type ExtractedMemoryProposal = {
   durability: number
   confidence: number
   changeRisk: number
+  recommendedDisposition: GeneratedMemoryDisposition
   reason: string | null
 }
 
@@ -344,6 +376,7 @@ function parseExtractorJSON(text: string, maxProposals = 2): ExtractedMemoryProp
       durability: typeof item.durability === "number" && Number.isFinite(item.durability) ? Math.max(0, Math.min(1, item.durability)) : 0,
       confidence: typeof item.confidence === "number" && Number.isFinite(item.confidence) ? Math.max(0, Math.min(1, item.confidence)) : 0,
       changeRisk: typeof item.changeRisk === "number" && Number.isFinite(item.changeRisk) ? Math.max(0, Math.min(1, item.changeRisk)) : 1,
+      recommendedDisposition: item.recommendedDisposition === "auto-apply" || item.recommendedDisposition === "skip" ? item.recommendedDisposition : "pending",
       reason: typeof item.reason === "string" && item.reason.trim() ? item.reason.trim().slice(0, 240) : null,
     }))
     .filter((item: ExtractedMemoryProposal) =>
@@ -387,8 +420,81 @@ function fallbackExtractorProposal(input: ProposeMemoriesFromTextInput, existing
     durability: 0.9,
     confidence: 0.8,
     changeRisk: 0.15,
+    recommendedDisposition: "pending",
     reason: "Explicit repo-scoped future workflow rule.",
   }]
+}
+
+function generatedPolicyDecision(value: unknown): MemoryProposal["policyDecision"] {
+  return value === "auto-applied" || value === "manual-only" || value === "disabled" ? value : "pending"
+}
+
+function graphLinkKindFromProposal(proposal: MemoryProposal): MemoryFactLink["kind"] {
+  const tag = proposal.tags.find((item) => item.startsWith("graph-kind:"))?.slice("graph-kind:".length)
+  return tag === "conflicts" || tag === "supersedes" || tag === "supports" ? tag : "related"
+}
+
+function graphLinkKeys(input: Pick<MemoryFactLink, "from" | "to" | "kind">) {
+  const key = `${input.from}\u0000${input.to}\u0000${input.kind}`
+  if (input.kind !== "related" && input.kind !== "conflicts") return [key]
+  return [key, `${input.to}\u0000${input.from}\u0000${input.kind}`]
+}
+
+function generatedMemoryAutoApplySafety(input: {
+  proposal: MemoryProposal
+  minConfidence: number
+  minDurability: number
+  maxChangeRisk: number
+  allowedCategories: string[]
+  blockedSensitivity: Array<"medium" | "high">
+}) {
+  if (input.proposal.operation !== "add") return { ok: false, reason: "only add proposals can auto-apply" }
+  if (input.proposal.targetEntryID || input.proposal.targetEntryIDs.length) return { ok: false, reason: "targeted memory changes require review" }
+  if (input.proposal.redactions.length) return { ok: false, reason: "redacted memory requires review" }
+  if (input.proposal.sensitivity !== "low" && input.blockedSensitivity.includes(input.proposal.sensitivity)) return { ok: false, reason: `${input.proposal.sensitivity} sensitivity requires review` }
+  if (input.proposal.confidence < input.minConfidence) return { ok: false, reason: "confidence below auto-apply threshold" }
+  if (input.proposal.durability < input.minDurability) return { ok: false, reason: "durability below auto-apply threshold" }
+  if (input.proposal.changeRisk > input.maxChangeRisk) return { ok: false, reason: "change risk above auto-apply threshold" }
+  if (input.allowedCategories.length && !input.proposal.categoryIDs.some((categoryID) => input.allowedCategories.includes(categoryID))) return { ok: false, reason: "category is not auto-apply allowed" }
+  return { ok: true, reason: "safe to auto-apply" }
+}
+
+async function markProposalPolicyDecision(proposal: MemoryProposal, policyDecision: MemoryProposal["policyDecision"], root?: string) {
+  const next = { ...proposal, policyDecision, updatedAt: new Date().toISOString() }
+  await writeProposal(next, root)
+  return next
+}
+
+export async function settleGeneratedMemoryProposal(input: {
+  proposal: MemoryProposal
+  policy: GeneratedMemoryWritePolicy
+  recommendedDisposition?: GeneratedMemoryDisposition
+  minConfidence: number
+  minDurability: number
+  maxChangeRisk: number
+  allowedCategories: string[]
+  blockedSensitivity: Array<"medium" | "high">
+}, root?: string) {
+  if (input.policy === "disabled") return { proposal: await markProposalPolicyDecision(input.proposal, "disabled", root), entry: null, autoApplied: false, reason: "memory write policy disabled" }
+  if (input.policy === "model-decides" && input.recommendedDisposition === "skip") return { proposal: await markProposalPolicyDecision(input.proposal, "disabled", root), entry: null, autoApplied: false, reason: "model recommended skipping" }
+  const wantsAutoApply = input.policy === "auto-safe" || (input.policy === "model-decides" && input.recommendedDisposition === "auto-apply")
+  if (!wantsAutoApply) return { proposal: await markProposalPolicyDecision(input.proposal, "pending", root), entry: null, autoApplied: false, reason: "pending by write policy" }
+  const safety = generatedMemoryAutoApplySafety(input)
+  if (!safety.ok) return { proposal: await markProposalPolicyDecision(input.proposal, "manual-only", root), entry: null, autoApplied: false, reason: safety.reason }
+  const marked = await markProposalPolicyDecision(input.proposal, "auto-applied", root)
+  const applied = await applyMemoryProposal(marked.id, root)
+  return { proposal: applied.proposal, entry: applied.entry, autoApplied: true, reason: safety.reason }
+}
+
+function memoryPolicyInput(config: MemoryConfig) {
+  return {
+    policy: config.memoryWritePolicy,
+    minConfidence: config.memoryAutoApplyMinConfidence,
+    minDurability: config.memoryAutoApplyMinDurability,
+    maxChangeRisk: config.memoryAutoApplyMaxChangeRisk,
+    allowedCategories: config.memoryAutoApplyAllowedCategories,
+    blockedSensitivity: config.memoryAutoApplyBlockedSensitivity,
+  }
 }
 
 export async function resolveMemoryExtractorRole(root?: string): Promise<MemoryExtractorRoleResult> {
@@ -399,7 +505,7 @@ export async function resolveMemoryExtractorRole(root?: string): Promise<MemoryE
   }
 
   const resolved = await resolveModelRoles(paths.root)
-  const role = (resolved.roles as Record<string, any>)[config.extractorRole]
+  const role = resolved.roles[config.extractorRole]
   if (!resolved.enabled || !role?.configured || !role.providerID || !role.modelID) {
     return { ok: false, reason: `memory extractor role not configured: ${config.extractorRole}` }
   }
@@ -462,6 +568,8 @@ export async function proposeMemoriesFromExtractorText(
   existingFingerprints?: string[],
 ) {
   const paths = memoryPaths(root)
+  const config = await readMemoryConfig(paths.root)
+  if (config.memoryWritePolicy === "disabled") return { proposals: [], candidates: 0, callsProviders: true as const, readsSecrets: false as const, writesMemory: false as const, skipped: true, reason: "memory write policy disabled" }
   const fingerprints = new Set(existingFingerprints ?? (await readMemoryExtractorContext(paths.root)).existingFingerprints)
   const extracted: ExtractedMemoryProposal[] = []
   const parsed = parseExtractorJSON(outputText || "", input.maxProposals ?? 2)
@@ -476,8 +584,14 @@ export async function proposeMemoriesFromExtractorText(
     fingerprints.add(memoryFingerprint(item.text))
   }
   const proposals: MemoryProposal[] = []
+  let autoApplied = 0
+  let skippedByPolicy = 0
   for (const item of extracted) {
-    proposals.push(await proposeMemory({
+    if (config.memoryWritePolicy === "model-decides" && item.recommendedDisposition === "skip") {
+      skippedByPolicy++
+      continue
+    }
+    const proposal = await proposeMemory({
       operation: item.operation,
       scope: item.scope,
       targetEntryID: item.targetEntryID,
@@ -493,18 +607,31 @@ export async function proposeMemoriesFromExtractorText(
       durability: item.durability,
       changeRisk: item.changeRisk,
       reason: item.reason,
-    }, paths.root))
+    }, paths.root)
+    const settled = await settleGeneratedMemoryProposal({
+      proposal,
+      recommendedDisposition: item.recommendedDisposition,
+      ...memoryPolicyInput(config),
+    }, paths.root)
+    if (settled.autoApplied) autoApplied++
+    proposals.push(settled.proposal)
   }
   const reason = proposals.length
     ? null
     : duplicateCandidates > 0
       ? "memory candidates already match saved memory or earlier proposals"
-      : "no durable memory candidates"
-  return { proposals, candidates: extracted.length, callsProviders: true as const, readsSecrets: false as const, writesMemory: false as const, skipped: false, reason }
+      : skippedByPolicy > 0
+        ? "memory write policy skipped candidates"
+        : "no durable memory candidates"
+  return { proposals, candidates: extracted.length, callsProviders: true as const, readsSecrets: false as const, writesMemory: autoApplied > 0, skipped: false, reason }
 }
 
 export async function proposeMemoriesWithExtractor(input: ProposeMemoriesFromTextInput, root?: string) {
   const paths = memoryPaths(root)
+  const config = await readMemoryConfig(paths.root)
+  if (config.memoryWritePolicy === "disabled") {
+    return { proposals: [], candidates: 0, callsProviders: false as const, readsSecrets: false as const, writesMemory: false as const, skipped: true, reason: "memory write policy disabled" }
+  }
   const role = await resolveMemoryExtractorRole(paths.root)
   if (!role.ok) {
     return { proposals: [], candidates: 0, callsProviders: false as const, readsSecrets: false as const, writesMemory: false as const, skipped: true, reason: role.reason }
@@ -573,7 +700,7 @@ export async function autoProposeMemoriesFromSession(session: any, root?: string
     evidence,
     maxProposals: 2,
   }, paths.root)
-  return { enabled: config.enabled, output: config.generate, skipped: result.skipped ?? false, reason: result.reason ?? null, proposals: result.proposals, callsProviders: result.callsProviders, writesMemory: false }
+  return { enabled: config.enabled, output: config.generate, skipped: result.skipped ?? false, reason: result.reason ?? null, proposals: result.proposals, callsProviders: result.callsProviders, writesMemory: result.writesMemory }
 }
 
 async function walkMemoryFiles(dir: string, limit = 120): Promise<string[]> {
@@ -658,16 +785,22 @@ export async function readMemoryProposal(id: string, root?: string) {
 export async function updateMemoryProposal(id: string, patch: Partial<Pick<MemoryProposal, "scope" | "text" | "tags" | "categoryIDs" | "confidence" | "durability" | "changeRisk" | "reason">>, root?: string) {
   const proposal = await readMemoryProposal(id, root)
   if (proposal.status !== "pending") throw new Error(`Memory proposal ${id} is ${proposal.status}`)
+  const scope = patch.scope === "global" ? "global" : patch.scope === "project" ? "project" : proposal.scope
+  const tags = patch.tags ? normalizeStringList(patch.tags) : proposal.tags
+  const redacted = redactMemoryText(typeof patch.text === "string" && patch.text.trim() ? patch.text.trim() : proposal.text)
   const next: MemoryProposal = {
     ...proposal,
-    scope: patch.scope === "global" ? "global" : patch.scope === "project" ? "project" : proposal.scope,
-    text: typeof patch.text === "string" && patch.text.trim() ? patch.text.trim() : proposal.text,
-    tags: patch.tags ? normalizeStringList(patch.tags) : proposal.tags,
+    scope,
+    text: redacted.text,
+    tags,
     categoryIDs: patch.categoryIDs ? normalizeMemoryCategoryIDs(patch.categoryIDs) : proposal.categoryIDs,
+    scopeReason: scopeReasonForMemory({ requestedScope: scope, text: redacted.text, tags }).reason,
     confidence: typeof patch.confidence === "number" && Number.isFinite(patch.confidence) ? Math.max(0, Math.min(1, patch.confidence)) : proposal.confidence,
     durability: typeof patch.durability === "number" && Number.isFinite(patch.durability) ? Math.max(0, Math.min(1, patch.durability)) : proposal.durability,
     changeRisk: typeof patch.changeRisk === "number" && Number.isFinite(patch.changeRisk) ? Math.max(0, Math.min(1, patch.changeRisk)) : proposal.changeRisk,
     reason: typeof patch.reason === "string" && patch.reason.trim() ? patch.reason.trim() : proposal.reason,
+    sensitivity: sensitivityFor(redacted.redactions, redacted.text),
+    redactions: redacted.redactions,
     updatedAt: new Date().toISOString(),
   }
   await writeProposal(next, root)
@@ -683,7 +816,10 @@ export async function applyMemoryProposal(id: string, root?: string, input: Appl
   let dreamService: DreamServicePlan | null = null
   const dreamScheduleProposal = proposal.tags.includes("dream-dry-run")
   const dreamServiceProposal = proposal.tags.includes("dream-service-start")
+  const graphUpsertProposal = proposal.tags.includes("graph-upsert")
+  const graphLinkProposal = proposal.tags.includes("graph-link")
   if (dreamScheduleProposal && dreamServiceProposal) throw new Error(`Dream proposal ${id} must split schedule and service activation into separate approvals`)
+  if (graphUpsertProposal && graphLinkProposal) throw new Error(`Graph proposal ${id} must split fact and link changes into separate approvals`)
   const dreamControl = dreamScheduleProposal || dreamServiceProposal
   if (dreamScheduleProposal) {
     dreamSchedule = await configureDreamScheduleFromText(root, proposal.text)
@@ -693,6 +829,35 @@ export async function applyMemoryProposal(id: string, root?: string, input: Appl
     dreamService = await (input.startDreamService ?? dreamServiceStart)()
   }
   if (dreamControl) {
+    const next: MemoryProposal = { ...proposal, operation, status: "applied", updatedAt: new Date().toISOString(), appliedEntryID: null }
+    await writeProposal(next, root)
+    return { proposal: next, entry, dreamSchedule, dreamService }
+  }
+  if (graphUpsertProposal) {
+    const fact = await upsertMemoryFact({
+      scope: proposal.scope,
+      text: proposal.text,
+      categoryIDs: proposal.categoryIDs,
+      provenance: [proposal.evidence, ...proposal.evidenceRefs].filter((item): item is string => Boolean(item)),
+      confidence: proposal.confidence,
+      durability: proposal.durability,
+      changeRisk: proposal.changeRisk,
+      sensitivity: proposal.sensitivity,
+    }, root)
+    const next: MemoryProposal = { ...proposal, operation, status: "applied", updatedAt: new Date().toISOString(), appliedEntryID: fact.id }
+    await writeProposal(next, root)
+    return { proposal: next, entry, dreamSchedule, dreamService }
+  }
+  if (graphLinkProposal) {
+    const [from, to] = proposal.targetEntryIDs
+    if (!from || !to) throw new Error(`Graph link proposal ${id} requires two fact ids`)
+    const factIDs = new Set((await readMemoryFacts(root)).map((fact) => fact.id))
+    if (!factIDs.has(from) || !factIDs.has(to)) throw new Error(`Graph link proposal ${id} references missing fact ids`)
+    const kind = graphLinkKindFromProposal(proposal)
+    const keys = new Set(graphLinkKeys({ from, to, kind }))
+    const graph = await readMemoryGraph(root)
+    const existing = graph.links.find((link) => graphLinkKeys(link).some((key) => keys.has(key)))
+    await (existing ? Promise.resolve(existing) : upsertMemoryFactLink({ from, to, kind }, root))
     const next: MemoryProposal = { ...proposal, operation, status: "applied", updatedAt: new Date().toISOString(), appliedEntryID: null }
     await writeProposal(next, root)
     return { proposal: next, entry, dreamSchedule, dreamService }

@@ -94,6 +94,25 @@ export function sessionTopbarLeftWidth(input: { contentWidth: number; metricsWid
   return Math.max(0, input.contentWidth - input.metricsWidth - 1)
 }
 
+export type SessionHeaderTitleAlign = "left" | "center" | "right"
+
+export function sessionTopbarLeftWidthWithTitle(input: { contentWidth: number; metricsWidth: number; titleVisible?: boolean }) {
+  const base = sessionTopbarLeftWidth(input)
+  if (!input.titleVisible) return base
+  return Math.max(12, Math.min(base, Math.floor(input.contentWidth * 0.42)))
+}
+
+export function sessionHeaderTitleAlign(value: unknown): SessionHeaderTitleAlign {
+  if (value === "left" || value === "center" || value === "right") return value
+  return "right"
+}
+
+export function sessionHeaderTitleJustify(align: SessionHeaderTitleAlign) {
+  if (align === "left") return "flex-start"
+  if (align === "center") return "center"
+  return "flex-end"
+}
+
 export function truncateMiddleDisplay(value: string, maxWidth: number) {
   if (maxWidth <= 0) return ""
   if (Bun.stringWidth(value) <= maxWidth) return value

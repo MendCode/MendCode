@@ -317,6 +317,50 @@ describe("session.message-v2.fromError", () => {
     expect(SessionRetry.retryable(result)).toBe("Network connection timed out")
   })
 
+  test("converts undici header and body timeouts to retryable APIError", () => {
+    for (const code of ["UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"]) {
+      const result = MessageV2.fromError(Object.assign(new Error(`${code}: stream timeout`), { code }), {
+        providerID,
+      })
+
+      expect(MessageV2.APIError.isInstance(result)).toBe(true)
+      if (!MessageV2.APIError.isInstance(result)) throw new Error("expected APIError")
+      expect(result.data.isRetryable).toBe(true)
+      expect(result.data.message).toBe("Network connection timed out")
+      expect(SessionRetry.retryable(result)).toBe("Network connection timed out")
+    }
+  })
+
+  test("converts unreachable network and socket hang up errors to retryable APIError", () => {
+    const cases = [
+      {
+        input: Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" }),
+        message: "Network unavailable",
+      },
+      { input: new Error("socket hang up"), message: "Network connection lost" },
+    ]
+
+    for (const item of cases) {
+      const result = MessageV2.fromError(item.input, { providerID })
+
+      expect(MessageV2.APIError.isInstance(result)).toBe(true)
+      if (!MessageV2.APIError.isInstance(result)) throw new Error("expected APIError")
+      expect(result.data.isRetryable).toBe(true)
+      expect(result.data.message).toBe(item.message)
+      expect(SessionRetry.retryable(result)).toBe(item.message)
+    }
+  })
+
+  test("classifies undici request-aborted errors as MessageAbortedError when explicitly aborted", () => {
+    const result = MessageV2.fromError(
+      Object.assign(new Error("Request aborted"), { code: "UND_ERR_REQUEST_ABORTED" }),
+      { providerID, aborted: true },
+    )
+
+    expect(result.name).toBe("MessageAbortedError")
+    expect(SessionRetry.retryable(result)).toBeUndefined()
+  })
+
   test("converts silent stream timeouts to retryable APIError", () => {
     const result = MessageV2.fromError(new Error("SSE read timed out"), { providerID })
 

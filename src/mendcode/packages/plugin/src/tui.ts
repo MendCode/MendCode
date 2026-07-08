@@ -291,7 +291,9 @@ export type TuiWidgetOptions = {
 export type TuiOverlayAnchor = "top-center" | "center" | "bottom-center" | "top-left" | "top-right" | "bottom-left" | "bottom-right"
 export type TuiOverlaySize = number | `${number}%` | "auto"
 export type TuiOverlayRenderContext = {
+  /** Close the overlay that owns this render context. */
   close: () => boolean
+  /** Request a TUI render when plugin-local overlay state changes outside Solid signals. */
   requestRender: () => void
 }
 export type TuiOverlayOptions = {
@@ -314,8 +316,34 @@ export type TuiOverlayOptions = {
   requestRender?: () => void
 }
 export type TuiOverlayApi = {
+  /** Open or replace a plugin-owned floating overlay. Runtime plugins clean open overlays on dispose. */
   open: (id: string, render: (context: TuiOverlayRenderContext) => JSX.Element | string | number | null, options?: TuiOverlayOptions) => boolean
+  /** Close a plugin-owned floating overlay by ID. */
   close: (id: string) => boolean
+}
+
+export type TuiCompactionArcadeRender = {
+  title?: string
+  status?: string
+  lines?: string[]
+  cells?: TuiCompactionArcadeCell[][]
+}
+
+export type TuiCompactionArcadeCellTone = "primary" | "muted" | "text" | "wall" | "empty" | "head" | "body" | "food" | "danger" | "accent"
+
+export type TuiCompactionArcadeCell = {
+  text: string
+  tone?: TuiCompactionArcadeCellTone
+}
+
+export type TuiCompactionArcadeGame<State = unknown> = {
+  id: string
+  label: string
+  intervalMs?: number
+  initialState: () => State
+  tick?: (state: State) => State
+  key?: (state: State, key: string) => State | undefined
+  render: (state: State) => TuiCompactionArcadeRender
 }
 
 export type TuiRuntimeApi = {
@@ -332,6 +360,8 @@ export type TuiRuntimeApi = {
   setFooter: (renderer?: (() => JSX.Element | null) | undefined) => boolean
   setFooterEntry: (id: string, render?: (() => JSX.Element | null) | undefined, input?: { order?: number }) => boolean
   setWorkingIndicator: (input?: { frames?: string[]; intervalMs?: number; visible?: boolean }) => boolean
+  registerCompactionArcadeGame: (game: TuiCompactionArcadeGame) => boolean
+  clearCompactionArcadeGame: (id: string) => boolean
   setEditorVisual: (input?: {
     showPlaceholder?: boolean
     normalPrefix?: string

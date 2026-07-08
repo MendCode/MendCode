@@ -8,7 +8,7 @@ export type MendReasoningVisibility = "visible" | "collapsed" | "hidden"
 export type MendActivityPlacement = "current" | "left-docked" | "footer"
 export type MendActivityStyle = "raw" | "minimal" | "signal"
 export type MendCompactionStyle = "minimal" | "cockpit" | "arcade" | "quiet"
-export type MendCompactionArcade = "off" | "snake" | "stars"
+export type MendCompactionArcade = "off" | "stars" | "snake" | "blocks" | (string & {})
 export type MendActivityPhase =
   | "sending"
   | "thinking"
@@ -25,6 +25,7 @@ export type MendActivityPhase =
   | "subagents"
   | "planning"
   | "memory"
+  | "compacting"
   | "retrying"
   | "blocked"
   | "done"
@@ -35,6 +36,10 @@ export type MendPresentationConfig = {
   profile: MendPresentationProfile
   message: {
     renderer: MendMessageRenderer
+  }
+  input: {
+    pasteSummary: boolean
+    pasteSummaryMinChars: number
   }
   reasoning: {
     defaultVisibility: MendReasoningVisibility
@@ -62,6 +67,13 @@ export type MendPresentationConfig = {
   }
 }
 
+const DEFAULT_PASTE_SUMMARY_MIN_CHARS = 3000
+
+const inputConfig: MendPresentationConfig["input"] = {
+  pasteSummary: true,
+  pasteSummaryMinChars: DEFAULT_PASTE_SUMMARY_MIN_CHARS,
+}
+
 const activityMessages: MendActivityMessages = {
   sending: ["Generating..."],
   thinking: ["Thinking..."],
@@ -78,6 +90,7 @@ const activityMessages: MendActivityMessages = {
   subagents: ["Waiting for subagents..."],
   planning: ["Planning..."],
   memory: ["Preparing memory..."],
+  compacting: ["Compacting..."],
   retrying: ["Retrying..."],
   blocked: ["Waiting..."],
   done: ["Done"],
@@ -99,13 +112,13 @@ const neutralActivityConfig: MendPresentationConfig["activity"] = {
 const cockpitCompactionConfig: MendPresentationConfig["compaction"] = {
   style: "cockpit",
   showProgress: true,
-  allowScratchpad: false,
-  arcade: "off",
+  allowScratchpad: true,
+  arcade: "snake",
 }
 
 const minimalCompactionConfig: MendPresentationConfig["compaction"] = {
   style: "minimal",
-  showProgress: true,
+  showProgress: false,
   allowScratchpad: false,
   arcade: "off",
 }
@@ -122,11 +135,12 @@ export const defaultPresentationConfig: MendPresentationConfig = {
   message: {
     renderer: "rich",
   },
+  input: inputConfig,
   reasoning: {
     defaultVisibility: "collapsed",
   },
   activity: neutralActivityConfig,
-  compaction: cockpitCompactionConfig,
+  compaction: minimalCompactionConfig,
   symbols: {
     assistantDone: "◈",
   },
@@ -137,6 +151,7 @@ const rawPresentationConfig: MendPresentationConfig = {
   message: {
     renderer: "plain",
   },
+  input: inputConfig,
   reasoning: {
     defaultVisibility: "visible",
   },
@@ -152,6 +167,7 @@ const minimalPresentationConfig: MendPresentationConfig = {
   message: {
     renderer: "markdown",
   },
+  input: inputConfig,
   reasoning: {
     defaultVisibility: "collapsed",
   },
@@ -216,7 +232,8 @@ function asCompactionStyle(value: unknown, fallback: MendCompactionStyle): MendC
 }
 
 function asCompactionArcade(value: unknown, fallback: MendCompactionArcade): MendCompactionArcade {
-  if (value === "off" || value === "snake" || value === "stars") return value
+  if (value === "off" || value === "stars" || value === "snake" || value === "blocks") return value
+  if (typeof value === "string" && value.trim().length > 0) return value.trim()
   return fallback
 }
 
@@ -252,6 +269,7 @@ export function resolveTuiPresentation(input: unknown): MendPresentationConfig {
   const profile = asProfile(raw.profile)
   const defaults = profileDefaults[profile]
   const message = isRecord(raw.message) ? raw.message : {}
+  const inputConfig = isRecord(raw.input) ? raw.input : {}
   const activity = isRecord(raw.activity) ? raw.activity : {}
   const compaction = isRecord(raw.compaction) ? raw.compaction : {}
   const reasoning = isRecord(raw.reasoning) ? raw.reasoning : {}
@@ -261,6 +279,10 @@ export function resolveTuiPresentation(input: unknown): MendPresentationConfig {
     profile,
     message: {
       renderer: asMessageRenderer(message.renderer ?? raw.messageRenderer, defaults.message.renderer),
+    },
+    input: {
+      pasteSummary: typeof inputConfig.pasteSummary === "boolean" ? inputConfig.pasteSummary : defaults.input.pasteSummary,
+      pasteSummaryMinChars: Math.max(1, Number(inputConfig.pasteSummaryMinChars) || defaults.input.pasteSummaryMinChars),
     },
     reasoning: {
       defaultVisibility: asReasoningVisibility(reasoning.defaultVisibility, defaults.reasoning.defaultVisibility),
@@ -343,24 +365,62 @@ export function compactPreviewLine(text: string | undefined, max = 88) {
   return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…` : normalized
 }
 
+function cleanPreviewLine(line: string) {
+  return line.replace(/^[-*#>\s]+/, "").trim()
+}
+
+function isOnlyCompactionHeading(line: string) {
+  const clean = cleanPreviewLine(line).replace(/[:.]+$/, "").trim().toLowerCase()
+  return [
+    "goal",
+    "summary",
+    "current user intent",
+    "resume anchor",
+    "active work",
+    "optional follow-ups",
+    "next steps",
+  ].includes(clean)
+}
+
+export function compactionSummaryPreview(text: string | undefined, max = 88) {
+  if (!text) return
+  const normalized = text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !isOnlyCompactionHeading(line))
+    .map(cleanPreviewLine)
+    .find(Boolean)
+  if (!normalized) return
+  return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…` : normalized
+}
+
 export function compactionStageStates(input: {
   hasSummary?: boolean
   resume?: boolean
   include?: string
   tailStartID?: string
+  postPrompt?: string
 }) {
   const hasTail = Boolean(input.include || input.tailStartID)
+  const shouldContinue = Boolean(input.resume || input.postPrompt)
   return [
-    { label: "Capture", state: "done" as const },
-    { label: "Anchor", state: input.hasSummary ? ("done" as const) : ("active" as const) },
+    { label: "Capture transcript", state: "done" as const },
+    { label: "Write memory", state: input.hasSummary ? ("done" as const) : ("active" as const) },
     {
-      label: input.resume ? "Resume" : "Tail",
-      state: input.hasSummary ? (hasTail || input.resume ? ("done" as const) : ("pending" as const)) : ("pending" as const),
+      label: "Preserve tail",
+      state: input.hasSummary ? (hasTail ? ("done" as const) : ("pending" as const)) : ("pending" as const),
+    },
+    {
+      label: "Continue",
+      state: input.hasSummary ? (shouldContinue ? ("done" as const) : ("pending" as const)) : ("pending" as const),
     },
   ]
 }
 
 export function compactionArcadeFrames(mode: MendCompactionArcade) {
-  if (mode !== "stars") return []
-  return ["✦ · ˚ ✦ · ˚ ✦", "  ˚ ✦ ·  ✧ · ✦", "✧ · ✦ · ˚ · ✧"]
+  if (mode === "stars") return ["✦ · ˚ ✦ · ˚ ✦", "  ˚ ✦ ·  ✧ · ✦", "✧ · ✦ · ˚ · ✧"]
+  if (mode === "snake") return []
+  if (mode === "blocks") return ["blocks ▙▟  ▖  ▝", "blocks ▙▟ ▜▛   ", "blocks ▙▟ ▜▛ ▄ ", "blocks ▙▟ ▜▛ ▄▟"]
+  return []
 }

@@ -633,6 +633,17 @@ function pluginApi(runtime: RuntimeState, plugin: PluginEntry, scope: PluginScop
       })
       return true
     },
+    registerCompactionArcadeGame(game) {
+      const ok = api.ui.runtime.registerCompactionArcadeGame(game)
+      if (ok)
+        rememberUi(`compaction-arcade:${game.id}`, () => {
+          api.ui.runtime.clearCompactionArcadeGame(game.id)
+        })
+      return ok
+    },
+    clearCompactionArcadeGame(id) {
+      return clearOwnedUi(`compaction-arcade:${id}`, () => api.ui.runtime.clearCompactionArcadeGame(id))
+    },
     setEditorVisual(input) {
       const ok = api.ui.runtime.setEditorVisual(input)
       if (!ok) return false

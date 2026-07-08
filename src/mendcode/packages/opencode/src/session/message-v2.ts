@@ -51,11 +51,21 @@ const RETRYABLE_NETWORK_ERROR_CODES = new Set([
   "ECONNABORTED",
   "ECONNREFUSED",
   "ECONNRESET",
+  "EHOSTDOWN",
+  "EHOSTUNREACH",
   "ENETDOWN",
+  "ENETRESET",
   "ENETUNREACH",
+  "ENOTCONN",
   "ENOTFOUND",
+  "EPIPE",
+  "ESOCKETTIMEDOUT",
   "ETIMEDOUT",
+  "ERR_SOCKET_CONNECTION_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
   "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_REQUEST_ABORTED",
   "UND_ERR_SOCKET",
 ])
 
@@ -249,6 +259,7 @@ export const CompactionPart = Schema.Struct({
   auto: Schema.Boolean,
   overflow: Schema.optional(Schema.Boolean),
   resume: Schema.optional(Schema.Boolean),
+  post_prompt: Schema.optional(Schema.String),
   instructions: Schema.optional(Schema.String),
   tail_start_id: Schema.optional(MessageID),
 })
@@ -1388,6 +1399,16 @@ export function fromError(
   e: unknown,
   ctx: { providerID: ProviderID; aborted?: boolean },
 ): NonNullable<Assistant["error"]> {
+  const abortedMessage = ctx.aborted ? explicitAbortMessage(e) : undefined
+  if (abortedMessage) {
+    return new AbortedError(
+      { message: abortedMessage },
+      {
+        cause: e,
+      },
+    ).toObject()
+  }
+
   const embeddedDataUrlDownloadError = findEmbeddedDataUrlDownloadError(e)
   if (embeddedDataUrlDownloadError) {
     return new APIError(
@@ -1529,6 +1550,28 @@ export function fromError(
   }
 }
 
+function explicitAbortMessage(e: unknown): string | undefined {
+  if (e instanceof DOMException && e.name === "AbortError") {
+    return e.message || "Aborted"
+  }
+
+  if (typeof e !== "object" || e === null) return undefined
+
+  const err = e as { code?: unknown; message?: unknown; cause?: unknown; errors?: unknown }
+  if (err.code === "UND_ERR_REQUEST_ABORTED") {
+    return typeof err.message === "string" && err.message ? err.message : "Aborted"
+  }
+
+  if (Array.isArray(err.errors)) {
+    for (const nested of err.errors) {
+      const match = explicitAbortMessage(nested)
+      if (match) return match
+    }
+  }
+
+  return explicitAbortMessage(err.cause)
+}
+
 function findEmbeddedDataUrlDownloadError(e: unknown): EmbeddedDataUrlDownloadError | undefined {
   if (typeof e !== "object" || e === null) return undefined
 
@@ -1575,7 +1618,17 @@ function retryableNetworkError(e: unknown): RetryableNetworkError | undefined {
     lower.includes("networkerror") ||
     lower.includes("connection closed") ||
     lower.includes("connection reset") ||
+    lower.includes("connection aborted") ||
+    lower.includes("connection refused") ||
+    lower.includes("connection terminated") ||
     lower.includes("connection timed out") ||
+    lower.includes("headers timeout") ||
+    lower.includes("body timeout") ||
+    lower.includes("network is unreachable") ||
+    lower.includes("host is unreachable") ||
+    lower.includes("no route to host") ||
+    lower.includes("socket hang up") ||
+    lower.includes("premature close") ||
     lower.includes("read timed out") ||
     lower.includes("stream timed out") ||
     lower.includes("sse read timed out") ||
@@ -1595,9 +1648,25 @@ function retryableNetworkError(e: unknown): RetryableNetworkError | undefined {
 }
 
 function networkRetryMessage(code: string) {
-  if (code === "ECONNRESET") return "Connection reset by server"
-  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return "Network unavailable"
-  if (code === "ETIMEDOUT" || code === "UND_ERR_CONNECT_TIMEOUT") return "Network connection timed out"
+  if (code === "ECONNRESET" || code === "ENETRESET") return "Connection reset by server"
+  if (
+    code === "ENOTFOUND" ||
+    code === "EAI_AGAIN" ||
+    code === "ENETDOWN" ||
+    code === "ENETUNREACH" ||
+    code === "EHOSTDOWN" ||
+    code === "EHOSTUNREACH"
+  )
+    return "Network unavailable"
+  if (
+    code === "ETIMEDOUT" ||
+    code === "ESOCKETTIMEDOUT" ||
+    code === "ERR_SOCKET_CONNECTION_TIMEOUT" ||
+    code === "UND_ERR_CONNECT_TIMEOUT" ||
+    code === "UND_ERR_HEADERS_TIMEOUT" ||
+    code === "UND_ERR_BODY_TIMEOUT"
+  )
+    return "Network connection timed out"
   if (code === "ECONNREFUSED") return "Provider connection refused"
   return "Network connection lost"
 }

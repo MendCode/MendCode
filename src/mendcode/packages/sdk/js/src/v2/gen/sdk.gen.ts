@@ -72,6 +72,7 @@ import type {
   McpLocalConfig,
   McpRemoteConfig,
   McpStatusResponses,
+  MemorySideChatResponses,
   OutputFormat,
   Part as Part2,
   PartDeleteErrors,
@@ -123,6 +124,16 @@ import type {
   QuestionReplyResponses,
   SessionAbortErrors,
   SessionAbortResponses,
+  SessionBackgroundListErrors,
+  SessionBackgroundListResponses,
+  SessionBackgroundRegisterErrors,
+  SessionBackgroundRegisterResponses,
+  SessionBackgroundRemoveErrors,
+  SessionBackgroundRemoveResponses,
+  SessionBackgroundWriterAcquireErrors,
+  SessionBackgroundWriterAcquireResponses,
+  SessionBackgroundWriterReleaseErrors,
+  SessionBackgroundWriterReleaseResponses,
   SessionChildrenErrors,
   SessionChildrenResponses,
   SessionCommandErrors,
@@ -1719,6 +1730,61 @@ export class Formatter extends HeyApiClient {
   }
 }
 
+export class Memory extends HeyApiClient {
+  /**
+   * Ask memory side chat
+   *
+   * Run the Memory page side chat through the instance provider runtime.
+   */
+  public sideChat<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      root?: string
+      message?: string
+      history?: Array<{
+        id: string
+        role: "user" | "assistant"
+        text: string
+        createdAt: string
+      }>
+      context?: {
+        selectedWorkspaceID?: string
+        selectedGroupID?: string
+        selectedCategoryID?: string
+        pageContext?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "root" },
+            { in: "body", key: "message" },
+            { in: "body", key: "history" },
+            { in: "body", key: "context" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<MemorySideChatResponses, unknown, ThrowOnError>({
+      url: "/memory/side-chat",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Auth2 extends HeyApiClient {
   /**
    * Remove MCP OAuth
@@ -2870,6 +2936,222 @@ export class Provider extends HeyApiClient {
   }
 }
 
+export class Writer extends HeyApiClient {
+  /**
+   * Release background writer lease
+   *
+   * Release the interactive writer lease for a background session.
+   */
+  public release<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      clientID?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "clientID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      SessionBackgroundWriterReleaseResponses,
+      SessionBackgroundWriterReleaseErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/background/writer",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Acquire background writer lease
+   *
+   * Acquire the single interactive writer lease for a background session.
+   */
+  public acquire<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      clientID?: string
+      ttlMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "clientID" },
+            { in: "body", key: "ttlMs" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionBackgroundWriterAcquireResponses,
+      SessionBackgroundWriterAcquireErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/background/writer",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Background extends HeyApiClient {
+  /**
+   * List background sessions
+   *
+   * List MendCode background sessions globally for Agent View.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionBackgroundListResponses,
+      SessionBackgroundListErrors,
+      ThrowOnError
+    >({
+      url: "/session/background",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Remove background session
+   *
+   * Remove a session from the background Agent View registry.
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<
+      SessionBackgroundRemoveResponses,
+      SessionBackgroundRemoveErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/background",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Register background session
+   *
+   * Mark a session as background-managed for Agent View.
+   */
+  public register<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      state?: "queued" | "working" | "needs_input" | "completed" | "failed" | "stopped"
+      summary?: string
+      error?: string
+      pinned?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "state" },
+            { in: "body", key: "summary" },
+            { in: "body", key: "error" },
+            { in: "body", key: "pinned" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionBackgroundRegisterResponses,
+      SessionBackgroundRegisterErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/background",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  private _writer?: Writer
+  get writer(): Writer {
+    return (this._writer ??= new Writer({ client: this.client }))
+  }
+}
+
 export class Session2 extends HeyApiClient {
   /**
    * List sessions
@@ -3213,6 +3495,8 @@ export class Session2 extends HeyApiClient {
       workspace?: string
       limit?: number
       before?: string
+      after?: string
+      view?: "full" | "tui"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3226,6 +3510,8 @@ export class Session2 extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "query", key: "limit" },
             { in: "query", key: "before" },
+            { in: "query", key: "after" },
+            { in: "query", key: "view" },
           ],
         },
       ],
@@ -3829,6 +4115,11 @@ export class Session2 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _background?: Background
+  get background(): Background {
+    return (this._background ??= new Background({ client: this.client }))
   }
 }
 
@@ -4820,6 +5111,11 @@ export class OpencodeClient extends HeyApiClient {
   private _formatter?: Formatter
   get formatter(): Formatter {
     return (this._formatter ??= new Formatter({ client: this.client }))
+  }
+
+  private _memory?: Memory
+  get memory(): Memory {
+    return (this._memory ??= new Memory({ client: this.client }))
   }
 
   private _mcp?: Mcp

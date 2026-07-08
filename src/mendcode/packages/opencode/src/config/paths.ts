@@ -7,6 +7,8 @@ import { unique } from "remeda"
 import * as Effect from "effect/Effect"
 import { AppFileSystem } from "@mendcode/core/filesystem"
 
+const PROJECT_CONFIG_DIRS = [".opencode", ".mendcode"]
+
 export const files = Effect.fn("ConfigPaths.projectFiles")(function* (
   name: string,
   directory: string,
@@ -24,18 +26,18 @@ export const directories = Effect.fn("ConfigPaths.directories")(function* (direc
   const afs = yield* AppFileSystem.Service
   return unique([
     Global.Path.config,
-    ...(!Flag.OPENCODE_DISABLE_PROJECT_CONFIG
-      ? yield* afs.up({
-          targets: [".mendcode", ".mendcode"],
-          start: directory,
-          stop: worktree,
-        })
-      : []),
     ...(yield* afs.up({
-      targets: [".mendcode", ".mendcode"],
+      targets: PROJECT_CONFIG_DIRS,
       start: Global.Path.home,
       stop: Global.Path.home,
     })),
+    ...(!Flag.OPENCODE_DISABLE_PROJECT_CONFIG
+      ? (yield* afs.up({
+          targets: PROJECT_CONFIG_DIRS,
+          start: directory,
+          stop: worktree,
+        })).toReversed()
+      : []),
     ...(Flag.OPENCODE_CONFIG_DIR ? [Flag.OPENCODE_CONFIG_DIR] : []),
   ])
 })

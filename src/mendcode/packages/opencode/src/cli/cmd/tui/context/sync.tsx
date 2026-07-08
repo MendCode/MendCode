@@ -35,7 +35,7 @@ import { emptyConsoleState, type ConsoleState } from "@/config/console-state"
 import path from "path"
 import { useKV } from "./kv"
 import { isRecentWorkingAssistant, sessionStatusExpiryDelay } from "../util/session-working"
-import { appendLiveShellOutput } from "./shell-output"
+import { appendLiveShellOutput, previewShellOutput } from "./shell-output"
 import { isCurrentTuiBootstrap, syncBootstrapReadiness, syncReadyForStatus, tuiFastBootEnabled } from "../util/fast-boot"
 
 type ShellOutputEvent = {
@@ -112,7 +112,10 @@ function previewPartForStore(part: Part): Part {
           ? {
               ...state,
               input: previewUnknown(state.input, TUI_FIELD_PREVIEW_CHARS, "tool input"),
-              output: previewString(state.output, TUI_TOOL_OUTPUT_PREVIEW_CHARS, "tool output") ?? "",
+              output:
+                part.tool === "bash" || part.tool === "shell"
+                  ? previewShellOutput(state.output)
+                  : previewString(state.output, TUI_TOOL_OUTPUT_PREVIEW_CHARS, "tool output") ?? "",
               metadata: previewUnknown(state.metadata, TUI_METADATA_PREVIEW_CHARS, "tool metadata"),
             }
           : {

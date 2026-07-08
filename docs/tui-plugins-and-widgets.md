@@ -147,6 +147,96 @@ export default {
 
 `shell.spawn()` is not a PTY. Full-screen terminal applications that require a real TTY, cursor addressing, alternate screen buffers, or terminal audio bridges should be wrapped by a PTY-backed helper or a future `spawnPty` API. Do not fake a Doom/cava integration by assuming normal stdout pipes behave like a terminal emulator.
 
+## Compaction Arcade Games
+
+Compaction can show a small focused arcade surface while context is being packed. Built-ins include `snake`, `stars`, and `blocks`; plugins can register real keyboard-driven games by ID.
+
+The user or package profile selects the game:
+
+```jsonc
+{
+  "presentation": {
+    "compaction": {
+      "style": "cockpit",
+      "showProgress": true,
+      "allowScratchpad": true,
+      "arcade": "company.dodger"
+    }
+  }
+}
+```
+
+Register the game from a TUI plugin:
+
+```tsx
+/** @jsxImportSource @opentui/solid */
+import type { TuiCompactionArcadeGame } from "@mendcode/plugin/tui"
+
+type DodgerState = {
+  player: number
+  rock: { x: number; y: number }
+  score: number
+}
+
+const width = 28
+const height = 8
+
+const game: TuiCompactionArcadeGame<DodgerState> = {
+  id: "company.dodger",
+  label: "Dodger",
+  intervalMs: 140,
+  initialState: () => ({
+    player: Math.floor(Math.random() * width),
+    rock: { x: Math.floor(Math.random() * width), y: 0 },
+    score: 0,
+  }),
+  tick(state) {
+    const y = state.rock.y + 1
+    if (y >= height) {
+      return {
+        ...state,
+        rock: { x: Math.floor(Math.random() * width), y: 0 },
+        score: state.score + 1,
+      }
+    }
+    return { ...state, rock: { ...state.rock, y } }
+  },
+  key(state, key) {
+    if (key === "left" || key === "a") return { ...state, player: Math.max(0, state.player - 1) }
+    if (key === "right" || key === "d") return { ...state, player: Math.min(width - 1, state.player + 1) }
+    return undefined
+  },
+  render(state) {
+    return {
+      title: `Dodger · Score ${state.score}`,
+      status: "Click/focus game first. Esc releases focus.",
+      cells: Array.from({ length: height }, (_, y) =>
+        Array.from({ length: width }, (_, x) => {
+          if (y === height - 1 && x === state.player) return { text: "▲ ", tone: "head" as const }
+          if (state.rock.x === x && state.rock.y === y) return { text: "◆ ", tone: "food" as const }
+          return { text: "· ", tone: "empty" as const }
+        }),
+      ),
+    }
+  },
+}
+
+export default {
+  id: "company.arcade",
+  async tui(api) {
+    api.ui.runtime.registerCompactionArcadeGame(game)
+  },
+}
+```
+
+Game input and runtime are focus-gated by the host compaction panel: click the game to focus/start it, `Esc` releases focus, and `tick()` is only called while the arcade surface is focused. Releasing arcade focus stops ticking the game, effectively pausing it. Keys are not sent to games while focus is outside the arcade surface.
+
+Arrow keys are normalized to `up`, `down`, `left`, and `right`; common character keys arrive as lowercase strings such as `w`, `a`, `s`, `d`, or `r`. Return a new state from `key()` to consume the key, or `undefined` to ignore it.
+
+Prefer `cells` for game boards that need semantic colors. Standard tones are `head`, `body`, `food`, `wall`, `empty`, `primary`, `muted`, `text`, `danger`, and `accent`; the host maps these to the active theme. Use `head` and `food` for player/target cells so every game gets accessible, consistent color separation. `lines` is still supported for simple monochrome output.
+
+Plugin-owned games are automatically unregistered when the plugin is disposed. If a plugin needs manual cleanup, call `api.ui.runtime.clearCompactionArcadeGame("company.dodger")`.
+
 ## Footer Entries
 
 Use `setFooterEntry()` when multiple packages need to contribute to the footer without replacing the whole footer.
@@ -167,6 +257,73 @@ export default {
 ```
 
 Use `setFooter()` only when one package intentionally owns the complete footer.
+
+## Floating Overlays
+
+Use `api.ui.overlay.open()` for temporary floating UI owned by a plugin: side-chat helpers, checklists, short inspectors, or contextual command surfaces. Overlays are not PTYs and are not the host-owned Memory Center side-chat; they are plugin-rendered Solid surfaces that can be opened from commands and closed by ID or via the render context.
+
+```tsx
+/** @jsxImportSource @opentui/solid */
+import { createSignal } from "solid-js"
+import { useKeyboard } from "@opentui/solid"
+
+function PluginSideChat(props: { close: () => boolean }) {
+  const [draft, setDraft] = createSignal("")
+  const [history, setHistory] = createSignal(["Plugin side-chat ready"])
+
+  useKeyboard((event) => {
+    if (event.name === "escape" || event.sequence === "q") props.close()
+    if (event.name === "backspace") setDraft((value) => value.slice(0, -1))
+    if (event.name === "return" && draft().trim()) {
+      setHistory((items) => [...items.slice(-5), `You: ${draft().trim()}`])
+      setDraft("")
+    }
+    if (event.sequence && event.sequence.length === 1) setDraft((value) => value + event.sequence)
+  })
+
+  return (
+    <box flexDirection="column" padding={1} gap={1}>
+      <text fg="cyan">Plugin Side Chat</text>
+      {history().map((line) => <text wrapMode="truncate">{line}</text>)}
+      <text fg="gray">› {draft() || "type, Enter to add, Esc/q to close"}</text>
+    </box>
+  )
+}
+
+export default {
+  id: "company.side-chat-overlay",
+  async tui(api) {
+    api.command.register(() => [
+      {
+        title: "Open Plugin Side Chat",
+        value: "company.side-chat.open",
+        category: "Company",
+        onSelect() {
+          api.ui.overlay.open(
+            "company.side-chat",
+            (context) => <PluginSideChat close={context.close} />,
+            {
+              title: "Plugin Side Chat",
+              anchor: "bottom-right",
+              width: "38%",
+              height: 12,
+              modal: false,
+            },
+          )
+        },
+      },
+    ])
+  },
+}
+```
+
+Plugin overlays are automatically cleaned up when a plugin is deactivated or disposed by the runtime wrapper. If the plugin closes the overlay itself, call `api.ui.overlay.close("company.side-chat")` or `context.close()`.
+
+Use the right surface for the job:
+
+- **Memory Center side-chat:** host-owned memory review UI and graph proposals.
+- **Plugin floating side-chat:** plugin-owned temporary overlay using `api.ui.overlay.open()`.
+- **External TUI app:** requires PTY/pane support; `shell.spawn()` and overlays do not emulate full-screen terminal apps like `graf` or `cava`.
 
 ## Slots
 

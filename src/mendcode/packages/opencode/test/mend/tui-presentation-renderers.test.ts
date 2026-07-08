@@ -2,9 +2,17 @@ import { describe, expect, test } from "bun:test"
 import path from "path"
 import { parseTimelineDiffRows, timelineDiffFileStatus } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
 import { diffStatsFromPatch, formatDiffStats, patchFileTitle } from "../../src/cli/cmd/tui/routes/session/renderers/diff-label"
-import { rawReasoningDisplay, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
+import { compactionArcadeFrames, compactionStageStates, compactionSummaryPreview, rawReasoningDisplay, resolveTuiPresentation, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
 import { groupTimelineParts, isTimelineStackStart, timelineCollapseLabel } from "../../src/mend/tui/timeline/group"
-import { normalizeToolEvent, shouldRenderCompactTool, toolClass, toolPresentationIcon, toolPresentationIconForProfile, toolSummary } from "../../src/mend/tui/timeline/normalize"
+import {
+  normalizeToolEvent,
+  shouldRenderCompactTool,
+  toolClass,
+  toolPresentationIcon,
+  toolPresentationIconForProfile,
+  toolSummary,
+  wrapTimelineLine,
+} from "../../src/mend/tui/timeline/normalize"
 
 function timelineNodeLabel(node: ReturnType<typeof groupTimelineParts>[number]) {
   if (node.type === "row") return (node as { title: string }).title
@@ -17,6 +25,35 @@ function isTimelineRowWithTitle(node: ReturnType<typeof groupTimelineParts>[numb
 }
 
 describe("mend tui presentation renderers", () => {
+  test("compaction defaults to public-safe minimal mode", () => {
+    expect(resolveTuiPresentation({}).compaction).toEqual({
+      style: "minimal",
+      showProgress: false,
+      allowScratchpad: false,
+      arcade: "off",
+    })
+    expect(resolveTuiPresentation({ profile: "mendcode", compaction: { style: "cockpit", showProgress: true, allowScratchpad: true, arcade: "snake" } }).compaction).toEqual({
+      style: "cockpit",
+      showProgress: true,
+      allowScratchpad: true,
+      arcade: "snake",
+    })
+    expect(resolveTuiPresentation({ compaction: { arcade: "custom-game" } }).compaction.arcade).toBe("custom-game")
+  })
+
+  test("compaction cockpit helpers skip empty headings and expose arcade modes", () => {
+    expect(compactionSummaryPreview("## Goal\n\nKeep implementing the approved plan.")).toBe("Keep implementing the approved plan.")
+    expect(compactionSummaryPreview("# Goal\n")).toBeUndefined()
+    expect(compactionStageStates({ hasSummary: true, tailStartID: "msg_tail", postPrompt: "next" }).map((stage) => stage.label)).toEqual([
+      "Capture transcript",
+      "Write memory",
+      "Preserve tail",
+      "Continue",
+    ])
+    expect(compactionArcadeFrames("snake")).toEqual([])
+    expect(compactionArcadeFrames("blocks").length).toBeGreaterThan(0)
+  })
+
   test("classifies tool events by presentation class", () => {
     expect(toolClass("read")).toBe("simple-read")
     expect(toolClass("webfetch")).toBe("web")
@@ -65,7 +102,21 @@ describe("mend tui presentation renderers", () => {
 
     expect(event.title).toBe("Web example.com")
     expect(event.title).not.toContain("[url=")
-    expect(event.lines).toEqual([])
+    expect(event.lines).toEqual(["https://www.example.com/docs?format=text"])
+  })
+
+  test("webfetch does not duplicate identical title and URL detail lines", () => {
+    const event = normalizeToolEvent({
+      tool: "webfetch",
+      state: "completed",
+      input: {
+        title: "https://example.com/docs",
+        url: "https://example.com/docs",
+      },
+    })
+
+    expect(event.title).toBe("Web example.com")
+    expect(event.lines).toEqual(["https://example.com/docs"])
   })
 
   test("websearch uses a query summary and shows full result URLs", () => {
@@ -76,9 +127,9 @@ describe("mend tui presentation renderers", () => {
       metadata: {
         numResults: 4,
         results: [
-          { url: "example.com/docs" },
-          { href: "https://www.example.com/blog/post" },
-          { link: "https://docs.example.com/guide" },
+          { url: "example.com/docs?ref=search#intro" },
+          { href: "https://www.example.com/blog/post?utm_source=exa" },
+          { link: "https://docs.example.com/guide#install" },
           { url: "https://ignored.example.com/fourth" },
         ],
       },
@@ -86,23 +137,45 @@ describe("mend tui presentation renderers", () => {
 
     expect(event.title).toBe('Search web "example domain" (4 results)')
     expect(event.lines).toEqual([
-      "https://example.com/docs",
-      "https://www.example.com/blog/post",
-      "https://docs.example.com/guide",
+      "https://example.com/docs?ref=search#intro",
+      "https://www.example.com/blog/post?utm_source=exa",
+      "https://docs.example.com/guide#install",
     ])
     expect(event.lines.every((line) => line.startsWith("https://"))).toBe(true)
   })
 
+  test("websearch extracts full URLs from tool output text", () => {
+    const event = normalizeToolEvent({
+      tool: "websearch",
+      state: "completed",
+      input: { query: "release notes" },
+      output: "Found https://example.com/releases/2026-07?channel=stable#notes and https://docs.example.com/setup/install?os=mac.",
+    })
+
+    expect(event.lines).toEqual([
+      "https://example.com/releases/2026-07?channel=stable#notes",
+      "https://docs.example.com/setup/install?os=mac",
+    ])
+  })
+
+  test("timeline line wrapping splits long URLs without dropping characters", () => {
+    const lines = wrapTimelineLine("", "https://example.com/docs/really/long/path/that/has/no/spaces?query=alpha-beta-gamma-delta#fragment", 36)
+
+    expect(lines.length).toBeGreaterThan(1)
+    expect(lines.join("").replaceAll("  ", "")).toBe("https://example.com/docs/really/long/path/that/has/no/spaces?query=alpha-beta-gamma-delta#fragment")
+    expect(lines.every((line) => Bun.stringWidth(line) <= 36)).toBe(true)
+  })
+
   test("one-line mendcode events have no empty block lines", () => {
     const event = normalizeToolEvent({
-      tool: "webfetch",
+      tool: "grep",
       state: "completed",
-      input: { url: "https://example.com" },
+      input: { pattern: "example" },
     })
 
     const rendered = event.lines.length > 0 ? [`╭─ ${event.title}`, ...event.lines.map((line) => `│ ${line}`), `╰─ ${event.result ?? ""}`] : [`◈ ${event.title}`]
 
-    expect(rendered).toEqual(["◈ Web example.com"])
+    expect(rendered).toEqual(['◈ Search "example"'])
     expect(rendered).not.toContain("╰─")
   })
 
@@ -233,11 +306,13 @@ describe("mend tui presentation renderers", () => {
     expect(shouldRenderCompactTool("mendcode", "bash")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "task")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "loop")).toBe(false)
+    expect(shouldRenderCompactTool("mendcode", "memory_graph")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "todowrite")).toBe(true)
     expect(shouldRenderCompactTool("minimal", "edit")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "apply_patch")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "task")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "loop")).toBe(false)
+    expect(shouldRenderCompactTool("minimal", "memory_graph")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "todowrite")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "bash")).toBe(true)
     expect(shouldRenderCompactTool("raw", "read")).toBe(false)
@@ -284,6 +359,25 @@ describe("mend tui presentation renderers", () => {
 
     expect(nodes).toHaveLength(1)
     expect(nodes[0]).toMatchObject({ type: "tool", tool: "loop" })
+  })
+
+  test("timeline collapse label uses expanded state and singular nouns", () => {
+    const collapse = {
+      count: 1,
+      rows: [
+        {
+          type: "row" as const,
+          id: "read-1",
+          tool: "read",
+          class: "simple-read" as const,
+          state: "completed",
+          title: "a.ts",
+        },
+      ],
+    }
+
+    expect(timelineCollapseLabel(collapse)).toBe("1 tool more")
+    expect(timelineCollapseLabel(collapse, { expanded: true })).toBe("1 tool shown")
   })
 
   test("groups old completed timeline rows behind a single more row", () => {

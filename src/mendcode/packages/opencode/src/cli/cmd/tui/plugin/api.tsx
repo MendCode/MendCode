@@ -25,6 +25,7 @@ import { DialogConfirm } from "../ui/dialog-confirm"
 import { DialogPrompt } from "../ui/dialog-prompt"
 import { DialogSelect, type DialogSelectOption as SelectOption } from "../ui/dialog-select"
 import { Prompt } from "../component/prompt"
+import { registerCompactionArcadeGame, unregisterCompactionArcadeGame } from "../component/compaction-panel"
 import { Slot as HostSlot } from "./slots"
 import type { useToast } from "../ui/toast"
 import { InstallationVersion } from "@mendcode/core/installation/version"
@@ -516,6 +517,12 @@ export function createTuiApi(input: Input): TuiPluginApi & MendExtensionApi {
         },
         setWorkingIndicator(input) {
           return setMendWorkingIndicator(input)
+        },
+        registerCompactionArcadeGame(game) {
+          return registerCompactionArcadeGame(game)
+        },
+        clearCompactionArcadeGame(id) {
+          return unregisterCompactionArcadeGame(id)
         },
         setEditorVisual(input) {
           return setMendEditorVisual(input)

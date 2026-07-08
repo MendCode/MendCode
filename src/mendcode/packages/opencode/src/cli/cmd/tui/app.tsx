@@ -126,7 +126,7 @@ import { cyclePromptMode, writePromptMode, type MendPromptMode } from "@/mend/pr
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import { setupReadiness } from "@/mend/runtime/readiness"
 import { isSetupComplete, readSetupState } from "@/mend/setup/state"
-import { runtimeRegistryInstallPack, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistryStatus } from "@/mend/runtime/registry"
+import { runtimeRegistryAdd, runtimeRegistryInstallPack, runtimeRegistryRemove, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistryStatus } from "@/mend/runtime/registry"
 import type { RegistryMarketplacePackManifest } from "@/mend/runtime/registry/marketplace"
 import {
   disableAllMendPackages,
@@ -339,6 +339,70 @@ function marketplaceRuntimeSummary(pack: RegistryMarketplacePackManifest) {
 
 function marketplaceShortSummary(pack: RegistryMarketplacePackManifest) {
   return Locale.truncate(marketplaceRuntimeSummary(pack), 90)
+}
+
+function marketplaceSourceIDFromURL(value: string) {
+  const clean = value.trim().replace(/\.git$/, "")
+  const last = clean.split(/[/:]/).filter(Boolean).at(-1) || "package-source"
+  const slug = last.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "")
+  return `url-${slug || "package-source"}`.slice(0, 64)
+}
+
+function isPublicGitHubMarketplaceURL(value: string) {
+  try {
+    const url = new URL(value.trim())
+    return (
+      url.protocol === "https:" &&
+      url.hostname.toLowerCase() === "github.com" &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      url.pathname.split("/").filter(Boolean).length === 2
+    )
+  } catch {
+    return false
+  }
+}
+
+function marketplaceInstallBadge(packID: string, installed: Awaited<ReturnType<typeof listMendPackages>>["installed"]) {
+  const found = installed.find((item) => item.id === packID)
+  if (!found) return null
+  return found.enabled ? "active" : "installed"
+}
+
+function marketplaceBadgeTitle(title: string, badge?: string | null) {
+  return `${badge ? `[${badge}] ` : ""}${title}`
+}
+
+function marketplaceSearchText(parts: Array<string | null | undefined>) {
+  return parts.filter(Boolean).join(" ")
+}
+
+function marketplaceStatusCategory(input: { badge?: string | null; sourceID?: string; channel?: string | null }) {
+  const state = input.badge === "active" ? "Active" : input.badge === "installed" ? "Installed" : undefined
+  const source = input.channel || input.sourceID
+  return [state, source].filter(Boolean).join(" · ") || "Packages"
+}
+
+function marketplaceSourceSafetyLines(input: {
+  sourceID: string
+  sourceType?: string
+  url?: string | null
+  digest?: { algorithm: "sha256"; value: string }
+  signature?: { algorithm: "sha256"; value: string }
+}) {
+  if (input.sourceID === "official" || input.sourceID === "local") return []
+  return [
+    "Security preview:",
+    `- Source: ${input.url || input.sourceID}`,
+    `- Type: ${input.sourceType || "unknown"}`,
+    `- Digest: ${input.digest ? `${input.digest.algorithm}:${input.digest.value.slice(0, 12)}...` : "not pinned"}`,
+    `- Signature: ${input.signature ? `${input.signature.algorithm}:${input.signature.value.slice(0, 12)}...` : "not signed"}`,
+    "- Trust only repos you expect to run MendCode package content from.",
+    "- Packages may add commands, skills, plugins, widgets, pages, scripts, and MCP config.",
+    "- MendCode copies allowlisted package files only; local sessions, auth, runs, cache, and customizations stay untouched.",
+  ]
 }
 
 function marketplacePackDetails(pack: RegistryMarketplacePackManifest, sourceID: string) {
@@ -762,7 +826,12 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   }
   const [terminalTitleEnabled, setTerminalTitleEnabled] = createSignal(kv.get("terminal_title_enabled", true))
   const [pasteSummaryEnabled, setPasteSummaryEnabled] = createSignal(
-    kv.get("paste_summary_enabled", !sync.data.config.experimental?.disable_paste_summary),
+    kv.get(
+      "paste_summary_enabled",
+      sync.data.config.experimental?.disable_paste_summary === undefined
+        ? mend.profile.presentation.input.pasteSummary
+        : !sync.data.config.experimental.disable_paste_summary,
+    ),
   )
 
   // Update terminal window title based on current route and session
@@ -1573,7 +1642,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         }))}
         onSelect={(option) => {
           local.agent.set(option.value)
-          local.model.pinCurrent()
+          local.model.pinAgentCurrent()
           toast.show({
             variant: "info",
             message: `Mode is now ${option.value}.`,
@@ -2361,7 +2430,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     ))
     dialog.setSize("medium")
   }
-  const showRegistryMarketplace = async (initialSourceID = "local") => {
+  const showRegistryMarketplace = async (initialSourceID = "local", cleanupSourceOnClose = false) => {
     showDialogLoading(
       initialSourceID === "local" ? "Loading local packages" : "Loading marketplace",
       initialSourceID === "local" ? "Reading local package catalog..." : "Fetching package catalog...",
@@ -2379,47 +2448,72 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       })
       return runtimeRegistrySearch("", sourceID, sourceRoot)
     })
+    const packageState = await listMendPackages(mend.root)
+    let keepTemporarySource = false
     dialog.replace(() => (
       <DialogSelect
         title="MendCode Marketplace"
-        options={result.results.map((pack) => ({
-          title: pack.title || pack.id,
+        options={result.results.map((pack) => {
+          const badge = marketplaceInstallBadge(pack.id, packageState.installed)
+          return {
+          title: marketplaceBadgeTitle(pack.title || pack.id, badge),
           value: pack.id,
-          category: pack.channel ? `${sourceID} / ${pack.channel}` : sourceID,
+          category: marketplaceStatusCategory({ badge, sourceID, channel: pack.channel }),
           description: marketplaceShortSummary(pack),
-          searchText: [pack.id, pack.title, pack.description, marketplaceRuntimeSummary(pack), ...(pack.tags || [])].filter(Boolean).join(" "),
-          footer: cleanMarketplaceVersion(pack.version),
+          searchText: marketplaceSearchText([pack.id, pack.title, pack.description, marketplaceRuntimeSummary(pack), sourceID, pack.channel, badge, ...(pack.tags || [])]),
+          footer: [cleanMarketplaceVersion(pack.version), badge].filter(Boolean).join(" · "),
           onSelect: async () => {
-            showDialogLoading("Loading package", `Reading ${pack.id}...`)
-            const detail = await runtimeRegistryShow(pack.id, sourceID, sourceRoot)
-            if (sourceID === "local") {
-              await DialogAlert.show(dialog, detail.pack.title || detail.pack.id, marketplacePackDetails(detail.pack, sourceID))
-              return
+            try {
+              showDialogLoading("Loading package", `Reading ${pack.id}...`)
+              const detail = await runtimeRegistryShow(pack.id, sourceID, sourceRoot)
+              if (sourceID === "local") {
+                await DialogAlert.show(dialog, detail.pack.title || detail.pack.id, marketplacePackDetails(detail.pack, sourceID))
+                return
+              }
+              const confirmed = await DialogConfirm.show(
+                dialog,
+                detail.pack.title || detail.pack.id,
+                [
+                  marketplacePackDetails(detail.pack, sourceID),
+                  "",
+                  ...marketplaceSourceSafetyLines({
+                    sourceID,
+                    sourceType: detail.source.type,
+                    url: detail.source.url,
+                    digest: detail.digest,
+                    signature: detail.pack.signature,
+                  }),
+                  "",
+                  "Install this package overlay for the next message?",
+                  "",
+                  "Will not touch local skills/modes/sessions/auth.",
+                ].join("\n"),
+              )
+              if (!confirmed) {
+                if (cleanupSourceOnClose) await runtimeRegistryRemove(sourceID, mend.root).catch(() => undefined)
+                return
+              }
+              const result = await runtimeRegistryInstallPack(detail.pack.id, sourceID, mend.root)
+              keepTemporarySource = true
+              await mend.reload()
+              toast.show({
+                variant: "success",
+                message: `Package installed: ${result.package.id}.`,
+                duration: 5000,
+              })
+              await showPackageManager()
+            } catch (error) {
+              if (cleanupSourceOnClose) await runtimeRegistryRemove(sourceID, mend.root).catch(() => undefined)
+              toast.show({ variant: "error", message: errorMessage(error), duration: 7000 })
             }
-            const confirmed = await DialogConfirm.show(
-              dialog,
-              detail.pack.title || detail.pack.id,
-              [
-                marketplacePackDetails(detail.pack, sourceID),
-                "",
-                "Install this package overlay for the next message?",
-                "",
-                "Will not touch local skills/modes/sessions/auth.",
-              ].join("\n"),
-            )
-            if (!confirmed) return
-            const result = await runtimeRegistryInstallPack(detail.pack.id, sourceID, mend.root)
-            await mend.reload()
-            toast.show({
-              variant: "success",
-              message: `Package installed: ${result.package.id}.`,
-              duration: 5000,
-            })
-            await showPackageManager()
           },
-        }))}
+          }
+        })}
       />
-    ))
+    ), () => {
+      if (!cleanupSourceOnClose || keepTemporarySource) return
+      void runtimeRegistryRemove(sourceID, mend.root).catch(() => undefined)
+    })
     dialog.setSize("xlarge")
   }
   const refreshPackagesRuntime = async () => {
@@ -2701,47 +2795,88 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             category: "Install",
             description: "Install a single-pack source or browse a multi-pack source.",
             onSelect: async () => {
-              const source = await DialogPrompt.show(dialog, "Package source id", {
+              const source = await DialogPrompt.show(dialog, "Source id or GitHub URL", {
                 value: "official",
-                placeholder: "official",
+                placeholder: "official or https://github.com/org/mendcode-package",
+                description: () => <text fg={theme.textMuted}>Paste a saved source id or a public GitHub repo URL.</text>,
               })
               if (!source?.trim()) return
-              const sourceID = source.trim()
-              showDialogLoading("Loading source", `Checking ${sourceID}...`)
-              const catalog = await runtimeRegistrySearch("", sourceID, mend.root)
-              if (catalog.results.length !== 1) {
+              const sourceText = source.trim()
+              const sourceLooksLikeURL = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(sourceText)
+              if (sourceLooksLikeURL && !isPublicGitHubMarketplaceURL(sourceText)) {
                 toast.show({
-                  variant: "info",
-                  message: `${sourceID} has ${catalog.results.length} packages. Choose one to install.`,
-                  duration: 4000,
+                  variant: "error",
+                  message: "Package URL must be public https://github.com/<org>/<repo> with no query, hash, or credentials.",
+                  duration: 7000,
                 })
-                await showRegistryMarketplace(sourceID)
                 return
               }
-              const detail = await runtimeRegistryShow(catalog.results[0]!.id, sourceID, mend.root)
-              const stateBefore = await listMendPackages(mend.root)
-              const confirmed = await DialogConfirm.show(
-                dialog,
-                detail.pack.title || detail.pack.id,
-                [
-                  marketplacePackDetails(detail.pack, sourceID),
-                  "",
-                  `Active before: ${stateBefore.active.join(", ") || "none"}`,
-                  `Active after: ${detail.pack.id}`,
-                  "",
-                  "Will not touch local skills/modes/sessions/auth.",
-                ].join("\n"),
-              )
-              if (!confirmed) return
-              showDialogLoading("Installing package", `Installing ${detail.pack.id}...`)
-              const result = await runtimeRegistryInstallPack(detail.pack.id, sourceID, mend.root)
-              await mend.reload()
-              toast.show({
-                variant: "success",
-                message: `Package installed: ${result.package.id}.`,
-                duration: 5000,
-              })
-              await showPackageManager()
+              const sourceID = sourceLooksLikeURL ? marketplaceSourceIDFromURL(sourceText) : sourceText
+              let sourceAdded = false
+              try {
+                if (sourceLooksLikeURL) {
+                  showDialogLoading("Adding source", `Saving ${sourceID}...`)
+                  await runtimeRegistryAdd([
+                    sourceID,
+                    "--type",
+                    "github",
+                    "--url",
+                    sourceText,
+                    "--note",
+                    "TUI-added GitHub marketplace package source.",
+                  ], mend.root)
+                  sourceAdded = true
+                }
+                showDialogLoading("Previewing source", `Checking ${sourceID}...`)
+                const catalog = await runtimeRegistrySearch("", sourceID, mend.root)
+                if (catalog.results.length !== 1) {
+                  toast.show({
+                    variant: "info",
+                    message: `${sourceID} has ${catalog.results.length} packages. Choose one to install.`,
+                    duration: 4000,
+                  })
+                  await showRegistryMarketplace(sourceID, sourceAdded)
+                  return
+                }
+                const detail = await runtimeRegistryShow(catalog.results[0]!.id, sourceID, mend.root)
+                const stateBefore = await listMendPackages(mend.root)
+                const confirmed = await DialogConfirm.show(
+                  dialog,
+                  detail.pack.title || detail.pack.id,
+                  [
+                    marketplacePackDetails(detail.pack, sourceID),
+                    "",
+                    ...marketplaceSourceSafetyLines({
+                      sourceID,
+                      sourceType: detail.source.type,
+                      url: detail.source.url,
+                      digest: detail.digest,
+                      signature: detail.pack.signature,
+                    }),
+                    "",
+                    `Active before: ${stateBefore.active.join(", ") || "none"}`,
+                    `Active after: ${detail.pack.id}`,
+                    "",
+                    "Will not touch local skills/modes/sessions/auth.",
+                  ].join("\n"),
+                )
+                if (!confirmed) {
+                  if (sourceAdded) await runtimeRegistryRemove(sourceID, mend.root).catch(() => undefined)
+                  return
+                }
+                showDialogLoading("Installing package", `Installing ${detail.pack.id}...`)
+                const result = await runtimeRegistryInstallPack(detail.pack.id, sourceID, mend.root)
+                await mend.reload()
+                toast.show({
+                  variant: "success",
+                  message: `Package installed: ${result.package.id}.`,
+                  duration: 5000,
+                })
+                await showPackageManager()
+              } catch (error) {
+                if (sourceAdded) await runtimeRegistryRemove(sourceID, mend.root).catch(() => undefined)
+                toast.show({ variant: "error", message: errorMessage(error), duration: 7000 })
+              }
             },
           },
           {
@@ -2782,10 +2917,11 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
               }]
             : []),
           ...installed.map((item) => ({
-            title: `${item.enabled ? "[x]" : "[ ]"} ${item.title || item.id}`,
+            title: marketplaceBadgeTitle(item.title || item.id, item.enabled ? "active" : "installed"),
             value: item.id,
-            category: item.enabled ? "Active package" : "Installed package",
+            category: marketplaceStatusCategory({ badge: item.enabled ? "active" : "installed", channel: item.channel, sourceID: item.sourceType }),
             description: item.description || "Installed overlay.",
+            searchText: marketplaceSearchText([item.id, item.title, item.description, item.root, item.version, item.channel, item.sourceType, item.enabled ? "active enabled selected" : "installed inactive disabled"]),
             footer: item.version || item.channel || item.sourceType,
             onSelect: async () => {
               const activeAfter = item.enabled
@@ -3899,7 +4035,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       enabled: promptRouteActive(),
       onSelect: () => {
         local.agent.move(1)
-        local.model.pinCurrent()
+        local.model.pinAgentCurrent()
       },
     },
     {
@@ -3935,7 +4071,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       enabled: promptRouteActive(),
       onSelect: () => {
         local.agent.move(-1)
-        local.model.pinCurrent()
+        local.model.pinAgentCurrent()
       },
     },
     {

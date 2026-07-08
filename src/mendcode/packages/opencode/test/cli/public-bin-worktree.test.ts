@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "fs/promises"
 import path from "node:path"
 import { tmpdir } from "../fixture/fixture"
 import { activateTsm } from "../../src/mend/config/tsm"
-import { resolveWorktreeShortcutTarget } from "../../src/mend/cli/public-bin"
+import { resolveWorktreeShortcutTarget, runtimeArgsForSessionShortcut } from "../../src/mend/cli/public-bin"
 
 const publicBin = path.resolve(import.meta.dir, "../../src/mend/cli/public-bin.ts")
 const previousBinary = process.env.MENDCODE_TSM_BINARY
@@ -13,9 +13,12 @@ afterEach(() => {
   else process.env.MENDCODE_TSM_BINARY = previousBinary
 })
 
-function runPublicBin(args: string[], options: { cwd?: string; env?: Record<string, string> } = {}) {
+function runPublicBin(
+  args: string[],
+  options: { cwd?: string; env?: Record<string, string>; bunBin?: string } = {},
+) {
   return Bun.spawnSync({
-    cmd: ["bun", publicBin, ...args],
+    cmd: [options.bunBin || "bun", publicBin, ...args],
     cwd: options.cwd ?? import.meta.dir,
     env: {
       ...process.env,
@@ -42,6 +45,19 @@ async function fakeTsm(root: string) {
     "  echo 'tsm wt add rm move prune open'",
     "  exit 0",
     "fi",
+    "exit 0",
+  ].join("\n"))
+  await import("fs/promises").then((fs) => fs.chmod(file, 0o755))
+  return { file, log }
+}
+
+async function fakeBun(root: string) {
+  const file = path.join(root, "bin", "bun")
+  const log = path.join(root, "bun.log")
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, [
+    "#!/bin/sh",
+    `printf '%s\\n' "$*" > ${JSON.stringify(log)}`,
     "exit 0",
   ].join("\n"))
   await import("fs/promises").then((fs) => fs.chmod(file, 0o755))
@@ -252,24 +268,94 @@ describe("mend public CLI help", () => {
 
   test("install is a shortcut for marketplace install", async () => {
     await using dir = await tmpdir()
-    const fakeBun = path.join(dir.path, "fake-bun")
-    const log = path.join(dir.path, "fake-bun.log")
-    await writeFile(fakeBun, [
-      "#!/bin/sh",
-      `printf '%s\\n' "$*" > ${JSON.stringify(log)}`,
-      "exit 0",
-    ].join("\n"))
-    await import("fs/promises").then((fs) => fs.chmod(fakeBun, 0o755))
+    const fake = await fakeBun(dir.path)
 
     const result = runPublicBin(["install", "sidequest", "official"], {
       cwd: dir.path,
       env: {
-        MENDCODE_BUN_BIN: fakeBun,
+        MENDCODE_BUN_BIN: fake.file,
       },
     })
 
     expect(result.exitCode).toBe(0)
-    const args = await readFile(log, "utf8")
+    const args = await readFile(fake.log, "utf8")
     expect(args).toContain("control-plane.ts marketplace install sidequest official")
+  })
+})
+
+describe("mend public CLI session restore", () => {
+  test("opens a session id shortcut through the MendCode TUI runtime", async () => {
+    await using dir = await tmpdir()
+
+    expect(runtimeArgsForSessionShortcut("ses_0cd1e09f6ffePQGK5SRql5mfKz", dir.path)).toEqual([
+      dir.path,
+      "--session",
+      "ses_0cd1e09f6ffePQGK5SRql5mfKz",
+    ])
+  })
+
+  test("routes a session id shortcut into the runtime --session invocation", async () => {
+    await using dir = await tmpdir()
+    const fake = await fakeBun(dir.path)
+
+    const result = runPublicBin(["ses_0cd1e09f6ffePQGK5SRql5mfKz"], {
+      cwd: dir.path,
+      bunBin: process.execPath,
+      env: {
+        MENDCODE_SHELL_CWD: dir.path,
+        PATH: `${path.dirname(fake.file)}:${process.env.PATH ?? ""}`,
+      },
+    })
+
+    expect(result.exitCode).toBe(0)
+    const args = await readFile(fake.log, "utf8")
+    expect(args).toContain("src/index.ts")
+    expect(args).toContain(`${dir.path} --session ses_0cd1e09f6ffePQGK5SRql5mfKz`)
+  })
+
+  test("rejects extra arguments after a session id shortcut", () => {
+    const result = runPublicBin(["ses_0cd1e09f6ffePQGK5SRql5mfKz", "extra"])
+    const output = result.stderr.toString()
+
+    expect(result.exitCode).toBe(1)
+    expect(output).toContain("Usage: mendcode --session ses_0cd1e09f6ffePQGK5SRql5mfKz")
+    expect(output).not.toContain("Blocked internal donor runtime command")
+  })
+
+  test("rejects malformed session id shortcuts with a MendCode-owned error", () => {
+    const result = runPublicBin(["ses_0cd1e09f6ffePQGK5SRql5mfKz-bad"])
+    const output = result.stderr.toString()
+
+    expect(result.exitCode).toBe(1)
+    expect(output).toContain("Invalid MendCode session id: ses_0cd1e09f6ffePQGK5SRql5mfKz-bad")
+    expect(output).not.toContain("Blocked internal donor runtime command")
+  })
+
+  test("explains legacy donor session restores without exposing OpenCode as the public command", () => {
+    const result = runPublicBin(["opencode", "--", "--session", "ses_0cd1e09f6ffePQGK5SRql5mfKz"])
+    const output = result.stderr.toString()
+
+    expect(result.exitCode).toBe(1)
+    expect(output).toContain("Blocked legacy session restore command")
+    expect(output).toContain("Use: mendcode --session ses_0cd1e09f6ffePQGK5SRql5mfKz")
+    expect(output).not.toContain("OpenCode is a donor/reference chassis")
+  })
+
+  test("keeps real donor commands blocked by default", () => {
+    const result = runPublicBin(["opencode", "--", "session", "list"])
+    const output = result.stderr.toString()
+
+    expect(result.exitCode).toBe(1)
+    expect(output).toContain("Blocked internal donor runtime command: session")
+    expect(output).toContain("MENDCODE_ALLOW_DONOR_COMMANDS=1")
+  })
+
+  test("does not misclassify donor session subcommands as legacy restores", () => {
+    const result = runPublicBin(["opencode", "--", "session", "delete", "ses_0cd1e09f6ffePQGK5SRql5mfKz"])
+    const output = result.stderr.toString()
+
+    expect(result.exitCode).toBe(1)
+    expect(output).toContain("Blocked internal donor runtime command: session")
+    expect(output).not.toContain("Blocked legacy session restore command")
   })
 })

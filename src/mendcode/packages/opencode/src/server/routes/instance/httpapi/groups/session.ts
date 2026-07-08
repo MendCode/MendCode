@@ -9,14 +9,17 @@ import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { BackgroundSession } from "@/session/background"
-import { MessageID, PartID, SessionID } from "@/session/schema"
+import { AgentViewMetadata } from "@/session/agent-view-metadata"
+import { AgentCommand } from "@/session/agent-command"
+import { AgentCommandPolicy } from "@/session/agent-command-policy"
+import { AgentCommandID, MessageID, PartID, SessionID } from "@/session/schema"
 import { Snapshot } from "@/snapshot"
 import { Schema, SchemaGetter, Struct } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import { WorkspaceRoutingMiddleware } from "../middleware/workspace-routing"
-import { ApiNotFoundError } from "../errors"
+import { ApiBadRequestError, ApiNotFoundError } from "../errors"
 import { described } from "./metadata"
 
 const root = "/session"
@@ -81,6 +84,17 @@ export const BackgroundWriterPayload = Schema.Struct({
   clientID: Schema.String,
   ttlMs: Schema.optional(Schema.Number),
 })
+export const AgentViewMetadataPayload = AgentViewMetadata.Patch
+export const AgentCommandCreatePayload = AgentCommand.Create
+export const AgentCommandUpdatePayload = AgentCommand.Update
+export const AgentCommandListQuery = Schema.Struct({
+  sourceSessionID: Schema.optional(SessionID),
+  targetSessionID: Schema.optional(SessionID),
+  state: Schema.optional(AgentCommand.State),
+})
+export const AgentCommandSessionQuery = Schema.Struct({
+  state: Schema.optional(AgentCommand.State),
+})
 export const BackgroundWriterResult = Schema.Union([
   Schema.Struct({
     acquired: Schema.Literal(true),
@@ -96,7 +110,14 @@ export const SessionPaths = {
   list: root,
   status: `${root}/status`,
   background: `${root}/background`,
+  agentView: `${root}/agent-view`,
+  agentViewMetadataList: `${root}/agent-view/metadata`,
+  agentCommandPolicy: `${root}/agent-command/policy`,
+  agentCommandList: `${root}/agent-command`,
   get: `${root}/:sessionID`,
+  agentViewMetadata: `${root}/:sessionID/agent-view/metadata`,
+  agentCommand: `${root}/:sessionID/agent-command`,
+  agentCommandItem: `${root}/:sessionID/agent-command/:commandID`,
   backgroundRegister: `${root}/:sessionID/background`,
   backgroundWriter: `${root}/:sessionID/background/writer`,
   children: `${root}/:sessionID/children`,
@@ -158,6 +179,17 @@ export const SessionApi = HttpApi.make("session")
             description: "List MendCode background sessions globally for Agent View.",
           }),
         ),
+        HttpApiEndpoint.get("agentViewList", SessionPaths.agentView, {
+          query: ListQuery,
+          success: described(Schema.Array(BackgroundSession.Entry), "Aggregate Agent View session rows"),
+          error: HttpApiError.BadRequest,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.agent_view.list",
+            summary: "List Agent View sessions",
+            description: "Get aggregate read-only session rows for Agents View with status, background state, and metadata overrides.",
+          }),
+        ),
         HttpApiEndpoint.get("get", SessionPaths.get, {
           params: { sessionID: SessionID },
           success: described(Session.Info, "Get session"),
@@ -167,6 +199,96 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.get",
             summary: "Get session",
             description: "Retrieve detailed information about a specific MendCode session.",
+          }),
+        ),
+        HttpApiEndpoint.get("agentViewMetadataList", SessionPaths.agentViewMetadataList, {
+          success: described(Schema.Array(AgentViewMetadata.Info), "Agent View metadata entries"),
+          error: HttpApiError.BadRequest,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.agent_view.metadata.list",
+            summary: "List Agent View metadata",
+            description: "List local control-plane metadata overrides for Agent View sessions.",
+          }),
+        ),
+        HttpApiEndpoint.get("agentViewMetadataGet", SessionPaths.agentViewMetadata, {
+          params: { sessionID: SessionID },
+          success: described(Schema.NullOr(AgentViewMetadata.Info), "Agent View metadata or null when unset"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.agent_view.metadata.get",
+            summary: "Get Agent View metadata",
+            description: "Read local control-plane metadata for a session without mutating its transcript.",
+          }),
+        ),
+        HttpApiEndpoint.patch("agentViewMetadataPatch", SessionPaths.agentViewMetadata, {
+          params: { sessionID: SessionID },
+          payload: AgentViewMetadataPayload,
+          success: described(AgentViewMetadata.Info, "Updated Agent View metadata"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.agent_view.metadata.patch",
+            summary: "Patch Agent View metadata",
+            description: "Update local control-plane metadata such as title override, tags, group, priority, notes, pin, or archive.",
+          }),
+        ),
+        HttpApiEndpoint.get("agentCommandList", SessionPaths.agentCommandList, {
+          query: AgentCommandListQuery,
+          success: described(Schema.Array(AgentCommand.Info), "Agent Command entries"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.agent_command.list",
+            summary: "List Agent Commands",
+            description: "List local control-plane command inbox entries for Agent View coordination.",
+          }),
+        ),
+        HttpApiEndpoint.get("agentCommandPolicy", SessionPaths.agentCommandPolicy, {
+          success: described(Schema.Array(AgentCommandPolicy.MatrixItem), "Agent Command policy matrix"),
+          error: HttpApiError.BadRequest,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.agent_command.policy",
+            summary: "List Agent Command policy matrix",
+            description: "List the local policy decisions used for structured Agent Command coordination.",
+          }),
+        ),
+        HttpApiEndpoint.get("agentCommandListBySession", SessionPaths.agentCommand, {
+          params: { sessionID: SessionID },
+          query: AgentCommandSessionQuery,
+          success: described(Schema.Array(AgentCommand.Info), "Agent Command entries targeting this session"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.agent_command.list_by_session",
+            summary: "List incoming Agent Commands",
+            description: "List command inbox entries targeting a session.",
+          }),
+        ),
+        HttpApiEndpoint.post("agentCommandCreate", SessionPaths.agentCommand, {
+          params: { sessionID: SessionID },
+          payload: AgentCommandCreatePayload,
+          success: described(AgentCommand.Info, "Created Agent Command"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.agent_command.create",
+            summary: "Create Agent Command",
+            description: "Send a structured, auditable command to a session inbox without mutating its transcript.",
+          }),
+        ),
+        HttpApiEndpoint.patch("agentCommandPatch", SessionPaths.agentCommandItem, {
+          params: { sessionID: SessionID, commandID: AgentCommandID },
+          payload: AgentCommandUpdatePayload,
+          success: described(AgentCommand.Info, "Updated Agent Command"),
+          error: [ApiBadRequestError, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.agent_command.patch",
+            summary: "Update Agent Command",
+            description: "Advance or resolve an Agent Command state with an auditable update.",
           }),
         ),
         HttpApiEndpoint.post("backgroundRegister", SessionPaths.backgroundRegister, {
@@ -195,25 +317,25 @@ export const SessionApi = HttpApi.make("session")
         HttpApiEndpoint.post("backgroundWriterAcquire", SessionPaths.backgroundWriter, {
           params: { sessionID: SessionID },
           payload: BackgroundWriterPayload,
-          success: described(BackgroundWriterResult, "Writer lease acquisition result"),
+          success: described(BackgroundWriterResult, "Writer presence registration result"),
           error: [HttpApiError.BadRequest, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.background.writer.acquire",
-            summary: "Acquire background writer lease",
-            description: "Acquire the single interactive writer lease for a background session.",
+            summary: "Register background writer presence",
+            description: "Register an interactive terminal for a background session without taking exclusive ownership.",
           }),
         ),
         HttpApiEndpoint.delete("backgroundWriterRelease", SessionPaths.backgroundWriter, {
           params: { sessionID: SessionID },
           payload: Schema.Struct({ clientID: Schema.String }),
-          success: described(Schema.NullOr(BackgroundSession.Info), "Released writer lease"),
+          success: described(Schema.NullOr(BackgroundSession.Info), "Released writer presence"),
           error: [HttpApiError.BadRequest, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.background.writer.release",
-            summary: "Release background writer lease",
-            description: "Release the interactive writer lease for a background session.",
+            summary: "Release background writer presence",
+            description: "Release this terminal's background writer presence when it is still current.",
           }),
         ),
         HttpApiEndpoint.get("children", SessionPaths.children, {

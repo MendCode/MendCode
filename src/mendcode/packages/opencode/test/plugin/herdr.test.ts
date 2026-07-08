@@ -271,14 +271,23 @@ describe("plugin.herdr", () => {
     const requests = captureHerdrRequests()
     await HerdrAgentStatePlugin({} as any)
 
-    expect(requests[0]).toMatchObject({
-      method: "pane.report_agent",
-      params: {
-        source: "mendcode:state",
-        agent: "mendcode",
-        state: "idle",
-      },
-    })
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.release_agent" &&
+          request.params.source === "herdr:opencode" &&
+          request.params.agent === "opencode",
+      ),
+    ).toBe(true)
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.agent === "mendcode" &&
+          request.params.state === "idle",
+      ),
+    ).toBe(true)
     expect(
       requests.some(
         (request) =>
@@ -291,7 +300,7 @@ describe("plugin.herdr", () => {
       requests.some(
         (request) =>
           request.method === "pane.report_agent_session" ||
-          (request.method === "pane.report_agent" && request.params.source === "herdr:opencode"),
+          (request.method === "pane.report_agent" && request.params.source === "herdr:mendcode"),
       ),
     ).toBe(false)
   })
@@ -333,8 +342,8 @@ describe("plugin.herdr", () => {
       requests.some(
         (request) =>
           request.method === "pane.report_agent_session" &&
-          request.params.source === "herdr:opencode" &&
-          request.params.agent === "opencode" &&
+          request.params.source === "herdr:mendcode" &&
+          request.params.agent === "mendcode" &&
           request.params.agent_session_id === "ses_busy",
       ),
     ).toBe(true)
@@ -353,8 +362,8 @@ describe("plugin.herdr", () => {
       requests.filter(
         (request) =>
           request.method === "pane.report_agent_session" &&
-          request.params.source === "herdr:opencode" &&
-          request.params.agent === "opencode" &&
+          request.params.source === "herdr:mendcode" &&
+          request.params.agent === "mendcode" &&
           request.params.agent_session_id === "ses_busy",
       ).length,
     ).toBeGreaterThanOrEqual(2)
@@ -398,8 +407,8 @@ describe("plugin.herdr", () => {
       requests.some(
         (request) =>
           request.method === "pane.report_agent_session" &&
-          request.params.source === "herdr:opencode" &&
-          request.params.agent === "opencode" &&
+          request.params.source === "herdr:mendcode" &&
+          request.params.agent === "mendcode" &&
           request.params.agent_session_id === "ses_idle",
       ),
     ).toBe(true)
@@ -767,7 +776,7 @@ describe("plugin.herdr", () => {
     ).toBe(false)
   })
 
-  test("reports MendCode-branded state while preserving the official OpenCode session identity", async () => {
+  test("reports MendCode-branded state while preserving the official MendCode session identity", async () => {
     process.env.HERDR_ENV = "1"
     process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
     process.env.HERDR_PANE_ID = "w1:p1"
@@ -799,8 +808,8 @@ describe("plugin.herdr", () => {
       requests.some(
         (request) =>
           request.method === "pane.report_agent_session" &&
-          request.params.source === "herdr:opencode" &&
-          request.params.agent === "opencode" &&
+          request.params.source === "herdr:mendcode" &&
+          request.params.agent === "mendcode" &&
           request.params.agent_session_id === "ses_chat",
       ),
     ).toBe(true)

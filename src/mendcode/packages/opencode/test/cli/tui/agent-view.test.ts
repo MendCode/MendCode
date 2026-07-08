@@ -1,11 +1,18 @@
 import { describe, expect, test } from "bun:test"
 import {
   formatAgentViewDetailLabel,
+  formatAgentViewCommandSummary,
   formatAgentViewPathLabel,
   formatAgentViewSessionTime,
+  countAgentViewCommands,
+  formatAgentViewOrchestrationSummary,
+  agentViewCommandTouchesSession,
+  isAgentViewCommandActionable,
   isAgentViewSessionFallbackVisible,
   isAgentViewSessionVisible,
   isTemporaryAgentViewDirectory,
+  summarizeAgentViewOrchestration,
+  type AgentViewCommand,
   type AgentViewBackgroundSession,
 } from "../../../src/cli/cmd/tui/util/agent-view"
 
@@ -48,13 +55,15 @@ describe("Agent View visibility", () => {
     expect(formatAgentViewDetailLabel("Loop active: ready")).toBe("Loop active: ready")
   })
 
-  test("hides temp sessions before active state classification", () => {
+  test("hides completed temp sessions but keeps active or awaiting rows", () => {
     const completed = item({
       state: "completed",
       directory: "/private/var/folders/wk/opencode-test-123",
     })
     expect(isAgentViewSessionVisible({ item: completed, now })).toBe(false)
-    expect(isAgentViewSessionVisible({ item: item({ ...completed.background, state: "working" }), now })).toBe(false)
+    expect(isAgentViewSessionVisible({ item: item({ ...completed.background, state: "working" }), now })).toBe(true)
+    expect(isAgentViewSessionVisible({ item: item({ ...completed.background, state: "needs_input" }), now })).toBe(true)
+    expect(isAgentViewSessionVisible({ item: completed, pendingInput: 1, now })).toBe(true)
     expect(isAgentViewSessionVisible({ item: item({ ...completed.background, pinned: true }), now })).toBe(true)
   })
 
@@ -66,6 +75,29 @@ describe("Agent View visibility", () => {
       }),
     ).toBe(true)
     expect(isAgentViewSessionVisible({ item: item({ state: "completed", session: null }), now })).toBe(false)
+  })
+
+  test("keeps old sessions visible while commands are still active or blocked", () => {
+    const oldSession = item({
+      state: "completed",
+      directory: "/Users/obed/Code/TerraPredict",
+      updated: now - 25 * 60 * 60 * 1_000,
+    })
+
+    expect(isAgentViewSessionVisible({ item: oldSession, now })).toBe(false)
+    expect(isAgentViewSessionVisible({ item: oldSession, activeCommands: 1, now })).toBe(true)
+    expect(isAgentViewSessionVisible({ item: oldSession, blockedCommands: 1, now })).toBe(true)
+  })
+
+  test("keeps pinned or active archived sessions visible while hiding archived completed rows", () => {
+    expect(isAgentViewSessionVisible({ item: item({ state: "completed", metadata: { archived: true } }), now })).toBe(false)
+    expect(
+      isAgentViewSessionVisible({
+        item: item({ state: "completed", metadata: { archived: true, pinned: true } }),
+        now,
+      }),
+    ).toBe(true)
+    expect(isAgentViewSessionVisible({ item: item({ state: "working", metadata: { archived: true } }), now })).toBe(true)
   })
 
   test("allows old real sessions only as the empty-recent fallback", () => {
@@ -85,6 +117,69 @@ describe("Agent View visibility", () => {
     expect(isAgentViewSessionFallbackVisible(tempSession)).toBe(false)
     expect(isAgentViewSessionFallbackVisible(item({ state: "completed", session: null }))).toBe(false)
   })
+
+  test("summarizes and counts command inbox state for Agent View rows", () => {
+    const pending = command({ id: "acmd_1", targetSessionID: "ses_worker", type: "rename", payload: { title: "Worker Alpha" } })
+    const accepted = command({ id: "acmd_2", targetSessionID: "ses_worker", state: "accepted", type: "tag", payload: { tags: ["api"] } })
+    const other = command({ id: "acmd_3", targetSessionID: "ses_other" })
+
+    expect(isAgentViewCommandActionable(pending)).toBe(true)
+    expect(isAgentViewCommandActionable(accepted)).toBe(false)
+    expect(agentViewCommandTouchesSession({ command: pending, sessionID: "ses_worker" })).toBe(true)
+    expect(agentViewCommandTouchesSession({ command: pending, sessionID: "ses_source" })).toBe(false)
+    expect(agentViewCommandTouchesSession({ command: pending, sessionID: "ses_source", direction: "either" })).toBe(true)
+    expect(agentViewCommandTouchesSession({ command: pending, sessionID: "ses_else", direction: "either" })).toBe(false)
+    expect(countAgentViewCommands({ commands: [pending, accepted, other], sessionID: "ses_worker", states: ["pending"] })).toBe(1)
+    expect(countAgentViewCommands({ commands: [pending, accepted, other], sessionID: "ses_worker" })).toBe(2)
+    expect(countAgentViewCommands({ commands: [pending, accepted, other], sessionID: "ses_source", direction: "either" })).toBe(3)
+    expect(formatAgentViewCommandSummary(pending)).toBe("pending · rename row · Worker Alpha")
+    expect(formatAgentViewCommandSummary(accepted)).toBe("accepted · update tags · #api")
+    expect(formatAgentViewCommandSummary(command({ type: "send_message", payload: { text: "Ship next safe step" } }))).toBe(
+      "pending · send message · Ship next safe step",
+    )
+    expect(formatAgentViewCommandSummary(command({ type: "stop", payload: { reason: "handoff" } }))).toBe(
+      "pending · stop worker · handoff",
+    )
+  })
+
+  test("collapses multiline command instructions into one safe preview line", () => {
+    expect(
+      formatAgentViewCommandSummary(
+        command({
+          type: "request_summary",
+          payload: { instructions: "Summarize latest run\n\nInclude failures\tand next steps" },
+        }),
+      ),
+    ).toBe("pending · request summary · Summarize latest run Include failures and next steps")
+  })
+
+  test("summarizes orchestration command status board with explicit pending limits", () => {
+    const summary = summarizeAgentViewOrchestration({
+      sessionIDs: ["ses_worker", "ses_other"],
+      pendingLimitPerTarget: 2,
+      commands: [
+        command({ id: "acmd_1", targetSessionID: "ses_worker" }),
+        command({ id: "acmd_2", targetSessionID: "ses_worker" }),
+        command({ id: "acmd_3", targetSessionID: "ses_worker" }),
+        command({ id: "acmd_4", targetSessionID: "ses_worker", state: "running" }),
+        command({ id: "acmd_5", targetSessionID: "ses_worker", state: "completed" }),
+        command({ id: "acmd_6", targetSessionID: "ses_other", state: "failed" }),
+        command({ id: "acmd_7", targetSessionID: "ses_hidden" }),
+      ],
+    })
+
+    expect(summary).toEqual({
+      pending: 3,
+      active: 1,
+      completed: 1,
+      blocked: 1,
+      pendingCapacity: 4,
+      overLimitTargets: 1,
+    })
+    expect(formatAgentViewOrchestrationSummary(summary)).toBe(
+      "Coordinator commands · 3/4 queued · 1 over limit · 1 running · 1 done · 1 blocked",
+    )
+  })
 })
 
 function item(
@@ -99,6 +194,8 @@ function item(
     summary: input.summary,
     error: input.error,
     pinned: input.pinned,
+    process: input.process,
+    metadata: input.metadata,
     time: {
       created: input.time?.created ?? now - 2_000,
       updated: input.updated ?? input.time?.updated ?? now - 1_000,
@@ -116,4 +213,17 @@ function item(
           },
   }
   return { background }
+}
+
+function command(input: Partial<AgentViewCommand>): AgentViewCommand {
+  return {
+    id: input.id ?? "acmd_test",
+    sourceSessionID: input.sourceSessionID ?? "ses_source",
+    targetSessionID: input.targetSessionID ?? "ses_target",
+    type: input.type ?? "request_summary",
+    payload: input.payload ?? {},
+    permissions: input.permissions ?? [],
+    state: input.state ?? "pending",
+    time: input.time ?? { created: now - 2_000, updated: now - 1_000 },
+  }
 }

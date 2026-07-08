@@ -266,7 +266,9 @@ export function Loops() {
   const [selectedID, setSelectedID] = createSignal(data.selectedID)
   const [now, setNow] = createSignal(Date.now())
   const [listError, setListError] = createSignal<string>()
-  const [snapshotError, setSnapshotError] = createSignal<string>()
+  const listRequests = new Map<string, Promise<{ cacheKey?: string; items: LoopWorkflow[] }>>()
+  const snapshotRequests = new Map<string, Promise<{ id: string; snapshot?: LoopSnapshot; error?: string }>>()
+  let refreshTimer: ReturnType<typeof setTimeout> | undefined
   const loopCacheKey = createMemo(() =>
     loopWorkflowListCacheKey({
       directory: project.instance.path().directory,
@@ -280,6 +282,15 @@ export function Loops() {
   }
 
   async function fetchList(source: { refresh: number; cacheKey?: string }) {
+    const key = `${source.cacheKey ?? "global"}:${source.refresh}`
+    const inflight = listRequests.get(key)
+    if (inflight) return inflight
+    const request = fetchListUncached(source).finally(() => listRequests.delete(key))
+    listRequests.set(key, request)
+    return request
+  }
+
+  async function fetchListUncached(source: { refresh: number; cacheKey?: string }) {
     const response = await sdk.fetch(`${sdk.url}/loop`, { headers: { accept: "application/json" } })
     if (!response.ok) {
       setListError(`Loop list failed: ${response.status}`)
@@ -292,14 +303,19 @@ export function Loops() {
     return { cacheKey: source.cacheKey, items }
   }
 
-  async function fetchSnapshot(id: string) {
+  async function fetchSnapshot(key: string) {
+    const inflight = snapshotRequests.get(key)
+    if (inflight) return inflight
+    const id = key.split(":")[0]
+    const request = fetchSnapshotUncached(id).finally(() => snapshotRequests.delete(key))
+    snapshotRequests.set(key, request)
+    return request
+  }
+
+  async function fetchSnapshotUncached(id: string) {
     const response = await sdk.fetch(`${sdk.url}/loop/${id}?limit=${LOOP_EVENT_LIMIT}`, { headers: { accept: "application/json" } })
-    if (!response.ok) {
-      setSnapshotError(`Loop snapshot failed: ${response.status}`)
-      return undefined
-    }
-    setSnapshotError(undefined)
-    return response.json() as Promise<LoopSnapshot>
+    if (!response.ok) return { id, error: `Loop snapshot failed: ${response.status}` }
+    return { id, snapshot: await response.json() as LoopSnapshot }
   }
 
   const [loops] = createResource(
@@ -324,14 +340,18 @@ export function Loops() {
     () => `${selected()?.id ?? ""}:${refresh()}`,
     (key) => {
       const id = key.split(":")[0]
-      if (!id) {
-        setSnapshotError(undefined)
-        return undefined
-      }
-      return fetchSnapshot(id)
+      if (!id) return undefined
+      return fetchSnapshot(key)
     },
   )
-  const detail = createMemo(() => snapshot.latest?.workflow ?? selected())
+  const currentSnapshotResult = createMemo(() => {
+    const latest = snapshot.latest
+    if (!latest) return undefined
+    return latest.id === selected()?.id ? latest : undefined
+  })
+  const currentSnapshot = createMemo(() => currentSnapshotResult()?.snapshot)
+  const snapshotError = createMemo(() => currentSnapshotResult()?.error)
+  const detail = createMemo(() => currentSnapshot()?.workflow ?? selected())
   const frame = createMemo(() => loopRouteFrameLayout(dimensions().width))
   const width = createMemo(() => frame().width)
   const narrow = createMemo(() => frame().narrow)
@@ -341,6 +361,22 @@ export function Loops() {
   const activeCount = createMemo(() => primaryLoops().length)
   const historyCount = createMemo(() => historyLoops().length)
   const projectFolder = createMemo(() => folderName(project.instance.path().directory || project.instance.path().worktree))
+
+  function requestRefresh() {
+    if (refreshTimer) return
+    refreshTimer = setTimeout(() => {
+      refreshTimer = undefined
+      setRefresh((value) => value + 1)
+    }, 100)
+  }
+
+  function refreshNow() {
+    if (refreshTimer) {
+      clearTimeout(refreshTimer)
+      refreshTimer = undefined
+    }
+    setRefresh((value) => value + 1)
+  }
 
   createEffect(() => {
     const requested = data.selectedID ? allLoops().find((item) => item.id === data.selectedID) : undefined
@@ -354,15 +390,16 @@ export function Loops() {
 
   onMount(() => {
     const clock = setInterval(() => setNow(Date.now()), 1_000)
-    const fallback = setInterval(() => setRefresh((value) => value + 1), 10_000)
+    const fallback = setInterval(requestRefresh, 10_000)
     const unsubscribe = sdk.event.on("event", (event) => {
       const type = event.payload?.type as string | undefined
       if (!type?.startsWith("loop.")) return
-      setRefresh((value) => value + 1)
+      requestRefresh()
     })
     onCleanup(() => {
       clearInterval(clock)
       clearInterval(fallback)
+      if (refreshTimer) clearTimeout(refreshTimer)
       unsubscribe()
     })
   })
@@ -397,7 +434,7 @@ export function Loops() {
       body: JSON.stringify({ reason: `TUI ${action}` }),
     })
     if (!response.ok) throw new Error(`${action} failed: ${response.status}`)
-    setRefresh((value) => value + 1)
+    refreshNow()
     toast.show({ variant: "success", message: `Loop ${action} requested.`, duration: 2500 })
   }
 
@@ -420,7 +457,7 @@ export function Loops() {
       body: JSON.stringify({ agent, reason: `TUI agent set to ${agent ?? "default"}` }),
     })
     if (!response.ok) throw new Error(`agent update failed: ${response.status}`)
-    setRefresh((value) => value + 1)
+    refreshNow()
     toast.show({ variant: "success", message: `Loop agent: ${agent ?? "default"}.`, duration: 2500 })
   }
 
@@ -451,7 +488,7 @@ export function Loops() {
     }
     if (evt.name === "r") {
       consume()
-      setRefresh((value) => value + 1)
+      refreshNow()
       return
     }
     if (evt.name === "a") {
@@ -474,7 +511,7 @@ export function Loops() {
       selectOffset(-1)
       return
     }
-    if (evt.name === "enter" || evt.name === "o") {
+    if (evt.name === "return" || evt.name === "enter" || evt.name === "o") {
       consume()
       void openChat().catch((error) => toast.error(error))
       return
@@ -510,15 +547,15 @@ export function Loops() {
       ...(hasInvalidZeroBudget(item) ? [["budget", "invalid maxTurns=0; recreate with positive cap or unlimited"]] : []),
       ["next", relativeWakeup(item)],
       ["cadence", cadenceLabel(item)],
-      ["model", modelLabel(sync.data.provider, item, snapshot.latest?.rootSession)],
+      ["model", modelLabel(sync.data.provider, item, currentSnapshot()?.rootSession)],
       ["agent", item.spec?.agent ?? "default"],
       ["chat", item.rootSessionID ?? "none yet"],
       ["updated", item.time?.updated ? new Date(item.time.updated).toLocaleTimeString() : "unknown"],
     ]
   })
 
-  const events = createMemo(() => (snapshot.latest?.events ?? []).slice().reverse())
-  const runs = createMemo(() => (snapshot.latest?.runs ?? []).slice(0, 6))
+  const events = createMemo(() => (currentSnapshot()?.events ?? []).slice().reverse())
+  const runs = createMemo(() => (currentSnapshot()?.runs ?? []).slice(0, 6))
 
   return (
     <box flexDirection="column" width="100%" height="100%" paddingLeft={frame().paddingX} paddingRight={frame().paddingX} paddingTop={frame().compact ? 0 : 1} paddingBottom={frame().compact ? 0 : 1} gap={frame().compact ? 0 : 1}>
@@ -530,14 +567,14 @@ export function Loops() {
       >
         <Show
           when={!stacked()}
-          fallback={<StackedView view={view()} items={visibleLoops()} selected={selected()} select={setSelectedID} detail={detail()} detailRows={detailRows()} events={events()} runs={runs()} error={snapshotError()} width={width()} compact={frame().compact} projectFolder={projectFolder()} />}
+          fallback={<StackedView view={view()} items={visibleLoops()} selected={selected()} select={setSelectedID} detail={detail()} detailRows={detailRows()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={width()} compact={frame().compact} projectFolder={projectFolder()} />}
         >
           <box flexDirection="row" flexGrow={1} minHeight={0} gap={1}>
             <box width={listWidth()} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
               <LoopList view={view()} items={visibleLoops()} selected={selected()} select={setSelectedID} width={listWidth() - 4} compact={frame().compact} projectFolder={projectFolder()} />
             </box>
             <box flexGrow={1} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-              <LoopDetail detail={detail()} rows={detailRows()} events={events()} runs={runs()} error={snapshotError()} width={detailWidth() - 4} />
+              <LoopDetail detail={detail()} rows={detailRows()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={detailWidth() - 4} />
             </box>
           </box>
         </Show>
@@ -660,6 +697,7 @@ function LoopDetail(props: {
   events: LoopEvent[]
   runs: LoopRun[]
   error?: string
+  loading?: boolean
   width: number
 }) {
   const { theme } = useTheme()
@@ -689,6 +727,9 @@ function LoopDetail(props: {
               </box>
 
               <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
+                <Show when={props.loading && !props.error}>
+                  <text fg={theme.textMuted} wrapMode="none" selectable={false}>loading latest snapshot…</text>
+                </Show>
                 <Show when={props.error}>
                   {(error) => <text fg={theme.warning} wrapMode="none" selectable={false}>snapshot unavailable · {compact(error(), Math.max(12, props.width - 23))}</text>}
                 </Show>
@@ -800,6 +841,7 @@ function StackedView(props: {
   events: LoopEvent[]
   runs: LoopRun[]
   error?: string
+  loading?: boolean
   width: number
   compact?: boolean
   projectFolder: string
@@ -831,11 +873,11 @@ function StackedView(props: {
         <Show
           when={!props.compact}
           fallback={
-            <CompactLoopDetail detail={props.detail} rows={props.detailRows} events={props.events} runs={props.runs} error={props.error} width={Math.max(20, props.width - 2)} />
+            <CompactLoopDetail detail={props.detail} rows={props.detailRows} events={props.events} runs={props.runs} error={props.error} loading={props.loading} width={Math.max(20, props.width - 2)} />
           }
         >
           <box borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-            <LoopDetail detail={props.detail} rows={props.detailRows} events={props.events} runs={props.runs} error={props.error} width={props.width - 4} />
+            <LoopDetail detail={props.detail} rows={props.detailRows} events={props.events} runs={props.runs} error={props.error} loading={props.loading} width={props.width - 4} />
           </box>
         </Show>
       </box>
@@ -849,6 +891,7 @@ function CompactLoopDetail(props: {
   events: LoopEvent[]
   runs: LoopRun[]
   error?: string
+  loading?: boolean
   width: number
 }) {
   const { theme } = useTheme()
@@ -868,6 +911,9 @@ function CompactLoopDetail(props: {
             </text>
             <Show when={props.error}>
               {(error) => <text fg={theme.warning} wrapMode="none" selectable={false}>{compact(`snapshot unavailable · ${error()}`, props.width)}</text>}
+            </Show>
+            <Show when={props.loading && !props.error}>
+              <text fg={theme.textMuted} wrapMode="none" selectable={false}>loading latest snapshot…</text>
             </Show>
             <Show when={latestRun()}>
               {(run) => <text fg={run().state === "failed" ? theme.error : theme.text} wrapMode="none" selectable={false}>{compact(`run · ${run().state} · ${run().evaluatorReason || run().phase || ""}`, props.width)}</text>}

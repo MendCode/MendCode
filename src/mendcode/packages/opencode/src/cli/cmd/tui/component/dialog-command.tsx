@@ -1,4 +1,4 @@
-import { useDialog } from "@tui/ui/dialog"
+import { commandDialogWidth, useDialog } from "@tui/ui/dialog"
 import { DialogSelect, type DialogSelectOption, type DialogSelectRef } from "@tui/ui/dialog-select"
 import {
   createContext,
@@ -11,7 +11,7 @@ import {
   type Accessor,
   type ParentProps,
 } from "solid-js"
-import { useKeyboard } from "@opentui/solid"
+import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { useKeybind } from "@tui/context/keybind"
 
 type Context = ReturnType<typeof init>
@@ -177,118 +177,167 @@ export function CommandProvider(props: ParentProps) {
 }
 
 function DialogCommand(props: { options: CommandOption[]; suggestedOptions: CommandOption[] }) {
+  const dimensions = useTerminalDimensions()
+  const categoryMode = createMemo(() => {
+    const width = Math.min(commandDialogWidth(dimensions().width), dimensions().width - 2)
+    if (width < 76) return "tiny"
+    if (width < 112) return "compact"
+    return "full"
+  })
   let ref: DialogSelectRef<string>
   const list = () => {
     const options = ref?.filter ? props.options : [...props.suggestedOptions, ...props.options]
-    return commandOptions(options)
+    return commandOptions(options, categoryMode())
   }
   return <DialogSelect ref={(r) => (ref = r)} title="Commands" variant="command" flat={true} options={list()} />
 }
 
-const categoryOrder = ["Session", "Chat", "Models", "Context", "Tools", "Settings", "System"]
+const fullCategoryOrder = [
+  "Session",
+  "Chat",
+  "Models",
+  "Providers",
+  "Memory",
+  "Loops",
+  "Workspace",
+  "Appearance",
+  "Access",
+  "Tools",
+  "Insights",
+  "Setup",
+  "Developer",
+  "System",
+]
+
+const compactCategoryOrder = ["Session", "Chat", "Models", "Context", "Tools", "Settings", "System"]
+const tinyCategoryOrder = ["Session", "Chat", "Models", "Tools", "System"]
+type CommandCategoryMode = "full" | "compact" | "tiny"
 
 const titleOverrides: Record<string, string> = {
-  "session.list": "Open chats",
-  "session.new": "New chat",
-  "session.rename": "Rename",
-  "session.compact": "Summarize",
-  "session.context": "Context",
-  "session.permission.status": "Approval",
-  "session.toggle.todos": "Todos",
-  "session.toggle.thinking": "Thinking",
-  "session.toggle.timestamps": "Timestamps",
-  "session.toggle.actions": "Tool details",
-  "session.toggle.conceal": "Code preview",
-  "session.toggle.scrollbar": "Scrollbar",
-  "session.toggle.generic_tool_output": "Tool output",
-  "session.timeline": "Timeline",
-  "session.background": "Run in background",
-  "session.attach": "Attach",
-  "session.fork": "Fork chat",
-  "session.undo": "Undo",
-  "session.redo": "Redo",
-  "messages.copy": "Copy reply",
-  "session.copy": "Copy chat",
-  "session.export": "Export chat",
-  "workspace.set": "Workspace",
-  "prompt.clear": "Clear input",
-  "prompt.submit": "Send",
-  "prompt.editor": "Editor",
-  "prompt.editor_context.clear": "Clear files",
-  "prompt.paste": "Paste",
-  "prompt.stash": "Save draft",
-  "prompt.stash.pop": "Restore draft",
-  "prompt.stash.list": "Drafts",
-  "prompt.skills": "Skills",
-  "model.list": "Model",
-  "agent.list": "Agent",
-  "mcp.list": "MCP",
-  "variant.list": "Variant",
+  "session.list": "Switch Chat",
+  "session.new": "New Chat",
+  "session.rename": "Rename Chat",
+  "session.compact": "Compact Chat",
+  "session.context": "View Context Usage",
+  "session.permission.status": "Change Approval Mode",
+  "session.toggle.sticky_user_header": "Toggle Sticky User Header",
+  "session.toggle.todos": "Toggle Todos",
+  "session.toggle.thinking": "Toggle Thinking",
+  "session.toggle.timestamps": "Toggle Timestamps",
+  "session.toggle.actions": "Toggle Tool Details",
+  "session.toggle.conceal": "Toggle Code Preview",
+  "session.toggle.scrollbar": "Toggle Chat Scrollbar",
+  "session.toggle.generic_tool_output": "Toggle Generic Tool Output",
+  "session.timeline": "Jump to Message",
+  "session.background": "Detach to Agent View",
+  "session.fork": "Fork Chat",
+  "session.undo": "Undo Last User Message",
+  "session.redo": "Redo Message",
+  "session.interrupt": "Interrupt Assistant",
+  "session.loop.create": "Create Session Loop Workflow",
+  "session.page.up": "Scroll Page Up",
+  "session.page.down": "Scroll Page Down",
+  "session.line.up": "Scroll Line Up",
+  "session.line.down": "Scroll Line Down",
+  "session.half.page.up": "Scroll Half Page Up",
+  "session.half.page.down": "Scroll Half Page Down",
+  "session.first": "Jump to First Message",
+  "session.last": "Jump to Last Message",
+  "session.messages_last_user": "Jump to Last User Message",
+  "session.message.next": "Jump to Next Message",
+  "session.message.previous": "Jump to Previous Message",
+  "messages.copy": "Copy Last Assistant Reply",
+  "session.copy": "Copy Chat Transcript",
+  "session.export": "Export Chat Transcript",
+  "session.child.first": "Open First Child Chat",
+  "session.parent": "Open Parent Chat",
+  "session.child.next": "Open Next Child Chat",
+  "session.child.previous": "Open Previous Child Chat",
+  "workspace.set": "Change Workspace",
+  "prompt.clear": "Clear Prompt Input",
+  "prompt.submit": "Send Prompt",
+  "prompt.editor": "Open Prompt Editor",
+  "prompt.editor_context.clear": "Remove Attached Files",
+  "prompt.paste": "Paste Clipboard Image",
+  "prompt.stash": "Save Prompt Draft",
+  "prompt.stash.pop": "Restore Prompt Draft",
+  "prompt.stash.list": "Open Prompt Drafts",
+  "prompt.skills": "Insert Skill",
+  "model.list": "Switch Model",
+  "model.cycle_recent": "Cycle Recent Model",
+  "model.cycle_recent_reverse": "Cycle Previous Recent Model",
+  "model.cycle_favorite": "Cycle Favorite Model",
+  "model.cycle_favorite_reverse": "Cycle Previous Favorite Model",
+  "agent.list": "Switch Agent",
+  "agent.cycle": "Cycle Agent",
+  "agent.cycle.reverse": "Cycle Previous Agent",
+  "agent.mode.picker": "Switch Agent Mode",
+  "mcp.list": "Toggle MCP Servers",
+  "variant.list": "Switch Model Variant",
+  "variant.cycle": "Cycle Model Variant",
   "provider.connect": "Connect Provider",
-  "console.org.switch": "Organization",
-  "mendcode.memory.status": "Memory Manager",
-  "mendcode.memory.manager": "Memory Center",
-  "mendcode.loops.dashboard": "Loop Workflows",
-  "mendcode.memory.input.enable": "Use memory",
-  "mendcode.memory.io.enable": "Save memories",
-  "mendcode.memory.disable": "Disable memory",
-  "mendcode.presentation.profile": "Chat presentation",
-  "mendcode.message.renderer": "Message rendering",
-  "mendcode.prompt.mode": "Prompt context",
-  "agent.mode.picker": "Mode picker",
-  "mendcode.prompt.chrome": "Chat input",
-  "mendcode.prompt.lead": "Input marker",
-  "mendcode.prompt.status.placement": "Status position",
-  "mendcode.prompt.status.script.left": "Left script",
-  "mendcode.prompt.status.script.right": "Right script",
-  "mendcode.prompt.status.left": "Left status",
-  "mendcode.prompt.status.right": "Right status",
-  "mendcode.prompt.status.separator": "Status separator",
-  "mendcode.prompt.mode.cycle": "Next prompt context",
-  "mendcode.setup": "Setup",
-  "mendcode.permission.status": "Permissions",
-  "mendcode.status": "Health",
-  "mendcode.ai.status": "Provider setup",
-  "mendcode.models.status": "Model setup",
-  "mendcode.budget.status": "Budget",
-  "mendcode.home.identity": "Home",
-  "mendcode.home.title": "Home title",
-  "mendcode.home.font": "Home font",
-  "mendcode.home.logo.text": "Home mascot",
-  "mendcode.home.welcome": "Welcome",
-  "mendcode.home.split.panel": "Home split panel",
-  "mendcode.customization.capabilities": "Customization",
-  "mendcode.packages": "Packages",
-  "mendcode.packages.create": "Create package",
-  "mendcode.packages.disableAll": "Disable packages",
-  "mendcode.marketplace": "Marketplace",
-  "mendcode.registry.status": "Package source",
-  "mendcode.runtime.status": "Runtime",
-  "mendcode.runtime.configure": "Use runtime",
-  "mendcode.assets": "Project assets",
-  "mendcode.slash.commands": "Commands",
-  "mendcode.tsm.status": "TSM",
-  "mendcode.worktree.manager": "Worktrees",
-  "mendcode.mflow.status": "Mflow",
-  "mendcode.mflow.activate": "Mflow on",
-  "mendcode.mflow.deactivate": "Mflow off",
-  "mendcode.mflow.remove": "Mflow remove",
-  "theme.switch": "Theme",
-  "theme.switch_mode": "Theme mode",
-  "theme.mode.lock": "Lock theme",
-  "terminal.title.toggle": "Terminal title",
-  "app.toggle.animations": "Animations",
-  "app.toggle.file_context": "File context",
-  "app.toggle.paste_summary": "Paste summary",
-  "app.toggle.session_directory_filter": "Directory filter",
-  "app.toggle.diffwrap": "Diff wrapping",
-  "plugins.list": "Plugins",
-  "help.show": "Help",
-  "docs.open": "Docs",
-  "app.exit": "Quit",
-  "app.debug": "Debug panel",
-  "app.console": "Console",
-  "app.heap_snapshot": "Heap snapshot",
+  "console.org.switch": "Switch Organization",
+  "mendcode.memory.status": "Review Memory Proposals",
+  "mendcode.memory.manager": "Open Memory Center",
+  "mendcode.memory.input.enable": "Enable Memory Input",
+  "mendcode.memory.io.enable": "Enable Memory Input and Output",
+  "mendcode.memory.disable": "Disable Memory",
+  "mendcode.loops.dashboard": "Open Loop Workflows",
+  "mendcode.loop.create": "Create Loop Workflow",
+  "mendcode.presentation.profile": "Configure Chat Presentation",
+  "mendcode.message.renderer": "Configure Message Rendering",
+  "mendcode.prompt.mode": "Switch Prompt Context",
+  "mendcode.prompt.chrome": "Configure Chat Input",
+  "mendcode.prompt.lead": "Configure Input Marker",
+  "mendcode.prompt.status.placement": "Configure Prompt Status Position",
+  "mendcode.prompt.status.script.left": "Configure Left Status Script",
+  "mendcode.prompt.status.script.right": "Configure Right Status Script",
+  "mendcode.prompt.status.left": "Configure Left Status Builtins",
+  "mendcode.prompt.status.right": "Configure Right Status Builtins",
+  "mendcode.prompt.status.separator": "Configure Status Separator",
+  "mendcode.prompt.mode.cycle": "Cycle Prompt Context",
+  "mendcode.session.submit_scroll": "Configure Submit Scroll Behavior",
+  "mendcode.setup": "Open Setup",
+  "mendcode.permission.status": "View Permission Mode",
+  "mendcode.status": "View MendCode Health",
+  "mendcode.ai.status": "Configure Providers",
+  "mendcode.models.status": "Configure Models",
+  "mendcode.budget.status": "Configure Budget",
+  "mendcode.home.identity": "Configure Home Identity",
+  "mendcode.home.title": "Configure Home Title",
+  "mendcode.home.font": "Configure Home Font",
+  "mendcode.home.logo.text": "Configure Home Mascot",
+  "mendcode.home.welcome": "Configure Home Welcome",
+  "mendcode.home.split.panel": "Configure Home Split Panel",
+  "mendcode.customization.capabilities": "View Customization Capabilities",
+  "mendcode.packages": "Manage Packages",
+  "mendcode.packages.create": "Create or Update Local Package",
+  "mendcode.packages.disableAll": "Disable All Packages",
+  "mendcode.marketplace": "Open Marketplace",
+  "mendcode.registry.status": "View Package Source Status",
+  "mendcode.runtime.status": "View Runtime Status",
+  "mendcode.runtime.configure": "Configure Runtime",
+  "mendcode.assets": "Manage Project Assets",
+  "mendcode.slash.commands": "View Slash Commands",
+  "mendcode.tsm.status": "Open TSM Manager",
+  "mendcode.worktree.manager": "Manage Worktrees",
+  "mendcode.mflow.status": "Open Mflow Manager",
+  "mendcode.mflow.activate": "Configure and Enable Mflow",
+  "mendcode.mflow.deactivate": "Disable Mflow",
+  "mendcode.mflow.remove": "Remove Mflow Config",
+  "mendcode.stats.insights": "Open Usage Insights",
+  "mendcode.stats.project": "Open Project Usage Insights",
+  "mendcode.changes.review": "Review Changes",
+  "theme.switch": "Switch Theme",
+  "plugins.list": "Manage Internal TUI Plugins",
+  "session.v2.messages": "View V2 Session Messages",
+  "help.show": "Open Help",
+  "docs.open": "Open Docs",
+  "app.exit": "Quit MendCode",
+  "app.debug": "Toggle Debug Panel",
+  "app.console": "Toggle Console",
+  "app.heap_snapshot": "Write Heap Snapshot",
+  "terminal.suspend": "Suspend Terminal",
 }
 
 const slashFallbacks: Record<string, Slash> = {
@@ -318,73 +367,96 @@ const slashFallbacks: Record<string, Slash> = {
 }
 
 function commandCategory(option: CommandOption) {
-  if (option.category === "Suggested") return "System"
-  if (option.value.startsWith("session.") || option.category === "Session" || option.category === "Permissions") {
-    return "Session"
+  const value = String(option.value).replace(/^suggested:/, "")
+  if (option.category === "Developer" || option.category === "Debug" || value.includes("debug") || value.includes("heap_snapshot")) {
+    return "Developer"
   }
+  if (value.includes("memory")) return "Memory"
+  if (value.includes("loop")) return "Loops"
+  if (value.includes("workspace")) return "Workspace"
   if (
-    option.value.includes("package") ||
-    option.value.includes("marketplace") ||
-    option.value.includes("plugin") ||
-    option.value.includes("skill") ||
-    option.value.includes("mcp") ||
-    option.value.includes("asset") ||
-    option.value.includes("runtime") ||
-    option.value.includes("registry") ||
-    option.value.includes("slash.commands") ||
-    option.value.includes("tsm") ||
-    option.value.includes("worktree") ||
-    option.value.includes("mflow")
-  ) {
-    return "Tools"
-  }
-  if (
-    option.category === "Prompt" ||
-    option.value.includes("prompt.") ||
-    option.value.includes("presentation") ||
-    option.value.includes("thinking") ||
-    option.value.includes("timestamps") ||
-    option.value.includes("conceal") ||
-    option.value.includes("scrollbar") ||
-    option.value.includes("generic_tool_output")
-  ) {
-    return "Chat"
-  }
-  if (
-    option.value.includes("memory") ||
-    option.value.includes("loop") ||
-    option.value.includes("context") ||
-    option.value.includes("workspace") ||
-    option.value.includes("file_context")
-  ) {
-    return "Context"
-  }
-  if (
-    option.category === "Agent" ||
-    option.category === "Provider" ||
-    option.category === "Connect Provider" ||
-    option.value.includes("model") ||
-    option.value.includes("agent") ||
-    option.value.includes("provider") ||
-    option.value.includes("variant")
+    value.includes("model") ||
+    value.includes("agent") ||
+    value.includes("variant") ||
+    value.includes("mcp") ||
+    option.category === "Agent"
   ) {
     return "Models"
   }
   if (
-    option.value.includes("theme") ||
-    option.value.includes("home") ||
-    option.value.includes("setup") ||
-    option.value.includes("budget") ||
-    option.value.includes("permission") ||
-    option.value.includes("terminal.title") ||
-    option.value.includes("animations") ||
-    option.value.includes("paste_summary") ||
-    option.value.includes("directory_filter") ||
-    option.value.includes("diffwrap")
+    value === "mendcode.ai.status" ||
+    value.includes("provider") ||
+    value.includes("org") ||
+    option.category === "Provider" ||
+    option.category === "Connect Provider"
   ) {
-    return "Settings"
+    return "Providers"
   }
+  if (value.includes("permission") || value.includes("approval") || value.includes("budget") || option.category === "Permissions") {
+    return "Access"
+  }
+  if (value.startsWith("session.") || value.startsWith("messages.") || option.category === "Session") return "Session"
+  if (
+    option.category === "Prompt" ||
+    value.includes("prompt.") ||
+    value.includes("presentation") ||
+    value.includes("renderer") ||
+    value.includes("submit_scroll") ||
+    value.includes("thinking") ||
+    value.includes("timestamps") ||
+    value.includes("conceal") ||
+    value.includes("scrollbar") ||
+    value.includes("generic_tool_output")
+  ) {
+    return "Chat"
+  }
+  if (
+    value.includes("theme") ||
+    value.includes("home") ||
+    value.includes("customization") ||
+    value.includes("terminal.title") ||
+    value.includes("animations") ||
+    value.includes("paste_summary") ||
+    value.includes("directory_filter") ||
+    value.includes("diffwrap") ||
+    value.startsWith("tips.")
+  ) {
+    return "Appearance"
+  }
+  if (
+    value.includes("package") ||
+    value.includes("marketplace") ||
+    value.includes("plugin") ||
+    value.includes("skill") ||
+    value.includes("asset") ||
+    value.includes("runtime") ||
+    value.includes("registry") ||
+    value.includes("slash.commands") ||
+    value.includes("tsm") ||
+    value.includes("worktree") ||
+    value.includes("mflow")
+  ) {
+    return "Tools"
+  }
+  if (value.includes("stats") || value.includes("insights") || value.includes("changes.review")) return "Insights"
+  if (value.includes("setup")) return "Setup"
   return "System"
+}
+
+function commandCategoryForWidth(option: CommandOption, mode: CommandCategoryMode) {
+  const category = commandCategory(option)
+  if (mode === "full") return category
+  if (mode === "tiny") {
+    if (category === "Providers") return "Models"
+    if (category === "Memory" || category === "Loops" || category === "Workspace" || category === "Access") return "Tools"
+    if (category === "Appearance" || category === "Insights" || category === "Setup" || category === "Developer") return "System"
+    return category
+  }
+  if (category === "Providers") return "Models"
+  if (category === "Memory" || category === "Loops" || category === "Workspace") return "Context"
+  if (category === "Appearance" || category === "Access" || category === "Setup") return "Settings"
+  if (category === "Insights" || category === "Developer") return "System"
+  return category
 }
 
 function commandRank(option: CommandOption) {
@@ -444,23 +516,24 @@ function commandFooter(option: CommandOption): DialogSelectOption<string>["foote
   return [slash, keybindLabel].filter(Boolean).join("   ")
 }
 
-function commandOptions(options: CommandOption[]) {
+function commandOptions(options: CommandOption[], categoryMode: CommandCategoryMode) {
   const deduped = new Map<string, CommandOption>()
   for (const option of options) {
     const key = String(option.value).replace(/^suggested:/, "")
     if (deduped.has(key) && option.category === "Suggested") continue
     deduped.set(key, option)
   }
+  const order = categoryMode === "tiny" ? tinyCategoryOrder : categoryMode === "compact" ? compactCategoryOrder : fullCategoryOrder
   return [...deduped.values()]
     .map((option) => ({
       ...option,
       title: titleOverrides[option.value] ?? option.title,
-      category: commandCategory(option),
+      category: commandCategoryForWidth(option, categoryMode),
       footer: commandFooter(option),
       searchText: searchText(option, (option as CommandOption & { keybindLabel?: string }).keybindLabel),
     }))
     .toSorted((a, b) => {
-      const category = categoryOrder.indexOf(a.category ?? "") - categoryOrder.indexOf(b.category ?? "")
+      const category = order.indexOf(a.category ?? "") - order.indexOf(b.category ?? "")
       if (category !== 0) return category
       const rank = commandRank(a) - commandRank(b)
       if (rank !== 0) return rank

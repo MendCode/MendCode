@@ -2,17 +2,24 @@ import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { DEFAULT_MEMORY_CATEGORIES, normalizeMemoryCategoryIDs } from "@/mend/memory/categories"
 import {
+  computeMemoryGraphHealth,
   readMemoryFacts,
   readMemoryGraph,
   upsertMemoryFact,
   upsertMemoryFactLink,
   validateMemoryGraph,
+  type MemoryFact,
+  type MemoryFactLink,
+  type MemoryGraphHealth,
 } from "@/mend/memory/graph"
 import type { MessageV2 } from "@/session/message-v2"
 import type { MemoryFactScope } from "@/mend/memory/categories"
 
 type MemoryGraphAction = "overview" | "search" | "upsert_fact" | "link" | "validate"
 type MemoryGraphLinkKind = "related" | "conflicts" | "supersedes" | "supports"
+
+const DEFAULT_SCOPE = "project" satisfies MemoryFactScope
+const DEFAULT_LINK_KIND = "related" satisfies MemoryGraphLinkKind
 
 const Action = Schema.Literals(["overview", "search", "upsert_fact", "link", "validate"])
 const Scope = Schema.Literals(["global", "project", "workspace", "group-view"])
@@ -39,6 +46,16 @@ type Metadata = {
     writes: boolean
     id?: string
   }
+  graphSnapshot?: MemoryGraphSnapshot
+}
+
+type MemoryGraphSnapshot = {
+  action: MemoryGraphAction
+  query?: string
+  health: MemoryGraphHealth
+  facts: Array<Pick<MemoryFact, "id" | "text" | "scope" | "categoryIDs" | "retrievalPriority"> & { materialized: boolean }>
+  links: Array<Pick<MemoryFactLink, "from" | "to" | "kind">>
+  categories: Array<{ id: string; label: string; count: number }>
 }
 
 function latestPath(messages: MessageV2.WithParts[]) {
@@ -62,18 +79,32 @@ function score(text: string, terms: string[]) {
 
 function formatGraphOverview(input: {
   facts: number
-  graphFacts: number
-  legacyFacts: number
-  links: number
+  health: MemoryGraphHealth
   categories: Array<{ id: string; count: number }>
 }) {
   const active = input.categories.filter((category) => category.count > 0).slice(0, 8)
   return [
+    `graph health: ${input.health.graphHealth}`,
     `facts: ${input.facts}`,
-    `graph facts: ${input.graphFacts}`,
-    `legacy facts: ${input.legacyFacts}`,
-    `links: ${input.links}`,
+    `materialized facts: ${input.health.materializedFacts}`,
+    `legacy facts: ${input.health.legacyFacts}`,
+    `links: ${input.health.links}`,
+    `connected facts: ${input.health.connectedFacts}`,
+    `isolated facts: ${input.health.isolatedFacts}`,
+    `orphan links: ${input.health.orphanLinks}`,
     active.length ? `active categories: ${active.map((item) => `${item.id}:${item.count}`).join(", ")}` : "active categories: none",
+  ].join("\n")
+}
+
+function formatGraphHealth(health: MemoryGraphHealth) {
+  return [
+    `graph health: ${health.graphHealth}`,
+    `materialized facts: ${health.materializedFacts}`,
+    `legacy facts: ${health.legacyFacts}`,
+    `links: ${health.links}`,
+    `connected facts: ${health.connectedFacts}`,
+    `isolated facts: ${health.isolatedFacts}`,
+    `orphan links: ${health.orphanLinks}`,
   ].join("\n")
 }
 
@@ -84,6 +115,50 @@ function formatFact(fact: Awaited<ReturnType<typeof upsertMemoryFact>>) {
     `categories: ${fact.categoryIDs.join(", ") || "uncategorized"}`,
     `text: ${fact.text}`,
   ].join("\n")
+}
+
+function categoryCounts(facts: MemoryFact[]) {
+  const counts = new Map<string, number>()
+  for (const fact of facts) {
+    for (const categoryID of fact.categoryIDs.length ? fact.categoryIDs : ["uncategorized"]) {
+      counts.set(categoryID, (counts.get(categoryID) ?? 0) + 1)
+    }
+  }
+  return counts
+}
+
+function graphSnapshot(input: {
+  action: MemoryGraphAction
+  query?: string
+  facts: MemoryFact[]
+  links: MemoryFactLink[]
+  health: MemoryGraphHealth
+}): MemoryGraphSnapshot {
+  const visibleFacts = input.facts.slice(0, 64)
+  const visibleFactIDs = new Set(visibleFacts.map((fact) => fact.id))
+  const counts = categoryCounts(visibleFacts)
+  return {
+    action: input.action,
+    query: input.query,
+    health: input.health,
+    facts: visibleFacts.map((fact) => ({
+      id: fact.id,
+      text: fact.text,
+      scope: fact.scope,
+      categoryIDs: fact.categoryIDs,
+      retrievalPriority: fact.retrievalPriority,
+      materialized: true,
+    })),
+    links: input.links
+      .filter((link) => visibleFactIDs.has(link.from) && visibleFactIDs.has(link.to))
+      .slice(0, 96)
+      .map((link) => ({ from: link.from, to: link.to, kind: link.kind })),
+    categories: DEFAULT_MEMORY_CATEGORIES.map((category) => ({
+      id: category.id,
+      label: category.label,
+      count: counts.get(category.id) ?? 0,
+    })),
+  }
 }
 
 export const MemoryGraphTool = Tool.define<typeof Parameters, Metadata, never>(
@@ -103,17 +178,10 @@ export const MemoryGraphTool = Tool.define<typeof Parameters, Metadata, never>(
 
         if (params.action === "overview") {
           const [graph, facts] = yield* Effect.promise(() => Promise.all([readMemoryGraph(root), readMemoryFacts(root)]))
-          const byCategory = new Map<string, number>()
-          for (const fact of facts) {
-            for (const categoryID of fact.categoryIDs.length ? fact.categoryIDs : ["uncategorized"]) {
-              byCategory.set(categoryID, (byCategory.get(categoryID) ?? 0) + 1)
-            }
-          }
+          const byCategory = categoryCounts(facts)
           const overview = {
             facts: facts.length,
-            graphFacts: graph.facts.length,
-            legacyFacts: facts.length - graph.facts.length,
-            links: graph.links.length,
+            health: computeMemoryGraphHealth({ graph, facts }),
             categories: DEFAULT_MEMORY_CATEGORIES.map((category) => ({
               id: category.id,
               count: byCategory.get(category.id) ?? 0,
@@ -122,35 +190,51 @@ export const MemoryGraphTool = Tool.define<typeof Parameters, Metadata, never>(
           return {
             title: "Memory graph overview",
             output: formatGraphOverview(overview),
-            metadata: { mendMemoryTool: { action: params.action, graph: true, writes } },
+            metadata: {
+              mendMemoryTool: { action: params.action, graph: true, writes },
+              graphSnapshot: graphSnapshot({ action: params.action, facts, links: graph.links, health: overview.health }),
+            },
           }
         }
 
         if (params.action === "validate") {
-          const result = yield* Effect.promise(() => validateMemoryGraph(root))
+          const [result, graph, facts] = yield* Effect.promise(() => Promise.all([validateMemoryGraph(root), readMemoryGraph(root), readMemoryFacts(root)]))
           return {
-            title: result.ok ? "Memory graph valid" : "Memory graph issues",
+            title: result.ok && result.health.graphHealth === "connected" ? "Memory graph valid" : result.ok ? `Memory graph valid but ${result.health.graphHealth}` : "Memory graph issues",
             output: result.ok
-              ? "ok: true\nissues: 0"
-              : [`ok: false`, `issues: ${result.issues.length}`, ...result.issues.slice(0, 8).map((issue) => `- ${issue.code}: ${issue.message}`)].join("\n"),
-            metadata: { mendMemoryTool: { action: params.action, graph: true, writes } },
+              ? [`ok: true`, `issues: 0`, formatGraphHealth(result.health)].join("\n")
+              : [`ok: false`, `issues: ${result.issues.length}`, formatGraphHealth(result.health), ...result.issues.slice(0, 8).map((issue) => `- ${issue.code}: ${issue.message}`)].join("\n"),
+            metadata: {
+              mendMemoryTool: { action: params.action, graph: true, writes },
+              graphSnapshot: graphSnapshot({ action: params.action, facts, links: graph.links, health: result.health }),
+            },
           }
         }
 
         if (params.action === "search") {
           const queryTerms = (params.query ?? "").toLowerCase().split(/[^a-z0-9_.@/-]+/).filter((item) => item.length > 1)
-          const facts = yield* Effect.promise(() => readMemoryFacts(root))
+          const [graph, facts] = yield* Effect.promise(() => Promise.all([readMemoryGraph(root), readMemoryFacts(root)]))
           const matches = facts
             .map((fact) => ({ fact, score: score(`${fact.text} ${fact.normalizedSummary} ${fact.categoryIDs.join(" ")}`, queryTerms) }))
             .filter((item) => !queryTerms.length || item.score > 0)
             .sort((a, b) => b.score - a.score || b.fact.updatedAt.localeCompare(a.fact.updatedAt))
             .slice(0, params.maxFacts ?? 12)
+          const matchFacts = matches.map(({ fact }) => fact)
           return {
             title: "Memory graph search",
             output: matches.length
               ? matches.map(({ fact }) => `- ${fact.id} [${fact.scope}] ${fact.categoryIDs.join(", ")}\n  ${fact.text}`).join("\n")
               : "No graph memory facts found.",
-            metadata: { mendMemoryTool: { action: params.action, graph: true, writes } },
+            metadata: {
+              mendMemoryTool: { action: params.action, graph: true, writes },
+              graphSnapshot: graphSnapshot({
+                action: params.action,
+                query: params.query,
+                facts: matchFacts,
+                links: graph.links,
+                health: computeMemoryGraphHealth({ graph, facts }),
+              }),
+            },
           }
         }
 
@@ -159,7 +243,7 @@ export const MemoryGraphTool = Tool.define<typeof Parameters, Metadata, never>(
           const fact = yield* Effect.promise(() => upsertMemoryFact({
             id: params.id,
             text,
-            scope: (params.scope ?? "project") as MemoryFactScope,
+            scope: params.scope ?? DEFAULT_SCOPE,
             categoryIDs: params.categoryIDs ? normalizeMemoryCategoryIDs(params.categoryIDs) : undefined,
             provenance: [`session:${ctx.sessionID}:message:${ctx.messageID}`],
             confidence: params.confidence ?? 0.8,
@@ -180,7 +264,7 @@ export const MemoryGraphTool = Tool.define<typeof Parameters, Metadata, never>(
         const link = yield* Effect.promise(() => upsertMemoryFactLink({
           from,
           to,
-          kind: (params.kind ?? "related") as MemoryGraphLinkKind,
+          kind: params.kind ?? DEFAULT_LINK_KIND,
         }, root))
         return {
           title: "Saved graph memory link",

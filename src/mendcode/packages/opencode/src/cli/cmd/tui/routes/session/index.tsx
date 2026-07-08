@@ -19,6 +19,7 @@ import path from "path"
 import { useRoute, useRouteData } from "@tui/context/route"
 import { useProject } from "@tui/context/project"
 import { useSync } from "@tui/context/sync"
+import { latestTerminalOutputPreview, renderTerminalOutput } from "@tui/context/shell-output"
 import { useEvent } from "@tui/context/event"
 import { SplitBorder } from "@tui/component/border"
 import { Spinner } from "@tui/component/spinner"
@@ -32,7 +33,7 @@ import {
   type ParsedKey,
   type TextareaRenderable,
 } from "@opentui/core"
-import { Prompt, type PromptRef } from "@tui/component/prompt"
+import { Prompt, type PromptRef, type PromptSubmitInfo } from "@tui/component/prompt"
 import type {
   AssistantMessage,
   Part,
@@ -89,7 +90,6 @@ import { errorMessage } from "@/util/error"
 import { Toast, useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv.tsx"
 import * as Editor from "../../util/editor"
-import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
 import { blurMendWidget, focusMendWidget, listMendWidgets, mendWidgetRenderContext, notifyMendWidgetVisible, readFocusedMendWidgetID, type MendWidgetEntry } from "@/mend/tui/widgets"
 import { renderMendEditor } from "@/mend/tui/editor-host"
@@ -101,7 +101,7 @@ import { PlanReviewPrompt } from "./plan-review"
 import { QuestionPrompt } from "./question"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import * as Model from "../../util/model"
-import { formatAssistantUsage, formatLatestAssistantContextUsage } from "../../util/usage"
+import { formatAssistantLiveUsage, formatAssistantUsage, formatLatestAssistantContextUsage } from "../../util/usage"
 import { formatTranscript } from "../../util/transcript"
 import { useTuiConfig } from "../../context/tui-config"
 import { getScrollAcceleration, isScrollboxAtBottom, isScrollboxAtTop } from "../../util/scroll"
@@ -112,9 +112,11 @@ import {
   sessionPendingInputSessionIDs,
   sessionPromptVisible,
   sessionLoopReceipt,
+  sessionHeaderTitleAlign,
+  sessionHeaderTitleJustify,
   sessionTopMetricsWidth,
   sessionTopbarLeftLabel,
-  sessionTopbarLeftWidth,
+  sessionTopbarLeftWidthWithTitle,
   sessionUsageBarLabels,
 } from "../../util/session-layout"
 import {
@@ -133,24 +135,41 @@ import { subagentTaskColorIndex, type SubagentTaskColorEntry } from "../../util/
 import {
   presentationReasoningVisible,
   compactPreviewLine,
-  compactionArcadeFrames,
-  compactionStageStates,
+  compactionSummaryPreview,
   rawReasoningDisplay,
   reasoningSummary,
   shouldDisplayReasoning,
   unavailableReasoningLabel,
 } from "@/mend/tui/presentation"
+import { CompactionPanel } from "../../component/compaction-panel"
+import {
+  agentViewCommandStateRank,
+  agentViewCommandTouchesSession,
+  formatAgentViewCommandSummary,
+  formatAgentViewCommandType,
+  isAgentViewCommandActionable,
+  type AgentViewCommand,
+} from "../../util/agent-view"
 import { promptChromeUsesFullSessionWidth } from "@/mend/tui/prompt-chrome"
 import { formatDuration } from "@/util/format"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
 import { reviewPermissionRequestWithModel, shouldTriggerSmartApproval } from "@/mend/permission/smart-approval"
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
-import { normalizeToolEvent, shouldRenderCompactTool, toolPresentationIcon, toolPresentationIconForProfile, webSearchUrlLines } from "@/mend/tui/timeline/normalize"
+import {
+  normalizeToolEvent,
+  shouldRenderCompactTool,
+  toolPresentationIcon,
+  toolPresentationIconForProfile,
+  webSearchUrlLines,
+  wrapTimelineLine,
+} from "@/mend/tui/timeline/normalize"
 import { groupTimelineParts, isTimelineStackStart, timelineCollapseLabel } from "@/mend/tui/timeline/group"
 import type { TimelineCollapse, TimelineRow } from "@/mend/tui/timeline/types"
 import { TimelineDiff } from "./renderers/diff"
 import { diffStatsFromFile, diffStatsFromPatch, patchFilePath, type TimelineDiffStats } from "./renderers/diff-label"
+import { memoryGraphMiniMap } from "../memory"
 import {
+  expandedUserMessageOffset,
   expandPastedContentPlaceholders,
   isPastedContentPart,
   userMessageDisplayText,
@@ -236,8 +255,6 @@ type BackgroundWriterInfo = {
     expires: number
   } | null
 }
-
-const activeBackgroundWriterStates = new Set<BackgroundWriterInfo["state"]>(["working", "needs_input"])
 
 type SessionLoopWorkflow = {
   id: string
@@ -325,16 +342,6 @@ function sessionMatchesLoopWorkflow(workflow: Pick<SessionLoopWorkflow, "rootSes
   return workflow.rootSessionID === sessionID || workflow.ownerSessionID === sessionID
 }
 
-type BackgroundWriterAcquireResult =
-  | {
-      acquired: true
-      info: BackgroundWriterInfo
-    }
-  | {
-      acquired: false
-      info?: BackgroundWriterInfo
-    }
-
 export function Session() {
   const route = useRouteData("session")
   const { navigate } = useRoute()
@@ -358,6 +365,7 @@ export function Session() {
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
+  const sessionPromptHistory = createMemo(() => sessionUserPromptHistory({ messages: messages(), partsByMessage: sync.data.part }))
   const fullHistoryStartID = createMemo(() => latestFullSessionHistoryStartID(messages()))
   const pendingInputSessionIDs = createMemo(() =>
     sessionPendingInputSessionIDs({
@@ -412,6 +420,11 @@ export function Session() {
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
   const [showTodos, setShowTodos] = kv.signal("session_todos_visible", false)
   const [followSessionOutput, setFollowSessionOutput] = createSignal(true)
+  const [submitViewportHoldRows, setSubmitViewportHoldRows] = createSignal(0)
+  const [submitViewportHoldMessageID, setSubmitViewportHoldMessageID] = createSignal<string>()
+  let submitViewportHoldTimer: ReturnType<typeof setTimeout> | undefined
+  let submitFollowSyncTimer: ReturnType<typeof setTimeout> | undefined
+  let submitFollowSyncToken = 0
 
   const showTimestamps = createMemo(() => timestamps() === "show")
   const contentInset = createMemo(() => (promptEdgeToEdge() ? 0 : 4))
@@ -420,6 +433,7 @@ export function Session() {
   const providers = createMemo(() => Model.index(sync.data.provider))
   const rootSessionID = createMemo(() => session()?.parentID ?? route.sessionID)
   const rootMessages = createMemo(() => sync.data.message[rootSessionID()] ?? [])
+  const rootFullHistoryStartID = createMemo(() => latestFullSessionHistoryStartID(rootMessages()))
   const rootLatestAssistant = createMemo(() =>
     sync.data.session_latest_assistant[rootSessionID()] ?? rootMessages().findLast((message): message is AssistantMessage => message.role === "assistant"),
   )
@@ -551,10 +565,19 @@ export function Session() {
     const metricsWidth = topMetricsWidth()
     return navWidth + metricsWidth + (navWidth > 0 && metricsWidth > 0 ? 1 : 0)
   })
+  const headerTitleConfig = createMemo(() => {
+    const header = mend.profile.layout.zones.header as { title?: { visible?: unknown; align?: unknown } }
+    return header.title ?? {}
+  })
+  const headerTitleVisible = createMemo(() => headerTitleConfig().visible === true)
+  const headerTitleAlign = createMemo(() => sessionHeaderTitleAlign(headerTitleConfig().align))
+  const headerTitleJustify = createMemo(() => sessionHeaderTitleJustify(headerTitleAlign()))
+  const headerTitleText = createMemo(() => session()?.title || route.sessionID)
   const topbarLeftWidth = createMemo(() =>
-    sessionTopbarLeftWidth({
+    sessionTopbarLeftWidthWithTitle({
       contentWidth: contentWidth(),
       metricsWidth: topbarReservedWidth(),
+      titleVisible: headerTitleVisible(),
     }),
   )
   const topbarLeftLabel = createMemo(() =>
@@ -568,14 +591,18 @@ export function Session() {
   const todos = createMemo(() => sync.data.todo[route.sessionID] ?? [])
   const taskSubagentBySession = createMemo(() => {
     const result = new Map<string, { description?: string; subagentType?: string }>()
+    const fullStartID = rootFullHistoryStartID()
     for (const message of rootMessages()) {
+      if (shouldUseSimpleSessionHistory({ messageID: message.id, fullStartID })) continue
       for (const part of sync.data.part[message.id] ?? []) {
         if (part.type !== "tool" || part.tool !== "task") continue
         const state = part.state as {
           input?: Record<string, unknown>
           metadata?: Record<string, unknown>
           title?: string
+          time?: { compacted?: boolean }
         }
+        if (state.time?.compacted) continue
         const sessionId = typeof state.metadata?.sessionId === "string" ? state.metadata.sessionId : undefined
         if (!sessionId) continue
         result.set(sessionId, {
@@ -594,47 +621,57 @@ export function Session() {
   const subagents = createMemo<SessionSubagentInfo[]>(() => {
     return children()
       .filter((child) => !!child.parentID)
-      .map((child) => {
+      .flatMap((child) => {
         const task = taskSubagentBySession().get(child.id)
+        if (!task) return []
         const childMessages = sync.data.message[child.id] ?? []
-        const latestAgent = childMessages.findLast((message) => message.role === "assistant" || message.role === "user")
-          ?.agent
+        const latestAssistant = childMessages.findLast((message): message is AssistantMessage => message.role === "assistant")
+        const latestAgent = (latestAssistant ?? childMessages.findLast((message) => message.role === "user"))?.agent
         const label = normalizeSubagentLabel(task?.subagentType ?? child.agent ?? latestAgent ?? "subagent")
-        return {
-          id: child.id,
-          label: Locale.titlecase(label),
-          description: task?.description ?? child.title ?? child.path ?? child.directory ?? child.id,
-          status: sessionLiveStateLabel({
-            status: sync.data.session_status?.[child.id],
-            messages: childMessages,
-            pendingInputCount:
-              (sync.data.permission[child.id]?.length ?? 0) +
-              (sync.data.question[child.id]?.length ?? 0) +
-              (sync.data.plan_review[child.id]?.length ?? 0),
-          }),
-          updated: Locale.time(child.time.updated),
-          active: child.id === route.sessionID,
-        }
+        const status = sessionLiveStateLabel({
+          status: sync.data.session_status?.[child.id],
+          messages: childMessages,
+          pendingInputCount:
+            (sync.data.permission[child.id]?.length ?? 0) +
+            (sync.data.question[child.id]?.length ?? 0) +
+            (sync.data.plan_review[child.id]?.length ?? 0),
+        })
+        const usage = latestAssistant
+          ? formatAssistantLiveUsage(latestAssistant, providers(), { config: sync.data.config }) ??
+            formatAssistantUsage(latestAssistant, providers(), { config: sync.data.config })
+          : undefined
+        return [
+          {
+            id: child.id,
+            label: Locale.titlecase(label),
+            description: task?.description ?? child.title ?? child.path ?? child.directory ?? child.id,
+            status,
+            meta: usage?.compact,
+            detail: usage?.detail,
+            updated: Locale.time(child.time.updated),
+            updatedAt: child.time.updated,
+            active: child.id === route.sessionID,
+          },
+        ]
+      })
+      .toSorted((a, b) => {
+        if (a.active !== b.active) return a.active ? -1 : 1
+        const aRelevant = sessionSubagentIsActive(a.status)
+        const bRelevant = sessionSubagentIsActive(b.status)
+        if (aRelevant !== bRelevant) return aRelevant ? -1 : 1
+        if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
       })
   })
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const toast = useToast()
   const sdk = useSDK()
+  const [agentCommands, setAgentCommands] = createSignal<AgentViewCommand[]>([])
+  const [agentCommandBusyID, setAgentCommandBusyID] = createSignal<string>()
+  let agentCommandRefreshTimer: ReturnType<typeof setTimeout> | undefined
   const editor = useEditorContext()
-  const backgroundWriterClientID = `tui-${Date.now()}-${Math.random().toString(36).slice(2)}`
-  const [backgroundWriterMode, setBackgroundWriterMode] = createSignal<
-    "unmanaged" | "attaching" | "attached" | "following"
-  >("unmanaged")
-  const [backgroundWriterOwner, setBackgroundWriterOwner] = createSignal<string>()
-  const [backgroundWriterOwns, setBackgroundWriterOwns] = createSignal(false)
-  const [backgroundWriterState, setBackgroundWriterState] = createSignal<BackgroundWriterInfo["state"]>()
   const [loopBackgroundSummary, setLoopBackgroundSummary] = createSignal<string>()
-  const backgroundWriterLocked = createMemo(() => {
-    const mode = backgroundWriterMode()
-    const state = backgroundWriterState()
-    return (mode === "attaching" || mode === "following") && !!state && activeBackgroundWriterStates.has(state)
-  })
   const loopStatusLabel = createMemo(() => {
     const workflow = currentLoopWorkflow()
     const summary = loopBackgroundSummary()
@@ -644,8 +681,87 @@ export function Session() {
     const name = workflow?.name ? `${workflow.name} · ` : ""
     return Locale.truncate(`${name}${state}${progress ? ` · ${progress}` : ""}`, Math.max(12, contentWidth() - 16))
   })
-  const showSessionBottomDock = createMemo(() => showTodos() && !disabled() && !backgroundWriterLocked())
-  const promptDisabled = createMemo(() => disabled() || backgroundWriterLocked())
+  const showSessionBottomDock = createMemo(() => showTodos() && !disabled())
+  const promptDisabled = createMemo(() => disabled())
+
+  const agentCommandURL = (path: string, query?: Record<string, string | undefined>) => {
+    const url = new URL(path, sdk.url)
+    for (const [key, value] of Object.entries(query ?? {})) {
+      if (value !== undefined) url.searchParams.set(key, value)
+    }
+    return url
+  }
+
+  const agentCommandJSON = async <T,>(path: string, init?: RequestInit, query?: Record<string, string | undefined>) => {
+    const headers = new Headers(sdk.headers)
+    if (sdk.directory) headers.set("x-mendcode-directory", encodeURIComponent(sdk.directory))
+    if (init?.body) headers.set("content-type", "application/json")
+    const response = await sdk.fetch(agentCommandURL(path, query), { ...init, headers })
+    if (!response.ok) throw new Error((await response.text().catch(() => "")) || `Agent command request failed: ${response.status}`)
+    return (await response.json()) as T
+  }
+
+  const setAgentCommandsMerged = (items: readonly AgentViewCommand[]) => {
+    const byID = new Map<string, AgentViewCommand>()
+    for (const item of items) byID.set(item.id, item)
+    setAgentCommands(
+      Array.from(byID.values()).toSorted(
+        (a, b) => agentViewCommandStateRank(a) - agentViewCommandStateRank(b) || b.time.updated - a.time.updated || b.id.localeCompare(a.id),
+      ),
+    )
+  }
+
+  const refreshAgentCommands = async (sessionID = route.sessionID) => {
+    const [incoming, outgoing] = await Promise.all([
+      agentCommandJSON<AgentViewCommand[]>(`/session/${sessionID}/agent-command`).catch(() => []),
+      agentCommandJSON<AgentViewCommand[]>("/session/agent-command", undefined, { sourceSessionID: sessionID }).catch(() => []),
+    ])
+    if (route.sessionID !== sessionID) return
+    setAgentCommandsMerged([...incoming, ...outgoing])
+  }
+
+  const scheduleAgentCommandRefresh = (delay = 50) => {
+    if (agentCommandRefreshTimer) clearTimeout(agentCommandRefreshTimer)
+    agentCommandRefreshTimer = setTimeout(() => {
+      agentCommandRefreshTimer = undefined
+      void refreshAgentCommands().catch(() => undefined)
+    }, delay)
+  }
+
+  const updateAgentCommand = async (command: AgentViewCommand, state: "accepted" | "rejected") => {
+    if (agentCommandBusyID() === command.id || !isAgentViewCommandActionable(command)) return
+    setAgentCommandBusyID(command.id)
+    try {
+      const updated = await agentCommandJSON<AgentViewCommand>(`/session/${route.sessionID}/agent-command/${command.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ state }),
+      })
+      setAgentCommandsMerged(agentCommands().map((item) => (item.id === updated.id ? updated : item)))
+      toast.show({ variant: state === "accepted" ? "success" : "info", message: `Command ${state}`, duration: 2500 })
+    } catch (error) {
+      toast.show({ variant: "error", message: errorMessage(error), duration: 4000 })
+    } finally {
+      setAgentCommandBusyID((current) => (current === command.id ? undefined : current))
+    }
+  }
+
+  const incomingAgentCommands = createMemo(() => agentCommands().filter((command) => command.targetSessionID === route.sessionID))
+  const sentAgentCommands = createMemo(() => agentCommands().filter((command) => command.sourceSessionID === route.sessionID && command.targetSessionID !== route.sessionID))
+  const visibleAgentCommands = createMemo(() => [...incomingAgentCommands().slice(0, 4), ...sentAgentCommands().slice(0, 2)])
+
+  createEffect(
+    on(
+      () => route.sessionID,
+      (sessionID) => {
+        setAgentCommands([])
+        void refreshAgentCommands(sessionID).catch(() => undefined)
+      },
+    ),
+  )
+
+  onCleanup(() => {
+    if (agentCommandRefreshTimer) clearTimeout(agentCommandRefreshTimer)
+  })
   const [permissionsConfig, { refetch: refetchPermissionsConfig }] = createResource(
     () => route.sessionID,
     async () => readPermissionsConfig(),
@@ -1120,18 +1236,16 @@ export function Session() {
   createEffect(
     on(
       () => ({
-        mode: backgroundWriterMode(),
         sessionID: route.sessionID,
         status: sync.data.session_status?.[route.sessionID]?.type,
         localActive: hasLocalActiveTurn(),
         loopState: currentLoopWorkflow()?.state,
         title: session()?.title ?? "",
       }),
-      ({ mode, status, localActive, loopState, title }) => {
+      ({ status, localActive, loopState, title }) => {
         const isLoopSession = Boolean(loopState) || title.startsWith("Loop:")
         if (eventlessFollowTimer) clearInterval(eventlessFollowTimer)
         eventlessFollowTimer = undefined
-        if (mode === "attached" && !isLoopSession) return
         if (!isLoopSession && status !== "busy" && status !== "retry" && !localActive) return
         const intervalMs =
           status === "busy" || status === "retry" || localActive || loopState === "working"
@@ -1147,8 +1261,8 @@ export function Session() {
     ),
   )
 
-  const eventSessionID = (evt: { properties?: unknown }) => {
-    const properties = evt.properties as
+  const eventSessionProperties = (evt: { properties?: unknown }) =>
+    evt.properties as
       | {
           sessionID?: string
           info?: { sessionID?: string; rootSessionID?: string }
@@ -1156,10 +1270,17 @@ export function Session() {
           run?: { rootSessionID?: string }
           thread?: { sessionID?: string }
           event?: { sessionID?: string }
+          targetSessionID?: string
+          sourceSessionID?: string
         }
       | undefined
+
+  const eventSessionID = (evt: { properties?: unknown }) => {
+    const properties = eventSessionProperties(evt)
     return (
       properties?.sessionID ??
+      properties?.targetSessionID ??
+      properties?.sourceSessionID ??
       properties?.info?.sessionID ??
       properties?.info?.rootSessionID ??
       properties?.run?.rootSessionID ??
@@ -1195,6 +1316,8 @@ export function Session() {
     "session.next.compaction.started",
     "session.next.compaction.ended",
     "session.compacted",
+    "agent_command.created",
+    "agent_command.updated",
     "loop.workflow.updated",
     "loop.run.updated",
     "loop.event.created",
@@ -1213,8 +1336,21 @@ export function Session() {
   const unsubscribeFollowSync = sdk.event.on("event", (event) => {
     if (event.payload.type === "sync") return
     const evt = event.payload
-    if (eventSessionID(evt) !== route.sessionID) return
-    if (backgroundWriterMode() === "attached") return
+    const evtType = evt.type as string
+    const evtProperties = eventSessionProperties(evt)
+    const agentCommandTouchesCurrentSession =
+      (evtType === "agent_command.created" || evtType === "agent_command.updated") &&
+      evtProperties?.sourceSessionID &&
+      evtProperties?.targetSessionID &&
+      agentViewCommandTouchesSession({
+        sourceSessionID: evtProperties.sourceSessionID,
+        targetSessionID: evtProperties.targetSessionID,
+        sessionID: route.sessionID,
+        direction: "either",
+      })
+    if (agentCommandTouchesCurrentSession) scheduleAgentCommandRefresh()
+    const evtSessionID = eventSessionID(evt)
+    if (evtSessionID !== route.sessionID && !agentCommandTouchesCurrentSession) return
     if (evt.type === "message.part.updated") {
       const part = (evt.properties as { part?: Part } | undefined)?.part
       const memory =
@@ -1244,7 +1380,7 @@ export function Session() {
     const status = sync.data.session_status?.[route.sessionID]?.type
     if (status && status !== "idle") return false
     if (pending()) return false
-    if (disabled() || backgroundWriterLocked()) return false
+    if (disabled()) return false
     return children().every((child) => {
       const childStatus = sync.data.session_status?.[child.id]?.type
       return !childStatus || childStatus === "idle"
@@ -1301,15 +1437,15 @@ export function Session() {
 
     if (part.tool === "plan_exit") {
       local.agent.set((part.state.metadata as { planExitAgent?: string } | undefined)?.planExitAgent || "build")
-      local.model.pinCurrent()
+      local.model.pinAgentCurrent()
       lastSwitch = part.id
     } else if (part.tool === "plan_review" && part.state.title === "Plan approved") {
       local.agent.set((part.state.metadata as { planExitAgent?: string } | undefined)?.planExitAgent || "build")
-      local.model.pinCurrent()
+      local.model.pinAgentCurrent()
       lastSwitch = part.id
     } else if (part.tool === "plan_enter") {
       local.agent.set("plan")
-      local.model.pinCurrent()
+      local.model.pinAgentCurrent()
       lastSwitch = part.id
     }
   })
@@ -1319,6 +1455,8 @@ export function Session() {
   let scrollAnchor: { id: string; offset: number } | undefined
   let lastObservedScrollTop = 0
   let lastObservedScrollHeight = 0
+  let manualScrollGraceUntil = 0
+  let bottomScrollToken = 0
   let scrollPagingInFlight = false
   let scrollPagingToken = 0
   let suppressedPagingBoundary: "top" | "bottom" | undefined
@@ -1386,11 +1524,23 @@ export function Session() {
     const atTop = isScrollboxAtTop(scroll)
     const atBottom = isScrollboxAtBottom(scroll)
 
-    if (suppressedPagingBoundary === "top" && !atTop) suppressedPagingBoundary = undefined
-    if (suppressedPagingBoundary === "bottom" && !atBottom) suppressedPagingBoundary = undefined
+    if (
+      suppressedPagingBoundary &&
+      shouldReleaseSessionPagingBoundarySuppression({
+        boundary: suppressedPagingBoundary,
+        scrollTop,
+        scrollHeight,
+        viewportHeight: scroll.viewport.height,
+      })
+    ) {
+      suppressedPagingBoundary = undefined
+    }
 
     if (atTop && history.hasMoreOlder && !history.loadingOlder && !scrollPagingInFlight) {
-      if (suppressedPagingBoundary === "top") return
+      if (suppressedPagingBoundary) {
+        setFollowSessionOutput(false)
+        return
+      }
       const pagingToken = scrollPagingToken
       setFollowSessionOutput(false)
       scrollPagingInFlight = true
@@ -1410,7 +1560,10 @@ export function Session() {
       lastObservedScrollTop = scrollTop
       lastObservedScrollHeight = scrollHeight
       if (history.hasMoreNewer && !history.loadingNewer && !scrollPagingInFlight) {
-        if (suppressedPagingBoundary === "bottom") return
+        if (suppressedPagingBoundary) {
+          setFollowSessionOutput(false)
+          return
+        }
         const pagingToken = scrollPagingToken
         setFollowSessionOutput(false)
         scrollPagingInFlight = true
@@ -1424,6 +1577,10 @@ export function Session() {
         })
         return
       }
+      if (suppressedPagingBoundary) {
+        setFollowSessionOutput(false)
+        return
+      }
       setFollowSessionOutput(true)
       return
     }
@@ -1432,20 +1589,39 @@ export function Session() {
 
     const userMovedViewport =
       Math.abs(scrollTop - lastObservedScrollTop) > 1 && Math.abs(scrollHeight - lastObservedScrollHeight) <= 1
-    if (userMovedViewport || !scrollAnchor) {
-      captureScrollAnchor()
-    } else {
+    if (
+      shouldRestoreSessionScrollAnchor({
+        now: Date.now(),
+        manualScrollGraceUntil,
+        userMovedViewport,
+        hasAnchor: Boolean(scrollAnchor),
+      })
+    ) {
       restoreScrollAnchor()
-      captureScrollAnchor()
     }
+    captureScrollAnchor()
 
     lastObservedScrollTop = scroll.scrollTop
     lastObservedScrollHeight = scroll.scrollHeight
   }
 
   const markScrollDetached = () => {
+    manualScrollGraceUntil = Date.now() + 250
     setFollowSessionOutput(false)
     setTimeout(captureScrollAnchor, 0)
+  }
+
+  const scheduleBottomScroll = (delay = 0) => {
+    const token = ++bottomScrollToken
+    setTimeout(() => {
+      if (token !== bottomScrollToken) return
+      if (!scroll || scroll.isDestroyed || !followSessionOutput()) return
+      scrollAnchor = undefined
+      scroll.scrollTo(scroll.scrollHeight)
+      lastObservedScrollTop = scroll.scrollTop
+      lastObservedScrollHeight = scroll.scrollHeight
+      setSessionScrollTop(scroll.scrollTop)
+    }, delay)
   }
 
   createEffect(
@@ -1458,6 +1634,13 @@ export function Session() {
         scrollAnchor = undefined
         lastObservedScrollTop = 0
         lastObservedScrollHeight = 0
+        manualScrollGraceUntil = 0
+        bottomScrollToken += 1
+        if (submitViewportHoldTimer) clearTimeout(submitViewportHoldTimer)
+        submitViewportHoldTimer = undefined
+        setSubmitViewportHoldRows(0)
+        setSubmitViewportHoldMessageID(undefined)
+        cancelSubmitFollowSync()
         setSessionScrollTop(0)
         setFollowSessionOutput(true)
       },
@@ -1466,10 +1649,12 @@ export function Session() {
   )
 
   const scrollBySession = (delta: number) => {
+    manualScrollGraceUntil = Date.now() + 250
     scroll.scrollBy(delta)
     setTimeout(syncScrollFollowMode, 0)
   }
   const scrollToSession = (position: number) => {
+    manualScrollGraceUntil = Date.now() + 250
     scroll.scrollTo(position)
     setTimeout(syncScrollFollowMode, 0)
   }
@@ -1575,15 +1760,78 @@ export function Session() {
     dialog.clear()
   }
 
-  function toBottom() {
+  function toBottom(options?: { sync?: boolean }) {
     setFollowSessionOutput(true)
     scrollAnchor = undefined
-    void sync.session.sync(route.sessionID, { force: true }).catch(() => undefined)
-    setTimeout(() => {
-      if (!scroll || scroll.isDestroyed) return
-      scroll.scrollTo(scroll.scrollHeight)
-    }, 50)
+    if (options?.sync !== false) void sync.session.sync(route.sessionID, { force: true }).catch(() => undefined)
+    scheduleBottomScroll(50)
   }
+
+  function releaseSubmitViewportHold(delay = 0) {
+    if (submitViewportHoldTimer) clearTimeout(submitViewportHoldTimer)
+    submitViewportHoldTimer = setTimeout(() => {
+      submitViewportHoldTimer = undefined
+      setSubmitViewportHoldRows(0)
+      setSubmitViewportHoldMessageID(undefined)
+      scheduleBottomScroll(0)
+    }, delay)
+  }
+
+  function cancelSubmitFollowSync() {
+    submitFollowSyncToken += 1
+    if (!submitFollowSyncTimer) return
+    clearTimeout(submitFollowSyncTimer)
+    submitFollowSyncTimer = undefined
+  }
+
+  function scheduleSubmitFollowSync(info: PromptSubmitInfo, delay = 160) {
+    if (submitFollowSyncTimer) clearTimeout(submitFollowSyncTimer)
+    const token = ++submitFollowSyncToken
+    submitFollowSyncTimer = setTimeout(() => {
+      submitFollowSyncTimer = undefined
+      if (token !== submitFollowSyncToken) return
+      if (route.sessionID !== info.sessionID) return
+      if (messages().some((message) => message.id === info.messageID)) return
+      void sync.session.sync(info.sessionID, { force: true }).finally(() => {
+        if (token !== submitFollowSyncToken) return
+        if (route.sessionID !== info.sessionID) return
+        scheduleBottomScroll(0)
+        if (messages().some((message) => message.id === info.messageID)) return
+        if (delay < 900) scheduleSubmitFollowSync(info, 900)
+      })
+    }, delay)
+  }
+
+  function handlePromptSubmit(info?: PromptSubmitInfo) {
+    if (info && info.sessionID === route.sessionID) {
+      const rows = submittedPromptViewportHoldRows(info)
+      if (rows > 0) {
+        setSubmitViewportHoldRows(rows)
+        setSubmitViewportHoldMessageID(info.messageID)
+        releaseSubmitViewportHold(2_000)
+      } else {
+        releaseSubmitViewportHold(0)
+      }
+      scheduleSubmitFollowSync(info)
+    }
+    toBottom({ sync: false })
+  }
+
+  createEffect(
+    on(
+      () => ({ messageID: submitViewportHoldMessageID(), loaded: messages().some((message) => message.id === submitViewportHoldMessageID()) }),
+      ({ messageID, loaded }) => {
+        if (!messageID || !loaded) return
+        cancelSubmitFollowSync()
+        releaseSubmitViewportHold(120)
+      },
+    ),
+  )
+
+  onCleanup(() => {
+    if (submitViewportHoldTimer) clearTimeout(submitViewportHoldTimer)
+    cancelSubmitFollowSync()
+  })
 
   const virtualWindow = createMemo(() =>
     sessionMessageVirtualWindow({
@@ -1597,6 +1845,16 @@ export function Session() {
     const window = virtualWindow()
     return messages().slice(window.start, window.end)
   })
+
+  createEffect(
+    on(
+      () => [route.sessionID, messages().length, visibleMessages().length, virtualWindow().start, virtualWindow().end] as const,
+      () => {
+        if (followSessionOutput()) scheduleBottomScroll(0)
+      },
+      { defer: true },
+    ),
+  )
 
   const updateStickyUserHeader = () => {
     if (!stickyUserHeaderEnabled() || !scroll || scroll.isDestroyed) {
@@ -1733,81 +1991,21 @@ export function Session() {
     setLoopBackgroundSummary(isLoop ? (summary ?? title) : undefined)
   }
 
-  const acquireBackgroundWriter = async (sessionID: string) =>
-    backgroundJSON<BackgroundWriterAcquireResult>(`/session/${sessionID}/background/writer`, {
-      method: "POST",
-      body: JSON.stringify({ clientID: backgroundWriterClientID, ttlMs: 45_000 }),
-    })
-
-  const releaseBackgroundWriter = async (sessionID: string) =>
-    backgroundJSON<BackgroundWriterInfo | null>(`/session/${sessionID}/background/writer`, {
-      method: "DELETE",
-      body: JSON.stringify({ clientID: backgroundWriterClientID }),
-    }).catch(() => null)
-
-  const refreshBackgroundWriter = async (sessionID: string, notify = false) => {
-    const info = await currentBackgroundSession(sessionID)
+  const refreshBackgroundSessionState = async (sessionID: string) => {
     if (route.sessionID !== sessionID) return
-    if (!info) {
-      setBackgroundWriterMode("unmanaged")
-      setBackgroundWriterOwner(undefined)
-      setBackgroundWriterOwns(false)
-      setBackgroundWriterState(undefined)
-      await refreshLoopBackgroundSummary(sessionID).catch(() => undefined)
-      return
-    }
-    setBackgroundWriterState(info.state)
-    if (!activeBackgroundWriterStates.has(info.state)) {
-      setBackgroundWriterMode("unmanaged")
-      setBackgroundWriterOwner(info.writer?.clientID)
-      setBackgroundWriterOwns(false)
-      await refreshLoopBackgroundSummary(sessionID).catch(() => undefined)
-      return
-    }
-    if (!backgroundWriterOwns()) setBackgroundWriterMode("attaching")
-    const result = await acquireBackgroundWriter(sessionID)
-    if (route.sessionID !== sessionID) return
-    setBackgroundWriterOwner(result.info?.writer?.clientID)
-    setBackgroundWriterOwns(result.acquired)
-    setBackgroundWriterState(result.info?.state ?? info.state)
-    setBackgroundWriterMode(result.acquired ? "attached" : "following")
     await refreshLoopBackgroundSummary(sessionID).catch(() => undefined)
-    if (notify) {
-      toast.show({
-        variant: result.acquired ? "success" : "info",
-        message: result.acquired ? "Attached to session." : "Following read-only. Another terminal is attached.",
-        duration: 3000,
-      })
-    }
   }
 
   createEffect(
     on(
       () => route.sessionID,
       (sessionID) => {
-        let released = false
         setLoopBackgroundSummary(undefined)
         setLoopSessionWorkflows([])
-        void refreshBackgroundWriter(sessionID).catch(() => {
+        void refreshBackgroundSessionState(sessionID).catch(() => {
           if (route.sessionID !== sessionID) return
-          setBackgroundWriterMode("unmanaged")
-          setBackgroundWriterOwner(undefined)
-          setBackgroundWriterOwns(false)
-          setBackgroundWriterState(undefined)
           void refreshLoopBackgroundSummary(sessionID).catch(() => undefined)
         })
-        const timer = setInterval(() => {
-          if (!backgroundWriterOwns()) return
-          void acquireBackgroundWriter(sessionID)
-            .then((result) => {
-              if (route.sessionID !== sessionID) return
-              setBackgroundWriterOwner(result.info?.writer?.clientID)
-              setBackgroundWriterOwns(result.acquired)
-              setBackgroundWriterState(result.info?.state)
-              setBackgroundWriterMode(result.acquired ? "attached" : "following")
-            })
-            .catch(() => undefined)
-        }, 15_000)
         const loopPoll = setInterval(() => {
           void refreshLoopWorkflows()
             .then((items) => {
@@ -1824,7 +2022,7 @@ export function Session() {
           const type = payload.type
           if (type === "background_session.updated" || type === "background_session.deleted") {
             if (payload.properties?.sessionID && payload.properties.sessionID !== sessionID) return
-            void refreshBackgroundWriter(sessionID).catch(() => undefined)
+            void refreshBackgroundSessionState(sessionID).catch(() => undefined)
             void refreshLoopBackgroundSummary(sessionID).catch(() => undefined)
             return
           }
@@ -1833,12 +2031,8 @@ export function Session() {
           }
         })
         onCleanup(() => {
-          clearInterval(timer)
           clearInterval(loopPoll)
           unsubscribe()
-          if (released || !backgroundWriterOwns()) return
-          released = true
-          void releaseBackgroundWriter(sessionID)
         })
       },
     ),
@@ -1860,11 +2054,6 @@ export function Session() {
       const text = await response.text().catch(() => "")
       throw new Error(text || `Background failed: ${response.status}`)
     }
-    await releaseBackgroundWriter(route.sessionID)
-    setBackgroundWriterOwns(false)
-    setBackgroundWriterMode("following")
-    setBackgroundWriterState(state)
-    setBackgroundWriterOwner(undefined)
     dialog?.clear()
     toast.show({
       variant: "info",
@@ -1979,10 +2168,10 @@ export function Session() {
       },
     },
     {
-      title: "Detach to Agent View",
+      title: "Detach to Agent View (/bg)",
       value: "session.background",
       category: "Session",
-      description: "Move this session to Agent View and return home.",
+      description: "Send this session to Home Agent View as a worker and return home.",
       slash: {
         name: "bg",
         aliases: ["background", "detach"],
@@ -1995,27 +2184,6 @@ export function Session() {
             duration: 5000,
           })
         })
-      },
-    },
-    {
-      title: backgroundWriterMode() === "following" ? "Attach session" : "Refresh session attach",
-      value: "session.attach",
-      category: "Session",
-      enabled: backgroundWriterMode() === "following",
-      description: "Try to take the writer lease for this background session.",
-      slash: {
-        name: "attach",
-      },
-      onSelect: (dialog) => {
-        void refreshBackgroundWriter(route.sessionID, true)
-          .then(() => dialog.clear())
-          .catch((error) => {
-            toast.show({
-              variant: "error",
-              message: errorMessage(error),
-              duration: 5000,
-            })
-          })
       },
     },
     {
@@ -2605,7 +2773,69 @@ export function Session() {
   })
 
   // snap to bottom when session changes
-  createEffect(on(() => route.sessionID, toBottom))
+  createEffect(on(() => route.sessionID, () => toBottom()))
+
+  const agentCommandPanel = () => (
+    <Show when={visibleAgentCommands().length > 0}>
+      <box paddingLeft={contentInset()} paddingRight={contentInset()} width={insetRowWidth()} flexDirection="column" gap={0} flexShrink={0}>
+        <text fg={theme.accent} wrapMode="none">
+          ⟡ Commands
+        </text>
+        <For each={visibleAgentCommands()}>
+          {(command) => {
+            const incoming = command.targetSessionID === route.sessionID
+            const actionable = incoming && isAgentViewCommandActionable(command)
+            const busy = agentCommandBusyID() === command.id
+            const compact = insetRowWidth() < 76
+            const statusLine = () =>
+              actionable ? (
+                <box flexDirection="row" flexShrink={0}>
+                  <text fg={theme.textMuted} wrapMode="none">mouse: </text>
+                  <text fg={busy ? theme.textMuted : theme.accent} wrapMode="none" onMouseUp={() => void updateAgentCommand(command, "accepted")}>
+                    [accept]
+                  </text>
+                  <text fg={theme.textMuted} wrapMode="none"> </text>
+                  <text fg={busy ? theme.textMuted : theme.error} wrapMode="none" onMouseUp={() => void updateAgentCommand(command, "rejected")}>
+                    [reject]
+                  </text>
+                </box>
+              ) : (
+                <text fg={theme.textMuted} wrapMode="none">{command.state}</text>
+              )
+            return (
+              <box
+                width="100%"
+                flexDirection="column"
+                border={["left"]}
+                customBorderChars={SplitBorder.customBorderChars}
+                borderColor={actionable ? theme.accent : theme.backgroundPanel}
+                paddingLeft={1}
+                paddingTop={0}
+                paddingBottom={0}
+              >
+                <box width="100%" flexDirection="row" overflow="hidden">
+                  <text fg={incoming ? theme.text : theme.textMuted} wrapMode="none">
+                    {incoming ? "in" : "sent"} · {formatAgentViewCommandSummary(command)}
+                  </text>
+                </box>
+                <box width="100%" flexDirection={compact ? "column" : "row"} overflow="hidden">
+                  <box width={compact ? "100%" : undefined} overflow="hidden">
+                    <text fg={theme.textMuted} wrapMode="none">
+                      {formatAgentViewCommandType(command)} · {incoming ? `from ${Locale.truncate(command.sourceSessionID, compact ? 14 : 18)}` : `to ${Locale.truncate(command.targetSessionID, compact ? 14 : 18)}`}
+                    </text>
+                  </box>
+                  <Show when={!compact}>
+                    <box flexGrow={1} minWidth={1} />
+                  </Show>
+                  {statusLine()}
+                </box>
+              </box>
+            )
+          }}
+        </For>
+      </box>
+    </Show>
+  )
 
   return (
     <context.Provider
@@ -2628,7 +2858,7 @@ export function Session() {
       }}
     >
       <box flexDirection="row" position="relative" width="100%">
-        <Show when={!backgroundWriterLocked() && planReviews().length > 0}>
+        <Show when={planReviews().length > 0}>
           <PlanReviewPrompt request={planReviews()[0]} />
         </Show>
         <box
@@ -2649,6 +2879,13 @@ export function Session() {
               </box>
               <Show when={session()?.parentID || currentLoopWorkflow()}>
                 <SessionTopNav mode={session()?.parentID ? "subagent" : "loop"} canCycle={session()?.parentID ? true : loopRootWorkflows().length > 1} hasParent={!!currentLoopWorkflow()?.ownerSessionID} />
+              </Show>
+              <Show when={headerTitleVisible()}>
+                <box flexGrow={1} minWidth={0} overflow="hidden" justifyContent={headerTitleJustify()}>
+                  <text fg={theme.textMuted} wrapMode="none">
+                    {Locale.truncate(headerTitleText(), Math.max(0, contentWidth() - topbarReservedWidth() - topbarLeftWidth() - 4))}
+                  </text>
+                </box>
               </Show>
               <SessionTopMetrics diff={topDiffStats()} usage={topUsage()} />
             </box>
@@ -2673,6 +2910,7 @@ export function Session() {
                 </box>
               )}
             </Show>
+            {agentCommandPanel()}
             <box position="relative" flexGrow={1} width="100%">
               <scrollbox
                 ref={(r) => (scroll = r)}
@@ -2784,6 +3022,7 @@ export function Session() {
                             messageID: message.id,
                             fullStartID: fullHistoryStartID(),
                           })}
+                          compactSubagentPrompt={Boolean(session()?.parentID)}
                         />
                       </Match>
                       <Match when={message.role === "assistant"}>
@@ -2829,28 +3068,11 @@ export function Session() {
               </Show>
             </box>
             <box flexShrink={0} width="100%">
-              <Show when={!backgroundWriterLocked() && permissions().length > 0}>
+              <Show when={permissions().length > 0}>
                 <PermissionPrompt request={permissions()[0]} />
               </Show>
-              <Show when={!backgroundWriterLocked() && permissions().length === 0 && questions().length > 0}>
+              <Show when={permissions().length === 0 && questions().length > 0}>
                 <QuestionPrompt request={questions()[0]} />
-              </Show>
-              <Show when={backgroundWriterMode() === "following" && backgroundWriterLocked()}>
-                <box paddingLeft={contentInset()} paddingRight={contentInset()} width={insetRowWidth()}>
-                  <text fg={theme.textMuted} wrapMode="none">
-                    Following read-only · attached in another terminal
-                    <Show when={backgroundWriterOwner()}>
-                      {(owner) => <span style={{ fg: theme.textMuted }}> · {Locale.truncate(owner(), 18)}</span>}
-                    </Show>
-                  </text>
-                </box>
-              </Show>
-              <Show when={backgroundWriterMode() === "attaching"}>
-                <box paddingLeft={contentInset()} paddingRight={contentInset()} width={insetRowWidth()}>
-                  <text fg={theme.textMuted} wrapMode="none">
-                    Attaching session…
-                  </text>
-                </box>
               </Show>
               <Show when={showSessionBottomDock()}>
                 <SessionBottomDock
@@ -2886,7 +3108,7 @@ export function Session() {
                     session_id={route.sessionID}
                     visible={visible()}
                     disabled={promptDisabled()}
-                    on_submit={toBottom}
+                    on_submit={handlePromptSubmit}
                     ref={bind}
                   >
                     {
@@ -2898,9 +3120,7 @@ export function Session() {
                         visible: visible(),
                         disabled: promptDisabled(),
                         ref: bind,
-                        onSubmit: () => {
-                          toBottom()
-                        },
+                        onSubmit: handlePromptSubmit,
                         right: <TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />,
                         defaultEditor: () => (
                           <Prompt
@@ -2908,13 +3128,13 @@ export function Session() {
                             ref={bind}
                             disabled={promptDisabled()}
                             historyScope={`session:${route.sessionID}`}
-                            onSubmit={() => {
-                              toBottom()
-                            }}
+                            historyItems={sessionPromptHistory}
+                            workspaceID={project.workspace.current()}
                             sessionID={route.sessionID}
                             permissionMode={permissionMode()}
                             permissionModeLabel={permissionModeLabel()}
                             permissionPending={permissionPendingCount()}
+                            onSubmit={handlePromptSubmit}
                             right={<TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
                           />
                         ),
@@ -2922,6 +3142,9 @@ export function Session() {
                     }
                   </TuiPluginRuntime.Slot>
                 </box>
+              </Show>
+              <Show when={submitViewportHoldRows() > 0}>
+                <box height={submitViewportHoldRows()} flexShrink={0} />
               </Show>
               <For each={listMendWidgets("belowEditor")}>{(item) => <RenderMendWidget item={item} />}</For>
             </box>
@@ -3072,7 +3295,10 @@ type SessionSubagentInfo = {
   label: string
   description: string
   status: string
+  meta?: string
+  detail?: string
   updated: string
+  updatedAt: number
   active: boolean
 }
 
@@ -3092,10 +3318,63 @@ function sessionLiveStateLabel(input: {
   return "ready"
 }
 
+function sessionSubagentIsActive(status: string) {
+  return status === "working" || status === "waiting" || status === "needs input" || status.startsWith("retry")
+}
+
 export function sessionHasLocalQueuedTurn(input: { messages: Array<Pick<Message, "id">>; pendingAssistantID?: string }) {
   const pendingAssistantID = input.pendingAssistantID
   if (!pendingAssistantID) return false
   return input.messages.some((message) => message.id > pendingAssistantID)
+}
+
+export function shouldRestoreSessionScrollAnchor(input: {
+  now: number
+  manualScrollGraceUntil: number
+  userMovedViewport: boolean
+  hasAnchor: boolean
+}) {
+  if (!input.hasAnchor) return false
+  if (input.now < input.manualScrollGraceUntil) return false
+  return !input.userMovedViewport
+}
+
+export function submittedPromptViewportHoldRows(input: { inputRows: number }) {
+  if (!Number.isFinite(input.inputRows)) return 0
+  return Math.max(0, Math.floor(input.inputRows) - 1)
+}
+
+export function shouldReleaseSessionPagingBoundarySuppression(input: {
+  boundary: "top" | "bottom"
+  scrollTop: number
+  scrollHeight: number
+  viewportHeight: number
+  releaseDistance?: number
+}) {
+  const maxScrollTop = Math.max(0, input.scrollHeight - input.viewportHeight)
+  if (maxScrollTop <= 0) return false
+  const releaseDistance = Math.min(
+    input.releaseDistance ?? Math.max(10, Math.floor(input.viewportHeight / 2)),
+    maxScrollTop,
+  )
+  if (input.boundary === "top") return input.scrollTop >= releaseDistance
+  return maxScrollTop - input.scrollTop >= releaseDistance
+}
+
+export function sessionUserPromptHistory(input: {
+  messages: ReadonlyArray<Pick<Message, "id" | "role">>
+  partsByMessage: Record<string, readonly { type: string }[] | undefined>
+}) {
+  return input.messages.flatMap((message) => {
+    if (message.role !== "user") return []
+    const prompt = restorePromptFromSubmittedParts(
+      (input.partsByMessage[message.id] ?? []).filter(
+        (part) => part.type === "text" || part.type === "file" || part.type === "agent",
+      ),
+    )
+    if (prompt.input.length === 0 && prompt.parts.length === 0) return []
+    return [prompt]
+  })
 }
 
 export function latestFullSessionHistoryStartID(
@@ -3504,9 +3783,14 @@ function SessionSubagentsWidget(props: {
   onOpen: (sessionID: string) => void
 }) {
   const { theme } = useTheme()
-  const visibleRows = createMemo(() => Math.max(1, props.height - 3))
+  const spacious = createMemo(() => props.width >= 48 && props.subagents.length <= 2)
+  const rowHeight = createMemo(() => (spacious() ? 2 : 1))
+  const visibleRows = createMemo(() => Math.max(1, Math.floor((props.height - 3) / rowHeight())))
   const visible = createMemo(() => props.subagents.slice(0, visibleRows()))
   const hidden = createMemo(() => Math.max(0, props.subagents.length - visibleRows()))
+  const statusWidth = 11
+  const labelWidth = createMemo(() => Math.max(8, props.width - statusWidth - 8))
+  const detailWidth = createMemo(() => Math.max(8, props.width - 9))
   const color = (status: string) => {
     if (status === "working" || status.startsWith("retry")) return theme.warning
     if (status === "needs input") return theme.error
@@ -3539,21 +3823,28 @@ function SessionSubagentsWidget(props: {
         <For each={visible()}>
           {(item) => (
             <box
-              flexDirection="row"
-              gap={1}
+              flexDirection="column"
+              gap={0}
               width="100%"
               backgroundColor={item.active ? theme.backgroundElement : theme.backgroundPanel}
               onMouseUp={() => props.onOpen(item.id)}
             >
-              <text fg={color(item.status)} flexShrink={0} wrapMode="none">
-                {item.active ? ">" : "•"}
-              </text>
-              <text fg={theme.text} flexGrow={1} wrapMode="none">
-                {Locale.truncateMiddle(`${item.label} ${item.description}`, Math.max(6, props.width - 24))}
-              </text>
-              <text fg={color(item.status)} flexShrink={0} wrapMode="none">
-                {Locale.truncateMiddle(item.status, 10)}
-              </text>
+              <box flexDirection="row" gap={1} width="100%">
+                <text fg={color(item.status)} flexShrink={0} wrapMode="none">
+                  {item.active ? ">" : "•"}
+                </text>
+                <text fg={theme.text} flexGrow={1} wrapMode="none">
+                  {Locale.truncateMiddle(`${item.label} ${item.description}`, labelWidth())}
+                </text>
+                <text fg={color(item.status)} flexShrink={0} wrapMode="none">
+                  {Locale.truncateMiddle(item.status, statusWidth)}
+                </text>
+              </box>
+              <Show when={spacious() && (item.detail || item.meta || item.updated)}>
+                <text fg={theme.textMuted} wrapMode="none">
+                  {Locale.truncateMiddle(`  ${item.detail ?? item.meta ?? item.updated}`, detailWidth())}
+                </text>
+              </Show>
             </box>
           )}
         </For>
@@ -3659,129 +3950,59 @@ const MIME_BADGE: Record<string, string> = {
 }
 
 function CompactionCard(props: {
-  reason: "auto" | "manual"
-  resume?: boolean
-  overflow?: boolean
-  tailStartID?: string
-  include?: string
+  part: Extract<Part, { type: "compaction" }>
   summaryPreview?: string
   transcriptPreview?: string
-  hasSummary?: boolean
+  modelOutputText?: string
+  modelReasoningText?: string
+  modelDetailLabel?: string
+  editableScratchpad?: boolean
 }) {
-  const { theme } = useTheme()
+  const sdk = useSDK()
   const mend = useMendTuiProfile()
-  const config = createMemo(() => mend.profile.presentation.compaction)
-  const stages = createMemo(() =>
-    compactionStageStates({
-      hasSummary: props.hasSummary,
-      resume: props.resume,
-      include: props.include,
-      tailStartID: props.tailStartID,
-    }),
-  )
-  const chips = createMemo(() =>
-    [
-      props.reason === "auto" ? "auto" : "manual",
-      props.overflow ? "overflow" : undefined,
-      props.resume ? "resume" : undefined,
-      props.tailStartID ? "preserved tail" : undefined,
-      props.include ? "transcript kept" : undefined,
-    ].filter((value): value is string => Boolean(value)),
-  )
-  const summaryPreview = createMemo(() => compactPreviewLine(props.summaryPreview, 112))
-  const transcriptPreview = createMemo(() => compactPreviewLine(props.transcriptPreview, 112))
-  const arcadeFrames = createMemo(() => (config().style === "arcade" ? compactionArcadeFrames(config().arcade) : []))
-
-  if (config().style === "quiet") {
-    return <box marginTop={1} border={["top"]} title=" Compaction " titleAlignment="center" borderColor={theme.borderActive} />
-  }
-
+  const scratchpadAllowed = createMemo(() => props.editableScratchpad || mend.profile.presentation.compaction.allowScratchpad)
+  const summaryPreview = createMemo(() => compactionSummaryPreview(props.summaryPreview, 360))
+  const transcriptPreview = createMemo(() => compactPreviewLine(props.transcriptPreview, 180))
   return (
-    <box
-      marginTop={1}
-      paddingLeft={2}
-      paddingRight={2}
-      paddingTop={1}
-      paddingBottom={1}
-      border={config().style === "minimal" ? ["left"] : ["left", "top"]}
-      customBorderChars={SplitBorder.customBorderChars}
-      borderColor={theme.borderActive}
-      backgroundColor={theme.backgroundPanel}
-      flexShrink={0}
-    >
-      <box flexDirection="row" justifyContent="space-between" width="100%" gap={2}>
-        <text fg={theme.text} wrapMode="none">
-          <span style={{ fg: theme.borderActive, bold: true }}>◈</span> Compaction cockpit
-        </text>
-        <text fg={theme.textMuted} wrapMode="none">
-          {props.reason === "auto" ? "auto" : "manual"}
-        </text>
-      </box>
-      <Show when={chips().length > 0}>
-        <box flexDirection="row" gap={1} flexWrap="wrap" paddingTop={1}>
-          <For each={chips()}>
-            {(chip) => (
-              <text fg={theme.text}>
-                <span style={{ bg: theme.backgroundElement, fg: theme.textMuted }}> {chip} </span>
-              </text>
-            )}
-          </For>
-        </box>
-      </Show>
-      <Show when={config().showProgress}>
-        <box flexDirection="row" gap={1} paddingTop={1} flexWrap="wrap">
-          <For each={stages()}>
-            {(stage, index) => {
-              const color = createMemo(() => {
-                if (stage.state === "done") return theme.borderActive
-                if (stage.state === "active") return theme.primary
-                return theme.textMuted
-              })
-              const glyph = createMemo(() => {
-                if (stage.state === "done") return "●"
-                if (stage.state === "active") return "◐"
-                return "○"
-              })
-              return (
-                <text fg={theme.textMuted} wrapMode="none">
-                  <span style={{ fg: color() }}>{glyph()} {stage.label}</span>
-                  <Show when={index() < stages().length - 1}>
-                    <span style={{ fg: theme.textMuted }}> ─ </span>
-                  </Show>
-                </text>
-              )
-            }}
-          </For>
-        </box>
-      </Show>
-      <Show when={summaryPreview()}>
-        <box paddingTop={1}>
-          <text fg={theme.text}>Summary: {summaryPreview()}</text>
-        </box>
-      </Show>
-      <Show when={!summaryPreview() && transcriptPreview()}>
-        <box paddingTop={1}>
-          <text fg={theme.textMuted}>Hint: {transcriptPreview()}</text>
-        </box>
-      </Show>
-      <Show when={props.include || props.tailStartID}>
-        <box paddingTop={1}>
-          <text fg={theme.textMuted}>
-            {props.include ? `Transcript anchor: ${Locale.truncate(props.include, 72)}` : `Tail start: ${Locale.truncate(props.tailStartID ?? "", 40)}`}
-          </text>
-        </box>
-      </Show>
-      <Show when={arcadeFrames().length > 0}>
-        <box paddingTop={1} flexDirection="column">
-          <For each={arcadeFrames()}>{(line) => <text fg={theme.primary}>{line}</text>}</For>
-        </box>
-      </Show>
-      <Show when={config().allowScratchpad}>
-        <box paddingTop={1}>
-          <text fg={theme.textMuted}>Scratchpad planned · not wired into transcript writes</text>
-        </box>
-      </Show>
-    </box>
+    <CompactionPanel
+      reason={props.part.auto ? "auto" : "manual"}
+      overflow={props.part.overflow}
+      resume={props.part.resume}
+      postPrompt={props.part.post_prompt}
+      tailStartID={props.part.tail_start_id}
+      hasSummaryBody={Boolean(summaryPreview())}
+      summaryPreview={summaryPreview()}
+      transcriptPreview={transcriptPreview()}
+      modelOutputText={props.modelOutputText}
+      modelReasoningText={props.modelReasoningText}
+      modelDetailLabel={props.modelDetailLabel}
+      scratchpad={
+        scratchpadAllowed()
+          ? {
+              key: props.part.id,
+              initialValue: props.part.post_prompt ?? "",
+              readOnly: !props.editableScratchpad,
+              onSave: props.editableScratchpad
+                ? async (value) => {
+                    await sdk.client.part.update(
+                      {
+                        sessionID: props.part.sessionID,
+                        messageID: props.part.messageID,
+                        partID: props.part.id,
+                        part: {
+                          ...props.part,
+                          post_prompt: value.trim() || undefined,
+                        },
+                      },
+                      { throwOnError: true },
+                    )
+                  }
+                : undefined,
+              note: "Saved. It will send after compaction.",
+            }
+          : undefined
+      }
+    />
   )
 }
 
@@ -3793,6 +4014,7 @@ function UserMessage(props: {
   pending?: string
   sticky?: boolean
   simpleHistory?: boolean
+  compactSubagentPrompt?: boolean
 }) {
   const local = useLocal()
   const sync = useSync()
@@ -3820,15 +4042,25 @@ function UserMessage(props: {
   const files = createMemo(() => props.parts.flatMap((x) => (x.type === "file" ? [x] : [])))
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
+  const tuiConfig = useTuiConfig()
+  const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const [hover, setHover] = createSignal(false)
   const queued = createMemo(() => props.pending && props.message.id > props.pending)
   const color = createMemo(() => local.agent.color(props.message.agent))
   const queuedFg = createMemo(() => selectedForeground(theme, color()))
+  const subagentInitialPrompt = createMemo(() => props.compactSubagentPrompt && props.index === 0)
   const collapsedDisplayText = createMemo(() =>
-    userMessageDisplayText(fullText(), props.sticky || props.simpleHistory ? { maxLines: 4, maxChars: 600 } : undefined),
+    userMessageDisplayText(
+      fullText(),
+      props.sticky || props.simpleHistory
+        ? { maxLines: 4, maxChars: 600 }
+        : subagentInitialPrompt()
+          ? { maxLines: 8, maxChars: 1000 }
+          : undefined,
+    ),
   )
   const effectiveExpandedText = createMemo(() => !props.sticky && !props.simpleHistory && expandedText())
-  const expandedViewportRows = createMemo(() => Math.max(8, Math.min(28, Math.floor(dimensions().height * 0.38))))
+  const expandedViewportRows = createMemo(() => Math.max(6, Math.min(18, Math.floor(dimensions().height * 0.3))))
   const expandedLines = createMemo(() => fullText().split("\n"))
   const expandedMaxOffset = createMemo(() => Math.max(0, expandedLines().length - expandedViewportRows()))
   const expandedWindow = createMemo(() => {
@@ -3848,30 +4080,71 @@ function UserMessage(props: {
     }
   })
   const displayText = createMemo(() => (effectiveExpandedText() ? expandedWindow() : collapsedDisplayText()))
+  const expandedRangeLabel = createMemo(() =>
+    expandedMaxOffset() > 0
+      ? `showing ${Locale.number(expandedWindow().offset + 1)}-${Locale.number(expandedWindow().end)} of ${Locale.number(expandedWindow().total)} message lines`
+      : "full message shown",
+  )
   const pastedContentChars = createMemo(() => pastedContentParts().reduce((total, part) => total + part.text.length, 0))
-  const togglePastedContent = (event: unknown) => {
+  let suppressNextMessageMouseUp = false
+  const stopMousePropagation = (event?: unknown) => {
     const maybeEvent = event as { stopPropagation?: () => void } | undefined
     maybeEvent?.stopPropagation?.()
+  }
+  const stopMouseEvent = (event?: unknown) => {
+    const maybeEvent = event as { preventDefault?: () => void; stopPropagation?: () => void } | undefined
+    maybeEvent?.preventDefault?.()
+    maybeEvent?.stopPropagation?.()
+  }
+  const consumeMouseEvent = (event?: unknown) => {
+    suppressNextMessageMouseUp = true
+    stopMouseEvent(event)
+  }
+  const handleMessageMouseUp = (event?: unknown) => {
+    if (suppressNextMessageMouseUp) {
+      suppressNextMessageMouseUp = false
+      stopMouseEvent(event)
+      return
+    }
+    props.onMouseUp()
+  }
+  const togglePastedContent = (event: unknown) => {
+    consumeMouseEvent(event)
     setExpandedPaste((value) => !value)
   }
+  let expandedScroll: ScrollBoxRenderable | undefined
   const toggleExpandedText = (event?: unknown) => {
-    const maybeEvent = event as { stopPropagation?: () => void } | undefined
-    maybeEvent?.stopPropagation?.()
+    consumeMouseEvent(event)
     setExpandedText((value) => {
       const next = !value
       if (!next) setExpandedOffset(0)
       return next
     })
   }
-  const scrollExpandedText = (delta: number, event?: unknown) => {
-    const maybeEvent = event as { stopPropagation?: () => void } | undefined
-    maybeEvent?.stopPropagation?.()
-    setExpandedOffset((value) => Math.max(0, Math.min(expandedMaxOffset(), value + delta)))
+  const scrollExpandedText = (offset: number, event?: unknown) => {
+    consumeMouseEvent(event)
+    const next = expandedUserMessageOffset({ offset, maxOffset: expandedMaxOffset() })
+    setExpandedOffset(next)
+    if (expandedScroll && !expandedScroll.isDestroyed) expandedScroll.scrollTo(next)
   }
 
   createEffect(() => {
     const max = expandedMaxOffset()
-    if (expandedOffset() > max) setExpandedOffset(max)
+    if (expandedOffset() > max) {
+      const next = expandedUserMessageOffset({ offset: expandedOffset(), maxOffset: max })
+      setExpandedOffset(next)
+      if (expandedScroll && !expandedScroll.isDestroyed) expandedScroll.scrollTo(next)
+    }
+  })
+
+  createEffect(() => {
+    if (!effectiveExpandedText() || expandedMaxOffset() <= 0) return
+    const timer = setInterval(() => {
+      if (!expandedScroll || expandedScroll.isDestroyed) return
+      const next = expandedUserMessageOffset({ offset: expandedScroll.scrollTop, maxOffset: expandedMaxOffset() })
+      if (next !== expandedOffset()) setExpandedOffset(next)
+    }, 80)
+    onCleanup(() => clearInterval(timer))
   })
 
   const compaction = createMemo(() => props.parts.find((x): x is Extract<Part, { type: "compaction" }> => x.type === "compaction"))
@@ -3881,13 +4154,39 @@ function UserMessage(props: {
         message.role === "assistant" && message.summary === true && message.parentID === props.message.id && !message.error,
     ),
   )
-  const summaryPreview = createMemo(() => {
+  const summaryOutputText = createMemo(() => {
     const summary = summaryAssistant()
     if (!summary) return
-    return (sync.data.part[summary.id] ?? [])
+    const text = (sync.data.part[summary.id] ?? [])
       .filter((part): part is TextPart => part.type === "text")
       .map((part) => part.text.trim())
-      .find(Boolean)
+      .filter(Boolean)
+      .join("\n\n")
+      .trim()
+    return text || undefined
+  })
+  const summaryReasoningText = createMemo(() => {
+    const summary = summaryAssistant()
+    if (!summary) return
+    const text = (sync.data.part[summary.id] ?? [])
+      .filter((part): part is ReasoningPart => part.type === "reasoning")
+      .map((part) => part.text.trim())
+      .filter(Boolean)
+      .join("\n\n")
+      .trim()
+    return text || undefined
+  })
+  const summaryPreview = createMemo(() => summaryOutputText())
+  const summaryModelDetailLabel = createMemo(() => {
+    const summary = summaryAssistant()
+    if (!summary) return
+    return [
+      summary.modelID ? `${summary.providerID}/${summary.modelID}` : undefined,
+      summary.tokens?.reasoning ? `${Locale.number(summary.tokens.reasoning)} reasoning` : undefined,
+      summary.tokens?.output ? `${Locale.number(summary.tokens.output)} output` : undefined,
+    ]
+      .filter((item): item is string => Boolean(item))
+      .join(" · ") || undefined
   })
   const transcriptPreview = createMemo(() => compaction()?.instructions || text())
 
@@ -3909,7 +4208,7 @@ function UserMessage(props: {
             onMouseOut={() => {
               setHover(false)
             }}
-            onMouseUp={props.onMouseUp}
+            onMouseUp={handleMessageMouseUp}
             paddingTop={1}
             paddingBottom={1}
             paddingLeft={2}
@@ -3920,7 +4219,7 @@ function UserMessage(props: {
           >
             <box flexDirection="row" justifyContent="space-between" width="100%" gap={2}>
               <text fg={theme.textMuted} wrapMode="none">
-                <span style={{ fg: color() }}>●</span> You
+                <span style={{ fg: color() }}>●</span> {subagentInitialPrompt() ? "Subagent prompt" : "You"}
               </text>
               <Show
                 when={queued()}
@@ -3936,105 +4235,108 @@ function UserMessage(props: {
               </Show>
             </box>
             <Show when={effectiveExpandedText() && collapsedDisplayText().compacted}>
-              <box flexDirection="row" justifyContent="space-between" width="100%" gap={2}>
-                <text
-                  fg={theme.textMuted}
-                  onMouseUp={(event) => {
-                    scrollExpandedText(-expandedViewportRows(), event)
-                  }}
-                >
-                  {expandedWindow().hasBefore ? "↑ earlier" : "  earlier"}
-                </text>
-                <text fg={theme.textMuted} wrapMode="none">
-                  lines {Locale.number(expandedWindow().offset + 1)}-{Locale.number(expandedWindow().end)} /{" "}
-                  {Locale.number(expandedWindow().total)}
-                </text>
-                <text
-                  fg={theme.textMuted}
-                  onMouseUp={(event) => {
-                    scrollExpandedText(expandedViewportRows(), event)
-                  }}
-                >
-                  {expandedWindow().hasAfter ? "later ↓" : "later  "}
-                </text>
-                <text
-                  fg={theme.textMuted}
-                  onMouseUp={(event) => {
-                    toggleExpandedText(event)
-                  }}
-                >
-                  collapse
-                </text>
+              <box
+                flexDirection="row"
+                justifyContent="space-between"
+                width="100%"
+                gap={2}
+                paddingBottom={1}
+              >
+                <box flexGrow={1} overflow="hidden">
+                  <text fg={theme.textMuted} wrapMode="none">
+                    Expanded message · {expandedRangeLabel()}
+                  </text>
+                </box>
+                <Show when={expandedMaxOffset() > 0}>
+                  <box flexDirection="row" flexShrink={0} gap={2}>
+                    <text
+                      fg={expandedWindow().hasBefore ? theme.text : theme.textMuted}
+                      onMouseDown={(event) => {
+                        scrollExpandedText(0, event)
+                      }}
+                      onMouseUp={stopMouseEvent}
+                    >
+                      {expandedWindow().hasBefore ? "go to top ↑" : "at top"}
+                    </text>
+                    <text
+                      fg={expandedWindow().hasAfter ? theme.text : theme.textMuted}
+                      onMouseDown={(event) => {
+                        scrollExpandedText(expandedMaxOffset(), event)
+                      }}
+                      onMouseUp={stopMouseEvent}
+                    >
+                      {expandedWindow().hasAfter ? "go to bottom ↓" : "at bottom"}
+                    </text>
+                  </box>
+                </Show>
               </box>
             </Show>
             <Show
               when={effectiveExpandedText() && expandedMaxOffset() > 0}
               fallback={<text fg={theme.text}>{displayText().text}</text>}
             >
-              <box flexDirection="row" width="100%" gap={1}>
-                <box flexGrow={1}>
-                  <text fg={theme.text}>{displayText().text}</text>
-                </box>
-                <UserMessageInternalScrollbar
-                  rows={expandedWindow().rows}
-                  offset={expandedWindow().offset}
-                  total={expandedWindow().total}
-                />
-              </box>
+              <scrollbox
+                ref={(ref) => {
+                  expandedScroll = ref
+                }}
+                height={expandedViewportRows()}
+                width="100%"
+                scrollAcceleration={scrollAcceleration()}
+                onMouseScroll={stopMousePropagation}
+                verticalScrollbarOptions={{
+                  visible: true,
+                  trackOptions: {
+                    backgroundColor: theme.backgroundPanel,
+                    foregroundColor: theme.textMuted,
+                  },
+                }}
+              >
+                <text fg={theme.text}>{visibleUserMessageText(fullText())}</text>
+              </scrollbox>
             </Show>
             <Show when={!props.sticky && !props.simpleHistory && pastedContentParts().length > 0}>
-              <text
-                fg={theme.textMuted}
-                onMouseUp={(event) => {
-                  if (pastedContentParts().length > 0) togglePastedContent(event)
-                }}
-              >
-                {expandedPaste() ? "▾ hide pasted content" : "▸ show pasted content"} (
-                {Locale.number(pastedContentParts().length)} block{pastedContentParts().length === 1 ? "" : "s"},{" "}
-                {Locale.number(pastedContentChars())} chars)
-              </text>
-            </Show>
-            <Show when={!props.sticky && !props.simpleHistory && collapsedDisplayText().compacted}>
-              <text
-                fg={theme.textMuted}
-                onMouseUp={(event) => {
-                  toggleExpandedText(event)
-                }}
-              >
-                … {Locale.number(collapsedDisplayText().hiddenChars)} chars hidden
-                <Show when={collapsedDisplayText().hiddenLines > 0}>
-                  <span style={{ fg: theme.textMuted }}> · {Locale.number(collapsedDisplayText().hiddenLines)} more lines</span>
-                </Show>
-                <span style={{ fg: theme.textMuted }}>
-                  {" "}· click to {effectiveExpandedText() ? "collapse" : "expand"}
-                </span>
-              </text>
-            </Show>
-            <Show when={effectiveExpandedText() && expandedMaxOffset() > 0}>
-              <box flexDirection="row" justifyContent="space-between" width="100%" gap={2}>
+              <box onMouseDown={consumeMouseEvent} onMouseUp={consumeMouseEvent}>
                 <text
                   fg={theme.textMuted}
                   onMouseUp={(event) => {
-                    scrollExpandedText(-expandedViewportRows(), event)
+                    if (pastedContentParts().length > 0) togglePastedContent(event)
                   }}
                 >
-                  {expandedWindow().hasBefore ? "↑ earlier" : "  earlier"}
+                  {expandedPaste() ? "▾ hide pasted content" : "▸ show pasted content"} (
+                  {Locale.number(pastedContentParts().length)} block{pastedContentParts().length === 1 ? "" : "s"},{" "}
+                  {Locale.number(pastedContentChars())} chars)
                 </text>
+              </box>
+            </Show>
+            <Show when={!effectiveExpandedText() && !props.sticky && !props.simpleHistory && collapsedDisplayText().compacted}>
+              <box onMouseDown={consumeMouseEvent} onMouseUp={consumeMouseEvent}>
                 <text
                   fg={theme.textMuted}
-                  onMouseUp={(event) => {
-                    scrollExpandedText(expandedViewportRows(), event)
-                  }}
-                >
-                  {expandedWindow().hasAfter ? "later ↓" : "later  "}
-                </text>
-                <text
-                  fg={theme.textMuted}
+                  onMouseDown={consumeMouseEvent}
                   onMouseUp={(event) => {
                     toggleExpandedText(event)
                   }}
                 >
-                  collapse
+                  … {Locale.number(collapsedDisplayText().hiddenChars)} chars hidden
+                  <Show when={collapsedDisplayText().hiddenLines > 0}>
+                    <span style={{ fg: theme.textMuted }}> · {Locale.number(collapsedDisplayText().hiddenLines)} more lines</span>
+                  </Show>
+                  <span style={{ fg: theme.textMuted }}>
+                    {" "}· click to {effectiveExpandedText() ? "collapse" : "expand"}
+                  </span>
+                </text>
+              </box>
+            </Show>
+            <Show when={effectiveExpandedText() && !props.sticky && !props.simpleHistory && collapsedDisplayText().compacted}>
+              <box onMouseDown={consumeMouseEvent} onMouseUp={consumeMouseEvent}>
+                <text
+                  fg={theme.textMuted}
+                  onMouseDown={consumeMouseEvent}
+                  onMouseUp={(event) => {
+                    toggleExpandedText(event)
+                  }}
+                >
+                  ▴ collapse expanded message
                 </text>
               </box>
             </Show>
@@ -4063,13 +4365,13 @@ function UserMessage(props: {
       <Show when={compaction()}>
         {(part) => (
           <CompactionCard
-            reason={part().auto ? "auto" : "manual"}
-            overflow={part().overflow}
-            resume={part().resume}
-            tailStartID={part().tail_start_id}
+            part={part()}
             summaryPreview={summaryPreview()}
             transcriptPreview={transcriptPreview()}
-            hasSummary={Boolean(summaryPreview())}
+            modelOutputText={summaryOutputText()}
+            modelReasoningText={summaryReasoningText()}
+            modelDetailLabel={summaryModelDetailLabel()}
+            editableScratchpad={!summaryAssistant()}
           />
         )}
       </Show>
@@ -4077,28 +4379,6 @@ function UserMessage(props: {
   )
 }
 
-function UserMessageInternalScrollbar(props: { rows: number; offset: number; total: number }) {
-  const { theme } = useTheme()
-  const rows = createMemo(() => Math.max(1, props.rows))
-  const total = createMemo(() => Math.max(rows(), props.total))
-  const thumbSize = createMemo(() => Math.max(1, Math.round((rows() / total()) * rows())))
-  const thumbStart = createMemo(() => {
-    const maxStart = Math.max(0, rows() - thumbSize())
-    const maxOffset = Math.max(1, total() - rows())
-    return Math.max(0, Math.min(maxStart, Math.round((props.offset / maxOffset) * maxStart)))
-  })
-
-  return (
-    <box flexDirection="column" flexShrink={0}>
-      <For each={Array.from({ length: rows() })}>
-        {(_, index) => {
-          const active = createMemo(() => index() >= thumbStart() && index() < thumbStart() + thumbSize())
-          return <text fg={active() ? theme.textMuted : theme.backgroundElement}>{active() ? "█" : "│"}</text>
-        }}
-      </For>
-    </box>
-  )
-}
 
 export function memoryToastMessage(info: SessionMemoryMetadata | undefined) {
   if (!info?.output?.generate) return ""
@@ -4123,6 +4403,11 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   const { theme } = useTheme()
   const sync = useSync()
   const messages = createMemo(() => sync.data.message[props.message.sessionID] ?? [])
+  const parentHasCompaction = createMemo(() => {
+    const parentID = props.message.parentID
+    if (!parentID) return false
+    return (sync.data.part[parentID] ?? []).some((part) => part.type === "compaction")
+  })
   const model = createMemo(() => Model.name(ctx.providers(), props.message.providerID, props.message.modelID))
   const usage = createMemo(() => formatAssistantUsage(props.message, ctx.providers()))
   const modelUsageLabel = createMemo(() => usage()?.compact ?? model())
@@ -4137,7 +4422,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
     return props.message.finish && !["tool-calls", "unknown"].includes(props.message.finish)
   })
   const streamingCompactionSummary = createMemo(() => {
-    return props.message.summary === true && !props.message.time.completed && mend.profile.presentation.profile !== "raw"
+    return props.message.summary === true && !parentHasCompaction() && !props.message.time.completed && mend.profile.presentation.profile !== "raw"
   })
   const simpleTextParts = createMemo(() =>
     props.parts.filter((part): part is TextPart => part.type === "text" && part.text.trim().length > 0),
@@ -4168,6 +4453,8 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           showReasoningRows: mend.profile.presentation.reasoning.defaultVisibility !== "hidden",
         }),
   )
+
+  if (props.message.summary === true && parentHasCompaction()) return null
 
   return (
     <Switch>
@@ -4231,9 +4518,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
         )}
       </Show>
       <Show when={streamingCompactionSummary()}>
-        <box paddingLeft={3} marginTop={1} flexShrink={0}>
-          <text fg={theme.textMuted} wrapMode="none">Compacting context…</text>
-        </box>
+        <CompactionPanel reason="auto" hasSummaryBody={false} />
       </Show>
       <Show when={props.message.error && props.message.error.name !== "MessageAbortedError"}>
         <box
@@ -4301,11 +4586,19 @@ function updateToolBreakMargin(el: BoxRenderable, setMargin: (value: number) => 
 function TimelineRowView(props: { row: TimelineRow; stackStart?: boolean }) {
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
+  const dimensions = useTerminalDimensions()
   const active = createMemo(() => props.row.state === "pending" || props.row.state === "running")
   const failed = createMemo(() => props.row.state === "error" || props.row.class === "failure")
   const planning = createMemo(() => props.row.class === "planning")
   const lines = createMemo(() => props.row.lines ?? [])
-  const detailed = createMemo(() => lines().length > 0)
+  const wrappedLines = createMemo(() => {
+    const width = Math.max(16, sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)) - 12)
+    return lines().flatMap((line) => wrapTimelineLine("", line, width))
+  })
+  const detailed = createMemo(() => wrappedLines().length > 0)
+  const cleanDetail = createMemo(
+    () => (props.row.tool === "webfetch" || props.row.tool === "websearch") && detailed(),
+  )
   const color = createMemo(() => {
     if (failed()) return theme.error
     if (planning()) return theme.warning
@@ -4328,12 +4621,25 @@ function TimelineRowView(props: { row: TimelineRow; stackStart?: boolean }) {
           </text>
         }
       >
-        <text fg={failed() ? theme.error : active() ? theme.text : theme.textMuted}>
-          ╭─ <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
-          {props.row.title}
-        </text>
-        <For each={lines()}>{(line) => <text fg={theme.textMuted}>│ {line}</text>}</For>
-        <text fg={theme.textMuted}>╰─</text>
+        <Show
+          when={cleanDetail()}
+          fallback={
+            <>
+              <text fg={failed() ? theme.error : active() ? theme.text : theme.textMuted}>
+                ╭─ <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+                {props.row.title}
+              </text>
+              <For each={wrappedLines()}>{(line) => <text fg={theme.textMuted} wrapMode="none">│ {line}</text>}</For>
+              <text fg={theme.textMuted}>╰─</text>
+            </>
+          }
+        >
+          <text fg={failed() ? theme.error : active() ? theme.text : theme.textMuted}>
+            <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+            {props.row.title}
+          </text>
+          <For each={wrappedLines()}>{(line) => <text fg={theme.textMuted} wrapMode="none">  {line}</text>}</For>
+        </Show>
       </Show>
     </box>
   )
@@ -4343,7 +4649,7 @@ function TimelineCollapseRow(props: { collapse: TimelineCollapse; stackStart?: b
   const { theme } = useTheme()
   const [expanded, setExpanded] = createSignal(false)
   const [hover, setHover] = createSignal(false)
-  const label = createMemo(() => timelineCollapseLabel(props.collapse))
+  const label = createMemo(() => timelineCollapseLabel(props.collapse, { expanded: expanded() }))
   return (
     <box flexDirection="column" flexShrink={0} marginTop={props.stackStart ? 1 : 0}>
       <box
@@ -4686,6 +4992,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
     if (props.part.tool === ShellID.ToolID) return false
     if (props.part.tool === "plan_review") return false
     if (props.part.tool === "loop") return false
+    if (props.part.tool === "memory_graph") return false
     return shouldRenderCompactTool(profile, props.part.tool)
   })
 
@@ -4777,6 +5084,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={props.part.tool === "loop"}>
           <Loop {...toolprops} />
         </Match>
+        <Match when={props.part.tool === "memory_graph"}>
+          <MemoryGraph {...toolprops} />
+        </Match>
         <Match when={true}>
           <GenericTool {...toolprops} />
         </Match>
@@ -4816,14 +5126,22 @@ function PlanReviewToolRow(props: ToolProps<any>) {
 function PresentationToolRow(props: { tool: string; state: string; input: Record<string, any>; metadata?: Record<string, any>; output?: unknown }) {
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
+  const dimensions = useTerminalDimensions()
   const [margin, setMargin] = createSignal(0)
   const pending = createMemo(() => props.state === "pending" || props.state === "running")
   const errored = createMemo(() => props.state === "error")
   const event = createMemo(() =>
     normalizeToolEvent({ tool: props.tool, state: props.state, input: props.input, metadata: props.metadata, output: props.output }),
   )
+  const wrappedLines = createMemo(() => {
+    const width = Math.max(16, sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)) - 12)
+    return event().lines.flatMap((line) => wrapTimelineLine("", line, width))
+  })
   const icon = createMemo(() => toolPresentationIconForProfile(mend.profile.presentation.profile, props.tool, errored() ? "failure" : event().class))
   const title = createMemo(() => event().title)
+  const cleanDetail = createMemo(
+    () => (props.tool === "webfetch" || props.tool === "websearch") && wrappedLines().length > 0,
+  )
   const rowColor = createMemo(() => {
     if (errored()) return theme.error
     if (pending()) return theme.text
@@ -4837,23 +5155,51 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
     <Show
       when={mend.profile.presentation.profile === "mendcode"}
       fallback={
-        <box
-          paddingLeft={3}
-          marginTop={margin()}
-          flexShrink={0}
-          renderBefore={function () {
-            updateToolBreakMargin(this as BoxRenderable, setMargin)
-          }}
+        <Show
+          when={wrappedLines().length > 0}
+          fallback={
+            <box
+              paddingLeft={3}
+              marginTop={margin()}
+              flexShrink={0}
+              renderBefore={function () {
+                updateToolBreakMargin(this as BoxRenderable, setMargin)
+              }}
+            >
+              <text fg={rowColor()}>
+                <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+                {detail()}
+              </text>
+            </box>
+          }
         >
-          <text fg={rowColor()}>
-            <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
-            {detail()}
-          </text>
-        </box>
+          <box
+            paddingLeft={3}
+            marginTop={margin()}
+            flexShrink={0}
+            flexDirection="column"
+            renderBefore={function () {
+              updateToolBreakMargin(this as BoxRenderable, setMargin)
+            }}
+          >
+            <text fg={rowColor()}>
+              <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+              {detail()}
+            </text>
+            <For each={wrappedLines()}>
+              {(line) => (
+                <text fg={theme.textMuted} wrapMode="char">
+                  {line}
+                </text>
+              )}
+            </For>
+            <Show when={event().result}>{(result) => <text fg={theme.textMuted}>{result()}</text>}</Show>
+          </box>
+        </Show>
       }
     >
       <Show
-        when={event().lines.length > 0}
+        when={wrappedLines().length > 0}
         fallback={
           <box
             paddingLeft={3}
@@ -4879,12 +5225,26 @@ function PresentationToolRow(props: { tool: string; state: string; input: Record
             updateToolBreakMargin(this as BoxRenderable, setMargin)
           }}
         >
-          <text fg={rowColor()}>
-            ╭─ <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
-            {title()}
-          </text>
-          <For each={event().lines}>{(line) => <text fg={theme.textMuted}>│ {line}</text>}</For>
-          <Show when={event().result}>{(result) => <text fg={theme.textMuted}>╰─ {result()}</text>}</Show>
+          <Show
+            when={cleanDetail()}
+            fallback={
+              <>
+                <text fg={rowColor()}>
+                  ╭─ <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+                  {title()}
+                </text>
+                <For each={wrappedLines()}>{(line) => <text fg={theme.textMuted} wrapMode="none">│ {line}</text>}</For>
+                <Show when={event().result}>{(result) => <text fg={theme.textMuted}>╰─ {result()}</text>}</Show>
+              </>
+            }
+          >
+            <text fg={rowColor()}>
+              <Show when={icon()}>{(value) => <span>{value()} </span>}</Show>
+              {title()}
+              <Show when={event().result}>{(result) => <span style={{ fg: theme.textMuted }}> · {result()}</span>}</Show>
+            </text>
+            <For each={wrappedLines()}>{(line) => <text fg={theme.textMuted} wrapMode="none">  {line}</text>}</For>
+          </Show>
         </box>
       </Show>
     </Show>
@@ -4902,15 +5262,12 @@ type ToolProps<T> = {
 function GenericTool(props: ToolProps<any>) {
   const { theme } = useTheme()
   const ctx = use()
-  const output = createMemo(() => props.output?.trim() ?? "")
+  const output = createMemo(() => renderTerminalOutput(props.output ?? ""))
   const [expanded, setExpanded] = createSignal(false)
-  const lines = createMemo(() => output().split("\n"))
-  const maxLines = 3
-  const overflow = createMemo(() => lines().length > maxLines)
-  const limited = createMemo(() => {
-    if (expanded() || !overflow()) return output()
-    return [...lines().slice(0, maxLines), "…"].join("\n")
-  })
+  const maxLines = 8
+  const preview = createMemo(() => latestTerminalOutputPreview(output(), maxLines))
+  const overflow = createMemo(() => preview().overflow)
+  const limited = createMemo(() => (expanded() || !overflow() ? output() : preview().text))
 
   return (
     <Show
@@ -5181,15 +5538,11 @@ function Shell(props: ToolProps<typeof ShellTool>) {
   const sync = useSync()
   const [now, setNow] = createSignal(Date.now())
   const isRunning = createMemo(() => props.part.state.status === "running")
-  const output = createMemo(() => stripAnsi(props.metadata.output?.trim() ?? ""))
+  const output = createMemo(() => renderTerminalOutput(props.metadata.output ?? ""))
   const [expanded, setExpanded] = createSignal(false)
-  const lines = createMemo(() => output().split("\n"))
-  const overflow = createMemo(() => lines().length > 10)
-  const limited = createMemo(() => {
-    if (expanded() || !overflow()) return output()
-    if (isRunning()) return ["...", ...lines().slice(-10)].join("\n")
-    return [...lines().slice(0, 10), "…"].join("\n")
-  })
+  const preview = createMemo(() => latestTerminalOutputPreview(output(), 10))
+  const overflow = createMemo(() => preview().overflow)
+  const limited = createMemo(() => (expanded() || !overflow() ? output() : preview().text))
 
   const workdirDisplay = createMemo(() => {
     const workdir = props.input.workdir
@@ -5371,26 +5724,53 @@ function Grep(props: ToolProps<typeof GrepTool>) {
 }
 
 function WebFetch(props: ToolProps<typeof WebFetchTool>) {
+  const { theme } = useTheme()
+  const mend = useMendTuiProfile()
+  const dimensions = useTerminalDimensions()
+  const detailLines = createMemo(() => [props.input.url].filter((line): line is string => Boolean(line?.trim())))
+  const wrappedLines = createMemo(() => {
+    const width = Math.max(16, sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)) - 8)
+    return detailLines().flatMap((line) => wrapTimelineLine("", line, width))
+  })
   return (
-    <InlineTool icon={toolPresentationIcon("webfetch")} pending="Fetching from the web..." complete={props.input.url} part={props.part}>
-      WebFetch {props.input.url}
-    </InlineTool>
+    <>
+      <InlineTool icon={toolPresentationIcon("webfetch")} pending="Fetching from the web..." complete={props.input.url} part={props.part}>
+        WebFetch
+      </InlineTool>
+      <For each={wrappedLines()}>
+        {(line) => (
+          <box paddingLeft={6} flexShrink={0}>
+            <text fg={theme.textMuted} wrapMode="char">
+              {line}
+            </text>
+          </box>
+        )}
+      </For>
+    </>
   )
 }
 
 function WebSearch(props: ToolProps<typeof WebSearchTool>) {
   const { theme } = useTheme()
+  const mend = useMendTuiProfile()
+  const dimensions = useTerminalDimensions()
   const metadata = props.metadata as { numResults?: number }
   const urls = createMemo(() => webSearchUrlLines(props.metadata as Record<string, unknown>, props.output))
+  const wrappedUrls = createMemo(() => {
+    const width = Math.max(16, sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)) - 8)
+    return urls().flatMap((url) => wrapTimelineLine("", url, width))
+  })
   return (
     <>
       <InlineTool icon={toolPresentationIcon("websearch")} pending="Searching web..." complete={props.input.query} part={props.part}>
         Web Search "{props.input.query}" <Show when={metadata.numResults}>({metadata.numResults} results)</Show>
       </InlineTool>
-      <For each={urls()}>
+      <For each={wrappedUrls()}>
         {(url) => (
           <box paddingLeft={6} flexShrink={0}>
-            <text fg={theme.textMuted} wrapMode="word">{url}</text>
+            <text fg={theme.textMuted} wrapMode="char">
+              {url}
+            </text>
           </box>
         )}
       </For>
@@ -5857,6 +6237,100 @@ function Skill(props: ToolProps<typeof SkillTool>) {
     <InlineTool icon={toolPresentationIcon("skill")} pending="Loading skill..." complete={props.input.name} part={props.part}>
       Skill "{props.input.name}"
     </InlineTool>
+  )
+}
+
+type MemoryGraphSnapshot = {
+  action?: string
+  query?: string
+  health?: { graphHealth?: string; connectedFacts?: number; isolatedFacts?: number; orphanLinks?: number }
+  facts: Array<{ id: string; text: string; scope: string; categoryIDs: string[]; retrievalPriority?: number; materialized?: boolean }>
+  links: Array<{ from: string; to: string; kind: string }>
+  categories: Array<{ id: string; label: string; count: number }>
+}
+
+function memoryGraphSnapshot(value: unknown): MemoryGraphSnapshot | undefined {
+  if (!value || typeof value !== "object") return
+  const record = value as Partial<MemoryGraphSnapshot>
+  if (!Array.isArray(record.facts) || !Array.isArray(record.links) || !Array.isArray(record.categories)) return
+  return record as MemoryGraphSnapshot
+}
+
+function MemoryGraph(props: ToolProps<any>) {
+  const dimensions = useTerminalDimensions()
+  const { theme } = useTheme()
+  const snapshot = createMemo(() => memoryGraphSnapshot(props.metadata.graphSnapshot))
+  const panelWidth = createMemo(() => Math.max(44, Math.min(96, dimensions().width - 12)))
+  const mapWidth = createMemo(() => Math.max(24, panelWidth() - 8))
+  const graph = createMemo(() => {
+    const data = snapshot()
+    if (!data) return
+    return memoryGraphMiniMap({
+      facts: data.facts,
+      links: data.links,
+      categories: data.categories,
+      width: mapWidth(),
+      height: panelWidth() < 58 ? 7 : 10,
+    })
+  })
+  const title = createMemo(() => {
+    const data = snapshot()
+    const inputRecord = props.input as Record<string, unknown>
+    const inputAction = typeof inputRecord.action === "string" ? inputRecord.action : ""
+    const inputQuery = typeof inputRecord.query === "string" ? inputRecord.query : ""
+    const action = data?.action ? data.action.replace(/_/g, " ") : inputAction ? inputAction.replace(/_/g, " ") : "graph"
+    const query = data?.query || inputQuery
+    return query ? `Memory graph · ${action} · ${Locale.truncateMiddle(query, 32)}` : `Memory graph · ${action}`
+  })
+  const healthTone = createMemo(() => {
+    const state = snapshot()?.health?.graphHealth
+    if (state === "connected") return theme.success
+    if (state === "empty") return theme.textMuted
+    return theme.warning
+  })
+  const healthLine = createMemo(() => {
+    const data = snapshot()
+    if (!data?.health) return `${data?.facts.length ?? 0} facts · ${data?.links.length ?? 0} links`
+    return `${data.health.graphHealth ?? "unknown"} · ${data.health.connectedFacts ?? 0}/${data.facts.length} connected · ${data.health.isolatedFacts ?? 0} isolated · ${data.health.orphanLinks ?? 0} orphan`
+  })
+  const short = (value: string, width = mapWidth()) => Locale.truncate(value, Math.max(8, width))
+
+  return (
+    <Show when={snapshot()} fallback={<GenericTool {...props} />}>
+      <BlockTool
+        title={title()}
+        icon={toolPresentationIcon("memory_graph")}
+        titleColor={healthTone()}
+        titleAttributes={TextAttributes.BOLD}
+        contentGap={0}
+        part={props.part}
+        spinner={props.part.state.status === "running"}
+      >
+        <box flexDirection="column" width={panelWidth()} borderStyle="single" borderColor={healthTone()} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1} overflow="hidden">
+          <box flexDirection="row">
+            <text fg={healthTone()} wrapMode="none">{toolPresentationIcon("memory_graph")} {short(title(), Math.max(16, panelWidth() - 20))}</text>
+            <box flexGrow={1} />
+            <text fg={theme.textMuted} wrapMode="none">tool result</text>
+          </box>
+          <text fg={theme.textMuted} wrapMode="none">{short(healthLine(), panelWidth() - 6)}</text>
+          <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column" overflow="hidden">
+            <Show
+              when={graph()?.rows.length}
+              fallback={<text fg={theme.textMuted}>No graph facts in this tool result.</text>}
+            >
+              <For each={graph()?.rows ?? []}>{(row) => <text fg={theme.primary} wrapMode="none">{short(row || " ")}</text>}</For>
+              <text fg={theme.textMuted} wrapMode="none">{short(graph()?.status ?? "")}</text>
+              <text fg={theme.textMuted} wrapMode="none">{short(graph()?.stats ?? "")}</text>
+              <For each={graph()?.edgeLabels ?? []}>{(line) => <text fg={theme.secondary} wrapMode="none">{short(line)}</text>}</For>
+              <For each={graph()?.focusLines ?? []}>{(line) => <text fg={theme.text} wrapMode="none">{short(line)}</text>}</For>
+              <For each={graph()?.relationRows ?? []}>{(line) => <text fg={theme.textMuted} wrapMode="none">{short(line)}</text>}</For>
+              <For each={graph()?.isolatedRows ?? []}>{(line) => <text fg={theme.warning} wrapMode="none">{short(line)}</text>}</For>
+              <For each={graph()?.legend ?? []}>{(line) => <text fg={theme.text} wrapMode="none">{short(line)}</text>}</For>
+            </Show>
+          </box>
+        </box>
+      </BlockTool>
+    </Show>
   )
 }
 

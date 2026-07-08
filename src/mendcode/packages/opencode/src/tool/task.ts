@@ -1,5 +1,6 @@
 import * as Tool from "./tool"
 import DESCRIPTION from "./task.txt"
+import path from "path"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { SessionID, MessageID } from "../session/schema"
@@ -20,6 +21,8 @@ export interface TaskPromptOps {
 
 const id = "task"
 const SUBAGENT_WAIT_STATUS_TTL_MS = 6 * 60 * 60 * 1000
+const ORCHESTRATION_ARTIFACT_MAX_CHARS = 24_000
+const ORCHESTRATION_ARTIFACTS = [".agents/orchestration/CHAT.md", ".agents/orchestration/STATUS.md"] as const
 
 export function normalizeSubagentType(value: string) {
   return value.trim().replace(/^(sub[/-])+/i, "")
@@ -50,34 +53,93 @@ function unique(items: string[]) {
   return Array.from(new Set(items))
 }
 
-function childEvidenceText(history: readonly MessageV2.WithParts[], fallbackText: string, extraParts: readonly MessageV2.Part[] = []) {
-  const trimmedFallback = fallbackText.trim()
-  const text = (() => {
-    for (let i = history.length - 1; i >= 0; i--) {
-      const message = history[i]
-      if (message?.info.role !== "assistant") continue
-      for (let j = message.parts.length - 1; j >= 0; j--) {
-        const part = message.parts[j]
-        if (part?.type !== "text") continue
-        const value = part.text.trim()
-        if (!value || value === trimmedFallback || isGenericTaskResult(value)) continue
-        return value
-      }
-    }
-    return ""
-  })()
-  const files = unique([
-    ...history.flatMap((message) => changedFiles(message.parts)),
-    ...changedFiles(extraParts),
-  ])
-  if (!text && files.length === 0) return trimmedFallback
+function isOrchestrationArtifact(file: string) {
+  const normalized = file.replace(/\\/g, "/")
+  return ORCHESTRATION_ARTIFACTS.some((artifact) => normalized === artifact || normalized.endsWith(`/${artifact}`))
+}
 
-  const lines = trimmedFallback ? [trimmedFallback] : []
-  if (text) lines.push("", "Subagent session evidence:", text)
-  if (files.length) {
-    lines.push("", "Subagent changed files:", ...files.map((file) => `- ${file}`))
-  }
-  return lines.join("\n")
+function artifactContent(text: string) {
+  const trimmed = text.trim()
+  if (trimmed.length <= ORCHESTRATION_ARTIFACT_MAX_CHARS) return trimmed
+  return [
+    `[orchestration artifact truncated: showing last ${ORCHESTRATION_ARTIFACT_MAX_CHARS} chars]`,
+    trimmed.slice(-ORCHESTRATION_ARTIFACT_MAX_CHARS),
+  ].join("\n")
+}
+
+function messageBases(history: readonly MessageV2.WithParts[]) {
+  return unique(
+    history.flatMap((message) => {
+      const messagePath = "path" in message.info ? message.info.path : undefined
+      return [messagePath?.root, messagePath?.cwd].filter((item): item is string => Boolean(item))
+    }),
+  )
+}
+
+function orchestrationArtifactCandidates(input: {
+  history: readonly MessageV2.WithParts[]
+  files: readonly string[]
+}) {
+  const bases = messageBases(input.history)
+  return unique(
+    input.files.flatMap((file) => {
+      if (!isOrchestrationArtifact(file)) return []
+      if (path.isAbsolute(file)) return [file]
+      return bases.map((base) => path.join(base, file))
+    }),
+  )
+}
+
+function readOrchestrationArtifacts(input: { history: readonly MessageV2.WithParts[]; files: readonly string[] }) {
+  const bases = messageBases(input.history)
+  const candidates = orchestrationArtifactCandidates(input).map((file) =>
+    path.isAbsolute(file) ? file : path.resolve(bases[0] ?? process.cwd(), file),
+  )
+  return Effect.forEach(
+    unique(candidates),
+    (file) =>
+      Effect.promise(async () => {
+        const content = await Bun.file(file).text()
+        const base = bases.find((base) => file.startsWith(`${base}${path.sep}`))
+        const display = base ? path.relative(base, file) : file
+        return [`--- ${display} ---`, artifactContent(content)].join("\n")
+      }).pipe(Effect.catchCause(() => Effect.succeed(undefined))),
+    { concurrency: "unbounded" },
+  ).pipe(Effect.map((items) => items.filter((item): item is string => Boolean(item))))
+}
+
+function childEvidenceText(history: readonly MessageV2.WithParts[], fallbackText: string, extraParts: readonly MessageV2.Part[] = []) {
+  return Effect.gen(function* () {
+    const trimmedFallback = fallbackText.trim()
+    const text = (() => {
+      for (let i = history.length - 1; i >= 0; i--) {
+        const message = history[i]
+        if (message?.info.role !== "assistant") continue
+        for (let j = message.parts.length - 1; j >= 0; j--) {
+          const part = message.parts[j]
+          if (part?.type !== "text") continue
+          const value = part.text.trim()
+          if (!value || value === trimmedFallback || isGenericTaskResult(value)) continue
+          return value
+        }
+      }
+      return ""
+    })()
+    const files = unique([
+      ...history.flatMap((message) => changedFiles(message.parts)),
+      ...changedFiles(extraParts),
+    ])
+    const artifacts = yield* readOrchestrationArtifacts({ history, files })
+    if (!text && files.length === 0 && artifacts.length === 0) return trimmedFallback
+
+    const lines = trimmedFallback ? [trimmedFallback] : []
+    if (text) lines.push("", "Subagent session evidence:", text)
+    if (files.length) {
+      lines.push("", "Subagent changed files:", ...files.map((file) => `- ${file}`))
+    }
+    if (artifacts.length) lines.push("", "Subagent orchestration artifacts:", ...artifacts)
+    return lines.join("\n")
+  })
 }
 
 function isAbortError(error: unknown) {
@@ -272,12 +334,22 @@ export const TaskTool = Tool.define(
         }
       }
 
-      const errorOutput = (input: { error: unknown; interrupted: boolean; status?: "failed" | "interrupted" | "retained" }) =>
+      const errorOutput = (input: {
+        error: unknown
+        interrupted: boolean
+        status?: "failed" | "interrupted" | "retained"
+        extraParts?: readonly MessageV2.Part[]
+      }) =>
         Effect.gen(function* () {
           const history = yield* sessions
             .messages({ sessionID: nextSession.id })
             .pipe(Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])))
-          const partial = childEvidenceText(history, lastText(history.flatMap((item) => item.parts)))
+          const extraParts = input.extraParts ?? []
+          const partial = yield* childEvidenceText(
+            history,
+            lastText([...history.flatMap((item) => item.parts), ...extraParts]),
+            extraParts,
+          )
           return output({
             status: input.status ?? (input.interrupted ? "interrupted" : "failed"),
             text: partial,
@@ -352,15 +424,19 @@ export const TaskTool = Tool.define(
                   }
                   const childMessage = outcome.exit.value
                   const error = childMessage.info.role === "assistant" ? childMessage.info.error : undefined
-                  if (error) return errorOutput({ error, interrupted: isAbortError(error) })
+                  if (error) return errorOutput({ error, interrupted: isAbortError(error), extraParts: childMessage.parts })
                   return sessions
                     .messages({ sessionID: nextSession.id })
                     .pipe(
                       Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])),
-                      Effect.map((history) => output({
-                        status: "completed",
-                        text: childEvidenceText(history, lastText(childMessage.parts), childMessage.parts),
-                      })),
+                      Effect.flatMap((history) =>
+                        Effect.map(childEvidenceText(history, lastText(childMessage.parts), childMessage.parts), (text) =>
+                          output({
+                            status: "completed",
+                            text,
+                          }),
+                        ),
+                      ),
                     )
                 }),
                 Effect.ensuring(status.set(ctx.sessionID, { type: "busy" })),

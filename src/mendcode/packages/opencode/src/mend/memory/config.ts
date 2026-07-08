@@ -15,6 +15,9 @@ export type MemoryDreamWindow = {
   timezone?: string
 }
 
+export type GeneratedMemoryWritePolicy = "pending" | "auto-safe" | "model-decides" | "disabled"
+export type MemoryDreamWritePolicy = GeneratedMemoryWritePolicy
+
 export type MemoryConfig = {
   version: 0
   configScope: "global" | "project"
@@ -31,6 +34,18 @@ export type MemoryConfig = {
   memoryDreamRole: string
   memoryAssistantRole: string
   dreamWindow: MemoryDreamWindow | null
+  memoryWritePolicy: GeneratedMemoryWritePolicy
+  memoryAutoApplyMinConfidence: number
+  memoryAutoApplyMinDurability: number
+  memoryAutoApplyMaxChangeRisk: number
+  memoryAutoApplyAllowedCategories: string[]
+  memoryAutoApplyBlockedSensitivity: Array<"medium" | "high">
+  dreamWritePolicy: MemoryDreamWritePolicy
+  dreamAutoApplyMinConfidence: number
+  dreamAutoApplyMinDurability: number
+  dreamAutoApplyMaxChangeRisk: number
+  dreamAutoApplyAllowedCategories: string[]
+  dreamAutoApplyBlockedSensitivity: Array<"medium" | "high">
   minIdleMinutes: number
   minBudgetRemainingUsd: number | null
   requireApprovalForGenerated: boolean
@@ -53,6 +68,18 @@ export const defaultMemoryConfig: MemoryConfig = {
   memoryDreamRole: "memoryDream",
   memoryAssistantRole: "memoryAssistant",
   dreamWindow: null,
+  memoryWritePolicy: "pending",
+  memoryAutoApplyMinConfidence: 0.9,
+  memoryAutoApplyMinDurability: 0.85,
+  memoryAutoApplyMaxChangeRisk: 0.2,
+  memoryAutoApplyAllowedCategories: ["project.commands", "project.stack", "user.preferences", "agent.policy", "memory.policy"],
+  memoryAutoApplyBlockedSensitivity: ["medium", "high"],
+  dreamWritePolicy: "pending",
+  dreamAutoApplyMinConfidence: 0.9,
+  dreamAutoApplyMinDurability: 0.85,
+  dreamAutoApplyMaxChangeRisk: 0.2,
+  dreamAutoApplyAllowedCategories: ["project.commands", "project.stack", "agent.policy", "memory.policy"],
+  dreamAutoApplyBlockedSensitivity: ["medium", "high"],
   minIdleMinutes: 30,
   minBudgetRemainingUsd: 0.25,
   requireApprovalForGenerated: true,
@@ -83,6 +110,22 @@ function scopes(value: unknown): MemoryScope[] {
   return out.length ? [...new Set(out)] : defaultMemoryConfig.scopes
 }
 
+function generatedMemoryWritePolicy(value: unknown, fallback: GeneratedMemoryWritePolicy): GeneratedMemoryWritePolicy {
+  return value === "pending" || value === "auto-safe" || value === "model-decides" || value === "disabled" ? value : fallback
+}
+
+function stringList(value: unknown, fallback: string[]) {
+  if (!Array.isArray(value)) return fallback
+  const out = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
+  return out.length ? [...new Set(out)] : fallback
+}
+
+function blockedSensitivity(value: unknown, fallback: Array<"medium" | "high">) {
+  if (!Array.isArray(value)) return fallback
+  const out = value.filter((item): item is "medium" | "high" => item === "medium" || item === "high")
+  return out.length ? [...new Set(out)] : fallback
+}
+
 function roleValue(value: unknown, fallback: string) {
   if (typeof value !== "string" || !value.trim()) return fallback
   return value === "summary" ? fallback : value
@@ -90,7 +133,12 @@ function roleValue(value: unknown, fallback: string) {
 
 function timeValue(value: unknown) {
   if (typeof value !== "string") return undefined
-  return /^\d{2}:\d{2}$/.test(value) ? value : undefined
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})$/)
+  if (!match) return undefined
+  const hour = Number(match[1])
+  const minute = Number(match[2])
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return undefined
+  return `${String(hour).padStart(2, "0")}:${match[2]}`
 }
 
 function dreamWindow(value: unknown, fallback: MemoryDreamWindow | null) {
@@ -163,6 +211,18 @@ export function normalizeMemoryConfig(input: unknown): MemoryConfig {
     memoryDreamRole: roleValue(raw.memoryDreamRole, defaultMemoryConfig.memoryDreamRole),
     memoryAssistantRole: roleValue(raw.memoryAssistantRole, defaultMemoryConfig.memoryAssistantRole),
     dreamWindow: dreamWindow(raw.dreamWindow, defaultMemoryConfig.dreamWindow),
+    memoryWritePolicy: generatedMemoryWritePolicy(raw.memoryWritePolicy, defaultMemoryConfig.memoryWritePolicy),
+    memoryAutoApplyMinConfidence: boundedNumberValue(raw.memoryAutoApplyMinConfidence, defaultMemoryConfig.memoryAutoApplyMinConfidence, 0, 1),
+    memoryAutoApplyMinDurability: boundedNumberValue(raw.memoryAutoApplyMinDurability, defaultMemoryConfig.memoryAutoApplyMinDurability, 0, 1),
+    memoryAutoApplyMaxChangeRisk: boundedNumberValue(raw.memoryAutoApplyMaxChangeRisk, defaultMemoryConfig.memoryAutoApplyMaxChangeRisk, 0, 1),
+    memoryAutoApplyAllowedCategories: stringList(raw.memoryAutoApplyAllowedCategories, defaultMemoryConfig.memoryAutoApplyAllowedCategories),
+    memoryAutoApplyBlockedSensitivity: blockedSensitivity(raw.memoryAutoApplyBlockedSensitivity, defaultMemoryConfig.memoryAutoApplyBlockedSensitivity),
+    dreamWritePolicy: generatedMemoryWritePolicy(raw.dreamWritePolicy, defaultMemoryConfig.dreamWritePolicy),
+    dreamAutoApplyMinConfidence: boundedNumberValue(raw.dreamAutoApplyMinConfidence, defaultMemoryConfig.dreamAutoApplyMinConfidence, 0, 1),
+    dreamAutoApplyMinDurability: boundedNumberValue(raw.dreamAutoApplyMinDurability, defaultMemoryConfig.dreamAutoApplyMinDurability, 0, 1),
+    dreamAutoApplyMaxChangeRisk: boundedNumberValue(raw.dreamAutoApplyMaxChangeRisk, defaultMemoryConfig.dreamAutoApplyMaxChangeRisk, 0, 1),
+    dreamAutoApplyAllowedCategories: stringList(raw.dreamAutoApplyAllowedCategories, defaultMemoryConfig.dreamAutoApplyAllowedCategories),
+    dreamAutoApplyBlockedSensitivity: blockedSensitivity(raw.dreamAutoApplyBlockedSensitivity, defaultMemoryConfig.dreamAutoApplyBlockedSensitivity),
     minIdleMinutes: numberValue(raw.minIdleMinutes, defaultMemoryConfig.minIdleMinutes, 0),
     minBudgetRemainingUsd: nullableNumber(raw.minBudgetRemainingUsd, defaultMemoryConfig.minBudgetRemainingUsd, 0),
     requireApprovalForGenerated: bool(raw.requireApprovalForGenerated, defaultMemoryConfig.requireApprovalForGenerated),

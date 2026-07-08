@@ -42,6 +42,16 @@ export type MemoryGraph = {
   policies: ReturnType<typeof normalizeMemoryCategoryPolicies>
 }
 
+export type MemoryGraphHealth = {
+  materializedFacts: number
+  legacyFacts: number
+  links: number
+  connectedFacts: number
+  isolatedFacts: number
+  orphanLinks: number
+  graphHealth: "empty" | "disconnected" | "partial" | "connected"
+}
+
 function graphDir(root?: string) {
   return path.join(memoryPaths(root).projectDir, "graph")
 }
@@ -161,11 +171,22 @@ export async function writeMemoryGraph(graph: Pick<MemoryGraph, "facts" | "links
 
 export async function upsertMemoryFact(input: Partial<MemoryFact> & { text: string }, root?: string) {
   const graph = await readMemoryGraph(root)
-  const fact = normalizeMemoryFact(input)
-  const index = graph.facts.findIndex((item) => item.id === fact.id)
+  const index = typeof input.id === "string" && input.id
+    ? graph.facts.findIndex((item) => item.id === input.id)
+    : -1
+  const definedInput = Object.fromEntries(Object.entries(input).filter((entry) => entry[1] !== undefined)) as Partial<MemoryFact> & { text: string }
+  const fact = index === -1
+    ? normalizeMemoryFact(input)
+    : normalizeMemoryFact({
+        ...graph.facts[index],
+        ...definedInput,
+        id: graph.facts[index]!.id,
+        createdAt: graph.facts[index]!.createdAt,
+        updatedAt: new Date().toISOString(),
+      })
   const facts = [...graph.facts]
   if (index === -1) facts.push(fact)
-  else facts[index] = { ...fact, updatedAt: new Date().toISOString() }
+  else facts[index] = fact
   await writeMemoryGraph({ ...graph, facts }, root)
   return fact
 }
@@ -205,9 +226,32 @@ export async function readMemoryFacts(root?: string) {
   return [...graph.facts, ...legacy.filter((fact) => !seen.has(fact.legacyEntryID))]
 }
 
+export function computeMemoryGraphHealth(input: { graph: Pick<MemoryGraph, "facts" | "links">; facts: MemoryFact[] }): MemoryGraphHealth {
+  const factIDs = new Set(input.facts.map((fact) => fact.id))
+  const validLinks = input.graph.links.filter((link) => factIDs.has(link.from) && factIDs.has(link.to))
+  const connectedFactIDs = new Set(validLinks.flatMap((link) => [link.from, link.to]))
+  const isolatedFacts = Math.max(0, input.facts.length - connectedFactIDs.size)
+  return {
+    materializedFacts: input.graph.facts.length,
+    legacyFacts: Math.max(0, input.facts.length - input.graph.facts.length),
+    links: input.graph.links.length,
+    connectedFacts: connectedFactIDs.size,
+    isolatedFacts,
+    orphanLinks: input.graph.links.length - validLinks.length,
+    graphHealth: input.graph.facts.length === 0
+      ? "empty"
+      : connectedFactIDs.size === 0
+        ? "disconnected"
+        : isolatedFacts === 0
+          ? "connected"
+          : "partial",
+  }
+}
+
 export async function validateMemoryGraph(root?: string) {
   const graph = await readMemoryGraph(root)
-  const factIDs = new Set((await readMemoryFacts(root)).map((fact) => fact.id))
+  const facts = await readMemoryFacts(root)
+  const factIDs = new Set(facts.map((fact) => fact.id))
   const issues: Array<{ code: string; message: string; repairable: boolean }> = []
   for (const fact of graph.facts) {
     for (const categoryID of fact.categoryIDs) {
@@ -221,7 +265,7 @@ export async function validateMemoryGraph(root?: string) {
       issues.push({ code: "missing-link-target", message: `Link ${link.id} references missing fact`, repairable: true })
     }
   }
-  return { ok: issues.length === 0, issues }
+  return { ok: issues.length === 0, issues, health: computeMemoryGraphHealth({ graph, facts }) }
 }
 
 export async function repairMemoryGraph(root?: string) {

@@ -104,6 +104,95 @@ export function shouldSummarizePastedContentWithThreshold(text: string, minChars
   return text.length > Math.max(1, minChars)
 }
 
+function shiftPromptPart(part: PromptPart, input: { start: number; delta: number }) {
+  if (part.type === "text" && part.source?.text && part.source.text.start > input.start) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        text: {
+          ...part.source.text,
+          start: part.source.text.start + input.delta,
+          end: part.source.text.end + input.delta,
+        },
+      },
+    } satisfies PromptPart
+  }
+  if (part.type === "file" && part.source?.text && part.source.text.start > input.start) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        text: {
+          ...part.source.text,
+          start: part.source.text.start + input.delta,
+          end: part.source.text.end + input.delta,
+        },
+      },
+    } satisfies PromptPart
+  }
+  if (part.type === "agent" && part.source && part.source.start > input.start) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        start: part.source.start + input.delta,
+        end: part.source.end + input.delta,
+      },
+    } satisfies PromptPart
+  }
+  return part
+}
+
+function expandPastedContentPartAt(prompt: PromptInfo, index: number, input?: { replaceStart?: number; replaceEnd?: number }) {
+  const part = prompt.parts[index]
+  if (!part || part.type !== "text" || !part.source?.text) return
+
+  const label = part.source.text.value
+  const labelStart = prompt.input.indexOf(label, part.source.text.start)
+  const start = input?.replaceStart ?? labelStart
+  if (start === -1) return
+
+  const end = input?.replaceEnd ?? start + label.length
+  const delta = part.text.length - (end - start)
+  return {
+    input: `${prompt.input.slice(0, start)}${part.text}${prompt.input.slice(end)}`,
+    parts: prompt.parts
+      .filter((_, partIndex) => partIndex !== index)
+      .map((item) => shiftPromptPart(item, { start, delta })),
+    cursorOffset: start + part.text.length,
+  } satisfies PromptInfo & { cursorOffset: number }
+}
+
+export function expandPastedContentInPrompt(prompt: PromptInfo, pastedText: string) {
+  const index = prompt.parts.findLastIndex(
+    (part) => part.type === "text" && part.text === pastedText && Boolean(part.source?.text?.value),
+  )
+  return expandPastedContentPartAt(prompt, index)
+}
+
+export function expandPastedContentAtOffset(prompt: PromptInfo, offset: number) {
+  const index = prompt.parts.findIndex((part) => {
+    if (part.type !== "text" || !part.source?.text?.value) return false
+    return offset >= part.source.text.start && offset <= part.source.text.end
+  })
+  return expandPastedContentPartAt(prompt, index)
+}
+
+export function expandEditedPastedContentInPrompt(prompt: PromptInfo) {
+  const index = prompt.parts.findIndex((part) => {
+    if (part.type !== "text" || !part.source?.text) return false
+    const visible = prompt.input.slice(part.source.text.start, part.source.text.end)
+    return visible !== part.source.text.value
+  })
+  const part = prompt.parts[index]
+  if (!part || part.type !== "text" || !part.source?.text) return
+  return expandPastedContentPartAt(prompt, index, {
+    replaceStart: part.source.text.start,
+    replaceEnd: part.source.text.end,
+  })
+}
+
 export function promptSubmitParts(prompt: PromptInfo) {
   const pastedTextParts = prompt.parts.filter(
     (part): part is PromptTextPart => part.type === "text" && Boolean(part.text),

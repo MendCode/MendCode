@@ -213,10 +213,8 @@ export const make = <A, E = never>(
           Effect.gen(function* () {
             yield* Fiber.interrupt(st.run.fiber)
             yield* Deferred.await(st.run.done).pipe(Effect.exit, Effect.asVoid)
-            yield* Deferred.fail(st.next.done, new Cancelled()).pipe(Effect.asVoid)
-            yield* idleIfCurrent()
           }),
-          { _tag: "Idle" } as const,
+          st,
         ] as const
       case "Shell":
         return [

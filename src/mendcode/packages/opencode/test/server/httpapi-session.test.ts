@@ -13,10 +13,13 @@ import { Project } from "../../src/project/project"
 import { Server } from "../../src/server/server"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
 import { Session } from "@/session/session"
-import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
+import type { BackgroundSession } from "@/session/background"
+import type { AgentViewMetadata } from "@/session/agent-view-metadata"
+import type { AgentCommand } from "@/session/agent-command"
+import { AgentCommandID, MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { MessageV2 } from "../../src/session/message-v2"
 import { Database } from "@/storage/db"
-import { SessionMessageTable, SessionTable } from "@/session/session.sql"
+import { AgentCommandTable, SessionMessageTable, SessionTable } from "@/session/session.sql"
 import { SessionMessage } from "../../src/v2/session-message"
 import { Modelv2 } from "../../src/v2/model"
 import * as DateTime from "effect/DateTime"
@@ -212,6 +215,126 @@ describe("session HttpApi", () => {
         ).toMatchObject({ id: parent.id, title: "parent" })
 
         expect(
+          yield* requestJson<AgentViewMetadata.Info>(pathFor(SessionPaths.agentViewMetadata, { sessionID: parent.id }), {
+            method: "PATCH",
+            headers: { ...headers, "content-type": "application/json" },
+            body: JSON.stringify({ title: "Coordinator label", tags: ["ops", "ops", "api"], priority: "normal" }),
+          }),
+        ).toMatchObject({ title: "Coordinator label", tags: ["ops", "api"], priority: "normal" })
+
+        expect(
+          yield* requestJson<AgentViewMetadata.Info | null>(
+            pathFor(SessionPaths.agentViewMetadata, { sessionID: parent.id }),
+            { headers },
+          ),
+        ).toMatchObject({ title: "Coordinator label", tags: ["ops", "api"] })
+
+        expect(
+          (yield* requestJson<AgentViewMetadata.Info[]>(SessionPaths.agentViewMetadataList, { headers })).map(
+            (item) => item.sessionID,
+          ),
+        ).toContain(parent.id)
+
+        const command = yield* requestJson<AgentCommand.Info>(pathFor(SessionPaths.agentCommand, { sessionID: parent.id }), {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ sourceSessionID: child.id, type: "tag", payload: { tags: ["ops", "ops", "api"] } }),
+        })
+        expect(command).toMatchObject({
+          sourceSessionID: child.id,
+          targetSessionID: parent.id,
+          type: "tag",
+          state: "pending",
+          payload: { tags: ["ops", "api"] },
+          policy: { decision: "same_workspace", permissions: ["agent_view.metadata.patch"] },
+        })
+
+        expect(yield* requestJson<unknown[]>(SessionPaths.agentCommandPolicy, { headers })).toEqual(expect.arrayContaining([
+          expect.objectContaining({ type: "request_summary", decision: "safe_auto" }),
+          expect.objectContaining({ type: "rename", decision: "same_workspace" }),
+          expect.objectContaining({ type: "tag", decision: "same_workspace" }),
+          expect.objectContaining({ type: "pause_after_turn", decision: "approval_required" }),
+          expect.objectContaining({ type: "stop", decision: "approval_required" }),
+          expect.objectContaining({ type: "send_message", decision: "approval_required" }),
+        ]))
+
+        yield* requestJson<BackgroundSession.Info>(pathFor(SessionPaths.backgroundRegister, { sessionID: parent.id }), {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ state: "working" }),
+        })
+        yield* requestJson<unknown>(pathFor(SessionPaths.backgroundWriter, { sessionID: parent.id }), {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ clientID: "terminal-a", ttlMs: 60_000 }),
+        })
+        expect(
+          yield* requestJson<AgentCommand.Info>(pathFor(SessionPaths.agentCommand, { sessionID: parent.id }), {
+            method: "POST",
+            headers: { ...headers, "content-type": "application/json" },
+            body: JSON.stringify({ sourceSessionID: child.id, type: "rename", payload: { title: "Owner guarded" } }),
+          }),
+        ).toMatchObject({
+          policy: {
+            decision: "same_workspace",
+          },
+        })
+
+        expect(
+          (yield* requestJson<AgentCommand.Info[]>(pathFor(SessionPaths.agentCommand, { sessionID: parent.id }), { headers })).map(
+            (item) => item.id,
+          ),
+        ).toContain(command.id)
+
+         expect(
+           yield* requestJson<AgentCommand.Info>(
+             pathFor(SessionPaths.agentCommandItem, { sessionID: parent.id, commandID: command.id }),
+             {
+               method: "PATCH",
+               headers: { ...headers, "content-type": "application/json" },
+               body: JSON.stringify({ state: "accepted" }),
+             },
+           ),
+         ).toMatchObject({ id: command.id, state: "completed", result: "Updated target Agent View tags." })
+
+         expect(
+           yield* requestJson<AgentCommand.Info>(
+             pathFor(SessionPaths.agentCommandItem, { sessionID: parent.id, commandID: command.id }),
+             {
+               method: "PATCH",
+               headers: { ...headers, "content-type": "application/json" },
+               body: JSON.stringify({ state: "completed", result: "done" }),
+             },
+           ),
+         ).toMatchObject({ id: command.id, state: "completed", result: "done" })
+
+         for (const experimental of [false, true]) {
+           const invalidTransition = yield* requestWithBackend(
+             experimental,
+             pathFor(SessionPaths.agentCommandItem, { sessionID: parent.id, commandID: command.id }),
+             {
+               method: "PATCH",
+               headers: { ...headers, "content-type": "application/json" },
+               body: JSON.stringify({ state: "running" }),
+             },
+           )
+           expect(invalidTransition.status).toBe(400)
+         }
+
+         expect(
+           (yield* requestJson<AgentCommand.Info[]>(`${SessionPaths.agentCommandList}?sourceSessionID=${child.id}&state=completed`, {
+             headers,
+           })).map((item) => item.id),
+         ).toEqual([command.id])
+
+
+        expect(
+          (yield* requestJson<unknown[]>(`${SessionPaths.agentView}?roots=true`, { headers })).map((item) =>
+            (item as { sessionID?: string }).sessionID,
+          ),
+        ).toContain(parent.id)
+
+        expect(
           (yield* requestJson<Session.Info[]>(pathFor(SessionPaths.children, { sessionID: parent.id }), {
             headers,
           })).map((item) => item.id),
@@ -312,7 +435,224 @@ describe("session HttpApi", () => {
   )
 
   it.live(
+    "matches legacy invalid agent-command transition responses",
+    withTmp({ git: true, config: { formatter: false, lsp: false } }, (tmp) =>
+      Effect.gen(function* () {
+        const headers = { "x-opencode-directory": tmp.path, "content-type": "application/json" }
+        const source = yield* createSession(tmp.path, { title: "source" })
+        const target = yield* createSession(tmp.path, { title: "target" })
+        const createBody = JSON.stringify({ sourceSessionID: source.id, type: "request_summary", payload: { instructions: "status" } })
+
+        const exercise = (experimental: boolean) =>
+          Effect.gen(function* () {
+            const created = yield* requestWithBackend(
+              experimental,
+              pathFor(SessionPaths.agentCommand, { sessionID: target.id }),
+              { method: "POST", headers, body: createBody },
+            ).pipe(Effect.flatMap(json<AgentCommand.Info>))
+
+            yield* requestWithBackend(
+              experimental,
+              pathFor(SessionPaths.agentCommandItem, { sessionID: target.id, commandID: created.id }),
+              { method: "PATCH", headers, body: JSON.stringify({ state: "accepted" }) },
+            ).pipe(Effect.flatMap(json<AgentCommand.Info>))
+
+            return yield* requestWithBackend(
+              experimental,
+              pathFor(SessionPaths.agentCommandItem, { sessionID: target.id, commandID: created.id }),
+              { method: "PATCH", headers, body: JSON.stringify({ state: "pending" }) },
+            ).pipe(
+              Effect.flatMap((response) =>
+                Effect.promise(async () => ({
+                  status: response.status,
+                  body: await response.json(),
+                })),
+              ),
+            )
+          })
+
+        const legacy = yield* exercise(false)
+        const effect = yield* exercise(true)
+
+        expect(legacy.status).toBe(400)
+        expect(effect.status).toBe(400)
+        expect(legacy.body).toMatchObject({
+          success: false,
+          data: null,
+          errors: [
+            {
+              name: "AgentCommandInvalidStateTransitionError",
+              message: "Invalid agent command state transition: accepted -> pending",
+              commandID: expect.any(String),
+              from: "accepted",
+              to: "pending",
+            },
+          ],
+        })
+        expect(effect.body).toMatchObject({
+          success: false,
+          data: null,
+          errors: [
+            {
+              name: legacy.body.errors[0]?.name,
+              message: legacy.body.errors[0]?.message,
+              commandID: expect.any(String),
+              from: legacy.body.errors[0]?.from,
+              to: legacy.body.errors[0]?.to,
+            },
+          ],
+        })
+      }),
+    ),
+  )
+
+  it.live(
+    "keeps agent-command routes project-scoped across legacy and HttpApi backends",
+    withTmp({ git: true, config: { formatter: false, lsp: false } }, (tmp) =>
+      Effect.gen(function* () {
+        const headers = { "x-opencode-directory": tmp.path, "content-type": "application/json" }
+        const localSource = yield* createSession(tmp.path, { title: "local source" })
+        const localTarget = yield* createSession(tmp.path, { title: "local target" })
+        const localCommand = yield* requestJson<AgentCommand.Info>(pathFor(SessionPaths.agentCommand, { sessionID: localTarget.id }), {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ sourceSessionID: localSource.id, type: "rename", payload: { title: "Local label" } }),
+        })
+
+        const other = yield* Effect.promise(() => tmpdir({ git: true, config: { formatter: false, lsp: false } }))
+        const otherHeaders = { "x-opencode-directory": other.path, "content-type": "application/json" }
+        try {
+          const remoteSource = yield* createSession(other.path, { title: "remote source" })
+          const remoteTarget = yield* createSession(other.path, { title: "remote target" })
+          const remoteCommand = yield* requestJson<AgentCommand.Info>(pathFor(SessionPaths.agentCommand, { sessionID: remoteTarget.id }), {
+            method: "POST",
+            headers: otherHeaders,
+            body: JSON.stringify({ sourceSessionID: remoteSource.id, type: "tag", payload: { tags: ["remote"] } }),
+          })
+
+          expect(
+            (yield* requestJson<AgentCommand.Info[]>(SessionPaths.agentCommandList, { headers })).map((item) => item.id),
+          ).toEqual([localCommand.id])
+          expect(
+            (yield* requestJson<AgentCommand.Info[]>(SessionPaths.agentCommandList, { headers: otherHeaders })).map((item) => item.id),
+          ).toEqual([remoteCommand.id])
+
+          for (const experimental of [false, true]) {
+            const crossProjectFilteredList = yield* requestWithBackend(
+              experimental,
+              `${SessionPaths.agentCommandList}?targetSessionID=${remoteTarget.id}`,
+              { headers },
+            )
+            expect(crossProjectFilteredList.status).toBe(200)
+            expect(yield* responseJson(crossProjectFilteredList)).toEqual([])
+
+            const crossProjectPatch = yield* requestWithBackend(
+              experimental,
+              pathFor(SessionPaths.agentCommandItem, { sessionID: remoteTarget.id, commandID: remoteCommand.id }),
+              {
+                method: "PATCH",
+                headers,
+                body: JSON.stringify({ state: "accepted" }),
+              },
+            )
+            expect(crossProjectPatch.status).toBe(404)
+            expect(yield* responseJson(crossProjectPatch)).toEqual({
+              name: "NotFoundError",
+              data: { message: `Agent command not found: ${remoteCommand.id}` },
+            })
+
+            const crossProjectCreate = yield* requestWithBackend(
+              experimental,
+              pathFor(SessionPaths.agentCommand, { sessionID: remoteTarget.id }),
+              {
+                method: "POST",
+                headers,
+                body: JSON.stringify({ sourceSessionID: localSource.id, type: "rename", payload: { title: "Cross-project" } }),
+              },
+            )
+            expect(crossProjectCreate.status).toBe(404)
+            expect(yield* responseJson(crossProjectCreate)).toEqual({
+              name: "NotFoundError",
+              data: { message: `Session not found: ${remoteTarget.id}` },
+            })
+          }
+        } finally {
+          yield* Effect.promise(() => other[Symbol.asyncDispose]())
+        }
+      }),
+    ),
+  )
+
+  it.live(
+    "refreshes stale stored agent-command writer ownership across legacy and HttpApi backends",
+    withTmp({ git: true, config: { formatter: false, lsp: false } }, (tmp) =>
+      Effect.gen(function* () {
+        const headers = { "x-opencode-directory": tmp.path, "content-type": "application/json" }
+        const source = yield* createSession(tmp.path, { title: "source" })
+        const target = yield* createSession(tmp.path, { title: "target" })
+        const commandID = AgentCommandID.ascending()
+        const now = Date.now()
+
+        yield* Effect.promise(() =>
+          WithInstance.provide({
+            directory: tmp.path,
+            fn: async () => {
+              Database.use((db) =>
+                db.insert(AgentCommandTable)
+                  .values({
+                    id: commandID,
+                    source_session_id: source.id,
+                    target_session_id: target.id,
+                    state: "pending",
+                    time_created: now,
+                    time_updated: now,
+                    data: {
+                      type: "rename",
+                      payload: { title: "Legacy worker" },
+                      permissions: ["agent_view.metadata.patch"],
+                      policy: {
+                        decision: "approval_required",
+                        permissions: ["agent_view.metadata.patch"],
+                        reason: "Legacy writer ownership required explicit target approval.",
+                        ownership: { targetWriter: { clientID: "terminal-a", expires: now - 1_000 } },
+                      },
+                    },
+                  })
+                  .run(),
+              )
+            },
+          }),
+        )
+
+        for (const experimental of [false, true]) {
+          const updated = yield* requestWithBackend(
+            experimental,
+            pathFor(SessionPaths.agentCommandItem, { sessionID: target.id, commandID }),
+            {
+              method: "PATCH",
+              headers,
+              body: JSON.stringify({ result: "checked" }),
+            },
+          ).pipe(Effect.flatMap(json<AgentCommand.Info>))
+
+          expect(updated).toMatchObject({
+            id: commandID,
+            result: "checked",
+            policy: {
+              decision: "same_workspace",
+              permissions: ["agent_view.metadata.patch"],
+              reason: "Metadata-only command from the same workspace; target still receives an auditable command card.",
+            },
+          })
+          expect(updated.policy.ownership).toBeUndefined()
+        }
+      }),
+    ),
+  )
+
+  it.live(
     "serves lifecycle mutation routes through Hono bridge",
+
     withTmp({ git: true, config: { formatter: false, lsp: false, share: "disabled" } }, (tmp) =>
       Effect.gen(function* () {
         const headers = { "x-opencode-directory": tmp.path, "content-type": "application/json" }
@@ -391,6 +731,51 @@ describe("session HttpApi", () => {
             ),
           ),
         ).toEqual({ workspaceID: workspace.id })
+      }),
+    ),
+  )
+
+  it.live(
+    "matches legacy agent-view aggregate directory filtering",
+    withTmp({ git: true, config: { formatter: false, lsp: false } }, (tmp) =>
+      Effect.gen(function* () {
+        const headers = { "x-opencode-directory": tmp.path, "content-type": "application/json" }
+        const other = yield* Effect.acquireRelease(
+          Effect.promise(() => tmpdir({ git: true, config: { formatter: false, lsp: false } })),
+          (dir) => Effect.promise(() => dir[Symbol.asyncDispose]()),
+        )
+
+        const scoped = yield* createSession(tmp.path, { title: "scoped background" })
+        const sibling = yield* createSession(other.path, { title: "sibling background" })
+
+        const register = (experimental: boolean, sessionID: string, summary: string, directory: string) =>
+          Effect.promise(
+            async () => {
+              const response = await WithInstance.provide({
+                directory,
+                fn: () =>
+                  app(experimental).request(pathFor(SessionPaths.backgroundRegister, { sessionID }), {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ state: "working", summary }),
+                  }),
+              })
+              return await response
+            },
+          )
+
+        expect((yield* register(false, scoped.id, "here", tmp.path)).status).toBe(200)
+        expect((yield* register(false, sibling.id, "elsewhere", other.path)).status).toBe(200)
+
+        const route = `${SessionPaths.agentView}?roots=true&directory=${encodeURIComponent(tmp.path)}`
+        const legacy = yield* requestWithBackend(false, route, { headers: { "x-opencode-directory": tmp.path } })
+        const effect = yield* requestWithBackend(true, route, { headers: { "x-opencode-directory": tmp.path } })
+        const legacyItems = yield* json<BackgroundSession.Entry[]>(legacy)
+        const effectItems = yield* json<BackgroundSession.Entry[]>(effect)
+
+        expect(legacyItems.map((item) => item.sessionID)).toContain(scoped.id)
+        expect(legacyItems.map((item) => item.sessionID)).not.toContain(sibling.id)
+        expect(effectItems.map((item) => item.sessionID)).toEqual(legacyItems.map((item) => item.sessionID))
       }),
     ),
   )

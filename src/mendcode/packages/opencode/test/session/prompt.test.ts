@@ -2221,6 +2221,8 @@ unix(
           expect(typeof tool.state.metadata.outputPath).toBe("string")
           expect(tool.state.output).toMatch(/\.\.\.output truncated\.\.\./)
           expect(tool.state.output).toMatch(/Output excerpt saved to:\s+\S+/)
+          expect(tool.state.metadata.output).toContain("Output excerpt saved to:")
+          expect(tool.state.metadata.output).toContain(String(tool.state.metadata.outputPath))
           expect(tool.state.output).not.toContain("Tool execution aborted")
         }),
       { git: true, config: providerCfg },

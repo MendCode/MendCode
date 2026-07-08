@@ -15,6 +15,7 @@ import {
 } from "@/mend/memory/side-chat"
 import { registerMemoryWorkspace, type MemoryWorkspace } from "@/mend/memory/workspaces"
 import { writeMemoryCategoryPolicy, type MemoryCategoryPolicy, type MemoryPolicyScope, type MemoryWritePolicy } from "@/mend/memory/categories"
+import { applyDreamGraphProposal, rejectDreamGraphProposal } from "@/mend/memory/dream"
 import { readDreamScheduleState, type DreamScheduleState, type DreamScheduleWindow } from "@/mend/memory/dream-scheduler"
 import { Locale } from "@/util/locale"
 import { useProject } from "@tui/context/project"
@@ -224,6 +225,17 @@ function memoryGraphLinePoints(from: { x: number; y: number }, to: { x: number; 
   }
 }
 
+function memoryGraphMiniPreview(input: { canvas: string[][]; width: number; height: number }) {
+  const previewWidth = Math.max(10, Math.min(18, Math.floor(input.width)))
+  const previewHeight = Math.max(3, Math.min(5, Math.floor(input.height)))
+  return Array.from({ length: previewHeight }, (_, y) => Array.from({ length: previewWidth }, (_, x) => {
+    const sampleY = Math.min(input.canvas.length - 1, Math.floor((y / Math.max(1, previewHeight - 1)) * Math.max(0, input.canvas.length - 1)))
+    const sampleX = Math.min((input.canvas[sampleY]?.length ?? 1) - 1, Math.floor((x / Math.max(1, previewWidth - 1)) * Math.max(0, (input.canvas[sampleY]?.length ?? 1) - 1)))
+    const value = input.canvas[sampleY]?.[sampleX] ?? " "
+    return value === " " ? " " : value === "×" ? "×" : value === "┈" ? "┈" : "·"
+  }).join("").replace(/\s+$/, ""))
+}
+
 export function memoryGraphMiniMap(input: {
   facts: MemoryGraphMiniFact[]
   links: MemoryGraphMiniLink[]
@@ -246,6 +258,7 @@ export function memoryGraphMiniMap(input: {
   const factIDs = new Set(facts.map((fact) => fact.id))
   const explicitLinks = input.links.filter((link) => factIDs.has(link.from) && factIDs.has(link.to)).slice(0, 28)
   const explicitLinkKeys = new Set(explicitLinks.flatMap((link) => [`${link.from}\u0000${link.to}`, `${link.to}\u0000${link.from}`]))
+  const explicitConnectedIDs = new Set(explicitLinks.flatMap((link) => [link.from, link.to]))
   const categoryGroups = Array.from(facts
     .flatMap((fact) => fact.categoryIDs.map((categoryID) => ({ fact, categoryID })))
     .reduce((groups, item) => groups.set(item.categoryID, [...(groups.get(item.categoryID) ?? []), item.fact]), new Map<string, MemoryGraphMiniFact[]>())
@@ -278,7 +291,13 @@ export function memoryGraphMiniMap(input: {
       rows: [],
       legend: [],
       labels: [],
+      minimap: [],
+      edgeLabels: [],
+      focusLines: [],
+      relationRows: [],
+      isolatedRows: [],
       emptyState: legacyDerivedFacts > 0 ? "legacy-only" : "empty",
+      stats: `connected 0 · isolated 0 · visible 0/${materializedFacts.length}`,
       status: `0/${input.facts.length} materialized · ${legacyDerivedFacts} legacy-derived · 0 explicit · 0 inferred`,
     }
   }
@@ -309,11 +328,30 @@ export function memoryGraphMiniMap(input: {
     const glyph = memoryGraphGlyph(categoryIndex.get(fact.categoryIDs[0] ?? "") ?? 0)
     canvas[point.y]![point.x] = glyph
   }
+  const isolatedFacts = facts.filter((fact) => !explicitConnectedIDs.has(fact.id))
+  const factGlyph = (id: string) => {
+    const fact = facts.find((item) => item.id === id)
+    return fact ? memoryGraphGlyph(categoryIndex.get(fact.categoryIDs[0] ?? "") ?? 0) : "?"
+  }
+  const factLabel = (id: string, max = 26) => memoryPreviewText(facts.find((item) => item.id === id)?.text ?? id, max)
+  const focus = facts.toSorted((a, b) => (explicitDegrees.get(b.id) ?? 0) - (explicitDegrees.get(a.id) ?? 0) || (a.retrievalPriority ?? 99) - (b.retrievalPriority ?? 99) || a.id.localeCompare(b.id))[0]
+  const focusDegree = focus ? explicitDegrees.get(focus.id) ?? 0 : 0
   return {
     rows: canvas.map((row) => row.join("").replace(/\s+$/, "")),
     legend: categories.slice(0, width < 44 ? 3 : 5).map((category) => `${memoryGraphGlyph(categoryIndex.get(category.id) ?? 0)} ${category.label} ${category.count}`),
-    labels: facts.slice(0, width < 44 ? 3 : 5).map((fact) => `${memoryGraphGlyph(categoryIndex.get(fact.categoryIDs[0] ?? "") ?? 0)} ${memoryPreviewText(fact.text, 42)}`),
+    labels: facts.slice(0, width < 44 ? 3 : 5).map((fact) => `${memoryGraphGlyph(categoryIndex.get(fact.categoryIDs[0] ?? "") ?? 0)} ${explicitConnectedIDs.has(fact.id) ? "connected" : "isolated"} · ${memoryPreviewText(fact.text, 36)}`),
+    minimap: memoryGraphMiniPreview({ canvas, width: width < 44 ? 10 : 16, height: width < 44 ? 3 : 4 }),
+    edgeLabels: explicitLinks.slice(0, width < 44 ? 2 : 4).map((link) => `${factGlyph(link.from)} --${link.kind}--> ${factGlyph(link.to)}`),
+    focusLines: focus ? [
+      `focus ${factGlyph(focus.id)} degree ${focusDegree} · ${focus.scope}`,
+      memoryPreviewText(focus.text, width < 44 ? 36 : 48),
+    ] : [],
+    relationRows: explicitLinks.length
+      ? explicitLinks.slice(0, width < 44 ? 3 : 5).map((link) => `${factGlyph(link.from)} ${factLabel(link.from, 18)} --${link.kind}--> ${factGlyph(link.to)} ${factLabel(link.to, 18)}`)
+      : links.slice(0, width < 44 ? 3 : 5).map((link) => `${factGlyph(link.from)} ${factLabel(link.from, 18)} --${link.kind}*--> ${factGlyph(link.to)} ${factLabel(link.to, 18)}`),
+    isolatedRows: isolatedFacts.slice(0, width < 44 ? 3 : 5).map((fact) => `${factGlyph(fact.id)} ${memoryPreviewText(fact.text, 34)}`),
     emptyState: "materialized",
+    stats: `connected ${explicitConnectedIDs.size} · isolated ${isolatedFacts.length} · visible ${facts.length}/${materializedFacts.length}`,
     status: `${facts.length}/${input.facts.length} materialized · ${legacyDerivedFacts} legacy-derived · ${explicitLinks.length} explicit · ${links.length - explicitLinks.length} inferred · ${categories.length} categories`,
   }
 }
@@ -576,20 +614,23 @@ function MemoryGraphMap(props: { data: MemoryOverview; width: number }) {
     width: Math.max(20, props.width - 6),
     height: props.width < 56 ? 7 : 10,
   }))
+  const health = createMemo(() => props.data.graphHealth)
+  const healthTone = createMemo(() => health().graphHealth === "connected" ? theme.success : health().graphHealth === "empty" ? theme.textMuted : theme.warning)
+  const healthLine = createMemo(() => `${health().graphHealth} · ${health().connectedFacts}/${props.data.facts.length} connected · ${health().isolatedFacts} isolated · ${health().orphanLinks} orphan`)
   return (
     <Panel title="Memory graph" grow>
       <Show
         when={graph().rows.length > 0}
         fallback={
           <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
-            <text fg={theme.textMuted} wrapMode="none">
-              {graph().emptyState === "legacy-only" ? "Legacy-derived memories found, but no graph facts yet." : "No materialized memory graph facts yet."}
+            <text fg={healthTone()} wrapMode="none">
+              {graph().emptyState === "legacy-only" ? "Legacy-derived memories found, but no graph facts yet." : health().graphHealth === "disconnected" ? "Valid graph, but disconnected: no relationships yet." : "No materialized memory graph facts yet."}
             </text>
             <text fg={theme.primary} wrapMode="none">
               Use memory_graph upsert_fact/link to materialize relationships.
             </text>
             <text fg={theme.textMuted} wrapMode="none">
-              {short(graph().status, Math.max(18, props.width - 8))}
+              {short(healthLine(), Math.max(18, props.width - 8))}
             </text>
           </box>
         }
@@ -606,11 +647,34 @@ function MemoryGraphMap(props: { data: MemoryOverview; width: number }) {
             <text fg={theme.textMuted} wrapMode="none">
               {short(graph().status, Math.max(10, props.width - 8))}
             </text>
+            <text fg={theme.textMuted} wrapMode="none">
+              {short(graph().stats, Math.max(10, props.width - 8))}
+            </text>
           </box>
           <box flexDirection="column" width={props.width < 62 ? "100%" : Math.max(22, Math.floor(props.width * 0.35))} overflow="hidden" gap={1}>
-            <text fg={theme.textMuted} wrapMode="none">
-              {`edges: ${props.data.links.length} explicit links · inferred category proximity`}
+            <text fg={healthTone()} wrapMode="none">
+              {short(`health: ${healthLine()}`, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}
             </text>
+            <text fg={theme.textMuted} wrapMode="none">
+              {props.data.links.length === 0
+                ? `edges: 0 explicit links · ${health().graphHealth === "empty" ? "empty" : "disconnected"}`
+                : `edges: ${props.data.links.length} explicit links · inferred category proximity`}
+            </text>
+            <For each={graph().minimap}>
+              {(line) => <text fg={theme.primary} wrapMode="none">{short(line || " ", props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
+            </For>
+            <For each={graph().edgeLabels}>
+              {(line) => <text fg={theme.textMuted} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
+            </For>
+            <For each={graph().focusLines}>
+              {(line) => <text fg={theme.text} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
+            </For>
+            <For each={graph().relationRows}>
+              {(line) => <text fg={theme.textMuted} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
+            </For>
+            <For each={graph().isolatedRows}>
+              {(line) => <text fg={theme.warning} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
+            </For>
             <For each={graph().legend}>
               {(line) => <text fg={theme.text} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
             </For>
@@ -770,10 +834,9 @@ function OverviewContent(props: {
   return (
     <box flexDirection="column" gap={1} minHeight={0} flexGrow={1}>
       <KpiStrip data={props.data} pending={props.pending} width={props.width} stacked={props.stacked} />
-      <box flexDirection={props.stacked ? "column" : "row"} gap={1} minHeight={0} flexGrow={1}>
-        <MemoryGraphMap data={props.data} width={Math.max(40, props.width / 2)} />
+      <box flexDirection="column" gap={1} minHeight={0} flexGrow={1}>
         <Panel title="Pending Queue" grow>
-          <ProposalRows proposals={props.pending} selectedIndex={props.selectedIndex} width={Math.max(30, props.width / 2 - 6)} onSelect={props.onSelectProposal} />
+          <ProposalRows proposals={props.pending} selectedIndex={props.selectedIndex} width={Math.max(30, props.width - 6)} onSelect={props.onSelectProposal} />
         </Panel>
       </box>
     </box>
@@ -820,12 +883,157 @@ function dreamRunProposalCount(detail: DreamRunDetailView) {
   return detail.run.proposals.length || detail.proposals.length
 }
 
+function dreamSkippedDecisionCount(detail: Pick<DreamRunDetailView, "decisions">) {
+  return detail.decisions.filter((decision) => decision.status === "skipped-policy" || decision.status === "skipped-duplicate").length
+}
+
 function dreamDetailSummary(detail: DreamRunDetailView | null | undefined) {
   if (!detail) return "No Dream run selected"
   const event = detail.events.at(-1)?.message
   const evidence = detail.evidence.length ? `${detail.evidence.length} evidence refs` : "no evidence"
   const proposals = `${dreamRunProposalCount(detail)} proposals`
-  return [event, evidence, proposals].filter(Boolean).join(" · ")
+  const graph = detail.graphProposals.length ? `${detail.graphProposals.length} graph links` : "no graph links"
+  return [event, evidence, proposals, graph].filter(Boolean).join(" · ")
+}
+
+type DreamTranscriptDetail = Readonly<{
+  run: { status: string; startedAt: string; completedAt: string | null; failureReason: string | null }
+  events: ReadonlyArray<{ at: string; status: string; message: string }>
+  evidence: ReadonlyArray<{ id: string; sourceType: string; sourcePath: string | null; redacted: boolean }>
+  proposals: ReadonlyArray<{ id: string; operation?: string; scope?: string; text?: string }>
+  graphProposals: ReadonlyArray<{ id: string; createdAt: string; kind: string; status?: string; confidence: number; reason: string; fromSummary: string; toSummary: string; reviewedAt?: string; linkID?: string; rejectionReason?: string }>
+  decisions: ReadonlyArray<{ at: string; status: string; reason: string }>
+  safety: { reads: ReadonlyArray<unknown>; skippedSources: ReadonlyArray<string>; failures: ReadonlyArray<string>; redactions: number } | null
+}>
+
+export type DreamTranscriptRow = {
+  at: string
+  tone: "info" | "success" | "warning" | "error"
+  label: string
+  detail: string
+}
+
+export function dreamEvidenceLabel(evidence: { id: string; sourceType: string; sourcePath: string | null; redacted: boolean }) {
+  const basename = evidence.sourcePath?.split(/[\\/]+/).filter(Boolean).at(-1)
+  const label = evidence.sourceType === "file"
+    ? basename ?? "file"
+    : evidence.sourceType === "memory"
+      ? "saved memory"
+      : evidence.sourceType === "proposal"
+        ? "pending proposal"
+        : basename ?? evidence.sourceType
+  return `${evidence.sourceType} · ${label}${evidence.redacted ? " · redacted" : ""}`
+}
+
+export function dreamGraphProposalLabel(proposal: { kind: string; status?: string; reason: string; fromSummary: string; toSummary: string }) {
+  const status = proposal.status ? `${proposal.status} · ` : ""
+  return `${status}${proposal.kind} · ${proposal.reason} · ${memoryPreviewText(proposal.fromSummary, 72)} ↔ ${memoryPreviewText(proposal.toSummary, 72)}`
+}
+
+function dreamTranscriptTone(status: string): DreamTranscriptRow["tone"] {
+  if (status === "completed" || status === "created-proposal" || status === "auto-applied-proposal" || status === "applied") return "success"
+  if (status === "failed") return "error"
+  if (status === "skipped-policy" || status === "skipped-duplicate" || status === "canceled" || status === "missed" || status === "rejected") return "warning"
+  return "info"
+}
+
+export function dreamTranscriptRows(detail: DreamTranscriptDetail | null | undefined): DreamTranscriptRow[] {
+  if (!detail) return []
+  const syntheticAt = detail.run.completedAt ?? detail.events.at(-1)?.at ?? detail.run.startedAt
+  const rows: DreamTranscriptRow[] = [
+    ...detail.events.map((event) => ({
+      at: event.at,
+      tone: dreamTranscriptTone(event.status),
+      label: event.status,
+      detail: event.message,
+    } satisfies DreamTranscriptRow)),
+  ]
+  if (!rows.length) {
+    rows.push({ at: detail.run.startedAt, tone: dreamTranscriptTone(detail.run.status), label: detail.run.status, detail: "Dream run has no event log yet" })
+  }
+  if (detail.proposals.length) {
+    rows.push({
+      at: syntheticAt,
+      tone: "success",
+      label: "memory proposals",
+      detail: `${detail.proposals.length} reviewable proposals · ${detail.proposals.slice(0, 2).map((proposal) => proposal.text ?? proposal.id).join(" · ")}`,
+    })
+  }
+  if (detail.graphProposals.length) {
+    const pending = detail.graphProposals.filter((proposal) => (proposal.status ?? "pending") === "pending").length
+    const applied = detail.graphProposals.filter((proposal) => proposal.status === "applied").length
+    const rejected = detail.graphProposals.filter((proposal) => proposal.status === "rejected").length
+    rows.push({
+      at: syntheticAt,
+      tone: "info",
+      label: "graph proposals",
+      detail: `${pending} pending · ${applied} applied · ${rejected} rejected · ${detail.graphProposals.slice(0, 2).map((proposal) => `${proposal.kind}: ${proposal.reason}`).join(" · ")}`,
+    })
+    rows.push(...detail.graphProposals.flatMap((proposal) => {
+      if (!proposal.reviewedAt || !proposal.status || proposal.status === "pending") return []
+      return [{
+        at: proposal.reviewedAt,
+        tone: dreamTranscriptTone(proposal.status),
+        label: proposal.status,
+        detail: `graph ${proposal.kind} · ${proposal.reason}${proposal.status === "rejected" && proposal.rejectionReason ? ` · ${proposal.rejectionReason}` : ""}`,
+      } satisfies DreamTranscriptRow]
+    }).slice(-3))
+  }
+  if (detail.decisions.length) {
+    rows.push(...detail.decisions.slice(-3).map((decision) => ({
+      at: decision.at,
+      tone: dreamTranscriptTone(decision.status),
+      label: decision.status,
+      detail: decision.reason,
+    } satisfies DreamTranscriptRow)))
+  }
+  rows.push({
+    at: syntheticAt,
+    tone: detail.safety?.failures.length ? "error" : detail.safety?.redactions || detail.safety?.skippedSources.length ? "warning" : "info",
+    label: "safety",
+    detail: `${detail.evidence.length} evidence refs · ${detail.safety?.reads.length ?? detail.evidence.length} reads · ${detail.safety?.redactions ?? 0} redactions · ${detail.safety?.skippedSources.length ?? 0} skipped sources`,
+  })
+  if (detail.run.failureReason || detail.safety?.failures.length) {
+    rows.push({
+      at: syntheticAt,
+      tone: "error",
+      label: "failure",
+      detail: detail.safety?.failures.join("; ") || detail.run.failureReason || "Dream failed",
+    })
+  }
+  return rows.toSorted((a, b) => a.at.localeCompare(b.at)).slice(-10)
+}
+
+function dreamActivityPriority(label: string) {
+  if (label === "completed" || label === "failed" || label === "failure") return 4
+  if (label === "memory proposals" || label === "graph proposals" || label === "applied" || label === "rejected") return 3
+  if (label.startsWith("skipped") || label === "created-proposal") return 2
+  if (label === "safety") return 0
+  return 1
+}
+
+export function dreamLatestActivity(detail: DreamTranscriptDetail | null | undefined) {
+  return dreamTranscriptRows(detail)
+    .toSorted((a, b) => b.at.localeCompare(a.at) || dreamActivityPriority(b.label) - dreamActivityPriority(a.label))[0] ?? null
+}
+
+function dreamTranscriptColor(tone: DreamTranscriptRow["tone"], theme: ReturnType<typeof useTheme>["theme"]) {
+  if (tone === "success") return theme.success
+  if (tone === "warning") return theme.warning
+  if (tone === "error") return theme.error
+  return theme.primary
+}
+
+function fallbackDreamRunDetail(run: MemoryOverview["dreamRuns"][number]) {
+  return {
+    run,
+    events: [],
+    evidence: [],
+    proposals: [],
+    graphProposals: [],
+    decisions: [],
+    safety: null,
+  } satisfies DreamRunDetailView
 }
 
 function DreamContent(props: {
@@ -838,7 +1046,7 @@ function DreamContent(props: {
   const { theme } = useTheme()
   const dream = () => props.data.dream
   const details = () => props.data.dreamRunDetails ?? []
-  const runs = () => details().length ? details() : (props.data.dreamRuns ?? []).map((run) => ({ run, events: [], evidence: [], proposals: [], safety: null }))
+  const runs = () => details().length ? details() : (props.data.dreamRuns ?? []).map(fallbackDreamRunDetail)
   const schedule = () => props.schedule
   return (
     <box flexDirection="column" gap={1} minHeight={0} flexGrow={1}>
@@ -870,7 +1078,10 @@ function DreamContent(props: {
           </box>
         </box>
         <text fg={theme.primary} wrapMode="none">
-          {short("Dream only drafts proposals. Nothing becomes memory until accepted.", props.width)}
+          {short(`Dream write policy: ${props.data.config.dreamWritePolicy} · default is reviewable proposals.`, props.width)}
+        </text>
+        <text fg={theme.textMuted} wrapMode="none">
+          {memoryPreviewText(`latest activity: ${props.data.dreamLatestActivity ? `${props.data.dreamLatestActivity.kind} · ${props.data.dreamLatestActivity.summary}` : "none"}`, props.width)}
         </text>
         <text fg={theme.textMuted} wrapMode="none">
           {short(`source ${dream()?.source ?? schedule()?.reason ?? "not scheduled"} · last ${dream() ? formatDate(dream()!.startedAt) : "none"}`, props.width)}
@@ -899,6 +1110,7 @@ function DreamContent(props: {
                 const reads = () => detail.safety?.reads.length ?? detail.evidence.length
                 const redactions = () => detail.safety?.redactions ?? 0
                 const duration = () => durationLabel(run().startedAt, run().completedAt)
+                const skipped = () => dreamSkippedDecisionCount(detail)
                 return (
                   <box height={4} overflow="hidden" onMouseUp={() => props.onSelectRun(index())}>
                     <box flexDirection="row" justifyContent="space-between" height={1} overflow="hidden">
@@ -910,10 +1122,10 @@ function DreamContent(props: {
                       </text>
                     </box>
                     <text fg={selectedRun() ? theme.text : theme.textMuted} wrapMode="none">
-                      {short(`${dreamRunProposalCount(detail)} proposals · ${detail.evidence.length} evidence · ${reads()} reads · ${redactions()} redactions${duration() ? ` · ${duration()}` : ""}`, props.width)}
+                      {short(`${dreamRunProposalCount(detail)} proposals · ${detail.graphProposals.length} graph · ${skipped()} skipped · ${detail.evidence.length} evidence · ${reads()} reads · ${redactions()} redactions${duration() ? ` · ${duration()}` : ""}`, props.width)}
                     </text>
                     <text fg={theme.textMuted} wrapMode="none">
-                      {short(detail.events.at(-1)?.message ?? run().failureReason ?? run().id, props.width)}
+                      {memoryPreviewText(detail.events.at(-1)?.message ?? run().failureReason ?? run().id, props.width)}
                     </text>
                     <Show when={selectedRun()}>
                       <text fg={theme.primary} wrapMode="none">
@@ -937,6 +1149,8 @@ function Inspector(props: {
   policyScope: MemoryPolicyScope
   onApplyProposal?: () => void
   onRejectProposal?: () => void
+  onApplyGraphProposal?: (runID: string, proposalID: string) => void
+  onRejectGraphProposal?: (runID: string, proposalID: string) => void
   onEditSelection?: () => void
 }) {
   const { theme } = useTheme()
@@ -1038,19 +1252,42 @@ function Inspector(props: {
           )}
         </Match>
         <Match when={props.selection.kind === "dream" ? props.selection.detail : undefined}>
-          {(detail) => (
-            <box flexDirection="column" gap={1} overflow="hidden">
+          {(detail) => {
+            const pendingGraphProposal = () => detail().graphProposals.find((proposal) => (proposal.status ?? "pending") === "pending")
+            return (
+              <box flexDirection="column" gap={1} overflow="hidden">
+              <Show when={dreamLatestActivity(detail())}>
+                {(activity) => (
+                  <text fg={dreamTranscriptColor(activity().tone, theme)} wrapMode="word">
+                    {memoryPreviewText(`latest: ${activity().label} · ${activity().detail}`, props.width * 3)}
+                  </text>
+                )}
+              </Show>
               <MetricRows
                 width={props.width}
                 items={[
                   stat("run", detail().run.id),
                   stat("status", dreamRunStatusLabel(detail().run.status), durationLabel(detail().run.startedAt, detail().run.completedAt)),
                   stat("source", detail().run.source, detail().run.workspaceID ?? "global"),
+                  stat("policy", detail().run.writePolicySnapshot, `${dreamSkippedDecisionCount(detail())} skipped`),
                   stat("proposals", String(dreamRunProposalCount(detail())), "pending review"),
+                  stat("graph", String(detail().graphProposals.filter((proposal) => (proposal.status ?? "pending") === "pending").length), `${detail().graphProposals.length} link proposals`),
                   stat("evidence", String(detail().evidence.length), `${detail().safety?.reads.length ?? detail().evidence.length} reads`),
                   stat("safety", `${detail().safety?.redactions ?? 0} redactions`, `${detail().safety?.skippedSources.length ?? 0} skipped`),
                 ]}
               />
+              <Show when={dreamTranscriptRows(detail()).length > 0}>
+                <box flexDirection="column" gap={0}>
+                  <text fg={theme.primary} wrapMode="none">Dream timeline</text>
+                  <For each={dreamTranscriptRows(detail()).slice(-6)}>
+                    {(row) => (
+                      <text fg={dreamTranscriptColor(row.tone, theme)} wrapMode="word">
+                        {memoryPreviewText(`${formatTime(row.at)} · ${row.label} · ${row.detail}`, props.width * 3)}
+                      </text>
+                    )}
+                  </For>
+                </box>
+              </Show>
               <Show when={detail().events.at(-1)?.message}>
                 {(message) => (
                   <box flexDirection="column" gap={0}>
@@ -1071,13 +1308,58 @@ function Inspector(props: {
                   </For>
                 </box>
               </Show>
+              <Show when={detail().decisions.length > 0}>
+                <box flexDirection="column" gap={0}>
+                  <text fg={theme.primary} wrapMode="none">Dream decisions</text>
+                  <For each={detail().decisions.slice(0, 3)}>
+                    {(decision) => (
+                      <text fg={decision.status === "created-proposal" ? theme.text : theme.warning} wrapMode="word">
+                        {memoryPreviewText(`${decision.status} · ${decision.reason}`, props.width * 3)}
+                      </text>
+                    )}
+                  </For>
+                </box>
+              </Show>
+              <Show when={detail().graphProposals.length > 0}>
+                <box flexDirection="column" gap={0}>
+                  <text fg={theme.primary} wrapMode="none">Graph proposals</text>
+                  <For each={detail().graphProposals.slice(0, 3)}>
+                    {(proposal) => (
+                      <box flexDirection="column" gap={0} overflow="hidden">
+                        <text fg={proposal.status === "applied" ? theme.success : proposal.status === "rejected" ? theme.warning : theme.text} wrapMode="word">
+                          {memoryPreviewText(dreamGraphProposalLabel(proposal), props.width * 3)}
+                        </text>
+                        <Show when={(proposal.status ?? "pending") === "pending"}>
+                          <box flexDirection="row" gap={1} height={1} overflow="hidden">
+                            <text fg={theme.success} wrapMode="none" onMouseUp={() => props.onApplyGraphProposal?.(detail().run.id, proposal.id)}>
+                              [apply graph]
+                            </text>
+                            <text fg={theme.error} wrapMode="none" onMouseUp={() => props.onRejectGraphProposal?.(detail().run.id, proposal.id)}>
+                              [reject graph]
+                            </text>
+                          </box>
+                        </Show>
+                      </box>
+                    )}
+                  </For>
+                </box>
+              </Show>
+              <Show when={pendingGraphProposal()}>
+                {(proposal) => (
+                  <box flexDirection="column" gap={0} overflow="hidden">
+                    <text fg={theme.warning} wrapMode="word">
+                      {memoryPreviewText(`keyboard apply/reject targets first pending graph action · ${dreamGraphProposalLabel(proposal())}`, props.width * 3)}
+                    </text>
+                  </box>
+                )}
+              </Show>
               <Show when={detail().evidence.length > 0}>
                 <box flexDirection="column" gap={0}>
                   <text fg={theme.primary} wrapMode="none">Evidence</text>
                   <For each={detail().evidence.slice(0, 3)}>
                     {(evidence) => (
                       <text fg={theme.textMuted} wrapMode="none">
-                        {short(`${evidence.sourceType} · ${evidence.sourcePath ?? evidence.id}`, props.width)}
+                        {short(dreamEvidenceLabel(evidence), props.width)}
                       </text>
                     )}
                   </For>
@@ -1093,8 +1375,9 @@ function Inspector(props: {
                   {memoryPreviewText(`skipped: ${detail().safety?.skippedSources.join(", ")}`, props.width * 3)}
                 </text>
               </Show>
-            </box>
-          )}
+              </box>
+            )
+          }}
         </Match>
         <Match when={props.selection.kind === "dream"}>
           <MetricRows width={props.width} items={[stat("view", "Dream"), stat("events", "SSE live"), stat("updates", "reviewable proposals")]} />
@@ -1455,9 +1738,12 @@ function memorySideChatPageContext(input: {
       `proposals: ${input.data.dream?.proposals.length ?? 0}`,
       `selectedRun: ${detail?.run.id ?? "none"}`,
       `selectedRunStatus: ${detail?.run.status ?? "none"}`,
+      `latestActivity: ${input.data.dreamLatestActivity ? `${input.data.dreamLatestActivity.kind}:${input.data.dreamLatestActivity.summary}` : "none"}`,
+      `selectedRunTimeline: ${detail ? dreamTranscriptRows(detail).slice(-6).map((row) => `${row.label}:${row.detail}`).join(" | ") : "none"}`,
       `selectedRunEvents: ${detail?.events.map((event) => `${event.status}:${event.message}`).slice(-6).join(" | ") ?? "none"}`,
-      `selectedRunEvidence: ${detail?.evidence.slice(0, 8).map((item) => `${item.sourceType}:${item.sourcePath ?? item.id}`).join(" | ") ?? "none"}`,
-      `selectedRunSafety: reads=${detail?.safety?.reads.length ?? 0} redactions=${detail?.safety?.redactions ?? 0} skipped=${detail?.safety?.skippedSources.join(", ") ?? "none"}`,
+      `selectedRunGraphProposals: ${detail?.graphProposals.slice(0, 6).map((proposal) => dreamGraphProposalLabel(proposal)).join(" | ") ?? "none"}`,
+      `selectedRunEvidence: ${detail?.evidence.slice(0, 8).map((item) => dreamEvidenceLabel(item)).join(" | ") ?? "none"}`,
+      `selectedRunSafety: reads=${detail?.safety?.reads.length ?? 0} redactions=${detail?.safety?.redactions ?? 0} skipped=${detail?.safety?.skippedSources.length ?? 0}`,
       "schedule guidance: prefer a flexible Dream window/range such as 18:00-23:00 over a fixed time like 21:00",
       "</dream>",
     )
@@ -1549,7 +1835,7 @@ export function Memory() {
       return category && policy ? { kind: "policy", category, policy } : { kind: "overview" }
     }
     if (tab() === "dream") {
-      const details = current.dreamRunDetails.length ? current.dreamRunDetails : current.dreamRuns.map((run) => ({ run, events: [], evidence: [], proposals: [], safety: null }))
+      const details = current.dreamRunDetails.length ? current.dreamRunDetails : current.dreamRuns.map(fallbackDreamRunDetail)
       return { kind: "dream", detail: details[index] ?? null }
     }
     return pending()[index] ? { kind: "proposal", proposal: pending()[index]! } : { kind: "overview" }
@@ -1629,6 +1915,23 @@ export function Memory() {
     ].join("\n")
   }
 
+  function selectedPendingDreamGraphProposal() {
+    const item = selection()
+    if (item.kind !== "dream" || !item.detail) return null
+    const proposal = item.detail.graphProposals.find((candidate) => (candidate.status ?? "pending") === "pending")
+    return proposal ? { runID: item.detail.run.id, proposal } : null
+  }
+
+  function graphProposalConfirmText(proposal: NonNullable<ReturnType<typeof selectedPendingDreamGraphProposal>>["proposal"]) {
+    return [
+      `Kind: ${proposal.kind}`,
+      `Confidence: ${Math.round(proposal.confidence * 100)}%`,
+      `Reason: ${proposal.reason}`,
+      `From: ${memoryPreviewText(proposal.fromSummary, 420)}`,
+      `To: ${memoryPreviewText(proposal.toSummary, 420)}`,
+    ].join("\n")
+  }
+
   async function confirmProposalAction(action: "apply" | "reject" | "edit", proposal: MemoryProposal) {
     const confirmed = await DialogConfirm.show(
       dialog,
@@ -1640,8 +1943,23 @@ export function Memory() {
     return confirmed === true
   }
 
+  async function confirmGraphProposalAction(action: "apply" | "reject", proposal: NonNullable<ReturnType<typeof selectedPendingDreamGraphProposal>>["proposal"]) {
+    const confirmed = await DialogConfirm.show(
+      dialog,
+      `${Locale.titlecase(action)} Dream graph proposal`,
+      graphProposalConfirmText(proposal),
+      "cancel",
+    )
+    dialog.clear()
+    return confirmed === true
+  }
+
   async function applySelectedProposal() {
     const item = selection()
+    if (item.kind === "dream") {
+      await applySelectedGraphProposal()
+      return
+    }
     if (item.kind !== "proposal") return
     const confirmed = await confirmProposalAction("apply", item.proposal)
     if (!confirmed) return
@@ -1651,11 +1969,39 @@ export function Memory() {
 
   async function rejectSelectedProposal() {
     const item = selection()
+    if (item.kind === "dream") {
+      await rejectSelectedGraphProposal()
+      return
+    }
     if (item.kind !== "proposal") return
     const confirmed = await confirmProposalAction("reject", item.proposal)
     if (!confirmed) return
     await rejectMemoryProposal(item.proposal.id, activeRoot())
     await reload("Proposal rejected")
+  }
+
+  async function applySelectedGraphProposal(runID?: string, proposalID?: string) {
+    const selected = selectedPendingDreamGraphProposal()
+    const target = runID && proposalID
+      ? { runID, proposal: data()?.dreamRunDetails.find((detail) => detail.run.id === runID)?.graphProposals.find((proposal) => proposal.id === proposalID) ?? null }
+      : selected
+    if (!target?.proposal) return
+    const confirmed = await confirmGraphProposalAction("apply", target.proposal)
+    if (!confirmed) return
+    await applyDreamGraphProposal(target.runID, target.proposal.id, activeRoot())
+    await reload("Dream graph proposal applied")
+  }
+
+  async function rejectSelectedGraphProposal(runID?: string, proposalID?: string) {
+    const selected = selectedPendingDreamGraphProposal()
+    const target = runID && proposalID
+      ? { runID, proposal: data()?.dreamRunDetails.find((detail) => detail.run.id === runID)?.graphProposals.find((proposal) => proposal.id === proposalID) ?? null }
+      : selected
+    if (!target?.proposal) return
+    const confirmed = await confirmGraphProposalAction("reject", target.proposal)
+    if (!confirmed) return
+    await rejectDreamGraphProposal(target.runID, target.proposal.id, activeRoot(), "Rejected from Memory Center")
+    await reload("Dream graph proposal rejected")
   }
 
   async function cycleSelectedPolicy() {
@@ -2003,6 +2349,8 @@ export function Memory() {
                         policyScope={policyScope()}
                         onApplyProposal={() => void applySelectedProposal().catch((err) => toast.error(err))}
                         onRejectProposal={() => void rejectSelectedProposal().catch((err) => toast.error(err))}
+                        onApplyGraphProposal={(runID, proposalID) => void applySelectedGraphProposal(runID, proposalID).catch((err) => toast.error(err))}
+                        onRejectGraphProposal={(runID, proposalID) => void rejectSelectedGraphProposal(runID, proposalID).catch((err) => toast.error(err))}
                         onEditSelection={() => void editSelection().catch((err) => toast.error(err))}
                       />
                     </box>
@@ -2054,6 +2402,8 @@ export function Memory() {
                         policyScope={policyScope()}
                         onApplyProposal={() => void applySelectedProposal().catch((err) => toast.error(err))}
                         onRejectProposal={() => void rejectSelectedProposal().catch((err) => toast.error(err))}
+                        onApplyGraphProposal={(runID, proposalID) => void applySelectedGraphProposal(runID, proposalID).catch((err) => toast.error(err))}
+                        onRejectGraphProposal={(runID, proposalID) => void rejectSelectedGraphProposal(runID, proposalID).catch((err) => toast.error(err))}
                         onEditSelection={() => void editSelection().catch((err) => toast.error(err))}
                       />
                     </box>
@@ -2101,6 +2451,8 @@ export function Memory() {
                         policyScope={policyScope()}
                         onApplyProposal={() => void applySelectedProposal().catch((err) => toast.error(err))}
                         onRejectProposal={() => void rejectSelectedProposal().catch((err) => toast.error(err))}
+                        onApplyGraphProposal={(runID, proposalID) => void applySelectedGraphProposal(runID, proposalID).catch((err) => toast.error(err))}
+                        onRejectGraphProposal={(runID, proposalID) => void rejectSelectedGraphProposal(runID, proposalID).catch((err) => toast.error(err))}
                         onEditSelection={() => void editSelection().catch((err) => toast.error(err))}
                       />
                     </box>

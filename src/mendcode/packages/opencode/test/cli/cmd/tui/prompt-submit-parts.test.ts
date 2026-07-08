@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import {
   DEFAULT_PASTE_SUMMARY_MIN_CHARS,
+  expandEditedPastedContentInPrompt,
+  expandPastedContentAtOffset,
+  expandPastedContentInPrompt,
   messagePartsToPortableClipboard,
   parsePortableImageClipboard,
   pastedContentLabel,
@@ -113,6 +116,112 @@ describe("prompt submit parts", () => {
         },
       },
     })
+  })
+
+  test("expands an existing pasted content placeholder when the same text is pasted again", () => {
+    const pasted = "large pasted context\n".repeat(20)
+    const label = pastedContentLabel(pasted)
+    const otherPasted = "other pasted context\n".repeat(20)
+    const otherLabel = pastedContentLabel(otherPasted)
+    const result = expandPastedContentInPrompt(
+      {
+        input: `review ${label} ${otherLabel}`,
+        parts: [
+          {
+            type: "text",
+            text: pasted,
+            source: {
+              text: {
+                start: 7,
+                end: 7 + label.length,
+                value: label,
+              },
+            },
+          },
+          {
+            type: "text",
+            text: otherPasted,
+            source: {
+              text: {
+                start: 8 + label.length,
+                end: 8 + label.length + otherLabel.length,
+                value: otherLabel,
+              },
+            },
+          },
+        ],
+      },
+      pasted,
+    )
+
+    expect(result?.input).toBe(`review ${pasted} ${otherLabel}`)
+    expect(result?.cursorOffset).toBe(7 + pasted.length)
+    expect(result?.parts).toHaveLength(1)
+    expect(result?.parts[0]).toMatchObject({
+      type: "text",
+      text: otherPasted,
+      source: {
+        text: {
+          start: 8 + pasted.length,
+          end: 8 + pasted.length + otherLabel.length,
+          value: otherLabel,
+        },
+      },
+    })
+  })
+
+  test("expands pasted content at a cursor offset inside the placeholder", () => {
+    const pasted = "large pasted context\n".repeat(20)
+    const label = pastedContentLabel(pasted)
+    const result = expandPastedContentAtOffset(
+      {
+        input: `review ${label}`,
+        parts: [
+          {
+            type: "text",
+            text: pasted,
+            source: {
+              text: {
+                start: 7,
+                end: 7 + label.length,
+                value: label,
+              },
+            },
+          },
+        ],
+      },
+      10,
+    )
+
+    expect(result?.input).toBe(`review ${pasted}`)
+    expect(result?.cursorOffset).toBe(7 + pasted.length)
+    expect(result?.parts).toEqual([])
+  })
+
+  test("expands pasted content when the visible placeholder is edited", () => {
+    const pasted = "large pasted context\n".repeat(20)
+    const label = pastedContentLabel(pasted)
+    const editedLabel = label.replace("Content", "XDD")
+    const result = expandEditedPastedContentInPrompt({
+      input: `review ${editedLabel}`,
+      parts: [
+        {
+          type: "text",
+          text: pasted,
+          source: {
+            text: {
+              start: 7,
+              end: 7 + editedLabel.length,
+              value: label,
+            },
+          },
+        },
+      ],
+    })
+
+    expect(result?.input).toBe(`review ${pasted}`)
+    expect(result?.cursorOffset).toBe(7 + pasted.length)
+    expect(result?.parts).toEqual([])
   })
 
   test("serializes submitted image attachments as portable clipboard data URLs", () => {

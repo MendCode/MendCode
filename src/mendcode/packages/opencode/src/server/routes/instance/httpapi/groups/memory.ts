@@ -39,6 +39,8 @@ const MemorySideChatAction = Schema.Struct({
     "edit-memory",
     "delete-memory",
     "move-memory",
+    "graph-upsert",
+    "graph-link",
     "create-category",
     "edit-category",
     "delete-category",
@@ -49,6 +51,9 @@ const MemorySideChatAction = Schema.Struct({
   targetID: Schema.optional(Schema.String),
   targetScope: Schema.optional(Schema.Literals(["project", "global"])),
   categoryID: Schema.optional(Schema.String),
+  fromFactID: Schema.optional(Schema.String),
+  toFactID: Schema.optional(Schema.String),
+  linkKind: Schema.optional(Schema.Literals(["related", "conflicts", "supersedes", "supports"])),
 })
 
 export const MemorySideChatResponse = Schema.Struct({

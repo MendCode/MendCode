@@ -21,6 +21,7 @@ export function resolveActivityPhase(input: ActivitySignalInput): MendActivityPh
   if (input.status === "idle") return "done"
   if (input.status === "busy" && input.statusKind === "subagent-wait") return "subagents"
   if (input.status === "busy" && input.statusKind === "memory-extract") return "memory"
+  if (input.status === "busy" && input.statusKind === "compaction") return "compacting"
 
   const activeNames = (input.activeToolNames ?? []).map((item) => item.toLowerCase())
   const activeToolPhase = phaseForToolNames(activeNames)

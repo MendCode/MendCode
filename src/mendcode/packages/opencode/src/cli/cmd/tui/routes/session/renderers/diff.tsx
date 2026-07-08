@@ -35,7 +35,7 @@ export function TimelineDiff(props: {
   const fg = (kind: TimelineDiffRowKind) => {
     if (kind === "added") return theme.diffHighlightAdded
     if (kind === "removed") return theme.diffHighlightRemoved
-    if (kind === "file" || kind === "meta") return theme.textMuted
+    if (kind === "file" || kind === "meta" || kind === "context") return theme.textMuted
     return theme.text
   }
   const lineFg = (kind: TimelineDiffRowKind) => {
