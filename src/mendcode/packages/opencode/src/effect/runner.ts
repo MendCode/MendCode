@@ -3,9 +3,22 @@ import { Cause, Deferred, Effect, Exit, Fiber, Latch, Schema, Scope, Synchronize
 export interface Runner<A, E = never> {
   readonly state: State<A, E>
   readonly busy: boolean
-  readonly ensureRunning: (work: Effect.Effect<A, E>, options?: { queue?: boolean }) => Effect.Effect<A, E>
+  readonly ensureRunning: (
+    work: Effect.Effect<A, E>,
+    options?: EnsureRunningOptions,
+  ) => Effect.Effect<A, E>
   readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E>
+  readonly interruptCurrent: (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => Effect.Effect<void>
+  readonly interrupt: Effect.Effect<void>
   readonly cancel: Effect.Effect<void>
+}
+
+export interface EnsureRunningOptions {
+  queue?: boolean
+  interrupt?: {
+    before?: Effect.Effect<void>
+    after?: Effect.Effect<void>
+  }
 }
 
 export class Cancelled extends Schema.TaggedErrorClass<Cancelled>()("RunnerCancelled", {}) {}
@@ -130,7 +143,18 @@ export const make = <A, E = never>(
       } satisfies PendingHandle<A, E>
     })
 
-  const ensureRunning = (work: Effect.Effect<A, E>, options?: { queue?: boolean }): Effect.Effect<A, E> =>
+  const interruptThenAwait = (
+    fiber: Fiber.Fiber<A, E>,
+    done: Deferred.Deferred<A, E | Cancelled>,
+    options: NonNullable<EnsureRunningOptions["interrupt"]>,
+  ) =>
+    Effect.gen(function* () {
+      yield* options.before ?? Effect.void
+      yield* Fiber.interrupt(fiber).pipe(Effect.ensuring(options.after ?? Effect.void))
+      return yield* awaitDone(done)
+    })
+
+  const ensureRunning = (work: Effect.Effect<A, E>, options?: EnsureRunningOptions): Effect.Effect<A, E> =>
     SynchronizedRef.modifyEffect(
       ref,
       (st) => Effect.gen(function* () {
@@ -138,11 +162,23 @@ export const make = <A, E = never>(
           case "Running":
             if (options?.queue) {
               const next = yield* queueRun(work)
-              return [awaitDone(next.done), { _tag: "RunningThenRun", run: st.run, next }] as const
+              return [
+                options.interrupt
+                  ? interruptThenAwait(st.run.fiber, next.done, options.interrupt)
+                  : awaitDone(next.done),
+                { _tag: "RunningThenRun", run: st.run, next },
+              ] as const
             }
             return [awaitDone(st.run.done), st] as const
           case "RunningThenRun":
-            if (options?.queue) return [awaitDone(st.next.done), st] as const
+            if (options?.queue) {
+              return [
+                options.interrupt
+                  ? interruptThenAwait(st.run.fiber, st.next.done, options.interrupt)
+                  : awaitDone(st.next.done),
+                st,
+              ] as const
+            }
             return [awaitDone(st.run.done), st] as const
           case "ShellThenRun":
             return [awaitDone(st.run.done), st] as const
@@ -236,6 +272,35 @@ export const make = <A, E = never>(
     }
   }).pipe(Effect.flatten)
 
+  const interruptCurrent = (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => SynchronizedRef.modify(ref, (st) => {
+    const interruptRun = (run: RunHandle<A, E>) =>
+      Effect.gen(function* () {
+        yield* options?.before ?? Effect.void
+        yield* Fiber.interrupt(run.fiber).pipe(Effect.ensuring(options?.after ?? Effect.void))
+        yield* Deferred.await(run.done).pipe(Effect.exit, Effect.asVoid)
+      })
+    const interruptShell = (shell: ShellHandle<A, E>) =>
+      Effect.gen(function* () {
+        yield* options?.before ?? Effect.void
+        yield* stopShell(shell).pipe(Effect.ensuring(options?.after ?? Effect.void))
+      })
+
+    switch (st._tag) {
+      case "Idle":
+        return [Effect.void, st] as const
+      case "Running":
+        return [interruptRun(st.run), st] as const
+      case "RunningThenRun":
+        return [interruptRun(st.run), st] as const
+      case "Shell":
+        return [interruptShell(st.shell), st] as const
+      case "ShellThenRun":
+        return [interruptShell(st.shell), st] as const
+    }
+  }).pipe(Effect.flatten)
+
+  const interrupt = interruptCurrent()
+
   return {
     get state() {
       return state()
@@ -245,6 +310,8 @@ export const make = <A, E = never>(
     },
     ensureRunning,
     startShell,
+    interruptCurrent,
+    interrupt,
     cancel,
   }
 }

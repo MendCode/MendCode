@@ -94,14 +94,7 @@ import {
   stopMflowDaemon,
   type MflowRelayMode,
 } from "@/mend/config/mflow"
-import {
-  activateTsm,
-  deactivateTsm,
-  removeTsm,
-  setupTsm,
-  tsmPlan,
-  tsmStatus,
-} from "@/mend/config/tsm"
+import { activateTsm, deactivateTsm, removeTsm, setupTsm, tsmPlan, tsmStatus } from "@/mend/config/tsm"
 import {
   worktreeAdopt,
   worktreeCreate,
@@ -126,7 +119,14 @@ import { cyclePromptMode, writePromptMode, type MendPromptMode } from "@/mend/pr
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import { setupReadiness } from "@/mend/runtime/readiness"
 import { isSetupComplete, readSetupState } from "@/mend/setup/state"
-import { runtimeRegistryAdd, runtimeRegistryInstallPack, runtimeRegistryRemove, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistryStatus } from "@/mend/runtime/registry"
+import {
+  runtimeRegistryAdd,
+  runtimeRegistryInstallPack,
+  runtimeRegistryRemove,
+  runtimeRegistrySearch,
+  runtimeRegistryShow,
+  runtimeRegistryStatus,
+} from "@/mend/runtime/registry"
 import type { RegistryMarketplacePackManifest } from "@/mend/runtime/registry/marketplace"
 import {
   disableAllMendPackages,
@@ -135,7 +135,7 @@ import {
   setMendPackageEnabled,
 } from "@/mend/runtime/packages"
 import { resolveProjectMemoryRoot, writeProjectMemoryConfig, type MemoryConfig } from "@/mend/memory/config"
-import { readPermissionsConfig } from "@/mend/config/permissions"
+import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
 import { initialTuiPluginReady, themeModeWaitMs, tuiFastBootEnabled } from "@/cli/cmd/tui/util/fast-boot"
 import {
   appendMemoryEntry,
@@ -162,7 +162,14 @@ import {
   type MendPresentationProfile,
 } from "@/mend/tui/presentation"
 import { defaultHomeMascot } from "@/mend/tui/mascot"
-import { clearMendOverlay, focusMendOverlay, listMendOverlays, mendOverlayRenderContext, readFocusedMendOverlayID, type MendOverlayEntry } from "@/mend/tui/overlays"
+import {
+  clearMendOverlay,
+  focusMendOverlay,
+  listMendOverlays,
+  mendOverlayRenderContext,
+  readFocusedMendOverlayID,
+  type MendOverlayEntry,
+} from "@/mend/tui/overlays"
 
 function rendererConfig(_config: TuiConfig.Info): CliRendererConfig {
   const mouseEnabled = !Flag.OPENCODE_DISABLE_MOUSE && (_config.mouse ?? true)
@@ -204,6 +211,12 @@ function releaseTerminalInputModes() {
   }
 }
 
+function permissionModeTitle(mode: PermissionMode) {
+  if (mode === "full_access") return "Full Access"
+  if (mode === "smart") return "Smart Approval"
+  return "Require approval"
+}
+
 function errorMessage(error: unknown) {
   const formatted = FormatError(error)
   if (formatted !== undefined) return formatted
@@ -223,7 +236,8 @@ function errorMessage(error: unknown) {
 
 function overlaySize(value: MendOverlayEntry["width"], total: number, fallback: number) {
   if (typeof value === "number") return Math.max(1, Math.min(total, value))
-  if (typeof value === "string" && value.endsWith("%")) return Math.max(1, Math.min(total, Math.floor((total * Number(value.slice(0, -1))) / 100)))
+  if (typeof value === "string" && value.endsWith("%"))
+    return Math.max(1, Math.min(total, Math.floor((total * Number(value.slice(0, -1))) / 100)))
   return Math.max(1, Math.min(total, fallback))
 }
 
@@ -239,8 +253,16 @@ function overlayFrame(item: MendOverlayEntry, dimensions: { width: number; heigh
   return {
     width,
     height,
-    left: item.anchor.endsWith("right") ? dimensions.width - margin.right - width : item.anchor.endsWith("left") ? margin.left : centerLeft,
-    top: item.anchor.startsWith("bottom") ? dimensions.height - margin.bottom - height : item.anchor.startsWith("top") ? margin.top : centerTop,
+    left: item.anchor.endsWith("right")
+      ? dimensions.width - margin.right - width
+      : item.anchor.endsWith("left")
+        ? margin.left
+        : centerLeft,
+    top: item.anchor.startsWith("bottom")
+      ? dimensions.height - margin.bottom - height
+      : item.anchor.startsWith("top")
+        ? margin.top
+        : centerTop,
   }
 }
 
@@ -258,7 +280,9 @@ function RenderMendOverlay(props: { item: MendOverlayEntry; dimensions: { width:
   })
   const fallback = (error: unknown) => (
     <box width="100%" height="100%" paddingLeft={1} paddingRight={1} overflow="hidden">
-      <text fg={theme.error} wrapMode="word">Overlay error · {errorMessage(error)}</text>
+      <text fg={theme.error} wrapMode="word">
+        Overlay error · {errorMessage(error)}
+      </text>
     </box>
   )
   return (
@@ -292,11 +316,17 @@ function RenderMendOverlay(props: { item: MendOverlayEntry; dimensions: { width:
       }}
     >
       <Show when={props.item.title}>
-        {(title) => <text fg={theme.textMuted} wrapMode="none">{title()}</text>}
+        {(title) => (
+          <text fg={theme.textMuted} wrapMode="none">
+            {title()}
+          </text>
+        )}
       </Show>
       <ErrorBoundary fallback={fallback}>
         <Show when={primitive() !== undefined} fallback={rendered() as JSX.Element}>
-          <text fg={theme.text} wrapMode="word">{primitive()}</text>
+          <text fg={theme.text} wrapMode="word">
+            {primitive()}
+          </text>
         </Show>
       </ErrorBoundary>
     </box>
@@ -304,7 +334,9 @@ function RenderMendOverlay(props: { item: MendOverlayEntry; dimensions: { width:
 }
 
 function MendOverlayHost(props: { dimensions: { width: number; height: number } }) {
-  return <For each={listMendOverlays()}>{(item) => <RenderMendOverlay item={item} dimensions={props.dimensions} />}</For>
+  return (
+    <For each={listMendOverlays()}>{(item) => <RenderMendOverlay item={item} dimensions={props.dimensions} />}</For>
+  )
 }
 
 function cleanMarketplaceVersion(version: string | undefined) {
@@ -344,7 +376,10 @@ function marketplaceShortSummary(pack: RegistryMarketplacePackManifest) {
 function marketplaceSourceIDFromURL(value: string) {
   const clean = value.trim().replace(/\.git$/, "")
   const last = clean.split(/[/:]/).filter(Boolean).at(-1) || "package-source"
-  const slug = last.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "")
+  const slug = last
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
   return `url-${slug || "package-source"}`.slice(0, 64)
 }
 
@@ -477,9 +512,7 @@ function registryStatusText(status: Awaited<ReturnType<typeof runtimeRegistrySta
     status.lastApply ? `- ${status.lastApply.id} at ${status.lastApply.appliedAt}` : "- none",
     "",
     "Shared config paths:",
-    ...(redactionShared.length
-      ? redactionShared.slice(0, 12).map((item) => `- ${item}`)
-      : ["- none"]),
+    ...(redactionShared.length ? redactionShared.slice(0, 12).map((item) => `- ${item}`) : ["- none"]),
     ...(redactionShared.length > 12 ? [`- ...and ${redactionShared.length - 12} more`] : []),
   ].join("\n")
 }
@@ -551,7 +584,9 @@ export function tui(input: {
   // oxlint-disable-next-line no-async-promise-executor -- intentional: async executor used for sequential setup before resolve
   return new Promise<void>(async (resolve) => {
     if (!canStartInteractiveTui()) {
-      process.stderr.write("Error: mend TUI requires an interactive terminal. Use `mendcode run` for non-interactive input.\n")
+      process.stderr.write(
+        "Error: mend TUI requires an interactive terminal. Use `mendcode run` for non-interactive input.\n",
+      )
       process.exitCode = 1
       resolve()
       return
@@ -727,13 +762,6 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     if (typeof pluginTimer === "object") pluginTimer.unref()
   })
 
-  const permissionConfigSummary = createMemo(() => {
-    const permission = sync.data.config.permission
-    if (permission === undefined) return "No explicit project permission config loaded. Runtime defaults still apply."
-    if (typeof permission === "string") return `permission: ${permission}`
-    return JSON.stringify(permission, null, 2)
-  })
-
   useKeyboard((evt) => {
     if (evt.defaultPrevented || dialog.stack.length > 0) return
     if (!evt.ctrl || evt.name !== "s") return
@@ -751,24 +779,47 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     showAgentModePicker()
   })
 
-  async function showGlobalPermissionStatus() {
+  async function showDefaultPermissionMode() {
     const permissions = await readPermissionsConfig()
-    await DialogAlert.show(
-      dialog,
-      "Permission mode",
-      [
-        `Global default: ${permissions.mode === "full_access" ? "Full Access" : permissions.mode === "smart" ? "Smart Approval" : "Require approval"}`,
-        `Smart reviewer role: ${permissions.reviewerRole}`,
-        "",
-        "Interactive Full Access and Smart Approval are available from a session command palette.",
-        "Open a session, press Ctrl+P, then search for `permission`.",
-        "",
-        "Config permission:",
-        permissionConfigSummary(),
-        "",
-        "--dangerously-skip-permissions only applies to `mendcode run`; it does not toggle an already-running TUI session.",
-      ].join("\n"),
-    )
+    dialog.replace(() => (
+      <DialogSelect
+        title="Default approval mode"
+        current={permissions.mode}
+        options={[
+          {
+            title: "Require approval",
+            value: "approval",
+            description: "Default future sessions to manual permission prompts.",
+          },
+          {
+            title: "Smart Approval",
+            value: "smart",
+            description: "Default future sessions to model-reviewed risky shell prompts.",
+          },
+          {
+            title: "Full Access",
+            value: "full_access",
+            description: "Default future sessions to automatically approve permission prompts.",
+          },
+        ]}
+        onSelect={(option) => {
+          if (option.value !== "approval" && option.value !== "smart" && option.value !== "full_access") return
+          const mode: PermissionMode = option.value
+          void writePermissionsConfig({ mode })
+            .then(() => {
+              toast.show({
+                message: `Default approval mode saved: ${permissionModeTitle(mode)}.`,
+                variant: "success",
+                duration: 4000,
+              })
+              dialog.clear()
+            })
+            .catch((error) => {
+              toast.show({ message: errorMessage(error), variant: "error", duration: 5000 })
+            })
+        }}
+      />
+    ))
   }
 
   useKeyboard((evt) => {
@@ -1004,11 +1055,13 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   const mflowStatusLine = async () => {
     const status = await mflowControlStatus(mend.root)
     const config = status.config
-    const relayLabel = config.relayMode === "local"
-      ? "Local"
-      : config.relayMode === "legacy-public" || (config.relayMode === "public" && config.signaling.includes("mflow-signal.obed0101.deno.net"))
-        ? "Legacy public"
-        : "Public"
+    const relayLabel =
+      config.relayMode === "local"
+        ? "Local"
+        : config.relayMode === "legacy-public" ||
+            (config.relayMode === "public" && config.signaling.includes("mflow-signal.obed0101.deno.net"))
+          ? "Legacy public"
+          : "Public"
     return {
       status,
       line: `${status.mode} · ${config.relayMode} · ${config.room}`,
@@ -1027,7 +1080,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   const showTsmManager = async () => {
     const status = await tsmStatus(mend.root)
     const workspace = status.workspace
-    const currentLabel = workspace.isLinkedWorktree ? `worktree ${workspace.currentBranch || "detached"}` : `base ${workspace.currentBranch || "detached"}`
+    const currentLabel = workspace.isLinkedWorktree
+      ? `worktree ${workspace.currentBranch || "detached"}`
+      : `base ${workspace.currentBranch || "detached"}`
     dialog.replace(() => (
       <DialogSelect
         title="tsm"
@@ -1125,7 +1180,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   const showWorktreeManager = async () => {
     const status = await worktreeStatus(mend.root)
     const workspace = status.workspace
-    const currentLabel = workspace.isLinkedWorktree ? `worktree ${workspace.currentBranch || "detached"}` : `base ${workspace.currentBranch || "detached"}`
+    const currentLabel = workspace.isLinkedWorktree
+      ? `worktree ${workspace.currentBranch || "detached"}`
+      : `base ${workspace.currentBranch || "detached"}`
     dialog.replace(() => (
       <DialogSelect
         title="worktrees"
@@ -1196,7 +1253,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             category: "Actions",
             description: "Show destructive gate; no git commands run.",
             onSelect: async () => {
-              const target = await DialogPrompt.show(dialog, "worktree to remove", { placeholder: "id, branch, or path" })
+              const target = await DialogPrompt.show(dialog, "worktree to remove", {
+                placeholder: "id, branch, or path",
+              })
               if (!target) return
               const result = await worktreeRemove([target], mend.root)
               await showDialogObject(dialog, "Worktree remove preview", result.previewText || result)
@@ -1209,7 +1268,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             category: "Actions",
             description: "Show destructive gate; no reset or clean runs.",
             onSelect: async () => {
-              const target = await DialogPrompt.show(dialog, "worktree to reset", { placeholder: "id, branch, or path" })
+              const target = await DialogPrompt.show(dialog, "worktree to reset", {
+                placeholder: "id, branch, or path",
+              })
               if (!target) return
               const result = await worktreeReset([target], mend.root)
               await showDialogObject(dialog, "Worktree reset preview", result.previewText || result)
@@ -1224,11 +1285,13 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     const current = await mflowStatusLine()
     const status = current.status
     const config = status.config
-    const dashboard = status.daemon.output?.match(/https:\/\/\S+\/dashboard/)?.[0] ?? "https://mflow-signal.obed0101.deno.net/dashboard"
+    const dashboard =
+      status.daemon.output?.match(/https:\/\/\S+\/dashboard/)?.[0] ?? "https://mflow-signal.obed0101.deno.net/dashboard"
     const locksText = status.locks.output?.trim() || "No lock output."
-    const localRelayHelp = config.relayMode === "local" && !status.daemon.running
-      ? "Local relay is configured but not running; use the start commands from mflow details."
-      : undefined
+    const localRelayHelp =
+      config.relayMode === "local" && !status.daemon.running
+        ? "Local relay is configured but not running; use the start commands from mflow details."
+        : undefined
     dialog.replace(() => (
       <DialogSelect
         title="mflow details"
@@ -1243,7 +1306,12 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             onSelect: () => {},
           },
           {
-            title: config.relayMode === "local" ? "Local relay" : config.relayMode === "legacy-public" || config.signaling.includes("mflow-signal.obed0101.deno.net") ? "Legacy public relay" : "Public relay URL",
+            title:
+              config.relayMode === "local"
+                ? "Local relay"
+                : config.relayMode === "legacy-public" || config.signaling.includes("mflow-signal.obed0101.deno.net")
+                  ? "Legacy public relay"
+                  : "Public relay URL",
             value: "relay",
             category: "Connection",
             description: localRelayHelp ?? config.signaling,
@@ -1269,7 +1337,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             title: mflowDaemonValue(status, "Uptime"),
             value: "uptime",
             category: "Daemon",
-            description: status.daemon.running ? `memory ${mflowDaemonValue(status, "Memory")}` : "daemon metrics unavailable while stopped",
+            description: status.daemon.running
+              ? `memory ${mflowDaemonValue(status, "Memory")}`
+              : "daemon metrics unavailable while stopped",
             onSelect: () => {},
           },
           {
@@ -1290,7 +1360,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             title: "Start daemon",
             value: "start-daemon",
             category: "Actions",
-            description: status.config.enabled ? "Run mflow start with saved config." : "Configure and turn on mflow first.",
+            description: status.config.enabled
+              ? "Run mflow start with saved config."
+              : "Configure and turn on mflow first.",
             disabled: !status.config.enabled || status.daemon.running,
             onSelect: () => void startMflowDaemonFromTui(),
           },
@@ -1315,7 +1387,8 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   }
   const configureAndActivateMflowFromTui = async () => {
     const current = (await mflowControlStatus(mend.root)).config
-    const currentIsLegacyPublic = current.relayMode === "legacy-public" || current.signaling.includes("mflow-signal.obed0101.deno.net")
+    const currentIsLegacyPublic =
+      current.relayMode === "legacy-public" || current.signaling.includes("mflow-signal.obed0101.deno.net")
     const showLocalRelayPicker = async (): Promise<string | null> => {
       const scan = await scanMflowRelays()
       return new Promise((resolve) => {
@@ -1339,14 +1412,20 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
                   value: "start",
                   category: "Actions",
                   description: "Show relay-server commands; use localhost after starting one.",
-                  onSelect: () => void showDialogObject(dialog, "Start local mflow relay", guide).then(() => showLocalRelayPicker().then(resolve)),
+                  onSelect: () =>
+                    void showDialogObject(dialog, "Start local mflow relay", guide).then(() =>
+                      showLocalRelayPicker().then(resolve),
+                    ),
                 },
                 {
                   title: "Show LAN relay URL",
                   value: "copy",
                   category: "Actions",
                   description: guide.lanUrlExample,
-                  onSelect: () => void showDialogObject(dialog, "LAN relay URL", guide).then(() => showLocalRelayPicker().then(resolve)),
+                  onSelect: () =>
+                    void showDialogObject(dialog, "LAN relay URL", guide).then(() =>
+                      showLocalRelayPicker().then(resolve),
+                    ),
                 },
                 {
                   title: "Refresh scan",
@@ -1359,7 +1438,8 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
                   title: "Use localhost:8787",
                   value: "localhost",
                   category: "Actions",
-                  description: "Configure MendCode for this relay URL; start the relay separately if scan did not detect it.",
+                  description:
+                    "Configure MendCode for this relay URL; start the relay separately if scan did not detect it.",
                   onSelect: () => resolve(guide.recommendedUrl),
                 },
               ]}
@@ -1374,7 +1454,13 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         () => (
           <DialogSelect
             title="mflow relay"
-            current={currentIsLegacyPublic ? "local" : current.relayMode === "remote" || current.relayMode === "custom" ? "public" : current.relayMode}
+            current={
+              currentIsLegacyPublic
+                ? "local"
+                : current.relayMode === "remote" || current.relayMode === "custom"
+                  ? "public"
+                  : current.relayMode
+            }
             options={[
               {
                 title: "Local mflow relay",
@@ -1407,7 +1493,11 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     }
     if (relayMode === "public") {
       const value = await DialogPrompt.show(dialog, "mflow relay URL", {
-        value: !currentIsLegacyPublic && (current.relayMode === "public" || current.relayMode === "remote" || current.relayMode === "custom") ? current.signaling : "wss://",
+        value:
+          !currentIsLegacyPublic &&
+          (current.relayMode === "public" || current.relayMode === "remote" || current.relayMode === "custom")
+            ? current.signaling
+            : "wss://",
         placeholder: "wss://relay.example.com",
       })
       if (value === null || value === undefined) return
@@ -1449,9 +1539,10 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     })
     if (!secretMode) return
 
-    const secret = secretMode === "manual"
-      ? await DialogPrompt.show(dialog, "mflow room secret", { placeholder: "shared room secret" })
-      : undefined
+    const secret =
+      secretMode === "manual"
+        ? await DialogPrompt.show(dialog, "mflow room secret", { placeholder: "shared room secret" })
+        : undefined
     if (secretMode === "manual" && (secret === null || secret === undefined)) return
 
     const storeSecret = await DialogConfirm.show(
@@ -1468,16 +1559,19 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     })
     if (priorityText === null || priorityText === undefined) return
 
-    await activateMflow({
-      relayMode,
-      signaling,
-      room: room.trim(),
-      secret: secret?.trim(),
-      generateSecret: secretMode === "generate",
-      storeSecret: storeSecret === true,
-      hookPriority: Number(priorityText) || 0,
-      publicRelayNoticeAccepted,
-    }, mend.root)
+    await activateMflow(
+      {
+        relayMode,
+        signaling,
+        room: room.trim(),
+        secret: secret?.trim(),
+        generateSecret: secretMode === "generate",
+        storeSecret: storeSecret === true,
+        hookPriority: Number(priorityText) || 0,
+        publicRelayNoticeAccepted,
+      },
+      mend.root,
+    )
     await mend.reload()
     toast.show({
       variant: "success",
@@ -1506,16 +1600,28 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   }
   const startMflowDaemonFromTui = async () => {
     const result = await startMflowDaemon(mend.root).catch((error) => {
-      toast.show({ variant: "error", message: `mflow daemon did not start: ${error instanceof Error ? error.message : String(error)}`, duration: 7000 })
+      toast.show({
+        variant: "error",
+        message: `mflow daemon did not start: ${error instanceof Error ? error.message : String(error)}`,
+        duration: 7000,
+      })
       return undefined
     })
     if (!result) return
-    toast.show({ variant: "success", message: result.daemon.running ? "mflow daemon started." : "mflow start ran, but daemon is not detected yet.", duration: 5000 })
+    toast.show({
+      variant: "success",
+      message: result.daemon.running ? "mflow daemon started." : "mflow start ran, but daemon is not detected yet.",
+      duration: 5000,
+    })
     await showMflowManager()
   }
   const stopMflowDaemonFromTui = async () => {
     const result = await stopMflowDaemon(mend.root).catch((error) => {
-      toast.show({ variant: "error", message: `mflow daemon did not stop: ${error instanceof Error ? error.message : String(error)}`, duration: 7000 })
+      toast.show({
+        variant: "error",
+        message: `mflow daemon did not stop: ${error instanceof Error ? error.message : String(error)}`,
+        duration: 7000,
+      })
       return undefined
     })
     if (!result) return
@@ -1781,12 +1887,10 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       ),
     })
     if (value === undefined || value === null) return
-    await updatePromptChrome(
-      (profile) => ({
-        ...profile,
-        identity: { ...profile.identity, productName: normalizeProductName(value) },
-      }),
-    )
+    await updatePromptChrome((profile) => ({
+      ...profile,
+      identity: { ...profile.identity, productName: normalizeProductName(value) },
+    }))
   }
   const showHomeMascotText = async () => {
     const value = await DialogPrompt.show(dialog, "Home mascot ASCII", {
@@ -1847,7 +1951,11 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     const current = mend.profile.surfaces.homeWelcome?.mode || "centered"
     const options: Array<{ title: string; value: "centered" | "split"; description: string }> = [
       { title: "Centered", value: "centered", description: "Current centered logo with actions underneath." },
-      { title: "Split", value: "split", description: "Two-column welcome: identity top-left, activity panel top-right." },
+      {
+        title: "Split",
+        value: "split",
+        description: "Two-column welcome: identity top-left, activity panel top-right.",
+      },
     ]
     dialog.replace(() => (
       <DialogSelect
@@ -1877,7 +1985,11 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     const current = mend.profile.surfaces.homeWelcome?.rightPanel || "agentManager"
     const options: Array<{ title: string; value: "actions" | "agentManager"; description: string }> = [
       { title: "Actions", value: "actions", description: "Show Resume, Open commands, and Quit in the split panel." },
-      { title: "Agent View", value: "agentManager", description: "Show global sessions grouped by input, working, and completed." },
+      {
+        title: "Agent View",
+        value: "agentManager",
+        description: "Show global sessions grouped by input, working, and completed.",
+      },
     ]
     dialog.replace(() => (
       <DialogSelect
@@ -2450,70 +2562,86 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     })
     const packageState = await listMendPackages(mend.root)
     let keepTemporarySource = false
-    dialog.replace(() => (
-      <DialogSelect
-        title="MendCode Marketplace"
-        options={result.results.map((pack) => {
-          const badge = marketplaceInstallBadge(pack.id, packageState.installed)
-          return {
-          title: marketplaceBadgeTitle(pack.title || pack.id, badge),
-          value: pack.id,
-          category: marketplaceStatusCategory({ badge, sourceID, channel: pack.channel }),
-          description: marketplaceShortSummary(pack),
-          searchText: marketplaceSearchText([pack.id, pack.title, pack.description, marketplaceRuntimeSummary(pack), sourceID, pack.channel, badge, ...(pack.tags || [])]),
-          footer: [cleanMarketplaceVersion(pack.version), badge].filter(Boolean).join(" · "),
-          onSelect: async () => {
-            try {
-              showDialogLoading("Loading package", `Reading ${pack.id}...`)
-              const detail = await runtimeRegistryShow(pack.id, sourceID, sourceRoot)
-              if (sourceID === "local") {
-                await DialogAlert.show(dialog, detail.pack.title || detail.pack.id, marketplacePackDetails(detail.pack, sourceID))
-                return
-              }
-              const confirmed = await DialogConfirm.show(
-                dialog,
-                detail.pack.title || detail.pack.id,
-                [
-                  marketplacePackDetails(detail.pack, sourceID),
-                  "",
-                  ...marketplaceSourceSafetyLines({
-                    sourceID,
-                    sourceType: detail.source.type,
-                    url: detail.source.url,
-                    digest: detail.digest,
-                    signature: detail.pack.signature,
-                  }),
-                  "",
-                  "Install this package overlay for the next message?",
-                  "",
-                  "Will not touch local skills/modes/sessions/auth.",
-                ].join("\n"),
-              )
-              if (!confirmed) {
-                if (cleanupSourceOnClose) await runtimeRegistryRemove(sourceID, mend.root).catch(() => undefined)
-                return
-              }
-              const result = await runtimeRegistryInstallPack(detail.pack.id, sourceID, mend.root)
-              keepTemporarySource = true
-              await mend.reload()
-              toast.show({
-                variant: "success",
-                message: `Package installed: ${result.package.id}.`,
-                duration: 5000,
-              })
-              await showPackageManager()
-            } catch (error) {
-              if (cleanupSourceOnClose) await runtimeRegistryRemove(sourceID, mend.root).catch(() => undefined)
-              toast.show({ variant: "error", message: errorMessage(error), duration: 7000 })
+    dialog.replace(
+      () => (
+        <DialogSelect
+          title="MendCode Marketplace"
+          options={result.results.map((pack) => {
+            const badge = marketplaceInstallBadge(pack.id, packageState.installed)
+            return {
+              title: marketplaceBadgeTitle(pack.title || pack.id, badge),
+              value: pack.id,
+              category: marketplaceStatusCategory({ badge, sourceID, channel: pack.channel }),
+              description: marketplaceShortSummary(pack),
+              searchText: marketplaceSearchText([
+                pack.id,
+                pack.title,
+                pack.description,
+                marketplaceRuntimeSummary(pack),
+                sourceID,
+                pack.channel,
+                badge,
+                ...(pack.tags || []),
+              ]),
+              footer: [cleanMarketplaceVersion(pack.version), badge].filter(Boolean).join(" · "),
+              onSelect: async () => {
+                try {
+                  showDialogLoading("Loading package", `Reading ${pack.id}...`)
+                  const detail = await runtimeRegistryShow(pack.id, sourceID, sourceRoot)
+                  if (sourceID === "local") {
+                    await DialogAlert.show(
+                      dialog,
+                      detail.pack.title || detail.pack.id,
+                      marketplacePackDetails(detail.pack, sourceID),
+                    )
+                    return
+                  }
+                  const confirmed = await DialogConfirm.show(
+                    dialog,
+                    detail.pack.title || detail.pack.id,
+                    [
+                      marketplacePackDetails(detail.pack, sourceID),
+                      "",
+                      ...marketplaceSourceSafetyLines({
+                        sourceID,
+                        sourceType: detail.source.type,
+                        url: detail.source.url,
+                        digest: detail.digest,
+                        signature: detail.pack.signature,
+                      }),
+                      "",
+                      "Install this package overlay for the next message?",
+                      "",
+                      "Will not touch local skills/modes/sessions/auth.",
+                    ].join("\n"),
+                  )
+                  if (!confirmed) {
+                    if (cleanupSourceOnClose) await runtimeRegistryRemove(sourceID, mend.root).catch(() => undefined)
+                    return
+                  }
+                  const result = await runtimeRegistryInstallPack(detail.pack.id, sourceID, mend.root)
+                  keepTemporarySource = true
+                  await mend.reload()
+                  toast.show({
+                    variant: "success",
+                    message: `Package installed: ${result.package.id}.`,
+                    duration: 5000,
+                  })
+                  await showPackageManager()
+                } catch (error) {
+                  if (cleanupSourceOnClose) await runtimeRegistryRemove(sourceID, mend.root).catch(() => undefined)
+                  toast.show({ variant: "error", message: errorMessage(error), duration: 7000 })
+                }
+              },
             }
-          },
-          }
-        })}
-      />
-    ), () => {
-      if (!cleanupSourceOnClose || keepTemporarySource) return
-      void runtimeRegistryRemove(sourceID, mend.root).catch(() => undefined)
-    })
+          })}
+        />
+      ),
+      () => {
+        if (!cleanupSourceOnClose || keepTemporarySource) return
+        void runtimeRegistryRemove(sourceID, mend.root).catch(() => undefined)
+      },
+    )
     dialog.setSize("xlarge")
   }
   const refreshPackagesRuntime = async () => {
@@ -2527,29 +2655,49 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     const title = await DialogPrompt.show(dialog, "Package title", {
       value: metadata.title || "",
       placeholder: "Starter Pack",
-      description: () => <text fg={theme.textMuted}>Human-facing package name shown in local package lists and registry previews.</text>,
+      description: () => (
+        <text fg={theme.textMuted}>Human-facing package name shown in local package lists and registry previews.</text>
+      ),
     })
     if (title === undefined || title === null) return
     const id = await DialogPrompt.show(dialog, "Package id", {
       value: metadata.id || "",
       placeholder: "starter-pack",
-      description: () => <text fg={theme.textMuted}>Stable package id. Blank keeps the generated local runtime id.</text>,
+      description: () => (
+        <text fg={theme.textMuted}>Stable package id. Blank keeps the generated local runtime id.</text>
+      ),
     })
     if (id === undefined || id === null) return
     const description = await DialogPrompt.show(dialog, "Package description", {
       value: metadata.description || "",
       placeholder: "Reusable MendCode starter package",
-      description: () => <text fg={theme.textMuted}>Short summary for package search, install previews, and show output.</text>,
+      description: () => (
+        <text fg={theme.textMuted}>Short summary for package search, install previews, and show output.</text>
+      ),
     })
     if (description === undefined || description === null) return
     const version = await DialogPrompt.show(dialog, "Package version", {
       value: metadata.version || "0.1.0",
       placeholder: "0.1.0",
-      description: () => <text fg={theme.textMuted}>Optional semantic package version. This is not the manifest schema version.</text>,
+      description: () => (
+        <text fg={theme.textMuted}>Optional semantic package version. This is not the manifest schema version.</text>
+      ),
     })
     if (version === undefined || version === null) return
     const selection: RuntimePackSelection = { ...(metadata.selection as RuntimePackSelection) }
-    type PackageFileCategoryKey = "commands" | "agents" | "modes" | "skills" | "plugins" | "tools" | "prompts" | "mcp" | "context" | "pages" | "widgets" | "extensions"
+    type PackageFileCategoryKey =
+      | "commands"
+      | "agents"
+      | "modes"
+      | "skills"
+      | "plugins"
+      | "tools"
+      | "prompts"
+      | "mcp"
+      | "context"
+      | "pages"
+      | "widgets"
+      | "extensions"
     const fileCategories: Array<{ key: PackageFileCategoryKey; title: string; files: string[] }> = [
       { key: "commands", title: "Commands", files: candidates.commands },
       { key: "agents", title: "Agents", files: candidates.agents },
@@ -2564,7 +2712,10 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       { key: "widgets", title: "TUI widgets", files: candidates.widgets },
       { key: "extensions", title: "Extension support files", files: candidates.extensions },
     ]
-    const boolCategories: Array<{ key: "tuiProfile" | "worktreePolicy" | "models" | "focus" | "budget" | "memory" | "permissions"; title: string }> = [
+    const boolCategories: Array<{
+      key: "tuiProfile" | "worktreePolicy" | "models" | "focus" | "budget" | "memory" | "permissions"
+      title: string
+    }> = [
       { key: "models", title: "Model roles (global config)" },
       { key: "focus", title: "Focus config (global config)" },
       { key: "budget", title: "Budget policy (global config)" },
@@ -2573,36 +2724,36 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       { key: "tuiProfile", title: "TUI profile (global config)" },
       { key: "worktreePolicy", title: "Worktree policy (global config)" },
     ]
-    const selectedSet = (key: PackageFileCategoryKey, files: string[]) =>
-      new Set((selection[key] ?? files) as string[])
-    const selectedCount = (key: PackageFileCategoryKey, files: string[]) =>
-      selectedSet(key, files).size
+    const selectedSet = (key: PackageFileCategoryKey, files: string[]) => new Set((selection[key] ?? files) as string[])
+    const selectedCount = (key: PackageFileCategoryKey, files: string[]) => selectedSet(key, files).size
     const visibleFileCategories = () =>
       fileCategories.filter((category) => category.files.length > 0 || selectedCount(category.key, category.files) > 0)
-    const boolEnabled = (key: "tuiProfile" | "worktreePolicy" | "models" | "focus" | "budget" | "memory" | "permissions") =>
-      selection[key] !== false
+    const boolEnabled = (
+      key: "tuiProfile" | "worktreePolicy" | "models" | "focus" | "budget" | "memory" | "permissions",
+    ) => selection[key] !== false
     const configSelectedCount = () => boolCategories.filter((category) => boolEnabled(category.key)).length
     const packageSummaryLine = () =>
       `${selectedCount("commands", candidates.commands)} cmd · ${selectedCount("agents", candidates.agents)} agents · ${selectedCount("skills", candidates.skills)} skills · ${selectedCount("tools", candidates.tools)} tools · ${configSelectedCount()}/${boolCategories.length} config`
-    const packageSummaryText = () => [
-      `Commands: ${selectedCount("commands", candidates.commands)}/${candidates.commands.length}`,
-      `Agents/subagents: ${selectedCount("agents", candidates.agents)}/${candidates.agents.length}`,
-      `Modes: ${selectedCount("modes", candidates.modes)}/${candidates.modes.length}`,
-      `Skills: ${selectedCount("skills", candidates.skills)}/${candidates.skills.length}`,
-      `Plugins: ${selectedCount("plugins", candidates.plugins)}/${candidates.plugins.length}`,
-      `Tool calls: ${selectedCount("tools", candidates.tools)}/${candidates.tools.length}`,
-      `Prompt templates: ${selectedCount("prompts", candidates.prompts)}/${candidates.prompts.length}`,
-      `MCP files: ${selectedCount("mcp", candidates.mcp)}/${candidates.mcp.length}`,
-      `Context files: ${selectedCount("context", candidates.context)}/${candidates.context.length}`,
-      `TUI pages: ${selectedCount("pages", candidates.pages)}/${candidates.pages.length}`,
-      `TUI widgets: ${selectedCount("widgets", candidates.widgets)}/${candidates.widgets.length}`,
-      `Extension support files: ${selectedCount("extensions", candidates.extensions)}/${candidates.extensions.length}`,
-      `Config groups: ${configSelectedCount()}/${boolCategories.length}`,
-      "",
-      "Package source: global MendCode configuration, not the currently opened project folder.",
-      "Global skills from supported legacy and MendCode skill folders are copied into this package authoring snapshot.",
-      "Original global skills/config are not deleted or moved.",
-    ].join("\n")
+    const packageSummaryText = () =>
+      [
+        `Commands: ${selectedCount("commands", candidates.commands)}/${candidates.commands.length}`,
+        `Agents/subagents: ${selectedCount("agents", candidates.agents)}/${candidates.agents.length}`,
+        `Modes: ${selectedCount("modes", candidates.modes)}/${candidates.modes.length}`,
+        `Skills: ${selectedCount("skills", candidates.skills)}/${candidates.skills.length}`,
+        `Plugins: ${selectedCount("plugins", candidates.plugins)}/${candidates.plugins.length}`,
+        `Tool calls: ${selectedCount("tools", candidates.tools)}/${candidates.tools.length}`,
+        `Prompt templates: ${selectedCount("prompts", candidates.prompts)}/${candidates.prompts.length}`,
+        `MCP files: ${selectedCount("mcp", candidates.mcp)}/${candidates.mcp.length}`,
+        `Context files: ${selectedCount("context", candidates.context)}/${candidates.context.length}`,
+        `TUI pages: ${selectedCount("pages", candidates.pages)}/${candidates.pages.length}`,
+        `TUI widgets: ${selectedCount("widgets", candidates.widgets)}/${candidates.widgets.length}`,
+        `Extension support files: ${selectedCount("extensions", candidates.extensions)}/${candidates.extensions.length}`,
+        `Config groups: ${configSelectedCount()}/${boolCategories.length}`,
+        "",
+        "Package source: global MendCode configuration, not the currently opened project folder.",
+        "Global skills from supported legacy and MendCode skill folders are copied into this package authoring snapshot.",
+        "Original global skills/config are not deleted or moved.",
+      ].join("\n")
     const openFileCategory = (category: (typeof fileCategories)[number]) => {
       const chosen = selectedSet(category.key, category.files)
       dialog.replace(() => (
@@ -2712,12 +2863,15 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
                   description: "Choose files.",
                   onSelect: () => openFileCategory(category),
                 }))
-              : [{
-                  title: "No global artifact files found",
-                  value: "no-project-files",
-                  category: "Global files",
-                  description: "No global MendCode commands, agents, modes, skills, plugins, prompts, MCP files, or widgets were found.",
-                }]),
+              : [
+                  {
+                    title: "No global artifact files found",
+                    value: "no-project-files",
+                    category: "Global files",
+                    description:
+                      "No global MendCode commands, agents, modes, skills, plugins, prompts, MCP files, or widgets were found.",
+                  },
+                ]),
             ...boolCategories.map((category) => ({
               title: `${boolEnabled(category.key) ? "[x]" : "[ ]"} ${category.title}`,
               value: category.key,
@@ -2756,23 +2910,24 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     activeAfter: string[]
     files: string[]
     extra?: string[]
-  }) => [
-    input.action,
-    "",
-    `Active before: ${input.activeBefore.join(", ") || "none"}`,
-    `Active after: ${input.activeAfter.join(", ") || "none"}`,
-    "",
-    "Runtime updated for next message:",
-    packageArtifactSummary(input.files),
-    ...(input.extra?.length ? ["", ...input.extra] : []),
-    "",
-    "Will not touch:",
-    "- open chat/session history",
-    "- local .mendcode/skills, modes, commands, plugins",
-    "- provider auth, runs, cache, generated history",
-    "",
-    "If the current mode disappears, MendCode will switch to the first available mode and show a notification.",
-  ].join("\n")
+  }) =>
+    [
+      input.action,
+      "",
+      `Active before: ${input.activeBefore.join(", ") || "none"}`,
+      `Active after: ${input.activeAfter.join(", ") || "none"}`,
+      "",
+      "Runtime updated for next message:",
+      packageArtifactSummary(input.files),
+      ...(input.extra?.length ? ["", ...input.extra] : []),
+      "",
+      "Will not touch:",
+      "- open chat/session history",
+      "- local .mendcode/skills, modes, commands, plugins",
+      "- provider auth, runs, cache, generated history",
+      "",
+      "If the current mode disappears, MendCode will switch to the first available mode and show a notification.",
+    ].join("\n")
   const confirmPackageTransition = async (input: Parameters<typeof packageTransitionText>[0]) =>
     DialogConfirm.show(dialog, input.title, packageTransitionText(input))
   const showPackageManager = async () => {
@@ -2798,7 +2953,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
               const source = await DialogPrompt.show(dialog, "Source id or GitHub URL", {
                 value: "official",
                 placeholder: "official or https://github.com/org/mendcode-package",
-                description: () => <text fg={theme.textMuted}>Paste a saved source id or a public GitHub repo URL.</text>,
+                description: () => (
+                  <text fg={theme.textMuted}>Paste a saved source id or a public GitHub repo URL.</text>
+                ),
               })
               if (!source?.trim()) return
               const sourceText = source.trim()
@@ -2806,7 +2963,8 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
               if (sourceLooksLikeURL && !isPublicGitHubMarketplaceURL(sourceText)) {
                 toast.show({
                   variant: "error",
-                  message: "Package URL must be public https://github.com/<org>/<repo> with no query, hash, or credentials.",
+                  message:
+                    "Package URL must be public https://github.com/<org>/<repo> with no query, hash, or credentials.",
                   duration: 7000,
                 })
                 return
@@ -2816,15 +2974,18 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
               try {
                 if (sourceLooksLikeURL) {
                   showDialogLoading("Adding source", `Saving ${sourceID}...`)
-                  await runtimeRegistryAdd([
-                    sourceID,
-                    "--type",
-                    "github",
-                    "--url",
-                    sourceText,
-                    "--note",
-                    "TUI-added GitHub marketplace package source.",
-                  ], mend.root)
+                  await runtimeRegistryAdd(
+                    [
+                      sourceID,
+                      "--type",
+                      "github",
+                      "--url",
+                      sourceText,
+                      "--note",
+                      "TUI-added GitHub marketplace package source.",
+                    ],
+                    mend.root,
+                  )
                   sourceAdded = true
                 }
                 showDialogLoading("Previewing source", `Checking ${sourceID}...`)
@@ -2894,34 +3055,49 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             onSelect: () => void showRegistryMarketplace("official"),
           },
           ...(state.enabled.length
-            ? [{
-                title: "Deselect all packages",
-                value: "disable-all",
-                category: "Active",
-                description: "Return to local config.",
-                onSelect: async () => {
-                  const files = state.enabled.flatMap((item) => item.copied)
-                  const confirmed = await confirmPackageTransition({
-                    title: "Deselect all packages",
-                    action: "Deselect every active package and return to local-only runtime.",
-                    activeBefore: state.active,
-                    activeAfter: [],
-                    files,
-                  })
-                  if (!confirmed) return
-                  await disableAllMendPackages(mend.root)
-                  await refreshPackagesRuntime()
-                  toast.show({ variant: "success", message: "All packages deselected.", duration: 4000 })
-                  await showPackageManager()
+            ? [
+                {
+                  title: "Deselect all packages",
+                  value: "disable-all",
+                  category: "Active",
+                  description: "Return to local config.",
+                  onSelect: async () => {
+                    const files = state.enabled.flatMap((item) => item.copied)
+                    const confirmed = await confirmPackageTransition({
+                      title: "Deselect all packages",
+                      action: "Deselect every active package and return to local-only runtime.",
+                      activeBefore: state.active,
+                      activeAfter: [],
+                      files,
+                    })
+                    if (!confirmed) return
+                    await disableAllMendPackages(mend.root)
+                    await refreshPackagesRuntime()
+                    toast.show({ variant: "success", message: "All packages deselected.", duration: 4000 })
+                    await showPackageManager()
+                  },
                 },
-              }]
+              ]
             : []),
           ...installed.map((item) => ({
             title: marketplaceBadgeTitle(item.title || item.id, item.enabled ? "active" : "installed"),
             value: item.id,
-            category: marketplaceStatusCategory({ badge: item.enabled ? "active" : "installed", channel: item.channel, sourceID: item.sourceType }),
+            category: marketplaceStatusCategory({
+              badge: item.enabled ? "active" : "installed",
+              channel: item.channel,
+              sourceID: item.sourceType,
+            }),
             description: item.description || "Installed overlay.",
-            searchText: marketplaceSearchText([item.id, item.title, item.description, item.root, item.version, item.channel, item.sourceType, item.enabled ? "active enabled selected" : "installed inactive disabled"]),
+            searchText: marketplaceSearchText([
+              item.id,
+              item.title,
+              item.description,
+              item.root,
+              item.version,
+              item.channel,
+              item.sourceType,
+              item.enabled ? "active enabled selected" : "installed inactive disabled",
+            ]),
             footer: item.version || item.channel || item.sourceType,
             onSelect: async () => {
               const activeAfter = item.enabled
@@ -2933,7 +3109,10 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
                 activeBefore: state.active,
                 activeAfter,
                 files: item.copied,
-                extra: [`Package root: ${item.root}`, `Version/channel: ${item.version || item.channel || item.sourceType}`],
+                extra: [
+                  `Package root: ${item.root}`,
+                  `Version/channel: ${item.version || item.channel || item.sourceType}`,
+                ],
               })
               if (!confirmed) return
               await setMendPackageEnabled(item.id, !item.enabled, mend.root)
@@ -2958,7 +3137,10 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
                 activeBefore: state.active,
                 activeAfter: state.active.filter((id) => id !== item.id),
                 files: item.copied,
-                extra: ["The downloaded overlay copy will be deleted.", "Local source/customization files stay on disk."],
+                extra: [
+                  "The downloaded overlay copy will be deleted.",
+                  "Local source/customization files stay on disk.",
+                ],
               })
               if (!confirmed) return
               await removeMendPackage(item.id, mend.root)
@@ -3028,7 +3210,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       "If the request is to stop, remove, delete, pause, resume, or run the current loop and no loop id is visible, call the matching `loop` action without `workflowID`; the tool resolves the current session's contextual loop.",
       "Ask with the `question` tool only when a critical setting is missing: objective, budget mode, iteration cap or unbounded mode, cadence, model/provider, max wall-clock runtime, permission mode, or stop condition.",
       "Before activating, design the loop strategy from the goal: choose `budgetMode` as `fixed` only for exactly-N iteration jobs, `max-goal` when maxTurns is a budget cap to complete a goal as early as possible, and `unbounded-monitor` for ongoing monitors. For `max-goal`, provide concrete `completionCriteria`, `successChecks`, `targetTurns`, and `reserveTurns`; do not divide the work across every max iteration. Aim to finish in the minimum responsible turns, then use remaining turns only for retry/verification if needed. Set `notifyOwnerOnComplete: true` for goal-completion loops so the parent session gets a completion summary.",
-      "Default to report-only unless I explicitly allow edits. Spanish/English requests such as codear, implementar, fixear, editar, hacer cambios, probar, compilar, run tests, or build are explicit edit permission for the loop; use permissionMode `normal` or `custom`, set `reportOnly: false`, and keep safety gates for push/merge/release/destructive shell. If I choose a model and reasoning effort/variant, pass `model` as provider/model and pass the effort as `variant` (for example `variant: \"medium\"`), or use provider/model#variant. For interval cadence, set `triggerMode: \"interval\"` and convert the interval to `intervalMs`. Preserve the current session model by omitting `model` unless I choose one.",
+      'Default to report-only unless I explicitly allow edits. Spanish/English requests such as codear, implementar, fixear, editar, hacer cambios, probar, compilar, run tests, or build are explicit edit permission for the loop; use permissionMode `normal` or `custom`, set `reportOnly: false`, and keep safety gates for push/merge/release/destructive shell. If I choose a model and reasoning effort/variant, pass `model` as provider/model and pass the effort as `variant` (for example `variant: "medium"`), or use provider/model#variant. For interval cadence, set `triggerMode: "interval"` and convert the interval to `intervalMs`. Preserve the current session model by omitting `model` unless I choose one.',
       "Do not hand-render Markdown tables or duplicate status cards after the tool call. Let the Loop Workflow card render from tool metadata, then give a one-line confirmation.",
     ].join("\n")
   }
@@ -3164,9 +3346,10 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
             title: proposal.scope === "global" ? "[scope] Move to project" : "[scope] Move to global",
             value: "scope",
             category: proposal.scope,
-            description: (proposal.operation ?? "add") === "add"
-              ? "Change where this memory will live before applying it."
-              : "Targeted update/remove proposals keep the scope of their target memory.",
+            description:
+              (proposal.operation ?? "add") === "add"
+                ? "Change where this memory will live before applying it."
+                : "Targeted update/remove proposals keep the scope of their target memory.",
             disabled: proposal.status !== "pending" || (proposal.operation ?? "add") !== "add",
             onSelect: () =>
               void changeMemoryProposalScope(proposal, proposal.scope === "global" ? "project" : "global"),
@@ -3337,7 +3520,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         memoryProposalDescription(proposal),
         proposal.text,
         proposal.reason ? `Why: ${proposal.reason}` : "",
-      ].filter(Boolean).join("\n\n"),
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
       previewMeta: `${proposal.scope} · ${proposal.sensitivity} · confidence ${Math.round((proposal.confidence ?? 0) * 100)}% · durability ${Math.round((proposal.durability ?? 0) * 100)}% · change risk ${Math.round((proposal.changeRisk ?? 0) * 100)}%`,
       onSelect: () => showMemoryProposalActions(proposal),
     }))
@@ -3379,9 +3564,8 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           ),
       },
       {
-        title: status.input && status.output
-          ? "[on] Memory input and learning enabled"
-          : "Enable memory input and learning",
+        title:
+          status.input && status.output ? "[on] Memory input and learning enabled" : "Enable memory input and learning",
         value: "memory-enable-io",
         category: "Settings",
         description: "Inject memory and create approval-gated proposals after chats.",
@@ -3405,10 +3589,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           "Saved memory entries and pending proposals remain on disk, but they will not be injected or generated while memory is disabled.",
         previewMeta: "project config",
         onSelect: () =>
-          void updateMemoryConfigFromDialog(
-            { enabled: false, use: false, generate: false },
-            "Memory disabled.",
-          ),
+          void updateMemoryConfigFromDialog({ enabled: false, use: false, generate: false }, "Memory disabled."),
       },
     ]
     const manualActionOptions: MemoryManagerOption[] = [
@@ -3485,12 +3666,17 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   }
   command.register(() => [
     {
-      title: "Permission mode",
+      title: "Approval mode",
       value: "mendcode.permission.status",
       category: mendCategory,
-      description: "Show current permission config and where to enable Smart Approval or Full Access",
-      enabled: route.data.type !== "session",
-      onSelect: () => void showGlobalPermissionStatus(),
+      description: "Set the default Approval Mode for a future session",
+      slash: { name: "permission", aliases: ["permissions", "approval"] },
+      enabled: route.data.type === "home",
+      onSelect: () => {
+        void showDefaultPermissionMode().catch((error) => {
+          toast.show({ message: errorMessage(error), variant: "error", duration: 5000 })
+        })
+      },
     },
     {
       title: "Status",
@@ -3719,7 +3905,11 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       value: "mendcode.registry.status",
       category: mendCategory,
       onSelect: async () => {
-        await DialogAlert.show(dialog, "MendCode Runtime Registry", registryStatusText(await runtimeRegistryStatus(mend.root)))
+        await DialogAlert.show(
+          dialog,
+          "MendCode Runtime Registry",
+          registryStatusText(await runtimeRegistryStatus(mend.root)),
+        )
       },
     },
     {
@@ -3738,7 +3928,27 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       slash: { name: "memory-center", aliases: ["memories"] },
       onSelect: () => {
         dialog.clear()
-        route.navigate({ type: "memory", returnTo: route.data.type === "session" ? { type: "session", sessionID: route.data.sessionID } : { type: "home" } })
+        route.navigate({
+          type: "memory",
+          returnTo:
+            route.data.type === "session" ? { type: "session", sessionID: route.data.sessionID } : { type: "home" },
+        })
+      },
+    },
+    {
+      title: "Open Memory Graph",
+      value: "mendcode.memory.graph",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "memory-graph", aliases: ["graph"] },
+      onSelect: () => {
+        dialog.clear()
+        route.navigate({
+          type: "memory",
+          view: "graph",
+          returnTo:
+            route.data.type === "session" ? { type: "session", sessionID: route.data.sessionID } : { type: "home" },
+        })
       },
     },
     {
@@ -3749,7 +3959,11 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       onSelect: async (dialog) => {
         await writeProjectMemoryConfig({ enabled: true, use: true, generate: false }, memoryRoot())
         await mend.reload()
-        toast.show({ variant: "success", message: "Memory input enabled. Output proposals remain off.", duration: 4000 })
+        toast.show({
+          variant: "success",
+          message: "Memory input enabled. Output proposals remain off.",
+          duration: 4000,
+        })
         dialog.clear()
       },
     },
@@ -4309,6 +4523,41 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     })
   })
 
+  const backgroundTaskNotificationIDs = new Set<string>()
+  event.subscribe((incoming) => {
+    const evt = incoming as unknown as {
+      type?: string
+      properties?: {
+        eventID?: string
+        state?: "needs_input" | "completed" | "failed" | "cancelled" | "interrupted"
+        title?: string
+        summary?: string
+        error?: string
+      }
+    }
+    if (evt.type !== "background_task.notification" || !evt.properties?.eventID || !evt.properties.state) return
+    if (backgroundTaskNotificationIDs.has(evt.properties.eventID)) return
+    if (backgroundTaskNotificationIDs.size >= 500) {
+      const oldest = backgroundTaskNotificationIDs.values().next().value
+      if (oldest) backgroundTaskNotificationIDs.delete(oldest)
+    }
+    backgroundTaskNotificationIDs.add(evt.properties.eventID)
+    const state = evt.properties.state
+    toast.show({
+      title:
+        state === "completed"
+          ? "Subagent completed"
+          : state === "needs_input"
+            ? "Subagent needs input"
+            : "Subagent stopped",
+      message: [evt.properties.title, evt.properties.error ?? evt.properties.summary ?? state]
+        .filter(Boolean)
+        .join(": "),
+      variant: state === "failed" ? "error" : state === "completed" ? "success" : "info",
+      duration: state === "needs_input" || state === "failed" ? 8000 : 5000,
+    })
+  })
+
   event.on(TuiEvent.SessionSelect.type, (evt) => {
     route.navigate({
       type: "session",
@@ -4402,7 +4651,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     return value as JSX.Element
   })
   const startupReady = createMemo(() => ready() && pluginsReady() && sync.status !== "loading")
-  const startupMessage = createMemo(() => startupLoadingText({ pluginsReady: pluginsReady(), syncLoading: sync.status === "loading" }))
+  const startupMessage = createMemo(() =>
+    startupLoadingText({ pluginsReady: pluginsReady(), syncLoading: sync.status === "loading" }),
+  )
 
   return (
     <box
@@ -4447,7 +4698,11 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           </Match>
         </Switch>
       </Show>
-      <ErrorBoundary fallback={(error) => <PluginRouteError id={route.data.type === "plugin" ? route.data.id : "unknown"} error={error} />}>
+      <ErrorBoundary
+        fallback={(error) => (
+          <PluginRouteError id={route.data.type === "plugin" ? route.data.id : "unknown"} error={error} />
+        )}
+      >
         {plugin()}
       </ErrorBoundary>
       <TuiPluginRuntime.Slot name="app" />

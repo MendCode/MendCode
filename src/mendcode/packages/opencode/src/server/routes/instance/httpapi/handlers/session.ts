@@ -275,7 +275,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         after: ctx.query.after,
         view: ctx.query.view,
       })
-      if (!page.cursor) return page.items
+      if (!page.cursor && !page.sparse) return page.items
+
+      if (!page.cursor) {
+        return HttpServerResponse.jsonUnsafe(page.items, {
+          headers: {
+            "Access-Control-Expose-Headers": "Link, X-Next-Cursor, X-Message-View-Sparse",
+            "X-Message-View-Sparse": "true",
+          },
+        })
+      }
 
       const request = yield* HttpServerRequest.HttpServerRequest
       // toURL() honors the Host + x-forwarded-proto headers, so the Link
@@ -286,9 +295,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       else url.searchParams.set("before", page.cursor)
       return HttpServerResponse.jsonUnsafe(page.items, {
         headers: {
-          "Access-Control-Expose-Headers": "Link, X-Next-Cursor",
+          "Access-Control-Expose-Headers": "Link, X-Next-Cursor, X-Message-View-Sparse",
           Link: `<${url.toString()}>; rel="next"`,
           "X-Next-Cursor": page.cursor,
+          ...(page.sparse ? { "X-Message-View-Sparse": "true" } : {}),
         },
       })
     })
@@ -360,6 +370,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* promptSvc.cancel(ctx.params.sessionID)
+      return true
+    })
+
+    const interrupt = Effect.fn("SessionHttpApi.interrupt")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* promptSvc.interrupt(ctx.params.sessionID)
       return true
     })
 
@@ -546,6 +561,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("update", update)
       .handle("fork", fork)
       .handle("abort", abort)
+      .handle("interrupt", interrupt)
       .handle("init", init)
       .handle("share", share)
       .handle("unshare", unshare)

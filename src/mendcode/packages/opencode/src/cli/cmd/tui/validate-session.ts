@@ -7,6 +7,7 @@ export async function validateSession(input: {
   directory?: string
   fetch?: typeof fetch
   headers?: RequestInit["headers"]
+  remote?: boolean
 }) {
   if (!input.sessionID) return
 
@@ -14,6 +15,7 @@ export async function validateSession(input: {
   if (!result.success) {
     throw new Error(`Invalid session ID: ${result.error.issues.at(0)?.message ?? "unknown error"}`)
   }
+  if (input.remote === false) return result.data
 
   await createOpencodeClient({
     baseUrl: input.url,
@@ -21,4 +23,5 @@ export async function validateSession(input: {
     fetch: input.fetch,
     headers: input.headers,
   }).session.get({ sessionID: result.data }, { throwOnError: true })
+  return result.data
 }

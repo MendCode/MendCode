@@ -4,7 +4,7 @@ import { mkdir, writeFile } from "fs/promises"
 import path from "path"
 import { mergeDeep } from "remeda"
 import { Global } from "@mendcode/core/global"
-import { generatedInternalAgentModelConfig, modelRoleProjection, modelsConfigToYaml, readGlobalModelsConfig, resolveModelRoles } from "./models"
+import { generatedInternalAgentModelConfig, modelRoleProjection, modelsConfigToYaml, readGlobalModelsConfig, resolveGlobalModelsConfigPath, resolveModelRoles } from "./models"
 import { readMendMcpConfig } from "./mcp"
 import { mendPaths } from "./paths"
 import { defaultTuiProfile } from "../profile"
@@ -453,6 +453,7 @@ export function generatedConfigNeedsSync(root?: string) {
   const inputs = [
     paths.mendConfig,
     paths.modelsConfig,
+    resolveGlobalModelsConfigPath(),
     paths.packageState,
     ...listFiles(paths.root, paths.mcpDir, { maxDepth: 8 })
       .filter((file) => file.endsWith(".json") || file.endsWith(".jsonc"))

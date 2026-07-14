@@ -3,12 +3,17 @@ import { renderAsciiText } from "@/cli/cmd/tui/component/ascii-text"
 import {
   configuredHomeLogoText,
   fittedHomeLogoText,
+  formatHomeAgentInboxSummary,
   formatHomeAgentViewSummary,
-  formatHomeCoordinatorSummary,
   homeAgentViewElapsedLabel,
+  homeAgentInboxSummaryLines,
+  homeAgentInboxSummaryVisible,
   homeAgentViewPanelWidth,
   homeAgentViewRecentlyActive,
   homeAgentViewRowLayout,
+  homeAgentViewSectionGapVisible,
+  homeAgentViewSummaryLines,
+  homeAgentViewSummaryVisible,
   homePromptPlaceholderText,
   homeRightPanelContainerWidth,
   homeSurfaceTextLayout,
@@ -137,6 +142,25 @@ describe("Home split welcome sizing", () => {
     expect(homeAgentViewRecentlyActive({ now, graceMs: 6_000 })).toBe(false)
   })
 
+  test("only shows the Agent View headline when waiting, looping, or working is active", () => {
+    expect(homeAgentViewSummaryVisible({ waiting: 0, looping: 0, working: 0 })).toBe(false)
+    expect(homeAgentViewSummaryVisible({ waiting: 1, looping: 0, working: 0 })).toBe(true)
+    expect(homeAgentViewSummaryVisible({ waiting: 0, looping: 1, working: 0 })).toBe(true)
+    expect(homeAgentViewSummaryVisible({ waiting: 0, looping: 0, working: 1 })).toBe(true)
+  })
+
+  test("only shows the inbox headline when pending or active commands exist", () => {
+    expect(homeAgentInboxSummaryVisible({ pending: 1, active: 0, completed: 0, blocked: 0, pendingCapacity: 3, overLimitTargets: 0 })).toBe(true)
+    expect(homeAgentInboxSummaryVisible({ pending: 0, active: 1, completed: 0, blocked: 0, pendingCapacity: 3, overLimitTargets: 0 })).toBe(true)
+    expect(homeAgentInboxSummaryVisible({ pending: 0, active: 0, completed: 4, blocked: 2, pendingCapacity: 3, overLimitTargets: 0 })).toBe(false)
+  })
+
+  test("does not leave a leading gap when both headlines are hidden", () => {
+    expect(homeAgentViewSectionGapVisible({ headlineVisible: false, precedingSectionCounts: [] })).toBe(false)
+    expect(homeAgentViewSectionGapVisible({ headlineVisible: true, precedingSectionCounts: [] })).toBe(true)
+    expect(homeAgentViewSectionGapVisible({ headlineVisible: false, precedingSectionCounts: [0, 2] })).toBe(true)
+  })
+
   test("keeps background rows when aggregate refresh omits them transiently", () => {
     expect(
       mergeAgentViewAggregateFallback(
@@ -170,41 +194,67 @@ describe("Home split welcome sizing", () => {
     })
   })
 
-  test("uses clearer compact Home Agent View labels on narrow widths", () => {
+  test("uses active-only Agent View labels on narrow widths", () => {
     expect(
       formatHomeAgentViewSummary({
-        needsInput: 2,
+        waiting: 2,
         looping: 1,
         working: 3,
-        completed: 4,
-        pendingCommands: 1,
         width: 54,
       }),
-    ).toBe("Workers · 2 wait · 1 loop · 3 work · 4 done · 1 cmd")
+    ).toBe("Agent View · 2 wait · 1 loop · 3 work")
     expect(
       formatHomeAgentViewSummary({
-        needsInput: 2,
+        waiting: 2,
         looping: 1,
         working: 3,
-        completed: 4,
-        pendingCommands: 1,
         width: 72,
       }),
-    ).toBe("Worker sessions · 2 waiting · 1 looping · 3 working · 4 done · 1 queued")
+    ).toBe("Agent View sessions · 2 waiting · 1 looping · 3 working")
+    expect(
+      formatHomeAgentViewSummary({
+        waiting: 2,
+        looping: 1,
+        working: 3,
+        width: 30,
+      }),
+    ).toBe("2 wait · 1 loop · 3 work")
+    expect(homeAgentViewSummaryLines({ waiting: 2, looping: 1, working: 3, width: 30 })).toEqual([
+      "Agent View sessions",
+      "2 wait · 1 loop · 3 work",
+    ])
   })
 
-  test("uses clearer coordinator queue and usage hint copy", () => {
+  test("uses honest Agent inbox queue copy and capacity slots", () => {
     expect(
-      formatHomeCoordinatorSummary({
+      formatHomeAgentInboxSummary({
         summary: { pending: 3, active: 1, completed: 1, blocked: 1, pendingCapacity: 4, overLimitTargets: 1 },
-        width: 48,
+        width: 54,
       }),
-    ).toBe("Queue · 3/4 queued · 1 run · 1 blocked")
+    ).toBe("Inbox · 3 queued · 4 slots · 1 active · 1 over")
     expect(
-      formatHomeCoordinatorSummary({
+      formatHomeAgentInboxSummary({
         summary: { pending: 3, active: 1, completed: 1, blocked: 1, pendingCapacity: 4, overLimitTargets: 1 },
         width: 72,
       }),
-    ).toBe("Commands (detach with /bg) · 3/4 queued · 1 over limit · 1 running · 1 blocked")
+    ).toBe("Agent inbox · 3 queued · 4 slots · 1 active · 1 over limit · 1 blocked")
+    expect(
+      formatHomeAgentInboxSummary({
+        summary: { pending: 3, active: 1, completed: 1, blocked: 1, pendingCapacity: 4, overLimitTargets: 1 },
+        width: 30,
+      }),
+    ).toBe("3 queued · 4 slots · 1 active")
+    expect(
+      homeAgentInboxSummaryLines({
+        summary: { pending: 3, active: 1, completed: 1, blocked: 1, pendingCapacity: 4, overLimitTargets: 1 },
+        width: 30,
+      }),
+    ).toEqual(["Agent inbox", "3 queued · 4 slots · 1 active", "1 blocked · 1 over"])
+    expect(
+      formatHomeAgentInboxSummary({
+        summary: { pending: 0, active: 1, completed: 0, blocked: 0, pendingCapacity: 0, overLimitTargets: 0 },
+        width: 54,
+      }),
+    ).toBe("Agent inbox · 0 queued · 0 slots · 1 active")
   })
 })

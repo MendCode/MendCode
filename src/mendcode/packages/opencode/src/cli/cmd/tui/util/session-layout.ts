@@ -96,6 +96,40 @@ export function sessionTopbarLeftWidth(input: { contentWidth: number; metricsWid
 
 export type SessionHeaderTitleAlign = "left" | "center" | "right"
 
+export type SessionTopbarLayout = {
+  pathWidth: number
+  navWidth: number
+  leftWidth: number
+  titleWidth: number
+  metricsWidth: number
+}
+
+export function sessionTopbarLayout(input: {
+  contentWidth: number
+  metricsWidth: number
+  navWidth?: number
+  titleVisible?: boolean
+}): SessionTopbarLayout {
+  const contentWidth = Math.max(1, Math.floor(input.contentWidth))
+  const metricsWidth = Math.min(Math.max(0, Math.floor(input.metricsWidth)), Math.floor(contentWidth * 0.3))
+  const titleWidth = input.titleVisible
+    ? Math.min(Math.max(12, Math.floor(contentWidth * 0.34)), Math.max(0, contentWidth - metricsWidth))
+    : 0
+  const leftWidth = input.titleVisible
+    ? Math.min(Math.floor(contentWidth * 0.38), Math.max(0, contentWidth - titleWidth - metricsWidth))
+    : Math.max(0, contentWidth - metricsWidth)
+  const navWidth = Math.min(Math.max(0, Math.floor(input.navWidth ?? 0)), Math.floor(leftWidth * 0.6))
+  const pathWidth = Math.max(0, leftWidth - navWidth - (navWidth > 0 ? 1 : 0))
+
+  return {
+    pathWidth,
+    navWidth,
+    leftWidth,
+    titleWidth,
+    metricsWidth,
+  }
+}
+
 export function sessionTopbarLeftWidthWithTitle(input: { contentWidth: number; metricsWidth: number; titleVisible?: boolean }) {
   const base = sessionTopbarLeftWidth(input)
   if (!input.titleVisible) return base
@@ -182,17 +216,17 @@ export function sessionTaskContinuation(input: {
 }) {
   const current = input.entries.find((entry) => entry.callID === input.callID)
   const target = input.sessionID ?? input.taskID ?? current?.sessionID ?? current?.taskID
-  if (!target) return { duplicate: false, activeResume: false, resumeCount: 0 }
+  if (!target) return { duplicate: false, activeResume: false, resumed: false, resumeCount: 0 }
 
   const sameSession = input.entries.filter((entry) => (entry.sessionID ?? entry.taskID) === target)
-  const first = sameSession[0]
-  const duplicate = first ? first.callID !== input.callID : false
   const currentIndex = sameSession.findIndex((entry) => entry.callID === input.callID)
-  const later = currentIndex >= 0 ? sameSession.slice(currentIndex + 1) : []
+  const latest = sameSession.at(-1)
+  const resumed = currentIndex > 0
 
   return {
-    duplicate,
-    activeResume: later.some((entry) => entry.status === "running"),
+    duplicate: latest ? latest.callID !== input.callID : false,
+    activeResume: resumed && current?.status === "running",
+    resumed,
     resumeCount: Math.max(0, sameSession.length - 1),
   }
 }

@@ -13,9 +13,21 @@ mendcode --tsm [target|--all]    # open TSM workspace with a MendCode split
 mendcode run "message"           # open TUI with an initial message
 mendcode chat "message"          # run a control-plane chat turn
 mendcode status
+mendcode loops status             # list loop workflows
 mendcode doctor
 mendcode check
 ```
+
+## Loop Workflow Controls
+
+Use the canonical loop guide for the full contract and lifecycle details: [Loop Workflows](loop-workflows.md).
+
+```text
+/loop   # natural-language loop creation/activation inside the TUI
+/loops  # operator dashboard for active and historical loops
+```
+
+The public loop CLI supports `status`/`list`, `examples`/`templates`, `draft`, `show`, `tail`, `monitor`, `tick`, `daemon`, `service`, `run`, `activate`, `pause`, `resume`, and `stop`. Use `tick ... --execute` for a real agent turn; `run` is record-only. Signal, override, delete, and agent-retarget actions belong to the assistant tool or local API rather than the public CLI.
 
 ## Setup Flow
 
@@ -87,7 +99,7 @@ only; the CLI remains responsible for its own login/session files.
 
 Common MendCode config paths:
 
-- `.mendcode/mendcode.json`: project config, focus defaults, package metadata, budget/worktree policy, and integration settings.
+- `.mendcode/mendcode.json`: project config, focus defaults, package metadata, budget/worktree policy, loop service settings, and integration settings.
 - `.mendcode/generated/opencode.json`: generated compatibility config for the adapted runtime.
 - `.mendcode/prompt-mode.json`: persisted prompt mode consumed by `mendcode run`, `mendcode chat`, and the TUI footer.
 - `.mendcode/models.yaml`: project model-role config.

@@ -1,42 +1,17 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
-import { RunCommand } from "./cli/cmd/run"
-import { GenerateCommand } from "./cli/cmd/generate"
 import * as Log from "@mendcode/core/util/log"
-import { ConsoleCommand } from "./cli/cmd/account"
-import { ProvidersCommand } from "./cli/cmd/providers"
-import { AgentCommand } from "./cli/cmd/agent"
-import { UpgradeCommand } from "./cli/cmd/upgrade"
-import { UninstallCommand } from "./cli/cmd/uninstall"
-import { ModelsCommand } from "./cli/cmd/models"
+import { Global } from "@mendcode/core/global"
 import { UI } from "./cli/ui"
 import { Installation } from "./installation"
 import { NamedError } from "@mendcode/core/util/error"
 import { FormatError } from "./cli/error"
-import { ServeCommand } from "./cli/cmd/serve"
-import { Filesystem } from "@/util/filesystem"
-import { DebugCommand } from "./cli/cmd/debug"
-import { StatsCommand } from "./cli/cmd/stats"
-import { McpCommand } from "./cli/cmd/mcp"
-import { GithubCommand } from "./cli/cmd/github"
-import { ExportCommand } from "./cli/cmd/export"
-import { ImportCommand } from "./cli/cmd/import"
-import { AttachCommand } from "./cli/cmd/tui/attach"
-import { TuiThreadCommand } from "./cli/cmd/tui/thread"
-import { AcpCommand } from "./cli/cmd/acp"
 import { EOL } from "os"
-import { WebCommand } from "./cli/cmd/web"
-import { PrCommand } from "./cli/cmd/pr"
-import { SessionCommand } from "./cli/cmd/session"
-import { DbCommand } from "./cli/cmd/db"
-import { GlobalLayoutCommand } from "./cli/cmd/global-layout"
-import { JsonMigration } from "@/storage/json-migration"
-import { Database } from "@/storage/db"
 import { errorMessage } from "./util/error"
-import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
-import { drizzle } from "drizzle-orm/bun-sqlite"
 import { ensureProcessMetadata } from "@mendcode/core/util/opencode-process"
+import path from "path"
+import { existsSync } from "fs"
 
 const processMetadata = ensureProcessMetadata("main")
 
@@ -53,6 +28,67 @@ process.on("uncaughtException", (e) => {
 })
 
 const args = hideBin(process.argv)
+
+type RuntimeCommand = {
+  command?: string | readonly string[]
+}
+
+const commandLoaders = {
+  acp: () => import("./cli/cmd/acp").then((module) => module.AcpCommand),
+  mcp: () => import("./cli/cmd/mcp").then((module) => module.McpCommand),
+  attach: () => import("./cli/cmd/tui/attach").then((module) => module.AttachCommand),
+  run: () => import("./cli/cmd/run").then((module) => module.RunCommand),
+  generate: () => import("./cli/cmd/generate").then((module) => module.GenerateCommand),
+  debug: () => import("./cli/cmd/debug").then((module) => module.DebugCommand),
+  console: () => import("./cli/cmd/account").then((module) => module.ConsoleCommand),
+  providers: () => import("./cli/cmd/providers").then((module) => module.ProvidersCommand),
+  agent: () => import("./cli/cmd/agent").then((module) => module.AgentCommand),
+  upgrade: () => import("./cli/cmd/upgrade").then((module) => module.UpgradeCommand),
+  uninstall: () => import("./cli/cmd/uninstall").then((module) => module.UninstallCommand),
+  serve: () => import("./cli/cmd/serve").then((module) => module.ServeCommand),
+  web: () => import("./cli/cmd/web").then((module) => module.WebCommand),
+  models: () => import("./cli/cmd/models").then((module) => module.ModelsCommand),
+  stats: () => import("./cli/cmd/stats").then((module) => module.StatsCommand),
+  export: () => import("./cli/cmd/export").then((module) => module.ExportCommand),
+  import: () => import("./cli/cmd/import").then((module) => module.ImportCommand),
+  github: () => import("./cli/cmd/github").then((module) => module.GithubCommand),
+  pr: () => import("./cli/cmd/pr").then((module) => module.PrCommand),
+  session: () => import("./cli/cmd/session").then((module) => module.SessionCommand),
+  plugin: () => import("./cli/cmd/plug").then((module) => module.PluginCommand),
+  db: () => import("./cli/cmd/db").then((module) => module.DbCommand),
+  "global-layout": () => import("./cli/cmd/global-layout").then((module) => module.GlobalLayoutCommand),
+} satisfies Record<string, () => Promise<RuntimeCommand>>
+
+function loadTuiCommand() {
+  return import("./cli/cmd/tui/thread").then((module) => module.TuiThreadCommand)
+}
+
+async function commandsForArgs(): Promise<RuntimeCommand[]> {
+  if (args.includes("--version") || args.includes("-v")) return []
+  if (args.includes("--help") || args.includes("-h") || args.includes("completion")) {
+    const commands: RuntimeCommand[] = [await loadTuiCommand()]
+    for (const load of Object.values(commandLoaders)) commands.push(await load())
+    return commands
+  }
+  const command = (() => {
+    for (let index = 0; index < args.length; index++) {
+      const token = args[index]
+      if (
+        /^(?:--(?:print-logs|pure)(?:=(?:true|false))?|--no-(?:print-logs|pure))$/.test(token) ||
+        token.startsWith("--log-level=")
+      )
+        continue
+      if (token === "--log-level") {
+        index++
+        continue
+      }
+      if (token.startsWith("-")) return
+      return token in commandLoaders ? token : undefined
+    }
+  })()
+  if (command) return [await commandLoaders[command as keyof typeof commandLoaders]()]
+  return [await loadTuiCommand()]
+}
 
 function show(out: string) {
   const text = out.trimStart()
@@ -114,8 +150,13 @@ const cli = yargs(args)
       run_id: processMetadata.runID,
     })
 
-    const migrationDonePath = JsonMigration.jsonStorageMigrationDonePath()
-    if (!(await Filesystem.exists(migrationDonePath))) {
+    const migrationDonePath = path.join(Global.Path.data, ".mendcode-json-storage-migration-v0.done")
+    if (!existsSync(migrationDonePath)) {
+      const [{ JsonMigration }, { Database }, { drizzle }] = await Promise.all([
+        import("@/storage/json-migration"),
+        import("@/storage/db"),
+        import("drizzle-orm/bun-sqlite"),
+      ])
       const tty = process.stderr.isTTY
       process.stderr.write("Performing one time database migration, may take a few minutes..." + EOL)
       const width = 36
@@ -154,30 +195,12 @@ const cli = yargs(args)
   })
   .usage("")
   .completion("completion", "generate shell completion script")
-  .command(AcpCommand)
-  .command(McpCommand)
-  .command(TuiThreadCommand)
-  .command(AttachCommand)
-  .command(RunCommand)
-  .command(GenerateCommand)
-  .command(DebugCommand)
-  .command(ConsoleCommand)
-  .command(ProvidersCommand)
-  .command(AgentCommand)
-  .command(UpgradeCommand)
-  .command(UninstallCommand)
-  .command(ServeCommand)
-  .command(WebCommand)
-  .command(ModelsCommand)
-  .command(StatsCommand)
-  .command(ExportCommand)
-  .command(ImportCommand)
-  .command(GithubCommand)
-  .command(PrCommand)
-  .command(SessionCommand)
-  .command(PluginCommand)
-  .command(DbCommand)
-  .command(GlobalLayoutCommand)
+
+for (const command of await commandsForArgs()) {
+  ;(cli.command as unknown as (command: RuntimeCommand) => typeof cli)(command)
+}
+
+cli
   .fail((msg, err) => {
     if (
       msg?.startsWith("Unknown argument") ||

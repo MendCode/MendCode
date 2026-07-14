@@ -121,6 +121,19 @@ function loopWorkflowBrief() {
   ].join("\n")
 }
 
+function backgroundSubagentFull() {
+  return [
+    "MendCode background subagents:",
+    "- For independent work that can run concurrently, call `task` with `background: true`, keep the returned task_id, and continue useful parent work immediately.",
+    "- Use `task_status` with action `get` to inspect one task, `list` to rediscover child task IDs, `wait` when the result is now a dependency, or `cancel` to stop a registered background task.",
+    "- Wait timeouts release only the waiter; they do not cancel the child. Completion, failure, cancellation, and needs-input notifications are host events and never trigger a provider call automatically.",
+    "- Do not busy-poll. Check after meaningful parent progress, when the result becomes a dependency, or before the final response.",
+    "- Keep `task` in foreground when the very next step depends on its result.",
+    "- Collect relevant background results before claiming completion; surface failed, waiting, or retrying tasks honestly.",
+    "- Background subagents are runtime-scoped concurrent jobs, not durable scheduled workflows. Use `loop` for monitored repetition or wakeups after MendCode exits.",
+  ].join("\n")
+}
+
 function loopWorkflowFull() {
   return [
     "MendCode Loop Workflow full contract:",
@@ -216,14 +229,22 @@ async function fullKnowledge(root: string) {
       "- Runtime mflow coordination is enabled. File edit locks are enforced by MendCode hooks; do not call mflow manually unless the user asks.",
     )
   }
-  if (tsm.enabled || tsm.lifecycle === "active" || tsm.lifecycle === "degraded" || (tsm.policy?.mode && tsm.policy.mode !== "off")) {
+  if (
+    tsm.enabled ||
+    tsm.lifecycle === "active" ||
+    tsm.lifecycle === "degraded" ||
+    (tsm.policy?.mode && tsm.policy.mode !== "off")
+  ) {
     integration.push(
       "TSM context:",
       `- TSM lifecycle=${tsm.lifecycle}, enabled=${tsm.enabled}, worktreeCapable=${tsm.worktreeCapable}. Do not install, activate, run, remove, or delegate worktrees to TSM unless explicitly requested.`,
     )
   }
   if (policy.mode === "live-sync" && !mflow.enabled) {
-    integration.push("Worktree context:", "- Worktree policy mentions live-sync, but Mflow is not fully enabled; keep live operations blocked.")
+    integration.push(
+      "Worktree context:",
+      "- Worktree policy mentions live-sync, but Mflow is not fully enabled; keep live operations blocked.",
+    )
   }
   return { knowledge: lines.join("\n"), integration: integration.join("\n") }
 }
@@ -242,12 +263,14 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
   const includeCustomInstructions = mode === "full"
   const includeMcpContext = mode === "full"
 
-  sections.push(section({
-    id: "mode-boundary",
-    label: "MendCode mode boundary",
-    source: "mode-boundary",
-    text: minimalBoundary(),
-  }))
+  sections.push(
+    section({
+      id: "mode-boundary",
+      label: "MendCode mode boundary",
+      source: "mode-boundary",
+      text: minimalBoundary(),
+    }),
+  )
 
   let basePrompt: string | null = null
   let basePromptSource: PromptBaseSource = "minimal-base"
@@ -257,12 +280,14 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
     if (harness) {
       basePrompt = harness.text
       basePromptSource = "mendcode-harness-source"
-      sections.push(section({
-        id: "harness",
-        label: `${source?.label || focusID} harness prompt`,
-        source: "mendcode-harness-source",
-        text: harness.text,
-      }))
+      sections.push(
+        section({
+          id: "harness",
+          label: `${source?.label || focusID} harness prompt`,
+          source: "mendcode-harness-source",
+          text: harness.text,
+        }),
+      )
     } else {
       fallbackReason = source
         ? source.sourcePolicy === "oss-source"
@@ -270,65 +295,90 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
           : `focus source policy is ${source.sourcePolicy}`
         : "unknown focus"
       basePromptSource = "opencode-generic-provider-fallback"
-      sections.push(section({
-        id: "fallback",
-        label: "MendCode focus fallback",
-        source: "opencode-generic-provider-fallback",
-        text: focusFallback(focusID, fallbackReason),
-      }))
+      sections.push(
+        section({
+          id: "fallback",
+          label: "MendCode focus fallback",
+          source: "opencode-generic-provider-fallback",
+          text: focusFallback(focusID, fallbackReason),
+        }),
+      )
     }
   }
 
   if (mode === "full") {
-    sections.push(section({
-      id: "loop-workflow-brief",
-      label: "MendCode Loop Workflow",
-      source: "mendcode-context",
-      text: loopWorkflowBrief(),
-    }))
+    sections.push(
+      section({
+        id: "background-subagents",
+        label: "MendCode background subagents",
+        source: "mendcode-context",
+        text: backgroundSubagentFull(),
+      }),
+    )
 
-    sections.push(section({
-      id: "tui-markdown-rendering",
-      label: "MendCode TUI Markdown rendering",
-      source: "mendcode-context",
-      text: tuiMarkdownRendering(),
-    }))
+    sections.push(
+      section({
+        id: "loop-workflow-brief",
+        label: "MendCode Loop Workflow",
+        source: "mendcode-context",
+        text: loopWorkflowBrief(),
+      }),
+    )
+
+    sections.push(
+      section({
+        id: "tui-markdown-rendering",
+        label: "MendCode TUI Markdown rendering",
+        source: "mendcode-context",
+        text: tuiMarkdownRendering(),
+      }),
+    )
   }
 
   if (mode === "full") {
     const full = await fullKnowledge(root)
-    sections.push(section({
-      id: "loop-workflow-full",
-      label: "MendCode Loop Workflow full contract",
-      source: "mendcode-context",
-      text: loopWorkflowFull(),
-    }))
-    sections.push(section({
-      id: "mendcode-context",
-      label: "MendCode knowledge",
-      source: "mendcode-context",
-      text: full.knowledge,
-    }))
-    sections.push(section({
-      id: "marketplace-extension-contract",
-      label: "MendCode marketplace and extension contract",
-      source: "mendcode-context",
-      text: marketplaceExtensionContract(),
-    }))
+    sections.push(
+      section({
+        id: "loop-workflow-full",
+        label: "MendCode Loop Workflow full contract",
+        source: "mendcode-context",
+        text: loopWorkflowFull(),
+      }),
+    )
+    sections.push(
+      section({
+        id: "mendcode-context",
+        label: "MendCode knowledge",
+        source: "mendcode-context",
+        text: full.knowledge,
+      }),
+    )
+    sections.push(
+      section({
+        id: "marketplace-extension-contract",
+        label: "MendCode marketplace and extension contract",
+        source: "mendcode-context",
+        text: marketplaceExtensionContract(),
+      }),
+    )
     if (full.integration) {
-      sections.push(section({
-        id: "integrations",
-        label: "Active integration knowledge",
-        source: "integration-context",
-        text: full.integration,
-      }))
+      sections.push(
+        section({
+          id: "integrations",
+          label: "Active integration knowledge",
+          source: "integration-context",
+          text: full.integration,
+        }),
+      )
     }
-    sections.push(section({
-      id: "customization-capabilities",
-      label: "MendCode customization capabilities",
-      source: "mendcode-context",
-      text: composeCustomizationCapabilitySection(),
-    }))
+    sections.push(
+      section({
+        id: "customization-capabilities",
+        label: "MendCode customization capabilities",
+        source: "mendcode-context",
+        text: composeCustomizationCapabilitySection(),
+      }),
+    )
   }
 
   const instructions = sections.map((item) => item.text).join("\n\n")

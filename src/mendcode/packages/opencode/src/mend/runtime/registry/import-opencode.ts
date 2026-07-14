@@ -96,7 +96,7 @@ export async function normalizeOpencodeSettingsToMendcode(entry: RuntimeRegistry
     models.roles.small = { ...models.roles.small, ...smallModel, reason: "Imported from OpenCode settings small_model." }
   }
   if (isRecord(inspected.config.agent)) {
-    for (const role of ["plan", "build", "review", "title", "summary", "compaction"]) {
+    for (const role of ["plan", "build", "title", "summary", "compaction"]) {
       const mapped = splitRuntimeModel(inspected.config.agent[role]?.model)
       if (!mapped) continue
       models.enabled = true

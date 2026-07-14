@@ -29,6 +29,8 @@ const EXTERNAL_SKILL_PATTERN = "skills/**/SKILL.md"
 const OPENCODE_SKILL_PATTERN = "{skill,skills}/**/SKILL.md"
 const SKILL_PATTERN = "**/SKILL.md"
 const HOT_RELOAD_DEBOUNCE = Duration.millis(100)
+const SKILL_PARSE_RETRIES = 4
+const SKILL_PARSE_RETRY_DELAY = Duration.millis(100)
 
 const SkillSource = Schema.Literals(["mendcode", "compat-opencode", "agents", "claude", "config-path", "remote"])
 const SkillScope = Schema.Literals(["project", "global", "configured", "remote"])
@@ -148,6 +150,10 @@ function isSkillFile(file: string) {
   return path.basename(file) === "SKILL.md"
 }
 
+function isMissingFileError(error: unknown): error is { code: string } {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code: string }).code === "ENOENT"
+}
+
 function diffSkills(prev: Record<string, Info>, next: Record<string, Info>) {
   const added = Object.keys(next).filter((name) => !prev[name]).toSorted()
   const removed = Object.keys(prev).filter((name) => !next[name]).toSorted()
@@ -158,52 +164,70 @@ function diffSkills(prev: Record<string, Info>, next: Record<string, Info>) {
 }
 
 const publishInvalid = Effect.fnUntraced(function* (bus: Bus.Interface, match: DiscoveredSkill, message: string, cause?: unknown) {
+  if (match.source === "claude" || match.source === "agents") {
+    log.warn("skipping invalid external skill", { skill: match.path, source: match.source, scope: match.scope, cause })
+    return
+  }
+
   const { Session } = yield* Effect.promise(() => import("@/session/session"))
   yield* bus.publish(Session.Event.Error, { error: new NamedError.Unknown({ message }).toObject() })
   log.error("failed to load skill", { skill: match.path, source: match.source, scope: match.scope, cause })
 })
 
 const parseSkill = Effect.fnUntraced(function* (match: DiscoveredSkill, bus: Bus.Interface) {
-  const md = yield* Effect.tryPromise({
-    try: () => ConfigMarkdown.parse(match.path),
-    catch: (err) => err,
-  }).pipe(
-    Effect.catch(
-      Effect.fnUntraced(function* (err) {
-        const message = ConfigMarkdown.FrontmatterError.isInstance(err)
-          ? err.data.message
-          : `Failed to parse skill ${match.path}`
-        yield* publishInvalid(bus, match, message, err)
-        return undefined
-      }),
-    ),
-  )
+  let parseError: unknown
+  let invalidFrontmatter: unknown
 
-  if (!md) return { invalid: match.path }
+  for (let attempt = 0; attempt <= SKILL_PARSE_RETRIES; attempt++) {
+    const result = yield* Effect.tryPromise({
+      try: () => ConfigMarkdown.parse(match.path),
+      catch: (error) => error,
+    }).pipe(
+      Effect.map((md) => ({ ok: true as const, md })),
+      Effect.catch((error) => Effect.succeed({ ok: false as const, error })),
+    )
 
-  const parsed = z.object({ name: z.string().min(1), description: z.string().min(1) }).safeParse(md.data)
-  if (!parsed.success) {
+    if (result.ok) {
+      parseError = undefined
+      const parsed = z.object({ name: z.string().min(1), description: z.string().min(1) }).safeParse(result.md.data)
+      if (parsed.success) {
+        return {
+          skill: {
+            name: parsed.data.name,
+            description: parsed.data.description,
+            location: match.path,
+            content: result.md.content,
+            source: match.source,
+            scope: match.scope,
+            status: "active" as const,
+            updatedAt: Date.now(),
+          },
+        }
+      }
+      invalidFrontmatter = parsed.error
+    } else {
+      if (isMissingFileError(result.error)) return { invalid: match.path }
+      invalidFrontmatter = undefined
+      parseError = result.error
+    }
+
+    if (attempt < SKILL_PARSE_RETRIES) yield* Effect.sleep(SKILL_PARSE_RETRY_DELAY)
+  }
+
+  if (invalidFrontmatter) {
     yield* publishInvalid(
       bus,
       match,
       `Skill ${match.path} must include non-empty frontmatter fields: name and description.`,
-      parsed.error,
+      invalidFrontmatter,
     )
-    return { invalid: match.path }
+  } else {
+    const message = ConfigMarkdown.FrontmatterError.isInstance(parseError)
+      ? parseError.data.message
+      : `Failed to parse skill ${match.path}`
+    yield* publishInvalid(bus, match, message, parseError)
   }
-
-  return {
-    skill: {
-      name: parsed.data.name,
-      description: parsed.data.description,
-      location: match.path,
-      content: md.content,
-      source: match.source,
-      scope: match.scope,
-      status: "active" as const,
-      updatedAt: Date.now(),
-    },
-  }
+  return { invalid: match.path }
 })
 
 const scan = Effect.fnUntraced(function* (

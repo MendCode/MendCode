@@ -70,6 +70,7 @@ globalThis.AI_SDK_LOG_WARNINGS = false
 const SHELL_OUTPUT_UPDATE_INTERVAL = 250
 const SHELL_LIVE_OUTPUT_MAX_CHARS = 30_000
 const RETAINED_SUBTASK_OUTPUT_MAX_CHARS = 32_000
+const SESSION_TITLE_REFRESH_INTERVAL = 15
 
 function shellLiveOutput(text: string) {
   if (text.length <= SHELL_LIVE_OUTPUT_MAX_CHARS) return text
@@ -95,7 +96,9 @@ function retainedSubtaskEvidence(history: readonly MessageV2.WithParts[]) {
     }
     return ""
   })()
-  const files = Array.from(new Set(history.flatMap((message) => message.parts.flatMap((part) => (part.type === "patch" ? part.files : [])))))
+  const files = Array.from(
+    new Set(history.flatMap((message) => message.parts.flatMap((part) => (part.type === "patch" ? part.files : [])))),
+  )
   if (!text && files.length === 0) return ""
   return [text, files.length ? ["Subagent changed files:", ...files.map((file) => `- ${file}`)].join("\n") : undefined]
     .filter(Boolean)
@@ -143,8 +146,7 @@ export function shouldSkipAutoCompaction(messages: MessageV2.WithParts[]) {
     if (msg.info.id <= latestSummary.id) continue
     const isCompactionTask = msg.parts.some((part) => part.type === "compaction")
     const isSyntheticResume = msg.parts.some(
-      (part) =>
-        part.type === "text" && part.synthetic === true && part.metadata?.compaction_continue === true,
+      (part) => part.type === "text" && part.synthetic === true && part.metadata?.compaction_continue === true,
     )
     if (isCompactionTask || isSyntheticResume) continue
     return false
@@ -172,8 +174,73 @@ function hasRunnableToolCalls(parts: MessageV2.Part[]) {
   return parts.some((part) => part.type === "tool" && !part.metadata?.providerExecuted)
 }
 
+function isInternalUserMessage(message: MessageV2.WithParts) {
+  if (message.info.role !== "user") return false
+  if (message.parts.some((part) => part.type === "compaction" || part.type === "subtask")) return true
+  const text = message.parts.filter((part) => part.type === "text")
+  return (
+    text.length > 0 &&
+    text.every(
+      (part) =>
+        part.synthetic === true ||
+        part.metadata?.compaction_continue === true ||
+        part.metadata?.compaction_post_prompt === true,
+    )
+  )
+}
+
+function internalUserParentID(message: MessageV2.WithParts) {
+  if (message.info.role !== "user") return
+  for (const part of message.parts) {
+    if (part.type !== "text") continue
+    const parentID = part.metadata?.compaction_parent_id
+    if (typeof parentID === "string") return parentID
+  }
+}
+
+/**
+ * Keep a queued prompt isolated from internal compaction follow-ups that were
+ * created after it. Message IDs are chronological, but compaction can create
+ * synthetic user/assistant messages after a real user prompt was already
+ * persisted, so selecting the latest message by ID can otherwise skip the
+ * queued prompt entirely.
+ */
+export function promptRunMessages(input: {
+  messages: MessageV2.WithParts[]
+  targetMessageID?: MessageID
+  initialMessageIDs?: ReadonlySet<string>
+  includeQueuedUserMessages?: boolean
+}) {
+  const targetMessageID = input.targetMessageID
+  if (!targetMessageID) return input.messages
+  const targetIndex = input.messages.findIndex((message) => message.info.id === targetMessageID)
+  if (targetIndex < 0) return input.messages
+
+  const initialMessageIDs = input.initialMessageIDs ?? new Set<string>()
+  const includedUserMessageIDs = new Set<string>([targetMessageID])
+  for (const message of input.messages.slice(targetIndex + 1)) {
+    if (message.info.role !== "user") continue
+    if (!isInternalUserMessage(message)) {
+      if (input.includeQueuedUserMessages || initialMessageIDs.has(message.info.id)) {
+        includedUserMessageIDs.add(message.info.id)
+      }
+      continue
+    }
+    if (initialMessageIDs.has(message.info.id)) continue
+    const parentID = internalUserParentID(message)
+    if (!parentID || includedUserMessageIDs.has(parentID)) includedUserMessageIDs.add(message.info.id)
+  }
+
+  return input.messages.filter((message, index) => {
+    if (index <= targetIndex) return true
+    if (message.info.role === "user") return includedUserMessageIDs.has(message.info.id)
+    return includedUserMessageIDs.has(message.info.parentID)
+  })
+}
+
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
+  readonly interrupt: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts>
   readonly loop: (input: LoopInput) => Effect.Effect<MessageV2.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts>
@@ -373,26 +440,32 @@ export const layer = Layer.effect(
       const lastUserIndex = messages.findIndex((message) => message.info.id === lastUser.id)
       if (lastUserIndex === -1) return "request" as const
       const lastUserMessage = messages[lastUserIndex]
-      if (lastUserMessage?.parts.some((part) => part.type === "text" && part.synthetic === true && part.metadata?.compaction_continue === true)) {
+      if (
+        lastUserMessage?.parts.some(
+          (part) => part.type === "text" && part.synthetic === true && part.metadata?.compaction_continue === true,
+        )
+      ) {
         return "after-compaction" as const
       }
-      const latestSummaryIndex = messages.findLastIndex((message, index) =>
-        index < lastUserIndex &&
-        message.info.role === "assistant" &&
-        message.info.summary === true &&
-        Boolean(message.info.finish) &&
-        !message.info.error,
+      const latestSummaryIndex = messages.findLastIndex(
+        (message, index) =>
+          index < lastUserIndex &&
+          message.info.role === "assistant" &&
+          message.info.summary === true &&
+          Boolean(message.info.finish) &&
+          !message.info.error,
       )
       if (latestSummaryIndex === -1) return "request" as const
       const realUsersAfterSummary = messages.slice(latestSummaryIndex + 1, lastUserIndex + 1).filter(realUserMessage)
-      return realUsersAfterSummary.length <= 1 ? "after-compaction" as const : "request" as const
+      return realUsersAfterSummary.length <= 1 ? ("after-compaction" as const) : ("request" as const)
     }
 
     function userMessageTitleText(message: MessageV2.WithParts) {
       return message.parts
         .map((part) => {
           if (part.type === "text" && !part.ignored && !part.synthetic) return part.text.trim()
-          if (part.type === "file" && !("synthetic" in part && part.synthetic)) return `[Attached ${part.filename ?? part.mime}]`
+          if (part.type === "file" && !("synthetic" in part && part.synthetic))
+            return `[Attached ${part.filename ?? part.mime}]`
           if (part.type === "subtask") return part.prompt.trim()
           return ""
         })
@@ -491,7 +564,7 @@ export const layer = Layer.effect(
         return
       }
 
-      if (realUserCount === 0 || realUserCount % 10 !== 0) return
+      if (realUserCount === 0 || realUserCount % SESSION_TITLE_REFRESH_INTERVAL !== 0) return
 
       const lastUser = realUsers.at(-1)
       if (!lastUser || lastUser.info.role !== "user") return
@@ -505,7 +578,7 @@ export const layer = Layer.effect(
         .slice(0, 20)
 
       const humanMessages = realUsers
-        .slice(-10)
+        .slice(-SESSION_TITLE_REFRESH_INTERVAL)
         .map(userMessageTitleText)
         .filter(Boolean)
         .map((message, index) => `${index + 1}. ${message}`)
@@ -731,6 +804,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         providerID: input.model.providerID,
         agent: input.agent,
       })) {
+        if (input.tools?.[item.id] === false) continue
         const schema = ProviderTransform.schema(input.model, EffectZod.toJsonSchema(item.parameters))
         tools[item.id] = tool({
           description: item.description,
@@ -783,9 +857,19 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
                   { args },
                 )
-                const result = yield* item.execute(args, ctx).pipe(
-                  Effect.ensuring(Effect.promise(() => releaseMflowLocks({ root: instance.directory, files: mflowLocks.locked, owner: mflowLocks.owner }))),
-                )
+                const result = yield* item
+                  .execute(args, ctx)
+                  .pipe(
+                    Effect.ensuring(
+                      Effect.promise(() =>
+                        releaseMflowLocks({
+                          root: instance.directory,
+                          files: mflowLocks.locked,
+                          owner: mflowLocks.owner,
+                        }),
+                      ),
+                    ),
+                  )
                 const output = {
                   ...result,
                   attachments: result.attachments?.map((attachment) => ({
@@ -811,6 +895,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       }
 
       for (const [key, item] of Object.entries(yield* mcp.tools())) {
+        if (input.tools?.[key] === false) continue
         const execute = item.execute
         if (!execute) continue
 
@@ -976,7 +1061,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           sessionID,
           abort: taskAbort.signal,
           callID: part.callID,
-          extra: { bypassAgentCheck: true, promptOps, abortReason: () => (isManualAbort(sessionID) ? "user" : undefined) },
+          extra: {
+            bypassAgentCheck: true,
+            promptOps,
+            abortReason: () => (isManualAbort(sessionID) ? "user" : undefined),
+          },
           messages: msgs,
           metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
             Effect.gen(function* () {
@@ -1003,31 +1092,29 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             const metadata = part.state.status === "pending" ? undefined : part.state.metadata
             const childSessionID = typeof metadata?.sessionId === "string" ? metadata.sessionId : undefined
             if (!childSessionID) return Effect.succeed(undefined)
-            return sessions
-              .messages({ sessionID: SessionID.make(childSessionID), view: "tui" })
-              .pipe(
-                Effect.map((history) => {
-                  const text = retainedSubtaskEvidence(history)
-                  const title =
-                    "title" in part.state && typeof part.state.title === "string" ? part.state.title : task.description
-                  return {
-                    title,
-                    metadata: {
-                      ...(metadata ?? {}),
-                      sessionId: SessionID.make(childSessionID),
-                      model: { providerID: taskModel.providerID, modelID: taskModel.id },
-                      status: "retained" as const,
-                    },
-                    output: retainedSubtaskOutput({
-                      taskID: childSessionID,
-                      text,
-                      error: error!,
-                    }),
-                    attachments: [],
-                  }
-                }),
-                Effect.catchCause(() => Effect.succeed(undefined)),
-              )
+            return sessions.messages({ sessionID: SessionID.make(childSessionID), view: "tui" }).pipe(
+              Effect.map((history) => {
+                const text = retainedSubtaskEvidence(history)
+                const title =
+                  "title" in part.state && typeof part.state.title === "string" ? part.state.title : task.description
+                return {
+                  title,
+                  metadata: {
+                    ...(metadata ?? {}),
+                    sessionId: SessionID.make(childSessionID),
+                    model: { providerID: taskModel.providerID, modelID: taskModel.id },
+                    status: "retained" as const,
+                  },
+                  output: retainedSubtaskOutput({
+                    taskID: childSessionID,
+                    text,
+                    error: error!,
+                  }),
+                  attachments: [],
+                }
+              }),
+              Effect.catchCause(() => Effect.succeed(undefined)),
+            )
           }),
           Effect.onInterrupt(() =>
             Effect.gen(function* () {
@@ -1317,6 +1404,24 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           return { info: msg, parts: [part] }
         }),
       )
+    })
+
+    const interrupt = Effect.fn("SessionPrompt.interrupt")(function* (sessionID: SessionID) {
+      yield* elog.info("interrupt", { sessionID })
+      let interruptedAssistantID: MessageID | undefined
+      yield* state
+        .interrupt(sessionID, {
+          before: Effect.gen(function* () {
+            promptAbortReasons.set(sessionID, "user")
+            const orphanedAssistant = yield* findOrphanedAssistantOnCancel(sessionID)
+            if (Option.isSome(orphanedAssistant)) interruptedAssistantID = orphanedAssistant.value.info.id
+            promptAbortControllers.get(sessionID)?.abort()
+          }),
+          after: Effect.gen(function* () {
+            if (interruptedAssistantID) yield* finishOrphanedAssistantOnCancel(sessionID, interruptedAssistantID)
+          }),
+        })
+        .pipe(Effect.ensuring(Effect.sync(() => promptAbortReasons.delete(sessionID))))
     })
 
     const getModel = Effect.fn("SessionPrompt.getModel")(function* (
@@ -1786,7 +1891,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         }
 
         if (input.noReply === true) return message
-        return yield* loop({ sessionID: input.sessionID, queue: true })
+        return yield* loop({ sessionID: input.sessionID, queue: true, targetMessageID: message.info.id })
       },
     )
 
@@ -1798,358 +1903,395 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       throw new Error("Impossible")
     })
 
-    const runLoop: (sessionID: SessionID, abort: AbortSignal) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.run")(
-      function* (sessionID: SessionID, abort: AbortSignal) {
-        const ctx = yield* InstanceState.context
-        const slog = elog.with({ sessionID })
-        let structured: unknown
-        let step = 0
-        const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+    const runLoop: (
+      sessionID: SessionID,
+      abort: AbortSignal,
+      targetMessageID?: MessageID,
+      includeQueuedUserMessages?: boolean,
+    ) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.run")(function* (
+      sessionID: SessionID,
+      abort: AbortSignal,
+      targetMessageID?: MessageID,
+      includeQueuedUserMessages?: boolean,
+    ) {
+      const ctx = yield* InstanceState.context
+      const slog = elog.with({ sessionID })
+      let structured: unknown
+      let step = 0
+      let initialMessageIDs: ReadonlySet<string> | undefined
+      const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
-        while (true) {
-          yield* status.set(sessionID, { type: "busy" })
-          yield* slog.info("loop", { step })
+      while (true) {
+        yield* status.set(sessionID, { type: "busy" })
+        yield* slog.info("loop", { step })
 
-          let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
+        let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
+        initialMessageIDs ??= new Set(msgs.map((message) => message.info.id))
+        msgs = promptRunMessages({ messages: msgs, targetMessageID, initialMessageIDs, includeQueuedUserMessages })
 
-          let lastUser: MessageV2.User | undefined
-          let lastAssistant: MessageV2.Assistant | undefined
-          let lastFinished: MessageV2.Assistant | undefined
-          let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            const msg = msgs[i]
-            if (!lastUser && msg.info.role === "user") lastUser = msg.info
-            if (!lastAssistant && msg.info.role === "assistant") lastAssistant = msg.info
-            if (!lastFinished && msg.info.role === "assistant" && msg.info.finish) lastFinished = msg.info
-            if (lastUser && lastFinished) break
-            const task = msg.parts.filter((part) => part.type === "compaction" || part.type === "subtask")
-            if (task && !lastFinished) tasks.push(...task)
-          }
+        let lastUser: MessageV2.User | undefined
+        let lastAssistant: MessageV2.Assistant | undefined
+        let lastFinished: MessageV2.Assistant | undefined
+        let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const msg = msgs[i]
+          if (!lastUser && msg.info.role === "user") lastUser = msg.info
+          if (!lastAssistant && msg.info.role === "assistant") lastAssistant = msg.info
+          if (!lastFinished && msg.info.role === "assistant" && msg.info.finish) lastFinished = msg.info
+          if (lastUser && lastFinished) break
+          const task = msg.parts.filter((part) => part.type === "compaction" || part.type === "subtask")
+          if (task && !lastFinished) tasks.push(...task)
+        }
 
-          if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+        if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
 
-          const lastAssistantMsg = msgs.findLast(
-            (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
-          )
-          // Some providers return "stop" even when the assistant message contains tool calls.
-          // Keep the loop running so tool results can be sent back to the model.
-          // Skip provider-executed tool parts — those were fully handled within the
-          // provider's stream (e.g. DWS Agent Platform) and don't need a re-loop.
-          const hasToolCalls = lastAssistantMsg ? hasRunnableToolCalls(lastAssistantMsg.parts) : false
+        const lastAssistantMsg = msgs.findLast(
+          (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
+        )
+        // Some providers return "stop" even when the assistant message contains tool calls.
+        // Keep the loop running so tool results can be sent back to the model.
+        // Skip provider-executed tool parts — those were fully handled within the
+        // provider's stream (e.g. DWS Agent Platform) and don't need a re-loop.
+        const hasToolCalls = lastAssistantMsg ? hasRunnableToolCalls(lastAssistantMsg.parts) : false
 
-          if (
-            lastAssistant?.finish &&
-            !["tool-calls"].includes(lastAssistant.finish) &&
-            !hasToolCalls &&
-            lastUser.id < lastAssistant.id
-          ) {
-            yield* slog.info("exiting loop")
-            break
-          }
+        if (
+          lastAssistant?.finish &&
+          !["tool-calls"].includes(lastAssistant.finish) &&
+          !hasToolCalls &&
+          lastUser.id < lastAssistant.id
+        ) {
+          yield* slog.info("exiting loop")
+          break
+        }
 
-          step++
-          if (step === 1)
-            yield* title({
-              session,
-              modelID: lastUser.model.modelID,
-              providerID: lastUser.model.providerID,
-              history: msgs,
-            }).pipe(Effect.ignore, Effect.forkIn(scope))
+        step++
+        if (step === 1)
+          yield* title({
+            session,
+            modelID: lastUser.model.modelID,
+            providerID: lastUser.model.providerID,
+            history: msgs,
+          }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-          const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
-          const task = tasks.pop()
+        const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
+        const task = tasks.pop()
 
-          if (task?.type === "subtask") {
-            yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
-            continue
-          }
+        if (task?.type === "subtask") {
+          yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs })
+          continue
+        }
 
-          if (task?.type === "compaction") {
-            const result = yield* compaction.process({
-              messages: msgs,
-              parentID: lastUser.id,
-              sessionID,
-              auto: task.auto,
-              overflow: task.overflow,
-              resume: task.resume,
-            })
-            if (result === "stop") break
-            continue
-          }
-
-          if (
-            lastFinished &&
-            shouldCheckFinishedAssistantForAutoCompaction({ lastUser, lastFinished }) &&
-            (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
-          ) {
-            if (shouldSkipAutoCompaction(msgs)) {
-              yield* slog.warn("skip duplicate auto compaction and continue resume", {
-                reason: "no real user input since summary",
-              })
-            } else {
-              yield* compaction.create({ sessionID, agent: lastUser.agent, model: lastUser.model, auto: true, resume: false })
-              continue
-            }
-          }
-
-          const agent = yield* agents.get(lastUser.agent)
-          if (!agent) {
-            const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
-            const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
-            const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
-            yield* bus.publish(Session.Event.Error, { sessionID, error: error.toObject() })
-            throw error
-          }
-          const maxSteps = agent.steps ?? Infinity
-          const isLastStep = step >= maxSteps
-          msgs = yield* insertReminders({ messages: msgs, agent, session })
-
-          const msg: MessageV2.Assistant = {
-            id: MessageID.ascending(),
+        if (task?.type === "compaction") {
+          const result = yield* compaction.process({
+            messages: msgs,
             parentID: lastUser.id,
-            role: "assistant",
-            mode: agent.name,
-            agent: agent.name,
-            variant: lastUser.model.variant,
-            path: { cwd: ctx.directory, root: ctx.worktree },
-            cost: 0,
-            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-            modelID: model.id,
-            providerID: model.providerID,
-            time: { created: Date.now() },
             sessionID,
+            auto: task.auto,
+            overflow: task.overflow,
+            resume: task.resume,
+          })
+          if (result === "stop") break
+          continue
+        }
+
+        if (
+          lastFinished &&
+          shouldCheckFinishedAssistantForAutoCompaction({ lastUser, lastFinished }) &&
+          (yield* compaction.isOverflow({ tokens: lastFinished.tokens, model }))
+        ) {
+          if (shouldSkipAutoCompaction(msgs)) {
+            yield* slog.warn("skip duplicate auto compaction and continue resume", {
+              reason: "no real user input since summary",
+            })
+          } else {
+            yield* compaction.create({
+              sessionID,
+              agent: lastUser.agent,
+              model: lastUser.model,
+              auto: true,
+              resume: false,
+            })
+            continue
           }
-          yield* sessions.updateMessage(msg)
-          const handle = yield* processor.create({
-            assistantMessage: msg,
-            sessionID,
+        }
+
+        const agent = yield* agents.get(lastUser.agent)
+        if (!agent) {
+          const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
+          const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+          const error = new NamedError.Unknown({ message: `Agent not found: "${lastUser.agent}".${hint}` })
+          yield* bus.publish(Session.Event.Error, { sessionID, error: error.toObject() })
+          throw error
+        }
+        const maxSteps = agent.steps ?? Infinity
+        const isLastStep = step >= maxSteps
+        msgs = yield* insertReminders({ messages: msgs, agent, session })
+
+        const msg: MessageV2.Assistant = {
+          id: MessageID.ascending(),
+          parentID: lastUser.id,
+          role: "assistant",
+          mode: agent.name,
+          agent: agent.name,
+          variant: lastUser.model.variant,
+          path: { cwd: ctx.directory, root: ctx.worktree },
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+          modelID: model.id,
+          providerID: model.providerID,
+          time: { created: Date.now() },
+          sessionID,
+        }
+        yield* sessions.updateMessage(msg)
+        const handle = yield* processor.create({
+          assistantMessage: msg,
+          sessionID,
+          model,
+          abort,
+          isManualAbort: () => isManualAbort(sessionID),
+        })
+
+        const outcome: "break" | "continue" = yield* Effect.gen(function* () {
+          const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
+          const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
+
+          const tools = yield* resolveTools({
+            agent,
+            session,
             model,
-            abort,
-            isManualAbort: () => isManualAbort(sessionID),
+            tools: lastUser.tools,
+            processor: handle,
+            bypassAgentCheck,
+            messages: msgs,
           })
 
-          const outcome: "break" | "continue" = yield* Effect.gen(function* () {
-            const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
-            const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
-
-            const tools = yield* resolveTools({
-              agent,
-              session,
+          if (lastUser.format?.type === "json_schema") {
+            tools["StructuredOutput"] = createStructuredOutputTool({
+              schema: lastUser.format.schema,
               model,
-              tools: lastUser.tools,
-              processor: handle,
-              bypassAgentCheck,
-              messages: msgs,
+              onSuccess(output) {
+                structured = output
+              },
             })
+          }
 
-            if (lastUser.format?.type === "json_schema") {
-              tools["StructuredOutput"] = createStructuredOutputTool({
-                schema: lastUser.format.schema,
-                model,
-                onSuccess(output) {
-                  structured = output
-                },
-              })
-            }
+          if (step === 1)
+            yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-            if (step === 1)
-              yield* summary.summarize({ sessionID, messageID: lastUser.id }).pipe(Effect.ignore, Effect.forkIn(scope))
-
-            if (step > 1 && lastFinished) {
-              for (const m of msgs) {
-                if (m.info.role !== "user" || m.info.id <= lastFinished.id) continue
-                for (const p of m.parts) {
-                  if (p.type !== "text" || p.ignored || p.synthetic) continue
-                  if (!p.text.trim()) continue
-                  p.text = [
-                    "<system-reminder>",
-                    "The user sent the following message:",
-                    p.text,
-                    "",
-                    "Please address this message and continue with your tasks.",
-                    "</system-reminder>",
-                  ].join("\n")
-                }
+          if (step > 1 && lastFinished) {
+            for (const m of msgs) {
+              if (m.info.role !== "user" || m.info.id <= lastFinished.id) continue
+              for (const p of m.parts) {
+                if (p.type !== "text" || p.ignored || p.synthetic) continue
+                if (!p.text.trim()) continue
+                p.text = [
+                  "<system-reminder>",
+                  "The user sent the following message:",
+                  p.text,
+                  "",
+                  "Please address this message and continue with your tasks.",
+                  "</system-reminder>",
+                ].join("\n")
               }
             }
+          }
 
-            yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+          yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const promptMode = yield* Effect.promise(() => readPromptMode())
-            const promptPolicy = yield* Effect.promise(() =>
-              composePromptPolicy({
-                mode: promptMode.mode,
-                modelID: model.api.id || model.id,
+          const promptMode = yield* Effect.promise(() => readPromptMode())
+          const promptPolicy = yield* Effect.promise(() =>
+            composePromptPolicy({
+              mode: promptMode.mode,
+              modelID: model.api.id || model.id,
+            }),
+          )
+          const stripMediaForResume = shouldSkipAutoCompaction(msgs)
+          const [skills, env, instructions, modelMsgs] = yield* Effect.all([
+            promptPolicy.includeSkillsByDefault ? sys.skills(agent) : Effect.succeed(undefined),
+            sys.environment(model),
+            promptPolicy.includeProjectInstructions ? instruction.system().pipe(Effect.orDie) : Effect.succeed([]),
+            MessageV2.toModelMessagesEffect(msgs, model, { stripMedia: stripMediaForResume }),
+          ])
+          const system = [...env, ...instructions, ...(skills ? [skills] : [])]
+          const memoryMode = promptMemoryMode(msgs, lastUser)
+          const latestPlanReview =
+            memoryMode === "after-compaction" && !hasAcceptedPlanReview(msgs)
+              ? latestAcceptedPlanReviewContext(yield* sessions.messages({ sessionID }))
+              : undefined
+          if (latestPlanReview) system.push(latestPlanReview)
+          const reviewContext = reviewContextForAssistant(ctx.worktree || ctx.directory)
+          if (reviewContext) {
+            system.push(`<mendcode_review_context>\n${reviewContext}\n</mendcode_review_context>`)
+          }
+          const format = lastUser.format ?? { type: "text" as const }
+          if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+          const streamMessages = [
+            ...modelMsgs,
+            ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : []),
+          ]
+          const promptTokens = Token.estimatePayload({
+            system,
+            messages: streamMessages,
+            tools: Object.fromEntries(
+              Object.entries(tools).map(([name, item]) => {
+                const toolInfo = item as Record<string, unknown>
+                return [
+                  name,
+                  {
+                    description: toolInfo.description,
+                    inputSchema: toolInfo.inputSchema ?? toolInfo.parameters,
+                  },
+                ]
               }),
-            )
-            const stripMediaForResume = shouldSkipAutoCompaction(msgs)
-            const [skills, env, instructions, modelMsgs] = yield* Effect.all([
-              promptPolicy.includeSkillsByDefault ? sys.skills(agent) : Effect.succeed(undefined),
-              sys.environment(model),
-              promptPolicy.includeProjectInstructions ? instruction.system().pipe(Effect.orDie) : Effect.succeed([]),
-              MessageV2.toModelMessagesEffect(msgs, model, { stripMedia: stripMediaForResume }),
-            ])
-            const system = [...env, ...instructions, ...(skills ? [skills] : [])]
-            const memoryMode = promptMemoryMode(msgs, lastUser)
-            const latestPlanReview =
-              memoryMode === "after-compaction" && !hasAcceptedPlanReview(msgs)
-                ? latestAcceptedPlanReviewContext(yield* sessions.messages({ sessionID }))
-                : undefined
-            if (latestPlanReview) system.push(latestPlanReview)
-            const reviewContext = reviewContextForAssistant(ctx.worktree || ctx.directory)
-            if (reviewContext) {
-              system.push(`<mendcode_review_context>\n${reviewContext}\n</mendcode_review_context>`)
-            }
-            const format = lastUser.format ?? { type: "text" as const }
-            if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
-            const streamMessages = [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])]
-            const promptTokens = Token.estimatePayload({
-              system,
-              messages: streamMessages,
-              tools: Object.fromEntries(
-                Object.entries(tools).map(([name, item]) => {
-                  const toolInfo = item as Record<string, unknown>
-                  return [
-                    name,
-                    {
-                      description: toolInfo.description,
-                      inputSchema: toolInfo.inputSchema ?? toolInfo.parameters,
-                    },
-                  ]
-                }),
-              ),
+            ),
+          })
+          if (yield* compaction.isPromptOverflow({ tokens: promptTokens, model, respectAuto: false, mode: "hard" })) {
+            const duplicateAutoCompaction = shouldSkipAutoCompaction(msgs)
+            yield* slog.warn("pre-provider compaction", {
+              promptTokens,
+              reason: duplicateAutoCompaction
+                ? "synthetic resume still exceeded effective provider/model threshold before request dispatch"
+                : "prompt estimate exceeded effective provider/model threshold before request dispatch",
             })
-            if (yield* compaction.isPromptOverflow({ tokens: promptTokens, model, respectAuto: false, mode: "hard" })) {
-              const duplicateAutoCompaction = shouldSkipAutoCompaction(msgs)
-              yield* slog.warn("pre-provider compaction", {
-                promptTokens,
-                reason: duplicateAutoCompaction
-                  ? "synthetic resume still exceeded effective provider/model threshold before request dispatch"
-                  : "prompt estimate exceeded effective provider/model threshold before request dispatch",
+            yield* sessions
+              .removeMessage({ sessionID, messageID: handle.message.id })
+              .pipe(Effect.catch(() => Effect.void))
+            yield* compaction.create({
+              sessionID,
+              agent: lastUser.agent,
+              model: lastUser.model,
+              auto: true,
+              overflow: true,
+              resume: !duplicateAutoCompaction,
+              instructions: duplicateAutoCompaction
+                ? "Synthetic resume still exceeded the provider/model context before dispatch. Produce the smallest useful rescue summary and do not auto-resume again; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
+                : "The provider prompt exceeded the effective context threshold before dispatch. Preserve the active request, latest TODO/tool state, changed files, and verification evidence; if provider compaction is also too large, use local rescue.",
+            })
+            return "continue" as const
+          }
+          const result = yield* handle.process({
+            user: lastUser,
+            agent,
+            permission: session.permission,
+            sessionID,
+            parentSessionID: session.parentID,
+            cwd: ctx.directory,
+            root: ctx.worktree,
+            system,
+            messages: streamMessages,
+            memoryMode,
+            tools,
+            model,
+            toolChoice: format.type === "json_schema" ? "required" : undefined,
+          })
+
+          if (structured !== undefined) {
+            handle.message.structured = structured
+            handle.message.finish = handle.message.finish ?? "stop"
+            yield* sessions.updateMessage(handle.message)
+            return "break" as const
+          }
+
+          const finished = handle.message.finish && !["tool-calls", "unknown"].includes(handle.message.finish)
+          if (finished && !handle.message.error) {
+            if (format.type === "json_schema") {
+              handle.message.error = new MessageV2.StructuredOutputError({
+                message: "Model did not produce structured output",
+                retries: 0,
+              }).toObject()
+              yield* sessions.updateMessage(handle.message)
+              return "break" as const
+            }
+          }
+
+          if (result === "stop") return "break" as const
+          if (result === "compact") {
+            if (shouldSkipAutoCompaction(msgs)) {
+              yield* slog.warn("duplicate auto compaction requires rescue", {
+                reason: "synthetic resume still exceeded provider/model context",
               })
-              yield* sessions
-                .removeMessage({ sessionID, messageID: handle.message.id })
-                .pipe(Effect.catch(() => Effect.void))
+              const handleParts = MessageV2.parts(handle.message.id)
+              const hasUsefulParts = handleParts.some(
+                (part) => part.type === "text" || part.type === "tool" || part.type === "patch" || part.type === "file",
+              )
+              if (!handle.message.finish && !hasUsefulParts) {
+                yield* sessions
+                  .removeMessage({ sessionID, messageID: handle.message.id })
+                  .pipe(Effect.catch(() => Effect.void))
+              }
               yield* compaction.create({
                 sessionID,
                 agent: lastUser.agent,
                 model: lastUser.model,
                 auto: true,
                 overflow: true,
-                resume: !duplicateAutoCompaction,
+                resume: false,
                 instructions:
-                  duplicateAutoCompaction
-                    ? "Synthetic resume still exceeded the provider/model context before dispatch. Produce the smallest useful rescue summary and do not auto-resume again; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
-                    : "The provider prompt exceeded the effective context threshold before dispatch. Preserve the active request, latest TODO/tool state, changed files, and verification evidence; if provider compaction is also too large, use local rescue.",
+                  "Synthetic resume still exceeded the provider/model context. Produce a smaller rescue summary without auto-resuming again; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference.",
               })
               return "continue" as const
             }
-            const result = yield* handle.process({
-              user: lastUser,
-              agent,
-              permission: session.permission,
+            yield* compaction.create({
               sessionID,
-              parentSessionID: session.parentID,
-              cwd: ctx.directory,
-              root: ctx.worktree,
-              system,
-              messages: streamMessages,
-              memoryMode,
-              tools,
-              model,
-              toolChoice: format.type === "json_schema" ? "required" : undefined,
+              agent: lastUser.agent,
+              model: lastUser.model,
+              auto: true,
+              overflow: shouldResumeAfterActiveCompaction(handle.message.finish),
+              resume: shouldResumeAfterActiveCompaction(handle.message.finish),
             })
-
-            if (structured !== undefined) {
-              handle.message.structured = structured
-              handle.message.finish = handle.message.finish ?? "stop"
-              yield* sessions.updateMessage(handle.message)
-              return "break" as const
-            }
-
-            const finished = handle.message.finish && !["tool-calls", "unknown"].includes(handle.message.finish)
-            if (finished && !handle.message.error) {
-              if (format.type === "json_schema") {
-                handle.message.error = new MessageV2.StructuredOutputError({
-                  message: "Model did not produce structured output",
-                  retries: 0,
-                }).toObject()
-                yield* sessions.updateMessage(handle.message)
-                return "break" as const
-              }
-            }
-
-            if (result === "stop") return "break" as const
-            if (result === "compact") {
-              if (shouldSkipAutoCompaction(msgs)) {
-                yield* slog.warn("duplicate auto compaction requires rescue", {
-                  reason: "synthetic resume still exceeded provider/model context",
-                })
-                const handleParts = MessageV2.parts(handle.message.id)
-                const hasUsefulParts = handleParts.some(
-                  (part) => part.type === "text" || part.type === "tool" || part.type === "patch" || part.type === "file",
-                )
-                if (!handle.message.finish && !hasUsefulParts) {
-                  yield* sessions
-                    .removeMessage({ sessionID, messageID: handle.message.id })
-                    .pipe(Effect.catch(() => Effect.void))
-                }
-                yield* compaction.create({
-                  sessionID,
-                  agent: lastUser.agent,
-                  model: lastUser.model,
-                  auto: true,
-                  overflow: true,
-                  resume: false,
-                  instructions:
-                    "Synthetic resume still exceeded the provider/model context. Produce a smaller rescue summary without auto-resuming again; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference.",
-                })
-                return "continue" as const
-              }
-              yield* compaction.create({
-                sessionID,
-                agent: lastUser.agent,
-                model: lastUser.model,
-                auto: true,
-                overflow: shouldResumeAfterActiveCompaction(handle.message.finish),
-                resume: shouldResumeAfterActiveCompaction(handle.message.finish),
-              })
-              return "continue" as const
-            }
-            if (finished && !handle.message.error && !hasRunnableToolCalls(MessageV2.parts(handle.message.id))) {
-              return "break" as const
-            }
             return "continue" as const
-          }).pipe(Effect.ensuring(instruction.clear(handle.message.id)))
-          if (outcome === "break") {
-            yield* handle.flushMemory()
-            break
           }
-          continue
+          if (finished && !handle.message.error && !hasRunnableToolCalls(MessageV2.parts(handle.message.id))) {
+            return "break" as const
+          }
+          return "continue" as const
+        }).pipe(Effect.ensuring(instruction.clear(handle.message.id)))
+        if (outcome === "break") {
+          yield* handle.flushMemory()
+          break
         }
+        continue
+      }
 
-        yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
-        return yield* lastAssistant(sessionID)
-      },
-    )
+      yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
+      return yield* lastAssistant(sessionID)
+    })
 
     const loop: (input: LoopInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
+      let interruptedAssistantID: MessageID | undefined
+      const queueMode = (yield* config.get()).queue?.mode ?? "after-response"
       const work = Effect.acquireUseRelease(
         Effect.sync(() => {
           const controller = new AbortController()
           promptAbortControllers.set(input.sessionID, controller)
           return controller
         }),
-        (controller) => runLoop(input.sessionID, controller.signal),
+        (controller) => runLoop(input.sessionID, controller.signal, input.targetMessageID, queueMode === "after-tools"),
         (controller) =>
           Effect.sync(() => {
-            if (promptAbortControllers.get(input.sessionID) === controller) promptAbortControllers.delete(input.sessionID)
+            if (promptAbortControllers.get(input.sessionID) === controller)
+              promptAbortControllers.delete(input.sessionID)
           }),
       )
       return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), work, {
         queue: input.queue,
+        interrupt:
+          input.queue === true && queueMode === "immediate"
+            ? {
+                before: Effect.gen(function* () {
+                  promptAbortReasons.set(input.sessionID, "user")
+                  const orphanedAssistant = yield* findOrphanedAssistantOnCancel(input.sessionID)
+                  if (Option.isSome(orphanedAssistant)) interruptedAssistantID = orphanedAssistant.value.info.id
+                  promptAbortControllers.get(input.sessionID)?.abort()
+                }),
+                after: Effect.gen(function* () {
+                  if (interruptedAssistantID)
+                    yield* finishOrphanedAssistantOnCancel(input.sessionID, interruptedAssistantID)
+                }).pipe(Effect.ensuring(Effect.sync(() => promptAbortReasons.delete(input.sessionID)))),
+              }
+            : undefined,
       })
     })
 
@@ -2297,6 +2439,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
     return Service.of({
       cancel,
+      interrupt,
       prompt,
       loop,
       shell,
@@ -2369,6 +2512,7 @@ export type PromptInput = Schema.Schema.Type<typeof PromptInput>
 export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput")({
   sessionID: SessionID,
   queue: Schema.optional(Schema.Boolean),
+  targetMessageID: Schema.optional(MessageID),
 }) {
   static readonly zod = zod(this)
 }
@@ -2418,7 +2562,9 @@ export function createStructuredOutputTool(input: {
 }): AITool {
   // Remove $schema property if present (not needed for tool input)
   const { $schema: _, ...toolSchema } = input.schema
-  const transformed = input.model ? ProviderTransform.schema(input.model, toolSchema as JSONSchema7) : (toolSchema as JSONSchema7)
+  const transformed = input.model
+    ? ProviderTransform.schema(input.model, toolSchema as JSONSchema7)
+    : (toolSchema as JSONSchema7)
 
   return tool({
     description: STRUCTURED_OUTPUT_DESCRIPTION,

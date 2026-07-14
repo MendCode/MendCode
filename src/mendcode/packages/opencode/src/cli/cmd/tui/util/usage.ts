@@ -45,21 +45,11 @@ const money = new Intl.NumberFormat("en-US", {
   currency: "USD",
 })
 
-const CONTEXT_USAGE_RESERVED = 20_000
-const OUTPUT_TOKEN_MAX = 32_000
 const COMPACT_CONTEXT_LABEL_WIDTH = 4
 
 function safe(value: number | undefined) {
   if (!Number.isFinite(value)) return 0
   return value ?? 0
-}
-
-function configCompactionReserved(config: unknown) {
-  if (!config || typeof config !== "object") return undefined
-  const compaction = (config as { compaction?: { reserved?: unknown } }).compaction
-  return typeof compaction?.reserved === "number" && Number.isFinite(compaction.reserved)
-    ? compaction.reserved
-    : undefined
 }
 
 export function assistantTokenTotals(message: Pick<AssistantMessage, "tokens">) {
@@ -74,15 +64,12 @@ export function assistantTokenTotals(message: Pick<AssistantMessage, "tokens">) 
   }
 }
 
-export function usableContextLimit(model: Provider["models"][string] | undefined, config?: unknown) {
+export function usableContextLimit(model: Provider["models"][string] | undefined, _config?: unknown) {
   const context = safe(model?.limit.context)
   if (context <= 0) return undefined
 
-  const output = Math.min(safe(model?.limit.output) || OUTPUT_TOKEN_MAX, OUTPUT_TOKEN_MAX)
-  const reserved = configCompactionReserved(config) ?? Math.min(CONTEXT_USAGE_RESERVED, output)
   const input = safe(model?.limit.input)
-
-  return input > 0 ? Math.max(0, input - reserved) : Math.max(0, context - output)
+  return input > 0 ? input : context
 }
 
 export function compactContextTokenLabel(tokens: number | undefined) {

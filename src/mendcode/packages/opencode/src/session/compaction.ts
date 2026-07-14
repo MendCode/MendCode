@@ -1482,7 +1482,7 @@ export const layer: Layer.Layer<
             // Internal marker for auto-compaction followups so provider plugins
             // can distinguish them from manual post-compaction user prompts.
             // This is not a stable plugin contract and may change or disappear.
-            metadata: { compaction_continue: true },
+            metadata: { compaction_continue: true, compaction_parent_id: input.parentID },
             synthetic: true,
             text,
             time: {

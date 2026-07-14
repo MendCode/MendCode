@@ -44,6 +44,9 @@ export const Model = Schema.Struct({
   ),
   compaction: Schema.optional(
     Schema.Struct({
+      token_limit: Schema.optional(PositiveInt).annotate({
+        description: "Absolute auto-compaction trigger in tokens for this provider model.",
+      }),
       threshold: Schema.optional(Schema.Finite).annotate({
         description: "Auto-compaction threshold percent for this provider model.",
       }),
@@ -118,6 +121,9 @@ export const Info = Schema.Struct({
   ),
   compaction: Schema.optional(
     Schema.Struct({
+      token_limit: Schema.optional(PositiveInt).annotate({
+        description: "Absolute auto-compaction trigger in tokens for all models in this provider.",
+      }),
       threshold: Schema.optional(Schema.Finite).annotate({
         description: "Auto-compaction threshold percent for all models in this provider.",
       }),

@@ -11,7 +11,7 @@ If you are deciding what to show on GitHub or the website, start with [Feature M
 3. [Customization](customization.md): prompt input, input marker, prompt status, home centered/split modes, Agent View, ASCII title/mascot, activity states, and team profile examples.
 4. [Plan Mode](plan-mode.md): interactive plan review modal, approve/edit/comment/reject flow, Mermaid support, and post-approval implementation handoff.
 5. [Changes Review](changes-review.md): `/changes` diff workspace, keybinds, comments, responsive layout, and agent-visible review context.
-6. [Loop Workflows](loop-workflows.md): durable loop workflows, Agent View loop sessions, dry-run/report-only/full execution modes, terminal monitor, and OS background service.
+6. [Loop Workflows](loop-workflows.md): durable loop sessions, Agent View loop roots, `/loop` creation, `/loops` supervision, dry-run/report-only/full execution modes, terminal monitor, and OS background service.
 7. [Memory Center](memory-center.md): saved memories, proposals, categories, Dream status, project grouping, and the constrained memory side agent for questions, explanations, and draft proposals.
 8. [Usage Insights](usage-insights.md): global/project activity dashboard, token heatmap, AI time, top tools/agents/models, cache behavior, and weather.
 9. [Packages and team sharing](packages-and-team-sharing.md): package commands, agents, modes, skills, prompts, MCP files, widgets, TUI profiles, model policy, permissions, memory, and worktree policy for teams.
@@ -56,6 +56,7 @@ If you are deciding what to show on GitHub or the website, start with [Feature M
 ```bash
 mendcode
 mendcode status
+mendcode loops status
 mendcode setup status
 mendcode models status
 mendcode packages status
@@ -64,6 +65,13 @@ mendcode tsm status
 mendcode worktree status
 mendcode --worktree [branch|path|id]
 mendcode --tsm [branch|path|id|--all]
+```
+
+## Loop Workflow Controls
+
+```text
+/loop   # create/activate a loop from natural language
+/loops  # supervise active and historical loops
 ```
 
 ## TUI Customization Commands
@@ -120,6 +128,8 @@ CLI profile inspection exists for compatibility/debugging, but it is not the nor
 - `src/mendcode/packages/opencode/src/session/loop.ts`: loop workflow model and lifecycle.
 - `src/mendcode/packages/opencode/src/session/loop-runner.ts`: loop wakeup execution path.
 - `src/mendcode/packages/opencode/src/tool/loop.ts`: assistant-facing loop workflow tool.
+- `src/mendcode/packages/opencode/src/server/routes/instance/loop.ts` and `src/mendcode/packages/opencode/src/server/routes/instance/httpapi/handlers/loop.ts`: legacy and Effect loop read/control routes.
+- `src/mendcode/packages/opencode/src/mend/cli/control-plane.ts` and `src/mendcode/packages/opencode/src/mend/runtime/loop-service.ts`: public loop CLI controls and project OS service lifecycle.
 - `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/stats/index.tsx`: Usage Insights TUI route.
 - `src/mendcode/packages/opencode/src/provider/claude-code.ts`: local Claude Code CLI provider bridge and validation.
 - `src/mendcode/packages/plugin/src/tui.ts`: public TUI plugin/widget types.

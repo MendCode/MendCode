@@ -37,6 +37,7 @@ import { setMendFooter, setMendFooterEntry } from "@/mend/tui/footer"
 import { setMendWorkingIndicator } from "@/mend/tui/working-indicator"
 import { setMendEditor, setMendEditorVisual } from "@/mend/tui/editor-host"
 import { Process } from "@/util/process"
+import { memoryOverview } from "@/mend/memory/overview"
 
 type RouteEntry = {
   key: symbol
@@ -359,6 +360,7 @@ function mendAppApi(): MendExtensionApi["app"] {
         "overlay.nonCapturing",
         "theme.set",
         "state.read",
+        "memory.graph.read",
         "lifecycle.dispose",
       ]
     },
@@ -563,6 +565,26 @@ export function createTuiApi(input: Input): TuiPluginApi & MendExtensionApi {
         capabilities() {
           return visibleCustomizationCapabilities().map((item) => `${item.id}:${item.status}:${item.trust}`)
         },
+      },
+    },
+    memory: {
+      async graph() {
+        const root = input.sync.path.directory
+        const overview = await memoryOverview(root)
+        return {
+          root,
+          facts: overview.facts.map((fact) => ({
+            id: fact.id,
+            text: fact.text,
+            scope: fact.scope,
+            categoryIDs: fact.categoryIDs,
+            retrievalPriority: fact.retrievalPriority,
+            materialized: fact.materialized,
+          })),
+          links: overview.links.map((link) => ({ from: link.from, to: link.to, kind: link.kind })),
+          categories: overview.categories.map((category) => ({ id: category.id, label: category.label, count: category.count })),
+          health: overview.graphHealth,
+        }
       },
     },
     get client() {

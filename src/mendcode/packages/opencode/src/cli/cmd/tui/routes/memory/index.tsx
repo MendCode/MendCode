@@ -1,6 +1,7 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
-import type { ScrollBoxRenderable, TextareaRenderable } from "@opentui/core"
+import { BoxRenderable, MouseButton, MouseEvent, type ScrollBoxRenderable, type TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import { asciiGraphNearestNode, asciiGraphRuns, layoutAsciiGraph, renderAsciiGraph, type AsciiGraphCell } from "@mendcode/plugin/tui"
 import { memoryOverview } from "@/mend/memory/overview"
 import { applyMemoryProposal, rejectMemoryProposal, updateMemoryProposal, type MemoryProposal } from "@/mend/memory/proposals"
 import { deleteMemoryEntry, updateMemoryEntry, type MemoryEntry } from "@/mend/memory/store"
@@ -31,7 +32,7 @@ import { useToast } from "@tui/ui/toast"
 
 type MemoryOverview = Awaited<ReturnType<typeof memoryOverview>>
 type DreamRunDetailView = MemoryOverview["dreamRunDetails"][number]
-type MemoryTab = "overview" | "project" | "global" | "policy" | "dream"
+type MemoryTab = "overview" | "project" | "global" | "graph" | "policy" | "dream"
 type Selection =
   | { kind: "entry"; entry: MemoryEntry }
   | { kind: "proposal"; proposal: MemoryProposal }
@@ -39,12 +40,13 @@ type Selection =
   | { kind: "dream"; detail: DreamRunDetailView | null }
   | { kind: "overview" }
 
-const TABS: Array<{ id: MemoryTab; label: string }> = [
-  { id: "overview", label: "Overview" },
-  { id: "project", label: "Project memories" },
-  { id: "global", label: "Global memories" },
-  { id: "policy", label: "Policy & categories" },
-  { id: "dream", label: "Dream" },
+const TABS: Array<{ id: MemoryTab; label: string; compactLabel: string }> = [
+  { id: "overview", label: "Overview", compactLabel: "Overview" },
+  { id: "project", label: "Project memories", compactLabel: "Project" },
+  { id: "global", label: "Global memories", compactLabel: "Global" },
+  { id: "graph", label: "Graph", compactLabel: "Graph" },
+  { id: "policy", label: "Policy & categories", compactLabel: "Policy" },
+  { id: "dream", label: "Dream", compactLabel: "Dream" },
 ]
 
 const WRITE_POLICIES: MemoryWritePolicy[] = ["disabled", "pending", "auto-apply-safe", "manual-only"]
@@ -59,6 +61,17 @@ export function memoryLayoutForDimensions(input: { width: number; height: number
     medium: input.width >= 112 && input.height >= 28,
     wide: input.width >= 132 && input.height >= 28,
     contentWidth: Math.max(40, input.width - 6),
+  }
+}
+
+export function memoryGraphExplorerLayout(input: { width: number; height: number }) {
+  const roomy = input.width >= 96
+  const inspectorWidth = roomy ? Math.min(62, Math.max(46, Math.floor(input.width * 0.3))) : input.width
+  return {
+    roomy,
+    inspectorWidth,
+    canvasWidth: Math.max(30, Math.min(180, roomy ? input.width - inspectorWidth - 4 : input.width - 2)),
+    canvasHeight: Math.max(8, Math.min(72, roomy ? input.height - 12 : Math.floor((input.height - 9) * 0.42))),
   }
 }
 
@@ -115,13 +128,49 @@ export function shouldMemoryRouteHandleKey(input: {
   return !input.dialogOpen && input.defaultPrevented !== true && input.textInputActive !== true
 }
 
-export function memoryTabCellWidths(input: { width: number; count?: number }) {
-  const count = Math.max(1, input.count ?? TABS.length)
-  const gaps = Math.max(0, count - 1)
-  const usable = Math.max(count, Math.floor(input.width) - gaps)
-  const base = Math.floor(usable / count)
-  const remainder = usable % count
-  return Array.from({ length: count }, (_, index) => base + (index < remainder ? 1 : 0))
+export function memoryTabCellWidths(input: { width: number; labels?: string[]; count?: number; gap?: number }) {
+  const count = Math.max(1, input.labels?.length ?? input.count ?? TABS.length)
+  const gap = Math.max(0, input.gap ?? 1)
+  const available = Math.max(count * 2, Math.floor(input.width) - Math.max(0, count - 1) * gap)
+  const desired = Array.from({ length: count }, (_, index) => Math.max(2, input.labels?.[index]?.length ?? 8))
+  const minimum = available < count * 6 ? 2 : 4
+  const widths = desired.map((value) => Math.max(minimum, value))
+  while (widths.reduce((sum, value) => sum + value, 0) > available) {
+    const index = widths.reduce((largest, value, current) => value > widths[largest]! ? current : largest, 0)
+    if (widths[index]! <= minimum) break
+    widths[index]!--
+  }
+  return widths
+}
+
+export function memoryTabPresentation(input: { width: number; active: MemoryTab }) {
+  const labels = (compact: boolean) => TABS.map((tab, index) => `${input.active === tab.id ? "●" : " "} ${index + 1} ${compact ? tab.compactLabel : tab.label}`)
+  const full = labels(false)
+  const compact = labels(true)
+  const fits = (items: string[], gap: number) => items.reduce((sum, item) => sum + item.length, 0) + Math.max(0, items.length - 1) * gap <= input.width
+  if (fits(full, 2)) return { labels: full, gap: 2, mode: "full" as const }
+  if (fits(compact, 1)) return { labels: compact, gap: 1, mode: "compact" as const }
+  return { labels: TABS.map((tab, index) => `${input.active === tab.id ? "●" : " "}${index + 1}`), gap: 1, mode: "numeric" as const }
+}
+
+export function memoryGraphCommandHints(width: number) {
+  const essentials = [
+    { key: "↑↓←→", label: "select" },
+    { key: "F", label: "find" },
+    { key: "P", label: "projects" },
+    { key: "I", label: "isolates" },
+    { key: "Esc", label: "back" },
+  ]
+  if (width < 72) return essentials
+  return [
+    essentials[0]!,
+    { key: "Click", label: "focus" },
+    ...essentials.slice(1, 4),
+    { key: "+/-", label: "zoom" },
+    { key: "[ ]", label: "cycle" },
+    { key: "R", label: "refresh" },
+    essentials[4]!,
+  ]
 }
 
 function comparableRoot(root: string) {
@@ -195,165 +244,173 @@ type MemoryGraphMiniCategory = {
   count: number
 }
 
-const GRAPH_GLYPHS = ["●", "◆", "■", "▲", "◇", "○", "✦", "✚", "✹", "⬟"]
-
-function memoryGraphGlyph(index: number) {
-  return GRAPH_GLYPHS[index % GRAPH_GLYPHS.length] ?? "●"
-}
-
-function memoryGraphLinePoints(from: { x: number; y: number }, to: { x: number; y: number }) {
-  const points: Array<{ x: number; y: number }> = []
-  const dx = Math.abs(to.x - from.x)
-  const dy = -Math.abs(to.y - from.y)
-  const sx = from.x < to.x ? 1 : -1
-  const sy = from.y < to.y ? 1 : -1
-  let error = dx + dy
-  let x = from.x
-  let y = from.y
-  while (true) {
-    points.push({ x, y })
-    if (x === to.x && y === to.y) return points
-    const doubleError = 2 * error
-    if (doubleError >= dy) {
-      error += dy
-      x += sx
-    }
-    if (doubleError <= dx) {
-      error += dx
-      y += sy
-    }
-  }
-}
-
-function memoryGraphMiniPreview(input: { canvas: string[][]; width: number; height: number }) {
-  const previewWidth = Math.max(10, Math.min(18, Math.floor(input.width)))
-  const previewHeight = Math.max(3, Math.min(5, Math.floor(input.height)))
-  return Array.from({ length: previewHeight }, (_, y) => Array.from({ length: previewWidth }, (_, x) => {
-    const sampleY = Math.min(input.canvas.length - 1, Math.floor((y / Math.max(1, previewHeight - 1)) * Math.max(0, input.canvas.length - 1)))
-    const sampleX = Math.min((input.canvas[sampleY]?.length ?? 1) - 1, Math.floor((x / Math.max(1, previewWidth - 1)) * Math.max(0, (input.canvas[sampleY]?.length ?? 1) - 1)))
-    const value = input.canvas[sampleY]?.[sampleX] ?? " "
-    return value === " " ? " " : value === "×" ? "×" : value === "┈" ? "┈" : "·"
-  }).join("").replace(/\s+$/, ""))
-}
-
 export function memoryGraphMiniMap(input: {
   facts: MemoryGraphMiniFact[]
   links: MemoryGraphMiniLink[]
   categories: MemoryGraphMiniCategory[]
   width: number
   height?: number
+  connectedOnly?: boolean
+  selectedID?: string
+  zoom?: number
 }) {
-  const width = Math.max(20, Math.min(72, Math.floor(input.width)))
-  const height = Math.max(6, Math.min(14, Math.floor(input.height ?? 10)))
+  const width = Math.max(20, Math.min(180, Math.floor(input.width)))
+  const height = Math.max(6, Math.min(72, Math.floor(input.height ?? 10)))
   const materializedFacts = input.facts.filter((fact) => fact.materialized !== false)
   const legacyDerivedFacts = input.facts.length - materializedFacts.length
-  const explicitDegrees = new Map<string, number>()
-  for (const link of input.links) {
-    explicitDegrees.set(link.from, (explicitDegrees.get(link.from) ?? 0) + 1)
-    explicitDegrees.set(link.to, (explicitDegrees.get(link.to) ?? 0) + 1)
-  }
-  const facts = materializedFacts
-    .toSorted((a, b) => (explicitDegrees.get(b.id) ?? 0) - (explicitDegrees.get(a.id) ?? 0) || (a.retrievalPriority ?? 99) - (b.retrievalPriority ?? 99) || a.id.localeCompare(b.id))
-    .slice(0, width < 44 ? 8 : 16)
-  const factIDs = new Set(facts.map((fact) => fact.id))
-  const explicitLinks = input.links.filter((link) => factIDs.has(link.from) && factIDs.has(link.to)).slice(0, 28)
-  const explicitLinkKeys = new Set(explicitLinks.flatMap((link) => [`${link.from}\u0000${link.to}`, `${link.to}\u0000${link.from}`]))
-  const explicitConnectedIDs = new Set(explicitLinks.flatMap((link) => [link.from, link.to]))
-  const categoryGroups = Array.from(facts
-    .flatMap((fact) => fact.categoryIDs.map((categoryID) => ({ fact, categoryID })))
-    .reduce((groups, item) => groups.set(item.categoryID, [...(groups.get(item.categoryID) ?? []), item.fact]), new Map<string, MemoryGraphMiniFact[]>())
-    .values())
-  const inferredLinks = categoryGroups
-    .flatMap((group) => group.slice(1).map((fact, index) => ({ from: group[index]!.id, to: fact.id, kind: "category", inferred: true })))
-  const representativeFacts = input.categories
-    .map((category) => facts.find((fact) => fact.categoryIDs.includes(category.id)))
-    .filter((fact, index, all): fact is MemoryGraphMiniFact => !!fact && all.findIndex((item) => item?.id === fact.id) === index)
-  const categoryRepresentativeLinks = representativeFacts
-    .slice(1)
-    .map((fact, index) => ({ from: representativeFacts[index]!.id, to: fact.id, kind: "category", inferred: true }))
-  const links = [
-    ...explicitLinks.map((link) => ({ ...link, inferred: false })),
-    ...[...inferredLinks, ...categoryRepresentativeLinks]
-      .filter((link) => link.from !== link.to && !explicitLinkKeys.has(`${link.from}\u0000${link.to}`))
-      .filter((link, index, all) => all.findIndex((candidate) => `${candidate.from}\u0000${candidate.to}` === `${link.from}\u0000${link.to}` || `${candidate.from}\u0000${candidate.to}` === `${link.to}\u0000${link.from}`) === index)
-      .slice(0, Math.max(0, 28 - explicitLinks.length)),
-  ]
-  const visibleCategoryIDs = new Set(facts.flatMap((fact) => fact.categoryIDs))
-  const categories = input.categories.filter((category) => category.count > 0 && visibleCategoryIDs.has(category.id))
-  const categoryIndex = new Map(input.categories.map((category, index) => [category.id, index]))
-  const graphDegrees = new Map<string, number>()
-  for (const link of links) {
-    graphDegrees.set(link.from, (graphDegrees.get(link.from) ?? 0) + 1)
-    graphDegrees.set(link.to, (graphDegrees.get(link.to) ?? 0) + 1)
-  }
-  if (!facts.length) {
+  const linkedIDs = new Set(input.links.flatMap((link) => [link.from, link.to]))
+  const isolatedFacts = materializedFacts.filter((fact) => !linkedIDs.has(fact.id))
+  const graphFacts = input.connectedOnly ? materializedFacts.filter((fact) => linkedIDs.has(fact.id)) : materializedFacts
+  const scene = layoutAsciiGraph({
+    nodes: graphFacts.map((fact) => ({
+      id: fact.id,
+      label: memoryPreviewText(fact.text, width < 44 ? 18 : 26),
+      group: fact.categoryIDs[0] ?? "uncategorized",
+      weight: Math.max(0, 10 - (fact.retrievalPriority ?? 10)),
+    })),
+    edges: input.links,
+    maxNodes: width < 44 ? 10 : width < 64 ? 16 : 24,
+  })
+  if (!scene.nodes.length) {
     return {
       rows: [],
+      cells: [] as AsciiGraphCell[][],
+      nodeCells: {} as Record<string, { x: number; y: number }>,
+      scene,
+      selectedID: undefined,
       legend: [],
       labels: [],
       minimap: [],
       edgeLabels: [],
       focusLines: [],
       relationRows: [],
-      isolatedRows: [],
-      emptyState: legacyDerivedFacts > 0 ? "legacy-only" : "empty",
-      stats: `connected 0 · isolated 0 · visible 0/${materializedFacts.length}`,
-      status: `0/${input.facts.length} materialized · ${legacyDerivedFacts} legacy-derived · 0 explicit · 0 inferred`,
+      isolatedRows: isolatedFacts.slice(0, width < 44 ? 3 : 5).map((fact) => `○ ${memoryPreviewText(fact.text, 34)}`),
+      emptyState: materializedFacts.length ? "disconnected" : legacyDerivedFacts > 0 ? "legacy-only" : "empty",
+      stats: `connected 0 · isolated ${isolatedFacts.length} · visible 0/${materializedFacts.length}`,
+      status: `${materializedFacts.length}/${input.facts.length} materialized · ${legacyDerivedFacts} legacy-derived · 0/${input.links.length} links`,
     }
   }
-  const canvas = Array.from({ length: height }, () => Array.from({ length: width }, () => " "))
-  const center = { x: Math.floor(width / 2), y: Math.floor(height / 2) }
-  const radiusX = Math.max(4, Math.floor(width / 2) - 4)
-  const radiusY = Math.max(2, Math.floor(height / 2) - 2)
-  const positions = new Map<string, { x: number; y: number }>()
-  for (const [index, fact] of facts.entries()) {
-    const angle = facts.length === 1 ? 0 : (2 * Math.PI * index) / facts.length - Math.PI / 2
-    const highDegree = index === 0 && (graphDegrees.get(fact.id) ?? 0) > 1
-    positions.set(fact.id, highDegree ? center : {
-      x: Math.max(1, Math.min(width - 2, Math.round(center.x + Math.cos(angle) * radiusX))),
-      y: Math.max(1, Math.min(height - 2, Math.round(center.y + Math.sin(angle) * radiusY))),
-    })
-  }
-  for (const link of links) {
-    const from = positions.get(link.from)
-    const to = positions.get(link.to)
-    if (!from || !to) continue
-    for (const point of memoryGraphLinePoints(from, to).slice(1, -1)) {
-      if (canvas[point.y]?.[point.x] === " ") canvas[point.y]![point.x] = link.kind === "conflicts" ? "×" : link.inferred ? "┈" : "·"
-    }
-  }
-  for (const fact of facts) {
-    const point = positions.get(fact.id)
-    if (!point) continue
-    const glyph = memoryGraphGlyph(categoryIndex.get(fact.categoryIDs[0] ?? "") ?? 0)
-    canvas[point.y]![point.x] = glyph
-  }
-  const isolatedFacts = facts.filter((fact) => !explicitConnectedIDs.has(fact.id))
-  const factGlyph = (id: string) => {
-    const fact = facts.find((item) => item.id === id)
-    return fact ? memoryGraphGlyph(categoryIndex.get(fact.categoryIDs[0] ?? "") ?? 0) : "?"
-  }
-  const factLabel = (id: string, max = 26) => memoryPreviewText(facts.find((item) => item.id === id)?.text ?? id, max)
-  const focus = facts.toSorted((a, b) => (explicitDegrees.get(b.id) ?? 0) - (explicitDegrees.get(a.id) ?? 0) || (a.retrievalPriority ?? 99) - (b.retrievalPriority ?? 99) || a.id.localeCompare(b.id))[0]
-  const focusDegree = focus ? explicitDegrees.get(focus.id) ?? 0 : 0
+  const visibleIDs = new Set(scene.nodes.map((node) => node.id))
+  const facts = materializedFacts.filter((fact) => visibleIDs.has(fact.id))
+  const factByID = new Map(facts.map((fact) => [fact.id, fact]))
+  const explicitLinks = scene.edges
+  const connectedIDs = new Set(explicitLinks.flatMap((link) => [link.from, link.to]))
+  const focus = scene.nodes.find((node) => node.id === input.selectedID)
+    ?? scene.nodes.toSorted((a, b) => b.degree - a.degree || (factByID.get(a.id)?.retrievalPriority ?? 99) - (factByID.get(b.id)?.retrievalPriority ?? 99) || a.id.localeCompare(b.id))[0]
+  const frame = renderAsciiGraph(scene, {
+    width,
+    height,
+    marker: "braille",
+    selectedID: focus?.id,
+    labelMode: "none",
+    labelMaxLength: width < 44 ? 16 : 22,
+    viewport: { zoom: Math.max(0.4, Math.min(4, input.zoom ?? 1)) },
+  })
+  const minimap = renderAsciiGraph(scene, {
+    width: width < 44 ? 10 : 16,
+    height: width < 44 ? 3 : 4,
+    marker: "braille",
+    selectedID: focus?.id,
+    labelMode: "none",
+  })
+  const visibleCategoryIDs = new Set(facts.flatMap((fact) => fact.categoryIDs))
+  const categories = input.categories.filter((category) => category.count > 0 && visibleCategoryIDs.has(category.id))
+  const visibleCategoryCounts = new Map(categories.map((category) => [category.id, facts.filter((fact) => fact.categoryIDs.includes(category.id)).length]))
+  const factLabel = (id: string, max = 26) => memoryPreviewText(factByID.get(id)?.text ?? id, max)
   return {
-    rows: canvas.map((row) => row.join("").replace(/\s+$/, "")),
-    legend: categories.slice(0, width < 44 ? 3 : 5).map((category) => `${memoryGraphGlyph(categoryIndex.get(category.id) ?? 0)} ${category.label} ${category.count}`),
-    labels: facts.slice(0, width < 44 ? 3 : 5).map((fact) => `${memoryGraphGlyph(categoryIndex.get(fact.categoryIDs[0] ?? "") ?? 0)} ${explicitConnectedIDs.has(fact.id) ? "connected" : "isolated"} · ${memoryPreviewText(fact.text, 36)}`),
-    minimap: memoryGraphMiniPreview({ canvas, width: width < 44 ? 10 : 16, height: width < 44 ? 3 : 4 }),
-    edgeLabels: explicitLinks.slice(0, width < 44 ? 2 : 4).map((link) => `${factGlyph(link.from)} --${link.kind}--> ${factGlyph(link.to)}`),
+    rows: frame.rows,
+    cells: frame.cells,
+    nodeCells: frame.nodeCells,
+    scene,
+    selectedID: focus?.id,
+    legend: categories.slice(0, width < 44 ? 3 : 5).map((category) => `● ${category.label} ${visibleCategoryCounts.get(category.id) ?? 0}`),
+    labels: facts.slice(0, width < 44 ? 3 : 5).map((fact) => `● ${connectedIDs.has(fact.id) ? "connected" : "isolated"} · ${memoryGraphMiniMapLabel(fact, 36)}`),
+    minimap: minimap.rows,
+    edgeLabels: explicitLinks.slice(0, width < 44 ? 2 : 4).map((link) => `● --${link.kind}--> ●`),
     focusLines: focus ? [
-      `focus ${factGlyph(focus.id)} degree ${focusDegree} · ${focus.scope}`,
-      memoryPreviewText(focus.text, width < 44 ? 36 : 48),
+      `focus ● degree ${focus.degree} · ${factByID.get(focus.id)?.scope ?? "project"}`,
+      memoryPreviewText(factByID.get(focus.id)?.text, width < 44 ? 36 : 48),
     ] : [],
     relationRows: explicitLinks.length
-      ? explicitLinks.slice(0, width < 44 ? 3 : 5).map((link) => `${factGlyph(link.from)} ${factLabel(link.from, 18)} --${link.kind}--> ${factGlyph(link.to)} ${factLabel(link.to, 18)}`)
-      : links.slice(0, width < 44 ? 3 : 5).map((link) => `${factGlyph(link.from)} ${factLabel(link.from, 18)} --${link.kind}*--> ${factGlyph(link.to)} ${factLabel(link.to, 18)}`),
-    isolatedRows: isolatedFacts.slice(0, width < 44 ? 3 : 5).map((fact) => `${factGlyph(fact.id)} ${memoryPreviewText(fact.text, 34)}`),
+      ? explicitLinks.slice(0, width < 44 ? 3 : 5).map((link) => `● ${factLabel(link.from, 18)} --${link.kind}--> ● ${factLabel(link.to, 18)}`)
+      : [],
+    isolatedRows: isolatedFacts.slice(0, width < 44 ? 3 : 5).map((fact) => `○ ${memoryPreviewText(fact.text, 34)}`),
     emptyState: "materialized",
-    stats: `connected ${explicitConnectedIDs.size} · isolated ${isolatedFacts.length} · visible ${facts.length}/${materializedFacts.length}`,
-    status: `${facts.length}/${input.facts.length} materialized · ${legacyDerivedFacts} legacy-derived · ${explicitLinks.length} explicit · ${links.length - explicitLinks.length} inferred · ${categories.length} categories`,
+    stats: `connected ${connectedIDs.size} · isolated ${isolatedFacts.length} · visible ${facts.length}/${materializedFacts.length}`,
+    status: `${materializedFacts.length}/${input.facts.length} materialized · ${legacyDerivedFacts} legacy-derived · ${facts.length}/${materializedFacts.length} visible · ${explicitLinks.length}/${input.links.length} links · ${categories.length} categories`,
   }
+}
+
+function memoryGraphMiniMapLabel(fact: MemoryGraphMiniFact, max: number) {
+  return memoryPreviewText(fact.text, max)
+}
+
+type MemoryGraphWorkspaceRef = Pick<MemoryWorkspace, "id" | "root" | "displayName">
+
+export function memoryGraphFactProjectLabels(input: {
+  fact: Pick<MemoryOverview["facts"][number], "scope" | "ownerWorkspaceIDs">
+  workspaces: MemoryGraphWorkspaceRef[]
+  activeRoot: string
+  activeLabel: string
+}) {
+  if (input.fact.scope === "global") return ["Global memory"]
+  const owners = input.fact.ownerWorkspaceIDs ?? []
+  const labels = owners.flatMap((owner) => {
+    const normalized = comparableRoot(owner)
+    const workspace = input.workspaces.find((item) => item.id === owner || comparableRoot(item.root) === normalized)
+    if (workspace) return [workspace.displayName]
+    if (normalized === comparableRoot(input.activeRoot)) return [input.activeLabel]
+    const label = normalized.split(/[\\/]/).filter(Boolean).at(-1)
+    return label ? [label] : []
+  })
+  if (labels.length) return [...new Set(labels)]
+  if (input.fact.scope === "workspace") return [input.activeLabel]
+  return [input.activeLabel]
+}
+
+export function memoryGraphSearchMatches(input: {
+  facts: MemoryOverview["facts"]
+  query: string
+  projectLabel: (fact: MemoryOverview["facts"][number]) => string
+  limit?: number
+}) {
+  const terms = input.query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (!terms.length) return []
+  return input.facts
+    .filter((fact) => {
+      const searchable = [fact.text, fact.normalizedSummary, fact.scope, fact.categoryIDs.join(" "), input.projectLabel(fact)].join(" ").toLowerCase()
+      return terms.every((term) => searchable.includes(term))
+    })
+    .toSorted((a, b) => Number(b.materialized) - Number(a.materialized) || b.confidence - a.confidence || b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, input.limit ?? 8)
+}
+
+export function MemoryGraphCanvasRows(props: {
+  cells: AsciiGraphCell[][]
+  categories: MemoryGraphMiniCategory[]
+}) {
+  const { theme } = useTheme()
+  const categoryIndex = createMemo(() => new Map(props.categories.map((category, index) => [category.id, index])))
+  const palette = () => [theme.primary, theme.secondary, theme.accent, theme.success, theme.info, theme.warning]
+  const color = (cell: Omit<AsciiGraphCell, "char">) => {
+    if (cell.kind === "selected") return theme.primary
+    if (cell.kind === "conflict") return theme.warning
+    if (cell.kind === "edge") return theme.borderActive
+    if (cell.kind === "label") return theme.text
+    if (cell.kind === "node") return palette()[(categoryIndex().get(cell.group ?? "") ?? 0) % palette().length] ?? theme.primary
+    return theme.textMuted
+  }
+  return (
+    <For each={props.cells}>
+      {(row) => (
+        <text wrapMode="none" selectable={false}>
+          <For each={asciiGraphRuns(row)}>
+            {(run) => <span style={{ fg: color(run) }}>{run.text}</span>}
+          </For>
+        </text>
+      )}
+    </For>
+  )
 }
 
 function toastInput(variant: "info" | "success" | "warning" | "error", message: string) {
@@ -399,7 +456,9 @@ function Header(props: { root: string; tab: MemoryTab; narrow: boolean; live: bo
   const { theme } = useTheme()
   const tab = () => TABS.find((item) => item.id === props.tab)?.label ?? "Memory"
   const status = () => `MendCode · ${tab()} · SSE ${props.live ? "live" : "waiting"}`
-  const shortcuts = "1-5 tabs · ↑↓ select · e edit · c side chat · esc"
+  const shortcuts = props.tab === "graph"
+    ? "/memory-graph"
+    : "1-6 tabs · ↑↓ select · e edit · c side chat · esc"
   return (
     <Switch>
       <Match when={props.narrow}>
@@ -463,9 +522,10 @@ function MetricRows(props: { items: Array<{ label: string; value: string; detail
 
 function TabBar(props: { tab: MemoryTab; width: number; onSelect: (tab: MemoryTab) => void }) {
   const { theme } = useTheme()
-  const cellWidths = createMemo(() => memoryTabCellWidths({ width: props.width, count: TABS.length }))
+  const presentation = createMemo(() => memoryTabPresentation({ width: props.width, active: props.tab }))
+  const cellWidths = createMemo(() => memoryTabCellWidths({ width: props.width, labels: presentation().labels, gap: presentation().gap }))
   return (
-    <box flexDirection="row" height={1} overflow="hidden" gap={1}>
+    <box flexDirection="row" height={1} overflow="hidden" gap={presentation().gap}>
       <For each={TABS}>
         {(tab, index) => (
           <box width={cellWidths()[index()] ?? 8} overflow="hidden" onMouseUp={() => props.onSelect(tab.id)}>
@@ -473,11 +533,31 @@ function TabBar(props: { tab: MemoryTab; width: number; onSelect: (tab: MemoryTa
               fg={props.tab === tab.id ? theme.success : theme.textMuted}
               wrapMode="none"
             >
-              {short(`${index() + 1} ${tab.label}`, cellWidths()[index()] ?? 8)}
+              {short(presentation().labels[index()] ?? `${index() + 1}`, cellWidths()[index()] ?? 8)}
             </text>
           </box>
         )}
       </For>
+    </box>
+  )
+}
+
+function GraphCommandBar(props: { width: number }) {
+  const { theme } = useTheme()
+  const hints = createMemo(() => memoryGraphCommandHints(props.width))
+  return (
+    <box height={1} flexShrink={0} overflow="hidden">
+      <text wrapMode="none">
+        <For each={hints()}>
+          {(hint, index) => (
+            <>
+              <Show when={index() > 0}><span style={{ fg: theme.textMuted }}> · </span></Show>
+              <span style={{ fg: theme.primary }}>{hint.key}</span>
+              <span style={{ fg: theme.textMuted }}> {hint.label}</span>
+            </>
+          )}
+        </For>
+      </text>
     </box>
   )
 }
@@ -605,86 +685,242 @@ function KpiStrip(props: { data: MemoryOverview; pending: MemoryProposal[]; widt
   )
 }
 
-function MemoryGraphMap(props: { data: MemoryOverview; width: number }) {
+type MemoryGraphFrame = ReturnType<typeof memoryGraphMiniMap>
+
+function MemoryGraphExplorer(props: {
+  data: MemoryOverview
+  frame: MemoryGraphFrame
+  width: number
+  height: number
+  canvasWidth: number
+  selectedID?: string
+  activeRoot: string
+  activeLabel: string
+  projectPosition: string
+  workspaces: MemoryGraphWorkspaceRef[]
+  showAll: boolean
+  zoom: number
+  searching: boolean
+  query: string
+  searchMatches: MemoryOverview["facts"]
+  onSelect: (id: string) => void
+  onPreviousProject: () => void
+  onNextProject: () => void
+  onChooseProject: () => void
+  onToggleAll: () => void
+  onBeginSearch: () => void
+  onRefresh: () => void
+}) {
   const { theme } = useTheme()
-  const graph = createMemo(() => memoryGraphMiniMap({
-    facts: props.data.facts,
-    links: props.data.links,
-    categories: props.data.categories,
-    width: Math.max(20, props.width - 6),
-    height: props.width < 56 ? 7 : 10,
-  }))
+  const layout = createMemo(() => memoryGraphExplorerLayout({ width: props.width, height: props.height }))
+  const roomy = () => layout().roomy
+  const inspectorWidth = () => layout().inspectorWidth
   const health = createMemo(() => props.data.graphHealth)
   const healthTone = createMemo(() => health().graphHealth === "connected" ? theme.success : health().graphHealth === "empty" ? theme.textMuted : theme.warning)
-  const healthLine = createMemo(() => `${health().graphHealth} · ${health().connectedFacts}/${props.data.facts.length} connected · ${health().isolatedFacts} isolated · ${health().orphanLinks} orphan`)
-  return (
-    <Panel title="Memory graph" grow>
+  const healthLine = createMemo(() => `${health().graphHealth} · ${props.frame.stats} · ${props.frame.scene.edges.length} persisted links`)
+  const selectedFact = createMemo(() => props.data.facts.find((fact) => fact.id === props.selectedID))
+  const selectedLinks = createMemo(() => props.data.links.flatMap((link) => {
+    if (link.from !== props.selectedID && link.to !== props.selectedID) return []
+    const outbound = link.from === props.selectedID
+    const otherID = outbound ? link.to : link.from
+    const fact = props.data.facts.find((candidate) => candidate.id === otherID)
+    return fact ? [{ link, fact, outbound }] : []
+  }))
+  const categoryLabel = (id: string) => props.data.categories.find((category) => category.id === id)?.label ?? id
+  const projectLabels = (fact: MemoryOverview["facts"][number]) => memoryGraphFactProjectLabels({
+    fact,
+    workspaces: props.workspaces,
+    activeRoot: props.activeRoot,
+    activeLabel: props.activeLabel,
+  })
+  let canvasBox: BoxRenderable | undefined
+
+  function mouse(event: MouseEvent) {
+    if (!canvasBox || event.button !== MouseButton.LEFT || event.type !== "down") return
+    const x = event.x - canvasBox.x
+    const y = event.y - canvasBox.y
+    const hit = Object.entries(props.frame.nodeCells)
+      .map(([id, point]) => ({ id, distance: Math.hypot(point.x - x, point.y - y) }))
+      .filter((item) => item.distance <= 2)
+      .toSorted((a, b) => a.distance - b.distance)[0]
+    if (!hit) return
+    props.onSelect(hit.id)
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  const Inspector = () => (
+    <box flexDirection="column" width={inspectorWidth()} minWidth={0} minHeight={0} overflow="hidden" gap={1}>
       <Show
-        when={graph().rows.length > 0}
+        when={!props.searching}
         fallback={
-          <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
-            <text fg={healthTone()} wrapMode="none">
-              {graph().emptyState === "legacy-only" ? "Legacy-derived memories found, but no graph facts yet." : health().graphHealth === "disconnected" ? "Valid graph, but disconnected: no relationships yet." : "No materialized memory graph facts yet."}
-            </text>
-            <text fg={theme.primary} wrapMode="none">
-              Use memory_graph upsert_fact/link to materialize relationships.
-            </text>
-            <text fg={theme.textMuted} wrapMode="none">
-              {short(healthLine(), Math.max(18, props.width - 8))}
-            </text>
+          <box flexDirection="column" minHeight={0} overflow="hidden" gap={1}>
+            <text fg={theme.primary} wrapMode="none">Find graph memories</text>
+            <text fg={theme.success} wrapMode="none">{props.query || "Type to search…"}</text>
+            <text fg={theme.textMuted} wrapMode="none">{props.searchMatches.length} matches · enter select · esc close</text>
+            <Show when={props.searchMatches.length} fallback={<text fg={theme.textMuted}>No materialized memories match this query.</text>}>
+              <For each={props.searchMatches.slice(0, roomy() ? 8 : 4)}>
+                {(fact, index) => (
+                  <box flexDirection="column" height={2} overflow="hidden" onMouseUp={() => props.onSelect(fact.id)}>
+                    <text fg={index() === 0 ? theme.success : theme.text} wrapMode="none">
+                      {short(`${index() === 0 ? "›" : " "} ${memoryPreviewText(fact.text, inspectorWidth() - 4)}`, inspectorWidth())}
+                    </text>
+                    <text fg={theme.textMuted} wrapMode="none">
+                      {short(`${projectLabels(fact).join(", ")} · ${fact.categoryIDs.map(categoryLabel).join(", ") || "Uncategorized"}`, inspectorWidth())}
+                    </text>
+                  </box>
+                )}
+              </For>
+            </Show>
           </box>
         }
       >
-        <box flexDirection={props.width < 62 ? "column" : "row"} minHeight={0} flexGrow={1} gap={1} overflow="hidden">
-          <box flexDirection="column" minWidth={0} flexGrow={1} overflow="hidden">
-            <For each={graph().rows}>
-              {(row) => (
-                <text fg={theme.primary} wrapMode="none">
-                  {short(row || " ", Math.max(10, props.width - 8))}
-                </text>
-              )}
-            </For>
-            <text fg={theme.textMuted} wrapMode="none">
-              {short(graph().status, Math.max(10, props.width - 8))}
-            </text>
-            <text fg={theme.textMuted} wrapMode="none">
-              {short(graph().stats, Math.max(10, props.width - 8))}
-            </text>
+        <Show when={selectedFact()} fallback={<text fg={theme.textMuted}>Select a node to inspect its memory.</text>}>
+          {(fact) => (
+            <scrollbox
+              minHeight={0}
+              flexGrow={1}
+              horizontalScrollbarOptions={{ visible: false }}
+              verticalScrollbarOptions={{ visible: true, trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border } }}
+            >
+              <box flexDirection="column" minHeight={0} gap={1} paddingRight={1}>
+                <box flexDirection="column">
+                  <text fg={theme.primary} wrapMode="none">Selected memory</text>
+                  <text fg={theme.text} wrapMode="word">{fact().text}</text>
+                </box>
+                <box flexDirection="column">
+                  <text fg={theme.textMuted} wrapMode="none">Project</text>
+                  <text fg={theme.success} wrapMode="none">{short(projectLabels(fact()).join(", "), inspectorWidth() - 2)}</text>
+                  <text fg={theme.textMuted} wrapMode="none">
+                    {short(fact().scope === "global" ? "Shared across project roots" : `graph root · ${props.activeRoot}`, inspectorWidth() - 2)}
+                  </text>
+                </box>
+                <box flexDirection="column">
+                  <text fg={theme.textMuted} wrapMode="none">Metadata</text>
+                  <text fg={theme.text} wrapMode="none">
+                    {short(`${fact().scope} · ${fact().materialized ? "materialized" : "legacy"} · ${fact().sensitivity} sensitivity`, inspectorWidth() - 2)}
+                  </text>
+                  <text fg={theme.textMuted} wrapMode="none">
+                    {short(`${Math.round(fact().confidence * 100)}% confidence · ${Math.round(fact().changeRisk * 100)}% change risk · priority ${fact().retrievalPriority}`, inspectorWidth() - 2)}
+                  </text>
+                  <text fg={theme.textMuted} wrapMode="none">{short(fact().categoryIDs.map(categoryLabel).join(" · ") || "Uncategorized", inspectorWidth() - 2)}</text>
+                </box>
+                <box flexDirection="column">
+                  <text fg={theme.primary} wrapMode="none">Relationships · {selectedLinks().length}</text>
+                  <Show when={selectedLinks().length} fallback={<text fg={theme.textMuted}>This memory has no persisted relationships.</text>}>
+                    <For each={selectedLinks().slice(0, 8)}>
+                      {(item) => (
+                        <box flexDirection="column" height={2} overflow="hidden" onMouseUp={() => props.onSelect(item.fact.id)}>
+                          <text fg={item.link.kind === "conflicts" ? theme.warning : theme.text} wrapMode="none">
+                            {short(`${item.outbound ? "→" : "←"} ${item.link.kind} · ${memoryPreviewText(item.fact.text, inspectorWidth() - 16)}`, inspectorWidth() - 2)}
+                          </text>
+                          <text fg={theme.textMuted} wrapMode="none">
+                            {short(projectLabels(item.fact).join(", "), inspectorWidth() - 2)}
+                          </text>
+                        </box>
+                      )}
+                    </For>
+                  </Show>
+                </box>
+                <Show when={fact().provenance.length}>
+                  <box flexDirection="column">
+                    <text fg={theme.textMuted} wrapMode="none">Provenance</text>
+                    <For each={fact().provenance.slice(0, 3)}>
+                      {(source) => <text fg={theme.textMuted} wrapMode="none">{short(source, inspectorWidth() - 2)}</text>}
+                    </For>
+                  </box>
+                </Show>
+              </box>
+            </scrollbox>
+          )}
+        </Show>
+      </Show>
+    </box>
+  )
+
+  return (
+    <box flexDirection="column" height={props.height} minHeight={0} overflow="hidden" gap={1}>
+      <box flexDirection="row" height={2} flexShrink={0} justifyContent="space-between" overflow="hidden">
+        <box flexDirection="column" overflow="hidden">
+          <box flexDirection="row" overflow="hidden">
+            <text fg={theme.textMuted}>Project </text>
+            <text fg={theme.primary} onMouseUp={props.onPreviousProject}>‹ </text>
+            <text fg={theme.success} wrapMode="none" onMouseUp={props.onChooseProject}>{short(props.activeLabel, 28)}</text>
+            <text fg={theme.primary} onMouseUp={props.onNextProject}> ›</text>
+            <text fg={theme.textMuted} wrapMode="none"> · {props.projectPosition}</text>
           </box>
-          <box flexDirection="column" width={props.width < 62 ? "100%" : Math.max(22, Math.floor(props.width * 0.35))} overflow="hidden" gap={1}>
-            <text fg={healthTone()} wrapMode="none">
-              {short(`health: ${healthLine()}`, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}
-            </text>
-            <text fg={theme.textMuted} wrapMode="none">
-              {props.data.links.length === 0
-                ? `edges: 0 explicit links · ${health().graphHealth === "empty" ? "empty" : "disconnected"}`
-                : `edges: ${props.data.links.length} explicit links · inferred category proximity`}
-            </text>
-            <For each={graph().minimap}>
-              {(line) => <text fg={theme.primary} wrapMode="none">{short(line || " ", props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
-            </For>
-            <For each={graph().edgeLabels}>
-              {(line) => <text fg={theme.textMuted} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
-            </For>
-            <For each={graph().focusLines}>
-              {(line) => <text fg={theme.text} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
-            </For>
-            <For each={graph().relationRows}>
-              {(line) => <text fg={theme.textMuted} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
-            </For>
-            <For each={graph().isolatedRows}>
-              {(line) => <text fg={theme.warning} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
-            </For>
-            <For each={graph().legend}>
-              {(line) => <text fg={theme.text} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
-            </For>
-            <For each={graph().labels}>
-              {(line) => <text fg={theme.textMuted} wrapMode="none">{short(line, props.width < 62 ? props.width - 8 : Math.floor(props.width * 0.35))}</text>}
-            </For>
+          <text fg={theme.textMuted} wrapMode="none">{short(props.activeRoot, Math.max(24, props.width - 74))}</text>
+        </box>
+        <box flexDirection="column" alignItems="flex-end" overflow="hidden">
+          <text fg={props.showAll ? theme.success : theme.text} wrapMode="none" onMouseUp={props.onToggleAll}>
+            {props.showAll ? "Including isolates" : "Connected network"} · {props.frame.scene.nodes.length}/{props.data.materializedFactCount}
+          </text>
+          <box flexDirection="row" overflow="hidden">
+            <text fg={theme.textMuted} wrapMode="none">zoom {props.zoom.toFixed(1)}x · {props.data.legacyDerivedFactCount} legacy outside graph · </text>
+            <text fg={theme.primary} wrapMode="none" onMouseUp={props.onBeginSearch}>find</text>
+            <text fg={theme.textMuted}> · </text>
+            <text fg={theme.primary} wrapMode="none" onMouseUp={props.onRefresh}>refresh</text>
           </box>
         </box>
+      </box>
+
+      <Show when={props.searching}>
+        <box height={1} flexShrink={0} overflow="hidden">
+          <text fg={theme.success} wrapMode="none">find: {props.query || "▎"}</text>
+          <text fg={theme.textMuted} wrapMode="none"> · search text, project, scope, or category</text>
+        </box>
       </Show>
-    </Panel>
+
+      <box flexDirection={roomy() ? "row" : "column"} minHeight={0} flexGrow={1} overflow="hidden" gap={1}>
+        <box flexDirection="column" minWidth={0} minHeight={0} flexGrow={1} overflow="hidden">
+          <Show
+            when={props.frame.rows.length}
+            fallback={
+              <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
+                <text fg={healthTone()} wrapMode="none">
+                  {props.frame.emptyState === "legacy-only" ? "Legacy-derived memories exist, but no graph facts are materialized." : "No persisted relationships for this project yet."}
+                </text>
+                <text fg={theme.primary} wrapMode="none">Press i to include isolates, or use memory_graph link to connect facts.</text>
+              </box>
+            }
+          >
+            <box
+              ref={(value: BoxRenderable) => (canvasBox = value)}
+              flexDirection="column"
+              width={props.canvasWidth + 2}
+              height={props.frame.rows.length + 2}
+              minWidth={0}
+              flexShrink={0}
+              borderStyle="single"
+              borderColor={theme.border}
+              overflow="hidden"
+              onMouse={mouse}
+            >
+              <MemoryGraphCanvasRows cells={props.frame.cells} categories={props.data.categories} />
+            </box>
+          </Show>
+          <text fg={healthTone()} wrapMode="none">{short(healthLine(), props.canvasWidth)}</text>
+          <Show when={roomy()}>
+            <text fg={theme.textMuted} wrapMode="none">{short(props.frame.legend.join(" · ") || "No active graph categories", props.canvasWidth)}</text>
+          </Show>
+          <Show when={selectedFact()}>
+            {(fact) => (
+              <text fg={theme.textMuted} wrapMode="none">
+                {short(`● ${projectLabels(fact()).join(", ")} · ${fact().categoryIDs.map(categoryLabel).join(", ") || "Uncategorized"} · ${memoryPreviewText(fact().text, props.canvasWidth - 20)}`, props.canvasWidth)}
+              </text>
+            )}
+          </Show>
+        </box>
+
+        <Show when={roomy()} fallback={<box height={Math.max(10, Math.floor(props.height * 0.38))}><Inspector /></box>}>
+          <box width={inspectorWidth()} minHeight={0} paddingLeft={1} border={["left"]} borderColor={theme.border}>
+            <Inspector />
+          </box>
+        </Show>
+      </box>
+
+      <GraphCommandBar width={props.width} />
+    </box>
   )
 }
 
@@ -1784,7 +2020,7 @@ export function Memory() {
   const dimensions = useTerminalDimensions()
   const currentRoot = createMemo(() => project.instance.directory() || process.cwd())
   const [selectedWorkspaceID, setSelectedWorkspaceID] = createSignal<string | null>(null)
-  const [tab, setTab] = createSignal<MemoryTab>("overview")
+  const [tab, setTab] = createSignal<MemoryTab>(route.data.type === "memory" && route.data.view === "graph" ? "graph" : "overview")
   const [selectedIndex, setSelectedIndex] = createSignal(0)
   const [policyScope, setPolicyScope] = createSignal<MemoryPolicyScope>("project")
   const [live, setLive] = createSignal(true)
@@ -1793,6 +2029,11 @@ export function Memory() {
   const [sideChatInputActive, setSideChatInputActive] = createSignal(false)
   const [sideChatBusy, setSideChatBusy] = createSignal(false)
   const [sideChatScrollToken, setSideChatScrollToken] = createSignal(0)
+  const [graphSelectedID, setGraphSelectedID] = createSignal<string>()
+  const [graphShowAll, setGraphShowAll] = createSignal(false)
+  const [graphZoom, setGraphZoom] = createSignal(1)
+  const [graphSearching, setGraphSearching] = createSignal(false)
+  const [graphQuery, setGraphQuery] = createSignal("")
   const [chatSessions, { refetch: refetchChatSessions }] = createResource(currentRoot, (root) => listMemorySideChats(root))
   const [baseOverview, { refetch: refetchBase }] = createResource(currentRoot, memoryOverview)
   const selectedWorkspace = createMemo(() => baseOverview()?.workspaces?.activeWorkspaces.find((workspace) => workspace.id === selectedWorkspaceID()) ?? null)
@@ -1813,6 +2054,50 @@ export function Memory() {
   const pending = createMemo(() => data()?.proposals.filter((proposal) => proposal.status === "pending") ?? [])
   const projectEntries = createMemo(() => data()?.projectEntries ?? [])
   const globalEntries = createMemo(() => data()?.globalEntries ?? [])
+  const graphWorkspaces = createMemo(() => baseOverview()?.workspaces?.activeWorkspaces ?? [])
+  const graphProjectOptions = createMemo(() => {
+    const current = comparableRoot(currentRoot())
+    const currentWorkspace = graphWorkspaces().find((workspace) => comparableRoot(workspace.root) === current)
+    return [
+      { id: null as string | null, root: currentRoot(), label: currentWorkspace?.displayName ?? current.split(/[\\/]/).filter(Boolean).at(-1) ?? currentRoot() },
+      ...memorySidebarProjectWorkspaces({ currentRoot: currentRoot(), workspaces: graphWorkspaces() })
+        .map((workspace) => ({ id: workspace.id as string | null, root: workspace.root, label: workspace.displayName })),
+    ]
+  })
+  const graphActiveLabel = createMemo(() => selectedWorkspace()?.displayName ?? graphProjectOptions()[0]?.label ?? activeRoot())
+  const graphProjectPosition = createMemo(() => {
+    const index = graphProjectOptions().findIndex((option) => option.id === selectedWorkspaceID())
+    return `${Math.max(0, index) + 1}/${graphProjectOptions().length}`
+  })
+  const graphLayout = createMemo(() => memoryGraphExplorerLayout({ width: contentWidth(), height: Math.max(12, dimensions().height - 8) }))
+  const graphFrame = createMemo(() => {
+    const current = data()
+    if (!current) return
+    return memoryGraphMiniMap({
+      facts: current.facts,
+      links: current.links,
+      categories: current.categories,
+      width: graphLayout().canvasWidth,
+      height: graphLayout().canvasHeight,
+      connectedOnly: !graphShowAll(),
+      selectedID: graphSelectedID(),
+      zoom: graphZoom(),
+    })
+  })
+  const graphSearchMatches = createMemo(() => {
+    const current = data()
+    if (!current) return []
+    return memoryGraphSearchMatches({
+      facts: current.facts.filter((fact) => fact.materialized),
+      query: graphQuery(),
+      projectLabel: (fact) => memoryGraphFactProjectLabels({
+        fact,
+        workspaces: graphWorkspaces(),
+        activeRoot: activeRoot(),
+        activeLabel: graphActiveLabel(),
+      }).join(" "),
+    })
+  })
   const visibleCount = createMemo(() => {
     const current = data()
     if (!current) return 1
@@ -1855,6 +2140,28 @@ export function Memory() {
   })
 
   createEffect(() => {
+    if (route.data.type === "memory" && route.data.view === "graph") setTab("graph")
+  })
+
+  createEffect(() => {
+    activeRoot()
+    setGraphSelectedID(undefined)
+    setGraphQuery("")
+    setGraphSearching(false)
+    setGraphZoom(1)
+  })
+
+  createEffect(() => {
+    const frame = graphFrame()
+    if (!frame?.scene.nodes.length) {
+      setGraphSelectedID(undefined)
+      return
+    }
+    if (frame.scene.nodes.some((node) => node.id === graphSelectedID())) return
+    setGraphSelectedID(frame.selectedID)
+  })
+
+  createEffect(() => {
     const session = chat()
     if (session && session.root !== currentRoot()) setChat(null)
   })
@@ -1862,6 +2169,41 @@ export function Memory() {
   async function reload(message = "Memory refreshed") {
     await Promise.allSettled([refetchBase(), refetch(), refetchDreamSchedule()])
     toast.show(toastInput("success", message))
+  }
+
+  function selectGraphFact(id: string) {
+    const current = data()?.facts.find((fact) => fact.id === id)
+    if (!current?.materialized) return
+    if (!graphFrame()?.scene.nodes.some((node) => node.id === id)) setGraphShowAll(true)
+    setGraphSelectedID(id)
+    setGraphSearching(false)
+  }
+
+  function cycleGraphProject(direction: 1 | -1) {
+    const options = graphProjectOptions()
+    if (!options.length) return
+    const current = Math.max(0, options.findIndex((option) => option.id === selectedWorkspaceID()))
+    setSelectedWorkspaceID(options[(current + direction + options.length) % options.length]?.id ?? null)
+  }
+
+  function showGraphProjectPicker() {
+    dialog.replace(() => (
+      <DialogSelect
+        title="Graph project"
+        placeholder="Search project roots"
+        options={graphProjectOptions().map((option) => ({
+          title: option.label,
+          value: option.id ?? "__current__",
+          category: option.id === selectedWorkspaceID() ? "Active" : "Projects",
+          description: option.root,
+          searchText: `${option.label} ${option.root}`,
+          onSelect: () => {
+            dialog.clear()
+            setSelectedWorkspaceID(option.id)
+          },
+        }))}
+      />
+    ))
   }
 
   async function editSelection() {
@@ -2186,6 +2528,87 @@ export function Memory() {
       defaultPrevented: evt.defaultPrevented,
       textInputActive: sideChatInputActive(),
     })) return
+    if (tab() === "graph") {
+      if (graphSearching()) {
+        if (evt.name === "escape") {
+          evt.preventDefault()
+          setGraphSearching(false)
+          return
+        }
+        if (evt.name === "return") {
+          evt.preventDefault()
+          const match = graphSearchMatches()[0]
+          if (match) selectGraphFact(match.id)
+          return
+        }
+        if (evt.name === "backspace") {
+          evt.preventDefault()
+          setGraphQuery((value) => value.slice(0, -1))
+          return
+        }
+        if (!evt.ctrl && !evt.meta && (evt.name.length === 1 || evt.name === "space")) {
+          evt.preventDefault()
+          setGraphQuery((value) => `${value}${evt.name === "space" ? " " : evt.name}`)
+        }
+        return
+      }
+      if (evt.name === "f" || evt.name === "/") {
+        evt.preventDefault()
+        setGraphQuery("")
+        setGraphSearching(true)
+        return
+      }
+      if (evt.name === "p") {
+        evt.preventDefault()
+        showGraphProjectPicker()
+        return
+      }
+      if (evt.name === "i") {
+        evt.preventDefault()
+        setGraphShowAll((value) => !value)
+        return
+      }
+      if (evt.name === "+" || evt.name === "=") {
+        evt.preventDefault()
+        setGraphZoom((value) => Math.min(4, Number((value * 1.25).toFixed(2))))
+        return
+      }
+      if (evt.name === "-") {
+        evt.preventDefault()
+        setGraphZoom((value) => Math.max(0.4, Number((value / 1.25).toFixed(2))))
+        return
+      }
+      if (evt.name === "[") {
+        evt.preventDefault()
+        cycleGraphProject(-1)
+        return
+      }
+      if (evt.name === "]") {
+        evt.preventDefault()
+        cycleGraphProject(1)
+        return
+      }
+      if (evt.name === "r") {
+        evt.preventDefault()
+        void reload("Memory graph refreshed").catch((err) => toast.error(err))
+        return
+      }
+      const direction = evt.name === "left" || evt.name === "h"
+        ? { x: -1, y: 0 }
+        : evt.name === "right" || evt.name === "l"
+          ? { x: 1, y: 0 }
+          : evt.name === "up" || evt.name === "k"
+            ? { x: 0, y: -1 }
+            : evt.name === "down" || evt.name === "j"
+              ? { x: 0, y: 1 }
+              : null
+      if (direction) {
+        evt.preventDefault()
+        const frame = graphFrame()
+        if (frame) setGraphSelectedID(asciiGraphNearestNode(frame.scene, graphSelectedID(), direction))
+        return
+      }
+    }
     if (evt.name === "escape" || evt.name === "q") {
       evt.preventDefault()
       route.navigate(routeReturnTarget(route.data))
@@ -2298,6 +2721,39 @@ export function Memory() {
           <EntryRows entries={globalEntries()} selectedIndex={selectedIndex()} width={contentWidth()} onSelect={setSelectedIndex} />
         </Panel>
       </Match>
+      <Match when={tab() === "graph"}>
+        <Show when={graphFrame()}>
+          {(frame) => (
+            <MemoryGraphExplorer
+              data={current}
+              frame={frame()}
+              width={contentWidth()}
+              height={Math.max(12, dimensions().height - 8)}
+              canvasWidth={graphLayout().canvasWidth}
+              selectedID={graphSelectedID()}
+              activeRoot={activeRoot()}
+              activeLabel={graphActiveLabel()}
+              projectPosition={graphProjectPosition()}
+              workspaces={graphWorkspaces()}
+              showAll={graphShowAll()}
+              zoom={graphZoom()}
+              searching={graphSearching()}
+              query={graphQuery()}
+              searchMatches={graphSearchMatches()}
+              onSelect={selectGraphFact}
+              onPreviousProject={() => cycleGraphProject(-1)}
+              onNextProject={() => cycleGraphProject(1)}
+              onChooseProject={showGraphProjectPicker}
+              onToggleAll={() => setGraphShowAll((value) => !value)}
+              onBeginSearch={() => {
+                setGraphQuery("")
+                setGraphSearching(true)
+              }}
+              onRefresh={() => void reload("Memory graph refreshed").catch((err) => toast.error(err))}
+            />
+          )}
+        </Show>
+      </Match>
       <Match when={tab() === "policy"}>
         <Panel title="Policy & categories" grow>
           <PolicyRows data={current} selectedIndex={selectedIndex()} width={contentWidth()} policyScope={policyScope()} onSelect={setSelectedIndex} />
@@ -2320,6 +2776,9 @@ export function Memory() {
               setSelectedIndex(0)
             }} />
             <Switch>
+              <Match when={tab() === "graph"}>
+                {renderMain(current())}
+              </Match>
               <Match when={wide()}>
                 <box flexDirection="row" minHeight={0} flexGrow={1} gap={1}>
                   <Sidebar

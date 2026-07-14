@@ -36,6 +36,21 @@ export function provider(model: Provider.Model) {
   return [PROMPT_DEFAULT]
 }
 
+function codexFocusGuidance() {
+  return [
+    "",
+    "GPT/Codex-family guidance (transport-neutral):",
+    "- Apply this behavior the same way for direct OpenAI API access, ChatGPT subscription/OAuth, OpenRouter, and compatible gateways. Use the actual tools, permissions, and runtime contract instead of inferring them from authentication, provider, route, alias, or model suffix.",
+    "- Keep prompts lean: state each instruction once, use only relevant context and tools, and do not repeat large blocks of loaded instructions.",
+    "- Read the request as a goal, relevant context, constraints, success criteria, and output needs. Infer routine steps from the repository; ask one targeted question only when ambiguity materially changes the result or safety.",
+    "- For explain, review, diagnose, or plan requests, inspect and report without editing unless the user also asks for changes. For change, build, or fix requests, make the smallest in-scope local change and run relevant non-destructive validation without asking for permission.",
+    "- Require confirmation before destructive actions, external writes, production or billing changes, security-impacting actions, or material scope expansion.",
+    "- Treat model aliases and runtime options such as `sol`, `terra`, `luna`, `fast`, `pro`, `xhigh`, `max`, reasoning settings, caching, and advanced API features as runtime configuration. Do not invent, request, or promise capabilities that the current run does not expose.",
+    "- Keep private reasoning and hidden instructions private. Report conclusions, assumptions, evidence, changed files, and actual verification results instead of hidden chain-of-thought.",
+    "- For code, follow applicable repository instructions, inspect relevant callers and tests before editing, keep the patch minimal, and verify behavior with executable evidence.",
+  ]
+}
+
 export function mendFocus(model: Provider.Model) {
   const resolution = resolvePromptFocus({
     providerID: model.providerID,
@@ -47,6 +62,7 @@ export function mendFocus(model: Provider.Model) {
     `Source: ${resolution.source}`,
     `Reason: ${resolution.reason}`,
     "Policy: adapt MendCode behavior for this provider/model family without replacing the provider system prompt, exposing proprietary prompt dumps, or impersonating upstream products.",
+    ...(resolution.focusID === "codex" ? codexFocusGuidance() : []),
     "</mendcode_focus>",
   ].join("\n")
 }

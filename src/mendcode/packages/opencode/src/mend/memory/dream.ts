@@ -1,7 +1,7 @@
 import { existsSync } from "fs"
 import { mkdir, readFile, writeFile } from "fs/promises"
 import path from "path"
-import { memoryPaths, readMemoryConfig, type MemoryDreamWritePolicy, type MemoryScope } from "./config"
+import { memoryPaths, readMemoryConfig, type MemoryConfig, type MemoryDreamWritePolicy, type MemoryScope } from "./config"
 import { readMemoryFacts, readMemoryGraph, upsertMemoryFactLink, type MemoryFact, type MemoryFactLink } from "./graph"
 import { collectDreamFileEvidence, type DreamEvidenceRef, type DreamSourcePermissions } from "./dream-sources"
 import { publishMemoryDreamEvent } from "./dream-events"
@@ -336,37 +336,65 @@ export function inferDreamGraphProposals(input: {
   const evidenceIDs = new Set(input.evidence.map((item) => item.id))
   const facts = input.facts
     .filter((fact) => fact.sensitivity === "low" && !fact.stale)
-    .toSorted((a, b) => a.retrievalPriority - b.retrievalPriority || b.confidence - a.confidence || a.id.localeCompare(b.id))
+    .toSorted((a, b) => b.confidence - a.confidence || b.durability - a.durability || a.retrievalPriority - b.retrievalPriority || a.id.localeCompare(b.id))
     .slice(0, 18)
+  const connected = new Set(input.links.flatMap((link) => [link.from, link.to]))
+  const candidates = facts.flatMap((from, index) => facts.slice(index + 1).flatMap((to) => {
+    const shared = sharedCategoryIDs(from, to)
+    if (!shared.length) return []
+    const kind: MemoryFactLink["kind"] = "related"
+    const key = `${from.id}\u0000${to.id}\u0000${kind}`
+    if (existing.has(key)) return []
+    return [{ from, to, shared, kind, key }]
+  }))
   const proposals: DreamGraphProposal[] = []
-  const seen = new Set<string>()
-  for (const [index, from] of facts.entries()) {
-    for (const to of facts.slice(index + 1)) {
-      const shared = sharedCategoryIDs(from, to)
-      if (!shared.length) continue
-      const kind: MemoryFactLink["kind"] = "related"
-      const key = `${from.id}\u0000${to.id}\u0000${kind}`
-      if (seen.has(key) || existing.has(key)) continue
-      proposals.push({
-        id: nowID("dreamlink"),
-        from: from.id,
-        to: to.id,
-        kind,
-        status: "pending",
-        confidence: Math.min(0.82, Math.max(0.5, ((from.confidence + to.confidence) / 2) - 0.08 + Math.min(0.1, shared.length * 0.03))),
-        reason: `Shared memory category: ${shared.slice(0, 3).join(", ")}`,
-        evidenceRefs: [...from.provenance, ...to.provenance]
-          .filter((ref) => evidenceIDs.has(ref) || ref.startsWith("dream:") || ref.startsWith("file:"))
-          .slice(0, 4),
-        fromSummary: from.normalizedSummary,
-        toSummary: to.normalizedSummary,
-        createdAt: (input.now ?? new Date()).toISOString(),
-      })
-      seen.add(key)
-      if (proposals.length >= 8) return proposals
-    }
+  while (candidates.length && proposals.length < 8) {
+    candidates.sort((a, b) => {
+      const isolatedA = Number(!connected.has(a.from.id)) + Number(!connected.has(a.to.id))
+      const isolatedB = Number(!connected.has(b.from.id)) + Number(!connected.has(b.to.id))
+      return isolatedB - isolatedA
+        || ((b.from.confidence + b.to.confidence) - (a.from.confidence + a.to.confidence))
+        || b.shared.length - a.shared.length
+        || a.key.localeCompare(b.key)
+    })
+    const candidate = candidates.shift()!
+    proposals.push({
+      id: nowID("dreamlink"),
+      from: candidate.from.id,
+      to: candidate.to.id,
+      kind: candidate.kind,
+      status: "pending",
+      confidence: Math.min(0.82, Math.max(0.5, ((candidate.from.confidence + candidate.to.confidence) / 2) - 0.08 + Math.min(0.1, candidate.shared.length * 0.03))),
+      reason: `Shared memory category: ${candidate.shared.slice(0, 3).join(", ")}`,
+      evidenceRefs: [...candidate.from.provenance, ...candidate.to.provenance]
+        .filter((ref) => evidenceIDs.has(ref) || ref.startsWith("dream:") || ref.startsWith("file:"))
+        .slice(0, 4),
+      fromSummary: candidate.from.normalizedSummary,
+      toSummary: candidate.to.normalizedSummary,
+      createdAt: (input.now ?? new Date()).toISOString(),
+    })
+    connected.add(candidate.from.id)
+    connected.add(candidate.to.id)
   }
   return proposals
+}
+
+function dreamGraphProposalAutoApplySafety(input: {
+  proposal: DreamGraphProposal
+  facts: MemoryFact[]
+  config: MemoryConfig
+}) {
+  if (input.config.dreamWritePolicy !== "auto-safe") return false
+  const factByID = new Map(input.facts.map((fact) => [fact.id, fact]))
+  const facts = [factByID.get(input.proposal.from), factByID.get(input.proposal.to)]
+  if (facts.some((fact) => !fact || fact.stale)) return false
+  const endpoints = facts.filter((fact): fact is MemoryFact => Boolean(fact))
+  if (endpoints.some((fact) => fact.sensitivity !== "low" && input.config.dreamAutoApplyBlockedSensitivity.includes(fact.sensitivity))) return false
+  if (endpoints.some((fact) => fact.confidence < input.config.dreamAutoApplyMinConfidence)) return false
+  if (endpoints.some((fact) => fact.durability < input.config.dreamAutoApplyMinDurability)) return false
+  if (endpoints.some((fact) => fact.changeRisk > input.config.dreamAutoApplyMaxChangeRisk)) return false
+  const shared = sharedCategoryIDs(endpoints[0]!, endpoints[1]!)
+  return shared.some((categoryID) => input.config.dreamAutoApplyAllowedCategories.includes(categoryID))
 }
 
 async function writeRun(root: string | undefined, run: DreamRun) {
@@ -559,8 +587,22 @@ export async function runMemoryDream(input: {
     const candidates = await model({ facts, proposals, evidence })
     graphProposals = inferDreamGraphProposals({ facts: graphFacts, links: graph.links, evidence, now: input.now })
     await writeRunGraphProposals(root, id, graphProposals)
+    let autoAppliedGraphLinks = 0
+    if (config.dreamWritePolicy === "auto-safe") {
+      for (const proposal of graphProposals) {
+        if (!dreamGraphProposalAutoApplySafety({ proposal, facts: graphFacts, config })) continue
+        await applyDreamGraphProposal(id, proposal.id, root)
+        autoAppliedGraphLinks++
+      }
+      if (autoAppliedGraphLinks) {
+        graphProposals = (await readDreamRunDetail(root, id))?.graphProposals ?? graphProposals
+      }
+    }
     if (graphProposals.length) {
-      await appendJsonl(path.join(dir, "events.jsonl"), { at: new Date().toISOString(), status: "progress", message: `Dream proposed ${graphProposals.length} graph links for review` } satisfies DreamRunEvent)
+      const pendingGraphLinks = graphProposals.length - autoAppliedGraphLinks
+      const message = `Dream proposed ${graphProposals.length} graph links: ${autoAppliedGraphLinks} auto-applied, ${pendingGraphLinks} pending review`
+      await appendJsonl(path.join(dir, "events.jsonl"), { at: new Date().toISOString(), status: "progress", message } satisfies DreamRunEvent)
+      publishMemoryDreamEvent({ root: memoryPaths(root).root, runID: id, status: "progress", message })
     }
     const priorCandidates: Array<{ id: string; text: string }> = []
     for (const candidate of candidates.slice(0, 5)) {
@@ -611,6 +653,7 @@ export async function runMemoryDream(input: {
         scope,
         text: candidate.text,
         tags: ["dream", ...categoryIDs],
+        categoryIDs,
         source: "memory-dream",
         evidence: `dream:${id}`,
         evidenceRefs,

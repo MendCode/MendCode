@@ -1,4 +1,16 @@
-import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, onCleanup } from "solid-js"
+import {
+  For,
+  Match,
+  Show,
+  Switch,
+  batch,
+  createEffect,
+  createMemo,
+  createResource,
+  createSelector,
+  createSignal,
+  onCleanup,
+} from "solid-js"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { routeReturnTarget, useRoute } from "@tui/context/route"
 import { useSDK } from "@tui/context/sdk"
@@ -9,6 +21,7 @@ import { useProject } from "@tui/context/project"
 import { useKV } from "@tui/context/kv"
 import { useDialog } from "@tui/ui/dialog"
 import { DialogPrompt } from "@tui/ui/dialog-prompt"
+import { Spinner } from "@tui/component/spinner"
 import { Locale } from "@/util/locale"
 import path from "path"
 import {
@@ -24,9 +37,10 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_DAYS = 365
 const ADVANCED_DAYS = 365
 const WEATHER_KV_KEY = "stats_weather"
-export const STATS_CACHE_KEY = "stats_insights"
+export const STATS_CACHE_KEY = "stats_insights_v2"
 const STATS_CACHE_STALE_MS = 5 * 60 * 1000
 const STATS_TODAY_CACHE_STALE_MS = 60 * 1000
+const STATS_MESSAGE_FETCH_CONCURRENCY = 12
 const HEATMAP_ROWS = 7
 const HEATMAP_COLUMNS = Math.ceil(DEFAULT_DAYS / HEATMAP_ROWS)
 const HEAT_MODES: HeatMode[] = ["daily", "weekly", "cumulative"]
@@ -87,18 +101,35 @@ function heatColor(theme: ReturnType<typeof useTheme>["theme"], value: number, p
 export function statsDayTokenValue(
   day: Pick<DailyUsage, "tokens" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheTokens">,
 ) {
-  return Math.max(day.tokens, day.inputTokens + day.outputTokens + day.reasoningTokens + day.cacheTokens)
+  const components = day.inputTokens + day.outputTokens + day.reasoningTokens + day.cacheTokens
+  return day.tokens > 0 || components <= 0 ? day.tokens : components
 }
 
 export function statsDayVisualValue(
-  day: Pick<DailyUsage, "tokens" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheTokens" | "sessions" | "messages" | "userMessages" | "aiResponseMs" | "toolMs">,
+  day: Pick<
+    DailyUsage,
+    | "tokens"
+    | "inputTokens"
+    | "outputTokens"
+    | "reasoningTokens"
+    | "cacheTokens"
+    | "sessions"
+    | "messages"
+    | "userMessages"
+    | "aiResponseMs"
+    | "toolMs"
+  >,
 ) {
   const tokens = statsDayTokenValue(day)
   if (tokens > 0) return tokens
   return day.messages > day.userMessages || day.sessions > 0 || day.aiResponseMs > 0 || day.toolMs > 0 ? 1 : 0
 }
 
-export function statsGraphSeries(input: { days: readonly DailyUsage[]; mode: Exclude<HeatMode, "daily">; rowCount?: number }) {
+export function statsGraphSeries(input: {
+  days: readonly DailyUsage[]
+  mode: Exclude<HeatMode, "daily">
+  rowCount?: number
+}) {
   const rowCount = Math.max(1, input.rowCount ?? HEATMAP_ROWS)
   let running = 0
   return Array.from({ length: Math.ceil(input.days.length / rowCount) }, (_, column) => {
@@ -497,7 +528,7 @@ function LoadingStats(props: { tiny: boolean }) {
 function selectedDayRows(day: DailyUsage) {
   const number = (value: number | undefined) => Locale.number(value ?? 0)
   return [
-    stat("tokens", number(statsDayTokenValue(day)), `${number(day.cacheTokens)} cache`),
+    stat("tokens", number(statsDayTokenValue(day)), `${number(day.cacheTokens)} cache included`),
     stat(
       "mix",
       `${number(day.inputTokens)} in`,
@@ -535,7 +566,7 @@ function CompactStats(props: {
   contentWidth: number
   selectedDay?: DailyUsage
   selectedDayIndex?: number
-  onSelectDay?: (index: number) => void
+  activityLoading?: boolean
   tokenRows?: Array<{ label: string; value: string; detail?: string }>
   responseRows?: Array<{ label: string; value: string; detail?: string }>
   statusRows?: Array<{ label: string; value: string; detail?: string }>
@@ -555,7 +586,7 @@ function CompactStats(props: {
           rows={7}
           labels={true}
           selectedIndex={props.selectedDayIndex}
-          onSelectDay={props.onSelectDay}
+          loading={props.activityLoading}
         />
         <SelectedDayDetail day={props.selectedDay} width={props.contentWidth} compact />
       </Panel>
@@ -584,7 +615,7 @@ function MainDashboard(props: {
   heatCellWidth: number
   selectedDay?: DailyUsage
   selectedDayIndex?: number
-  onSelectDay: (index: number) => void
+  activityLoading?: boolean
   kpis: Array<{ label: string; value: string; detail?: string }>
   tokenRows: Array<{ label: string; value: string; detail?: string }>
   responseRows: Array<{ label: string; value: string; detail?: string }>
@@ -619,7 +650,7 @@ function MainDashboard(props: {
               cellWidth={props.heatCellWidth}
               labels={props.roomy}
               selectedIndex={props.selectedDayIndex}
-              onSelectDay={props.onSelectDay}
+              loading={props.activityLoading}
             />
             <SelectedDayDetail day={props.selectedDay} width={props.contentWidth} />
           </Panel>
@@ -749,7 +780,6 @@ function UsageGraph(props: {
   cellWidth?: number
   rows?: number
   selectedIndex?: number
-  onSelectDay?: (index: number) => void
 }) {
   const { theme } = useTheme()
   const rowCount = createMemo(() => props.rows ?? 7)
@@ -762,8 +792,11 @@ function UsageGraph(props: {
   const selectedColumn = createMemo(() => {
     const selected = props.selectedIndex
     if (selected === undefined) return undefined
-    return series().findIndex((point) => selected >= visibleStart() + point.index && selected <= visibleStart() + point.endIndex)
+    return series().findIndex(
+      (point) => selected >= visibleStart() + point.index && selected <= visibleStart() + point.endIndex,
+    )
   })
+  const isSelectedColumn = createSelector(selectedColumn)
   const labels = createMemo(() => timelineLabels(visible()))
   const graphCell = (point: ReturnType<typeof statsGraphSeries>[number], row: number) => {
     if (point.value <= 0) return "".padEnd(cellWidth())
@@ -780,10 +813,14 @@ function UsageGraph(props: {
               <For each={series()}>
                 {(point, column) => (
                   <text
-                    fg={column() === selectedColumn() ? theme.warning : props.mode === "cumulative" ? theme.primary : theme.success}
+                    fg={
+                      isSelectedColumn(column())
+                        ? theme.warning
+                        : props.mode === "cumulative"
+                          ? theme.primary
+                          : theme.success
+                    }
                     wrapMode="none"
-                    onMouseOver={() => props.onSelectDay?.(visibleStart() + point.endIndex)}
-                    onMouseUp={() => props.onSelectDay?.(visibleStart() + point.endIndex)}
                   >
                     {graphCell(point, row)}
                   </text>
@@ -810,36 +847,43 @@ function TokenActivityView(props: {
   rows?: number
   labels?: boolean
   selectedIndex?: number
-  onSelectDay?: (index: number) => void
+  loading?: boolean
 }) {
   return (
-    <box flexDirection="column" flexGrow={1} minHeight={0} gap={0}>
-      <Switch>
-        <Match when={props.mode === "daily"}>
-          <UsageHeatmap
-            insights={props.insights}
-            mode="daily"
-            columns={props.columns}
-            cellWidth={props.cellWidth}
-            rows={props.rows}
-            labels={props.labels}
-            selectedIndex={props.selectedIndex}
-            onSelectDay={props.onSelectDay}
-          />
-        </Match>
-        <Match when={props.mode === "weekly" || props.mode === "cumulative"}>
-          <UsageGraph
-            insights={props.insights}
-            mode={props.mode === "cumulative" ? "cumulative" : "weekly"}
-            columns={props.columns}
-            cellWidth={props.cellWidth}
-            rows={props.rows}
-            selectedIndex={props.selectedIndex}
-            onSelectDay={props.onSelectDay}
-          />
-        </Match>
-      </Switch>
-    </box>
+    <Show
+      when={!props.loading}
+      fallback={
+        <box flexDirection="column" width="100%" flexGrow={1} minHeight={0} justifyContent="center" alignItems="center">
+          <Spinner>updating token activity…</Spinner>
+        </box>
+      }
+    >
+      <box flexDirection="column" flexGrow={1} minHeight={0} gap={0}>
+        <Switch>
+          <Match when={props.mode === "daily"}>
+            <UsageHeatmap
+              insights={props.insights}
+              mode="daily"
+              columns={props.columns}
+              cellWidth={props.cellWidth}
+              rows={props.rows}
+              labels={props.labels}
+              selectedIndex={props.selectedIndex}
+            />
+          </Match>
+          <Match when={props.mode === "weekly" || props.mode === "cumulative"}>
+            <UsageGraph
+              insights={props.insights}
+              mode={props.mode === "cumulative" ? "cumulative" : "weekly"}
+              columns={props.columns}
+              cellWidth={props.cellWidth}
+              rows={props.rows}
+              selectedIndex={props.selectedIndex}
+            />
+          </Match>
+        </Switch>
+      </box>
+    </Show>
   )
 }
 
@@ -851,7 +895,6 @@ function UsageHeatmap(props: {
   rows?: number
   labels?: boolean
   selectedIndex?: number
-  onSelectDay?: (index: number) => void
 }) {
   const { theme } = useTheme()
   const rowCount = createMemo(() => props.rows ?? 7)
@@ -896,9 +939,10 @@ function UsageHeatmap(props: {
     })
   })
   const labels = createMemo(() => timelineLabels(visible()))
+  const isSelected = createSelector(() => props.selectedIndex)
   const cellText = (cell: HeatCell) => {
     if (cell.index === undefined) return "".padEnd(cellWidth())
-    if (cell.index === props.selectedIndex) return "▣".padEnd(cellWidth())
+    if (isSelected(cell.index)) return "▣".padEnd(cellWidth())
     return heatGlyph(cell.value, peak()).padEnd(cellWidth())
   }
 
@@ -911,10 +955,12 @@ function UsageHeatmap(props: {
               <For each={row}>
                 {(cell) => (
                   <text
-                    fg={cell.index === props.selectedIndex ? theme.warning : heatColor(theme, cell.value, peak())}
+                    fg={
+                      cell.index !== undefined && isSelected(cell.index)
+                        ? theme.warning
+                        : heatColor(theme, cell.value, peak())
+                    }
                     wrapMode="none"
-                    onMouseOver={() => cell.index !== undefined && props.onSelectDay?.(cell.index)}
-                    onMouseUp={() => cell.index !== undefined && props.onSelectDay?.(cell.index)}
                   >
                     {cellText(cell)}
                   </text>
@@ -958,43 +1004,101 @@ async function listGlobalSessions(sdk: ReturnType<typeof useSDK>, query: Session
   }
 }
 
+async function loadGlobalUsageInsights(
+  sdk: ReturnType<typeof useSDK>,
+  input: { start: number; limit: number; messageLimit: number },
+) {
+  const headers = new Headers(sdk.headers)
+  if (sdk.directory) headers.set("x-mendcode-directory", encodeURIComponent(sdk.directory))
+  const response = await sdk.fetch(statsURL(sdk, "/experimental/usage-insights", input), { headers })
+  if (!response.ok) throw new Error(`usage insights failed: ${response.status}`)
+  return (await response.json()) as UsageInsights
+}
+
+export async function mapStatsSessionsInBatches<T, R>(
+  input: readonly T[],
+  load: (item: T) => Promise<R>,
+  options: { concurrency?: number; onBatch?: (items: readonly R[], batch: number, batches: number) => void } = {},
+) {
+  const concurrency = Math.max(1, Math.floor(options.concurrency ?? STATS_MESSAGE_FETCH_CONCURRENCY))
+  const batches = Array.from({ length: Math.ceil(input.length / concurrency) }, (_, index) =>
+    input.slice(index * concurrency, (index + 1) * concurrency),
+  )
+  const result: R[] = []
+  for (const [index, batch] of batches.entries()) {
+    result.push(...(await Promise.all(batch.map(load))))
+    options.onBatch?.(result, index, batches.length)
+  }
+  return result
+}
+
 async function loadInsights(
   sdk: ReturnType<typeof useSDK>,
-  options: { advanced: boolean; scope: StatsScope; query: SessionScopeQuery },
+  options: {
+    advanced: boolean
+    scope: StatsScope
+    query: SessionScopeQuery
+    onFirstBatch?: (insights: UsageInsights) => void
+  },
 ) {
   const days = options.advanced ? ADVANCED_DAYS : DEFAULT_DAYS
-  const start = Date.now() - days * DAY_MS
+  const end = Date.now()
+  const start = end - days * DAY_MS
   const query: SessionListQuery = {
     start,
     limit: options.advanced ? 1000 : 250,
     ...options.query,
   }
+  if (options.scope === "global") {
+    if (options.onFirstBatch && query.limit > 250) {
+      const partial = await loadGlobalUsageInsights(sdk, {
+        start,
+        limit: 250,
+        messageLimit: 500,
+      }).catch(() => undefined)
+      if (partial) options.onFirstBatch(partial)
+    }
+    const aggregated = await loadGlobalUsageInsights(sdk, {
+      start,
+      limit: query.limit,
+      messageLimit: 500,
+    }).catch(() => undefined)
+    if (aggregated) return aggregated
+  }
   const sessions =
     options.scope === "global"
       ? await listGlobalSessions(sdk, query)
       : ((await sdk.client.session.list(query, { throwOnError: true })).data ?? [])
-  const items = await Promise.all(
-    sessions.map(async (session) => {
-      const result = await sdk.client.session.messages({ sessionID: session.id, limit: 500 })
+  const items = await mapStatsSessionsInBatches(
+    sessions,
+    async (session) => {
+      const result = await sdk.client.session.messages({ sessionID: session.id, limit: 500, view: "tui" })
       return { session, messages: result.data ?? [] } as SessionInsightInput
-    }),
+    },
+    {
+      onBatch: (loaded, batch, batches) => {
+        if (batch === 0 && batches > 1) options.onFirstBatch?.(buildUsageInsights([...loaded], { start, end }))
+      },
+    },
   )
-  return buildUsageInsights(items, { start, end: Date.now() })
+  return buildUsageInsights(items, { start, end })
 }
 
-export function usageInsightsCacheKey(scope: StatsScope) {
-  return `${STATS_CACHE_KEY}:${scope}`
+export function usageInsightsCacheKey(scope: StatsScope, query: SessionScopeQuery = {}, directory?: string) {
+  if (scope === "global") return `${STATS_CACHE_KEY}:${scope}`
+  const identity =
+    directory || query.scope || query.directory || query.path
+      ? JSON.stringify([directory ?? null, query.scope ?? null, query.directory ?? null, query.path ?? null])
+      : ""
+  return `${STATS_CACHE_KEY}:${scope}${identity ? `:${encodeURIComponent(identity)}` : ""}`
 }
 
 export function statsSelectedDayIndex(input: {
   days: readonly { day: string }[]
   selectedDay?: string
   selectedIndex?: number
-  followLatest: boolean
 }) {
   if (input.days.length <= 0) return undefined
-  if (input.followLatest) return input.days.length - 1
-
   const selectedDayIndex = input.selectedDay ? input.days.findIndex((day) => day.day === input.selectedDay) : -1
   if (selectedDayIndex >= 0) return selectedDayIndex
 
@@ -1037,7 +1141,7 @@ export async function warmUsageInsightsCache(input: {
 }) {
   const scope = input.scope ?? "global"
   const next = await loadInsights(input.sdk, { advanced: true, scope, query: input.query ?? {} })
-  input.kv.set(usageInsightsCacheKey(scope), { updated: Date.now(), data: next })
+  input.kv.set(usageInsightsCacheKey(scope, input.query, input.sdk.directory), { updated: Date.now(), data: next })
   return next
 }
 
@@ -1059,12 +1163,14 @@ export function Stats() {
   const [weatherReady, setWeatherReady] = createSignal(false)
   const [selectedDayIndex, setSelectedDayIndex] = createSignal<number | undefined>()
   const [selectedDayKey, setSelectedDayKey] = createSignal<string | undefined>()
-  const [followLatestDay, setFollowLatestDay] = createSignal(true)
+  const [selectedDayLoading, setSelectedDayLoading] = createSignal(false)
   const [cacheUpdated, setCacheUpdated] = createSignal<number | undefined>()
   const [cacheReady, setCacheReady] = createSignal(false)
   const [insightRefreshRequest, setInsightRefreshRequest] = createSignal(0)
   const [refreshingInsights, setRefreshingInsights] = createSignal(false)
   const [statsRefreshTick, setStatsRefreshTick] = createSignal(0)
+  let selectedDayTimer: ReturnType<typeof setTimeout> | undefined
+  let pendingSelectedDay: { index: number; key: string | undefined } | undefined
   const tiny = createMemo(() => dimensions().width < 92 || dimensions().height < 26)
   const narrow = createMemo(() => !tiny() && dimensions().width < 124)
   const wide = createMemo(() => dimensions().width >= 142 && dimensions().height >= 34)
@@ -1093,11 +1199,14 @@ export function Stats() {
     if (current.directory) return { directory: current.directory }
     return { scope: "project" }
   })
-  const statsCacheKey = createMemo(() => usageInsightsCacheKey(scope()))
+  const statsCacheKey = createMemo(() => usageInsightsCacheKey(scope(), scopeQuery(), sdk.directory))
   const [cachedInsights, setCachedInsights] = createSignal<UsageInsights | undefined>()
   let lastAutoRefreshCacheSignature: string | undefined
   const statsRefreshPoll = setInterval(() => setStatsRefreshTick((value) => value + 1), STATS_TODAY_CACHE_STALE_MS)
-  onCleanup(() => clearInterval(statsRefreshPoll))
+  onCleanup(() => {
+    clearInterval(statsRefreshPoll)
+    if (selectedDayTimer) clearTimeout(selectedDayTimer)
+  })
   createEffect(() => {
     if (!kv.ready) return
     setCacheReady(false)
@@ -1130,7 +1239,10 @@ export function Stats() {
       if (cached && input.refresh === 0) return cached
       setRefreshingInsights(true)
       try {
-        const next = await loadInsights(sdk, input)
+        const next = await loadInsights(sdk, {
+          ...input,
+          onFirstBatch: cached ? undefined : (partial) => setCachedInsights(normalizeUsageInsights(partial)),
+        })
         const updated = Date.now()
         const normalized = normalizeUsageInsights(next)
         const payload = { updated, data: normalized ?? next }
@@ -1144,11 +1256,11 @@ export function Stats() {
     },
   )
   createEffect(() => {
-    statsRefreshTick()
+    const refreshTick = statsRefreshTick()
     if (!kv.ready || !cacheReady() || refreshingInsights()) return
     const cached = cachedInsights()
     if (!cached) return
-    const signature = `${statsCacheKey()}:${cacheUpdated() ?? 0}:${cached.days.at(-1)?.day ?? "none"}`
+    const signature = `${statsCacheKey()}:${cacheUpdated() ?? 0}:${cached.days.at(-1)?.day ?? "none"}:${refreshTick}`
     if (lastAutoRefreshCacheSignature === signature) return
     if (!statsCacheNeedsRefresh({ updated: cacheUpdated(), days: cached.days })) return
     lastAutoRefreshCacheSignature = signature
@@ -1224,26 +1336,46 @@ export function Stats() {
       days: data.days,
       selectedDay: selectedDayKey(),
       selectedIndex: selectedDayIndex(),
-      followLatest: followLatestDay(),
     })
     if (nextSelectedDayIndex === undefined) return
-    setSelectedDayIndex(nextSelectedDayIndex)
-    setSelectedDayKey(data.days[nextSelectedDayIndex]?.day)
+    const nextSelectedDayKey = data.days[nextSelectedDayIndex]?.day
+    if (selectedDayIndex() === nextSelectedDayIndex && selectedDayKey() === nextSelectedDayKey) return
+    batch(() => {
+      setSelectedDayIndex(nextSelectedDayIndex)
+      setSelectedDayKey(nextSelectedDayKey)
+    })
   })
 
   function selectDay(index: number) {
     const data = visibleInsights()
     if (!data || data.days.length === 0) return
     const next = Math.max(0, Math.min(data.days.length - 1, index))
-    setSelectedDayIndex(next)
-    setSelectedDayKey(data.days[next]?.day)
-    setFollowLatestDay(next === data.days.length - 1)
+    const key = data.days[next]?.day
+    const current = pendingSelectedDay?.index ?? selectedDayIndex()
+    if (current === next && pendingSelectedDay === undefined) return
+    pendingSelectedDay = { index: next, key }
+    setSelectedDayLoading(true)
+    if (selectedDayTimer) return
+    selectedDayTimer = setTimeout(() => {
+      const pending = pendingSelectedDay
+      pendingSelectedDay = undefined
+      selectedDayTimer = undefined
+      if (!pending) {
+        setSelectedDayLoading(false)
+        return
+      }
+      batch(() => {
+        setSelectedDayIndex(pending.index)
+        setSelectedDayKey(pending.key)
+        setSelectedDayLoading(false)
+      })
+    }, 0)
   }
 
   function moveSelectedDay(delta: number) {
     const data = visibleInsights()
     if (!data || data.days.length === 0) return
-    selectDay((selectedDayIndex() ?? data.days.length - 1) + delta)
+    selectDay((pendingSelectedDay?.index ?? selectedDayIndex() ?? data.days.length - 1) + delta)
   }
 
   function moveSelectedColumn(delta: number) {
@@ -1290,25 +1422,25 @@ export function Stats() {
       configureWeather()
       return
     }
-    if (evt.name === "left" || evt.name === "h") {
+    if (evt.name === "left") {
       evt.preventDefault()
       evt.stopPropagation()
       moveSelectedColumn(-1)
       return
     }
-    if (evt.name === "right" || evt.name === "l") {
+    if (evt.name === "right") {
       evt.preventDefault()
       evt.stopPropagation()
       moveSelectedColumn(1)
       return
     }
-    if (evt.name === "up" || evt.name === "k") {
+    if (evt.name === "up") {
       evt.preventDefault()
       evt.stopPropagation()
       moveSelectedDay(-1)
       return
     }
-    if (evt.name === "down" || evt.name === "j") {
+    if (evt.name === "down") {
       evt.preventDefault()
       evt.stopPropagation()
       moveSelectedDay(1)
@@ -1327,7 +1459,11 @@ export function Stats() {
     const current = totals()
     if (!current) return []
     return [
-      stat("tokens", Locale.number(current.tokens), `${Locale.number(current.peakTokens)} peak day`),
+      stat(
+        "tokens",
+        Locale.number(current.tokens),
+        `${Locale.number(current.peakTokens)} peak day · ${Locale.number(current.cacheTokens)} cache included`,
+      ),
       stat("sessions", Locale.number(current.sessions), `${Locale.number(current.activeDays)} active days`),
       stat(
         "AI generating",
@@ -1343,7 +1479,11 @@ export function Stats() {
     const current = totals()
     if (!current) return []
     return [
-      stat("tokens", Locale.number(current.tokens), `${Locale.number(current.peakTokens)} peak`),
+      stat(
+        "tokens",
+        Locale.number(current.tokens),
+        `${Locale.number(current.peakTokens)} peak · ${Locale.number(current.cacheTokens)} cache included`,
+      ),
       stat("sessions", Locale.number(current.sessions), `${Locale.number(current.activeDays)} days`),
       stat(
         "AI time",
@@ -1440,7 +1580,7 @@ export function Stats() {
                       contentWidth={contentWidth()}
                       selectedDay={selectedDay()}
                       selectedDayIndex={selectedDayIndex()}
-                      onSelectDay={selectDay}
+                      activityLoading={refreshingInsights() || insights.loading || selectedDayLoading()}
                       tokenRows={tokenRows()}
                       responseRows={responseRows()}
                       statusRows={statusRows()}
@@ -1459,7 +1599,7 @@ export function Stats() {
                     heatCellWidth={heatCellWidth()}
                     selectedDay={selectedDay()}
                     selectedDayIndex={selectedDayIndex()}
-                    onSelectDay={selectDay}
+                    activityLoading={refreshingInsights() || insights.loading || selectedDayLoading()}
                     kpis={kpis()}
                     tokenRows={tokenRows()}
                     responseRows={responseRows()}

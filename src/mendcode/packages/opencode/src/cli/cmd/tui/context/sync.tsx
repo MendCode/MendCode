@@ -36,7 +36,12 @@ import path from "path"
 import { useKV } from "./kv"
 import { isRecentWorkingAssistant, sessionStatusExpiryDelay } from "../util/session-working"
 import { appendLiveShellOutput, previewShellOutput } from "./shell-output"
-import { isCurrentTuiBootstrap, syncBootstrapReadiness, syncReadyForStatus, tuiFastBootEnabled } from "../util/fast-boot"
+import {
+  isCurrentTuiBootstrap,
+  syncBootstrapReadiness,
+  syncReadyForStatus,
+  tuiFastBootEnabled,
+} from "../util/fast-boot"
 
 type ShellOutputEvent = {
   type: "session.next.shell.output"
@@ -49,6 +54,7 @@ type ShellOutputEvent = {
 
 export const TUI_SESSION_MESSAGE_SYNC_LIMIT = 50
 export const TUI_SESSION_MESSAGE_STORE_LIMIT = 150
+export const COMPACTED_TOOL_CALLS_KV_KEY = "compacted_tool_calls_visible"
 const TUI_TEXT_PREVIEW_CHARS = 128 * 1024
 const TUI_TOOL_OUTPUT_PREVIEW_CHARS = 16 * 1024
 const TUI_METADATA_PREVIEW_CHARS = 4 * 1024
@@ -73,9 +79,7 @@ function previewUnknown(input: unknown, maxChars: number, label: string, depth =
   const result: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(input)) {
     const nextMax =
-      key === "output" || key === "diff" || key === "content"
-        ? maxChars
-        : Math.min(maxChars, TUI_FIELD_PREVIEW_CHARS)
+      key === "output" || key === "diff" || key === "content" ? maxChars : Math.min(maxChars, TUI_FIELD_PREVIEW_CHARS)
     result[key] = previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
   }
   return result
@@ -115,7 +119,7 @@ function previewPartForStore(part: Part): Part {
               output:
                 part.tool === "bash" || part.tool === "shell"
                   ? previewShellOutput(state.output)
-                  : previewString(state.output, TUI_TOOL_OUTPUT_PREVIEW_CHARS, "tool output") ?? "",
+                  : (previewString(state.output, TUI_TOOL_OUTPUT_PREVIEW_CHARS, "tool output") ?? ""),
               metadata: previewUnknown(state.metadata, TUI_METADATA_PREVIEW_CHARS, "tool metadata"),
             }
           : {
@@ -146,6 +150,28 @@ function preserveAppendOnlyPartText(current: Part, incoming: Part): Part {
   return incoming
 }
 
+function preserveRunningShellOutput(current: Part, incoming: Part): Part {
+  if (current.type !== "tool" || incoming.type !== "tool") return incoming
+  if (current.tool !== incoming.tool || (current.tool !== "bash" && current.tool !== "shell")) return incoming
+  if (current.state.status !== "running" || incoming.state.status !== "running") return incoming
+  const output = current.state.metadata?.output
+  if (typeof output !== "string" || output.length === 0) return incoming
+  return {
+    ...incoming,
+    state: {
+      ...incoming.state,
+      metadata: {
+        ...(incoming.state.metadata ?? {}),
+        output,
+      },
+    },
+  }
+}
+
+function preserveLivePart(current: Part, incoming: Part) {
+  return preserveRunningShellOutput(current, preserveAppendOnlyPartText(current, incoming))
+}
+
 function mergeFetchedParts(current: Part[] | undefined, incoming: Part[]) {
   if (!current?.length) return incoming
 
@@ -154,14 +180,12 @@ function mergeFetchedParts(current: Part[] | undefined, incoming: Part[]) {
   const merged = incoming.map((part) => {
     seen.add(part.id)
     const existing = currentByID.get(part.id)
-    return existing ? preserveAppendOnlyPartText(existing, part) : part
+    return existing ? preserveLivePart(existing, part) : part
   })
 
   for (const part of current) {
     if (seen.has(part.id)) continue
-    if ((part.type === "text" || part.type === "reasoning") && part.time?.end === undefined) {
-      merged.push(part)
-    }
+    merged.push(part)
   }
 
   return merged.toSorted((a, b) => a.id.localeCompare(b.id))
@@ -174,6 +198,12 @@ function mergeMessageInfo(current: Message | undefined, incoming: Message): Mess
   return {
     ...current,
     ...incoming,
+    time: {
+      ...current.time,
+      ...incoming.time,
+      completed: incoming.time.completed ?? current.time.completed,
+    },
+    finish: incoming.finish ?? current.finish,
     providerID: incoming.providerID || current.providerID,
     modelID: incoming.modelID || current.modelID,
     variant: incoming.variant ?? current.variant,
@@ -189,18 +219,20 @@ function trimLoadedSessionMessages(input: {
   messages: Message[]
   max: number
   drop: "oldest" | "newest"
+  preserveIDs?: ReadonlySet<string>
 }) {
   if (input.messages.length <= input.max) return { messages: input.messages, removed: [] as Message[] }
   const removeCount = input.messages.length - input.max
-  if (input.drop === "newest") {
-    return {
-      messages: input.messages.slice(0, input.max),
-      removed: input.messages.slice(input.max),
-    }
-  }
+  const candidates = input.drop === "oldest" ? input.messages : input.messages.toReversed()
+  const removedIDs = new Set(
+    candidates
+      .filter((message) => !input.preserveIDs?.has(message.id))
+      .slice(0, removeCount)
+      .map((message) => message.id),
+  )
   return {
-    messages: input.messages.slice(removeCount),
-    removed: input.messages.slice(0, removeCount),
+    messages: input.messages.filter((message) => !removedIDs.has(message.id)),
+    removed: input.messages.filter((message) => removedIDs.has(message.id)),
   }
 }
 
@@ -209,31 +241,46 @@ function mergeSessionMessagePage(input: {
   incoming: Message[]
   max: number
   drop: "oldest" | "newest"
-  preserveCurrent?: "all" | "newer-working-assistant"
+  preserveCurrent?: "all" | "newer-working-assistant" | "all-assistants"
+  preserveIDs?: ReadonlySet<string>
 }) {
   const byID = new Map<string, Message>()
+  const currentByID = new Map((input.current ?? []).map((message) => [message.id, message]))
   const oldestIncomingID = input.incoming[0]?.id
   const newestIncomingID = input.incoming.at(-1)?.id
+  const preserveAllCurrent = input.preserveCurrent === "all" || input.incoming.length === 0
   for (const message of input.current ?? []) {
-    if (input.preserveCurrent === "newer-working-assistant") {
+    if (input.preserveIDs?.has(message.id)) {
+      byID.set(message.id, message)
+      continue
+    }
+    if (
+      !preserveAllCurrent &&
+      (input.preserveCurrent === "newer-working-assistant" || input.preserveCurrent === "all-assistants")
+    ) {
+      if (message.role === "user") {
+        byID.set(message.id, message)
+        continue
+      }
+      if (input.preserveCurrent === "all-assistants" && message.role === "assistant") {
+        byID.set(message.id, message)
+        continue
+      }
       if (oldestIncomingID && message.id < oldestIncomingID) {
         byID.set(message.id, message)
         continue
       }
       if (!newestIncomingID || message.id <= newestIncomingID) continue
-      if (message.role === "user") {
-        byID.set(message.id, message)
-        continue
-      }
       if (message.role !== "assistant" || message.time.completed) continue
     }
     byID.set(message.id, message)
   }
-  for (const message of input.incoming) byID.set(message.id, mergeMessageInfo(byID.get(message.id), message))
+  for (const message of input.incoming) byID.set(message.id, mergeMessageInfo(currentByID.get(message.id), message))
   return trimLoadedSessionMessages({
     messages: [...byID.values()].toSorted((a, b) => a.id.localeCompare(b.id)),
     max: input.max,
     drop: input.drop,
+    preserveIDs: input.preserveIDs,
   })
 }
 
@@ -328,19 +375,35 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     const project = useProject()
     const sdk = useSDK()
     const kv = useKV()
+    const [showCompactedToolCalls] = kv.signal(COMPACTED_TOOL_CALLS_KV_KEY, false)
 
-    const sessionMessagePaging = new Map<string, {
-      olderCursor?: string
-      hasMoreOlder: boolean
-      newerCursor?: string
-      hasMoreNewer: boolean
-      loadingOlder?: Promise<boolean>
-      loadingNewer?: Promise<boolean>
-    }>()
+    const sessionMessagePaging = new Map<
+      string,
+      {
+        olderCursor?: string
+        hasMoreOlder: boolean
+        newerCursor?: string
+        hasMoreNewer: boolean
+        loadingOlder?: Promise<boolean>
+        loadingNewer?: Promise<boolean>
+      }
+    >()
+    const sessionMessageSyncGeneration = new Map<string, number>()
+    const pinnedSessionMessages = new Map<string, Set<string>>()
     const sessionStatusTimers = new Map<string, Timer>()
     let syncedWorkspace = project.workspace.current()
     let bootstrapGeneration = 0
     let pendingInputRefreshTimer: Timer | undefined
+
+    function beginSessionMessageSync(sessionID: string) {
+      const generation = (sessionMessageSyncGeneration.get(sessionID) ?? 0) + 1
+      sessionMessageSyncGeneration.set(sessionID, generation)
+      return generation
+    }
+
+    function isCurrentSessionMessageSync(sessionID: string, generation: number) {
+      return sessionMessageSyncGeneration.get(sessionID) === generation
+    }
 
     function sessionListQuery(): { scope?: "project"; path?: string } {
       if (!kv.get("session_directory_filter_enabled", true)) return { scope: "project" }
@@ -385,18 +448,24 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       return []
     }
 
-    async function fetchSessionMessagePage(input: { sessionID: string; limit: number; before?: string; after?: string }) {
+    async function fetchSessionMessagePage(input: {
+      sessionID: string
+      limit: number
+      before?: string
+      after?: string
+    }) {
       const url = new URL(`/session/${encodeURIComponent(input.sessionID)}/message`, sdk.url)
       url.searchParams.set("limit", String(input.limit))
-      url.searchParams.set("view", "tui")
+      url.searchParams.set("view", showCompactedToolCalls() ? "tui-all" : "tui")
       if (input.before) url.searchParams.set("before", input.before)
       if (input.after) url.searchParams.set("after", input.after)
       if (sdk.directory) url.searchParams.set("directory", sdk.directory)
       const response = await sdk.fetch(url.toString(), { headers: sdk.headers })
       if (!response.ok) throw new Error(`session message page failed: ${response.status} ${response.statusText}`)
       return {
-        items: await response.json() as SessionMessagePageItem[],
+        items: (await response.json()) as SessionMessagePageItem[],
         cursor: response.headers.get("X-Next-Cursor") ?? undefined,
+        sparse: response.headers.get("X-Message-View-Sparse") === "true",
       }
     }
 
@@ -404,6 +473,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       const first = await fetchSessionMessagePage({ sessionID, limit: TUI_SESSION_MESSAGE_SYNC_LIMIT })
       let items = first.items
       let cursor = first.cursor
+      let sparse = first.sparse
       let before: string | undefined
       while (cursor && cursor !== before && items.length < TUI_SESSION_MESSAGE_STORE_LIMIT) {
         before = cursor
@@ -417,9 +487,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           break
         }
         items = [...older.items, ...items]
+        sparse ||= older.sparse
         cursor = older.cursor === before ? undefined : older.cursor
       }
-      return { items, cursor }
+      return { items, cursor, sparse }
     }
 
     function rememberLatestAssistant(sessionID: string, messages: readonly Message[]) {
@@ -430,12 +501,17 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     }
 
     function recomputeLatestAssistant(sessionID: string) {
-      const latest = store.message[sessionID]?.findLast((message): message is AssistantMessage => message.role === "assistant")
+      const latest = store.message[sessionID]?.findLast(
+        (message): message is AssistantMessage => message.role === "assistant",
+      )
       if (latest) {
         setStore("session_latest_assistant", sessionID, reconcile(latest))
         return
       }
-      setStore("session_latest_assistant", produce((draft) => delete draft[sessionID]))
+      setStore(
+        "session_latest_assistant",
+        produce((draft) => delete draft[sessionID]),
+      )
     }
 
     function removeSessionParts(messages: Message[]) {
@@ -452,7 +528,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       sessionID: string
       items: SessionMessagePageItem[]
       drop: "oldest" | "newest"
-      preserveCurrent?: "all" | "newer-working-assistant"
+      preserveCurrent?: "all" | "newer-working-assistant" | "all-assistants"
     }) {
       const merged = mergeSessionMessagePage({
         current: store.message[input.sessionID],
@@ -460,12 +536,17 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         max: TUI_SESSION_MESSAGE_STORE_LIMIT,
         drop: input.drop,
         preserveCurrent: input.preserveCurrent ?? "all",
+        preserveIDs: pinnedSessionMessages.get(input.sessionID),
       })
       setStore("message", input.sessionID, reconcile(merged.messages))
       rememberLatestAssistant(input.sessionID, merged.messages)
       for (const item of input.items) {
         if (!merged.messages.some((message) => message.id === item.info.id)) continue
-        setStore("part", item.info.id, reconcile(mergeFetchedParts(store.part[item.info.id], item.parts.map(previewPartForStore))))
+        setStore(
+          "part",
+          item.info.id,
+          reconcile(mergeFetchedParts(store.part[item.info.id], item.parts.map(previewPartForStore))),
+        )
       }
       removeSessionParts(merged.removed)
       return merged
@@ -512,28 +593,53 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       sessionStatusTimers.delete(sessionID)
     }
 
+    function releaseCompletedPinnedMessages(sessionID: string) {
+      const pinned = pinnedSessionMessages.get(sessionID)
+      if (!pinned) return
+      const completedParentID = (store.message[sessionID] ?? [])
+        .filter(
+          (message): message is AssistantMessage =>
+            message.role === "assistant" &&
+            message.time.completed !== undefined &&
+            (Boolean(message.error) || Boolean(message.finish && !["tool-calls", "unknown"].includes(message.finish))),
+        )
+        .map((message) => message.parentID)
+        .filter((parentID): parentID is string => Boolean(parentID))
+        .toSorted((a, b) => b.localeCompare(a))[0]
+      if (!completedParentID) return
+      for (const messageID of pinned) {
+        if (messageID <= completedParentID) pinned.delete(messageID)
+      }
+      if (pinned.size === 0) pinnedSessionMessages.delete(sessionID)
+    }
+
     function scheduleSessionStatusExpiry(sessionID: string, status: SessionStatus) {
       clearSessionStatusTimer(sessionID)
       const delay = sessionStatusExpiryDelay(status)
       if (!delay) return
-      sessionStatusTimers.set(sessionID, setTimeout(() => {
-        sessionStatusTimers.delete(sessionID)
-        const current = store.session_status[sessionID]
-        if (!current || current.type !== status.type) return
-        if (current.type === "busy" && status.type === "busy") {
-          const currentUntil = "until" in current && typeof current.until === "number" ? current.until : undefined
-          const statusUntil = "until" in status && typeof status.until === "number" ? status.until : undefined
-          if (currentUntil !== statusUntil) return
-        }
-        if (current.type === "retry" && status.type === "retry" && current.next !== status.next) return
-        setStore("session_status", sessionID, { type: "idle" })
-      }, delay))
+      sessionStatusTimers.set(
+        sessionID,
+        setTimeout(() => {
+          sessionStatusTimers.delete(sessionID)
+          const current = store.session_status[sessionID]
+          if (!current || current.type !== status.type) return
+          if (current.type === "busy" && status.type === "busy") {
+            const currentUntil = "until" in current && typeof current.until === "number" ? current.until : undefined
+            const statusUntil = "until" in status && typeof status.until === "number" ? status.until : undefined
+            if (currentUntil !== statusUntil) return
+          }
+          if (current.type === "retry" && status.type === "retry" && current.next !== status.next) return
+          setStore("session_status", sessionID, { type: "idle" })
+        }, delay),
+      )
     }
 
     function setSessionStatus(sessionID: string, status: SessionStatus) {
       setStore("session_status", sessionID, status)
-      if (status.type === "idle") clearSessionStatusTimer(sessionID)
-      else scheduleSessionStatusExpiry(sessionID, status)
+      if (status.type === "idle") {
+        clearSessionStatusTimer(sessionID)
+        releaseCompletedPinnedMessages(sessionID)
+      } else scheduleSessionStatusExpiry(sessionID, status)
     }
 
     function replaceSessionStatuses(statuses: Record<string, SessionStatus>) {
@@ -541,7 +647,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         if (!(sessionID in statuses)) clearSessionStatusTimer(sessionID)
       }
       setStore("session_status", reconcile(statuses))
-      for (const [sessionID, status] of Object.entries(statuses)) scheduleSessionStatusExpiry(sessionID, status)
+      for (const [sessionID, status] of Object.entries(statuses)) {
+        if (status.type === "idle") releaseCompletedPinnedMessages(sessionID)
+        else scheduleSessionStatusExpiry(sessionID, status)
+      }
     }
 
     onCleanup(() => {
@@ -746,14 +855,30 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 }),
               )
             }
-            setStore("message", produce((draft) => delete draft[sessionID]))
-            setStore("session_latest_assistant", produce((draft) => delete draft[sessionID]))
-            setStore("todo", produce((draft) => delete draft[sessionID]))
-            setStore("session_diff", produce((draft) => delete draft[sessionID]))
-            setStore("session_status", produce((draft) => delete draft[sessionID]))
+            setStore(
+              "message",
+              produce((draft) => delete draft[sessionID]),
+            )
+            setStore(
+              "session_latest_assistant",
+              produce((draft) => delete draft[sessionID]),
+            )
+            setStore(
+              "todo",
+              produce((draft) => delete draft[sessionID]),
+            )
+            setStore(
+              "session_diff",
+              produce((draft) => delete draft[sessionID]),
+            )
+            setStore(
+              "session_status",
+              produce((draft) => delete draft[sessionID]),
+            )
             removeSessionParts(removedMessages)
           })
           sessionMessagePaging.delete(sessionID)
+          pinnedSessionMessages.delete(sessionID)
           clearSessionStatusTimer(sessionID)
           break
         }
@@ -795,12 +920,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const result = Binary.search(messages, event.properties.info.id, (m) => m.id)
           if (result.found) {
             const next = mergeMessageInfo(messages[result.index], event.properties.info)
-            setStore(
-              "message",
-              event.properties.info.sessionID,
-              result.index,
-              reconcile(next),
-            )
+            setStore("message", event.properties.info.sessionID, result.index, reconcile(next))
             rememberLatestAssistant(event.properties.info.sessionID, [next])
             break
           }
@@ -818,22 +938,17 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             }),
           )
           const updated = store.message[event.properties.info.sessionID]
-          if (updated.length > TUI_SESSION_MESSAGE_STORE_LIMIT) {
-            const oldest = updated[0]
+          const overflowed = updated.length > TUI_SESSION_MESSAGE_STORE_LIMIT
+          if (overflowed) {
+            const trimmed = trimLoadedSessionMessages({
+              messages: [...updated],
+              max: TUI_SESSION_MESSAGE_STORE_LIMIT,
+              drop: "oldest",
+              preserveIDs: pinnedSessionMessages.get(event.properties.info.sessionID),
+            })
             batch(() => {
-              setStore(
-                "message",
-                event.properties.info.sessionID,
-                produce((draft) => {
-                  draft.shift()
-                }),
-              )
-              setStore(
-                "part",
-                produce((draft) => {
-                  delete draft[oldest.id]
-                }),
-              )
+              setStore("message", event.properties.info.sessionID, reconcile(trimmed.messages))
+              removeSessionParts(trimmed.removed)
             })
           }
           rememberLatestAssistant(event.properties.info.sessionID, [event.properties.info])
@@ -842,7 +957,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             sessionMessagePaging.set(event.properties.info.sessionID, {
               ...paging,
               olderCursor: paging.hasMoreOlder ? paging.olderCursor : messageCursor(first),
-              hasMoreOlder: paging.hasMoreOlder || updated.length > TUI_SESSION_MESSAGE_STORE_LIMIT,
+              hasMoreOlder: paging.hasMoreOlder || overflowed,
               newerCursor: undefined,
               hasMoreNewer: false,
             })
@@ -850,6 +965,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           break
         }
         case "message.removed": {
+          pinnedSessionMessages.get(event.properties.sessionID)?.delete(event.properties.messageID)
           const messages = store.message[event.properties.sessionID]
           if (!messages) break
           const result = Binary.search(messages, event.properties.messageID, (m) => m.id)
@@ -862,7 +978,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                   draft.splice(result.index, 1)
                 }),
               )
-              setStore("part", produce((draft) => delete draft[event.properties.messageID]))
+              setStore(
+                "part",
+                produce((draft) => delete draft[event.properties.messageID]),
+              )
             })
             recomputeLatestAssistant(event.properties.sessionID)
           }
@@ -877,7 +996,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           }
           const result = Binary.search(parts, event.properties.part.id, (p) => p.id)
           if (result.found) {
-            const next = previewPartForStore(preserveAppendOnlyPartText(parts[result.index], incomingPart))
+            const next = previewPartForStore(preserveLivePart(parts[result.index], incomingPart))
             setStore("part", event.properties.part.messageID, result.index, reconcile(next))
             break
           }
@@ -905,7 +1024,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               const field = fieldName as keyof typeof part
               const existing = part[field] as string | undefined
               const maxChars = fieldName === "text" ? TUI_TEXT_PREVIEW_CHARS : TUI_FIELD_PREVIEW_CHARS
-              ;(part[field] as string) = previewString((existing ?? "") + event.properties.delta, maxChars, String(field)) ?? ""
+              ;(part[field] as string) =
+                previewString((existing ?? "") + event.properties.delta, maxChars, String(field)) ?? ""
             }),
           )
           break
@@ -958,11 +1078,18 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         apply()
       }
       if (workspace !== syncedWorkspace) {
+        sessionMessageSyncGeneration.forEach((generation, sessionID) =>
+          sessionMessageSyncGeneration.set(sessionID, generation + 1),
+        )
         sessionMessagePaging.clear()
+        pinnedSessionMessages.clear()
         syncedWorkspace = workspace
         setStore("provider_metadata_ready", false)
       }
-      const readiness = syncBootstrapReadiness({ fastBoot: tuiFastBootEnabled(), continueSession: Boolean(args.continue) })
+      const readiness = syncBootstrapReadiness({
+        fastBoot: tuiFastBootEnabled(),
+        continueSession: Boolean(args.continue),
+      })
       const projectPromise = project.sync()
       const sessionListPromise = projectPromise.then(() => listSessions())
       void sessionListPromise.catch(() => undefined)
@@ -1029,26 +1156,38 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           void Promise.all([
             ...(readiness.blockProviderUxMetadata ? [] : [hydrateProviderUxMetadata()]),
             ...(readiness.blockSessionList ? [] : [hydrateSessionList()]),
-            sdk.client.command.list({ workspace }).then((x) => setIfCurrent(() => setStore("command", reconcile(x.data ?? [])))),
-            sdk.client.lsp.status({ workspace }).then((x) => setIfCurrent(() => setStore("lsp", reconcile(x.data ?? [])))),
-            sdk.client.mcp.status({ workspace }).then((x) => setIfCurrent(() => setStore("mcp", reconcile(x.data ?? {})))),
+            sdk.client.command
+              .list({ workspace })
+              .then((x) => setIfCurrent(() => setStore("command", reconcile(x.data ?? [])))),
+            sdk.client.lsp
+              .status({ workspace })
+              .then((x) => setIfCurrent(() => setStore("lsp", reconcile(x.data ?? [])))),
+            sdk.client.mcp
+              .status({ workspace })
+              .then((x) => setIfCurrent(() => setStore("mcp", reconcile(x.data ?? {})))),
             sdk.client.experimental.resource
               .list({ workspace })
               .then((x) => setIfCurrent(() => setStore("mcp_resource", reconcile(x.data ?? {})))),
-            sdk.client.formatter.status({ workspace }).then((x) => setIfCurrent(() => setStore("formatter", reconcile(x.data ?? [])))),
+            sdk.client.formatter
+              .status({ workspace })
+              .then((x) => setIfCurrent(() => setStore("formatter", reconcile(x.data ?? [])))),
             sdk.client.session.status({ workspace }).then((x) => {
               setIfCurrent(() => replaceSessionStatuses(x.data ?? {}))
             }),
-            sdk.client.provider.auth({ workspace }).then((x) => setIfCurrent(() => setStore("provider_auth", reconcile(x.data ?? {})))),
+            sdk.client.provider
+              .auth({ workspace })
+              .then((x) => setIfCurrent(() => setStore("provider_auth", reconcile(x.data ?? {})))),
             sdk.client.vcs.get({ workspace }).then((x) => setIfCurrent(() => setStore("vcs", reconcile(x.data)))),
             refreshPendingInput(),
             project.workspace.sync(),
-          ]).then(() => {
-            if (!isCurrentBootstrap()) return
-            setStore("status", "complete")
-          }).catch((e) => {
-            void reportBootstrapError(e)
-          })
+          ])
+            .then(() => {
+              if (!isCurrentBootstrap()) return
+              setStore("status", "complete")
+            })
+            .catch((e) => {
+              void reportBootstrapError(e)
+            })
         })
         .catch(async (e) => {
           await reportBootstrapError(e)
@@ -1076,6 +1215,39 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         return project.instance.path()
       },
       session: {
+        pinMessage(sessionID: string, messageID: string) {
+          const pinned = pinnedSessionMessages.get(sessionID) ?? new Set<string>()
+          pinned.add(messageID)
+          pinnedSessionMessages.set(sessionID, pinned)
+        },
+        unpinMessage(sessionID: string, messageID: string) {
+          const pinned = pinnedSessionMessages.get(sessionID)
+          if (!pinned) return
+          pinned.delete(messageID)
+          if (pinned.size === 0) pinnedSessionMessages.delete(sessionID)
+        },
+        async reloadMessages(sessionID: string) {
+          const pinned = pinnedSessionMessages.get(sessionID)
+          const current = [...(store.message[sessionID] ?? [])]
+          const keep = pinned ? current.filter((message) => pinned.has(message.id)) : []
+          const removed = current.filter((message) => !pinned?.has(message.id))
+          const removedParts = new Map(removed.map((message) => [message.id, [...(store.part[message.id] ?? [])]]))
+          batch(() => {
+            setStore("message", sessionID, reconcile(keep))
+            removeSessionParts(removed)
+            recomputeLatestAssistant(sessionID)
+          })
+          sessionMessagePaging.delete(sessionID)
+          await result.session.sync(sessionID, { force: true }).catch((error) => {
+            batch(() => {
+              setStore("message", sessionID, reconcile(current))
+              removedParts.forEach((parts, messageID) => setStore("part", messageID, reconcile(parts)))
+              recomputeLatestAssistant(sessionID)
+            })
+            sessionMessagePaging.delete(sessionID)
+            throw error
+          })
+        },
         get(sessionID: string) {
           const match = Binary.search(store.session, sessionID, (s) => s.id)
           if (match.found) return store.session[match.index]
@@ -1118,12 +1290,14 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const page = sessionMessagePaging.get(sessionID)
           if (!page?.hasMoreOlder || !page.olderCursor) return false
           if (page.loadingOlder) return page.loadingOlder
+          const generation = sessionMessageSyncGeneration.get(sessionID) ?? 0
           const load = (async () => {
             const messages = await fetchSessionMessagePage({
               sessionID,
               limit: TUI_SESSION_MESSAGE_SYNC_LIMIT,
               before: page.olderCursor,
             })
+            if (!isCurrentSessionMessageSync(sessionID, generation)) return false
             batch(() => {
               const merged = applySessionMessagePage({ sessionID, items: messages.items, drop: "newest" })
               const advancedOlderCursor = Boolean(messages.cursor && messages.cursor !== page.olderCursor)
@@ -1140,7 +1314,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             return messages.items.length > 0
           })().finally(() => {
             const latest = sessionMessagePaging.get(sessionID)
-            if (latest?.loadingOlder === load) sessionMessagePaging.set(sessionID, { ...latest, loadingOlder: undefined })
+            if (latest?.loadingOlder === load)
+              sessionMessagePaging.set(sessionID, { ...latest, loadingOlder: undefined })
           })
           sessionMessagePaging.set(sessionID, { ...page, loadingOlder: load })
           return load
@@ -1153,12 +1328,14 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const newest = current.at(-1)
           const after = page.newerCursor ?? (newest ? messageCursor(newest) : undefined)
           if (!after) return false
+          const generation = sessionMessageSyncGeneration.get(sessionID) ?? 0
           const load = (async () => {
             const messages = await fetchSessionMessagePage({
               sessionID,
               limit: TUI_SESSION_MESSAGE_SYNC_LIMIT,
               after,
             })
+            if (!isCurrentSessionMessageSync(sessionID, generation)) return false
             batch(() => {
               const merged = applySessionMessagePage({ sessionID, items: messages.items, drop: "oldest" })
               const oldest = merged.messages[0]
@@ -1176,13 +1353,15 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             return messages.items.length > 0
           })().finally(() => {
             const latest = sessionMessagePaging.get(sessionID)
-            if (latest?.loadingNewer === load) sessionMessagePaging.set(sessionID, { ...latest, loadingNewer: undefined })
+            if (latest?.loadingNewer === load)
+              sessionMessagePaging.set(sessionID, { ...latest, loadingNewer: undefined })
           })
           sessionMessagePaging.set(sessionID, { ...page, loadingNewer: load })
           return load
         },
         async sync(sessionID: string, options?: { force?: boolean }) {
           if (!options?.force && sessionMessagePaging.has(sessionID)) return
+          const generation = beginSessionMessageSync(sessionID)
           const workspace = project.workspace.current()
           const [session, messages, todo, diff, statuses] = await Promise.all([
             sdk.client.session.get({ sessionID }, { throwOnError: true }),
@@ -1191,6 +1370,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             sdk.client.session.diff({ sessionID }),
             sdk.client.session.status({ workspace }),
           ])
+          if (!isCurrentSessionMessageSync(sessionID, generation)) return
           batch(() => {
             setStore(
               "session",
@@ -1201,7 +1381,12 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               }),
             )
             setStore("todo", sessionID, reconcile(todo.data ?? []))
-            applySessionMessagePage({ sessionID, items: messages.items, drop: "oldest", preserveCurrent: "newer-working-assistant" })
+            applySessionMessagePage({
+              sessionID,
+              items: messages.items,
+              drop: "oldest",
+              preserveCurrent: messages.sparse ? "all-assistants" : "newer-working-assistant",
+            })
             sessionMessagePaging.set(sessionID, {
               olderCursor: messages.cursor,
               hasMoreOlder: Boolean(messages.cursor),

@@ -131,6 +131,7 @@ function graphSnapshot(input: {
   action: MemoryGraphAction
   query?: string
   facts: MemoryFact[]
+  materializedFactIDs: ReadonlySet<string>
   links: MemoryFactLink[]
   health: MemoryGraphHealth
 }): MemoryGraphSnapshot {
@@ -147,7 +148,7 @@ function graphSnapshot(input: {
       scope: fact.scope,
       categoryIDs: fact.categoryIDs,
       retrievalPriority: fact.retrievalPriority,
-      materialized: true,
+      materialized: input.materializedFactIDs.has(fact.id),
     })),
     links: input.links
       .filter((link) => visibleFactIDs.has(link.from) && visibleFactIDs.has(link.to))
@@ -192,7 +193,7 @@ export const MemoryGraphTool = Tool.define<typeof Parameters, Metadata, never>(
             output: formatGraphOverview(overview),
             metadata: {
               mendMemoryTool: { action: params.action, graph: true, writes },
-              graphSnapshot: graphSnapshot({ action: params.action, facts, links: graph.links, health: overview.health }),
+              graphSnapshot: graphSnapshot({ action: params.action, facts, materializedFactIDs: new Set(graph.facts.map((fact) => fact.id)), links: graph.links, health: overview.health }),
             },
           }
         }
@@ -206,7 +207,7 @@ export const MemoryGraphTool = Tool.define<typeof Parameters, Metadata, never>(
               : [`ok: false`, `issues: ${result.issues.length}`, formatGraphHealth(result.health), ...result.issues.slice(0, 8).map((issue) => `- ${issue.code}: ${issue.message}`)].join("\n"),
             metadata: {
               mendMemoryTool: { action: params.action, graph: true, writes },
-              graphSnapshot: graphSnapshot({ action: params.action, facts, links: graph.links, health: result.health }),
+              graphSnapshot: graphSnapshot({ action: params.action, facts, materializedFactIDs: new Set(graph.facts.map((fact) => fact.id)), links: graph.links, health: result.health }),
             },
           }
         }
@@ -231,6 +232,7 @@ export const MemoryGraphTool = Tool.define<typeof Parameters, Metadata, never>(
                 action: params.action,
                 query: params.query,
                 facts: matchFacts,
+                materializedFactIDs: new Set(graph.facts.map((fact) => fact.id)),
                 links: graph.links,
                 health: computeMemoryGraphHealth({ graph, facts }),
               }),

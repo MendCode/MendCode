@@ -31,6 +31,7 @@ export type StatsRoute = {
 
 export type MemoryRoute = {
   type: "memory"
+  view?: "overview" | "graph"
   returnTo?: HomeRoute | SessionRoute
 }
 

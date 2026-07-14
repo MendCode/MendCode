@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { layoutAsciiGraph, renderAsciiGraph } from "@mendcode/plugin/tui"
 import { setupSteps, requiredSetupSteps, type SetupState } from "../../src/mend/setup/state"
 import { routeReturnTarget } from "../../src/cli/cmd/tui/context/route"
 import {
+  inferModelPresetAuthMode,
   isPublicGitHubURL,
   setupExtractorAuthMessage,
   setupLabelValueLine,
@@ -13,9 +15,45 @@ import {
   truncateSetupText,
 } from "../../src/cli/cmd/tui/routes/setup"
 import { setupRailStepStatus } from "../../src/cli/cmd/tui/routes/setup/setup-rail"
-import { loopRouteColumns, loopRouteFrameLayout, loopRouteKeyHint, loopRouteStackedListHeight } from "../../src/cli/cmd/tui/routes/loops"
-import { dreamEvidenceLabel, dreamGraphProposalLabel, dreamLatestActivity, dreamTranscriptRows, memoryGraphMiniMap, memoryLayoutForDimensions, memoryPreviewText, memorySidebarProjectWorkspaces, memoryTabCellWidths, shouldMemoryRouteHandleKey, sideChatInputArtifacts } from "../../src/cli/cmd/tui/routes/memory"
-import { contextAutoCompactLabel, contextInventoryRows, contextUsageBarCells, contextUsageGridCells, contextUsageGridLayout, contextUsageGridLegend, contextUsageGridRows } from "../../src/cli/cmd/tui/routes/session/dialog-context-usage"
+import {
+  compactLoopDetailLines,
+  latestLoopWakeReason,
+  loopContractPreviewRows,
+  loopDetailRowLayout,
+  loopRouteColumns,
+  loopRouteFrameLayout,
+  loopRouteHeaderLayout,
+  loopRouteKeyHint,
+  loopRouteStackedListHeight,
+  loopSupervisionRows,
+} from "../../src/cli/cmd/tui/routes/loops"
+import {
+  dreamEvidenceLabel,
+  dreamGraphProposalLabel,
+  dreamLatestActivity,
+  dreamTranscriptRows,
+  memoryGraphCommandHints,
+  memoryGraphExplorerLayout,
+  memoryGraphFactProjectLabels,
+  memoryGraphMiniMap,
+  memoryGraphSearchMatches,
+  memoryLayoutForDimensions,
+  memoryPreviewText,
+  memorySidebarProjectWorkspaces,
+  memoryTabCellWidths,
+  memoryTabPresentation,
+  shouldMemoryRouteHandleKey,
+  sideChatInputArtifacts,
+} from "../../src/cli/cmd/tui/routes/memory"
+import {
+  contextAutoCompactLabel,
+  contextInventoryRows,
+  contextUsageBarCells,
+  contextUsageGridCells,
+  contextUsageGridLayout,
+  contextUsageGridLegend,
+  contextUsageGridRows,
+} from "../../src/cli/cmd/tui/routes/session/dialog-context-usage"
 import { startupLoadingText } from "../../src/cli/cmd/tui/component/startup-loading"
 import {
   initialTuiPluginReady,
@@ -91,6 +129,13 @@ describe("setup route smoke", () => {
     expect(isPublicGitHubURL("https://token@github.com/org/repo")).toBe(false)
     expect(isPublicGitHubURL("https://github.com/org/repo?token=secret")).toBe(false)
     expect(isPublicGitHubURL("file:///tmp/repo")).toBe(false)
+  })
+
+  test("only infers preset auth mode when a provider/model pair is unambiguous", () => {
+    expect(inferModelPresetAuthMode("openai", "gpt-5-mini")).toBe("api-key")
+    expect(inferModelPresetAuthMode("openai", "gpt-5.6")).toBe("api-key")
+    expect(inferModelPresetAuthMode("openai", "gpt-5.6-sol")).toBe("chatgpt-subscription-oauth")
+    expect(inferModelPresetAuthMode("openai", "gpt-5.2-codex")).toBeNull()
   })
 
   test("memory dialog highlights generated proposals when learning is enabled", () => {
@@ -251,7 +296,332 @@ describe("setup route smoke", () => {
     expect(loopRouteStackedListHeight(12, true, 12)).toBe(4)
     expect(loopRouteStackedListHeight(12, false, 20)).toBe(8)
     expect(loopRouteKeyHint({ width: 46, narrow: true, compact: true })).toBe("a/h · o · q")
-    expect(loopRouteKeyHint({ width: 88, narrow: true, compact: true })).toBe("a/h view · o chat · q back")
+    expect(loopRouteKeyHint({ width: 88, narrow: true, compact: true })).toBe("a/h view · pgup/dn page · o chat · q back")
+  })
+
+  test("loops route reserves non-shrinking responsive header rows", () => {
+    expect(loopRouteHeaderLayout(loopRouteFrameLayout(117).narrow)).toEqual({
+      flexDirection: "column",
+      height: 2,
+      flexShrink: 0,
+    })
+    expect(loopRouteHeaderLayout(loopRouteFrameLayout(118).narrow)).toEqual({
+      flexDirection: "row",
+      height: 1,
+      flexShrink: 0,
+    })
+  })
+
+  test("loops detail metadata reserves a separator after full labels", () => {
+    expect(loopDetailRowLayout(57)).toEqual({ labelWidth: 11, gap: 1, valueWidth: 45 })
+    expect("evaluation".length).toBeLessThanOrEqual(loopDetailRowLayout(57).labelWidth)
+    expect("latest run".length).toBeLessThanOrEqual(loopDetailRowLayout(57).labelWidth)
+    expect("next action".length).toBeLessThanOrEqual(loopDetailRowLayout(57).labelWidth)
+  })
+
+  test("loops route summarizes supervised run state for the detail view", () => {
+    const events = [
+      {
+        id: "evt_1",
+        type: "wake",
+        title: "External signal",
+        summary: "GitHub issue updated.",
+      },
+    ]
+    const rows = loopSupervisionRows({
+      workflow: {
+        id: "loop_1",
+        state: "working",
+        objective: "Keep issue triage current.",
+        metrics: { inputTokens: 10, outputTokens: 5, cost: 0.0025 },
+      },
+      summary: {
+        workflowID: "loop_1",
+        state: "working",
+        phase: "evaluating",
+        objective: "Keep issue triage current.",
+        verdict: "continue",
+        verdictSummary: "Needs one more validation.",
+        gateSummary: {
+          total: 2,
+          pass: 1,
+          fail: 0,
+          blocked: 0,
+          awaitingApproval: 1,
+          skip: 0,
+          blocking: "approval-policy",
+        },
+        evidenceSummary: ["Focused test passed", "Diff artifact captured"],
+        nextAction: "Ask for approval before posting.",
+        memorySummary: { total: 3, open: 1, latest: ["Issue labels verified"] },
+        costSummary: { tokens: 15, cost: 0.0025 },
+      },
+      runs: [
+        {
+          id: "run_1",
+          state: "completed",
+          trigger: "external-signal",
+          phase: "gated",
+          rubricResult: { status: "pass", score: 0.9, threshold: 0.85, blockers: [] },
+          gateResults: [
+            {
+              id: "manual-review",
+              status: "pass",
+              waiver: { action: "waive", actor: "user:operator", reason: "Reviewed manually.", time: 1 },
+            },
+          ],
+        },
+      ],
+      events,
+      artifacts: [{ id: "artifact_1", kind: "diff", title: "Diff", summary: "Changed triage note." }],
+    })
+
+    expect(latestLoopWakeReason(events)).toBe("External signal: GitHub issue updated.")
+    expect(rows.find((row) => row[0] === "verdict")?.[1]).toContain("Needs one more validation")
+    expect(rows.find((row) => row[0] === "gates")?.[1]).toContain("approval-policy")
+    expect(rows.find((row) => row[0] === "rubric")?.[1]).toBe("pass · 90% / 85%")
+    expect(rows.find((row) => row[0] === "overrides")?.[1]).toBe("1 audited · user:operator")
+    expect(rows.find((row) => row[0] === "evidence")?.[1]).toContain("Focused test passed")
+    expect(rows.find((row) => row[0] === "memory")?.[1]).toContain("Issue labels verified")
+    expect(rows.find((row) => row[0] === "changed")?.[1]).toBe("1 diff artifact")
+    expect(rows.find((row) => row[0] === "cost")?.[1]).toBe("15 tokens · $0.0025")
+    expect(rows.find((row) => row[0] === "next action")?.[1]).toBe("Ask for approval before posting.")
+
+    const compactLines = compactLoopDetailLines({
+      detail: {
+        id: "loop_1",
+        state: "working",
+        objective: "Keep issue triage current.",
+        rootSessionID: "ses_loop_1",
+        spec: {
+          budgetMode: "max-goal",
+          successChecks: ["bun test test/triage.test.ts"],
+          approvalPolicy: { requireApprovalFor: ["comment.issue"] },
+        },
+        metrics: { turns: 1 },
+      },
+      rows: [
+        ["budget", "max-goal · 1/open"],
+        ["checks", "1 success check"],
+        ["approvals", "comment.issue"],
+        ["chat", "ses_loop_1"],
+      ],
+      supervisionRows: rows,
+    })
+
+    expect(compactLines.join("\n")).toContain("contract · max-goal · 1/open")
+    expect(compactLines.join("\n")).toContain("wake · External signal: GitHub issue updated.")
+    expect(compactLines.join("\n")).toContain("run · completed · external-signal · gated")
+    expect(compactLines.join("\n")).toContain("verdict · continue · Needs one more validation.")
+    expect(compactLines.join("\n")).toContain("rubric · pass · 90% / 85%")
+    expect(compactLines.join("\n")).toContain("overrides · 1 audited · user:operator")
+    expect(compactLines.join("\n")).toContain("changed · 1 diff artifact")
+    expect(compactLines.join("\n")).toContain("memory · 3 facts · 1 open · Issue labels verified")
+    expect(compactLines.join("\n")).toContain("next · Ask for approval before posting.")
+  })
+
+  test("loops route builds loop designer contract preview rows", () => {
+    const rows = loopContractPreviewRows({
+      id: "loop_draft",
+      name: "Draft issue triage loop",
+      state: "draft",
+      phase: "draft",
+      objective: "Watch issues and prepare triage summaries.",
+      spec: {
+        trigger: { mode: "external-signal" },
+        budgetMode: "max-goal",
+        completionCriteria: ["Issue summary is ready"],
+        successChecks: ["bun test test/triage.test.ts"],
+        stopWhen: ["summary posted or approval denied"],
+        evaluation: { mode: "independent" },
+        workspace: { mode: "read-only" },
+        costBudget: { maxCost: 1.5, maxTokens: 4000 },
+        approvalPolicy: { requireApprovalFor: ["external-send", "push"], approvedActions: ["external-send"] },
+        memory: { enabled: true, sections: ["verified", "open"] },
+      },
+      policy: {
+        maxTurns: 5,
+        maxRuntimeMs: 300000,
+        requireApprovalFor: ["external-send", "push"],
+        approvedActions: ["external-send"],
+      },
+    })
+
+    expect(rows.find((row) => row[0] === "wake")?.[1]).toContain("matching external signal")
+    expect(rows.find((row) => row[0] === "can do")?.[1]).toContain("without edits")
+    expect(rows.find((row) => row[0] === "approval")?.[1]).toContain("push")
+    expect(rows.find((row) => row[0] === "verify")?.[1]).toContain("bun test test/triage.test.ts")
+    expect(rows.find((row) => row[0] === "judge")?.[1]).toContain("Issue summary is ready")
+    expect(rows.find((row) => row[0] === "stop")?.[1]).toContain("summary posted")
+    expect(rows.find((row) => row[0] === "budget")?.[1]).toContain("max-goal")
+    expect(rows.find((row) => row[0] === "workspace")?.[1]).toBe("read-only")
+    expect(rows.find((row) => row[0] === "memory")?.[1]).toBe("verified, open")
+  })
+
+  test("loops contract preview exposes executable validation without raw output", () => {
+    const rows = loopContractPreviewRows({
+      id: "loop_validation",
+      state: "draft",
+      spec: {
+        successChecks: ["browser smoke passed"],
+        validationChecks: [{ id: "diff-check", command: "git diff --check" }],
+        retention: { maxArtifacts: 80, maxAgeMs: 86_400_000, maxBytes: 2_000_000 },
+      },
+    })
+
+    expect(rows.find((row) => row[0] === "verify")?.[1]).toContain("browser smoke passed; git diff --check")
+  })
+
+  test("loops route preserves legacy report-only contract previews without explicit read-only workspace metadata", () => {
+    const rows = loopContractPreviewRows({
+      id: "loop_legacy_report_only",
+      state: "active",
+      policy: { requireApprovalFor: ["edit", "write", "apply_patch", "shell", "subagent", "push", "merge", "release"] },
+    })
+
+    expect(rows.find((row) => row[0] === "can do")?.[1]).toContain("without edits")
+  })
+
+  test("loops route approval wording excludes already-approved actions", () => {
+    const rows = loopContractPreviewRows({
+      id: "loop_preapproved",
+      state: "draft",
+      phase: "draft",
+      spec: {
+        approvalPolicy: {
+          requireApprovalFor: ["external-send"],
+          approvedActions: ["external-send"],
+        },
+      },
+    })
+
+    expect(rows.find((row) => row[0] === "approval")?.[1]).toBe(
+      "No additional approval is pending inside the configured permission envelope.",
+    )
+  })
+
+  test("loops compact detail keeps every designer preview section visible", () => {
+    const contractRows = loopContractPreviewRows({
+      id: "loop_draft",
+      name: "Draft issue triage loop",
+      state: "draft",
+      phase: "draft",
+      objective: "Watch issues and prepare triage summaries.",
+      spec: {
+        trigger: { mode: "external-signal" },
+        budgetMode: "max-goal",
+        completionCriteria: ["Issue summary is ready"],
+        successChecks: ["bun test test/triage.test.ts"],
+        stopWhen: ["summary posted or approval denied"],
+        evaluation: { mode: "independent" },
+        workspace: { mode: "read-only" },
+        costBudget: { maxCost: 1.5, maxTokens: 4000 },
+        approvalPolicy: { requireApprovalFor: ["external-send", "push"], approvedActions: ["external-send"] },
+        memory: { enabled: true, sections: ["verified", "open"] },
+      },
+      policy: {
+        maxTurns: 5,
+        maxRuntimeMs: 300000,
+        requireApprovalFor: ["external-send", "push"],
+        approvedActions: ["external-send"],
+      },
+    })
+    const lines = compactLoopDetailLines({
+      detail: {
+        id: "loop_draft",
+        state: "draft",
+        phase: "draft",
+        rootSessionID: "ses_loop_draft",
+        metrics: { turns: 0 },
+      },
+      rows: [["chat", "ses_loop_draft"]],
+      contractRows,
+      supervisionRows: [["memory", "0 facts"]],
+    })
+
+    expect(lines.join("\n")).toContain("contract · I will wake when matching external signal.")
+    expect(lines.join("\n")).toContain("can do · Inspect, summarize, and produce evidence without edits.")
+    expect(lines.join("\n")).toContain("approval · Needs approval for push.")
+    expect(lines.join("\n")).toContain("verify · Verify by bun test test/triage.test.ts.")
+    expect(lines.join("\n")).toContain("judge · independent judge checks Issue summary is ready.")
+    expect(lines.join("\n")).toContain("stop · Stop when summary posted or approval denied.")
+    expect(lines.join("\n")).toContain("budget · max-goal · 5 turns")
+    expect(lines.join("\n")).toContain("workspace · read-only")
+    expect(lines.join("\n")).toContain("memory plan · verified, open")
+  })
+
+  test("loops route tolerates partial summary payloads for legacy fallback rendering", () => {
+    const rows = loopSupervisionRows({
+      workflow: {
+        id: "loop_legacy",
+        state: "paused",
+        memory: { entries: [{ summary: "Captured context" }] },
+      },
+      summary: {
+        workflowID: "loop_legacy",
+        state: "paused",
+        memorySummary: {},
+        costSummary: {},
+      },
+    })
+
+    expect(rows.find((row) => row[0] === "memory")?.[1]).toBe("0 facts · 0 open")
+    expect(rows.find((row) => row[0] === "cost")?.[1]).toBe("0 tokens")
+    expect(rows.find((row) => row[0] === "next action")?.[1]).toBe("monitor")
+  })
+
+  test("loops route prefers the latest wake signal over a later started event", () => {
+    expect(
+      latestLoopWakeReason([
+        {
+          id: "evt_started",
+          type: "started",
+          title: "Run started",
+          summary: "Worker picked up the loop.",
+        },
+        {
+          id: "evt_wake",
+          type: "wake",
+          title: "GitHub issue updated",
+          summary: "Issue #42 changed labels.",
+        },
+      ]),
+    ).toBe("GitHub issue updated: Issue #42 changed labels.")
+  })
+
+  test("loops route changed-artifact summary stays scoped to the latest run", () => {
+    const rows = loopSupervisionRows({
+      workflow: {
+        id: "loop_1",
+        state: "working",
+      },
+      runs: [
+        {
+          id: "run_latest",
+          state: "completed",
+          trigger: "manual",
+          phase: "done",
+        },
+      ],
+      artifacts: [
+        {
+          id: "artifact_latest",
+          kind: "diff",
+          title: "Latest diff",
+          summary: "Latest run changed files.",
+          runID: "run_latest",
+        },
+        {
+          id: "artifact_old",
+          kind: "diff",
+          title: "Older diff",
+          summary: "Older run changed files.",
+          runID: "run_old",
+        },
+      ],
+    })
+
+    expect(rows.find((row) => row[0] === "changed")?.[1]).toBe("1 diff artifact")
   })
 
   test("memory route keeps the side chat pane visible on medium-height terminals", () => {
@@ -277,11 +647,13 @@ describe("setup route smoke", () => {
       links: [{ from: "a", to: "b", kind: "supports" }],
     })
 
-    expect(graph.rows.join("\n")).toContain("·")
+    expect(graph.rows.join("\n")).toMatch(/[\u2801-\u28ff]/)
+    expect(graph.cells.flat().some((cell) => cell.relation === "supports")).toBe(true)
+    expect(graph.cells.flat().some((cell) => cell.kind === "selected")).toBe(true)
     expect(graph.legend.join("\n")).toContain("Commands")
     expect(graph.status).toContain("2/2 materialized")
     expect(graph.status).toContain("0 legacy-derived")
-    expect(graph.status).toContain("1 explicit")
+    expect(graph.status).toContain("1/1 links")
     expect(graph.stats).toContain("connected 2")
     expect(graph.stats).toContain("isolated 0")
     expect(graph.minimap.length).toBeGreaterThan(0)
@@ -292,7 +664,30 @@ describe("setup route smoke", () => {
     expect(graph.isolatedRows).toEqual([])
   })
 
-  test("memory graph mini map infers compact fallback edges when links are absent", () => {
+  test("shared ascii graph renderer is deterministic and provides a plain ascii fallback", () => {
+    const input = {
+      nodes: [
+        { id: "commands", label: "Commands", group: "project.commands" },
+        { id: "policy", label: "Policy", group: "memory.policy" },
+        { id: "architecture", label: "Architecture", group: "project.architecture" },
+      ],
+      edges: [
+        { from: "commands", to: "policy", kind: "supports" },
+        { from: "policy", to: "architecture", kind: "conflicts" },
+      ],
+      iterations: 80,
+    }
+    const first = layoutAsciiGraph(input)
+    const second = layoutAsciiGraph(input)
+
+    expect(first.nodes.map((node) => [node.id, node.x, node.y])).toEqual(second.nodes.map((node) => [node.id, node.x, node.y]))
+    expect(renderAsciiGraph(first, { width: 40, height: 10, marker: "braille", selectedID: "policy" }).rows.join("\n")).toMatch(/[\u2801-\u28ff]/)
+    const ascii = renderAsciiGraph(first, { width: 40, height: 10, marker: "ascii", selectedID: "policy" }).rows.join("\n")
+    expect(ascii).toContain("@")
+    expect(ascii).not.toMatch(/[\u2801-\u28ff]/)
+  })
+
+  test("memory graph mini map keeps unlinked facts isolated instead of inventing edges", () => {
     const graph = memoryGraphMiniMap({
       width: 42,
       height: 7,
@@ -308,14 +703,15 @@ describe("setup route smoke", () => {
       links: [],
     })
 
-    expect(graph.rows.join("\n")).toContain("┈")
+    expect(graph.cells.flat().filter((cell) => cell.kind === "node" || cell.kind === "selected").map((cell) => cell.char).join("")).toMatch(/[•◉]/)
     expect(graph.status).toContain("3/3 materialized")
-    expect(graph.status).toContain("0 explicit")
-    expect(graph.status).toContain("2 inferred")
+    expect(graph.status).toContain("0/0 links")
+    expect(graph.status).not.toContain("inferred")
     expect(graph.stats).toContain("connected 0")
     expect(graph.stats).toContain("isolated 3")
+    expect(graph.scene.edges).toEqual([])
     expect(graph.edgeLabels).toEqual([])
-    expect(graph.relationRows.join("\n")).toContain("category*")
+    expect(graph.relationRows).toEqual([])
     expect(graph.isolatedRows.join("\n")).toContain("Run focused memory tests")
     expect(graph.legend.join("\n")).toContain("Commands")
   })
@@ -356,8 +752,7 @@ describe("setup route smoke", () => {
     expect(graph.stats).toContain("visible 0/0")
     expect(graph.status).toContain("0/2 materialized")
     expect(graph.status).toContain("2 legacy-derived")
-    expect(graph.status).toContain("0 explicit")
-    expect(graph.status).toContain("0 inferred")
+    expect(graph.status).toContain("0/0 links")
   })
 
   test("memory graph mini map separates materialized facts from legacy-derived counts", () => {
@@ -372,10 +767,10 @@ describe("setup route smoke", () => {
       links: [{ from: "graph_a", to: "graph_b", kind: "supports" }],
     })
 
-    expect(graph.rows.join("\n")).toContain("·")
+    expect(graph.rows.join("\n")).toMatch(/[\u2801-\u28ff]/)
     expect(graph.status).toContain("2/3 materialized")
     expect(graph.status).toContain("1 legacy-derived")
-    expect(graph.status).toContain("1 explicit")
+    expect(graph.status).toContain("1/1 links")
     expect(graph.stats).toContain("visible 2/2")
   })
 
@@ -405,6 +800,114 @@ describe("setup route smoke", () => {
     expect(graph.legend.join("\n")).not.toContain("Category 5")
   })
 
+  test("memory graph detail view separates isolates from the connected canvas", () => {
+    const graph = memoryGraphMiniMap({
+      width: 60,
+      height: 12,
+      connectedOnly: true,
+      selectedID: "b",
+      categories: [{ id: "project", label: "Project", count: 3 }],
+      facts: [
+        { id: "a", scope: "project", categoryIDs: ["project"], text: "Connected source" },
+        { id: "b", scope: "project", categoryIDs: ["project"], text: "Connected target" },
+        { id: "c", scope: "project", categoryIDs: ["project"], text: "Standalone memory" },
+      ],
+      links: [{ from: "a", to: "b", kind: "related" }],
+    })
+
+    expect(graph.scene.nodes.map((node) => node.id).toSorted()).toEqual(["a", "b"])
+    expect(graph.selectedID).toBe("b")
+    expect(graph.nodeCells.b).toBeDefined()
+    expect(graph.isolatedRows).toEqual(["○ Standalone memory"])
+    expect(graph.stats).toContain("connected 2 · isolated 1 · visible 2/3")
+  })
+
+  test("memory graph explorer gives wide terminals a dominant canvas and narrow terminals a stacked inspector", () => {
+    const wide = memoryGraphExplorerLayout({ width: 160, height: 42 })
+    const narrow = memoryGraphExplorerLayout({ width: 78, height: 28 })
+
+    expect(wide.roomy).toBe(true)
+    expect(wide.canvasWidth).toBeGreaterThan(wide.inspectorWidth)
+    expect(wide.canvasHeight).toBe(30)
+    expect(narrow.roomy).toBe(false)
+    expect(narrow.inspectorWidth).toBe(78)
+    expect(narrow.canvasWidth).toBe(76)
+    expect(narrow.canvasHeight).toBeGreaterThanOrEqual(8)
+  })
+
+  test("memory graph inspector resolves project owners by workspace id or root", () => {
+    const workspaces = [
+      { id: "ws_mendcode", root: "/code/MendCode", displayName: "MendCode" },
+      { id: "ws_web", root: "/code/MendCode-Web", displayName: "MendCode Web" },
+    ]
+    const labels = (scope: "global" | "project", ownerWorkspaceIDs: string[]) => memoryGraphFactProjectLabels({
+      fact: { scope, ownerWorkspaceIDs },
+      workspaces,
+      activeRoot: "/code/MendCode",
+      activeLabel: "MendCode",
+    })
+
+    expect(labels("project", ["ws_web"])).toEqual(["MendCode Web"])
+    expect(labels("project", ["/code/MendCode"])).toEqual(["MendCode"])
+    expect(labels("project", ["/code/UnknownProject"])).toEqual(["UnknownProject"])
+    expect(labels("global", [])).toEqual(["Global memory"])
+  })
+
+  test("memory graph search matches memory text together with project identity", () => {
+    const facts = [
+      {
+        id: "fact_a",
+        legacyEntryID: null,
+        scope: "project" as const,
+        ownerWorkspaceIDs: ["ws_mendcode"],
+        ownerGroupIDs: [],
+        categoryIDs: ["project.commands"],
+        text: "Keep the approved compaction plan verbatim.",
+        normalizedSummary: "Keep the approved compaction plan verbatim.",
+        provenance: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-02T00:00:00.000Z",
+        verifiedAt: null,
+        confidence: 0.9,
+        durability: 0.9,
+        changeRisk: 0.1,
+        sensitivity: "low" as const,
+        stale: false,
+        retrievalPriority: 1,
+        legacyMaterialized: false,
+        materialized: true,
+      },
+      {
+        id: "fact_b",
+        legacyEntryID: null,
+        scope: "project" as const,
+        ownerWorkspaceIDs: ["ws_web"],
+        ownerGroupIDs: [],
+        categoryIDs: ["project.architecture"],
+        text: "Use the web runtime adapter.",
+        normalizedSummary: "Use the web runtime adapter.",
+        provenance: [],
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        verifiedAt: null,
+        confidence: 0.8,
+        durability: 0.8,
+        changeRisk: 0.2,
+        sensitivity: "low" as const,
+        stale: false,
+        retrievalPriority: 2,
+        legacyMaterialized: false,
+        materialized: true,
+      },
+    ]
+
+    expect(memoryGraphSearchMatches({
+      facts,
+      query: "MendCode compaction",
+      projectLabel: (fact) => fact.ownerWorkspaceIDs[0] === "ws_mendcode" ? "MendCode" : "MendCode Web",
+    }).map((fact) => fact.id)).toEqual(["fact_a"])
+  })
+
   test("memory route hotkeys stay inactive while a prompt dialog is open", () => {
     expect(shouldMemoryRouteHandleKey({ dialogOpen: false })).toBe(true)
     expect(shouldMemoryRouteHandleKey({ dialogOpen: true })).toBe(false)
@@ -412,9 +915,19 @@ describe("setup route smoke", () => {
     expect(shouldMemoryRouteHandleKey({ dialogOpen: false, textInputActive: true })).toBe(false)
   })
 
-  test("memory tabs distribute across available width", () => {
-    expect(memoryTabCellWidths({ width: 60, count: 5 })).toEqual([12, 11, 11, 11, 11])
-    expect(memoryTabCellWidths({ width: 14, count: 5 }).reduce((sum, value) => sum + value, 0)).toBe(10)
+  test("memory tabs stay content-sized instead of stretching across wide terminals", () => {
+    const labels = ["  1 Overview", "  2 Project", "● 3 Graph"]
+    expect(memoryTabCellWidths({ width: 80, labels, gap: 2 })).toEqual(labels.map((label) => label.length))
+    expect(memoryTabCellWidths({ width: 40, labels: [" 1", " 2", "●3", " 4", " 5", " 6"], gap: 1 })).toEqual([2, 2, 2, 2, 2, 2])
+    expect(memoryTabCellWidths({ width: 65 })).toEqual([8, 8, 8, 8, 8, 8])
+    expect(memoryTabPresentation({ width: 160, active: "graph" }).mode).toBe("full")
+    expect(memoryTabPresentation({ width: 80, active: "graph" }).mode).toBe("compact")
+    expect(memoryTabPresentation({ width: 40, active: "graph" })).toMatchObject({ mode: "numeric", labels: [" 1", " 2", " 3", "●4", " 5", " 6"] })
+  })
+
+  test("memory graph command bar removes secondary actions on narrow terminals", () => {
+    expect(memoryGraphCommandHints(140).map((item) => item.key)).toEqual(["↑↓←→", "Click", "F", "P", "I", "+/-", "[ ]", "R", "Esc"])
+    expect(memoryGraphCommandHints(60).map((item) => item.key)).toEqual(["↑↓←→", "F", "P", "I", "Esc"])
   })
 
   test("context usage label reflects configured compaction threshold", () => {
@@ -514,24 +1027,30 @@ describe("setup route smoke", () => {
       blockProviderUxMetadata: true,
       blockSessionList: false,
     })
-    expect(isCurrentTuiBootstrap({
-      generation: 2,
-      currentGeneration: 2,
-      workspace: "workspace-a",
-      currentWorkspace: "workspace-a",
-    })).toBe(true)
-    expect(isCurrentTuiBootstrap({
-      generation: 1,
-      currentGeneration: 2,
-      workspace: "workspace-a",
-      currentWorkspace: "workspace-a",
-    })).toBe(false)
-    expect(isCurrentTuiBootstrap({
-      generation: 2,
-      currentGeneration: 2,
-      workspace: "workspace-a",
-      currentWorkspace: "workspace-b",
-    })).toBe(false)
+    expect(
+      isCurrentTuiBootstrap({
+        generation: 2,
+        currentGeneration: 2,
+        workspace: "workspace-a",
+        currentWorkspace: "workspace-a",
+      }),
+    ).toBe(true)
+    expect(
+      isCurrentTuiBootstrap({
+        generation: 1,
+        currentGeneration: 2,
+        workspace: "workspace-a",
+        currentWorkspace: "workspace-a",
+      }),
+    ).toBe(false)
+    expect(
+      isCurrentTuiBootstrap({
+        generation: 2,
+        currentGeneration: 2,
+        workspace: "workspace-a",
+        currentWorkspace: "workspace-b",
+      }),
+    ).toBe(false)
     expect(themeModeWaitMs(true)).toBe(50)
     expect(themeModeWaitMs(false)).toBe(1000)
     expect(startupLoadingText({ pluginsReady: false })).toBe("Loading plugins...")

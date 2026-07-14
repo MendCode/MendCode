@@ -42,7 +42,7 @@ Most coding agents give you a chat box. MendCode gives you the harness around it
 | Share a tuned setup with a team | Runtime packages for commands, agents, modes, skills, prompts, MCP config, plugins, TUI profile, model roles, permissions, memory defaults, and worktree policy. |
 | Review before implementation | Plan Mode renders Markdown, including Mermaid when supported, inside a TUI review modal before switching to the implementation agent. |
 | Review current code changes | `/changes` opens a responsive TUI diff workspace with comments and agent-visible review context between model turns. |
-| Keep repeat work moving | Loop Workflows create durable, monitorable agent loops with safe report-only wakeups, Agent View sessions, and optional per-project OS services. |
+| Keep repeat work moving | Loop Workflows create durable, monitorable loop sessions with contract-aware report-only wakeups, `/loop` creation, `/loops` supervision, and optional per-project OS services. |
 | Keep risky actions explicit | Permission modes, smart permission review, preview-first worktree actions, and approval-gated memory proposals. |
 | Route work to the right model | Model roles for planning, building, review, subagents, summaries, compaction, memory extraction, Dream, memory side chat, and permission review. |
 | Coordinate parallel terminal work | Optional mflow locks plus optional TSM/worktree orchestration for multi-session work. |
@@ -322,10 +322,11 @@ See [Changes Review](docs/changes-review.md).
 
 ### Loop Workflows
 
-Loop Workflows are durable, monitorable agent loops for objectives that should
-keep moving across controlled iterations. A loop starts as a draft, becomes an
-activated root session, records run/journal events, appears in Agent View, and
-can be woken manually or by a per-project background service.
+Loop Workflows are durable, monitorable loop sessions for objectives that should
+keep moving across controlled iterations. A loop starts from `/loop`, is
+supervised in `/loops`, becomes an activated root session, records run/journal
+events, appears in Agent View, and can be woken manually or by a per-project
+background service.
 
 <p align="center">
   <img src="docs/assets/screenshots/loop-workflow-created.png" alt="MendCode Loop Workflow receipt in chat" width="980">
@@ -343,9 +344,10 @@ mendcode loops tick loop_... --execute --report-only
 mendcode loops monitor loop_...
 ```
 
-The safe test path is `--execute --report-only`: the agent wakes and writes
-transcript activity, but edit/write/patch/shell/subagent tools are denied.
-Full execution remains explicit through `--execute` or
+For a workflow whose durable contract is already report-only/read-only,
+`--execute --report-only` wakes the agent and writes transcript activity without
+edit/write/patch/shell/subagent tools. Edit-capable workflows keep their
+contract; full execution remains explicit through `--execute` or
 `mendcode loops service start --allow-edits`.
 
 See [Loop Workflows](docs/loop-workflows.md).
@@ -558,6 +560,8 @@ context, then verify live code before changing behavior.
 - [Plan Mode](docs/plan-mode.md): plan review flow.
 - [Changes Review](docs/changes-review.md): responsive diff review, comments,
   keybinds, and agent-visible review context.
+- [Loop Workflows](docs/loop-workflows.md): durable loop sessions, root
+  session/evaluator boundaries, `/loop`, `/loops`, and service controls.
 - [Memory Center](docs/memory-center.md): saved/pending memories, categories,
   Dream maintenance, and the constrained memory side agent.
 - [Usage Insights](docs/usage-insights.md): local activity dashboard.

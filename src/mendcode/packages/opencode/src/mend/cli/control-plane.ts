@@ -1786,7 +1786,8 @@ async function main() {
   if (cmd === "loops") {
     await loops(args)
     const sub = args[0] || "status"
-    if (sub !== "monitor" && sub !== "daemon") process.exit(process.exitCode ?? 0)
+    // One-shot launchd/Task Scheduler runs must exit after runtime disposal; native watchers can keep the event loop alive.
+    if (sub !== "monitor" && (sub !== "daemon" || args.includes("--once"))) process.exit(process.exitCode ?? 0)
     return
   }
   if (cmd === "ai") return ai(args)

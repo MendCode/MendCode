@@ -224,7 +224,7 @@ describe("prompt submit parts", () => {
     expect(result?.parts).toEqual([])
   })
 
-  test("serializes submitted image attachments as portable clipboard data URLs", () => {
+  test("serializes submitted image attachments as text placeholders", () => {
     const result = messagePartsToPortableClipboard([
       {
         id: "prt_text",
@@ -252,8 +252,26 @@ describe("prompt submit parts", () => {
     ])
 
     expect(result.imageCount).toBe(1)
-    expect(result.firstImage).toEqual({ mime: "image/png", data: "aGVsbG8=" })
-    expect(result.text).toBe("inspect ![clip.png](data:image/png;base64,aGVsbG8=) please")
+    expect(result.text).toBe("inspect [Image 1: clip.png] please")
+    expect(result.text).not.toContain("base64")
+  })
+
+  test("serializes image-only submitted messages as copyable text", () => {
+    const result = messagePartsToPortableClipboard([
+      {
+        id: "prt_image",
+        sessionID: "ses",
+        messageID: "msg",
+        type: "file",
+        mime: "image/png",
+        filename: "screen.png",
+        url: "data:image/png;base64,aGVsbG8=",
+      },
+    ])
+
+    expect(result.imageCount).toBe(1)
+    expect(result.text).toBe("[Image 1: screen.png]")
+    expect(result.text).not.toContain("base64")
   })
 
   test("parses portable clipboard image data URLs back into paste tokens", () => {

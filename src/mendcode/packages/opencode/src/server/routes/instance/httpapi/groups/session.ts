@@ -43,7 +43,7 @@ export const MessagesQuery = Schema.Struct({
   limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
   before: Schema.optional(Schema.String),
   after: Schema.optional(Schema.String),
-  view: Schema.optional(Schema.Literals(["full", "tui"])),
+  view: Schema.optional(Schema.Literals(["full", "tui", "tui-all"])),
 })
 export const StatusMap = Schema.Record(Schema.String, SessionStatus.Info)
 export const UpdatePayload = Schema.Struct({
@@ -130,6 +130,7 @@ export const SessionPaths = {
   update: `${root}/:sessionID`,
   fork: `${root}/:sessionID/fork`,
   abort: `${root}/:sessionID/abort`,
+  interrupt: `${root}/:sessionID/interrupt`,
   share: `${root}/:sessionID/share`,
   init: `${root}/:sessionID/init`,
   summarize: `${root}/:sessionID/summarize`,
@@ -449,6 +450,17 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.abort",
             summary: "Abort session",
             description: "Abort an active session and stop any ongoing AI processing or command execution.",
+          }),
+        ),
+        HttpApiEndpoint.post("interrupt", SessionPaths.interrupt, {
+          params: { sessionID: SessionID },
+          success: described(Schema.Boolean, "Interrupted active turn and promoted the next queued prompt"),
+          error: [HttpApiError.BadRequest, HttpApiError.NotFound],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.interrupt",
+            summary: "Send queued prompt now",
+            description: "Interrupt the active turn and immediately start the next queued prompt, if one exists.",
           }),
         ),
         HttpApiEndpoint.post("init", SessionPaths.init, {

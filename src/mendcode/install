@@ -431,6 +431,26 @@ install_from_binary() {
     print_success "Installed ${INSTALL_DIR}/$BINARY_NAME"
 }
 
+restart_loaded_loop_services() {
+    if [[ "$(uname -s)" != "Darwin" ]] || ! command -v launchctl >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local uid
+    uid=$(id -u)
+    local restarted=0
+    while IFS= read -r label; do
+        [[ -n "$label" ]] || continue
+        if launchctl kickstart -k "gui/${uid}/${label}" >/dev/null 2>&1; then
+            restarted=$((restarted + 1))
+        fi
+    done < <(launchctl list 2>/dev/null | awk '$3 ~ /^com\\.mendcode\\.loops\\./ { print $3 }')
+
+    if [[ "$restarted" -gt 0 ]]; then
+        print_success "Refreshed $restarted loaded MendCode loop service(s)"
+    fi
+}
+
 if [ -n "$binary_path" ]; then
     install_from_binary
 else
@@ -440,6 +460,9 @@ else
     fi
 fi
 
+if [ "$already_installed" != "true" ]; then
+    restart_loaded_loop_services
+fi
 
 add_to_path() {
     local config_file=$1

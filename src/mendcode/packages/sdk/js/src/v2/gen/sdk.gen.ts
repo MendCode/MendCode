@@ -3,7 +3,10 @@
 import { client } from "./client.gen.js"
 import { buildClientParams, type Client, type Options as Options2, type TDataShape } from "./client/index.js"
 import type {
+  AgentCommandCreate,
+  AgentCommandUpdate,
   AgentPartInput,
+  AgentViewMetadataPatch,
   AppAgentsResponses,
   AppLogErrors,
   AppLogResponses,
@@ -29,6 +32,7 @@ import type {
   ExperimentalConsoleSwitchOrgResponses,
   ExperimentalResourceListResponses,
   ExperimentalSessionListResponses,
+  ExperimentalUsageInsightsGetResponses,
   ExperimentalWorkspaceAdapterListResponses,
   ExperimentalWorkspaceCreateErrors,
   ExperimentalWorkspaceCreateResponses,
@@ -124,6 +128,24 @@ import type {
   QuestionReplyResponses,
   SessionAbortErrors,
   SessionAbortResponses,
+  SessionAgentCommandCreateErrors,
+  SessionAgentCommandCreateResponses,
+  SessionAgentCommandListBySessionErrors,
+  SessionAgentCommandListBySessionResponses,
+  SessionAgentCommandListErrors,
+  SessionAgentCommandListResponses,
+  SessionAgentCommandPatchErrors,
+  SessionAgentCommandPatchResponses,
+  SessionAgentCommandPolicyErrors,
+  SessionAgentCommandPolicyResponses,
+  SessionAgentViewListErrors,
+  SessionAgentViewListResponses,
+  SessionAgentViewMetadataGetErrors,
+  SessionAgentViewMetadataGetResponses,
+  SessionAgentViewMetadataListErrors,
+  SessionAgentViewMetadataListResponses,
+  SessionAgentViewMetadataPatchErrors,
+  SessionAgentViewMetadataPatchResponses,
   SessionBackgroundListErrors,
   SessionBackgroundListResponses,
   SessionBackgroundRegisterErrors,
@@ -152,6 +174,8 @@ import type {
   SessionGetResponses,
   SessionInitErrors,
   SessionInitResponses,
+  SessionInterruptErrors,
+  SessionInterruptResponses,
   SessionListResponses,
   SessionMessageErrors,
   SessionMessageResponses,
@@ -818,6 +842,44 @@ export class Session extends HeyApiClient {
   }
 }
 
+export class UsageInsights extends HeyApiClient {
+  /**
+   * Get aggregated usage insights
+   *
+   * Aggregate recent session usage server-side without transferring every transcript to the TUI.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      start: number
+      limit?: number
+      messageLimit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "start" },
+            { in: "query", key: "limit" },
+            { in: "query", key: "messageLimit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ExperimentalUsageInsightsGetResponses, unknown, ThrowOnError>({
+      url: "/experimental/usage-insights",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Resource extends HeyApiClient {
   /**
    * Get MCP resources
@@ -1084,6 +1146,11 @@ export class Experimental extends HeyApiClient {
   private _session?: Session
   get session(): Session {
     return (this._session ??= new Session({ client: this.client }))
+  }
+
+  private _usageInsights?: UsageInsights
+  get usageInsights(): UsageInsights {
+    return (this._usageInsights ??= new UsageInsights({ client: this.client }))
   }
 
   private _resource?: Resource
@@ -2938,9 +3005,9 @@ export class Provider extends HeyApiClient {
 
 export class Writer extends HeyApiClient {
   /**
-   * Release background writer lease
+   * Release background writer presence
    *
-   * Release the interactive writer lease for a background session.
+   * Release this terminal's background writer presence when it is still current.
    */
   public release<ThrowOnError extends boolean = false>(
     parameters: {
@@ -2981,9 +3048,9 @@ export class Writer extends HeyApiClient {
   }
 
   /**
-   * Acquire background writer lease
+   * Register background writer presence
    *
-   * Acquire the single interactive writer lease for a background session.
+   * Register an interactive terminal for a background session without taking exclusive ownership.
    */
   public acquire<ThrowOnError extends boolean = false>(
     parameters: {
@@ -3149,6 +3216,376 @@ export class Background extends HeyApiClient {
   private _writer?: Writer
   get writer(): Writer {
     return (this._writer ??= new Writer({ client: this.client }))
+  }
+}
+
+export class Metadata extends HeyApiClient {
+  /**
+   * List Agent View metadata
+   *
+   * List local control-plane metadata overrides for Agent View sessions.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionAgentViewMetadataListResponses,
+      SessionAgentViewMetadataListErrors,
+      ThrowOnError
+    >({
+      url: "/session/agent-view/metadata",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get Agent View metadata
+   *
+   * Read local control-plane metadata for a session without mutating its transcript.
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionAgentViewMetadataGetResponses,
+      SessionAgentViewMetadataGetErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/agent-view/metadata",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Patch Agent View metadata
+   *
+   * Update local control-plane metadata such as title override, tags, group, priority, notes, pin, or archive.
+   */
+  public patch<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      agentViewMetadataPatch?: AgentViewMetadataPatch
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "agentViewMetadataPatch", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      SessionAgentViewMetadataPatchResponses,
+      SessionAgentViewMetadataPatchErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/agent-view/metadata",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class AgentView extends HeyApiClient {
+  /**
+   * List Agent View sessions
+   *
+   * Get aggregate read-only session rows for Agents View with status, background state, and metadata overrides.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      scope?: "project"
+      path?: string
+      roots?: boolean | "true" | "false"
+      start?: number
+      search?: string
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "scope" },
+            { in: "query", key: "path" },
+            { in: "query", key: "roots" },
+            { in: "query", key: "start" },
+            { in: "query", key: "search" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionAgentViewListResponses,
+      SessionAgentViewListErrors,
+      ThrowOnError
+    >({
+      url: "/session/agent-view",
+      ...options,
+      ...params,
+    })
+  }
+
+  private _metadata?: Metadata
+  get metadata(): Metadata {
+    return (this._metadata ??= new Metadata({ client: this.client }))
+  }
+}
+
+export class AgentCommand extends HeyApiClient {
+  /**
+   * List Agent Commands
+   *
+   * List local control-plane command inbox entries for Agent View coordination.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      sourceSessionID?: string
+      targetSessionID?: string
+      state?: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sourceSessionID" },
+            { in: "query", key: "targetSessionID" },
+            { in: "query", key: "state" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionAgentCommandListResponses,
+      SessionAgentCommandListErrors,
+      ThrowOnError
+    >({
+      url: "/session/agent-command",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List Agent Command policy matrix
+   *
+   * List the local policy decisions used for structured Agent Command coordination.
+   */
+  public policy<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionAgentCommandPolicyResponses,
+      SessionAgentCommandPolicyErrors,
+      ThrowOnError
+    >({
+      url: "/session/agent-command/policy",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List incoming Agent Commands
+   *
+   * List command inbox entries targeting a session.
+   */
+  public listBySession<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      state?: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "state" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionAgentCommandListBySessionResponses,
+      SessionAgentCommandListBySessionErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/agent-command",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Create Agent Command
+   *
+   * Send a structured, auditable command to a session inbox without mutating its transcript.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      agentCommandCreate?: AgentCommandCreate
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "agentCommandCreate", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionAgentCommandCreateResponses,
+      SessionAgentCommandCreateErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/agent-command",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Update Agent Command
+   *
+   * Advance or resolve an Agent Command state with an auditable update.
+   */
+  public patch<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      commandID: string
+      directory?: string
+      workspace?: string
+      agentCommandUpdate?: AgentCommandUpdate
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "commandID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "agentCommandUpdate", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<
+      SessionAgentCommandPatchResponses,
+      SessionAgentCommandPatchErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/agent-command/{commandID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 }
 
@@ -3496,7 +3933,7 @@ export class Session2 extends HeyApiClient {
       limit?: number
       before?: string
       after?: string
-      view?: "full" | "tui"
+      view?: "full" | "tui" | "tui-all"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3721,6 +4158,38 @@ export class Session2 extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<SessionAbortResponses, SessionAbortErrors, ThrowOnError>({
       url: "/session/{sessionID}/abort",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Send queued prompt now
+   *
+   * Interrupt the active turn and immediately start the next queued prompt, if one exists.
+   */
+  public interrupt<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionInterruptResponses, SessionInterruptErrors, ThrowOnError>({
+      url: "/session/{sessionID}/interrupt",
       ...options,
       ...params,
     })
@@ -4120,6 +4589,16 @@ export class Session2 extends HeyApiClient {
   private _background?: Background
   get background(): Background {
     return (this._background ??= new Background({ client: this.client }))
+  }
+
+  private _agentView?: AgentView
+  get agentView(): AgentView {
+    return (this._agentView ??= new AgentView({ client: this.client }))
+  }
+
+  private _agentCommand?: AgentCommand
+  get agentCommand(): AgentCommand {
+    return (this._agentCommand ??= new AgentCommand({ client: this.client }))
   }
 }
 

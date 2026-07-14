@@ -536,6 +536,10 @@ describe("mend memory", () => {
     expect(prompt).toContain("operation=remove")
     expect(prompt).toContain("Assistant text such as 'I will not save this yet' is not a reason to skip")
     expect(prompt).toContain("If the user repeats or lightly rephrases")
+    expect(prompt).toContain("Allowed memory categories")
+    expect(prompt).toContain("project.commands: Recurring commands, validation gates, and release commands.")
+    expect(prompt).toContain("this extractor cannot create categories")
+    expect(prompt).toContain("uncategorized: compatibility fallback only")
     expect(prompt).not.toContain("mflow live test")
     expect(prompt).not.toContain("smoke test before saying done")
   })
@@ -631,6 +635,37 @@ describe("mend memory", () => {
     expect(pending.length).toBe(1)
   })
 
+  test("extractor recovers from unknown categories using the fixed catalog", async () => {
+    await using dir = await tmpdir()
+    const result = await proposeMemoriesFromExtractorText({
+      text: "USER: Cuando el usuario indique que no hace falta testear y el trabajo esté listo, se puede ejecutar shipit directamente.",
+      tags: ["chat", "auto"],
+      cwd: dir.path,
+      source: "tui-session-auto-extract",
+      evidence: "session:test:message:category-fallback",
+      maxProposals: 1,
+    }, JSON.stringify({
+      proposals: [{
+        shouldRemember: true,
+        operation: "add",
+        scope: "project",
+        categoryIDs: ["workflow.rules"],
+        text: "Cuando el usuario indique que no hace falta testear y el trabajo esté listo, se puede ejecutar shipit directamente.",
+        tags: ["workflow", "shipit"],
+        durability: 0.95,
+        confidence: 0.9,
+        changeRisk: 0.1,
+        recommendedDisposition: "pending",
+        reason: "Regla durable del flujo del proyecto.",
+      }],
+    }), dir.path)
+
+    expect(result.proposals).toHaveLength(1)
+    expect(result.proposals[0]?.categoryIDs).toContain("project.commands")
+    expect(result.proposals[0]?.categoryIDs).toContain("project.release")
+    expect(result.proposals[0]?.categoryIDs).not.toContain("uncategorized")
+  })
+
   test("extractor auto-safe policy applies obvious safe adds and leaves risky adds pending", async () => {
     await using dir = await tmpdir()
     await writeProjectMemoryConfig({
@@ -640,6 +675,13 @@ describe("mend memory", () => {
       memoryAutoApplyMaxChangeRisk: 0.2,
       memoryAutoApplyAllowedCategories: ["memory.policy"],
       memoryAutoApplyBlockedSensitivity: ["medium", "high"],
+    }, dir.path)
+    const related = await upsertMemoryFact({
+      text: "Memory extraction policies should keep automatic writes conservative and auditable.",
+      categoryIDs: ["memory.policy"],
+      confidence: 0.95,
+      durability: 0.9,
+      changeRisk: 0.1,
     }, dir.path)
 
     const result = await proposeMemoriesFromExtractorText({
@@ -681,6 +723,7 @@ describe("mend memory", () => {
     }), dir.path)
     const proposals = await listMemoryProposals(dir.path, "all")
     const entries = await readMemoryEntries("project", dir.path)
+    const graph = await readMemoryGraph(dir.path)
 
     expect(result.writesMemory).toBe(true)
     expect(result.proposals).toHaveLength(2)
@@ -690,6 +733,11 @@ describe("mend memory", () => {
     expect(proposals.find((proposal) => proposal.text.includes("Security-sensitive"))?.policyDecision).toBe("manual-only")
     expect(entries).toHaveLength(1)
     expect(entries[0]?.text).toContain("obvious durable")
+    expect(graph.links).toEqual([expect.objectContaining({
+      from: `legacy_${entries[0]?.id}`,
+      to: related.id,
+      kind: "related",
+    })])
   })
 
   test("extractor model-decides policy skips or auto-applies based on safe model disposition", async () => {
@@ -865,6 +913,7 @@ describe("mend memory", () => {
     expect(policies["project.commands"]?.promptEnabled).toBe(false)
     expect(policies["volatile.reject"]?.writePolicy).toBe("disabled")
     expect(inferMemoryCategoryIDs({ text: "Run bun test before release", tags: ["release"] })).toContain("project.release")
+    expect(inferMemoryCategoryIDs({ text: "No hace falta testear; ejecutar shipit directamente" })).toEqual(["project.release", "project.commands"])
     expect(scopeReasonForMemory({ requestedScope: "global", text: "MendCode release uses dev branch" }).scope).toBe("project")
   })
 
@@ -1172,7 +1221,7 @@ describe("mend memory", () => {
       kind: "related",
       reason: "Shared memory category: memory.policy",
     })
-    expect(detail?.events.some((event) => event.message.includes("graph links for review"))).toBe(true)
+    expect(detail?.events.some((event) => event.message.includes("graph links"))).toBe(true)
     expect(overview.dreamRunDetails[0]?.graphProposals).toHaveLength(1)
     expect(overview.dreamLatestActivity?.summary).toContain("Dream completed")
 
@@ -1180,6 +1229,40 @@ describe("mend memory", () => {
     const duplicateRun = await runMemoryDream({ root: dir.path, model: async () => [] })
 
     expect((await readDreamRunDetail(dir.path, duplicateRun.id))?.graphProposals).toHaveLength(0)
+  })
+
+  test("Dream auto-safe policy applies graph links that pass endpoint policy", async () => {
+    await using dir = await tmpdir()
+    await writeProjectMemoryConfig({
+      dreamWritePolicy: "auto-safe",
+      dreamAutoApplyMinConfidence: 0.9,
+      dreamAutoApplyMinDurability: 0.85,
+      dreamAutoApplyMaxChangeRisk: 0.2,
+      dreamAutoApplyAllowedCategories: ["memory.policy"],
+      dreamAutoApplyBlockedSensitivity: ["medium", "high"],
+    }, dir.path)
+    const first = await upsertMemoryFact({
+      text: "Dream may connect safe memory policy facts under an explicit auto-safe policy.",
+      categoryIDs: ["memory.policy"],
+      confidence: 0.95,
+      durability: 0.9,
+      changeRisk: 0.1,
+    }, dir.path)
+    const second = await upsertMemoryFact({
+      text: "Auto-safe graph links must still satisfy endpoint confidence and risk thresholds.",
+      categoryIDs: ["memory.policy"],
+      confidence: 0.94,
+      durability: 0.91,
+      changeRisk: 0.1,
+    }, dir.path)
+
+    const run = await runMemoryDream({ root: dir.path, model: async () => [] })
+    const graph = await readMemoryGraph(dir.path)
+    const detail = await readDreamRunDetail(dir.path, run.id)
+
+    expect(graph.links).toEqual([expect.objectContaining({ from: first.id, to: second.id, kind: "related" })])
+    expect(detail?.graphProposals[0]).toMatchObject({ status: "applied", linkID: graph.links[0]?.id })
+    expect(detail?.events.some((event) => event.message.includes("1 auto-applied"))).toBe(true)
   })
 
   test("Dream graph proposal apply creates one validated graph link and audits status", async () => {

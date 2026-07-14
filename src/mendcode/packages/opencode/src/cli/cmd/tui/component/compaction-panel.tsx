@@ -1,9 +1,10 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, type JSX } from "solid-js"
 import type { BoxRenderable, MouseEvent, TextareaRenderable } from "@opentui/core"
-import { useKeyboard } from "@opentui/solid"
+import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { SplitBorder } from "./border"
 import { useTheme } from "../context/theme"
 import { useMendTuiProfile } from "../context/mend"
+import { useKV } from "../context/kv"
 import { useTextareaKeybindings } from "./textarea-keybindings"
 import { Locale } from "@/util/locale"
 import { errorMessage } from "@/util/error"
@@ -53,10 +54,24 @@ export type CompactionArcadeGame = {
   render: (state: unknown) => CompactionArcadeRender
 }
 
+export function shouldBlurCompactionArcadeWhenOffscreen(input: {
+  focused: boolean
+  screenY?: number
+  height?: number
+  viewportHeight?: number
+}) {
+  if (!input.focused) return false
+  if (input.screenY === undefined || input.height === undefined || input.viewportHeight === undefined) return false
+  if (!Number.isFinite(input.screenY) || !Number.isFinite(input.height) || !Number.isFinite(input.viewportHeight)) return false
+  if (input.height <= 0 || input.viewportHeight <= 0) return false
+  return input.screenY + input.height <= 0 || input.screenY >= input.viewportHeight
+}
+
 const snakeSize = 16
 const snakeWidth = snakeSize
 const snakeHeight = snakeSize
 const snakeCellWidth = 2
+const snakeGlobalHighScoreKey = "mendcode.arcade.snake.high_score"
 
 function sameSnakePoint(a: SnakePoint, b: SnakePoint) {
   return a.x === b.x && a.y === b.y
@@ -111,6 +126,11 @@ function initialSnakeState(highScore = 0): SnakeState {
     alive: true,
     paused: false,
   }
+}
+
+function normalizedSnakeHighScore(value: unknown) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0
+  return Math.max(0, Math.floor(value))
 }
 
 function normalizedArcadeKey(name: string, sequence?: string) {
@@ -271,7 +291,9 @@ export function CompactionPanel(props: {
   }
 }) {
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
   const mend = useMendTuiProfile()
+  const kv = useKV()
   const textareaKeybindings = useTextareaKeybindings()
   const config = createMemo(() => mend.profile.presentation.compaction)
   const stages = createMemo(() =>
@@ -343,6 +365,22 @@ export function CompactionPanel(props: {
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let saveTicket = 0
 
+  function globalSnakeHighScore() {
+    return normalizedSnakeHighScore(kv.get(snakeGlobalHighScoreKey, 0))
+  }
+
+  function persistSnakeHighScore(state: unknown) {
+    if (activeArcadeGame()?.id !== snakeArcadeGame.id) return
+    const highScore = normalizedSnakeHighScore((state as SnakeState).highScore)
+    if (highScore <= globalSnakeHighScore()) return
+    kv.set(snakeGlobalHighScoreKey, highScore)
+  }
+
+  function setArcadeStateAndPersist(next: unknown) {
+    setArcadeState(next)
+    persistSnakeHighScore(next)
+  }
+
   function focusArcade() {
     if (!activeArcadeGame()) return
     setArcadeFocused(true)
@@ -355,6 +393,18 @@ export function CompactionPanel(props: {
     if (input?.consume === false) return
     event?.preventDefault?.()
     event?.stopPropagation?.()
+  }
+
+  function blurArcadeIfOffscreen() {
+    if (!arcadeBox || arcadeBox.isDestroyed) return false
+    if (!shouldBlurCompactionArcadeWhenOffscreen({
+      focused: arcadeFocused(),
+      screenY: arcadeBox.screenY,
+      height: arcadeBox.height,
+      viewportHeight: dimensions().height,
+    })) return false
+    blurArcade(undefined, { consume: false })
+    return true
   }
 
   function consumeMouseEvent(event?: { preventDefault?: () => void; stopPropagation?: () => void }) {
@@ -382,9 +432,11 @@ export function CompactionPanel(props: {
       blurArcade(event)
       return true
     }
-    const next = game.key?.(arcadeState(), key)
+    const next = game.id === snakeArcadeGame.id && key === "r"
+      ? initialSnakeState(globalSnakeHighScore())
+      : game.key?.(arcadeState(), key)
     if (next === undefined) return false
-    setArcadeState(next)
+    setArcadeStateAndPersist(next)
     event.preventDefault()
     event.stopPropagation?.()
     return true
@@ -396,7 +448,10 @@ export function CompactionPanel(props: {
       const game = activeArcadeGame()
       if (game) {
         if (!arcadeFocused()) return
-        setArcadeState((state) => game.tick?.(state) ?? state)
+        if (blurArcadeIfOffscreen()) return
+        const state = arcadeState()
+        const next = game.tick?.(state) ?? state
+        if (next !== state) setArcadeStateAndPersist(next)
       }
       else setArcadeTick((value) => value + 1)
     }, activeArcadeGame()?.intervalMs ?? 240)
@@ -409,11 +464,26 @@ export function CompactionPanel(props: {
     if (id === lastArcadeGameID) return
     lastArcadeGameID = id
     setArcadeFocused(false)
-    if (game) setArcadeState(game.initialState())
+    if (game) {
+      const state = game.id === snakeArcadeGame.id ? initialSnakeState(globalSnakeHighScore()) : game.initialState()
+      setArcadeStateAndPersist(state)
+    }
+  })
+
+  createEffect(() => {
+    const game = activeArcadeGame()
+    if (game?.id !== snakeArcadeGame.id) return
+    const highScore = globalSnakeHighScore()
+    setArcadeState((state) => {
+      const snake = state as SnakeState
+      if (snake.highScore >= highScore) return state
+      return { ...snake, highScore }
+    })
   })
 
   useKeyboard((event) => {
     if (!arcadeFocused()) return
+    if (blurArcadeIfOffscreen()) return
     if (scratchpadInput && !scratchpadInput.isDestroyed && scratchpadInput.focused) return
     if (handleArcadeKey(event)) return
     event.preventDefault()

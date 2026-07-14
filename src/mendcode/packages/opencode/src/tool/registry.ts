@@ -9,6 +9,7 @@ import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
 import { ReadTool } from "./read"
 import { TaskTool } from "./task"
+import { TaskStatusTool } from "./task-status"
 import { TodoWriteTool } from "./todo"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
@@ -55,6 +56,7 @@ import { Permission } from "@/permission"
 import { PlanReview } from "@/plan-review"
 import { readPromptMode } from "@/mend/prompt/mode"
 import { LoopWorkflow } from "@/session/loop"
+import { BackgroundTask } from "@/session/background-task"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -90,6 +92,7 @@ export const layer: Layer.Layer<
   | Skill.Service
   | Session.Service
   | SessionStatus.Service
+  | BackgroundTask.Service
   | Provider.Service
   | LSP.Service
   | Instruction.Service
@@ -112,6 +115,7 @@ export const layer: Layer.Layer<
 
     const invalid = yield* InvalidTool
     const task = yield* TaskTool
+    const taskStatus = yield* TaskStatusTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const planReview = yield* PlanReviewTool
@@ -220,6 +224,7 @@ export const layer: Layer.Layer<
           edit: Tool.init(edit),
           write: Tool.init(writetool),
           task: Tool.init(task),
+          taskStatus: Tool.init(taskStatus),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
           search: Tool.init(websearch),
@@ -247,6 +252,7 @@ export const layer: Layer.Layer<
             tool.edit,
             tool.write,
             tool.task,
+            tool.taskStatus,
             tool.fetch,
             tool.todo,
             tool.search,
@@ -388,7 +394,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Skill.defaultLayer),
     Layer.provide(Agent.defaultLayer),
     Layer.provide(Session.defaultLayer),
-    Layer.provide(SessionStatus.defaultLayer),
+    Layer.provide([SessionStatus.defaultLayer, BackgroundTask.defaultLayer]),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(LSP.defaultLayer),
     Layer.provide(Instruction.defaultLayer),

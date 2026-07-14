@@ -267,12 +267,12 @@ export async function writeMemoryCategoryPolicy(
 export function inferMemoryCategoryIDs(input: { text?: string | null; tags?: string[] | null; source?: string | null }) {
   const haystack = [input.text ?? "", ...(input.tags ?? []), input.source ?? ""].join(" ").toLowerCase()
   const categories: string[] = []
-  if (/\b(release|version|changelog|pr|merge|main|dev|tag|ship|publish)\b/.test(haystack)) categories.push("project.release")
-  if (/\b(test|bun|pnpm|npm|command|script|typecheck|lint|build|smoke)\b/.test(haystack)) categories.push("project.commands")
+  if (/\b(release|version|changelog|pr|merge|main|dev|tag|ship|shipit|publish|publicar|lanzamiento|versión|versionar|rama)\b/.test(haystack)) categories.push("project.release")
+  if (/\b(test|testing|testear|prueba|pruebas|bun|pnpm|npm|command|comando|comandos|script|typecheck|lint|build|compilar|smoke|ejecutar)\b/.test(haystack)) categories.push("project.commands")
   if (/\b(auth|secret|token|permission|security|sandbox|keepass|env)\b/.test(haystack)) categories.push("project.security")
   if (/\b(architecture|module|service|api|database|schema|runtime|flow|contract)\b/.test(haystack)) categories.push("project.architecture")
   if (/\b(stack|framework|react|solid|typescript|bun|node|package manager)\b/.test(haystack)) categories.push("project.stack")
-  if (/\b(always|never|prefer|style|language|respond|responde|prefiere)\b/.test(haystack)) categories.push("user.preferences")
+  if (/\b(always|never|prefer|style|language|respond|responde|prefiere|siempre|nunca|idioma)\b/.test(haystack)) categories.push("user.preferences")
   if (/\b(memory|dream|proposal|retrieve|extractor|remember)\b/.test(haystack)) categories.push("memory.policy")
   if (/\b(todo|roadmap|later|future|backlog)\b/.test(haystack)) categories.push("todo.stable")
   if (/\b(currently|right now|ahora|just happened|log|trace|status|pending task)\b/.test(haystack)) categories.push("volatile.reject")

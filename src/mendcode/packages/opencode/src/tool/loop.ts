@@ -8,15 +8,17 @@ import { InstanceState } from "@/effect/instance-state"
 import { loopServiceArgsFromConfig, loopServiceStart } from "@/mend/runtime/loop-service"
 import { Provider } from "@/provider/provider"
 
-const Action = Schema.Literals(["draft", "activate", "show", "list", "pause", "resume", "stop", "delete", "run_once", "update_agent"])
+const Action = Schema.Literals(["draft", "activate", "show", "list", "pause", "resume", "stop", "delete", "run_once", "update_agent", "signal", "override"])
 const TriggerMode = Schema.Literals(["manual", "interval", "adaptive", "external-signal", "self-paced"])
 const PermissionMode = Schema.Literals(["report-only", "normal", "custom"])
 const BudgetMode = Schema.Literals(["fixed", "max-goal", "unbounded-monitor"])
+const EvaluationMode = Schema.Literals(["legacy", "deterministic", "independent"])
+const WorkspaceMode = Schema.Literals(["read-only", "in-place", "per-loop-worktree", "per-run-worktree"])
 
 export const Parameters = Schema.Struct({
   action: Action.annotate({
     description:
-      "Loop workflow action. Use activate to create/start a loop, draft to create a reviewable draft, show/list to inspect, update_agent to change the loop agent, and pause/resume/stop/delete/run_once for control.",
+      "Loop workflow action. Use activate to create/start a loop, draft to create a reviewable draft, show/list to inspect, update_agent to change the loop agent, override only after an explicit user waiver/accept/retry decision, and pause/resume/stop/delete/run_once for control.",
   }),
   workflowID: Schema.optional(LoopWorkflow.LoopID).annotate({
     description:
@@ -58,18 +60,46 @@ export const Parameters = Schema.Struct({
   agent: Schema.optional(Schema.String).annotate({
     description: "Optional MendCode agent/profile name to use when the loop runner wakes this workflow. With action=update_agent, set this to the new agent name or an empty string to use the default agent.",
   }),
+  evaluationMode: Schema.optional(EvaluationMode).annotate({
+    description: "Completion evaluation mode. max-goal loops default to independent so worker self-completion must be judged before the workflow completes.",
+  }),
+  evaluatorAgent: Schema.optional(Schema.String).annotate({
+    description: "Optional agent/profile for the independent evaluator. Defaults to the loop agent/session default.",
+  }),
   permissionMode: Schema.optional(PermissionMode).annotate({
     description: "Loop execution permission mode. Use report-only by default, normal only after explicit user approval, or custom with gates/approval lists.",
+  }),
+  workspaceMode: Schema.optional(WorkspaceMode).annotate({
+    description:
+      "Workspace isolation policy. read-only avoids edits, in-place uses the current project, and worktree modes record intended isolation for worktree lifecycle handling.",
   }),
   budgetMode: Schema.optional(BudgetMode).annotate({
     description:
       "Loop budget semantics: fixed runs exactly to maxTurns, max-goal uses maxTurns as a cap and completes as soon as the goal is verified, unbounded-monitor omits maxTurns and runs until stopped/blocker.",
+  }),
+  maxCost: Schema.optional(Schema.Number).annotate({
+    description: "Optional lifetime model cost budget for the loop when usage metadata is available.",
+  }),
+  maxTokens: Schema.optional(Schema.Number).annotate({
+    description: "Optional lifetime token budget for the loop when usage metadata is available.",
+  }),
+  approvalRequiredFor: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description: "Approval-required action classes for this loop, such as push, merge, release, external-send, destructive-shell, or broad-refactor.",
+  }),
+  approvedActions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description: "Action classes explicitly approved for this loop. Use sparingly; sensitive actions should require user approval.",
   }),
   completionCriteria: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Concrete criteria that prove the loop goal is complete. Required for max-goal implementation loops.",
   }),
   successChecks: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Validation commands, inspections, or review checks the loop should run before reporting complete.",
+  }),
+  validationCommands: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description: "Explicit executable validation commands. Only bounded read-only test/check commands from the validation allowlist are executed.",
+  }),
+  validationTimeoutMs: Schema.optional(Schema.Number).annotate({
+    description: "Per-command validation timeout in milliseconds. Defaults to 120000 and is capped at 10 minutes.",
   }),
   targetTurns: Schema.optional(Schema.Number).annotate({
     description: "Soft target number of iterations to finish the goal before using the remaining budget for recovery/verification.",
@@ -92,110 +122,176 @@ export const Parameters = Schema.Struct({
   ensureService: Schema.optional(Schema.Boolean).annotate({
     description: "When activating, best-effort start the project loop service so wakeups continue outside the TUI.",
   }),
+  signalSource: Schema.optional(Schema.String).annotate({
+    description: "External signal source for action=signal, such as github, ci, slack, local, or manual.",
+  }),
+  signalType: Schema.optional(Schema.String).annotate({
+    description: "External signal type for action=signal, such as ci.check.failed or github.pr.updated.",
+  }),
+  signalDedupeKey: Schema.optional(Schema.String).annotate({
+    description: "Stable idempotency key for action=signal. Duplicate source/type/key signals are ignored.",
+  }),
+  signalPayloadSummary: Schema.optional(Schema.String).annotate({
+    description: "Safe redacted summary of the external signal payload for action=signal.",
+  }),
+  signalLinks: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description: "Optional links associated with the signal, bounded and stored as metadata.",
+  }),
+  artifactMaxCount: Schema.optional(Schema.Number).annotate({
+    description: "Optional retained non-critical artifact count budget for this loop. Audit-critical records are preserved.",
+  }),
+  artifactMaxAgeMs: Schema.optional(Schema.Number).annotate({
+    description: "Optional maximum age for non-critical loop artifacts in milliseconds.",
+  }),
+  artifactMaxBytes: Schema.optional(Schema.Number).annotate({
+    description: "Optional soft retained artifact byte budget; oldest non-critical artifacts are pruned first while audit-critical records are preserved.",
+  }),
+  overrideAction: Schema.optional(Schema.Literals(["waive", "accept", "retry"])).annotate({
+    description: "Human override action. Requires an explicit user decision and a non-empty reason.",
+  }),
+  overrideGateID: Schema.optional(Schema.String).annotate({
+    description: "Blocking gate id to waive. Safety-critical policy, approval, budget, and user-input gates cannot be waived.",
+  }),
   reason: Schema.optional(Schema.String).annotate({
     description: "Short reason recorded in the loop journal for this action.",
   }),
 })
 
-type Metadata = {
-  workflowID?: string
-  sessionId?: string
-  rootSessionID?: string
-  ownerSessionID?: string
-  state?: string
-  phase?: string
-  nextWakeup?: number
-  name?: string
-  objective?: string
-  triggerMode?: string
-  intervalMs?: number
+type ModelMetadata = {
+  providerID: string
+  modelID: string
+  variant?: string
+}
+
+type LatestRunMetadata = {
+  runID: LoopWorkflow.RunInfo["id"]
+  state: LoopWorkflow.RunInfo["state"]
+  phase: LoopWorkflow.RunInfo["phase"]
+  trigger: LoopWorkflow.RunInfo["trigger"]
+  summary?: string
+  failureClass?: LoopWorkflow.RunInfo["failureClass"]
+  retry?: LoopWorkflow.RunInfo["retry"]
+  workspaceLease?: LoopWorkflow.RunInfo["workspaceLease"]
+}
+
+type LatestCheckpointMetadata = NonNullable<LoopWorkflow.RunInfo["checkpoint"]>
+type LatestJudgmentMetadata = NonNullable<LoopWorkflow.RunInfo["judgment"]>
+type LatestRubricMetadata = NonNullable<LoopWorkflow.RunInfo["rubricResult"]>
+type LatestGateResultsMetadata = NonNullable<LoopWorkflow.RunInfo["gateResults"]>
+type LatestArtifactMetadata = Pick<LoopWorkflow.ArtifactInfo, "id" | "kind" | "title" | "summary" | "status" | "source">
+type LoopMemoryMetadata = Pick<LoopWorkflow.MemoryEntry, "section" | "summary" | "source" | "runID"> & {
+  label: string
+  created: number
+}
+type ContractPreviewMetadata = {
+  wakeWhen: string
+  canDo: string
+  requiresApproval: string
+  verifyBy: string
+  judgeChecks: string
+  stopWhen: string
+  estimatedBudget: string
+  workspaceIsolation: string
+  memoryRetained: string
+}
+type ChangedFileMetadata = {
+  file: string
+  additions: number
+  deletions: number
+  status?: string
+}
+type RecentEventMetadata = Pick<LoopWorkflow.JournalEvent, "title" | "summary" | "type">
+type WorkspaceModeMetadata = NonNullable<LoopWorkflow.Info["spec"]["workspace"]>["mode"]
+type CostBudgetMetadata = NonNullable<LoopWorkflow.Info["spec"]["costBudget"]>
+type ApprovalPolicyMetadata = {
+  requireApprovalFor?: string[]
+  approvedActions?: string[]
+}
+type WorkflowListMetadata = {
+  workflowID: LoopWorkflow.Info["id"]
+  workspaceID?: LoopWorkflow.Info["workspaceID"]
+  ownerSessionID?: LoopWorkflow.Info["ownerSessionID"]
+  rootSessionID?: LoopWorkflow.Info["rootSessionID"]
+  state: LoopWorkflow.Info["state"]
+  phase: LoopWorkflow.Info["phase"]
+  name: LoopWorkflow.Info["name"]
+  nextWakeup?: LoopWorkflow.Info["nextWakeup"]
+  turns?: LoopWorkflow.Info["metrics"]["turns"]
+  maxTurns?: LoopWorkflow.Info["policy"]["maxTurns"]
+  objective?: LoopWorkflow.Info["objective"]
+  triggerMode?: NonNullable<LoopWorkflow.Info["spec"]["trigger"]>["mode"]
+  intervalMs?: NonNullable<LoopWorkflow.Info["spec"]["trigger"]>["intervalMs"]
   permissionMode?: "report-only" | "normal" | "custom"
-  budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
-  model?: {
-    providerID: string
-    modelID: string
-    variant?: string
-  }
-  agent?: string
-  count?: number
-  latestRun?: {
-    runID: string
-    state: string
-    phase: string
-    trigger: string
-    summary?: string
-  }
-  latestCheckpoint?: {
-    status?: string
-    summary?: string
-    evidence?: string[]
-    nextAction?: string
-    confidence?: string
-  }
-  changedFiles?: Array<{
-    file: string
-    additions: number
-    deletions: number
-    status?: string
-  }>
+  workspaceMode?: WorkspaceModeMetadata
+  budgetMode?: LoopWorkflow.Info["spec"]["budgetMode"]
+  costBudget?: CostBudgetMetadata
+  cost?: number
+  tokens?: number
+  approvalPolicy?: ApprovalPolicyMetadata
+  evaluationMode?: NonNullable<LoopWorkflow.Info["spec"]["evaluation"]>["mode"]
+  evaluatorAgent?: NonNullable<LoopWorkflow.Info["spec"]["evaluation"]>["evaluatorAgent"]
+  model?: ModelMetadata
+  agent?: LoopWorkflow.Info["spec"]["agent"]
+  created?: LoopWorkflow.Info["time"]["created"]
+  activated?: LoopWorkflow.Info["time"]["activated"]
+  updated?: LoopWorkflow.Info["time"]["updated"]
+  latestRun?: LatestRunMetadata
+  latestCheckpoint?: LatestCheckpointMetadata
+  latestJudgment?: LatestJudgmentMetadata
+  latestRubric?: LatestRubricMetadata
+  latestGateResults?: LatestGateResultsMetadata
+  latestArtifacts?: LatestArtifactMetadata[]
+  loopMemory?: LoopMemoryMetadata[]
+  changedFiles?: ChangedFileMetadata[]
   lastMessage?: string
-  recentEvents?: Array<{
-    title: string
-    summary: string
-    type: string
-  }>
+  recentEvents?: RecentEventMetadata[]
+  signal?: LoopWorkflow.NormalizedSignal
+  signalDeduped?: boolean
+  supervision?: LoopWorkflow.Summary
+  contractPreview?: ContractPreviewMetadata
+}
+
+type Metadata = {
+  workflowID?: LoopWorkflow.Info["id"]
+  workspaceID?: LoopWorkflow.Info["workspaceID"]
+  sessionId?: LoopWorkflow.Info["rootSessionID"]
+  rootSessionID?: LoopWorkflow.Info["rootSessionID"]
+  ownerSessionID?: LoopWorkflow.Info["ownerSessionID"]
+  state?: LoopWorkflow.Info["state"]
+  phase?: LoopWorkflow.Info["phase"]
+  nextWakeup?: LoopWorkflow.Info["nextWakeup"]
+  name?: LoopWorkflow.Info["name"]
+  objective?: LoopWorkflow.Info["objective"]
+  triggerMode?: NonNullable<LoopWorkflow.Info["spec"]["trigger"]>["mode"]
+  intervalMs?: NonNullable<LoopWorkflow.Info["spec"]["trigger"]>["intervalMs"]
+  permissionMode?: "report-only" | "normal" | "custom"
+  workspaceMode?: WorkspaceModeMetadata
+  budgetMode?: LoopWorkflow.Info["spec"]["budgetMode"]
+  costBudget?: CostBudgetMetadata
+  cost?: number
+  tokens?: number
+  approvalPolicy?: ApprovalPolicyMetadata
+  evaluationMode?: NonNullable<LoopWorkflow.Info["spec"]["evaluation"]>["mode"]
+  evaluatorAgent?: NonNullable<LoopWorkflow.Info["spec"]["evaluation"]>["evaluatorAgent"]
+  model?: ModelMetadata
+  agent?: LoopWorkflow.Info["spec"]["agent"]
+  count?: number
+  latestRun?: LatestRunMetadata
+  latestCheckpoint?: LatestCheckpointMetadata
+  latestJudgment?: LatestJudgmentMetadata
+  latestRubric?: LatestRubricMetadata
+  latestGateResults?: LatestGateResultsMetadata
+  latestArtifacts?: LatestArtifactMetadata[]
+  loopMemory?: LoopMemoryMetadata[]
+  changedFiles?: ChangedFileMetadata[]
+  lastMessage?: string
+  recentEvents?: RecentEventMetadata[]
   serviceEnsured?: boolean
-  workflows?: Array<{
-    workflowID: string
-    ownerSessionID?: string
-    rootSessionID?: string
-    state: string
-    phase: string
-    name: string
-    nextWakeup?: number
-    turns?: number
-    maxTurns?: number
-    objective?: string
-    triggerMode?: string
-    intervalMs?: number
-    permissionMode?: "report-only" | "normal" | "custom"
-    budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
-    model?: {
-      providerID: string
-      modelID: string
-      variant?: string
-    }
-    agent?: string
-    created?: number
-    activated?: number
-    updated?: number
-    latestRun?: {
-      runID: string
-      state: string
-      phase: string
-      trigger: string
-      summary?: string
-    }
-    latestCheckpoint?: {
-      status?: string
-      summary?: string
-      evidence?: string[]
-      nextAction?: string
-      confidence?: string
-    }
-    changedFiles?: Array<{
-      file: string
-      additions: number
-      deletions: number
-      status?: string
-    }>
-    lastMessage?: string
-    recentEvents?: Array<{
-      title: string
-      summary: string
-      type: string
-    }>
-  }>
+  signal?: LoopWorkflow.NormalizedSignal
+  signalDeduped?: boolean
+  supervision?: LoopWorkflow.Summary
+  contractPreview?: ContractPreviewMetadata
+  workflows?: WorkflowListMetadata[]
 }
 
 const reportOnlyApprovalGates = ["edit", "write", "apply_patch", "shell", "subagent"]
@@ -205,10 +301,24 @@ function sameStringSet(values: Set<string>, expected: string[]) {
   return values.size === expected.length && expected.every((item) => values.has(item))
 }
 
+function approvalPolicyFor(workflow: Pick<LoopWorkflow.Info, "policy" | "spec">): ApprovalPolicyMetadata {
+  return {
+    requireApprovalFor: workflow.policy.requireApprovalFor ?? workflow.spec.approvalPolicy?.requireApprovalFor,
+    approvedActions: workflow.policy.approvedActions ?? workflow.spec.approvalPolicy?.approvedActions,
+  }
+}
+
+function pendingApprovalActions(workflow: Pick<LoopWorkflow.Info, "policy" | "spec">) {
+  const policy = approvalPolicyFor(workflow)
+  const approved = new Set(policy.approvedActions ?? [])
+  return (policy.requireApprovalFor ?? []).filter((item) => !approved.has(item))
+}
+
 function permissionModeFor(workflow: LoopWorkflow.Info): "report-only" | "normal" | "custom" {
+  if (workflow.spec.workspace?.mode === "read-only") return "report-only"
   const gates = workflow.spec.gates ?? []
   if (gates.some((gate) => /report-only|do not edit/i.test(gate))) return "report-only"
-  const approvals = new Set(workflow.policy.requireApprovalFor ?? [])
+  const approvals = new Set(approvalPolicyFor(workflow).requireApprovalFor ?? [])
   if (reportOnlyApprovalGates.every((gate) => approvals.has(gate))) return "report-only"
   if (gates.length > 0) return "custom"
   if (!approvals.size || sameStringSet(approvals, normalApprovalGates)) return "normal"
@@ -254,6 +364,78 @@ function defaultReserveTurns(maxTurns: number | undefined) {
   return Math.max(1, Math.min(3, Math.floor(maxTurns * 0.2)))
 }
 
+function tokenTotal(metrics: LoopWorkflow.Info["metrics"]) {
+  return (metrics.inputTokens ?? 0) + (metrics.outputTokens ?? 0) + (metrics.reasoningTokens ?? 0) + (metrics.cacheReadTokens ?? 0) + (metrics.cacheWriteTokens ?? 0)
+}
+
+function listText(values: readonly string[] | undefined, fallback: string) {
+  const items = values?.map((item) => item.trim()).filter(Boolean)
+  return items?.length ? items.join("; ") : fallback
+}
+
+function verificationChecks(workflow: LoopWorkflow.Info) {
+  return Array.from(new Set([
+    ...(workflow.spec.successChecks ?? []),
+    ...(workflow.spec.validationChecks ?? []).map((check) => check.command),
+  ].map((item) => item.trim()).filter(Boolean)))
+}
+
+function triggerPreview(workflow: LoopWorkflow.Info) {
+  const trigger = workflow.spec.trigger
+  if (!trigger?.mode || trigger.mode === "manual") return "the user runs it manually or requests run_once"
+  if (trigger.mode === "interval") return trigger.intervalMs ? `every ${Math.round(trigger.intervalMs / 1000)}s` : "on its configured interval"
+  if (trigger.mode === "external-signal") return "an authenticated matching external signal is recorded"
+  if (trigger.mode === "self-paced") return "the previous checkpoint schedules another self-paced iteration"
+  return "the scheduler decides the loop is ready to continue"
+}
+
+function budgetPreview(workflow: LoopWorkflow.Info) {
+  const turns = workflow.policy.maxTurns ? `${workflow.policy.maxTurns} turn cap` : "unlimited turns"
+  const runtime = workflow.policy.maxRuntimeMs ? `${workflow.policy.maxRuntimeMs}ms runtime cap` : "no runtime cap"
+  const cost = workflow.spec.costBudget?.maxCost !== undefined ? `$${workflow.spec.costBudget.maxCost} cost cap` : "no cost cap"
+  const tokens = workflow.spec.costBudget?.maxTokens !== undefined ? `${workflow.spec.costBudget.maxTokens} token cap` : "no token cap"
+  return `${workflow.spec.budgetMode ?? "legacy"}; ${turns}; ${runtime}; ${cost}; ${tokens}`
+}
+
+function contractPreview(workflow: LoopWorkflow.Info): ContractPreviewMetadata {
+  const permissionMode = permissionModeFor(workflow)
+  const approvals = pendingApprovalActions(workflow)
+  const criteria = workflow.spec.completionCriteria?.length ? workflow.spec.completionCriteria : workflow.spec.rubric?.criteria?.map((item) => item.description)
+  return {
+    wakeWhen: `I will wake when ${triggerPreview(workflow)}.`,
+    canDo: permissionMode === "report-only"
+      ? "I can inspect, summarize, and produce evidence without editing files or causing external side effects."
+      : `I can work on the objective using ${workflow.spec.workspace?.mode ?? "in-place"} workspace mode within configured gates.`,
+    requiresApproval: `I cannot do without approval: ${listText(approvals, "actions outside the configured permission envelope")}.`,
+    verifyBy: `I will verify by ${listText(verificationChecks(workflow), "recording checkpoint evidence and configured gate results")}.`,
+    judgeChecks: workflow.spec.evaluation?.mode === "independent"
+      ? `The independent judge will check ${listText(criteria, "objective evidence, validation output, and safety gates")}.`
+      : `The ${workflow.spec.evaluation?.mode ?? "legacy"} evaluator will check ${listText(criteria, "the checkpoint summary and available evidence")}.`,
+    stopWhen: `I will stop when ${listText(workflow.spec.stopWhen, workflow.spec.budgetMode === "max-goal" ? "the goal is independently verified or budget/gates block progress" : "the budget is exhausted, stopped, or a gate blocks progress")}.`,
+    estimatedBudget: `Estimated budget: ${budgetPreview(workflow)}.`,
+    workspaceIsolation: `Workspace isolation: ${workflow.spec.workspace?.mode ?? "in-place"}.`,
+    memoryRetained: workflow.spec.memory?.enabled === false
+      ? "Memory retained: disabled."
+      : `Memory retained: ${workflow.spec.memory?.sections?.join(", ") || (workflow.memory ? "loop-local facts" : "none configured")}.`,
+  }
+}
+
+function formatContractPreview(preview: ContractPreviewMetadata) {
+  return [
+    "<loop_contract_preview>",
+    preview.wakeWhen,
+    preview.canDo,
+    preview.requiresApproval,
+    preview.verifyBy,
+    preview.judgeChecks,
+    preview.stopWhen,
+    preview.estimatedBudget,
+    preview.workspaceIsolation,
+    preview.memoryRetained,
+    "</loop_contract_preview>",
+  ].join("\n")
+}
+
 function positiveMaxTurns(value: number | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined
   return Math.floor(value)
@@ -276,6 +458,8 @@ function objectiveExplicitlyRequestsEdits(objective: string | undefined) {
 
 function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: Tool.Context["sessionID"]) {
   if (!params.objective?.trim()) throw new Error("objective is required when creating a loop workflow")
+  const artifactMaxCount = positiveMaxTurns(params.artifactMaxCount)
+  if (params.artifactMaxCount !== undefined && !artifactMaxCount) throw new Error("artifactMaxCount must be > 0 when provided")
   const name =
     params.name?.trim() ||
     params.objective
@@ -285,11 +469,13 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
   const model = params.model ? parseLoopModel(params.model, params.variant) : undefined
   const allowEditsFromObjective = params.permissionMode === undefined && params.reportOnly === undefined && objectiveExplicitlyRequestsEdits(params.objective)
   const reportOnly =
+    params.workspaceMode === "read-only" ||
     params.permissionMode === "report-only" ||
     params.reportOnly === true ||
     (params.permissionMode === undefined && params.reportOnly !== false && !allowEditsFromObjective)
   const budgetMode = inferBudgetMode(params)
   const maxTurns = maxTurnsFor(params, budgetMode)
+  const evaluationMode = params.evaluationMode ?? (budgetMode === "max-goal" ? "independent" : "legacy")
   const trigger =
     params.triggerMode || params.intervalMs
       ? {
@@ -306,6 +492,11 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
     budgetMode,
     completionCriteria: params.completionCriteria,
     successChecks: params.successChecks,
+    validationChecks: params.validationCommands?.map((command, index) => ({
+      id: `validation-${index + 1}`,
+      command: command.trim(),
+      timeoutMs: params.validationTimeoutMs === undefined ? undefined : Math.max(0, Math.floor(params.validationTimeoutMs)),
+    })).filter((check) => check.command.length > 0),
     strategy: {
       targetTurns: params.targetTurns ?? (budgetMode === "max-goal" ? defaultTargetTurns(maxTurns) : undefined),
       reserveTurns: params.reserveTurns ?? (budgetMode === "max-goal" ? defaultReserveTurns(maxTurns) : undefined),
@@ -324,17 +515,82 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
         }
       : undefined,
     agent: params.agent?.trim() || undefined,
+    evaluation: {
+      mode: evaluationMode,
+      evaluatorAgent: params.evaluatorAgent?.trim() || undefined,
+      requireIndependentForCompletion: evaluationMode === "independent",
+      allowWorkerSelfComplete: evaluationMode === "legacy",
+      maxEvaluatorRetries: 1,
+    },
+    rubric: budgetMode === "max-goal"
+      ? {
+          name: "Loop goal completion rubric",
+          passThreshold: 0.85,
+          criteria: [
+            {
+              id: "objective",
+              description: "The loop objective and completion criteria are satisfied by concrete evidence.",
+              weight: 0.5,
+              minScore: 4,
+              evidenceRequired: ["checkpoint evidence", "success checks"],
+            },
+            {
+              id: "verification",
+              description: "Configured success checks were run or explicitly explained as unavailable.",
+              weight: 0.3,
+              minScore: 4,
+              evidenceRequired: ["success check output"],
+            },
+            {
+              id: "safety",
+              description: "No approval-required or destructive action was performed without permission.",
+              weight: 0.2,
+              minScore: 5,
+              evidenceRequired: ["policy gate status"],
+            },
+          ],
+          mandatoryBlockers: [
+            "configured validation failed",
+            "completion evidence is only a self-assertion",
+            "approval-required action attempted without approval",
+          ],
+        }
+      : undefined,
+    workspace: { mode: reportOnly ? "read-only" : params.workspaceMode ?? "in-place" },
+    costBudget: params.maxCost !== undefined || params.maxTokens !== undefined
+      ? {
+          maxCost: params.maxCost,
+          maxTokens: params.maxTokens === undefined ? undefined : Math.max(0, Math.floor(params.maxTokens)),
+        }
+      : undefined,
+    approvalPolicy: params.approvalRequiredFor || params.approvedActions
+      ? {
+          requireApprovalFor: params.approvalRequiredFor,
+          approvedActions: params.approvedActions,
+        }
+      : undefined,
+    memory: budgetMode === "max-goal" ? { enabled: true, sections: ["tried", "verified", "open", "decisions", "rejected"] } : undefined,
+    retention: params.artifactMaxCount !== undefined || params.artifactMaxAgeMs !== undefined || params.artifactMaxBytes !== undefined
+      ? {
+          maxArtifacts: artifactMaxCount,
+          maxAgeMs: params.artifactMaxAgeMs === undefined ? undefined : Math.max(0, Math.floor(params.artifactMaxAgeMs)),
+          maxBytes: params.artifactMaxBytes === undefined ? undefined : Math.max(0, Math.floor(params.artifactMaxBytes)),
+        }
+      : undefined,
     policy: {
       maxTurns,
       maxRuntimeMs: params.maxRuntimeMs,
       maxChildren: params.maxChildren,
       maxDepth: params.maxDepth,
-      requireApprovalFor: reportOnly ? [...reportOnlyApprovalGates, "push", "merge", "release"] : normalApprovalGates,
+      requireApprovalFor: params.approvalRequiredFor ?? (reportOnly ? [...reportOnlyApprovalGates, "push", "merge", "release"] : normalApprovalGates),
+      approvedActions: params.approvedActions,
     },
   } satisfies LoopWorkflow.CreateDraftInput
 }
 
 function formatWorkflow(workflow: LoopWorkflow.Info) {
+  const preview = contractPreview(workflow)
+  const policy = approvalPolicyFor(workflow)
   const lines = [
     `loop_id: ${workflow.id}`,
     `loop_state: ${workflow.state}`,
@@ -342,8 +598,20 @@ function formatWorkflow(workflow: LoopWorkflow.Info) {
     `loop_name: ${workflow.name}`,
     `root_session_id: ${workflow.rootSessionID ?? "none"}`,
     `owner_session_id: ${workflow.ownerSessionID ?? "none"}`,
+    `workspace_id: ${workflow.workspaceID ?? "none"}`,
+    `workspace_mode: ${workflow.spec.workspace?.mode ?? "legacy"}`,
     `next_wakeup: ${workflow.nextWakeup ? new Date(workflow.nextWakeup).toISOString() : "none"}`,
     `budget_mode: ${workflow.spec.budgetMode ?? "legacy"}`,
+    `cost: ${workflow.metrics.cost ?? 0}`,
+    `tokens: ${tokenTotal(workflow.metrics)}`,
+    `max_cost: ${workflow.spec.costBudget?.maxCost ?? "unlimited"}`,
+    `max_tokens: ${workflow.spec.costBudget?.maxTokens ?? "unlimited"}`,
+    `approval_required_for: ${policy.requireApprovalFor?.join(", ") || "none"}`,
+    `approved_actions: ${policy.approvedActions?.join(", ") || "none"}`,
+    `validation_checks: ${workflow.spec.validationChecks?.map((check) => check.command).join(", ") || "none"}`,
+    `artifact_retention: count=${workflow.spec.retention?.maxArtifacts ?? "default"} age_ms=${workflow.spec.retention?.maxAgeMs ?? "unlimited"} bytes=${workflow.spec.retention?.maxBytes ?? "unlimited"}`,
+    `evaluation_mode: ${workflow.spec.evaluation?.mode ?? "legacy"}`,
+    `evaluator_agent: ${workflow.spec.evaluation?.evaluatorAgent ?? "loop/session default"}`,
     `max_turns: ${workflow.policy.maxTurns ?? "unlimited"}`,
     `max_runtime_ms: ${workflow.policy.maxRuntimeMs ?? "unlimited"}`,
     `model: ${
@@ -356,6 +624,8 @@ function formatWorkflow(workflow: LoopWorkflow.Info) {
     `reserve_turns: ${workflow.spec.strategy?.reserveTurns ?? "auto"}`,
     `notify_owner_on_complete: ${workflow.spec.strategy?.notifyOwnerOnComplete === true ? "true" : "false"}`,
     "",
+    formatContractPreview(preview),
+    "",
     "<loop_objective>",
     workflow.objective,
     "</loop_objective>",
@@ -363,8 +633,18 @@ function formatWorkflow(workflow: LoopWorkflow.Info) {
   return lines.join("\n")
 }
 
+function redactSensitiveText(value: string) {
+  return value
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_SECRET]")
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "[REDACTED_SECRET]")
+    .replace(/(["'])(api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password)\1\s*:\s*"[^"\n]*"/gi, '$1$2$1:"[REDACTED]"')
+    .replace(/\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password)\s*([:=])\s*([^\s,;]+)/gi, "$1$2[REDACTED]")
+    .replace(/\b(authorization)\s*([:=])\s*([^\n]+)/gi, "$1$2[REDACTED]")
+}
+
 function compactText(value: string, max = 1600) {
-  const text = value.replace(/\r\n/g, "\n").trim()
+  const text = redactSensitiveText(value).replace(/\r\n/g, "\n").trim()
   if (text.length <= max) return text
   return `${text.slice(0, max - 1).trimEnd()}…`
 }
@@ -394,6 +674,31 @@ function formatChangedFiles(files: Array<{ file: string; additions: number; dele
   ].filter((line): line is string => Boolean(line))
 }
 
+function latestMemory(workflow: LoopWorkflow.Info) {
+  const entries = workflow.memory?.entries ?? []
+  const sections: Array<[LoopWorkflow.MemorySection, string]> = [
+    ["tried", "tried"],
+    ["verified", "verified"],
+    ["open", "open"],
+    ["decisions", "decisions"],
+    ["rejected", "rejected"],
+  ]
+  return sections.flatMap(([section, label]) =>
+    entries
+      .filter((entry) => entry.section === section)
+      .slice(-6)
+      .map((entry) => ({ section, label, summary: entry.summary, source: entry.source, runID: entry.runID, created: entry.time.created })),
+  )
+}
+
+function formatMemory(entries: ReturnType<typeof latestMemory>) {
+  if (!entries.length) return "loop_memory: none"
+  return [
+    "loop_memory:",
+    ...entries.map((entry) => `  - ${entry.section}: ${entry.summary}${entry.source ? ` (${entry.source})` : ""}`),
+  ].join("\n")
+}
+
 function formatSnapshotContext(input: {
   snapshot: LoopWorkflow.Snapshot
   rootSummary?: Session.Info["summary"]
@@ -409,6 +714,20 @@ function formatSnapshotContext(input: {
   }))
   const latestEvents = input.snapshot.events.slice(-5)
   const checkpointInfo = latestRun?.checkpoint
+  const judgmentInfo = latestRun?.judgment
+  const gateResults = latestRun?.gateResults ?? []
+  const memory = latestMemory(input.snapshot.workflow)
+  const supervision = LoopWorkflow.summarizeSnapshot(input.snapshot)
+  const latestArtifacts = latestRun
+    ? input.snapshot.artifacts.filter((artifact) => artifact.runID === latestRun.id).map((artifact) => ({
+        id: artifact.id,
+        kind: artifact.kind,
+        title: artifact.title,
+        summary: artifact.summary,
+        status: artifact.status,
+        source: artifact.source,
+      }))
+    : []
 
   return {
     latestRun: latestRun
@@ -418,9 +737,18 @@ function formatSnapshotContext(input: {
           phase: latestRun.phase,
           trigger: latestRun.trigger,
           summary: checkpointInfo?.summary ?? latestRun.evaluatorReason,
+          failureClass: latestRun.failureClass,
+          retry: latestRun.retry,
+          workspaceLease: latestRun.workspaceLease,
         }
       : undefined,
     latestCheckpoint: checkpointInfo,
+    latestJudgment: judgmentInfo,
+    latestRubric: latestRun?.rubricResult,
+    latestGateResults: gateResults,
+    latestArtifacts,
+    loopMemory: memory,
+    supervision,
     changedFiles: files,
     lastMessage: input.lastMessage,
     recentEvents: latestEvents.map((event) => ({ title: event.title, summary: event.summary, type: event.type })),
@@ -430,6 +758,13 @@ function formatSnapshotContext(input: {
         ? `latest_run: ${latestRun.id} ${latestRun.state}/${latestRun.phase} trigger=${latestRun.trigger}`
         : "latest_run: none",
       latestRun?.evaluatorReason ? `latest_run_summary: ${latestRun.evaluatorReason}` : undefined,
+      latestRun?.failureClass ? `latest_failure_class: ${latestRun.failureClass}` : undefined,
+      latestRun?.retry
+        ? `latest_retry: attempt=${latestRun.retry.attempt}${latestRun.retry.backoffMs ? ` backoff_ms=${latestRun.retry.backoffMs}` : ""}${latestRun.retry.nextWakeup ? ` next=${new Date(latestRun.retry.nextWakeup).toISOString()}` : ""}`
+        : undefined,
+      latestRun?.workspaceLease
+        ? `latest_workspace_lease: ${latestRun.workspaceLease.mode}/${latestRun.workspaceLease.state} path=${latestRun.workspaceLease.path}${latestRun.workspaceLease.branch ? ` branch=${latestRun.workspaceLease.branch}` : ""}`
+        : undefined,
       checkpointInfo
         ? [
             "latest_checkpoint:",
@@ -443,6 +778,54 @@ function formatSnapshotContext(input: {
             .filter((line): line is string => Boolean(line))
             .join("\n")
         : "latest_checkpoint: none",
+      judgmentInfo
+        ? [
+            "latest_judgment:",
+            judgmentInfo.status ? `  status: ${judgmentInfo.status}` : undefined,
+            judgmentInfo.summary ? `  summary: ${judgmentInfo.summary}` : undefined,
+            judgmentInfo.recommendedNextAction ? `  recommended_next_action: ${judgmentInfo.recommendedNextAction}` : undefined,
+            judgmentInfo.confidence ? `  confidence: ${judgmentInfo.confidence}` : undefined,
+            judgmentInfo.evidence?.length ? "  evidence:" : undefined,
+            ...(judgmentInfo.evidence ?? []).map((item) => `  - ${item}`),
+          ]
+            .filter((line): line is string => Boolean(line))
+            .join("\n")
+        : "latest_judgment: none",
+      gateResults.length
+        ? [
+            "latest_gate_results:",
+            ...gateResults.map((gate) =>
+              `  - ${gate.id}: ${gate.status}${gate.failureClass ? ` (${gate.failureClass})` : ""}${gate.summary ? ` — ${gate.summary}` : ""}${gate.waiver ? ` · ${gate.waiver.action} by ${gate.waiver.actor}: ${gate.waiver.reason}` : ""}`,
+            ),
+          ].join("\n")
+        : "latest_gate_results: none",
+      latestRun?.rubricResult
+        ? [
+            "latest_rubric:",
+            `  status: ${latestRun.rubricResult.status}`,
+            `  score: ${latestRun.rubricResult.score}`,
+            `  threshold: ${latestRun.rubricResult.threshold}`,
+            ...latestRun.rubricResult.criteria.map((criterion) => `  - ${criterion.id}: ${criterion.passed ? "pass" : "fail"} ${criterion.score}/${criterion.maxScore} · ${criterion.reason}`),
+            ...latestRun.rubricResult.blockers.filter((blocker) => blocker.present).map((blocker) => `  - blocker: ${blocker.id} · ${blocker.reason}`),
+          ].join("\n")
+        : "latest_rubric: none",
+      [
+        "supervision_summary:",
+        `  verdict: ${supervision.verdict ?? "unknown"}`,
+        supervision.verdictSummary ? `  summary: ${supervision.verdictSummary}` : undefined,
+        supervision.nextAction ? `  next_action: ${supervision.nextAction}` : undefined,
+        `  gates: pass=${supervision.gateSummary.pass} fail=${supervision.gateSummary.fail} blocked=${supervision.gateSummary.blocked} awaiting_approval=${supervision.gateSummary.awaitingApproval} skip=${supervision.gateSummary.skip}`,
+        supervision.gateSummary.blocking ? `  blocking_gate: ${supervision.gateSummary.blocking}` : undefined,
+        supervision.evidenceSummary.length ? "  evidence:" : undefined,
+        ...supervision.evidenceSummary.map((item) => `  - ${item}`),
+      ].filter((line): line is string => Boolean(line)).join("\n"),
+      latestArtifacts.length
+        ? [
+            "latest_artifacts:",
+            ...latestArtifacts.slice(-10).map((artifact) => `  - ${artifact.kind}: ${artifact.title} — ${artifact.summary}`),
+          ].join("\n")
+        : "latest_artifacts: none",
+      formatMemory(memory),
       "root_session_changes:",
       `  files: ${input.rootSummary?.files ?? files.length}`,
       `  additions: ${input.rootSummary?.additions ?? files.reduce((total, file) => total + file.additions, 0)}`,
@@ -469,9 +852,12 @@ function formatList(workflows: LoopWorkflow.Info[], snapshots?: Map<string, Loop
       return [
         `${workflow.id}  ${workflow.state}/${workflow.phase}  ${workflow.name}`,
         `  root_session_id: ${workflow.rootSessionID ?? "none"}`,
+        `  workspace_mode: ${workflow.spec.workspace?.mode ?? "legacy"}`,
+        `  cost: ${workflow.metrics.cost ?? 0}  tokens: ${tokenTotal(workflow.metrics)}`,
         `  next_wakeup: ${workflow.nextWakeup ? new Date(workflow.nextWakeup).toISOString() : "none"}`,
         run ? `  last_run: ${run.id} ${run.state}/${run.phase} trigger=${run.trigger}` : undefined,
         run?.evaluatorReason ? `  last_summary: ${run.evaluatorReason}` : undefined,
+        snapshots?.get(workflow.id) ? `  verdict: ${LoopWorkflow.summarizeSnapshot(snapshots.get(workflow.id)!).verdict ?? "unknown"}` : undefined,
       ].filter((line): line is string => Boolean(line)).join("\n")
     })
     .join("\n")
@@ -485,8 +871,10 @@ function listOutput(items: LoopWorkflow.Info[], snapshots?: Map<string, LoopWork
       count: items.length,
       workflows: items.map((item) => {
         const context = contexts?.get(item.id)
+        const policy = approvalPolicyFor(item)
         return {
           workflowID: item.id,
+          workspaceID: item.workspaceID,
           ownerSessionID: item.ownerSessionID,
           rootSessionID: item.rootSessionID,
           state: item.state,
@@ -499,7 +887,14 @@ function listOutput(items: LoopWorkflow.Info[], snapshots?: Map<string, LoopWork
           triggerMode: item.spec.trigger?.mode,
           intervalMs: item.spec.trigger?.intervalMs,
           permissionMode: permissionModeFor(item),
+          workspaceMode: item.spec.workspace?.mode,
           budgetMode: item.spec.budgetMode,
+          costBudget: item.spec.costBudget,
+          cost: item.metrics.cost,
+          tokens: tokenTotal(item.metrics),
+          approvalPolicy: policy,
+          evaluationMode: item.spec.evaluation?.mode,
+          evaluatorAgent: item.spec.evaluation?.evaluatorAgent,
           model: modelMetadata(item.spec.model),
           agent: item.spec.agent,
           created: item.time.created,
@@ -507,6 +902,13 @@ function listOutput(items: LoopWorkflow.Info[], snapshots?: Map<string, LoopWork
           updated: item.time.updated,
           latestRun: context?.latestRun,
           latestCheckpoint: context?.latestCheckpoint,
+          latestJudgment: context?.latestJudgment,
+          latestRubric: context?.latestRubric,
+          latestGateResults: context?.latestGateResults,
+          latestArtifacts: context?.latestArtifacts,
+          loopMemory: context?.loopMemory,
+          supervision: context?.supervision,
+          contractPreview: contractPreview(item),
           changedFiles: context?.changedFiles,
           lastMessage: context?.lastMessage,
           recentEvents: context?.recentEvents,
@@ -523,7 +925,8 @@ function canControl(action: Schema.Schema.Type<typeof Action>, workflow: LoopWor
   if (action === "resume") return workflow.state === "paused"
   if (action === "show") return true
   if (action === "update_agent") return true
-  if (action === "run_once") return workflow.state !== "paused" && !terminalStates.has(workflow.state)
+  if (action === "override") return workflow.state === "blocked" || workflow.state === "needs_input" || workflow.state === "active"
+  if (action === "run_once") return workflow.state === "active" || workflow.state === "sleeping" || workflow.state === "draft"
   return !terminalStates.has(workflow.state)
 }
 
@@ -534,8 +937,11 @@ function createFromShowInput(params: Schema.Schema.Type<typeof Parameters>) {
 function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean, rootSessionModel?: { providerID: string; modelID: string; variant?: string }): Metadata {
   const permissionMode = permissionModeFor(workflow)
   const model = modelMetadata(workflow.spec.model ?? rootSessionModel)
+  const preview = contractPreview(workflow)
+  const policy = approvalPolicyFor(workflow)
   return {
     workflowID: workflow.id,
+    workspaceID: workflow.workspaceID,
     sessionId: workflow.rootSessionID,
     rootSessionID: workflow.rootSessionID,
     ownerSessionID: workflow.ownerSessionID,
@@ -547,13 +953,23 @@ function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean, rootSes
     triggerMode: workflow.spec.trigger?.mode,
     intervalMs: workflow.spec.trigger?.intervalMs,
     permissionMode,
+    workspaceMode: workflow.spec.workspace?.mode,
     budgetMode: workflow.spec.budgetMode,
+    costBudget: workflow.spec.costBudget,
+    cost: workflow.metrics.cost,
+    tokens: tokenTotal(workflow.metrics),
+    approvalPolicy: policy,
+    evaluationMode: workflow.spec.evaluation?.mode,
+    evaluatorAgent: workflow.spec.evaluation?.evaluatorAgent,
     model,
     agent: workflow.spec.agent,
+    loopMemory: latestMemory(workflow),
+    contractPreview: preview,
     serviceEnsured,
     workflows: [
       {
         workflowID: workflow.id,
+        workspaceID: workflow.workspaceID,
         ownerSessionID: workflow.ownerSessionID,
         rootSessionID: workflow.rootSessionID,
         state: workflow.state,
@@ -566,9 +982,18 @@ function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean, rootSes
         triggerMode: workflow.spec.trigger?.mode,
         intervalMs: workflow.spec.trigger?.intervalMs,
         permissionMode,
+        workspaceMode: workflow.spec.workspace?.mode,
         budgetMode: workflow.spec.budgetMode,
+        costBudget: workflow.spec.costBudget,
+        cost: workflow.metrics.cost,
+        tokens: tokenTotal(workflow.metrics),
+        approvalPolicy: policy,
+        evaluationMode: workflow.spec.evaluation?.mode,
+        evaluatorAgent: workflow.spec.evaluation?.evaluatorAgent,
         model,
         agent: workflow.spec.agent,
+        loopMemory: latestMemory(workflow),
+        contractPreview: preview,
         created: workflow.time.created,
         activated: workflow.time.activated,
         updated: workflow.time.updated,
@@ -648,7 +1073,58 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
           let workflow: LoopWorkflow.Info | undefined
 
           if (params.workflowID) workflow = yield* workflows.get(params.workflowID)
-          else if (action !== "draft" && action !== "activate") workflow = yield* contextualWorkflow(action, ctx.sessionID)
+          else if (action !== "draft" && action !== "activate" && action !== "signal") workflow = yield* contextualWorkflow(action, ctx.sessionID)
+
+          if (action === "signal") {
+            const result = yield* workflows.ingestSignal({
+              workflowID: params.workflowID,
+              source: params.signalSource?.trim() || "manual",
+              type: params.signalType?.trim() || "manual.signal",
+              dedupeKey: params.signalDedupeKey,
+              payloadSummary: params.signalPayloadSummary ?? params.reason,
+              links: params.signalLinks,
+            })
+            return {
+              title: result.deduped ? `Deduped loop signal ${result.signal.id}` : `Recorded loop signal ${result.signal.id}`,
+              output: [
+                `signal_id: ${result.signal.id}`,
+                `signal_source: ${result.signal.source}`,
+                `signal_type: ${result.signal.type}`,
+                `signal_dedupe_key: ${result.signal.dedupeKey}`,
+                `signal_deduped: ${result.deduped ? "true" : "false"}`,
+                `matched_loops: ${result.matched.length}`,
+                ...result.matched.map((item) => `- ${item.id} ${item.state}/${item.phase} next=${item.nextWakeup ? new Date(item.nextWakeup).toISOString() : "none"}`),
+              ].join("\n"),
+              metadata: {
+                count: result.matched.length,
+                signal: result.signal,
+                signalDeduped: result.deduped,
+                workflows: result.matched.map((item) => ({
+                  workflowID: item.id,
+                  workspaceID: item.workspaceID,
+                  ownerSessionID: item.ownerSessionID,
+                  rootSessionID: item.rootSessionID,
+                  state: item.state,
+                  phase: item.phase,
+                  name: item.name,
+                  nextWakeup: item.nextWakeup,
+                  objective: item.objective,
+                  triggerMode: item.spec.trigger?.mode,
+                  intervalMs: item.spec.trigger?.intervalMs,
+                  permissionMode: permissionModeFor(item),
+                  workspaceMode: item.spec.workspace?.mode,
+                  budgetMode: item.spec.budgetMode,
+                  evaluationMode: item.spec.evaluation?.mode,
+                  evaluatorAgent: item.spec.evaluation?.evaluatorAgent,
+                  model: modelMetadata(item.spec.model),
+                  agent: item.spec.agent,
+                  created: item.time.created,
+                  activated: item.time.activated,
+                  updated: item.time.updated,
+                })),
+              },
+            }
+          }
 
           if (!workflow && action === "show") {
             const items = yield* workflows.list()
@@ -718,12 +1194,19 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
                 "",
                 `runs: ${snapshot.runs.length}`,
                 `threads: ${snapshot.threads.length}`,
+                `artifacts: ${snapshot.artifacts.length}`,
                 `events: ${snapshot.events.length}`,
               ].join("\n"),
               metadata: {
                 ...metadata(snapshot.workflow, undefined, snapshot.rootSession?.model),
                 latestRun: context.latestRun,
                 latestCheckpoint: context.latestCheckpoint,
+                latestJudgment: context.latestJudgment,
+                latestRubric: context.latestRubric,
+                latestGateResults: context.latestGateResults,
+                latestArtifacts: context.latestArtifacts,
+                loopMemory: context.loopMemory,
+                supervision: context.supervision,
                 changedFiles: context.changedFiles,
                 lastMessage: context.lastMessage,
                 recentEvents: context.recentEvents,
@@ -750,6 +1233,49 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
               title: `Updated loop agent ${workflow.id}`,
               output: formatWorkflow(workflow),
               metadata: metadata(workflow),
+            }
+          }
+
+          if (action === "override") {
+            if (!params.overrideAction) throw new Error("overrideAction is required for loop override")
+            if (!params.reason?.trim()) throw new Error("A non-empty reason is required for loop override")
+            yield* ctx.ask({
+              permission: "doom_loop",
+              patterns: [`${workflow.id}:${params.overrideAction}:${params.overrideGateID ?? "all"}`],
+              always: [],
+              metadata: {
+                workflowID: workflow.id,
+                action: params.overrideAction,
+                gateID: params.overrideGateID ?? null,
+                reason: params.reason,
+              },
+            })
+            workflow = yield* workflows.override({
+              id: workflow.id,
+              action: params.overrideAction,
+              gateID: params.overrideGateID,
+              actor: `session:${ctx.sessionID}`,
+              reason: params.reason,
+            })
+            const snapshot = yield* workflows.snapshot(workflow.id, 10)
+            const context = yield* snapshotContext(snapshot)
+            return {
+              title: `Loop override ${params.overrideAction} ${workflow.id}`,
+              output: [formatWorkflow(workflow), "", `override_action: ${params.overrideAction}`, `override_gate: ${params.overrideGateID ?? "none"}`, `override_reason: ${params.reason}`].join("\n"),
+              metadata: {
+                ...metadata(workflow),
+                latestRun: context.latestRun,
+                latestCheckpoint: context.latestCheckpoint,
+                latestJudgment: context.latestJudgment,
+                latestRubric: context.latestRubric,
+                latestGateResults: context.latestGateResults,
+                latestArtifacts: context.latestArtifacts,
+                loopMemory: context.loopMemory,
+                supervision: context.supervision,
+                changedFiles: context.changedFiles,
+                lastMessage: context.lastMessage,
+                recentEvents: context.recentEvents,
+              },
             }
           }
 

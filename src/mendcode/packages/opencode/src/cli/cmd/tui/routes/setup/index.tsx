@@ -58,7 +58,6 @@ const baseModelRoleOrder = [
   "default",
   "build",
   "plan",
-  "review",
   "subagent",
   "small",
   "title",
@@ -70,7 +69,7 @@ const baseModelRoleOrder = [
   "permissionReviewer",
 ] as const
 type SetupModelRole = string
-const primaryModelRoles = ["default", "build", "plan", "review"] as const
+const primaryModelRoles = ["default", "build", "plan"] as const
 const internalModelRoles = ["subagent", "small", "title", "compaction", "summary", "memoryExtractor", "memoryDream", "memoryAssistant", "permissionReviewer"] as const
 const promptModes: MendPromptMode[] = ["minimal", "focus", "full"]
 const promptModeDetails: Record<MendPromptMode, { summary: string; runtime: string; adds: string }> = {
@@ -95,7 +94,6 @@ const roleDescriptions: Record<string, string> = {
   default: "Fallback chat model and generated config model.",
   build: "Model used when the TUI is in build mode.",
   plan: "Model used when the TUI is in plan mode.",
-  review: "Review/checking role for future and projected role routing.",
   subagent: "Default model for new background subagent task sessions. Individual agent configs can still override it.",
   small: "Runtime small-model fallback for title generation and lightweight internal work.",
   title: "Hidden runtime agent that generates conversation titles.",
@@ -114,7 +112,6 @@ const roleLabels: Record<string, string> = {
   default: "Default chat",
   build: "Build",
   plan: "Plan",
-  review: "Review",
   subagent: "Subagents",
   small: "Small/cheap",
   title: "Chat titles",
@@ -302,6 +299,16 @@ function presetRole(preset: (typeof modelPresets)[keyof typeof modelPresets]): M
   return { providerID: preset.providerID, modelID: preset.modelID, authMode: preset.authMode }
 }
 
+export function inferModelPresetAuthMode(providerID: string, modelID: string) {
+  const matches = [...new Set(
+    Object.values(modelPresets)
+      .filter((preset) => preset.providerID === providerID && preset.modelID === modelID && preset.authMode)
+      .map((preset) => preset.authMode),
+  )]
+  if (matches.length !== 1) return null
+  return matches[0]
+}
+
 function parseOptionalUsd(value: string | null, label: string) {
   const text = value?.trim().toLowerCase()
   if (!text || ["none", "no limit", "unlimited", "sin limite", "sin límite"].includes(text)) return null
@@ -437,7 +444,7 @@ export function Setup() {
     const agentRoles = sync.data.agent
       .filter((agent) => agent.mode !== "subagent" && !agent.hidden)
       .map((agent) => agent.name)
-      .filter((name) => name !== "default")
+      .filter((name) => name !== "default" && name !== "review")
     return [...new Set([...baseModelRoleOrder, ...agentRoles])]
   })
 
@@ -465,11 +472,7 @@ export function Setup() {
   const inferAuthMode = (providerID: string, modelID: string) => {
     const currentAuth = setupSummary()?.auth as any
     if (currentAuth?.providerID === providerID && typeof currentAuth.authMode === "string") return currentAuth.authMode
-    const preset = Object.values(modelPresets).find(
-      (item) => item.providerID === providerID && item.modelID === modelID,
-    )
-    if (preset?.authMode) return preset.authMode
-    return null
+    return inferModelPresetAuthMode(providerID, modelID)
   }
 
   const saveModelRoleWithVariant = async (roleName: SetupModelRole, role: ModelRole) => {
@@ -571,14 +574,14 @@ export function Setup() {
   const applyModelOnboardingPreset = async (preset: "subscription" | "api-balanced" | "api-budget") => {
     const config = await readModelsConfig(mend.root)
     const primary = preset === "subscription"
-      ? presetRole(modelPresets["openai-codex-subscription-gpt-5.2-codex"])
+      ? presetRole(modelPresets["openai-codex-subscription-gpt-5.6-sol"])
       : preset === "api-balanced"
-        ? presetRole(modelPresets["openai-api-gpt-5.2-codex"])
+        ? presetRole(modelPresets["openai-api-gpt-5.6"])
         : presetRole(modelPresets["openai-api-gpt-5-mini"])
     const defaultRole = preset === "subscription"
-      ? presetRole(modelPresets["openai-codex-subscription-gpt-5.2"])
+      ? presetRole(modelPresets["openai-codex-subscription-gpt-5.6-sol"])
       : preset === "api-balanced"
-        ? presetRole(modelPresets["openai-api-gpt-5.2"])
+        ? presetRole(modelPresets["openai-api-gpt-5.6"])
         : presetRole(modelPresets["openai-api-gpt-5-mini"])
     const helper = preset === "api-balanced"
       ? presetRole(modelPresets["openai-api-gpt-5-mini"])
@@ -590,7 +593,6 @@ export function Setup() {
     config.roles.build = primary
     config.roles.code = primary
     config.roles.plan = defaultRole
-    config.roles.review = defaultRole
     config.roles.subagent = primary
     config.roles.small = helper
     config.roles.title = helper

@@ -1,7 +1,7 @@
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@mendcode/plugin/tui"
 import { useSyncV2 } from "@tui/context/sync-v2"
 import { useSync } from "@tui/context/sync"
-import { latestTerminalOutputPreview, renderTerminalOutput } from "@tui/context/shell-output"
+import { latestTerminalOutputPreview, renderTerminalOutput, selectShellOutput } from "@tui/context/shell-output"
 import { SplitBorder } from "@tui/component/border"
 import { Spinner } from "@tui/component/spinner"
 import { useTheme } from "@tui/context/theme"
@@ -63,7 +63,7 @@ import {
 import { StyledPlanMarkdown } from "@/cli/cmd/tui/component/styled-plan-markdown"
 import { CompactionPanel } from "@/cli/cmd/tui/component/compaction-panel"
 import { visibleUserMessageText } from "@/cli/cmd/tui/routes/session/user-message-display"
-import { memoryGraphMiniMap } from "@/cli/cmd/tui/routes/memory"
+import { MemoryGraphCanvasRows, memoryGraphMiniMap } from "@/cli/cmd/tui/routes/memory"
 
 const id = "internal:session-v2-debug"
 const route = "session.v2.messages"
@@ -1144,8 +1144,8 @@ function CommandOutput(props: {
         </text>
       </box>
       <Show when={props.output}>
-        <box paddingLeft={2} flexDirection="column">
-          <For each={props.output?.split("\n") ?? []}>{(line) => <text fg={theme.textMuted}>{line || " "}</text>}</For>
+        <box paddingLeft={2}>
+          <text fg={theme.textMuted} wrapMode="word" width="100%">{props.output}</text>
         </box>
       </Show>
       <Show when={!props.output}>{props.empty}</Show>
@@ -1160,7 +1160,11 @@ function CommandOutput(props: {
 
 function Bash(props: ToolProps) {
   const { theme } = useTheme()
-  const output = createMemo(() => renderTerminalOutput(stringValue(props.metadata.output) ?? props.output ?? ""))
+  const isRunning = createMemo(() => props.part.state.status === "running")
+  const liveOutput = createMemo(() => stringValue(props.metadata.output))
+  const output = createMemo(() =>
+    renderTerminalOutput(selectShellOutput({ running: isRunning(), live: liveOutput(), final: props.output })),
+  )
   const command = createMemo(() => stringValue(props.input.command) ?? pendingInput(props.part))
   const title = createMemo(() => `# ${stringValue(props.input.description) ?? "Shell"}`)
   const [expanded, setExpanded] = createSignal(false)
@@ -1545,9 +1549,10 @@ function memoryGraphSnapshot(value: unknown): MemoryGraphSnapshot | undefined {
 function MemoryGraph(props: ToolProps) {
   const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
+  const route = useRoute()
   const snapshot = createMemo(() => memoryGraphSnapshot(props.metadata.graphSnapshot))
-  const panelWidth = createMemo(() => Math.max(44, Math.min(96, dimensions().width - 12)))
-  const mapWidth = createMemo(() => Math.max(24, panelWidth() - 8))
+  const panelWidth = createMemo(() => Math.max(40, Math.min(72, dimensions().width - 12)))
+  const mapWidth = createMemo(() => Math.max(24, panelWidth() - 4))
   const graph = createMemo(() => {
     const data = snapshot()
     if (!data) return
@@ -1556,7 +1561,8 @@ function MemoryGraph(props: ToolProps) {
       links: data.links,
       categories: data.categories,
       width: mapWidth(),
-      height: panelWidth() < 58 ? 7 : 10,
+      height: panelWidth() < 54 ? 5 : 6,
+      connectedOnly: true,
     })
   })
   const title = createMemo(() => {
@@ -1571,12 +1577,26 @@ function MemoryGraph(props: ToolProps) {
     if (state === "empty") return theme.textMuted
     return theme.warning
   })
-  const healthLine = createMemo(() => {
-    const data = snapshot()
-    if (!data?.health) return `${data?.facts.length ?? 0} facts · ${data?.links.length ?? 0} links`
-    return `${data.health.graphHealth ?? "unknown"} · ${data.health.connectedFacts ?? 0}/${data.facts.length} connected · ${data.health.isolatedFacts ?? 0} isolated · ${data.health.orphanLinks ?? 0} orphan`
-  })
   const short = (value: string, width = mapWidth()) => Locale.truncate(value, Math.max(8, width))
+  const footer = createMemo(() => {
+    const data = snapshot()
+    const frame = graph()
+    if (!data || !frame) return ""
+    const state = data.health?.graphHealth ?? (frame.scene.edges.length ? "connected" : "disconnected")
+    return `${state} · ${frame.stats} · ${frame.scene.edges.length} links`
+  })
+  const detailRows = createMemo(() => {
+    const frame = graph()
+    if (!frame) return []
+    if (frame.relationRows.length) return frame.relationRows.slice(0, 2)
+    if (frame.isolatedRows.length) return frame.isolatedRows.slice(0, 2)
+    return frame.labels.slice(0, 2)
+  })
+  const openGraph = () => route.navigate({
+    type: "memory",
+    view: "graph",
+    returnTo: route.data.type === "session" ? { type: "session", sessionID: route.data.sessionID } : { type: "home" },
+  })
 
   return (
     <Show when={snapshot()} fallback={<GenericTool {...props} />}>
@@ -1587,29 +1607,19 @@ function MemoryGraph(props: ToolProps) {
         contentGap={0}
         part={props.part}
         spinner={props.part.state.status === "running"}
+        onClick={openGraph}
       >
-        <box flexDirection="column" width={panelWidth()} borderStyle="single" borderColor={healthTone()} paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1} overflow="hidden">
-          <box flexDirection="row">
-            <text fg={healthTone()} wrapMode="none">{toolPresentationIcon("memory_graph")} {short(title(), Math.max(16, panelWidth() - 20))}</text>
-            <box flexGrow={1} />
-            <text fg={theme.textMuted} wrapMode="none">tool result</text>
-          </box>
-          <text fg={theme.textMuted} wrapMode="none">{short(healthLine(), panelWidth() - 6)}</text>
-          <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column" overflow="hidden">
-            <Show
-              when={graph()?.rows.length}
-              fallback={<text fg={theme.textMuted}>No graph facts in this tool result.</text>}
-            >
-              <For each={graph()?.rows ?? []}>{(row) => <text fg={theme.primary} wrapMode="none">{short(row || " ")}</text>}</For>
-              <text fg={theme.textMuted} wrapMode="none">{short(graph()?.status ?? "")}</text>
-              <text fg={theme.textMuted} wrapMode="none">{short(graph()?.stats ?? "")}</text>
-              <For each={graph()?.edgeLabels ?? []}>{(line) => <text fg={theme.secondary} wrapMode="none">{short(line)}</text>}</For>
-              <For each={graph()?.focusLines ?? []}>{(line) => <text fg={theme.text} wrapMode="none">{short(line)}</text>}</For>
-              <For each={graph()?.relationRows ?? []}>{(line) => <text fg={theme.textMuted} wrapMode="none">{short(line)}</text>}</For>
-              <For each={graph()?.isolatedRows ?? []}>{(line) => <text fg={theme.warning} wrapMode="none">{short(line)}</text>}</For>
-              <For each={graph()?.legend ?? []}>{(line) => <text fg={theme.text} wrapMode="none">{short(line)}</text>}</For>
-            </Show>
-          </box>
+        <box flexDirection="column" width={panelWidth()} paddingLeft={1} overflow="hidden">
+          <Show when={graph()?.rows.length}>
+            <box flexDirection="column" overflow="hidden">
+              <MemoryGraphCanvasRows cells={graph()!.cells} categories={snapshot()!.categories} />
+            </box>
+          </Show>
+          <text fg={healthTone()} wrapMode="none">{short(footer(), panelWidth() - 2)}</text>
+          <For each={detailRows()}>
+            {(row) => <text fg={theme.textMuted} wrapMode="none">{short(row, panelWidth() - 2)}</text>}
+          </For>
+          <text fg={theme.primary} wrapMode="none">Open /memory-graph for the full view</text>
         </box>
       </BlockTool>
     </Show>

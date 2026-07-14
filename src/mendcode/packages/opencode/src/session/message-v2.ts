@@ -23,6 +23,7 @@ import { desc } from "drizzle-orm"
 import { eq } from "drizzle-orm"
 import { inArray } from "drizzle-orm"
 import { lt } from "drizzle-orm"
+import { sql } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import { gt } from "drizzle-orm"
 import { MessageTable, PartTable, SessionTable } from "./session.sql"
@@ -743,7 +744,7 @@ const info = (row: typeof MessageTable.$inferSelect) =>
     sessionID: row.session_id,
   }) as Info
 
-export type PageView = "full" | "tui"
+export type PageView = "full" | "tui" | "tui-all"
 
 const TUI_TEXT_PREVIEW_CHARS = 128 * 1024
 const TUI_TOOL_OUTPUT_PREVIEW_CHARS = 16 * 1024
@@ -844,7 +845,7 @@ const part = (row: typeof PartTable.$inferSelect, view: PageView = "full") => {
     sessionID: row.session_id,
     messageID: row.message_id,
   } as Part
-  return view === "tui" ? previewPartForTui(hydrated) : hydrated
+  return view === "tui" || view === "tui-all" ? previewPartForTui(hydrated) : hydrated
 }
 
 const older = (row: Cursor) =>
@@ -1254,9 +1255,170 @@ export function toModelMessages(
   return Effect.runPromise(toModelMessagesEffect(input, model, options).pipe(Effect.provide(EffectLogger.layer)))
 }
 
-export function page(input: { sessionID: SessionID; limit: number; before?: string; after?: string; view?: PageView }) {
+function compactedHistoryBoundary(sessionID: SessionID) {
+  return Database.use((db) =>
+    db
+      .select()
+      .from(MessageTable)
+      .where(
+        and(
+          eq(MessageTable.session_id, sessionID),
+          sql`json_extract(${MessageTable.data}, '$.role') = 'assistant'`,
+          sql`json_extract(${MessageTable.data}, '$.summary') = 1`,
+          sql`json_extract(${MessageTable.data}, '$.time.completed') IS NOT NULL`,
+        ),
+      )
+      .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
+      .limit(1)
+      .get(),
+  )
+}
+
+function compactedHistoryPageRows(
+  rows: Array<typeof MessageTable.$inferSelect>,
+  boundary: typeof MessageTable.$inferSelect,
+) {
+  const compacted = rows.filter(
+    (row) => row.time_created < boundary.time_created || (row.time_created === boundary.time_created && row.id <= boundary.id),
+  )
+  const parts = compacted.length === 0
+    ? []
+    : Database.use((db) =>
+        db
+          .select({
+            messageID: PartTable.message_id,
+            type: sql<string>`json_extract(${PartTable.data}, '$.type')`,
+            synthetic: sql<number | null>`json_extract(${PartTable.data}, '$.synthetic')`,
+          })
+          .from(PartTable)
+          .where(
+            and(
+              inArray(PartTable.message_id, compacted.map((row) => row.id)),
+              sql`(
+                json_extract(${PartTable.data}, '$.type') = 'compaction'
+                OR (
+                  json_extract(${PartTable.data}, '$.type') = 'text'
+                  AND length(trim(coalesce(json_extract(${PartTable.data}, '$.text'), ''))) > 0
+                )
+              )`,
+            ),
+          )
+          .all(),
+      )
+  const assistantText = new Set(parts.filter((part) => part.type === "text").map((part) => part.messageID))
+  const userContent = new Set(
+    parts
+      .filter((part) => part.type === "compaction" || (part.type === "text" && part.synthetic !== 1))
+      .map((part) => part.messageID),
+  )
+  const visible = new Set<string>()
+  const support = new Set<string>()
+  rows.forEach((row) => {
+    const message = info(row)
+    if (message.role === "assistant" && message.summary === true) {
+      support.add(row.id)
+      return
+    }
+    if (row.time_created > boundary.time_created) {
+      visible.add(row.id)
+      return
+    }
+    if (row.time_created === boundary.time_created && row.id > boundary.id) {
+      visible.add(row.id)
+      return
+    }
+    if (message.role === "user" ? userContent.has(row.id) : assistantText.has(row.id)) visible.add(row.id)
+  })
+  return {
+    rows: rows.filter((row) => visible.has(row.id) || support.has(row.id)),
+    visible,
+  }
+}
+
+export interface PageResult {
+  items: WithParts[]
+  more: boolean
+  cursor?: string
+  sparse?: boolean
+}
+
+function compactedPage(input: { sessionID: SessionID; limit: number; before?: Cursor; after?: Cursor }): PageResult | undefined {
+  const boundary = compactedHistoryBoundary(input.sessionID)
+  if (!boundary) return
+
+  const chunkSize = Math.max(50, input.limit + 1)
+  const selected: Array<{ item: WithParts; row: typeof MessageTable.$inferSelect; visible: boolean }> = []
+  const ascending = input.after !== undefined
+  let position = input.before ?? input.after
+  let exhausted = false
+  let visibleCount = 0
+
+  while (visibleCount <= input.limit && !exhausted) {
+    const where = position
+      ? and(eq(MessageTable.session_id, input.sessionID), ascending ? newer(position) : older(position))
+      : eq(MessageTable.session_id, input.sessionID)
+    const rows = Database.use((db) =>
+      db
+        .select()
+        .from(MessageTable)
+        .where(where)
+        .orderBy(ascending ? asc(MessageTable.time_created) : desc(MessageTable.time_created), ascending ? asc(MessageTable.id) : desc(MessageTable.id))
+        .limit(chunkSize)
+        .all(),
+    )
+    if (rows.length === 0) {
+      exhausted = true
+      break
+    }
+
+    const pageRows = compactedHistoryPageRows(rows, boundary)
+    const items = hydrate(pageRows.rows, { view: "tui" })
+    pageRows.rows.forEach((row, index) => {
+      const item = items[index]
+      if (!item) return
+      const visible = pageRows.visible.has(row.id)
+      if (visible) visibleCount++
+      selected.push({ item, row, visible })
+    })
+    const tail = rows.at(-1)
+    if (!tail || rows.length < chunkSize) {
+      exhausted = true
+      break
+    }
+    position = { id: tail.id, time: tail.time_created }
+  }
+
+  const more = visibleCount > input.limit || !exhausted
+  let included = 0
+  const cutoff = selected.findIndex((entry) => entry.visible && ++included > input.limit)
+  const slice = cutoff === -1 ? selected : selected.slice(0, cutoff)
+  const visibleIDs = new Set(slice.filter((entry) => entry.visible).map((entry) => entry.row.id))
+  const pageSlice = slice.filter(
+    (entry) =>
+      entry.visible ||
+      (entry.item.info.role === "assistant" &&
+        entry.item.info.summary === true &&
+        entry.item.info.parentID !== undefined &&
+        visibleIDs.has(entry.item.info.parentID)),
+  )
+  const items = pageSlice.map((entry) => entry.item)
+  if (!ascending) items.reverse()
+  const tail = slice.findLast((entry) => entry.visible)?.row
+  return {
+    items,
+    more,
+    cursor: more && tail ? cursor.encode({ id: tail.id, time: tail.time_created }) : undefined,
+    sparse: true,
+  }
+}
+
+export function page(input: { sessionID: SessionID; limit: number; before?: string; after?: string; view?: PageView }): PageResult {
   const before = input.before ? cursor.decode(input.before) : undefined
   const after = input.after ? cursor.decode(input.after) : undefined
+  if (input.view === "tui") {
+    const compacted = compactedPage({ sessionID: input.sessionID, limit: input.limit, before, after })
+    if (compacted) return compacted
+  }
   const where = before
     ? and(eq(MessageTable.session_id, input.sessionID), older(before))
     : after

@@ -1,18 +1,20 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Exit, Fiber, Layer } from "effect"
+import { Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { Agent } from "../../src/agent/agent"
 import { Config } from "@/config/config"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { Session } from "@/session/session"
 import { BUSY_STATUS_STALE_MS, SessionStatus } from "@/session/status"
+import { BackgroundTask } from "@/session/background-task"
 import { MessageV2 } from "../../src/session/message-v2"
 import type { SessionPrompt } from "../../src/session/prompt"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Provider } from "@/provider/provider"
 import { normalizeSubagentType, TaskTool, type TaskPromptOps } from "../../src/tool/task"
+import { TaskStatusTool } from "../../src/tool/task-status"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { disposeAllInstances } from "../fixture/fixture"
@@ -97,6 +99,7 @@ const it = testEffect(
     CrossSpawnSpawner.defaultLayer,
     Session.defaultLayer,
     SessionStatus.defaultLayer,
+    BackgroundTask.defaultLayer,
     Truncate.defaultLayer,
     ToolRegistry.defaultLayer,
   ),
@@ -215,6 +218,9 @@ describe("tool.task", () => {
         expect(zebra).toBeGreaterThan(general)
         expect(first).toContain("Optional subagent model selection:")
         expect(first).toContain("Available model examples:")
+        expect(first).toContain("Do not use it for greetings")
+        expect(first).toContain("Set `background: true`")
+        expect(first).not.toContain("greeting-responder")
       }),
     {
       config: {
@@ -1383,5 +1389,313 @@ describe("tool.task", () => {
         },
       },
     },
+  )
+
+  it.instance("execute launches background tasks without waiting for completion", () =>
+    Effect.gen(function* () {
+      const status = yield* SessionStatus.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      const ready = defer<void>()
+      const done = defer<void>()
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) =>
+          Effect.promise(() => {
+            ready.resolve()
+            return done.promise
+          }).pipe(Effect.as(reply(input, "background result"))),
+      }
+
+      const result = yield* def.execute(
+        {
+          description: "inspect in background",
+          prompt: "inspect the cache path independently",
+          subagent_type: "general",
+          background: true,
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.metadata.status).toBe("started")
+      expect(result.output).toContain(`task_status with task_id ${result.metadata.sessionId}`)
+      yield* Effect.promise(() => ready.promise)
+      expect(yield* status.get(result.metadata.sessionId)).toMatchObject({ type: "busy" })
+      expect(yield* status.get(chat.id)).toEqual({ type: "idle" })
+      const statusTool = yield* TaskStatusTool
+      const statusDef = yield* statusTool.init()
+      const inspected = yield* statusDef.execute(
+        { action: "get", task_id: result.metadata.sessionId },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+      expect(inspected.output).toContain("task_status: running")
+      expect(inspected.output).toContain("task_source: registry")
+      expect(inspected.output).toContain("task_generation: 1")
+      done.resolve()
+      const background = yield* BackgroundTask.Service
+      const completed = yield* background.wait({ taskID: result.metadata.sessionId, timeoutMs: 2_000 })
+      expect(completed).toMatchObject({
+        timedOut: false,
+        snapshot: {
+          generation: 1,
+          state: "completed",
+          result: { summary: expect.stringContaining("background result") },
+        },
+      })
+    }),
+  )
+
+  it.instance("task_status lists background tasks and collects their persisted result", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const child = yield* sessions.create({ parentID: chat.id, title: "Background inspection", agent: "general" })
+      const childAssistant: MessageV2.Assistant = {
+        ...assistant,
+        id: MessageID.ascending(),
+        parentID: MessageID.ascending(),
+        sessionID: child.id,
+        mode: "general",
+        agent: "general",
+        time: { created: Date.now(), completed: Date.now() },
+        finish: "stop",
+      }
+      yield* sessions.updateMessage(childAssistant)
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: childAssistant.id,
+        sessionID: child.id,
+        type: "text",
+        text: "Found the cache ownership bug.",
+      })
+      const tool = yield* TaskStatusTool
+      const def = yield* tool.init()
+      const ctx = {
+        sessionID: chat.id,
+        messageID: assistant.id,
+        agent: "build",
+        abort: new AbortController().signal,
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+
+      const listed = yield* def.execute({ action: "list" }, ctx)
+      expect(listed.output).toContain(`task_id: ${child.id}`)
+      expect(listed.output).toContain("status: completed")
+
+      const result = yield* def.execute({ action: "get", task_id: child.id }, ctx)
+      expect(result.metadata).toMatchObject({ sessionId: child.id, status: "completed" })
+      expect(result.output).toContain("task_status: completed")
+      expect(result.output).toContain("Found the cache ownership bug.")
+    }),
+  )
+
+  it.instance("task_status cancels a registered background task idempotently", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const taskTool = yield* TaskTool
+      const taskDef = yield* taskTool.init()
+      const done = defer<void>()
+      let cancels = 0
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.sync(() => cancels++),
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) => Effect.promise(() => done.promise).pipe(Effect.as(reply(input, "late completion"))),
+      }
+      const ctx = {
+        sessionID: chat.id,
+        messageID: assistant.id,
+        agent: "build",
+        abort: new AbortController().signal,
+        extra: { promptOps },
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+      const launched = yield* taskDef.execute(
+        {
+          description: "cancel background work",
+          prompt: "wait until cancelled",
+          subagent_type: "general",
+          background: true,
+        },
+        ctx,
+      )
+      const statusTool = yield* TaskStatusTool
+      const statusDef = yield* statusTool.init()
+      const first = yield* statusDef.execute({ action: "cancel", task_id: launched.metadata.sessionId }, ctx)
+      const second = yield* statusDef.execute({ action: "cancel", task_id: launched.metadata.sessionId }, ctx)
+      expect(cancels).toBe(1)
+      expect(first.output).toContain("task_status: cancelled")
+      expect(second.output).toContain("task_status: cancelled")
+      done.resolve()
+    }),
+  )
+
+  it.instance("task_status wait returns when the captured generation completes", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const taskTool = yield* TaskTool
+      const taskDef = yield* taskTool.init()
+      const done = defer<void>()
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) => Effect.promise(() => done.promise).pipe(Effect.as(reply(input, "waited result"))),
+      }
+      const ctx = {
+        sessionID: chat.id,
+        messageID: assistant.id,
+        agent: "build",
+        abort: new AbortController().signal,
+        extra: { promptOps },
+        messages: [],
+        metadata: () => Effect.void,
+        ask: () => Effect.void,
+      }
+      const launched = yield* taskDef.execute(
+        {
+          description: "wait background work",
+          prompt: "return after release",
+          subagent_type: "general",
+          background: true,
+        },
+        ctx,
+      )
+      const statusTool = yield* TaskStatusTool
+      const statusDef = yield* statusTool.init()
+      const scope = yield* Scope.Scope
+      const waiting = yield* statusDef
+        .execute({ action: "wait", task_id: launched.metadata.sessionId, timeout_ms: 2_000 }, ctx)
+        .pipe(Effect.forkIn(scope))
+      yield* Effect.sleep(10)
+      done.resolve()
+      const result = yield* Fiber.join(waiting)
+      expect(result.output).toContain("task_status: completed")
+      expect(result.output).toContain("wait_timed_out: false")
+      expect(result.output).toContain("waited result")
+    }),
+  )
+
+  it.instance("task_status reconciles a committed child result into the registry", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const background = yield* BackgroundTask.Service
+      const { chat, assistant } = yield* seed()
+      const child = yield* sessions.create({ parentID: chat.id, title: "Reconcile child", agent: "general" })
+      const run = yield* background.start({
+        taskID: child.id,
+        parentSessionID: chat.id,
+        title: "Reconcile child",
+        agent: "general",
+      })
+      yield* background.markRunning({ taskID: child.id, generation: run.generation })
+      const childUser: MessageV2.User = {
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: child.id,
+        agent: "general",
+        model: ref,
+        time: { created: Date.now() },
+      }
+      yield* sessions.updateMessage(childUser)
+      const childAssistant: MessageV2.Assistant = {
+        ...assistant,
+        id: MessageID.ascending(),
+        parentID: childUser.id,
+        sessionID: child.id,
+        mode: "general",
+        agent: "general",
+        time: { created: Date.now(), completed: Date.now() },
+        finish: "stop",
+      }
+      yield* sessions.updateMessage(childAssistant)
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: childAssistant.id,
+        sessionID: child.id,
+        type: "text",
+        text: "Recovered committed result.",
+      })
+
+      const statusTool = yield* TaskStatusTool
+      const statusDef = yield* statusTool.init()
+      const result = yield* statusDef.execute(
+        { action: "get", task_id: child.id },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+      expect(result.output).toContain("task_status: completed")
+      expect(result.output).toContain("Recovered committed result.")
+      expect((yield* background.get(child.id))?.state).toBe("completed")
+    }),
+  )
+
+  it.instance("task_status does not present the child prompt as partial output", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const child = yield* sessions.create({ parentID: chat.id, title: "Pending background task", agent: "general" })
+      const childUser: MessageV2.User = {
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: child.id,
+        agent: "general",
+        model: ref,
+        time: { created: Date.now() },
+      }
+      yield* sessions.updateMessage(childUser)
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: childUser.id,
+        sessionID: child.id,
+        type: "text",
+        text: "private child instructions",
+      })
+      const tool = yield* TaskStatusTool
+      const def = yield* tool.init()
+      const result = yield* def.execute(
+        { action: "get", task_id: child.id },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.output).toContain("task_status: waiting")
+      expect(result.output).not.toContain("private child instructions")
+    }),
   )
 })

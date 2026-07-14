@@ -74,6 +74,35 @@ describe("usage insights", () => {
     expect(insights.topModels[0]?.name).toBe("openai/gpt-test")
   })
 
+  test("prefers the provider-reported total over reconstructed token components", () => {
+    const insights = buildUsageInsights(
+      [
+        item({
+          messages: [
+            {
+              info: {
+                id: "msg_total",
+                role: "assistant",
+                tokens: { total: 145, input: 100, output: 40, reasoning: 10, cache: { read: 5, write: 2 } },
+                time: { created: base },
+              },
+              parts: [],
+            },
+          ],
+        }),
+      ],
+      { start: base, end: base },
+    )
+
+    expect(insights.totals.tokens).toBe(145)
+    expect(
+      insights.totals.inputTokens +
+        insights.totals.outputTokens +
+        insights.totals.reasoningTokens +
+        insights.totals.cacheTokens,
+    ).toBe(157)
+  })
+
   test("computes active-day streaks from user or token activity", () => {
     const day = 24 * 60 * 60 * 1000
     const insights = buildUsageInsights(

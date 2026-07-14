@@ -3,6 +3,7 @@ import DESCRIPTION from "./task.txt"
 import path from "path"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
+import { BackgroundTask } from "@/session/background-task"
 import { SessionID, MessageID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
@@ -41,7 +42,10 @@ function lastText(parts: readonly MessageV2.Part[]) {
 const GENERIC_TASK_RESULTS = new Set(["done", "listo", "ok", "complete", "completed"])
 
 function isGenericTaskResult(text: string) {
-  const normalized = text.trim().toLowerCase().replace(/[.!]+$/, "")
+  const normalized = text
+    .trim()
+    .toLowerCase()
+    .replace(/[.!]+$/, "")
   return normalized.length > 0 && normalized.length <= 24 && GENERIC_TASK_RESULTS.has(normalized)
 }
 
@@ -76,10 +80,7 @@ function messageBases(history: readonly MessageV2.WithParts[]) {
   )
 }
 
-function orchestrationArtifactCandidates(input: {
-  history: readonly MessageV2.WithParts[]
-  files: readonly string[]
-}) {
+function orchestrationArtifactCandidates(input: { history: readonly MessageV2.WithParts[]; files: readonly string[] }) {
   const bases = messageBases(input.history)
   return unique(
     input.files.flatMap((file) => {
@@ -108,7 +109,11 @@ function readOrchestrationArtifacts(input: { history: readonly MessageV2.WithPar
   ).pipe(Effect.map((items) => items.filter((item): item is string => Boolean(item))))
 }
 
-function childEvidenceText(history: readonly MessageV2.WithParts[], fallbackText: string, extraParts: readonly MessageV2.Part[] = []) {
+function childEvidenceText(
+  history: readonly MessageV2.WithParts[],
+  fallbackText: string,
+  extraParts: readonly MessageV2.Part[] = [],
+) {
   return Effect.gen(function* () {
     const trimmedFallback = fallbackText.trim()
     const text = (() => {
@@ -125,10 +130,7 @@ function childEvidenceText(history: readonly MessageV2.WithParts[], fallbackText
       }
       return ""
     })()
-    const files = unique([
-      ...history.flatMap((message) => changedFiles(message.parts)),
-      ...changedFiles(extraParts),
-    ])
+    const files = unique([...history.flatMap((message) => changedFiles(message.parts)), ...changedFiles(extraParts)])
     const artifacts = yield* readOrchestrationArtifacts({ history, files })
     if (!text && files.length === 0 && artifacts.length === 0) return trimmedFallback
 
@@ -140,6 +142,20 @@ function childEvidenceText(history: readonly MessageV2.WithParts[], fallbackText
     if (artifacts.length) lines.push("", "Subagent orchestration artifacts:", ...artifacts)
     return lines.join("\n")
   })
+}
+
+export function subagentEvidenceText(
+  history: readonly MessageV2.WithParts[],
+  extraParts: readonly MessageV2.Part[] = [],
+) {
+  return childEvidenceText(
+    history,
+    lastText([
+      ...history.filter((item) => item.info.role === "assistant").flatMap((item) => item.parts),
+      ...extraParts,
+    ]),
+    extraParts,
+  )
 }
 
 function isAbortError(error: unknown) {
@@ -181,6 +197,10 @@ export const Parameters = Schema.Struct({
     description:
       "This should only be set if you mean to resume a previous task (you can pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one)",
   }),
+  background: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Return immediately while the subagent continues. Use task_status with the returned task_id to inspect it later.",
+  }),
   command: Schema.optional(Schema.String).annotate({ description: "The command that triggered this task" }),
 })
 
@@ -192,6 +212,7 @@ export const TaskTool = Tool.define(
     const provider = yield* Provider.Service
     const sessions = yield* Session.Service
     const status = yield* SessionStatus.Service
+    const backgroundTasks = yield* BackgroundTask.Service
     const scope = yield* Scope.Scope
 
     const run = Effect.fn("TaskTool.execute")(function* (
@@ -309,7 +330,11 @@ export const TaskTool = Tool.define(
       const cancel = ops.cancel(nextSession.id)
       let parentAborted = isExplicitUserAbort(ctx)
 
-      const output = (input: { status: "completed" | "interrupted" | "failed" | "retained"; text?: string; error?: unknown }) => {
+      const output = (input: {
+        status: "started" | "completed" | "interrupted" | "failed" | "retained"
+        text?: string
+        error?: unknown
+      }) => {
         const lines = [
           `task_id: ${nextSession.id} (for resuming to continue this task if needed)`,
           `task_status: ${input.status}`,
@@ -319,8 +344,11 @@ export const TaskTool = Tool.define(
         }
         lines.push("", "<task_result>", input.text ?? "", "</task_result>")
         if (input.status === "retained") {
-          lines.push("", `Parent execution stopped before the subagent finished. Resume this subagent chat with task_id ${nextSession.id} to inspect or continue the work.`)
-        } else if (input.status !== "completed") {
+          lines.push(
+            "",
+            `Parent execution stopped before the subagent finished. Resume this subagent chat with task_id ${nextSession.id} to inspect or continue the work.`,
+          )
+        } else if (input.status !== "completed" && input.status !== "started") {
           lines.push("", `Resume this subagent chat with task_id ${nextSession.id} to inspect or continue the work.`)
         }
         return {
@@ -345,11 +373,7 @@ export const TaskTool = Tool.define(
             .messages({ sessionID: nextSession.id })
             .pipe(Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])))
           const extraParts = input.extraParts ?? []
-          const partial = yield* childEvidenceText(
-            history,
-            lastText([...history.flatMap((item) => item.parts), ...extraParts]),
-            extraParts,
-          )
+          const partial = yield* subagentEvidenceText(history, extraParts)
           return output({
             status: input.status ?? (input.interrupted ? "interrupted" : "failed"),
             text: partial,
@@ -364,6 +388,111 @@ export const TaskTool = Tool.define(
         if (parentAborted) runCancel.fork(cancel)
       }
 
+      const prompt = Effect.gen(function* () {
+        const parts = yield* ops.resolvePromptParts(params.prompt)
+        return yield* ops.prompt({
+          messageID,
+          sessionID: nextSession.id,
+          model: {
+            modelID: model.modelID,
+            providerID: model.providerID,
+          },
+          variant,
+          agent: next.name,
+          tools: {
+            ...(canTodo ? {} : { todowrite: false }),
+            ...(canTask ? {} : { task: false }),
+            ...Object.fromEntries((cfg.experimental?.primary_tools ?? []).map((item) => [item, false])),
+          },
+          parts,
+        })
+      })
+
+      if (params.background) {
+        const task = yield* backgroundTasks.start({
+          taskID: nextSession.id,
+          parentSessionID: ctx.sessionID,
+          originMessageID: ctx.messageID,
+          originCallID: ctx.callID,
+          title: params.description,
+          agent: next.name,
+          model: {
+            providerID: model.providerID,
+            modelID: model.modelID,
+            variant,
+          },
+        })
+        const running = yield* backgroundTasks.markRunning({ taskID: nextSession.id, generation: task.generation })
+        yield* status.set(nextSession.id, { type: "busy" })
+        yield* prompt.pipe(
+          Effect.flatMap((message) =>
+            Effect.gen(function* () {
+              const history = yield* sessions
+                .messages({ sessionID: nextSession.id })
+                .pipe(Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])))
+              const text = yield* subagentEvidenceText(history, message.parts)
+              const error = message.info.role === "assistant" ? message.info.error : undefined
+              const current = yield* backgroundTasks.get(nextSession.id, task.generation)
+              const state = error
+                ? current?.controlIntent === "cancel" && isAbortError(error)
+                  ? "cancelled"
+                  : isAbortError(error)
+                    ? "interrupted"
+                    : "failed"
+                : "completed"
+              yield* backgroundTasks.finish({
+                taskID: nextSession.id,
+                generation: task.generation,
+                state,
+                result: {
+                  summary: text,
+                  error: error ? errorText(error) : undefined,
+                  changedFiles: unique(history.flatMap((item) => changedFiles(item.parts))),
+                },
+              })
+            }),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              const error = Cause.squash(cause)
+              const history = yield* sessions
+                .messages({ sessionID: nextSession.id })
+                .pipe(Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])))
+              const current = yield* backgroundTasks.get(nextSession.id, task.generation)
+              yield* backgroundTasks.finish({
+                taskID: nextSession.id,
+                generation: task.generation,
+                state:
+                  current?.controlIntent === "cancel" && (Cause.hasInterrupts(cause) || isAbortError(error))
+                    ? "cancelled"
+                    : Cause.hasInterrupts(cause) || isAbortError(error)
+                      ? "interrupted"
+                      : "failed",
+                result: {
+                  summary: yield* subagentEvidenceText(history),
+                  error: errorText(error),
+                  changedFiles: unique(history.flatMap((item) => changedFiles(item.parts))),
+                },
+              })
+            }).pipe(Effect.catchCause(() => Effect.void)),
+          ),
+          Effect.ensuring(status.set(nextSession.id, { type: "idle" })),
+          Effect.forkIn(scope),
+        )
+        const started = output({
+          status: "started",
+          text: `Subagent started in the background. Use task_status with task_id ${nextSession.id} to inspect progress or collect the result.`,
+        })
+        return {
+          ...started,
+          metadata: {
+            ...started.metadata,
+            generation: task.generation,
+            revision: running.revision,
+          },
+        }
+      }
+
       return yield* Effect.acquireUseRelease(
         Effect.sync(() => {
           ctx.abort.addEventListener("abort", onAbort)
@@ -371,25 +500,7 @@ export const TaskTool = Tool.define(
         }),
         () =>
           Effect.gen(function* () {
-            const parts = yield* ops.resolvePromptParts(params.prompt)
-            const child = yield* ops
-              .prompt({
-                messageID,
-                sessionID: nextSession.id,
-                model: {
-                  modelID: model.modelID,
-                  providerID: model.providerID,
-                },
-                variant,
-                agent: next.name,
-                tools: {
-                  ...(canTodo ? {} : { todowrite: false }),
-                  ...(canTask ? {} : { task: false }),
-                  ...Object.fromEntries((cfg.experimental?.primary_tools ?? []).map((item) => [item, false])),
-                },
-                parts,
-              })
-              .pipe(Effect.forkIn(scope))
+            const child = yield* prompt.pipe(Effect.forkIn(scope))
 
             yield* status.set(ctx.sessionID, {
               type: "busy",
@@ -398,49 +509,47 @@ export const TaskTool = Tool.define(
               until: Date.now() + SUBAGENT_WAIT_STATUS_TTL_MS,
             })
 
-            const result = yield* Fiber.await(child)
-              .pipe(
-                Effect.map((exit) => ({ type: "exit" as const, exit })),
-                Effect.raceFirst(
-                  Deferred.await(abortEvent).pipe(Effect.map((reason) => ({ type: "abort" as const, reason }))),
-                ),
-                Effect.flatMap((outcome) => {
-                  if (outcome.type === "abort") {
-                    return errorOutput({
-                      error: new DOMException(
-                        outcome.reason === "user" ? "Aborted" : "Connection interrupted; subagent session retained",
-                        "AbortError",
-                      ),
-                      interrupted: outcome.reason === "user",
-                      status: outcome.reason === "user" ? "interrupted" : "retained",
-                    })
-                  }
-                  if (Exit.isFailure(outcome.exit)) {
-                    const error = Cause.squash(outcome.exit.cause)
-                    return errorOutput({
-                      error,
-                      interrupted: parentAborted && (Cause.hasInterrupts(outcome.exit.cause) || isAbortError(error)),
-                    })
-                  }
-                  const childMessage = outcome.exit.value
-                  const error = childMessage.info.role === "assistant" ? childMessage.info.error : undefined
-                  if (error) return errorOutput({ error, interrupted: isAbortError(error), extraParts: childMessage.parts })
-                  return sessions
-                    .messages({ sessionID: nextSession.id })
-                    .pipe(
-                      Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])),
-                      Effect.flatMap((history) =>
-                        Effect.map(childEvidenceText(history, lastText(childMessage.parts), childMessage.parts), (text) =>
-                          output({
-                            status: "completed",
-                            text,
-                          }),
-                        ),
-                      ),
-                    )
-                }),
-                Effect.ensuring(status.set(ctx.sessionID, { type: "busy" })),
-              )
+            const result = yield* Fiber.await(child).pipe(
+              Effect.map((exit) => ({ type: "exit" as const, exit })),
+              Effect.raceFirst(
+                Deferred.await(abortEvent).pipe(Effect.map((reason) => ({ type: "abort" as const, reason }))),
+              ),
+              Effect.flatMap((outcome) => {
+                if (outcome.type === "abort") {
+                  return errorOutput({
+                    error: new DOMException(
+                      outcome.reason === "user" ? "Aborted" : "Connection interrupted; subagent session retained",
+                      "AbortError",
+                    ),
+                    interrupted: outcome.reason === "user",
+                    status: outcome.reason === "user" ? "interrupted" : "retained",
+                  })
+                }
+                if (Exit.isFailure(outcome.exit)) {
+                  const error = Cause.squash(outcome.exit.cause)
+                  return errorOutput({
+                    error,
+                    interrupted: parentAborted && (Cause.hasInterrupts(outcome.exit.cause) || isAbortError(error)),
+                  })
+                }
+                const childMessage = outcome.exit.value
+                const error = childMessage.info.role === "assistant" ? childMessage.info.error : undefined
+                if (error)
+                  return errorOutput({ error, interrupted: isAbortError(error), extraParts: childMessage.parts })
+                return sessions.messages({ sessionID: nextSession.id }).pipe(
+                  Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])),
+                  Effect.flatMap((history) =>
+                    Effect.map(subagentEvidenceText(history, childMessage.parts), (text) =>
+                      output({
+                        status: "completed",
+                        text,
+                      }),
+                    ),
+                  ),
+                )
+              }),
+              Effect.ensuring(status.set(ctx.sessionID, { type: "busy" })),
+            )
 
             return result
           }),

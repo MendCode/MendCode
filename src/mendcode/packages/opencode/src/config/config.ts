@@ -71,7 +71,16 @@ function normalizeLoadedConfig(data: unknown, source: string) {
     log.warn("tui keys in runtime config are deprecated; move them to tui.json", { path: source })
   }
 
-  const mendControlPlaneKeys = ["version", "engine", "focus", "budgets", "memory", "package", "worktree"] as const
+  const mendControlPlaneKeys = [
+    "version",
+    "engine",
+    "focus",
+    "budgets",
+    "memory",
+    "package",
+    "worktree",
+    "loop",
+  ] as const
   const removedControlPlaneKeys = mendControlPlaneKeys.filter((key) => key in copy)
   if (removedControlPlaneKeys.length) {
     mutated = true
@@ -271,12 +280,23 @@ export const Info = Schema.Struct({
       reserved: Schema.optional(NonNegativeInt).annotate({
         description: "Token buffer for compaction. Leaves enough window to avoid overflow during compaction.",
       }),
-      threshold: Schema.optional(Schema.Finite).annotate({
+      token_limit: Schema.optional(PositiveInt).annotate({
         description:
-          "Auto-compaction threshold as a percent of the model input/context limit (default: 95).",
+          "Absolute auto-compaction trigger in tokens. Takes precedence over threshold and is capped by the model input/context limit.",
+      }),
+      threshold: Schema.optional(Schema.Finite).annotate({
+        description: "Auto-compaction threshold as a percent of the model input/context limit (default: 95).",
       }),
     }),
   ),
+  queue: Schema.optional(
+    Schema.Struct({
+      mode: Schema.optional(Schema.Literals(["after-response", "after-tools", "after-turn", "immediate"])).annotate({
+        description:
+          "How prompts submitted during an active assistant response are handled: after-response waits for the complete response (default), after-tools joins after the current tool-call iteration, immediate interrupts and starts the queued prompt, and after-turn is a deprecated alias for after-response.",
+      }),
+    }),
+  ).annotate({ description: "Default handling for prompts submitted while an assistant turn is active." }),
   experimental: Schema.optional(
     Schema.Struct({
       disable_paste_summary: Schema.optional(Schema.Boolean),

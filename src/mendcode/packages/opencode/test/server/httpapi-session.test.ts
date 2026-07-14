@@ -690,6 +690,12 @@ describe("session HttpApi", () => {
             headers,
           }),
         ).toBe(true)
+        expect(
+          yield* requestJson<boolean>(pathFor(SessionPaths.interrupt, { sessionID: created.id }), {
+            method: "POST",
+            headers,
+          }),
+        ).toBe(true)
 
         expect(
           yield* requestJson<boolean>(pathFor(SessionPaths.remove, { sessionID: created.id }), {
@@ -854,12 +860,49 @@ describe("session HttpApi", () => {
         const headers = { "x-opencode-directory": tmp.path }
         const session = yield* createSession(tmp.path, { title: "messages" })
         yield* createTextMessage(tmp.path, session.id, "first")
-        yield* createTextMessage(tmp.path, session.id, "second")
-        const route = `${pathFor(SessionPaths.messages, { sessionID: session.id })}?limit=1`
+        const compact = yield* createTextMessage(tmp.path, session.id, "second")
+        yield* Effect.promise(() =>
+          WithInstance.provide({
+            directory: tmp.path,
+            fn: () =>
+              runSession(
+                Effect.gen(function* () {
+                  const svc = yield* Session.Service
+                  yield* svc.updatePart({
+                    id: PartID.ascending(),
+                    sessionID: session.id,
+                    messageID: compact.info.id,
+                    type: "compaction",
+                    auto: true,
+                  })
+                  yield* svc.updateMessage({
+                    id: MessageID.ascending(),
+                    sessionID: session.id,
+                    parentID: compact.info.id,
+                    role: "assistant",
+                    mode: "compaction",
+                    agent: "compaction",
+                    path: { cwd: tmp.path, root: tmp.path },
+                    cost: 0,
+                    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                    providerID: ProviderID.make("test"),
+                    modelID: ModelID.make("test"),
+                    summary: true,
+                    time: { created: Date.now(), completed: Date.now() },
+                  })
+                }),
+              ),
+          }),
+        )
+        const route = `${pathFor(SessionPaths.messages, { sessionID: session.id })}?limit=1&view=tui`
 
         const legacy = yield* requestWithBackend(false, route, { headers })
         const effect = yield* requestWithBackend(true, route, { headers })
 
+        expect(legacy.status).toBe(200)
+        expect(effect.status).toBe(200)
+        expect(legacy.headers.get("x-message-view-sparse")).toBe("true")
+        expect(effect.headers.get("x-message-view-sparse")).toBe("true")
         expect(effect.headers.get("x-next-cursor")).toBe(legacy.headers.get("x-next-cursor"))
         expect(effect.headers.get("link")).toBe(legacy.headers.get("link"))
         expect(effect.headers.get("access-control-expose-headers")).toBe(

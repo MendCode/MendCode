@@ -3,8 +3,8 @@ import { mkdir, readFile, readdir, stat, writeFile } from "fs/promises"
 import path from "path"
 import { memoryPaths, readMemoryConfig, type GeneratedMemoryWritePolicy, type MemoryConfig, type MemoryScope } from "./config"
 import { appendMemoryEntry, deleteMemoryEntry, readMemoryEntries, updateMemoryEntry, type MemoryEntry, type MemorySensitivity } from "./store"
-import { inferMemoryCategoryIDs, normalizeMemoryCategoryIDs, scopeReasonForMemory } from "./categories"
-import { legacyScopeForFact, readMemoryFacts, readMemoryGraph, upsertMemoryFact, upsertMemoryFactLink, type MemoryFactLink } from "./graph"
+import { DEFAULT_MEMORY_CATEGORIES, inferMemoryCategoryIDs, normalizeMemoryCategoryIDs, scopeReasonForMemory } from "./categories"
+import { connectMemoryFactToRelatedFact, legacyScopeForFact, readMemoryFacts, readMemoryGraph, upsertMemoryFact, upsertMemoryFactLink, type MemoryFactLink } from "./graph"
 import { configureDreamScheduleFromText, type DreamScheduleState } from "./dream-scheduler"
 import { resolveModelRoles } from "../config/models"
 import { runProviderAdapter } from "../runtime/provider-adapters"
@@ -95,6 +95,8 @@ export type AutoMemoryResult = {
 
 export type ApplyMemoryProposalInput = {
   startDreamService?: () => Promise<DreamServicePlan>
+  connectRelated?: boolean
+  relatedCategoryIDs?: string[]
 }
 
 export type ApplyMemoryProposalResult = {
@@ -303,6 +305,12 @@ export function extractorPrompt() {
     "Return strict JSON only:",
     '{"proposals":[{"shouldRemember":true,"operation":"add|update|remove|verify|expire|recategorize|demote-scope","scope":"project|global","categoryIDs":["project.commands"],"targetEntryID":"existing-memory-id-or-null","targetEntryScope":"project|global|null","text":"durable memory text or removal reason","tags":["short-tag"],"durability":0.0,"confidence":0.0,"changeRisk":0.0,"recommendedDisposition":"auto-apply|pending|skip","reason":"why this is worth changing"}]}',
     "",
+    "Allowed memory categories (use only these exact IDs; this extractor cannot create categories):",
+    ...DEFAULT_MEMORY_CATEGORIES.filter((category) => category.id !== "uncategorized").map(
+      (category) => `- ${category.id}: ${category.description} Allowed scopes: ${category.allowedScopes.join(", ")}.`,
+    ),
+    "- uncategorized: compatibility fallback only. Use it only when no semantic category above applies.",
+    "",
     "Rules:",
     "- Return an empty proposals array unless the input contains genuinely durable future-use information that should be remembered indefinitely.",
     "- Only set shouldRemember=true when durability is at least 0.8, confidence is at least 0.75, and changeRisk is at most 0.25.",
@@ -364,21 +372,27 @@ function parseExtractorJSON(text: string, maxProposals = 2): ExtractedMemoryProp
   const limit = Math.max(0, Math.min(2, maxProposals))
   return proposals
     .filter((item: any) => typeof item?.text === "string" && item.text.trim().length >= 16)
-    .map((item: any): ExtractedMemoryProposal => ({
-      shouldRemember: item.shouldRemember === true,
-      operation: item.operation === "update" || item.operation === "remove" || item.operation === "verify" || item.operation === "expire" || item.operation === "recategorize" || item.operation === "demote-scope" ? item.operation : "add",
-      scope: item.scope === "global" ? "global" as const : "project" as const,
-      targetEntryID: typeof item.targetEntryID === "string" && item.targetEntryID.trim() ? item.targetEntryID.trim() : null,
-      targetEntryScope: item.targetEntryScope === "global" ? "global" as const : item.targetEntryScope === "project" ? "project" as const : null,
-      text: item.text.trim(),
-      tags: normalizeStringList(item.tags),
-      categoryIDs: normalizeMemoryCategoryIDs(item.categoryIDs),
-      durability: typeof item.durability === "number" && Number.isFinite(item.durability) ? Math.max(0, Math.min(1, item.durability)) : 0,
-      confidence: typeof item.confidence === "number" && Number.isFinite(item.confidence) ? Math.max(0, Math.min(1, item.confidence)) : 0,
-      changeRisk: typeof item.changeRisk === "number" && Number.isFinite(item.changeRisk) ? Math.max(0, Math.min(1, item.changeRisk)) : 1,
-      recommendedDisposition: item.recommendedDisposition === "auto-apply" || item.recommendedDisposition === "skip" ? item.recommendedDisposition : "pending",
-      reason: typeof item.reason === "string" && item.reason.trim() ? item.reason.trim().slice(0, 240) : null,
-    }))
+    .map((item: any): ExtractedMemoryProposal => {
+      const tags = normalizeStringList(item.tags)
+      const categoryIDs = normalizeMemoryCategoryIDs(item.categoryIDs)
+      return {
+        shouldRemember: item.shouldRemember === true,
+        operation: item.operation === "update" || item.operation === "remove" || item.operation === "verify" || item.operation === "expire" || item.operation === "recategorize" || item.operation === "demote-scope" ? item.operation : "add",
+        scope: item.scope === "global" ? "global" as const : "project" as const,
+        targetEntryID: typeof item.targetEntryID === "string" && item.targetEntryID.trim() ? item.targetEntryID.trim() : null,
+        targetEntryScope: item.targetEntryScope === "global" ? "global" as const : item.targetEntryScope === "project" ? "project" as const : null,
+        text: item.text.trim(),
+        tags,
+        categoryIDs: categoryIDs.length === 1 && categoryIDs[0] === "uncategorized"
+          ? inferMemoryCategoryIDs({ text: item.text, tags, source: "model-extract" })
+          : categoryIDs,
+        durability: typeof item.durability === "number" && Number.isFinite(item.durability) ? Math.max(0, Math.min(1, item.durability)) : 0,
+        confidence: typeof item.confidence === "number" && Number.isFinite(item.confidence) ? Math.max(0, Math.min(1, item.confidence)) : 0,
+        changeRisk: typeof item.changeRisk === "number" && Number.isFinite(item.changeRisk) ? Math.max(0, Math.min(1, item.changeRisk)) : 1,
+        recommendedDisposition: item.recommendedDisposition === "auto-apply" || item.recommendedDisposition === "skip" ? item.recommendedDisposition : "pending",
+        reason: typeof item.reason === "string" && item.reason.trim() ? item.reason.trim().slice(0, 240) : null,
+      }
+    })
     .filter((item: ExtractedMemoryProposal) =>
       item.shouldRemember &&
       item.durability >= 0.8 &&
@@ -482,7 +496,10 @@ export async function settleGeneratedMemoryProposal(input: {
   const safety = generatedMemoryAutoApplySafety(input)
   if (!safety.ok) return { proposal: await markProposalPolicyDecision(input.proposal, "manual-only", root), entry: null, autoApplied: false, reason: safety.reason }
   const marked = await markProposalPolicyDecision(input.proposal, "auto-applied", root)
-  const applied = await applyMemoryProposal(marked.id, root)
+  const applied = await applyMemoryProposal(marked.id, root, {
+    connectRelated: true,
+    relatedCategoryIDs: input.allowedCategories,
+  })
   return { proposal: applied.proposal, entry: applied.entry, autoApplied: true, reason: safety.reason }
 }
 
@@ -926,7 +943,7 @@ export async function applyMemoryProposal(id: string, root?: string, input: Appl
     }, root)
   }
   if (entry) {
-    await upsertMemoryFact({
+    const fact = await upsertMemoryFact({
       id: `legacy_${entry.id}`,
       legacyEntryID: entry.id,
       scope: legacyScopeForFact(entry.scope),
@@ -940,6 +957,7 @@ export async function applyMemoryProposal(id: string, root?: string, input: Appl
       sensitivity: entry.sensitivity,
       legacyMaterialized: true,
     }, root)
+    if (input.connectRelated) await connectMemoryFactToRelatedFact(fact.id, root, input.relatedCategoryIDs)
   }
   const next: MemoryProposal = { ...proposal, operation, status: "applied", updatedAt: new Date().toISOString(), appliedEntryID: entry?.id ?? null }
   await writeProposal(next, root)

@@ -19,6 +19,12 @@ function compactionThreshold(value: unknown) {
   return normalizeThreshold(record(record(value)?.compaction)?.threshold)
 }
 
+function compactionTokenLimit(value: unknown) {
+  const limit = record(record(value)?.compaction)?.token_limit
+  if (typeof limit !== "number" || !Number.isFinite(limit) || limit <= 0) return undefined
+  return Math.floor(limit)
+}
+
 export function compactionThresholdPercent(input: {
   cfg?: unknown
   model?: { id?: string; providerID?: string }
@@ -32,6 +38,16 @@ export function compactionThresholdPercent(input: {
     compactionThreshold(cfg) ??
     DEFAULT_COMPACTION_THRESHOLD_PERCENT
   )
+}
+
+export function configuredCompactionTokenLimit(input: {
+  cfg?: unknown
+  model?: { id?: string; providerID?: string }
+}) {
+  const cfg = record(input.cfg)
+  const providerConfig = input.model?.providerID ? record(record(cfg?.provider)?.[input.model.providerID]) : undefined
+  const modelConfig = input.model?.id ? record(record(providerConfig?.models)?.[input.model.id]) : undefined
+  return compactionTokenLimit(modelConfig) ?? compactionTokenLimit(providerConfig) ?? compactionTokenLimit(cfg)
 }
 
 export function usable(input: { cfg: Config.Info; model: Provider.Model }) {
@@ -52,7 +68,10 @@ export function modelContextLimit(input: { model: Provider.Model }) {
 }
 
 export function compactionThresholdTokens(input: { cfg: Config.Info; model: Provider.Model }) {
-  return Math.floor(modelContextLimit(input) * (compactionThresholdPercent(input) / 100))
+  const context = modelContextLimit(input)
+  const tokenLimit = configuredCompactionTokenLimit(input)
+  if (tokenLimit !== undefined) return Math.min(context, tokenLimit)
+  return Math.floor(context * (compactionThresholdPercent(input) / 100))
 }
 
 export function isTokenOverflow(input: {

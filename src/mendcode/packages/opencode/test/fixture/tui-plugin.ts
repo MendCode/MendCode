@@ -92,6 +92,7 @@ type Opts = {
   }
   tuiConfig?: HostPluginApi["tuiConfig"]
   app?: Partial<HostPluginApi["app"]>
+  memory?: Partial<HostPluginApi["memory"]>
   state?: {
     ready?: HostPluginApi["state"]["ready"]
     config?: HostPluginApi["state"]["config"]
@@ -317,6 +318,23 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
       get ready() {
         return true
       },
+    },
+    memory: {
+      graph: opts.memory?.graph ?? (async () => ({
+        root: opts.state?.path?.directory ?? "",
+        facts: [],
+        links: [],
+        categories: [],
+        health: {
+          graphHealth: "empty",
+          materializedFacts: 0,
+          legacyFacts: 0,
+          links: 0,
+          connectedFacts: 0,
+          isolatedFacts: 0,
+          orphanLinks: 0,
+        },
+      })),
     },
     state: {
       get ready() {

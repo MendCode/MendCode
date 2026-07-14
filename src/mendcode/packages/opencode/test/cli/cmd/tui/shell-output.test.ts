@@ -4,6 +4,7 @@ import {
   latestTerminalOutputPreview,
   previewShellOutput,
   renderTerminalOutput,
+  selectShellOutput,
 } from "../../../../src/cli/cmd/tui/context/shell-output"
 
 test("live shell output appends deltas without replaying the latest line", () => {
@@ -74,6 +75,12 @@ test("terminal output renderer bounds synthetic cursor movement", () => {
 
 test("shell output preview keeps tail-only semantics", () => {
   expect(previewShellOutput("x".repeat(30_001))).toBe("...\n\n" + "x".repeat(30_000))
+})
+
+test("shell output uses live text while running and final text after completion", () => {
+  expect(selectShellOutput({ running: true, live: "live tail", final: "complete output" })).toBe("live tail")
+  expect(selectShellOutput({ running: false, live: "stale live tail", final: "complete output" })).toBe("complete output")
+  expect(selectShellOutput({ running: false, live: "live fallback" })).toBe("live fallback")
 })
 
 test("latest terminal preview renders only tail while keeping saved-output hints", () => {

@@ -1,12 +1,10 @@
 {
+  "$schema": "https://mendcode.ai/config.json",
   "version": 0,
   "package": {
     "id": "memory-graph-page-example",
     "title": "Memory Graph Page Example",
     "version": "1.0.0"
   },
-  "plugin": ["./pages/memory-graph.tsx"],
-  "plugin_enabled": {
-    "memory-graph-page-example.page": true
-  }
+  "plugin": ["./pages/memory-graph.tsx"]
 }

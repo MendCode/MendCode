@@ -15,7 +15,22 @@ export type ModelRole = {
 }
 export type ModelsConfig = { version: 0; enabled: boolean; roles: Record<string, ModelRole> }
 
+function withoutRemovedModelRoles(config: ModelsConfig): ModelsConfig {
+  if (!Object.hasOwn(config.roles, "review")) return config
+  const roles = Object.fromEntries(Object.entries(config.roles).filter(([name]) => name !== "review"))
+  return { ...config, roles }
+}
+
 export const modelPresets = {
+  "openai-codex-subscription-gpt-5.6-sol": {
+    providerID: "openai",
+    modelID: "gpt-5.6-sol",
+    authMode: "chatgpt-subscription-oauth",
+    env: [],
+    pricingPer1MTokens: null,
+    source: ".agents/vendor/opencode/packages/opencode/src/plugin/codex.ts",
+    note: "Uses the Codex-supported GPT-5.6 Sol model with ChatGPT Plus/Pro OAuth; not OpenAI API billing.",
+  },
   "openai-codex-subscription-gpt-5.2": {
     providerID: "openai",
     modelID: "gpt-5.2",
@@ -52,6 +67,15 @@ export const modelPresets = {
     source: "https://platform.openai.com/docs/models/gpt-5.2-codex",
     note: "OpenAI API billing; same text-token price as GPT-5.2.",
   },
+  "openai-api-gpt-5.6": {
+    providerID: "openai",
+    modelID: "gpt-5.6",
+    authMode: "api-key",
+    env: ["OPENAI_API_KEY"],
+    pricingPer1MTokens: { inputUsd: 5, cachedInputUsd: 0.5, outputUsd: 30 },
+    source: "https://platform.openai.com/docs/pricing/",
+    note: "OpenAI API billing; newest GPT-5.6 default with max reasoning support.",
+  },
   "openai-api-gpt-5-mini": {
     providerID: "openai",
     modelID: "gpt-5-mini",
@@ -85,7 +109,6 @@ export const defaultModelsConfig: ModelsConfig = {
     plan: { providerID: null, modelID: null, reason: "No plan-role model is configured yet." },
     build: { providerID: null, modelID: null, reason: "No build-role model is configured yet." },
     code: { providerID: null, modelID: null, reason: "No code-role model is configured yet." },
-    review: { providerID: null, modelID: null, reason: "No review-role model is configured yet." },
     subagent: { providerID: null, modelID: null, reason: "Default model for subagent task tool sessions." },
     title: { providerID: null, modelID: null, reason: "Hidden runtime title-generation agent model." },
     compaction: { providerID: null, modelID: null, reason: "Hidden runtime context-compaction agent model." },
@@ -132,13 +155,13 @@ export function resolveGlobalModelsConfigPath() {
 export async function readGlobalModelsConfig(): Promise<ModelsConfig> {
   const file = resolveGlobalModelsConfigPath()
   if (!existsSync(file)) return JSON.parse(JSON.stringify(defaultModelsConfig)) as ModelsConfig
-  return parseModelsYaml(await readFile(file, "utf8"))
+  return withoutRemovedModelRoles(parseModelsYaml(await readFile(file, "utf8")))
 }
 
 export async function writeGlobalModelsConfig(config: ModelsConfig) {
   const file = resolveGlobalModelsConfigPath()
   await mkdir(path.dirname(file), { recursive: true })
-  await writeFile(file, `${modelsConfigToYaml(config)}\n`)
+  await writeFile(file, `${modelsConfigToYaml(withoutRemovedModelRoles(config))}\n`)
 }
 
 function parseScalar(raw: string) {
@@ -190,7 +213,7 @@ function yamlScalar(value: unknown) {
 
 export function modelsConfigToYaml(config: ModelsConfig) {
   const lines = [`version: ${config.version}`, `enabled: ${config.enabled}`, "roles:"]
-  for (const [name, role] of Object.entries(config.roles)) {
+  for (const [name, role] of Object.entries(config.roles).filter(([roleName]) => roleName !== "review")) {
     lines.push(`  ${name}:`)
     for (const [key, value] of Object.entries(role)) lines.push(`    ${key}: ${yamlScalar(value)}`)
   }
@@ -235,6 +258,7 @@ async function applyGlobalConfigOverrides(config: ModelsConfig) {
   }
 
   for (const [name, agent] of Object.entries((data.agent || {}) as Record<string, any>)) {
+    if (name === "review") continue
     const parsed = parseRuntimeModel(agent?.model)
     if (!parsed) continue
     if (next.roles[name]?.providerID && next.roles[name]?.modelID) continue
@@ -273,13 +297,13 @@ export async function readModelsConfig(root?: string): Promise<ModelsConfig> {
         : {}),
     }
   }
-  return base
+  return withoutRemovedModelRoles(base)
 }
 
 export async function writeModelsConfig(config: ModelsConfig, root?: string) {
   const file = mendPaths(root).modelsConfig
   await mkdir(path.dirname(file), { recursive: true })
-  await writeFile(file, `${modelsConfigToYaml(config)}\n`)
+  await writeFile(file, `${modelsConfigToYaml(withoutRemovedModelRoles(config))}\n`)
 }
 
 async function readJsonIfExists<T>(file: string, fallback: T): Promise<T> {
@@ -358,7 +382,6 @@ export async function modelRoleProjection(root?: string, focus = "codex") {
     plan: roles.plan?.runtimeModel || resolved.defaultModel,
     build: roles.build?.runtimeModel || roles.code?.runtimeModel || resolved.defaultModel,
     code: roles.build?.runtimeModel || roles.code?.runtimeModel || resolved.defaultModel,
-    review: roles.review?.runtimeModel || resolved.defaultModel,
     subagent: roles.subagent?.runtimeModel || null,
     small: roles.small?.runtimeModel || null,
     title: roles.title?.runtimeModel || roles.small?.runtimeModel || resolved.defaultModel,
@@ -392,7 +415,7 @@ export async function modelRoleProjection(root?: string, focus = "codex") {
     projected,
     warnings: resolved.enabled
       ? resolved.warnings
-      : ["models.yaml enabled=false; plan/code/review roles are documented but not projected into runtime metadata"],
+      : ["models.yaml enabled=false; plan/code roles are documented but not projected into runtime metadata"],
     failures,
   }
 }

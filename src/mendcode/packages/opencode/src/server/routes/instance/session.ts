@@ -980,6 +980,37 @@ export const SessionRoutes = lazy(() =>
         }),
     )
     .post(
+      "/:sessionID/interrupt",
+      describeRoute({
+        summary: "Send queued prompt now",
+        description: "Interrupt the active turn and immediately start the next queued prompt, if one exists.",
+        operationId: "session.interrupt",
+        responses: {
+          200: {
+            description: "Interrupted active turn and promoted the next queued prompt",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: SessionID.zod,
+        }),
+      ),
+      async (c) =>
+        jsonRequest("SessionRoutes.interrupt", c, function* () {
+          const svc = yield* SessionPrompt.Service
+          yield* svc.interrupt(c.req.valid("param").sessionID)
+          return true
+        }),
+    )
+    .post(
       "/:sessionID/share",
       describeRoute({
         summary: "Disabled session sharing",
@@ -1225,7 +1256,7 @@ export const SessionRoutes = lazy(() =>
                 },
                 { message: "Invalid cursor" },
               ),
-            view: z.enum(["full", "tui"]).optional(),
+            view: z.enum(["full", "tui", "tui-all"]).optional(),
           })
           .refine((value) => !value.before || !value.after, {
             message: "before and after are mutually exclusive",
@@ -1259,12 +1290,15 @@ export const SessionRoutes = lazy(() =>
           after: query.after,
           view: query.view,
         })
+        if (page.cursor || page.sparse) {
+          c.header("Access-Control-Expose-Headers", "Link, X-Next-Cursor, X-Message-View-Sparse")
+        }
+        if (page.sparse) c.header("X-Message-View-Sparse", "true")
         if (page.cursor) {
           const url = new URL(c.req.url)
           url.searchParams.set("limit", query.limit.toString())
           if (query.after) url.searchParams.set("after", page.cursor)
           else url.searchParams.set("before", page.cursor)
-          c.header("Access-Control-Expose-Headers", "Link, X-Next-Cursor")
           c.header("Link", `<${url.toString()}>; rel="next"`)
           c.header("X-Next-Cursor", page.cursor)
         }

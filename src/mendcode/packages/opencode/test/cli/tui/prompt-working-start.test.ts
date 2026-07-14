@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { shouldBlurCompactionArcadeWhenOffscreen } from "@/cli/cmd/tui/component/compaction-panel"
 import {
   promptCursorEndOffset,
   promptCursorOffsetAfterArrow,
@@ -21,15 +22,36 @@ import {
 } from "@/cli/cmd/tui/component/prompt"
 import {
   latestFullSessionHistoryStartID,
+  sessionFollowSyncIsStale,
+  sessionFollowSyncKind,
   sessionHasLocalQueuedTurn,
+  sessionTranscriptRenderKey,
+  sessionUserMessageQueued,
   sessionUserPromptHistory,
-  submittedPromptViewportHoldRows,
+  shouldDeferSessionFollowSync,
   shouldReleaseSessionPagingBoundarySuppression,
   shouldRestoreSessionScrollAnchor,
   shouldUseSimpleSessionHistory,
 } from "@/cli/cmd/tui/routes/session"
-import { loopWorkflowListCacheKey } from "@/cli/cmd/tui/routes/loops"
-import { statsCacheNeedsRefresh, statsDayTokenValue, statsDayVisualValue, statsGraphSeries, statsSelectedDayIndex } from "@/cli/cmd/tui/routes/stats"
+import {
+  LOOP_HISTORY_PAGE_SIZE,
+  LOOP_WORKFLOW_GLOBAL_CACHE_KEY,
+  loopGlobalPageCacheKey,
+  loopHistoryPage,
+  loopHistoryPageFromContract,
+  loopSnapshotResourceKey,
+  loopWorkflowProjectLabel,
+  shouldKeepRouteLoopSelection,
+} from "@/cli/cmd/tui/routes/loops"
+import {
+  mapStatsSessionsInBatches,
+  statsCacheNeedsRefresh,
+  statsDayTokenValue,
+  statsDayVisualValue,
+  statsGraphSeries,
+  statsSelectedDayIndex,
+  usageInsightsCacheKey,
+} from "@/cli/cmd/tui/routes/stats"
 import type { DailyUsage } from "@/cli/cmd/tui/util/usage-insights"
 
 describe("optimistic user turn", () => {
@@ -102,6 +124,41 @@ describe("optimistic user turn", () => {
   })
 })
 
+describe("queued user turn", () => {
+  test("stays visibly queued across later assistant tool iterations", () => {
+    const activeUser = { id: "msg_001", role: "user" }
+    const queuedUser = { id: "msg_003", role: "user" }
+    const messages = [
+      activeUser,
+      { id: "msg_002", role: "assistant", parentID: activeUser.id },
+      queuedUser,
+      { id: "msg_004", role: "assistant", parentID: activeUser.id },
+    ]
+
+    expect(
+      sessionUserMessageQueued({
+        messageID: queuedUser.id,
+        pendingAssistantID: "msg_004",
+        messages,
+      }),
+    ).toBe(true)
+    expect(
+      sessionUserMessageQueued({
+        messageID: activeUser.id,
+        pendingAssistantID: "msg_004",
+        messages,
+      }),
+    ).toBe(false)
+    expect(
+      sessionUserMessageQueued({
+        messageID: queuedUser.id,
+        pendingAssistantID: "msg_005",
+        messages: [...messages, { id: "msg_005", role: "assistant", parentID: queuedUser.id }],
+      }),
+    ).toBe(false)
+  })
+})
+
 describe("resolveWorkingStartedAt", () => {
   test("keeps the original assistant start when a follower already stored a local start", () => {
     expect(
@@ -147,21 +204,60 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldInterruptImmediately({ statusType: "busy", hasDraft: true })).toBe(false)
     expect(shouldInterruptImmediately({ statusType: "retry", hasDraft: true })).toBe(false)
     expect(shouldInterruptImmediately({ statusType: "idle" })).toBe(false)
+    expect(shouldInterruptImmediately({ statusType: "idle", hasActiveWorkingAssistant: true })).toBe(true)
+    expect(shouldInterruptImmediately({ statusType: "idle", hasActiveWorkingAssistant: true, hasDraft: true })).toBe(
+      false,
+    )
   })
 
   test("accepts prompt interrupt only when the prompt textarea owns focus", () => {
     const promptInput = {}
     const arcadeInput = {}
-    expect(shouldAcceptPromptInterruptFocus({ inputFocused: true, currentFocusedRenderable: promptInput, promptInput })).toBe(true)
-    expect(shouldAcceptPromptInterruptFocus({ inputFocused: true, currentFocusedRenderable: arcadeInput, promptInput })).toBe(false)
-    expect(shouldAcceptPromptInterruptFocus({ inputFocused: false, currentFocusedRenderable: promptInput, promptInput })).toBe(false)
+    expect(
+      shouldAcceptPromptInterruptFocus({ inputFocused: true, currentFocusedRenderable: promptInput, promptInput }),
+    ).toBe(true)
+    expect(
+      shouldAcceptPromptInterruptFocus({ inputFocused: true, currentFocusedRenderable: arcadeInput, promptInput }),
+    ).toBe(false)
+    expect(
+      shouldAcceptPromptInterruptFocus({ inputFocused: false, currentFocusedRenderable: promptInput, promptInput }),
+    ).toBe(false)
+  })
+
+  test("only blurs focused compaction arcade after it leaves the visible screen", () => {
+    expect(shouldBlurCompactionArcadeWhenOffscreen({ focused: true, screenY: 5, height: 10, viewportHeight: 20 })).toBe(
+      false,
+    )
+    expect(
+      shouldBlurCompactionArcadeWhenOffscreen({ focused: true, screenY: -9, height: 10, viewportHeight: 20 }),
+    ).toBe(false)
+    expect(
+      shouldBlurCompactionArcadeWhenOffscreen({ focused: true, screenY: 19, height: 10, viewportHeight: 20 }),
+    ).toBe(false)
+    expect(
+      shouldBlurCompactionArcadeWhenOffscreen({ focused: true, screenY: -10, height: 10, viewportHeight: 20 }),
+    ).toBe(true)
+    expect(
+      shouldBlurCompactionArcadeWhenOffscreen({ focused: true, screenY: 20, height: 10, viewportHeight: 20 }),
+    ).toBe(true)
+    expect(
+      shouldBlurCompactionArcadeWhenOffscreen({ focused: false, screenY: 20, height: 10, viewportHeight: 20 }),
+    ).toBe(false)
   })
 
   test("keeps plain left and right arrows available for prompt cursor movement", () => {
-    expect(shouldHandlePromptCursorArrow({ name: "left", ctrl: false, meta: false, shift: false, super: false })).toBe(true)
-    expect(shouldHandlePromptCursorArrow({ name: "right", ctrl: false, meta: false, shift: false, super: false })).toBe(true)
-    expect(shouldHandlePromptCursorArrow({ name: "left", ctrl: true, meta: false, shift: false, super: false })).toBe(false)
-    expect(shouldHandlePromptCursorArrow({ name: "up", ctrl: false, meta: false, shift: false, super: false })).toBe(false)
+    expect(shouldHandlePromptCursorArrow({ name: "left", ctrl: false, meta: false, shift: false, super: false })).toBe(
+      true,
+    )
+    expect(shouldHandlePromptCursorArrow({ name: "right", ctrl: false, meta: false, shift: false, super: false })).toBe(
+      true,
+    )
+    expect(shouldHandlePromptCursorArrow({ name: "left", ctrl: true, meta: false, shift: false, super: false })).toBe(
+      false,
+    )
+    expect(shouldHandlePromptCursorArrow({ name: "up", ctrl: false, meta: false, shift: false, super: false })).toBe(
+      false,
+    )
 
     expect(promptCursorOffsetAfterArrow({ text: "abc", cursorOffset: 0, direction: "left" })).toBe(0)
     expect(promptCursorOffsetAfterArrow({ text: "abc", cursorOffset: 1, direction: "left" })).toBe(0)
@@ -197,7 +293,12 @@ describe("resolveWorkingStartedAt", () => {
 
   test("uses stored history only when the route does not supply session-scoped history", () => {
     expect(shouldUseStoredPromptHistoryFallback({ historyItems: () => [], messageHistoryCount: 0 })).toBe(false)
-    expect(shouldUseStoredPromptHistoryFallback({ historyItems: () => [{ input: "loaded", parts: [] }], messageHistoryCount: 1 })).toBe(false)
+    expect(
+      shouldUseStoredPromptHistoryFallback({
+        historyItems: () => [{ input: "loaded", parts: [] }],
+        messageHistoryCount: 1,
+      }),
+    ).toBe(false)
     expect(shouldUseStoredPromptHistoryFallback({})).toBe(true)
   })
 
@@ -235,10 +336,22 @@ describe("resolveWorkingStartedAt", () => {
       }),
     ).toBe(true)
     expect(shouldAttemptPromptHistoryNavigation({ direction: 1, cursorOffset: 5, text: "line 1\nline 2" })).toBe(false)
-    expect(shouldSnapPromptCursorToEnd({ direction: 1, cursorOffset: 5, text: "line 1\nline 2", visualRow: 0, height: 2 })).toBe(false)
-    expect(shouldSnapPromptCursorToEnd({ direction: 1, cursorOffset: 5, text: "line 1\nline 2", visualRow: 1, height: 2 })).toBe(true)
-    expect(shouldSnapPromptCursorToEnd({ direction: 1, cursorOffset: 5, text: "line 1\nline 2", visualRow: 1, height: 6 })).toBe(true)
-    expect(shouldAttemptPromptHistoryNavigation({ direction: 1, cursorOffset: promptCursorEndOffset("line 1\nline 2"), text: "line 1\nline 2" })).toBe(true)
+    expect(
+      shouldSnapPromptCursorToEnd({ direction: 1, cursorOffset: 5, text: "line 1\nline 2", visualRow: 0, height: 2 }),
+    ).toBe(false)
+    expect(
+      shouldSnapPromptCursorToEnd({ direction: 1, cursorOffset: 5, text: "line 1\nline 2", visualRow: 1, height: 2 }),
+    ).toBe(true)
+    expect(
+      shouldSnapPromptCursorToEnd({ direction: 1, cursorOffset: 5, text: "line 1\nline 2", visualRow: 1, height: 6 }),
+    ).toBe(true)
+    expect(
+      shouldAttemptPromptHistoryNavigation({
+        direction: 1,
+        cursorOffset: promptCursorEndOffset("line 1\nline 2"),
+        text: "line 1\nline 2",
+      }),
+    ).toBe(true)
     expect(shouldAttemptPromptHistoryNavigation({ direction: -1, cursorOffset: 0, text: "line 1\nline 2" })).toBe(true)
     expect(
       shouldPreferMessagePromptHistory({
@@ -355,6 +468,27 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldUseSimpleSessionHistory({ messageID: "msg_005", fullStartID })).toBe(false)
   })
 
+  test("remounts the transcript only when a compaction summary completes", () => {
+    const streaming = [
+      { id: "msg_001", role: "user" as const, time: { completed: 1 } },
+      { id: "msg_002", role: "assistant" as const, parentID: "msg_001", summary: true, time: {} },
+    ]
+    const completed = [streaming[0], { ...streaming[1], time: { completed: 2 } }]
+    const afterSubmit = [...completed, { id: "msg_003", role: "user" as const, time: { completed: 3 } }]
+    const streamingStartID = latestFullSessionHistoryStartID(streaming)
+    const completedStartID = latestFullSessionHistoryStartID(completed)
+    const afterSubmitStartID = latestFullSessionHistoryStartID(afterSubmit)
+
+    expect(streamingStartID).toBeUndefined()
+    expect(completedStartID).toBe("msg_002")
+    expect(afterSubmitStartID).toBe(completedStartID)
+    expect(sessionTranscriptRenderKey("ses_test", streamingStartID)).toBe("ses_test:initial")
+    expect(sessionTranscriptRenderKey("ses_test", completedStartID)).toBe("ses_test:msg_002")
+    expect(sessionTranscriptRenderKey("ses_test", afterSubmitStartID)).toBe(
+      sessionTranscriptRenderKey("ses_test", completedStartID),
+    )
+  })
+
   test("keeps unfinished assistant tools visible even when a newer queued user exists", () => {
     const messages = [
       { id: "msg_001", role: "user" as const, time: { completed: 1 } },
@@ -396,30 +530,108 @@ describe("resolveWorkingStartedAt", () => {
     expect(sessionUserPromptHistory({ messages, partsByMessage }).map((item) => item.input)).toEqual(["   "])
   })
 
-  test("separates loop list cache entries by project directory and worktree", () => {
-    expect(loopWorkflowListCacheKey({})).toBeUndefined()
-    expect(loopWorkflowListCacheKey({ directory: "/repo", worktree: "/repo/.wt/a" })).not.toBe(
-      loopWorkflowListCacheKey({ directory: "/repo", worktree: "/repo/.wt/b" }),
+  test("keys global loop cache entries by the requested page contract", () => {
+    expect(loopGlobalPageCacheKey({ offset: 0 })).toBe("global:0:50")
+    expect(loopGlobalPageCacheKey({ offset: 50 })).not.toBe(loopGlobalPageCacheKey({ offset: 0 }))
+    expect(loopGlobalPageCacheKey({ offset: 0, limit: 25 })).not.toBe(loopGlobalPageCacheKey({ offset: 0 }))
+  })
+
+  test("holds a deep-linked loop selection until its server page resolves", () => {
+    expect(shouldKeepRouteLoopSelection({ requestedID: "loop_51", loading: true, items: [{ id: "loop_1" }] })).toBe(
+      true,
     )
-    expect(loopWorkflowListCacheKey({ directory: "/repo" })).not.toBe(
-      loopWorkflowListCacheKey({ worktree: "/repo/.wt/a" }),
+    expect(shouldKeepRouteLoopSelection({ requestedID: "loop_51", loading: true, items: [{ id: "loop_51" }] })).toBe(
+      false,
+    )
+    expect(shouldKeepRouteLoopSelection({ requestedID: "loop_51", loading: false, items: [{ id: "loop_1" }] })).toBe(
+      false,
     )
   })
 
-  test("keeps stats selection on latest day across cached to fresh data", () => {
-    const cachedDays = [{ day: "2026-07-01" }, { day: "2026-07-02" }, { day: "2026-07-03" }]
-    const freshDays = [{ day: "2026-06-30" }, ...cachedDays]
+  test("uses stable global loop dashboard identity and project labels", () => {
+    expect(LOOP_WORKFLOW_GLOBAL_CACHE_KEY).toBe("global")
+    expect(loopSnapshotResourceKey({ id: "loop_1", time: { updated: 123 } })).toBe("loop_1:123")
+    expect(loopSnapshotResourceKey({ id: "loop_1", time: { updated: 123 } })).toBe(
+      loopSnapshotResourceKey({ id: "loop_1", time: { updated: 123 } }),
+    )
+    expect(
+      loopWorkflowProjectLabel({
+        projectID: "project-1",
+        project: { id: "project-1", worktree: "/Users/example/Code/MendCode" },
+      }),
+    ).toBe("MendCode")
+  })
+
+  test("pages archived loop history at a bounded page size", () => {
+    const archived = Array.from({ length: LOOP_HISTORY_PAGE_SIZE + 2 }, (_, index) => `loop_${index + 1}`)
+
+    expect(loopHistoryPage({ items: archived, page: 0 })).toMatchObject({
+      page: 0,
+      pageCount: 2,
+      start: 0,
+      end: LOOP_HISTORY_PAGE_SIZE,
+      total: LOOP_HISTORY_PAGE_SIZE + 2,
+      items: archived.slice(0, LOOP_HISTORY_PAGE_SIZE),
+    })
+    expect(loopHistoryPage({ items: archived, page: 1 })).toMatchObject({
+      page: 1,
+      start: LOOP_HISTORY_PAGE_SIZE,
+      end: LOOP_HISTORY_PAGE_SIZE + 2,
+      items: archived.slice(LOOP_HISTORY_PAGE_SIZE),
+    })
+    expect(loopHistoryPage({ items: archived, page: 99 })).toMatchObject({
+      page: 1,
+      items: archived.slice(LOOP_HISTORY_PAGE_SIZE),
+    })
 
     expect(
-      statsSelectedDayIndex({ days: cachedDays, selectedDay: "2026-07-03", selectedIndex: 2, followLatest: true }),
-    ).toBe(2)
-    expect(
-      statsSelectedDayIndex({ days: cachedDays, selectedDay: "2026-07-02", selectedIndex: 1, followLatest: false }),
-    ).toBe(1)
-    expect(
-      statsSelectedDayIndex({ days: freshDays, selectedDay: "2026-07-02", selectedIndex: 1, followLatest: false }),
-    ).toBe(2)
-    expect(statsSelectedDayIndex({ days: freshDays, selectedIndex: 2, followLatest: false })).toBe(2)
+      loopHistoryPageFromContract({
+        items: ["loop_51", "loop_52"],
+        page: { offset: LOOP_HISTORY_PAGE_SIZE, limit: LOOP_HISTORY_PAGE_SIZE, total: LOOP_HISTORY_PAGE_SIZE + 2 },
+      }),
+    ).toMatchObject({
+      page: 1,
+      pageCount: 2,
+      start: LOOP_HISTORY_PAGE_SIZE,
+      end: LOOP_HISTORY_PAGE_SIZE + 2,
+      total: LOOP_HISTORY_PAGE_SIZE + 2,
+      items: ["loop_51", "loop_52"],
+    })
+  })
+
+  test("loads stats sessions in bounded batches and exposes the first batch early", async () => {
+    let active = 0
+    let peak = 0
+    const batchSizes: number[] = []
+    const result = await mapStatsSessionsInBatches(
+      [1, 2, 3, 4, 5, 6, 7],
+      async (value) => {
+        active++
+        peak = Math.max(peak, active)
+        await Bun.sleep(2)
+        active--
+        return value * 2
+      },
+      {
+        concurrency: 3,
+        onBatch: (items) => batchSizes.push(items.length),
+      },
+    )
+
+    expect(result).toEqual([2, 4, 6, 8, 10, 12, 14])
+    expect(peak).toBe(3)
+    expect(batchSizes).toEqual([3, 6, 7])
+  })
+
+  test("keeps stats day selection stable across cached to fresh data", () => {
+    const cachedDays = [{ day: "2026-07-01" }, { day: "2026-07-02" }, { day: "2026-07-03" }]
+    const freshDays = [{ day: "2026-06-30" }, ...cachedDays, { day: "2026-07-04" }]
+
+    expect(statsSelectedDayIndex({ days: cachedDays, selectedDay: "2026-07-03", selectedIndex: 2 })).toBe(2)
+    expect(statsSelectedDayIndex({ days: cachedDays, selectedDay: "2026-07-02", selectedIndex: 1 })).toBe(1)
+    expect(statsSelectedDayIndex({ days: freshDays, selectedDay: "2026-07-02", selectedIndex: 1 })).toBe(2)
+    expect(statsSelectedDayIndex({ days: freshDays, selectedDay: "2026-07-03", selectedIndex: 2 })).toBe(3)
+    expect(statsSelectedDayIndex({ days: freshDays, selectedIndex: 2 })).toBe(2)
   })
 
   test("refreshes stale stats cache when the latest cached day is behind today", () => {
@@ -454,6 +666,19 @@ describe("resolveWorkingStartedAt", () => {
     ).toBe(true)
   })
 
+  test("isolates scoped stats caches while sharing global insights", () => {
+    expect(usageInsightsCacheKey("global", {}, "/repo/a")).toBe(usageInsightsCacheKey("global", {}, "/repo/b"))
+    expect(usageInsightsCacheKey("directory", { path: "apps/web" }, "/repo/a")).not.toBe(
+      usageInsightsCacheKey("directory", { path: "apps/api" }, "/repo/a"),
+    )
+    expect(usageInsightsCacheKey("project", { scope: "project" }, "/repo/a")).not.toBe(
+      usageInsightsCacheKey("project", { scope: "project" }, "/repo/b"),
+    )
+    expect(usageInsightsCacheKey("directory", { path: "web" }, "/repo|apps")).not.toBe(
+      usageInsightsCacheKey("directory", { directory: "apps|web" }, "/repo"),
+    )
+  })
+
   function statsDay(input: Partial<DailyUsage> & { day: string }): DailyUsage {
     return {
       day: input.day,
@@ -474,9 +699,10 @@ describe("resolveWorkingStartedAt", () => {
     }
   }
 
-  test("uses token breakdown when cached daily token total is missing", () => {
+  test("uses the reported daily total and falls back to token breakdown when missing", () => {
     expect(statsDayTokenValue(statsDay({ day: "2026-07-03", tokens: 0, inputTokens: 10, outputTokens: 5 }))).toBe(15)
     expect(statsDayTokenValue(statsDay({ day: "2026-07-03", tokens: 20, inputTokens: 10, outputTokens: 5 }))).toBe(20)
+    expect(statsDayTokenValue(statsDay({ day: "2026-07-03", tokens: 10, inputTokens: 10, outputTokens: 5 }))).toBe(10)
   })
 
   test("keeps daily heatmap active when AI activity exists without stored token usage", () => {
@@ -493,13 +719,6 @@ describe("resolveWorkingStartedAt", () => {
     ]
     expect(statsGraphSeries({ days, mode: "weekly", rowCount: 2 }).map((point) => point.value)).toEqual([0, 20])
     expect(statsGraphSeries({ days, mode: "cumulative", rowCount: 2 }).map((point) => point.value)).toEqual([0, 20])
-  })
-
-  test("reserves only collapsed prompt input rows after submit", () => {
-    expect(submittedPromptViewportHoldRows({ inputRows: 1 })).toBe(0)
-    expect(submittedPromptViewportHoldRows({ inputRows: 8 })).toBe(7)
-    expect(submittedPromptViewportHoldRows({ inputRows: 0 })).toBe(0)
-    expect(submittedPromptViewportHoldRows({ inputRows: Number.NaN })).toBe(0)
   })
 
   test("does not restore scroll anchors during manual scroll grace", () => {
@@ -527,6 +746,24 @@ describe("resolveWorkingStartedAt", () => {
         hasAnchor: true,
       }),
     ).toBe(false)
+  })
+
+  test("does not refetch the transcript for canonical incremental message events", () => {
+    expect(sessionFollowSyncKind("message.updated")).toBeUndefined()
+    expect(sessionFollowSyncKind("message.part.updated")).toBeUndefined()
+    expect(sessionFollowSyncKind("message.part.delta")).toBeUndefined()
+    expect(sessionFollowSyncKind("session.status")).toBeUndefined()
+    expect(sessionFollowSyncKind("session.next.text.started")).toBe("immediate")
+    expect(sessionFollowSyncKind("session.next.text.delta")).toBe("live")
+    expect(sessionFollowSyncIsStale({ now: 1_500, lastSyncAt: 0, lastEventAt: 1_200, intervalMs: 600 })).toBe(false)
+    expect(sessionFollowSyncIsStale({ now: 1_800, lastSyncAt: 0, lastEventAt: 1_200, intervalMs: 600 })).toBe(true)
+  })
+
+  test("defers follow refreshes while paging or viewing an older transcript window", () => {
+    expect(shouldDeferSessionFollowSync({ hasMoreNewer: false, loadingOlder: false, loadingNewer: false })).toBe(false)
+    expect(shouldDeferSessionFollowSync({ hasMoreNewer: true, loadingOlder: false, loadingNewer: false })).toBe(true)
+    expect(shouldDeferSessionFollowSync({ hasMoreNewer: false, loadingOlder: true, loadingNewer: false })).toBe(true)
+    expect(shouldDeferSessionFollowSync({ hasMoreNewer: false, loadingOlder: false, loadingNewer: true })).toBe(true)
   })
 
   test("keeps paging boundary suppression through small scrollbar bounce near page seams", () => {
@@ -632,5 +869,4 @@ describe("resolveWorkingStartedAt", () => {
       }),
     ).toBe(true)
   })
-
 })

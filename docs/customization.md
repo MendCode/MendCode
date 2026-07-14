@@ -569,13 +569,9 @@ Agent View is the split-home session manager:
 }
 ```
 
-Agent View shows recent/background sessions grouped into:
+Agent View groups visible session rows into `Needs input`, `Looping`, `Working`, and `Completed`. Its optional session headline summarizes only current `waiting`, `looping`, and `working` counts; it does not present visible completed rows as a lifetime total. The Agent inbox headline describes durable structured coordination commands with queued, slot-capacity, and active counts rather than shell/tool execution.
 
-- `Needs input`: permission requests, questions, or plan reviews waiting on the user.
-- `Working`: running/background sessions.
-- `Completed`: recently finished sessions.
-
-It also refreshes from session/status/input events and polls while visible. Rows can be selected and opened; the prompt can target the selected Agent View session when appropriate.
+Each headline appears only while that category has active work. Completed session rows remain visible when both headlines are hidden. Rows can be selected and opened, while the Home prompt remains a new-task composer.
 
 This setup is especially good when you run multiple agents or background sessions and want the home page to show what needs attention before you type.
 

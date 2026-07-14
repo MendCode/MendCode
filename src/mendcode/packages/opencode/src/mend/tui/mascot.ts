@@ -15,7 +15,11 @@ export type MendMascotLineHitbox = {
 }
 
 function cleanAsciiLiteral(value: string) {
-  return value.replace(/^\n/, "").trimEnd()
+  const lines = value.replace(/^\n/, "").trimEnd().split("\n")
+  const indentation = Math.min(
+    ...lines.filter((line) => line.trim()).map((line) => line.match(/^\s*/)?.[0].length ?? 0),
+  )
+  return lines.map((line) => line.slice(indentation)).join("\n")
 }
 
 function stripActivityStateText(value: string) {

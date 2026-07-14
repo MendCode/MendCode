@@ -6,6 +6,7 @@ import { OAUTH_DUMMY_KEY } from "../auth"
 import os from "os"
 import { setTimeout as sleep } from "node:timers/promises"
 import { createServer } from "http"
+import { isRecord } from "@/util/record"
 
 const log = Log.create({ service: "plugin.codex" })
 
@@ -14,6 +15,11 @@ const ISSUER = "https://auth.openai.com"
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 const OAUTH_PORT = 1455
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000
+const CODEX_COMPATIBILITY_VERSION = "0.144.0"
+const CODEX_ORIGINATOR = "codex_cli_rs"
+const CODEX_USER_AGENT = `codex_cli_rs/0.0.0 (MendCode; ${os.platform()} ${os.release()}; ${os.arch()})`
+const RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite"
+const RESPONSES_LITE_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
 const ALLOWED_MODELS = new Set([
   "gpt-5.5",
   "gpt-5.2",
@@ -22,6 +28,177 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.4",
   "gpt-5.4-mini",
 ])
+
+const CODEX_CHATGPT_MODEL_ALIASES: Record<string, string> = {
+  "gpt-5.6": "gpt-5.6-sol",
+}
+
+const CODEX_CHATGPT_5_6_LIMIT = {
+  context: 272_000,
+  input: 272_000,
+  output: 128_000,
+}
+
+const CODEX_CHATGPT_FAST_MODE_MODELS = new Set([
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.5",
+  "gpt-5.6",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+])
+
+const CODEX_CHATGPT_PRO_MODE_MODELS = new Set([
+  "gpt-5.6",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+])
+
+export function normalizeCodexChatGPTModel(modelID: string) {
+  const fastBase = modelID.endsWith("-fast") ? modelID.slice(0, -"-fast".length) : undefined
+  const proBase = modelID.endsWith("-pro") ? modelID.slice(0, -"-pro".length) : undefined
+  const mode = fastBase && CODEX_CHATGPT_FAST_MODE_MODELS.has(fastBase)
+    ? "fast"
+    : proBase && CODEX_CHATGPT_PRO_MODE_MODELS.has(proBase)
+      ? "pro"
+      : undefined
+  const base = mode === "fast" ? fastBase! : mode === "pro" ? proBase! : modelID
+  return {
+    modelID: CODEX_CHATGPT_MODEL_ALIASES[base] ?? base,
+    mode,
+  }
+}
+
+export function normalizeCodexChatGPTRequestBody(body: BodyInit | null | undefined) {
+  if (typeof body !== "string") return body
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return body
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return body
+  const request = parsed as Record<string, unknown>
+  if (typeof request.model !== "string") return body
+  const normalized = normalizeCodexChatGPTModel(request.model)
+  const reasoning =
+    normalized.mode === "pro"
+      ? {
+          ...(typeof request.reasoning === "object" && request.reasoning !== null ? request.reasoning : {}),
+          mode: "pro",
+        }
+      : request.reasoning
+  if (normalized.modelID === request.model && !normalized.mode) return body
+  return JSON.stringify({
+    ...request,
+    model: normalized.modelID,
+    ...(normalized.mode === "fast" ? { service_tier: "priority" } : {}),
+    ...(reasoning === undefined ? {} : { reasoning }),
+  })
+}
+
+function prepareResponsesLiteRequest(input: {
+  body: BodyInit | null | undefined
+  headers: Headers
+  sessionIDs: Map<string, string>
+}) {
+  const body = normalizeCodexChatGPTRequestBody(input.body)
+  if (typeof body !== "string") return body
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(body)
+  } catch {
+    return body
+  }
+  if (!isRecord(parsed) || typeof parsed.model !== "string" || !RESPONSES_LITE_MODELS.has(parsed.model)) return body
+  if (!Array.isArray(parsed.input)) throw new Error("Responses Lite requires an input array")
+  if (parsed.tools !== undefined && !Array.isArray(parsed.tools)) {
+    throw new Error("Responses Lite requires a tools array")
+  }
+  if (parsed.instructions !== undefined && typeof parsed.instructions !== "string") {
+    throw new Error("Responses Lite requires string instructions")
+  }
+
+  const sourceSessionID = input.headers.get("session-id") ?? input.headers.get("session_id")
+  const sessionID = (sourceSessionID ? input.sessionIDs.get(sourceSessionID) : undefined) ?? Bun.randomUUIDv7()
+  if (sourceSessionID) input.sessionIDs.set(sourceSessionID, sessionID)
+  parsed.input = [
+    { type: "additional_tools", role: "developer", tools: parsed.tools ?? [] },
+    ...(parsed.instructions
+      ? [
+          {
+            type: "message",
+            role: "developer",
+            content: [{ type: "input_text", text: parsed.instructions }],
+          },
+        ]
+      : []),
+    ...parsed.input,
+  ]
+  delete parsed.tools
+  delete parsed.instructions
+  parsed.tool_choice = "auto"
+  parsed.parallel_tool_calls = false
+  parsed.prompt_cache_key = sessionID
+  parsed.reasoning = {
+    ...(isRecord(parsed.reasoning) ? parsed.reasoning : {}),
+    context: "all_turns",
+  }
+  stripImageDetail(parsed.input)
+
+  input.headers.delete("content-length")
+  input.headers.delete("session_id")
+  input.headers.set("session-id", sessionID)
+  input.headers.set("x-session-affinity", sessionID)
+  input.headers.set("version", CODEX_COMPATIBILITY_VERSION)
+  input.headers.set(RESPONSES_LITE_HEADER, "true")
+  return JSON.stringify(parsed)
+}
+
+export function prepareCodexChatGPTOAuthRequest(input: {
+  body: BodyInit | null | undefined
+  headers: Headers
+  sessionIDs?: Map<string, string>
+  responsesLite?: boolean
+}) {
+  input.headers.set("originator", CODEX_ORIGINATOR)
+  input.headers.set("User-Agent", CODEX_USER_AGENT)
+  input.headers.set("Origin", "https://chatgpt.com")
+  if (input.responsesLite === false) return normalizeCodexChatGPTRequestBody(input.body)
+  return prepareResponsesLiteRequest({
+    body: input.body,
+    headers: input.headers,
+    sessionIDs: input.sessionIDs ?? new Map(),
+  })
+}
+
+function stripImageDetail(input: unknown): void {
+  if (Array.isArray(input)) {
+    input.forEach(stripImageDetail)
+    return
+  }
+  if (!isRecord(input)) return
+  if (input.type === "input_image") delete input.detail
+  Object.values(input).forEach(stripImageDetail)
+}
+
+function invalidCodexChatGPTRequestResponse(error: unknown) {
+  return new Response(
+    JSON.stringify({
+      error: {
+        type: "invalid_request_error",
+        code: "invalid_request",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    }),
+    {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    },
+  )
+}
 
 interface PkceCodes {
   verifier: string
@@ -62,6 +239,10 @@ export interface IdTokenClaims {
   "https://api.openai.com/auth"?: {
     chatgpt_account_id?: string
   }
+}
+
+export interface CodexAuthPluginOptions {
+  codexApiEndpoint?: string
 }
 
 export function parseJwtClaims(token: string): IdTokenClaims | undefined {
@@ -364,8 +545,14 @@ function waitForOAuthCallback(pkce: PkceCodes, state: string): Promise<TokenResp
   })
 }
 
-export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
+export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPluginOptions = {}): Promise<Hooks> {
+  const codexApiEndpoint = options.codexApiEndpoint ?? CODEX_API_ENDPOINT
+  const codexSessionIDs = new Map<string, string>()
   return {
+    async event(input) {
+      if (input.event.type !== "session.deleted") return
+      codexSessionIDs.delete(input.event.properties.info.id)
+    },
     provider: {
       id: "openai",
       async models(provider, ctx) {
@@ -387,13 +574,15 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
                   output: 0,
                   cache: { read: 0, write: 0 },
                 },
-                limit: model.id.includes("gpt-5.5")
-                  ? {
-                      context: 400_000,
-                      input: 272_000,
-                      output: 128_000,
-                    }
-                  : model.limit,
+                limit: model.api.id.startsWith("gpt-5.6")
+                  ? CODEX_CHATGPT_5_6_LIMIT
+                  : model.id.includes("gpt-5.5")
+                    ? {
+                        context: 400_000,
+                        input: 272_000,
+                        output: 128_000,
+                      }
+                    : model.limit,
               },
             ]),
         )
@@ -408,21 +597,9 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
         return {
           apiKey: OAUTH_DUMMY_KEY,
           async fetch(requestInput: RequestInfo | URL, init?: RequestInit) {
-            // Remove dummy API key authorization header
-            if (init?.headers) {
-              if (init.headers instanceof Headers) {
-                init.headers.delete("authorization")
-                init.headers.delete("Authorization")
-              } else if (Array.isArray(init.headers)) {
-                init.headers = init.headers.filter(([key]) => key.toLowerCase() !== "authorization")
-              } else {
-                delete init.headers["authorization"]
-                delete init.headers["Authorization"]
-              }
-            }
-
+            const request = new Request(requestInput, init)
             const currentAuth = await getAuth()
-            if (currentAuth.type !== "oauth") return fetch(requestInput, init)
+            if (currentAuth.type !== "oauth") return fetch(request)
 
             // Cast to include accountId field
             const authWithAccount = currentAuth as typeof currentAuth & { accountId?: string }
@@ -446,43 +623,40 @@ export async function CodexAuthPlugin(input: PluginInput): Promise<Hooks> {
               authWithAccount.accountId = newAccountId
             }
 
-            // Build headers
-            const headers = new Headers()
-            if (init?.headers) {
-              if (init.headers instanceof Headers) {
-                init.headers.forEach((value, key) => headers.set(key, value))
-              } else if (Array.isArray(init.headers)) {
-                for (const [key, value] of init.headers) {
-                  if (value !== undefined) headers.set(key, String(value))
-                }
-              } else {
-                for (const [key, value] of Object.entries(init.headers)) {
-                  if (value !== undefined) headers.set(key, String(value))
-                }
-              }
-            }
-
-            // Set authorization header with access token
+            const headers = new Headers(request.headers)
+            headers.delete("authorization")
             headers.set("authorization", `Bearer ${currentAuth.access}`)
 
             // Set ChatGPT-Account-Id header for organization subscriptions
             if (authWithAccount.accountId) {
               headers.set("ChatGPT-Account-Id", authWithAccount.accountId)
             }
-
             // Rewrite URL to Codex endpoint
-            const parsed =
-              requestInput instanceof URL
-                ? requestInput
-                : new URL(typeof requestInput === "string" ? requestInput : requestInput.url)
-            const url =
-              parsed.pathname.includes("/v1/responses") || parsed.pathname.includes("/chat/completions")
-                ? new URL(CODEX_API_ENDPOINT)
-                : parsed
+            const parsed = new URL(request.url)
+            const rewrites = parsed.pathname.includes("/v1/responses") || parsed.pathname.includes("/chat/completions")
+            if (!rewrites) return fetch(request, { headers })
+            const url = new URL(codexApiEndpoint)
+            const requestBody = request.body ? await request.text() : undefined
 
+            const body = (() => {
+              try {
+                return prepareCodexChatGPTOAuthRequest({
+                  body: requestBody,
+                  headers,
+                  sessionIDs: codexSessionIDs,
+                  responsesLite: parsed.pathname.includes("/v1/responses"),
+                })
+              } catch (error) {
+                return invalidCodexChatGPTRequestResponse(error)
+              }
+            })()
+            if (body instanceof Response) return body
             return fetch(url, {
-              ...init,
+              method: request.method,
               headers,
+              body: request.method === "GET" || request.method === "HEAD" ? undefined : body,
+              redirect: request.redirect,
+              signal: request.signal,
             })
           },
         }

@@ -4,10 +4,12 @@ import { homedir } from "os"
 import path from "path"
 import { fileURLToPath } from "url"
 import { Glob } from "@mendcode/core/util/glob"
+import { ConfigMarkdown } from "@/config/markdown"
 import { Flag } from "@mendcode/core/flag/flag"
 import { Global } from "@mendcode/core/global"
 import { mendPaths } from "../config/paths"
 import type { MendPackageManifest } from "../sdk/package"
+import type { MendTuiProfile } from "../profile"
 import { packageMetadata, packageMetadataSet } from "../config/project"
 import { readModelsConfig } from "../config/models"
 import { readMendMcpConfig, readMendMcpConfigFromDir } from "../config/mcp"
@@ -146,6 +148,31 @@ async function listPackFiles(root: string, pattern: string) {
     .sort()
 }
 
+function hasDisabledPackExport(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  return (value as Record<string, unknown>).export === false
+}
+
+async function skillPackExportDisabledFromFile(file: string) {
+  try {
+    const parsed = await ConfigMarkdown.parse(file)
+    const data = parsed.data as Record<string, unknown>
+    return data.export === false || data.package === false || hasDisabledPackExport(data.package) || hasDisabledPackExport(data.mendcode)
+  } catch {
+    return false
+  }
+}
+
+async function skillPackExportDisabled(root: string, file: string) {
+  return skillPackExportDisabledFromFile(path.join(root, file))
+}
+
+async function listSkillPackFiles(root: string, selected?: string[]) {
+  const files = selectedFiles(await listPackFiles(root, "{skill,skills}/**/SKILL.md"), selected)
+  const exportable = await Promise.all(files.map(async (file) => (await skillPackExportDisabled(root, file)) ? [] : [file]))
+  return exportable.flat()
+}
+
 async function listGlobalSkillFiles() {
   if (Flag.OPENCODE_DISABLE_EXTERNAL_SKILLS) return []
   const home = process.env.OPENCODE_TEST_HOME || homedir()
@@ -163,7 +190,9 @@ async function listGlobalSkillFiles() {
       include: "file",
     }).catch(() => [])
   }))
-  return matches.flat().sort()
+  const files = matches.flat().sort()
+  const exportable = await Promise.all(files.map(async (file) => (await skillPackExportDisabledFromFile(file)) ? [] : [file]))
+  return exportable.flat()
 }
 
 function posixPath(file: string) {
@@ -194,8 +223,10 @@ function globalSkillSnapshotName(skillFile: string) {
 export async function prepareGlobalRuntimePackAuthorRoot() {
   const root = globalRuntimePackAuthorRoot()
   const targetMend = path.join(root, ".mendcode")
-  const previousConfig = await readJsonIfExists(path.join(targetMend, "mendcode.json")) as Record<string, any>
-  const previousPackage = previousConfig.package && typeof previousConfig.package === "object" ? previousConfig.package : null
+  const previousConfig = await readJsonIfExists(path.join(targetMend, "mendcode.json")) as Record<string, unknown>
+  const previousPackage = previousConfig.package && typeof previousConfig.package === "object" && !Array.isArray(previousConfig.package)
+    ? previousConfig.package
+    : null
   await rm(targetMend, { recursive: true, force: true })
   await mkdir(targetMend, { recursive: true })
 
@@ -219,7 +250,7 @@ export async function prepareGlobalRuntimePackAuthorRoot() {
     await copyFileIfExists(path.join(Global.Path.config, "mendcode.jsonc"), path.join(targetMend, "mendcode.json"))
   }
   if (previousPackage) {
-    const nextConfig = await readJsonIfExists(path.join(targetMend, "mendcode.json")) as Record<string, any>
+    const nextConfig = await readJsonIfExists(path.join(targetMend, "mendcode.json")) as Record<string, unknown>
     nextConfig.version = typeof nextConfig.version === "number" ? nextConfig.version : 0
     nextConfig.package = previousPackage
     await writeFile(path.join(targetMend, "mendcode.json"), `${JSON.stringify(nextConfig, null, 2)}\n`)
@@ -256,7 +287,7 @@ export async function runtimePackArtifactCandidates(root?: string): Promise<Runt
     commands: await listPackFiles(paths.root, "{command,commands}/**/*.md"),
     agents: await listPackFiles(paths.root, "{agent,agents}/**/*.md"),
     modes: await listPackFiles(paths.root, "{mode,modes}/**/*.md"),
-    skills: await listPackFiles(paths.root, "{skill,skills}/**/SKILL.md"),
+    skills: await listSkillPackFiles(paths.root),
     globalSkills: await listGlobalSkillFiles(),
     plugins: await listPackFiles(paths.root, "{plugin,plugins}/**/*.{ts,js}"),
     tools: await listPackFiles(paths.root, "{tool,tools}/**/*.{ts,js}"),
@@ -381,7 +412,7 @@ export async function buildLocalRuntimePack(root?: string): Promise<RuntimePack>
   const commands = selectedFiles(await listPackFiles(paths.root, "{command,commands}/**/*.md"), selection.commands)
   const agents = selectedFiles(await listPackFiles(paths.root, "{agent,agents}/**/*.md"), selection.agents)
   const modes = selectedFiles(await listPackFiles(paths.root, "{mode,modes}/**/*.md"), selection.modes)
-  const skills = selectedFiles(await listPackFiles(paths.root, "{skill,skills}/**/SKILL.md"), selection.skills)
+  const skills = await listSkillPackFiles(paths.root, selection.skills)
   const plugins = selectedFiles(await listPackFiles(paths.root, "{plugin,plugins}/**/*.{ts,js}"), selection.plugins)
   const tools = selectedExtensionBackedFiles(await listPackFiles(paths.root, "{tool,tools}/**/*.{ts,js}"), selection.tools, selection.extensions)
   const prompts = selectedFiles(await listPackFiles(paths.root, "{prompt,prompts}/**/*.md"), selection.prompts)
@@ -567,10 +598,22 @@ export async function rollbackRuntimePack(root?: string) {
   return plan
 }
 
+function objectRecord(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  return value as Record<string, unknown>
+}
+
+function stringOrFallback(value: unknown, fallback: string) {
+  return typeof value === "string" && value.length ? value : fallback
+}
+
 export function formatRuntimePackPlan(plan: RuntimePackPlan) {
   const model = plan.pack.models.default.providerID && plan.pack.models.default.modelID
     ? `${plan.pack.models.default.providerID}/${plan.pack.models.default.modelID}`
     : "runtime default"
+  const tui = objectRecord(plan.pack.tui) as Partial<MendTuiProfile> | null
+  const tuiLayout = objectRecord(tui?.layout)
+  const worktree = objectRecord(plan.pack.worktree)
   return [
     `Action: ${plan.action}`,
     `Pack: ${plan.pack.id}@${plan.pack.version} (${plan.pack.source.type})`,
@@ -591,9 +634,9 @@ export function formatRuntimePackPlan(plan: RuntimePackPlan) {
     `Memory settings: ${Object.keys(plan.pack.settings.memory || {}).length ? "included" : "none"}`,
     `Permission settings: ${Object.keys(plan.pack.settings.permissions || {}).length ? "included" : "none"}`,
     `Context: ${plan.pack.context.include.join(", ") || "none"}`,
-    `TUI: ${(plan.pack.tui as any).profile || "unknown"} / ${(plan.pack.tui as any).layout?.density || "unknown"}`,
+    `TUI: ${stringOrFallback(tui?.profile, "unknown")} / ${stringOrFallback(tuiLayout?.density, "unknown")}`,
     `Budget keys: ${Object.keys(plan.pack.budget).join(", ") || "none"}`,
-    `Worktree mode: ${(plan.pack.worktree as any).mode || "off"}`,
+    `Worktree mode: ${stringOrFallback(worktree?.mode, "off")}`,
     `Subsystems: ${plan.subsystemChanges.length}`,
     `Secrets included: ${plan.secretsIncluded}`,
     `Marketplace: local registry/catalog (${plan.marketplace.plannedSources.join(", ") || "none"})`,

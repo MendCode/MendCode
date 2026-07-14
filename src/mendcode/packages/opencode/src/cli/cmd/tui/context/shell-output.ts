@@ -11,6 +11,11 @@ export function previewShellOutput(output: string) {
   return clampLiveShellOutput(output)
 }
 
+export function selectShellOutput(input: { running: boolean; live?: string; final?: string }) {
+  if (input.running) return input.live ?? ""
+  return input.final ?? input.live ?? ""
+}
+
 export function latestTerminalOutputPreview(text: string, maxLines: number) {
   const lines = text.split("\n")
   const limit = Math.max(1, Math.floor(maxLines))

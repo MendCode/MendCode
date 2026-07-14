@@ -22,5 +22,35 @@ describe("session route initialization", () => {
     expect(source).toContain("suppressedPagingBoundary = undefined")
     expect(source).toContain("setFollowSessionOutput(true)")
     expect(source).toContain("if (pagingToken !== scrollPagingToken || route.sessionID !== currentSessionID) return")
+    expect(source).toContain("shouldDeferSessionFollowSync(sync.session.history(route.sessionID))")
+  })
+
+  test("settles submit with one post-render scroll and no stale editor spacer", async () => {
+    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
+
+    expect(source).toContain("const scheduleSubmitBottomScroll = (sessionID: string) =>")
+    expect(source).toContain("scheduleSubmitBottomScroll(options.submitSessionID)")
+    expect(source).toContain("if (submitBottomScrollSessionID === route.sessionID) return")
+    expect(source).not.toContain("scheduleSubmitBottomScrollPasses")
+    expect(source).not.toContain("submitViewportHold")
+    expect(source).not.toContain("submittedPromptViewportHold")
+  })
+
+  test("offers a reversible compacted tool-call command with a RAM warning", async () => {
+    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
+
+    expect(source).toContain('value: "session.toggle.compacted_tool_calls"')
+    expect(source).toContain("can substantially increase RAM usage")
+    expect(source).toContain("setShowCompactedToolCalls(() => enable)")
+    expect(source).toContain("await sync.session.reloadMessages(route.sessionID)")
+  })
+
+  test("renders queued prompts with response-aware copy and a send-now badge", async () => {
+    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
+
+    expect(source).toContain('if (mode === "after-tools") return "Waiting for the current tool iteration to finish"')
+    expect(source).toContain('return "Waiting for the current response to finish"')
+    expect(source).toContain("bg: sendNowBackground()")
+    expect(source).toContain('" ↗ SEND NOW "')
   })
 })

@@ -146,41 +146,79 @@ export function homeAgentViewRowLayout(input: { width: number }) {
   }
 }
 
-export function formatHomeAgentViewSummary(input: {
-  needsInput: number
-  looping: number
-  working: number
-  completed: number
-  pendingCommands: number
-  width: number
-}) {
-  const label = input.width >= 64 ? "Worker sessions" : "Workers"
-  const counts = input.width >= 56
-    ? `${input.needsInput} waiting · ${input.looping} looping · ${input.working} working · ${input.completed} done`
-    : `${input.needsInput} wait · ${input.looping} loop · ${input.working} work · ${input.completed} done`
-  const commandLabel = input.pendingCommands > 0
-    ? input.width >= 56
-      ? ` · ${input.pendingCommands} queued`
-      : ` · ${input.pendingCommands} cmd`
-    : ""
-  return `${label} · ${counts}${commandLabel}`
+export function homeAgentViewSummaryVisible(input: { waiting: number; looping: number; working: number }) {
+  return input.waiting + input.looping + input.working > 0
 }
 
-export function formatHomeCoordinatorSummary(input: { summary: AgentViewOrchestrationSummary; width: number }) {
-  const label = input.width >= 68 ? "Commands (detach with /bg)" : input.width >= 52 ? "Commands" : "Queue"
-  const pendingLabel = input.summary.pendingCapacity > 0
-    ? `${input.summary.pending}/${input.summary.pendingCapacity} queued`
-    : `${input.summary.pending} queued`
-  const limitLabel = input.summary.overLimitTargets > 0
-    ? input.width >= 56
-      ? ` · ${input.summary.overLimitTargets} over limit`
-      : input.width >= 52
-        ? ` · ${input.summary.overLimitTargets} over`
-        : ""
-    : ""
-  const runningLabel = input.width >= 56 ? `${input.summary.active} running` : `${input.summary.active} run`
-  const blockedLabel = input.summary.blocked > 0 || input.width >= 56 ? ` · ${input.summary.blocked} blocked` : ""
-  return `${label} · ${pendingLabel}${limitLabel} · ${runningLabel}${blockedLabel}`
+export function formatHomeAgentViewSummary(input: {
+  waiting: number
+  looping: number
+  working: number
+  width: number
+}) {
+  const full = `Agent View sessions · ${input.waiting} waiting · ${input.looping} looping · ${input.working} working`
+  const compact = `Agent View · ${input.waiting} wait · ${input.looping} loop · ${input.working} work`
+  const narrow = `${input.waiting} wait · ${input.looping} loop · ${input.working} work`
+  return [full, compact, narrow].find((value) => Bun.stringWidth(value) <= input.width) ?? narrow
+}
+
+export function homeAgentViewSummaryLines(input: {
+  waiting: number
+  looping: number
+  working: number
+  width: number
+}) {
+  const formatted = formatHomeAgentViewSummary(input)
+  if (formatted.startsWith("Agent View")) return [formatted]
+  const active = `${input.waiting} wait · ${input.looping} loop · ${input.working} work`
+  if (Bun.stringWidth(active) <= input.width) return ["Agent View sessions", active]
+  return ["Agent View sessions", `${input.waiting} wait · ${input.looping} loop`, `${input.working} work`]
+}
+
+export function homeAgentInboxSummaryVisible(summary: AgentViewOrchestrationSummary) {
+  return summary.pending + summary.active > 0
+}
+
+export function formatHomeAgentInboxSummary(input: { summary: AgentViewOrchestrationSummary; width: number }) {
+  const capacity = ` · ${input.summary.pendingCapacity} slots`
+  const bases = [
+    { value: `Agent inbox · ${input.summary.pending} queued${capacity} · ${input.summary.active} active`, wide: true },
+    { value: `Inbox · ${input.summary.pending} queued${capacity} · ${input.summary.active} active`, wide: false },
+    { value: `${input.summary.pending} queued${capacity} · ${input.summary.active} active`, wide: false },
+  ]
+  const requiredExtra = input.summary.overLimitTargets > 0
+    ? (wide: boolean) => ` · ${input.summary.overLimitTargets} over${wide ? " limit" : ""}`
+    : () => input.summary.blocked > 0 ? ` · ${input.summary.blocked} blocked` : ""
+  const selected = bases.find((item) => Bun.stringWidth(item.value + requiredExtra(item.wide)) <= input.width) ?? bases[2]
+  const base = selected.value
+  const extras = [
+    input.summary.overLimitTargets > 0 ? ` · ${input.summary.overLimitTargets} over${selected.wide ? " limit" : ""}` : "",
+    input.summary.blocked > 0 ? ` · ${input.summary.blocked} blocked` : "",
+  ]
+  return extras.reduce(
+    (value, extra) => extra && Bun.stringWidth(value + extra) <= input.width ? value + extra : value,
+    base,
+  )
+}
+
+export function homeAgentInboxSummaryLines(input: { summary: AgentViewOrchestrationSummary; width: number }) {
+  const formatted = formatHomeAgentInboxSummary(input)
+  if (formatted.startsWith("Agent inbox") || formatted.startsWith("Inbox")) return [formatted]
+  const queued = `${input.summary.pending} queued · ${input.summary.pendingCapacity} slots`
+  const active = `${input.summary.active} active`
+  const core = `${queued} · ${active}`
+  const details = [
+    input.summary.blocked > 0 ? `${input.summary.blocked} blocked` : "",
+    input.summary.overLimitTargets > 0 ? `${input.summary.overLimitTargets} over` : "",
+  ].filter(Boolean).join(" · ")
+  return ["Agent inbox", ...(Bun.stringWidth(core) <= input.width ? [core] : [queued, active]), details].filter(Boolean)
+}
+
+export function homeAgentViewSectionGapVisible(input: {
+  headlineVisible: boolean
+  precedingSectionCounts: readonly number[]
+}) {
+  return input.headlineVisible || input.precedingSectionCounts.some((count) => count > 0)
 }
 
 export function homeSplitIdentityPaneWidth(input: { panelWidth: number; rightPanelWidth: number; twoColumn: boolean }) {
@@ -875,18 +913,20 @@ export function HomeSurface(props: {
     }
     return { needsInput, looping, working, completed }
   })
-  const agentViewSummary = createMemo(() => {
+  const agentViewSummaryVisible = createMemo(() => {
     const state = agentViewState()
-    const visibleSessionIDs = new Set(agentViewSessions().map((item) => item.background.sessionID))
-    const pendingCommands = globalAgentCommands().filter(
-      (command) => command.state === "pending" && visibleSessionIDs.has(command.targetSessionID),
-    ).length
-    return formatHomeAgentViewSummary({
-      needsInput: state.needsInput.length,
+    return homeAgentViewSummaryVisible({
+      waiting: state.needsInput.length,
       looping: state.looping.length,
       working: state.working.length,
-      completed: state.completed.length,
-      pendingCommands,
+    })
+  })
+  const agentViewSummary = createMemo(() => {
+    const state = agentViewState()
+    return homeAgentViewSummaryLines({
+      waiting: state.needsInput.length,
+      looping: state.looping.length,
+      working: state.working.length,
       width: widthForHomeAgentViewSummary(),
     })
   })
@@ -898,6 +938,14 @@ export function HomeSurface(props: {
       pendingLimitPerTarget: 3,
     })
   })
+  const agentViewInboxSummaryVisible = createMemo(() => {
+    const summary = agentViewOrchestrationSummary()
+    return homeAgentInboxSummaryVisible(summary)
+  })
+  const agentViewHeadlineVisible = createMemo(() => agentViewSummaryVisible() || agentViewInboxSummaryVisible())
+  const agentViewInboxSummary = createMemo(() =>
+    homeAgentInboxSummaryLines({ summary: agentViewOrchestrationSummary(), width: widthForHomeAgentViewSummary() }),
+  )
   const visibleAgentViewRows = createMemo(() => [
     ...agentViewState().needsInput.slice(0, 3),
     ...agentViewState().looping.slice(0, 4),
@@ -1168,10 +1216,12 @@ export function HomeSurface(props: {
       marker: (item: AgentViewSessionItem) => JSX.Element | string,
       color: string,
       max: number,
-      options?: { elapsed?: boolean },
+      options?: { elapsed?: boolean; gapBefore?: Accessor<boolean> },
     ) => (
       <Show when={items.length > 0}>
-        <box height={1} />
+        <Show when={options?.gapBefore?.() ?? true}>
+          <box height={1} />
+        </Show>
         <text fg={mend.profile.theme.tokens.foreground} wrapMode="none">{title}</text>
         {items.slice(0, max).map((item) => row(item, () => marker(item), color, options))}
       </Show>
@@ -1187,29 +1237,61 @@ export function HomeSurface(props: {
             </box>
           }
         >
-          <text fg={mend.profile.theme.tokens.muted} wrapMode="none">
-            {Locale.truncate(agentViewSummary(), Math.max(12, width()))}
-          </text>
-          <text
-            fg={agentViewOrchestrationSummary().overLimitTargets > 0 ? "#f59e0b" : launcherHintColor}
-            wrapMode="none"
-          >
-            {Locale.truncate(
-              formatHomeCoordinatorSummary({ summary: agentViewOrchestrationSummary(), width: width() }),
-              Math.max(12, width()),
-            )}
-          </text>
-          {section("Needs input", agentViewState().needsInput, () => "✱", mend.profile.theme.tokens.accent, 3, { elapsed: true })}
-          {section("Looping", agentViewState().looping, () => "↻", mend.profile.theme.tokens.accent, 4, { elapsed: true })}
+          <Show when={agentViewSummaryVisible()}>
+            <For each={agentViewSummary()}>{(line) =>
+              <text fg={mend.profile.theme.tokens.muted} wrapMode="none">
+                {Locale.truncate(line, Math.max(12, width()))}
+              </text>
+            }</For>
+          </Show>
+          <Show when={agentViewInboxSummaryVisible()}>
+            <For each={agentViewInboxSummary()}>{(line) =>
+              <text
+                fg={agentViewOrchestrationSummary().overLimitTargets > 0 ? "#f59e0b" : launcherHintColor}
+                wrapMode="none"
+              >
+                {Locale.truncate(line, Math.max(12, width()))}
+              </text>
+            }</For>
+          </Show>
+          {section("Needs input", agentViewState().needsInput, () => "✱", mend.profile.theme.tokens.accent, 3, {
+            elapsed: true,
+            gapBefore: () => homeAgentViewSectionGapVisible({
+              headlineVisible: agentViewHeadlineVisible(),
+              precedingSectionCounts: [],
+            }),
+          })}
+          {section("Looping", agentViewState().looping, () => "↻", mend.profile.theme.tokens.accent, 4, {
+            elapsed: true,
+            gapBefore: () => homeAgentViewSectionGapVisible({
+              headlineVisible: agentViewHeadlineVisible(),
+              precedingSectionCounts: [agentViewState().needsInput.length],
+            }),
+          })}
           {section(
             "Working",
             agentViewState().working,
             () => <Spinner />,
             launcherHintColor,
             4,
-            { elapsed: true },
+            {
+              elapsed: true,
+              gapBefore: () => homeAgentViewSectionGapVisible({
+                headlineVisible: agentViewHeadlineVisible(),
+                precedingSectionCounts: [agentViewState().needsInput.length, agentViewState().looping.length],
+              }),
+            },
           )}
-          {section("Completed", agentViewState().completed, () => "✦", "#86efac", 3)}
+          {section("Completed", agentViewState().completed, () => "✦", "#86efac", 3, {
+            gapBefore: () => homeAgentViewSectionGapVisible({
+              headlineVisible: agentViewHeadlineVisible(),
+              precedingSectionCounts: [
+                agentViewState().needsInput.length,
+                agentViewState().looping.length,
+                agentViewState().working.length,
+              ],
+            }),
+          })}
         </Show>
       </box>
     )
@@ -1314,7 +1396,11 @@ export function HomeSurface(props: {
                     <Show when={splitShowsSideTitle()}>
                       <Show
                         when={showSplitAsciiTitle()}
-                        fallback={<text fg={mend.profile.theme.tokens.foreground} wrapMode="none">{splitProductText()}</text>}
+                        fallback={
+                          <box width="100%" alignItems="center">
+                            <text fg={mend.profile.theme.tokens.foreground} wrapMode="none">{splitProductText()}</text>
+                          </box>
+                        }
                       >
                         <box>
                           <SurfaceLines text={splitProductAscii()} />

@@ -91,14 +91,15 @@ async function addUser(sessionID: SessionID, text?: string) {
 async function addAssistant(
   sessionID: SessionID,
   parentID: MessageID,
-  opts?: { summary?: boolean; finish?: string; error?: MessageV2.Assistant["error"] },
+  opts?: { summary?: boolean; finish?: string; completed?: boolean; error?: MessageV2.Assistant["error"] },
 ) {
   const id = MessageID.ascending()
+  const created = Date.now()
   await svc.updateMessage({
     id,
     sessionID,
     role: "assistant",
-    time: { created: Date.now() },
+    time: { created, completed: opts?.completed ? created : undefined },
     parentID,
     modelID: ModelID.make("test"),
     providerID: ProviderID.make("test"),
@@ -112,6 +113,17 @@ async function addAssistant(
     error: opts?.error,
   } as unknown as MessageV2.Info)
   return id
+}
+
+async function addText(sessionID: SessionID, messageID: MessageID, text: string, opts?: { synthetic?: boolean }) {
+  await svc.updatePart({
+    id: PartID.ascending(),
+    sessionID,
+    messageID,
+    type: "text",
+    text,
+    synthetic: opts?.synthetic,
+  })
 }
 
 async function addCompactionPart(sessionID: SessionID, messageID: MessageID, tailStartID?: MessageID) {
@@ -308,6 +320,49 @@ describe("MessageV2.page", () => {
             String(tuiTool.state.metadata.outputPath),
         ).toBe("/tmp/full-output")
         expect(tuiFile?.type === "file" && tuiFile.url.length).toBeLessThan(16 * 1024)
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+
+  test("tui pagination skips tool-only messages before the latest completed compaction", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const oldUser = await addUser(session.id, "old request")
+        const oldFinal = await addAssistant(session.id, oldUser, { finish: "stop", completed: true })
+        await addText(session.id, oldFinal, "old final answer")
+        const hiddenTools = [] as MessageID[]
+        for (let index = 0; index < 120; index++) {
+          const assistant = await addAssistant(session.id, oldUser, { finish: "tool-calls", completed: true })
+          hiddenTools.push(assistant)
+          await addLargeToolPart(session.id, assistant, `tool ${index}`)
+        }
+        const syntheticUser = await addUser(session.id)
+        await addText(session.id, syntheticUser, "internal continuation", { synthetic: true })
+        const compact = await addUser(session.id)
+        await addCompactionPart(session.id, compact)
+        const summary = await addAssistant(session.id, compact, { summary: true, finish: "stop", completed: true })
+        await addText(session.id, summary, "summary")
+        const latestUser = await addUser(session.id, "latest request")
+        const latestAssistant = await addAssistant(session.id, latestUser, { finish: "stop", completed: true })
+        await addText(session.id, latestAssistant, "latest answer")
+
+        const latest = MessageV2.page({ sessionID: session.id, limit: 4, view: "tui" })
+        expect(latest.items.map((item) => item.info.id)).toEqual([oldFinal, compact, summary, latestUser, latestAssistant])
+        expect(latest.cursor).toBeTruthy()
+        expect(latest.sparse).toBe(true)
+
+        const older = MessageV2.page({ sessionID: session.id, limit: 4, before: latest.cursor, view: "tui" })
+        expect(older.items.map((item) => item.info.id)).toEqual([oldUser])
+        expect(older.more).toBe(false)
+        expect(older.items.some((item) => hiddenTools.includes(item.info.id))).toBe(false)
+
+        const all = MessageV2.page({ sessionID: session.id, limit: 6, view: "tui-all" })
+        expect(all.items.some((item) => hiddenTools.includes(item.info.id))).toBe(true)
+        expect(all.sparse).toBeUndefined()
 
         await svc.remove(session.id)
       },

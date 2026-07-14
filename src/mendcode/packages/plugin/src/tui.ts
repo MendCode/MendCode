@@ -1,3 +1,24 @@
+export {
+  asciiGraphCellToWorld,
+  asciiGraphNearestNode,
+  asciiGraphRuns,
+  asciiGraphWithNodePosition,
+  layoutAsciiGraph,
+  renderAsciiGraph,
+  type AsciiGraphCell,
+  type AsciiGraphCellKind,
+  type AsciiGraphEdge,
+  type AsciiGraphFrame,
+  type AsciiGraphLabelMode,
+  type AsciiGraphLayoutNode,
+  type AsciiGraphMarker,
+  type AsciiGraphNode,
+  type AsciiGraphPoint,
+  type AsciiGraphRun,
+  type AsciiGraphScene,
+  type AsciiGraphViewport,
+} from "./ascii-graph.js"
+
 import type {
   AgentPart,
   OpencodeClient,
@@ -645,6 +666,48 @@ export type TuiWorkspace = {
   set: (workspaceID?: string) => void
 }
 
+export type TuiMemoryGraphFact = {
+  id: string
+  text: string
+  scope: string
+  categoryIDs: string[]
+  retrievalPriority?: number
+  materialized: boolean
+}
+
+export type TuiMemoryGraphLink = {
+  from: string
+  to: string
+  kind: string
+}
+
+export type TuiMemoryGraphCategory = {
+  id: string
+  label: string
+  count: number
+}
+
+export type TuiMemoryGraphSnapshot = {
+  root: string
+  facts: TuiMemoryGraphFact[]
+  links: TuiMemoryGraphLink[]
+  categories: TuiMemoryGraphCategory[]
+  health: {
+    graphHealth: string
+    materializedFacts: number
+    legacyFacts: number
+    links: number
+    connectedFacts: number
+    isolatedFacts: number
+    orphanLinks: number
+  }
+}
+
+export type TuiMemoryApi = {
+  /** Read the current project's persisted memory graph without granting arbitrary filesystem access. */
+  graph: () => Promise<TuiMemoryGraphSnapshot>
+}
+
 export type TuiPluginApi = {
   app: TuiApp
   command: {
@@ -678,6 +741,7 @@ export type TuiPluginApi = {
   readonly tuiConfig: Frozen<TuiConfigView>
   kv: TuiKV
   state: TuiState
+  memory: TuiMemoryApi
   theme: TuiTheme
   client: OpencodeClient
   event: TuiEventBus

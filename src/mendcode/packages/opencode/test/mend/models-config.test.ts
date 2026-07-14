@@ -86,4 +86,36 @@ describe("mend model roles", () => {
       else process.env.XDG_CONFIG_HOME = previousXdgConfigHome
     }
   })
+
+  test("removes the deprecated generic review role from model configuration", async () => {
+    await using dir = await tmpdir()
+    await using globalDir = await tmpdir()
+    const previousXdgConfigHome = process.env.XDG_CONFIG_HOME
+    process.env.XDG_CONFIG_HOME = globalDir.path
+    try {
+      await writeText(
+        path.join(globalDir.path, "mendcode", "models.yaml"),
+        [
+          "version: 0",
+          "enabled: true",
+          "roles:",
+          "  default:",
+          '    providerID: "openai"',
+          '    modelID: "gpt-5.4"',
+          "  review:",
+          '    providerID: "openai"',
+          '    modelID: "gpt-5.5"',
+          "",
+        ].join("\n"),
+      )
+
+      const resolved = await resolveModelRoles(dir.path)
+      expect((resolved.roles as any).review).toBeUndefined()
+      const projection = await modelRoleProjection(dir.path)
+      expect((projection.projected as any).review).toBeUndefined()
+    } finally {
+      if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
+      else process.env.XDG_CONFIG_HOME = previousXdgConfigHome
+    }
+  })
 })

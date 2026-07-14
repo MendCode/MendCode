@@ -33,7 +33,7 @@ afterEach(async () => {
 })
 
 describe("session action routes", () => {
-  test("abort route returns success", async () => {
+  test("abort and interrupt routes return success", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
       directory: tmp.path,
@@ -45,6 +45,10 @@ describe("session action routes", () => {
 
         expect(res.status).toBe(200)
         expect(await res.json()).toBe(true)
+
+        const interrupt = await app.request(`/session/${session.id}/interrupt`, { method: "POST" })
+        expect(interrupt.status).toBe(200)
+        expect(await interrupt.json()).toBe(true)
 
         await svc.remove(session.id)
       },

@@ -769,6 +769,62 @@ describe("session.compaction.isOverflow", () => {
   )
 
   it.live(
+    "uses an absolute global auto-compaction token limit",
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const model = createModel({ context: 1_050_000, input: 922_000, output: 128_000 })
+          expect(
+            yield* compact.isOverflow({
+              tokens: { input: 249_999, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              model,
+            }),
+          ).toBe(false)
+          expect(
+            yield* compact.isOverflow({
+              tokens: { input: 250_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              model,
+            }),
+          ).toBe(true)
+        }),
+      {
+        config: {
+          compaction: { token_limit: 250_000 },
+        },
+      },
+    ),
+  )
+
+  it.live(
+    "caps an absolute auto-compaction token limit at the model context limit",
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const compact = yield* SessionCompaction.Service
+          const model = createModel({ context: 200_000, output: 20_000 })
+          expect(
+            yield* compact.isOverflow({
+              tokens: { input: 199_999, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              model,
+            }),
+          ).toBe(false)
+          expect(
+            yield* compact.isOverflow({
+              tokens: { input: 200_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              model,
+            }),
+          ).toBe(true)
+        }),
+      {
+        config: {
+          compaction: { token_limit: 250_000 },
+        },
+      },
+    ),
+  )
+
+  it.live(
     "uses provider and model auto-compaction threshold overrides",
     provideTmpdirInstance(
       () =>

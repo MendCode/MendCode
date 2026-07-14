@@ -139,6 +139,23 @@ function Add-MendCodeToPath {
   }
 }
 
+function Restart-MendCodeLoopServices {
+  if (-not (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+    return
+  }
+
+  $tasks = @(Get-ScheduledTask -TaskPath "\MendCode\Loops\" -ErrorAction SilentlyContinue |
+    Where-Object { $_.TaskName -like "com.mendcode.loops.*" })
+  foreach ($task in $tasks) {
+    Stop-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
+    Start-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue
+  }
+
+  if ($tasks.Count -gt 0) {
+    Write-Ok "Refreshed $($tasks.Count) MendCode loop task(s)"
+  }
+}
+
 if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
   throw "install.ps1 is for Windows. On macOS or Linux, run: curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash"
 }
@@ -183,6 +200,7 @@ Copy-Item -Force $binary.FullName (Join-Path $InstallDir "mendcode.exe")
 Remove-Item -Recurse -Force $extractDir
 Remove-Item -Force $zip
 Write-Ok "Installed $(Join-Path $InstallDir "mendcode.exe")"
+Restart-MendCodeLoopServices
 
 Write-Step 4 4 "Updating PATH"
 Add-MendCodeToPath

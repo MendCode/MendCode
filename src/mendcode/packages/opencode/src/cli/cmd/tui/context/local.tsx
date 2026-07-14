@@ -15,6 +15,7 @@ import { Filesystem } from "@/util/filesystem"
 import { readModelsConfig, type ModelRole } from "@/mend/config/models"
 import { useMendTuiProfile } from "./mend"
 import { useRoute } from "./route"
+import { nextPromptVariant, resolveSelectedPromptModel, resolveSelectedPromptVariant } from "../component/prompt/agent"
 
 type ModelSource = "user" | "hydrated" | "agent"
 
@@ -323,6 +324,30 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         )
       })
 
+      function routePromptModel() {
+        const localModel = currentModel()
+        if (route.data.type !== "session") return localModel
+        const session = sync.session.get(route.data.sessionID)
+        const user = (sync.data.message[route.data.sessionID] ?? []).findLast((item) => item.role === "user")
+        const key = scopedModelKey()
+        const source = key ? modelStore.modelSource[key] : undefined
+        const override = key && (source === "user" || source === "agent") ? modelStore.model[key] : undefined
+        const sessionAgent = sync.data.agent.find((item) => item.name === session?.agent && !item.hidden)
+        return resolveSelectedPromptModel({
+          hasSession: true,
+          sessionUsesSubagent: Boolean(
+            sessionAgent?.name && !agent.list().some((item) => item.name === sessionAgent.name),
+          ),
+          localModel,
+          localOverride: override,
+          localOverrideUpdatedAt: key ? modelStore.modelUpdatedAt[key] : undefined,
+          userModel: user?.role === "user" ? user.model : undefined,
+          userModelCreatedAt: user?.time.created,
+          sessionModel: session?.model,
+          agentModel: sessionAgent?.model,
+        })
+      }
+
       function variantScopeKey(model: { providerID: string; modelID: string } | undefined) {
         if (!model) return undefined
         const scope = scopedModelKey()
@@ -379,17 +404,35 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         const a = scopedAgentInfo()
         const key = variantScopeKey(m)
         if (!key) return undefined
-        if (modelStore.variant[key] !== undefined && modelStore.variantSource[key] !== "agent") {
-          const value = modelStore.variant[key]
-          return value === "default" ? undefined : value
-        }
+        const value = modelStore.variant[key]
+        const stored = value === "default" ? undefined : value
+        const source = modelStore.variantSource[key]
         const role = a ? modelStore.mendRoles[a.name] : undefined
-        if (role?.providerID === m.providerID && role.modelID === m.modelID) return role.variant ?? undefined
-        if (modelStore.variant[key] !== undefined) {
-          const value = modelStore.variant[key]
-          return value === "default" ? undefined : value
-        }
-        return undefined
+        const localVariant = value !== undefined && source !== "agent"
+          ? stored
+          : role?.providerID === m.providerID && role.modelID === m.modelID
+            ? role.variant ?? undefined
+            : stored
+        const session = route.data.type === "session" ? sync.session.get(route.data.sessionID) : undefined
+        const user = route.data.type === "session"
+          ? (sync.data.message[route.data.sessionID] ?? []).findLast((item) => item.role === "user")
+          : undefined
+        const userModel = user?.role === "user" && user.model.providerID === m.providerID && user.model.modelID === m.modelID
+          ? user.model
+          : undefined
+        const sessionModelID = session?.model?.id
+        const sessionModel = session?.model?.providerID === m.providerID && sessionModelID === m.modelID
+          ? session.model
+          : undefined
+        return resolveSelectedPromptVariant({
+          hasSession: route.data.type === "session",
+          localVariant,
+          hasLocalVariantOverride: value !== undefined && (source === "user" || source === "agent"),
+          localVariantOverrideUpdatedAt: modelStore.variantUpdatedAt[key],
+          userModel,
+          userModelCreatedAt: userModel ? user?.time.created : undefined,
+          sessionModel,
+        })
       }
 
       function setVariant(
@@ -604,19 +647,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           },
           set: setVariant,
           cycle() {
-            const variants = this.list()
+            const model = routePromptModel()
+            const variants = this.list(model)
             if (variants.length === 0) return
-            const current = this.current()
-            if (!current) {
-              this.set(variants[0])
-              return
-            }
-            const index = variants.indexOf(current)
-            if (index === -1 || index === variants.length - 1) {
-              this.set(undefined)
-              return
-            }
-            this.set(variants[index + 1])
+            this.set(nextPromptVariant(variants, this.current(model)), { model })
           },
         },
       }

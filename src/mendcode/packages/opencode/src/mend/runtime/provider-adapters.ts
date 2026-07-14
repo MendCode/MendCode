@@ -7,6 +7,7 @@ import { providerAuthPreset, providerEnvRequirements } from "./readiness"
 import { budgetEnforcementStatus } from "./budget"
 import { providerAuthStateFile, readProviderAuthState } from "./auth-state"
 import { mendRuntimeVersion } from "./version"
+import { prepareCodexChatGPTOAuthRequest } from "@/plugin/codex"
 
 const genericAiSdkPackages: Record<string, { factory: string }> = {
   "@ai-sdk/anthropic": { factory: "createAnthropic" },
@@ -244,15 +245,21 @@ async function runOpenAISubscriptionPrompt(root: string, input: any) {
   const auth = await ensureFreshOpenAIAuthState(root)
   if (!auth) throw new Error("OpenAI OAuth state missing. Run `mendcode auth login openai --method browser --execute` first.")
   const startedAt = Date.now()
-  const headers: Record<string, string> = {
+  const headers = new Headers({
     "Content-Type": "application/json",
     Authorization: `Bearer ${auth.access}`,
-    originator: "mendcode",
-    "User-Agent": `mendcode/${mendRuntimeVersion()} (${process.platform}; ${process.arch})`,
     session_id: `mend-${Date.now()}`,
-  }
-  if (auth.accountId) headers["ChatGPT-Account-Id"] = auth.accountId
-  const response = await fetch(openaiCodexResponsesEndpoint(), { method: "POST", headers, body: JSON.stringify(responseRequestBody(input)) })
+  })
+  if (auth.accountId) headers.set("ChatGPT-Account-Id", auth.accountId)
+  const body = prepareCodexChatGPTOAuthRequest({
+    headers,
+    body: JSON.stringify(responseRequestBody(input)),
+  })
+  const response = await fetch(openaiCodexResponsesEndpoint(), {
+    method: "POST",
+    headers,
+    body,
+  })
   return parseResponsesResult({ ...input, authMode: "chatgpt-subscription-oauth", response, text: await response.text(), elapsedMs: Date.now() - startedAt })
 }
 

@@ -25,12 +25,9 @@ function asClipboardPart(part: unknown): RuntimeClipboardPart {
   return part as RuntimeClipboardPart
 }
 
-function imageMarkdown(part: RuntimeClipboardPart) {
-  if (!part.url?.startsWith("data:") || !part.mime?.startsWith("image/")) return
-  const match = part.url.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=\s]+)$/)
-  if (!match || !match[1].startsWith("image/")) return
-  const filename = (part.filename || "image").replace(/[\]\n\r]/g, " ").trim() || "image"
-  return `![${filename}](data:${match[1]};base64,${match[2].replace(/\s+/g, "")})`
+function imagePlaceholder(part: RuntimeClipboardPart, index: number) {
+  const filename = part.filename?.replace(/[\]\n\r]/g, " ").trim()
+  return filename ? `[Image ${index}: ${filename}]` : `[Image ${index} attached]`
 }
 
 export function messagePartsToPortableClipboard(parts: readonly unknown[]) {
@@ -43,26 +40,19 @@ export function messagePartsToPortableClipboard(parts: readonly unknown[]) {
     if (part.type === "file" && part.mime?.startsWith("image/") && part.url?.startsWith("data:")) attachments.push(part)
   }
 
-  for (const attachment of attachments) {
-    const markdown = imageMarkdown(attachment)
-    if (!markdown) continue
-    const placeholder = attachment.source?.text?.value
-    if (placeholder && text.includes(placeholder)) {
-      text = text.replace(placeholder, markdown)
+  for (const [index, attachment] of attachments.entries()) {
+    const placeholder = imagePlaceholder(attachment, index + 1)
+    const source = attachment.source?.text?.value
+    if (source && text.includes(source)) {
+      text = text.replace(source, placeholder)
       continue
     }
-    text += `${text && !text.endsWith("\n") ? "\n\n" : ""}${markdown}`
+    text += `${text && !text.endsWith("\n") ? "\n\n" : ""}${placeholder}`
   }
 
   return {
     text,
     imageCount: attachments.length,
-    firstImage: attachments[0]
-      ? {
-          mime: attachments[0].mime!,
-          data: attachments[0].url!.replace(/^data:[^;,]+;base64,/, "").replace(/\s+/g, ""),
-        }
-      : undefined,
   }
 }
 
@@ -144,7 +134,11 @@ function shiftPromptPart(part: PromptPart, input: { start: number; delta: number
   return part
 }
 
-function expandPastedContentPartAt(prompt: PromptInfo, index: number, input?: { replaceStart?: number; replaceEnd?: number }) {
+function expandPastedContentPartAt(
+  prompt: PromptInfo,
+  index: number,
+  input?: { replaceStart?: number; replaceEnd?: number },
+) {
   const part = prompt.parts[index]
   if (!part || part.type !== "text" || !part.source?.text) return
 

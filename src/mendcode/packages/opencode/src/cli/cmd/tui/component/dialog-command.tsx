@@ -298,7 +298,7 @@ const titleOverrides: Record<string, string> = {
   "mendcode.prompt.mode.cycle": "Cycle Prompt Context",
   "mendcode.session.submit_scroll": "Configure Submit Scroll Behavior",
   "mendcode.setup": "Open Setup",
-  "mendcode.permission.status": "View Permission Mode",
+  "mendcode.permission.status": "Change Default Approval Mode",
   "mendcode.status": "View MendCode Health",
   "mendcode.ai.status": "Configure Providers",
   "mendcode.models.status": "Configure Models",

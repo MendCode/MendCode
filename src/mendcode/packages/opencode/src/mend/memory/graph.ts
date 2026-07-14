@@ -209,6 +209,37 @@ export async function upsertMemoryFactLink(
   return link
 }
 
+function sharedSemanticCategories(a: MemoryFact, b: MemoryFact, allowedCategoryIDs?: string[]) {
+  const categories = new Set(b.categoryIDs)
+  const allowed = allowedCategoryIDs?.length ? new Set(allowedCategoryIDs) : undefined
+  return a.categoryIDs.filter((categoryID) => categoryID !== "uncategorized" && categories.has(categoryID) && (!allowed || allowed.has(categoryID)))
+}
+
+function relatedFactScore(fact: MemoryFact, candidate: MemoryFact, allowedCategoryIDs?: string[]) {
+  const terms = new Set(fact.normalizedSummary.toLowerCase().split(/[^\p{L}\p{N}_.@/-]+/u).filter((term) => term.length > 3))
+  const candidateTerms = new Set(candidate.normalizedSummary.toLowerCase().split(/[^\p{L}\p{N}_.@/-]+/u).filter((term) => term.length > 3))
+  const overlap = [...terms].filter((term) => candidateTerms.has(term)).length / Math.max(1, Math.min(terms.size, candidateTerms.size))
+  return sharedSemanticCategories(fact, candidate, allowedCategoryIDs).length * 100
+    + overlap * 10
+    + (fact.scope === candidate.scope ? 2 : 0)
+    + candidate.confidence
+    + candidate.durability
+    - candidate.retrievalPriority / 1000
+}
+
+export async function connectMemoryFactToRelatedFact(id: string, root?: string, allowedCategoryIDs?: string[]) {
+  const graph = await readMemoryGraph(root)
+  const fact = graph.facts.find((item) => item.id === id)
+  if (!fact) return null
+  const existing = graph.links.find((link) => link.from === id || link.to === id)
+  if (existing) return existing
+  const candidate = graph.facts
+    .filter((item) => item.id !== id && item.sensitivity === "low" && !item.stale && sharedSemanticCategories(fact, item, allowedCategoryIDs).length > 0)
+    .toSorted((a, b) => relatedFactScore(fact, b, allowedCategoryIDs) - relatedFactScore(fact, a, allowedCategoryIDs) || a.id.localeCompare(b.id))[0]
+  if (!candidate) return null
+  return upsertMemoryFactLink({ from: id, to: candidate.id, kind: "related" }, root)
+}
+
 export async function legacyFacts(root?: string) {
   const [globalEntries, projectEntries] = await Promise.all([
     readMemoryEntries("global", root).catch(() => []),

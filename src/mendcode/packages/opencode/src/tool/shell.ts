@@ -709,7 +709,7 @@ export const ShellTool = Tool.define(
       return {
         title: input.description,
         metadata: {
-          output: last || preview(output),
+          output: preview(output),
           exit: code,
           description: input.description,
           truncated: cut,

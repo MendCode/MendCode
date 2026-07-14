@@ -54,11 +54,7 @@ export function DialogMessage(props: {
             const clipboard = messagePartsToPortableClipboard(await fullParts(msg.id))
             if (!clipboard.text) return
 
-            if (clipboard.imageCount === 1 && clipboard.firstImage && clipboard.text.startsWith("![")) {
-              await Clipboard.copyImage(clipboard.firstImage).catch(() => Clipboard.copy(clipboard.text))
-            } else {
-              await Clipboard.copy(clipboard.text)
-            }
+            await Clipboard.copy(clipboard.text)
             dialog.clear()
           },
         },

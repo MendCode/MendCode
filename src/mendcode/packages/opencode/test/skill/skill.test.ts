@@ -10,6 +10,7 @@ import { Global } from "@mendcode/core/global"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { provideInstance, provideTmpdirInstance, tmpdir } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { Session } from "../../src/session/session"
 import path from "path"
 import fs from "fs/promises"
 
@@ -191,6 +192,60 @@ Just some content without YAML frontmatter.
 
           const skill = yield* Skill.Service
           expect((yield* skill.all()).find((x) => x.name === "no-frontmatter")).toBeUndefined()
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("does not surface invalid external skills as session errors", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        withHome(
+          dir,
+          Effect.gen(function* () {
+            yield* Effect.promise(() =>
+              Bun.write(
+                path.join(dir, ".claude", "skills", "invalid-external", "SKILL.md"),
+                "# This file is missing frontmatter\n",
+              ),
+            )
+
+            const bus = yield* Bus.Service
+            const errors: unknown[] = []
+            const unsubscribe = yield* bus.subscribeCallback(Session.Event.Error, (event) => errors.push(event))
+            const skill = yield* Skill.Service
+            expect(yield* skill.get("invalid-external")).toBeUndefined()
+            yield* Effect.sleep("50 millis")
+            unsubscribe()
+            expect(errors).toHaveLength(0)
+          }),
+        ),
+      { git: true },
+    ),
+  )
+
+  it.live("retries a skill while its frontmatter is being written", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const skillPath = path.join(dir, ".mendcode", "skill", "transient-skill", "SKILL.md")
+          const valid = `---
+name: transient-skill
+description: A skill that becomes valid after an in-progress write.
+---
+
+# Transient Skill
+`
+          yield* Effect.promise(() => Bun.write(skillPath, "# Incomplete while the editor is writing\n"))
+          const finishWrite = new Promise<void>((resolve, reject) => {
+            setTimeout(() => {
+              Bun.write(skillPath, valid).then(() => resolve(), reject)
+            }, 25)
+          })
+
+          const skill = yield* Skill.Service
+          yield* Effect.promise(() => finishWrite)
+          expect(yield* skill.get("transient-skill")).toBeDefined()
         }),
       { git: true },
     ),
@@ -638,10 +693,11 @@ description: Skill that will be deleted.
           )
 
           const skill = yield* Skill.Service
-          const bus = yield* Bus.Service
-          expect(yield* skill.get("deleted-skill")).toBeDefined()
+           const bus = yield* Bus.Service
+           expect(yield* skill.get("deleted-skill")).toBeDefined()
+           yield* Effect.sleep("150 millis")
 
-          yield* Effect.promise(() => fs.rm(skillPath))
+           yield* Effect.promise(() => fs.rm(skillPath))
           yield* bus.publish(FileWatcher.Event.Updated, { file: skillPath, event: "unlink" })
           expect(yield* waitForSkill(skill.get("deleted-skill"), (item) => item === undefined)).toBeUndefined()
         }),

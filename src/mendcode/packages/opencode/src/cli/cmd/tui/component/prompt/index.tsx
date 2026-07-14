@@ -266,9 +266,13 @@ export function shouldEnableSessionInterrupt(input: {
   return Boolean(input.hasActiveWorkingAssistant) && !input.autocompleteVisible
 }
 
-export function shouldInterruptImmediately(input: { statusType: string; hasDraft?: boolean }) {
+export function shouldInterruptImmediately(input: {
+  statusType: string
+  hasDraft?: boolean
+  hasActiveWorkingAssistant?: boolean
+}) {
   if (input.hasDraft) return false
-  return input.statusType !== "idle"
+  return input.statusType !== "idle" || Boolean(input.hasActiveWorkingAssistant)
 }
 
 export function shouldAcceptPromptInterruptFocus(input: { inputFocused: boolean; currentFocusedRenderable?: unknown; promptInput?: unknown }) {
@@ -411,6 +415,7 @@ function cleanPromptInputText(value: string) {
 export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
   let anchor: BoxRenderable
+  let suppressPromptInputSync = false
   let autocomplete: AutocompleteRef
   let lastPastedContentClick: { time: number; offset: number } | undefined
 
@@ -1056,6 +1061,7 @@ export function Prompt(props: PromptProps) {
             const immediateInterrupt = shouldInterruptImmediately({
               statusType: status().type,
               hasDraft: store.prompt.input.trim().length > 0 || store.prompt.parts.length > 0,
+              hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
             })
             if (autocomplete?.visible && !immediateInterrupt) return
             if (!shouldAcceptPromptInterruptFocus({ inputFocused: input.focused, currentFocusedRenderable: renderer.currentFocusedRenderable, promptInput: input })) return
@@ -1501,6 +1507,7 @@ export function Prompt(props: PromptProps) {
     const message = optimisticUserMessage(input)
     const parts = optimisticUserParts(input)
     const messages = sync.data.message[input.sessionID]
+    sync.session.pinMessage(input.sessionID, input.messageID)
 
     batch(() => {
       if (!messages) {
@@ -1521,6 +1528,7 @@ export function Prompt(props: PromptProps) {
   }
 
   function removeOptimisticUserTurn(input: { sessionID: string; messageID: string; created: number }) {
+    sync.session.unpinMessage(input.sessionID, input.messageID)
     const messages = sync.data.message[input.sessionID]
     const index = messages?.findIndex((item) => item.id === input.messageID) ?? -1
     const message = index >= 0 ? messages?.[index] : undefined
@@ -1543,6 +1551,25 @@ export function Prompt(props: PromptProps) {
     })
   }
 
+  function clearPromptForSubmit() {
+    suppressPromptInputSync = true
+    input.extmarks.clear()
+    input.clear()
+    setStore("prompt", { input: "", parts: [] })
+    setStore("extmarkToPartIndex", new Map())
+    suppressPromptInputSync = false
+  }
+
+  function restorePromptAfterSubmitFailure(prompt: PromptInfo) {
+    suppressPromptInputSync = true
+    input.setText(prompt.input)
+    input.cursorOffset = prompt.input.length
+    setStore("prompt", prompt)
+    suppressPromptInputSync = false
+    restoreExtmarksFromParts(prompt.parts)
+    input.gotoBufferEnd()
+  }
+
   async function submit() {
     setWarpNotice(undefined)
 
@@ -1562,13 +1589,19 @@ export function Prompt(props: PromptProps) {
       }
     }
     syncExtmarksWithPromptParts()
+    const promptSnapshot: PromptInfo = {
+      input: store.prompt.input,
+      parts: [...store.prompt.parts],
+      mode: store.prompt.mode,
+    }
+    const submittedInputRows = input.height
     if (props.disabled) return false
     if (workspaceCreating()) return false
     if (autocomplete?.visible) return false
-    if (!store.prompt.input) return false
+    if (!promptSnapshot.input) return false
     const agent = activeAgent()
     if (!agent) return false
-    const trimmed = store.prompt.input.trim()
+    const trimmed = promptSnapshot.input.trim()
     if (trimmed === "exit" || trimmed === "quit" || trimmed === ":q") {
       void exit()
       return true
@@ -1591,19 +1624,28 @@ export function Prompt(props: PromptProps) {
       void promptModelWarning()
       return false
     }
+    const submittedPrompt = promptSubmitParts(promptSnapshot)
+    clearPromptForSubmit()
     const modelConfig = await readModelsConfig(mend.root).catch(() => undefined)
     const configuredRole = Object.values(modelConfig?.roles || {}).find(
       (role) => role?.providerID === selectedModel.providerID && role?.modelID === selectedModel.modelID,
     )
-    const budgetGate = await budgetEnforcementStatus(
-      {
-        providerID: selectedModel.providerID,
-        modelID: selectedModel.modelID,
-        authMode: configuredRole?.authMode || null,
-      },
-      mend.root,
-    )
+    let budgetGate: Awaited<ReturnType<typeof budgetEnforcementStatus>>
+    try {
+      budgetGate = await budgetEnforcementStatus(
+        {
+          providerID: selectedModel.providerID,
+          modelID: selectedModel.modelID,
+          authMode: configuredRole?.authMode || null,
+        },
+        mend.root,
+      )
+    } catch (error) {
+      restorePromptAfterSubmitFailure(promptSnapshot)
+      throw error
+    }
     if (budgetGate.blockers.length) {
+      restorePromptAfterSubmitFailure(promptSnapshot)
       await DialogAlert.show(dialog, "MendCode Budget", budgetGate.blockers.join("\n"))
       return false
     }
@@ -1619,6 +1661,7 @@ export function Prompt(props: PromptProps) {
     const workspaceID = workspaceSession?.workspaceID
     const workspaceStatus = workspaceID ? (project.workspace.status(workspaceID) ?? "error") : undefined
     if (props.sessionID && workspaceID && workspaceStatus !== "connected") {
+      restorePromptAfterSubmitFailure(promptSnapshot)
       dialog.replace(() => (
         <DialogWorkspaceUnavailable
           onRestore={() => {
@@ -1649,28 +1692,34 @@ export function Prompt(props: PromptProps) {
         return undefined
       })
 
-      const res = await sdk.client.session.create({
-        workspace: workspaceID,
-        agent: agent.name,
-        model: {
-          providerID: selectedModel.providerID,
-          id: selectedModel.modelID,
-          variant,
-        },
-      })
-
-      if (res.error) {
-        console.log("Creating a session failed:", res.error)
-
-        toast.show({
-          message: "Creating a session failed. Open console for more details.",
-          variant: "error",
+      try {
+        const res = await sdk.client.session.create({
+          workspace: workspaceID,
+          agent: agent.name,
+          model: {
+            providerID: selectedModel.providerID,
+            id: selectedModel.modelID,
+            variant,
+          },
         })
 
-        return true
-      }
+        if (res.error) {
+          restorePromptAfterSubmitFailure(promptSnapshot)
+          console.log("Creating a session failed:", res.error)
 
-      sessionID = res.data.id
+          toast.show({
+            message: "Creating a session failed. Open console for more details.",
+            variant: "error",
+          })
+
+          return true
+        }
+
+        sessionID = res.data.id
+      } catch (error) {
+        restorePromptAfterSubmitFailure(promptSnapshot)
+        throw error
+      }
     }
 
     local.model.set(selectedModel)
@@ -1679,7 +1728,6 @@ export function Prompt(props: PromptProps) {
     const messageID = MessageID.ascending()
     workingStartedAtBySession.set(sessionID, Date.now())
     setWorkingStartedAt(workingStartedAtBySession.get(sessionID))
-    const submittedPrompt = promptSubmitParts(store.prompt)
     const inputText = submittedPrompt.inputText
     const nonTextParts = submittedPrompt.nonTextParts
 
@@ -1708,12 +1756,18 @@ export function Prompt(props: PromptProps) {
     const slashServerCommand = slashInvocation
       ? sync.data.command.find((command) => command.name === slashInvocation.name)
       : undefined
-    const skillInvocation =
-      slashInvocation &&
-      !NATIVE_COMPACTION_SLASHES.has(slashInvocation.name) &&
-      !slashServerCommand
-        ? await findSkill(slashInvocation.name)
-        : undefined
+    let skillInvocation: Awaited<ReturnType<typeof findSkill>>
+    try {
+      skillInvocation =
+        slashInvocation &&
+        !NATIVE_COMPACTION_SLASHES.has(slashInvocation.name) &&
+        !slashServerCommand
+          ? await findSkill(slashInvocation.name)
+          : undefined
+    } catch (error) {
+      restorePromptAfterSubmitFailure(promptSnapshot)
+      throw error
+    }
 
     if (store.mode === "shell") {
       void sdk.client.session.shell({
@@ -1783,13 +1837,26 @@ export function Prompt(props: PromptProps) {
           variant,
           parts: skillPromptParts,
         })
-        .catch((error) => {
+        .then((result) => {
+          if (!result.error) return
           removeOptimisticUserTurn({ sessionID, messageID, created: optimisticCreated })
           toast.show({
             title: "Prompt not sent",
             message:
-              error instanceof Error && error.message ? error.message : "Connection failed. MendCode is reconnecting.",
+              result.error instanceof Error && result.error.message
+                ? result.error.message
+                : "The server rejected this prompt.",
             variant: "error",
+            duration: 5000,
+          })
+        })
+        .catch(() => {
+          void sync.session.sync(sessionID, { force: true }).catch(() => undefined)
+          toast.show({
+            title: "Prompt delivery uncertain",
+            message:
+              "The server may have accepted this prompt. The message was kept visible while MendCode reconnects.",
+            variant: "warning",
             duration: 5000,
           })
         })
@@ -1831,13 +1898,26 @@ export function Prompt(props: PromptProps) {
           variant,
           parts: promptParts,
         })
-        .catch((error) => {
+        .then((result) => {
+          if (!result.error) return
           removeOptimisticUserTurn({ sessionID, messageID, created: optimisticCreated })
           toast.show({
             title: "Prompt not sent",
             message:
-              error instanceof Error && error.message ? error.message : "Connection failed. MendCode is reconnecting.",
+              result.error instanceof Error && result.error.message
+                ? result.error.message
+                : "The server rejected this prompt.",
             variant: "error",
+            duration: 5000,
+          })
+        })
+        .catch(() => {
+          void sync.session.sync(sessionID, { force: true }).catch(() => undefined)
+          toast.show({
+            title: "Prompt delivery uncertain",
+            message:
+              "The server may have accepted this prompt. The message was kept visible while MendCode reconnects.",
+            variant: "warning",
             duration: 5000,
           })
         })
@@ -1845,7 +1925,7 @@ export function Prompt(props: PromptProps) {
     }
     history.append(
       {
-        ...store.prompt,
+        ...promptSnapshot,
         mode: currentMode,
       },
       props.historyScope,
@@ -1856,7 +1936,7 @@ export function Prompt(props: PromptProps) {
       parts: [],
     })
     setStore("extmarkToPartIndex", new Map())
-    props.onSubmit?.({ sessionID, messageID, inputRows: input.height })
+    props.onSubmit?.({ sessionID, messageID, inputRows: submittedInputRows })
 
     // temporary hack to make sure the message is sent
     if (!props.sessionID) {
@@ -2909,6 +2989,7 @@ export function Prompt(props: PromptProps) {
                 minHeight={1}
                 maxHeight={6}
                 onContentChange={() => {
+                  if (suppressPromptInputSync) return
                   const raw = input.plainText
                   const value = removeVisibleResolvingText(raw)
                   if (value !== raw) {

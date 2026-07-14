@@ -23,6 +23,24 @@ describe("mend prompt composition", () => {
     expect(policy.policyInstructions).not.toContain("Mermaid fenced blocks")
   })
 
+  test("full mode teaches non-blocking subagents without expanding sparse modes", async () => {
+    const minimal = await composePromptPolicy({ mode: "minimal", focusID: "codex" })
+    const focus = await composePromptPolicy({ mode: "focus", focusID: "codex" })
+    const full = await composePromptPolicy({ mode: "full", focusID: "codex" })
+
+    expect(minimal.sections.find((item) => item.id === "background-subagents")).toBeUndefined()
+    expect(focus.sections.find((item) => item.id === "background-subagents")).toBeUndefined()
+    const section = full.sections.find((item) => item.id === "background-subagents")
+    expect(section?.text).toContain("`task` with `background: true`")
+    expect(section?.text).toContain("`task_status`")
+    expect(section?.text).toContain("`wait`")
+    expect(section?.text).toContain("`cancel`")
+    expect(section?.text).toContain("never trigger a provider call")
+    expect(section?.text).toContain("Do not busy-poll")
+    expect(section?.text).toContain("before the final response")
+    expect(section?.text).toContain("Use `loop`")
+  })
+
   test("prompt modes route monitored iterations through Loop Workflows", async () => {
     const minimal = await composePromptPolicy({ mode: "minimal", focusID: "codex" })
     const focus = await composePromptPolicy({ mode: "focus", focusID: "codex" })
