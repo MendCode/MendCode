@@ -273,6 +273,30 @@ function key(taskID: SessionID, generation: number) {
   return `${taskID}:${generation}`
 }
 
+export function listSnapshots(parentSessionID: SessionID) {
+  return Database.use((db) =>
+    db
+      .select()
+      .from(BackgroundTaskTable)
+      .where(eq(BackgroundTaskTable.parent_session_id, parentSessionID))
+      .all()
+      .flatMap((task) => {
+        const run = db
+          .select()
+          .from(BackgroundTaskRunTable)
+          .where(
+            and(
+              eq(BackgroundTaskRunTable.task_id, task.task_id),
+              eq(BackgroundTaskRunTable.generation, task.current_generation),
+            ),
+          )
+          .get()
+        return run ? [fromRows(task, run)] : []
+      })
+      .toSorted((a, b) => b.time.updated - a.time.updated || b.taskID.localeCompare(a.taskID)),
+  )
+}
+
 export interface Interface {
   readonly start: (input: StartInput) => Effect.Effect<Snapshot>
   readonly markRunning: (input: { taskID: SessionID; generation: number }) => Effect.Effect<Snapshot>
@@ -557,29 +581,9 @@ export const layer = Layer.effect(
       })
     })
 
-    const list = Effect.fn("BackgroundTask.list")(function* (parentSessionID: SessionID) {
-      return Database.use((db) =>
-        db
-          .select()
-          .from(BackgroundTaskTable)
-          .where(eq(BackgroundTaskTable.parent_session_id, parentSessionID))
-          .all()
-          .flatMap((task) => {
-            const run = db
-              .select()
-              .from(BackgroundTaskRunTable)
-              .where(
-                and(
-                  eq(BackgroundTaskRunTable.task_id, task.task_id),
-                  eq(BackgroundTaskRunTable.generation, task.current_generation),
-                ),
-              )
-              .get()
-            return run ? [fromRows(task, run)] : []
-          })
-          .toSorted((a, b) => b.time.updated - a.time.updated || b.taskID.localeCompare(a.taskID)),
-      )
-    })
+    const list = Effect.fn("BackgroundTask.list")((parentSessionID: SessionID) =>
+      Effect.sync(() => listSnapshots(parentSessionID)),
+    )
 
     const wait = Effect.fn("BackgroundTask.wait")(function* (input: {
       taskID: SessionID

@@ -1012,7 +1012,7 @@ export const layer = Layer.effect(
         (item): item is LoopGateResult => Boolean(item),
       )
       let judgment: LoopJudgment | undefined
-      let evaluatorMessage: MessageV2.WithParts | undefined
+      let evaluatorUsage: LoopWorkflow.Usage | undefined
       let evaluatorStarted: number | undefined
       if (requiresIndependentCompletion(current, checkpoint)) {
         const evaluatorSession = yield* sessions.create({
@@ -1047,7 +1047,8 @@ export const layer = Layer.effect(
               })
             }),
           )
-        evaluatorMessage = "message" in evaluatorResult ? evaluatorResult.message : undefined
+        const evaluatorMessage = "message" in evaluatorResult ? evaluatorResult.message : undefined
+        evaluatorUsage = evaluatorStarted ? usageFromMessage(evaluatorMessage, current, evaluatorStarted) : undefined
         judgment = evaluatorResult.judgment
       }
       const deterministicGates = [...preJudgeGates, successChecksGate(current, checkpoint, judgment)].filter(
@@ -1065,7 +1066,7 @@ export const layer = Layer.effect(
         gateResults,
         usage: mergeUsage([
           usageFromMessage(result.value, current, runStarted),
-          evaluatorStarted ? usageFromMessage(evaluatorMessage, current, evaluatorStarted) : undefined,
+          evaluatorUsage,
         ]),
       })
       const after = yield* workflow.get(id)

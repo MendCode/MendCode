@@ -260,6 +260,7 @@ export const CompactionPart = Schema.Struct({
   auto: Schema.Boolean,
   overflow: Schema.optional(Schema.Boolean),
   resume: Schema.optional(Schema.Boolean),
+  discard_tail: Schema.optional(Schema.Boolean),
   post_prompt: Schema.optional(Schema.String),
   instructions: Schema.optional(Schema.String),
   tail_start_id: Schema.optional(MessageID),
@@ -1274,6 +1275,99 @@ function compactedHistoryBoundary(sessionID: SessionID) {
   )
 }
 
+function compactionTailByMessage(rows: Array<typeof MessageTable.$inferSelect>) {
+  const result = new Map<MessageID, MessageID | null>()
+  if (rows.length === 0) return result
+  const parts = Database.use((db) =>
+    db
+      .select({
+        messageID: PartTable.message_id,
+        tailStartID: sql<MessageID | null>`json_extract(${PartTable.data}, '$.tail_start_id')`,
+      })
+      .from(PartTable)
+      .where(
+        and(
+          inArray(PartTable.message_id, rows.map((row) => row.id)),
+          sql`json_extract(${PartTable.data}, '$.type') = 'compaction'`,
+        ),
+      )
+      .orderBy(PartTable.message_id, PartTable.id)
+      .all(),
+  )
+  for (const part of parts) {
+    if (!result.has(part.messageID)) result.set(part.messageID, part.tailStartID)
+  }
+  return result
+}
+
+function compactedHistory(sessionID: SessionID) {
+  if (!compactedHistoryBoundary(sessionID)) return filterCompacted(stream(sessionID))
+
+  const result: WithParts[] = []
+  const completed = new Set<string>()
+  let retain: MessageID | undefined
+  let before: Cursor | undefined
+  const size = 50
+
+  while (true) {
+    const where = before
+      ? and(eq(MessageTable.session_id, sessionID), older(before))
+      : eq(MessageTable.session_id, sessionID)
+    const rows = Database.use((db) =>
+      db
+        .select()
+        .from(MessageTable)
+        .where(where)
+        .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
+        .limit(size)
+        .all(),
+    )
+    if (rows.length === 0) {
+      const session = Database.use((db) =>
+        db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get(),
+      )
+      if (!session) throw new NotFoundError({ message: `Session not found: ${sessionID}` })
+      break
+    }
+
+    const compactionTail = compactionTailByMessage(rows)
+    const retainedRows: Array<typeof MessageTable.$inferSelect> = []
+    let exhausted = false
+    for (const row of rows) {
+      retainedRows.push(row)
+      const message = info(row)
+      if (retain) {
+        if (row.id === retain) exhausted = true
+        if (exhausted) break
+        continue
+      }
+      if (message.role === "user" && completed.has(message.id)) {
+        if (!compactionTail.has(message.id)) continue
+        const tailStartID = compactionTail.get(message.id)
+        if (!tailStartID) {
+          exhausted = true
+          break
+        }
+        retain = tailStartID
+        if (row.id === retain) exhausted = true
+        if (exhausted) break
+        continue
+      }
+      if (message.role === "assistant" && message.summary && message.finish && !message.error) {
+        completed.add(message.parentID)
+      }
+    }
+
+    result.push(...hydrate(retainedRows))
+    if (exhausted || rows.length < size) break
+    const tail = rows.at(-1)
+    if (!tail) break
+    before = { id: tail.id, time: tail.time_created }
+  }
+
+  return filterCompacted(result)
+}
+
 function compactedHistoryPageRows(
   rows: Array<typeof MessageTable.$inferSelect>,
   boundary: typeof MessageTable.$inferSelect,
@@ -1342,12 +1436,36 @@ export interface PageResult {
   sparse?: boolean
 }
 
+function latestTuiUserMessage(sessionID: SessionID) {
+  const rows = Database.use((db) =>
+    db
+      .select()
+      .from(MessageTable)
+      .where(
+        and(
+          eq(MessageTable.session_id, sessionID),
+          sql`json_extract(${MessageTable.data}, '$.role') = 'user'`,
+        ),
+      )
+      .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
+      .limit(25)
+      .all(),
+  )
+  return hydrate(rows, { view: "tui" }).find(
+    (message) =>
+      message.info.role === "user" &&
+      message.parts.some(
+        (part) => (part.type === "text" && !part.synthetic && part.text.trim().length > 0) || part.type === "file",
+      ),
+  )
+}
+
 function compactedPage(input: { sessionID: SessionID; limit: number; before?: Cursor; after?: Cursor }): PageResult | undefined {
   const boundary = compactedHistoryBoundary(input.sessionID)
   if (!boundary) return
 
   const chunkSize = Math.max(50, input.limit + 1)
-  const selected: Array<{ item: WithParts; row: typeof MessageTable.$inferSelect; visible: boolean }> = []
+  const selected: Array<{ row: typeof MessageTable.$inferSelect; visible: boolean }> = []
   const ascending = input.after !== undefined
   let position = input.before ?? input.after
   let exhausted = false
@@ -1372,13 +1490,10 @@ function compactedPage(input: { sessionID: SessionID; limit: number; before?: Cu
     }
 
     const pageRows = compactedHistoryPageRows(rows, boundary)
-    const items = hydrate(pageRows.rows, { view: "tui" })
-    pageRows.rows.forEach((row, index) => {
-      const item = items[index]
-      if (!item) return
+    pageRows.rows.forEach((row) => {
       const visible = pageRows.visible.has(row.id)
       if (visible) visibleCount++
-      selected.push({ item, row, visible })
+      selected.push({ row, visible })
     })
     const tail = rows.at(-1)
     if (!tail || rows.length < chunkSize) {
@@ -1393,16 +1508,26 @@ function compactedPage(input: { sessionID: SessionID; limit: number; before?: Cu
   const cutoff = selected.findIndex((entry) => entry.visible && ++included > input.limit)
   const slice = cutoff === -1 ? selected : selected.slice(0, cutoff)
   const visibleIDs = new Set(slice.filter((entry) => entry.visible).map((entry) => entry.row.id))
-  const pageSlice = slice.filter(
-    (entry) =>
-      entry.visible ||
-      (entry.item.info.role === "assistant" &&
-        entry.item.info.summary === true &&
-        entry.item.info.parentID !== undefined &&
-        visibleIDs.has(entry.item.info.parentID)),
+  const pageSlice = slice.filter((entry) => {
+    if (entry.visible) return true
+    const message = info(entry.row)
+    return (
+      message.role === "assistant" &&
+      message.summary === true &&
+      message.parentID !== undefined &&
+      visibleIDs.has(message.parentID)
+    )
+  })
+  const items = hydrate(
+    pageSlice.map((entry) => entry.row),
+    { view: "tui" },
   )
-  const items = pageSlice.map((entry) => entry.item)
   if (!ascending) items.reverse()
+  const latestUser = !input.before && !input.after ? latestTuiUserMessage(input.sessionID) : undefined
+  if (latestUser && !items.some((item) => item.info.id === latestUser.info.id)) {
+    items.push(latestUser)
+    items.sort((a, b) => a.info.id.localeCompare(b.info.id))
+  }
   const tail = slice.findLast((entry) => entry.visible)?.row
   return {
     items,
@@ -1554,7 +1679,7 @@ export function filterCompacted(msgs: Iterable<WithParts>) {
 }
 
 export const filterCompactedEffect = Effect.fnUntraced(function* (sessionID: SessionID) {
-  return filterCompacted(stream(sessionID))
+  return compactedHistory(sessionID)
 })
 
 export function fromError(

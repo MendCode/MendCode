@@ -70,6 +70,7 @@ import { openWorkspaceSelect, warpWorkspaceSession, type WorkspaceSelection } fr
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
 import { useArgs } from "@tui/context/args"
 import { Flag } from "@mendcode/core/flag/flag"
+import * as Log from "@mendcode/core/util/log"
 import { WorkspaceLabel, type WorkspaceStatus } from "../workspace-label"
 import { readModelsConfig } from "@/mend/config/models"
 import { budgetEnforcementStatus } from "@/mend/runtime/budget"
@@ -101,6 +102,7 @@ import {
 
 const NATIVE_COMPACTION_SLASHES = new Set(["compact", "summarize"])
 const ACTIVE_LOOP_STATES = new Set(["active", "sleeping", "working", "needs_input", "blocked"])
+const trace = Log.create({ service: "tui.prompt" })
 
 type LoopWorkflowInfo = {
   id: string
@@ -237,6 +239,14 @@ function formatEditorContext(selection: EditorSelection) {
 
 let stashed: { prompt: PromptInfo; cursor: number } | undefined
 const workingStartedAtBySession = new Map<string, number>()
+
+export function latestPendingAssistantID(
+  messages: Array<{ id: string; role: string; time: { created?: number; completed?: number } }>,
+) {
+  const latestAssistant = messages.findLast((message) => message.role === "assistant")
+  if (!latestAssistant || latestAssistant.time.completed) return
+  return latestAssistant.id
+}
 
 export function resolveWorkingStartedAt(input: {
   stored?: number
@@ -488,8 +498,9 @@ export function Prompt(props: PromptProps) {
   function findActiveWorkingAssistant() {
     const sessionID = props.sessionID
     if (!sessionID) return
-    const msg = sync.data.message[sessionID] ?? []
-    return msg.findLast((item): item is AssistantMessage => item.role === "assistant" && !item.time.completed)
+    const messages = sync.data.message[sessionID] ?? []
+    const activeID = latestPendingAssistantID(messages)
+    return messages.findLast((item): item is AssistantMessage => item.role === "assistant" && item.id === activeID)
   }
   const hasActiveWorkingAssistant = createMemo(() => Boolean(findActiveWorkingAssistant()))
   onCleanup(() => {
@@ -867,7 +878,7 @@ export function Prompt(props: PromptProps) {
       }
     }
 
-    const active = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && !item.time.completed)
+    const active = findActiveWorkingAssistant()
     const selectedModel = selectedPromptModel()
     const selectedModelInfo = selectedModel
       ? sync.data.provider.find((item) => item.id === selectedModel.providerID)?.models[selectedModel.modelID]
@@ -902,8 +913,7 @@ export function Prompt(props: PromptProps) {
   })
   const workingTokenUsage = createMemo(() => {
     if (!props.sessionID) return
-    const msg = sync.data.message[props.sessionID] ?? []
-    const active = msg.findLast((item): item is AssistantMessage => item.role === "assistant" && !item.time.completed)
+    const active = findActiveWorkingAssistant()
     if (!active) return
     const live = active.liveUsage as
       | {
@@ -1752,6 +1762,14 @@ export function Prompt(props: PromptProps) {
           ]
         : []
     const promptParts = [...editorParts, ...submittedPrompt.parts.map(assign)]
+    trace.trace("submit", {
+      sessionID,
+      messageID,
+      mode: currentMode,
+      inputChars: inputText.length,
+      partTypes: promptParts.map((part) => part.type),
+      status: status().type,
+    })
     const slashInvocation = findSlashCommandInvocation(inputText, () => true)
     const slashServerCommand = slashInvocation
       ? sync.data.command.find((command) => command.name === slashInvocation.name)
@@ -1838,6 +1856,11 @@ export function Prompt(props: PromptProps) {
           parts: skillPromptParts,
         })
         .then((result) => {
+          trace.trace("prompt-result", {
+            sessionID,
+            messageID,
+            error: result.error ? String(result.error) : undefined,
+          })
           if (!result.error) return
           removeOptimisticUserTurn({ sessionID, messageID, created: optimisticCreated })
           toast.show({
@@ -1899,6 +1922,11 @@ export function Prompt(props: PromptProps) {
           parts: promptParts,
         })
         .then((result) => {
+          trace.trace("prompt-result", {
+            sessionID,
+            messageID,
+            error: result.error ? String(result.error) : undefined,
+          })
           if (!result.error) return
           removeOptimisticUserTurn({ sessionID, messageID, created: optimisticCreated })
           toast.show({

@@ -33,7 +33,7 @@ import {
   type ParsedKey,
   type TextareaRenderable,
 } from "@opentui/core"
-import { Prompt, type PromptRef, type PromptSubmitInfo } from "@tui/component/prompt"
+import { latestPendingAssistantID, Prompt, type PromptRef, type PromptSubmitInfo } from "@tui/component/prompt"
 import type {
   AssistantMessage,
   Part,
@@ -46,6 +46,7 @@ import type {
   ReasoningPart,
 } from "@mendcode/sdk/v2"
 import { useLocal } from "@tui/context/local"
+import * as Log from "@mendcode/core/util/log"
 import { Locale } from "@/util/locale"
 import { Process } from "@/util/process"
 import type { Tool } from "@/tool/tool"
@@ -196,6 +197,7 @@ import {
 } from "../../util/plan-markdown"
 
 addDefaultParsers(parsers.parsers)
+const trace = Log.create({ service: "tui.session" })
 
 // Core message/part/status events are reconciled incrementally by SyncProvider.
 // Poll only for lifecycle events that do not carry their canonical store update.
@@ -246,10 +248,53 @@ export function queuedPromptWaitLabel(mode: string | undefined) {
 export function sessionUserMessageQueued(input: {
   messageID: string
   pendingAssistantID?: string
-  messages: ReadonlyArray<{ id: string; role: string; parentID?: string }>
+  messages: ReadonlyArray<{
+    id: string
+    role: string
+    parentID?: string
+    time?: { created?: number; completed?: number }
+  }>
 }) {
   if (!input.pendingAssistantID) return false
+  const pending = input.messages.find(
+    (message) => message.role === "assistant" && message.id === input.pendingAssistantID,
+  )
+  if (!pending || pending.time?.completed !== undefined || !pending.parentID) return false
+  const activeParentIndex = input.messages.findIndex((message) => message.id === pending.parentID)
+  const messageIndex = input.messages.findIndex((message) => message.id === input.messageID)
+  if (activeParentIndex < 0 || messageIndex <= activeParentIndex) return false
   return !input.messages.some((message) => message.role === "assistant" && message.parentID === input.messageID)
+}
+
+export function sessionPinnedUserMessageID(input: {
+  messages: ReadonlyArray<{
+    id: string
+    role: string
+    parentID?: string
+    finish?: string
+    time: { created?: number; completed?: number }
+  }>
+  pendingAssistantID?: string
+  submittedUserMessageID?: string
+  isVisibleUser?: (messageID: string) => boolean
+}) {
+  const visible = (messageID: string) => input.isVisibleUser?.(messageID) ?? true
+  const pending = input.messages.find(
+    (message) => message.role === "assistant" && message.id === input.pendingAssistantID,
+  )
+  const activeParentID = pending && pending.time.completed === undefined ? pending.parentID : undefined
+  const submitted = input.submittedUserMessageID
+  if (submitted && visible(submitted)) {
+    const latestChild = input.messages.findLast(
+      (message) => message.role === "assistant" && message.parentID === submitted,
+    )
+    const finished =
+      latestChild?.time.completed !== undefined &&
+      Boolean(latestChild.finish && !["tool-calls", "unknown"].includes(latestChild.finish))
+    if (!finished && (!activeParentID || activeParentID === submitted)) return submitted
+  }
+
+  return activeParentID && visible(activeParentID) ? activeParentID : undefined
 }
 
 export function sessionFollowSyncIsStale(input: {
@@ -452,7 +497,7 @@ export function Session() {
     sessionUserPromptHistory({ messages: messages(), partsByMessage: sync.data.part }),
   )
   const fullHistoryStartID = createMemo(() => latestFullSessionHistoryStartID(messages()))
-  const transcriptRenderKey = createMemo(() => sessionTranscriptRenderKey(route.sessionID, fullHistoryStartID()))
+  const transcriptRenderKey = createMemo(() => sessionTranscriptRenderKey(route.sessionID))
   const pendingInputSessionIDs = createMemo(() =>
     sessionPendingInputSessionIDs({
       sessionID: route.sessionID,
@@ -483,9 +528,26 @@ export function Session() {
   )
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0 || planReviews().length > 0)
 
-  const pending = createMemo(() => {
-    return messages().findLast((x) => x.role === "assistant" && !x.time.completed)?.id
+  const [submittedUserMessageID, setSubmittedUserMessageID] = createSignal<string>()
+  const pending = createMemo(() => latestPendingAssistantID(messages()))
+  const activeTurnAssistantID = createMemo(() => {
+    const unfinished = pending()
+    if (unfinished) return unfinished
+    const status = sync.data.session_status?.[route.sessionID]?.type
+    if (status !== "busy" && status !== "retry") return
+    return messages().findLast((message) => message.role === "assistant")?.id
   })
+  const pinnedTurnUserMessageID = createMemo(() =>
+    sessionPinnedUserMessageID({
+      messages: messages(),
+      pendingAssistantID: activeTurnAssistantID(),
+      submittedUserMessageID: submittedUserMessageID(),
+      isVisibleUser: (messageID) =>
+        (sync.data.part[messageID] ?? []).some(
+          (part) => part.type === "text" && !part.synthetic && part.text.trim().length > 0,
+        ),
+    }),
+  )
   const hasLocalActiveTurn = createMemo(() => {
     return sessionHasLocalQueuedTurn({ messages: messages(), pendingAssistantID: pending() })
   })
@@ -566,10 +628,13 @@ export function Session() {
     if (sync.session.history(rootSessionID()).hasMoreNewer) return stableTopUsage()
     return topUsageFromLoadedHistory()
   })
-  const stickyUserHeaderEnabled = createMemo(() => {
+  const configuredStickyUserHeaderEnabled = createMemo(() => {
     const sessionLayout = mend.profile.layout.zones.session
     return Boolean((sessionLayout as { stickyUserHeader?: unknown }).stickyUserHeader)
   })
+  const stickyUserHeaderEnabled = createMemo(
+    () => configuredStickyUserHeaderEnabled() || Boolean(pinnedTurnUserMessageID()),
+  )
   const [stickyUserMessageID, setStickyUserMessageID] = createSignal<string>()
   const stickyUserMessage = createMemo(() => {
     const id = stickyUserMessageID()
@@ -1809,6 +1874,7 @@ export function Session() {
         manualScrollGraceUntil = 0
         cancelBottomScrollTimers()
         cancelSubmitFollowSync()
+        setSubmittedUserMessageID(undefined)
         setSessionScrollTop(0)
         setFollowSessionOutput(true)
         lastSessionEventAt = Date.now()
@@ -1986,7 +2052,17 @@ export function Session() {
   }
 
   function handlePromptSubmit(info?: PromptSubmitInfo) {
-    if (info && info.sessionID === route.sessionID) scheduleSubmitFollowSync(info)
+    trace.trace("prompt-submit", {
+      sessionID: info?.sessionID,
+      messageID: info?.messageID,
+      inputRows: info?.inputRows,
+      loadedIDs: messages().map((message) => message.id),
+      follow: followSessionOutput(),
+    })
+    if (info && info.sessionID === route.sessionID) {
+      setSubmittedUserMessageID(info.messageID)
+      scheduleSubmitFollowSync(info)
+    }
     toBottom({
       sync: false,
       submitSessionID: info?.sessionID === route.sessionID ? info.sessionID : undefined,
@@ -2021,6 +2097,15 @@ export function Session() {
           virtualWindow().end,
       ] as const,
       () => {
+        trace.trace("virtual-window", {
+          sessionID: route.sessionID,
+          messageCount: messages().length,
+          visibleCount: visibleMessages().length,
+          start: virtualWindow().start,
+          end: virtualWindow().end,
+          scrollTop: sessionScrollTop(),
+          follow: followSessionOutput(),
+        })
         if (submitBottomScrollSessionID === route.sessionID) return
         if (followSessionOutput()) scheduleBottomScroll(0)
       },
@@ -2046,6 +2131,23 @@ export function Session() {
       .filter((item): item is { id: string; y: number } => Boolean(item))
       .sort((a, b) => a.y - b.y)
 
+    const pinnedID = pinnedTurnUserMessageID()
+    if (pinnedID) {
+      const pinnedAnchor = userAnchors.find((item) => item.id === pinnedID)
+      const pinnedIndex = messages().findIndex((message) => message.id === pinnedID)
+      if (
+        (typeof pinnedAnchor?.y === "number" && pinnedAnchor.y <= top) ||
+        (pinnedIndex >= 0 && pinnedIndex < virtualWindow().start) ||
+        (!pinnedAnchor && pinnedIndex >= 0 && followSessionOutput())
+      ) {
+        setStickyUserMessageID(pinnedID)
+        return
+      }
+    }
+    if (!configuredStickyUserHeaderEnabled()) {
+      setStickyUserMessageID(undefined)
+      return
+    }
     setStickyUserMessageID(
       stickyUserIDFromVirtualWindow({
         messages: messages(),
@@ -2284,7 +2386,7 @@ export function Session() {
       },
     },
     {
-      title: stickyUserHeaderEnabled() ? "Disable sticky user header" : "Enable sticky user header",
+      title: configuredStickyUserHeaderEnabled() ? "Disable sticky user header" : "Enable sticky user header",
       value: "session.toggle.sticky_user_header",
       category: "Session",
       description: "Pin the latest user message below the top navbar.",
@@ -3658,8 +3760,8 @@ export function latestFullSessionHistoryStartID(
   return latestCompactionSummary?.id
 }
 
-export function sessionTranscriptRenderKey(sessionID: string, fullStartID?: string) {
-  return `${sessionID}:${fullStartID ?? "initial"}`
+export function sessionTranscriptRenderKey(sessionID: string) {
+  return sessionID
 }
 
 export function shouldUseSimpleSessionHistory(input: { messageID: string; fullStartID?: string }) {
@@ -4516,9 +4618,14 @@ function UserMessage(props: {
             width="100%"
           >
             <box flexDirection="row" justifyContent="space-between" width="100%" gap={2}>
-              <text fg={theme.textMuted} wrapMode="none">
-                <span style={{ fg: color() }}>●</span> {subagentInitialPrompt() ? "Subagent prompt" : "You"}
-              </text>
+              <box flexDirection="row" flexGrow={1} minWidth={0} overflow="hidden">
+                <text fg={theme.textMuted} wrapMode="none">
+                  <span style={{ fg: color() }}>●</span> {subagentInitialPrompt() ? "Subagent prompt" : "You"}
+                  <Show when={queued()}>
+                    <span> · {queuedPromptWaitLabel(sync.data.config.queue?.mode)}</span>
+                  </Show>
+                </text>
+              </box>
               <Show
                 when={queued()}
                 fallback={
@@ -4527,27 +4634,26 @@ function UserMessage(props: {
                   </text>
                 }
               >
-                <text fg={theme.textMuted} wrapMode="none">
-                  <span style={{ bg: color(), fg: queuedFg(), bold: true }}> QUEUED </span>
-                </text>
+                <box flexDirection="row" flexShrink={0} gap={1}>
+                  <text fg={theme.textMuted} wrapMode="none">
+                    <span style={{ bg: color(), fg: queuedFg(), bold: true }}> QUEUED </span>
+                  </text>
+                  <Show when={props.onSendNow}>
+                    <text
+                      onMouseDown={consumeMouseEvent}
+                      onMouseUp={(event) => {
+                        consumeMouseEvent(event)
+                        if (!props.sendNowPending) props.onSendNow?.()
+                      }}
+                    >
+                      <span style={{ bg: sendNowBackground(), fg: sendNowForeground(), bold: true }}>
+                        {props.sendNowPending ? " … " : " ↗ SEND "}
+                      </span>
+                    </text>
+                  </Show>
+                </box>
               </Show>
             </box>
-            <Show when={queued() && props.onSendNow}>
-              <box flexDirection="row" justifyContent="space-between" width="100%" paddingTop={1}>
-                <text fg={theme.textMuted}>{queuedPromptWaitLabel(sync.data.config.queue?.mode)}</text>
-                <text
-                  onMouseDown={consumeMouseEvent}
-                  onMouseUp={(event) => {
-                    consumeMouseEvent(event)
-                    if (!props.sendNowPending) props.onSendNow?.()
-                  }}
-                >
-                  <span style={{ bg: sendNowBackground(), fg: sendNowForeground(), bold: true }}>
-                    {props.sendNowPending ? " … SENDING " : " ↗ SEND NOW "}
-                  </span>
-                </text>
-              </box>
-            </Show>
             <Show when={effectiveExpandedText() && collapsedDisplayText().compacted}>
               <box flexDirection="row" justifyContent="space-between" width="100%" gap={2} paddingBottom={1}>
                 <box flexGrow={1} overflow="hidden">

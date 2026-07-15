@@ -45,12 +45,14 @@ describe("session route initialization", () => {
     expect(source).toContain("await sync.session.reloadMessages(route.sessionID)")
   })
 
-  test("renders queued prompts with response-aware copy and a send-now badge", async () => {
+  test("keeps queued prompt actions on the header row", async () => {
     const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
 
     expect(source).toContain('if (mode === "after-tools") return "Waiting for the current tool iteration to finish"')
     expect(source).toContain('return "Waiting for the current response to finish"')
+    expect(source).toContain("· {queuedPromptWaitLabel(sync.data.config.queue?.mode)}")
     expect(source).toContain("bg: sendNowBackground()")
-    expect(source).toContain('" ↗ SEND NOW "')
+    expect(source).toContain('" ↗ SEND "')
+    expect(source).not.toContain("<Show when={queued() && props.onSendNow}>")
   })
 })

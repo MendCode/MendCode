@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "../../fixture/fixture"
-import { resolveThreadDirectory } from "../../../src/cli/cmd/tui/thread"
+import { resolveSharedServerURL, resolveThreadDirectory } from "../../../src/cli/cmd/tui/thread"
 
 describe("tui thread", () => {
   async function check(project?: string) {
@@ -24,5 +24,18 @@ describe("tui thread", () => {
 
   test("uses the real cwd after resolving a relative project from PWD", async () => {
     await check(".")
+  })
+
+  test("resolves an explicit shared server URL", () => {
+    expect(resolveSharedServerURL("http://127.0.0.1:4096")).toBe("http://127.0.0.1:4096/")
+  })
+
+  test("falls back to the environment for the shared server URL", () => {
+    expect(resolveSharedServerURL(undefined, "https://mendcode.example.test")).toBe("https://mendcode.example.test/")
+  })
+
+  test("rejects credentials and unsupported shared server URLs", () => {
+    expect(() => resolveSharedServerURL("ftp://127.0.0.1:4096")).toThrow("http or https")
+    expect(() => resolveSharedServerURL("http://user:password@127.0.0.1:4096")).toThrow("credentials")
   })
 })

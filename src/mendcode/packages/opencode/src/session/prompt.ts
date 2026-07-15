@@ -163,6 +163,14 @@ export function shouldResumeAfterActiveCompaction(_finish: string | undefined) {
   return true
 }
 
+function latestCompactionDiscardedTail(messages: MessageV2.WithParts[]) {
+  return Boolean(
+    messages
+      .findLast((message) => message.parts.some((part) => part.type === "compaction"))
+      ?.parts.some((part) => part.type === "compaction" && part.discard_tail === true),
+  )
+}
+
 export function shouldCheckFinishedAssistantForAutoCompaction(input: {
   lastUser: MessageV2.User
   lastFinished: MessageV2.Assistant
@@ -1876,6 +1884,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
     const prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.prompt")(
       function* (input: PromptInput) {
+        log.trace("prompt-start", {
+          sessionID: input.sessionID,
+          messageID: input.messageID,
+          queue: true,
+        })
         const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
         yield* revert.cleanup(session)
         const message = yield* createUserMessage(input)
@@ -1891,6 +1904,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         }
 
         if (input.noReply === true) return message
+        log.trace("prompt-queue-run", { sessionID: input.sessionID, messageID: message.info.id })
         return yield* loop({ sessionID: input.sessionID, queue: true, targetMessageID: message.info.id })
       },
     )
@@ -2147,6 +2161,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           })
           if (yield* compaction.isPromptOverflow({ tokens: promptTokens, model, respectAuto: false, mode: "hard" })) {
             const duplicateAutoCompaction = shouldSkipAutoCompaction(msgs)
+            const rescueAlreadyAttempted = latestCompactionDiscardedTail(msgs)
             yield* slog.warn("pre-provider compaction", {
               promptTokens,
               reason: duplicateAutoCompaction
@@ -2162,9 +2177,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               model: lastUser.model,
               auto: true,
               overflow: true,
-              resume: !duplicateAutoCompaction,
+              resume: !duplicateAutoCompaction || !rescueAlreadyAttempted,
+              discardTail: duplicateAutoCompaction,
               instructions: duplicateAutoCompaction
-                ? "Synthetic resume still exceeded the provider/model context before dispatch. Produce the smallest useful rescue summary and do not auto-resume again; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
+                ? rescueAlreadyAttempted
+                  ? "The prompt still exceeded the provider/model context after the preserved tail was discarded. Produce the smallest final rescue summary without auto-resuming; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
+                  : "Synthetic resume still exceeded the provider/model context before dispatch. Replace the preserved tail with the smallest useful rescue summary, then resume once; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
                 : "The provider prompt exceeded the effective context threshold before dispatch. Preserve the active request, latest TODO/tool state, changed files, and verification evidence; if provider compaction is also too large, use local rescue.",
             })
             return "continue" as const
@@ -2207,6 +2225,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           if (result === "stop") return "break" as const
           if (result === "compact") {
             if (shouldSkipAutoCompaction(msgs)) {
+              const rescueAlreadyAttempted = latestCompactionDiscardedTail(msgs)
               yield* slog.warn("duplicate auto compaction requires rescue", {
                 reason: "synthetic resume still exceeded provider/model context",
               })
@@ -2225,9 +2244,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 model: lastUser.model,
                 auto: true,
                 overflow: true,
-                resume: false,
+                resume: !rescueAlreadyAttempted,
+                discardTail: true,
                 instructions:
-                  "Synthetic resume still exceeded the provider/model context. Produce a smaller rescue summary without auto-resuming again; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference.",
+                  rescueAlreadyAttempted
+                    ? "The prompt still exceeded the provider/model context after the preserved tail was discarded. Produce the smallest final rescue summary without auto-resuming; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
+                    : "Synthetic resume still exceeded the provider/model context. Replace the preserved tail with a smaller rescue summary, then resume once; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference.",
               })
               return "continue" as const
             }
@@ -2262,6 +2284,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     ) {
       let interruptedAssistantID: MessageID | undefined
       const queueMode = (yield* config.get()).queue?.mode ?? "after-response"
+      log.trace("loop-ensure-running", {
+        sessionID: input.sessionID,
+        targetMessageID: input.targetMessageID,
+        queueMode,
+        queue: input.queue,
+      })
       const work = Effect.acquireUseRelease(
         Effect.sync(() => {
           const controller = new AbortController()

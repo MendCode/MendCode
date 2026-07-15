@@ -369,6 +369,35 @@ describe("MessageV2.page", () => {
     })
   })
 
+  test("latest tui page retains the active user across hundreds of assistant steps", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const compact = await addUser(session.id)
+        await addCompactionPart(session.id, compact)
+        const summary = await addAssistant(session.id, compact, { summary: true, finish: "stop", completed: true })
+        await addText(session.id, summary, "summary")
+        const activeUser = await addUser(session.id, "keep the active prompt visible")
+        for (let index = 0; index < 30; index++) {
+          const assistant = await addAssistant(session.id, activeUser, { finish: "tool-calls", completed: true })
+          await addLargeToolPart(session.id, assistant, `tool ${index}`)
+        }
+
+        const latest = MessageV2.page({ sessionID: session.id, limit: 10, view: "tui" })
+
+        expect(latest.items.some((item) => item.info.id === activeUser)).toBe(true)
+        expect(
+          latest.items.find((item) => item.info.id === activeUser)?.parts.some(
+            (part) => part.type === "text" && part.text === "keep the active prompt visible",
+          ),
+        ).toBe(true)
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+
   test("session messages honors tui view for unpaginated reads", async () => {
     await WithInstance.provide({
       directory: root,
@@ -1212,6 +1241,45 @@ describe("MessageV2.filterCompacted", () => {
         expect(result.map((item) => item.info.id)).toEqual([c2, s2, u3, a3, u4, a4])
 
         await svc.remove(session.id)
+      },
+    })
+  })
+
+  test("effect history hydration matches the streamed compaction result", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const first = await addUser(session.id, "first")
+        const firstAssistant = await addAssistant(session.id, first, { finish: "end_turn" })
+        await addText(session.id, firstAssistant, "first reply")
+        const retained = await addUser(session.id, "retained")
+        const retainedAssistant = await addAssistant(session.id, retained, { finish: "end_turn" })
+        await addText(session.id, retainedAssistant, "retained reply")
+        const compaction = await addUser(session.id)
+        await addCompactionPart(session.id, compaction, retained)
+        const summary = await addAssistant(session.id, compaction, { summary: true, finish: "end_turn" })
+        await addText(session.id, summary, "summary")
+        const latest = await addUser(session.id, "latest")
+        const latestAssistant = await addAssistant(session.id, latest, { finish: "end_turn" })
+        await addText(session.id, latestAssistant, "latest reply")
+
+        const expected = MessageV2.filterCompacted(MessageV2.stream(session.id))
+        const actual = await Effect.runPromise(MessageV2.filterCompactedEffect(session.id))
+        expect(actual).toEqual(expected)
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+
+  test("effect history throws for a missing session", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        await expect(Effect.runPromise(MessageV2.filterCompactedEffect("missing-session" as SessionID))).rejects.toThrow(
+          "NotFoundError",
+        )
       },
     })
   })

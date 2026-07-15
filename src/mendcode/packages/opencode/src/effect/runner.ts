@@ -1,4 +1,7 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Latch, Schema, Scope, SynchronizedRef } from "effect"
+import * as Log from "@mendcode/core/util/log"
+
+const trace = Log.create({ service: "runner" })
 
 export interface Runner<A, E = never> {
   readonly state: State<A, E>
@@ -85,6 +88,7 @@ export const make = <A, E = never>(
     SynchronizedRef.modifyEffect(
       ref,
       (st) => Effect.gen(function* () {
+        trace.trace("finish", { id, state: st._tag, success: Exit.isSuccess(exit) })
         if (st._tag === "Running" && st.run.id === id) {
           return [
             Effect.gen(function* () {
@@ -158,6 +162,7 @@ export const make = <A, E = never>(
     SynchronizedRef.modifyEffect(
       ref,
       (st) => Effect.gen(function* () {
+        trace.trace("ensure", { state: st._tag, queue: options?.queue ?? false, interrupt: Boolean(options?.interrupt) })
         switch (st._tag) {
           case "Running":
             if (options?.queue) {

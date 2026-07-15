@@ -76,6 +76,7 @@ import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import type { RouteMap } from "@/cli/cmd/tui/plugin/api"
 import { FormatError, FormatUnknownError } from "@/cli/error"
 import { Locale } from "@/util/locale"
+import { backgroundTaskToast } from "@tui/util/background-task-notification"
 
 import type { EventSource } from "./context/sdk"
 import { DialogVariant } from "./component/dialog-variant"
@@ -4543,19 +4544,13 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     }
     backgroundTaskNotificationIDs.add(evt.properties.eventID)
     const state = evt.properties.state
-    toast.show({
-      title:
-        state === "completed"
-          ? "Subagent completed"
-          : state === "needs_input"
-            ? "Subagent needs input"
-            : "Subagent stopped",
-      message: [evt.properties.title, evt.properties.error ?? evt.properties.summary ?? state]
-        .filter(Boolean)
-        .join(": "),
-      variant: state === "failed" ? "error" : state === "completed" ? "success" : "info",
-      duration: state === "needs_input" || state === "failed" ? 8000 : 5000,
+    const notification = backgroundTaskToast({
+      state,
+      title: evt.properties.title,
+      summary: evt.properties.summary,
+      error: evt.properties.error,
     })
+    if (notification) toast.show(notification)
   })
 
   event.on(TuiEvent.SessionSelect.type, (evt) => {

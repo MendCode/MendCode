@@ -10,7 +10,7 @@ import { errorMessage } from "@/util/error"
 import { withTimeout } from "@/util/timeout"
 import { withNetworkOptions, resolveNetworkOptionsNoConfig } from "@/cli/network"
 import { Filesystem } from "@/util/filesystem"
-import type { GlobalEvent } from "@mendcode/sdk/v2"
+import { createOpencodeClient, type GlobalEvent } from "@mendcode/sdk/v2"
 import type { EventSource } from "./context/sdk"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
 import { writeHeapSnapshot } from "v8"
@@ -23,12 +23,54 @@ import {
 } from "@mendcode/core/util/opencode-process"
 import { validateSession } from "./validate-session"
 import { loadMendTuiProfile } from "@/mend/profile"
+import { ServerAuth } from "@/server/auth"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
 }
 
 type RpcClient = ReturnType<typeof Rpc.client<typeof rpc>>
+
+type ThreadTransport = {
+  url: string
+  fetch?: typeof fetch
+  headers?: RequestInit["headers"]
+  events?: EventSource
+}
+
+export function resolveSharedServerURL(value?: string, environment = process.env.MENDCODE_SERVER_URL) {
+  const raw = value || environment
+  if (!raw) return
+
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new Error("Invalid MendCode server URL")
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("MendCode server URL must use http or https")
+  }
+  if (url.username || url.password) {
+    throw new Error("MendCode server URL must not contain credentials")
+  }
+  return url.toString()
+}
+
+async function probeSharedServer(input: {
+  url: string
+  directory: string
+  headers?: RequestInit["headers"]
+}) {
+  const client = createOpencodeClient({
+    baseUrl: input.url,
+    directory: input.directory,
+    headers: input.headers,
+  })
+  await client.global.health({ throwOnError: true })
+  await client.session.list({ limit: 1 }, { throwOnError: true })
+}
 
 function createWorkerFetch(client: RpcClient): typeof fetch {
   const fn = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -118,6 +160,10 @@ export const TuiThreadCommand = cmd({
       .option("agent", {
         type: "string",
         describe: "agent to use",
+      })
+      .option("server-url", {
+        type: "string",
+        describe: "connect to an existing MendCode server instead of starting a local worker (or use MENDCODE_SERVER_URL)",
       }),
   handler: async (args) => {
     // Keep ENABLE_PROCESSED_INPUT cleared even if other code flips it.
@@ -137,7 +183,6 @@ export const TuiThreadCommand = cmd({
       // Resolve relative --project paths from PWD, then use the real cwd after
       // chdir so the thread and worker share the same directory key.
       const next = resolveThreadDirectory(args.project)
-      const file = await target()
       try {
         process.chdir(next)
       } catch {
@@ -145,29 +190,69 @@ export const TuiThreadCommand = cmd({
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
+      const network = resolveNetworkOptionsNoConfig(args)
+      let sharedServerURL: string | undefined
+      try {
+        sharedServerURL = resolveSharedServerURL(args.serverUrl)
+      } catch (error) {
+        UI.error(errorMessage(error))
+        process.exitCode = 1
+        return
+      }
+      const networkOptionSet =
+        process.argv.includes("--port") ||
+        process.argv.includes("--hostname") ||
+        process.argv.includes("--mdns") ||
+        network.mdns ||
+        network.port !== 0 ||
+        network.hostname !== "127.0.0.1"
+
+      if (sharedServerURL && networkOptionSet) {
+        UI.error("--server-url cannot be combined with --port, --hostname, or --mdns")
+        process.exitCode = 1
+        return
+      }
+
+      const sharedServerHeaders = sharedServerURL ? ServerAuth.headers() : undefined
+      let sharedServer = sharedServerURL
+      if (sharedServer) {
+        try {
+          await probeSharedServer({ url: sharedServer, directory: cwd, headers: sharedServerHeaders })
+        } catch (error) {
+          UI.println(
+            UI.Style.TEXT_WARNING_BOLD +
+              "! " +
+              UI.Style.TEXT_NORMAL +
+              `Shared server unavailable; falling back to the local worker. ${errorMessage(error)}`,
+          )
+          sharedServer = undefined
+        }
+      }
+
+      const file = sharedServer ? undefined : await target()
       const env = sanitizedProcessEnv({
         [OPENCODE_PROCESS_ROLE]: "worker",
         [OPENCODE_RUN_ID]: ensureRunID(),
       })
-
-      const worker = new Worker(file, {
-        env,
-      })
-      worker.onerror = (e) => {
-        Log.Default.error("thread error", {
-          message: e.message,
-          filename: e.filename,
-          lineno: e.lineno,
-          colno: e.colno,
-          error: e.error,
-        })
+      const worker = file ? new Worker(file, { env }) : undefined
+      if (worker) {
+        worker.onerror = (e) => {
+          Log.Default.error("thread error", {
+            message: e.message,
+            filename: e.filename,
+            lineno: e.lineno,
+            colno: e.colno,
+            error: e.error,
+          })
+        }
       }
 
-      const client = Rpc.client<typeof rpc>(worker)
+      const client = worker ? Rpc.client<typeof rpc>(worker) : undefined
       const error = (e: unknown) => {
         Log.Default.error("process error", { error: errorMessage(e) })
       }
       const reload = () => {
+        if (!client) return
         client.call("reload", undefined).catch((err) => {
           Log.Default.warn("worker reload failed", {
             error: errorMessage(err),
@@ -185,6 +270,7 @@ export const TuiThreadCommand = cmd({
         process.off("uncaughtException", error)
         process.off("unhandledRejection", error)
         process.off("SIGUSR2", reload)
+        if (!client || !worker) return
         await withTimeout(client.call("shutdown", undefined), 5000).catch((error) => {
           Log.Default.warn("worker shutdown failed", {
             error: errorMessage(error),
@@ -197,7 +283,6 @@ export const TuiThreadCommand = cmd({
       const config = await TuiConfig.get()
       const mendProfile = await loadMendTuiProfile(cwd, config)
 
-      const network = resolveNetworkOptionsNoConfig(args)
       const external =
         process.argv.includes("--port") ||
         process.argv.includes("--hostname") ||
@@ -206,17 +291,23 @@ export const TuiThreadCommand = cmd({
         network.port !== 0 ||
         network.hostname !== "127.0.0.1"
 
-      const transport = external
+      const transport: ThreadTransport = sharedServer
         ? {
-            url: (await client.call("server", network)).url,
-            fetch: undefined,
-            events: undefined,
+            url: sharedServer,
+            headers: sharedServerHeaders,
           }
-        : {
-            url: "http://opencode.internal",
-            fetch: createWorkerFetch(client),
-            events: createEventSource(client),
-          }
+        : external
+          ? {
+              url: (await client!.call("server", network)).url,
+              fetch: undefined,
+              headers: ServerAuth.headers(),
+              events: undefined,
+            }
+          : {
+              url: "http://opencode.internal",
+              fetch: createWorkerFetch(client!),
+              events: createEventSource(client!),
+            }
 
       try {
         await validateSession({
@@ -224,6 +315,7 @@ export const TuiThreadCommand = cmd({
           sessionID: args.session,
           directory: cwd,
           fetch: transport.fetch,
+          headers: transport.headers,
         })
       } catch (error) {
         UI.error(errorMessage(error))
@@ -231,15 +323,18 @@ export const TuiThreadCommand = cmd({
         return
       }
 
-      setTimeout(() => {
-        client.call("checkUpgrade", { directory: cwd }).catch(() => {})
-      }, 1000).unref?.()
+      if (client) {
+        setTimeout(() => {
+          client.call("checkUpgrade", { directory: cwd }).catch(() => {})
+        }, 1000).unref?.()
+      }
 
       try {
         await tui({
           url: transport.url,
           async onSnapshot() {
             const tui = writeHeapSnapshot("tui.heapsnapshot")
+            if (!client) return [tui]
             const server = await client.call("snapshot", undefined)
             return [tui, server]
           },
@@ -247,6 +342,7 @@ export const TuiThreadCommand = cmd({
           mendProfile,
           directory: cwd,
           fetch: transport.fetch,
+          headers: transport.headers,
           events: transport.events,
           args: {
             continue: args.continue,

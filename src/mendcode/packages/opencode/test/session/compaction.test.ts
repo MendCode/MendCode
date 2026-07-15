@@ -21,6 +21,7 @@ import { Session as SessionNs } from "@/session/session"
 import { MessageV2 } from "../../src/session/message-v2"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
+import { BackgroundTask } from "../../src/session/background-task"
 import { SessionSummary } from "../../src/session/summary"
 import { Todo } from "../../src/session/todo"
 import { SessionV2 } from "../../src/v2/session"
@@ -256,7 +257,7 @@ function runtime(
 ) {
   const bus = Bus.layer
   return ManagedRuntime.make(
-    Layer.mergeAll(SessionCompaction.layer, bus).pipe(
+    Layer.mergeAll(SessionCompaction.layer.pipe(Layer.provide(BackgroundTask.defaultLayer)), bus).pipe(
       Layer.provide(provider.layer),
       Layer.provide(SessionNs.defaultLayer),
       Layer.provide(layer(result)),
@@ -274,6 +275,7 @@ const deps = Layer.mergeAll(
   layer("continue"),
   agentLayer,
   Plugin.defaultLayer,
+  BackgroundTask.defaultLayer,
   Bus.layer,
   Config.defaultLayer,
   Todo.defaultLayer,
@@ -282,7 +284,11 @@ const deps = Layer.mergeAll(
 const env = Layer.mergeAll(
   SessionNs.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
-  SessionCompaction.layer.pipe(Layer.provide(SessionNs.defaultLayer), Layer.provideMerge(deps)),
+  SessionCompaction.layer.pipe(
+    Layer.provide(BackgroundTask.defaultLayer),
+    Layer.provide(SessionNs.defaultLayer),
+    Layer.provideMerge(deps),
+  ),
 )
 
 const it = testEffect(env)
@@ -315,7 +321,13 @@ function liveRuntime(layer: Layer.Layer<LLM.Service>, provider = ProviderTest.fa
   const question = Question.layer.pipe(Layer.provide(bus))
   const processor = SessionProcessorModule.SessionProcessor.layer.pipe(Layer.provide(summary))
   return ManagedRuntime.make(
-    (Layer.mergeAll(SessionCompaction.layer.pipe(Layer.provide(processor)), processor, bus, status).pipe(
+    (Layer.mergeAll(
+      SessionCompaction.layer.pipe(Layer.provide(processor), Layer.provide(BackgroundTask.defaultLayer)),
+      processor,
+      bus,
+      status,
+      BackgroundTask.defaultLayer,
+    ).pipe(
       Layer.provide(provider.layer),
       Layer.provide(SessionNs.defaultLayer),
       Layer.provide(Snapshot.defaultLayer),
@@ -329,7 +341,7 @@ function liveRuntime(layer: Layer.Layer<LLM.Service>, provider = ProviderTest.fa
       Layer.provide(bus),
       Layer.provide(config),
       Layer.provide(Todo.defaultLayer),
-    ) as unknown as Layer.Layer<SessionCompaction.Service | Bus.Service, never, never>),
+    ) as unknown as Layer.Layer<SessionCompaction.Service | BackgroundTask.Service | Bus.Service, never, never>),
   )
 }
 
@@ -1570,6 +1582,71 @@ describe("session.compaction.process", () => {
           const part = await lastCompactionPart(session.id)
           expect(part?.type).toBe("compaction")
           expect(part?.tail_start_id).toBe(keep.id)
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
+  test("rescue compaction discards the heavy tail and resumes", async () => {
+    await using tmp = await tmpdir()
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        await user(session.id, "first")
+        await user(session.id, "second")
+        await user(session.id, "third")
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: true,
+          overflow: true,
+          resume: true,
+          discardTail: true,
+        })
+
+        const rt = runtime(
+          "continue",
+          Plugin.defaultLayer,
+          wide(),
+          cfg({ tail_turns: 2, preserve_recent_tokens: 10_000 }),
+        )
+        try {
+          const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          const result = await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+                overflow: true,
+                resume: true,
+              }),
+            ),
+          )
+
+          const all = await svc.messages({ sessionID: session.id })
+          const part = all
+            .flatMap((message) => message.parts)
+            .findLast((item): item is MessageV2.CompactionPart => item.type === "compaction")
+          expect(result).toBe("continue")
+          expect(part).toMatchObject({ type: "compaction", discard_tail: true })
+          expect(part?.tail_start_id).toBeUndefined()
+          expect(
+            all.some(
+              (message) =>
+                message.info.role === "user" &&
+                message.parts.some(
+                  (item) => item.type === "text" && item.synthetic && item.metadata?.compaction_continue === true,
+                ),
+            ),
+          ).toBe(true)
         } finally {
           await rt.dispose()
         }
@@ -2975,6 +3052,123 @@ describe("session.compaction.process", () => {
           expect(captured).toContain("Mapped Convex Auth")
           expect(captured).toContain("Changed files: convex/auth.ts, convex/lib/auth.ts")
           expect(captured).toContain("Use subagent task outputs as first-class state evidence")
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
+  test("compaction resume preserves authoritative background task continuity", async () => {
+    const stub = llm()
+    let captured = ""
+    stub.push(
+      reply("summary", (input) => {
+        captured = llmInputText(input)
+      }),
+    )
+
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        await user(session.id, "continue the implementation")
+        const queuedChild = await svc.create({ parentID: session.id, title: "Queued child", agent: "general" })
+        const runningChild = await svc.create({ parentID: session.id, title: "Running child", agent: "general" })
+        const completedChild = await svc.create({ parentID: session.id, title: "Completed child", agent: "general" })
+        const failedChild = await svc.create({ parentID: session.id, title: "Failed child", agent: "general" })
+
+        const rt = liveRuntime(stub.layer, wide())
+        try {
+          await rt.runPromise(
+            Effect.gen(function* () {
+              const tasks = yield* BackgroundTask.Service
+              const queued = yield* tasks.start({
+                taskID: queuedChild.id,
+                parentSessionID: session.id,
+                title: queuedChild.title,
+                agent: queuedChild.agent,
+              })
+              const running = yield* tasks.start({
+                taskID: runningChild.id,
+                parentSessionID: session.id,
+                title: runningChild.title,
+                agent: runningChild.agent,
+              })
+              yield* tasks.markRunning({ taskID: runningChild.id, generation: running.generation })
+              const completed = yield* tasks.start({
+                taskID: completedChild.id,
+                parentSessionID: session.id,
+                title: completedChild.title,
+                agent: completedChild.agent,
+              })
+              yield* tasks.markRunning({ taskID: completedChild.id, generation: completed.generation })
+              yield* tasks.finish({
+                taskID: completedChild.id,
+                generation: completed.generation,
+                state: "completed",
+                result: { summary: "Completed child evidence." },
+              })
+              const failed = yield* tasks.start({
+                taskID: failedChild.id,
+                parentSessionID: session.id,
+                title: failedChild.title,
+                agent: failedChild.agent,
+              })
+              yield* tasks.markRunning({ taskID: failedChild.id, generation: failed.generation })
+              yield* tasks.finish({
+                taskID: failedChild.id,
+                generation: failed.generation,
+                state: "failed",
+                result: { error: "Failed child evidence." },
+              })
+            }),
+          )
+
+          await SessionCompaction.create({
+            sessionID: session.id,
+            agent: "build",
+            model: ref,
+            auto: true,
+            resume: true,
+          })
+          const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+                overflow: true,
+              }),
+            ),
+          )
+
+          for (const [taskID, state] of [
+            [queuedChild.id, "queued"],
+            [runningChild.id, "running"],
+            [completedChild.id, "completed"],
+            [failedChild.id, "failed"],
+          ] as const) {
+            expect(captured).toContain(`task_id: ${taskID}`)
+            expect(captured).toContain(`session_id: ${taskID}`)
+            expect(captured).toContain(`state: ${state}`)
+          }
+          expect(captured).toContain("authoritative BackgroundTask registry")
+          expect(captured).toContain("call task_status for each task_id")
+
+          const resumedText = (await svc.messages({ sessionID: session.id }))
+            .flatMap((message) => message.parts)
+            .filter((part): part is MessageV2.TextPart => part.type === "text")
+            .map((part) => part.text)
+            .find((text) => text.includes("Background Task Continuity"))
+          expect(resumedText).toContain(`task_id: ${runningChild.id}`)
+          expect(resumedText).toContain("state: running")
+          expect(resumedText).toContain("call task_status for each task_id")
         } finally {
           await rt.dispose()
         }

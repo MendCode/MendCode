@@ -9,6 +9,7 @@ import {
   supplementalSlashPromptParts,
   optimisticUserParts,
   promptHistoryMatchesCurrent,
+  latestPendingAssistantID,
   resolveWorkingStartedAt,
   shouldAcceptPromptInterruptFocus,
   shouldAttemptPromptHistoryNavigation,
@@ -25,6 +26,7 @@ import {
   sessionFollowSyncIsStale,
   sessionFollowSyncKind,
   sessionHasLocalQueuedTurn,
+  sessionPinnedUserMessageID,
   sessionTranscriptRenderKey,
   sessionUserMessageQueued,
   sessionUserPromptHistory,
@@ -125,6 +127,27 @@ describe("optimistic user turn", () => {
 })
 
 describe("queued user turn", () => {
+  test("ignores an older unfinished assistant after a newer response completed", () => {
+    expect(
+      latestPendingAssistantID([
+        { id: "msg_001", role: "user", time: { created: 1 } },
+        { id: "msg_002", role: "assistant", time: { created: 2 } },
+        { id: "msg_003", role: "user", time: { created: 3 } },
+        { id: "msg_004", role: "assistant", time: { created: 4, completed: 5 } },
+      ]),
+    ).toBeUndefined()
+  })
+
+  test("keeps the latest unfinished assistant active across a newer queued user", () => {
+    expect(
+      latestPendingAssistantID([
+        { id: "msg_001", role: "user", time: { created: 1 } },
+        { id: "msg_002", role: "assistant", time: { created: 2 } },
+        { id: "msg_003", role: "user", time: { created: 3 } },
+      ]),
+    ).toBe("msg_002")
+  })
+
   test("stays visibly queued across later assistant tool iterations", () => {
     const activeUser = { id: "msg_001", role: "user" }
     const queuedUser = { id: "msg_003", role: "user" }
@@ -156,6 +179,59 @@ describe("queued user turn", () => {
         messages: [...messages, { id: "msg_005", role: "assistant", parentID: queuedUser.id }],
       }),
     ).toBe(false)
+  })
+
+  test("does not mark an older user queued when the active assistant belongs to a later user", () => {
+    const olderUser = { id: "msg_001", role: "user" }
+    const activeUser = { id: "msg_003", role: "user" }
+    const messages = [olderUser, activeUser, { id: "msg_004", role: "assistant", parentID: activeUser.id }]
+
+    expect(
+      sessionUserMessageQueued({
+        messageID: olderUser.id,
+        pendingAssistantID: "msg_004",
+        messages,
+      }),
+    ).toBe(false)
+  })
+
+  test("keeps the active turn pinned while a later user message is queued", () => {
+    const messages = [
+      { id: "msg_001", role: "user", time: {} },
+      { id: "msg_002", role: "assistant", parentID: "msg_001", finish: "tool-calls", time: { completed: 2 } },
+      { id: "msg_003", role: "user", time: {} },
+      { id: "msg_004", role: "assistant", parentID: "msg_001", time: {} },
+    ]
+
+    expect(
+      sessionPinnedUserMessageID({
+        messages,
+        pendingAssistantID: "msg_004",
+        submittedUserMessageID: "msg_003",
+      }),
+    ).toBe("msg_001")
+  })
+
+  test("keeps the submitted user pinned through its response and releases it when finished", () => {
+    const user = { id: "msg_003", role: "user", time: {} }
+    const running = [user, { id: "msg_004", role: "assistant", parentID: user.id, time: {} }]
+    expect(
+      sessionPinnedUserMessageID({
+        messages: running,
+        pendingAssistantID: "msg_004",
+        submittedUserMessageID: user.id,
+      }),
+    ).toBe(user.id)
+
+    expect(
+      sessionPinnedUserMessageID({
+        messages: [
+          user,
+          { id: "msg_004", role: "assistant", parentID: user.id, finish: "stop", time: { completed: 5 } },
+        ],
+        submittedUserMessageID: user.id,
+      }),
+    ).toBeUndefined()
   })
 })
 
@@ -468,7 +544,7 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldUseSimpleSessionHistory({ messageID: "msg_005", fullStartID })).toBe(false)
   })
 
-  test("remounts the transcript only when a compaction summary completes", () => {
+  test("keeps the transcript mounted when a compaction summary completes", () => {
     const streaming = [
       { id: "msg_001", role: "user" as const, time: { completed: 1 } },
       { id: "msg_002", role: "assistant" as const, parentID: "msg_001", summary: true, time: {} },
@@ -482,11 +558,10 @@ describe("resolveWorkingStartedAt", () => {
     expect(streamingStartID).toBeUndefined()
     expect(completedStartID).toBe("msg_002")
     expect(afterSubmitStartID).toBe(completedStartID)
-    expect(sessionTranscriptRenderKey("ses_test", streamingStartID)).toBe("ses_test:initial")
-    expect(sessionTranscriptRenderKey("ses_test", completedStartID)).toBe("ses_test:msg_002")
-    expect(sessionTranscriptRenderKey("ses_test", afterSubmitStartID)).toBe(
-      sessionTranscriptRenderKey("ses_test", completedStartID),
-    )
+    const renderKey = sessionTranscriptRenderKey("ses_test")
+    expect(renderKey).toBe("ses_test")
+    expect(sessionTranscriptRenderKey("ses_test")).toBe(renderKey)
+    expect(streamingStartID).not.toBe(completedStartID)
   })
 
   test("keeps unfinished assistant tools visible even when a newer queued user exists", () => {

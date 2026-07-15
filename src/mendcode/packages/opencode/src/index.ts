@@ -74,7 +74,7 @@ async function commandsForArgs(): Promise<RuntimeCommand[]> {
     for (let index = 0; index < args.length; index++) {
       const token = args[index]
       if (
-        /^(?:--(?:print-logs|pure)(?:=(?:true|false))?|--no-(?:print-logs|pure))$/.test(token) ||
+        /^(?:--(?:print-logs|pure|trace)(?:=(?:true|false))?|--no-(?:print-logs|pure|trace))$/.test(token) ||
         token.startsWith("--log-level=")
       )
         continue
@@ -121,9 +121,16 @@ const cli = yargs(args)
     describe: "run without external plugins",
     type: "boolean",
   })
+  .option("trace", {
+    describe: "capture correlated backend and TUI queue diagnostics",
+    type: "boolean",
+  })
   .middleware(async (opts) => {
     if (opts.pure) {
       process.env.OPENCODE_PURE = "1"
+    }
+    if (opts.trace) {
+      process.env.MENDCODE_TRACE = "1"
     }
 
     await Log.init({

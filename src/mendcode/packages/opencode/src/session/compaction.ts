@@ -3,6 +3,7 @@ import { Bus } from "@/bus"
 import { mkdir, writeFile } from "fs/promises"
 import * as Session from "./session"
 import { SessionID, MessageID, PartID } from "./schema"
+import { BackgroundTask } from "./background-task"
 import { Provider } from "@/provider/provider"
 import { MessageV2 } from "./message-v2"
 import z from "zod"
@@ -962,11 +963,20 @@ function recentOperationalContext(messages: MessageV2.WithParts[]) {
 function taskOutput(state: MessageV2.ToolState) {
   if (state.status === "completed") return state.output
   if (state.status === "error") return state.metadata?.output ?? state.error
-  if (state.status === "running" || state.status === "pending") return `Task is still ${state.status}.`
+  if (state.status === "running" || state.status === "pending") return ""
   return ""
 }
 
-function subagentTaskContext(messages: MessageV2.WithParts[]) {
+function taskEvidenceOutput(state: MessageV2.ToolState) {
+  return taskOutput(state)
+    .split("\n")
+    .filter((line: string) => !/^\s*task_(?:id|status|generation|revision|source):/i.test(line))
+    .map((line: string) => line.replace(/^\s*<\/?task_result>\s*$/i, ""))
+    .join("\n")
+    .trim()
+}
+
+function subagentTaskEvidence(messages: MessageV2.WithParts[]) {
   const tasks: string[] = []
   for (const msg of messages) {
     if (msg.info.role !== "assistant") continue
@@ -976,11 +986,14 @@ function subagentTaskContext(messages: MessageV2.WithParts[]) {
       const description = toolInputValue(input, "description") ?? "subagent task"
       const subagent = toolInputValue(input, "subagent_type") ?? "unknown"
       const subagentSessionID = toolMetadataValue(part.state, "sessionId")
-      const output = taskOutput(part.state).trim()
-      const excerpt = compactText(output, SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)
+      const output = taskOutput(part.state)
+      const outputTaskID = output.match(/^\s*task_id:\s*(\S+)/im)?.[1]
+      const taskID = subagentSessionID ?? outputTaskID
+      const excerpt = compactText(taskEvidenceOutput(part.state), SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)
       tasks.push(
         [
-          `- ${description} (${subagent}) — ${part.state.status}`,
+          `- ${description} (${subagent})`,
+          taskID ? `  task_id: ${taskID}` : undefined,
           subagentSessionID ? `  subagentSessionID: ${subagentSessionID}` : undefined,
           excerpt
             .split("\n")
@@ -998,10 +1011,33 @@ function subagentTaskContext(messages: MessageV2.WithParts[]) {
   if (!recent.length) return []
   return [
     [
-      "Subagent Task Context:",
+      "Subagent Task Context (supplemental output evidence only):",
       ...recent,
       "",
-      "Use subagent task outputs as first-class state evidence. Preserve concrete results, blockers, changed files, and unfinished/running work in the anchored summary.",
+      "Use subagent task outputs as first-class state evidence for concrete results, blockers, changed files, and unfinished work; do not infer lifecycle state from rendered tool cards. The Background Task Continuity block is authoritative when present; otherwise call task_status with the task_id before deciding whether work is complete, running, or lost.",
+    ].join("\n"),
+  ]
+}
+
+export function backgroundTaskContinuityContext(tasks: readonly BackgroundTask.Snapshot[]) {
+  if (!tasks.length) return []
+  return [
+    [
+      "Background Task Continuity (authoritative BackgroundTask registry):",
+      ...tasks.flatMap((task) => [
+        `- task_id: ${task.taskID}`,
+        `  session_id: ${task.taskID}`,
+        `  parent_session_id: ${task.parentSessionID}`,
+        `  generation: ${task.generation}`,
+        `  revision: ${task.revision}`,
+        `  state: ${task.state}`,
+        `  control_intent: ${task.controlIntent}`,
+        `  title: ${compactText(task.title, 240)}`,
+        task.result?.summary ? `  result_summary: ${compactText(task.result.summary, SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)}` : undefined,
+        task.result?.error ? `  result_error: ${compactText(task.result.error, SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)}` : undefined,
+      ].filter((line): line is string => Boolean(line))),
+      "",
+      "Each task_id is also its child session_id. The registry state above is authoritative; do not invent or overwrite it from rendered tool cards. On resume, call task_status for each task_id and reconcile the current registry state with the child transcript before treating work as cancelled, lost, or complete.",
     ].join("\n"),
   ]
 }
@@ -1083,6 +1119,7 @@ export interface Interface {
     auto: boolean
     overflow?: boolean
     resume?: boolean
+    discardTail?: boolean
     instructions?: string
   }) => Effect.Effect<void>
 }
@@ -1268,11 +1305,13 @@ export const layer: Layer.Layer<
       const hidden = new Set(prior.flatMap((item) => [item.userIndex, item.assistantIndex]))
       const previousSummary = prior.at(-1)?.summary
       const visibleHistory = history.filter((_, index) => !hidden.has(index))
-      const selected = yield* select({
-        messages: visibleHistory,
-        cfg,
-        model,
-      })
+      const selected = compactionPart?.discard_tail
+        ? { head: visibleHistory, tail_start_id: undefined }
+        : yield* select({
+            messages: visibleHistory,
+            cfg,
+            model,
+          })
       // Allow plugins to inject context or replace compaction prompt.
       const compacting = yield* plugin.trigger(
         "experimental.session.compacting",
@@ -1280,6 +1319,7 @@ export const layer: Layer.Layer<
         { context: [], prompt: undefined },
       )
       const persistedTodos = yield* todos.get(input.sessionID).pipe(Effect.catch(() => Effect.succeed([])))
+      const backgroundTaskSnapshots = yield* Effect.sync(() => BackgroundTask.listSnapshots(input.sessionID))
       const summaryHistory = selected.head
       const ctx = yield* InstanceState.context
       const transcriptPath = yield* writeTranscript({
@@ -1305,7 +1345,8 @@ export const layer: Layer.Layer<
         ...compactionTriggerContext({ compactionPart, messages: history }),
         ...todoContext(persistedTodos),
         ...recentOperationalContext(visibleHistory),
-        ...subagentTaskContext(visibleHistory),
+        ...backgroundTaskContinuityContext(backgroundTaskSnapshots),
+        ...subagentTaskEvidence(visibleHistory),
         ...compacting.context,
       ]
       const nextPrompt =
@@ -1398,6 +1439,7 @@ export const layer: Layer.Layer<
       }
 
       const currentMessages = yield* session.messages({ sessionID: input.sessionID })
+      const currentBackgroundTaskSnapshots = yield* Effect.sync(() => BackgroundTask.listSnapshots(input.sessionID))
       const currentParent = currentMessages.find((message) => message.info.id === input.parentID)
       const latestCompactionPart = currentParent?.parts.find(
         (part): part is MessageV2.CompactionPart => part.type === "compaction" && part.id === compactionPart?.id,
@@ -1471,9 +1513,14 @@ export const layer: Layer.Layer<
             agent: userMessage.agent,
             model: userMessage.model,
           })
-          const text =
-            "The previous request exceeded the provider's size or context limit, so the conversation was compacted. Continue from the summary and preserved recent messages. If attachments were removed from context, say so only when relevant to the user's request.\n\n" +
-            COMPACTION_RESUME_PROMPT
+          const text = [
+            "The previous request exceeded the provider's size or context limit, so the conversation was compacted. Continue from the summary and preserved recent messages. If attachments were removed from context, say so only when relevant to the user's request.",
+            COMPACTION_RESUME_PROMPT,
+            ...backgroundTaskContinuityContext(currentBackgroundTaskSnapshots),
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+
           yield* session.updatePart({
             id: PartID.ascending(),
             messageID: continueMsg.id,
@@ -1521,6 +1568,7 @@ export const layer: Layer.Layer<
       auto: boolean
       overflow?: boolean
       resume?: boolean
+      discardTail?: boolean
       instructions?: string
     }) {
       const msg = yield* session.updateMessage({
@@ -1539,6 +1587,7 @@ export const layer: Layer.Layer<
         auto: input.auto,
         overflow: input.overflow,
         resume: input.resume ?? false,
+        discard_tail: input.discardTail,
         instructions: input.instructions?.trim() || undefined,
       })
       EventV2.run(SessionEvent.Compaction.Started.Sync, {
@@ -1589,6 +1638,7 @@ export const create = fn(
     auto: z.boolean(),
     overflow: z.boolean().optional(),
     resume: z.boolean().optional(),
+    discardTail: z.boolean().optional(),
     instructions: z.string().optional(),
   }),
   (input) => runPromise((svc) => svc.create(input)),

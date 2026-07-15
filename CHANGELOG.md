@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Keep TUI message state idempotent when duplicate `message.updated` events arrive in the same batch, preventing temporary assistant duplication or disappearance during queued and normal turns.
+- Preserve the latest real user turn and its visible assistant output across bounded refreshes, stale removals, and compaction-related updates.
+- Keep prompt/queue working state, compaction progress, background-task notifications, and session rendering synchronized during active turns.
+
+### Tests
+
+- Add regressions for batched duplicate message updates, pinned user turns, sparse refreshes, bounded transcript retention, compaction pairing, and prompt working-state transitions.
+
 ## 0.1.20 - 2026-06-27
 
 ### Added
