@@ -123,6 +123,10 @@ let databaseCache:
     }
   | undefined
 
+const DATABASE_SESSION_BATCH_SIZE = 50
+const DATABASE_MESSAGE_ID_BATCH_SIZE = 5_000
+const DATABASE_CACHE_TTL_MS = 60_000
+
 export function buildUsageInsightsFromDatabase(input: {
   sessions: InsightSession[]
   start: number
@@ -134,117 +138,141 @@ export function buildUsageInsightsFromDatabase(input: {
   const messageLimit = Math.max(1, Math.min(500, input.messageLimit ?? 500))
   if (input.sessions.length === 0) return buildUsageInsights([], { start, end })
   const cacheKey = `${start}:${end}:${messageLimit}:${input.sessions.map((session) => `${session.id}:${session.time.updated}:${session.agent ?? ""}:${session.summary?.files ?? 0}`).join(",")}`
-  if (databaseCache?.key === cacheKey && Date.now() - databaseCache.updated < 5_000) return databaseCache.data
-  const sessionIDs = input.sessions.map((session) => SessionID.make(session.id))
-  const messages = Database.use((db) => {
-    const ranked = db
-      .select({
-        id: MessageTable.id,
-        sessionID: MessageTable.session_id,
-        created: MessageTable.time_created,
-        role: sql<string>`json_extract(${MessageTable.data}, '$.role')`.as("role"),
-        agent: sql<string | null>`json_extract(${MessageTable.data}, '$.agent')`.as("agent"),
-        modelID: sql<string | null>`json_extract(${MessageTable.data}, '$.modelID')`.as("model_id"),
-        providerID: sql<string | null>`json_extract(${MessageTable.data}, '$.providerID')`.as("provider_id"),
-        cost: sql<number | null>`json_extract(${MessageTable.data}, '$.cost')`.as("cost"),
-        completed: sql<number | null>`json_extract(${MessageTable.data}, '$.time.completed')`.as("completed"),
-        total: sql<number | null>`json_extract(${MessageTable.data}, '$.tokens.total')`.as("total_tokens"),
-        input: sql<number | null>`json_extract(${MessageTable.data}, '$.tokens.input')`.as("input_tokens"),
-        output: sql<number | null>`json_extract(${MessageTable.data}, '$.tokens.output')`.as("output_tokens"),
-        reasoning: sql<number | null>`json_extract(${MessageTable.data}, '$.tokens.reasoning')`.as("reasoning_tokens"),
-        cacheRead: sql<number | null>`json_extract(${MessageTable.data}, '$.tokens.cache.read')`.as("cache_read"),
-        cacheWrite: sql<number | null>`json_extract(${MessageTable.data}, '$.tokens.cache.write')`.as("cache_write"),
-        rank: sql<number>`row_number() over (partition by ${MessageTable.session_id} order by ${MessageTable.time_created} desc, ${MessageTable.id} desc)`.as(
-          "rank",
-        ),
-      })
-      .from(MessageTable)
-      .where(and(inArray(MessageTable.session_id, sessionIDs), gte(MessageTable.time_created, start)))
-      .as("ranked_usage_messages")
-    return db.select().from(ranked).where(lte(ranked.rank, messageLimit)).all()
-  })
+  if (databaseCache?.key === cacheKey && Date.now() - databaseCache.updated < DATABASE_CACHE_TTL_MS)
+    return databaseCache.data
   const partType = sql<string>`json_extract(${PartTable.data}, '$.type')`
   const messageRole = sql<string>`json_extract(${MessageTable.data}, '$.role')`
-  const parts = Array.from({ length: Math.ceil(messages.length / 20_000) }, (_, index) =>
-    messages.slice(index * 20_000, (index + 1) * 20_000).map((message) => message.id),
-  ).flatMap((messageIDs) =>
-    Database.use((db) =>
-      db
+  let data: UsageInsights | undefined
+
+  for (let offset = 0; offset < input.sessions.length; offset += DATABASE_SESSION_BATCH_SIZE) {
+    const sessions = input.sessions.slice(offset, offset + DATABASE_SESSION_BATCH_SIZE)
+    const sessionIDs = sessions.map((session) => SessionID.make(session.id))
+    const messages = Database.use((db) => {
+      const ranked = db
         .select({
-          messageID: PartTable.message_id,
-          type: partType,
-          text: sql<string | null>`json_extract(${PartTable.data}, '$.text')`,
-          tool: sql<string | null>`json_extract(${PartTable.data}, '$.tool')`,
-          name: sql<string | null>`json_extract(${PartTable.data}, '$.name')`,
-          status: sql<string | null>`json_extract(${PartTable.data}, '$.state.status')`,
-          start: sql<number | null>`json_extract(${PartTable.data}, '$.state.time.start')`,
-          end: sql<number | null>`json_extract(${PartTable.data}, '$.state.time.end')`,
+          id: MessageTable.id,
+          sessionID: MessageTable.session_id,
+          created: MessageTable.time_created,
+          role: sql<string>`json_extract(${MessageTable.data}, '$.role')`.as("role"),
+          agent: sql<string | null>`json_extract(${MessageTable.data}, '$.agent')`.as("agent"),
+          modelID: sql<string | null>`json_extract(${MessageTable.data}, '$.modelID')`.as("model_id"),
+          providerID: sql<string | null>`json_extract(${MessageTable.data}, '$.providerID')`.as("provider_id"),
+          cost: sql<number | null>`json_extract(${MessageTable.data}, '$.cost')`.as("cost"),
+          completed: sql<number | null>`json_extract(${MessageTable.data}, '$.time.completed')`.as("completed"),
+          total: sql<number | null>`json_extract(${MessageTable.data}, '$.tokens.total')`.as("total_tokens"),
+          input: sql<number | null>`json_extract(${MessageTable.data}, '$.tokens.input')`.as("input_tokens"),
+          output: sql<number | null>`json_extract(${MessageTable.data}, '$.tokens.output')`.as("output_tokens"),
+          reasoning: sql<number | null>`json_extract(${MessageTable.data}, '$.tokens.reasoning')`.as("reasoning_tokens"),
+          cacheRead: sql<number | null>`json_extract(${MessageTable.data}, '$.tokens.cache.read')`.as("cache_read"),
+          cacheWrite: sql<number | null>`json_extract(${MessageTable.data}, '$.tokens.cache.write')`.as("cache_write"),
+          rank: sql<number>`row_number() over (partition by ${MessageTable.session_id} order by ${MessageTable.time_created} desc, ${MessageTable.id} desc)`.as(
+            "rank",
+          ),
         })
-        .from(PartTable)
-        .innerJoin(MessageTable, sql`${MessageTable.id} = ${PartTable.message_id}`)
+        .from(MessageTable)
         .where(
           and(
-            inArray(PartTable.message_id, messageIDs),
-            sql`(${partType} in ('tool', 'agent') or (${partType} = 'text' and ${messageRole} = 'user'))`,
+            inArray(MessageTable.session_id, sessionIDs),
+            gte(MessageTable.time_created, start),
+            sql`${messageRole} in ('user', 'assistant')`,
           ),
         )
-        .all(),
-    ),
-  )
-  const byMessage = new Map<string, InsightMessage["parts"]>()
-  for (const part of parts) {
-    const items = byMessage.get(part.messageID) ?? []
-    items.push({
-      type: part.type,
-      ...(part.text === null ? {} : { text: part.text }),
-      ...(part.tool === null ? {} : { tool: part.tool }),
-      ...(part.name === null ? {} : { name: part.name }),
-      ...(part.status === null && part.start === null && part.end === null
-        ? {}
-        : {
-            state: {
-              ...(part.status === null ? {} : { status: part.status }),
-              ...(part.start === null && part.end === null
-                ? {}
-                : {
-                    time: {
-                      ...(part.start === null ? {} : { start: part.start }),
-                      ...(part.end === null ? {} : { end: part.end }),
-                    },
-                  }),
-            },
-          }),
+        .as("ranked_usage_messages")
+      return db.select().from(ranked).where(lte(ranked.rank, messageLimit)).all()
     })
-    byMessage.set(part.messageID, items)
-  }
-  const bySession = new Map(
-    input.sessions.map((session) => [session.id, { session, messages: [] as InsightMessage[] }]),
-  )
-  for (const message of messages) {
-    if (message.role !== "user" && message.role !== "assistant") continue
-    bySession.get(message.sessionID)?.messages.push({
-      info: {
-        id: message.id,
-        role: message.role,
-        ...(message.agent === null ? {} : { agent: message.agent }),
-        ...(message.modelID === null ? {} : { modelID: message.modelID }),
-        ...(message.providerID === null ? {} : { providerID: message.providerID }),
-        ...(message.cost === null ? {} : { cost: message.cost }),
-        tokens: {
-          ...(message.total === null ? {} : { total: message.total }),
-          input: message.input ?? 0,
-          output: message.output ?? 0,
-          reasoning: message.reasoning ?? 0,
-          cache: { read: message.cacheRead ?? 0, write: message.cacheWrite ?? 0 },
+    const byMessage = new Map<string, InsightMessage["parts"]>()
+    for (let offset = 0; offset < messages.length; offset += DATABASE_MESSAGE_ID_BATCH_SIZE) {
+      const messageIDs = messages.slice(offset, offset + DATABASE_MESSAGE_ID_BATCH_SIZE).map((message) => message.id)
+      const parts = Database.use((db) =>
+        db
+          .select({
+            messageID: PartTable.message_id,
+            type: partType,
+            text: sql<string | null>`json_extract(${PartTable.data}, '$.text')`,
+            tool: sql<string | null>`json_extract(${PartTable.data}, '$.tool')`,
+            name: sql<string | null>`json_extract(${PartTable.data}, '$.name')`,
+            status: sql<string | null>`json_extract(${PartTable.data}, '$.state.status')`,
+            start: sql<number | null>`json_extract(${PartTable.data}, '$.state.time.start')`,
+            end: sql<number | null>`json_extract(${PartTable.data}, '$.state.time.end')`,
+          })
+          .from(PartTable)
+          .innerJoin(MessageTable, sql`${MessageTable.id} = ${PartTable.message_id}`)
+          .where(
+            and(
+              inArray(PartTable.message_id, messageIDs),
+              sql`(${partType} in ('tool', 'agent') or (${partType} = 'text' and ${messageRole} = 'user'))`,
+            ),
+          )
+          .all(),
+      )
+      for (const part of parts) {
+        const items = byMessage.get(part.messageID) ?? []
+        items.push({
+          type: part.type,
+          ...(part.text === null ? {} : { text: part.text }),
+          ...(part.tool === null ? {} : { tool: part.tool }),
+          ...(part.name === null ? {} : { name: part.name }),
+          ...(part.status === null && part.start === null && part.end === null
+            ? {}
+            : {
+                state: {
+                  ...(part.status === null ? {} : { status: part.status }),
+                  ...(part.start === null && part.end === null
+                    ? {}
+                    : {
+                        time: {
+                          ...(part.start === null ? {} : { start: part.start }),
+                          ...(part.end === null ? {} : { end: part.end }),
+                        },
+                      }),
+                },
+              }),
+        })
+        byMessage.set(part.messageID, items)
+      }
+    }
+    const bySession = new Map(
+      sessions.map((session) => [session.id, { session, messages: [] as InsightMessage[] }]),
+    )
+    for (const message of messages) {
+      if (message.role !== "user" && message.role !== "assistant") continue
+      bySession.get(message.sessionID)?.messages.push({
+        info: {
+          id: message.id,
+          role: message.role,
+          ...(message.agent === null ? {} : { agent: message.agent }),
+          ...(message.modelID === null ? {} : { modelID: message.modelID }),
+          ...(message.providerID === null ? {} : { providerID: message.providerID }),
+          ...(message.cost === null ? {} : { cost: message.cost }),
+          tokens: {
+            ...(message.total === null ? {} : { total: message.total }),
+            input: message.input ?? 0,
+            output: message.output ?? 0,
+            reasoning: message.reasoning ?? 0,
+            cache: { read: message.cacheRead ?? 0, write: message.cacheWrite ?? 0 },
+          },
+          time: { created: message.created, ...(message.completed === null ? {} : { completed: message.completed }) },
         },
-        time: { created: message.created, ...(message.completed === null ? {} : { completed: message.completed }) },
-      },
-      parts: byMessage.get(message.id) ?? [],
-    })
+        parts: byMessage.get(message.id) ?? [],
+      })
+    }
+    data = mergeUsageInsights(
+      data,
+      buildUsageInsights([...bySession.values()], { start, end, topLimit: Number.MAX_SAFE_INTEGER }),
+      Number.MAX_SAFE_INTEGER,
+    )
   }
-  const data = buildUsageInsights([...bySession.values()], { start, end })
-  databaseCache = { key: cacheKey, updated: Date.now(), data }
-  return data
+
+  const result = data
+    ? {
+        ...data,
+        topTools: data.topTools.slice(0, 8),
+        topAgents: data.topAgents.slice(0, 8),
+        topModels: data.topModels.slice(0, 8),
+      }
+    : buildUsageInsights([], { start, end })
+  databaseCache = { key: cacheKey, updated: Date.now(), data: result }
+  return result
 }
 
 function startOfLocalDay(input: number) {
@@ -323,7 +351,93 @@ function streak(days: DailyUsage[]) {
   return { current, longest, activeDays: active.size }
 }
 
-export function buildUsageInsights(input: SessionInsightInput[], options: { start?: number; end?: number } = {}) {
+function mergeUsageInsights(left: UsageInsights | undefined, right: UsageInsights, topLimit = 8): UsageInsights {
+  if (!left) return right
+
+  const days = left.days.map((day, index) => {
+    const next = right.days[index]
+    if (!next || next.day !== day.day) return day
+    return {
+      ...day,
+      sessions: day.sessions + next.sessions,
+      messages: day.messages + next.messages,
+      userMessages: day.userMessages + next.userMessages,
+      userWords: day.userWords + next.userWords,
+      tokens: day.tokens + next.tokens,
+      inputTokens: day.inputTokens + next.inputTokens,
+      outputTokens: day.outputTokens + next.outputTokens,
+      reasoningTokens: day.reasoningTokens + next.reasoningTokens,
+      cacheTokens: day.cacheTokens + next.cacheTokens,
+      cost: day.cost + next.cost,
+      aiResponseMs: day.aiResponseMs + next.aiResponseMs,
+      toolMs: day.toolMs + next.toolMs,
+      changedFiles: day.changedFiles + next.changedFiles,
+    }
+  })
+  const streaks = streak(days)
+
+  return {
+    days,
+    totals: {
+      sessions: left.totals.sessions + right.totals.sessions,
+      messages: left.totals.messages + right.totals.messages,
+      userMessages: left.totals.userMessages + right.totals.userMessages,
+      userWords: left.totals.userWords + right.totals.userWords,
+      tokens: left.totals.tokens + right.totals.tokens,
+      inputTokens: left.totals.inputTokens + right.totals.inputTokens,
+      outputTokens: left.totals.outputTokens + right.totals.outputTokens,
+      reasoningTokens: left.totals.reasoningTokens + right.totals.reasoningTokens,
+      cacheTokens: left.totals.cacheTokens + right.totals.cacheTokens,
+      cost: left.totals.cost + right.totals.cost,
+      aiResponseMs: left.totals.aiResponseMs + right.totals.aiResponseMs,
+      toolMs: left.totals.toolMs + right.totals.toolMs,
+      changedFiles: left.totals.changedFiles + right.totals.changedFiles,
+      activeDays: streaks.activeDays,
+      currentStreak: streaks.current,
+      longestStreak: streaks.longest,
+      peakTokens: Math.max(left.totals.peakTokens, right.totals.peakTokens),
+      longestTaskMs: Math.max(left.totals.longestTaskMs, right.totals.longestTaskMs),
+      sessionsWithCodeChanges: left.totals.sessionsWithCodeChanges + right.totals.sessionsWithCodeChanges,
+    },
+    topTools: mergeTopCounts(left.topTools, right.topTools, topLimit),
+    topAgents: mergeTopCounts(left.topAgents, right.topAgents, topLimit),
+    topModels: mergeTopModels(left.topModels, right.topModels, topLimit),
+  }
+}
+
+function mergeTopCounts(
+  left: Array<{ name: string; count: number }>,
+  right: Array<{ name: string; count: number }>,
+  limit: number,
+) {
+  const counts = new Map<string, number>()
+  for (const item of [...left, ...right]) counts.set(item.name, (counts.get(item.name) ?? 0) + item.count)
+  return topCounts(counts, limit)
+}
+
+function mergeTopModels(
+  left: Array<{ name: string; count: number; tokens: number; cost: number }>,
+  right: Array<{ name: string; count: number; tokens: number; cost: number }>,
+  limit: number,
+) {
+  const models = new Map<string, { count: number; tokens: number; cost: number }>()
+  for (const item of [...left, ...right]) {
+    const current = models.get(item.name) ?? { count: 0, tokens: 0, cost: 0 }
+    current.count += item.count
+    current.tokens += item.tokens
+    current.cost += item.cost
+    models.set(item.name, current)
+  }
+  return [...models.entries()]
+    .sort((a, b) => b[1].tokens - a[1].tokens || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([name, value]) => ({ name, count: value.count, tokens: value.tokens, cost: value.cost }))
+}
+
+export function buildUsageInsights(
+  input: SessionInsightInput[],
+  options: { start?: number; end?: number; topLimit?: number } = {},
+) {
   const end = startOfLocalDay(options.end ?? Date.now())
   const oldestSession = input.reduce((min, item) => Math.min(min, item.session.time.created), end)
   const start = startOfLocalDay(options.start ?? oldestSession)
@@ -478,11 +592,11 @@ export function buildUsageInsights(input: SessionInsightInput[], options: { star
       longestTaskMs,
       sessionsWithCodeChanges,
     },
-    topTools: topCounts(tools, 8),
-    topAgents: topCounts(agents, 8),
+    topTools: topCounts(tools, options.topLimit ?? 8),
+    topAgents: topCounts(agents, options.topLimit ?? 8),
     topModels: [...models.entries()]
       .sort((a, b) => b[1].tokens - a[1].tokens || a[0].localeCompare(b[0]))
-      .slice(0, 8)
+      .slice(0, options.topLimit ?? 8)
       .map(([name, value]) => ({ name, count: value.count, tokens: value.tokens, cost: value.cost })),
   } satisfies UsageInsights
 }
@@ -538,6 +652,18 @@ export function formatInsightDuration(ms: number) {
   const days = Math.floor(ms / (24 * 60 * 60 * 1000))
   const hours = Math.floor((ms % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000))
   return hours > 0 ? `${days}d ${hours}h` : `${days}d`
+}
+
+export function formatInsightNumber(value: number) {
+  const safeValue = Number.isFinite(value) ? value : 0
+  const absolute = Math.abs(safeValue)
+  const compact = (divisor: number, suffix: string) =>
+    `${(Math.trunc((safeValue / divisor) * 10) / 10).toFixed(1)}${suffix}`
+
+  if (absolute >= 1_000_000_000) return compact(1_000_000_000, "B")
+  if (absolute >= 1_000_000) return compact(1_000_000, "M")
+  if (absolute >= 1_000) return compact(1_000, "K")
+  return safeValue.toString()
 }
 
 export function formatMoney(value: number) {

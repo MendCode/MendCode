@@ -44,6 +44,12 @@ export const MessagesQuery = Schema.Struct({
   before: Schema.optional(Schema.String),
   after: Schema.optional(Schema.String),
   view: Schema.optional(Schema.Literals(["full", "tui", "tui-all"])),
+  partsLimit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThan(0))),
+})
+export const MessageQuery = Schema.Struct({
+  view: Schema.optional(Schema.Literals(["full", "tui", "tui-all"])),
+  partsLimit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThan(0))),
+  partsAfter: Schema.optional(Schema.String),
 })
 export const StatusMap = Schema.Record(Schema.String, SessionStatus.Info)
 export const UpdatePayload = Schema.Struct({
@@ -386,6 +392,7 @@ export const SessionApi = HttpApi.make("session")
         ),
         HttpApiEndpoint.get("message", SessionPaths.message, {
           params: { sessionID: SessionID, messageID: MessageID },
+          query: MessageQuery,
           success: described(MessageV2.WithParts, "Message"),
           error: [HttpApiError.BadRequest, ApiNotFoundError],
         }).annotateMerge(

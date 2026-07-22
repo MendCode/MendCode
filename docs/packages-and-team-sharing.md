@@ -59,12 +59,15 @@ Active package state lives in:
 
 Marketplace packages run against the public MendCode API:
 
-- `@mendcode/plugin/tui` for commands, routes, widgets, slots, dialogs, shell-backed streaming widgets, state, KV, themes, and lifecycle cleanup.
+- `@mendcode/plugin/tui` for commands, routes/pages, widgets, slots, dialogs, overlays, shell-backed streaming widgets, editor customization, state, KV, themes, and lifecycle cleanup.
+- `api.session`, `api.ai`, and `api.metadata` for session lifecycle, AI-backed pages/modals, Agent View metadata, and control-plane actions.
+- `api.memory` for graph snapshots, explicit fact/link mutations, and Memory side chat.
+- `api.client` for the generated SDK surface when a package needs an endpoint without a convenience wrapper.
 - `.mendcode/tools` for assistant-facing custom tool calls.
 - `.mendcode/pages` for package-owned TUI pages.
 - `.mendcode/tui/profile.json` for profile and status customization.
 
-Packages should not import private runtime internals. If a package needs a missing capability, add a public API first.
+Packages should import public types from `@mendcode/plugin/tui` and must not import private runtime internals. If a package needs a missing capability, add a public API first instead of reaching into `src/`. Third-party packages are trusted local code: inspect them before enabling shell, session, or memory mutations.
 
 ## Create a Local Package
 

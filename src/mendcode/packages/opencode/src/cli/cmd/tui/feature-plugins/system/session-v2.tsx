@@ -55,10 +55,7 @@ import {
   hasMermaidFence,
   renderPlanMarkdown,
   renderPlanMarkdownStatic,
-  renderPlanMarkdownStreaming,
   renderStreamingMarkdownTail,
-  type StreamingPlanMarkdownState,
-  visibleStreamingMarkdownPreview,
 } from "@/cli/cmd/tui/util/plan-markdown"
 import { StyledPlanMarkdown } from "@/cli/cmd/tui/component/styled-plan-markdown"
 import { CompactionPanel } from "@/cli/cmd/tui/component/compaction-panel"
@@ -515,27 +512,12 @@ function AssistantText(props: { messageID: string; part: SessionMessageAssistant
   const streaming = createMemo(() => !props.completed)
   const source = createMemo(() => {
     const text = streaming() ? props.part.text.trimStart() : props.part.text.trim()
-    if (streaming() && (renderer() === "markdown" || renderer() === "rich")) return visibleStreamingMarkdownPreview(text)
     return text
   })
   const messageWidth = createMemo(() => sessionContentWidth(dimensions().width, false))
   const markdownWidth = createMemo(() => Math.max(1, messageWidth() - textPaddingLeft))
   const richRenderWidth = createMemo(() => Math.min(markdownWidth(), 100))
   const hasMermaid = createMemo(() => hasMermaidFence(source()))
-  let streamingMarkdownState: StreamingPlanMarkdownState | undefined
-  const streamingMarkdownContent = createMemo(() => {
-    if (!streaming()) {
-      streamingMarkdownState = undefined
-      return
-    }
-    if (renderer() !== "markdown" && renderer() !== "rich") {
-      streamingMarkdownState = undefined
-      return
-    }
-    const result = renderPlanMarkdownStreaming(source(), richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" }, streamingMarkdownState)
-    streamingMarkdownState = result.state
-    return result
-  })
   const richStaticContent = createMemo(() => {
     if (renderer() !== "markdown" && renderer() !== "rich") return
     if (streaming()) return
@@ -549,18 +531,15 @@ function AssistantText(props: { messageID: string; part: SessionMessageAssistant
   const [richContent] = createResource(richInput, async (input) =>
     renderPlanMarkdown(input.text, input.width, { tableMode: "grid", markdownMode: "tables-only" }),
   )
-  const markdownContent = createMemo(() =>
-    streamingMarkdownContent()?.content ??
-    (renderer() === "markdown" || renderer() === "rich" ? (richStaticContent() ?? richContent() ?? source()) : source()),
-  )
-  const markdownTail = createMemo(() => {
-    if (streaming()) return ""
-    const tail = streamingMarkdownContent()?.tail ?? ""
-    return renderStreamingMarkdownTail(tail, richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" }, {
-      finalized: !streaming(),
-      output: streaming() ? "text" : "markdown",
+  const streamingContent = createMemo(() => {
+    if (!streaming()) return ""
+    if (renderer() !== "markdown" && renderer() !== "rich") return ""
+    return renderStreamingMarkdownTail(source(), richRenderWidth(), { tableMode: "grid", markdownMode: "tables-only" }, {
+      finalized: false,
+      output: "text",
     })
   })
+  const markdownContent = createMemo(() => (renderer() === "markdown" || renderer() === "rich" ? (richStaticContent() ?? richContent() ?? source()) : source()))
   return (
     <Show when={source().trim().length > 0}>
       <box
@@ -580,16 +559,14 @@ function AssistantText(props: { messageID: string; part: SessionMessageAssistant
             <StyledPlanMarkdown
               syntaxStyle={props.syntax}
               width={markdownWidth()}
-              content={markdownContent()}
+              content={streaming() ? streamingContent() : markdownContent()}
               tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
               conceal={true}
               fg={theme.markdownText}
               bg={theme.background}
+              streaming={streaming()}
               stableTextMode={renderer() !== "markdown" && renderer() !== "rich"}
               colorizeHex={renderer() === "rich"}
-              streamingTail={markdownTail()}
-              streamingTailColorizeHex={renderer() === "rich"}
-              streamingTailMode={streaming() ? "text" : "markdown"}
             />
           </Match>
         </Switch>
@@ -1629,6 +1606,7 @@ function MemoryGraph(props: ToolProps) {
 function Loop(props: ToolProps) {
   const { navigate } = useRoute()
   const sdk = useSDK()
+  const renderer = useRenderer()
   const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
   const [tick, setTick] = createSignal(Date.now())
@@ -1659,10 +1637,15 @@ function Loop(props: ToolProps) {
   async function fetchLoopSnapshot() {
     const id = workflowID()
     if (!id) return undefined
-    const response = await sdk.fetch(`${sdk.url}/loop/${id}`, { headers: { accept: "application/json" } })
-    if (!response.ok) return undefined
-    return response.json().catch(() => undefined) as Promise<
-      | {
+    const headers = new Headers(sdk.headers)
+    headers.set("accept", "application/json")
+    if (sdk.directory) headers.set("x-mendcode-directory", encodeURIComponent(sdk.directory))
+    try {
+      const response = await sdk.fetch(`${sdk.url}/loop/${id}`, { headers })
+      if (!response.ok) return undefined
+      return response.json().catch(() => undefined) as Promise<
+        | {
+
           workflow?: {
             id?: string
             name?: string
@@ -1678,8 +1661,11 @@ function Loop(props: ToolProps) {
           runs?: unknown[]
           events?: unknown[]
         }
-      | undefined
-    >
+        | undefined
+      >
+    } catch {
+      return undefined
+    }
   }
 
   const [snapshot] = createResource(
@@ -1783,14 +1769,19 @@ function Loop(props: ToolProps) {
     const sessionID = liveRootSessionID() ?? workflowList().find((item) => item.rootSessionID)?.rootSessionID
     if (sessionID) navigate({ type: "session", sessionID })
   }
+  const handleOpenFirstLoop = () => {
+    if (renderer.getSelection()?.getSelectedText()) return
+    openFirstLoop()
+  }
 
   if (action() === "list" && !workflowID()) {
     return (
-      <BlockTool title="# ↻ Loop Workflows" titleColor={theme.secondary} contentGap={0} part={props.part} onClick={openFirstLoop}>
+      <BlockTool title="# ↻ Loop Workflows" titleColor={theme.secondary} contentGap={0} part={props.part}>
         <box width="100%" alignItems="center">
           <box
             flexDirection="column"
             width={panelWidth()}
+            onMouseUp={handleOpenFirstLoop}
             flexShrink={0}
             borderStyle="single"
             borderColor={hover() ? theme.secondary : theme.border}
@@ -1844,12 +1835,12 @@ function Loop(props: ToolProps) {
       contentGap={0}
       part={props.part}
       spinner={props.part.state.status === "running" && !workflowID()}
-      onClick={openFirstLoop}
     >
       <box width="100%" alignItems="center">
         <box
           flexDirection="column"
           width={panelWidth()}
+          onMouseUp={handleOpenFirstLoop}
           flexShrink={0}
           borderStyle="single"
           borderColor={hover() ? stateColor() : theme.border}

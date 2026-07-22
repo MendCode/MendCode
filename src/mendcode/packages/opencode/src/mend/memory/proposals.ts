@@ -11,6 +11,7 @@ import { runProviderAdapter } from "../runtime/provider-adapters"
 import { dreamServiceStart, type DreamServicePlan } from "../runtime/dream-service"
 
 export type MemoryProposalStatus = "pending" | "applied" | "rejected"
+export type MemoryProposalResolution = "pending" | "applied" | "rejected" | "archived" | "superseded"
 export type MemoryProposalOperation = "add" | "update" | "remove" | "merge" | "split" | "verify" | "expire" | "recategorize" | "relink" | "demote-scope" | "promote-scope"
 export type GeneratedMemoryDisposition = "auto-apply" | "pending" | "skip"
 
@@ -18,6 +19,10 @@ export type MemoryProposal = {
   id: string
   version: 0
   status: MemoryProposalStatus
+  resolution?: MemoryProposalResolution
+  resolutionReason?: string | null
+  resolvedAt?: string | null
+  supersededBy?: string | null
   operation: MemoryProposalOperation
   scope: MemoryScope
   text: string
@@ -169,10 +174,22 @@ function normalizeMemoryProposal(input: Partial<MemoryProposal> & Pick<MemoryPro
   const categoryIDs = normalizeMemoryCategoryIDs(input.categoryIDs?.length ? input.categoryIDs : inferMemoryCategoryIDs({ text, tags, source }))
   const createdAt = typeof input.createdAt === "string" && input.createdAt.trim() ? input.createdAt : typeof input.updatedAt === "string" && input.updatedAt.trim() ? input.updatedAt : new Date(0).toISOString()
   const updatedAt = typeof input.updatedAt === "string" && input.updatedAt.trim() ? input.updatedAt : createdAt
+  const status = input.status === "applied" || input.status === "rejected" ? input.status : "pending"
+  const resolution = input.resolution === "applied" || input.resolution === "rejected" || input.resolution === "archived" || input.resolution === "superseded"
+    ? input.resolution
+    : status === "applied"
+      ? "applied"
+      : status === "rejected"
+        ? "rejected"
+        : "pending"
   return {
     id: input.id,
     version: 0,
-    status: input.status === "applied" || input.status === "rejected" ? input.status : "pending",
+    status,
+    resolution,
+    resolutionReason: typeof input.resolutionReason === "string" && input.resolutionReason.trim() ? input.resolutionReason.trim() : null,
+    resolvedAt: typeof input.resolvedAt === "string" && input.resolvedAt.trim() ? input.resolvedAt : null,
+    supersededBy: typeof input.supersededBy === "string" && input.supersededBy.trim() ? input.supersededBy : null,
     operation: input.operation ?? "add",
     scope: input.scope === "global" ? "global" : "project",
     text,
@@ -202,9 +219,10 @@ function normalizeMemoryProposal(input: Partial<MemoryProposal> & Pick<MemoryPro
 
 async function writeProposal(proposal: MemoryProposal, root?: string) {
   const paths = memoryPaths(root)
+  const normalized = normalizeMemoryProposal(proposal)
   await mkdir(paths.proposalsDir, { recursive: true })
-  await writeFile(proposalPath(paths.root, proposal.id), `${JSON.stringify(proposal, null, 2)}\n`)
-  return proposal
+  await writeFile(proposalPath(paths.root, normalized.id), `${JSON.stringify(normalized, null, 2)}\n`)
+  return normalized
 }
 
 export async function proposeMemory(input: ProposeMemoryInput, root?: string) {
@@ -216,6 +234,10 @@ export async function proposeMemory(input: ProposeMemoryInput, root?: string) {
     id: nowID(),
     version: 0,
     status: "pending",
+    resolution: "pending",
+    resolutionReason: null,
+    resolvedAt: null,
+    supersededBy: null,
     operation: input.operation === "update" || input.operation === "remove" || input.operation === "merge" || input.operation === "split" || input.operation === "verify" || input.operation === "expire" || input.operation === "recategorize" || input.operation === "relink" || input.operation === "demote-scope" || input.operation === "promote-scope" ? input.operation : "add",
     scope: scopeReasonForMemory({ requestedScope: input.scope, text: redacted.text, tags: input.tags }).scope,
     text: redacted.text,
@@ -531,7 +553,7 @@ export async function resolveMemoryExtractorRole(root?: string): Promise<MemoryE
     roleName: config.extractorRole,
     providerID: role.providerID,
     modelID: role.modelID,
-    authMode: role.authMode || "api-key",
+    authMode: role.authMode || (role.providerID === "openai" ? "provider-oauth-or-token" : "api-key"),
   }
 }
 
@@ -799,14 +821,22 @@ export async function readMemoryProposal(id: string, root?: string) {
   return normalizeMemoryProposal(await readJson<MemoryProposal>(file))
 }
 
-export async function updateMemoryProposal(id: string, patch: Partial<Pick<MemoryProposal, "scope" | "text" | "tags" | "categoryIDs" | "confidence" | "durability" | "changeRisk" | "reason">>, root?: string) {
+export async function updateMemoryProposal(id: string, patch: Partial<Pick<MemoryProposal, "operation" | "scope" | "text" | "tags" | "categoryIDs" | "confidence" | "durability" | "changeRisk" | "reason" | "targetEntryID" | "targetEntryScope" | "targetEntryIDs">>, root?: string) {
   const proposal = await readMemoryProposal(id, root)
   if (proposal.status !== "pending") throw new Error(`Memory proposal ${id} is ${proposal.status}`)
   const scope = patch.scope === "global" ? "global" : patch.scope === "project" ? "project" : proposal.scope
   const tags = patch.tags ? normalizeStringList(patch.tags) : proposal.tags
   const redacted = redactMemoryText(typeof patch.text === "string" && patch.text.trim() ? patch.text.trim() : proposal.text)
+  const targetEntryID = patch.targetEntryID !== undefined ? patch.targetEntryID : proposal.targetEntryID
+  const targetEntryScope = patch.targetEntryScope !== undefined ? patch.targetEntryScope : proposal.targetEntryScope
+  const targetEntryIDs = patch.targetEntryIDs !== undefined
+    ? normalizeStringList(patch.targetEntryIDs)
+    : targetEntryID
+      ? [targetEntryID]
+      : proposal.targetEntryIDs
   const next: MemoryProposal = {
     ...proposal,
+    operation: patch.operation ?? proposal.operation,
     scope,
     text: redacted.text,
     tags,
@@ -818,10 +848,41 @@ export async function updateMemoryProposal(id: string, patch: Partial<Pick<Memor
     reason: typeof patch.reason === "string" && patch.reason.trim() ? patch.reason.trim() : proposal.reason,
     sensitivity: sensitivityFor(redacted.redactions, redacted.text),
     redactions: redacted.redactions,
+    targetEntryID,
+    targetEntryScope,
+    targetEntryIDs,
     updatedAt: new Date().toISOString(),
   }
   await writeProposal(next, root)
   return next
+}
+
+export async function resolveMemoryProposal(input: {
+  id: string
+  resolution: Exclude<MemoryProposalResolution, "pending" | "applied">
+  reason: string
+  supersededBy?: string | null
+}, root?: string) {
+  const proposal = await readMemoryProposal(input.id, root)
+  if (proposal.status !== "pending") return proposal
+  const resolvedAt = new Date().toISOString()
+  return writeProposal({
+    ...proposal,
+    status: "rejected",
+    resolution: input.resolution,
+    resolutionReason: input.reason.trim() || null,
+    resolvedAt,
+    supersededBy: input.supersededBy ?? null,
+    updatedAt: resolvedAt,
+  }, root)
+}
+
+export async function archiveMemoryProposal(id: string, root?: string, reason = "Archived by Dream consolidation") {
+  return resolveMemoryProposal({ id, resolution: "archived", reason }, root)
+}
+
+export async function supersedeMemoryProposal(id: string, supersededBy: string, root?: string, reason = "Superseded by Dream consolidation") {
+  return resolveMemoryProposal({ id, resolution: "superseded", supersededBy, reason }, root)
 }
 
 export async function applyMemoryProposal(id: string, root?: string, input: ApplyMemoryProposalInput = {}): Promise<ApplyMemoryProposalResult> {
@@ -967,7 +1028,8 @@ export async function applyMemoryProposal(id: string, root?: string, input: Appl
 export async function rejectMemoryProposal(id: string, root?: string) {
   const proposal = await readMemoryProposal(id, root)
   if (proposal.status !== "pending") throw new Error(`Memory proposal ${id} is ${proposal.status}`)
-  const next: MemoryProposal = { ...proposal, status: "rejected", updatedAt: new Date().toISOString() }
+  const resolvedAt = new Date().toISOString()
+  const next: MemoryProposal = { ...proposal, status: "rejected", resolution: "rejected", resolutionReason: "Rejected by memory review", resolvedAt, updatedAt: resolvedAt }
   await writeProposal(next, root)
   return next
 }

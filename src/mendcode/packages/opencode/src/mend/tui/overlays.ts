@@ -8,6 +8,9 @@ export type MendOverlaySize = number | `${number}%` | "auto"
 
 export type MendOverlayRenderContext = {
   close: () => boolean
+  focus: () => boolean
+  blur: () => boolean
+  focused: () => boolean
   requestRender: () => void
 }
 
@@ -144,6 +147,14 @@ export function focusMendOverlay(id: string) {
   return true
 }
 
+export function blurMendOverlay(id?: string) {
+  const focused = focusedOverlayID()
+  if (id && focused !== id) return false
+  if (!focused) return false
+  setFocusedOverlayID(undefined)
+  return true
+}
+
 export function readFocusedMendOverlayID() {
   return focusedOverlayID()
 }
@@ -151,6 +162,9 @@ export function readFocusedMendOverlayID() {
 export function mendOverlayRenderContext(item: MendOverlayEntry): MendOverlayRenderContext {
   return {
     close: () => clearMendOverlay(item.id),
+    focus: () => focusMendOverlay(item.id),
+    blur: () => blurMendOverlay(item.id),
+    focused: () => readFocusedMendOverlayID() === item.id,
     requestRender: item.requestRender ?? (() => {}),
   }
 }

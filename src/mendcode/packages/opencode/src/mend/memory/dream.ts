@@ -1,11 +1,12 @@
 import { existsSync } from "fs"
 import { mkdir, readFile, writeFile } from "fs/promises"
 import path from "path"
-import { memoryPaths, readMemoryConfig, type MemoryConfig, type MemoryDreamWritePolicy, type MemoryScope } from "./config"
+import { memoryPaths, readMemoryConfig, type DreamConsolidationPolicy, type MemoryConfig, type MemoryDreamWritePolicy, type MemoryScope } from "./config"
 import { readMemoryFacts, readMemoryGraph, upsertMemoryFactLink, type MemoryFact, type MemoryFactLink } from "./graph"
 import { collectDreamFileEvidence, type DreamEvidenceRef, type DreamSourcePermissions } from "./dream-sources"
 import { publishMemoryDreamEvent } from "./dream-events"
 import { listMemoryProposals, proposeMemory, redactMemoryText, settleGeneratedMemoryProposal, type MemoryProposal } from "./proposals"
+import { readDreamConsolidationRun, resolveMemoryConsolidator, runMemoryConsolidation, type DreamConsolidationModel, type DreamConsolidationRun } from "./dream-consolidation"
 
 const DREAM_FACT_CONTEXT_LIMIT = 32
 const DREAM_PROPOSAL_CONTEXT_LIMIT = 32
@@ -78,6 +79,7 @@ export type DreamRunDetail = {
   proposals: DreamRunProposalSummary[]
   graphProposals: DreamGraphProposal[]
   decisions: DreamRunDecision[]
+  consolidation?: DreamConsolidationRun | null
   safety: DreamRunSafety | null
 }
 
@@ -452,15 +454,16 @@ export async function readDreamRunDetail(root: string | undefined, id: string, r
   const run = runInput ? normalizeDreamRun(runInput) : await readJsonIfExists<DreamRun>(path.join(dir, "run.json")).then((value) => value ? normalizeDreamRun(value) : null).catch(() => null)
   if (!run?.id) return null
   if (root && run.projectRoot !== memoryPaths(root).root) return null
-  const [events, evidence, proposals, graphProposals, decisions, safety] = await Promise.all([
+  const [events, evidence, proposals, graphProposals, decisions, safety, consolidation] = await Promise.all([
     readJsonlIfExists<DreamRunEvent>(path.join(dir, "events.jsonl")),
     readJsonlIfExists<DreamEvidenceRef>(path.join(dir, "evidence.jsonl")),
     readJsonIfExists<DreamRunProposalSummary[]>(path.join(dir, "proposals.json")).catch(() => null),
     readJsonIfExists<StoredDreamGraphProposal[]>(path.join(dir, "graph-proposals.json")).catch(() => null),
     readJsonIfExists<DreamRunDecision[]>(path.join(dir, "decisions.json")).catch(() => null),
     readJsonIfExists<DreamRunSafety>(path.join(dir, "safety.json")).catch(() => null),
+    readDreamConsolidationRun(root, id),
   ])
-  return { run, events, evidence, proposals: proposals ?? [], graphProposals: (graphProposals ?? []).map(normalizeDreamGraphProposal), decisions: decisions ?? [], safety }
+  return { run, events, evidence, proposals: proposals ?? [], graphProposals: (graphProposals ?? []).map(normalizeDreamGraphProposal), decisions: decisions ?? [], consolidation, safety }
 }
 
 export async function applyDreamGraphProposal(runID: string, proposalID: string, root?: string) {
@@ -518,6 +521,8 @@ export async function runMemoryDream(input: {
   groupID?: string | null
   permissions?: DreamSourcePermissions
   model?: DreamModelAdapter
+  consolidator?: DreamConsolidationModel
+  consolidationPolicy?: DreamConsolidationPolicy
   now?: Date
 } = {}) {
   const root = input.root
@@ -525,6 +530,7 @@ export async function runMemoryDream(input: {
   const startedAt = (input.now ?? new Date()).toISOString()
   const permissions = normalizeDreamPermissions(root, input.permissions)
   const config = await readMemoryConfig(root)
+  const consolidationPolicy = input.consolidationPolicy ?? config.dreamConsolidationPolicy
   const created: MemoryProposal[] = []
   const decisions: DreamRunDecision[] = []
   let graphProposals: DreamGraphProposal[] = []
@@ -583,6 +589,34 @@ export async function runMemoryDream(input: {
     await writeFile(path.join(dir, "evidence.jsonl"), evidence.map((item) => JSON.stringify(item)).join("\n") + (evidence.length ? "\n" : ""))
     safetyInput = { evidence, skipped: files.skipped, failures: [] }
     await writeSafety(root, id, safetyInput)
+    if (consolidationPolicy !== "disabled") {
+      const resolvedConsolidator = input.consolidator ? null : await resolveMemoryConsolidator(root)
+      if (!input.consolidator && !resolvedConsolidator?.ok && (await listMemoryProposals(root, "pending")).length) {
+        throw new Error(resolvedConsolidator?.reason || "Dream consolidation role is not configured")
+      }
+      const consolidation = await runMemoryConsolidation({
+        root,
+        runID: id,
+        policy: consolidationPolicy,
+        model: input.consolidator ?? (resolvedConsolidator?.ok ? resolvedConsolidator.model : undefined),
+        evidence,
+        now: input.now,
+      })
+      const consolidationMessage = consolidation.status === "failed"
+        ? `Dream consolidation failed: ${consolidation.failureReason || "unknown failure"}`
+        : `Dream consolidation ${consolidation.status}: ${consolidation.resolved} resolved, ${consolidation.pendingAfter} pending after`
+      await appendJsonl(path.join(dir, "events.jsonl"), { at: new Date().toISOString(), status: consolidation.status === "failed" ? "failed" : "progress", message: consolidationMessage } satisfies DreamRunEvent)
+      publishMemoryDreamEvent({ root: memoryPaths(root).root, runID: id, status: consolidation.status === "failed" ? "failed" : "progress", message: consolidationMessage })
+      if (consolidation.status === "failed") throw new Error(consolidation.failureReason || "Dream consolidation failed")
+      const completedAt = new Date().toISOString()
+      run = { ...run, status: "completed", completedAt, proposals: [] }
+      await writeRun(root, run)
+      await writeRunProposals(root, id, [])
+      await writeRunDecisions(root, id, decisions)
+      await appendJsonl(path.join(dir, "events.jsonl"), { at: completedAt, status: "completed", message: consolidationMessage } satisfies DreamRunEvent)
+      publishMemoryDreamEvent({ root: memoryPaths(root).root, runID: id, status: "completed", message: consolidationMessage, proposalCount: 0 })
+      return run
+    }
     const model = input.model ?? defaultDreamCandidates
     const candidates = await model({ facts, proposals, evidence })
     graphProposals = inferDreamGraphProposals({ facts: graphFacts, links: graph.links, evidence, now: input.now })

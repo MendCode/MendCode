@@ -684,6 +684,15 @@ function pluginApi(runtime: RuntimeState, plugin: PluginEntry, scope: PluginScop
       close(id) {
         return clearOwnedUi(`overlay:${id}`, () => api.ui.overlay.close(id))
       },
+      focus(id) {
+        return api.ui.overlay.focus(id)
+      },
+      blur(id) {
+        return api.ui.overlay.blur(id)
+      },
+      focused() {
+        return api.ui.overlay.focused()
+      },
     },
     runtime: runtimeUi,
   }
@@ -697,6 +706,9 @@ function pluginApi(runtime: RuntimeState, plugin: PluginEntry, scope: PluginScop
     tuiConfig: api.tuiConfig,
     kv: api.kv,
     state: api.state,
+    session: api.session,
+    metadata: api.metadata,
+    ai: api.ai,
     memory: api.memory,
     theme,
     get client() {

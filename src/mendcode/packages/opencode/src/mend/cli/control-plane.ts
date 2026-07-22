@@ -1,6 +1,6 @@
 import { readFile } from "fs/promises"
 import path from "path"
-import { mendPaths } from "../config/paths"
+import { mendPaths, resolveMendProjectRoot } from "../config/paths"
 import { readPromptMode, cyclePromptMode, writePromptMode } from "../prompt/mode"
 import { mendStatusSummary, integrationStatus } from "../commands/status"
 import { readActiveTuiProfile, applyTuiProposal, rollbackTuiPreset, applyTuiPreset } from "../tui/profile-actions"
@@ -21,7 +21,7 @@ import { accumulateSessionTelemetry, buildRunPlan, executeRunPlan, parseRunArgs,
 import { providerRunAdapterInventory, providerSmoke } from "../runtime/provider-adapters"
 import { providerLogin } from "../runtime/auth"
 import { exportPlan } from "../runtime/export"
-import { loopServiceArgsFromConfig, loopServiceInstall, loopServicePlan, loopServiceStart, loopServiceStatus, loopServiceStop, loopServiceUninstall, type LoopServicePlan, type LoopServiceStatus } from "../runtime/loop-service"
+import { DEFAULT_LOOP_SERVICE_LIMIT, loopServiceArgsFromConfig, loopServiceInstall, loopServicePlan, loopServiceStart, loopServiceStatus, loopServiceStop, loopServiceUninstall, type LoopServicePlan, type LoopServiceStatus } from "../runtime/loop-service"
 import { dreamServiceInstall, dreamServicePlan, dreamServiceStart, dreamServiceStatus, dreamServiceStop, dreamServiceUninstall, type DreamServiceArgs, type DreamServicePlan, type DreamServiceStatus } from "../runtime/dream-service"
 import { adapterStatus, checkRuntime, collectStatus, doctorLines, donorConfigPathsReport, ownedRuntimeStatus, toolchainStatus, upstreamInspect, upstreamStatus } from "../runtime/system"
 import { adoptOwnedRuntime, ownedRuntimePlan } from "../runtime/adoption"
@@ -31,8 +31,10 @@ import { disableAllMendPackages, listMendPackages, removeMendPackage, setMendPac
 import { appendMemoryEntry, deleteMemoryEntry, memoryStatus, readMemoryEntries, refreshMemoryIndex, updateMemoryEntry } from "../memory/store"
 import { formatMemoryBlock, retrieveMemory } from "../memory/retrieve"
 import { writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../memory/config"
-import { readDreamRuns } from "../memory/dream"
+import { readDreamRuns, runMemoryDream } from "../memory/dream"
+import { readDreamConsolidationRun } from "../memory/dream-consolidation"
 import { readDreamScheduleState, runGlobalDreamSchedulerTick } from "../memory/dream-scheduler"
+import { writeMemorySessionDigestFromSession } from "../memory/session-digests"
 import { applyMemoryProposal, autoProposeMemoriesFromSession, importCodexMemories, listMemoryProposals, proposeMemoriesWithExtractor, proposeMemory, rejectMemoryProposal } from "../memory/proposals"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "../config/permissions"
 import { Effect } from "effect"
@@ -88,7 +90,7 @@ function closest(value: string, candidates: string[]) {
 }
 
 function shellProjectRoot() {
-  return path.resolve(process.env.MENDCODE_SHELL_CWD || process.cwd())
+  return resolveMendProjectRoot()
 }
 
 function jsonRequested(args: string[]) {
@@ -323,15 +325,21 @@ async function loops(args: string[]) {
     const template = LoopTemplates.get(optionValue(args, "--template"))
     const name = optionValue(args, "--name") ?? template?.name ?? args[1]
     const objective = optionValue(args, "--objective") ?? template?.objective ?? args.slice(name ? 2 : 1).filter((item) => !item.startsWith("--")).join(" ")
-    if (!name || !objective) throw new Error("Usage: mendcode loops draft --name <name> --objective <objective>")
+    if (!name || !objective) throw new Error("Usage: mendcode loops draft --name <name> --objective <objective> [--interval-ms N | --daily-at HH:mm --timezone Area/City]")
     const interval = optionValue(args, "--interval-ms")
+    const dailyAt = optionValue(args, "--daily-at")
+    const timezone = optionValue(args, "--timezone")
     const draft = await withLoopService((loop) =>
       Effect.runPromise(
         loop.createDraft({
           name,
           objective,
           templateID: template?.id,
-          trigger: interval ? { mode: "interval", intervalMs: Number(interval) } : template?.trigger,
+          trigger: dailyAt || timezone
+            ? { mode: "daily", dailyAt: dailyAt ?? undefined, timezone: timezone ?? undefined }
+            : interval
+              ? { mode: "interval", intervalMs: Number(interval) }
+              : template?.trigger,
           gates: template?.gates,
           stopWhen: template?.stopWhen,
           policy: template?.policy,
@@ -389,7 +397,7 @@ async function loops(args: string[]) {
   }
   if (sub === "daemon") {
     const interval = Number(optionValue(args, "--interval-ms") ?? 30_000)
-    const limit = Number(optionValue(args, "--limit") ?? 1)
+    const limit = Number(optionValue(args, "--limit") ?? DEFAULT_LOOP_SERVICE_LIMIT)
     const execute = args.includes("--execute")
     const reportOnly = args.includes("--report-only")
     const quiet = args.includes("--quiet")
@@ -844,6 +852,7 @@ async function chat(args: string[]) {
     ? { skipped: false, queued: true, reason: "memory extraction queued", proposals: [], callsProviders: false, writesMemory: false }
     : { skipped: true, reason: "run failed", proposals: [], callsProviders: false, writesMemory: false }
   if (result.ok) {
+    void writeMemorySessionDigestFromSession(structuredClone(session), mendPaths().root).catch(() => {})
     void autoProposeMemoriesFromSession(structuredClone(session)).catch(() => {})
   }
   const output = {
@@ -1182,6 +1191,14 @@ async function memoryDream(args: string[], root: string) {
     printResult(args, result, (value) => `${value.status}: ${value.reason}${value.runs?.length ? ` (${value.runs.length} run${value.runs.length === 1 ? "" : "s"})` : ""}`)
     return
   }
+  if (sub === "run" || sub === "consolidate") {
+    const consolidationPolicy = args.includes("--preview") ? "preview" as const : args.includes("--auto") ? "auto-consolidate" as const : undefined
+    const run = await runMemoryDream({ root, source: "manual", consolidationPolicy })
+    const consolidation = await readDreamConsolidationRun(root, run.id)
+    console.log(JSON.stringify({ run, consolidation, callsProviders: consolidation?.policy !== "disabled", readsSecrets: false }, null, 2))
+    if (run.status === "failed") process.exitCode = 1
+    return
+  }
   if (sub === "daemon") {
     const interval = Number(optionValue(args, "--interval-ms") ?? 60_000)
     if (!Number.isFinite(interval) || interval <= 0) throw new Error("--interval-ms must be a positive number")
@@ -1249,7 +1266,7 @@ async function memoryDream(args: string[], root: string) {
     }
     throw new Error("Usage: mendcode memory dream service <plan|install|start|stop|restart|status|logs|uninstall> [--interval-ms N] [--service-dir <path>] [--log-dir <path>]")
   }
-  throw new Error("Usage: mendcode memory dream <status|tick|daemon|service>")
+  throw new Error("Usage: mendcode memory dream <status|run|consolidate|tick|daemon|service> [--preview|--auto]")
 }
 
 async function memory(args: string[]) {
@@ -1413,13 +1430,15 @@ async function memory(args: string[]) {
     if (projectMaxEntries) updates.projectMaxEntries = Number(projectMaxEntries)
     const globalCompactionMaxEntries = optionValue(args, "--global-compaction-max-entries")
     if (globalCompactionMaxEntries) updates.globalCompactionMaxEntries = Number(globalCompactionMaxEntries)
+    const dreamConsolidationPolicy = optionValue(args, "--dream-consolidation-policy")
+    if (dreamConsolidationPolicy === "disabled" || dreamConsolidationPolicy === "preview" || dreamConsolidationPolicy === "auto-consolidate") updates.dreamConsolidationPolicy = dreamConsolidationPolicy
     const result = args.includes("--project")
       ? await writeProjectMemoryConfig(updates, root)
       : await writeGlobalMemoryConfig(updates, root)
     console.log(JSON.stringify({ ...result, callsProviders: false, readsSecrets: false }, null, 2))
     return
   }
-  throw new Error("Usage: mend-control-plane memory <status|dream <status|tick|daemon|service>|search <query>|preview <query>|add <text>|edit <entry-id> <text>|delete <entry-id>|propose <text|--from-file path>|list [--status pending|applied|rejected|all]|apply <proposal-id>|reject <proposal-id>|import-codex [--from path] [--apply]|index|config [--enable|--disable|--input|--no-input|--output|--no-output|--use|--no-use|--generate|--no-generate|--max-prompt-tokens n|--max-entries n|--project-max-entries n|--global-compaction-max-entries n|--project]>")
+  throw new Error("Usage: mend-control-plane memory <status|dream <status|run|consolidate|tick|daemon|service>|search <query>|preview <query>|add <text>|edit <entry-id> <text>|delete <entry-id>|propose <text|--from-file path>|list [--status pending|applied|rejected|all]|apply <proposal-id>|reject <proposal-id>|import-codex [--from path] [--apply]|index|config [--enable|--disable|--input|--no-input|--output|--no-output|--use|--no-use|--generate|--no-generate|--max-prompt-tokens n|--max-entries n|--project-max-entries n|--global-compaction-max-entries n|--dream-consolidation-policy disabled|preview|auto-consolidate|--project]>")
 }
 
 async function auth(args: string[]) {

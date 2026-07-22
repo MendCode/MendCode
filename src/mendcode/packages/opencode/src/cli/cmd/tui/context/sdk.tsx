@@ -28,6 +28,15 @@ function errorMessage(error: unknown) {
   return "Connection lost"
 }
 
+function eventID(event: GlobalEvent) {
+  const payload = event.payload as { type?: unknown; id?: unknown; syncEvent?: unknown }
+  if (payload.type === "sync" && payload.syncEvent && typeof payload.syncEvent === "object") {
+    const id = (payload.syncEvent as { id?: unknown }).id
+    if (typeof id === "string" && id) return id
+  }
+  return typeof payload.id === "string" && payload.id ? payload.id : undefined
+}
+
 export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
   name: "SDK",
   init: (props: {
@@ -70,6 +79,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     let queue: GlobalEvent[] = []
     let timer: Timer | undefined
     let last = 0
+    const seenEventIDs = new Set<string>()
+    const seenEventOrder: string[] = []
+    const maxSeenEventIDs = 4096
     let watchdog: Timer | undefined
     let watchdogLastTick = Date.now()
     let sseAttemptStartedAt = Date.now()
@@ -113,6 +125,16 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     const isControlEvent = (type: string) => type === "server.connected" || type === "server.heartbeat"
 
     const handleEvent = (event: GlobalEvent) => {
+      const id = eventID(event)
+      if (id) {
+        if (seenEventIDs.has(id)) return
+        seenEventIDs.add(id)
+        seenEventOrder.push(id)
+        if (seenEventOrder.length > maxSeenEventIDs) {
+          const expired = seenEventOrder.shift()
+          if (expired) seenEventIDs.delete(expired)
+        }
+      }
       const now = Date.now()
       const type = event.payload.type as string
       const wasReconnecting = connection.status === "reconnecting" || connection.status === "failed"

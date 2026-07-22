@@ -191,6 +191,15 @@ export async function upsertMemoryFact(input: Partial<MemoryFact> & { text: stri
   return fact
 }
 
+export async function deleteMemoryFact(id: string, root?: string) {
+  const graph = await readMemoryGraph(root)
+  if (!graph.facts.some((fact) => fact.id === id)) return { ok: false, id, deletedLinks: 0 }
+  const facts = graph.facts.filter((fact) => fact.id !== id)
+  const links = graph.links.filter((link) => link.from !== id && link.to !== id)
+  await writeMemoryGraph({ ...graph, facts, links }, root)
+  return { ok: true, id, deletedLinks: graph.links.length - links.length }
+}
+
 export async function upsertMemoryFactLink(
   input: Omit<MemoryFactLink, "id" | "createdAt"> & Partial<Pick<MemoryFactLink, "id" | "createdAt">>,
   root?: string,
@@ -207,6 +216,13 @@ export async function upsertMemoryFactLink(
   links.push(link)
   await writeMemoryGraph({ ...graph, links }, root)
   return link
+}
+
+export async function deleteMemoryFactLink(id: string, root?: string) {
+  const graph = await readMemoryGraph(root)
+  if (!graph.links.some((link) => link.id === id)) return { ok: false, id }
+  await writeMemoryGraph({ ...graph, links: graph.links.filter((link) => link.id !== id) }, root)
+  return { ok: true, id }
 }
 
 function sharedSemanticCategories(a: MemoryFact, b: MemoryFact, allowedCategoryIDs?: string[]) {

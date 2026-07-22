@@ -12,6 +12,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
+import { processMemoryUsage } from "@/util/process-memory"
 
 const log = Log.create({ service: "server" })
 
@@ -73,6 +74,10 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
       return { healthy: true as const, version: Installation.displayVersion(), channel: Installation.channel() }
+    })
+
+    const memory = Effect.fn("GlobalHttpApi.memory")(function* () {
+      return processMemoryUsage("server")
     })
 
     const event = Effect.fn("GlobalHttpApi.event")(function* () {
@@ -147,6 +152,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
 
     return handlers
       .handle("health", health)
+      .handle("memory", memory)
       .handleRaw("event", event)
       .handle("configGet", configGet)
       .handle("configUpdate", configUpdate)

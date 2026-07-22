@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { sessionMessageVirtualWindow, stickyUserIDFromVirtualWindow } from "@/cli/cmd/tui/util/session-virtual-window"
+import { compareSessionMessages, sortSessionMessages } from "@/cli/cmd/tui/util/session-message-order"
+import { sessionTranscriptRows } from "@/cli/cmd/tui/util/session-transcript-rows"
 
 const messages = Array.from({ length: 300 }, (_, index) => ({
   id: `msg-${index}`,
@@ -111,5 +113,38 @@ describe("session transcript virtual window", () => {
     })
 
     expect(sticky).toBe("msg-102")
+  })
+
+  test("orders messages by creation time instead of assuming IDs are chronological", () => {
+    const messages = [
+      { id: "msg-z", time: { created: 20 } },
+      { id: "msg-a", time: { created: 10 } },
+      { id: "msg-b", time: { created: 20 } },
+    ]
+
+    expect(sortSessionMessages(messages).map((message) => message.id)).toEqual(["msg-a", "msg-b", "msg-z"])
+    expect(compareSessionMessages(messages[1], messages[0])).toBeLessThan(0)
+  })
+
+  test("keeps queued messages in the same transcript row sequence", () => {
+    const messages = [{ id: "old" }, { id: "queued" }, { id: "latest" }]
+    expect(sessionTranscriptRows(messages, new Set(["queued"])).map((message) => message.id)).toEqual([
+      "old",
+      "latest",
+      "queued",
+    ])
+  })
+
+  test("deduplicates transcript rows before moving queued messages", () => {
+    const messages = [
+      { id: "old", version: 1 },
+      { id: "duplicate", version: 1 },
+      { id: "duplicate", version: 2 },
+      { id: "queued", version: 1 },
+    ]
+
+    const rows = sessionTranscriptRows(messages, new Set(["queued"]))
+    expect(rows.map((message) => message.id)).toEqual(["old", "duplicate", "queued"])
+    expect(rows.find((message) => message.id === "duplicate")).toEqual({ id: "duplicate", version: 2 })
   })
 })

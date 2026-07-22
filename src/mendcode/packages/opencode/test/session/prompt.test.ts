@@ -35,8 +35,11 @@ import {
   SessionPrompt,
   shouldCheckFinishedAssistantForAutoCompaction,
   promptRunMessages,
+  autoRescueCompactionCount,
   shouldResumeAfterActiveCompaction,
   shouldResumeAfterAutoCompaction,
+  shouldResumeAfterAutoRescueCompaction,
+  shouldPreflightPromptOverflow,
   shouldSkipAutoCompaction,
 } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
@@ -309,6 +312,49 @@ function userInfo(id = MessageID.ascending()): MessageV2.User {
   }
 }
 
+function compactionUser(discardTail: boolean, rescueAttempt?: number) {
+  const info = userInfo()
+  return {
+    info,
+    parts: [
+      {
+        id: PartID.ascending(),
+        sessionID: info.sessionID,
+        messageID: info.id,
+        type: "compaction" as const,
+        auto: true,
+        overflow: true,
+        resume: true,
+        discard_tail: discardTail,
+        rescue_attempt: rescueAttempt,
+      },
+    ],
+  } satisfies MessageV2.WithParts
+}
+
+test("auto rescue compaction stops only after repeated rescues without progress", () => {
+  const realUser = promptUser([{ type: "text", id: PartID.ascending(), text: "finish the request" }])
+  const normalCompaction = compactionUser(false)
+  const firstRescue = compactionUser(true, 1)
+  const firstWork = promptAssistant({ id: MessageID.ascending(), finish: "tool-calls", summary: false, parentID: realUser.info.id })
+  const secondRescue = compactionUser(true, 2)
+  const secondWork = promptAssistant({ id: MessageID.ascending(), finish: "tool-calls", summary: false, parentID: realUser.info.id })
+  const thirdRescue = compactionUser(true, 3)
+  const thirdWork = promptAssistant({ id: MessageID.ascending(), finish: "tool-calls", summary: false, parentID: realUser.info.id })
+
+  expect(autoRescueCompactionCount([realUser, normalCompaction])).toBe(0)
+  expect(autoRescueCompactionCount([realUser, firstRescue])).toBe(1)
+  expect(shouldResumeAfterAutoRescueCompaction([realUser, firstRescue])).toBe(true)
+  expect(shouldResumeAfterAutoRescueCompaction([realUser, firstRescue, firstWork])).toBe(true)
+  expect(autoRescueCompactionCount([realUser, firstRescue, firstWork, secondRescue])).toBe(2)
+  expect(shouldResumeAfterAutoRescueCompaction([realUser, firstRescue, firstWork, secondRescue])).toBe(false)
+
+  const afterSecondRescue = [realUser, firstRescue, firstWork, secondRescue, secondWork]
+  expect(shouldResumeAfterAutoRescueCompaction(afterSecondRescue)).toBe(true)
+  expect(autoRescueCompactionCount([...afterSecondRescue, thirdRescue])).toBe(3)
+  expect(shouldResumeAfterAutoRescueCompaction([...afterSecondRescue, thirdRescue, thirdWork])).toBe(true)
+})
+
 test("auto compaction guard waits for real user input after a synthetic resume", () => {
   const oldUser = promptUser([{ type: "text", id: PartID.ascending(), text: "original request" }])
   const oldAssistant = promptAssistant({
@@ -353,6 +399,50 @@ test("active provider compaction always resumes after writing the summary", () =
   expect(shouldResumeAfterActiveCompaction("length")).toBe(true)
   expect(shouldResumeAfterActiveCompaction("unknown")).toBe(true)
   expect(shouldResumeAfterActiveCompaction("stop")).toBe(true)
+})
+
+test("does not preflight an approximate prompt overflow below the configured threshold", () => {
+  expect(
+    shouldPreflightPromptOverflow({
+      promptOverflow: true,
+      promptTokens: 104,
+      hardLimit: 100,
+      previousContextAtThreshold: false,
+    }),
+  ).toBe(false)
+  expect(
+    shouldPreflightPromptOverflow({
+      promptOverflow: true,
+      promptTokens: 280_000,
+      hardLimit: 272_000,
+      previousContextAtThreshold: false,
+    }),
+  ).toBe(false)
+  expect(
+    shouldPreflightPromptOverflow({
+      promptOverflow: true,
+      promptTokens: 100,
+      hardLimit: 100,
+      previousContextAtThreshold: true,
+    }),
+  ).toBe(true)
+  expect(shouldPreflightPromptOverflow({ promptOverflow: true, promptTokens: 100, hardLimit: 100 })).toBe(true)
+  expect(
+    shouldPreflightPromptOverflow({
+      promptOverflow: true,
+      promptTokens: 106,
+      hardLimit: 100,
+      previousContextAtThreshold: false,
+    }),
+  ).toBe(true)
+  expect(
+    shouldPreflightPromptOverflow({
+      promptOverflow: false,
+      promptTokens: 111,
+      hardLimit: 100,
+      previousContextAtThreshold: true,
+    }),
+  ).toBe(false)
 })
 
 test("auto compaction ignores a finished assistant that is older than queued user input", () => {
@@ -565,9 +655,9 @@ const user = Effect.fn("test.user")(function* (sessionID: SessionID, text: strin
   return msg
 })
 
-const seed = Effect.fn("test.seed")(function* (sessionID: SessionID, opts?: { finish?: string }) {
+const seed = Effect.fn("test.seed")(function* (sessionID: SessionID, opts?: { finish?: string; text?: string }) {
   const session = yield* Session.Service
-  const msg = yield* user(sessionID, "hello")
+  const msg = yield* user(sessionID, opts?.text ?? "hello")
   const assistant: MessageV2.Assistant = {
     id: MessageID.ascending(),
     role: "assistant",
@@ -816,6 +906,58 @@ it.live("preflights oversized prompt and compacts before calling provider", () =
   ),
 )
 
+it.live("resumes after auto-compaction of an incomplete assistant turn", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const request = "termina la migración y ejecuta la verificación enfocada"
+
+      const { assistant } = yield* seed(chat.id, { finish: "tool-calls", text: request })
+
+      assistant.tokens.input = 95_000
+
+      yield* sessions.updateMessage(assistant)
+      yield* llm.text("compaction summary")
+      yield* llm.text("continued work")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const inputs = yield* llm.inputs
+
+      expect(result.parts.some((part) => part.type === "text" && part.text === "continued work")).toBe(true)
+      expect(inputs.some((input) => JSON.stringify(input).includes(request))).toBe(true)
+      expect(inputs.some((input) => JSON.stringify(input).includes("compaction summary"))).toBe(true)
+      expect(inputs.some((input) => JSON.stringify(input).includes("Latest real user language hint: Spanish"))).toBe(
+        true,
+      )
+      expect(
+        messages.some(
+          (message) =>
+            message.info.role === "user" &&
+            message.parts.some((part) => part.type === "text" && part.synthetic && part.metadata?.compaction_continue),
+        ),
+      ).toBe(true)
+
+      expect(yield* llm.calls).toBe(2)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        agent: {
+          build: { model: "test/test-model" },
+          compaction: { model: "test/test-model" },
+        },
+      }),
+    },
+  ),
+)
+
 it.live("runs a prompt queued during compaction after the resumed turn", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {
@@ -855,8 +997,18 @@ it.live("runs a prompt queued during compaction after the resumed turn", () =>
       gate.resolve()
 
       const [firstResult, queuedResult] = yield* Effect.all([Fiber.join(first), Fiber.join(queued)])
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const queuedUser = messages.find(
+        (message) =>
+          message.info.role === "user" &&
+          message.parts.some((part) => part.type === "text" && part.text === "queued while compacting"),
+      )
       expect(firstResult.parts.some((part) => part.type === "text" && part.text === "resumed turn")).toBe(true)
       expect(queuedResult.parts.some((part) => part.type === "text" && part.text === "queued turn")).toBe(true)
+      expect(queuedResult.info.agent).toBe("build")
+      expect(queuedResult.info.summary).not.toBe(true)
+      expect(queuedResult.info.role === "assistant" ? queuedResult.info.parentID : undefined).toBe(queuedUser?.info.id)
+      expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("queued while compacting"))).toBe(true)
       expect(yield* llm.calls).toBe(3)
     }),
     {
@@ -872,6 +1024,70 @@ it.live("runs a prompt queued during compaction after the resumed turn", () =>
           },
         }
       },
+    },
+  ),
+)
+
+it.live("dispatches a queued prompt after compaction triggered by the active response", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const gate = defer<void>()
+      yield* llm.push(reply().text("active response").usage({ input: 95_000, output: 1 }).wait(gate.promise).stop())
+      yield* llm.text("compaction summary")
+      yield* llm.text("previous work continued")
+      yield* llm.text("queued response")
+
+      const active = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "active request" }],
+        })
+        .pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      const queued = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "queued after response" }],
+        })
+        .pipe(Effect.forkChild)
+      gate.resolve()
+
+      const [activeResult, queuedResult] = yield* Effect.all([Fiber.join(active), Fiber.join(queued)])
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const queuedUser = messages.find(
+        (message) =>
+          message.info.role === "user" &&
+          message.parts.some((part) => part.type === "text" && part.text === "queued after response"),
+      )
+      expect(activeResult.parts.some((part) => part.type === "text" && part.text === "previous work continued")).toBe(
+        true,
+      )
+      expect(queuedResult.parts.some((part) => part.type === "text" && part.text === "queued response")).toBe(true)
+      expect(queuedResult.info.agent).toBe("build")
+      expect(queuedResult.info.summary).not.toBe(true)
+      expect(queuedResult.info.role === "assistant" ? queuedResult.info.parentID : undefined).toBe(queuedUser?.info.id)
+      expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("queued after response"))).toBe(true)
+      expect(yield* llm.calls).toBe(4)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        agent: {
+          build: { model: "test/test-model" },
+          compaction: { model: "test/test-model" },
+        },
+      }),
     },
   ),
 )
@@ -915,6 +1131,82 @@ it.live("default queue mode waits for the complete active response", () =>
       )
       expect(queuedResult.parts.some((part) => part.type === "text" && part.text === "queued response")).toBe(true)
       expect(yield* llm.calls).toBe(3)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        agent: { build: { model: "test/test-model" } },
+      }),
+    },
+  ),
+)
+
+it.live("runs distinct queued prompts in FIFO order", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const gate = defer<void>()
+      yield* llm.push(reply().tool("glob", { pattern: "**/*.txt" }).wait(gate.promise))
+      yield* llm.text("active response complete")
+      yield* llm.text("queued response one")
+      yield* llm.text("queued response two")
+
+      const active = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "active request" }],
+        })
+        .pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      const firstQueued = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "queued request one" }],
+        })
+        .pipe(Effect.forkChild)
+      yield* Effect.gen(function* () {
+        while (true) {
+          const messages = yield* sessions.messages({ sessionID: chat.id })
+          if (
+            messages.some((message) =>
+              message.parts.some((part) => part.type === "text" && part.text === "queued request one"),
+            )
+          )
+            return
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(Effect.timeout("1 second"))
+      const secondQueued = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "queued request two" }],
+        })
+        .pipe(Effect.forkChild)
+      gate.resolve()
+
+      const [activeResult, firstResult, secondResult] = yield* Effect.all([
+        Fiber.join(active),
+        Fiber.join(firstQueued),
+        Fiber.join(secondQueued),
+      ])
+      expect(activeResult.parts.some((part) => part.type === "text" && part.text === "active response complete")).toBe(
+        true,
+      )
+      expect(firstResult.parts.some((part) => part.type === "text" && part.text === "queued response one")).toBe(true)
+      expect(secondResult.parts.some((part) => part.type === "text" && part.text === "queued response two")).toBe(true)
+      expect(yield* llm.calls).toBe(4)
     }),
     {
       git: true,

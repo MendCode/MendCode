@@ -1603,9 +1603,11 @@ describe("session.compaction.process", () => {
           agent: "build",
           model: ref,
           auto: true,
-          overflow: true,
-          resume: true,
-          discardTail: true,
+           overflow: true,
+           resume: true,
+           discardTail: true,
+           rescueAttempt: 1,
+
         })
 
         const rt = runtime(
@@ -1636,7 +1638,8 @@ describe("session.compaction.process", () => {
             .flatMap((message) => message.parts)
             .findLast((item): item is MessageV2.CompactionPart => item.type === "compaction")
           expect(result).toBe("continue")
-          expect(part).toMatchObject({ type: "compaction", discard_tail: true })
+           expect(part).toMatchObject({ type: "compaction", discard_tail: true, rescue_attempt: 1 })
+
           expect(part?.tail_start_id).toBeUndefined()
           expect(
             all.some(
@@ -3302,6 +3305,85 @@ describe("session.compaction.process", () => {
           expect(captured).toContain("## Resume Anchor")
           expect(captured).toContain("## Optional Follow-ups")
           expect(captured).toContain("Convert older summaries into this format")
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
+  test("recompaction keeps the latest real user request ahead of synthetic resume text", async () => {
+    const stub = llm()
+    let captured = ""
+    stub.push(reply("summary one"))
+    stub.push(
+      reply("summary two", (input) => {
+        captured = llmInputText(input)
+      }),
+    )
+
+    await using tmp = await tmpdir()
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        const request = "finish the migration and run the focused verification"
+        await user(session.id, request)
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: true,
+          overflow: true,
+          resume: true,
+        })
+
+        const rt = liveRuntime(stub.layer, wide())
+        try {
+          let msgs = await svc.messages({ sessionID: session.id })
+          let parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+                overflow: true,
+                resume: true,
+              }),
+            ),
+          )
+
+          await SessionCompaction.create({
+            sessionID: session.id,
+            agent: "build",
+            model: ref,
+            auto: true,
+            overflow: true,
+            resume: true,
+          })
+          msgs = MessageV2.filterCompacted(MessageV2.stream(session.id))
+          parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+                overflow: true,
+                resume: true,
+              }),
+            ),
+          )
+
+          expect(captured).toContain("Latest Real User Request Evidence")
+          expect(captured).toMatch(
+            new RegExp(`Latest Real User Request Evidence:[\\s\\S]*?- text:\\n\\s+${request.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`),
+          )
         } finally {
           await rt.dispose()
         }

@@ -237,6 +237,7 @@ describe("tool.shell permissions", () => {
         expect(requests.length).toBe(1)
         expect(requests[0].permission).toBe("bash")
         expect(requests[0].patterns).toContain("echo hello")
+        expect(requests[0].metadata).toMatchObject({ source: "shell", command: "echo hello" })
       },
     })
   })
@@ -349,6 +350,7 @@ describe("tool.shell permissions", () => {
         const extDirReq = requests.find((r) => r.permission === "external_directory")
         expect(extDirReq).toBeDefined()
         expect(extDirReq!.patterns).toContain(want)
+        expect(extDirReq!.metadata).toMatchObject({ source: "shell", command: `cat ${file}` })
       },
     })
   })

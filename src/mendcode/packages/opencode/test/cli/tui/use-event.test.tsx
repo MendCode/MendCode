@@ -146,6 +146,7 @@ function syncCompactionEndedEvent(input: { directory: string; workspace?: string
     workspace: input.workspace,
     payload: {
       type: "sync",
+      id: "evt_compaction_ended",
       syncEvent: {
         id: "evt_compaction_ended",
         type: "session.next.compaction.ended.0",
@@ -165,6 +166,7 @@ function syncCompactedEvent(input: { directory: string; workspace?: string }): G
     workspace: input.workspace,
     payload: {
       type: "sync",
+      id: "evt_compacted",
       syncEvent: {
         id: "evt_compacted",
         type: "session.compacted.0",
@@ -300,6 +302,21 @@ describe("useEvent", () => {
     }
   })
 
+  test("does not deliver a global event twice when it carries a workspace", async () => {
+    const { app, emit, project, seen } = await mount()
+
+    try {
+      project.workspace.set("ws_a")
+      emit(event(update("1.2.4"), { directory: "global", workspace: "ws_a" }))
+
+      await wait(() => seen.length === 1)
+
+      expect(seen).toEqual([update("1.2.4")])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   test("forwards sync compaction ended events for session hydration", async () => {
     const { app, emit, seen } = await mount()
 
@@ -328,6 +345,39 @@ describe("useEvent", () => {
       expect(seen[0]).toMatchObject({
         type: "session.compacted",
         properties: { sessionID: "ses_test" },
+      })
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("deduplicates direct and sync copies of the same event", async () => {
+    const { app, emit, seen } = await mount()
+
+    try {
+      emit(
+        event(
+          {
+            id: "evt_compaction_ended",
+            type: "session.next.compaction.ended",
+            properties: {
+              sessionID: "ses_test",
+              timestamp: 0,
+              text: "summary",
+            },
+          } as Event,
+          { directory: "/tmp/root" },
+        ),
+      )
+      const sync = syncCompactionEndedEvent({ directory: "/tmp/root" })
+      sync.payload.id = "evt_sync_wrapper"
+      emit(sync)
+
+      await wait(() => seen.length === 1)
+      expect(seen).toHaveLength(1)
+      expect(seen[0]).toMatchObject({
+        id: "evt_compaction_ended",
+        type: "session.next.compaction.ended",
       })
     } finally {
       app.renderer.destroy()

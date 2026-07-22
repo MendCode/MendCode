@@ -113,7 +113,7 @@ const cockpitCompactionConfig: MendPresentationConfig["compaction"] = {
   style: "cockpit",
   showProgress: true,
   allowScratchpad: true,
-  arcade: "snake",
+  arcade: "off",
 }
 
 const minimalCompactionConfig: MendPresentationConfig["compaction"] = {

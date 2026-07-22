@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { shouldBlurCompactionArcadeWhenOffscreen } from "@/cli/cmd/tui/component/compaction-panel"
+import {
+  shouldBlurCompactionArcadeWhenOffscreen,
+  shouldRenderCompactionArcade,
+} from "@/cli/cmd/tui/component/compaction-panel"
 import {
   promptCursorEndOffset,
   promptCursorOffsetAfterArrow,
   promptCursorOffsetFromMouse,
+  fetchLoopWorkflowsFromServer,
+  promptDraftHistoryAction,
   mergeOptimisticUserParts,
   optimisticUserMessage,
   supplementalSlashPromptParts,
@@ -25,12 +30,16 @@ import {
   latestFullSessionHistoryStartID,
   sessionFollowSyncIsStale,
   sessionFollowSyncKind,
+  sessionUserMovedViewport,
   sessionHasLocalQueuedTurn,
   sessionPinnedUserMessageID,
+  sessionQueuedUserMessageIDs,
   sessionTranscriptRenderKey,
   sessionUserMessageQueued,
   sessionUserPromptHistory,
+  shouldPinSessionStickyUserHeader,
   shouldDeferSessionFollowSync,
+  shouldHoldSessionSubmitScroll,
   shouldReleaseSessionPagingBoundarySuppression,
   shouldRestoreSessionScrollAnchor,
   shouldUseSimpleSessionHistory,
@@ -38,15 +47,19 @@ import {
 import {
   LOOP_HISTORY_PAGE_SIZE,
   LOOP_WORKFLOW_GLOBAL_CACHE_KEY,
+  LOOP_WORKFLOW_PROJECT_CACHE_KEY,
   loopGlobalPageCacheKey,
   loopHistoryPage,
   loopHistoryPageFromContract,
   loopSnapshotResourceKey,
+  loopStateCounts,
+  loopWakeupLabel,
   loopWorkflowProjectLabel,
   shouldKeepRouteLoopSelection,
 } from "@/cli/cmd/tui/routes/loops"
 import {
   mapStatsSessionsInBatches,
+  clockAscii,
   statsCacheNeedsRefresh,
   statsDayTokenValue,
   statsDayVisualValue,
@@ -55,6 +68,52 @@ import {
   usageInsightsCacheKey,
 } from "@/cli/cmd/tui/routes/stats"
 import type { DailyUsage } from "@/cli/cmd/tui/util/usage-insights"
+
+describe("shared-server loop status", () => {
+  test("turns a transient connection failure into an empty auxiliary result", async () => {
+    const result = await fetchLoopWorkflowsFromServer({
+      fetcher: async () => {
+        throw new Error("Unable to connect. Is the computer able to access the url?")
+      },
+      url: "http://127.0.0.1:1234",
+      directory: "/tmp/project",
+    })
+
+    expect(result).toEqual([])
+  })
+
+  test("sends shared-server auth and directory routing headers", async () => {
+    let request!: Request
+    const result = await fetchLoopWorkflowsFromServer({
+      fetcher: async (input, init) => {
+        request = new Request(input, init)
+        return new Response(JSON.stringify([{ id: "loop_1", state: "active" }]), {
+          headers: { "content-type": "application/json" },
+        })
+      },
+      url: "http://127.0.0.1:1234",
+      headers: { authorization: "Basic test" },
+      directory: "/tmp/project",
+    })
+
+    expect(result).toEqual([{ id: "loop_1", state: "active" }])
+    expect(request.headers.get("authorization")).toBe("Basic test")
+    expect(request.headers.get("accept")).toBe("application/json")
+    expect(request.headers.get("x-mendcode-directory")).toBe(encodeURIComponent("/tmp/project"))
+  })
+})
+
+describe("prompt draft history", () => {
+  test("uses the terminal-safe undo binding only when the editor has an undo point", () => {
+    expect(promptDraftHistoryAction({ undo: true, redo: false, canUndo: true, canRedo: false })).toBe("undo")
+    expect(promptDraftHistoryAction({ undo: true, redo: false, canUndo: false, canRedo: false })).toBeUndefined()
+  })
+
+  test("uses the configured redo binding without stealing terminal suspend", () => {
+    expect(promptDraftHistoryAction({ undo: false, redo: true, canUndo: false, canRedo: true })).toBe("redo")
+    expect(promptDraftHistoryAction({ undo: true, redo: true, canUndo: true, canRedo: true })).toBe("undo")
+  })
+})
 
 describe("optimistic user turn", () => {
   test("uses the submitted ids so backend sync reconciles instead of duplicating", () => {
@@ -181,6 +240,53 @@ describe("queued user turn", () => {
     ).toBe(false)
   })
 
+  test("returns queued users for the bottom dock without hiding dispatched users", () => {
+    const messages = [
+      { id: "msg_001", role: "user" },
+      { id: "msg_002", role: "assistant", parentID: "msg_001" },
+      { id: "msg_003", role: "user" },
+      { id: "msg_004", role: "user" },
+      { id: "msg_005", role: "assistant", parentID: "msg_004" },
+      { id: "msg_006", role: "user" },
+    ]
+
+    expect(sessionQueuedUserMessageIDs({ messages, pendingAssistantID: "msg_002" })).toEqual(["msg_003", "msg_006"])
+    expect(sessionQueuedUserMessageIDs({ messages, pendingAssistantID: "msg_005" })).toEqual(["msg_006"])
+  })
+
+  test("keeps queued users visible during the completed-tool-iteration gap", () => {
+    const messages = [
+      { id: "msg_001", role: "user" },
+      { id: "msg_002", role: "assistant", parentID: "msg_001", finish: "tool-calls", time: { completed: 2 } },
+      { id: "msg_003", role: "user" },
+    ]
+
+    expect(
+      sessionQueuedUserMessageIDs({
+        messages,
+        pendingAssistantID: "msg_002",
+        working: true,
+      }),
+    ).toEqual(["msg_003"])
+    expect(sessionQueuedUserMessageIDs({ messages, pendingAssistantID: "msg_002" })).toEqual([])
+  })
+
+  test("does not queue a new prompt behind a completed final assistant", () => {
+    const messages = [
+      { id: "msg_001", role: "user" },
+      { id: "msg_002", role: "assistant", parentID: "msg_001", finish: "stop", time: { completed: 2 } },
+      { id: "msg_003", role: "user" },
+    ]
+
+    expect(
+      sessionQueuedUserMessageIDs({
+        messages,
+        pendingAssistantID: "msg_002",
+        working: true,
+      }),
+    ).toEqual([])
+  })
+
   test("does not mark an older user queued when the active assistant belongs to a later user", () => {
     const olderUser = { id: "msg_001", role: "user" }
     const activeUser = { id: "msg_003", role: "user" }
@@ -210,9 +316,21 @@ describe("queued user turn", () => {
         submittedUserMessageID: "msg_003",
       }),
     ).toBe("msg_001")
+
+    expect(
+      sessionPinnedUserMessageID({
+        messages: [
+          messages[0],
+          { id: "msg_002", role: "assistant", parentID: "msg_001", finish: "tool-calls", time: { completed: 2 } },
+          messages[2],
+        ],
+        pendingAssistantID: "msg_002",
+        working: true,
+      }),
+    ).toBe("msg_001")
   })
 
-  test("keeps the submitted user pinned through its response and releases it when finished", () => {
+  test("keeps the submitted user pinned through response settlement and releases it when idle", () => {
     const user = { id: "msg_003", role: "user", time: {} }
     const running = [user, { id: "msg_004", role: "assistant", parentID: user.id, time: {} }]
     expect(
@@ -232,6 +350,43 @@ describe("queued user turn", () => {
         submittedUserMessageID: user.id,
       }),
     ).toBeUndefined()
+
+    expect(
+      sessionPinnedUserMessageID({
+        messages: [
+          user,
+          { id: "msg_004", role: "assistant", parentID: user.id, finish: "stop", time: { completed: 5 } },
+        ],
+        submittedUserMessageID: user.id,
+        working: true,
+      }),
+    ).toBe(user.id)
+  })
+
+  test("pins the active user while follow mode keeps the transcript at the tail", () => {
+    expect(
+      shouldPinSessionStickyUserHeader({
+        pinnedUserID: "msg_new",
+        pinnedAnchor: { id: "msg_new", y: 140 },
+        follow: true,
+      }),
+    ).toBe(true)
+
+    expect(
+      shouldPinSessionStickyUserHeader({
+        pinnedUserID: "msg_new",
+        pinnedAnchor: { id: "msg_new", y: 140 },
+        follow: false,
+      }),
+    ).toBe(false)
+
+    expect(
+      shouldPinSessionStickyUserHeader({
+        pinnedUserID: "msg_new",
+        pinnedAnchor: { id: "msg_old", y: 140 },
+        follow: true,
+      }),
+    ).toBe(false)
   })
 })
 
@@ -319,6 +474,13 @@ describe("resolveWorkingStartedAt", () => {
     expect(
       shouldBlurCompactionArcadeWhenOffscreen({ focused: false, screenY: 20, height: 10, viewportHeight: 20 }),
     ).toBe(false)
+  })
+
+  test("renders compaction arcade only in the explicit arcade presentation", () => {
+    expect(shouldRenderCompactionArcade({ style: "cockpit", arcade: "snake" })).toBe(false)
+    expect(shouldRenderCompactionArcade({ style: "minimal", arcade: "snake" })).toBe(false)
+    expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake" })).toBe(true)
+    expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "off" })).toBe(false)
   })
 
   test("keeps plain left and right arrows available for prompt cursor movement", () => {
@@ -609,6 +771,23 @@ describe("resolveWorkingStartedAt", () => {
     expect(loopGlobalPageCacheKey({ offset: 0 })).toBe("global:0:50")
     expect(loopGlobalPageCacheKey({ offset: 50 })).not.toBe(loopGlobalPageCacheKey({ offset: 0 }))
     expect(loopGlobalPageCacheKey({ offset: 0, limit: 25 })).not.toBe(loopGlobalPageCacheKey({ offset: 0 }))
+    expect(LOOP_WORKFLOW_PROJECT_CACHE_KEY).toBe("project")
+    expect(loopGlobalPageCacheKey({ offset: 0, scope: "project" })).toBe("project:0:50")
+  })
+
+  test("does not label scheduled blocked loops as manual", () => {
+    const blocked = {
+      state: "blocked",
+      spec: { trigger: { mode: "interval", intervalMs: 900_000 } },
+    } as Parameters<typeof loopWakeupLabel>[0]
+    const waiting = {
+      state: "active",
+      spec: { trigger: { mode: "external-signal" } },
+    } as Parameters<typeof loopWakeupLabel>[0]
+
+    expect(loopWakeupLabel(blocked)).toBe("not scheduled (blocked)")
+    expect(loopWakeupLabel(waiting)).toBe("waiting for external-signal")
+    expect(loopStateCounts([{ state: "sleeping" }, { state: "blocked" }, { state: "blocked" }])).toEqual({ scheduled: 1, blocked: 2 })
   })
 
   test("holds a deep-linked loop selection until its server page resolves", () => {
@@ -780,6 +959,12 @@ describe("resolveWorkingStartedAt", () => {
     expect(statsDayTokenValue(statsDay({ day: "2026-07-03", tokens: 10, inputTokens: 10, outputTokens: 5 }))).toBe(10)
   })
 
+  test("keeps every clock row aligned", () => {
+    const rows = clockAscii("09:37")
+    expect(rows).toHaveLength(7)
+    expect(new Set(rows.map((row) => row.length)).size).toBe(1)
+  })
+
   test("keeps daily heatmap active when AI activity exists without stored token usage", () => {
     expect(statsDayVisualValue(statsDay({ day: "2026-07-03", sessions: 1, messages: 2, userMessages: 1 }))).toBe(1)
     expect(statsDayVisualValue(statsDay({ day: "2026-07-03", sessions: 0, messages: 0, userMessages: 0 }))).toBe(0)
@@ -823,6 +1008,29 @@ describe("resolveWorkingStartedAt", () => {
     ).toBe(false)
   })
 
+  test("does not treat a queued prompt layout resize as manual scrolling", () => {
+    expect(
+      sessionUserMovedViewport({
+        scrollTop: 900,
+        lastScrollTop: 840,
+        scrollHeight: 1_200,
+        lastScrollHeight: 1_200,
+        viewportHeight: 48,
+        lastViewportHeight: 48,
+      }),
+    ).toBe(true)
+    expect(
+      sessionUserMovedViewport({
+        scrollTop: 900,
+        lastScrollTop: 840,
+        scrollHeight: 1_200,
+        lastScrollHeight: 1_200,
+        viewportHeight: 42,
+        lastViewportHeight: 48,
+      }),
+    ).toBe(false)
+  })
+
   test("does not refetch the transcript for canonical incremental message events", () => {
     expect(sessionFollowSyncKind("message.updated")).toBeUndefined()
     expect(sessionFollowSyncKind("message.part.updated")).toBeUndefined()
@@ -839,6 +1047,12 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldDeferSessionFollowSync({ hasMoreNewer: true, loadingOlder: false, loadingNewer: false })).toBe(true)
     expect(shouldDeferSessionFollowSync({ hasMoreNewer: false, loadingOlder: true, loadingNewer: false })).toBe(true)
     expect(shouldDeferSessionFollowSync({ hasMoreNewer: false, loadingOlder: false, loadingNewer: true })).toBe(true)
+  })
+
+  test("holds follow-sync while the single submit scroll is pending", () => {
+    expect(shouldHoldSessionSubmitScroll({ sessionID: "ses_001", submitSessionID: "ses_001" })).toBe(true)
+    expect(shouldHoldSessionSubmitScroll({ sessionID: "ses_001", submitSessionID: "ses_002" })).toBe(false)
+    expect(shouldHoldSessionSubmitScroll({ sessionID: "ses_001" })).toBe(false)
   })
 
   test("keeps paging boundary suppression through small scrollbar bounce near page seams", () => {

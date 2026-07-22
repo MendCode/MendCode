@@ -646,6 +646,15 @@ test("streaming markdown tail renders closed inline markdown on the live final l
   expect(rendered).not.toContain("**")
 })
 
+test("streaming markdown keeps partial tokens visible without waiting for a newline", () => {
+  const options = { tableMode: "grid" as const, markdownMode: "tables-only" as const }
+  const first = renderStreamingMarkdownTail("Generando", 96, options, { output: "text" })
+  const second = renderStreamingMarkdownTail("Generando una respuesta", 96, options, { output: "text" })
+
+  expect(first).toContain("Generando")
+  expect(second).toContain("Generando una respuesta")
+})
+
 test("streaming markdown tail leaves the active final line unstyled while typing", () => {
   const rendered = renderStreamingMarkdownTail("## Historia breve\n\n## Still typing", 96, {
     tableMode: "grid",
@@ -831,6 +840,12 @@ test("styled plan markdown wraps fenced unicode lines by display width", () => {
 test("styled plan markdown does not colorize macro-style hashtags", () => {
   expect(hasStyledHexColors("#define TANK_USE_MOCK_SENSOR 1")).toBe(false)
   expect(hasStyledHexColors("Use #abc here")).toBe(true)
+})
+
+test("styled plan markdown leaves hex-like tokens inside inline code in markdown flow", () => {
+  expect(shouldColorizeHexMarkdownLine("React muestra `#130`.", false)).toBe(false)
+  expect(shouldColorizeHexMarkdownLine("Usa `background: #1E88E5`.", false)).toBe(false)
+  expect(shouldColorizeHexMarkdownLine("Color de marca: #1E88E5", false)).toBe(true)
 })
 
 test("styled plan markdown keeps markdown tables with hex values in markdown flow", () => {

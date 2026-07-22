@@ -20,7 +20,7 @@ import type {
   ProviderAuthMethod,
   VcsInfo,
 } from "@mendcode/sdk/v2"
-import { createStore, produce, reconcile } from "solid-js/store"
+import { createStore, produce, reconcile, unwrap } from "solid-js/store"
 import { useProject } from "@tui/context/project"
 import { useEvent } from "@tui/context/event"
 import { useSDK } from "@tui/context/sdk"
@@ -42,6 +42,8 @@ import {
   syncReadyForStatus,
   tuiFastBootEnabled,
 } from "../util/fast-boot"
+import { pickTuiSessionCacheEvictions, TUI_SESSION_CACHE_LIMIT } from "../util/session-cache"
+import { compareSessionMessages, isSessionMessageAfter, isSessionMessageBefore, sortSessionMessages } from "../util/session-message-order"
 
 type ShellOutputEvent = {
   type: "session.next.shell.output"
@@ -53,12 +55,18 @@ type ShellOutputEvent = {
 }
 
 export const TUI_SESSION_MESSAGE_SYNC_LIMIT = 50
-export const TUI_SESSION_MESSAGE_STORE_LIMIT = 150
+// Keep three pages resident as a bounded sliding cache; this is a 150-message history limit.
+export const TUI_SESSION_MESSAGE_PAGE_WINDOW = 3
+export const TUI_SESSION_MESSAGE_STORE_LIMIT = TUI_SESSION_MESSAGE_SYNC_LIMIT * TUI_SESSION_MESSAGE_PAGE_WINDOW
+export const TUI_SESSION_MESSAGE_PART_SYNC_LIMIT = 96
 export const COMPACTED_TOOL_CALLS_KV_KEY = "compacted_tool_calls_visible"
 const TUI_TEXT_PREVIEW_CHARS = 128 * 1024
 const TUI_TOOL_OUTPUT_PREVIEW_CHARS = 16 * 1024
 const TUI_METADATA_PREVIEW_CHARS = 4 * 1024
+const TUI_DIFF_PREVIEW_CHARS = 3 * TUI_METADATA_PREVIEW_CHARS
 const TUI_FIELD_PREVIEW_CHARS = 2 * 1024
+const TUI_PATCH_FILE_LIMIT = 256
+const TUI_PREVIEW_ARRAY_LIMIT = 8
 const trace = Log.create({ service: "tui.sync" })
 
 function previewString(input: string | undefined, maxChars: number, label: string) {
@@ -71,17 +79,38 @@ function previewString(input: string | undefined, maxChars: number, label: strin
   return `${input.slice(0, head)}${marker}${input.slice(input.length - tail)}`
 }
 
+function previewDiff(input: string) {
+  if (input.length <= TUI_DIFF_PREVIEW_CHARS) return input
+  const marker = "\n[Diff preview truncated: too large to render safely. Show more to inspect the full diff.]\n"
+  const budget = Math.max(0, TUI_DIFF_PREVIEW_CHARS - marker.length)
+  if (budget <= 0) return marker.slice(0, TUI_DIFF_PREVIEW_CHARS)
+  const head = Math.floor(budget / 3)
+  return `${input.slice(0, head)}${marker}${input.slice(input.length - (budget - head))}`
+}
+
 function previewUnknown(input: unknown, maxChars: number, label: string, depth = 0): unknown {
   if (typeof input === "string") return previewString(input, maxChars, label)
   if (!input || typeof input !== "object") return input
-  if (depth >= 4) return input
-  if (Array.isArray(input)) return input.map((item) => previewUnknown(item, maxChars, label, depth + 1))
+  if (depth >= 4) return "[nested value omitted]"
+  if (Array.isArray(input)) {
+    const itemLimit = Math.min(TUI_PREVIEW_ARRAY_LIMIT, Math.max(1, Math.floor(maxChars / 1024)))
+    const itemMaxChars = Math.max(256, Math.floor(maxChars / itemLimit))
+    return input.slice(0, itemLimit).map((item) => previewUnknown(item, itemMaxChars, label, depth + 1))
+  }
 
   const result: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(input)) {
+    const diffLike = key === "diff" || key === "patch"
     const nextMax =
-      key === "output" || key === "diff" || key === "content" ? maxChars : Math.min(maxChars, TUI_FIELD_PREVIEW_CHARS)
-    result[key] = previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
+      diffLike || key === "output" || key === "content"
+        ? diffLike
+          ? TUI_DIFF_PREVIEW_CHARS
+          : maxChars
+        : Math.min(maxChars, TUI_FIELD_PREVIEW_CHARS)
+    result[key] =
+      diffLike && typeof value === "string"
+        ? previewDiff(value)
+        : previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
   }
   return result
 }
@@ -97,6 +126,7 @@ function previewPartForStore(part: Part): Part {
       source: previewUnknown(part.source, TUI_FIELD_PREVIEW_CHARS, "file source"),
     } as Part
   }
+  if (part.type === "patch") return { ...part, files: part.files.slice(0, TUI_PATCH_FILE_LIMIT) }
   if (part.type !== "tool") return part
 
   const state = part.state
@@ -214,6 +244,16 @@ function mergeMessageInfo(current: Message | undefined, incoming: Message): Mess
 type SessionMessagePageItem = {
   info: Message
   parts: Part[]
+  partsMore?: boolean
+  partsCursor?: string
+}
+
+function normalizeSessionMessages(messages: readonly Message[]) {
+  const byID = new Map<string, Message>()
+  for (const message of messages) {
+    byID.set(message.id, mergeMessageInfo(byID.get(message.id), message))
+  }
+  return sortSessionMessages([...byID.values()])
 }
 
 function trimLoadedSessionMessages(input: {
@@ -222,9 +262,10 @@ function trimLoadedSessionMessages(input: {
   drop: "oldest" | "newest"
   preserveIDs?: ReadonlySet<string>
 }) {
-  if (input.messages.length <= input.max) return { messages: input.messages, removed: [] as Message[] }
-  const removeCount = input.messages.length - input.max
-  const candidates = input.drop === "oldest" ? input.messages : input.messages.toReversed()
+  const messages = normalizeSessionMessages(input.messages)
+  if (messages.length <= input.max) return { messages, removed: [] as Message[] }
+  const removeCount = messages.length - input.max
+  const candidates = input.drop === "oldest" ? messages : messages.toReversed()
   const removedIDs = new Set(
     candidates
       .filter((message) => !input.preserveIDs?.has(message.id))
@@ -232,8 +273,8 @@ function trimLoadedSessionMessages(input: {
       .map((message) => message.id),
   )
   return {
-    messages: input.messages.filter((message) => !removedIDs.has(message.id)),
-    removed: input.messages.filter((message) => removedIDs.has(message.id)),
+    messages: messages.filter((message) => !removedIDs.has(message.id)),
+    removed: messages.filter((message) => removedIDs.has(message.id)),
   }
 }
 
@@ -249,10 +290,21 @@ function visibleAssistantParts(parts: readonly Part[] | undefined) {
   return parts.some((part) => part.type === "text" && !part.synthetic && part.text.trim().length > 0)
 }
 
+function isHiddenCompactionSummary(
+  message: Message,
+  messages: readonly Message[],
+  parts?: (messageID: string) => readonly Part[] | undefined,
+) {
+  if (message.role !== "assistant" || message.summary !== true || !message.parentID) return false
+  const parent = messages.find((candidate) => candidate.id === message.parentID)
+  return (parent && parts?.(parent.id)?.some((part) => part.type === "compaction")) === true
+}
+
 function preserveSessionTailIDs(
   messages: readonly Message[],
   pinned?: ReadonlySet<string>,
   parts?: (messageID: string) => readonly Part[] | undefined,
+  working = false,
 ) {
   const result = new Set(pinned)
   const users = messages.filter((message) => message.role === "user")
@@ -260,6 +312,19 @@ function preserveSessionTailIDs(
     users.findLast((message) => visibleUserParts(parts?.(message.id)) === true) ??
     users.findLast((message) => visibleUserParts(parts?.(message.id)) === undefined)
   if (latestUser) result.add(latestUser.id)
+  const latestAssistant = messages.findLast(
+    (message) =>
+      message.role === "assistant" &&
+      !isHiddenCompactionSummary(message, messages, parts) &&
+      visibleAssistantParts(parts?.(message.id)),
+  )
+  if (latestAssistant) result.add(latestAssistant.id)
+  const workingAssistant = messages.findLast(
+    (message) =>
+      message.role === "assistant" &&
+      (message.time.completed === undefined || (working && ["tool-calls", "unknown"].includes(message.finish ?? ""))),
+  )
+  if (workingAssistant) result.add(workingAssistant.id)
   return result
 }
 
@@ -284,13 +349,15 @@ function mergeSessionMessagePage(input: {
   drop: "oldest" | "newest"
   preserveCurrent?: "all" | "newer-working-assistant"
   preserveIDs?: ReadonlySet<string>
+  excludedIDs?: ReadonlySet<string>
 }) {
   const byID = new Map<string, Message>()
   const currentByID = new Map((input.current ?? []).map((message) => [message.id, message]))
-  const oldestIncomingID = input.incoming[0]?.id
-  const newestIncomingID = input.incoming.at(-1)?.id
+  const oldestIncoming = input.incoming[0]
+  const newestIncoming = input.incoming.at(-1)
   const preserveAllCurrent = input.preserveCurrent === "all" || input.incoming.length === 0
   for (const message of input.current ?? []) {
+    if (input.excludedIDs?.has(message.id)) continue
     if (input.preserveIDs?.has(message.id)) {
       byID.set(message.id, message)
       continue
@@ -300,18 +367,25 @@ function mergeSessionMessagePage(input: {
         byID.set(message.id, message)
         continue
       }
-      if (oldestIncomingID && message.id < oldestIncomingID) {
+      if (message.role === "assistant" && message.time.completed === undefined) {
         byID.set(message.id, message)
         continue
       }
-      if (!newestIncomingID || message.id <= newestIncomingID) continue
+      if (oldestIncoming && isSessionMessageBefore(message, oldestIncoming)) {
+        byID.set(message.id, message)
+        continue
+      }
+      if (!newestIncoming || !isSessionMessageAfter(message, newestIncoming)) continue
       if (message.role !== "assistant" || message.time.completed) continue
     }
     byID.set(message.id, message)
   }
-  for (const message of input.incoming) byID.set(message.id, mergeMessageInfo(currentByID.get(message.id), message))
+  for (const message of input.incoming) {
+    if (input.excludedIDs?.has(message.id)) continue
+    byID.set(message.id, mergeMessageInfo(currentByID.get(message.id), message))
+  }
   const trimmed = trimLoadedSessionMessages({
-    messages: [...byID.values()].toSorted((a, b) => a.id.localeCompare(b.id)),
+    messages: sortSessionMessages([...byID.values()]),
     max: input.max,
     drop: input.drop,
     preserveIDs: input.preserveIDs,
@@ -369,6 +443,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       part: {
         [messageID: string]: Part[]
       }
+      message_part_paging: {
+        [messageID: string]: {
+          hasMore: boolean
+          cursor?: string
+          loading?: boolean
+        }
+      }
       lsp: LspStatus[]
       mcp: {
         [key: string]: McpStatus
@@ -403,6 +484,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       message: {},
       session_latest_assistant: {},
       part: {},
+      message_part_paging: {},
       lsp: [],
       mcp: {},
       mcp_resource: {},
@@ -428,7 +510,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       }
     >()
     const sessionMessageSyncGeneration = new Map<string, number>()
+    const sessionMessageSyncInFlight = new Map<string, Promise<void>>()
+    const sessionMessageSyncQueued = new Set<string>()
+    const sessionCacheSeen = new Set<string>()
+    let activeSessionID: string | undefined
     const pinnedSessionMessages = new Map<string, Set<string>>()
+    const removedSessionMessages = new Map<string, Set<string>>()
+    const pendingPartDeltas = new Map<string, Map<string, Map<string, Map<string, string>>>>()
     const sessionStatusTimers = new Map<string, Timer>()
     let syncedWorkspace = project.workspace.current()
     let bootstrapGeneration = 0
@@ -495,7 +583,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     }) {
       const url = new URL(`/session/${encodeURIComponent(input.sessionID)}/message`, sdk.url)
       url.searchParams.set("limit", String(input.limit))
-      url.searchParams.set("view", showCompactedToolCalls() ? "tui-all" : "tui")
+      const showAllToolCalls = showCompactedToolCalls()
+      url.searchParams.set("view", showAllToolCalls ? "tui-all" : "tui")
+      if (showAllToolCalls) url.searchParams.set("partsLimit", String(TUI_SESSION_MESSAGE_PART_SYNC_LIMIT))
       if (input.before) url.searchParams.set("before", input.before)
       if (input.after) url.searchParams.set("after", input.after)
       if (sdk.directory) url.searchParams.set("directory", sdk.directory)
@@ -506,6 +596,20 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         cursor: response.headers.get("X-Next-Cursor") ?? undefined,
         sparse: response.headers.get("X-Message-View-Sparse") === "true",
       }
+    }
+
+    async function fetchSessionMessageParts(input: { sessionID: string; messageID: string; after: string }) {
+      const url = new URL(
+        `/session/${encodeURIComponent(input.sessionID)}/message/${encodeURIComponent(input.messageID)}`,
+        sdk.url,
+      )
+      url.searchParams.set("view", "tui-all")
+      url.searchParams.set("partsLimit", String(TUI_SESSION_MESSAGE_PART_SYNC_LIMIT))
+      url.searchParams.set("partsAfter", input.after)
+      if (sdk.directory) url.searchParams.set("directory", sdk.directory)
+      const response = await sdk.fetch(url.toString(), { headers: sdk.headers })
+      if (!response.ok) throw new Error(`session message parts failed: ${response.status} ${response.statusText}`)
+      return (await response.json()) as SessionMessagePageItem
     }
 
     async function fetchSessionMessageWindow(sessionID: string) {
@@ -532,11 +636,22 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       return { items, cursor, sparse }
     }
 
+    function setLatestAssistantSnapshot(sessionID: string, message: AssistantMessage) {
+      const snapshot = structuredClone(unwrap(message))
+      setStore(
+        "session_latest_assistant",
+        produce((draft) => {
+          draft[sessionID] = snapshot
+        }),
+      )
+    }
+
     function rememberLatestAssistant(sessionID: string, messages: readonly Message[]) {
       const latest = messages.findLast((message): message is AssistantMessage => message.role === "assistant")
       if (!latest) return
       const current = store.session_latest_assistant[sessionID]
-      if (!current || latest.id >= current.id) setStore("session_latest_assistant", sessionID, reconcile(latest))
+      if (current && isSessionMessageBefore(latest, current)) return
+      setLatestAssistantSnapshot(sessionID, latest)
     }
 
     function recomputeLatestAssistant(sessionID: string) {
@@ -544,13 +659,56 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         (message): message is AssistantMessage => message.role === "assistant",
       )
       if (latest) {
-        setStore("session_latest_assistant", sessionID, reconcile(latest))
+        setLatestAssistantSnapshot(sessionID, latest)
         return
       }
       setStore(
         "session_latest_assistant",
         produce((draft) => delete draft[sessionID]),
       )
+    }
+
+    function clearPendingPartDeltas(sessionID: string, messageID: string, partID?: string) {
+      const byMessage = pendingPartDeltas.get(sessionID)
+      if (!byMessage) return
+      const byPart = byMessage.get(messageID)
+      if (!byPart) return
+      if (partID) {
+        byPart.delete(partID)
+        if (byPart.size > 0) return
+      }
+      byMessage.delete(messageID)
+      if (byMessage.size > 0) return
+      pendingPartDeltas.delete(sessionID)
+    }
+
+    function queuePartDelta(sessionID: string, messageID: string, partID: string, field: string, delta: string) {
+      const byMessage = pendingPartDeltas.get(sessionID) ?? new Map<string, Map<string, Map<string, string>>>()
+      const byPart = byMessage.get(messageID) ?? new Map<string, Map<string, string>>()
+      const fields = byPart.get(partID) ?? new Map<string, string>()
+      const maxChars = field === "text" ? TUI_TEXT_PREVIEW_CHARS : TUI_FIELD_PREVIEW_CHARS
+      fields.set(field, previewString(`${fields.get(field) ?? ""}${delta}`, maxChars, `part ${field}`) ?? "")
+      byPart.set(partID, fields)
+      byMessage.set(messageID, byPart)
+      pendingPartDeltas.set(sessionID, byMessage)
+    }
+
+    function applyPendingPartDeltas(part: Part) {
+      const fields = pendingPartDeltas.get(part.sessionID)?.get(part.messageID)?.get(part.id)
+      if (!fields) return part
+      clearPendingPartDeltas(part.sessionID, part.messageID, part.id)
+
+      let next = part
+      for (const [field, delta] of fields) {
+        const current = next[field as keyof typeof next]
+        if (typeof current !== "string" || current.endsWith(delta)) continue
+        const maxChars = field === "text" ? TUI_TEXT_PREVIEW_CHARS : TUI_FIELD_PREVIEW_CHARS
+        next = {
+          ...next,
+          [field]: previewString(`${current}${delta}`, maxChars, `part ${field}`) ?? "",
+        } as Part
+      }
+      return next
     }
 
     function removeSessionParts(messages: Message[]) {
@@ -561,6 +719,120 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           for (const message of messages) delete draft[message.id]
         }),
       )
+      setStore(
+        "message_part_paging",
+        produce((draft) => {
+          for (const message of messages) delete draft[message.id]
+        }),
+      )
+      for (const message of messages) clearPendingPartDeltas(message.sessionID, message.id)
+    }
+
+    // Drop only in-memory UI caches; persisted session data remains untouched.
+    function evictSessionCache(sessionID: string) {
+      const messages = store.message[sessionID] ?? []
+      const orphanPartMessageIDs = new Set<string>()
+      batch(() => {
+        removeSessionParts(messages)
+        setStore(
+          "part",
+          produce((draft) => {
+            for (const [messageID, parts] of Object.entries(draft)) {
+              if (!parts?.some((part) => part.sessionID === sessionID)) continue
+              orphanPartMessageIDs.add(messageID)
+              delete draft[messageID]
+            }
+          }),
+        )
+        setStore(
+          "message_part_paging",
+          produce((draft) => {
+            for (const messageID of orphanPartMessageIDs) delete draft[messageID]
+          }),
+        )
+        setStore(
+          "message",
+          produce((draft) => delete draft[sessionID]),
+        )
+        setStore(
+          "session_latest_assistant",
+          produce((draft) => delete draft[sessionID]),
+        )
+        setStore(
+          "todo",
+          produce((draft) => delete draft[sessionID]),
+        )
+        setStore(
+          "session_diff",
+          produce((draft) => delete draft[sessionID]),
+        )
+        setStore(
+          "session_status",
+          produce((draft) => delete draft[sessionID]),
+        )
+        setStore(
+          "permission",
+          produce((draft) => delete draft[sessionID]),
+        )
+        setStore(
+          "question",
+          produce((draft) => delete draft[sessionID]),
+        )
+        setStore(
+          "plan_review",
+          produce((draft) => delete draft[sessionID]),
+        )
+      })
+      sessionMessagePaging.delete(sessionID)
+      sessionMessageSyncGeneration.delete(sessionID)
+      sessionMessageSyncQueued.delete(sessionID)
+      pinnedSessionMessages.delete(sessionID)
+      removedSessionMessages.delete(sessionID)
+      clearSessionStatusTimer(sessionID)
+      sessionCacheSeen.delete(sessionID)
+    }
+
+    function sessionCachePreserveIDs() {
+      const preserve = new Set<string>()
+      if (activeSessionID) preserve.add(activeSessionID)
+      for (const sessionID of sessionMessageSyncInFlight.keys()) preserve.add(sessionID)
+      for (const sessionID of sessionMessageSyncQueued) preserve.add(sessionID)
+      for (const sessionID of pinnedSessionMessages.keys()) preserve.add(sessionID)
+      for (const [sessionID, page] of sessionMessagePaging) {
+        if (page.loadingOlder || page.loadingNewer) preserve.add(sessionID)
+      }
+      for (const [sessionID, status] of Object.entries(store.session_status)) {
+        if (status.type !== "idle") preserve.add(sessionID)
+      }
+      for (const [sessionID, requests] of Object.entries(store.permission)) {
+        if (requests.length > 0) preserve.add(sessionID)
+      }
+      for (const [sessionID, requests] of Object.entries(store.question)) {
+        if (requests.length > 0) preserve.add(sessionID)
+      }
+      for (const [sessionID, requests] of Object.entries(store.plan_review)) {
+        if (requests.length > 0) preserve.add(sessionID)
+      }
+      return preserve
+    }
+
+    function touchSessionCache(sessionID: string, active = false) {
+      if (active) activeSessionID = sessionID
+      sessionCacheSeen.delete(sessionID)
+      sessionCacheSeen.add(sessionID)
+      if (sessionCacheSeen.size <= TUI_SESSION_CACHE_LIMIT) return
+      const evicted = pickTuiSessionCacheEvictions({
+        seen: sessionCacheSeen,
+        preserve: sessionCachePreserveIDs(),
+      })
+      for (const stale of evicted) evictSessionCache(stale)
+    }
+
+    function markSessionMessageRemoved(sessionID: string, messageID: string) {
+      const removed = removedSessionMessages.get(sessionID) ?? new Set<string>()
+      removed.add(messageID)
+      removedSessionMessages.set(sessionID, removed)
+      return removed
     }
 
     function applySessionMessagePage(input: {
@@ -570,23 +842,37 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       preserveCurrent?: "all" | "newer-working-assistant"
     }) {
       const current = store.message[input.sessionID]
-      const incoming = input.items.map((item) => item.info)
+      const removed = removedSessionMessages.get(input.sessionID)
+      const items = removed ? input.items.filter((item) => !removed.has(item.info.id)) : input.items
+      const incoming = items.map((item) => item.info)
       const incomingParts = new Map(
-        input.items.map((item) => [item.info.id, mergeFetchedParts(store.part[item.info.id], item.parts)]),
+        items.map((item) => [item.info.id, mergeFetchedParts(store.part[item.info.id], item.parts)]),
       )
+      const sessionIsWorking = ["busy", "retry"].includes(store.session_status[input.sessionID]?.type ?? "")
       const preserveIDs =
         input.drop === "oldest"
           ? preserveSessionTailIDs(
-              [...(current ?? []), ...incoming].toSorted((a, b) => a.id.localeCompare(b.id)),
+              sortSessionMessages([...(current ?? []), ...incoming]),
               pinnedSessionMessages.get(input.sessionID),
               (messageID) => incomingParts.get(messageID) ?? store.part[messageID],
+              sessionIsWorking,
             )
           : pinnedSessionMessages.get(input.sessionID)
       const preserveVisibleAssistantIDs = new Set(preserveIDs)
-      const currentUserIDs = new Set((current ?? []).filter((message) => message.role === "user").map((message) => message.id))
+
+      const currentUserIDs = new Set(
+        (current ?? []).filter((message) => message.role === "user").map((message) => message.id),
+      )
       for (const message of current ?? []) {
         if (message.role !== "assistant") continue
         if (!message.parentID || !currentUserIDs.has(message.parentID)) continue
+        if (
+          sessionIsWorking &&
+          (message.time.completed === undefined || message.finish === "tool-calls" || message.finish === "unknown")
+        ) {
+          preserveVisibleAssistantIDs.add(message.id)
+          continue
+        }
         if (!visibleAssistantParts(incomingParts.get(message.id) ?? store.part[message.id])) continue
         preserveVisibleAssistantIDs.add(message.id)
       }
@@ -597,6 +883,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         drop: input.drop,
         preserveCurrent: input.preserveCurrent ?? "all",
         preserveIDs: preserveVisibleAssistantIDs,
+        excludedIDs: removed,
       })
       trace.trace("message-page-merged", {
         sessionID: input.sessionID,
@@ -611,13 +898,20 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       })
       setStore("message", input.sessionID, reconcile(merged.messages))
       rememberLatestAssistant(input.sessionID, merged.messages)
-      for (const item of input.items) {
+      for (const item of items) {
         if (!merged.messages.some((message) => message.id === item.info.id)) continue
         setStore(
           "part",
           item.info.id,
           reconcile(mergeFetchedParts(store.part[item.info.id], item.parts.map(previewPartForStore))),
         )
+        if (item.partsMore !== undefined || store.message_part_paging[item.info.id]) {
+          setStore("message_part_paging", item.info.id, {
+            hasMore: item.partsMore === true,
+            cursor: item.partsCursor,
+            loading: false,
+          })
+        }
       }
       removeSessionParts(merged.removed)
       return merged
@@ -630,6 +924,22 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         grouped[item.sessionID].push(item)
       }
       return grouped
+    }
+
+    function eventSessionID(event: { type: string; properties?: Record<string, unknown> }) {
+      const properties = event.properties
+      if (!properties) return
+      if (typeof properties.sessionID === "string") return properties.sessionID
+      const part = properties.part
+      if (part && typeof part === "object" && typeof (part as { sessionID?: unknown }).sessionID === "string")
+        return (part as { sessionID: string }).sessionID
+      const info = properties.info
+      if (info && typeof info === "object") {
+        if (typeof (info as { sessionID?: unknown }).sessionID === "string")
+          return (info as { sessionID: string }).sessionID
+        if (event.type.startsWith("session.") && typeof (info as { id?: unknown }).id === "string")
+          return (info as { id: string }).id
+      }
     }
 
     async function refreshPendingInput() {
@@ -716,17 +1026,22 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       if (pendingInputRefreshTimer) clearTimeout(pendingInputRefreshTimer)
       for (const timer of sessionStatusTimers.values()) clearTimeout(timer)
       sessionStatusTimers.clear()
+      sessionCacheSeen.clear()
+      activeSessionID = undefined
     })
 
     event.subscribe((event) => {
       const eventProperties = (event as { properties?: Record<string, unknown> }).properties
       trace.trace("event", {
+        id: typeof (event as { id?: unknown }).id === "string" ? (event as { id: string }).id : undefined,
         type: event.type,
         sessionID: typeof eventProperties?.sessionID === "string" ? eventProperties.sessionID : undefined,
         messageID: typeof eventProperties?.messageID === "string" ? eventProperties.messageID : undefined,
         partID: typeof eventProperties?.partID === "string" ? eventProperties.partID : undefined,
         propertyKeys: eventProperties ? Object.keys(eventProperties) : [],
       })
+      const sessionID = eventSessionID({ type: event.type, properties: eventProperties })
+      if (sessionID) touchSessionCache(sessionID)
       const shellOutputEvent = event as typeof event | ShellOutputEvent
       if (shellOutputEvent.type === "session.next.shell.output") {
         const messages = store.message[shellOutputEvent.properties.sessionID] ?? []
@@ -944,8 +1259,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             )
             removeSessionParts(removedMessages)
           })
+          sessionCacheSeen.delete(sessionID)
+          pendingPartDeltas.delete(sessionID)
+          if (activeSessionID === sessionID) activeSessionID = undefined
           sessionMessagePaging.delete(sessionID)
+          sessionMessageSyncQueued.delete(sessionID)
           pinnedSessionMessages.delete(sessionID)
+          removedSessionMessages.delete(sessionID)
           clearSessionStatusTimer(sessionID)
           break
         }
@@ -993,6 +1313,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             loadedIDs: (store.message[event.properties.info.sessionID] ?? []).map((message) => message.id),
           })
           const sessionID = event.properties.info.sessionID
+          if (removedSessionMessages.get(sessionID)?.has(event.properties.info.id)) break
           const messages = store.message[sessionID]
           if (!messages) {
             setStore("message", sessionID, [event.properties.info])
@@ -1001,46 +1322,31 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           }
           const paging = sessionMessagePaging.get(sessionID)
           const newestLoaded = messages.at(-1)
-          if (paging?.hasMoreNewer && newestLoaded && event.properties.info.id > newestLoaded.id) {
+          if (paging?.hasMoreNewer && newestLoaded && isSessionMessageAfter(event.properties.info, newestLoaded)) {
             rememberLatestAssistant(sessionID, [event.properties.info])
             break
           }
 
-          let next: Message = event.properties.info
-          setStore(
-            "message",
-            sessionID,
-            produce((draft) => {
-              const indexes = draft.flatMap((message, index) => (message.id === event.properties.info.id ? [index] : []))
-              const index = indexes[0]
-              if (index !== undefined) {
-                next = mergeMessageInfo(draft[index], event.properties.info)
-                draft[index] = next
-                for (const duplicate of indexes.slice(1).toReversed()) draft.splice(duplicate, 1)
-                return
-              }
-              const insertAt = draft.findIndex((message) => message.id > event.properties.info.id)
-              draft.splice(insertAt < 0 ? draft.length : insertAt, 0, event.properties.info)
-            }),
-          )
-          const updated = store.message[sessionID]
+          const updated = normalizeSessionMessages([...messages, event.properties.info])
           const overflowed = updated.length > TUI_SESSION_MESSAGE_STORE_LIMIT
-          if (overflowed) {
-            const trimmed = trimLoadedSessionMessages({
-              messages: [...updated],
-              max: TUI_SESSION_MESSAGE_STORE_LIMIT,
-              drop: "oldest",
-              preserveIDs: preserveSessionTailIDs(
-                updated,
-                pinnedSessionMessages.get(event.properties.info.sessionID),
-                (messageID) => store.part[messageID],
-              ),
-            })
-            batch(() => {
-              setStore("message", event.properties.info.sessionID, reconcile(trimmed.messages))
-              removeSessionParts(trimmed.removed)
-            })
-          }
+          const preserveIDs = preserveSessionTailIDs(
+            updated,
+            pinnedSessionMessages.get(event.properties.info.sessionID),
+            (messageID) => store.part[messageID],
+            ["busy", "retry"].includes(store.session_status[event.properties.info.sessionID]?.type ?? ""),
+          )
+          const rememberedAssistantID = store.session_latest_assistant[sessionID]?.id
+          if (rememberedAssistantID) preserveIDs.add(rememberedAssistantID)
+          const trimmed = trimLoadedSessionMessages({
+            messages: updated,
+            max: TUI_SESSION_MESSAGE_STORE_LIMIT,
+            drop: "oldest",
+            preserveIDs,
+          })
+          batch(() => {
+            setStore("message", event.properties.info.sessionID, reconcile(trimmed.messages, { key: "id" }))
+            if (trimmed.removed.length > 0) removeSessionParts(trimmed.removed)
+          })
           rememberLatestAssistant(event.properties.info.sessionID, [event.properties.info])
           const first = store.message[event.properties.info.sessionID]?.[0]
           if (paging && first) {
@@ -1055,25 +1361,42 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           break
         }
         case "message.removed": {
-          if (pinnedSessionMessages.get(event.properties.sessionID)?.has(event.properties.messageID)) break
-          const messages = store.message[event.properties.sessionID]
-          if (!messages) break
-          const result = Binary.search(messages, event.properties.messageID, (m) => m.id)
-          if (result.found) {
+          const sessionID = event.properties.sessionID
+          const messageID = event.properties.messageID
+          const isRevertRemoval = "reason" in event.properties && event.properties.reason === "revert"
+          if (isRevertRemoval) {
+            markSessionMessageRemoved(sessionID, messageID)
+            const pinned = pinnedSessionMessages.get(sessionID)
+            pinned?.delete(messageID)
+            if (pinned?.size === 0) pinnedSessionMessages.delete(sessionID)
+          }
+          if (!isRevertRemoval && pinnedSessionMessages.get(sessionID)?.has(messageID)) break
+          const messages = store.message[sessionID]
+          if (!messages) {
+            clearPendingPartDeltas(sessionID, messageID)
+            break
+          }
+          const index = messages.findIndex((message) => message.id === messageID)
+          if (index >= 0) {
             batch(() => {
               setStore(
                 "message",
-                event.properties.sessionID,
+                sessionID,
                 produce((draft) => {
-                  draft.splice(result.index, 1)
+                  draft.splice(index, 1)
                 }),
               )
               setStore(
                 "part",
-                produce((draft) => delete draft[event.properties.messageID]),
+                produce((draft) => delete draft[messageID]),
+              )
+              setStore(
+                "message_part_paging",
+                produce((draft) => delete draft[messageID]),
               )
             })
-            recomputeLatestAssistant(event.properties.sessionID)
+            clearPendingPartDeltas(sessionID, messageID)
+            recomputeLatestAssistant(sessionID)
           }
           break
         }
@@ -1084,7 +1407,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             partID: event.properties.part.id,
             type: event.properties.part.type,
           })
-          const incomingPart = previewPartForStore(event.properties.part)
+          if (removedSessionMessages.get(event.properties.part.sessionID)?.has(event.properties.part.messageID)) break
+          const incomingPart = previewPartForStore(applyPendingPartDeltas(event.properties.part))
           const parts = store.part[event.properties.part.messageID]
           if (!parts) {
             setStore("part", event.properties.part.messageID, [incomingPart])
@@ -1107,10 +1431,29 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         }
 
         case "message.part.delta": {
+          if (removedSessionMessages.get(event.properties.sessionID)?.has(event.properties.messageID)) break
           const parts = store.part[event.properties.messageID]
-          if (!parts) break
+          if (!parts) {
+            queuePartDelta(
+              event.properties.sessionID,
+              event.properties.messageID,
+              event.properties.partID,
+              event.properties.field,
+              event.properties.delta,
+            )
+            break
+          }
           const result = Binary.search(parts, event.properties.partID, (p) => p.id)
-          if (!result.found) break
+          if (!result.found) {
+            queuePartDelta(
+              event.properties.sessionID,
+              event.properties.messageID,
+              event.properties.partID,
+              event.properties.field,
+              event.properties.delta,
+            )
+            break
+          }
           setStore(
             "part",
             event.properties.messageID,
@@ -1128,6 +1471,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         }
 
         case "message.part.removed": {
+          if (removedSessionMessages.get(event.properties.sessionID)?.has(event.properties.messageID)) break
+          clearPendingPartDeltas(event.properties.sessionID, event.properties.messageID, event.properties.partID)
           const parts = store.part[event.properties.messageID]
           if (!parts) break
           const result = Binary.search(parts, event.properties.partID, (p) => p.id)
@@ -1184,7 +1529,11 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         sessionMessageSyncGeneration.forEach((generation, sessionID) =>
           sessionMessageSyncGeneration.set(sessionID, generation + 1),
         )
+        for (const sessionID of [...sessionCacheSeen]) evictSessionCache(sessionID)
+        sessionCacheSeen.clear()
+        activeSessionID = undefined
         sessionMessagePaging.clear()
+        sessionMessageSyncQueued.clear()
         pinnedSessionMessages.clear()
         syncedWorkspace = workspace
         setStore("provider_metadata_ready", false)
@@ -1247,7 +1596,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       }
       const blockingRequests: Promise<unknown>[] = [
         projectPromise,
-        hydrateProviderMetadata(),
+        ...(readiness.blockProviderMetadata ? [hydrateProviderMetadata()] : []),
         ...(readiness.blockProviderUxMetadata ? [hydrateProviderUxMetadata()] : []),
         ...(readiness.blockSessionList ? [hydrateSessionList()] : []),
       ]
@@ -1257,6 +1606,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           if (!isCurrentBootstrap()) return
           if (store.status !== "complete") setStore("status", "partial")
           void Promise.all([
+            ...(readiness.blockProviderMetadata ? [] : [hydrateProviderMetadata()]),
             ...(readiness.blockProviderUxMetadata ? [] : [hydrateProviderUxMetadata()]),
             ...(readiness.blockSessionList ? [] : [hydrateSessionList()]),
             sdk.client.command
@@ -1336,8 +1686,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           if (pinned.size === 0) pinnedSessionMessages.delete(sessionID)
         },
         async reloadMessages(sessionID: string) {
+          touchSessionCache(sessionID, true)
           sessionMessagePaging.delete(sessionID)
-          await result.session.sync(sessionID, { force: true }).catch((error) => {
+          await result.session.sync(sessionID, { force: true }).catch((error: unknown) => {
             sessionMessagePaging.delete(sessionID)
             throw error
           })
@@ -1380,7 +1731,46 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             loaded: store.message[sessionID]?.length ?? 0,
           }
         },
+        async loadMoreMessageParts(sessionID: string, messageID: string) {
+          touchSessionCache(sessionID, true)
+          const paging = store.message_part_paging[messageID]
+          if (!paging?.hasMore || !paging.cursor) return false
+          if (paging.loading) return false
+          setStore("message_part_paging", messageID, "loading", true)
+          try {
+            const item = await fetchSessionMessageParts({ sessionID, messageID, after: paging.cursor })
+            if (item.info.sessionID !== sessionID || item.info.id !== messageID) {
+              setStore("message_part_paging", messageID, "loading", false)
+              return false
+            }
+            batch(() => {
+              setStore(
+                "message",
+                sessionID,
+                produce((draft) => {
+                  const index = draft.findIndex((message) => message.id === messageID)
+                  if (index >= 0) draft[index] = mergeMessageInfo(draft[index], item.info)
+                }),
+              )
+              setStore(
+                "part",
+                messageID,
+                reconcile(mergeFetchedParts(store.part[messageID], item.parts.map(previewPartForStore))),
+              )
+              setStore("message_part_paging", messageID, {
+                hasMore: item.partsMore === true,
+                cursor: item.partsCursor,
+                loading: false,
+              })
+            })
+            return item.parts.length > 0
+          } catch (error) {
+            setStore("message_part_paging", messageID, "loading", false)
+            throw error
+          }
+        },
         async loadOlder(sessionID: string) {
+          touchSessionCache(sessionID, true)
           const page = sessionMessagePaging.get(sessionID)
           if (!page?.hasMoreOlder || !page.olderCursor) return false
           if (page.loadingOlder) return page.loadingOlder
@@ -1400,7 +1790,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 olderCursor: messages.cursor,
                 hasMoreOlder: messages.items.length > 0 && advancedOlderCursor,
                 newerCursor: newest ? messageCursor(newest) : page.newerCursor,
-                hasMoreNewer: page.hasMoreNewer || merged.removed.some((message) => newest && message.id > newest.id),
+                hasMoreNewer: page.hasMoreNewer || merged.removed.some((message) => newest && isSessionMessageAfter(message, newest)),
                 loadingOlder: page.loadingOlder,
                 loadingNewer: page.loadingNewer,
               })
@@ -1415,6 +1805,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           return load
         },
         async loadNewer(sessionID: string) {
+          touchSessionCache(sessionID, true)
           const page = sessionMessagePaging.get(sessionID)
           if (!page?.hasMoreNewer) return false
           if (page.loadingNewer) return page.loadingNewer
@@ -1437,7 +1828,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               const advancedNewerCursor = Boolean(messages.cursor && messages.cursor !== after)
               sessionMessagePaging.set(sessionID, {
                 olderCursor: oldest ? messageCursor(oldest) : page.olderCursor,
-                hasMoreOlder: page.hasMoreOlder || merged.removed.some((message) => oldest && message.id < oldest.id),
+                hasMoreOlder: page.hasMoreOlder || merged.removed.some((message) => oldest && isSessionMessageBefore(message, oldest)),
+
                 newerCursor: latest ? messageCursor(latest) : messages.cursor,
                 hasMoreNewer: messages.items.length > 0 && advancedNewerCursor,
                 loadingOlder: page.loadingOlder,
@@ -1453,55 +1845,75 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           sessionMessagePaging.set(sessionID, { ...page, loadingNewer: load })
           return load
         },
-        async sync(sessionID: string, options?: { force?: boolean }) {
+        async sync(sessionID: string, options?: { force?: boolean }): Promise<void> {
+          const force = options?.force ?? false
+          touchSessionCache(sessionID, !force)
           trace.trace("sync-start", {
             sessionID,
-            force: options?.force ?? false,
+            force,
             loadedIDs: (store.message[sessionID] ?? []).map((message) => message.id),
             paging: sessionMessagePaging.get(sessionID),
           })
-          if (!options?.force && sessionMessagePaging.has(sessionID)) return
-          const generation = beginSessionMessageSync(sessionID)
-          const workspace = project.workspace.current()
-          const [session, messages, todo, diff, statuses] = await Promise.all([
-            sdk.client.session.get({ sessionID }, { throwOnError: true }),
-            fetchSessionMessageWindow(sessionID),
-            sdk.client.session.todo({ sessionID }),
-            sdk.client.session.diff({ sessionID }),
-            sdk.client.session.status({ workspace }),
-          ])
-          if (!isCurrentSessionMessageSync(sessionID, generation)) return
-          batch(() => {
-            setStore(
-              "session",
-              produce((draft) => {
-                const match = Binary.search(draft, sessionID, (s) => s.id)
-                if (match.found) draft[match.index] = session.data!
-                if (!match.found) draft.splice(match.index, 0, session.data!)
-              }),
-            )
-            setStore("todo", sessionID, reconcile(todo.data ?? []))
-            applySessionMessagePage({
+          if (!force && sessionMessagePaging.has(sessionID)) return
+
+          const active = sessionMessageSyncInFlight.get(sessionID)
+          if (active) {
+            if (!force) return active
+            sessionMessageSyncQueued.add(sessionID)
+            await active
+            if (!sessionMessageSyncQueued.delete(sessionID)) return
+            return result.session.sync(sessionID, { force: true })
+          }
+
+          const run = (async () => {
+            const generation = beginSessionMessageSync(sessionID)
+            const workspace = project.workspace.current()
+            const [session, messages, todo, diff, statuses] = await Promise.all([
+              sdk.client.session.get({ sessionID }, { throwOnError: true }),
+              fetchSessionMessageWindow(sessionID),
+              sdk.client.session.todo({ sessionID }),
+              sdk.client.session.diff({ sessionID }),
+              sdk.client.session.status({ workspace }),
+            ])
+            if (!isCurrentSessionMessageSync(sessionID, generation)) return
+            batch(() => {
+              setStore(
+                "session",
+                produce((draft) => {
+                  const match = Binary.search(draft, sessionID, (s) => s.id)
+                  if (match.found) draft[match.index] = session.data!
+                  if (!match.found) draft.splice(match.index, 0, session.data!)
+                }),
+              )
+              setStore("todo", sessionID, reconcile(todo.data ?? []))
+              applySessionMessagePage({
+                sessionID,
+                items: messages.items,
+                drop: "oldest",
+                preserveCurrent: "newer-working-assistant",
+              })
+              sessionMessagePaging.set(sessionID, {
+                olderCursor: messages.cursor,
+                hasMoreOlder: Boolean(messages.cursor),
+                newerCursor: undefined,
+                hasMoreNewer: false,
+              })
+              setStore("session_diff", sessionID, reconcile(diff.data ?? []))
+              replaceSessionStatuses(statuses.data ?? {})
+            })
+            trace.trace("sync-end", {
               sessionID,
-              items: messages.items,
-              drop: "oldest",
-              preserveCurrent: "newer-working-assistant",
+              loadedIDs: (store.message[sessionID] ?? []).map((message) => message.id),
+              status: store.session_status[sessionID],
+              paging: sessionMessagePaging.get(sessionID),
             })
-            sessionMessagePaging.set(sessionID, {
-              olderCursor: messages.cursor,
-              hasMoreOlder: Boolean(messages.cursor),
-              newerCursor: undefined,
-              hasMoreNewer: false,
-            })
-            setStore("session_diff", sessionID, reconcile(diff.data ?? []))
-            replaceSessionStatuses(statuses.data ?? {})
-          })
-          trace.trace("sync-end", {
-            sessionID,
-            loadedIDs: (store.message[sessionID] ?? []).map((message) => message.id),
-            status: store.session_status[sessionID],
-            paging: sessionMessagePaging.get(sessionID),
-          })
+          })()
+          sessionMessageSyncInFlight.set(sessionID, run)
+          try {
+            await run
+          } finally {
+            if (sessionMessageSyncInFlight.get(sessionID) === run) sessionMessageSyncInFlight.delete(sessionID)
+          }
         },
       },
       bootstrap,

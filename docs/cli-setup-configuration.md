@@ -115,6 +115,29 @@ Common MendCode config paths:
 - `.mendcode/tsm/state.json`: optional TSM state.
 - `.mendcode/worktree/state.json`: managed/adopted worktree registry.
 
+## Prompt Draft Undo and Redo
+
+The TUI keeps a temporary in-memory edit history for the active prompt:
+
+- `Ctrl+_` undoes the latest prompt edit. On many keyboards, press `Ctrl+Shift+-`.
+- `Ctrl+Y` redoes a prompt edit.
+- On macOS, `⌘Z` and `⌘⇧Z` are also available by default.
+- `Ctrl+Z` remains the POSIX terminal suspend shortcut and does not undo prompt text.
+
+This history is intentionally not persisted. It can recover text cleared while the
+prompt is still open, but closing the prompt or TUI discards it.
+
+Override the bindings in `.mendcode/tui.json` or `~/.config/mendcode/tui.json`:
+
+```jsonc
+{
+  "keybinds": {
+    "input_undo": "ctrl+_,super+z",
+    "input_redo": "ctrl+y,super+shift+z"
+  }
+}
+```
+
 ## Focus Profiles
 
 Focus profiles tune provider-family behavior, model role defaults, prompt policy, tool posture, budget posture, and worktree policy.
@@ -241,7 +264,7 @@ Permission modes:
 | Mode | Behavior |
 | --- | --- |
 | `approval` | Manual approval remains the default posture. |
-| `smart` | Uses an AI-assisted reviewer role for configured triggers. If the reviewer role is not configured, MendCode asks instead of silently approving. |
+| `smart` | Auto-approves only bounded read-only shell requests. Risky or ambiguous requests use the configured AI reviewer when applicable, and fall back to a prompt if it is unavailable; scripts, deletes, writes, privilege changes, network commands, and other non-read-only commands are never auto-approved. |
 | `full_access` | Reduces permission prompts for the current policy surface, but explicit deny rules still matter. Use only when that trust posture is intentional. |
 
 Configure permissions:

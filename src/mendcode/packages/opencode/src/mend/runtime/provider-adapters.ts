@@ -3,7 +3,7 @@ import { chmod, readFile, writeFile } from "fs/promises"
 import { spawnSync } from "child_process"
 import path from "path"
 import { mendPaths } from "../config/paths"
-import { providerAuthPreset, providerEnvRequirements } from "./readiness"
+import { providerAuthPreset, providerAuthStatus, providerEnvRequirements } from "./readiness"
 import { budgetEnforcementStatus } from "./budget"
 import { providerAuthStateFile, readProviderAuthState } from "./auth-state"
 import { mendRuntimeVersion } from "./version"
@@ -275,6 +275,33 @@ async function runOpenAIAPIKeyPrompt(input: any) {
   return parseResponsesResult({ ...input, authMode: "api-key", response, text: await response.text(), elapsedMs: Date.now() - startedAt })
 }
 
+export function selectOpenAIAuthMode(input: {
+  configuredAuthMode?: string | null
+  apiKeyAvailable: boolean
+  oauthAvailable: boolean
+}) {
+  const configured = input.configuredAuthMode?.trim() || null
+  if (configured === "api-key") return "api-key" as const
+  if (configured === "chatgpt-subscription-oauth") return "chatgpt-subscription-oauth" as const
+  if (input.oauthAvailable) return "chatgpt-subscription-oauth" as const
+  if (input.apiKeyAvailable) return "api-key" as const
+  return null
+}
+
+async function resolveOpenAIAuthMode(root: string, input: { modelID: string; authMode: string }) {
+  const configured = input.authMode.trim() || null
+  if (configured === "api-key" || configured === "chatgpt-subscription-oauth") return configured
+  const auth = await providerAuthStatus("openai", input.modelID, { authMode: configured, skipNext: true }, root)
+  const oauthAvailable = auth.mendAuth?.type === "oauth" && auth.mendAuth.accessTokenPresent && (!auth.oauthExpired || auth.oauthRefreshReady)
+  const resolved = selectOpenAIAuthMode({
+    configuredAuthMode: configured,
+    apiKeyAvailable: Boolean(process.env.OPENAI_API_KEY),
+    oauthAvailable,
+  })
+  if (resolved) return resolved
+  throw new Error(auth.blockers?.join("; ") || "No usable OpenAI OAuth or API-key credentials are configured.")
+}
+
 function genericAiSdkRunnerCode() {
   return `
 import { generateText } from "ai"
@@ -329,7 +356,8 @@ export async function runSupportStatus(input: { providerID?: string | null; mode
 
 export async function runProviderAdapter(root: string, input: { providerID: string; modelID: string; authMode: string; prompt?: string; messages?: any[]; instructions?: string }) {
   if (input.providerID === "openai") {
-    if (input.authMode === "api-key") return runOpenAIAPIKeyPrompt(input)
+    const authMode = await resolveOpenAIAuthMode(root, input)
+    if (authMode === "api-key") return runOpenAIAPIKeyPrompt(input)
     return runOpenAISubscriptionPrompt(root, input)
   }
   return runGenericAiSdkPrompt(root, input)

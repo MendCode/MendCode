@@ -415,11 +415,11 @@ test("merges keybind overrides across precedence layers", async () => {
   expect(config.keybinds?.theme_list).toBe("ctrl+k")
 })
 
-wintest("defaults Ctrl+Z to input undo on Windows", async () => {
+wintest("defaults a terminal-safe binding for input undo on Windows", async () => {
   await using tmp = await tmpdir()
   const config = await getTuiConfig(tmp.path)
   expect(config.keybinds?.terminal_suspend).toBe("none")
-  expect(config.keybinds?.input_undo).toBe("ctrl+z,ctrl+-,super+z")
+  expect(config.keybinds?.input_undo).toBe("ctrl+_,super+z")
 })
 
 wintest("keeps explicit input undo overrides on Windows", async () => {
@@ -442,7 +442,7 @@ wintest("ignores terminal suspend bindings on Windows", async () => {
 
   const config = await getTuiConfig(tmp.path)
   expect(config.keybinds?.terminal_suspend).toBe("none")
-  expect(config.keybinds?.input_undo).toBe("ctrl+z,ctrl+-,super+z")
+  expect(config.keybinds?.input_undo).toBe("ctrl+_,super+z")
 })
 
 test("OPENCODE_TUI_CONFIG provides settings when no project config exists", async () => {

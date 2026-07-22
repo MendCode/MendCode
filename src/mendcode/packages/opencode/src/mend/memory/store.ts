@@ -41,6 +41,7 @@ export type MemoryStatus = {
   extractorRole: string
   consolidatorRole: string
   memoryDreamRole: string
+  dreamConsolidationPolicy: string
   memoryAssistantRole: string
   paths: Record<string, string>
   summaries: Record<MemoryScope, { exists: boolean; bytes: number }>
@@ -233,6 +234,7 @@ export async function memoryStatus(root?: string): Promise<MemoryStatus> {
     extractorRole: config.extractorRole,
     consolidatorRole: config.consolidatorRole,
     memoryDreamRole: config.memoryDreamRole,
+    dreamConsolidationPolicy: config.dreamConsolidationPolicy,
     memoryAssistantRole: config.memoryAssistantRole,
     paths: {
       globalConfig: paths.globalConfig,

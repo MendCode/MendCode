@@ -26,8 +26,12 @@ export function DialogConsoleOrg() {
   const { theme } = useTheme()
 
   const [orgs] = createResource(async () => {
-    const result = await sdk.client.experimental.console.listOrgs({}, { throwOnError: true })
-    return result.data?.orgs ?? []
+    try {
+      const result = await sdk.client.experimental.console.listOrgs({}, { throwOnError: true })
+      return result.data?.orgs ?? []
+    } catch {
+      return []
+    }
   })
 
   const current = createMemo(() => orgs()?.find((item) => item.active))

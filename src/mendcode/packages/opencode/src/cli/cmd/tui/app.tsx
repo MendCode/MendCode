@@ -171,6 +171,7 @@ import {
   readFocusedMendOverlayID,
   type MendOverlayEntry,
 } from "@/mend/tui/overlays"
+import { formatDiagnostics, type DiagnosticsSnapshot } from "@/util/process-memory"
 
 function rendererConfig(_config: TuiConfig.Info): CliRendererConfig {
   const mouseEnabled = !Flag.OPENCODE_DISABLE_MOUSE && (_config.mouse ?? true)
@@ -576,6 +577,7 @@ export function tui(input: {
     config?: unknown
   }
   onSnapshot?: () => Promise<string[]>
+  onDiagnostics?: () => Promise<DiagnosticsSnapshot>
   directory?: string
   fetch?: typeof fetch
   headers?: RequestInit["headers"]
@@ -660,7 +662,10 @@ export function tui(input: {
                                               <PromptHistoryProvider>
                                                 <PromptRefProvider>
                                                   <EditorContextProvider>
-                                                    <App onSnapshot={input.onSnapshot} />
+                                                    <App
+                                                      onSnapshot={input.onSnapshot}
+                                                      onDiagnostics={input.onDiagnostics}
+                                                    />
                                                   </EditorContextProvider>
                                                 </PromptRefProvider>
                                               </PromptHistoryProvider>
@@ -688,7 +693,7 @@ export function tui(input: {
   })
 }
 
-function App(props: { onSnapshot?: () => Promise<string[]> }) {
+function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () => Promise<DiagnosticsSnapshot> }) {
   const tuiConfig = useTuiConfig()
   const route = useRoute()
   const dimensions = useTerminalDimensions()
@@ -3211,7 +3216,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       "If the request is to stop, remove, delete, pause, resume, or run the current loop and no loop id is visible, call the matching `loop` action without `workflowID`; the tool resolves the current session's contextual loop.",
       "Ask with the `question` tool only when a critical setting is missing: objective, budget mode, iteration cap or unbounded mode, cadence, model/provider, max wall-clock runtime, permission mode, or stop condition.",
       "Before activating, design the loop strategy from the goal: choose `budgetMode` as `fixed` only for exactly-N iteration jobs, `max-goal` when maxTurns is a budget cap to complete a goal as early as possible, and `unbounded-monitor` for ongoing monitors. For `max-goal`, provide concrete `completionCriteria`, `successChecks`, `targetTurns`, and `reserveTurns`; do not divide the work across every max iteration. Aim to finish in the minimum responsible turns, then use remaining turns only for retry/verification if needed. Set `notifyOwnerOnComplete: true` for goal-completion loops so the parent session gets a completion summary.",
-      'Default to report-only unless I explicitly allow edits. Spanish/English requests such as codear, implementar, fixear, editar, hacer cambios, probar, compilar, run tests, or build are explicit edit permission for the loop; use permissionMode `normal` or `custom`, set `reportOnly: false`, and keep safety gates for push/merge/release/destructive shell. If I choose a model and reasoning effort/variant, pass `model` as provider/model and pass the effort as `variant` (for example `variant: "medium"`), or use provider/model#variant. For interval cadence, set `triggerMode: "interval"` and convert the interval to `intervalMs`. Preserve the current session model by omitting `model` unless I choose one.',
+      'Default to report-only unless I explicitly allow edits. Spanish/English requests such as codear, implementar, fixear, editar, hacer cambios, probar, compilar, run tests, or build are explicit edit permission for the loop; use permissionMode `normal` or `custom`, set `reportOnly: false`, and keep safety gates for push/merge/release/destructive shell. If I choose a model and reasoning effort/variant, pass `model` as provider/model and pass the effort as `variant` (for example `variant: "medium"`), or use provider/model#variant. For interval cadence, set `triggerMode: "interval"` and convert the interval to `intervalMs`; for a local daily schedule, set `triggerMode: "daily"`, `dailyAt` as `HH:mm`, and an explicit IANA `timezone`. Preserve the current session model by omitting `model` unless I choose one.',
       "Do not hand-render Markdown tables or duplicate status cards after the tool call. Let the Loop Workflow card render from tool metadata, then give a one-line confirmation.",
     ].join("\n")
   }
@@ -3542,6 +3547,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           `Proposals: pending ${status.proposals.pending} · applied ${status.proposals.applied} · rejected ${status.proposals.rejected}`,
           `Runtime caps: project ${status.projectMaxEntries}/request · global ${status.globalCompactionMaxEntries}/after compaction`,
           `Extractor: ${status.extractorRole} · output model calls ${status.outputCallsProviders ? "possible" : "off"}`,
+          `Dream consolidation: ${status.dreamConsolidationPolicy}`,
           `Project path: ${status.paths.projectEntries}`,
           `Global path: ${status.paths.globalEntries}`,
         ].join("\n"),
@@ -4410,9 +4416,51 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
     },
     {
+      title: "Show diagnostics",
+      category: "System",
+      value: "app.diagnostics",
+      slash: { name: "diagnostics", aliases: ["diag"] },
+      hidden: !props.onDiagnostics,
+      description: "Read current TUI and connected runtime diagnostics on demand.",
+      onSelect: async (dialog) => {
+        try {
+          const diagnostics = await props.onDiagnostics?.()
+          if (!diagnostics) {
+            dialog.clear()
+            toast.show({ variant: "error", message: "Diagnostics are unavailable.", duration: 4000 })
+            return
+          }
+          await DialogAlert.show(
+            dialog,
+            "MendCode Diagnostics",
+            formatDiagnostics({
+              ...diagnostics,
+              ui: {
+                sessionCount: sync.data.session.length,
+                cachedSessionCount: Object.keys(sync.data.message).length,
+                cachedMessageCount: Object.values(sync.data.message).reduce(
+                  (total, messages) => total + (messages?.length ?? 0),
+                  0,
+                ),
+                cachedPartCount: Object.values(sync.data.part).reduce(
+                  (total, parts) => total + (parts?.length ?? 0),
+                  0,
+                ),
+                route: route.data.type,
+              },
+            }),
+          )
+        } catch (error) {
+          dialog.clear()
+          toast.show({ variant: "error", message: errorMessage(error), duration: 5000 })
+        }
+      },
+    },
+    {
       title: "Write heap snapshot",
       category: "System",
       value: "app.heap_snapshot",
+      hidden: !props.onSnapshot,
       onSelect: async (dialog) => {
         const files = await props.onSnapshot?.()
         toast.show({

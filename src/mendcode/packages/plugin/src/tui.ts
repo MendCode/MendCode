@@ -314,6 +314,12 @@ export type TuiOverlaySize = number | `${number}%` | "auto"
 export type TuiOverlayRenderContext = {
   /** Close the overlay that owns this render context. */
   close: () => boolean
+  /** Focus the overlay that owns this render context. */
+  focus: () => boolean
+  /** Remove focus from the overlay that owns this render context. */
+  blur: () => boolean
+  /** Whether the overlay that owns this render context currently has focus. */
+  focused: () => boolean
   /** Request a TUI render when plugin-local overlay state changes outside Solid signals. */
   requestRender: () => void
 }
@@ -341,6 +347,12 @@ export type TuiOverlayApi = {
   open: (id: string, render: (context: TuiOverlayRenderContext) => JSX.Element | string | number | null, options?: TuiOverlayOptions) => boolean
   /** Close a plugin-owned floating overlay by ID. */
   close: (id: string) => boolean
+  /** Focus a capturable plugin-owned overlay by ID. */
+  focus: (id: string) => boolean
+  /** Blur a plugin-owned overlay. Without an ID, blur whichever overlay is focused. */
+  blur: (id?: string) => boolean
+  /** Read the currently focused overlay ID, if any. */
+  focused: () => string | undefined
 }
 
 export type TuiCompactionArcadeRender = {
@@ -439,6 +451,8 @@ type TuiConfigView = Pick<PluginConfig, "$schema" | "theme" | "keybinds" | "plug
 
 export type TuiApp = {
   readonly version: string
+  /** Runtime-discovered public extension capabilities. */
+  readonly capabilities?: ReadonlyArray<string>
 }
 
 type Frozen<Value> = Value extends (...args: never[]) => unknown
@@ -668,17 +682,32 @@ export type TuiWorkspace = {
 
 export type TuiMemoryGraphFact = {
   id: string
+  legacyEntryID: string | null
   text: string
+  normalizedSummary: string
   scope: string
+  ownerWorkspaceIDs: string[]
+  ownerGroupIDs: string[]
   categoryIDs: string[]
-  retrievalPriority?: number
+  provenance: string[]
+  createdAt: string
+  updatedAt: string
+  verifiedAt: string | null
+  confidence: number
+  durability: number
+  changeRisk: number
+  sensitivity: "low" | "medium" | "high"
+  stale: boolean
+  retrievalPriority: number
   materialized: boolean
 }
 
 export type TuiMemoryGraphLink = {
+  id: string
   from: string
   to: string
   kind: string
+  createdAt: string
 }
 
 export type TuiMemoryGraphCategory = {
@@ -703,9 +732,116 @@ export type TuiMemoryGraphSnapshot = {
   }
 }
 
+export type TuiMemoryGraphFactInput = {
+  id?: string
+  text: string
+  scope?: "global" | "project" | "workspace" | "group-view"
+  ownerWorkspaceIDs?: string[]
+  ownerGroupIDs?: string[]
+  categoryIDs?: string[]
+  normalizedSummary?: string
+  provenance?: string[]
+  confidence?: number
+  durability?: number
+  changeRisk?: number
+  sensitivity?: "low" | "medium" | "high"
+  stale?: boolean
+  retrievalPriority?: number
+}
+
+export type TuiMemoryGraphLinkInput = {
+  id?: string
+  from: string
+  to: string
+  kind: "related" | "conflicts" | "supersedes" | "supports"
+  createdAt?: string
+}
+
+export type TuiMemoryGraphDeleteResult = {
+  ok: boolean
+  id: string
+  deletedLinks?: number
+}
+
 export type TuiMemoryApi = {
   /** Read the current project's persisted memory graph without granting arbitrary filesystem access. */
   graph: () => Promise<TuiMemoryGraphSnapshot>
+  /** Ask the instance-backed Memory side chat and receive structured proposed actions. */
+  sideChat: OpencodeClient["memory"]["sideChat"]
+  /** Create or update a materialized graph fact in the current project. */
+  upsertGraphFact: (input: TuiMemoryGraphFactInput) => Promise<TuiMemoryGraphFact>
+  /** Delete a materialized graph fact and any links that point to it. */
+  deleteGraphFact: (id: string) => Promise<TuiMemoryGraphDeleteResult>
+  /** Create or update a graph link in the current project. */
+  upsertGraphLink: (input: TuiMemoryGraphLinkInput) => Promise<TuiMemoryGraphLink>
+  /** Delete a graph link by ID. */
+  deleteGraphLink: (id: string) => Promise<TuiMemoryGraphDeleteResult>
+}
+
+export type TuiSessionApi = {
+  /** Return the session currently visible in the TUI, if the active route is a session. */
+  current: () => string | undefined
+  list: OpencodeClient["session"]["list"]
+  create: OpencodeClient["session"]["create"]
+  status: OpencodeClient["session"]["status"]
+  delete: OpencodeClient["session"]["delete"]
+  get: OpencodeClient["session"]["get"]
+  update: OpencodeClient["session"]["update"]
+  children: OpencodeClient["session"]["children"]
+  todo: OpencodeClient["session"]["todo"]
+  diff: OpencodeClient["session"]["diff"]
+  messages: OpencodeClient["session"]["messages"]
+  prompt: OpencodeClient["session"]["prompt"]
+  promptAsync: OpencodeClient["session"]["promptAsync"]
+  command: OpencodeClient["session"]["command"]
+  shell: OpencodeClient["session"]["shell"]
+  deleteMessage: OpencodeClient["session"]["deleteMessage"]
+  message: OpencodeClient["session"]["message"]
+  fork: OpencodeClient["session"]["fork"]
+  abort: OpencodeClient["session"]["abort"]
+  interrupt: OpencodeClient["session"]["interrupt"]
+  init: OpencodeClient["session"]["init"]
+  summarize: OpencodeClient["session"]["summarize"]
+  revert: OpencodeClient["session"]["revert"]
+  unrevert: OpencodeClient["session"]["unrevert"]
+  background: OpencodeClient["session"]["background"]
+  agentView: OpencodeClient["session"]["agentView"]
+  agentCommand: OpencodeClient["session"]["agentCommand"]
+}
+
+export type TuiSessionMetadataApi = {
+  /** Return the session currently visible in the TUI, if any. */
+  current: () => string | undefined
+  list: OpencodeClient["session"]["agentView"]["metadata"]["list"]
+  get: OpencodeClient["session"]["agentView"]["metadata"]["get"]
+  patch: OpencodeClient["session"]["agentView"]["metadata"]["patch"]
+  getCurrent: () => Promise<Awaited<ReturnType<OpencodeClient["session"]["agentView"]["metadata"]["get"]>>>
+}
+
+export type TuiSessionCreateInput = NonNullable<Parameters<OpencodeClient["session"]["create"]>[0]>
+type TuiSessionPromptInput = NonNullable<Parameters<OpencodeClient["session"]["prompt"]>[0]>
+type TuiSessionPromptAsyncInput = NonNullable<Parameters<OpencodeClient["session"]["promptAsync"]>[0]>
+type TuiSessionMessagesInput = NonNullable<Parameters<OpencodeClient["session"]["messages"]>[0]>
+type TuiSessionUpdateInput = NonNullable<Parameters<OpencodeClient["session"]["update"]>[0]>
+
+export type TuiAiPromptInput = string | Omit<TuiSessionPromptInput, "sessionID">
+
+/** A persistent MendCode session that a plugin can use as an AI-backed page or modal. */
+export type TuiAiSession = {
+  readonly id: string
+  prompt: (input: TuiAiPromptInput) => ReturnType<OpencodeClient["session"]["prompt"]>
+  promptAsync: (input: Omit<TuiSessionPromptAsyncInput, "sessionID"> | string) => ReturnType<OpencodeClient["session"]["promptAsync"]>
+  messages: (input?: Omit<TuiSessionMessagesInput, "sessionID">) => ReturnType<OpencodeClient["session"]["messages"]>
+  update: (input: Omit<TuiSessionUpdateInput, "sessionID">) => ReturnType<OpencodeClient["session"]["update"]>
+  abort: () => ReturnType<OpencodeClient["session"]["abort"]>
+  delete: () => ReturnType<OpencodeClient["session"]["delete"]>
+}
+
+export type TuiAiApi = {
+  /** Wrap an existing session as a plugin-owned AI handle. */
+  open: (sessionID: string) => TuiAiSession
+  /** Create a regular MendCode session that can power a custom page or modal. */
+  create: (input?: TuiSessionCreateInput) => Promise<TuiAiSession>
 }
 
 export type TuiPluginApi = {
@@ -741,6 +877,9 @@ export type TuiPluginApi = {
   readonly tuiConfig: Frozen<TuiConfigView>
   kv: TuiKV
   state: TuiState
+  session: TuiSessionApi
+  metadata: TuiSessionMetadataApi
+  ai: TuiAiApi
   memory: TuiMemoryApi
   theme: TuiTheme
   client: OpencodeClient

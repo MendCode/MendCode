@@ -22,7 +22,7 @@ export const defaultMendConfig = {
     configMode: "overlay",
   },
   focus: { default: "codex", allowSessionOverride: true },
-  budgets: { warnUsd: 1, stopUsd: 3, expensiveModelRequiresConfirm: true },
+  budgets: { mode: "subscription", warnUsd: null, stopUsd: null, expensiveModelRequiresConfirm: false },
   memory: {
     enabled: false,
     use: false,
@@ -34,6 +34,7 @@ export const defaultMendConfig = {
     globalCompactionMaxEntries: 50,
     extractorRole: "memoryExtractor",
     consolidatorRole: "none",
+    dreamConsolidationPolicy: "disabled",
     requireApprovalForGenerated: true,
   },
   package: {

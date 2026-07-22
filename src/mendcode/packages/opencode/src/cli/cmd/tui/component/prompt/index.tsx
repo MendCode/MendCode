@@ -75,6 +75,7 @@ import { WorkspaceLabel, type WorkspaceStatus } from "../workspace-label"
 import { readModelsConfig } from "@/mend/config/models"
 import { budgetEnforcementStatus } from "@/mend/runtime/budget"
 import { useMendTuiProfile } from "@tui/context/mend"
+import { compareSessionMessages } from "../../util/session-message-order"
 import { listMendStatusEntries } from "@/mend/tui/status"
 import { listMendWidgets } from "@/mend/tui/widgets"
 import { getMendFooter, listMendFooterEntries } from "@/mend/tui/footer"
@@ -104,12 +105,32 @@ const NATIVE_COMPACTION_SLASHES = new Set(["compact", "summarize"])
 const ACTIVE_LOOP_STATES = new Set(["active", "sleeping", "working", "needs_input", "blocked"])
 const trace = Log.create({ service: "tui.prompt" })
 
-type LoopWorkflowInfo = {
+export type LoopWorkflowInfo = {
   id: string
   state: string
   phase?: string
   rootSessionID?: string
   nextWakeup?: number
+}
+
+export async function fetchLoopWorkflowsFromServer(input: {
+  fetcher: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+  url: string
+  headers?: HeadersInit
+  directory?: string
+}) {
+  const headers = new Headers(input.headers)
+  headers.set("accept", "application/json")
+  if (input.directory) headers.set("x-mendcode-directory", encodeURIComponent(input.directory))
+  try {
+    const response = await input.fetcher(`${input.url}/loop`, { headers })
+    if (!response.ok) return [] as LoopWorkflowInfo[]
+    const data = await response.json().catch(() => undefined)
+    return Array.isArray(data) ? (data as LoopWorkflowInfo[]) : []
+  } catch {
+    // Loop status is auxiliary; a shared-server reconnect must not crash the TUI.
+    return [] as LoopWorkflowInfo[]
+  }
 }
 
 export type PromptProps = {
@@ -188,6 +209,7 @@ export function supplementalSlashPromptParts<T extends { type: string; synthetic
 
 export type PromptRef = {
   focused: boolean
+  submitPending?: boolean
   current: PromptInfo
   inputRows?: number
   set(prompt: PromptInfo): void
@@ -398,6 +420,18 @@ export function shouldHandlePromptCursorArrow(input: Pick<ParsedKey, "name" | "c
   return input.name === "left" || input.name === "right"
 }
 
+export function promptDraftHistoryAction(input: {
+  undo: boolean
+  redo: boolean
+  canUndo: boolean
+  canRedo: boolean
+}) {
+  if (input.undo && input.canUndo) return "undo" as const
+  if (input.redo && input.canRedo) return "redo" as const
+
+  return undefined
+}
+
 export function promptCursorEndOffset(text: string) {
   return text.length
 }
@@ -426,6 +460,7 @@ export function Prompt(props: PromptProps) {
   let input: TextareaRenderable
   let anchor: BoxRenderable
   let suppressPromptInputSync = false
+  let submitPending = false
   let autocomplete: AutocompleteRef
   let lastPastedContentClick: { time: number; offset: number } | undefined
 
@@ -475,7 +510,9 @@ export function Prompt(props: PromptProps) {
   )
   function applyPromptHistoryItem(item: PromptInfo, direction: 1 | -1, event: ParsedKey & { preventDefault: () => void }) {
     const cleanInput = cleanPromptInputText(item.input)
-    input.setText(cleanInput)
+    // Keep the draft that was replaced by ↑/↓ recoverable through the
+    // editor's temporary undo history.
+    input.replaceText(cleanInput)
     setStore("prompt", { ...item, input: cleanInput })
     setStore("mode", item.mode ?? "normal")
     restoreExtmarksFromParts(item.parts)
@@ -724,16 +761,22 @@ export function Prompt(props: PromptProps) {
   const [loopRefreshTick, setLoopRefreshTick] = createSignal(0)
 
   async function fetchLoopWorkflows() {
-    const response = await sdk.fetch(`${sdk.url}/loop`, { headers: { accept: "application/json" } })
-    if (!response.ok) return [] as LoopWorkflowInfo[]
-    const data = await response.json().catch(() => undefined)
-    return Array.isArray(data) ? (data as LoopWorkflowInfo[]) : []
+    return fetchLoopWorkflowsFromServer({
+      fetcher: sdk.fetch,
+      url: sdk.url,
+      headers: sdk.headers,
+      directory: sdk.directory,
+    })
   }
 
   const [loopWorkflows] = createResource(loopRefreshTick, fetchLoopWorkflows)
   const [availableSkills, { refetch: refetchAvailableSkills }] = createResource(async () => {
-    const result = await sdk.client.app.skills()
-    return result.data ?? []
+    try {
+      const result = await sdk.client.app.skills()
+      return result.data ?? []
+    } catch {
+      return []
+    }
   })
   const skillNames = createMemo(() => new Set((availableSkills() ?? []).map((skill) => skill.name)))
   const activeLoopCount = createMemo(
@@ -1010,8 +1053,8 @@ export function Prompt(props: PromptProps) {
         category: "Prompt",
         hidden: true,
         onSelect: (dialog) => {
+          input.replaceText("")
           input.extmarks.clear()
-          input.clear()
           dialog.clear()
         },
       },
@@ -1245,6 +1288,9 @@ export function Prompt(props: PromptProps) {
     get focused() {
       return input.focused
     },
+    get submitPending() {
+      return submitPending
+    },
     get current() {
       return store.prompt
     },
@@ -1265,7 +1311,7 @@ export function Prompt(props: PromptProps) {
       input.gotoBufferEnd()
     },
     reset() {
-      input.clear()
+      input.replaceText("")
       input.extmarks.clear()
       setStore("prompt", {
         input: "",
@@ -1460,8 +1506,8 @@ export function Prompt(props: PromptProps) {
           input: store.prompt.input,
           parts: store.prompt.parts,
         })
+        input.replaceText("")
         input.extmarks.clear()
-        input.clear()
         setStore("prompt", { input: "", parts: [] })
         setStore("extmarkToPartIndex", new Map())
         dialog.clear()
@@ -1527,7 +1573,7 @@ export function Prompt(props: PromptProps) {
           "message",
           input.sessionID,
           produce((draft) => {
-            const index = draft.findIndex((item) => item.id > input.messageID)
+            const index = draft.findIndex((item) => compareSessionMessages(item, message) > 0)
             draft.splice(index < 0 ? draft.length : index, 0, message)
           }),
         )
@@ -1563,14 +1609,39 @@ export function Prompt(props: PromptProps) {
 
   function clearPromptForSubmit() {
     suppressPromptInputSync = true
+    // Keep the editor's in-memory undo point so a cleared draft can be
+    // recovered with Ctrl+_ without persisting prompt contents anywhere.
+    input.replaceText("")
     input.extmarks.clear()
-    input.clear()
     setStore("prompt", { input: "", parts: [] })
     setStore("extmarkToPartIndex", new Map())
     suppressPromptInputSync = false
   }
 
+  function handlePromptDraftHistoryKey(event: ParsedKey & { preventDefault: () => void; stopPropagation: () => void }) {
+    const action = promptDraftHistoryAction({
+      undo: keybind.match("input_undo", event),
+      redo: keybind.match("input_redo", event),
+      canUndo: input.editBuffer.canUndo(),
+      canRedo: input.editBuffer.canRedo(),
+    })
+    if (action === "undo") {
+      event.preventDefault()
+      event.stopPropagation()
+      input.undo()
+      return true
+    }
+    if (action === "redo") {
+      event.preventDefault()
+      event.stopPropagation()
+      input.redo()
+      return true
+    }
+    return false
+  }
+
   function restorePromptAfterSubmitFailure(prompt: PromptInfo) {
+    submitPending = false
     suppressPromptInputSync = true
     input.setText(prompt.input)
     input.cursorOffset = prompt.input.length
@@ -1581,6 +1652,7 @@ export function Prompt(props: PromptProps) {
   }
 
   async function submit() {
+    if (submitPending) return false
     setWarpNotice(undefined)
 
     // IME: double-defer may fire before onContentChange flushes the last
@@ -1623,8 +1695,8 @@ export function Prompt(props: PromptProps) {
         .some((item) => item.display === `/${name}` || item.aliases?.some((alias) => alias === `/${name}`))
     })
     if (store.mode !== "shell" && uiSlashInvocation && command.triggerSlash(uiSlashInvocation.name, uiSlashInvocation.arguments)) {
+      input.replaceText("")
       input.extmarks.clear()
-      input.clear()
       setStore("prompt", { input: "", parts: [] })
       setStore("extmarkToPartIndex", new Map())
       return true
@@ -1635,6 +1707,7 @@ export function Prompt(props: PromptProps) {
       return false
     }
     const submittedPrompt = promptSubmitParts(promptSnapshot)
+    submitPending = true
     clearPromptForSubmit()
     const modelConfig = await readModelsConfig(mend.root).catch(() => undefined)
     const configuredRole = Object.values(modelConfig?.roles || {}).find(
@@ -1966,6 +2039,8 @@ export function Prompt(props: PromptProps) {
     setStore("extmarkToPartIndex", new Map())
     props.onSubmit?.({ sessionID, messageID, inputRows: submittedInputRows })
 
+    if (props.sessionID) submitPending = false
+
     // temporary hack to make sure the message is sent
     if (!props.sessionID) {
       if (editorParts.length > 0) editor.preserveSelectionFromNewSession()
@@ -1976,7 +2051,6 @@ export function Prompt(props: PromptProps) {
         })
       }, 50)
     }
-    input.clear()
     return true
   }
   const exit = useExit()
@@ -3036,6 +3110,7 @@ export function Prompt(props: PromptProps) {
                     e.preventDefault()
                     return
                   }
+                  if (handlePromptDraftHistoryKey(e)) return
                   if (isTextareaNewlineKey(e, keybind.all)) markSubmitSuppressedForNewline()
                   // Check clipboard for images before terminal-handled paste runs.
                   // This helps terminals that forward Ctrl+V to the app; Windows
@@ -3054,7 +3129,7 @@ export function Prompt(props: PromptProps) {
                     // If no image, let the default paste behavior continue
                   }
                   if (keybind.match("input_clear", e) && store.prompt.input !== "") {
-                    input.clear()
+                    input.replaceText("")
                     input.extmarks.clear()
                     setStore("prompt", {
                       input: "",
@@ -3193,7 +3268,21 @@ export function Prompt(props: PromptProps) {
                   // default paste unless we suppress it first and handle insertion ourselves.
                   event.preventDefault()
 
+                  const isPortableImageClipboard = pastedContent.includes("![") && pastedContent.includes("data:image/")
+                  if (
+                    !isPortableImageClipboard &&
+                    shouldSummarizePastedContentWithThreshold(pastedContent, pasteSummaryMinChars()) &&
+                    kv.get("paste_summary_enabled", pasteSummaryDefaultEnabled())
+                  ) {
+                    if (!expandPastedText(pastedContent)) pasteText(pastedContent, pastedContentLabel(pastedContent))
+                    return
+                  }
+
                   const filepath = iife(() => {
+                    // Do not run path detection on a large text paste. Apart from
+                    // being unnecessary, it creates another full-size string and
+                    // delays the bounded placeholder path above.
+                    if (pastedContent.length > 8192 || pastedContent.includes("\n")) return ""
                     const raw = pastedContent.replace(/^['"]+|['"]+$/g, "")
                     if (raw.startsWith("file://")) {
                       try {
@@ -3233,7 +3322,7 @@ export function Prompt(props: PromptProps) {
                     } catch {}
                   }
 
-                  const portableImageTokens = parsePortableImageClipboard(pastedContent)
+                  const portableImageTokens = isPortableImageClipboard ? parsePortableImageClipboard(pastedContent) : undefined
                   if (portableImageTokens) {
                     for (const token of portableImageTokens) {
                       if (token.type === "text") {
@@ -3247,14 +3336,6 @@ export function Prompt(props: PromptProps) {
                         content: token.content,
                       })
                     }
-                    return
-                  }
-
-                  if (
-                    shouldSummarizePastedContentWithThreshold(pastedContent, pasteSummaryMinChars()) &&
-                    kv.get("paste_summary_enabled", pasteSummaryDefaultEnabled())
-                  ) {
-                    if (!expandPastedText(pastedContent)) pasteText(pastedContent, pastedContentLabel(pastedContent))
                     return
                   }
 

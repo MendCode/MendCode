@@ -22,6 +22,7 @@ import {
   homeSplitIdentityWidth,
   homeSplitLogoMaxWidth,
   resolveHomePromptTarget,
+  shouldOpenSelectedAgentViewSession,
 } from "@/cli/cmd/tui/routes/home"
 import { defaultTuiProfile } from "@/mend/profile"
 import { defaultHomeMascot } from "@/mend/tui/mascot"
@@ -37,6 +38,33 @@ describe("resolveHomePromptTarget", () => {
       historyScope: "project:workspace-1",
       sessionID: undefined,
     })
+  })
+})
+
+describe("shouldOpenSelectedAgentViewSession", () => {
+  test("does not let a pending new-session submit open the selected session", () => {
+    expect(
+      shouldOpenSelectedAgentViewSession({
+        promptInput: "",
+        submitPending: true,
+        selectedSessionID: "selected-session",
+      }),
+    ).toBe(false)
+  })
+
+  test("only opens a selected session for an empty, idle prompt", () => {
+    expect(
+      shouldOpenSelectedAgentViewSession({
+        promptInput: "",
+        selectedSessionID: "selected-session",
+      }),
+    ).toBe(true)
+    expect(
+      shouldOpenSelectedAgentViewSession({
+        promptInput: "new task",
+        selectedSessionID: "selected-session",
+      }),
+    ).toBe(false)
   })
 })
 

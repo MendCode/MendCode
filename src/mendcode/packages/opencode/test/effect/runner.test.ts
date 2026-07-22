@@ -137,7 +137,7 @@ describe("Runner", () => {
   )
 
   it.live(
-    "ensureRunning shares the queued run while preserving the active run",
+    "ensureRunning runs every queued work in FIFO order",
     Effect.gen(function* () {
       const s = yield* Scope.Scope
       const runner = Runner.make<string>(s)
@@ -153,11 +153,15 @@ describe("Runner", () => {
         yield* Deferred.await(queuedGate)
         return "queued"
       })
+      const secondQueued = Effect.gen(function* () {
+        yield* Ref.update(calls, (n) => n + 1)
+        return "second-queued"
+      })
       const a = yield* runner.ensureRunning(queued, { queue: true }).pipe(Effect.forkChild)
       yield* Effect.gen(function* () {
         while (runner.state._tag !== "RunningThenRun") yield* Effect.yieldNow
       }).pipe(Effect.timeout("250 millis"))
-      const b = yield* runner.ensureRunning(queued, { queue: true }).pipe(Effect.forkChild)
+      const b = yield* runner.ensureRunning(secondQueued, { queue: true }).pipe(Effect.forkChild)
       yield* Effect.sleep("10 millis")
 
       yield* Deferred.succeed(gate, undefined)
@@ -165,8 +169,8 @@ describe("Runner", () => {
 
       expect(yield* Fiber.join(first)).toBe("first")
       expect(yield* Fiber.join(a)).toBe("queued")
-      expect(yield* Fiber.join(b)).toBe("queued")
-      expect(yield* Ref.get(calls)).toBe(1)
+      expect(yield* Fiber.join(b)).toBe("second-queued")
+      expect(yield* Ref.get(calls)).toBe(2)
     }),
   )
 

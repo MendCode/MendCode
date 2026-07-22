@@ -25,34 +25,56 @@ describe("session route initialization", () => {
     expect(source).toContain("shouldDeferSessionFollowSync(sync.session.history(route.sessionID))")
   })
 
+  test("keeps loop card clicks scoped and restores each session scroll position", async () => {
+    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
+    const sessionV2 = await Bun.file(new URL("../../../src/cli/cmd/tui/feature-plugins/system/session-v2.tsx", import.meta.url)).text()
+
+    expect(source).toContain("const sessionScrollStates = new Map<string, SessionScrollState>()")
+    expect(source).toContain("const scheduleSessionScrollRestore = (sessionID: string, state?: SessionScrollState) =>")
+    expect(source).toContain("if (activeSessionID !== sessionID) rememberSessionScroll(activeSessionID)")
+    expect(source).toContain("onMouseUp={handleOpenTarget}")
+    expect(sessionV2).toContain("const handleOpenFirstLoop = () =>")
+    expect(sessionV2).toContain("onMouseUp={handleOpenFirstLoop}")
+  })
+
   test("settles submit with one post-render scroll and no stale editor spacer", async () => {
     const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
 
     expect(source).toContain("const scheduleSubmitBottomScroll = (sessionID: string) =>")
     expect(source).toContain("scheduleSubmitBottomScroll(options.submitSessionID)")
+    expect(source).toContain("if (options?.sync !== false) void sync.session.sync(route.sessionID, { force: true })")
+    expect(source).toContain("toBottom({\n      sync: false,\n      submitSessionID:")
     expect(source).toContain("if (submitBottomScrollSessionID === route.sessionID) return")
     expect(source).not.toContain("scheduleSubmitBottomScrollPasses")
     expect(source).not.toContain("submitViewportHold")
     expect(source).not.toContain("submittedPromptViewportHold")
   })
 
-  test("offers a reversible compacted tool-call command with a RAM warning", async () => {
+  test("offers a reversible compacted tool-call command with a bounded-loading warning", async () => {
     const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
 
     expect(source).toContain('value: "session.toggle.compacted_tool_calls"')
-    expect(source).toContain("can substantially increase RAM usage")
+    expect(source).toContain("progressively so long sessions stay responsive")
     expect(source).toContain("setShowCompactedToolCalls(() => enable)")
     expect(source).toContain("await sync.session.reloadMessages(route.sessionID)")
   })
 
-  test("keeps queued prompt actions on the header row", async () => {
+  test("keeps queued prompts in the transcript flow above the editor", async () => {
     const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
 
     expect(source).toContain('if (mode === "after-tools") return "Waiting for the current tool iteration to finish"')
     expect(source).toContain('return "Waiting for the current response to finish"')
-    expect(source).toContain("· {queuedPromptWaitLabel(sync.data.config.queue?.mode)}")
+    expect(source).toContain("const transcriptRows = createMemo")
+    expect(source).toContain("total: transcriptRows().length")
+    expect(source).toContain("sessionTranscriptRows(messages(), queuedMessageIDs())")
+    expect(source).toContain("<For each={visibleMessageIDs()}>")
+    expect(source).toContain("messageByID().get(messageID)")
+    expect(source).toContain("queuedMessageIDs().has(message().id)")
+    expect(source).not.toContain("queuedMessageRenderIDs")
+    expect(source).toMatch(/queued\s+sticky/)
     expect(source).toContain("bg: sendNowBackground()")
     expect(source).toContain('" ↗ SEND "')
-    expect(source).not.toContain("<Show when={queued() && props.onSendNow}>")
+    expect(source).not.toContain("paddingTop={1} paddingBottom={1}")
+    expect(source).not.toContain("pending={pending()}")
   })
 })

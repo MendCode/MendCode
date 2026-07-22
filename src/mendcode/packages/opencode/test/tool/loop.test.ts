@@ -220,6 +220,48 @@ describe("tool.loop", () => {
     ),
   )
 
+  it.live("persists daily cadence and timezone in loop metadata", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const registry = yield* ToolRegistry.Service
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ title: "Parent daily loop test" })
+          const agent = { name: "build", mode: "primary" as const, permission: [], options: {} }
+          const tool = (yield* registry.tools({
+            providerID: ProviderID.opencode,
+            modelID: ModelID.make("gpt-5"),
+            agent,
+          })).find((tool) => tool.id === LoopTool.id)
+          if (!tool) throw new Error("Loop tool not found")
+
+          const result = yield* tool.execute(
+            {
+              action: "draft",
+              objective: "Generate a daily report at 10:00.",
+              triggerMode: "daily",
+              dailyAt: "10:00",
+              timezone: "America/New_York",
+              intervalMs: 86_400_000,
+              budgetMode: "unbounded-monitor",
+            },
+            {
+              ...baseCtx,
+              sessionID: parent.id,
+              ask: () => Effect.void,
+            },
+          )
+
+          expect(result.metadata.triggerMode).toBe("daily")
+          expect(result.metadata.dailyAt).toBe("10:00")
+          expect(result.metadata.timezone).toBe("America/New_York")
+          expect(result.metadata.contractPreview?.wakeWhen).toContain("daily at 10:00 (America/New_York)")
+          expect(result.output).toContain("trigger: daily at 10:00 (America/New_York)")
+        }),
+      { git: true },
+    ),
+  )
+
   it.live("records explicit workspace isolation mode in show and list metadata", () =>
     provideTmpdirInstance(
       () =>

@@ -2,6 +2,7 @@ import { cmd } from "@/cli/cmd/cmd"
 import { tui } from "./app"
 import { Rpc } from "@/util/rpc"
 import { type rpc } from "./worker"
+import { spawn, type ChildProcess } from "child_process"
 import path from "path"
 import { fileURLToPath } from "url"
 import { UI } from "@/cli/ui"
@@ -24,6 +25,8 @@ import {
 import { validateSession } from "./validate-session"
 import { loadMendTuiProfile } from "@/mend/profile"
 import { ServerAuth } from "@/server/auth"
+import { SharedServer, type SharedServerState } from "./shared-server"
+import { isProcessMemoryUsage, processMemoryUsage, type DiagnosticsSnapshot } from "@/util/process-memory"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
@@ -58,11 +61,7 @@ export function resolveSharedServerURL(value?: string, environment = process.env
   return url.toString()
 }
 
-async function probeSharedServer(input: {
-  url: string
-  directory: string
-  headers?: RequestInit["headers"]
-}) {
+async function probeSharedServer(input: { url: string; directory: string; headers?: RequestInit["headers"] }) {
   const client = createOpencodeClient({
     baseUrl: input.url,
     directory: input.directory,
@@ -70,6 +69,140 @@ async function probeSharedServer(input: {
   })
   await client.global.health({ throwOnError: true })
   await client.session.list({ limit: 1 }, { throwOnError: true })
+}
+
+function sharedServerConnection(state: SharedServerState) {
+  return {
+    url: state.url,
+    headers: ServerAuth.headers({ username: state.username, password: state.password }),
+  }
+}
+
+async function connectToLocalSharedServer(directory: string) {
+  const state = await SharedServer.readState()
+  if (!state) return
+  const connection = sharedServerConnection(state)
+  try {
+    await probeSharedServer({ ...connection, directory })
+    return connection
+  } catch {
+    return
+  }
+}
+
+async function waitForLocalSharedServer(directory: string, timeoutMs = 12_000) {
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    const connection = await connectToLocalSharedServer(directory)
+    if (connection) return connection
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  return
+}
+
+function runtimeEntrypoint(runtimeCwd: string) {
+  const entry = process.argv[1]
+  if (!entry || !/(^|[\\/])src[\\/]index\.(?:ts|js)$/.test(entry)) return
+  return path.isAbsolute(entry) ? entry : path.resolve(runtimeCwd, entry)
+}
+
+function sharedServerCommand(runtimeCwd: string) {
+  const entry = runtimeEntrypoint(runtimeCwd)
+  if (!entry) {
+    return {
+      command: process.execPath,
+      args: ["serve", "--hostname", "127.0.0.1", "--port", "0"],
+      cwd: runtimeCwd,
+    }
+  }
+
+  const packageRoot = path.dirname(path.dirname(entry))
+  return {
+    command: process.execPath,
+    args: [
+      "--cwd",
+      packageRoot,
+      "--no-install",
+      "--conditions=browser",
+      entry,
+      "serve",
+      "--hostname",
+      "127.0.0.1",
+      "--port",
+      "0",
+    ],
+    cwd: packageRoot,
+  }
+}
+
+function sharedServerEnvironment(credentials: ReturnType<typeof SharedServer.credentials>) {
+  const env = { ...process.env }
+  for (const key of [
+    "MENDCODE_ROOT",
+    "OPENCODE_ROOT",
+    "MENDCODE_CONFIG_DIR",
+    "OPENCODE_CONFIG_DIR",
+    "MENDCODE_CONFIG",
+    "OPENCODE_CONFIG",
+    "MENDCODE_DB",
+    "OPENCODE_DB",
+    "MENDCODE_TUI_CONFIG",
+    "OPENCODE_TUI_CONFIG",
+    "MENDCODE_SHELL_CWD",
+    "MENDCODE_PUBLIC_BIN",
+    "OPENCODE_PROCESS_ROLE",
+    "OPENCODE_RUN_ID",
+  ]) {
+    delete env[key]
+  }
+  return {
+    ...env,
+    MENDCODE_SERVER_USERNAME: credentials.username,
+    MENDCODE_SERVER_PASSWORD: credentials.password,
+    OPENCODE_SERVER_USERNAME: credentials.username,
+    OPENCODE_SERVER_PASSWORD: credentials.password,
+    MENDCODE_SHARED_SERVER_STATE_FILE: SharedServer.statePath(),
+  }
+}
+
+async function ensureLocalSharedServer(input: { directory: string; runtimeCwd: string }) {
+  const existing = await connectToLocalSharedServer(input.directory)
+  if (existing) return existing
+
+  const release = await SharedServer.acquireLock()
+  if (!release) return waitForLocalSharedServer(input.directory)
+
+  let child: ChildProcess | undefined
+  let connected = false
+  try {
+    const startedByAnotherClient = await connectToLocalSharedServer(input.directory)
+    if (startedByAnotherClient) {
+      connected = true
+      return startedByAnotherClient
+    }
+
+    await SharedServer.clearState()
+    const credentials = SharedServer.credentials()
+    const command = sharedServerCommand(input.runtimeCwd)
+    child = spawn(command.command, command.args, {
+      cwd: command.cwd,
+      env: sharedServerEnvironment(credentials),
+      detached: true,
+      stdio: "ignore",
+    })
+    child.on("error", () => undefined)
+    child.unref()
+
+    const started = await waitForLocalSharedServer(input.directory)
+    if (!started) return
+    connected = true
+    return started
+  } catch {
+    return
+  } finally {
+    if (!connected) child?.kill()
+    await release()
+  }
 }
 
 function createWorkerFetch(client: RpcClient): typeof fetch {
@@ -112,6 +245,17 @@ async function input(value?: string) {
   if (!value) return piped
   if (!piped) return value
   return piped + "\n" + value
+}
+
+async function readServerDiagnostics(transport: ThreadTransport) {
+  const request = transport.fetch ?? fetch
+  const response = await request(new URL("/global/diagnostics/memory", transport.url), {
+    headers: transport.headers,
+  })
+  if (!response.ok) throw new Error(`diagnostics endpoint returned HTTP ${response.status}`)
+  const value: unknown = await response.json()
+  if (!isProcessMemoryUsage(value)) throw new Error("diagnostics endpoint returned an invalid response")
+  return value
 }
 
 export function resolveThreadDirectory(project?: string, envPWD = process.env.PWD, cwd = process.cwd()) {
@@ -163,7 +307,17 @@ export const TuiThreadCommand = cmd({
       })
       .option("server-url", {
         type: "string",
-        describe: "connect to an existing MendCode server instead of starting a local worker (or use MENDCODE_SERVER_URL)",
+        describe:
+          "connect to an existing MendCode server instead of starting a local worker (or use MENDCODE_SERVER_URL)",
+      })
+      .option("isolated", {
+        type: "boolean",
+        describe: "run with a private local worker instead of the shared local server",
+      })
+      .option("diagnostics", {
+        type: "boolean",
+        default: false,
+        describe: "enable the on-demand diagnostics commands",
       }),
   handler: async (args) => {
     // Keep ENABLE_PROCESSED_INPUT cleared even if other code flips it.
@@ -173,6 +327,7 @@ export const TuiThreadCommand = cmd({
       // Must be the very first thing — disables CTRL_C_EVENT before any Worker
       // spawn or async work so the OS cannot kill the process group.
       win32DisableProcessedInput()
+      const runtimeCwd = process.cwd()
 
       if (args.fork && !args.continue && !args.session) {
         UI.error("--fork requires --continue or --session")
@@ -213,7 +368,7 @@ export const TuiThreadCommand = cmd({
         return
       }
 
-      const sharedServerHeaders = sharedServerURL ? ServerAuth.headers() : undefined
+      let sharedServerHeaders = sharedServerURL ? ServerAuth.headers() : undefined
       let sharedServer = sharedServerURL
       if (sharedServer) {
         try {
@@ -223,9 +378,21 @@ export const TuiThreadCommand = cmd({
             UI.Style.TEXT_WARNING_BOLD +
               "! " +
               UI.Style.TEXT_NORMAL +
-              `Shared server unavailable; falling back to the local worker. ${errorMessage(error)}`,
+              `Shared server unavailable; falling back to the local runtime. ${errorMessage(error)}`,
           )
           sharedServer = undefined
+        }
+      }
+
+      const isolated =
+        args.isolated ||
+        process.env.MENDCODE_DISABLE_SHARED_SERVER === "1" ||
+        process.env.OPENCODE_DISABLE_SHARED_SERVER === "1"
+      if (!sharedServer && !isolated && !networkOptionSet) {
+        const local = await ensureLocalSharedServer({ directory: cwd, runtimeCwd })
+        if (local) {
+          sharedServer = local.url
+          sharedServerHeaders = local.headers
         }
       }
 
@@ -332,12 +499,30 @@ export const TuiThreadCommand = cmd({
       try {
         await tui({
           url: transport.url,
-          async onSnapshot() {
-            const tui = writeHeapSnapshot("tui.heapsnapshot")
-            if (!client) return [tui]
-            const server = await client.call("snapshot", undefined)
-            return [tui, server]
-          },
+          ...(args.diagnostics
+            ? {
+                async onSnapshot() {
+                  const tui = writeHeapSnapshot("tui.heapsnapshot")
+                  if (!client) return [tui]
+                  const server = await client.call("snapshot", undefined)
+                  return [tui, server]
+                },
+                async onDiagnostics(): Promise<DiagnosticsSnapshot> {
+                  const tui = processMemoryUsage("tui")
+                  try {
+                    return {
+                      tui,
+                      server: await readServerDiagnostics(transport),
+                    }
+                  } catch (error) {
+                    return {
+                      tui,
+                      serverError: errorMessage(error),
+                    }
+                  }
+                },
+              }
+            : {}),
           config,
           mendProfile,
           directory: cwd,

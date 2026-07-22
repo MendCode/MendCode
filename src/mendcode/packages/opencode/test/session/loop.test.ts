@@ -7,6 +7,7 @@ import {
   LoopID,
   RunID,
   Service as LoopWorkflowService,
+  nextDailyWakeup,
   type CreateDraftInput,
   type FailureClass,
   type GoalStatus,
@@ -134,7 +135,7 @@ const svc = {
   listGlobal() {
     return run(LoopWorkflowService.use((loop) => loop.listGlobal()))
   },
-  listGlobalPage(input?: { offset?: number; limit?: number; selectedID?: LoopID }) {
+  listGlobalPage(input?: { offset?: number; limit?: number; selectedID?: LoopID; scope?: "all" | "project" }) {
     return run(LoopWorkflowService.use((loop) => loop.listGlobalPage(input)))
   },
   runOnce(id: LoopID) {
@@ -171,6 +172,37 @@ afterEach(async () => {
 })
 
 describe("loop workflow service", () => {
+  test("calculates the next daily wakeup in the requested IANA timezone", () => {
+    expect(nextDailyWakeup(Date.parse("2026-07-17T13:30:00Z"), "10:00", "America/New_York")).toBe(Date.parse("2026-07-17T14:00:00Z"))
+    expect(nextDailyWakeup(Date.parse("2026-07-17T14:00:01Z"), "10:00", "America/New_York")).toBe(Date.parse("2026-07-18T14:00:00Z"))
+    expect(nextDailyWakeup(Date.parse("2026-07-17T09:00:00Z"), "10:00", "UTC")).toBe(Date.parse("2026-07-17T10:00:00Z"))
+  })
+
+  test("skips a nonexistent DST wall-clock time instead of scheduling the wrong hour", () => {
+    expect(nextDailyWakeup(Date.parse("2026-03-08T06:00:00Z"), "02:30", "America/New_York")).toBe(Date.parse("2026-03-09T06:30:00Z"))
+  })
+
+  test("activates daily loops with a durable next wakeup and due filtering", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Daily report",
+          objective: "Generate the daily report.",
+          trigger: { mode: "daily", dailyAt: "10:00", timezone: "UTC", intervalMs: 60_000 },
+          budgetMode: "unbounded-monitor",
+        })
+        const active = await svc.activate(draft.id)
+        expect(active.spec.trigger).toEqual({ mode: "daily", dailyAt: "10:00", timezone: "UTC" })
+        expect(active.state).toBe("sleeping")
+        expect(active.nextWakeup).toBeGreaterThan(Date.now())
+        expect((await svc.due(active.nextWakeup! - 1)).map((item) => item.id)).not.toContain(active.id)
+        expect((await svc.due(active.nextWakeup! + 1)).map((item) => item.id)).toContain(active.id)
+      },
+    })
+  })
+
   test("keeps execution lists project-scoped while exposing global dashboard entries", async () => {
     await using first = await tmpdir({ git: true })
     await using second = await tmpdir({ git: true })
@@ -191,6 +223,29 @@ describe("loop workflow service", () => {
         expect(global.map((item) => item.id)).toEqual(expect.arrayContaining([firstDraft.id, secondDraft.id]))
         expect(global.find((item) => item.id === firstDraft.id)?.project.worktree).toBe(first.path)
         expect(global.find((item) => item.id === secondDraft.id)?.project.worktree).toBe(second.path)
+      },
+    })
+  })
+
+  test("can scope the global dashboard page to the current project", async () => {
+    await using first = await tmpdir({ git: true })
+    await using second = await tmpdir({ git: true })
+    const firstDraft = await WithInstance.provide({
+      directory: first.path,
+      fn: () => svc.createDraft({ name: "First scoped loop", objective: "Keep the first project visible." }),
+    })
+    const secondDraft = await WithInstance.provide({
+      directory: second.path,
+      fn: () => svc.createDraft({ name: "Second scoped loop", objective: "Keep the second project visible." }),
+    })
+
+    await WithInstance.provide({
+      directory: first.path,
+      fn: async () => {
+        const projectPage = await svc.listGlobalPage({ limit: 100, scope: "project" })
+        expect(projectPage.history.map((item) => item.id)).toContain(firstDraft.id)
+        expect(projectPage.history.map((item) => item.id)).not.toContain(secondDraft.id)
+        expect(projectPage.page.total).toBe(1)
       },
     })
   })
@@ -273,7 +328,7 @@ describe("loop workflow service", () => {
             .run()
         })
 
-        const page = await svc.listGlobalPage({ limit: 1 })
+        const page = await svc.listGlobalPage({ limit: 1, selectedID: draft.id })
         expect(page.active.map((item) => item.id)).not.toContain(draft.id)
         expect(page.history.map((item) => item.id)).toContain(draft.id)
         expect(page.page.total).toBeGreaterThan(0)
@@ -806,6 +861,61 @@ describe("loop workflow service", () => {
     })
   })
 
+  test("recovers a dead worker process before its lease expires and clears generating state", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Process crash recovery",
+          objective: "Recover when the loop worker dies during generation.",
+          trigger: { mode: "interval", intervalMs: 120_000 },
+        })
+        const active = await svc.activate(draft.id)
+        const worker = Bun.spawn(["true"])
+        await worker.exited
+        const stuck = await svc.startRunWithLease(draft.id, `loop-runner:${worker.pid}:worker-token`)
+        Database.use((db) => {
+          const run = db.select().from(LoopRunTable).where(eq(LoopRunTable.id, stuck.id)).get()!
+          const now = Date.now()
+          db.update(LoopRunTable)
+            .set({
+              data: {
+                ...run.data,
+                lease: {
+                  holder: `loop-runner:${worker.pid}:worker-token`,
+                  acquired: now - 1_000,
+                  heartbeat: now - 1_000,
+                  expires: now + 60 * 60 * 1000,
+                },
+              },
+            })
+            .where(eq(LoopRunTable.id, stuck.id))
+            .run()
+          db.insert(SessionStatusTable)
+            .values({
+              session_id: active.rootSessionID!,
+              time_created: now,
+               time_updated: now,
+               data: { type: "busy" },
+            })
+            .onConflictDoUpdate({
+               target: SessionStatusTable.session_id,
+               set: { time_updated: now, data: { type: "busy" } },
+            })
+            .run()
+        })
+
+        const recovered = await svc.snapshot(draft.id)
+        expect(recovered.workflow).toMatchObject({ state: "sleeping", phase: "waiting", nextWakeup: expect.any(Number) })
+        expect(recovered.runs[0]).toMatchObject({ id: stuck.id, state: "failed", phase: "stale" })
+        expect(Database.use((db) => db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, active.rootSessionID!)).get())).toBeUndefined()
+        expect(Database.use((db) => db.select().from(LoopThreadTable).where(eq(LoopThreadTable.workflow_id, draft.id)).get()?.state)).toBe("queued")
+        expect(Database.use((db) => db.select().from(BackgroundSessionTable).where(eq(BackgroundSessionTable.session_id, active.rootSessionID!)).get()?.data.state)).toBe("queued")
+      },
+    })
+  })
+
   test("stale leased runs are also reconciled while the workflow is paused mid-iteration", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
@@ -977,6 +1087,24 @@ describe("loop workflow service", () => {
     })
   })
 
+  test("max-goal loops do not invent a budget when no cap is configured", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Uncapped goal",
+          objective: "Keep working until the goal is verified.",
+          budgetMode: "max-goal",
+        })
+        const active = await svc.activate(draft.id)
+
+        expect(active.policy.maxTurns).toBeUndefined()
+        expect(active.spec.costBudget).toBeUndefined()
+      },
+    })
+  })
+
   test("unbounded monitor loops omit the turn cap even when maxTurns is supplied", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
@@ -1021,6 +1149,77 @@ describe("loop workflow service", () => {
         expect(snapshot.workflow.nextWakeup).toBeGreaterThan(Date.now())
         expect(snapshot.workflow.metrics.turns).toBe(1)
         expect(snapshot.events.at(-1)?.data?.completed).toBe(false)
+      },
+    })
+  })
+
+  test("unbounded scheduled monitors keep cadence when a checkpoint reports an informational blocker", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Blocked hourly monitor",
+          objective: "Keep monitoring and report stale inputs without stopping the schedule.",
+          trigger: { mode: "interval", intervalMs: 3_600_000 },
+          budgetMode: "unbounded-monitor",
+        })
+        await svc.activate(draft.id)
+
+        const started = await svc.startRun(draft.id)
+        await svc.completeRun(draft.id, started.id, { status: "blocked", summary: "Inputs are stale; report blocked_stale_data." })
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("sleeping")
+        expect(snapshot.workflow.phase).toBe("waiting")
+        expect(snapshot.workflow.nextWakeup).toBeDefined()
+        expect(snapshot.runs[0]?.state).toBe("completed")
+        const nextWakeup = Number(snapshot.workflow.nextWakeup)
+        expect(nextWakeup).toBeGreaterThan(Date.now())
+        expect((await svc.due(nextWakeup + 1)).map((item) => item.id)).toContain(draft.id)
+      },
+    })
+  })
+
+  test("rehydrates legacy blocked scheduled monitors without losing their cadence", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Legacy blocked monitor",
+          objective: "Recover a scheduled monitor persisted by an older runner.",
+          trigger: { mode: "daily", dailyAt: "10:00", timezone: "UTC" },
+          budgetMode: "unbounded-monitor",
+        })
+        await svc.activate(draft.id)
+        Database.use((db) =>
+          db.update(LoopWorkflowTable)
+            .set({ next_wakeup: Date.now() - 1 })
+            .where(eq(LoopWorkflowTable.id, draft.id))
+            .run(),
+        )
+        const started = await svc.startRun(draft.id)
+        await svc.completeRun(draft.id, started.id, { status: "blocked", summary: "Stale data was reported." })
+
+        Database.use((db) => {
+          const now = Date.now()
+          const run = db.select().from(LoopRunTable).where(eq(LoopRunTable.id, started.id)).get()!
+          db.update(LoopRunTable)
+            .set({ state: "blocked", phase: "blocked", next_wakeup: null, time_updated: now, time_ended: now })
+            .where(eq(LoopRunTable.id, run.id))
+            .run()
+          db.update(LoopWorkflowTable)
+            .set({ state: "blocked", phase: "blocked", next_wakeup: null, time_updated: now })
+            .where(eq(LoopWorkflowTable.id, draft.id))
+            .run()
+        })
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("sleeping")
+        expect(snapshot.workflow.phase).toBe("waiting")
+        expect(snapshot.workflow.nextWakeup).toBeDefined()
+        expect(snapshot.events.at(-1)?.title).toBe("Scheduled monitor resumed")
       },
     })
   })
@@ -1602,6 +1801,34 @@ describe("loop workflow service", () => {
         expect(skipped.value.summary).toContain("skipping duplicate execution")
         expect(skipped.prompts).toBe(0)
         expect((await svc.snapshot(draft.id)).workflow.metrics.turns).toBe(0)
+      },
+    })
+  })
+
+  test("loop runner does not restart blocked workflows or spend another run", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Blocked safety gate",
+          objective: "Do not restart after a safety gate blocks the workflow.",
+          trigger: { mode: "interval", intervalMs: 60_000 },
+        })
+        await svc.activate(draft.id)
+        const first = await svc.startRun(draft.id)
+        await svc.completeRun(draft.id, first.id, {
+          status: "blocked",
+          summary: "A safety gate requires operator action.",
+        })
+
+        const skipped = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })))
+
+        expect(skipped.value).toMatchObject({ workflowID: draft.id, state: "skipped" })
+        expect(skipped.value.summary).toContain("blocked")
+        expect(skipped.prompts).toBe(0)
+        expect((await svc.snapshot(draft.id)).runs).toHaveLength(1)
+        await expect(svc.startRun(draft.id)).rejects.toThrow()
       },
     })
   })

@@ -12,6 +12,7 @@ import { ModelID, ProviderID } from "../provider/schema"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction, hasAcceptedPlanReview, latestAcceptedPlanReviewContext } from "./compaction"
+import { modelContextLimit } from "./overflow"
 import { Bus } from "../bus"
 import { ProviderTransform } from "@/provider/transform"
 import { SystemPrompt } from "./system"
@@ -63,19 +64,19 @@ import { readPromptMode } from "@/mend/prompt/mode"
 import { composePromptPolicy } from "@/mend/prompt/compose"
 import { enforceMflowBeforeEdit, releaseMflowLocks, waitMflowBeforeRead } from "@/mend/config/mflow"
 import { reviewContextForAssistant } from "@/cli/cmd/tui/routes/changes/review-actions"
+import {
+  createShellOutputDeltaBuffer,
+  SHELL_OUTPUT_UPDATE_INTERVAL,
+  shellLiveOutput,
+} from "@/tool/shell-output"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
 
-const SHELL_OUTPUT_UPDATE_INTERVAL = 250
-const SHELL_LIVE_OUTPUT_MAX_CHARS = 30_000
 const RETAINED_SUBTASK_OUTPUT_MAX_CHARS = 32_000
 const SESSION_TITLE_REFRESH_INTERVAL = 15
-
-function shellLiveOutput(text: string) {
-  if (text.length <= SHELL_LIVE_OUTPUT_MAX_CHARS) return text
-  return "...\n\n" + text.slice(-SHELL_LIVE_OUTPUT_MAX_CHARS)
-}
+const MAX_AUTO_RESCUE_WITHOUT_PROGRESS = 2
+const PREFLIGHT_HARD_OVERFLOW_MARGIN = 1.05
 
 function retainedSubtaskText(input: string) {
   if (input.length <= RETAINED_SUBTASK_OUTPUT_MAX_CHARS) return input
@@ -163,12 +164,15 @@ export function shouldResumeAfterActiveCompaction(_finish: string | undefined) {
   return true
 }
 
-function latestCompactionDiscardedTail(messages: MessageV2.WithParts[]) {
-  return Boolean(
-    messages
-      .findLast((message) => message.parts.some((part) => part.type === "compaction"))
-      ?.parts.some((part) => part.type === "compaction" && part.discard_tail === true),
-  )
+export function shouldPreflightPromptOverflow(input: {
+  promptOverflow: boolean
+  promptTokens: number
+  hardLimit: number
+  previousContextAtThreshold?: boolean
+}) {
+  if (!input.promptOverflow) return false
+  if (input.previousContextAtThreshold === undefined || input.previousContextAtThreshold) return true
+  return input.hardLimit > 0 && input.promptTokens >= input.hardLimit * PREFLIGHT_HARD_OVERFLOW_MARGIN
 }
 
 export function shouldCheckFinishedAssistantForAutoCompaction(input: {
@@ -195,6 +199,36 @@ function isInternalUserMessage(message: MessageV2.WithParts) {
         part.metadata?.compaction_post_prompt === true,
     )
   )
+}
+
+export function autoRescueCompactionCount(messages: MessageV2.WithParts[]) {
+  let count = 0
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.info.role === "user" && !isInternalUserMessage(message)) break
+    for (const part of message.parts) {
+      if (part.type !== "compaction" || part.discard_tail !== true) continue
+      count = Math.max(count, part.rescue_attempt ?? 1)
+    }
+  }
+  return count
+}
+
+export function shouldResumeAfterAutoRescueCompaction(messages: MessageV2.WithParts[]) {
+  const latestRescueIndex = messages.findLastIndex((message) =>
+    message.info.role === "user" && message.parts.some((part) => part.type === "compaction" && part.discard_tail === true),
+  )
+  if (latestRescueIndex < 0) return true
+
+  // A long-running request may need more than two rescue compactions. Keep
+  // resuming while the model produced real work after the previous rescue;
+  // only stop after repeated rescues that made no progress at all.
+  const madeProgress = messages
+    .slice(latestRescueIndex + 1)
+    .some((message) => message.info.role === "assistant" && message.info.summary !== true)
+  if (madeProgress) return true
+
+  return autoRescueCompactionCount(messages) < MAX_AUTO_RESCUE_WITHOUT_PROGRESS
 }
 
 function internalUserParentID(message: MessageV2.WithParts) {
@@ -226,6 +260,11 @@ export function promptRunMessages(input: {
 
   const initialMessageIDs = input.initialMessageIDs ?? new Set<string>()
   const includedUserMessageIDs = new Set<string>([targetMessageID])
+  for (const message of input.messages.slice(0, targetIndex + 1)) {
+    if (message.info.role === "user" && isInternalUserMessage(message)) {
+      includedUserMessageIDs.add(message.info.id)
+    }
+  }
   for (const message of input.messages.slice(targetIndex + 1)) {
     if (message.info.role !== "user") continue
     if (!isInternalUserMessage(message)) {
@@ -235,6 +274,22 @@ export function promptRunMessages(input: {
       continue
     }
     if (initialMessageIDs.has(message.info.id)) continue
+    const isCompletedCompactionFollowup = message.parts.some(
+      (part) =>
+        part.type === "text" &&
+        (part.metadata?.compaction_continue === true || part.metadata?.compaction_post_prompt === true),
+    )
+    if (
+      isCompletedCompactionFollowup &&
+      input.messages.some(
+        (candidate) =>
+          candidate.info.role === "assistant" &&
+          candidate.info.parentID === message.info.id &&
+          candidate.info.finish,
+      )
+    ) {
+      continue
+    }
     const parentID = internalUserParentID(message)
     if (!parentID || includedUserMessageIDs.has(parentID)) includedUserMessageIDs.add(message.info.id)
   }
@@ -1368,14 +1423,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 forceKillAfter: "3 seconds",
               })
               const handle = yield* spawner.spawn(cmd)
-              let pendingDelta = ""
+              const pendingDelta = createShellOutputDeltaBuffer()
               let lastOutputUpdate = 0
               const flushOutput = Effect.fnUntraced(function* (force?: boolean) {
-                if (!pendingDelta) return
+                if (!pendingDelta.hasPending()) return
                 const now = Date.now()
                 if (!force && now - lastOutputUpdate < SHELL_OUTPUT_UPDATE_INTERVAL) return
-                const delta = pendingDelta
-                pendingDelta = ""
+                const delta = pendingDelta.take()
+                if (!delta) return
                 lastOutputUpdate = now
                 yield* bus.publish(SessionEvent.Shell.Output, {
                   sessionID: input.sessionID,
@@ -1391,7 +1446,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               yield* Stream.runForEach(Stream.decodeText(handle.all), (chunk) =>
                 Effect.gen(function* () {
                   output += chunk
-                  pendingDelta += chunk
+                  pendingDelta.append(chunk)
                   yield* flushOutput()
                 }),
               )
@@ -1940,7 +1995,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         yield* slog.info("loop", { step })
 
         let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
-        initialMessageIDs ??= new Set(msgs.map((message) => message.info.id))
+        if (!initialMessageIDs) {
+          const targetIndex = targetMessageID ? msgs.findIndex((message) => message.info.id === targetMessageID) : -1
+          initialMessageIDs = new Set(
+            (targetIndex >= 0 ? msgs.slice(0, targetIndex + 1) : msgs).map((message) => message.info.id),
+          )
+        }
         msgs = promptRunMessages({ messages: msgs, targetMessageID, initialMessageIDs, includeQueuedUserMessages })
 
         let lastUser: MessageV2.User | undefined
@@ -2023,7 +2083,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               agent: lastUser.agent,
               model: lastUser.model,
               auto: true,
-              resume: false,
+              resume: shouldResumeAfterAutoCompaction(lastFinished.finish),
             })
             continue
           }
@@ -2143,25 +2203,50 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             ...modelMsgs,
             ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : []),
           ]
-          const promptTokens = Token.estimatePayload({
-            system,
-            messages: streamMessages,
-            tools: Object.fromEntries(
-              Object.entries(tools).map(([name, item]) => {
-                const toolInfo = item as Record<string, unknown>
-                return [
-                  name,
-                  {
-                    description: toolInfo.description,
-                    inputSchema: toolInfo.inputSchema ?? toolInfo.parameters,
-                  },
-                ]
-              }),
-            ),
-          })
-          if (yield* compaction.isPromptOverflow({ tokens: promptTokens, model, respectAuto: false, mode: "hard" })) {
+           const promptTokens = Token.estimatePayload({
+             system,
+             messages: streamMessages,
+             tools: Object.fromEntries(
+               Object.entries(tools).map(([name, item]) => {
+                 const toolInfo = item as Record<string, unknown>
+                 return [
+                   name,
+                   {
+                     description: toolInfo.description,
+                     inputSchema: toolInfo.inputSchema ?? toolInfo.parameters,
+                   },
+                 ]
+               }),
+             ),
+           })
+           const previousContextTokens = lastFinished
+             ? lastFinished.tokens.input +
+               lastFinished.tokens.output +
+               lastFinished.tokens.reasoning +
+               lastFinished.tokens.cache.read +
+               lastFinished.tokens.cache.write
+             : undefined
+           const previousContextAtThreshold =
+             previousContextTokens === undefined
+               ? undefined
+               : yield* compaction.isPromptOverflow({
+                   tokens: previousContextTokens,
+                   model,
+                   respectAuto: false,
+                   mode: "threshold",
+                 })
+           const promptOverflow = yield* compaction.isPromptOverflow({
+             tokens: promptTokens,
+             model,
+             respectAuto: false,
+             mode: "hard",
+           })
+           const hardLimit = modelContextLimit({ model })
+           if (shouldPreflightPromptOverflow({ promptOverflow, promptTokens, hardLimit, previousContextAtThreshold })) {
             const duplicateAutoCompaction = shouldSkipAutoCompaction(msgs)
-            const rescueAlreadyAttempted = latestCompactionDiscardedTail(msgs)
+            const rescueCompactions = autoRescueCompactionCount(msgs)
+            const rescueAlreadyAttempted = rescueCompactions > 0
+            const canResumeAfterRescue = shouldResumeAfterAutoRescueCompaction(msgs)
             yield* slog.warn("pre-provider compaction", {
               promptTokens,
               reason: duplicateAutoCompaction
@@ -2177,12 +2262,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               model: lastUser.model,
               auto: true,
               overflow: true,
-              resume: !duplicateAutoCompaction || !rescueAlreadyAttempted,
+              resume: !duplicateAutoCompaction || canResumeAfterRescue,
               discardTail: duplicateAutoCompaction,
+              rescueAttempt: duplicateAutoCompaction ? rescueCompactions + 1 : undefined,
               instructions: duplicateAutoCompaction
-                ? rescueAlreadyAttempted
-                  ? "The prompt still exceeded the provider/model context after the preserved tail was discarded. Produce the smallest final rescue summary without auto-resuming; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
-                  : "Synthetic resume still exceeded the provider/model context before dispatch. Replace the preserved tail with the smallest useful rescue summary, then resume once; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
+                ? canResumeAfterRescue
+                  ? rescueAlreadyAttempted
+                    ? "Synthetic resume still exceeded the provider/model context. Replace the preserved tail with a smaller rescue summary, then resume once; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
+                    : "Synthetic resume still exceeded the provider/model context before dispatch. Replace the preserved tail with the smallest useful rescue summary, then resume once; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
+                  : "The prompt still exceeded the provider/model context after the preserved tail was discarded. Produce the smallest final rescue summary without auto-resuming; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
                 : "The provider prompt exceeded the effective context threshold before dispatch. Preserve the active request, latest TODO/tool state, changed files, and verification evidence; if provider compaction is also too large, use local rescue.",
             })
             return "continue" as const
@@ -2225,7 +2313,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           if (result === "stop") return "break" as const
           if (result === "compact") {
             if (shouldSkipAutoCompaction(msgs)) {
-              const rescueAlreadyAttempted = latestCompactionDiscardedTail(msgs)
+              const rescueCompactions = autoRescueCompactionCount(msgs)
+              const canResumeAfterRescue = shouldResumeAfterAutoRescueCompaction(msgs)
               yield* slog.warn("duplicate auto compaction requires rescue", {
                 reason: "synthetic resume still exceeded provider/model context",
               })
@@ -2244,12 +2333,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 model: lastUser.model,
                 auto: true,
                 overflow: true,
-                resume: !rescueAlreadyAttempted,
+                resume: canResumeAfterRescue,
                 discardTail: true,
-                instructions:
-                  rescueAlreadyAttempted
-                    ? "The prompt still exceeded the provider/model context after the preserved tail was discarded. Produce the smallest final rescue summary without auto-resuming; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
-                    : "Synthetic resume still exceeded the provider/model context. Replace the preserved tail with a smaller rescue summary, then resume once; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference.",
+                rescueAttempt: rescueCompactions + 1,
+                instructions: canResumeAfterRescue
+                  ? "Synthetic resume still exceeded the provider/model context. Replace the preserved tail with a smaller rescue summary, then resume once; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference."
+                  : "The prompt still exceeded the provider/model context after the preserved tail was discarded. Produce the smallest final rescue summary without auto-resuming; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference.",
               })
               return "continue" as const
             }

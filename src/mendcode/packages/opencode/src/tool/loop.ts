@@ -9,7 +9,7 @@ import { loopServiceArgsFromConfig, loopServiceStart } from "@/mend/runtime/loop
 import { Provider } from "@/provider/provider"
 
 const Action = Schema.Literals(["draft", "activate", "show", "list", "pause", "resume", "stop", "delete", "run_once", "update_agent", "signal", "override"])
-const TriggerMode = Schema.Literals(["manual", "interval", "adaptive", "external-signal", "self-paced"])
+const TriggerMode = Schema.Literals(["manual", "interval", "daily", "adaptive", "external-signal", "self-paced"])
 const PermissionMode = Schema.Literals(["report-only", "normal", "custom"])
 const BudgetMode = Schema.Literals(["fixed", "max-goal", "unbounded-monitor"])
 const EvaluationMode = Schema.Literals(["legacy", "deterministic", "independent"])
@@ -31,10 +31,16 @@ export const Parameters = Schema.Struct({
     description: "Durable loop objective. Required when creating a draft or activating a new loop.",
   }),
   triggerMode: Schema.optional(TriggerMode).annotate({
-    description: "How the loop wakes up. Use manual for on-demand tests or interval for scheduled background loops.",
+    description: "How the loop wakes up. Use manual for on-demand tests, interval for elapsed-time polling, or daily for a timezone-aware HH:mm schedule.",
   }),
   intervalMs: Schema.optional(Schema.Number).annotate({
-    description: "Interval in milliseconds when triggerMode is interval.",
+    description: "Interval in milliseconds when triggerMode is interval; omit it for daily triggers.",
+  }),
+  dailyAt: Schema.optional(Schema.String).annotate({
+    description: "Local 24-hour time for a daily trigger, formatted as HH:mm.",
+  }),
+  timezone: Schema.optional(Schema.String).annotate({
+    description: "Timezone for dailyAt. Accepts UTC, GMT, or any valid IANA timezone such as America/New_York or Europe/Madrid. Defaults to the local timezone.",
   }),
   maxTurns: Schema.optional(Schema.Number).annotate({
     description:
@@ -75,13 +81,13 @@ export const Parameters = Schema.Struct({
   }),
   budgetMode: Schema.optional(BudgetMode).annotate({
     description:
-      "Loop budget semantics: fixed runs exactly to maxTurns, max-goal uses maxTurns as a cap and completes as soon as the goal is verified, unbounded-monitor omits maxTurns and runs until stopped/blocker.",
+      "Loop budget semantics: fixed runs exactly to a positive maxTurns cap, max-goal uses an optional maxTurns cap and completes as soon as the goal is verified, unbounded-monitor omits maxTurns and runs until stopped/blocker.",
   }),
   maxCost: Schema.optional(Schema.Number).annotate({
-    description: "Optional lifetime model cost budget for the loop when usage metadata is available.",
+    description: "Optional lifetime model cost budget for the loop when usage metadata is available; omit it when Setup has no budget configured.",
   }),
   maxTokens: Schema.optional(Schema.Number).annotate({
-    description: "Optional lifetime token budget for the loop when usage metadata is available.",
+    description: "Optional lifetime token budget for the loop when usage metadata is available; omit it when Setup has no budget configured or when no per-loop cap was explicitly requested.",
   }),
   approvalRequiredFor: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Approval-required action classes for this loop, such as push, merge, release, external-send, destructive-shell, or broad-refactor.",
@@ -221,9 +227,12 @@ type WorkflowListMetadata = {
   objective?: LoopWorkflow.Info["objective"]
   triggerMode?: NonNullable<LoopWorkflow.Info["spec"]["trigger"]>["mode"]
   intervalMs?: NonNullable<LoopWorkflow.Info["spec"]["trigger"]>["intervalMs"]
+  dailyAt?: NonNullable<LoopWorkflow.Info["spec"]["trigger"]>["dailyAt"]
+  timezone?: NonNullable<LoopWorkflow.Info["spec"]["trigger"]>["timezone"]
   permissionMode?: "report-only" | "normal" | "custom"
   workspaceMode?: WorkspaceModeMetadata
   budgetMode?: LoopWorkflow.Info["spec"]["budgetMode"]
+  usageMode?: LoopWorkflow.Info["spec"]["usageMode"]
   costBudget?: CostBudgetMetadata
   cost?: number
   tokens?: number
@@ -264,9 +273,12 @@ type Metadata = {
   objective?: LoopWorkflow.Info["objective"]
   triggerMode?: NonNullable<LoopWorkflow.Info["spec"]["trigger"]>["mode"]
   intervalMs?: NonNullable<LoopWorkflow.Info["spec"]["trigger"]>["intervalMs"]
+  dailyAt?: NonNullable<LoopWorkflow.Info["spec"]["trigger"]>["dailyAt"]
+  timezone?: NonNullable<LoopWorkflow.Info["spec"]["trigger"]>["timezone"]
   permissionMode?: "report-only" | "normal" | "custom"
   workspaceMode?: WorkspaceModeMetadata
   budgetMode?: LoopWorkflow.Info["spec"]["budgetMode"]
+  usageMode?: LoopWorkflow.Info["spec"]["usageMode"]
   costBudget?: CostBudgetMetadata
   cost?: number
   tokens?: number
@@ -350,7 +362,7 @@ function inferBudgetMode(params: Schema.Schema.Type<typeof Parameters>): "fixed"
   const objective = params.objective ?? ""
   const fixedLanguage = /\b(exactly|fixed|solo|solamente|exactamente)\b.*\b(iteration|iterations|iteracion|iteraciones|veces)\b/i
   if (params.maxTurns && fixedLanguage.test(objective)) return "fixed"
-  if (!params.maxTurns && (params.triggerMode === "interval" || params.triggerMode === "external-signal")) return "unbounded-monitor"
+  if (!params.maxTurns && (params.triggerMode === "interval" || params.triggerMode === "daily" || params.triggerMode === "external-signal" || params.dailyAt !== undefined || params.timezone !== undefined)) return "unbounded-monitor"
   return "max-goal"
 }
 
@@ -384,6 +396,7 @@ function triggerPreview(workflow: LoopWorkflow.Info) {
   const trigger = workflow.spec.trigger
   if (!trigger?.mode || trigger.mode === "manual") return "the user runs it manually or requests run_once"
   if (trigger.mode === "interval") return trigger.intervalMs ? `every ${Math.round(trigger.intervalMs / 1000)}s` : "on its configured interval"
+  if (trigger.mode === "daily") return `daily at ${trigger.dailyAt ?? "its configured time"}${trigger.timezone ? ` (${trigger.timezone})` : ""}`
   if (trigger.mode === "external-signal") return "an authenticated matching external signal is recorded"
   if (trigger.mode === "self-paced") return "the previous checkpoint schedules another self-paced iteration"
   return "the scheduler decides the loop is ready to continue"
@@ -394,7 +407,8 @@ function budgetPreview(workflow: LoopWorkflow.Info) {
   const runtime = workflow.policy.maxRuntimeMs ? `${workflow.policy.maxRuntimeMs}ms runtime cap` : "no runtime cap"
   const cost = workflow.spec.costBudget?.maxCost !== undefined ? `$${workflow.spec.costBudget.maxCost} cost cap` : "no cost cap"
   const tokens = workflow.spec.costBudget?.maxTokens !== undefined ? `${workflow.spec.costBudget.maxTokens} token cap` : "no token cap"
-  return `${workflow.spec.budgetMode ?? "legacy"}; ${turns}; ${runtime}; ${cost}; ${tokens}`
+  const usage = workflow.spec.usageMode === "subscription" ? "subscription usage" : workflow.spec.usageMode === "api-usage" ? "API usage" : "legacy usage"
+  return `${usage}; ${workflow.spec.budgetMode ?? "legacy"}; ${turns}; ${runtime}; ${cost}; ${tokens}`
 }
 
 function contractPreview(workflow: LoopWorkflow.Info): ContractPreviewMetadata {
@@ -476,12 +490,14 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
   const budgetMode = inferBudgetMode(params)
   const maxTurns = maxTurnsFor(params, budgetMode)
   const evaluationMode = params.evaluationMode ?? (budgetMode === "max-goal" ? "independent" : "legacy")
+  const triggerMode = params.triggerMode ?? (params.dailyAt !== undefined || params.timezone !== undefined ? "daily" : params.intervalMs !== undefined ? "interval" : "manual")
   const trigger =
-    params.triggerMode || params.intervalMs
-      ? {
-          mode: params.triggerMode ?? (params.intervalMs ? "interval" : "manual"),
-          intervalMs: params.intervalMs,
-        }
+    params.triggerMode || params.intervalMs !== undefined || params.dailyAt !== undefined || params.timezone !== undefined
+      ? triggerMode === "daily"
+        ? { mode: triggerMode, dailyAt: params.dailyAt, timezone: params.timezone }
+        : triggerMode === "interval"
+          ? { mode: triggerMode, intervalMs: params.intervalMs }
+          : { mode: triggerMode }
       : undefined
   return {
     name,
@@ -600,8 +616,10 @@ function formatWorkflow(workflow: LoopWorkflow.Info) {
     `owner_session_id: ${workflow.ownerSessionID ?? "none"}`,
     `workspace_id: ${workflow.workspaceID ?? "none"}`,
     `workspace_mode: ${workflow.spec.workspace?.mode ?? "legacy"}`,
+    `trigger: ${triggerPreview(workflow)}`,
     `next_wakeup: ${workflow.nextWakeup ? new Date(workflow.nextWakeup).toISOString() : "none"}`,
     `budget_mode: ${workflow.spec.budgetMode ?? "legacy"}`,
+    `usage_mode: ${workflow.spec.usageMode ?? "legacy"}`,
     `cost: ${workflow.metrics.cost ?? 0}`,
     `tokens: ${tokenTotal(workflow.metrics)}`,
     `max_cost: ${workflow.spec.costBudget?.maxCost ?? "unlimited"}`,
@@ -853,6 +871,7 @@ function formatList(workflows: LoopWorkflow.Info[], snapshots?: Map<string, Loop
         `${workflow.id}  ${workflow.state}/${workflow.phase}  ${workflow.name}`,
         `  root_session_id: ${workflow.rootSessionID ?? "none"}`,
         `  workspace_mode: ${workflow.spec.workspace?.mode ?? "legacy"}`,
+        `  cadence: ${triggerPreview(workflow)}`,
         `  cost: ${workflow.metrics.cost ?? 0}  tokens: ${tokenTotal(workflow.metrics)}`,
         `  next_wakeup: ${workflow.nextWakeup ? new Date(workflow.nextWakeup).toISOString() : "none"}`,
         run ? `  last_run: ${run.id} ${run.state}/${run.phase} trigger=${run.trigger}` : undefined,
@@ -886,9 +905,12 @@ function listOutput(items: LoopWorkflow.Info[], snapshots?: Map<string, LoopWork
           objective: item.objective,
           triggerMode: item.spec.trigger?.mode,
           intervalMs: item.spec.trigger?.intervalMs,
+          dailyAt: item.spec.trigger?.dailyAt,
+          timezone: item.spec.trigger?.timezone,
           permissionMode: permissionModeFor(item),
           workspaceMode: item.spec.workspace?.mode,
           budgetMode: item.spec.budgetMode,
+          usageMode: item.spec.usageMode,
           costBudget: item.spec.costBudget,
           cost: item.metrics.cost,
           tokens: tokenTotal(item.metrics),
@@ -952,9 +974,12 @@ function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean, rootSes
     objective: workflow.objective,
     triggerMode: workflow.spec.trigger?.mode,
     intervalMs: workflow.spec.trigger?.intervalMs,
+    dailyAt: workflow.spec.trigger?.dailyAt,
+    timezone: workflow.spec.trigger?.timezone,
     permissionMode,
     workspaceMode: workflow.spec.workspace?.mode,
     budgetMode: workflow.spec.budgetMode,
+    usageMode: workflow.spec.usageMode,
     costBudget: workflow.spec.costBudget,
     cost: workflow.metrics.cost,
     tokens: tokenTotal(workflow.metrics),
@@ -981,9 +1006,12 @@ function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean, rootSes
         objective: workflow.objective,
         triggerMode: workflow.spec.trigger?.mode,
         intervalMs: workflow.spec.trigger?.intervalMs,
+        dailyAt: workflow.spec.trigger?.dailyAt,
+        timezone: workflow.spec.trigger?.timezone,
         permissionMode,
         workspaceMode: workflow.spec.workspace?.mode,
         budgetMode: workflow.spec.budgetMode,
+        usageMode: workflow.spec.usageMode,
         costBudget: workflow.spec.costBudget,
         cost: workflow.metrics.cost,
         tokens: tokenTotal(workflow.metrics),
@@ -1111,11 +1139,14 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
                   objective: item.objective,
                   triggerMode: item.spec.trigger?.mode,
                   intervalMs: item.spec.trigger?.intervalMs,
-                  permissionMode: permissionModeFor(item),
-                  workspaceMode: item.spec.workspace?.mode,
-                  budgetMode: item.spec.budgetMode,
-                  evaluationMode: item.spec.evaluation?.mode,
-                  evaluatorAgent: item.spec.evaluation?.evaluatorAgent,
+                  dailyAt: item.spec.trigger?.dailyAt,
+                  timezone: item.spec.trigger?.timezone,
+                   permissionMode: permissionModeFor(item),
+                   workspaceMode: item.spec.workspace?.mode,
+                   budgetMode: item.spec.budgetMode,
+                   usageMode: item.spec.usageMode,
+                   evaluationMode: item.spec.evaluation?.mode,
+                   evaluatorAgent: item.spec.evaluation?.evaluatorAgent,
                   model: modelMetadata(item.spec.model),
                   agent: item.spec.agent,
                   created: item.time.created,

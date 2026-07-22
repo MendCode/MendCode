@@ -26,6 +26,7 @@ import { lt } from "drizzle-orm"
 import { sql } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import { gt } from "drizzle-orm"
+import { gte } from "drizzle-orm"
 import { MessageTable, PartTable, SessionTable } from "./session.sql"
 import * as ProviderError from "@/provider/error"
 import { iife } from "@/util/iife"
@@ -80,6 +81,8 @@ type EmbeddedDataUrlDownloadError = {
 }
 
 export const SYNTHETIC_ATTACHMENT_PROMPT = "Attached image(s) from tool result:"
+export const COMPACTION_CONTEXT_MARKER =
+  "<compaction_context>Use the following compaction summary as cumulative state. This is not a new user request. Do not repeat completed work; continue from the summary's next required action.</compaction_context>"
 export { isMedia }
 
 export const OutputLengthError = namedSchemaError("MessageOutputLengthError", {})
@@ -261,6 +264,7 @@ export const CompactionPart = Schema.Struct({
   overflow: Schema.optional(Schema.Boolean),
   resume: Schema.optional(Schema.Boolean),
   discard_tail: Schema.optional(Schema.Boolean),
+  rescue_attempt: Schema.optional(NonNegativeInt),
   post_prompt: Schema.optional(Schema.String),
   instructions: Schema.optional(Schema.String),
   tail_start_id: Schema.optional(MessageID),
@@ -661,6 +665,7 @@ const UpdatedEventSchema = Schema.Struct({
 const RemovedEventSchema = Schema.Struct({
   sessionID: SessionID,
   messageID: MessageID,
+  reason: Schema.optional(Schema.Literal("revert")),
 })
 
 const PartUpdatedEventSchema = Schema.Struct({
@@ -715,10 +720,14 @@ export const Event = {
 export const WithParts = Schema.Struct({
   info: _Info,
   parts: Schema.Array(_Part),
+  partsMore: Schema.optional(Schema.Boolean),
+  partsCursor: Schema.optional(Schema.String),
 }).pipe(withStatics((s) => ({ zod: zod(s) })))
 export type WithParts = {
   info: Info
   parts: Part[]
+  partsMore?: boolean
+  partsCursor?: string
 }
 
 const Cursor = Schema.Struct({
@@ -747,29 +756,75 @@ const info = (row: typeof MessageTable.$inferSelect) =>
 
 export type PageView = "full" | "tui" | "tui-all"
 
+function previewInfoForTui(message: Info): Info {
+  if (message.role !== "user" || !message.summary) return message
+  return {
+    ...message,
+    summary: {
+      ...message.summary,
+      title: message.summary.title
+        ? previewString(message.summary.title, TUI_FIELD_PREVIEW_CHARS, "summary title")
+        : message.summary.title,
+      body: message.summary.body
+        ? previewString(message.summary.body, TUI_METADATA_PREVIEW_CHARS, "summary body")
+        : message.summary.body,
+      diffs: message.summary.diffs.slice(0, TUI_SUMMARY_DIFF_LIMIT).map((diff) => ({
+        ...diff,
+        file: previewString(diff.file, TUI_FIELD_PREVIEW_CHARS, "summary diff file"),
+        patch: previewDiff(diff.patch),
+      })),
+    },
+  }
+}
+
 const TUI_TEXT_PREVIEW_CHARS = 128 * 1024
 const TUI_TOOL_OUTPUT_PREVIEW_CHARS = 16 * 1024
 const TUI_METADATA_PREVIEW_CHARS = 4 * 1024
+const TUI_DIFF_PREVIEW_CHARS = 3 * TUI_METADATA_PREVIEW_CHARS
 const TUI_FIELD_PREVIEW_CHARS = 2 * 1024
+const TUI_PATCH_FILE_LIMIT = 256
+const TUI_PREVIEW_ARRAY_LIMIT = 8
+const TUI_SUMMARY_DIFF_LIMIT = 64
 
 function previewString(input: string, maxChars: number, _label: string) {
   if (input.length <= maxChars) return input
   return input.slice(0, maxChars)
 }
 
+function previewDiff(input: string) {
+  if (input.length <= TUI_DIFF_PREVIEW_CHARS) return input
+  const marker = "\n[Diff preview truncated: too large to render safely. Show more to inspect the full diff.]\n"
+  const budget = Math.max(0, TUI_DIFF_PREVIEW_CHARS - marker.length)
+  if (budget <= 0) return marker.slice(0, TUI_DIFF_PREVIEW_CHARS)
+  const head = Math.floor(budget / 3)
+  return `${input.slice(0, head)}${marker}${input.slice(input.length - (budget - head))}`
+}
+
 function previewUnknown(input: unknown, maxChars: number, label: string, depth = 0): unknown {
   if (typeof input === "string") return previewString(input, maxChars, label)
   if (!input || typeof input !== "object") return input
-  if (depth >= 5) return input
-  if (Array.isArray(input)) return input.map((item) => previewUnknown(item, maxChars, label, depth + 1))
+  if (depth >= 5) return "[nested value omitted]"
+  if (Array.isArray(input)) {
+    const itemLimit = Math.min(TUI_PREVIEW_ARRAY_LIMIT, Math.max(1, Math.floor(maxChars / 1024)))
+    const itemMaxChars = Math.max(256, Math.floor(maxChars / itemLimit))
+    return input
+      .slice(0, itemLimit)
+      .map((item) => previewUnknown(item, itemMaxChars, label, depth + 1))
+  }
 
   const result: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(input)) {
+    const diffLike = key === "diff" || key === "patch"
     const nextMax =
-      key === "output" || key === "diff" || key === "content"
-        ? maxChars
+      diffLike || key === "output" || key === "content"
+        ? diffLike
+          ? TUI_DIFF_PREVIEW_CHARS
+          : maxChars
         : Math.min(maxChars, TUI_FIELD_PREVIEW_CHARS)
-    result[key] = previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
+    result[key] =
+      diffLike && typeof value === "string"
+        ? previewDiff(value)
+        : previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
   }
   return result
 }
@@ -791,10 +846,14 @@ export function previewPartForTui(part: Part): Part {
       return { ...part, text: previewString(part.text, TUI_TEXT_PREVIEW_CHARS, "reasoning part") }
     case "file":
       return previewFilePartForTui(part)
+    case "patch":
+      return { ...part, files: part.files.slice(0, TUI_PATCH_FILE_LIMIT) }
     case "snapshot":
       return { ...part, snapshot: previewString(part.snapshot, TUI_FIELD_PREVIEW_CHARS, "snapshot") }
     case "step-start":
-      return part.snapshot ? { ...part, snapshot: previewString(part.snapshot, TUI_FIELD_PREVIEW_CHARS, "snapshot") } : part
+      return part.snapshot
+        ? { ...part, snapshot: previewString(part.snapshot, TUI_FIELD_PREVIEW_CHARS, "snapshot") }
+        : part
     case "step-finish":
       return {
         ...part,
@@ -811,27 +870,55 @@ export function previewPartForTui(part: Part): Part {
           : part.state.status === "running"
             ? {
                 ...part.state,
-                input: previewUnknown(part.state.input, TUI_FIELD_PREVIEW_CHARS, "tool input") as typeof part.state.input,
-                metadata: previewUnknown(part.state.metadata, TUI_METADATA_PREVIEW_CHARS, "tool metadata") as typeof part.state.metadata,
+                input: previewUnknown(
+                  part.state.input,
+                  TUI_FIELD_PREVIEW_CHARS,
+                  "tool input",
+                ) as typeof part.state.input,
+                metadata: previewUnknown(
+                  part.state.metadata,
+                  TUI_METADATA_PREVIEW_CHARS,
+                  "tool metadata",
+                ) as typeof part.state.metadata,
               }
             : part.state.status === "completed"
               ? {
                   ...part.state,
-                  input: previewUnknown(part.state.input, TUI_FIELD_PREVIEW_CHARS, "tool input") as typeof part.state.input,
+                  input: previewUnknown(
+                    part.state.input,
+                    TUI_FIELD_PREVIEW_CHARS,
+                    "tool input",
+                  ) as typeof part.state.input,
                   output: previewString(part.state.output, TUI_TOOL_OUTPUT_PREVIEW_CHARS, "tool output"),
-                  metadata: previewUnknown(part.state.metadata, TUI_METADATA_PREVIEW_CHARS, "tool metadata") as typeof part.state.metadata,
+                  metadata: previewUnknown(
+                    part.state.metadata,
+                    TUI_METADATA_PREVIEW_CHARS,
+                    "tool metadata",
+                  ) as typeof part.state.metadata,
                   attachments: part.state.attachments?.map(previewFilePartForTui),
                 }
               : {
                   ...part.state,
-                  input: previewUnknown(part.state.input, TUI_FIELD_PREVIEW_CHARS, "tool input") as typeof part.state.input,
+                  input: previewUnknown(
+                    part.state.input,
+                    TUI_FIELD_PREVIEW_CHARS,
+                    "tool input",
+                  ) as typeof part.state.input,
                   error: previewString(part.state.error, TUI_TOOL_OUTPUT_PREVIEW_CHARS, "tool error"),
-                  metadata: previewUnknown(part.state.metadata, TUI_METADATA_PREVIEW_CHARS, "tool metadata") as typeof part.state.metadata,
+                  metadata: previewUnknown(
+                    part.state.metadata,
+                    TUI_METADATA_PREVIEW_CHARS,
+                    "tool metadata",
+                  ) as typeof part.state.metadata,
                 }
       return {
         ...part,
         state,
-        metadata: previewUnknown(part.metadata, TUI_METADATA_PREVIEW_CHARS, "tool part metadata") as typeof part.metadata,
+        metadata: previewUnknown(
+          part.metadata,
+          TUI_METADATA_PREVIEW_CHARS,
+          "tool part metadata",
+        ) as typeof part.metadata,
       }
     }
     default:
@@ -855,30 +942,85 @@ const older = (row: Cursor) =>
 const newer = (row: Cursor) =>
   or(gt(MessageTable.time_created, row.time), and(eq(MessageTable.time_created, row.time), gt(MessageTable.id, row.id)))
 
-function hydrate(rows: (typeof MessageTable.$inferSelect)[], options: { view?: PageView } = {}) {
+function encodePartCursor(id: string) {
+  return Buffer.from(JSON.stringify({ id })).toString("base64url")
+}
+
+function decodePartCursor(input: string) {
+  const value = JSON.parse(Buffer.from(input, "base64url").toString("utf8"))
+  if (!value || typeof value.id !== "string") throw new Error("Invalid part cursor")
+  return value.id
+}
+
+function hydrate(
+  rows: (typeof MessageTable.$inferSelect)[],
+  options: {
+    view?: PageView
+    partsLimit?: number
+    partsAfter?: string
+    partFilter?: (row: typeof PartTable.$inferSelect) => boolean
+  } = {},
+) {
   const ids = rows.map((row) => row.id)
-  const partByMessage = new Map<string, Part[]>()
+  const partByMessage = new Map<string, { parts: Part[]; more?: boolean; cursor?: string }>()
   if (ids.length > 0) {
-    const partRows = Database.use((db) =>
-      db
-        .select()
-        .from(PartTable)
-        .where(inArray(PartTable.message_id, ids))
-        .orderBy(PartTable.message_id, PartTable.id)
-        .all(),
-    )
-    for (const row of partRows) {
-      const next = part(row, options.view)
-      const list = partByMessage.get(row.message_id)
-      if (list) list.push(next)
-      else partByMessage.set(row.message_id, [next])
+    if (options.partsLimit === undefined) {
+      const partRows = Database.use((db) =>
+        db
+          .select()
+          .from(PartTable)
+          .where(inArray(PartTable.message_id, ids))
+          .orderBy(PartTable.message_id, PartTable.id)
+          .all(),
+      )
+      for (const row of partRows) {
+        if (options.partFilter && !options.partFilter(row)) continue
+        const next = part(row, options.view)
+        const current = partByMessage.get(row.message_id)
+        if (current) current.parts.push(next)
+        else partByMessage.set(row.message_id, { parts: [next] })
+      }
+    } else {
+      const limit = Math.max(1, Math.floor(options.partsLimit))
+      const after = options.partsAfter ? decodePartCursor(options.partsAfter) : undefined
+      for (const messageID of ids) {
+        const partRows = Database.use((db) =>
+          db
+            .select()
+            .from(PartTable)
+            .where(
+              after
+                ? and(eq(PartTable.message_id, messageID), gt(PartTable.id, after))
+                : eq(PartTable.message_id, messageID),
+            )
+            .orderBy(PartTable.id)
+            .limit(limit + 1)
+            .all(),
+        )
+        const more = partRows.length > limit
+        const selected = more ? partRows.slice(0, limit) : partRows
+        const parts = selected.map((row) => part(row, options.view))
+        const last = selected.at(-1)
+        partByMessage.set(messageID, {
+          parts,
+          more,
+          cursor: more && last ? encodePartCursor(last.id) : undefined,
+        })
+      }
     }
   }
 
-  return rows.map((row) => ({
-    info: info(row),
-    parts: partByMessage.get(row.id) ?? [],
-  }))
+  return rows.map((row) => {
+    const hydrated = partByMessage.get(row.id)
+    const message = info(row)
+    const renderedInfo = options.view === "tui" || options.view === "tui-all" ? previewInfoForTui(message) : message
+    if (!hydrated) return { info: renderedInfo, parts: [] }
+    return {
+      info: renderedInfo,
+      parts: hydrated.parts,
+      ...(options.partsLimit !== undefined ? { partsMore: hydrated.more === true, partsCursor: hydrated.cursor } : {}),
+    }
+  })
 }
 
 function providerMeta(metadata: Record<string, any> | undefined) {
@@ -921,7 +1063,8 @@ function bytesEndWith(bytes: Uint8Array, suffix: number[]) {
 }
 
 function hasCompleteImageBytes(bytes: Uint8Array, mediaType: string) {
-  if (mediaType === "image/png") return bytesEndWith(bytes, [0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82])
+  if (mediaType === "image/png")
+    return bytesEndWith(bytes, [0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82])
   return true
 }
 
@@ -1079,7 +1222,7 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
         if (part.type === "compaction") {
           userMessage.parts.push({
             type: "text",
-            text: "What did we do so far?",
+            text: COMPACTION_CONTEXT_MARKER,
           })
         }
         if (part.type === "subtask") {
@@ -1287,7 +1430,10 @@ function compactionTailByMessage(rows: Array<typeof MessageTable.$inferSelect>) 
       .from(PartTable)
       .where(
         and(
-          inArray(PartTable.message_id, rows.map((row) => row.id)),
+          inArray(
+            PartTable.message_id,
+            rows.map((row) => row.id),
+          ),
           sql`json_extract(${PartTable.data}, '$.type') = 'compaction'`,
         ),
       )
@@ -1373,32 +1519,37 @@ function compactedHistoryPageRows(
   boundary: typeof MessageTable.$inferSelect,
 ) {
   const compacted = rows.filter(
-    (row) => row.time_created < boundary.time_created || (row.time_created === boundary.time_created && row.id <= boundary.id),
+    (row) =>
+      row.time_created < boundary.time_created || (row.time_created === boundary.time_created && row.id <= boundary.id),
   )
-  const parts = compacted.length === 0
-    ? []
-    : Database.use((db) =>
-        db
-          .select({
-            messageID: PartTable.message_id,
-            type: sql<string>`json_extract(${PartTable.data}, '$.type')`,
-            synthetic: sql<number | null>`json_extract(${PartTable.data}, '$.synthetic')`,
-          })
-          .from(PartTable)
-          .where(
-            and(
-              inArray(PartTable.message_id, compacted.map((row) => row.id)),
-              sql`(
+  const parts =
+    compacted.length === 0
+      ? []
+      : Database.use((db) =>
+          db
+            .select({
+              messageID: PartTable.message_id,
+              type: sql<string>`json_extract(${PartTable.data}, '$.type')`,
+              synthetic: sql<number | null>`json_extract(${PartTable.data}, '$.synthetic')`,
+            })
+            .from(PartTable)
+            .where(
+              and(
+                inArray(
+                  PartTable.message_id,
+                  compacted.map((row) => row.id),
+                ),
+                sql`(
                 json_extract(${PartTable.data}, '$.type') = 'compaction'
                 OR (
                   json_extract(${PartTable.data}, '$.type') = 'text'
                   AND length(trim(coalesce(json_extract(${PartTable.data}, '$.text'), ''))) > 0
                 )
               )`,
-            ),
-          )
-          .all(),
-      )
+              ),
+            )
+            .all(),
+        )
   const assistantText = new Set(parts.filter((part) => part.type === "text").map((part) => part.messageID))
   const userContent = new Set(
     parts
@@ -1441,12 +1592,7 @@ function latestTuiUserMessage(sessionID: SessionID) {
     db
       .select()
       .from(MessageTable)
-      .where(
-        and(
-          eq(MessageTable.session_id, sessionID),
-          sql`json_extract(${MessageTable.data}, '$.role') = 'user'`,
-        ),
-      )
+      .where(and(eq(MessageTable.session_id, sessionID), sql`json_extract(${MessageTable.data}, '$.role') = 'user'`))
       .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
       .limit(25)
       .all(),
@@ -1460,7 +1606,12 @@ function latestTuiUserMessage(sessionID: SessionID) {
   )
 }
 
-function compactedPage(input: { sessionID: SessionID; limit: number; before?: Cursor; after?: Cursor }): PageResult | undefined {
+function compactedPage(input: {
+  sessionID: SessionID
+  limit: number
+  before?: Cursor
+  after?: Cursor
+}): PageResult | undefined {
   const boundary = compactedHistoryBoundary(input.sessionID)
   if (!boundary) return
 
@@ -1480,7 +1631,10 @@ function compactedPage(input: { sessionID: SessionID; limit: number; before?: Cu
         .select()
         .from(MessageTable)
         .where(where)
-        .orderBy(ascending ? asc(MessageTable.time_created) : desc(MessageTable.time_created), ascending ? asc(MessageTable.id) : desc(MessageTable.id))
+        .orderBy(
+          ascending ? asc(MessageTable.time_created) : desc(MessageTable.time_created),
+          ascending ? asc(MessageTable.id) : desc(MessageTable.id),
+        )
         .limit(chunkSize)
         .all(),
     )
@@ -1518,10 +1672,20 @@ function compactedPage(input: { sessionID: SessionID; limit: number; before?: Cu
       visibleIDs.has(message.parentID)
     )
   })
-  const items = hydrate(
-    pageSlice.map((entry) => entry.row),
-    { view: "tui" },
+  const simpleHistoryMessageIDs = new Set(
+    pageSlice
+      .filter(
+        (entry) =>
+          entry.row.time_created < boundary.time_created ||
+          (entry.row.time_created === boundary.time_created && entry.row.id < boundary.id),
+      )
+      .map((entry) => entry.row.id),
   )
+  const items = hydrate(pageSlice.map((entry) => entry.row), {
+    view: "tui",
+    partFilter: (row) =>
+      !simpleHistoryMessageIDs.has(row.message_id) || row.data.type === "text" || row.data.type === "compaction",
+  })
   if (!ascending) items.reverse()
   const latestUser = !input.before && !input.after ? latestTuiUserMessage(input.sessionID) : undefined
   if (latestUser && !items.some((item) => item.info.id === latestUser.info.id)) {
@@ -1537,7 +1701,14 @@ function compactedPage(input: { sessionID: SessionID; limit: number; before?: Cu
   }
 }
 
-export function page(input: { sessionID: SessionID; limit: number; before?: string; after?: string; view?: PageView }): PageResult {
+export function page(input: {
+  sessionID: SessionID
+  limit: number
+  before?: string
+  after?: string
+  view?: PageView
+  partsLimit?: number
+}): PageResult {
   const before = input.before ? cursor.decode(input.before) : undefined
   const after = input.after ? cursor.decode(input.after) : undefined
   if (input.view === "tui") {
@@ -1548,13 +1719,16 @@ export function page(input: { sessionID: SessionID; limit: number; before?: stri
     ? and(eq(MessageTable.session_id, input.sessionID), older(before))
     : after
       ? and(eq(MessageTable.session_id, input.sessionID), newer(after))
-    : eq(MessageTable.session_id, input.sessionID)
+      : eq(MessageTable.session_id, input.sessionID)
   const rows = Database.use((db) =>
     db
       .select()
       .from(MessageTable)
       .where(where)
-      .orderBy(after ? asc(MessageTable.time_created) : desc(MessageTable.time_created), after ? asc(MessageTable.id) : desc(MessageTable.id))
+      .orderBy(
+        after ? asc(MessageTable.time_created) : desc(MessageTable.time_created),
+        after ? asc(MessageTable.id) : desc(MessageTable.id),
+      )
       .limit(input.limit + 1)
       .all(),
   )
@@ -1571,7 +1745,7 @@ export function page(input: { sessionID: SessionID; limit: number; before?: stri
 
   const more = rows.length > input.limit
   const slice = more ? rows.slice(0, input.limit) : rows
-  const items = hydrate(slice, { view: input.view })
+  const items = hydrate(slice, { view: input.view, partsLimit: input.partsLimit })
   if (!after) items.reverse()
   const tail = slice.at(-1)
   return {
@@ -1610,7 +1784,13 @@ export function parts(message_id: MessageID) {
   )
 }
 
-export function get(input: { sessionID: SessionID; messageID: MessageID }): WithParts {
+export function get(input: {
+  sessionID: SessionID
+  messageID: MessageID
+  view?: PageView
+  partsLimit?: number
+  partsAfter?: string
+}): WithParts {
   const row = Database.use((db) =>
     db
       .select()
@@ -1619,10 +1799,167 @@ export function get(input: { sessionID: SessionID; messageID: MessageID }): With
       .get(),
   )
   if (!row) throw new NotFoundError({ message: `Message not found: ${input.messageID}` })
-  return {
-    info: info(row),
-    parts: parts(input.messageID),
+  return hydrate([row], {
+    view: input.view,
+    partsLimit: input.partsLimit,
+    partsAfter: input.partsAfter,
+  })[0]
+}
+
+type RevertTimelineRow = {
+  id: MessageID
+  time: number
+  role: string
+}
+
+function revertTimeline(sessionID: SessionID) {
+  return Database.use((db) =>
+    db
+      .select({
+        id: MessageTable.id,
+        time: MessageTable.time_created,
+        role: sql<string>`json_extract(${MessageTable.data}, '$.role')`,
+      })
+      .from(MessageTable)
+      .where(eq(MessageTable.session_id, sessionID))
+      .orderBy(asc(MessageTable.time_created), asc(MessageTable.id))
+      .all(),
+  ) as RevertTimelineRow[]
+}
+
+export type RevertScan = {
+  messageID: MessageID
+  partID?: PartID
+  patches: Snapshot.Patch[]
+  range: Array<Pick<WithParts, "parts">>
+}
+
+/**
+ * Loads only the message metadata and snapshot/patch parts needed by revert.
+ * Full message payloads can contain large tool outputs and summaries, so the
+ * normal transcript hydration path is intentionally not used here.
+ */
+export function revertScan(input: { sessionID: SessionID; messageID: MessageID; partID?: PartID }): RevertScan | undefined {
+  const timeline = revertTimeline(input.sessionID)
+  const partID = input.partID
+  const targetMessageID = partID
+    ? Database.use((db) =>
+        db
+          .select({ messageID: PartTable.message_id })
+          .from(PartTable)
+          .where(and(eq(PartTable.session_id, input.sessionID), eq(PartTable.id, partID)))
+          .get(),
+      )?.messageID
+    : input.messageID
+  if (!targetMessageID) return
+
+  const targetIndex = timeline.findIndex((item) => item.id === targetMessageID)
+  if (targetIndex < 0) return
+
+  const lastUser = timeline.slice(0, targetIndex + 1).findLast((item) => item.role === "user")
+  const hasPriorTextOrTool = partID
+    ? Database.use((db) =>
+        db
+          .select({ type: sql<string>`json_extract(${PartTable.data}, '$.type')` })
+          .from(PartTable)
+          .where(
+            and(
+              eq(PartTable.session_id, input.sessionID),
+              eq(PartTable.message_id, targetMessageID),
+              lt(PartTable.id, partID),
+            ),
+          )
+          .all()
+          .some((item) => item.type === "text" || item.type === "tool"),
+      )
+    : false
+  const messageID = !hasPriorTextOrTool && lastUser ? lastUser.id : targetMessageID
+  const rangeIndex = timeline.findIndex((item) => item.id === messageID)
+  if (rangeIndex < 0) return
+
+  const sourceIDs = timeline.slice(rangeIndex).map((item) => item.id)
+  const positions = new Map(timeline.map((item, index) => [item.id, index]))
+  const rows =
+    sourceIDs.length === 0
+      ? []
+      : Database.use((db) =>
+          db
+            .select()
+            .from(PartTable)
+            .where(
+              and(
+                eq(PartTable.session_id, input.sessionID),
+                inArray(PartTable.message_id, sourceIDs),
+                sql`json_extract(${PartTable.data}, '$.type') IN ('patch', 'step-start', 'step-finish')`,
+              ),
+            )
+            .orderBy(PartTable.message_id, PartTable.id)
+            .all(),
+        )
+  const patches: Snapshot.Patch[] = []
+  const rangeParts = new Map<MessageID, Part[]>()
+  for (const row of rows) {
+    const hydrated = part(row)
+    const position = positions.get(row.message_id)
+    if (position === undefined) continue
+    if (position >= targetIndex && hydrated.type === "patch") {
+      patches.push({ hash: hydrated.hash, files: hydrated.files })
+    }
+    if (position >= rangeIndex && (hydrated.type === "step-start" || hydrated.type === "step-finish")) {
+      const current = rangeParts.get(row.message_id)
+      if (current) current.push(hydrated)
+      else rangeParts.set(row.message_id, [hydrated])
+    }
   }
+
+  return {
+    messageID,
+    partID: hasPriorTextOrTool ? partID : undefined,
+    patches,
+    range: timeline.slice(rangeIndex).flatMap((item) => {
+      const parts = rangeParts.get(item.id)
+      return parts ? [{ parts }] : []
+    }),
+  }
+}
+
+export type RevertCleanup = {
+  messageIDs: MessageID[]
+  partIDs: PartID[]
+}
+
+/** Returns IDs for cleanup without hydrating message or tool payloads. */
+export function revertCleanup(input: { sessionID: SessionID; messageID: MessageID; partID?: PartID }): RevertCleanup {
+  const partID = input.partID
+  const messages = Database.use((db) =>
+    db
+      .select({ id: MessageTable.id })
+      .from(MessageTable)
+      .where(eq(MessageTable.session_id, input.sessionID))
+      .orderBy(asc(MessageTable.time_created), asc(MessageTable.id))
+      .all(),
+  )
+  const messageIDs = messages
+    .filter((item) => item.id > input.messageID || (!partID && item.id === input.messageID))
+    .map((item) => item.id)
+  const partIDs = partID
+    ? Database.use((db) =>
+        db
+          .select({ id: PartTable.id })
+          .from(PartTable)
+          .where(
+            and(
+              eq(PartTable.session_id, input.sessionID),
+              eq(PartTable.message_id, input.messageID),
+              gte(PartTable.id, partID),
+            ),
+          )
+          .orderBy(asc(PartTable.id))
+          .all()
+          .map((item) => item.id),
+      )
+    : []
+  return { messageIDs, partIDs }
 }
 
 export function filterCompacted(msgs: Iterable<WithParts>) {

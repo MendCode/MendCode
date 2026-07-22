@@ -10,9 +10,8 @@ import { zod } from "@/util/effect-zod"
 const keybind = (value: string, description: string) =>
   Schema.String.pipe(Schema.optional, Schema.withDecodingDefault(Effect.succeed(value))).annotate({ description })
 
-// Windows prepends ctrl+z to the undo binding because `terminal_suspend`
-// cannot consume ctrl+z on native Windows terminals (no POSIX suspend).
-const inputUndoDefault = process.platform === "win32" ? "ctrl+z,ctrl+-,super+z" : "ctrl+-,super+z"
+// Ctrl+_ is the terminal-safe undo shortcut; Super+Z keeps native macOS undo.
+const inputUndoDefault = "ctrl+_,super+z"
 
 const KeybindsSchema = Schema.Struct({
   leader: keybind("ctrl+x", "Leader key for keybind combinations"),
@@ -96,7 +95,7 @@ const KeybindsSchema = Schema.Struct({
   input_backspace: keybind("backspace,shift+backspace", "Backspace in input"),
   input_delete: keybind("ctrl+d,delete,shift+delete", "Delete character in input"),
   input_undo: keybind(inputUndoDefault, "Undo in input"),
-  input_redo: keybind("ctrl+.,super+shift+z", "Redo in input"),
+  input_redo: keybind("ctrl+y,super+shift+z", "Redo in input"),
   input_word_forward: keybind("alt+f,alt+right,ctrl+right", "Move word forward in input"),
   input_word_backward: keybind("alt+b,alt+left,ctrl+left", "Move word backward in input"),
   input_select_word_forward: keybind("alt+shift+f,alt+shift+right", "Select word forward in input"),

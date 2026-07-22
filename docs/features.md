@@ -20,7 +20,7 @@ The pitch is not “another chat box.” The pitch is a configurable coding term
 | Usage Insights                  | Local activity dashboard for tokens, sessions, AI time, words, tools, agents, models, changed files, daily activity, selected-day detail, cache mix, and optional weather.                              | [Usage Insights](usage-insights.md)                                                      |
 | Approval-gated memory           | Memory can retrieve context without silently turning every session into permanent state. Generated memories become reviewable proposals first.                                                         | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory)       |
 | Memory Center, graph, and Dream | Route-level memory workspace with saved/pending memories, categories, policy controls, Dream logs, and constrained memory side chat.                                                                   | [Memory Center](memory-center.md)                                                        |
-| Smart permissions               | Choose `approval`, `smart`, or `full_access`. Smart mode can route risky permission decisions through a configured `permissionReviewer` role.                                                          | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory)       |
+| Smart permissions               | Choose `approval`, `smart`, or `full_access`. Smart mode auto-approves bounded read-only shell work and can route risky decisions through a configured `permissionReviewer` role.                         | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory)       |
 | Model roles                     | Configure task-specific roles for default, small, plan, build, review, subagent, title, compaction, summary, memory extraction, Dream, memory side chat, and permission review.                        | [CLI, setup, and configuration](cli-setup-configuration.md#models)                       |
 | Local provider bridges          | Connect local provider CLIs such as Claude Code through validated setup/auth surfaces while keeping credentials in local tool state.                                                                    | [CLI, setup, and configuration](cli-setup-configuration.md#connect-provider)             |
 | mflow coordination              | Optional local-first coordination and locks for multiple agents working around the same repo.                                                                                                          | [mflow coordination](mflow.md)                                                           |
@@ -89,7 +89,14 @@ These are good demo moments because they show MendCode as a product surface, not
 | `Ctrl+X`, then `s` | Open runtime status.                                                                                                                              |
 | `Ctrl+X`, then `l` | Switch/resume sessions.                                                                                                                           |
 | `Ctrl+X`, then `n` | Start a new session.                                                                                                                              |
+| `Ctrl+_`           | Undo the most recent prompt edit. On many keyboards this is `Ctrl+Shift+-`.                                                                       |
+| `Ctrl+Y`           | Redo a prompt edit.                                                                                                                                 |
+| `⌘Z` / `⌘⇧Z`       | Undo / redo prompt edits on macOS.                                                                                                                  |
+| `Ctrl+Z`           | Suspend the terminal on POSIX systems; it is not the prompt undo shortcut.                                                                         |
 | `Esc`              | Interrupt the current session or leave focused route views.                                                                                       |
+
+Prompt undo/redo history is temporary and stays in memory only. It can recover text
+cleared while the prompt remains open, but it is not persisted as a prompt archive.
 
 Slash commands are also registered for common surfaces:
 
@@ -415,7 +422,7 @@ Permission modes:
 | Mode          | Behavior                                                                                                                                             |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `approval`    | Manual approval remains the normal review posture.                                                                                                   |
-| `smart`       | Risky prompts can be routed to a configured `permissionReviewer` model role. If the role is not usable, MendCode asks instead of silently approving. |
+| `smart`       | Bounded read-only shell requests pass automatically. Risky or ambiguous requests stay gated and may use a configured `permissionReviewer`; the reviewer cannot auto-approve non-read-only commands. |
 | `full_access` | Reduces prompts for the current trust posture, while explicit deny rules still matter.                                                               |
 
 Safety principles:

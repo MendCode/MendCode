@@ -42,42 +42,19 @@ export const layer = Layer.effect(
 
     const revert = Effect.fn("SessionRevert.revert")(function* (input: RevertInput) {
       yield* state.assertNotBusy(input.sessionID)
-      const all = yield* sessions.messages({ sessionID: input.sessionID })
-      let lastUser: MessageV2.User | undefined
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      const scan = MessageV2.revertScan(input)
+      if (!scan) return session
 
-      let rev: Session.Info["revert"]
-      const patches: Snapshot.Patch[] = []
-      for (const msg of all) {
-        if (msg.info.role === "user") lastUser = msg.info
-        const remaining = []
-        for (const part of msg.parts) {
-          if (rev) {
-            if (part.type === "patch") patches.push(part)
-            continue
-          }
-
-          if (!rev) {
-            if ((msg.info.id === input.messageID && !input.partID) || part.id === input.partID) {
-              const partID = remaining.some((item) => ["text", "tool"].includes(item.type)) ? input.partID : undefined
-              rev = {
-                messageID: !partID && lastUser ? lastUser.id : msg.info.id,
-                partID,
-              }
-            }
-            remaining.push(part)
-          }
-        }
+      const rev: NonNullable<Session.Info["revert"]> = {
+        messageID: scan.messageID,
+        partID: scan.partID,
       }
-
-      if (!rev) return session
-
       rev.snapshot = session.revert?.snapshot ?? (yield* snap.track())
       if (session.revert?.snapshot) yield* snap.restore(session.revert.snapshot)
-      yield* snap.revert(patches)
+      yield* snap.revert(scan.patches)
       if (rev.snapshot) rev.diff = yield* snap.diff(rev.snapshot)
-      const range = all.filter((msg) => msg.info.id >= rev.messageID)
-      const diffs = yield* summary.computeDiff({ messages: range })
+      const diffs = yield* summary.computeDiff({ messages: scan.range })
       yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore)
       yield* bus.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: diffs })
       yield* sessions.setRevert({
@@ -105,42 +82,25 @@ export const layer = Layer.effect(
     const cleanup = Effect.fn("SessionRevert.cleanup")(function* (session: Session.Info) {
       if (!session.revert) return
       const sessionID = session.id
-      const msgs = yield* sessions.messages({ sessionID })
       const messageID = session.revert.messageID
-      const remove = [] as MessageV2.WithParts[]
-      let target: MessageV2.WithParts | undefined
-      for (const msg of msgs) {
-        if (msg.info.id < messageID) continue
-        if (msg.info.id > messageID) {
-          remove.push(msg)
-          continue
-        }
-        if (session.revert.partID) {
-          target = msg
-          continue
-        }
-        remove.push(msg)
-      }
-      for (const msg of remove) {
+      const cleanup = MessageV2.revertCleanup({
+        sessionID,
+        messageID,
+        partID: session.revert.partID,
+      })
+      for (const removedMessageID of cleanup.messageIDs) {
         yield* sync.run(MessageV2.Event.Removed, {
           sessionID,
-          messageID: msg.info.id,
+          messageID: removedMessageID,
+          reason: "revert",
         })
       }
-      if (session.revert.partID && target) {
-        const partID = session.revert.partID
-        const idx = target.parts.findIndex((part) => part.id === partID)
-        if (idx >= 0) {
-          const removeParts = target.parts.slice(idx)
-          target.parts = target.parts.slice(0, idx)
-          for (const part of removeParts) {
-            yield* sync.run(MessageV2.Event.PartRemoved, {
-              sessionID,
-              messageID: target.info.id,
-              partID: part.id,
-            })
-          }
-        }
+      for (const partID of cleanup.partIDs) {
+        yield* sync.run(MessageV2.Event.PartRemoved, {
+          sessionID,
+          messageID,
+          partID,
+        })
       }
       yield* sessions.clearRevert(sessionID)
     })

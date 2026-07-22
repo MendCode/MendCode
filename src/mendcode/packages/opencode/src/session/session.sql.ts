@@ -221,8 +221,10 @@ export const AgentCommandTable = sqliteTable(
 
 type LoopSpecData = {
   trigger?: {
-    mode?: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced"
+    mode?: "manual" | "interval" | "daily" | "adaptive" | "external-signal" | "self-paced"
     intervalMs?: number
+    dailyAt?: string
+    timezone?: string
   }
   budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
   completionCriteria?: string[]
@@ -402,7 +404,7 @@ export const LoopRunTable = sqliteTable(
       .references(() => LoopWorkflowTable.id, { onDelete: "cascade" }),
     root_session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
     state: text().$type<"queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped">().notNull(),
-    trigger: text().$type<"manual" | "interval" | "adaptive" | "external-signal" | "self-paced" | "resume" | "run-once">().notNull(),
+    trigger: text().$type<"manual" | "interval" | "daily" | "adaptive" | "external-signal" | "self-paced" | "resume" | "run-once">().notNull(),
     phase: text().notNull(),
     next_wakeup: integer(),
     ...Timestamps,

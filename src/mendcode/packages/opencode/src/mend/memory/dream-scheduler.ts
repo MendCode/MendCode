@@ -127,7 +127,8 @@ function parseTimeToken(value: string) {
 function timezoneFromText(text: string) {
   const zone = text.match(/\b([A-Z][A-Za-z_]+\/[A-Za-z_]+)\b/)?.[1]
   if (zone) return zone
-  if (/\bpanama\b/i.test(text)) return "America/Panama"
+  if (/\b(?:utc|gmt)\b/i.test(text)) return "UTC"
+  if (/\bnew\s+york\b/i.test(text)) return "America/New_York"
   return undefined
 }
 

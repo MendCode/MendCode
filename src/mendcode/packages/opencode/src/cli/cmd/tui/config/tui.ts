@@ -196,12 +196,8 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
 
   const keybinds = { ...(acc.result.keybinds ?? {}) }
   if (process.platform === "win32") {
-    // Native Windows terminals do not support POSIX suspend, so prefer prompt undo.
+    // Native Windows terminals do not support POSIX suspend.
     keybinds.terminal_suspend = "none"
-    keybinds.input_undo ??= unique([
-      "ctrl+z",
-      ...ConfigKeybinds.Keybinds.shape.input_undo.parse(undefined).split(","),
-    ]).join(",")
   }
   acc.result.keybinds = ConfigKeybinds.Keybinds.parse(keybinds)
 

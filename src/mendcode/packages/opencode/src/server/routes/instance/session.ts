@@ -1257,6 +1257,7 @@ export const SessionRoutes = lazy(() =>
                 { message: "Invalid cursor" },
               ),
             view: z.enum(["full", "tui", "tui-all"]).optional(),
+            partsLimit: z.coerce.number().int().min(1).optional(),
           })
           .refine((value) => !value.before || !value.after, {
             message: "before and after are mutually exclusive",
@@ -1289,6 +1290,7 @@ export const SessionRoutes = lazy(() =>
           before: query.before,
           after: query.after,
           view: query.view,
+          partsLimit: query.partsLimit,
         })
         if (page.cursor || page.sparse) {
           c.header("Access-Control-Expose-Headers", "Link, X-Next-Cursor, X-Message-View-Sparse")
@@ -1317,10 +1319,7 @@ export const SessionRoutes = lazy(() =>
             content: {
               "application/json": {
                 schema: resolver(
-                  z.object({
-                    info: MessageV2.Info.zod,
-                    parts: MessageV2.Part.zod.array(),
-                  }),
+                   MessageV2.WithParts.zod,
                 ),
               },
             },
@@ -1335,11 +1334,23 @@ export const SessionRoutes = lazy(() =>
           messageID: MessageID.zod,
         }),
       ),
+      validator(
+        "query",
+        z.object({
+          view: z.enum(["full", "tui", "tui-all"]).optional(),
+          partsLimit: z.coerce.number().int().min(1).optional(),
+          partsAfter: z.string().optional(),
+        }),
+      ),
       async (c) => {
         const params = c.req.valid("param")
+        const query = c.req.valid("query")
         const message = await MessageV2.get({
           sessionID: params.sessionID,
           messageID: params.messageID,
+          view: query.view,
+          partsLimit: query.partsLimit,
+          partsAfter: query.partsAfter,
         })
         return c.json(message)
       },

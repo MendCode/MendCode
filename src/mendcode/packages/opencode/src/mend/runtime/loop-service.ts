@@ -54,6 +54,8 @@ export type LoopServiceArgs = {
   logDir?: string
 }
 
+export const DEFAULT_LOOP_SERVICE_LIMIT = 10
+
 function stableProjectID(projectRoot: string) {
   return createHash("sha256").update(path.resolve(projectRoot)).digest("hex").slice(0, 12)
 }
@@ -145,17 +147,19 @@ function configuredMode(value: unknown): LoopServiceMode {
 }
 
 export function loopServiceArgsFromConfig(projectRoot: string, overrides: Partial<LoopServiceArgs> = {}): LoopServiceArgs {
-  const cfg = readMendConfig(projectRoot)
+  const root = path.resolve(projectRoot)
+  const cfg = readMendConfig(root)
   const loop = cfg.loop && typeof cfg.loop === "object" ? cfg.loop : {}
   const mode = configuredMode(loop.defaultServiceMode)
   const cleanOverrides = Object.fromEntries(Object.entries(overrides).filter(([, value]) => value !== undefined))
+  const projectPath = (value: unknown) => typeof value === "string" && value.trim() ? path.resolve(root, value) : undefined
   return {
-    projectRoot,
-    serviceDir: typeof loop.serviceDir === "string" ? loop.serviceDir : undefined,
-    logDir: typeof loop.logDir === "string" ? loop.logDir : undefined,
     execute: mode !== "dry-run",
     reportOnly: mode !== "execute",
     ...cleanOverrides,
+    projectRoot: root,
+    serviceDir: projectPath(cleanOverrides.serviceDir ?? loop.serviceDir),
+    logDir: projectPath(cleanOverrides.logDir ?? loop.logDir),
   }
 }
 
@@ -166,7 +170,7 @@ export function loopServicePlan(args: LoopServiceArgs): LoopServicePlan {
   const id = stableProjectID(projectRoot)
   const label = `com.mendcode.loops.${id}`
   const intervalMs = args.intervalMs ?? 30_000
-  const limit = args.limit ?? 1
+  const limit = args.limit ?? DEFAULT_LOOP_SERVICE_LIMIT
   const command = args.command ?? defaultCommand()
   const serviceDir = path.resolve(args.serviceDir || defaultServiceDir(platformValue))
   const logDir = path.resolve(args.logDir || defaultLogDir(platformValue))
@@ -247,6 +251,11 @@ export function loopServicePlist(plan: LoopServicePlan) {
   <array>
     ${plan.programArguments.map(stringNode).join("\n    ")}
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MENDCODE_SHELL_CWD</key>
+    ${stringNode(plan.projectRoot)}
+  </dict>
   <key>WorkingDirectory</key>
   ${stringNode(plan.projectRoot)}
   <key>RunAtLoad</key>
@@ -262,6 +271,10 @@ export function loopServicePlist(plan: LoopServicePlan) {
 `
 }
 
+function systemdString(value: string) {
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("\n", "\\n")}"`
+}
+
 export function loopServiceSystemdUnit(plan: LoopServicePlan) {
   return `[Unit]
 Description=MendCode Loop Workflow daemon for ${plan.projectRoot}
@@ -270,6 +283,7 @@ After=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=${plan.projectRoot}
+Environment=MENDCODE_SHELL_CWD=${systemdString(plan.projectRoot)}
 ExecStart=${shellQuote(plan.programArguments)}
 Restart=always
 RestartSec=5
@@ -282,7 +296,8 @@ WantedBy=default.target
 }
 
 export function loopServiceWindowsCommand(plan: LoopServicePlan) {
-  return `${shellQuote(plan.programArguments)} >> "${plan.stdoutPath}" 2>> "${plan.stderrPath}"`
+  const projectRoot = plan.projectRoot.replaceAll('"', '""')
+  return `set "MENDCODE_SHELL_CWD=${projectRoot}" && ${shellQuote(plan.programArguments)} >> "${plan.stdoutPath}" 2>> "${plan.stderrPath}"`
 }
 
 export function loopServiceDefinition(plan: LoopServicePlan) {
@@ -333,13 +348,23 @@ export async function loopServiceUninstall(args: LoopServiceArgs) {
 }
 
 export async function loopServiceStart(args: LoopServiceArgs) {
-  const plan = await loopServiceInstall(args)
+  const plan = loopServicePlan(args)
   if (platform() !== plan.platform) throw new Error(`Loop service start target is ${plan.platform}, current platform is ${process.platform}.`)
+  const previousDefinition = await readFile(plan.definitionPath, "utf8").catch(() => undefined)
   const existing = serviceLoaded(plan)
-  if (existing.loaded) runServiceCommand(plan, plan.stopCommand)
-  const result = runServiceCommand(plan, plan.startCommand)
-  if (result.status !== 0) throw new Error(result.stderr || result.stdout || `${plan.backend} start failed`)
-  return plan
+  const installed = await loopServiceInstall(args)
+  if (existing.loaded && previousDefinition === loopServiceDefinition(installed)) return installed
+  if (existing.loaded) {
+    const stopped = runServiceCommand(installed, installed.stopCommand)
+    if (stopped.status !== 0 && serviceLoaded(installed).loaded) {
+      throw new Error(stopped.stderr || stopped.stdout || `${installed.backend} stop failed while restarting`)
+    }
+  }
+  const result = runServiceCommand(installed, installed.startCommand)
+  if (result.status !== 0) throw new Error(result.stderr || result.stdout || `${installed.backend} start failed`)
+  const loaded = serviceLoaded(installed)
+  if (!loaded.loaded) throw new Error(loaded.detail || `${installed.backend} started but is not loaded`)
+  return installed
 }
 
 export async function loopServiceStop(args: LoopServiceArgs) {

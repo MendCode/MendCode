@@ -13,6 +13,7 @@ import { ConfigModelID } from "@/config/model-id"
 import { Provider } from "@/provider/provider"
 import { Cause, Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
+import { Permission } from "@/permission"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -255,7 +256,10 @@ export const TaskTool = Tool.define(
           agent: next.name,
           permission: [
             ...(parent.permission ?? []).filter(
-              (rule) => rule.permission === "external_directory" || rule.action === "deny",
+              (rule) =>
+                rule.permission === "external_directory" ||
+                rule.permission === Permission.SESSION_MODE_PERMISSION ||
+                rule.action === "deny",
             ),
             ...(canTodo
               ? []

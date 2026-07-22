@@ -31,6 +31,14 @@ describe("plugin.codex", () => {
       })
     })
 
+    test("routes the legacy GPT-5.3 Codex ID to a ChatGPT-supported model", () => {
+      expect(
+        JSON.parse(
+          normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.3-codex" })) as string,
+        ),
+      ).toEqual({ model: "gpt-5.5" })
+    })
+
     test("lowers generated fast model IDs used by subagents and hidden roles", () => {
       expect(
         JSON.parse(

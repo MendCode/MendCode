@@ -26,7 +26,7 @@ export type LoopWorkflow = {
   phase?: string
   nextWakeup?: number
   spec?: {
-    trigger?: { mode?: string; intervalMs?: number }
+    trigger?: { mode?: string; intervalMs?: number; dailyAt?: string; timezone?: string }
     model?: { providerID?: string; modelID?: string; variant?: string }
     agent?: string
     budgetMode?: string
@@ -153,6 +153,7 @@ export type LoopSummary = {
 }
 
 type LoopView = "active" | "history"
+type LoopScope = "project" | "all"
 
 export type LoopHistoryPage<T> = {
   items: T[]
@@ -177,13 +178,15 @@ const ACTIVE_STATES = new Set(["active", "sleeping", "working", "needs_input", "
 const TERMINAL_STATES = new Set(["completed", "failed", "stopped"])
 const REPORT_ONLY_APPROVAL_GATES = ["edit", "write", "apply_patch", "shell", "subagent"]
 const NORMAL_APPROVAL_GATES = ["push", "merge", "release", "version-bump", "external-send", "destructive-shell", "broad-refactor"]
-const LOOP_EVENT_LIMIT = 200
+const LOOP_EVENT_LIMIT = 50
 export const LOOP_HISTORY_PAGE_SIZE = 50
 const loopWorkflowListCache = new Map<string, LoopGlobalPage>()
 export const LOOP_WORKFLOW_GLOBAL_CACHE_KEY = "global"
+export const LOOP_WORKFLOW_PROJECT_CACHE_KEY = "project"
 
-export function loopGlobalPageCacheKey(input: { offset: number; limit?: number }) {
-  return `${LOOP_WORKFLOW_GLOBAL_CACHE_KEY}:${Math.max(0, input.offset)}:${Math.max(1, input.limit ?? LOOP_HISTORY_PAGE_SIZE)}`
+export function loopGlobalPageCacheKey(input: { offset: number; limit?: number; scope?: LoopScope }) {
+  const scope = input.scope === "project" ? LOOP_WORKFLOW_PROJECT_CACHE_KEY : LOOP_WORKFLOW_GLOBAL_CACHE_KEY
+  return `${scope}:${Math.max(0, input.offset)}:${Math.max(1, input.limit ?? LOOP_HISTORY_PAGE_SIZE)}`
 }
 
 export function loopSnapshotResourceKey(workflow?: Pick<LoopWorkflow, "id" | "time">) {
@@ -251,10 +254,10 @@ export function loopRouteStackedListHeight(itemCount: number, compact: boolean, 
 }
 
 export function loopRouteKeyHint(input: { width: number; narrow: boolean; compact: boolean }) {
-  if (input.width < 48) return "a/h · o · q"
-  if (input.compact) return "a/h view · pgup/dn page · o chat · q back"
-  if (input.narrow) return "a active · h history · pgup/dn page · e agent · o open · q back"
-  return "a active · h history · pgup/dn page · r refresh · j/k select · o open chat · e edit agent · p pause · u resume · s stop · q back"
+  if (input.width < 48) return "c/g · a/h · o · q"
+  if (input.compact) return "c project · g all · a/h view · pgup/dn page · o chat · q back"
+  if (input.narrow) return "c project · g all · a active · h history · pgup/dn page · e agent · o open · q back"
+  return "c project · g all · a active · h history · pgup/dn page · r refresh · j/k select · o open chat · e edit agent · p pause · u resume · s stop · q back"
 }
 
 export function loopRouteHeaderLayout(narrow: boolean) {
@@ -337,18 +340,27 @@ function progressLabel(workflow: LoopWorkflow) {
   return typeof maxTurns === "number" ? `${current}/${maxTurns}` : `${current}/open`
 }
 
-function relativeWakeup(workflow: LoopWorkflow) {
+export function loopWakeupLabel(workflow: LoopWorkflow) {
   if (workflow.state === "paused") return "paused"
   if (TERMINAL_STATES.has(workflow.state)) return "ended"
-  if (!workflow.nextWakeup) return "manual"
+  const triggerMode = workflow.spec?.trigger?.mode
+  if (!workflow.nextWakeup) {
+    if (!triggerMode || triggerMode === "manual") return "on demand"
+    if (workflow.state === "blocked") return "not scheduled (blocked)"
+    if (workflow.state === "needs_input") return "waiting for input"
+    if (workflow.state === "working") return "running"
+    return `waiting for ${triggerMode}`
+  }
   const seconds = Math.max(0, Math.round((workflow.nextWakeup - Date.now()) / 1000))
   const rel = formatDuration(seconds)
-  return `${rel || "now"} (${new Date(workflow.nextWakeup).toLocaleTimeString()})`
+  const timezone = workflow.spec?.trigger?.mode === "daily" ? workflow.spec.trigger.timezone : undefined
+  return `${rel || "now"} (${new Date(workflow.nextWakeup).toLocaleTimeString([], timezone ? { timeZone: timezone } : undefined)})`
 }
 
 function cadenceLabel(workflow: LoopWorkflow) {
   const trigger = workflow.spec?.trigger
-  if (!trigger?.mode) return "manual"
+  if (!trigger?.mode || trigger.mode === "manual") return "on demand"
+  if (trigger.mode === "daily") return `daily at ${trigger.dailyAt ?? "configured time"}${trigger.timezone ? ` (${trigger.timezone})` : ""}`
   if (trigger.mode !== "interval") return trigger.mode
   const ms = trigger.intervalMs
   return typeof ms === "number" ? `every ${formatDuration(Math.round(ms / 1000))}` : "interval"
@@ -452,8 +464,9 @@ function retentionLabel(workflow: LoopWorkflow) {
 
 function triggerPreview(workflow: LoopWorkflow) {
   const trigger = workflow.spec?.trigger
-  if (!trigger?.mode || trigger.mode === "manual") return "manual or run_once"
+  if (!trigger?.mode || trigger.mode === "manual") return "on demand / run_once"
   if (trigger.mode === "interval") return trigger.intervalMs ? `every ${formatDuration(Math.round(trigger.intervalMs / 1000))}` : "configured interval"
+  if (trigger.mode === "daily") return `daily at ${trigger.dailyAt ?? "configured time"}${trigger.timezone ? ` (${trigger.timezone})` : ""}`
   if (trigger.mode === "external-signal") return "matching external signal"
   if (trigger.mode === "self-paced") return "self-paced checkpoint continuation"
   return "scheduler readiness"
@@ -593,6 +606,13 @@ function isPrimaryLoop(workflow: LoopWorkflow) {
   return ACTIVE_STATES.has(workflow.state)
 }
 
+export function loopStateCounts(items: readonly Pick<LoopWorkflow, "state">[]) {
+  return {
+    scheduled: items.filter((item) => ACTIVE_STATES.has(item.state) && item.state !== "blocked").length,
+    blocked: items.filter((item) => item.state === "blocked").length,
+  }
+}
+
 function sortActiveLoops(a: LoopWorkflow, b: LoopWorkflow) {
   const priority = (item: LoopWorkflow) => {
     if (item.state === "needs_input") return 0
@@ -627,6 +647,7 @@ export function Loops() {
 
   const [refresh, setRefresh] = createSignal(0)
   const [view, setView] = createSignal<LoopView>("active")
+  const [scope, setScope] = createSignal<LoopScope>("project")
   const [selectedID, setSelectedID] = createSignal(data.selectedID)
   const [historyPage, setHistoryPage] = createSignal(0)
   const [routeSelectedID, setRouteSelectedID] = createSignal(data.selectedID)
@@ -636,9 +657,10 @@ export function Loops() {
   const snapshotRequests = new Map<string, Promise<{ id: string; snapshot?: LoopSnapshot; summary?: LoopSummary; error?: string }>>()
   let refreshTimer: ReturnType<typeof setTimeout> | undefined
   let appliedRouteSelectedID = data.selectedID
-  const loopCacheKey = (offset = historyPage() * LOOP_HISTORY_PAGE_SIZE, limit = LOOP_HISTORY_PAGE_SIZE) => loopGlobalPageCacheKey({ offset, limit })
-  const cachedPage = (offset = historyPage() * LOOP_HISTORY_PAGE_SIZE) => {
-    const key = loopCacheKey(offset)
+  const loopCacheKey = (offset = historyPage() * LOOP_HISTORY_PAGE_SIZE, limit = LOOP_HISTORY_PAGE_SIZE, requestedScope = scope()) =>
+    loopGlobalPageCacheKey({ offset, limit, scope: requestedScope })
+  const cachedPage = (offset = historyPage() * LOOP_HISTORY_PAGE_SIZE, requestedScope = scope()) => {
+    const key = loopCacheKey(offset, LOOP_HISTORY_PAGE_SIZE, requestedScope)
     return loopWorkflowListCache.get(key) ?? { active: [], history: [], page: { offset, limit: LOOP_HISTORY_PAGE_SIZE, total: 0 } }
   }
 
@@ -650,8 +672,8 @@ export function Loops() {
     return headers
   }
 
-  async function fetchList(source: { refresh: number; cacheKey?: string; offset: number; selectedID?: string }) {
-    const key = `${source.cacheKey ?? "global"}:${source.refresh}:${source.selectedID ?? ""}`
+  async function fetchList(source: { refresh: number; cacheKey?: string; offset: number; selectedID?: string; scope: LoopScope }) {
+    const key = `${source.scope}:${source.cacheKey ?? "global"}:${source.refresh}:${source.selectedID ?? ""}`
     const inflight = listRequests.get(key)
     if (inflight) return inflight
     const request = fetchListUncached(source).finally(() => listRequests.delete(key))
@@ -659,10 +681,11 @@ export function Loops() {
     return request
   }
 
-  async function fetchListUncached(source: { refresh: number; cacheKey?: string; offset: number; selectedID?: string }) {
-    const fallback = source.cacheKey ? loopWorkflowListCache.get(source.cacheKey) ?? cachedPage(source.offset) : cachedPage(source.offset)
+  async function fetchListUncached(source: { refresh: number; cacheKey?: string; offset: number; selectedID?: string; scope: LoopScope }) {
+    const fallback = source.cacheKey ? loopWorkflowListCache.get(source.cacheKey) ?? cachedPage(source.offset, source.scope) : cachedPage(source.offset, source.scope)
     const query = new URLSearchParams({ offset: String(source.offset), limit: String(LOOP_HISTORY_PAGE_SIZE) })
     if (source.selectedID) query.set("selectedID", source.selectedID)
+    query.set("scope", source.scope)
     const response = await sdk.fetch(`${sdk.url}/loop/global/page?${query}`, { headers: requestHeaders() }).catch(() => undefined)
     if (!response?.ok) {
       setListError(`Loop list failed: ${response?.status ?? "network error"}`)
@@ -676,9 +699,9 @@ export function Loops() {
     setListError(undefined)
     const page = data as LoopGlobalPage
     if (source.cacheKey) {
-      loopWorkflowListCache.set(loopCacheKey(page.page.offset, page.page.limit), page)
+      loopWorkflowListCache.set(loopCacheKey(page.page.offset, page.page.limit, source.scope), page)
     }
-    return { cacheKey: loopCacheKey(page.page.offset, page.page.limit), requestKey: source.cacheKey, page }
+    return { cacheKey: loopCacheKey(page.page.offset, page.page.limit, source.scope), requestKey: source.cacheKey, page }
   }
 
   async function fetchSnapshot(key: string, workflow: LoopWorkflow) {
@@ -705,7 +728,7 @@ export function Loops() {
   }
 
   const [loops] = createResource(
-    () => ({ refresh: refresh(), cacheKey: loopCacheKey(), offset: historyPage() * LOOP_HISTORY_PAGE_SIZE, selectedID: routeSelectedID() }),
+    () => ({ refresh: refresh(), cacheKey: loopCacheKey(), offset: historyPage() * LOOP_HISTORY_PAGE_SIZE, selectedID: routeSelectedID(), scope: scope() }),
     fetchList,
     { initialValue: { cacheKey: loopCacheKey(), page: cachedPage() } },
   )
@@ -748,7 +771,7 @@ export function Loops() {
   const stacked = createMemo(() => frame().stacked)
   const listWidth = createMemo(() => loopRouteColumns({ width: width(), stacked: stacked() }).listWidth)
   const detailWidth = createMemo(() => loopRouteColumns({ width: width(), stacked: stacked() }).detailWidth)
-  const activeCount = createMemo(() => primaryLoops().length)
+  const activeCounts = createMemo(() => loopStateCounts(primaryLoops()))
   const historyCount = createMemo(() => historyPageData().total)
 
   function requestRefresh() {
@@ -815,6 +838,15 @@ export function Loops() {
     setView(next)
     if (next === "history") setHistoryPage(0)
     setSelectedID(undefined)
+  }
+
+  function switchScope(next: LoopScope) {
+    if (scope() === next) return
+    setScope(next)
+    setView("active")
+    setHistoryPage(0)
+    setSelectedID(undefined)
+    setRouteSelectedID(undefined)
   }
 
   function selectHistoryPage(offset: number) {
@@ -907,6 +939,11 @@ export function Loops() {
       refreshNow()
       return
     }
+    if (evt.name === "c" || evt.name === "g") {
+      consume()
+      switchScope(evt.name === "c" ? "project" : "all")
+      return
+    }
     if (evt.name === "a") {
       consume()
       switchView("active")
@@ -986,7 +1023,7 @@ export function Loops() {
       ["state", stateLabel(item)],
       ["iteration", progressLabel(item)],
       ["budget", hasInvalidZeroBudget(item) ? "invalid maxTurns=0; recreate with positive cap or unlimited" : `${item.spec?.budgetMode ?? "budget"} · ${progressLabel(item)}`],
-      ["next", relativeWakeup(item)],
+      ["next", loopWakeupLabel(item)],
       ["cadence", cadenceLabel(item)],
       ["evaluation", item.spec?.evaluation?.mode ?? "legacy"],
       ["workspace", item.spec?.workspace?.mode ?? "in-place"],
@@ -1002,19 +1039,19 @@ export function Loops() {
 
   return (
     <box flexDirection="column" width="100%" height="100%" paddingLeft={frame().paddingX} paddingRight={frame().paddingX} paddingTop={frame().compact ? 0 : 1} paddingBottom={frame().compact ? 0 : 1} gap={frame().compact ? 0 : 1}>
-      <Header view={view()} activeCount={activeCount()} historyCount={historyCount()} width={width()} narrow={narrow()} compact={frame().compact} />
+      <Header scope={scope()} view={view()} scheduledCount={activeCounts().scheduled} blockedCount={activeCounts().blocked} historyCount={historyCount()} width={width()} narrow={narrow()} compact={frame().compact} />
 
       <Show
         when={allLoops().length}
-        fallback={<EmptyState loading={loops.loading} error={listError()} activeCount={activeCount()} historyCount={historyCount()} view={view()} />}
+        fallback={<EmptyState loading={loops.loading} error={listError()} historyCount={historyCount()} view={view()} />}
       >
         <Show
           when={!stacked()}
-          fallback={<StackedView view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} detail={detail()} detailRows={detailRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={width()} compact={frame().compact} />}
+          fallback={<StackedView scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} detail={detail()} detailRows={detailRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={width()} compact={frame().compact} />}
         >
           <box flexDirection="row" flexGrow={1} minHeight={0} gap={1}>
             <box width={listWidth()} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-              <LoopList view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} width={listWidth() - 4} compact={frame().compact} />
+              <LoopList scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} width={listWidth() - 4} compact={frame().compact} />
             </box>
             <box flexGrow={1} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
               <LoopDetail detail={detail()} rows={detailRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={detailWidth() - 4} />
@@ -1026,9 +1063,9 @@ export function Loops() {
   )
 }
 
-function Header(props: { view: LoopView; activeCount: number; historyCount: number; width: number; narrow: boolean; compact: boolean }) {
+function Header(props: { scope: LoopScope; view: LoopView; scheduledCount: number; blockedCount: number; historyCount: number; width: number; narrow: boolean; compact: boolean }) {
   const { theme } = useTheme()
-  const summary = () => `active ${props.activeCount} · history ${props.historyCount} · ${props.view}`
+  const summary = () => `${props.scope === "project" ? "current project" : "all projects"} · scheduled ${props.scheduledCount} · blocked ${props.blockedCount} · history ${props.historyCount} · ${props.view}`
   const layout = createMemo(() => loopRouteHeaderLayout(props.narrow))
   return (
     <box flexDirection={layout().flexDirection} width="100%" height={layout().height} flexShrink={layout().flexShrink} gap={props.narrow ? 0 : 1} overflow="hidden">
@@ -1045,6 +1082,7 @@ function Header(props: { view: LoopView; activeCount: number; historyCount: numb
 }
 
 function LoopList(props: {
+  scope: LoopScope
   view: LoopView
   items: LoopWorkflow[]
   pagination?: LoopHistoryPage<LoopWorkflow>
@@ -1054,7 +1092,7 @@ function LoopList(props: {
   compact?: boolean
 }) {
   const { theme } = useTheme()
-  const title = createMemo(() => props.view === "active" ? "active loops" : "history · newest first")
+  const title = createMemo(() => `${props.scope === "project" ? "current project" : "all projects"} · ${props.view === "active" ? "scheduled + blocked" : "history · newest first"}`)
   const count = createMemo(() => {
     if (!props.pagination) return `${props.items.length}`
     if (!props.pagination.total) return "0 of 0"
@@ -1077,7 +1115,7 @@ function LoopList(props: {
             trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border },
           }}
         >
-          <Show when={props.items.length} fallback={<text fg={theme.textMuted} wrapMode="none">{props.view === "active" ? "No active loops. Press h for history." : "No archived loops."}</text>}>
+          <Show when={props.items.length} fallback={<text fg={theme.textMuted} wrapMode="none">{props.view === "active" ? "No scheduled or blocked loops. Press h for history." : "No archived loops."}</text>}>
             <For each={props.items}>
               {(item, index) => (
                 <LoopRow
@@ -1116,7 +1154,7 @@ function LoopRow(props: {
   const detailWidth = createMemo(() => Math.max(8, props.width - 2))
   const detail = createMemo(() => {
     const when = timeLabel(timestamp(props.item))
-    const status = isPrimaryLoop(props.item) ? `${stateLabel(props.item)} · next ${relativeWakeup(props.item)}` : stateLabel(props.item)
+    const status = isPrimaryLoop(props.item) ? `${stateLabel(props.item)} · next ${loopWakeupLabel(props.item)}` : stateLabel(props.item)
     const chat = props.item.rootSessionID ? "chat ready" : cadenceLabel(props.item)
     const lead = props.latest ? "latest · " : ""
     if (props.compact) return `${lead}${status} · ${chat}`
@@ -1309,6 +1347,7 @@ function DetailRow(props: { label: string; value: string; width: number; emphasi
 }
 
 function StackedView(props: {
+  scope: LoopScope
   view: LoopView
   items: LoopWorkflow[]
   pagination?: LoopHistoryPage<LoopWorkflow>
@@ -1341,6 +1380,7 @@ function StackedView(props: {
       <box flexDirection="column" gap={props.compact ? 0 : 1}>
         <box borderStyle="single" borderColor={theme.border} paddingLeft={props.compact ? 0 : 1} paddingRight={props.compact ? 0 : 1} height={loopRouteStackedListHeight(props.items.length, Boolean(props.compact), dimensions().height)} flexShrink={0}>
           <LoopList
+            scope={props.scope}
             view={props.view}
             items={props.items}
             pagination={props.pagination}
@@ -1411,11 +1451,11 @@ function CompactLoopDetail(props: {
   )
 }
 
-function EmptyState(props: { loading: boolean; error?: string; activeCount: number; historyCount: number; view: LoopView }) {
+function EmptyState(props: { loading: boolean; error?: string; historyCount: number; view: LoopView }) {
   const { theme } = useTheme()
   const empty = () =>
     props.view === "active" && props.historyCount > 0
-      ? "No active loops. Press h to review history."
+      ? "No scheduled or blocked loops. Press h to review history."
       : "No loop workflows found."
   return (
     <box flexDirection="column" width="100%" height="100%" alignItems="center" justifyContent="center" gap={1}>

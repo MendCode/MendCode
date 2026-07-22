@@ -7,7 +7,8 @@ Do not use shell commands to discover the loop CLI for normal chat workflows. Pr
 Before creating a loop, use the question tool when important parameters are missing or ambiguous:
 - objective and success/stop condition
 - iteration cap or whether it should run until stopped
-- cadence: manual, self-paced, or interval
+- cadence: manual, self-paced, interval, or daily at a local time
+- daily schedule details: `dailyAt` as `HH:mm` plus an IANA `timezone`; persist the timezone instead of guessing on every wakeup
 - max wall-clock runtime when applicable
 - permission mode: report-only, normal execution, or custom gates
 - provider/model and agent profile when the user wants a specific runtime
@@ -29,6 +30,8 @@ Common patterns:
 - For `max-goal`, provide `completionCriteria`, `successChecks`, `targetTurns`, and `reserveTurns`. Do not divide work across every available iteration; use `maxTurns` as a cap/budget, not a schedule.
 - Use a bounded `maxTurns` plus clear stop conditions for test loops and max-goal loops only.
 - Use `model` in provider/model-id format when the user selected a model for loop iterations.
+- For a daily schedule, use `triggerMode: "daily"`, `dailyAt: "10:00"`, and an explicit timezone such as `UTC`, `GMT`, `America/New_York`, or `Europe/Madrid`; any valid IANA/UTC/GMT zone is accepted. Omit `intervalMs` entirely. Omit `maxTurns` for an ongoing daily monitor unless the user asks for a bounded number of runs.
+- Do not turn a daily request into an ad-hoc 24-hour interval or ask the user to choose between OS schedulers; the durable workflow stores the wall-clock schedule and the project service handles the wakeup.
 - After a list result identifies a concrete loop id, use `action: "show"` with that `workflowID` for detailed status.
 
 The TUI renders Loop Workflow cards from tool metadata. Do not manually recreate the card as a Markdown table in the assistant response after calling this tool.

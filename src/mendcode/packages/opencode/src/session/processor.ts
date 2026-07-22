@@ -33,6 +33,8 @@ import {
   type ProposeMemoriesFromTextInput,
 } from "@/mend/memory/proposals"
 import { mendMemoryContext } from "@/mend/memory/retrieve"
+import { writeMemorySessionDigest } from "@/mend/memory/session-digests"
+import { ShellID } from "@/tool/shell/id"
 import * as DateTime from "effect/DateTime"
 
 const DOOM_LOOP_THRESHOLD = 3
@@ -574,6 +576,20 @@ export const layer: Layer.Layer<
           if (match?.part.state.status === "running" || match?.part.state.status === "pending") return true
         }
         return false
+      })
+
+      const hasPendingShellTool = Effect.fn("SessionProcessor.hasPendingShellTool")(function* () {
+        for (const toolCallID of Object.keys(ctx.toolcalls)) {
+          const match = yield* readToolCall(toolCallID)
+          if (match?.part.tool !== ShellID.ToolID) continue
+          if (match.part.state.status === "pending" || match.part.state.status === "running") return true
+        }
+        return false
+      })
+
+      const keepStreamAlive = Effect.fn("SessionProcessor.keepStreamAlive")(function* () {
+        if (yield* hasPendingHumanInteraction()) return true
+        return yield* hasPendingShellTool()
       })
 
       const proposeAutomaticMemories = Effect.fn("SessionProcessor.proposeAutomaticMemories")(function* (
@@ -1378,7 +1394,7 @@ export const layer: Layer.Layer<
 
             yield* timeoutStreamUnless(stream, {
               duration: idleTimeoutMs,
-              keepWaiting: hasPendingHumanInteraction(),
+              keepWaiting: keepStreamAlive(),
               onTimeout: () => new Error(`LLM stream timed out after ${idleTimeoutMs}ms without events`),
             }).pipe(
               Stream.tap((event) => handleEvent(event)),
@@ -1475,6 +1491,17 @@ export const layer: Layer.Layer<
         })
         const sessionID = ctx.sessionID
         const messageID = ctx.assistantMessage.id
+        yield* Effect.promise(() => writeMemorySessionDigest({
+          sessionID: String(sessionID),
+          projectRoot: pending.memoryRoot,
+          title: null,
+          summary: pending.memoryTurnText,
+          decisions: [],
+          corrections: [],
+          validations: [],
+          files: [],
+          evidenceRefs: [`session:${sessionID}:message:${messageID}`],
+        }, pending.memoryRoot).catch(() => null))
         const created = yield* proposeAutomaticMemories({
           user: pending.user,
           cwd: pending.messagePath.cwd,

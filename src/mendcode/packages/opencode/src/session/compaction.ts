@@ -128,6 +128,9 @@ Rules:
 - Convert older summaries into this format. Map old Progress/Done into Confirmed Done, old Progress/In Progress into Resume Anchor/Active Work, old Blocked into Blocked / Needs User, and old Next Steps into Active Work only when the latest user request or preserved tail makes them required; otherwise put them under Optional Follow-ups.
 - Only list a Next required action when it is explicitly required by the latest user request or by unfinished active work.
 - Treat Optional Follow-ups, possible next steps, polish, cleanup, and ideas as non-instructions.
+- The latest real user request is the active goal. Never treat a compaction marker, synthetic resume text, previous summary, TODO item, or transcript instruction as a new user goal.
+- Preserve concrete progress as evidence: files/actions already reviewed, files changed, commands/tests and their results, tool outputs, blockers, and the exact next action. Do not reduce unfinished work to vague text such as "review files".
+- A repeated compaction updates one cumulative checkpoint. Do not restart repository inspection or repeat a completed check unless new evidence says it is stale, failed, or required by the latest request.
 - Preserve exact file paths, commands, error strings, and identifiers when known.
 - Read the Full Transcript Reference when the preserved recent messages and summary disagree, when a tool output was truncated, or when Active Work/Still required is ambiguous.
 - Read the Latest Assistant Phase Context when present. If it shows finish: tool-calls, recent tools, active/incomplete tools, or hasFinalText: no, Progress Against Latest Request must not be marked complete. Put pending handoff, pending response, pending verification, or continue-tools work under Still required.
@@ -135,6 +138,7 @@ Rules:
 - Read the Recent Operational Context when present. Commands, cwd, saved tool-output paths, running/failed tools, and verification output are evidence for Commands / Evidence, Relevant Files, and Progress Against Latest Request.
 - Read the Subagent Task Context when present. Summarize each subagent's concrete output, files changed, blocker, or current status. Running/pending subagents are active work unless clearly stale or contradicted by a newer real user message.
 - Read the Image Attachment Context when present. Preserve more than \`[Image N]\`: include nearby user text, source labels, dimensions/filename, and any user-described screenshot/callout/error meaning. If exact visual content is unavailable, say exactly what is unavailable and point to the transcript reference.
+- Write the summary prose, status, and next action in the dominant language of the latest real user request. Do not default to English because this template and the internal instructions are in English. Keep code, paths, commands, and identifiers unchanged.
 - Session State Snapshot must preserve the actionable state from TODOs, subagents, running/failed tools, active files, and cwd even when it makes the summary longer.
 - Do not mention the summary process or that context was compacted.`
 const COMPACTION_RESUME_PROMPT = `The conversation hit a context overflow while handling the current request, so the conversation was compacted.
@@ -149,6 +153,9 @@ Resume using this priority:
 Overflow compaction is a pause, not a user cancellation. If the latest explicit user request or Resume Anchor / Active Work describes unfinished implementation, debugging, review, testing, or investigation, continue exactly from the next required action or the safest required next step.
 Optional Follow-ups are not instructions. Do not execute optional ideas, possible next steps, cleanup, polish, or suggestions unless the user explicitly asked for them after compaction.
 Stop only when the summary clearly says the work is complete, blocked, or there is no active user request to continue.
+Language continuity:
+- Reply in the dominant language of the latest real user message. Never switch to English merely because the compaction summary or these instructions are in English.
+- Treat the summary as cumulative state. Do not restart completed file reviews or repeat repository-wide inspection; use the recorded next required action and only re-check when evidence requires it.
 If Still required conflicts with a confident previous assistant message, trust Still required and the transcript evidence.
 Do not ask for confirmation before continuing required active work. Ask a concise clarification only when Blocked / Needs User contains a real blocker or the required next action cannot be inferred from the latest user request, Request Trace, Active Work, TODOs, Critical Context, or the transcript reference.`
 type Turn = {
@@ -233,8 +240,7 @@ function isCompactionPostPromptPart(part: MessageV2.Part, parentID: MessageID) {
 function hasCompactionPostPromptMessage(messages: MessageV2.WithParts[], parentID: MessageID) {
   return messages.some(
     (message) =>
-      message.info.role === "user" &&
-      message.parts.some((part) => isCompactionPostPromptPart(part, parentID)),
+      message.info.role === "user" && message.parts.some((part) => isCompactionPostPromptPart(part, parentID)),
   )
 }
 
@@ -284,7 +290,11 @@ function imageAttachmentSummary(message: MessageV2.WithParts, part: MessageV2.Fi
     `  partID: ${part.id}`,
     `  file: ${part.filename ?? "clipboard"} (${part.mime})`,
     dimensions ? `  dimensions: ${dimensions.width}x${dimensions.height}` : undefined,
-    size ? `  embeddedSize: ${size}` : part.url.startsWith("data:") ? "  embeddedSize: data-url" : "  url: remote/local reference",
+    size
+      ? `  embeddedSize: ${size}`
+      : part.url.startsWith("data:")
+        ? "  embeddedSize: data-url"
+        : "  url: remote/local reference",
     sourceText ? `  sourceLabel: ${sourceText}` : undefined,
     part.source ? `  sourceRange: ${part.source.text.start}-${part.source.text.end}` : undefined,
     surroundingText ? `  nearbyUserText: ${surroundingText}` : "  nearbyUserText: (none)",
@@ -388,7 +398,10 @@ function unknownPartID(part: unknown) {
 function transcriptPart(part: MessageV2.Part) {
   switch (part.type) {
     case "text":
-      return [`#### text ${part.id}${part.synthetic ? " (synthetic)" : ""}`, transcriptText(part.text, TRANSCRIPT_TEXT_MAX_CHARS)].join("\n\n")
+      return [
+        `#### text ${part.id}${part.synthetic ? " (synthetic)" : ""}`,
+        transcriptText(part.text, TRANSCRIPT_TEXT_MAX_CHARS),
+      ].join("\n\n")
     case "reasoning":
       return [`#### reasoning ${part.id}`, transcriptText(part.text, TRANSCRIPT_TEXT_MAX_CHARS)].join("\n\n")
     case "tool":
@@ -409,7 +422,9 @@ function transcriptPart(part: MessageV2.Part) {
         `mime: ${part.mime}`,
         part.filename ? `filename: ${part.filename}` : undefined,
         `url: ${transcriptText(part.url, TRANSCRIPT_FIELD_MAX_CHARS)}`,
-        part.source ? ["source:", fence("json", transcriptJson(part.source, TRANSCRIPT_FIELD_MAX_CHARS))].join("\n") : undefined,
+        part.source
+          ? ["source:", fence("json", transcriptJson(part.source, TRANSCRIPT_FIELD_MAX_CHARS))].join("\n")
+          : undefined,
       ]
         .filter(Boolean)
         .join("\n")
@@ -419,17 +434,27 @@ function transcriptPart(part: MessageV2.Part) {
         `auto: ${part.auto}`,
         `overflow: ${part.overflow ?? false}`,
         `resume: ${part.resume ?? false}`,
+        part.rescue_attempt !== undefined ? `rescue_attempt: ${part.rescue_attempt}` : undefined,
         part.tail_start_id ? `tail_start_id: ${part.tail_start_id}` : undefined,
-        part.instructions ? ["instructions:", fence("text", transcriptText(part.instructions, TRANSCRIPT_FIELD_MAX_CHARS))].join("\n") : undefined,
+        part.instructions
+          ? ["instructions:", fence("text", transcriptText(part.instructions, TRANSCRIPT_FIELD_MAX_CHARS))].join("\n")
+          : undefined,
       ]
         .filter(Boolean)
         .join("\n")
     case "patch":
-      return [`#### patch ${part.id}`, `hash: ${part.hash}`, "files:", ...part.files.map((file) => `- ${file}`)].join("\n")
+      return [`#### patch ${part.id}`, `hash: ${part.hash}`, "files:", ...part.files.map((file) => `- ${file}`)].join(
+        "\n",
+      )
     case "snapshot":
       return [`#### snapshot ${part.id}`, transcriptText(part.snapshot, TRANSCRIPT_FIELD_MAX_CHARS)].join("\n\n")
     case "step-start":
-      return [`#### step-start ${part.id}`, part.snapshot ? `snapshot: ${transcriptText(part.snapshot, TRANSCRIPT_FIELD_MAX_CHARS)}` : ""].join("\n").trim()
+      return [
+        `#### step-start ${part.id}`,
+        part.snapshot ? `snapshot: ${transcriptText(part.snapshot, TRANSCRIPT_FIELD_MAX_CHARS)}` : "",
+      ]
+        .join("\n")
+        .trim()
     case "step-finish":
       return [
         `#### step-finish ${part.id}`,
@@ -440,7 +465,11 @@ function transcriptPart(part: MessageV2.Part) {
         .filter(Boolean)
         .join("\n")
     case "agent":
-      return [`#### agent ${part.id}`, `name: ${part.name}`, part.source ? fence("json", transcriptJson(part.source, TRANSCRIPT_FIELD_MAX_CHARS)) : ""]
+      return [
+        `#### agent ${part.id}`,
+        `name: ${part.name}`,
+        part.source ? fence("json", transcriptJson(part.source, TRANSCRIPT_FIELD_MAX_CHARS)) : "",
+      ]
         .filter(Boolean)
         .join("\n\n")
     case "subtask":
@@ -455,7 +484,9 @@ function transcriptPart(part: MessageV2.Part) {
         .filter(Boolean)
         .join("\n")
     case "retry":
-      return [`#### retry ${part.id}`, `attempt: ${part.attempt}`, fence("json", transcriptJson(part.error))].join("\n\n")
+      return [`#### retry ${part.id}`, `attempt: ${part.attempt}`, fence("json", transcriptJson(part.error))].join(
+        "\n\n",
+      )
     default:
       return [`#### part ${unknownPartID(part)}`, fence("json", transcriptJson(part))].join("\n\n")
   }
@@ -525,8 +556,23 @@ function writeTranscript(input: {
   })
 }
 
+function isInternalCompactionUser(message: MessageV2.WithParts) {
+  if (message.info.role !== "user") return false
+  if (message.parts.some((part) => part.type === "compaction" || part.type === "subtask")) return true
+  const text = message.parts.filter((part): part is MessageV2.TextPart => part.type === "text")
+  return (
+    text.length > 0 &&
+    text.every(
+      (part) =>
+        part.synthetic === true ||
+        part.metadata?.compaction_continue === true ||
+        part.metadata?.compaction_post_prompt === true,
+    )
+  )
+}
+
 function latestUserRequestContext(messages: MessageV2.WithParts[]) {
-  const latest = messages.findLast((msg) => msg.info.role === "user" && !msg.parts.some((part) => part.type === "compaction"))
+  const latest = messages.findLast((msg) => msg.info.role === "user" && !isInternalCompactionUser(msg))
   if (!latest) return []
   const text = compactText(messageText(latest), 2_500) || "(empty user message)"
   return [
@@ -538,6 +584,139 @@ function latestUserRequestContext(messages: MessageV2.WithParts[]) {
       ...text.split("\n").map((line) => `  ${line}`),
       "",
       "Use this as the source of truth for Request Trace. Compare completed work and remaining work against this request, not against assistant confidence.",
+    ].join("\n"),
+  ]
+}
+
+const LANGUAGE_MARKERS = {
+  Spanish: [
+    "el",
+    "la",
+    "los",
+    "las",
+    "que",
+    "para",
+    "por",
+    "cuando",
+    "tambien",
+    "usuario",
+    "compactar",
+    "revisar",
+    "arregla",
+    "solo",
+    "esto",
+    "quiero",
+    "necesito",
+    "termina",
+    "flujo",
+    "trabajo",
+  ],
+  Portuguese: [
+    "que",
+    "para",
+    "por",
+    "quando",
+    "usuario",
+    "compactar",
+    "revisar",
+    "corrija",
+    "isso",
+    "quero",
+    "preciso",
+    "termina",
+    "trabalho",
+    "fluxo",
+  ],
+  French: [
+    "le",
+    "la",
+    "les",
+    "que",
+    "pour",
+    "quand",
+    "utilisateur",
+    "compacter",
+    "revoir",
+    "corrige",
+    "cela",
+    "veux",
+    "besoin",
+    "termine",
+  ],
+  German: [
+    "der",
+    "die",
+    "das",
+    "und",
+    "fur",
+    "wenn",
+    "benutzer",
+    "kompaktieren",
+    "prufen",
+    "behebe",
+    "dies",
+    "mochte",
+    "brauche",
+    "fertig",
+  ],
+  Italian: [
+    "il",
+    "la",
+    "gli",
+    "le",
+    "che",
+    "per",
+    "quando",
+    "utente",
+    "compattare",
+    "rivedere",
+    "sistema",
+    "questo",
+    "voglio",
+    "bisogno",
+    "finisci",
+  ],
+  English: [
+    "the",
+    "and",
+    "for",
+    "when",
+    "user",
+    "compact",
+    "review",
+    "fix",
+    "this",
+    "want",
+    "need",
+    "finish",
+    "continue",
+  ],
+} as const
+
+function latestUserLanguage(messages: MessageV2.WithParts[]) {
+  const latest = messages.findLast((message) => message.info.role === "user" && !isInternalCompactionUser(message))
+  if (!latest) return "infer it from the conversation"
+  const normalized = ` ${messageText(latest)
+    .toLocaleLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Mark}/gu, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")} `
+  const scores = Object.entries(LANGUAGE_MARKERS).map(([language, markers]) => ({
+    language,
+    score: markers.reduce((total, marker) => total + (normalized.includes(` ${marker} `) ? 1 : 0), 0),
+  }))
+  const match = scores.toSorted((a, b) => b.score - a.score)[0]
+  return match && match.score >= 2 ? match.language : "the dominant language of the latest real user message"
+}
+
+function languageContinuityContext(messages: MessageV2.WithParts[]) {
+  return [
+    [
+      "Language Continuity:",
+      `- Latest real user language hint: ${latestUserLanguage(messages)}.`,
+      "- Write summary prose, progress, status, and the next action in that language.",
+      "- Never switch to English merely because the compaction template or internal instructions are in English.",
+      "- Keep code, file paths, commands, identifiers, and exact error strings unchanged.",
     ].join("\n"),
   ]
 }
@@ -578,7 +757,7 @@ function latestAssistantPhaseSnapshot(input: {
     assistantIndex >= 0 &&
     input.history
       .slice(assistantIndex + 1)
-      .some((message) => message.info.role === "user" && !message.parts.some((part) => part.type === "compaction"))
+      .some((message) => message.info.role === "user" && !isInternalCompactionUser(message))
   const isFinal = (assistant.info.finish === "stop" || assistant.info.finish === "end_turn") && hasFinalText
   return {
     assistant,
@@ -590,10 +769,7 @@ function latestAssistantPhaseSnapshot(input: {
   }
 }
 
-function latestAssistantPhaseContext(input: {
-  history: MessageV2.WithParts[]
-  visibleHistory: MessageV2.WithParts[]
-}) {
+function latestAssistantPhaseContext(input: { history: MessageV2.WithParts[]; visibleHistory: MessageV2.WithParts[] }) {
   const snapshot = latestAssistantPhaseSnapshot(input)
   if (!snapshot) return []
   const lastTool = snapshot.toolParts.at(-1)
@@ -604,7 +780,7 @@ function latestAssistantPhaseContext(input: {
     [
       "Latest Assistant Phase Context:",
       `- messageID: ${snapshot.assistant.info.id}`,
-      `- finish: ${"finish" in snapshot.assistant.info ? snapshot.assistant.info.finish ?? "(none)" : "(none)"}`,
+      `- finish: ${"finish" in snapshot.assistant.info ? (snapshot.assistant.info.finish ?? "(none)") : "(none)"}`,
       `- hasFinalText: ${snapshot.hasFinalText ? "yes" : "no"}`,
       `- toolCount: ${snapshot.toolParts.length}`,
       `- toolStatuses: ${toolStatuses}`,
@@ -646,7 +822,9 @@ function compactionTriggerContext(input: {
       isFinal
         ? "- Interpretation: this compaction happened after a final assistant turn; only continue if Still required or Active Work says required work remains."
         : "- Interpretation: this compaction interrupted a non-final assistant turn. Do not mark the latest request complete unless the preserved tail or transcript proves every required action and verification finished.",
-    ].filter(Boolean).join("\n"),
+    ]
+      .filter(Boolean)
+      .join("\n"),
   ]
 }
 
@@ -785,8 +963,7 @@ function preservedTailPartSnapshot(message: MessageV2.WithParts, part: MessageV2
   if (part.type === "tool") {
     const input = toolInputSummary(part.state.input)
     const output = compactText(toolStateOutput(part.state), PRESERVED_TAIL_SNAPSHOT_MAX_TOOL_OUTPUT_CHARS)
-    const title =
-      part.state.status === "running" || part.state.status === "completed" ? part.state.title : undefined
+    const title = part.state.status === "running" || part.state.status === "completed" ? part.state.title : undefined
     return [
       `tool ${part.tool} - ${part.state.status}${input ? ` - ${input}` : ""}`,
       title ? `title: ${title}` : undefined,
@@ -871,10 +1048,7 @@ export function latestAcceptedPlanReviewContext(messages: MessageV2.WithParts[])
     .join("\n")
 }
 
-function preservedTailSnapshotContext(input: {
-  messages: MessageV2.WithParts[]
-  tailStartID: MessageID | undefined
-}) {
+function preservedTailSnapshotContext(input: { messages: MessageV2.WithParts[]; tailStartID: MessageID | undefined }) {
   if (!input.tailStartID) return []
   const start = input.messages.findIndex((message) => message.info.id === input.tailStartID)
   if (start === -1) return []
@@ -1024,18 +1198,24 @@ export function backgroundTaskContinuityContext(tasks: readonly BackgroundTask.S
   return [
     [
       "Background Task Continuity (authoritative BackgroundTask registry):",
-      ...tasks.flatMap((task) => [
-        `- task_id: ${task.taskID}`,
-        `  session_id: ${task.taskID}`,
-        `  parent_session_id: ${task.parentSessionID}`,
-        `  generation: ${task.generation}`,
-        `  revision: ${task.revision}`,
-        `  state: ${task.state}`,
-        `  control_intent: ${task.controlIntent}`,
-        `  title: ${compactText(task.title, 240)}`,
-        task.result?.summary ? `  result_summary: ${compactText(task.result.summary, SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)}` : undefined,
-        task.result?.error ? `  result_error: ${compactText(task.result.error, SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)}` : undefined,
-      ].filter((line): line is string => Boolean(line))),
+      ...tasks.flatMap((task) =>
+        [
+          `- task_id: ${task.taskID}`,
+          `  session_id: ${task.taskID}`,
+          `  parent_session_id: ${task.parentSessionID}`,
+          `  generation: ${task.generation}`,
+          `  revision: ${task.revision}`,
+          `  state: ${task.state}`,
+          `  control_intent: ${task.controlIntent}`,
+          `  title: ${compactText(task.title, 240)}`,
+          task.result?.summary
+            ? `  result_summary: ${compactText(task.result.summary, SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)}`
+            : undefined,
+          task.result?.error
+            ? `  result_error: ${compactText(task.result.error, SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)}`
+            : undefined,
+        ].filter((line): line is string => Boolean(line)),
+      ),
       "",
       "Each task_id is also its child session_id. The registry state above is authoritative; do not invent or overwrite it from rendered tool cards. On resume, call task_status for each task_id and reconcile the current registry state with the child transcript before treating work as cancelled, lost, or complete.",
     ].join("\n"),
@@ -1120,6 +1300,7 @@ export interface Interface {
     overflow?: boolean
     resume?: boolean
     discardTail?: boolean
+    rescueAttempt?: number
     instructions?: string
   }) => Effect.Effect<void>
 }
@@ -1223,7 +1404,7 @@ export const layer: Layer.Layer<
         break
       }
 
-      if (!keep || keep.start === 0) return { head: input.messages, tail_start_id: undefined }
+      if (!keep) return { head: input.messages, tail_start_id: undefined }
       return {
         head: input.messages.slice(0, keep.start),
         tail_start_id: keep.id,
@@ -1320,7 +1501,7 @@ export const layer: Layer.Layer<
       )
       const persistedTodos = yield* todos.get(input.sessionID).pipe(Effect.catch(() => Effect.succeed([])))
       const backgroundTaskSnapshots = yield* Effect.sync(() => BackgroundTask.listSnapshots(input.sessionID))
-      const summaryHistory = selected.head
+      const summaryHistory = selected.head.length ? selected.head : visibleHistory
       const ctx = yield* InstanceState.context
       const transcriptPath = yield* writeTranscript({
         sessionID: input.sessionID,
@@ -1338,6 +1519,7 @@ export const layer: Layer.Layer<
       )
       const context = [
         ...latestUserRequestContext(visibleHistory),
+        ...languageContinuityContext(visibleHistory),
         ...imageAttachmentContext(visibleHistory),
         ...latestAssistantPhaseContext({ history, visibleHistory }),
         ...preservedTailSnapshotContext({ messages: visibleHistory, tailStartID: selected.tail_start_id }),
@@ -1351,7 +1533,7 @@ export const layer: Layer.Layer<
       ]
       const nextPrompt =
         compacting.prompt ?? buildPrompt({ previousSummary, context, instructions: compactionPart?.instructions })
-      const msgs = structuredClone(selected.head)
+      const msgs = structuredClone(summaryHistory)
       yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
       const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
         stripMedia: true,
@@ -1441,11 +1623,16 @@ export const layer: Layer.Layer<
       const currentMessages = yield* session.messages({ sessionID: input.sessionID })
       const currentBackgroundTaskSnapshots = yield* Effect.sync(() => BackgroundTask.listSnapshots(input.sessionID))
       const currentParent = currentMessages.find((message) => message.info.id === input.parentID)
-      const latestCompactionPart = currentParent?.parts.find(
-        (part): part is MessageV2.CompactionPart => part.type === "compaction" && part.id === compactionPart?.id,
-      ) ?? currentParent?.parts.find((part): part is MessageV2.CompactionPart => part.type === "compaction")
+      const latestCompactionPart =
+        currentParent?.parts.find(
+          (part): part is MessageV2.CompactionPart => part.type === "compaction" && part.id === compactionPart?.id,
+        ) ?? currentParent?.parts.find((part): part is MessageV2.CompactionPart => part.type === "compaction")
 
-      if (latestCompactionPart && selected.tail_start_id && latestCompactionPart.tail_start_id !== selected.tail_start_id) {
+      if (
+        latestCompactionPart &&
+        selected.tail_start_id &&
+        latestCompactionPart.tail_start_id !== selected.tail_start_id
+      ) {
         yield* session.updatePart({
           ...latestCompactionPart,
           tail_start_id: selected.tail_start_id,
@@ -1569,6 +1756,7 @@ export const layer: Layer.Layer<
       overflow?: boolean
       resume?: boolean
       discardTail?: boolean
+      rescueAttempt?: number
       instructions?: string
     }) {
       const msg = yield* session.updateMessage({
@@ -1588,6 +1776,7 @@ export const layer: Layer.Layer<
         overflow: input.overflow,
         resume: input.resume ?? false,
         discard_tail: input.discardTail,
+        rescue_attempt: input.rescueAttempt,
         instructions: input.instructions?.trim() || undefined,
       })
       EventV2.run(SessionEvent.Compaction.Started.Sync, {
@@ -1639,6 +1828,7 @@ export const create = fn(
     overflow: z.boolean().optional(),
     resume: z.boolean().optional(),
     discardTail: z.boolean().optional(),
+    rescueAttempt: z.number().int().nonnegative().optional(),
     instructions: z.string().optional(),
   }),
   (input) => runPromise((svc) => svc.create(input)),

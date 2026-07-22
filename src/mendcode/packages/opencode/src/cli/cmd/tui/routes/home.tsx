@@ -100,6 +100,14 @@ export function resolveHomePromptTarget(input: { workspaceID?: string; selectedA
   }
 }
 
+export function shouldOpenSelectedAgentViewSession(input: {
+  promptInput: string
+  submitPending?: boolean
+  selectedSessionID?: string
+}) {
+  return Boolean(input.selectedSessionID && input.promptInput.length === 0 && !input.submitPending)
+}
+
 export function homePromptPlaceholderText(input?: { selectedTitle?: string }) {
   if (!input?.selectedTitle) return placeholder.normal
   return [`New task here — Enter starts /new. Selected session: ${Locale.truncate(input.selectedTitle, 32)}`]
@@ -985,8 +993,9 @@ export function HomeSurface(props: {
       setSelectedAgentViewSessionID(undefined)
       return
     }
-    const promptInput = promptRef.current?.current.input ?? ""
-    if (promptInput !== "") return
+    const prompt = promptRef.current
+    const promptInput = prompt?.current.input ?? ""
+    if (promptInput !== "" || prompt?.submitPending) return
     if (evt.name === "up") {
       evt.preventDefault()
       moveAgentViewSelection(-1)
@@ -1000,6 +1009,13 @@ export function HomeSurface(props: {
     if (evt.name === "return") {
       const selected = selectedAgentViewItem()
       if (!selected) return
+      if (
+        !shouldOpenSelectedAgentViewSession({
+          promptInput,
+          submitPending: prompt?.submitPending,
+          selectedSessionID: selected?.background.sessionID,
+        })
+      ) return
       evt.preventDefault()
       openAgentViewSession(selected)
     }

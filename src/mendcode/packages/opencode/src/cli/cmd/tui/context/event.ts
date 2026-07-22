@@ -43,6 +43,7 @@ export function useEvent() {
       // Special hack for truly global events
       if (event.directory === "global") {
         handler(payload)
+        return
       }
 
       if (project.workspace.current()) {

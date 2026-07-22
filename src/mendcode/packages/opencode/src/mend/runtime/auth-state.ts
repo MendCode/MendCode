@@ -17,7 +17,8 @@ function globalProviderAuthStateFile(providerID: string) {
 }
 
 export function providerAuthStateFile(root: string, providerID: string) {
-  return globalProviderAuthStateFile(providerID) || projectProviderAuthStateFile(root, providerID)
+  const globalFile = globalProviderAuthStateFile(providerID)
+  return existsSync(globalFile) ? globalFile : projectProviderAuthStateFile(root, providerID)
 }
 
 function projectLegacyAuthStateFile(root: string) {
@@ -36,21 +37,28 @@ async function readLegacyProviderAuthStateFromFile(file: string, providerID: str
   return providerState
 }
 
+function authStateFreshness(state: any) {
+  const expires = typeof state?.expires === "number" ? state.expires : 0
+  const timestamps = [state?.refreshedAt, state?.updatedAt, state?.createdAt]
+    .map((value) => typeof value === "string" ? Date.parse(value) : 0)
+    .filter((value) => Number.isFinite(value))
+  return Math.max(expires, ...timestamps, 0)
+}
+
+export function selectProviderAuthState(candidates: Array<{ state: any; priority: number }>) {
+  return candidates
+    .filter((candidate) => candidate.state && typeof candidate.state === "object")
+    .toSorted((left, right) => authStateFreshness(right.state) - authStateFreshness(left.state) || left.priority - right.priority)[0]?.state ?? null
+}
+
 export async function readProviderAuthState(root: string, providerID: string) {
-  for (const file of [
-    globalProviderAuthStateFile(providerID),
-    projectProviderAuthStateFile(root, providerID),
-  ]) {
-    const modern = await readJsonIfExists(file, null)
-    if (modern) return modern
-  }
-
-  for (const file of [globalLegacyAuthStateFile(), projectLegacyAuthStateFile(root)]) {
-    const legacy = await readLegacyProviderAuthStateFromFile(file, providerID)
-    if (legacy) return legacy
-  }
-
-  return null
+  const candidates = [
+    await readJsonIfExists(globalProviderAuthStateFile(providerID), null),
+    await readJsonIfExists(projectProviderAuthStateFile(root, providerID), null),
+    await readLegacyProviderAuthStateFromFile(globalLegacyAuthStateFile(), providerID),
+    await readLegacyProviderAuthStateFromFile(projectLegacyAuthStateFile(root), providerID),
+  ]
+  return selectProviderAuthState(candidates.map((state, priority) => ({ state, priority })))
 }
 
 export async function repairProviderAuthState(root: string, providerID: string, options: { preferProject?: boolean } = {}) {

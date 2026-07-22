@@ -48,8 +48,10 @@ const DraftBody = z.object({
   templateID: z.string().optional(),
   trigger: z
     .object({
-      mode: z.enum(["manual", "interval", "adaptive", "external-signal", "self-paced"]).optional(),
+      mode: z.enum(["manual", "interval", "daily", "adaptive", "external-signal", "self-paced"]).optional(),
       intervalMs: z.number().int().nonnegative().optional(),
+      dailyAt: z.string().optional(),
+      timezone: z.string().optional(),
     })
     .optional(),
   stopWhen: z.array(z.string()).optional(),
@@ -77,6 +79,10 @@ function limit(value: string | undefined) {
   if (value === undefined) return
   const parsed = Number(value)
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined
+}
+
+function scope(value: string | undefined) {
+  return value === "project" || value === "all" ? value : undefined
 }
 
 export const LoopRoutes = lazy(() =>
@@ -112,6 +118,7 @@ export const LoopRoutes = lazy(() =>
           offset: limit(c.req.query("offset")),
           limit: limit(c.req.query("limit")),
           selectedID: selectedID ? loopID(selectedID) : undefined,
+          scope: scope(c.req.query("scope")),
         })
       }),
     )

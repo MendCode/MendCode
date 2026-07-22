@@ -29,10 +29,13 @@ function requestGlobalPage(request: HttpServerRequest.HttpServerRequest) {
     return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : undefined
   }
   const selectedID = params.get("selectedID")
+  const scope = params.get("scope")
+  const pageScope: "all" | "project" | undefined = scope === "project" || scope === "all" ? scope : undefined
   return {
     offset: integer("offset"),
     limit: integer("limit"),
     selectedID: selectedID ? LoopID.make(selectedID) : undefined,
+    scope: pageScope,
   }
 }
 

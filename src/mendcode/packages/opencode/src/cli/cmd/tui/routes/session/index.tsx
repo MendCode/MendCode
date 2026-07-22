@@ -54,6 +54,7 @@ import type { ReadTool } from "@/tool/read"
 import type { WriteTool } from "@/tool/write"
 import { ShellTool } from "@/tool/shell"
 import { ShellID } from "@/tool/shell/id"
+import { Permission } from "@/permission"
 import type { GlobTool } from "@/tool/glob"
 import { TodoWriteTool } from "@/tool/todo"
 import type { GrepTool } from "@/tool/grep"
@@ -136,6 +137,7 @@ import {
 } from "../../util/session-bottom-dock"
 import { renderSessionExitSummary } from "../../util/session-exit-summary"
 import { sessionMessageVirtualWindow, stickyUserIDFromVirtualWindow } from "../../util/session-virtual-window"
+import { sessionTranscriptRows } from "../../util/session-transcript-rows"
 import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { restorePromptFromSubmittedParts } from "../../component/prompt/submit-parts"
@@ -162,7 +164,10 @@ import {
 import { promptChromeUsesFullSessionWidth } from "@/mend/tui/prompt-chrome"
 import { formatDuration } from "@/util/format"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
-import { reviewPermissionRequestWithModel, shouldTriggerSmartApproval } from "@/mend/permission/smart-approval"
+import {
+  reviewPermissionRequestWithModel,
+  shouldTriggerSmartApproval,
+} from "@/mend/permission/smart-approval"
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import {
   normalizeToolEvent,
@@ -190,10 +195,7 @@ import {
   planReviewInlineTitle,
   renderPlanMarkdown,
   renderPlanMarkdownStatic,
-  renderPlanMarkdownStreaming,
   renderStreamingMarkdownTail,
-  type StreamingPlanMarkdownState,
-  visibleStreamingMarkdownPreview,
 } from "../../util/plan-markdown"
 
 addDefaultParsers(parsers.parsers)
@@ -235,6 +237,13 @@ const SESSION_LIVE_FOLLOW_EVENTS = new Set([
   "session.next.compaction.delta",
 ])
 
+type SessionScrollState = {
+  top: number
+  follow: boolean
+}
+
+const sessionScrollStates = new Map<string, SessionScrollState>()
+
 export function sessionFollowSyncKind(type: string) {
   if (SESSION_IMMEDIATE_FOLLOW_EVENTS.has(type)) return "immediate" as const
   if (SESSION_LIVE_FOLLOW_EVENTS.has(type)) return "live" as const
@@ -266,6 +275,49 @@ export function sessionUserMessageQueued(input: {
   return !input.messages.some((message) => message.role === "assistant" && message.parentID === input.messageID)
 }
 
+function assistantTurnNeedsContinuation(message: {
+  time?: { completed?: number }
+  finish?: string
+}) {
+  if (message.time?.completed === undefined) return true
+  return message.finish === "tool-calls" || message.finish === "unknown"
+}
+
+export function sessionQueuedUserMessageIDs(input: {
+  pendingAssistantID?: string
+  working?: boolean
+  messages: ReadonlyArray<{
+    id: string
+    role: string
+    parentID?: string
+    finish?: string
+    time?: { created?: number; completed?: number }
+  }>
+}) {
+  const pendingAssistantID = input.pendingAssistantID
+  const pending = pendingAssistantID
+    ? input.messages.find((message) => message.role === "assistant" && message.id === pendingAssistantID)
+    : undefined
+  const latestAssistant = input.messages.findLast((message) => message.role === "assistant")
+  const activeParentID =
+    (pending?.time?.completed === undefined ? pending?.parentID : undefined) ??
+    (input.working && latestAssistant && assistantTurnNeedsContinuation(latestAssistant)
+      ? latestAssistant.parentID
+      : undefined)
+  if (!activeParentID) return []
+  const activeParentIndex = input.messages.findIndex((message) => message.id === activeParentID)
+  if (activeParentIndex < 0) return []
+  const assistantParentIDs = new Set(
+    input.messages.flatMap((message) =>
+      message.role === "assistant" && message.parentID ? [message.parentID] : [],
+    ),
+  )
+  return input.messages
+    .slice(activeParentIndex + 1)
+    .filter((message) => message.role === "user" && !assistantParentIDs.has(message.id))
+    .map((message) => message.id)
+}
+
 export function sessionPinnedUserMessageID(input: {
   messages: ReadonlyArray<{
     id: string
@@ -275,6 +327,7 @@ export function sessionPinnedUserMessageID(input: {
     time: { created?: number; completed?: number }
   }>
   pendingAssistantID?: string
+  working?: boolean
   submittedUserMessageID?: string
   isVisibleUser?: (messageID: string) => boolean
 }) {
@@ -282,7 +335,12 @@ export function sessionPinnedUserMessageID(input: {
   const pending = input.messages.find(
     (message) => message.role === "assistant" && message.id === input.pendingAssistantID,
   )
-  const activeParentID = pending && pending.time.completed === undefined ? pending.parentID : undefined
+  const latestAssistant = input.messages.findLast((message) => message.role === "assistant")
+  const activeParentID =
+    (pending && pending.time.completed === undefined ? pending.parentID : undefined) ??
+    (input.working && latestAssistant && assistantTurnNeedsContinuation(latestAssistant)
+      ? latestAssistant.parentID
+      : undefined)
   const submitted = input.submittedUserMessageID
   if (submitted && visible(submitted)) {
     const latestChild = input.messages.findLast(
@@ -291,10 +349,20 @@ export function sessionPinnedUserMessageID(input: {
     const finished =
       latestChild?.time.completed !== undefined &&
       Boolean(latestChild.finish && !["tool-calls", "unknown"].includes(latestChild.finish))
-    if (!finished && (!activeParentID || activeParentID === submitted)) return submitted
+    if ((!finished || input.working) && (!activeParentID || activeParentID === submitted)) return submitted
   }
 
   return activeParentID && visible(activeParentID) ? activeParentID : undefined
+}
+
+export function shouldPinSessionStickyUserHeader(input: {
+  pinnedUserID?: string
+  pinnedAnchor?: { id: string; y: number }
+  follow: boolean
+}) {
+  const anchor = input.pinnedAnchor
+  if (!input.follow || !anchor) return false
+  return anchor.id === input.pinnedUserID
 }
 
 export function sessionFollowSyncIsStale(input: {
@@ -306,12 +374,31 @@ export function sessionFollowSyncIsStale(input: {
   return input.now - Math.max(input.lastSyncAt, input.lastEventAt) >= input.intervalMs
 }
 
+export function sessionUserMovedViewport(input: {
+  scrollTop: number
+  lastScrollTop: number
+  scrollHeight: number
+  lastScrollHeight: number
+  viewportHeight: number
+  lastViewportHeight: number
+}) {
+  return (
+    Math.abs(input.scrollTop - input.lastScrollTop) > 1 &&
+    Math.abs(input.scrollHeight - input.lastScrollHeight) <= 1 &&
+    Math.abs(input.viewportHeight - input.lastViewportHeight) <= 1
+  )
+}
+
 export function shouldDeferSessionFollowSync(input: {
   hasMoreNewer: boolean
   loadingOlder: boolean
   loadingNewer: boolean
 }) {
   return input.hasMoreNewer || input.loadingOlder || input.loadingNewer
+}
+
+export function shouldHoldSessionSubmitScroll(input: { sessionID: string; submitSessionID?: string }) {
+  return input.submitSessionID !== undefined && input.submitSessionID === input.sessionID
 }
 
 const context = createContext<{
@@ -530,6 +617,10 @@ export function Session() {
 
   const [submittedUserMessageID, setSubmittedUserMessageID] = createSignal<string>()
   const pending = createMemo(() => latestPendingAssistantID(messages()))
+  const sessionWorking = createMemo(() => {
+    const status = sync.data.session_status?.[route.sessionID]?.type
+    return status === "busy" || status === "retry"
+  })
   const activeTurnAssistantID = createMemo(() => {
     const unfinished = pending()
     if (unfinished) return unfinished
@@ -537,10 +628,27 @@ export function Session() {
     if (status !== "busy" && status !== "retry") return
     return messages().findLast((message) => message.role === "assistant")?.id
   })
+  const queuedMessageIDs = createMemo(
+    () =>
+      new Set(
+        sessionQueuedUserMessageIDs({
+          messages: messages(),
+          pendingAssistantID: activeTurnAssistantID(),
+          working: sessionWorking(),
+        }),
+      ),
+  )
+  const queuedMessages = createMemo(() => {
+    const queuedIDs = queuedMessageIDs()
+    return messages().filter((message): message is UserMessage => message.role === "user" && queuedIDs.has(message.id))
+  })
+  const transcriptRows = createMemo(() => sessionTranscriptRows(messages(), queuedMessageIDs()))
+  const messageByID = createMemo(() => new Map(messages().map((message) => [message.id, message] as const)))
   const pinnedTurnUserMessageID = createMemo(() =>
     sessionPinnedUserMessageID({
       messages: messages(),
       pendingAssistantID: activeTurnAssistantID(),
+      working: sessionWorking(),
       submittedUserMessageID: submittedUserMessageID(),
       isVisibleUser: (messageID) =>
         (sync.data.part[messageID] ?? []).some(
@@ -965,6 +1073,7 @@ export function Session() {
   const smartReviewedPermissionIDs = new Set<string>()
   const sessionPermissionModesKey = "session_permission_modes"
   const permissionSessionID = createMemo(() => session()?.parentID ?? route.sessionID)
+  let syncedSessionPermissionMode: string | undefined
 
   function normalizePermissionModeValue(value: unknown): PermissionMode | undefined {
     if (value === "approval" || value === "smart" || value === "full_access") return value
@@ -986,14 +1095,33 @@ export function Session() {
     return normalizePermissionModeValue(sessionPermissionOverrides()[permissionSessionID()])
   }
 
+  async function syncSessionPermissionMode(mode: PermissionMode) {
+    const sessionID = permissionSessionID()
+    const syncKey = `${sessionID}:${mode}`
+    if (syncedSessionPermissionMode === syncKey) return
+    await sdk.client.session.update(
+      {
+        sessionID,
+        permission: [Permission.sessionModeRule(mode)],
+      },
+      { throwOnError: true },
+    )
+    syncedSessionPermissionMode = syncKey
+  }
+
   createEffect(() => {
     const config = permissionsConfig()
     const sessionMode = sessionPermissionModeOverride()
-    if (sessionMode) {
-      setPermissionModeSetting(sessionMode)
-      return
-    }
-    if (config) setPermissionModeSetting(config.mode)
+    const mode = sessionMode || config?.mode
+    if (!mode || !sync.ready || !session()) return
+    setPermissionModeSetting(mode)
+    void syncSessionPermissionMode(mode).catch((error) => {
+      toast.show({
+        message: `Could not sync permission mode: ${errorMessage(error)}`,
+        variant: "error",
+        duration: 5000,
+      })
+    })
   })
 
   const permissionConfigSummary = createMemo(() => {
@@ -1006,12 +1134,17 @@ export function Session() {
   async function replyPermissionOnce(request: PermissionRequest) {
     if (autoAcceptedPermissionIDs.has(request.id)) return false
     autoAcceptedPermissionIDs.add(request.id)
-    await sdk.client.permission.reply({
-      reply: "once",
-      requestID: request.id,
-      workspace: project.workspace.current(),
-    })
-    return true
+    try {
+      await sdk.client.permission.reply({
+        reply: "once",
+        requestID: request.id,
+        workspace: project.workspace.current(),
+      })
+      return true
+    } catch (error) {
+      autoAcceptedPermissionIDs.delete(request.id)
+      throw error
+    }
   }
 
   async function autoAcceptPendingPermissions() {
@@ -1026,32 +1159,40 @@ export function Session() {
     let reviewed = 0
     for (const request of permissions()) {
       if (smartReviewedPermissionIDs.has(request.id)) continue
-      if (!shouldTriggerSmartApproval(request)) continue
-      smartReviewedPermissionIDs.add(request.id)
-      setSmartPermissionStatus(`Smart reviewing ${request.permission}`)
-      const decision = await reviewPermissionRequestWithModel(request, mend.root)
-      if (!decision.triggered || decision.decision === "ask") {
-        setSmartPermissionStatus(`Smart needs approval`)
-        toast.show({ message: `Smart Approval needs you: ${decision.reason}`, variant: "info", duration: 5000 })
+      if (!shouldTriggerSmartApproval(request)) {
+        setSmartPermissionStatus("Smart needs your approval")
         continue
       }
-      reviewed++
-      await sdk.client.permission.reply({
-        reply: decision.decision === "allow" ? "once" : "reject",
-        requestID: request.id,
-        workspace: project.workspace.current(),
-      })
-      toast.show({
-        message: `Smart Approval ${decision.decision === "allow" ? "allowed" : "rejected"}: ${decision.reason}`,
-        variant: decision.decision === "allow" ? "success" : "warning",
-        duration: 5000,
-      })
-      setSmartPermissionStatus(`Smart ${decision.decision === "allow" ? "approved" : "rejected"}`)
-      setTimeout(() => {
-        setSmartPermissionStatus((current) => (current?.startsWith("Smart ") ? null : current))
-      }, 5000)
+      smartReviewedPermissionIDs.add(request.id)
+      try {
+        setSmartPermissionStatus(`Smart reviewing ${request.permission}`)
+        const decision = await reviewPermissionRequestWithModel(request, mend.root)
+        if (!decision.triggered || decision.decision === "ask") {
+          setSmartPermissionStatus(`Smart needs approval`)
+          toast.show({ message: `Smart Approval needs you: ${decision.reason}`, variant: "info", duration: 5000 })
+          continue
+        }
+        reviewed++
+        await sdk.client.permission.reply({
+          reply: decision.decision === "allow" ? "once" : "reject",
+          requestID: request.id,
+          workspace: project.workspace.current(),
+        })
+        toast.show({
+          message: `Smart Approval ${decision.decision === "allow" ? "allowed" : "rejected"}: ${decision.reason}`,
+          variant: decision.decision === "allow" ? "success" : "warning",
+          duration: 5000,
+        })
+        setSmartPermissionStatus(`Smart ${decision.decision === "allow" ? "approved" : "rejected"}`)
+        setTimeout(() => {
+          setSmartPermissionStatus((current) => (current?.startsWith("Smart ") ? null : current))
+        }, 5000)
+      } catch (error) {
+        smartReviewedPermissionIDs.delete(request.id)
+        throw error
+      }
     }
-    return reviewed
+    return { accepted: 0, reviewed }
   }
 
   createEffect(
@@ -1069,6 +1210,7 @@ export function Session() {
     const overrides = { ...sessionPermissionOverrides(), [permissionSessionID()]: mode }
     kv.set(sessionPermissionModesKey, overrides)
     setPermissionModeSetting(mode)
+    await syncSessionPermissionMode(mode)
   }
 
   async function clearPermissionModeForSession() {
@@ -1077,12 +1219,15 @@ export function Session() {
     kv.set(sessionPermissionModesKey, overrides)
     const globalMode = (await readPermissionsConfig()).mode
     setPermissionModeSetting(globalMode)
+    await syncSessionPermissionMode(globalMode)
     await refetchPermissionsConfig()
   }
 
   async function setPermissionModeAsDefault(mode: PermissionMode) {
     await writePermissionsConfig({ mode })
-    setPermissionModeSetting(sessionPermissionModeOverride() || mode)
+    const activeMode = sessionPermissionModeOverride() || mode
+    setPermissionModeSetting(activeMode)
+    await syncSessionPermissionMode(activeMode)
     await refetchPermissionsConfig()
   }
 
@@ -1207,10 +1352,16 @@ export function Session() {
           if (option.value === "smart") {
             void setPermissionModeForSession("smart")
             void smartReviewPendingPermissions()
-              .then((reviewed) => {
+              .then(({ accepted, reviewed }) => {
+                const summary = [
+                  accepted ? `auto-approved ${accepted} safe permission${accepted === 1 ? "" : "s"}` : "",
+                  reviewed ? `reviewed ${reviewed} risky permission${reviewed === 1 ? "" : "s"}` : "",
+                ]
+                  .filter(Boolean)
+                  .join("; ")
                 toast.show({
-                  message: reviewed
-                    ? `Smart Approval enabled for this session; reviewed ${reviewed} risky permission${reviewed === 1 ? "" : "s"}.`
+                  message: summary
+                    ? `Smart Approval enabled for this session; ${summary}.`
                     : "Smart Approval enabled for this session.",
                   variant: "success",
                   duration: 4000,
@@ -1618,6 +1769,7 @@ export function Session() {
   let scrollAnchor: { id: string; offset: number } | undefined
   let lastObservedScrollTop = 0
   let lastObservedScrollHeight = 0
+  let lastObservedViewportHeight = 0
   let manualScrollGraceUntil = 0
   let bottomScrollToken = 0
   let routeBottomScrollToken = 0
@@ -1626,6 +1778,8 @@ export function Session() {
   let scrollPagingInFlight = false
   let scrollPagingToken = 0
   let suppressedPagingBoundary: "top" | "bottom" | undefined
+  let activeSessionID = route.sessionID
+  let restoringSessionScroll = false
   const [sessionScrollTop, setSessionScrollTop] = createSignal(0)
   let prompt: PromptRef | undefined
   const bind = (r: PromptRef | undefined) => {
@@ -1641,6 +1795,14 @@ export function Session() {
 
   // Keep the child-session exit shortcut for states where the prompt is not mounted.
   const exit = useExit()
+
+  const rememberSessionScroll = (sessionID: string) => {
+    if (!scroll || scroll.isDestroyed) return
+    sessionScrollStates.set(sessionID, {
+      top: scroll.scrollTop,
+      follow: followSessionOutput(),
+    })
+  }
 
   const captureScrollAnchor = () => {
     if (!scroll || scroll.isDestroyed) {
@@ -1682,7 +1844,9 @@ export function Session() {
       if (!restored) scroll.scrollTo(boundary === "top" ? 0 : scroll.scrollHeight)
       lastObservedScrollTop = scroll.scrollTop
       lastObservedScrollHeight = scroll.scrollHeight
+      lastObservedViewportHeight = scroll.viewport.height
       setSessionScrollTop(scroll.scrollTop)
+
     }, 0)
   }
 
@@ -1698,13 +1862,24 @@ export function Session() {
     if (!scroll || scroll.isDestroyed) return
     const scrollTop = scroll.scrollTop
     const scrollHeight = scroll.scrollHeight
-    setSessionScrollTop(scrollTop)
+    const viewportHeight = scroll.viewport.height
     const currentSessionID = route.sessionID
+    if (restoringSessionScroll && currentSessionID === activeSessionID) return
+    if (shouldHoldSessionSubmitScroll({ sessionID: currentSessionID, submitSessionID: submitBottomScrollSessionID })) return
+    setSessionScrollTop(scrollTop)
     const history = sync.session.history(currentSessionID)
     const atTop = isScrollboxAtTop(scroll)
     const atBottom = isScrollboxAtBottom(scroll)
-    const userMovedViewport =
-      Math.abs(scrollTop - lastObservedScrollTop) > 1 && Math.abs(scrollHeight - lastObservedScrollHeight) <= 1
+    const userMovedViewport = sessionUserMovedViewport({
+      scrollTop,
+      lastScrollTop: lastObservedScrollTop,
+      scrollHeight,
+      lastScrollHeight: lastObservedScrollHeight,
+      viewportHeight,
+      lastViewportHeight: lastObservedViewportHeight,
+    })
+    const contentHeightChanged = Math.abs(scrollHeight - lastObservedScrollHeight) > 1
+    const viewportHeightChanged = Math.abs(viewportHeight - lastObservedViewportHeight) > 1
 
     if (userMovedViewport) cancelBottomScrollTimers()
 
@@ -1720,7 +1895,7 @@ export function Session() {
       suppressedPagingBoundary = undefined
     }
 
-    if (atTop && history.hasMoreOlder && !history.loadingOlder && !scrollPagingInFlight) {
+    if (!followSessionOutput() && atTop && history.hasMoreOlder && !history.loadingOlder && !scrollPagingInFlight) {
       if (suppressedPagingBoundary) {
         setFollowSessionOutput(false)
         return
@@ -1752,6 +1927,7 @@ export function Session() {
       scrollAnchor = undefined
       lastObservedScrollTop = scrollTop
       lastObservedScrollHeight = scrollHeight
+      lastObservedViewportHeight = viewportHeight
       if (history.hasMoreNewer && !history.loadingNewer && !scrollPagingInFlight) {
         if (suppressedPagingBoundary) {
           setFollowSessionOutput(false)
@@ -1782,6 +1958,11 @@ export function Session() {
       return
     }
 
+    if (followSessionOutput() && (contentHeightChanged || viewportHeightChanged) && !userMovedViewport) {
+      scheduleFollowBottomScroll(currentSessionID)
+      return
+    }
+
     setFollowSessionOutput(false)
     if (
       shouldRestoreSessionScrollAnchor({
@@ -1797,23 +1978,30 @@ export function Session() {
 
     lastObservedScrollTop = scroll.scrollTop
     lastObservedScrollHeight = scroll.scrollHeight
+    lastObservedViewportHeight = scroll.viewport.height
   }
 
   const markScrollDetached = () => {
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
     setFollowSessionOutput(false)
-    setTimeout(captureScrollAnchor, 0)
+    setTimeout(() => {
+      captureScrollAnchor()
+      rememberSessionScroll(activeSessionID)
+    }, 0)
   }
 
   const scrollToBottomIfAllowed = (options?: { force?: boolean }) => {
     if (!scroll || scroll.isDestroyed) return
     if (!options?.force && !followSessionOutput()) return
     scrollAnchor = undefined
+    renderer.requestRender()
     scroll.scrollTo(scroll.scrollHeight)
     lastObservedScrollTop = scroll.scrollTop
     lastObservedScrollHeight = scroll.scrollHeight
+    lastObservedViewportHeight = scroll.viewport.height
     setSessionScrollTop(scroll.scrollTop)
+    rememberSessionScroll(activeSessionID)
   }
 
   const scrollToBottomForToken = (token: number, options?: { force?: boolean }) => {
@@ -1837,16 +2025,43 @@ export function Session() {
       () => {
         queueMicrotask(() => {
           renderer.requestRender()
-          scheduleBottomScroll(0, { force: true })
+          if (followSessionOutput()) scheduleBottomScroll(0, { force: true })
         })
       },
       { defer: true },
     ),
   )
 
-  const scheduleRouteBottomScrollPasses = (sessionID: string, delays: number[], options?: { force?: boolean }) => {
+  const scheduleFollowBottomScroll = (sessionID: string) => {
     const token = ++routeBottomScrollToken
-    delays.forEach((delay) => setTimeout(() => scrollToBottomForRouteToken(token, sessionID, options), delay))
+    setTimeout(() => scrollToBottomForRouteToken(token, sessionID, { force: true }), 0)
+  }
+
+  const scheduleSessionScrollRestore = (sessionID: string, state?: SessionScrollState) => {
+    const token = ++routeBottomScrollToken
+    const delays = [0, 16, 50, 120]
+    delays.forEach((delay) => {
+      setTimeout(() => {
+        if (token !== routeBottomScrollToken || route.sessionID !== sessionID) return
+        if (!scroll || scroll.isDestroyed) {
+          if (delay === delays[delays.length - 1]) restoringSessionScroll = false
+          return
+        }
+        if (state && !state.follow) {
+          renderer.requestRender()
+          scroll.scrollTo(state.top)
+          lastObservedScrollTop = scroll.scrollTop
+          lastObservedScrollHeight = scroll.scrollHeight
+          lastObservedViewportHeight = scroll.viewport.height
+          setSessionScrollTop(state.top)
+
+          if (delay === delays[delays.length - 1]) restoringSessionScroll = false
+          return
+        }
+        setFollowSessionOutput(true)
+        scrollToBottomIfAllowed({ force: true })
+      }, delay)
+    })
   }
 
   const scheduleSubmitBottomScroll = (sessionID: string) => {
@@ -1854,37 +2069,49 @@ export function Session() {
     submitBottomScrollSessionID = sessionID
     submitBottomScrollTimer = setTimeout(() => {
       submitBottomScrollTimer = undefined
-      submitBottomScrollSessionID = undefined
-      if (route.sessionID !== sessionID) return
+      if (route.sessionID !== sessionID) {
+        submitBottomScrollSessionID = undefined
+        return
+      }
       renderer.requestRender()
       scrollToBottomIfAllowed({ force: true })
-    }, 50)
+      submitBottomScrollSessionID = undefined
+    }, 0)
   }
 
   createEffect(
     on(
       () => route.sessionID,
       (sessionID) => {
+        if (!sessionID) return
+        if (activeSessionID !== sessionID) rememberSessionScroll(activeSessionID)
+        activeSessionID = sessionID
+        const remembered = sessionScrollStates.get(sessionID)
         scrollPagingToken += 1
         scrollPagingInFlight = false
         suppressedPagingBoundary = undefined
         scrollAnchor = undefined
         lastObservedScrollTop = 0
         lastObservedScrollHeight = 0
+        lastObservedViewportHeight = 0
         manualScrollGraceUntil = 0
         cancelBottomScrollTimers()
         cancelSubmitFollowSync()
         setSubmittedUserMessageID(undefined)
-        setSessionScrollTop(0)
-        setFollowSessionOutput(true)
+        const targetScrollTop = remembered?.follow ? 0 : remembered?.top ?? 0
+        restoringSessionScroll = Boolean(remembered && !remembered.follow)
+        setSessionScrollTop(targetScrollTop)
+        setFollowSessionOutput(remembered?.follow ?? true)
         lastSessionEventAt = Date.now()
         if (scroll && !scroll.isDestroyed) {
-          scroll.scrollTo(0)
+          scroll.scrollTo(targetScrollTop)
           lastObservedScrollTop = scroll.scrollTop
           lastObservedScrollHeight = scroll.scrollHeight
-          setSessionScrollTop(scroll.scrollTop)
+          lastObservedViewportHeight = scroll.viewport.height
+          setSessionScrollTop(targetScrollTop)
+
         }
-        scheduleRouteBottomScrollPasses(sessionID, [0, 16, 50, 120], { force: true })
+        scheduleSessionScrollRestore(sessionID, remembered)
       },
     ),
   )
@@ -1893,12 +2120,14 @@ export function Session() {
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
     scroll.scrollBy(delta)
+    rememberSessionScroll(activeSessionID)
     setTimeout(syncScrollFollowMode, 0)
   }
   const scrollToSession = (position: number) => {
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
     scroll.scrollTo(position)
+    rememberSessionScroll(activeSessionID)
     setTimeout(syncScrollFollowMode, 0)
   }
   const [validatedExitSessionID, setValidatedExitSessionID] = createSignal<string>()
@@ -1908,6 +2137,8 @@ export function Session() {
     const timer = setInterval(syncScrollFollowMode, 80)
     onCleanup(() => clearInterval(timer))
   })
+
+  onCleanup(() => rememberSessionScroll(activeSessionID))
 
   createEffect(() => {
     const current = session()
@@ -2044,7 +2275,6 @@ export function Session() {
       void sync.session.sync(info.sessionID, { force: true }).finally(() => {
         if (token !== submitFollowSyncToken) return
         if (route.sessionID !== info.sessionID) return
-        scheduleBottomScroll(0)
         if (messages().some((message) => message.id === info.messageID)) return
         if (delay < 900) scheduleSubmitFollowSync(info, 900)
       })
@@ -2075,7 +2305,7 @@ export function Session() {
 
   const virtualWindow = createMemo(() =>
     sessionMessageVirtualWindow({
-      total: messages().length,
+      total: transcriptRows().length,
       scrollTop: sessionScrollTop(),
       viewportHeight: scroll && !scroll.isDestroyed ? scroll.height : dimensions().height,
       followOutput: followSessionOutput(),
@@ -2083,32 +2313,81 @@ export function Session() {
   )
   const visibleMessages = createMemo(() => {
     const window = virtualWindow()
-    return messages().slice(window.start, window.end)
+    return transcriptRows().slice(window.start, window.end)
   })
+  const visibleMessageIDs = createMemo(() => visibleMessages().map((message) => message.id))
+  const renderSnapshot = (includeVisibleIDs = true) => {
+    const window = virtualWindow()
+    const mountedChildren = scroll && !scroll.isDestroyed ? scroll.getChildren() : []
+    const mountedIDs = mountedChildren.flatMap((child) => (child.id ? [child.id] : []))
+    const mountedIDCounts = mountedIDs.reduce(
+      (counts, id) => counts.set(id, (counts.get(id) ?? 0) + 1),
+      new Map<string, number>(),
+    )
+
+    return {
+      sessionID: route.sessionID,
+      messageCount: transcriptRows().length,
+      queuedCount: queuedMessages().length,
+      visibleCount: visibleMessages().length,
+      visibleIDs: includeVisibleIDs ? visibleMessageIDs() : undefined,
+      start: window.start,
+      end: window.end,
+      virtualized: window.virtualized,
+      topSpacer: window.topSpacer,
+      bottomSpacer: window.bottomSpacer,
+      scrollTop: scroll && !scroll.isDestroyed ? scroll.scrollTop : sessionScrollTop(),
+      sessionScrollTop: sessionScrollTop(),
+      scrollHeight: scroll && !scroll.isDestroyed ? scroll.scrollHeight : undefined,
+      viewportHeight: scroll && !scroll.isDestroyed ? scroll.viewport.height : undefined,
+      maxScrollTop:
+        scroll && !scroll.isDestroyed ? Math.max(0, scroll.scrollHeight - scroll.viewport.height) : undefined,
+      follow: followSessionOutput(),
+      renderKey: transcriptRenderKey(),
+      anchorID: scrollAnchor?.id,
+      anchorOffset: scrollAnchor?.offset,
+      pinnedUserID: pinnedTurnUserMessageID(),
+      stickyUserID: stickyUserMessageID(),
+      mountedChildCount: mountedChildren.length,
+      mountedFirstID: mountedIDs[0],
+      mountedLastID: mountedIDs.at(-1),
+      duplicateMountedIDs: [...mountedIDCounts]
+        .filter(([, count]) => count > 1)
+        .map(([id]) => id),
+    }
+  }
 
   createEffect(
     on(
       () =>
         [
           route.sessionID,
-          messages().length,
+          transcriptRows().length,
+          queuedMessages().length,
           visibleMessages().length,
           virtualWindow().start,
           virtualWindow().end,
-      ] as const,
+        ] as const,
       () => {
-        trace.trace("virtual-window", {
-          sessionID: route.sessionID,
-          messageCount: messages().length,
-          visibleCount: visibleMessages().length,
-          start: virtualWindow().start,
-          end: virtualWindow().end,
-          scrollTop: sessionScrollTop(),
-          follow: followSessionOutput(),
-        })
+        trace.trace("virtual-window", renderSnapshot())
         if (submitBottomScrollSessionID === route.sessionID) return
-        if (followSessionOutput()) scheduleBottomScroll(0)
+        if (followSessionOutput()) scheduleFollowBottomScroll(route.sessionID)
       },
+      { defer: true },
+    ),
+  )
+
+  createEffect(
+    on(
+      () => [
+        route.sessionID,
+        sessionScrollTop(),
+        followSessionOutput(),
+        pinnedTurnUserMessageID(),
+        stickyUserMessageID(),
+        transcriptRenderKey(),
+      ] as const,
+      () => trace.trace("render-scroll-state", renderSnapshot(false)),
       { defer: true },
     ),
   )
@@ -2124,7 +2403,8 @@ export function Session() {
     const userAnchors = scroll
       .getChildren()
       .map((child) => {
-        const message = child.id ? byID.get(child.id) : undefined
+        const messageID = child.id?.startsWith("queued-") ? child.id.slice("queued-".length) : child.id
+        const message = messageID ? byID.get(messageID) : undefined
         if (message?.role !== "user") return
         return { id: message.id, y: child.y }
       })
@@ -2134,11 +2414,17 @@ export function Session() {
     const pinnedID = pinnedTurnUserMessageID()
     if (pinnedID) {
       const pinnedAnchor = userAnchors.find((item) => item.id === pinnedID)
-      const pinnedIndex = messages().findIndex((message) => message.id === pinnedID)
+      const pinnedIndex = transcriptRows().findIndex((message) => message.id === pinnedID)
       if (
+        stickyUserMessageID() === pinnedID ||
         (typeof pinnedAnchor?.y === "number" && pinnedAnchor.y <= top) ||
         (pinnedIndex >= 0 && pinnedIndex < virtualWindow().start) ||
-        (!pinnedAnchor && pinnedIndex >= 0 && followSessionOutput())
+        (!pinnedAnchor && pinnedIndex >= 0 && followSessionOutput()) ||
+        shouldPinSessionStickyUserHeader({
+          pinnedUserID: pinnedID,
+          pinnedAnchor,
+          follow: followSessionOutput(),
+        })
       ) {
         setStickyUserMessageID(pinnedID)
         return
@@ -2150,7 +2436,7 @@ export function Session() {
     }
     setStickyUserMessageID(
       stickyUserIDFromVirtualWindow({
-        messages: messages(),
+        messages: transcriptRows(),
         window: virtualWindow(),
         mountedUserAnchors: userAnchors,
         top,
@@ -2365,7 +2651,7 @@ export function Session() {
         "Use exactly the `loop` tool, not shell commands. If the request already includes the objective, cadence, iteration limit, permission mode, and stop conditions, your first loop tool call must be action `activate`. Do not call `show` or `list` before creating the loop.",
         "If the request is to stop, remove, delete, pause, resume, or run the current loop and no loop id is visible, call the matching `loop` action without `workflowID`; the tool resolves the current session's contextual loop.",
         "Ask with the `question` tool only when a critical setting is missing: objective, iteration limit or unbounded mode, cadence, model/provider, max wall-clock runtime, permission mode, or stop condition.",
-        'Default to report-only unless I explicitly allow edits. Spanish/English requests such as codear, implementar, fixear, editar, hacer cambios, probar, compilar, run tests, or build are explicit edit permission for the loop; use permissionMode `normal` or `custom`, set `reportOnly: false`, and keep safety gates for push/merge/release/destructive shell. If I choose a model and reasoning effort/variant, pass `model` as provider/model and pass the effort as `variant` (for example `variant: "medium"`), or use provider/model#variant. For interval cadence, set `triggerMode: "interval"` and convert the interval to `intervalMs`. Preserve the current session model by omitting `model` unless I choose one.',
+        'Default to report-only unless I explicitly allow edits. Spanish/English requests such as codear, implementar, fixear, editar, hacer cambios, probar, compilar, run tests, or build are explicit edit permission for the loop; use permissionMode `normal` or `custom`, set `reportOnly: false`, and keep safety gates for push/merge/release/destructive shell. If I choose a model and reasoning effort/variant, pass `model` as provider/model and pass the effort as `variant` (for example `variant: "medium"`), or use provider/model#variant. For interval cadence, set `triggerMode: "interval"` and convert the interval to `intervalMs`; for a local daily schedule, set `triggerMode: "daily"`, `dailyAt` as `HH:mm`, and an explicit IANA `timezone`. Preserve the current session model by omitting `model` unless I choose one.',
         "Do not hand-render Markdown tables or duplicate status cards after the tool call. Let the Loop Workflow card render from tool metadata, then give a one-line confirmation.",
       ].join("\n"),
     )
@@ -2664,14 +2950,14 @@ export function Session() {
       category: "Session",
       description: showCompactedToolCalls()
         ? "Return to the lightweight compacted history view."
-        : "Loads every historical tool call before compaction. Warning: this can use substantially more RAM.",
+        : "Loads historical tool calls progressively so long sessions stay responsive.",
       onSelect: async (dialog) => {
         const enable = !showCompactedToolCalls()
         if (enable) {
           const confirmed = await DialogConfirm.show(
             dialog,
             "Show all compacted tool calls?",
-            "This loads many additional historical messages and can substantially increase RAM usage. You can disable it again from Ctrl+P.",
+            "This loads additional historical tool calls in bounded pages as you scroll. You can disable it again from Ctrl+P.",
           )
           if (!confirmed) return
         }
@@ -3282,10 +3568,14 @@ export function Session() {
                     <Show when={virtualWindow().topSpacer > 0}>
                       <box height={virtualWindow().topSpacer} flexShrink={0} />
                     </Show>
-                    <For each={visibleMessages()}>
-                      {(message, index) => (
-                        <Switch>
-                          <Match when={message.id === revert()?.messageID}>
+                    <For each={visibleMessageIDs()}>
+                      {(messageID, index) => {
+                        return (
+                          <Show when={messageByID().get(messageID)}>
+                          {(message) => {
+                            return (
+                            <Switch>
+                              <Match when={message().id === revert()?.messageID}>
                             {(function () {
                               const command = useCommandDialog()
                               const [hover, setHover] = createSignal(false)
@@ -3346,53 +3636,80 @@ export function Session() {
                               )
                             })()}
                           </Match>
-                          <Match when={revert()?.messageID && message.id >= revert()!.messageID}>
+                          <Match when={revert()?.messageID && message().id >= revert()!.messageID}>
                             <></>
                           </Match>
-                          <Match when={message.role === "user"}>
+                           <Match when={queuedMessageIDs().has(message().id)}>
+                             <UserMessage
+                               index={virtualWindow().start + index()}
+                               message={message() as UserMessage}
+                               parts={sync.data.part[message().id] ?? []}
+                               queued
+                               sticky
+                               anchorID={`queued-${message().id}`}
+                               onSendNow={() => void sendQueuedNow(message().id)}
+                               sendNowPending={sendNowMessageID() === message().id}
+                               simpleHistory={false}
+                               compactSubagentPrompt={Boolean(session()?.parentID)}
+                               onMouseUp={() => {
+                                 if (renderer.getSelection()?.getSelectedText()) return
+                                 dialog.replace(() => (
+                                   <DialogMessage
+                                     messageID={message().id}
+                                     sessionID={route.sessionID}
+                                     setPrompt={(promptInfo) => prompt?.set(promptInfo)}
+                                   />
+                                 ))
+                               }}
+                             />
+                           </Match>
+                           <Match when={message().role === "user" && !queuedMessageIDs().has(message().id)}>
                             <UserMessage
                               index={virtualWindow().start + index()}
                               onMouseUp={() => {
                                 if (renderer.getSelection()?.getSelectedText()) return
                                 dialog.replace(() => (
                                   <DialogMessage
-                                    messageID={message.id}
+                                    messageID={message().id}
                                     sessionID={route.sessionID}
                                     setPrompt={(promptInfo) => prompt?.set(promptInfo)}
                                   />
                                 ))
                               }}
-                              message={message as UserMessage}
-                              parts={sync.data.part[message.id] ?? []}
-                              pending={pending()}
-                              onSendNow={() => void sendQueuedNow(message.id)}
-                              sendNowPending={sendNowMessageID() === message.id}
+                              message={message() as UserMessage}
+                              parts={sync.data.part[message().id] ?? []}
+                              onSendNow={() => void sendQueuedNow(message().id)}
+                              sendNowPending={sendNowMessageID() === message().id}
                               simpleHistory={
                                 !showCompactedToolCalls() &&
                                 shouldUseSimpleSessionHistory({
-                                  messageID: message.id,
+                                  messageID: message().id,
                                   fullStartID: fullHistoryStartID(),
                                 })
                               }
                               compactSubagentPrompt={Boolean(session()?.parentID)}
                             />
                           </Match>
-                          <Match when={message.role === "assistant"}>
+                          <Match when={message().role === "assistant"}>
                             <AssistantMessage
-                              last={lastAssistant()?.id === message.id}
-                              message={message as AssistantMessage}
-                              parts={sync.data.part[message.id] ?? []}
+                              last={lastAssistant()?.id === message().id}
+                              message={message() as AssistantMessage}
+                              parts={sync.data.part[message().id] ?? []}
                               simpleHistory={
                                 !showCompactedToolCalls() &&
                                 shouldUseSimpleSessionHistory({
-                                  messageID: message.id,
+                                  messageID: message().id,
                                   fullStartID: fullHistoryStartID(),
                                 })
                               }
                             />
                           </Match>
-                        </Switch>
-                      )}
+                            </Switch>
+                            )
+                          }}
+                          </Show>
+                        )
+                      }}
                     </For>
                     <Show when={virtualWindow().bottomSpacer > 0}>
                       <box height={virtualWindow().bottomSpacer} flexShrink={0} />
@@ -3407,9 +3724,6 @@ export function Session() {
                       index={0}
                       message={message()}
                       parts={sync.data.part[message().id] ?? []}
-                      pending={pending()}
-                      onSendNow={() => void sendQueuedNow(message().id)}
-                      sendNowPending={sendNowMessageID() === message().id}
                       sticky
                       simpleHistory={false}
                       onMouseUp={() => {
@@ -4334,18 +4648,27 @@ function CompactionCard(props: {
   part: Extract<Part, { type: "compaction" }>
   summaryPreview?: string
   transcriptPreview?: string
-  modelOutputText?: string
-  modelReasoningText?: string
-  modelDetailLabel?: string
   editableScratchpad?: boolean
 }) {
   const sdk = useSDK()
+  const { theme, syntax } = useTheme()
   const mend = useMendTuiProfile()
+  const dimensions = useTerminalDimensions()
+  const messageWidth = createMemo(() =>
+    sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)),
+  )
+  const contentWidth = createMemo(() => Math.max(1, messageWidth() - 3))
+  const renderWidth = createMemo(() => Math.min(contentWidth(), 100))
   const scratchpadAllowed = createMemo(
     () => props.editableScratchpad || mend.profile.presentation.compaction.allowScratchpad,
   )
   const summaryPreview = createMemo(() => compactionSummaryPreview(props.summaryPreview, 360))
   const transcriptPreview = createMemo(() => compactPreviewLine(props.transcriptPreview, 180))
+  const summaryContent = createMemo(() => {
+    const summary = props.summaryPreview?.trim()
+    if (!summary) return ""
+    return renderPlanMarkdownStatic(summary, renderWidth(), { tableMode: "grid", markdownMode: "tables-only" })
+  })
   return (
     <CompactionPanel
       reason={props.part.auto ? "auto" : "manual"}
@@ -4356,9 +4679,21 @@ function CompactionCard(props: {
       hasSummaryBody={Boolean(summaryPreview())}
       summaryPreview={summaryPreview()}
       transcriptPreview={transcriptPreview()}
-      modelOutputText={props.modelOutputText}
-      modelReasoningText={props.modelReasoningText}
-      modelDetailLabel={props.modelDetailLabel}
+      summaryContent={summaryContent() ? (
+        <box paddingTop={1}>
+          <StyledPlanMarkdown
+            syntaxStyle={syntax()}
+            width={contentWidth()}
+            content={summaryContent()}
+            tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
+            conceal={true}
+            fg={theme.text}
+            bg={theme.backgroundPanel}
+            stableTextMode={false}
+            colorizeHex={true}
+          />
+        </box>
+      ) : undefined}
       scratchpad={
         scratchpadAllowed()
           ? {
@@ -4394,7 +4729,8 @@ function UserMessage(props: {
   parts: Part[]
   onMouseUp: () => void
   index: number
-  pending?: string
+  queued?: boolean
+  anchorID?: string
   onSendNow?: () => void
   sendNowPending?: boolean
   sticky?: boolean
@@ -4430,13 +4766,7 @@ function UserMessage(props: {
   const tuiConfig = useTuiConfig()
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const [hover, setHover] = createSignal(false)
-  const queued = createMemo(() =>
-    sessionUserMessageQueued({
-      messageID: props.message.id,
-      pendingAssistantID: props.pending,
-      messages: sync.data.message[props.message.sessionID] ?? [],
-    }),
-  )
+  const queued = createMemo(() => props.queued === true)
   const color = createMemo(() => local.agent.color(props.message.agent))
   const queuedFg = createMemo(() => selectedForeground(theme, color()))
   const sendNowBackground = createMemo(() => (props.sendNowPending ? theme.backgroundElement : theme.accent))
@@ -4543,6 +4873,13 @@ function UserMessage(props: {
   const compaction = createMemo(() =>
     props.parts.find((x): x is Extract<Part, { type: "compaction" }> => x.type === "compaction"),
   )
+  const latestCompactionMessageID = createMemo(() =>
+    (sync.data.message[props.message.sessionID] ?? [])
+      .filter((message) => message.role === "user")
+      .findLast((message) => (sync.data.part[message.id] ?? []).some((part) => part.type === "compaction"))?.id,
+  )
+  const showCompactionCard = createMemo(() => props.message.id === latestCompactionMessageID())
+  const visibleCompaction = createMemo(() => (showCompactionCard() ? compaction() : undefined))
   const summaryAssistant = createMemo(() =>
     (sync.data.message[props.message.sessionID] ?? []).find(
       (message): message is AssistantMessage =>
@@ -4563,38 +4900,15 @@ function UserMessage(props: {
       .trim()
     return text || undefined
   })
-  const summaryReasoningText = createMemo(() => {
-    const summary = summaryAssistant()
-    if (!summary) return
-    const text = (sync.data.part[summary.id] ?? [])
-      .filter((part): part is ReasoningPart => part.type === "reasoning")
-      .map((part) => part.text.trim())
-      .filter(Boolean)
-      .join("\n\n")
-      .trim()
-    return text || undefined
-  })
-  const summaryPreview = createMemo(() => summaryOutputText())
-  const summaryModelDetailLabel = createMemo(() => {
-    const summary = summaryAssistant()
-    if (!summary) return
-    return (
-      [
-        summary.modelID ? `${summary.providerID}/${summary.modelID}` : undefined,
-        summary.tokens?.reasoning ? `${Locale.number(summary.tokens.reasoning)} reasoning` : undefined,
-        summary.tokens?.output ? `${Locale.number(summary.tokens.output)} output` : undefined,
-      ]
-        .filter((item): item is string => Boolean(item))
-        .join(" · ") || undefined
-    )
-  })
+  const summaryReady = createMemo(() => summaryAssistant()?.time.completed !== undefined)
+  const summaryPreview = createMemo(() => (summaryReady() ? summaryOutputText() : undefined))
   const transcriptPreview = createMemo(() => compaction()?.instructions || text())
 
   return (
     <>
       <Show when={text()}>
         <box
-          id={props.sticky ? undefined : props.message.id}
+          id={props.anchorID ?? (props.sticky ? undefined : props.message.id)}
           marginTop={props.index === 0 ? 0 : 1}
           width="100%"
           paddingLeft={1}
@@ -4788,15 +5102,12 @@ function UserMessage(props: {
           </box>
         </box>
       </Show>
-      <Show when={compaction()}>
+      <Show when={visibleCompaction()}>
         {(part) => (
           <CompactionCard
             part={part()}
             summaryPreview={summaryPreview()}
             transcriptPreview={transcriptPreview()}
-            modelOutputText={summaryOutputText()}
-            modelReasoningText={summaryReasoningText()}
-            modelDetailLabel={summaryModelDetailLabel()}
             editableScratchpad={!summaryAssistant()}
           />
         )}
@@ -4837,6 +5148,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   const model = createMemo(() => Model.name(ctx.providers(), props.message.providerID, props.message.modelID))
   const usage = createMemo(() => formatAssistantUsage(props.message, ctx.providers()))
   const modelUsageLabel = createMemo(() => usage()?.compact ?? model())
+  const partsPaging = createMemo(() => sync.data.message_part_paging[props.message.id])
   const rawReasoningUsageLabel = createMemo(() => {
     if (mend.profile.presentation.profile !== "raw") return
     const reasoning = props.message.tokens.reasoning ?? 0
@@ -4949,8 +5261,19 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
               </For>
             )}
           </Show>
-          <Show when={streamingCompactionSummary()}>
-            <CompactionPanel reason="auto" hasSummaryBody={false} />
+          <Show when={partsPaging()?.hasMore}>
+            <box
+              paddingLeft={3}
+              paddingTop={1}
+              onMouseUp={() => {
+                if (partsPaging()?.loading) return
+                void sync.session.loadMoreMessageParts(props.message.sessionID, props.message.id).catch(() => {})
+              }}
+            >
+              <text fg={theme.textMuted}>
+                ◇ {partsPaging()?.loading ? "Loading more tool calls…" : "More tool calls available · click to load"}
+              </text>
+            </box>
           </Show>
           <Show when={props.message.error && props.message.error.name !== "MessageAbortedError"}>
             <box
@@ -4995,6 +5318,9 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
               </box>
             </Match>
           </Switch>
+          <Show when={streamingCompactionSummary()}>
+            <CompactionPanel reason="auto" hasSummaryBody={false} />
+          </Show>
         </>
       </Match>
     </Switch>
@@ -5337,8 +5663,6 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   const streaming = createMemo(() => props.last && !props.message.time.completed)
   const source = createMemo(() => {
     const text = streaming() ? props.part.text.trimStart() : props.part.text.trim()
-    if (streaming() && (renderer() === "markdown" || renderer() === "rich"))
-      return visibleStreamingMarkdownPreview(text)
     return text
   })
   const messageWidth = createMemo(() =>
@@ -5347,25 +5671,6 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   const markdownWidth = createMemo(() => Math.max(1, messageWidth() - textPaddingLeft))
   const richRenderWidth = createMemo(() => Math.min(markdownWidth(), 100))
   const hasMermaid = createMemo(() => hasMermaidFence(source()))
-  let streamingMarkdownState: StreamingPlanMarkdownState | undefined
-  const streamingMarkdownContent = createMemo(() => {
-    if (!streaming()) {
-      streamingMarkdownState = undefined
-      return
-    }
-    if (renderer() !== "markdown" && renderer() !== "rich") {
-      streamingMarkdownState = undefined
-      return
-    }
-    const result = renderPlanMarkdownStreaming(
-      source(),
-      richRenderWidth(),
-      { tableMode: "grid", markdownMode: "tables-only" },
-      streamingMarkdownState,
-    )
-    streamingMarkdownState = result.state
-    return result
-  })
   const markdownStaticContent = createMemo(() => {
     if (renderer() !== "markdown" && renderer() !== "rich") return
     if (streaming()) return
@@ -5382,22 +5687,20 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   const [richContent] = createResource(richInput, async (input) =>
     renderPlanMarkdown(input.text, input.width, { tableMode: "grid", markdownMode: "tables-only" }),
   )
-  const markdownContent = createMemo(
-    () => streamingMarkdownContent()?.content ?? markdownStaticContent() ?? richContent() ?? source(),
-  )
-  const markdownTail = createMemo(() => {
-    if (streaming()) return ""
-    const tail = streamingMarkdownContent()?.tail ?? ""
+  const streamingContent = createMemo(() => {
+    if (!streaming()) return ""
+    if (renderer() !== "markdown" && renderer() !== "rich") return ""
     return renderStreamingMarkdownTail(
-      tail,
+      source(),
       richRenderWidth(),
       { tableMode: "grid", markdownMode: "tables-only" },
       {
-        finalized: !streaming(),
-        output: streaming() ? "text" : "markdown",
+        finalized: false,
+        output: "text",
       },
     )
   })
+  const markdownContent = createMemo(() => markdownStaticContent() ?? richContent() ?? source())
   return (
     <Show when={source().trim().length > 0}>
       <box
@@ -5417,16 +5720,14 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
             <StyledPlanMarkdown
               syntaxStyle={syntax()}
               width={markdownWidth()}
-              content={markdownContent()}
+              content={streaming() ? streamingContent() : markdownContent()}
               tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
               conceal={ctx.conceal()}
               fg={theme.markdownText}
               bg={theme.background}
+              streaming={streaming()}
               stableTextMode={!streaming()}
               colorizeHex={true}
-              streamingTail={markdownTail()}
-              streamingTailColorizeHex={true}
-              streamingTailMode={streaming() ? "text" : "markdown"}
             />
           </Match>
           <Match when={true}>
@@ -6958,6 +7259,7 @@ function Loop(props: ToolProps<typeof LoopTool>) {
   const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
   const { navigate } = useRoute()
+  const renderer = useRenderer()
   const [hover, setHover] = createSignal(false)
   const [refresh, setRefresh] = createSignal(0)
 
@@ -6978,9 +7280,16 @@ function Loop(props: ToolProps<typeof LoopTool>) {
   async function fetchLoopSnapshot() {
     const id = resolvedWorkflowID()
     if (!id) return undefined
-    const response = await sdk.fetch(`${sdk.url}/loop/${id}`, { headers: { accept: "application/json" } })
-    if (!response.ok) return undefined
-    return response.json().catch(() => undefined) as Promise<SessionLoopSnapshot | undefined>
+    const headers = new Headers(sdk.headers)
+    headers.set("accept", "application/json")
+    if (sdk.directory) headers.set("x-mendcode-directory", encodeURIComponent(sdk.directory))
+    try {
+      const response = await sdk.fetch(`${sdk.url}/loop/${id}`, { headers })
+      if (!response.ok) return undefined
+      return response.json().catch(() => undefined) as Promise<SessionLoopSnapshot | undefined>
+    } catch {
+      return undefined
+    }
   }
   const [snapshot] = createResource(() => `${resolvedWorkflowID() ?? ""}:${refresh()}`, fetchLoopSnapshot)
   onMount(() => {
@@ -7020,8 +7329,11 @@ function Loop(props: ToolProps<typeof LoopTool>) {
   const triggerLabel = createMemo(() => {
     const mode = props.metadata.triggerMode ?? firstWorkflow()?.triggerMode ?? props.input.triggerMode
     const interval = props.metadata.intervalMs ?? firstWorkflow()?.intervalMs ?? props.input.intervalMs
+    const dailyAt = props.metadata.dailyAt ?? firstWorkflow()?.dailyAt ?? props.input.dailyAt
+    const timezone = props.metadata.timezone ?? firstWorkflow()?.timezone ?? props.input.timezone
     if (mode === "interval" && typeof interval === "number" && interval > 0)
       return `interval · every ${Math.round(interval / 60000)}m`
+    if (mode === "daily") return `daily · ${dailyAt ?? "configured time"}${timezone ? ` · ${timezone}` : ""}`
     if (mode) return String(mode)
     return "manual"
   })
@@ -7119,6 +7431,10 @@ function Loop(props: ToolProps<typeof LoopTool>) {
     })
   }
   const openLabel = createMemo(() => (resolvedRootSessionID() ? "open loop chat" : "open loops dashboard"))
+  const handleOpenTarget = () => {
+    if (renderer.getSelection()?.getSelectedText()) return
+    void openTarget().catch((error) => toast.error(error))
+  }
 
   return (
     <BlockTool
@@ -7128,12 +7444,12 @@ function Loop(props: ToolProps<typeof LoopTool>) {
       contentGap={0}
       part={props.part}
       spinner={props.part.state.status === "running" && !resolvedWorkflowID()}
-      onClick={openTarget}
     >
       <box width="100%" alignItems="center">
         <box
           flexDirection="column"
           width={panelWidth()}
+          onMouseUp={handleOpenTarget}
           flexShrink={0}
           borderStyle="single"
           borderColor={hover() ? theme.secondary : receiptColor()}

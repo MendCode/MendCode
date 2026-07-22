@@ -3,7 +3,7 @@ import { spawnSync } from "child_process"
 import { existsSync, readFileSync } from "fs"
 import path from "path"
 import { generatedConfigNeedsSync, initProject, syncProject } from "../config/project"
-import { mendPaths } from "../config/paths"
+import { mendPaths, resolveMendProjectRoot } from "../config/paths"
 import { donorIdentityGuardStatus, runtimeAdapterCommand } from "../runtime/system"
 import { worktreeStatus } from "../config/worktree"
 import { tsmStatus } from "../config/tsm"
@@ -166,9 +166,11 @@ Workflows:
   mendcode marketplace install-source <source-id>
   mendcode marketplace enable|disable <id>
                                 select or deselect a marketplace pack
-  mendcode loops status|list     inspect local Loop Workflows
-  mendcode loops examples        list built-in Loop templates
-  mendcode loops show|monitor <id>
+   mendcode loops status|list     inspect local Loop Workflows
+   mendcode loops examples        list built-in Loop templates
+   mendcode loops draft --name <name> --objective <text>
+                                 create a draft; use --daily-at HH:mm --timezone Area/City for local daily runs
+   mendcode loops show|monitor <id>
   mendcode loops tick [id]        preview one due loop iteration
                                 inspect or monitor one Loop Workflow journal
   mendcode loops service status|start|stop
@@ -212,7 +214,8 @@ Primary public surface:
   mendcode loops tick <id> --execute [--report-only]
   mendcode loops service install|start|stop|restart|status|logs|uninstall [--service-dir <path>] [--log-dir <path>]
   mendcode loops daemon --once --quiet  run one due-loop pass for scheduled background services
-  mendcode memory dream tick|daemon|service
+  mendcode memory dream run|consolidate|tick|daemon|service
+  mendcode memory dream run --preview|--auto  run a manual consolidation pass
   mendcode memory dream daemon --once   run one scheduled Dream pass and exit
   mendcode memory dream service install|start|stop|restart|status|logs|uninstall [--service-dir <path>] [--log-dir <path>]
   mendcode mflow status|setup|activate|deactivate|remove
@@ -275,7 +278,7 @@ export function runtimeArgsForSessionShortcut(sessionID: string, cwd = shellCwd(
 }
 
 function shellCwd() {
-  return path.resolve(process.env.MENDCODE_SHELL_CWD || process.cwd())
+  return resolveMendProjectRoot()
 }
 
 function controlPlaneEnv(root: string) {

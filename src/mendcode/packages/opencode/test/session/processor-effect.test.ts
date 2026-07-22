@@ -1018,6 +1018,67 @@ it.live("session.processor effect tests keep permission toolcalls pending across
   ),
 )
 
+it.live("session.processor effect tests keep shell tools pending across idle stream timeout", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        process.env.MENDCODE_LLM_STREAM_IDLE_TIMEOUT_MS = "25"
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.tool("bash", { command: "sleep 1" })
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "run a slow command")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const run = yield* handle
+          .process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies MessageV2.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "run a slow command" }],
+            tools: { bash: neverTool("Run a shell command") },
+          })
+          .pipe(Effect.forkChild)
+
+        yield* llm.wait(1)
+        yield* Effect.promise(async () => {
+          const end = Date.now() + 500
+          while (Date.now() < end) {
+            if (MessageV2.parts(msg.id).some((part) => part.type === "tool")) return
+            await Bun.sleep(10)
+          }
+        })
+        yield* Effect.sleep("100 millis")
+
+        const call = MessageV2.parts(msg.id).find((part): part is MessageV2.ToolPart => part.type === "tool")
+        expect(yield* llm.calls).toBe(1)
+        expect(call?.tool).toBe("bash")
+        expect(call?.state.status).toBe("running")
+
+        const exit = yield* Fiber.await(run).pipe(Effect.timeout("100 millis"), Effect.exit)
+        expect(Exit.isFailure(exit)).toBe(true)
+        yield* Fiber.interrupt(run)
+      }),
+    { git: true, config: (url) => providerCfg(url) },
+  ),
+)
+
 it.live("session.processor effect tests keep task child permissions pending across idle stream timeout", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>

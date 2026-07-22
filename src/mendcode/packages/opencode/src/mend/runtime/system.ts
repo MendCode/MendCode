@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "fs/promises"
 import { homedir, tmpdir } from "os"
 import path from "path"
 import { resolveGlobalModelsConfigPath } from "../config/models"
-import { mendPaths } from "../config/paths"
+import { mendPaths, resolveMendProjectRoot } from "../config/paths"
 import { mendRuntimeVersion } from "./version"
 
 const DONOR_COMMAND_OVERRIDE_ENV = "MENDCODE_ALLOW_DONOR_COMMANDS"
@@ -421,7 +421,7 @@ function donorRuntimeGlobalDataReport(root = mendPaths().root) {
 }
 
 export function donorConfigPathsReport(root = mendPaths().root) {
-  const cwd = process.env.MENDCODE_SHELL_CWD || process.cwd()
+  const cwd = resolveMendProjectRoot()
   const env = originalEnv()
   return {
     precedence: {

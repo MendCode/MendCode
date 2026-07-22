@@ -869,6 +869,13 @@ The `@mendcode/plugin` package supports:
 - slots/widgets
 - footer entries
 - runtime status
+- session lifecycle and AI handles
+- Agent View metadata
+- memory graph reads/writes and Memory side chat
+- focused modal/overlay control
+- generated SDK access through `api.client`
+
+A TUI plugin can therefore implement a full page, modal, side chat, session assistant, dashboard, or memory workflow without editing MendCode internals. See the [complete public API](tui-plugins-and-widgets.md#public-api-surface).
 
 Useful home/prompt slots:
 

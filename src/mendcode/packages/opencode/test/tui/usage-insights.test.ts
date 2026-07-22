@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   buildUsageInsights,
   formatInsightDuration,
+  formatInsightNumber,
   normalizeUsageInsights,
   type InsightMessage,
   type InsightSession,
@@ -179,5 +180,11 @@ describe("usage insights", () => {
 
   test("formats multi-day durations with normalized days and hours", () => {
     expect(formatInsightDuration(116 * 60 * 60 * 1000)).toBe("4d 20h")
+  })
+
+  test("formats large usage values with truncated compact units", () => {
+    expect(formatInsightNumber(4_873_200_000)).toBe("4.8B")
+    expect(formatInsightNumber(706_200_000)).toBe("706.2M")
+    expect(formatInsightNumber(1_199)).toBe("1.1K")
   })
 })

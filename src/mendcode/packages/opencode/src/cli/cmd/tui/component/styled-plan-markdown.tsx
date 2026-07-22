@@ -16,6 +16,7 @@ type StyledPlanMarkdownProps = {
     columnFitter?: "balanced"
     wrapMode?: "char"
   }
+  streaming?: boolean
   stableTextMode?: boolean
   colorizeHex?: boolean
   streamingTail?: string
@@ -106,9 +107,14 @@ function isMarkdownTableLine(line: string) {
   return trimmed.length > 1 && trimmed.startsWith("|") && trimmed.endsWith("|")
 }
 
+function hasInlineCodeSpan(line: string) {
+  return /(^|[^\\])`[^`\n]+`/.test(line)
+}
+
 export function shouldColorizeHexMarkdownLine(line: string, inFence = false) {
   if (inFence) return false
   if (isMarkdownTableLine(line)) return false
+  if (hasInlineCodeSpan(line)) return false
   return hasStyledHexColors(line)
 }
 

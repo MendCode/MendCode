@@ -286,6 +286,37 @@ describe("MessageV2.page", () => {
     })
   })
 
+  test("tui view bounds heavyweight user summary diffs without changing full pages", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const messageID = await addUser(session.id, "show history")
+        const initial = MessageV2.page({ sessionID: session.id, limit: 1 }).items[0]?.info
+        if (!initial || initial.role !== "user") throw new Error("user message missing")
+        const diffs = Array.from({ length: 512 }, (_, index) => ({
+          file: `file-${index}.txt`,
+          patch: "x".repeat(16 * 1024),
+          additions: 1,
+          deletions: 1,
+        }))
+        await svc.updateMessage({
+          ...initial,
+          id: messageID,
+          summary: { title: "summary", body: "body", diffs },
+        })
+
+        const full = MessageV2.page({ sessionID: session.id, limit: 1 })
+        const tui = MessageV2.page({ sessionID: session.id, limit: 1, view: "tui" })
+        expect(full.items[0]?.info.role === "user" && full.items[0].info.summary?.diffs).toHaveLength(512)
+        expect(tui.items[0]?.info.role === "user" && tui.items[0].info.summary?.diffs.length).toBe(64)
+        expect(Buffer.byteLength(JSON.stringify(tui))).toBeLessThan(2 * 1024 * 1024)
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+
   test("tui view trims heavyweight part payloads without changing full pages", async () => {
     await WithInstance.provide({
       directory: root,
@@ -303,12 +334,44 @@ describe("MessageV2.page", () => {
           filename: "large.png",
           url: `data:image/png;base64,${"a".repeat(64 * 1024)}`,
         } as any)
+        await svc.updatePart({
+          id: PartID.ascending(),
+          sessionID: session.id,
+          messageID,
+          type: "patch",
+          hash: "large-patch",
+          files: Array.from({ length: 4_444 }, (_, index) => `generated/file-${index}.ts`),
+        } as any)
+        const workflows = Array.from({ length: 32 }, (_, index) => ({
+          id: index,
+          state: { details: { payload: "x".repeat(4 * 1024) } },
+        }))
+        await svc.updatePart({
+          id: PartID.ascending(),
+          sessionID: session.id,
+          messageID,
+          type: "tool",
+          callID: "call_loop",
+          tool: "loop",
+          state: {
+            status: "completed",
+            input: { action: "show" },
+            output: "loop output",
+            title: "loop",
+            metadata: { workflows },
+            time: { start: Date.now(), end: Date.now() },
+          },
+        } as any)
 
         const full = MessageV2.page({ sessionID: session.id, limit: 1 })
         const tui = MessageV2.page({ sessionID: session.id, limit: 1, view: "tui" })
         const fullTool = full.items[0]?.parts.find((part) => part.type === "tool")
         const tuiTool = tui.items[0]?.parts.find((part) => part.type === "tool")
         const tuiFile = tui.items[0]?.parts.find((part) => part.type === "file")
+        const fullPatch = full.items[0]?.parts.find((part) => part.type === "patch")
+        const tuiPatch = tui.items[0]?.parts.find((part) => part.type === "patch")
+        const fullLoop = full.items[0]?.parts.find((part) => part.type === "tool" && part.callID === "call_loop")
+        const tuiLoop = tui.items[0]?.parts.find((part) => part.type === "tool" && part.callID === "call_loop")
 
         expect(fullTool?.type === "tool" && fullTool.state.status === "completed" && fullTool.state.output).toBe(large)
         expect(tuiTool?.type === "tool" && tuiTool.state.status === "completed" && tuiTool.state.output.length).toBeLessThan(
@@ -319,14 +382,64 @@ describe("MessageV2.page", () => {
             tuiTool.state.status === "completed" &&
             String(tuiTool.state.metadata.outputPath),
         ).toBe("/tmp/full-output")
+        expect(
+          tuiTool?.type === "tool" && tuiTool.state.status === "completed" && String(tuiTool.state.metadata.diff),
+        ).toContain("Diff preview truncated: too large to render safely")
+        expect(
+          tuiTool?.type === "tool" && tuiTool.state.status === "completed" && String(tuiTool.state.metadata.diff),
+        ).toContain("Show more")
+        expect(
+          tuiTool?.type === "tool" && tuiTool.state.status === "completed" && String(tuiTool.state.metadata.diff).length,
+        ).toBeLessThanOrEqual(12 * 1024)
         expect(tuiFile?.type === "file" && tuiFile.url.length).toBeLessThan(16 * 1024)
+        expect(fullPatch?.type === "patch" && fullPatch.files.length).toBe(4_444)
+        expect(tuiPatch?.type === "patch" && tuiPatch.files.length).toBe(256)
+        expect(fullLoop?.type === "tool" && fullLoop.state.status === "completed" && fullLoop.state.metadata.workflows).toHaveLength(32)
+        expect(tuiLoop?.type === "tool" && tuiLoop.state.status === "completed" && tuiLoop.state.metadata.workflows).toHaveLength(2)
+        expect(Buffer.byteLength(JSON.stringify(tui))).toBeLessThan(128 * 1024)
 
         await svc.remove(session.id)
       },
     })
   })
 
-  test("tui pagination skips tool-only messages before the latest completed compaction", async () => {
+  test("tui-all pages tool parts per message instead of hydrating an unbounded timeline", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const messageID = await addUser(session.id, "show every tool call")
+        for (let index = 0; index < 130; index++) {
+          await addLargeToolPart(session.id, messageID, `tool ${index}`)
+        }
+
+        const first = MessageV2.page({ sessionID: session.id, limit: 1, view: "tui-all", partsLimit: 32 })
+        const firstItem = first.items[0]!
+        expect(firstItem.parts).toHaveLength(32)
+        expect(firstItem.partsMore).toBe(true)
+        expect(firstItem.partsCursor).toBeTruthy()
+
+        const next = MessageV2.get({
+          sessionID: session.id,
+          messageID,
+          view: "tui-all",
+          partsLimit: 32,
+          partsAfter: firstItem.partsCursor,
+        })
+        expect(next.parts).toHaveLength(32)
+        expect(next.parts[0]?.id).not.toBe(firstItem.parts.at(-1)?.id)
+        expect(next.partsMore).toBe(true)
+        expect(next.partsCursor).toBeTruthy()
+
+        const full = MessageV2.get({ sessionID: session.id, messageID })
+        expect(full.parts).toHaveLength(131)
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+
+  test("tui pagination skips tool-only messages and heavy parts before the latest completed compaction", async () => {
     await WithInstance.provide({
       directory: root,
       fn: async () => {
@@ -334,6 +447,7 @@ describe("MessageV2.page", () => {
         const oldUser = await addUser(session.id, "old request")
         const oldFinal = await addAssistant(session.id, oldUser, { finish: "stop", completed: true })
         await addText(session.id, oldFinal, "old final answer")
+        await addLargeToolPart(session.id, oldFinal, "x".repeat(160 * 1024))
         const hiddenTools = [] as MessageID[]
         for (let index = 0; index < 120; index++) {
           const assistant = await addAssistant(session.id, oldUser, { finish: "tool-calls", completed: true })
@@ -352,6 +466,8 @@ describe("MessageV2.page", () => {
 
         const latest = MessageV2.page({ sessionID: session.id, limit: 4, view: "tui" })
         expect(latest.items.map((item) => item.info.id)).toEqual([oldFinal, compact, summary, latestUser, latestAssistant])
+        expect(latest.items.find((item) => item.info.id === oldFinal)?.parts).toHaveLength(1)
+        expect(latest.items.find((item) => item.info.id === oldFinal)?.parts[0]?.type).toBe("text")
         expect(latest.cursor).toBeTruthy()
         expect(latest.sparse).toBe(true)
 

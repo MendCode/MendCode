@@ -605,9 +605,16 @@ export function Setup() {
     await writeGlobalModelsConfig(config)
     await syncGlobalPrimaryAgentModels(mend.root)
     await refreshGeneratedRuntimeModelConfig(mend.root)
+    await writeBudgetPolicy(
+      preset === "subscription"
+        ? { mode: "subscription", warnUsd: null, stopUsd: null, expensiveModelRequiresConfirm: false }
+        : { mode: "api-usage", warnUsd: 1, stopUsd: 3, expensiveModelRequiresConfirm: true },
+      mend.root,
+    )
     await mark("models")
+    await mark("budget")
     dialog.clear()
-    toast.show({ variant: "success", message: "Model onboarding preset applied.", duration: 4000 })
+    toast.show({ variant: "success", message: "Model and usage preset applied.", duration: 4000 })
   }
 
   const chooseModelRoleMenu = () => {
@@ -651,14 +658,43 @@ export function Setup() {
 
   const chooseBudget = () => {
     dialog.replace(() => (
-      <DialogSelect
-        title="Budget Policy"
-        options={[
+       <DialogSelect
+         title="Budget Policy"
+         current={setupSummary()?.budget?.mode === "api-usage" ? "api-usage" : "subscription"}
+         options={[
           {
-            title: "Set USD limits",
+            title: "Subscription usage preset",
+            value: "subscription",
+            category: "Usage mode",
+            description: "No loop token/cost budget and no API USD warn/stop gate.",
+            onSelect: async () => {
+              await writeBudgetPolicy(
+                { mode: "subscription", warnUsd: null, stopUsd: null, expensiveModelRequiresConfirm: false },
+                mend.root,
+              )
+              await mark("budget")
+              toast.show({ variant: "success", message: "Subscription usage mode enabled; no budget limits configured.", duration: 4000 })
+            },
+          },
+          {
+            title: "API usage preset",
+            value: "api-usage",
+            category: "Usage mode",
+            description: "Use API-priced USD enforcement with $1 warning and $3 stop defaults.",
+            onSelect: async () => {
+              await writeBudgetPolicy(
+                { mode: "api-usage", warnUsd: 1, stopUsd: 3, expensiveModelRequiresConfirm: true },
+                mend.root,
+              )
+              await mark("budget")
+              toast.show({ variant: "success", message: "API usage mode enabled with $1/$3 USD limits.", duration: 4000 })
+            },
+          },
+          {
+            title: "Set API USD limits",
             value: "custom",
-            category: "Budget",
-            description: "Choose your own warn and stop thresholds. Blank means no limit.",
+            category: "API usage",
+            description: "Choose your own warn and stop thresholds. Blank means no API USD limit.",
             onSelect: async () => {
               const current = setupSummary()?.budget as any
               const warnInput = await DialogPrompt.show(dialog, "Warn USD", {
@@ -685,7 +721,7 @@ export function Setup() {
                 const warnUsd = parseOptionalUsd(warnInput, "Warn USD")
                 const stopUsd = parseOptionalUsd(stopInput, "Stop USD")
                 await writeBudgetPolicy(
-                  { warnUsd, stopUsd, expensiveModelRequiresConfirm: current?.expensiveModelRequiresConfirm !== false },
+                  { mode: "api-usage", warnUsd, stopUsd, expensiveModelRequiresConfirm: current?.expensiveModelRequiresConfirm !== false },
                   mend.root,
                 )
                 await mark("budget")
@@ -835,7 +871,7 @@ export function Setup() {
         title: "Smart Approval",
         value: "smart",
         category: "Permission mode",
-        description: "Use the configured reviewer model only for risky shell/script/delete prompts.",
+        description: "Auto-approve bounded read-only commands; review risky shell, script, and delete prompts.",
       },
       {
         title: "Full Access",
@@ -1872,22 +1908,23 @@ export function Setup() {
                   <text fg={theme.textMuted}>Enter opens onboarding presets plus all model roles. Click any visible row to edit it.</text>
                 </box>
               </Match>
-              <Match when={active() === "budget"}>
-                <box flexDirection="column" gap={1}>
-                  <text fg={theme.primary}>Budget</text>
-                  <text>Warn USD: {budget()?.warnUsd ?? "no limit"}</text>
-                  <text>Stop USD: {budget()?.stopUsd ?? "no limit"}</text>
-                  <text>
-                    Expensive model confirmation: {budget()?.expensiveModelRequiresConfirm === false ? "off" : "on"}
-                  </text>
-                  <text fg={theme.textMuted}>
-                    Subscription OAuth can count tokens but cannot enforce API-priced USD spend.
-                  </text>
-                  <text fg={theme.textMuted}>
-                    API-key priced models can warn/stop by USD thresholds before provider calls.
-                  </text>
-                </box>
-              </Match>
+               <Match when={active() === "budget"}>
+                 <box flexDirection="column" gap={1}>
+                   <text fg={theme.primary}>Budget</text>
+                   <text>Usage mode: {budget()?.mode === "api-usage" ? "API usage" : "Subscription"}</text>
+                   <text>Warn USD: {budget()?.warnUsd ?? "no limit"}</text>
+                   <text>Stop USD: {budget()?.stopUsd ?? "no limit"}</text>
+                   <text>
+                     Expensive model confirmation: {budget()?.expensiveModelRequiresConfirm === false ? "off" : "on"}
+                   </text>
+                   <text fg={theme.textMuted}>
+                     Subscription mode leaves token and USD budgets unenforced.
+                   </text>
+                   <text fg={theme.textMuted}>
+                     API usage mode can warn/stop by USD thresholds before provider calls.
+                   </text>
+                 </box>
+               </Match>
               <Match when={active() === "health"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme.primary}>Health Check</text>
@@ -2041,7 +2078,9 @@ export function Setup() {
                       )}
                     </text>
                   </Show>
-                  <text>Consolidation model: {setupSummary()?.memory.consolidatorRole || "none"} · no background spend</text>
+                  <text>
+                    Consolidation model: {setupSummary()?.memory.consolidatorRole || "none"} · policy {setupSummary()?.memory.dreamConsolidationPolicy || "disabled"}
+                  </text>
                   <text>
                     Dream model: {setupSummary()?.memory.memoryDreamRole || "memoryDream"} · manual/scheduled runs write proposals only
                   </text>
@@ -2073,14 +2112,15 @@ export function Setup() {
                         ? "Smart Approval"
                         : "Require approval"}
                   </text>
-                  <text>Smart trigger: risky shell/script/delete prompts only</text>
+                  <text>Smart policy: safe read-only commands pass; risky shell/script/delete prompts stay gated</text>
                   <text>
                     Permission reviewer model:{" "}
                     {modelLabel(modelRole(setupSummary()?.permissions.reviewerRole || "permissionReviewer"))}
                   </text>
                   <text fg={theme.textMuted}>
-                    Smart Approval uses the reviewer model for fast allow/reject/ask decisions; non-risky permission
-                    prompts still use the normal prompt.
+                    Smart Approval auto-approves only bounded read-only shell requests. Risky or ambiguous requests stay
+                    gated and can be reviewed by the configured model; a model response can never auto-approve a command
+                    that is not provably read-only.
                   </text>
                   <text fg={theme.textMuted}>
                     Full Access is the renamed auto-accept mode for the TUI session. It does not change OS sandboxing by

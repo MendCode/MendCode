@@ -17,6 +17,7 @@ export type MemoryDreamWindow = {
 
 export type GeneratedMemoryWritePolicy = "pending" | "auto-safe" | "model-decides" | "disabled"
 export type MemoryDreamWritePolicy = GeneratedMemoryWritePolicy
+export type DreamConsolidationPolicy = "disabled" | "preview" | "auto-consolidate"
 
 export type MemoryConfig = {
   version: 0
@@ -41,6 +42,7 @@ export type MemoryConfig = {
   memoryAutoApplyAllowedCategories: string[]
   memoryAutoApplyBlockedSensitivity: Array<"medium" | "high">
   dreamWritePolicy: MemoryDreamWritePolicy
+  dreamConsolidationPolicy: DreamConsolidationPolicy
   dreamAutoApplyMinConfidence: number
   dreamAutoApplyMinDurability: number
   dreamAutoApplyMaxChangeRisk: number
@@ -75,6 +77,7 @@ export const defaultMemoryConfig: MemoryConfig = {
   memoryAutoApplyAllowedCategories: ["project.commands", "project.stack", "user.preferences", "agent.policy", "memory.policy"],
   memoryAutoApplyBlockedSensitivity: ["medium", "high"],
   dreamWritePolicy: "pending",
+  dreamConsolidationPolicy: "disabled",
   dreamAutoApplyMinConfidence: 0.9,
   dreamAutoApplyMinDurability: 0.85,
   dreamAutoApplyMaxChangeRisk: 0.2,
@@ -112,6 +115,10 @@ function scopes(value: unknown): MemoryScope[] {
 
 function generatedMemoryWritePolicy(value: unknown, fallback: GeneratedMemoryWritePolicy): GeneratedMemoryWritePolicy {
   return value === "pending" || value === "auto-safe" || value === "model-decides" || value === "disabled" ? value : fallback
+}
+
+function dreamConsolidationPolicy(value: unknown, fallback: DreamConsolidationPolicy): DreamConsolidationPolicy {
+  return value === "preview" || value === "auto-consolidate" || value === "disabled" ? value : fallback
 }
 
 function stringList(value: unknown, fallback: string[]) {
@@ -218,6 +225,7 @@ export function normalizeMemoryConfig(input: unknown): MemoryConfig {
     memoryAutoApplyAllowedCategories: stringList(raw.memoryAutoApplyAllowedCategories, defaultMemoryConfig.memoryAutoApplyAllowedCategories),
     memoryAutoApplyBlockedSensitivity: blockedSensitivity(raw.memoryAutoApplyBlockedSensitivity, defaultMemoryConfig.memoryAutoApplyBlockedSensitivity),
     dreamWritePolicy: generatedMemoryWritePolicy(raw.dreamWritePolicy, defaultMemoryConfig.dreamWritePolicy),
+    dreamConsolidationPolicy: dreamConsolidationPolicy(raw.dreamConsolidationPolicy, defaultMemoryConfig.dreamConsolidationPolicy),
     dreamAutoApplyMinConfidence: boundedNumberValue(raw.dreamAutoApplyMinConfidence, defaultMemoryConfig.dreamAutoApplyMinConfidence, 0, 1),
     dreamAutoApplyMinDurability: boundedNumberValue(raw.dreamAutoApplyMinDurability, defaultMemoryConfig.dreamAutoApplyMinDurability, 0, 1),
     dreamAutoApplyMaxChangeRisk: boundedNumberValue(raw.dreamAutoApplyMaxChangeRisk, defaultMemoryConfig.dreamAutoApplyMaxChangeRisk, 0, 1),

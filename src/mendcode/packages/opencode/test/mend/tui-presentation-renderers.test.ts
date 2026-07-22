@@ -808,11 +808,15 @@ describe("mend tui presentation renderers", () => {
   })
 
   test("timeline diff parser caps very large text diffs", () => {
-    const body = Array.from({ length: 2_000 }, (_, index) => `+line ${index}`).join("\n")
-    const rows = parseTimelineDiffRows(["+++ b/huge.ts", "@@ -0,0 +1,2000 @@", body].join("\n"))
+    const body = Array.from({ length: 4_000 }, (_, index) => `+line ${index}`).join("\n")
+    const rows = parseTimelineDiffRows(["+++ b/huge.ts", "@@ -0,0 +1,4000 @@", body].join("\n"))
 
-    expect(rows.length).toBeLessThanOrEqual(1_201)
-    expect(rows.at(-1)).toEqual({ kind: "meta", text: expect.stringContaining("Diff preview truncated") })
+    expect(rows.length).toBeLessThanOrEqual(3_601)
+    expect(rows.at(-1)).toEqual({
+      kind: "meta",
+      text: expect.stringContaining("Diff preview truncated: too large to render safely"),
+    })
+    expect(rows.at(-1)?.text).toContain("Show more")
   })
 
   test("timeline diff detects complete created files", () => {

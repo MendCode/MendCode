@@ -17,6 +17,7 @@ import { errors } from "../error"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "../global-lifecycle"
 import "@/mend/memory/dream-events"
 import "@/mend/memory/workspace-events"
+import { processMemoryUsage } from "@/util/process-memory"
 
 const log = Log.create({ service: "server" })
 
@@ -93,6 +94,38 @@ export const GlobalRoutes = lazy(() =>
       }),
       async (c) => {
         return c.json({ healthy: true, version: Installation.displayVersion(), channel: Installation.channel() })
+      },
+    )
+    .get(
+      "/diagnostics/memory",
+      describeRoute({
+        summary: "Get process memory usage",
+        description: "Get a manually requested, read-only memory sample for the current server process.",
+        operationId: "global.diagnostics.memory",
+        responses: {
+          200: {
+            description: "Current process memory usage",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.object({
+                    pid: z.number(),
+                    role: z.string(),
+                    rss: z.number(),
+                    heapTotal: z.number(),
+                    heapUsed: z.number(),
+                    external: z.number(),
+                    arrayBuffers: z.number(),
+                    uptimeSeconds: z.number(),
+                  }),
+                ),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        return c.json(processMemoryUsage("server"))
       },
     )
     .get(

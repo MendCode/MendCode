@@ -234,11 +234,14 @@ function workflowExplicitlyAllowsEdits(workflow: LoopWorkflow.Info) {
 
 function runTriggerFor(workflow: LoopWorkflow.Info): LoopWorkflow.RunTrigger {
   const mode = workflow.spec.trigger?.mode
-  if (mode === "interval" || mode === "adaptive" || mode === "external-signal" || mode === "self-paced") return mode
+  if (mode === "interval" || mode === "daily" || mode === "adaptive" || mode === "external-signal" || mode === "self-paced") return mode
   return "manual"
 }
 
 function readinessDecision(workflow: LoopWorkflow.Info): { ready: true } | { ready: false; reason: string; nextWakeup?: number } {
+  if (workflow.state === "blocked" || workflow.state === "needs_input") {
+    return { ready: false, reason: `Loop is ${workflow.state}; resolve the blocking condition before running it again.` }
+  }
   if (typeof workflow.policy.maxTurns === "number" && (workflow.metrics.turns ?? 0) >= workflow.policy.maxTurns) {
     return { ready: false, reason: `Loop has no remaining iteration budget (${workflow.metrics.turns ?? 0}/${workflow.policy.maxTurns}).` }
   }

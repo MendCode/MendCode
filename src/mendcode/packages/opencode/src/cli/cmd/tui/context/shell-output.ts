@@ -1,6 +1,7 @@
 const LIVE_SHELL_OUTPUT_PREVIEW_LIMIT = 30_000
 const MAX_TERMINAL_CURSOR_ROWS = 2_000
 const MAX_TERMINAL_CURSOR_COLUMNS = LIVE_SHELL_OUTPUT_PREVIEW_LIMIT
+const MAX_REPLAY_OVERLAP = 8_192
 
 function clampLiveShellOutput(output: string) {
   if (output.length <= LIVE_SHELL_OUTPUT_PREVIEW_LIMIT) return output
@@ -232,25 +233,40 @@ function replayCandidate(text: string) {
 }
 
 function overlapLength(current: string, delta: string) {
-  const max = Math.min(current.length, delta.length)
-  for (let size = max; size > 0; size--) {
-    if (!replayCandidate(delta.slice(0, size))) continue
-    if (current.endsWith(delta.slice(0, size))) return size
+  const max = Math.min(current.length, delta.length, MAX_REPLAY_OVERLAP)
+  if (max < 4) return 0
+
+  const prefix = delta.slice(0, max)
+  const table = new Array<number>(max).fill(0)
+  for (let index = 1, size = 0; index < max; index++) {
+    while (size > 0 && prefix[index] !== prefix[size]) size = table[size - 1] ?? 0
+    if (prefix[index] === prefix[size]) size++
+    table[index] = size
   }
-  return 0
+
+  let size = 0
+  const suffix = current.slice(-max)
+  for (let index = 0; index < suffix.length; index++) {
+    const char = suffix[index]
+    while (size > 0 && char !== prefix[size]) size = table[size - 1] ?? 0
+    if (char === prefix[size]) size++
+    if (size === max) return max
+  }
+  return size >= 4 ? size : 0
 }
 
 export function appendLiveShellOutput(current: unknown, delta: string, options?: { replayProtection?: boolean }) {
-  const existing = String(current ?? "")
+  const existing = clampLiveShellOutput(String(current ?? ""))
   if (!delta) return clampLiveShellOutput(existing)
-  if (!existing) return clampLiveShellOutput(delta)
-  if (options?.replayProtection === false) return clampLiveShellOutput(existing + delta)
+  const incoming = clampLiveShellOutput(delta)
+  if (!existing) return incoming
+  if (options?.replayProtection === false) return clampLiveShellOutput(existing + incoming)
 
-  if (replayCandidate(delta) && existing.endsWith(delta)) return clampLiveShellOutput(existing)
-  if (replayCandidate(existing) && delta.startsWith(existing)) return clampLiveShellOutput(delta)
+  if (replayCandidate(incoming) && existing.endsWith(incoming)) return clampLiveShellOutput(existing)
+  if (replayCandidate(existing) && incoming.startsWith(existing)) return clampLiveShellOutput(incoming)
 
-  const overlap = overlapLength(existing, delta)
-  if (overlap > 0) return clampLiveShellOutput(existing + delta.slice(overlap))
+  const overlap = overlapLength(existing, incoming)
+  if (overlap > 0) return clampLiveShellOutput(existing + incoming.slice(overlap))
 
-  return clampLiveShellOutput(existing + delta)
+  return clampLiveShellOutput(existing + incoming)
 }

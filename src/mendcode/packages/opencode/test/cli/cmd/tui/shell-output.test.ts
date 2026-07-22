@@ -6,6 +6,10 @@ import {
   renderTerminalOutput,
   selectShellOutput,
 } from "../../../../src/cli/cmd/tui/context/shell-output"
+import {
+  createShellOutputDeltaBuffer,
+  SHELL_LIVE_OUTPUT_DELTA_MAX_CHARS,
+} from "../../../../src/tool/shell-output"
 
 test("live shell output appends deltas without replaying the latest line", () => {
   expect(appendLiveShellOutput("25%\n", "30%\n")).toBe("25%\n30%\n")
@@ -19,6 +23,26 @@ test("live shell output appends deltas without replaying the latest line", () =>
 
 test("live shell output can preserve repeated raw deltas", () => {
   expect(appendLiveShellOutput("tick\n", "tick\n", { replayProtection: false })).toBe("tick\ntick\n")
+})
+
+test("live shell output bounds large deltas before replay detection", () => {
+  const output = appendLiveShellOutput("a".repeat(30_000), "b".repeat(30_000))
+
+  expect(output.length).toBeLessThanOrEqual(30_005)
+  expect(output.endsWith("b".repeat(100))).toBe(true)
+})
+
+test("live shell delta buffer bounds bursty output and keeps its tail", () => {
+  const buffer = createShellOutputDeltaBuffer()
+  buffer.append("old\n")
+  buffer.append("x".repeat(SHELL_LIVE_OUTPUT_DELTA_MAX_CHARS * 4))
+
+  const delta = buffer.take()
+
+  expect(delta.length).toBeLessThanOrEqual(SHELL_LIVE_OUTPUT_DELTA_MAX_CHARS)
+  expect(delta).toContain("Live output throttled")
+  expect(delta.endsWith("x".repeat(100))).toBe(true)
+  expect(buffer.hasPending()).toBe(false)
 })
 
 test("terminal output renderer stabilizes carriage-return updates", () => {

@@ -14,6 +14,19 @@ export function mendRuntimeRoot() {
   return path.resolve(here, "../../../../../../..")
 }
 
+export function resolveMendProjectRoot(
+  cwd = process.cwd(),
+  override = process.env.MENDCODE_SHELL_CWD,
+  runtimeRoot = mendRuntimeRoot(),
+) {
+  const current = path.resolve(cwd)
+  if (!override) return current
+  const configured = path.resolve(override)
+  const runtimePackage = path.join(path.resolve(runtimeRoot), "src", "mendcode", "packages", "opencode")
+  if (configured === path.resolve(runtimeRoot) && current !== configured && current !== runtimePackage) return current
+  return configured
+}
+
 export function mendPaths(root = mendRuntimeRoot()) {
   return {
     root,

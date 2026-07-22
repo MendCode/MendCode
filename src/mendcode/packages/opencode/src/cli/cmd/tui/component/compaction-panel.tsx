@@ -54,6 +54,10 @@ export type CompactionArcadeGame = {
   render: (state: unknown) => CompactionArcadeRender
 }
 
+export function shouldRenderCompactionArcade(input: { style: "minimal" | "cockpit" | "arcade" | "quiet"; arcade: string }) {
+  return input.style === "arcade" && input.arcade !== "off"
+}
+
 export function shouldBlurCompactionArcadeWhenOffscreen(input: {
   focused: boolean
   screenY?: number
@@ -244,7 +248,7 @@ const snakeArcadeGame: CompactionArcadeGame = {
     const snake = state as SnakeState
     return {
       title: `Snake · Score ${snake.score} · Best ${snake.highScore}`,
-      status: snake.alive ? (snake.paused ? "Paused" : "Focused controls active") : "Crash. Press R to reset.",
+      status: snake.alive ? (snake.paused ? "Paused" : "Focused controls active") : "Game over. Press R to reset.",
       cells: renderSnakeCells(snake),
     }
   },
@@ -278,9 +282,6 @@ export function CompactionPanel(props: {
   summaryPreview?: string
   transcriptPreview?: string
   summaryContent?: JSX.Element
-  modelOutputText?: string
-  modelReasoningText?: string
-  modelDetailLabel?: string
   scratchpad?: {
     key: string
     initialValue?: string
@@ -317,10 +318,12 @@ export function CompactionPanel(props: {
   const [arcadeTick, setArcadeTick] = createSignal(0)
   const [arcadeFocused, setArcadeFocused] = createSignal(false)
   const [arcadeState, setArcadeState] = createSignal<unknown>(snakeArcadeGame.initialState())
-  const activeArcadeGame = createMemo(() => registeredCompactionArcadeGame(config().arcade))
+  const activeArcadeGame = createMemo(() =>
+    shouldRenderCompactionArcade(config()) ? registeredCompactionArcadeGame(config().arcade) : undefined,
+  )
   const arcadeRender = createMemo(() => activeArcadeGame()?.render(arcadeState()))
   const arcadeFrame = createMemo(() => {
-    if (config().arcade === "off" || activeArcadeGame()) return []
+    if (!shouldRenderCompactionArcade(config()) || activeArcadeGame()) return []
     const frames = compactionArcadeFrames(config().arcade)
     const frame = frames[arcadeTick() % Math.max(1, frames.length)]
     return frame ? [frame] : []
@@ -348,10 +351,6 @@ export function CompactionPanel(props: {
       .filter((value): value is string => Boolean(value))
       .join(" · "),
   )
-  const modelOutputText = createMemo(() => props.modelOutputText?.trim())
-  const modelReasoningText = createMemo(() => props.modelReasoningText?.trim())
-  const modelDetailAvailable = createMemo(() => Boolean(modelOutputText() || modelReasoningText()))
-  const [modelDetailExpanded, setModelDetailExpanded] = createSignal(false)
   const [draft, setDraft] = createSignal(props.scratchpad?.initialValue ?? "")
   const [saved, setSaved] = createSignal(props.scratchpad?.initialValue ?? "")
   const [saveState, setSaveState] = createSignal<"saved" | "pending" | "saving" | "local" | "error">(
@@ -443,7 +442,7 @@ export function CompactionPanel(props: {
   }
 
   createEffect(() => {
-    if (config().arcade === "off") return
+    if (!shouldRenderCompactionArcade(config())) return
     const timer = setInterval(() => {
       const game = activeArcadeGame()
       if (game) {
@@ -644,22 +643,6 @@ export function CompactionPanel(props: {
           </For>
         </box>
       </Show>
-      <box paddingTop={1} flexDirection="column" border={["top"]} borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-        <text fg={theme.textMuted} wrapMode="none">
-          Compacted memory · {props.hasSummaryBody ? "packed" : "packing"}
-        </text>
-        <Show
-          when={props.hasSummaryBody}
-          fallback={<text fg={theme.textMuted} wrapMode="none">Writing summary…</text>}
-        >
-          <Show when={props.summaryContent} fallback={<text fg={theme.text} wrapMode="word">{props.summaryPreview ? Locale.truncate(props.summaryPreview ?? "", 220) : "Summary output is not available yet."}</text>}>
-            {props.summaryContent}
-          </Show>
-        </Show>
-        <Show when={!props.hasSummaryBody && props.transcriptPreview && !activeArcadeGame()}>
-          <text fg={theme.textMuted} wrapMode="word">Focus: {Locale.truncate(props.transcriptPreview ?? "", 120)}</text>
-        </Show>
-      </box>
       <Show when={activeArcadeGame() && arcadeRender()}>
         <box paddingTop={1} width="100%" flexDirection="column" alignItems="center">
           <box
@@ -710,6 +693,22 @@ export function CompactionPanel(props: {
           <For each={arcadeFrame()}>{(line) => <text fg={theme.primary}>{line}</text>}</For>
         </box>
       </Show>
+      <box paddingTop={1} flexDirection="column" border={["top"]} borderColor={theme.border} paddingLeft={1} paddingRight={1}>
+        <text fg={theme.textMuted} wrapMode="none">
+          Compacted memory · {props.hasSummaryBody ? "packed" : "packing"}
+        </text>
+        <Show
+          when={props.hasSummaryBody}
+          fallback={<text fg={theme.textMuted} wrapMode="none">Writing summary…</text>}
+        >
+          <Show when={props.summaryContent} fallback={<text fg={theme.text} wrapMode="word">{props.summaryPreview ? Locale.truncate(props.summaryPreview ?? "", 220) : "Summary output is not available yet."}</text>}>
+            {props.summaryContent}
+          </Show>
+        </Show>
+        <Show when={!props.hasSummaryBody && props.transcriptPreview}>
+          <text fg={theme.textMuted} wrapMode="word">Focus: {Locale.truncate(props.transcriptPreview ?? "", 120)}</text>
+        </Show>
+      </box>
       <Show when={scratchpadEnabled() && props.scratchpad && (!scratchpadReadOnly() || followUpText())}>
         <box paddingTop={1} flexDirection="column" border={["top"]} borderColor={theme.border} paddingLeft={1} paddingRight={1}>
           <text fg={theme.textMuted} wrapMode="none">
@@ -745,43 +744,6 @@ export function CompactionPanel(props: {
           </Show>
           <Show when={scratchpadStatus()}>
             <text fg={saveState() === "error" ? theme.error : theme.textMuted} wrapMode="none">{scratchpadStatus()}</text>
-          </Show>
-        </box>
-      </Show>
-      <Show when={modelDetailAvailable()}>
-        <box paddingTop={1} flexDirection="column" border={["top"]} borderColor={theme.border} paddingLeft={1} paddingRight={1} onMouseDown={consumeMouseEvent} onMouseUp={consumeMouseEvent}>
-          <text
-            fg={theme.textMuted}
-            wrapMode="none"
-            onMouseUp={(event) => {
-              consumeMouseEvent(event)
-              setModelDetailExpanded((value) => !value)
-            }}
-          >
-            {modelDetailExpanded() ? "▾ hide model reasoning/output" : "▸ show model reasoning/output"}
-            <Show when={props.modelDetailLabel}>
-              {(label) => <span style={{ fg: theme.textMuted }}> · {label()}</span>}
-            </Show>
-          </text>
-          <Show when={modelDetailExpanded()}>
-            <box paddingTop={1} flexDirection="column" border={["left"]} borderColor={theme.border} paddingLeft={1}>
-              <Show when={modelReasoningText()}>
-                {(reasoning) => (
-                  <box flexDirection="column" paddingBottom={1}>
-                    <text fg={theme.textMuted} wrapMode="none">Reasoning returned by compaction model</text>
-                    <text fg={theme.text} wrapMode="char">{reasoning()}</text>
-                  </box>
-                )}
-              </Show>
-              <Show when={modelOutputText()}>
-                {(output) => (
-                  <box flexDirection="column">
-                    <text fg={theme.textMuted} wrapMode="none">Output text returned by compaction model</text>
-                    <text fg={theme.text} wrapMode="char">{output()}</text>
-                  </box>
-                )}
-              </Show>
-            </box>
           </Show>
         </box>
       </Show>

@@ -31,6 +31,7 @@ const ALLOWED_MODELS = new Set([
 
 const CODEX_CHATGPT_MODEL_ALIASES: Record<string, string> = {
   "gpt-5.6": "gpt-5.6-sol",
+  "gpt-5.3-codex": "gpt-5.5",
 }
 
 const CODEX_CHATGPT_5_6_LIMIT = {

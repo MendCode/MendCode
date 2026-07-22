@@ -14,6 +14,8 @@ import { readMemoryFacts, readMemoryGraph, repairMemoryGraph, upsertMemoryFact, 
 import { registerMemoryWorkspace, memoryWorkspaceOverview, writeWorkspaceRegistry } from "../../src/mend/memory/workspaces"
 import { allowedDreamGitCommands, collectDreamFileEvidence, isDreamFileAllowed } from "../../src/mend/memory/dream-sources"
 import { applyDreamGraphProposal, latestDreamStatus, readDreamRunDetail, readDreamRuns, rejectDreamGraphProposal, runMemoryDream, type DreamGraphProposal } from "../../src/mend/memory/dream"
+import { listMemorySessionDigests, writeMemorySessionDigestFromSession } from "../../src/mend/memory/session-digests"
+import { parseDreamConsolidationOutput, readDreamConsolidationRun } from "../../src/mend/memory/dream-consolidation"
 import { dreamScheduleWindowFromText, evaluateDreamSchedule, readDreamScheduleState, runGlobalDreamSchedulerTick, runScheduledMemoryDream } from "../../src/mend/memory/dream-scheduler"
 import { listMemorySideChats, memoryAssistantFailureReason, parseMemorySideChatResponse, resolveMemoryAssistantRole, resolveMemoryAssistantRuntimeRole, sendMemorySideChatMessage, startMemorySideChat } from "../../src/mend/memory/side-chat"
 import { memoryOverview } from "../../src/mend/memory/overview"
@@ -103,7 +105,7 @@ describe("mend memory", () => {
         enabled: true,
         start: "6:00",
         end: "23:00",
-        timezone: "America/Panama",
+        timezone: "America/New_York",
       },
     })
 
@@ -111,7 +113,7 @@ describe("mend memory", () => {
       enabled: true,
       start: "06:00",
       end: "23:00",
-      timezone: "America/Panama",
+      timezone: "America/New_York",
     })
 
     await writeJson(memoryPaths(dir.path).globalConfig, {
@@ -1769,16 +1771,16 @@ describe("mend memory", () => {
       window: { enabled: true, start: "23:00", end: "02:00" },
       now: new Date("2026-06-18T03:00:00"),
     })
-    const panama = await evaluateDreamSchedule({
+    const newYork = await evaluateDreamSchedule({
       root: dir.path,
-      window: { enabled: true, start: "20:00", end: "21:00", timezone: "America/Panama" },
-      now: new Date("2026-06-17T01:30:00Z"),
+      window: { enabled: true, start: "20:00", end: "21:00", timezone: "America/New_York" },
+      now: new Date("2026-06-17T00:30:00Z"),
     })
 
     expect(overnight.action).toBe("wait")
     expect(overnightMissed.action).toBe("missed")
-    expect(panama.action).toBe("run")
-    expect(panama.date).toBe("2026-06-16")
+    expect(newYork.action).toBe("run")
+    expect(newYork.date).toBe("2026-06-16")
   })
 
   test("Dream schedule falls back safely when timezone is invalid", async () => {
@@ -1868,7 +1870,7 @@ describe("mend memory", () => {
           },
           {
             kind: "dream-dry-run",
-            text: "Configure Dream to run at 21:00 America/Panama and only draft proposals.",
+            text: "Configure Dream to run at 21:00 America/New_York and only draft proposals.",
             scope: "project",
             categoryIDs: ["memory.dream"],
           },
@@ -1950,7 +1952,7 @@ describe("mend memory", () => {
         text: "Prepared reviewable Dream night activation proposals.",
         actions: [{
           kind: "dream-dry-run",
-          text: "Configure Dream to run in the 18:00-23:00 America/Panama night window and keep output pending.",
+          text: "Configure Dream to run in the 18:00-23:00 America/New_York night window and keep output pending.",
           scope: "global",
           categoryIDs: ["memory.dream"],
         }, {
@@ -1976,12 +1978,12 @@ describe("mend memory", () => {
     const chat = await startMemorySideChat({ root: dir.path, selectedCategoryID: "memory.dream" })
     const result = await sendMemorySideChatMessage({
       session: chat,
-      message: "Set Dream from 6pm to 11pm in Panama.",
+      message: "Set Dream from 6pm to 11pm in New York.",
       responder: async () => ({
         text: "Prepared a reviewable Dream schedule proposal.",
         actions: [{
           kind: "dream-dry-run",
-          text: "Configure Dream to run in the 18:00-23:00 America/Panama window and only draft proposals.",
+          text: "Configure Dream to run in the 18:00-23:00 America/New_York window and only draft proposals.",
           scope: "project",
           categoryIDs: ["memory.dream"],
         }],
@@ -1996,11 +1998,11 @@ describe("mend memory", () => {
     const entries = await readMemoryEntries("project", dir.path)
 
     expect(applied.entry).toBe(null)
-    expect(applied.dreamSchedule?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" })
+    expect(applied.dreamSchedule?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/New_York" })
     expect(schedule?.status).toBe("scheduled")
-    expect(schedule?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" })
+    expect(schedule?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/New_York" })
     expect(otherSchedule?.window).toMatchObject(schedule?.window ?? {})
-    expect(globalConfig.dreamWindow).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" })
+    expect(globalConfig.dreamWindow).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/New_York" })
     expect(tick.status).toBe("offline")
     expect(entries).toHaveLength(0)
   })
@@ -2080,17 +2082,29 @@ describe("mend memory", () => {
   })
 
   test("Dream schedule parser accepts human time ranges", () => {
-    expect(dreamScheduleWindowFromText("setea el dream de 6pm a 11pm en Panama")).toMatchObject({
+    expect(dreamScheduleWindowFromText("setea el dream de 6pm a 11pm en New York")).toMatchObject({
       enabled: true,
       start: "18:00",
       end: "23:00",
-      timezone: "America/Panama",
+      timezone: "America/New_York",
     })
-    expect(dreamScheduleWindowFromText("Run Dream at 21:00 America/Panama")).toMatchObject({
+    expect(dreamScheduleWindowFromText("Run Dream at 21:00 America/New_York")).toMatchObject({
       enabled: true,
       start: "21:00",
       end: "21:00",
-      timezone: "America/Panama",
+      timezone: "America/New_York",
+    })
+    expect(dreamScheduleWindowFromText("Run Dream from 09:00 to 10:00 UTC")).toMatchObject({
+      enabled: true,
+      start: "09:00",
+      end: "10:00",
+      timezone: "UTC",
+    })
+    expect(dreamScheduleWindowFromText("Run Dream at 21:00 GMT")).toMatchObject({
+      enabled: true,
+      start: "21:00",
+      end: "21:00",
+      timezone: "UTC",
     })
   })
 
@@ -2102,7 +2116,7 @@ describe("mend memory", () => {
         enabled: true,
         start: "18:00",
         end: "23:00",
-        timezone: "America/Panama",
+        timezone: "America/New_York",
       },
     }, dir.path)
 
@@ -2111,14 +2125,14 @@ describe("mend memory", () => {
 
     expect(schedule?.status).toBe("scheduled")
     expect(schedule?.reason).toBe("Dream window configured in memory settings")
-    expect(schedule?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" })
+    expect(schedule?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/New_York" })
     expect(otherSchedule?.window).toMatchObject(schedule?.window ?? {})
   })
 
   test("global memory config writes do not inherit project Dream settings", async () => {
     await using dir = await tmpdir()
     await writeProjectMemoryConfig({
-      dreamWindow: { enabled: true, start: "01:00", end: "02:00", timezone: "America/Panama" },
+      dreamWindow: { enabled: true, start: "01:00", end: "02:00", timezone: "America/New_York" },
     }, dir.path)
     await writeGlobalMemoryConfig({ use: true }, dir.path)
 
@@ -2138,12 +2152,12 @@ describe("mend memory", () => {
         enabled: true,
         start: "01:00",
         end: "02:00",
-        timezone: "America/Panama",
+        timezone: "America/New_York",
       },
     }, dir.path)
     await runScheduledMemoryDream({
       root: dir.path,
-      window: { enabled: true, start: "01:00", end: "02:00", timezone: "America/Panama" },
+      window: { enabled: true, start: "01:00", end: "02:00", timezone: "America/New_York" },
       now: new Date("2026-06-17T03:00:00"),
     })
 
@@ -2151,14 +2165,14 @@ describe("mend memory", () => {
 
     expect(schedule?.status).toBe("missed")
     expect(schedule?.manualTriggerRequired).toBe(true)
-    expect(schedule?.window).toMatchObject({ enabled: true, start: "01:00", end: "02:00", timezone: "America/Panama" })
+    expect(schedule?.window).toMatchObject({ enabled: true, start: "01:00", end: "02:00", timezone: "America/New_York" })
   })
 
   test("global Dream scheduler runs due windows across registered workspaces", async () => {
     await using first = await tmpdir()
     await using second = await tmpdir()
     await writeGlobalMemoryConfig({
-      dreamWindow: { enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" },
+      dreamWindow: { enabled: true, start: "18:00", end: "23:00", timezone: "America/New_York" },
     }, first.path)
     await registerMemoryWorkspace({ root: first.path, source: "user-added-root" }, first.path)
     await registerMemoryWorkspace({ root: second.path, source: "user-added-root" }, second.path)
@@ -2255,7 +2269,7 @@ describe("mend memory", () => {
   test("global Dream scheduler records online gating instead of running offline", async () => {
     await using dir = await tmpdir()
     await writeGlobalMemoryConfig({
-      dreamWindow: { enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" },
+      dreamWindow: { enabled: true, start: "18:00", end: "23:00", timezone: "America/New_York" },
     }, dir.path)
 
     const result = await runGlobalDreamSchedulerTick({
@@ -2272,7 +2286,7 @@ describe("mend memory", () => {
   test("Dream schedule state recovers from already-applied Dream proposals", async () => {
     await using dir = await tmpdir()
     const proposal = await proposeMemory({
-      text: "Dream proposal: Configure Dream to run in the 18:00-23:00 America/Panama window and only draft proposals.",
+      text: "Dream proposal: Configure Dream to run in the 18:00-23:00 America/New_York window and only draft proposals.",
       scope: "project",
       tags: ["side-chat", "dream-dry-run", "memory.dream"],
       categoryIDs: ["memory.dream"],
@@ -2286,7 +2300,7 @@ describe("mend memory", () => {
 
     expect(recovered?.status).toBe("scheduled")
     expect(recovered?.reason).toBe("Recovered from applied Dream proposal")
-    expect(recovered?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/Panama" })
+    expect(recovered?.window).toMatchObject({ enabled: true, start: "18:00", end: "23:00", timezone: "America/New_York" })
   })
 
   test("side chat default responder is honest when no assistant model is configured", async () => {
@@ -2601,5 +2615,216 @@ describe("mend memory", () => {
     expect(applied.reason).toContain("disabled")
     expect(applied.proposals.length).toBe(0)
     expect(pending.length).toBe(0)
+  })
+
+  test("normalizes Dream consolidation policy without changing legacy Dream defaults", async () => {
+    await using dir = await tmpdir()
+
+    await writeProjectMemoryConfig({ dreamConsolidationPolicy: "auto-consolidate" }, dir.path)
+    const config = await readMemoryConfig(dir.path)
+
+    expect(config.dreamConsolidationPolicy).toBe("auto-consolidate")
+    expect(config.dreamWritePolicy).toBe("pending")
+  })
+
+  test("persists bounded redacted session digests for Dream context", async () => {
+    await using dir = await tmpdir()
+
+    const digest = await writeMemorySessionDigestFromSession({
+      id: "session_digest_test",
+      title: "Memory consolidation session",
+      directory: dir.path,
+      messages: [
+        { role: "user", content: "Decision: always keep Dream memory changes conservative. OPENAI_API_KEY=DIGEST_SECRET" },
+        { role: "assistant", content: "Validated with bun test and kept the project files unchanged." },
+      ],
+    }, dir.path)
+    const digests = await listMemorySessionDigests(dir.path)
+
+    expect(digest.projectRoot).toBe(dir.path)
+    expect(digest.summary).toContain("[REDACTED:")
+    expect(digest.summary).not.toContain("DIGEST_SECRET")
+    expect(digest.decisions.join("\n")).toContain("always keep Dream")
+    expect(digest.validations.join("\n")).toContain("bun test")
+    expect(digests.map((item) => item.id)).toContain(digest.id)
+  })
+
+  test("Dream auto-consolidation resolves proposals and consumes session digests", async () => {
+    await using dir = await tmpdir()
+    await writeProjectMemoryConfig({
+      dreamConsolidationPolicy: "auto-consolidate",
+      dreamAutoApplyAllowedCategories: ["memory.policy"],
+      dreamAutoApplyMinConfidence: 0.9,
+      dreamAutoApplyMinDurability: 0.85,
+      dreamAutoApplyMaxChangeRisk: 0.2,
+    }, dir.path)
+    const digest = await writeMemorySessionDigestFromSession({
+      id: "session_consolidation",
+      directory: dir.path,
+      messages: [{ role: "user", content: "Decision: keep Dream consolidation conservative." }],
+    }, dir.path)
+    const accepted = await proposeMemory({
+      scope: "project",
+      text: "Dream consolidation should preserve durable memory policy decisions.",
+      categoryIDs: ["memory.policy"],
+      confidence: 0.98,
+      durability: 0.96,
+      changeRisk: 0.05,
+      source: "test",
+    }, dir.path)
+    const uncertain = await proposeMemory({
+      scope: "project",
+      text: "This uncertain Dream note should not become canonical memory.",
+      categoryIDs: ["memory.policy"],
+      confidence: 0.2,
+      durability: 0.2,
+      changeRisk: 0.9,
+      source: "test",
+    }, dir.path)
+
+    const run = await runMemoryDream({
+      root: dir.path,
+      consolidator: async ({ proposals, digests }) => {
+        expect(digests.some((item) => item.id === digest.id)).toBe(true)
+        return proposals.map((proposal) => proposal.id === accepted.id
+          ? { proposalID: proposal.id, resolution: "apply" as const, reason: "Durable policy confirmed.", evidenceRefs: [digest.id] }
+          : { proposalID: proposal.id, resolution: "archive" as const, reason: "Uncertain and too risky to retain as canonical memory.", evidenceRefs: [digest.id] })
+      },
+    })
+    const consolidation = await readDreamConsolidationRun(dir.path, run.id)
+    const detail = await readDreamRunDetail(dir.path, run.id)
+    const pending = await listMemoryProposals(dir.path, "pending")
+    const allProposals = await listMemoryProposals(dir.path, "all")
+    const entries = await readMemoryEntries("project", dir.path)
+    const consumedDigests = await listMemorySessionDigests(dir.path, { includeConsumed: true })
+
+    expect(run.status).toBe("completed")
+    expect(consolidation?.status).toBe("completed")
+    expect(consolidation?.pendingBefore).toBe(2)
+    expect(consolidation?.pendingAfter).toBe(0)
+    expect(consolidation?.applied).toBe(1)
+    expect(consolidation?.archived).toBe(1)
+    expect(pending).toHaveLength(0)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.text).toContain("durable memory policy")
+    expect(allProposals.find((proposal) => proposal.id === accepted.id)?.resolution).toBe("applied")
+    expect(allProposals.find((proposal) => proposal.id === uncertain.id)?.resolution).toBe("archived")
+    expect(detail?.consolidation?.pendingAfter).toBe(0)
+    expect(consumedDigests.find((item) => item.id === digest.id)?.consumedBy).toContain(run.id)
+  })
+
+  test("Dream consolidation applies targeted update and remove proposals", async () => {
+    await using dir = await tmpdir()
+    await writeProjectMemoryConfig({
+      dreamConsolidationPolicy: "auto-consolidate",
+      dreamAutoApplyAllowedCategories: ["memory.policy"],
+    }, dir.path)
+    const entry = await appendMemoryEntry({
+      scope: "project",
+      text: "The old Dream memory behavior is obsolete.",
+      categoryIDs: ["memory.policy"],
+      tags: ["memory"],
+    }, dir.path)
+    const update = await proposeMemory({
+      operation: "update",
+      scope: "project",
+      targetEntryID: entry.id,
+      targetEntryScope: "project",
+      text: "Dream memory behavior is consolidated by a bounded, auditable host pipeline.",
+      categoryIDs: ["memory.policy"],
+      confidence: 0.98,
+      durability: 0.95,
+      changeRisk: 0.05,
+      source: "test",
+    }, dir.path)
+    const remove = await proposeMemory({
+      operation: "remove",
+      scope: "project",
+      targetEntryID: entry.id,
+      targetEntryScope: "project",
+      text: "Remove the obsolete Dream memory after the replacement is applied.",
+      categoryIDs: ["memory.policy"],
+      confidence: 0.98,
+      durability: 0.95,
+      changeRisk: 0.05,
+      source: "test",
+    }, dir.path)
+
+    const run = await runMemoryDream({
+      root: dir.path,
+      consolidator: async ({ proposals }) => proposals.map((proposal) => ({ proposalID: proposal.id, resolution: "apply" as const, reason: `Apply ${proposal.operation} from Dream consolidation.` })),
+    })
+
+    expect(run.status).toBe("completed")
+    expect(await listMemoryProposals(dir.path, "pending")).toHaveLength(0)
+    expect(await readMemoryEntries("project", dir.path)).toHaveLength(0)
+    expect((await listMemoryProposals(dir.path, "all")).find((proposal) => proposal.id === update.id)?.resolution).toBe("applied")
+    expect((await listMemoryProposals(dir.path, "all")).find((proposal) => proposal.id === remove.id)?.resolution).toBe("applied")
+  })
+
+  test("Dream consolidation processes every pending proposal in bounded batches", async () => {
+    await using dir = await tmpdir()
+    await writeProjectMemoryConfig({
+      dreamConsolidationPolicy: "auto-consolidate",
+      dreamAutoApplyAllowedCategories: ["memory.policy"],
+    }, dir.path)
+    for (let index = 0; index < 25; index++) {
+      await proposeMemory({
+        scope: "project",
+        text: `Durable Dream consolidation policy ${index} should remain auditable.`,
+        categoryIDs: ["memory.policy"],
+        confidence: 0.98,
+        durability: 0.95,
+        changeRisk: 0.05,
+        source: "test",
+      }, dir.path)
+    }
+    const batches: number[] = []
+    const run = await runMemoryDream({
+      root: dir.path,
+      consolidator: async ({ proposals }) => {
+        batches.push(proposals.length)
+        return proposals.map((proposal) => ({ proposalID: proposal.id, resolution: "archive" as const, reason: "Fixture proposal is intentionally archived." }))
+      },
+    })
+    const consolidation = await readDreamConsolidationRun(dir.path, run.id)
+
+    expect(run.status).toBe("completed")
+    expect(batches).toEqual([24, 1])
+    expect(consolidation?.pendingBefore).toBe(25)
+    expect(consolidation?.pendingAfter).toBe(0)
+    expect(consolidation?.resolved).toBe(25)
+    expect(await listMemoryProposals(dir.path, "pending")).toHaveLength(0)
+  })
+
+  test("Dream consolidation fails closed when the model omits a pending proposal", async () => {
+    await using dir = await tmpdir()
+    await writeProjectMemoryConfig({
+      dreamConsolidationPolicy: "auto-consolidate",
+      dreamAutoApplyAllowedCategories: ["memory.policy"],
+    }, dir.path)
+    const proposal = await proposeMemory({
+      scope: "project",
+      text: "A pending proposal must remain visible when consolidation cannot resolve it.",
+      categoryIDs: ["memory.policy"],
+      source: "test",
+    }, dir.path)
+
+    const run = await runMemoryDream({
+      root: dir.path,
+      consolidator: async () => [],
+    })
+    const consolidation = await readDreamConsolidationRun(dir.path, run.id)
+
+    expect(run.status).toBe("failed")
+    expect(consolidation?.status).toBe("failed")
+    expect(consolidation?.failureReason).toContain("did not resolve")
+    expect((await listMemoryProposals(dir.path, "pending")).map((item) => item.id)).toEqual([proposal.id])
+  })
+
+  test("parses strict Dream consolidation JSON and ignores prose outside decisions", () => {
+    const decisions = parseDreamConsolidationOutput(`Here is the result:\n${JSON.stringify({ decisions: [{ proposalID: "proposal_1", resolution: "archive", reason: "Transient note." }] })}`)
+
+    expect(decisions).toEqual([expect.objectContaining({ proposalID: "proposal_1", resolution: "archive", reason: "Transient note." })])
   })
 })

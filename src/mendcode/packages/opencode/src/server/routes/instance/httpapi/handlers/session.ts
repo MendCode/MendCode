@@ -42,6 +42,7 @@ import {
   ForkPayload,
   InitPayload,
   ListQuery,
+  MessageQuery,
   MessagesQuery,
   PermissionResponsePayload,
   PromptPayload,
@@ -271,10 +272,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const page = MessageV2.page({
         sessionID: ctx.params.sessionID,
         limit: ctx.query.limit,
-        before: ctx.query.before,
-        after: ctx.query.after,
-        view: ctx.query.view,
-      })
+         before: ctx.query.before,
+         after: ctx.query.after,
+         view: ctx.query.view,
+         partsLimit: ctx.query.partsLimit,
+       })
       if (!page.cursor && !page.sparse) return page.items
 
       if (!page.cursor) {
@@ -305,10 +307,18 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const message = Effect.fn("SessionHttpApi.message")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
+      query: typeof MessageQuery.Type
     }) {
       return yield* SessionError.mapStorageNotFound(
         Effect.try({
-          try: () => MessageV2.get({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }),
+          try: () =>
+            MessageV2.get({
+              sessionID: ctx.params.sessionID,
+              messageID: ctx.params.messageID,
+              view: ctx.query.view,
+              partsLimit: ctx.query.partsLimit,
+              partsAfter: ctx.query.partsAfter,
+            }),
           catch: (error) => error,
         }).pipe(Effect.catch((error) => (NotFoundError.isInstance(error) ? Effect.fail(error) : Effect.die(error)))),
       )

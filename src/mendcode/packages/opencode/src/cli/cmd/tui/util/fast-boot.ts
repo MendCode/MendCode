@@ -21,6 +21,7 @@ export function syncReadyForStatus(status: "loading" | "partial" | "complete") {
 
 export function syncBootstrapReadiness(input: { fastBoot: boolean; continueSession?: boolean }) {
   return {
+    blockProviderMetadata: !input.fastBoot,
     blockProviderUxMetadata: !input.fastBoot,
     blockSessionList: Boolean(input.continueSession),
   }

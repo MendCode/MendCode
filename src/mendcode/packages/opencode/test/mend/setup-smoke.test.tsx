@@ -1016,14 +1016,17 @@ describe("setup route smoke", () => {
     expect(syncReadyForStatus("partial")).toBe(true)
     expect(syncReadyForStatus("complete")).toBe(true)
     expect(syncBootstrapReadiness({ fastBoot: true })).toEqual({
+      blockProviderMetadata: false,
       blockProviderUxMetadata: false,
       blockSessionList: false,
     })
     expect(syncBootstrapReadiness({ fastBoot: true, continueSession: true })).toEqual({
+      blockProviderMetadata: false,
       blockProviderUxMetadata: false,
       blockSessionList: true,
     })
     expect(syncBootstrapReadiness({ fastBoot: false })).toEqual({
+      blockProviderMetadata: true,
       blockProviderUxMetadata: true,
       blockSessionList: false,
     })

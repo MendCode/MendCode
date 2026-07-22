@@ -23,6 +23,7 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
 import { Shell as ShellEvent } from "@/v2/session-event"
+import { createShellOutputDeltaBuffer } from "./shell-output"
 
 export { Parameters } from "./shell/prompt"
 
@@ -324,7 +325,8 @@ const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boole
   return tree
 })
 
-const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan) {
+const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan, command: string) {
+  const metadata = { source: "shell", command }
   if (scan.dirs.size > 0) {
     const globs = Array.from(scan.dirs).map((dir) => {
       if (process.platform === "win32") return AppFileSystem.normalizePathPattern(path.join(dir, "*"))
@@ -334,7 +336,7 @@ const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan)
       permission: "external_directory",
       patterns: globs,
       always: globs,
-      metadata: {},
+      metadata,
     })
   }
 
@@ -343,7 +345,7 @@ const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan)
     permission: ShellID.ToolID,
     patterns: Array.from(scan.patterns),
     always: Array.from(scan.always),
-    metadata: {},
+    metadata,
   })
 })
 
@@ -514,7 +516,7 @@ export const ShellTool = Tool.define(
       let expired = false
       let aborted: "user" | "external" | undefined
       let lastMetadataUpdate = 0
-      let pendingOutputDelta = ""
+      const pendingOutputDelta = createShellOutputDeltaBuffer()
       let lastOutputEvent = 0
       let terminalPreviewLines = [""]
       let terminalPreviewColumn = 0
@@ -533,11 +535,11 @@ export const ShellTool = Tool.define(
         })
       }
       const flushOutputEvent = (force?: boolean) => {
-        if (!ctx.callID || !pendingOutputDelta) return Effect.void
+        if (!ctx.callID || !pendingOutputDelta.hasPending()) return Effect.void
         const now = Date.now()
         if (!force && now - lastOutputEvent < METADATA_UPDATE_INTERVAL) return Effect.void
-        const delta = pendingOutputDelta
-        pendingOutputDelta = ""
+        const delta = pendingOutputDelta.take()
+        if (!delta) return Effect.void
         lastOutputEvent = now
         return bus.publish(ShellEvent.Output, {
           sessionID: ctx.sessionID,
@@ -625,7 +627,7 @@ export const ShellTool = Tool.define(
         }
 
         last = preview(updateTerminalPreview(chunk))
-        if (!rewrite) pendingOutputDelta += outputChunk
+        if (!rewrite) pendingOutputDelta.append(outputChunk)
 
         return flushMetadata().pipe(Effect.andThen(() => flushOutputEvent()))
       }
@@ -749,7 +751,7 @@ export const ShellTool = Tool.define(
                   )
                   const scan = yield* collect(tree.rootNode, cwd, ps, shell, executeInstance)
                   if (!containsPath(cwd, executeInstance)) scan.dirs.add(cwd)
-                  yield* ask(ctx, scan)
+                  yield* ask(ctx, scan, params.command)
                 }),
               )
 

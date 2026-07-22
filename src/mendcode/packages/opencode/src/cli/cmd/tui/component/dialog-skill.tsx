@@ -43,8 +43,12 @@ export function DialogSkill(props: DialogSkillProps) {
   dialog.setSize("large")
 
   const [skills, { refetch }] = createResource(async () => {
-    const result = await sdk.client.app.skills()
-    return result.data ?? []
+    try {
+      const result = await sdk.client.app.skills()
+      return result.data ?? []
+    } catch {
+      return []
+    }
   })
 
   const unsubscribe = sdk.event.on("event", (evt) => {

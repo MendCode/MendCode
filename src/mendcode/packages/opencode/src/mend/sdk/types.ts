@@ -1,3 +1,5 @@
+import type { TuiAiApi, TuiMemoryApi, TuiSessionApi, TuiSessionMetadataApi } from "@mendcode/plugin/tui"
+
 export type Dispose = () => void
 export type MendKeyEvent = {
   name: string
@@ -55,7 +57,13 @@ export type MendOverlaySize = number | `${number}%` | "auto"
 export type MendOverlayApi = {
   open(
     id: string,
-    render: (context: { close: () => boolean; requestRender: () => void }) => unknown,
+    render: (context: {
+      close: () => boolean
+      focus: () => boolean
+      blur: () => boolean
+      focused: () => boolean
+      requestRender: () => void
+    }) => unknown,
     input?: {
       anchor?: MendOverlayAnchor
       width?: MendOverlaySize
@@ -72,6 +80,9 @@ export type MendOverlayApi = {
     },
   ): boolean
   close(id: string): boolean
+  focus(id: string): boolean
+  blur(id?: string): boolean
+  focused(): string | undefined
 }
 
 export type MendUiRuntimeApi = {
@@ -167,6 +178,10 @@ export type MendExtensionApi = {
     set(key: string, value: unknown): void
     ready: boolean
   }
+  session: TuiSessionApi
+  metadata: TuiSessionMetadataApi
+  ai: TuiAiApi
+  memory: TuiMemoryApi
   state: {
     customization: {
       capabilities(): string[]

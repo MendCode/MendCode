@@ -54,6 +54,7 @@ import type {
   GlobalConfigGetResponses,
   GlobalConfigUpdateErrors,
   GlobalConfigUpdateResponses,
+  GlobalDiagnosticsMemoryResponses,
   GlobalDisposeResponses,
   GlobalEventResponses,
   GlobalHealthResponses,
@@ -461,6 +462,20 @@ export class App extends HeyApiClient {
   }
 }
 
+export class Diagnostics extends HeyApiClient {
+  /**
+   * Get process memory usage
+   *
+   * Get a manually requested, read-only memory sample for the current server process.
+   */
+  public memory<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<GlobalDiagnosticsMemoryResponses, unknown, ThrowOnError>({
+      url: "/global/diagnostics/memory",
+      ...options,
+    })
+  }
+}
+
 export class Config extends HeyApiClient {
   /**
    * Get global configuration
@@ -558,6 +573,11 @@ export class Global extends HeyApiClient {
         ...params.headers,
       },
     })
+  }
+
+  private _diagnostics?: Diagnostics
+  get diagnostics(): Diagnostics {
+    return (this._diagnostics ??= new Diagnostics({ client: this.client }))
   }
 
   private _config?: Config

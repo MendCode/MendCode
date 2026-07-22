@@ -284,6 +284,9 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
       overlay: {
         open: opts.ui?.overlay?.open ?? (() => true),
         close: opts.ui?.overlay?.close ?? (() => true),
+        focus: opts.ui?.overlay?.focus ?? (() => true),
+        blur: opts.ui?.overlay?.blur ?? (() => true),
+        focused: opts.ui?.overlay?.focused ?? (() => undefined),
       },
       runtime: {
         setStatus: opts.ui?.runtime?.setStatus ?? (() => true),
@@ -319,6 +322,20 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
         return true
       },
     },
+    get session() {
+      return Object.assign(client().session, { current: () => undefined })
+    },
+    get metadata() {
+      return Object.assign(client().session.agentView.metadata, { current: () => undefined, getCurrent: () => Promise.reject(new Error("No session route is currently active")) })
+    },
+    ai: {
+      open() {
+        throw new Error("AI sessions are not configured in this fixture")
+      },
+      async create() {
+        throw new Error("AI sessions are not configured in this fixture")
+      },
+    },
     memory: {
       graph: opts.memory?.graph ?? (async () => ({
         root: opts.state?.path?.directory ?? "",
@@ -335,6 +352,21 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
           orphanLinks: 0,
         },
       })),
+      sideChat: opts.memory?.sideChat ?? (async () => {
+        throw new Error("Memory side chat is not configured in this fixture")
+      }),
+      upsertGraphFact: opts.memory?.upsertGraphFact ?? (async () => {
+        throw new Error("Memory graph writes are not configured in this fixture")
+      }),
+      deleteGraphFact: opts.memory?.deleteGraphFact ?? (async () => {
+        throw new Error("Memory graph writes are not configured in this fixture")
+      }),
+      upsertGraphLink: opts.memory?.upsertGraphLink ?? (async () => {
+        throw new Error("Memory graph writes are not configured in this fixture")
+      }),
+      deleteGraphLink: opts.memory?.deleteGraphLink ?? (async () => {
+        throw new Error("Memory graph writes are not configured in this fixture")
+      }),
     },
     state: {
       get ready() {

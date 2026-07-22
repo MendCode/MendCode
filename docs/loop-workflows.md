@@ -43,7 +43,7 @@ The three budget modes have different completion semantics:
 |---|---|
 | `fixed` | Run to the positive iteration cap unless stopped, blocked, or waiting for input; it does not complete early when the goal is reached. |
 | `max-goal` | Treat `maxTurns` as a cap, finish early as soon as completion is verified, and block instead of claiming success when the cap is exhausted. |
-| `unbounded-monitor` | Keep monitoring until stopped, blocked, or an external stop condition applies; omit `maxTurns`. |
+| `unbounded-monitor` | Keep monitoring until stopped, an explicit safety/budget/input gate blocks it, or an external stop condition applies; omit `maxTurns`. A scheduled monitor may report an informational `blocked` checkpoint (for example, stale data) and keep its next wakeup when no gate failed. |
 
 `max-goal` workflows created through the loop tool default to independent evaluation unless the contract explicitly selects another mode. A passing independent evaluator may close an already-complete goal when the worker reported `blocked`, but only when the remaining gates pass. It does not override `needs_input`, approval requirements, or deterministic failures.
 
@@ -93,6 +93,8 @@ mendcode loops monitor loop_...
 `monitor` is the terminal view for one loop. It refreshes the workflow state, persisted root-thread ledger, and journal while the command is running. Ordinary subagent and evaluator output remains in the associated session transcripts.
 
 ## Tick Modes
+
+Daily schedules are first-class triggers rather than 24-hour intervals. Create one with `triggerMode: "daily"`, `dailyAt: "10:00"`, and a timezone such as `UTC`, `GMT`, `America/New_York`, or `Europe/Madrid`. MendCode accepts valid IANA/UTC/GMT zones, persists the timezone, calculates the next wall-clock occurrence (including daylight-saving transitions), and lets the project loop service process the workflow when that wakeup is due.
 
 `tick` is the manual wakeup command.
 

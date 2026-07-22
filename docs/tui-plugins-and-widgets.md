@@ -106,8 +106,9 @@ Use `api.shell.spawn()` when a widget needs live command output. The process out
 /** @jsxImportSource @opentui/solid */
 import { createSignal, onCleanup } from "solid-js"
 import { useKeyboard } from "@opentui/solid"
+import type { TuiPluginApi } from "@mendcode/plugin/tui"
 
-function CommandWidget(props: { api: any }) {
+function CommandWidget(props: { api: TuiPluginApi }) {
   const [output, setOutput] = createSignal("")
   const proc = props.api.shell.spawn("printf 'ready\\n'; while true; do date; sleep 2; done", {
     maxBuffer: 8_000,
@@ -324,6 +325,144 @@ Use the right surface for the job:
 - **Memory Center side-chat:** host-owned memory review UI and graph proposals.
 - **Plugin floating side-chat:** plugin-owned temporary overlay using `api.ui.overlay.open()`.
 - **External TUI app:** requires PTY/pane support; `shell.spawn()` and overlays do not emulate full-screen terminal apps like `graf` or `cava`.
+
+## Pages, Modals, and AI
+
+MendCode does not require a separate page framework. A plugin page is a registered route rendered with OpenTUI Solid. A modal is either the host dialog stack or a plugin-owned overlay. Both surfaces can use the same session and AI APIs as the rest of the TUI.
+
+```tsx
+/** @jsxImportSource @opentui/solid */
+import { useKeyboard } from "@opentui/solid"
+import { createSignal } from "solid-js"
+import type { TuiPluginApi } from "@mendcode/plugin/tui"
+
+function AssistantModal(props: { api: TuiPluginApi; sessionID: string }) {
+  const [answer, setAnswer] = createSignal("Ask this session anything")
+  const ai = props.api.ai.open(props.sessionID)
+
+  useKeyboard((event) => {
+    if (event.name !== "return") return
+    void ai.prompt("Summarize the current session in five bullets.").then((result) => {
+      setAnswer(JSON.stringify(result.data ?? result.error ?? result))
+    })
+  })
+
+  return (
+    <box flexDirection="column" padding={1} gap={1}>
+      <text fg={props.api.theme.current.accent}>Session assistant</text>
+      <text wrapMode="word">{answer()}</text>
+      <text fg={props.api.theme.current.textMuted}>Press Enter to summarize. Use Esc to close.</text>
+    </box>
+  )
+}
+
+export default {
+  id: "company.session-assistant",
+  async tui(api: TuiPluginApi) {
+    api.command.register(() => [
+      {
+        title: "Open session assistant",
+        value: "company.session-assistant.open",
+        onSelect() {
+          const sessionID = api.session.current()
+          if (!sessionID) return
+          api.ui.dialog.replace(() => (
+            <api.ui.Dialog size="large" onClose={() => api.ui.dialog.clear()}>
+              <AssistantModal api={api} sessionID={sessionID} />
+            </api.ui.Dialog>
+          ))
+        },
+      },
+    ])
+  },
+}
+```
+
+For a plugin-owned side chat, use `api.ui.overlay.open()` instead of the dialog stack. Set `modal: true` when the overlay should capture attention, call `api.ui.overlay.focus(id)` after opening, and use `context.close()`, `context.focus()`, or `context.blur()` from the renderer. Set `allowStack: true` when the plugin intentionally owns more than one overlay.
+
+`api.ai.create()` creates a persistent MendCode session that can power a page or modal. `api.ai.open(sessionID)` wraps an existing session. AI handles expose `prompt`, `promptAsync`, `messages`, `update`, `abort`, and `delete`; delete the session explicitly when it is temporary. Plugin disposal removes UI registrations, but it does not silently delete sessions or memory.
+
+## Session and Metadata API
+
+The TUI plugin API exposes the same generated SDK contracts used by MendCode itself, with the current route and host client already available:
+
+```ts
+const sessionID = api.session.current()
+const sessions = await api.session.list({})
+const status = await api.session.status({})
+
+if (sessionID) {
+  const session = await api.session.get({ sessionID })
+  const messages = await api.session.messages({ sessionID })
+  await api.metadata.patch({
+    sessionID,
+    agentViewMetadataPatch: {
+      title: "Release review",
+      tags: ["release", "review"],
+      priority: "high",
+      pinned: true,
+    },
+  })
+}
+```
+
+`api.session` includes `list`, `create`, `status`, `delete`, `get`, `update`, `children`, `todo`, `diff`, `messages`, `prompt`, `promptAsync`, `command`, `shell`, `deleteMessage`, `message`, `fork`, `abort`, `interrupt`, `init`, `summarize`, `revert`, `unrevert`, `background`, `agentView`, and `agentCommand`.
+
+`api.metadata` includes `list`, `get`, `patch`, `getCurrent`, and `current`. Metadata changes are control-plane changes: they update title, tags, grouping, priority, notes, pin, and archive state without rewriting the transcript.
+
+For endpoints not yet wrapped by a convenience method, `api.client` is the generated `OpencodeClient`. It is intentionally part of the public contract, so a plugin can use the same authenticated instance and request context without importing MendCode internals.
+
+## Memory Graph API
+
+Memory graph access is project-scoped to the active TUI instance. Plugins can inspect the graph, create or update facts, create or update links, delete either, and call the structured Memory side chat:
+
+```ts
+const snapshot = await api.memory.graph()
+const fact = await api.memory.upsertGraphFact({
+  text: "The release checklist lives in .mendcode/checklists/release.md",
+  scope: "project",
+  categoryIDs: ["workflow"],
+  provenance: ["company.release-plugin"],
+  confidence: 0.9,
+})
+
+const link = await api.memory.upsertGraphLink({
+  from: fact.id,
+  to: snapshot.facts[0]?.id ?? fact.id,
+  kind: "related",
+})
+
+await api.memory.deleteGraphLink(link.id)
+await api.memory.deleteGraphFact(fact.id)
+
+const proposal = await api.memory.sideChat({
+  message: "Suggest a safe graph fact for the selected release context.",
+})
+```
+
+Graph facts expose identity, scope, ownership, categories, provenance, timestamps, confidence, durability, change risk, sensitivity, stale state, and retrieval priority. Graph links include their IDs and creation timestamps, so a plugin can edit and remove the exact object it created. `api.memory.graph()` is read-only; graph writes are explicit and persist under the active project's MendCode memory directory.
+
+## Public API Surface
+
+The complete public TUI contract is exported from `@mendcode/plugin/tui`:
+
+| Surface | Public API | Typical use |
+| --- | --- | --- |
+| Pages | `route.register`, `route.navigate`, `route.current` | Full-screen dashboards, settings, inspectors, sidebars |
+| Modals | `ui.dialog`, `ui.Dialog*` | Confirmations, forms, selectors, AI workflows |
+| Floating UI | `ui.overlay` | Side chats, inspectors, popovers, non-capturing status panels |
+| Editor | `ui.Prompt`, `ui.runtime.setEditor`, `setEditorVisual` | Replace or decorate prompt input |
+| Persistent UI | `ui.runtime.setWidget`, `setFooter`, `setFooterEntry`, `setStatus` | Panels, footer data, status indicators |
+| Session AI | `session`, `metadata`, `ai` | Create, inspect, prompt, organize, and stop sessions |
+| Memory | `memory` | Read and mutate graph facts/links and call Memory side chat |
+| Host state | `state`, `event`, `client` | React to events and inspect synced TUI state |
+| Terminal work | `shell`, `pty`, `renderer` | Commands, renderer integrations, and future PTY-backed surfaces |
+| Interaction | `command`, `keybind`, `slots`, `theme`, `kv` | Commands, shortcuts, injection points, themes, persistence |
+| Lifecycle | `lifecycle` | Abort signals and deterministic cleanup |
+
+`api.app.capabilities` reports the host capability vocabulary (`session.ai`, `metadata.write`, `memory.graph.write`, `overlay.focus`, and related surfaces). It is a discovery aid, not a sandbox: local plugins run with the permissions of the MendCode process. Review third-party package source before enabling plugins that can execute shell commands, mutate sessions, or write memory.
+
+`api.pty.spawn` is part of the stable type contract, but the default host currently rejects PTY creation with an explicit error. Use `api.shell.spawn` for non-interactive commands and overlays/widgets for UI until a PTY host is enabled; do not assume a pipe emulates a full terminal.
 
 ## Slots
 

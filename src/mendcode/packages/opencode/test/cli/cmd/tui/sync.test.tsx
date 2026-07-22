@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/solid */
 import { describe, expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
-import { onMount } from "solid-js"
+import { batch, onMount } from "solid-js"
 import { Global } from "@mendcode/core/global"
 import { ArgsProvider } from "../../../../src/cli/cmd/tui/context/args"
 import { ExitProvider } from "../../../../src/cli/cmd/tui/context/exit"
@@ -458,11 +458,7 @@ describe("tui sync", () => {
       } as GlobalEvent)
       emit(removed("evt_pinned_removal_1"))
       await Bun.sleep(20)
-      expect(sync.data.message[sessionID]?.map((item) => item.id)).toEqual([
-        message.id,
-        synthetic.id,
-        summary.id,
-      ])
+      expect(sync.data.message[sessionID]?.map((item) => item.id)).toEqual([message.id, synthetic.id, summary.id])
       expect(sync.data.part[message.id]?.[0]).toMatchObject({ text: part.text })
 
       sync.session.unpinMessage(sessionID, message.id)
@@ -538,7 +534,103 @@ describe("tui sync", () => {
         finish: "stop",
         time: { created: 2, completed: 3 },
       })
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
 
+  test("working sparse refresh keeps a tool-call assistant until its text part arrives", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    let emit!: (event: GlobalEvent) => void
+    const sessionID = "ses_sparse_working_text_assistant"
+    const user = {
+      info: {
+        id: "msg_001",
+        sessionID,
+        role: "user",
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-test" },
+        time: { created: 1 },
+      },
+      parts: [{ id: "prt_001", messageID: "msg_001", sessionID, type: "text", text: "continue" }],
+    }
+    const activeAssistant = {
+      info: {
+        id: "msg_002",
+        sessionID,
+        parentID: user.info.id,
+        role: "assistant",
+        agent: "build",
+        providerID: "openai",
+        modelID: "gpt-test",
+        finish: "tool-calls",
+        tokens: {},
+        time: { created: 2, completed: 2 },
+      },
+      parts: [],
+    }
+    let page = [user, activeAssistant]
+    const { app, sync } = await mount(
+      {
+        [`/session/${sessionID}`]: {
+          id: sessionID,
+          projectID: "proj_test",
+          directory,
+          title: "Sparse working text assistant",
+          version: "test",
+          time: { created: 1, updated: 2 },
+        },
+        [`/session/${sessionID}/message`]: () =>
+          new Response(JSON.stringify(page), {
+            headers: { "content-type": "application/json", "X-Message-View-Sparse": "true" },
+          }),
+        [`/session/${sessionID}/todo`]: [],
+        [`/session/${sessionID}/diff`]: [],
+        "/session/status": { [sessionID]: { type: "busy" } },
+      },
+      {
+        events: eventSource({
+          onSubscribe: (handler) => {
+            emit = handler
+          },
+        }),
+      },
+    )
+
+    try {
+      await sync.session.sync(sessionID, { force: true })
+      page = [user]
+      await sync.session.sync(sessionID, { force: true })
+
+      expect(sync.data.message[sessionID]?.map((message) => message.id)).toEqual([user.info.id, activeAssistant.info.id])
+
+      emit({
+        directory,
+        project: "proj_test",
+        payload: {
+          id: "evt_final_text",
+          type: "message.part.updated",
+          properties: {
+            sessionID,
+            part: {
+              id: "prt_final",
+              messageID: activeAssistant.info.id,
+              sessionID,
+              type: "text",
+              text: "final output",
+              time: { start: 3 },
+            },
+          },
+        },
+      } as GlobalEvent)
+
+      await wait(() => sync.data.part[activeAssistant.info.id]?.some((part) => part.type === "text"))
+      expect(sync.data.message[sessionID]?.some((message) => message.id === activeAssistant.info.id)).toBe(true)
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous
@@ -726,7 +818,18 @@ describe("tui sync", () => {
       },
       parts: [],
     }
-    let page = [oldUser, oldAssistant, currentUser, activeAssistant]
+    const submittedUser = {
+      info: {
+        id: "msg_005",
+        sessionID,
+        role: "user",
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-test" },
+        time: { created: 5 },
+      },
+      parts: [{ id: "prt_005", messageID: "msg_005", sessionID, type: "text", text: "third" }],
+    }
+    let page = [oldUser, oldAssistant, currentUser, activeAssistant, submittedUser]
     const { app, sync } = await mount({
       [`/session/${sessionID}`]: {
         id: sessionID,
@@ -746,7 +849,7 @@ describe("tui sync", () => {
 
     try {
       await sync.session.sync(sessionID, { force: true })
-      page = [oldUser, currentUser, activeAssistant]
+      page = [oldUser, currentUser, submittedUser]
       await sync.session.sync(sessionID, { force: true })
 
       expect(sync.data.message[sessionID]?.map((message) => message.id)).toEqual([
@@ -754,6 +857,7 @@ describe("tui sync", () => {
         oldAssistant.info.id,
         currentUser.info.id,
         activeAssistant.info.id,
+        submittedUser.info.id,
       ])
       expect(sync.data.part[oldAssistant.info.id]?.[0]).toMatchObject({ text: "first answer" })
     } finally {
@@ -813,7 +917,7 @@ describe("tui sync", () => {
     })
 
     try {
-      const oldAssistants = Array.from({ length: 250 }, (_, index) => ({
+      const oldAssistants = Array.from({ length: TUI_SESSION_MESSAGE_STORE_LIMIT + 50 }, (_, index) => ({
         id: `msg_000_${index.toString().padStart(3, "0")}`,
         sessionID,
         parentID: "msg_000_user",
@@ -937,6 +1041,63 @@ describe("tui sync", () => {
       release?.()
       await reload
     } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("coalesces concurrent forced session refreshes and runs one queued refresh", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    const sessionID = "ses_coalesced_refresh"
+    const info = {
+      id: sessionID,
+      projectID: "proj_test",
+      directory,
+      title: "Coalesced refresh",
+      version: "test",
+      time: { created: 1, updated: 1 },
+    }
+    const user = {
+      info: {
+        id: "msg_coalesced_refresh",
+        sessionID,
+        role: "user",
+        agent: "build",
+        time: { created: 1 },
+      },
+      parts: [],
+    }
+    let calls = 0
+    let release!: () => void
+    const { app, sync } = await mount({
+      [`/session/${sessionID}`]: info,
+      [`/session/${sessionID}/message`]: async () => {
+        calls++
+        if (calls === 1) await new Promise<void>((resolve) => (release = resolve))
+        return [user]
+      },
+      [`/session/${sessionID}/todo`]: [],
+      [`/session/${sessionID}/diff`]: [],
+    })
+
+    try {
+      const first = sync.session.sync(sessionID, { force: true })
+      await wait(() => calls === 1 && Boolean(release))
+      const second = sync.session.sync(sessionID, { force: true })
+      const third = sync.session.sync(sessionID, { force: true })
+
+      expect(calls).toBe(1)
+      release()
+      await Promise.all([first, second, third])
+
+      expect(calls).toBe(2)
+      expect(sync.data.message[sessionID]?.map((message) => message.id)).toEqual([user.info.id])
+    } finally {
+      release?.()
       app.renderer.destroy()
       Global.Path.state = previous
     }
@@ -1113,18 +1274,8 @@ describe("tui sync", () => {
 
       for (let index = 0; index < 9; index++) await sync.session.loadNewer(sessionID)
 
-      expect(starts.slice(-9)).toEqual([150, 200, 250, 300, 350, 400, 450, 500, 550])
-      expect(directions.slice(-9)).toEqual([
-        "newer",
-        "newer",
-        "newer",
-        "newer",
-        "newer",
-        "newer",
-        "newer",
-        "newer",
-        "newer",
-      ])
+      expect(starts.slice(-6)).toEqual([300, 350, 400, 450, 500, 550])
+      expect(directions.slice(-6)).toEqual(["newer", "newer", "newer", "newer", "newer", "newer"])
       expect(sync.data.message[sessionID]?.length).toBe(TUI_SESSION_MESSAGE_STORE_LIMIT)
       expect(sync.data.message[sessionID]?.[0]?.id).toBe("msg_450")
       expect(sync.data.message[sessionID]?.at(-1)?.id).toBe("msg_599")
@@ -1186,9 +1337,7 @@ describe("tui sync", () => {
       [`/session/${sessionID}`]: info,
       [`/session/${sessionID}/message`]: async (url: URL) => {
         const before = url.searchParams.get("before")
-        const start = before
-          ? Math.max(0, (messageIndexFromCursor(before) ?? 0) - TUI_SESSION_MESSAGE_SYNC_LIMIT)
-          : 550
+        const start = before ? Math.max(0, (messageIndexFromCursor(before) ?? 0) - TUI_SESSION_MESSAGE_SYNC_LIMIT) : 550
         if (delayOlder && before) {
           delayOlder = false
           await olderReleased
@@ -1491,6 +1640,140 @@ describe("tui sync", () => {
       await wait(() => sync.data.message[sessionID]?.length === 0)
       expect(sync.data.message[sessionID]).toEqual([])
       expect(sync.data.part[messageID]).toBeUndefined()
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("revert removals cannot resurrect pinned messages during a stale refresh", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    let emit!: (event: GlobalEvent) => void
+    const sessionID = "ses_revert_refresh"
+    const baseUser = {
+      info: {
+        id: "msg_001",
+        sessionID,
+        role: "user",
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-test" },
+        time: { created: 1 },
+      },
+      parts: [],
+    }
+    const baseAssistant = {
+      info: {
+        id: "msg_002",
+        sessionID,
+        parentID: baseUser.info.id,
+        role: "assistant",
+        agent: "build",
+        providerID: "openai",
+        modelID: "gpt-test",
+        tokens: {},
+        finish: "stop",
+        time: { created: 2, completed: 2 },
+      },
+      parts: [],
+    }
+    const revertedUser = {
+      info: {
+        id: "msg_003",
+        sessionID,
+        role: "user",
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-test" },
+        time: { created: 3 },
+      },
+      parts: [],
+    }
+    const revertedAssistant = {
+      info: {
+        id: "msg_004",
+        sessionID,
+        parentID: revertedUser.info.id,
+        role: "assistant",
+        agent: "build",
+        providerID: "openai",
+        modelID: "gpt-test",
+        tokens: {},
+        finish: "stop",
+        time: { created: 4, completed: 4 },
+      },
+      parts: [],
+    }
+    const nextUser = {
+      info: {
+        id: "msg_005",
+        sessionID,
+        role: "user",
+        agent: "build",
+        model: { providerID: "openai", modelID: "gpt-test" },
+        time: { created: 5 },
+      },
+      parts: [],
+    }
+    const info = {
+      id: sessionID,
+      projectID: "proj_test",
+      directory,
+      title: "Revert refresh",
+      version: "test",
+      time: { created: 1, updated: 5 },
+    }
+    const stalePage = [baseUser, baseAssistant, revertedUser, nextUser]
+    const { app, sync } = await mount(
+      {
+        [`/session/${sessionID}`]: info,
+        [`/session/${sessionID}/message`]: stalePage,
+        [`/session/${sessionID}/todo`]: [],
+        [`/session/${sessionID}/diff`]: [],
+      },
+      {
+        events: eventSource({
+          onSubscribe: (handler) => {
+            emit = handler
+          },
+        }),
+      },
+    )
+
+    const removed = (id: string) =>
+      ({
+        directory,
+        project: "proj_test",
+        payload: {
+          id: `evt_${id}`,
+          type: "message.removed",
+          properties: { sessionID, messageID: id, reason: "revert" },
+        },
+      }) as GlobalEvent
+
+    try {
+      sync.set("message", sessionID, [
+        baseUser.info,
+        baseAssistant.info,
+        revertedUser.info,
+        revertedAssistant.info,
+        nextUser.info,
+      ] as any)
+      sync.session.pinMessage(sessionID, revertedUser.info.id)
+
+      emit(removed(revertedUser.info.id))
+      emit(removed(revertedAssistant.info.id))
+      await wait(() => !sync.data.message[sessionID]?.some((message) => message.id === revertedUser.info.id))
+
+      await sync.session.sync(sessionID, { force: true })
+
+      expect(sync.data.message[sessionID]?.map((message) => message.id)).toEqual([
+        baseUser.info.id,
+        baseAssistant.info.id,
+        nextUser.info.id,
+      ])
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous
@@ -1874,6 +2157,205 @@ describe("tui sync", () => {
     }
   })
 
+  test("duplicate message IDs do not evict the previous assistant at the store limit", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    let emit!: (event: GlobalEvent) => void
+    const sessionID = "ses_duplicate_message_trim"
+    const initialMessages = Array.from({ length: TUI_SESSION_MESSAGE_STORE_LIMIT - 1 }, (_, index) => ({
+      id: `msg_${String(index).padStart(3, "0")}`,
+      sessionID,
+      role: index % 2 === 0 ? "user" : "assistant",
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-test" },
+      tokens: {},
+      time: { created: index + 1, ...(index % 2 === 0 ? { completed: index + 1 } : {}) },
+    }))
+    const previousAssistant = {
+      id: "msg_previous_assistant",
+      sessionID,
+      role: "assistant",
+      parentID: initialMessages.at(-1)!.id,
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-test" },
+      tokens: {},
+      finish: "stop",
+      time: { created: TUI_SESSION_MESSAGE_STORE_LIMIT - 1, completed: TUI_SESSION_MESSAGE_STORE_LIMIT - 1 },
+    }
+    const optimisticUser = {
+      id: "msg_optimistic_user",
+      sessionID,
+      role: "user",
+      agent: "build",
+      time: { created: TUI_SESSION_MESSAGE_STORE_LIMIT },
+    }
+    const nextAssistant = {
+      id: "msg_next_assistant",
+      sessionID,
+      role: "assistant",
+      parentID: optimisticUser.id,
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-test" },
+      tokens: {},
+      time: { created: TUI_SESSION_MESSAGE_STORE_LIMIT + 1 },
+    }
+    const info = {
+      id: sessionID,
+      projectID: "proj_test",
+      directory,
+      title: "Duplicate message trim",
+      version: "test",
+      time: { created: 1, updated: TUI_SESSION_MESSAGE_STORE_LIMIT + 1 },
+    }
+    const { app, sync } = await mount(
+      {
+        [`/session/${sessionID}`]: info,
+        [`/session/${sessionID}/message`]: initialMessages.map((message) => ({ info: message, parts: [] })),
+        [`/session/${sessionID}/todo`]: [],
+        [`/session/${sessionID}/diff`]: [],
+        "/session/status": { [sessionID]: { type: "busy" } },
+      },
+      {
+        events: eventSource({
+          onSubscribe: (handler) => {
+            emit = handler
+          },
+        }),
+      },
+    )
+
+    try {
+      sync.set("message", sessionID, [
+        ...initialMessages,
+        previousAssistant,
+      ] as any)
+      sync.set("session_latest_assistant", sessionID, previousAssistant as any)
+      sync.session.pinMessage(sessionID, optimisticUser.id)
+      const userEvent = {
+        directory,
+        project: "proj_test",
+        payload: {
+          id: "evt_optimistic_user_trim",
+          type: "message.updated",
+          properties: { sessionID, info: optimisticUser },
+        },
+      } as GlobalEvent
+      const assistantEvent = {
+        directory,
+        project: "proj_test",
+        payload: {
+          id: "evt_duplicate_message_trim",
+          type: "message.updated",
+          properties: { sessionID, info: nextAssistant },
+        },
+      } as GlobalEvent
+      const assistantEventAgain = {
+        ...assistantEvent,
+        payload: { ...assistantEvent.payload, id: "evt_duplicate_message_trim_again" },
+      } as GlobalEvent
+
+      emit(userEvent)
+       await wait(() => sync.data.message[sessionID]?.some((message) => message.id === optimisticUser.id) === true)
+       emit(assistantEvent)
+
+
+       await wait(() => sync.data.message[sessionID]?.some((message) => message.id === nextAssistant.id) === true)
+       const messages = sync.data.message[sessionID] ?? []
+       expect(messages).toHaveLength(TUI_SESSION_MESSAGE_STORE_LIMIT)
+
+      expect(messages.map((message) => message.id)).toHaveLength(new Set(messages.map((message) => message.id)).size)
+      expect(messages.some((message) => message.id === previousAssistant.id)).toBe(true)
+      expect(messages.some((message) => message.id === optimisticUser.id)).toBe(true)
+      expect(messages.at(-1)?.id).toBe(nextAssistant.id)
+
+      emit(assistantEventAgain)
+      await wait(() => (sync.data.message[sessionID] ?? []).length === TUI_SESSION_MESSAGE_STORE_LIMIT)
+      expect(sync.data.message[sessionID]?.map((message) => message.id)).toHaveLength(
+        new Set(sync.data.message[sessionID]?.map((message) => message.id)).size,
+      )
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("ignores a mismatched paged message response instead of replacing another message", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    const sessionID = "ses_message_part_mismatch"
+    const requestedID = "msg_previous_assistant"
+    const wrongID = "msg_current_assistant"
+    const sessionInfo = {
+      id: sessionID,
+      projectID: "proj_test",
+      directory,
+      title: "Mismatched message parts",
+      version: "test",
+      time: { created: 1, updated: 3 },
+    }
+    const requested = {
+      id: requestedID,
+      sessionID,
+      role: "assistant",
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-test" },
+      tokens: {},
+      finish: "stop",
+      time: { created: 1, completed: 1 },
+    }
+    const user = {
+      id: "msg_current_user",
+      sessionID,
+      role: "user",
+      agent: "build",
+      time: { created: 2 },
+    }
+    const wrong = {
+      id: wrongID,
+      sessionID,
+      role: "assistant",
+      parentID: user.id,
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-test" },
+      tokens: {},
+      time: { created: 3 },
+    }
+    const { app, sync } = await mount({
+      [`/session/${sessionID}`]: sessionInfo,
+      [`/session/${sessionID}/message`]: [],
+      [`/session/${sessionID}/message/${requestedID}`]: {
+        info: wrong,
+        parts: [],
+        partsMore: false,
+      },
+      [`/session/${sessionID}/todo`]: [],
+      [`/session/${sessionID}/diff`]: [],
+    })
+
+    try {
+      sync.set("message", sessionID, [requested, user, wrong] as any)
+      sync.set("message_part_paging", requestedID, { hasMore: true, cursor: "cursor" })
+
+      await expect(sync.session.loadMoreMessageParts(sessionID, requestedID)).resolves.toBe(false)
+
+      expect(sync.data.message[sessionID]?.map((message) => message.id)).toEqual([requestedID, user.id, wrongID])
+      expect(sync.data.message_part_paging[requestedID]).toMatchObject({
+        hasMore: true,
+        cursor: "cursor",
+        loading: false,
+      })
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
   test("live message events keep full synced transcript history", async () => {
     const previous = Global.Path.state
     await using tmp = await tmpdir()
@@ -2087,6 +2569,266 @@ describe("tui sync", () => {
     }
   })
 
+  test("live trimming keeps the latest visible assistant output during a tool-call burst", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    let emit!: (event: GlobalEvent) => void
+    const sessionID = "ses_visible_assistant_tail"
+    const stableUser = {
+      id: "msg_000_user",
+      sessionID,
+      role: "user",
+      agent: "build",
+      time: { created: 1 },
+    }
+    const stableAssistant = {
+      id: "msg_000_assistant",
+      sessionID,
+      parentID: stableUser.id,
+      role: "assistant",
+      agent: "build",
+      providerID: "openai",
+      modelID: "gpt-test",
+      finish: "stop",
+      tokens: {},
+      time: { created: 2, completed: 2 },
+    }
+    const toolCallAssistants = Array.from({ length: TUI_SESSION_MESSAGE_STORE_LIMIT - 3 }, (_, index) => ({
+      id: `msg_${String(index + 1).padStart(3, "0")}`,
+      sessionID,
+      parentID: stableUser.id,
+      role: "assistant",
+      agent: "build",
+      providerID: "openai",
+      modelID: "gpt-test",
+      finish: "tool-calls",
+      tokens: {},
+      time: { created: index + 3, completed: index + 3 },
+    }))
+    const latestUser = {
+      id: "msg_149_user",
+      sessionID,
+      role: "user",
+      agent: "build",
+      time: { created: 149 },
+    }
+    const nextAssistant = {
+      id: "msg_150_assistant",
+      sessionID,
+      parentID: latestUser.id,
+      role: "assistant",
+      agent: "build",
+      providerID: "openai",
+      modelID: "gpt-test",
+      finish: "tool-calls",
+      tokens: {},
+      time: { created: 150, completed: 150 },
+    }
+    const { app, sync } = await mount(
+      {
+        "/session/status": { [sessionID]: { type: "busy" } },
+      },
+      {
+        events: eventSource({
+          onSubscribe: (handler) => {
+            emit = handler
+          },
+        }),
+      },
+    )
+
+    try {
+      sync.set("message", sessionID, [stableUser, stableAssistant, ...toolCallAssistants, latestUser] as any)
+      sync.set("part", stableAssistant.id, [
+        { id: "prt_stable_output", messageID: stableAssistant.id, sessionID, type: "text", text: "stable output" },
+      ] as any)
+      sync.set("part", stableUser.id, [
+        { id: "prt_stable_prompt", messageID: stableUser.id, sessionID, type: "text", text: "prompt" },
+      ] as any)
+
+      emit({
+        directory,
+        project: "proj_test",
+        payload: {
+          id: "evt_tool_call_burst",
+          type: "message.updated",
+          properties: { sessionID, info: nextAssistant },
+        },
+      } as GlobalEvent)
+
+      await wait(() => sync.data.message[sessionID]?.some((message) => message.id === nextAssistant.id) === true)
+      expect(sync.data.message[sessionID]?.length).toBe(TUI_SESSION_MESSAGE_STORE_LIMIT)
+      expect(sync.data.message[sessionID]?.some((message) => message.id === stableAssistant.id)).toBe(true)
+      expect(sync.data.message[sessionID]?.some((message) => message.id === nextAssistant.id)).toBe(true)
+      expect(sync.data.part[stableAssistant.id]?.[0]).toMatchObject({ text: "stable output" })
+      expect(sync.data.message[sessionID]?.some((message) => message.id === toolCallAssistants[0]?.id)).toBe(false)
+
+      emit({
+        directory,
+        project: "proj_test",
+        payload: {
+          id: "evt_working_text_after_trim",
+          type: "message.part.updated",
+          properties: {
+            sessionID,
+            part: {
+              id: "prt_working_text",
+              messageID: nextAssistant.id,
+              sessionID,
+              type: "text",
+              text: "streamed output survives trim",
+              time: { start: 151 },
+            },
+          },
+        },
+      } as GlobalEvent)
+      await wait(() => sync.data.part[nextAssistant.id]?.some((part) => part.type === "text") === true)
+      expect(sync.data.part[nextAssistant.id]?.[0]).toMatchObject({ text: "streamed output survives trim" })
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("live trimming does not preserve a hidden compaction summary over visible assistant output", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    let emit!: (event: GlobalEvent) => void
+    const sessionID = "ses_hidden_compaction_summary_tail"
+    const stableUser = {
+      id: "msg_000_user",
+      sessionID,
+      role: "user",
+      agent: "build",
+      time: { created: 1 },
+    }
+    const stableAssistant = {
+      id: "msg_001_assistant",
+      sessionID,
+      parentID: stableUser.id,
+      role: "assistant",
+      agent: "build",
+      providerID: "openai",
+      modelID: "gpt-test",
+      finish: "stop",
+      tokens: {},
+      time: { created: 2, completed: 2 },
+    }
+    const toolCallAssistants = Array.from({ length: TUI_SESSION_MESSAGE_STORE_LIMIT - 5 }, (_, index) => ({
+      id: `msg_${String(index + 2).padStart(3, "0")}_tool`,
+      sessionID,
+      parentID: stableUser.id,
+      role: "assistant",
+      agent: "build",
+      providerID: "openai",
+      modelID: "gpt-test",
+      finish: "tool-calls",
+      tokens: {},
+      time: { created: index + 3, completed: index + 3 },
+    }))
+    const latestUser = {
+      id: "msg_147_user",
+      sessionID,
+      role: "user",
+      agent: "build",
+      time: { created: 148 },
+    }
+    const compactionUser = {
+      id: "msg_148_compaction",
+      sessionID,
+      role: "user",
+      agent: "build",
+      time: { created: 149 },
+    }
+    const hiddenSummary = {
+      id: "msg_149_summary",
+      sessionID,
+      parentID: compactionUser.id,
+      role: "assistant",
+      summary: true,
+      agent: "build",
+      providerID: "openai",
+      modelID: "gpt-test",
+      finish: "stop",
+      tokens: {},
+      time: { created: 150, completed: 150 },
+    }
+    const nextAssistant = {
+      id: "msg_150_assistant",
+      sessionID,
+      parentID: latestUser.id,
+      role: "assistant",
+      agent: "build",
+      providerID: "openai",
+      modelID: "gpt-test",
+      finish: "tool-calls",
+      tokens: {},
+      time: { created: 151 },
+    }
+    const { app, sync } = await mount(
+      {},
+      {
+        events: eventSource({
+          onSubscribe: (handler) => {
+            emit = handler
+          },
+        }),
+      },
+    )
+
+    try {
+      sync.set("message", sessionID, [
+        stableUser,
+        stableAssistant,
+        ...toolCallAssistants,
+        latestUser,
+        compactionUser,
+        hiddenSummary,
+      ] as any)
+      sync.set("part", stableUser.id, [
+        { id: "prt_stable_prompt", messageID: stableUser.id, sessionID, type: "text", text: "prompt" },
+      ] as any)
+      sync.set("part", stableAssistant.id, [
+        { id: "prt_stable_output", messageID: stableAssistant.id, sessionID, type: "text", text: "stable output" },
+      ] as any)
+      sync.set("part", latestUser.id, [
+        { id: "prt_latest_prompt", messageID: latestUser.id, sessionID, type: "text", text: "latest prompt" },
+      ] as any)
+      sync.set("part", compactionUser.id, [
+        { id: "prt_compaction", messageID: compactionUser.id, sessionID, type: "compaction", auto: true },
+      ] as any)
+      sync.set("part", hiddenSummary.id, [
+        { id: "prt_hidden_summary", messageID: hiddenSummary.id, sessionID, type: "text", text: "hidden summary" },
+      ] as any)
+      sync.session.pinMessage(sessionID, stableUser.id)
+
+      emit({
+        directory,
+        project: "proj_test",
+        payload: {
+          id: "evt_hidden_compaction_summary_tail",
+          type: "message.updated",
+          properties: { sessionID, info: nextAssistant },
+        },
+      } as GlobalEvent)
+
+      await wait(() => sync.data.message[sessionID]?.some((message) => message.id === nextAssistant.id) === true)
+      expect(sync.data.message[sessionID]?.length).toBe(TUI_SESSION_MESSAGE_STORE_LIMIT)
+      expect(sync.data.message[sessionID]?.some((message) => message.id === stableUser.id)).toBe(true)
+      expect(sync.data.message[sessionID]?.some((message) => message.id === stableAssistant.id)).toBe(true)
+      expect(sync.data.message[sessionID]?.some((message) => message.id === toolCallAssistants[0]?.id)).toBe(false)
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
   test("live message events do not replace an older paged window with a tail message", async () => {
     const previous = Global.Path.state
     await using tmp = await tmpdir()
@@ -2188,6 +2930,7 @@ describe("tui sync", () => {
       expect(sync.data.message[sessionID]?.[0]?.id).toBe("msg_000")
       expect(sync.data.message[sessionID]?.at(-1)?.id).toBe("msg_149")
       expect(sync.data.session_latest_assistant[sessionID]?.id).toBe(nextMessage.id)
+
       expect(sync.session.history(sessionID)).toMatchObject({ hasMoreOlder: false, hasMoreNewer: true })
     } finally {
       app.renderer.destroy()
@@ -2450,6 +3193,83 @@ describe("tui sync", () => {
       expect(sync.data.messages[sessionID]?.[0]).toMatchObject({ id: "msg_after", text: "after" })
     } finally {
       app.renderer.destroy()
+    }
+  })
+
+  test("buffers a text delta that arrives before its part update", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    let emit!: (event: GlobalEvent) => void
+    const sessionID = "ses_part_delta_before_update"
+    const messageID = "msg_part_delta_before_update"
+    const partID = "prt_part_delta_before_update"
+    const { app, sync } = await mount(
+      {},
+      {
+        events: eventSource({
+          onSubscribe: (handler) => {
+            emit = handler
+          },
+        }),
+      },
+    )
+
+    try {
+      sync.set("message", sessionID, [
+        {
+          id: messageID,
+          sessionID,
+          role: "assistant",
+          agent: "build",
+          model: { providerID: "openai", modelID: "gpt-test" },
+          tokens: {},
+          time: { created: 1 },
+        } as any,
+      ])
+
+      emit({
+        directory,
+        project: "proj_test",
+        payload: {
+          id: "evt_part_delta_before_update",
+          type: "message.part.delta",
+          properties: {
+            sessionID,
+            messageID,
+            partID,
+            field: "text",
+            delta: "streamed output",
+          },
+        },
+      } as GlobalEvent)
+      emit({
+        directory,
+        project: "proj_test",
+        payload: {
+          id: "evt_part_update_after_delta",
+          type: "message.part.updated",
+          properties: {
+            sessionID,
+            part: {
+              id: partID,
+              messageID,
+              sessionID,
+              type: "text",
+              text: "",
+              time: { start: 1 },
+            },
+          },
+        },
+      } as GlobalEvent)
+
+      await wait(() => sync.data.part[messageID]?.[0]?.type === "text")
+      expect(sync.data.part[messageID]?.[0]).toMatchObject({ text: "streamed output" })
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
     }
   })
 })

@@ -4499,6 +4499,31 @@ export type GlobalHealthResponses = {
 
 export type GlobalHealthResponse = GlobalHealthResponses[keyof GlobalHealthResponses]
 
+export type GlobalDiagnosticsMemoryData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/diagnostics/memory"
+}
+
+export type GlobalDiagnosticsMemoryResponses = {
+  /**
+   * Current process memory usage
+   */
+  200: {
+    pid: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    role: string
+    rss: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    heapTotal: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    heapUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    external: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    arrayBuffers: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    uptimeSeconds: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type GlobalDiagnosticsMemoryResponse = GlobalDiagnosticsMemoryResponses[keyof GlobalDiagnosticsMemoryResponses]
+
 export type GlobalEventData = {
   body?: never
   path?: never

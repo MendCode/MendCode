@@ -27,6 +27,7 @@ import path from "path"
 import {
   buildUsageInsights,
   formatInsightDuration,
+  formatInsightNumber,
   normalizeUsageInsights,
   type DailyUsage,
   type SessionInsightInput,
@@ -40,6 +41,7 @@ const WEATHER_KV_KEY = "stats_weather"
 export const STATS_CACHE_KEY = "stats_insights_v2"
 const STATS_CACHE_STALE_MS = 5 * 60 * 1000
 const STATS_TODAY_CACHE_STALE_MS = 60 * 1000
+const STATS_REQUEST_TIMEOUT_MS = 15 * 1000
 const STATS_MESSAGE_FETCH_CONCURRENCY = 12
 const HEATMAP_ROWS = 7
 const HEATMAP_COLUMNS = Math.ceil(DEFAULT_DAYS / HEATMAP_ROWS)
@@ -288,9 +290,11 @@ function BigNumber(props: { label: string; value: string; detail?: string; accen
   const { theme } = useTheme()
   return (
     <Panel title={props.label} grow>
-      <text fg={props.accent ? theme.success : theme.text} wrapMode="none">
-        {props.value}
-      </text>
+      <box height={2} justifyContent="center" overflow="hidden">
+        <text fg={props.accent ? theme.success : theme.primary} wrapMode="none">
+          <span style={{ bold: true }}>{props.value}</span>
+        </text>
+      </box>
       <Show when={props.detail}>
         <text fg={theme.textMuted} wrapMode="none">
           {props.detail}
@@ -314,9 +318,16 @@ const CLOCK_DIGITS: Record<string, string[]> = {
   ":": ["     ", "  █  ", "  █  ", "     ", "  █  ", "  █  ", "     "],
 }
 
-function clockAscii(value: string) {
+const CLOCK_WIDTH = 29
+
+export function clockAscii(value: string) {
   const chars = value.replace(/\s[AP]M$/, "").split("")
-  return Array.from({ length: 7 }, (_, row) => chars.map((char) => CLOCK_DIGITS[char]?.[row] ?? "     ").join(" "))
+  return Array.from({ length: 7 }, (_, row) =>
+    chars
+      .map((char) => CLOCK_DIGITS[char]?.[row] ?? "     ")
+      .join(" ")
+      .padEnd(CLOCK_WIDTH),
+  )
 }
 
 function ClockWidget(props: { tall?: boolean }) {
@@ -329,16 +340,18 @@ function ClockWidget(props: { tall?: boolean }) {
     now().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" }),
   )
   return (
-    <Panel title="Clock" height={props.tall ? 14 : 12}>
-      <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={0}>
-        <For each={clockAscii(time())}>
-          {(line) => (
-            <text fg={theme.success} wrapMode="none">
-              {line}
-            </text>
-          )}
-        </For>
-        <box height={1} overflow="hidden">
+    <Panel title="Clock" height={props.tall ? 15 : 14}>
+      <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
+        <box flexDirection="column" width={CLOCK_WIDTH} height={7} overflow="hidden">
+          <For each={clockAscii(time())}>
+            {(line) => (
+              <text fg={theme.success} wrapMode="none">
+                {line}
+              </text>
+            )}
+          </For>
+        </box>
+        <box flexDirection="row" width={CLOCK_WIDTH} height={1} justifyContent="center" overflow="hidden">
           <text fg={theme.textMuted} wrapMode="none">
             {date()}
           </text>
@@ -497,17 +510,17 @@ function StatusSummary(props: {
   )
 }
 
-function LoadingStats(props: { tiny: boolean }) {
+function LoadingStats(props: { tiny: boolean; error?: string }) {
   const { theme } = useTheme()
   return (
     <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
       <Panel title="Activity" height={props.tiny ? 8 : 7}>
         <box flexDirection="column" flexGrow={1} justifyContent="center" overflow="hidden" gap={1}>
           <text fg={theme.text} wrapMode="none">
-            Loading session metrics...
+            {props.error ? "Usage insights unavailable" : "Loading session metrics..."}
           </text>
           <text fg={theme.textMuted} wrapMode="none">
-            Reading global cached stats first.
+            {props.error ? "Press r to retry." : "Reading global cached stats first."}
           </text>
         </box>
       </Panel>
@@ -526,7 +539,7 @@ function LoadingStats(props: { tiny: boolean }) {
 }
 
 function selectedDayRows(day: DailyUsage) {
-  const number = (value: number | undefined) => Locale.number(value ?? 0)
+  const number = (value: number | undefined) => formatInsightNumber(value ?? 0)
   return [
     stat("tokens", number(statsDayTokenValue(day)), `${number(day.cacheTokens)} cache included`),
     stat(
@@ -691,7 +704,10 @@ function MainDashboard(props: {
                   </Match>
                   <Match when={props.data.topTools.length > 0}>
                     <ListRows
-                      items={props.data.topTools.map((item) => ({ name: item.name, right: Locale.number(item.count) }))}
+                      items={props.data.topTools.map((item) => ({
+                        name: item.name,
+                        right: formatInsightNumber(item.count),
+                      }))}
                       nameWidth={20}
                     />
                   </Match>
@@ -701,13 +717,15 @@ function MainDashboard(props: {
                 <ListRows
                   items={props.data.topAgents
                     .slice(0, 3)
-                    .map((item) => ({ name: item.name, right: Locale.number(item.count) }))}
+                    .map((item) => ({ name: item.name, right: formatInsightNumber(item.count) }))}
                   nameWidth={22}
                 />
                 <ListRows
-                  items={props.data.topModels
-                    .slice(0, 2)
-                    .map((item) => ({ name: item.name, right: Locale.number(item.tokens), color: theme.textMuted }))}
+                  items={props.data.topModels.slice(0, 2).map((item) => ({
+                    name: item.name,
+                    right: formatInsightNumber(item.tokens),
+                    color: theme.textMuted,
+                  }))}
                   nameWidth={24}
                 />
               </Panel>
@@ -991,15 +1009,15 @@ function statsURL(
   return url
 }
 
-async function listGlobalSessions(sdk: ReturnType<typeof useSDK>, query: SessionListQuery) {
+async function listGlobalSessions(sdk: ReturnType<typeof useSDK>, query: SessionListQuery, signal: AbortSignal) {
   const headers = new Headers(sdk.headers)
   if (sdk.directory) headers.set("x-mendcode-directory", encodeURIComponent(sdk.directory))
   try {
-    const response = await sdk.fetch(statsURL(sdk, "/experimental/session", query), { headers })
+    const response = await sdk.fetch(statsURL(sdk, "/experimental/session", query), { headers, signal })
     if (!response.ok) throw new Error(`global stats failed: ${response.status}`)
     return (await response.json()) as SessionInsightInput["session"][]
   } catch {
-    const result = await sdk.client.experimental.session.list(query, { throwOnError: true })
+    const result = await sdk.client.experimental.session.list(query, { throwOnError: true, signal })
     return (result.data ?? []) as SessionInsightInput["session"][]
   }
 }
@@ -1007,10 +1025,11 @@ async function listGlobalSessions(sdk: ReturnType<typeof useSDK>, query: Session
 async function loadGlobalUsageInsights(
   sdk: ReturnType<typeof useSDK>,
   input: { start: number; limit: number; messageLimit: number },
+  signal: AbortSignal,
 ) {
   const headers = new Headers(sdk.headers)
   if (sdk.directory) headers.set("x-mendcode-directory", encodeURIComponent(sdk.directory))
-  const response = await sdk.fetch(statsURL(sdk, "/experimental/usage-insights", input), { headers })
+  const response = await sdk.fetch(statsURL(sdk, "/experimental/usage-insights", input), { headers, signal })
   if (!response.ok) throw new Error(`usage insights failed: ${response.status}`)
   return (await response.json()) as UsageInsights
 }
@@ -1044,44 +1063,64 @@ async function loadInsights(
   const days = options.advanced ? ADVANCED_DAYS : DEFAULT_DAYS
   const end = Date.now()
   const start = end - days * DAY_MS
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), STATS_REQUEST_TIMEOUT_MS)
   const query: SessionListQuery = {
     start,
     limit: options.advanced ? 1000 : 250,
     ...options.query,
   }
-  if (options.scope === "global") {
-    if (options.onFirstBatch && query.limit > 250) {
-      const partial = await loadGlobalUsageInsights(sdk, {
-        start,
-        limit: 250,
-        messageLimit: 500,
-      }).catch(() => undefined)
-      if (partial) options.onFirstBatch(partial)
+  try {
+    if (options.scope === "global") {
+      if (options.onFirstBatch && query.limit > 250) {
+        const partial = await loadGlobalUsageInsights(
+          sdk,
+          {
+            start,
+            limit: 250,
+            messageLimit: 500,
+          },
+          controller.signal,
+        ).catch(() => undefined)
+        if (partial) options.onFirstBatch(partial)
+      }
+      const aggregated = await loadGlobalUsageInsights(
+        sdk,
+        {
+          start,
+          limit: query.limit,
+          messageLimit: 500,
+        },
+        controller.signal,
+      ).catch(() => undefined)
+      if (aggregated) return aggregated
     }
-    const aggregated = await loadGlobalUsageInsights(sdk, {
-      start,
-      limit: query.limit,
-      messageLimit: 500,
-    }).catch(() => undefined)
-    if (aggregated) return aggregated
-  }
-  const sessions =
-    options.scope === "global"
-      ? await listGlobalSessions(sdk, query)
-      : ((await sdk.client.session.list(query, { throwOnError: true })).data ?? [])
-  const items = await mapStatsSessionsInBatches(
-    sessions,
-    async (session) => {
-      const result = await sdk.client.session.messages({ sessionID: session.id, limit: 500, view: "tui" })
-      return { session, messages: result.data ?? [] } as SessionInsightInput
-    },
-    {
-      onBatch: (loaded, batch, batches) => {
-        if (batch === 0 && batches > 1) options.onFirstBatch?.(buildUsageInsights([...loaded], { start, end }))
+    const sessions =
+      options.scope === "global"
+        ? await listGlobalSessions(sdk, query, controller.signal)
+        : ((await sdk.client.session.list(query, { throwOnError: true, signal: controller.signal })).data ?? [])
+    const items = await mapStatsSessionsInBatches(
+      sessions,
+      async (session) => {
+        const result = await sdk.client.session.messages(
+          { sessionID: session.id, limit: 500, view: "tui" },
+          { throwOnError: true, signal: controller.signal },
+        )
+        return { session, messages: result.data ?? [] } as SessionInsightInput
       },
-    },
-  )
-  return buildUsageInsights(items, { start, end })
+      {
+        onBatch: (loaded, batch, batches) => {
+          if (batch === 0 && batches > 1) options.onFirstBatch?.(buildUsageInsights([...loaded], { start, end }))
+        },
+      },
+    )
+    return buildUsageInsights(items, { start, end })
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(`Usage insights timed out after ${STATS_REQUEST_TIMEOUT_MS / 1000}s`)
+    throw error
+  } finally {
+    clearTimeout(timeout)
+  }
 }
 
 export function usageInsightsCacheKey(scope: StatsScope, query: SessionScopeQuery = {}, directory?: string) {
@@ -1168,6 +1207,7 @@ export function Stats() {
   const [cacheReady, setCacheReady] = createSignal(false)
   const [insightRefreshRequest, setInsightRefreshRequest] = createSignal(0)
   const [refreshingInsights, setRefreshingInsights] = createSignal(false)
+  const [insightError, setInsightError] = createSignal<string | undefined>()
   const [statsRefreshTick, setStatsRefreshTick] = createSignal(0)
   let selectedDayTimer: ReturnType<typeof setTimeout> | undefined
   let pendingSelectedDay: { index: number; key: string | undefined } | undefined
@@ -1236,7 +1276,11 @@ export function Stats() {
     async (input) => {
       if (!input.ready) return undefined
       const cached = cachedInsights()
-      if (cached && input.refresh === 0) return cached
+      if (cached && input.refresh === 0) {
+        setInsightError(undefined)
+        return cached
+      }
+      setInsightError(undefined)
       setRefreshingInsights(true)
       try {
         const next = await loadInsights(sdk, {
@@ -1249,7 +1293,13 @@ export function Stats() {
         setCachedInsights(normalized)
         setCacheUpdated(updated)
         kv.set(statsCacheKey(), payload)
+        setInsightError(undefined)
         return next
+      } catch (error) {
+        setInsightError(error instanceof Error ? error.message : "Usage insights failed")
+        const fallback = cachedInsights()
+        if (fallback) return fallback
+        throw error
       } finally {
         setRefreshingInsights(false)
       }
@@ -1461,17 +1511,21 @@ export function Stats() {
     return [
       stat(
         "tokens",
-        Locale.number(current.tokens),
-        `${Locale.number(current.peakTokens)} peak day · ${Locale.number(current.cacheTokens)} cache included`,
+        formatInsightNumber(current.tokens),
+        `${formatInsightNumber(current.peakTokens)} peak day · ${formatInsightNumber(current.cacheTokens)} cache included`,
       ),
-      stat("sessions", Locale.number(current.sessions), `${Locale.number(current.activeDays)} active days`),
+      stat("sessions", formatInsightNumber(current.sessions), `${formatInsightNumber(current.activeDays)} active days`),
       stat(
         "AI generating",
         formatInsightDuration(current.aiResponseMs),
         `${formatInsightDuration(current.longestTaskMs)} longest`,
       ),
-      stat("user words", Locale.number(current.userWords), `${Locale.number(current.userMessages)} prompts`),
-      stat("cache tokens", Locale.number(current.cacheTokens)),
+      stat(
+        "user words",
+        formatInsightNumber(current.userWords),
+        `${formatInsightNumber(current.userMessages)} prompts`,
+      ),
+      stat("cache tokens", formatInsightNumber(current.cacheTokens)),
       stat("streak", `${current.currentStreak} days`, `${current.longestStreak} longest`),
     ]
   })
@@ -1481,34 +1535,34 @@ export function Stats() {
     return [
       stat(
         "tokens",
-        Locale.number(current.tokens),
-        `${Locale.number(current.peakTokens)} peak · ${Locale.number(current.cacheTokens)} cache included`,
+        formatInsightNumber(current.tokens),
+        `${formatInsightNumber(current.peakTokens)} peak · ${formatInsightNumber(current.cacheTokens)} cache included`,
       ),
-      stat("sessions", Locale.number(current.sessions), `${Locale.number(current.activeDays)} days`),
+      stat("sessions", formatInsightNumber(current.sessions), `${formatInsightNumber(current.activeDays)} days`),
       stat(
         "AI time",
         formatInsightDuration(current.aiResponseMs),
         `${formatInsightDuration(current.longestTaskMs)} longest`,
       ),
-      stat("words", Locale.number(current.userWords), `${Locale.number(current.userMessages)} prompts`),
+      stat("words", formatInsightNumber(current.userWords), `${formatInsightNumber(current.userMessages)} prompts`),
     ]
   })
   const tokenRows = createMemo(() => {
     const current = totals()
     if (!current) return []
     return [
-      stat("input", Locale.number(current.inputTokens)),
-      stat("output", Locale.number(current.outputTokens)),
-      stat("reasoning", Locale.number(current.reasoningTokens)),
-      stat("cache", Locale.number(current.cacheTokens)),
+      stat("input", formatInsightNumber(current.inputTokens)),
+      stat("output", formatInsightNumber(current.outputTokens)),
+      stat("reasoning", formatInsightNumber(current.reasoningTokens)),
+      stat("cache", formatInsightNumber(current.cacheTokens)),
     ]
   })
   const outcomeRows = createMemo(() => {
     const current = totals()
     if (!current) return []
     return [
-      stat("sessions with code changes", Locale.number(current.sessionsWithCodeChanges)),
-      stat("changed files", Locale.number(current.changedFiles)),
+      stat("sessions with code changes", formatInsightNumber(current.sessionsWithCodeChanges)),
+      stat("changed files", formatInsightNumber(current.changedFiles)),
       stat("tool runtime", formatInsightDuration(current.toolMs)),
       stat("loaded window", advanced() ? `${ADVANCED_DAYS} days` : `${DEFAULT_DAYS} days`),
     ]
@@ -1519,15 +1573,19 @@ export function Stats() {
     if (!current) return []
     return [
       stat("window", advanced() ? `${ADVANCED_DAYS} days` : `${DEFAULT_DAYS} days`),
-      stat("visible sync", Locale.number(sync.data.session.length)),
-      stat("active days", Locale.number(current.activeDays)),
-      stat("sessions", Locale.number(current.sessions)),
-      stat("prompts", Locale.number(current.userMessages)),
+      stat("visible sync", formatInsightNumber(sync.data.session.length)),
+      stat("active days", formatInsightNumber(current.activeDays)),
+      stat("sessions", formatInsightNumber(current.sessions)),
+      stat("prompts", formatInsightNumber(current.userMessages)),
       stat("streak", `${current.currentStreak}d`, `${current.longestStreak} longest`),
-      stat("cache tokens", Locale.number(current.cacheTokens)),
-      stat("cache age", cacheAgeLabel(cacheUpdated()), refreshingInsights() ? "refreshing" : "ready"),
-      stat("changed files", Locale.number(current.changedFiles)),
-      stat("code sessions", Locale.number(current.sessionsWithCodeChanges)),
+      stat("cache tokens", formatInsightNumber(current.cacheTokens)),
+      stat(
+        "cache age",
+        cacheAgeLabel(cacheUpdated()),
+        insightError() ? "stale" : refreshingInsights() ? "refreshing" : "ready",
+      ),
+      stat("changed files", formatInsightNumber(current.changedFiles)),
+      stat("code sessions", formatInsightNumber(current.sessionsWithCodeChanges)),
     ]
   })
   const responseRows = createMemo(() => {
@@ -1536,7 +1594,7 @@ export function Stats() {
     return [
       stat("AI generating", formatInsightDuration(current.aiResponseMs)),
       stat("tool runtime", formatInsightDuration(current.toolMs)),
-      stat("cache", Locale.number(current.cacheTokens)),
+      stat("cache", formatInsightNumber(current.cacheTokens)),
     ]
   })
   return (
@@ -1553,7 +1611,7 @@ export function Stats() {
       <Header advanced={showDetails()} scope={scope()} mode={mode()} narrow={tiny()} />
       <Switch>
         <Match when={!visibleInsights()}>
-          <LoadingStats tiny={tiny()} />
+          <LoadingStats tiny={tiny()} error={insightError()} />
         </Match>
         <Match when={visibleInsights()}>
           {(data) => (
@@ -1580,7 +1638,7 @@ export function Stats() {
                       contentWidth={contentWidth()}
                       selectedDay={selectedDay()}
                       selectedDayIndex={selectedDayIndex()}
-                      activityLoading={refreshingInsights() || insights.loading || selectedDayLoading()}
+                      activityLoading={selectedDayLoading()}
                       tokenRows={tokenRows()}
                       responseRows={responseRows()}
                       statusRows={statusRows()}
@@ -1599,7 +1657,7 @@ export function Stats() {
                     heatCellWidth={heatCellWidth()}
                     selectedDay={selectedDay()}
                     selectedDayIndex={selectedDayIndex()}
-                    activityLoading={refreshingInsights() || insights.loading || selectedDayLoading()}
+                    activityLoading={selectedDayLoading()}
                     kpis={kpis()}
                     tokenRows={tokenRows()}
                     responseRows={responseRows()}
