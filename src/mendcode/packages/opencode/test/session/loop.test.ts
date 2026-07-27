@@ -88,6 +88,7 @@ function runRunner<A, E>(
     SessionPrompt.Service,
     SessionPrompt.Service.of({
       cancel: () => Effect.void,
+      cancelQueued: () => Effect.succeed(false),
       interrupt: () => Effect.void,
       prompt: (input: PromptInput) =>
         Effect.sync(() => {

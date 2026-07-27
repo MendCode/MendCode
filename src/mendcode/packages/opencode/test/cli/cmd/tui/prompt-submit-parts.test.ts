@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   DEFAULT_PASTE_SUMMARY_MIN_CHARS,
+  appendPromptInfo,
   expandEditedPastedContentInPrompt,
   expandPastedContentAtOffset,
   expandPastedContentInPrompt,
@@ -14,6 +15,38 @@ import {
 } from "../../../../src/cli/cmd/tui/component/prompt/submit-parts"
 
 describe("prompt submit parts", () => {
+  test("appends an edited message without replacing the current draft", () => {
+    const result = appendPromptInfo(
+      { input: "keep this draft", parts: [] },
+      {
+        input: "edit this queued message",
+        parts: [
+          {
+            type: "agent",
+            name: "explore",
+            source: { start: 0, end: 7, value: "explore" },
+          },
+        ],
+      },
+    )
+
+    expect(result.input).toBe("keep this draft\n\nedit this queued message")
+    expect(result.parts).toEqual([
+      {
+        type: "agent",
+        name: "explore",
+        source: { start: 17, end: 24, value: "explore" },
+      },
+    ])
+  })
+
+  test("keeps an empty draft from adding a separator when editing a message", () => {
+    expect(appendPromptInfo({ input: "", parts: [] }, { input: "queued", parts: [] })).toEqual({
+      input: "queued",
+      parts: [],
+    })
+  })
+
   test("summarizes large pasted content in the visible prompt", () => {
     expect(shouldSummarizePastedContent("one\ntwo\nthree")).toBe(false)
     expect(shouldSummarizePastedContent("short")).toBe(false)

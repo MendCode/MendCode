@@ -74,7 +74,7 @@ export function formatProcessMemory(label: string, memory: ProcessMemoryUsage) {
   return [
     `${label} (pid ${memory.pid}, ${memory.role})`,
     `  RSS (RAM): ${formatBytes(memory.rss)}`,
-    `  V8 heap: ${formatBytes(memory.heapUsed)} / ${formatBytes(memory.heapTotal)}`,
+    `  JS heap: ${formatBytes(memory.heapUsed)} used / ${formatBytes(memory.heapTotal)} reported`,
     `  External: ${formatBytes(memory.external)}`,
     `  Array buffers: ${formatBytes(memory.arrayBuffers)}`,
     `  Uptime: ${formatUptime(memory.uptimeSeconds)}`,

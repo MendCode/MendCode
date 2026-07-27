@@ -38,11 +38,28 @@ describe("dream service plans", () => {
     const plist = dreamServicePlist(plan)
 
     expect(plist).toContain("<key>ProgramArguments</key>")
+    expect(plist).toContain("<key>EnvironmentVariables</key>")
+    expect(plist).toContain("<key>MENDCODE_MEMORY_DIR</key>")
     expect(plist).toContain("<key>WorkingDirectory</key>")
     expect(plist).toContain("/tmp/acme &amp; &quot;repo&quot;")
     expect(plist).toContain("<key>StartInterval</key>")
     expect(plist).toContain("<integer>60</integer>")
+    expect(plist).toContain("<key>RunAtLoad</key>\n  <false/>")
     expect(plist).not.toContain("<key>KeepAlive</key>")
+  })
+
+  test("gates macOS launches with native Dream window checks", () => {
+    const plan = dreamServicePlan({
+      command: "/opt/mendcode",
+      platform: "darwin",
+      workingDirectory: "/Users/test",
+    })
+
+    expect(plan.serviceProgramArguments.slice(0, 2)).toEqual(["/bin/sh", "-c"])
+    expect(plan.serviceProgramArguments[2]).toContain("/usr/bin/plutil -extract")
+    expect(plan.serviceProgramArguments[2]).toContain("TZ=\"$timezone\"")
+    expect(plan.serviceProgramArguments[2]).toContain("/opt/mendcode memory dream daemon")
+    expect(dreamServicePlist(plan)).toContain("<string>/bin/sh</string>")
   })
 
   test("builds a Linux user systemd unit with configurable directories", () => {

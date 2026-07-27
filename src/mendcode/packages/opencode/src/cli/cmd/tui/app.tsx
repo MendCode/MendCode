@@ -30,6 +30,7 @@ import { EditorContextProvider } from "@tui/context/editor"
 import { useEvent } from "@tui/context/event"
 import { SDKProvider, useSDK } from "@tui/context/sdk"
 import { StartupLoading, startupLoadingText } from "@tui/component/startup-loading"
+import { FirstRunIntro } from "@tui/component/first-run-intro"
 import { SyncProvider, useSync } from "@tui/context/sync"
 import { SyncProviderV2 } from "@tui/context/sync-v2"
 import { LocalProvider, useLocal } from "@tui/context/local"
@@ -57,6 +58,7 @@ import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
 import { DialogAlert } from "./ui/dialog-alert"
 import { DialogConfirm } from "./ui/dialog-confirm"
+import { DialogCustomization, type TuiCustomizationAction } from "@tui/component/dialog-customization"
 import { showDialogObject } from "./ui/dialog-object"
 import { DialogPrompt } from "./ui/dialog-prompt"
 import { DialogSelect, type DialogSelectOption } from "./ui/dialog-select"
@@ -78,7 +80,7 @@ import { FormatError, FormatUnknownError } from "@/cli/error"
 import { Locale } from "@/util/locale"
 import { backgroundTaskToast } from "@tui/util/background-task-notification"
 
-import type { EventSource } from "./context/sdk"
+import type { EventSource, SDKConnectionRefresh } from "./context/sdk"
 import { DialogVariant } from "./component/dialog-variant"
 import { MendTuiProfileProvider, useMendTuiProfile } from "./context/mend"
 import type { MendTuiProfile } from "@/mend/profile"
@@ -118,6 +120,12 @@ import {
 import { packageMetadata, packageMetadataSet, syncProject } from "@/mend/config/project"
 import { cyclePromptMode, writePromptMode, type MendPromptMode } from "@/mend/prompt/mode"
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
+import {
+  DEFAULT_MEND_TUI_CUSTOMIZATION,
+  readMendTuiCustomization,
+  resolveMendTerminalTitle,
+  writeMendTuiCustomization,
+} from "@/mend/tui/customization"
 import { setupReadiness } from "@/mend/runtime/readiness"
 import { isSetupComplete, readSetupState } from "@/mend/setup/state"
 import {
@@ -138,6 +146,7 @@ import {
 import { resolveProjectMemoryRoot, writeProjectMemoryConfig, type MemoryConfig } from "@/mend/memory/config"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
 import { initialTuiPluginReady, themeModeWaitMs, tuiFastBootEnabled } from "@/cli/cmd/tui/util/fast-boot"
+import { FIRST_RUN_INTRO_SEEN_KEY, shouldShowFirstRunIntro } from "@/cli/cmd/tui/util/first-run-intro"
 import {
   appendMemoryEntry,
   deleteMemoryEntry,
@@ -582,6 +591,9 @@ export function tui(input: {
   fetch?: typeof fetch
   headers?: RequestInit["headers"]
   events?: EventSource
+  reconnect?: {
+    refresh?: SDKConnectionRefresh
+  }
 }) {
   // promise to prevent immediate exit
   // oxlint-disable-next-line no-async-promise-executor -- intentional: async executor used for sequential setup before resolve
@@ -648,6 +660,7 @@ export function tui(input: {
                           fetch={input.fetch}
                           headers={input.headers}
                           events={input.events}
+                          reconnect={input.reconnect}
                         >
                           <ProjectProvider>
                             <SyncProvider>
@@ -716,6 +729,32 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
   const sync = useSync()
   const exit = useExit()
   const promptRef = usePromptRef()
+  const [firstRunIntroVisible, setFirstRunIntroVisible] = createSignal(false)
+  const [firstRunIntroRun, setFirstRunIntroRun] = createSignal(0)
+  const completeFirstRunIntro = () => {
+    if (!firstRunIntroVisible()) return
+    setFirstRunIntroVisible(false)
+    kv.set(FIRST_RUN_INTRO_SEEN_KEY, true)
+  }
+  const replayFirstRunIntro = () => {
+    dialog.clear()
+    setFirstRunIntroRun((value) => value + 1)
+    setFirstRunIntroVisible(true)
+  }
+
+  useKeyboard((evt) => {
+    if (!firstRunIntroVisible() || evt.defaultPrevented) return
+    if (keybind.match("app_exit", evt)) {
+      evt.preventDefault()
+      evt.stopPropagation()
+      void exit()
+      return
+    }
+    evt.preventDefault()
+    evt.stopPropagation()
+    completeFirstRunIntro()
+  })
+
   const routes: RouteMap = new Map()
   const [routeRev, setRouteRev] = createSignal(0)
   const [homeRevision, setHomeRevision] = createSignal(0)
@@ -881,7 +920,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
 
     renderer.clearSelection()
   }
-  const [terminalTitleEnabled, setTerminalTitleEnabled] = createSignal(kv.get("terminal_title_enabled", true))
+  const tuiCustomization = createMemo(() => readMendTuiCustomization((key, fallback) => kv.get(key, fallback)))
+  const terminalTitleEnabled = createMemo(() => tuiCustomization().terminalTitle)
   const [pasteSummaryEnabled, setPasteSummaryEnabled] = createSignal(
     kv.get(
       "paste_summary_enabled",
@@ -891,50 +931,52 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     ),
   )
 
-  // Update terminal window title based on current route and session
+  // Update terminal window title based on the live customization contract.
   createEffect(() => {
-    if (!terminalTitleEnabled() || Flag.OPENCODE_DISABLE_TERMINAL_TITLE) return
+    const customization = tuiCustomization()
+    if (Flag.OPENCODE_DISABLE_TERMINAL_TITLE) return
+    if (!customization.terminalTitle) {
+      renderer.setTerminalTitle("")
+      return
+    }
 
-    if (route.data.type === "home") {
+    const session = route.data.type === "session" ? sync.session.get(route.data.sessionID) : undefined
+    const routeLabel =
+      route.data.type === "home"
+        ? "Home"
+        : route.data.type === "session"
+          ? "Session"
+          : route.data.type === "plugin"
+            ? route.data.id
+            : route.data.type === "setup"
+              ? "Setup"
+              : route.data.type === "memory"
+                ? "Memory"
+                : route.data.type === "changes"
+                  ? "Changes"
+                  : route.data.type === "loops"
+                    ? "Loops"
+                    : route.data.type
+    const sessionLabel = session && !SessionApi.isDefaultTitle(session.title) ? session.title : routeLabel
+    if (
+      route.data.type === "home" &&
+      customization.terminalTitleTemplate === DEFAULT_MEND_TUI_CUSTOMIZATION.terminalTitleTemplate
+    ) {
       renderer.setTerminalTitle(productName())
       return
     }
-
-    if (route.data.type === "session") {
-      const session = sync.session.get(route.data.sessionID)
-      if (!session || SessionApi.isDefaultTitle(session.title)) {
-        renderer.setTerminalTitle(productName())
-        return
-      }
-
-      const title = session.title.length > 40 ? session.title.slice(0, 37) + "..." : session.title
-      renderer.setTerminalTitle(`${productName()} | ${title}`)
-      return
-    }
-
-    if (route.data.type === "plugin") {
-      renderer.setTerminalTitle(`${productName()} | ${route.data.id}`)
-      return
-    }
-
-    if (route.data.type === "setup") {
-      renderer.setTerminalTitle(`${productName()} | Setup`)
-      return
-    }
-
-    if (route.data.type === "memory") {
-      renderer.setTerminalTitle(`${productName()} | Memory`)
-      return
-    }
-
-    if (route.data.type === "changes") {
-      renderer.setTerminalTitle(`${productName()} | Changes`)
-      return
-    }
-
-    if (route.data.type === "loops") {
-      renderer.setTerminalTitle(`${productName()} | Loops`)
-    }
+    renderer.setTerminalTitle(
+      resolveMendTerminalTitle({
+        template: customization.terminalTitleTemplate,
+        product: productName(),
+        session: sessionLabel.length > 40 ? sessionLabel.slice(0, 37) + "..." : sessionLabel,
+        route: routeLabel,
+        path:
+          route.data.type === "session"
+            ? session?.directory || project.instance.path().directory
+            : project.instance.path().directory,
+      }),
+    )
   })
 
   const args = useArgs()
@@ -1020,13 +1062,23 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
 
   let setupRedirectChecked = false
   createEffect(() => {
-    if (setupRedirectChecked || !ready() || sync.status === "loading") return
+    if (setupRedirectChecked || !ready() || !pluginsReady() || sync.status === "loading" || !kv.ready) return
     if (route.data.type !== "home") return
     setupRedirectChecked = true
     void Promise.all([readSetupState(mend.root), setupReadiness(mend.root)])
       .then(([state, readiness]) => {
         if (isSetupComplete(state)) return
         if (readiness.aiReady) return
+        if (shouldShowFirstRunIntro({
+          interactive: true,
+          setupComplete: isSetupComplete(state),
+          dismissed: Boolean(state.dismissedAt),
+          seen: kv.get(FIRST_RUN_INTRO_SEEN_KEY, false) === true,
+        })) {
+          dialog.clear()
+          setFirstRunIntroRun((value) => value + 1)
+          setFirstRunIntroVisible(true)
+        }
         route.navigate({ type: "setup", step: state.currentStep, minimal: Boolean(state.dismissedAt) })
       })
       .catch(toast.error)
@@ -3241,6 +3293,134 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       ].join("\n\n"),
     )
   }
+  const showCustomization = () => {
+    const actions: TuiCustomizationAction[] = [
+      {
+        value: "advanced.home.identity",
+        title: "Home identity",
+        category: "Advanced profile",
+        description: "Choose the generated title or mascot identity for Home.",
+        status: mend.profile.identity.logoMode === "mascot" ? "ASCII mascot" : "ASCII title",
+        onSelect: showHomeIdentityMode,
+      },
+      {
+        value: "advanced.home.title",
+        title: "Home title text",
+        category: "Advanced profile",
+        description: "Change the product name used by Home and the default terminal title.",
+        status: mend.profile.identity.productName || "MendCode",
+        onSelect: showHomeTitleText,
+      },
+      {
+        value: "advanced.home.mascot",
+        title: "Home mascot ASCII",
+        category: "Advanced profile",
+        description: "Replace or reset the Home mascot text.",
+        status: mend.profile.surfaces.homeLogo?.text ? "custom" : "default",
+        onSelect: showHomeMascotText,
+      },
+      {
+        value: "advanced.home.font",
+        title: "Home title font",
+        category: "Advanced profile",
+        description: "Choose the ASCII title renderer.",
+        status:
+          mend.profile.identity.logoFont === "small"
+            ? "Small"
+            : mend.profile.identity.logoFont === "standard"
+              ? "Standard"
+              : mend.profile.identity.logoFont === "shadow"
+                ? "Shadow"
+                : "MendCode",
+        onSelect: showHomeLogoFont,
+      },
+      {
+        value: "advanced.home.welcome",
+        title: "Home welcome layout",
+        category: "Advanced profile",
+        description: "Choose centered or split Home content.",
+        status: mend.profile.surfaces.homeWelcome?.mode === "split" ? "Split" : "Centered",
+        onSelect: showHomeWelcomeMode,
+      },
+      {
+        value: "advanced.home.panel",
+        title: "Home split panel",
+        category: "Advanced profile",
+        description: "Choose actions or Agent View for the split panel.",
+        status: mend.profile.surfaces.homeWelcome?.rightPanel === "actions" ? "Actions" : "Agent View",
+        onSelect: showHomeSplitPanel,
+      },
+      {
+        value: "advanced.prompt.chrome",
+        title: "Prompt chrome",
+        category: "Advanced profile",
+        description: "Choose the prompt frame and border treatment.",
+        status:
+          mend.profile.promptChrome.preset === "top-bottom"
+            ? "Top + bottom"
+            : mend.profile.promptChrome.preset === "ascii-box"
+              ? "ASCII box"
+              : mend.profile.promptChrome.preset === "minimal"
+                ? "Minimal"
+                : "Full box",
+        onSelect: showPromptChromePresets,
+      },
+      {
+        value: "advanced.prompt.lead",
+        title: "Prompt lead string",
+        category: "Advanced profile",
+        description: "Change the marker displayed before prompt input.",
+        status: mend.profile.promptChrome.glyphs?.leadText || "blank",
+        onSelect: showPromptLeadString,
+      },
+      {
+        value: "advanced.prompt.status",
+        title: "Prompt status placement",
+        category: "Advanced profile",
+        description: "Choose where prompt metadata is rendered.",
+        status:
+          (mend.profile.promptStatus.placementByPreset?.[mend.profile.promptChrome.preset] ||
+            (mend.profile.promptChrome.preset === "ascii-box" ? "inside" : "outside")) === "inside"
+            ? "Inside"
+            : "Outside",
+        onSelect: showPromptStatusPlacement,
+      },
+      {
+        value: "advanced.presentation.profile",
+        title: "Chat presentation",
+        category: "Advanced profile",
+        description: "Choose raw, minimal, or MendCode message presentation.",
+        status: presentationProfileTitle(mend.profile.presentation.profile),
+        onSelect: showPresentationProfile,
+      },
+      {
+        value: "advanced.presentation.renderer",
+        title: "Message renderer",
+        category: "Advanced profile",
+        description: "Choose plain, Markdown, or rich message rendering.",
+        status: mend.profile.presentation.message.renderer,
+        onSelect: showMessageRenderer,
+      },
+      {
+        value: "advanced.prompt.submit",
+        title: "Submit scroll behavior",
+        category: "Advanced profile",
+        description: "Choose how the session follows submitted prompts.",
+        status: sessionSubmitScrollMode() === "clear" ? "Clear sent message" : "Normal follow",
+        onSelect: showSessionSubmitScrollMode,
+      },
+      {
+        value: "advanced.api",
+        title: "View customization API",
+        category: "About & API",
+        description: "Inspect public extension surfaces and safe routing capabilities.",
+        status: "read-only",
+        onSelect: showCustomizationCapabilities,
+      },
+    ]
+    dialog.replace(() => <DialogCustomization actions={actions} />)
+    dialog.setSize("command")
+  }
   const editMemoryEntry = async (entry: MemoryEntry) => {
     const text = await DialogPrompt.show(dialog, `Edit ${entry.scope} memory`, {
       value: entry.text,
@@ -3871,11 +4051,17 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       },
     },
     {
+      title: "Customize TUI",
+      value: "mendcode.customization.open",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "customize", aliases: ["customization", "capabilities", "tui-customization"] },
+      onSelect: showCustomization,
+    },
+    {
       title: "Customization capabilities",
       value: "mendcode.customization.capabilities",
       category: mendCategory,
-      suggested: true,
-      slash: { name: "customization", aliases: ["capabilities", "tui-customization"] },
       onSelect: () => void showCustomizationCapabilities(),
     },
     {
@@ -4495,12 +4681,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       keybind: "terminal_title_toggle",
       category: "System",
       onSelect: (dialog) => {
-        setTerminalTitleEnabled((prev) => {
-          const next = !prev
-          kv.set("terminal_title_enabled", next)
-          if (!next) renderer.setTerminalTitle("")
-          return next
-        })
+        const next = !terminalTitleEnabled()
+        writeMendTuiCustomization((key, fallback) => kv.get(key, fallback), kv.set, { terminalTitle: next })
+        if (!next) renderer.setTerminalTitle("")
         dialog.clear()
       },
     },
@@ -4512,6 +4695,14 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
         kv.set("animations_enabled", !kv.get("animations_enabled", true))
         dialog.clear()
       },
+    },
+    {
+      title: "Replay MendCode intro",
+      value: "app.replay.intro",
+      category: "System",
+      slash: { name: "intro", aliases: ["replay-intro"] },
+      description: "Preview the first-run intro without changing Setup state.",
+      onSelect: () => replayFirstRunIntro(),
     },
     {
       title: kv.get("file_context_enabled", true) ? "Disable file context" : "Enable file context",
@@ -4573,16 +4764,38 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
   })
 
   const backgroundTaskNotificationIDs = new Set<string>()
+  const ownerWakeIDs = new Set<string>()
   event.subscribe((incoming) => {
     const evt = incoming as unknown as {
       type?: string
       properties?: {
         eventID?: string
+        wakeID?: string
+        parentSessionID?: string
+        taskIDs?: string[]
+        taskTitles?: string[]
         state?: "needs_input" | "completed" | "failed" | "cancelled" | "interrupted"
         title?: string
         summary?: string
         error?: string
       }
+    }
+    if (evt.type === "background_task.owner_wake" && evt.properties?.wakeID) {
+      if (ownerWakeIDs.has(evt.properties.wakeID)) return
+      if (ownerWakeIDs.size >= 500) {
+        const oldest = ownerWakeIDs.values().next().value
+        if (oldest) ownerWakeIDs.delete(oldest)
+      }
+      ownerWakeIDs.add(evt.properties.wakeID)
+      const titles = evt.properties.taskTitles?.filter(Boolean) ?? []
+      const count = evt.properties.taskIDs?.length ?? titles.length
+      toast.show({
+        title: "Agent resumed",
+        message: `${titles.join(", ") || `${count} background task${count === 1 ? "" : "s"}`} finished; the runtime event was delivered internally`,
+        variant: "info",
+        duration: 5_000,
+      })
+      return
     }
     if (evt.type !== "background_task.notification" || !evt.properties?.eventID || !evt.properties.state) return
     if (backgroundTaskNotificationIDs.has(evt.properties.eventID)) return
@@ -4751,6 +4964,14 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       <TuiPluginRuntime.Slot name="app" />
       <MendOverlayHost dimensions={dimensions()} />
       <StartupLoading ready={startupReady} text={startupMessage} delayMs={fastBoot ? 0 : 500} />
+      <Show when={firstRunIntroVisible()}>
+        <FirstRunIntro
+          run={firstRunIntroRun()}
+          animationsEnabled={() => kv.get("animations_enabled", true) === true}
+          handoffLabel={() => (route.data.type === "setup" ? "MENDCODE / SETUP" : undefined)}
+          onComplete={completeFirstRunIntro}
+        />
+      </Show>
     </box>
   )
 }

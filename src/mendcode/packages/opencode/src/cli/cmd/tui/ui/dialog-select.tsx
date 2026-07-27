@@ -59,7 +59,10 @@ export type DialogSelectRef<T> = {
   filtered: DialogSelectOption<T>[]
 }
 
-export function shouldHandleDialogSelectCustomKeybinds(input: Pick<InputRenderable, "focused"> | undefined, filter: string) {
+export function shouldHandleDialogSelectCustomKeybinds(
+  input: Pick<InputRenderable, "focused"> | undefined,
+  filter: string,
+) {
   return input?.focused !== true || filter.length === 0
 }
 
@@ -95,7 +98,9 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   const commandVariant = createMemo(() => props.variant === "command")
   const optionList = createMemo(() =>
     Array.isArray(props.options)
-      ? props.options.filter((item): item is DialogSelectOption<T> => Boolean(item) && typeof item === "object" && "value" in item)
+      ? props.options.filter(
+          (item): item is DialogSelectOption<T> => Boolean(item) && typeof item === "object" && "value" in item,
+        )
       : [],
   )
 
@@ -222,6 +227,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
       setStore("activeCategory", available[next])
       setStore("selected", 0)
     })
+    const option = flat()[0]
+    if (option) props.onMove?.(option)
     scroll?.scrollTo(0)
   }
 
@@ -541,7 +548,7 @@ function Option(props: {
   })
   const footer = createMemo(() => {
     if (typeof props.footer !== "string") return props.footer
-    return Locale.truncate(props.footer.replace(/\s+/g, " "), 24)
+    return Locale.truncate(props.footer.replace(/\s+/g, " "), props.commandVariant ? 36 : 24)
   })
 
   return (

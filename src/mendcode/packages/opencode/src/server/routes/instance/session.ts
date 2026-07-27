@@ -1386,7 +1386,9 @@ export const SessionRoutes = lazy(() =>
           const params = c.req.valid("param")
           const state = yield* SessionRunState.Service
           const session = yield* Session.Service
-          yield* state.assertNotBusy(params.sessionID)
+          const prompt = yield* SessionPrompt.Service
+          const cancelled = yield* prompt.cancelQueued(params)
+          if (!cancelled) yield* state.assertNotBusy(params.sessionID)
           yield* session.removeMessage({
             sessionID: params.sessionID,
             messageID: params.messageID,

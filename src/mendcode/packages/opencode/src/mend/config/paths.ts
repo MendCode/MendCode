@@ -35,6 +35,7 @@ export function mendPaths(root = mendRuntimeRoot()) {
     ownedRuntimeRoot: path.join(root, "src", "mendcode"),
     ownedRuntimePackage: path.join(root, "src", "mendcode", "packages", "opencode"),
     runtimeControlPlane: path.join(root, "src", "mendcode", "packages", "opencode", "src", "mend", "cli", "control-plane.ts"),
+    runtimeBackgroundDaemon: path.join(root, "src", "mendcode", "packages", "opencode", "src", "mend", "cli", "background-daemon.ts"),
     runtimeAssetsRoot: path.join(root, "src", "mendcode", "packages", "opencode", "src", "mend", "assets"),
     runtimeTuiAssets: path.join(root, "src", "mendcode", "packages", "opencode", "src", "mend", "assets", "tui"),
     runtimePromptEvidenceAssets: path.join(root, "src", "mendcode", "packages", "opencode", "src", "mend", "assets", "prompt-sources"),

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   sessionContentWidth,
+  sessionDiffStatsLabel,
   sessionLoopReceipt,
   sessionPendingInputSessionIDs,
   sessionTaskContinuation,
@@ -85,6 +86,14 @@ describe("session layout", () => {
         usage,
       }),
     ).toBe(24)
+  })
+
+  test("can show changed file count without changing the default diff label", () => {
+    const diff = { added: 2_600, removed: 710, files: 12 }
+
+    expect(sessionDiffStatsLabel(diff)).toBe("+2.6K -710")
+    expect(sessionDiffStatsLabel(diff, { showFiles: true })).toBe("12 files +2.6K -710")
+    expect(sessionDiffStatsLabel(diff, { showCounts: false, showFiles: true })).toBe("12 files")
   })
 
   test("truncates the topbar path before it can overlap metrics", () => {

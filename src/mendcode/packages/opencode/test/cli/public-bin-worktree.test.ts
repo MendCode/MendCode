@@ -3,7 +3,8 @@ import { mkdir, readFile, writeFile } from "fs/promises"
 import path from "node:path"
 import { tmpdir } from "../fixture/fixture"
 import { activateTsm } from "../../src/mend/config/tsm"
-import { resolveWorktreeShortcutTarget, runtimeArgsForSessionShortcut } from "../../src/mend/cli/public-bin"
+import { resolveWorktreeShortcutTarget, runtimeArgsForSessionShortcut, runtimeEnv } from "../../src/mend/cli/public-bin"
+import { resolveCompiledRuntimeBinary } from "../../src/mend/runtime/system"
 
 const publicBin = path.resolve(import.meta.dir, "../../src/mend/cli/public-bin.ts")
 const previousBinary = process.env.MENDCODE_TSM_BINARY
@@ -90,6 +91,32 @@ function status(input: {
 }
 
 describe("mend public worktree shortcuts", () => {
+  test("does not leak the runtime project config directory into child runtimes", () => {
+    const root = "/runtime/mendcode"
+    const env = runtimeEnv(root, {
+      MENDCODE_CONFIG_DIR: path.join(root, ".mendcode"),
+      OPENCODE_CONFIG_DIR: path.join(root, ".mendcode"),
+      MENDCODE_SHELL_CWD: "/workspace/project",
+    })
+
+    expect(env.MENDCODE_CONFIG_DIR).toBeUndefined()
+    expect(env.OPENCODE_CONFIG_DIR).toBeUndefined()
+    expect(env.MENDCODE_ROOT).toBe(root)
+    expect(env.OPENCODE_CONFIG).toBe(path.join(root, ".mendcode", "generated", "opencode.json"))
+  })
+
+  test("selects a local compiled runtime while preserving a source-runtime escape hatch", async () => {
+    await using tmp = await tmpdir()
+    const platform = process.platform === "win32" ? "windows" : process.platform
+    const binary = process.platform === "win32" ? "mendcode.exe" : "mendcode"
+    const candidate = path.join(tmp.path, "dist", `mendcode-${platform}-${process.arch}`, "bin", binary)
+    await mkdir(path.dirname(candidate), { recursive: true })
+    await writeFile(candidate, "compiled")
+
+    expect(resolveCompiledRuntimeBinary(tmp.path, {})).toBe(candidate)
+    expect(resolveCompiledRuntimeBinary(tmp.path, { MENDCODE_USE_SOURCE_RUNTIME: "1" })).toBeUndefined()
+  })
+
   test("infers the current linked worktree when no target is provided", () => {
     const result = resolveWorktreeShortcutTarget(status({
       currentPath: "/repo-wt",
@@ -284,25 +311,26 @@ describe("mend public CLI help", () => {
 })
 
 describe("mend public CLI session restore", () => {
-  test("opens a session id shortcut through the MendCode TUI runtime", async () => {
+  test("builds the -s session shortcut through the MendCode TUI runtime", async () => {
     await using dir = await tmpdir()
 
     expect(runtimeArgsForSessionShortcut("ses_0cd1e09f6ffePQGK5SRql5mfKz", dir.path)).toEqual([
       dir.path,
-      "--session",
+      "-s",
       "ses_0cd1e09f6ffePQGK5SRql5mfKz",
     ])
   })
 
-  test("routes a session id shortcut into the runtime --session invocation", async () => {
+  test("routes -s into the runtime session invocation", async () => {
     await using dir = await tmpdir()
     const fake = await fakeBun(dir.path)
 
-    const result = runPublicBin(["ses_0cd1e09f6ffePQGK5SRql5mfKz"], {
+    const result = runPublicBin(["-s", "ses_0cd1e09f6ffePQGK5SRql5mfKz"], {
       cwd: dir.path,
       bunBin: process.execPath,
       env: {
         MENDCODE_SHELL_CWD: dir.path,
+        MENDCODE_USE_SOURCE_RUNTIME: "1",
         PATH: `${path.dirname(fake.file)}:${process.env.PATH ?? ""}`,
       },
     })
@@ -310,16 +338,24 @@ describe("mend public CLI session restore", () => {
     expect(result.exitCode).toBe(0)
     const args = await readFile(fake.log, "utf8")
     expect(args).toContain("src/index.ts")
-    expect(args).toContain(`${dir.path} --session ses_0cd1e09f6ffePQGK5SRql5mfKz`)
+    expect(args).toContain(`${dir.path} -s ses_0cd1e09f6ffePQGK5SRql5mfKz`)
   })
 
-  test("rejects extra arguments after a session id shortcut", () => {
-    const result = runPublicBin(["ses_0cd1e09f6ffePQGK5SRql5mfKz", "extra"])
+  test("rejects the bare session id shortcut", () => {
+    const result = runPublicBin(["ses_0cd1e09f6ffePQGK5SRql5mfKz"])
     const output = result.stderr.toString()
 
     expect(result.exitCode).toBe(1)
-    expect(output).toContain("Usage: mendcode --session ses_0cd1e09f6ffePQGK5SRql5mfKz")
-    expect(output).not.toContain("Blocked internal donor runtime command")
+    expect(output).toContain("Usage: mendcode -s ses_0cd1e09f6ffePQGK5SRql5mfKz")
+    expect(output).toContain("Session shortcuts require the -s argument")
+  })
+
+  test("rejects extra arguments after -s", () => {
+    const result = runPublicBin(["-s", "ses_0cd1e09f6ffePQGK5SRql5mfKz", "extra"])
+    const output = result.stderr.toString()
+
+    expect(result.exitCode).toBe(1)
+    expect(output).toContain("Usage: mendcode -s <session_id>")
   })
 
   test("rejects malformed session id shortcuts with a MendCode-owned error", () => {
@@ -337,7 +373,7 @@ describe("mend public CLI session restore", () => {
 
     expect(result.exitCode).toBe(1)
     expect(output).toContain("Blocked legacy session restore command")
-    expect(output).toContain("Use: mendcode --session ses_0cd1e09f6ffePQGK5SRql5mfKz")
+    expect(output).toContain("Use: mendcode -s ses_0cd1e09f6ffePQGK5SRql5mfKz")
     expect(output).not.toContain("OpenCode is a donor/reference chassis")
   })
 

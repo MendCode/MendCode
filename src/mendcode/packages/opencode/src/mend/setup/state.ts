@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "fs/promises"
 import path from "path"
 import { mendPaths } from "../config/paths"
 
-export type SetupStepID = "provider" | "models" | "budget" | "health" | "package" | "prompt" | "tui" | "memory" | "permissions"
+export type SetupStepID = "start" | "provider" | "models" | "budget" | "health" | "package" | "prompt" | "tui" | "memory" | "permissions"
 
 export type SetupState = {
   version: 0
@@ -15,13 +15,13 @@ export type SetupState = {
   updatedAt: string | null
 }
 
-export const setupSteps: SetupStepID[] = ["provider", "models", "budget", "health", "package", "tui", "prompt", "memory", "permissions"]
+export const setupSteps: SetupStepID[] = ["start", "provider", "models", "budget", "prompt", "tui", "memory", "permissions", "package"]
 export const requiredSetupSteps: SetupStepID[] = ["provider", "models", "budget", "prompt"]
 
 export const defaultSetupState: SetupState = {
   version: 0,
   completedOnce: false,
-  currentStep: "provider",
+  currentStep: "start",
   completedSteps: [],
   dismissedAt: null,
   lastOpenedAt: null,
@@ -29,7 +29,7 @@ export const defaultSetupState: SetupState = {
 }
 
 function normalizeStep(step: unknown): SetupStepID {
-  return setupSteps.includes(step as SetupStepID) ? (step as SetupStepID) : "provider"
+  return setupSteps.includes(step as SetupStepID) ? (step as SetupStepID) : "start"
 }
 
 function normalizeState(input: unknown): SetupState {

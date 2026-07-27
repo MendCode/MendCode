@@ -514,7 +514,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const deleteMessage = Effect.fn("SessionHttpApi.deleteMessage")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
-      yield* runState.assertNotBusy(ctx.params.sessionID)
+      const cancelled = yield* promptSvc.cancelQueued(ctx.params)
+      if (!cancelled) yield* runState.assertNotBusy(ctx.params.sessionID)
       yield* session.removeMessage(ctx.params)
       return true
     })

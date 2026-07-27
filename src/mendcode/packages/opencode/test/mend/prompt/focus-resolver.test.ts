@@ -13,7 +13,15 @@ describe("mend prompt focus resolver", () => {
     ["anthropic", "claude-sonnet-4-5", "claude"],
     ["google", "gemini-3-pro", "gemini"],
     ["openrouter", "deepseek/deepseek-chat", "deepseek"],
+    ["openrouter", "deepseek/deepseek-v3.2-exp", "deepseek"],
+    ["openrouter", "z-ai/glm-5.2", "glm"],
+    ["openrouter", "z-ai/glm-5.1", "glm"],
+    ["zai", "glm-5.2", "glm"],
     ["mistral", "codestral-latest", "mistral"],
+    ["openrouter", "minimax/minimax-m2.5", "minimax"],
+    ["xai", "grok-code-fast-1", "grok"],
+    ["minimax", "unknown-model", "minimax"],
+    ["xai", "unknown-model", "grok"],
     ["ollama", "qwen3-coder", "local"],
   ])("resolves %s/%s to %s", (providerID, modelID, focusID) => {
     expect(resolvePromptFocus({ providerID, modelID }).focusID).toBe(focusID as PromptFocusID)
@@ -22,6 +30,13 @@ describe("mend prompt focus resolver", () => {
   test("model family wins over provider transport", () => {
     const resolved = resolvePromptFocus({ providerID: "opencode-go", modelID: "kimi-k2" })
     expect(resolved.focusID).toBe("kimi")
+    expect(resolved.source).toBe("model-family")
+  })
+
+  test("keeps the actual DeepSeek family over an Anthropic-compatible transport", () => {
+    const resolved = resolvePromptFocus({ providerID: "anthropic", modelID: "deepseek-v4-pro[1m]" })
+
+    expect(resolved.focusID).toBe("deepseek")
     expect(resolved.source).toBe("model-family")
   })
 

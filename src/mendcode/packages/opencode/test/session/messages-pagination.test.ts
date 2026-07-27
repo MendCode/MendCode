@@ -137,7 +137,7 @@ async function addCompactionPart(sessionID: SessionID, messageID: MessageID, tai
   } as any)
 }
 
-async function addLargeToolPart(sessionID: SessionID, messageID: MessageID, text: string) {
+async function addLargeToolPart(sessionID: SessionID, messageID: MessageID, text: string, includeContent = false) {
   await svc.updatePart({
     id: PartID.ascending(),
     sessionID,
@@ -147,7 +147,7 @@ async function addLargeToolPart(sessionID: SessionID, messageID: MessageID, text
     tool: "bash",
     state: {
       status: "completed",
-      input: { command: "large-output" },
+       input: { command: "large-output", ...(includeContent ? { content: text } : {}) },
       output: text,
       title: "large output",
       metadata: {
@@ -323,8 +323,8 @@ describe("MessageV2.page", () => {
       fn: async () => {
         const session = await svc.create({})
         const messageID = await addUser(session.id, "show history")
-        const large = "x".repeat(160 * 1024)
-        await addLargeToolPart(session.id, messageID, large)
+        const large = "x".repeat(600 * 1024)
+        await addLargeToolPart(session.id, messageID, large, true)
         await svc.updatePart({
           id: PartID.ascending(),
           sessionID: session.id,
@@ -374,9 +374,13 @@ describe("MessageV2.page", () => {
         const tuiLoop = tui.items[0]?.parts.find((part) => part.type === "tool" && part.callID === "call_loop")
 
         expect(fullTool?.type === "tool" && fullTool.state.status === "completed" && fullTool.state.output).toBe(large)
+        expect(fullTool?.type === "tool" && fullTool.state.status === "completed" && fullTool.state.input.content).toBe(large)
         expect(tuiTool?.type === "tool" && tuiTool.state.status === "completed" && tuiTool.state.output.length).toBeLessThan(
           large.length,
         )
+        expect(
+          tuiTool?.type === "tool" && tuiTool.state.status === "completed" && String(tuiTool.state.input.content),
+        ).toContain("tool input.content preview truncated")
         expect(
           tuiTool?.type === "tool" &&
             tuiTool.state.status === "completed" &&
@@ -390,13 +394,13 @@ describe("MessageV2.page", () => {
         ).toContain("Show more")
         expect(
           tuiTool?.type === "tool" && tuiTool.state.status === "completed" && String(tuiTool.state.metadata.diff).length,
-        ).toBeLessThanOrEqual(12 * 1024)
+        ).toBeLessThanOrEqual(512 * 1024)
         expect(tuiFile?.type === "file" && tuiFile.url.length).toBeLessThan(16 * 1024)
         expect(fullPatch?.type === "patch" && fullPatch.files.length).toBe(4_444)
         expect(tuiPatch?.type === "patch" && tuiPatch.files.length).toBe(256)
         expect(fullLoop?.type === "tool" && fullLoop.state.status === "completed" && fullLoop.state.metadata.workflows).toHaveLength(32)
         expect(tuiLoop?.type === "tool" && tuiLoop.state.status === "completed" && tuiLoop.state.metadata.workflows).toHaveLength(2)
-        expect(Buffer.byteLength(JSON.stringify(tui))).toBeLessThan(128 * 1024)
+        expect(Buffer.byteLength(JSON.stringify(tui))).toBeLessThan(1.25 * 1024 * 1024)
 
         await svc.remove(session.id)
       },
@@ -418,6 +422,10 @@ describe("MessageV2.page", () => {
         expect(firstItem.parts).toHaveLength(32)
         expect(firstItem.partsMore).toBe(true)
         expect(firstItem.partsCursor).toBeTruthy()
+
+        const normal = MessageV2.page({ sessionID: session.id, limit: 1, view: "tui" }).items[0]!
+        expect(normal.parts).toHaveLength(96)
+        expect(normal.partsMore).toBe(true)
 
         const next = MessageV2.get({
           sessionID: session.id,

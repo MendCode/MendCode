@@ -2,6 +2,7 @@ import { spawnSync } from "child_process"
 import { mkdir, readFile, rm, writeFile } from "fs/promises"
 import os from "os"
 import path from "path"
+import { computeGlobalRoots, resolveActiveAppSegment } from "@mendcode/core/global-layout"
 
 export type DreamServicePlatform = "darwin" | "linux" | "win32"
 export type DreamServiceBackend = "launchd" | "systemd-user" | "scheduled-task"
@@ -15,6 +16,8 @@ export type DreamServicePlan = {
   stdoutPath: string
   stderrPath: string
   programArguments: string[]
+  serviceProgramArguments: string[]
+  memoryDirectory: string
   installCommand: string[]
   startCommand: string[]
   stopCommand: string[]
@@ -133,6 +136,43 @@ function dreamDaemonArgs(args: Required<Pick<DreamServiceArgs, "intervalMs">>, o
   return daemonArgs
 }
 
+function dreamWindowPreflightCommand(input: { daemonArguments: string[]; memoryDirectory: string }) {
+  const fallback = shellQuote(input.daemonArguments)
+  const config = shellQuote([path.join(input.memoryDirectory, "config.json")])
+  const schedule = shellQuote([path.join(input.memoryDirectory, "dream", "schedule.json")])
+  return [
+    "to_minutes() {",
+    "  hour=${1%%:*}; minute=${1#*:}",
+    "  hour=${hour#0}; minute=${minute#0}",
+    "  [ -n \"$hour\" ] || hour=0; [ -n \"$minute\" ] || minute=0",
+    "  printf '%s\\n' $((hour * 60 + minute))",
+    "}",
+    "check_window() {",
+    "  file=$1; key=$2; window_active=0",
+    "  enabled=$(/usr/bin/plutil -extract \"$key.enabled\" raw -o - \"$file\" 2>/dev/null) || return 1",
+    "  [ \"$enabled\" = \"true\" ] || return 1",
+    "  start=$(/usr/bin/plutil -extract \"$key.start\" raw -o - \"$file\" 2>/dev/null) || return 1",
+    "  end=$(/usr/bin/plutil -extract \"$key.end\" raw -o - \"$file\" 2>/dev/null) || return 1",
+    "  case \"$start\" in [0-9]:[0-9][0-9]|[0-9][0-9]:[0-9][0-9]) ;; *) return 1 ;; esac",
+    "  case \"$end\" in [0-9]:[0-9][0-9]|[0-9][0-9]:[0-9][0-9]) ;; *) return 1 ;; esac",
+    "  start_minutes=$(to_minutes \"$start\"); end_minutes=$(to_minutes \"$end\")",
+    "  [ \"$start_minutes\" -le 1439 ] && [ \"$end_minutes\" -le 1439 ] || return 1",
+    "  timezone=$(/usr/bin/plutil -extract \"$key.timezone\" raw -o - \"$file\" 2>/dev/null) || timezone=",
+    "  if [ -n \"$timezone\" ]; then current=$(TZ=\"$timezone\" /bin/date +%H:%M 2>/dev/null) || current=$(/bin/date +%H:%M); else current=$(/bin/date +%H:%M); fi",
+    "  current_minutes=$(to_minutes \"$current\")",
+    "  if [ \"$start_minutes\" -le \"$end_minutes\" ]; then",
+    "    [ \"$current_minutes\" -ge \"$start_minutes\" ] && [ \"$current_minutes\" -le \"$end_minutes\" ] && window_active=1",
+    "  elif [ \"$current_minutes\" -ge \"$start_minutes\" ] || [ \"$current_minutes\" -le \"$end_minutes\" ]; then",
+    "    window_active=1",
+    "  fi",
+    "  return 0",
+    "}",
+    `if check_window ${config} dreamWindow; then [ "$window_active" = "1" ] && exec ${fallback}; exit 0; fi`,
+    `if check_window ${schedule} window; then [ "$window_active" = "1" ] && exec ${fallback}; fi`,
+    "exit 0",
+  ].join("\n")
+}
+
 export function dreamServicePlan(args: DreamServiceArgs = {}): DreamServicePlan {
   const platformValue = platform(args.platform)
   const backend = backendFor(platformValue)
@@ -143,6 +183,7 @@ export function dreamServicePlan(args: DreamServiceArgs = {}): DreamServicePlan 
   const logDir = path.resolve(args.logDir || defaultLogDir(platformValue))
   const workingDirectory = path.resolve(args.workingDirectory || os.homedir())
   const oneShot = serviceRunsOneShot(platformValue)
+  const memoryDirectory = process.env.MENDCODE_MEMORY_DIR || path.join(computeGlobalRoots(resolveActiveAppSegment()).data, "memory")
   const programArguments = platformValue === "win32"
     ? [command, ...dreamDaemonArgs({ intervalMs }, { once: oneShot })]
     : [
@@ -157,6 +198,9 @@ export function dreamServicePlan(args: DreamServiceArgs = {}): DreamServicePlan 
       : platformValue === "linux"
         ? path.join(serviceDir, `${label}.service`)
         : path.join(serviceDir, `${label}.cmd`)
+  const serviceProgramArguments = platformValue === "darwin"
+    ? ["/bin/sh", "-c", dreamWindowPreflightCommand({ daemonArguments: programArguments, memoryDirectory })]
+    : programArguments
   const programLine = platformValue === "win32" ? windowsCommandLine(programArguments) : shellQuote(programArguments)
   return {
     label,
@@ -167,6 +211,8 @@ export function dreamServicePlan(args: DreamServiceArgs = {}): DreamServicePlan 
     stdoutPath: path.join(logDir, `${label}.log`),
     stderrPath: path.join(logDir, `${label}.err.log`),
     programArguments,
+    serviceProgramArguments,
+    memoryDirectory,
     installCommand:
       platformValue === "darwin"
         ? ["write", definitionPath]
@@ -210,12 +256,17 @@ export function dreamServicePlist(plan: DreamServicePlan) {
   ${stringNode(plan.label)}
   <key>ProgramArguments</key>
   <array>
-    ${plan.programArguments.map(stringNode).join("\n    ")}
+    ${plan.serviceProgramArguments.map(stringNode).join("\n    ")}
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>MENDCODE_MEMORY_DIR</key>
+    ${stringNode(plan.memoryDirectory)}
+  </dict>
   <key>WorkingDirectory</key>
   ${stringNode(plan.workingDirectory)}
   <key>RunAtLoad</key>
-  <true/>
+  <false/>
   <key>StartInterval</key>
   <integer>${serviceIntervalSeconds(plan.intervalMs)}</integer>
   <key>StandardOutPath</key>

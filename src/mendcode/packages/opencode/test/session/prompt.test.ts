@@ -24,6 +24,7 @@ import { PlanReview } from "../../src/plan-review"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
 import { SessionMessageTable } from "../../src/session/session.sql"
+import { BackgroundTaskEventTable } from "../../src/session/background-task.sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { AppFileSystem } from "@mendcode/core/filesystem"
@@ -41,6 +42,7 @@ import {
   shouldResumeAfterAutoRescueCompaction,
   shouldPreflightPromptOverflow,
   shouldSkipAutoCompaction,
+  ownerWakePromptText,
 } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
@@ -65,6 +67,28 @@ import { testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 
 void Log.init({ print: false })
+
+test("owner wake prompts are internal runtime context", () => {
+  const taskID = SessionID.make("ses_owner_wake_task")
+  const text = ownerWakePromptText([
+    {
+      eventID: "evt_owner_wake",
+      taskID,
+      parentSessionID: SessionID.make("ses_owner_wake_parent"),
+      generation: 1,
+      revision: 2,
+      state: "completed",
+      title: "Inspect cache",
+      summary: "Cache is healthy.",
+      background: true,
+    },
+  ])
+
+  expect(text).toContain('<mendcode_runtime_event type="background_task">')
+  expect(text).toContain(`task_id: ${taskID}`)
+  expect(text).toContain("not a user request")
+  expect(text).toContain("task_status")
+})
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -168,11 +192,13 @@ const lsp = Layer.succeed(
   }),
 )
 
-const status = SessionStatus.layer.pipe(Layer.provideMerge(Bus.layer))
+const bus = Bus.defaultLayer
+const status = SessionStatus.layer.pipe(Layer.provide(bus))
 const run = SessionRunState.layer.pipe(Layer.provide(status))
 const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 function makeHttp() {
   const deps = Layer.mergeAll(
+    bus,
     Session.defaultLayer,
     Snapshot.defaultLayer,
     LLM.defaultLayer,
@@ -187,7 +213,7 @@ function makeHttp() {
     mcp,
     AppFileSystem.defaultLayer,
     status,
-    BackgroundTask.defaultLayer,
+    BackgroundTask.layer.pipe(Layer.provide(bus)),
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const planReview = PlanReview.layer.pipe(Layer.provideMerge(deps))
@@ -391,6 +417,7 @@ test("auto compaction resumes only for active or incomplete assistant turns", ()
   expect(shouldResumeAfterAutoCompaction("length")).toBe(true)
   expect(shouldResumeAfterAutoCompaction("unknown")).toBe(true)
   expect(shouldResumeAfterAutoCompaction("stop")).toBe(false)
+  expect(shouldResumeAfterAutoCompaction("stop", true)).toBe(true)
 })
 
 test("active provider compaction always resumes after writing the summary", () => {
@@ -586,6 +613,15 @@ test("queued prompts wait for the active response unless after-tools is configur
       includeQueuedUserMessages: true,
     }).map((message) => message.info.id),
   ).toEqual([activeUser.info.id, activeAssistant.info.id, queuedUser.info.id])
+  expect(
+    promptRunMessages({ messages, targetMessageID: MessageID.ascending(), initialMessageIDs }).map(
+      (message) => message.info.id,
+    ),
+  ).toEqual([activeUser.info.id, activeAssistant.info.id])
+  expect(promptRunMessages({ messages, initialMessageIDs }).map((message) => message.info.id)).toEqual([
+    activeUser.info.id,
+    activeAssistant.info.id,
+  ])
 })
 
 // Config that registers a custom "test" provider with a "test-model" model
@@ -802,6 +838,66 @@ const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
 
 // Loop semantics
 
+it.live("wakes an idle parent only for an opted-in background task", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const tasks = yield* BackgroundTask.Service
+      const config = yield* Config.Service
+      expect((yield* config.get()).experimental?.subagent_owner_wake).toBe(true)
+      const parent = yield* sessions.create({ title: "Owner wake parent" })
+      yield* llm.text("parent ready")
+      yield* prompt.prompt({
+        sessionID: parent.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "start" }],
+      })
+      yield* llm.reset
+      const child = yield* sessions.create({ parentID: parent.id, title: "Inspect cache", agent: "general" })
+      const run = yield* tasks.start({
+        taskID: child.id,
+        parentSessionID: parent.id,
+        title: "Inspect cache",
+        agent: "general",
+        startRunning: true,
+      })
+      yield* llm.text("wake acknowledged")
+      yield* tasks.finish({
+        taskID: child.id,
+        generation: run.generation,
+        state: "completed",
+        background: true,
+        result: { summary: "Cache is healthy." },
+      })
+      const events = Database.use((db) =>
+        db.select().from(BackgroundTaskEventTable).all(),
+      )
+      expect(events.at(-1)?.payload).toMatchObject({ background: true })
+      yield* Effect.sleep(500)
+
+      expect(yield* llm.calls).toBe(1)
+      const messages = yield* sessions.messages({ sessionID: parent.id })
+      expect(
+        messages.some((message) =>
+          message.info.role === "user" &&
+          message.parts.some(
+            (part) => part.type === "text" && part.synthetic === true && part.metadata?.kind === "background_task_owner_wake",
+          ),
+        ),
+      ).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url: string) => ({
+        ...providerCfg(url),
+        experimental: { subagent_owner_wake: true },
+      }),
+    },
+  ),
+)
+
 it.live("loop exits immediately when last assistant has stop finish", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {
@@ -843,6 +939,43 @@ it.live("loop calls LLM and returns assistant message", () =>
       const parts = result.parts.filter((p) => p.type === "text")
       expect(parts.some((p) => p.type === "text" && p.text === "world")).toBe(true)
       expect(yield* llm.hits).toHaveLength(1)
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("replays an already persisted prompt without duplicating the user turn", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const original = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        noReply: true,
+        parts: [{ type: "text", text: "original request" }],
+      })
+      yield* llm.text("recovered response")
+
+      const result = yield* prompt.prompt({
+        sessionID: chat.id,
+        messageID: original.info.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "must not replace the original" }],
+      })
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const users = messages.filter((message) => message.info.role === "user")
+
+      expect(result.info.role).toBe("assistant")
+      expect(yield* llm.hits).toHaveLength(1)
+      expect(users).toHaveLength(1)
+      expect(users[0]?.parts.some((part) => part.type === "text" && part.text === "original request")).toBe(true)
     }),
     { git: true, config: providerCfg },
   ),
@@ -943,6 +1076,65 @@ it.live("resumes after auto-compaction of an incomplete assistant turn", () =>
         ),
       ).toBe(true)
 
+      expect(yield* llm.calls).toBe(2)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        agent: {
+          build: { model: "test/test-model" },
+          compaction: { model: "test/test-model" },
+        },
+      }),
+    },
+  ),
+)
+
+it.live("resumes automatic compaction when a stop response still has tool work", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const request = "termina la migración y ejecuta la verificación enfocada"
+      const { assistant } = yield* seed(chat.id, { finish: "stop", text: request })
+
+      assistant.tokens.input = 95_000
+      yield* sessions.updateMessage(assistant)
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: assistant.id,
+        sessionID: chat.id,
+        type: "tool",
+        callID: "call-1",
+        tool: "shell",
+        state: {
+          status: "completed",
+          input: { command: "git status" },
+          output: "working tree status",
+          title: "git status",
+          metadata: {},
+          time: { start: Date.now(), end: Date.now() },
+        },
+      })
+      yield* llm.text("compaction summary")
+      yield* llm.text("continued work")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+
+      expect(result.parts.some((part) => part.type === "text" && part.text === "continued work")).toBe(true)
+      expect(
+        messages.some(
+          (message) =>
+            message.info.role === "user" &&
+            message.parts.some((part) => part.type === "text" && part.synthetic && part.metadata?.compaction_continue),
+        ),
+      ).toBe(true)
       expect(yield* llm.calls).toBe(2)
     }),
     {
@@ -1207,6 +1399,192 @@ it.live("runs distinct queued prompts in FIFO order", () =>
       expect(firstResult.parts.some((part) => part.type === "text" && part.text === "queued response one")).toBe(true)
       expect(secondResult.parts.some((part) => part.type === "text" && part.text === "queued response two")).toBe(true)
       expect(yield* llm.calls).toBe(4)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        agent: { build: { model: "test/test-model" } },
+      }),
+    },
+  ),
+)
+
+it.live("removes an edited queued prompt before sending its replacement", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const gate = defer<void>()
+      yield* llm.push(reply().tool("glob", { pattern: "**/*.txt" }).wait(gate.promise))
+      yield* llm.text("active response complete")
+      yield* llm.text("edited queued response")
+
+      const active = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "active request" }],
+        })
+        .pipe(Effect.forkChild)
+      yield* llm.wait(1)
+
+      const queuedID = MessageID.ascending()
+      const queued = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: queuedID,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "queued request before edit" }],
+        })
+        .pipe(Effect.forkChild)
+      yield* Effect.gen(function* () {
+        while (true) {
+          const messages = yield* sessions.messages({ sessionID: chat.id })
+          if (messages.some((message) => message.info.id === queuedID)) return
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(Effect.timeout("1 second"))
+
+      expect(
+        yield* prompt.cancelQueued({
+          sessionID: chat.id,
+          messageID: queuedID,
+        }),
+      ).toBe(true)
+      yield* sessions.removeMessage({ sessionID: chat.id, messageID: queuedID })
+      const removed = yield* sessions.messages({ sessionID: chat.id })
+      expect(removed.some((message) => message.info.id === queuedID)).toBe(false)
+
+      const replacement = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "queued request after edit" }],
+        })
+        .pipe(Effect.forkChild)
+
+      gate.resolve()
+      const [activeResult, cancelledResult, replacementResult] = yield* Effect.all([
+        Fiber.join(active),
+        Fiber.join(queued),
+        Fiber.join(replacement),
+      ])
+      expect(cancelledResult.info.role).toBe("assistant")
+      expect(
+        activeResult.parts.some((part) => part.type === "text" && part.text === "active response complete"),
+      ).toBe(true)
+      expect(
+        replacementResult.parts.some((part) => part.type === "text" && part.text === "edited queued response"),
+      ).toBe(true)
+      expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("queued request after edit"))).toBe(
+        true,
+      )
+      expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("queued request before edit"))).toBe(
+        false,
+      )
+      expect(yield* llm.calls).toBe(3)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        agent: { build: { model: "test/test-model" } },
+      }),
+    },
+  ),
+)
+
+it.live("keeps direct in-place queued prompt replacement compatible", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const gate = defer<void>()
+      yield* llm.push(reply().tool("glob", { pattern: "**/*.txt" }).wait(gate.promise))
+      yield* llm.text("active response complete")
+      yield* llm.text("edited queued response")
+
+      const active = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "active request" }],
+        })
+        .pipe(Effect.forkChild)
+      yield* llm.wait(1)
+
+      const queuedID = MessageID.ascending()
+      const queued = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          messageID: queuedID,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "queued request before edit" }],
+        })
+        .pipe(Effect.forkChild)
+      yield* Effect.gen(function* () {
+        while (true) {
+          const messages = yield* sessions.messages({ sessionID: chat.id })
+          if (messages.some((message) => message.info.id === queuedID)) return
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(Effect.timeout("1 second"))
+
+      const edited = yield* prompt.prompt({
+        sessionID: chat.id,
+        messageID: queuedID,
+        replaceExisting: true,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "queued request after edit" }],
+      })
+      expect(edited.info.id).toBe(queuedID)
+      expect(edited.parts.some((part) => part.type === "text" && part.text === "queued request after edit")).toBe(
+        true,
+      )
+      expect(edited.parts.some((part) => part.type === "text" && part.text === "queued request before edit")).toBe(
+        false,
+      )
+
+      const stored = yield* sessions.messages({ sessionID: chat.id })
+      const storedQueued = stored.filter((message) => message.info.id === queuedID)
+      expect(storedQueued).toHaveLength(1)
+      expect(
+        storedQueued[0]?.parts.some((part) => part.type === "text" && part.text === "queued request after edit"),
+      ).toBe(true)
+      expect(
+        storedQueued[0]?.parts.some((part) => part.type === "text" && part.text === "queued request before edit"),
+      ).toBe(false)
+
+      gate.resolve()
+      const [activeResult, queuedResult] = yield* Effect.all([Fiber.join(active), Fiber.join(queued)])
+      expect(
+        activeResult.parts.some((part) => part.type === "text" && part.text === "active response complete"),
+      ).toBe(true)
+      expect(
+        queuedResult.parts.some((part) => part.type === "text" && part.text === "edited queued response"),
+      ).toBe(true)
+      expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("queued request after edit"))).toBe(
+        true,
+      )
+      expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("queued request before edit"))).toBe(
+        false,
+      )
+      expect(yield* llm.calls).toBe(3)
     }),
     {
       git: true,

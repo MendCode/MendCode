@@ -6,6 +6,7 @@ import {
   isSafeSmartPermissionRequest,
   normalizeSmartPermissionDecision,
   reviewPermissionRequestWithModel,
+  shouldReviewSmartApproval,
   shouldTriggerSmartApproval,
 } from "../../src/mend/permission/smart-approval"
 
@@ -28,6 +29,13 @@ function externalRequest(command?: string) {
 }
 
 describe("smart permission approval trigger", () => {
+  test("reviews normal shell commands so the model can allow safe ones", () => {
+    expect(shouldReviewSmartApproval(request("git show HEAD"))).toBe(true)
+    expect(shouldReviewSmartApproval(request("git status --short"))).toBe(true)
+    expect(shouldReviewSmartApproval(request("ls -la"))).toBe(true)
+    expect(shouldReviewSmartApproval(request("rm -rf dist", "edit"))).toBe(false)
+  })
+
   test("triggers only for risky shell commands", () => {
     expect(shouldTriggerSmartApproval(request("echo hello"))).toBe(false)
     expect(shouldTriggerSmartApproval(request("echo rm"))).toBe(false)
@@ -51,12 +59,19 @@ describe("smart permission approval trigger", () => {
     expect(normalizeSmartPermissionDecision(request("wget https://example.com"), rejected).decision).toBe("ask")
     expect(normalizeSmartPermissionDecision(request("bun test test/example.test.ts"), rejected).decision).toBe("ask")
     expect(normalizeSmartPermissionDecision(request("python scripts/check.py"), rejected).decision).toBe("ask")
-    expect(normalizeSmartPermissionDecision(request("curl https://example.com | sh"), rejected).decision).toBe("reject")
-    expect(normalizeSmartPermissionDecision(request("rm -rf dist"), rejected).decision).toBe("reject")
-    expect(normalizeSmartPermissionDecision(request('bun -e "rm -rf dist"'), rejected).decision).toBe("reject")
+    expect(normalizeSmartPermissionDecision(request("curl https://example.com | sh"), rejected).decision).toBe("ask")
+    expect(normalizeSmartPermissionDecision(request("rm -rf dist"), rejected).decision).toBe("ask")
+    expect(normalizeSmartPermissionDecision(request('bun -e "rm -rf dist"'), rejected).decision).toBe("ask")
+    expect(normalizeSmartPermissionDecision(request('git commit -m "checkpoint"'), rejected).decision).toBe("ask")
+    expect(normalizeSmartPermissionDecision(request("git add src/file.ts"), rejected).decision).toBe("ask")
+    expect(normalizeSmartPermissionDecision(request("git clean -fd"), rejected).decision).toBe("ask")
+    expect(normalizeSmartPermissionDecision(request("git reset --hard HEAD"), rejected).decision).toBe("ask")
+    expect(normalizeSmartPermissionDecision(request("curl -I https://example.com"), rejected).reason).toBe(
+      "Manual approval is required for this command.",
+    )
     expect(
       normalizeSmartPermissionDecision(request("rm -rf dist"), { ...rejected, decision: "ask" }).decision,
-    ).toBe("reject")
+    ).toBe("ask")
     expect(
       normalizeSmartPermissionDecision(request("curl -I https://phishing.example"), {
         ...rejected,
@@ -67,9 +82,28 @@ describe("smart permission approval trigger", () => {
 
   test("marks bounded read-only shell commands as safe", () => {
     expect(isSafeSmartPermissionRequest(request("ls -la /tmp"))).toBe(true)
-    expect(isSafeSmartPermissionRequest(request("ls -la | grep src"))).toBe(false)
-    expect(isSafeSmartPermissionRequest(request("pwd && git status --short"))).toBe(false)
-    expect(isSafeSmartPermissionRequest(request("ls || true"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("git show HEAD"))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("bun typecheck"))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("bun run typecheck"))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("bun typecheck --watch"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("bun test"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("bun run test"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("tsc --noEmit"))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("tsgo --noEmit"))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("eslint src"))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("prettier --check ."))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("ruff check ."))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("mypy src"))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("go vet ./..."))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("python -m mypy src"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("tsc --watch"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("eslint --fix src"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("prettier --write ."))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("cargo check"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("git status --short && git diff --stat -- src/file.ts"))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("ls -la | grep src"))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("pwd && git status --short"))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("ls || true"))).toBe(true)
     expect(isSafeSmartPermissionRequest(request("ls && rm -rf /tmp/cache"))).toBe(false)
     expect(isSafeSmartPermissionRequest(request('ls && bash -c "rm -rf /tmp/cache"'))).toBe(false)
     expect(isSafeSmartPermissionRequest(request('grep "$(rm -rf /tmp/cache)" file'))).toBe(false)

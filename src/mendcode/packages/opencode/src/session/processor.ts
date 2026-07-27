@@ -40,6 +40,7 @@ import * as DateTime from "effect/DateTime"
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
 const DEFAULT_LLM_STREAM_IDLE_TIMEOUT_MS = 180_000
+const RETRY_STATUS_EVENT_INTERVAL_MS = 5_000
 
 function llmStreamIdleTimeoutMs() {
   const value = Number(process.env.MENDCODE_LLM_STREAM_IDLE_TIMEOUT_MS)
@@ -452,6 +453,7 @@ export const layer: Layer.Layer<
     const summary = yield* SessionSummary.Service
     const scope = yield* Scope.Scope
     const status = yield* SessionStatus.Service
+    const retryStatusPublishedAt = new Map<SessionID, number>()
 
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
@@ -480,6 +482,8 @@ export const layer: Layer.Layer<
         usedExplicitMemoryTool: false,
       }
       let aborted = false
+      // Keep the retry state visible while a new provider attempt is still in setup.
+      let retrying = false
       const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
 
       const isExplicitAbort = () => aborted || (input.isManualAbort ? input.isManualAbort() : input.abort?.aborted === true)
@@ -738,8 +742,19 @@ export const layer: Layer.Layer<
       })
 
       const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
+        const attemptProducedContent =
+          value.type === "reasoning-start" ||
+          value.type === "text-start" ||
+          value.type === "tool-input-start" ||
+          value.type === "tool-call"
+        if (retrying && attemptProducedContent) {
+          retrying = false
+          yield* status.set(ctx.sessionID, { type: "busy" })
+        }
+
         switch (value.type) {
           case "start":
+            if (retrying) return
             yield* status.set(ctx.sessionID, { type: "busy" })
             return
 
@@ -1238,8 +1253,15 @@ export const layer: Layer.Layer<
         ctx.reasoningMap = {}
 
         yield* Effect.forEach(
-          Object.values(ctx.toolcalls),
-          (call) => Deferred.await(call.done).pipe(Effect.timeout("250 millis"), Effect.ignore),
+          Object.keys(ctx.toolcalls),
+          (toolCallID) =>
+            Effect.gen(function* () {
+              const call = ctx.toolcalls[toolCallID]
+              if (!call) return
+              const match = yield* readToolCall(toolCallID)
+              const timeout = match?.part.tool === ShellID.ToolID ? "3 seconds" : "250 millis"
+              yield* Deferred.await(call.done).pipe(Effect.timeout(timeout), Effect.ignore)
+            }),
           { concurrency: "unbounded" },
         )
 
@@ -1451,22 +1473,32 @@ export const layer: Layer.Layer<
               SessionRetry.policy({
                 parse,
                 set: (info) => {
-                  // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-                  EventV2.run(SessionEvent.Retried.Sync, {
-                    sessionID: ctx.sessionID,
-                    attempt: info.attempt,
-                    error: {
-                      message: info.message,
-                      isRetryable: true,
-                    },
-                    timestamp: DateTime.makeUnsafe(Date.now()),
-                  })
+                  retrying = true
+                  const now = Date.now()
+                  const lastPublished = retryStatusPublishedAt.get(ctx.sessionID)
+                  const notify =
+                    info.attempt === 1 ||
+                    lastPublished === undefined ||
+                    now - lastPublished >= RETRY_STATUS_EVENT_INTERVAL_MS
+                  if (notify) {
+                    retryStatusPublishedAt.set(ctx.sessionID, now)
+                    // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+                    EventV2.run(SessionEvent.Retried.Sync, {
+                      sessionID: ctx.sessionID,
+                      attempt: info.attempt,
+                      error: {
+                        message: info.message,
+                        isRetryable: true,
+                      },
+                      timestamp: DateTime.makeUnsafe(now),
+                    })
+                  }
                   return status.set(ctx.sessionID, {
                     type: "retry",
                     attempt: info.attempt,
                     message: info.message,
                     next: info.next,
-                  })
+                  }, { notify })
                 },
               }),
             ),

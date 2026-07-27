@@ -402,8 +402,40 @@ describe("useEvent", () => {
       expect(sdk.connection.recoveringSince).toBeNumber()
 
       controllers[1].enqueue(sseEvent(sessionStatusEvent()))
+      await Bun.sleep(30)
+      expect(sdk.connection.recoveringSince).toBeNumber()
+
+      controllers[1].enqueue(sseEvent(heartbeatEvent()))
       await wait(() => sdk.connection.recoveringSince === undefined)
       expect(sdk.connection.lastApplicationEventAt).toBeNumber()
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("SDK event stream refreshes a shared connection after repeated server restarts", async () => {
+    let refreshes = 0
+    const { app, sdk, controllers } = await mountSSE({
+      reconnect: {
+        retryDelay: 1,
+        maxRetryDelay: 1,
+        refresh: async () => ({ url: `http://test-${++refreshes}` }),
+      },
+    })
+
+    try {
+      controllers[0].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
+
+      controllers[0].close()
+      await wait(() => controllers.length === 2)
+      expect(refreshes).toBeGreaterThanOrEqual(2)
+      controllers[1].close()
+      await wait(() => controllers.length === 3)
+      expect(sdk.connection.status).not.toBe("failed")
+
+      controllers[2].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
     } finally {
       app.renderer.destroy()
     }
@@ -426,7 +458,7 @@ describe("useEvent", () => {
 
       controllers[1].enqueue(sseEvent(heartbeatEvent()))
       await wait(() => sdk.connection.status === "connected")
-      expect(sdk.connection.recoveringSince).toBeNumber()
+      expect(sdk.connection.recoveringSince).toBeUndefined()
 
       controllers[1].enqueue(sseEvent(sessionStatusEvent()))
       await wait(() => sdk.connection.recoveringSince === undefined)

@@ -1444,6 +1444,63 @@ it.live("session.processor effect tests publish retry status updates", () =>
   ),
 )
 
+it.live("session.processor effect tests keep retry status while the next provider attempt connects", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        process.env.MENDCODE_LLM_STREAM_IDLE_TIMEOUT_MS = "1000"
+        const { processors, session, provider } = yield* boot()
+
+        yield* llm.error(503, { error: "boom" })
+        yield* llm.push(reply().hang())
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "retry connection")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const bus = yield* Bus.Service
+        const statusTypes: SessionStatus.Info["type"][] = []
+        const off = yield* bus.subscribeCallback(SessionStatus.Event.Status, (evt) => {
+          if (evt.properties.sessionID === chat.id) statusTypes.push(evt.properties.status.type)
+        })
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const run = yield* handle
+          .process({
+            user: {
+              id: parent.id,
+              sessionID: chat.id,
+              role: "user",
+              time: parent.time,
+              agent: parent.agent,
+              model: { providerID: ref.providerID, modelID: ref.modelID },
+            } satisfies MessageV2.User,
+            sessionID: chat.id,
+            model: mdl,
+            agent: agent(),
+            system: [],
+            messages: [{ role: "user", content: "retry connection" }],
+            tools: {},
+          })
+          .pipe(Effect.forkChild)
+
+        yield* llm.wait(2)
+        yield* Effect.sleep("50 millis")
+        const retryIndex = statusTypes.indexOf("retry")
+        expect(retryIndex).toBeGreaterThanOrEqual(0)
+        expect(statusTypes.slice(retryIndex + 1)).not.toContain("busy")
+
+        off()
+        yield* Fiber.interrupt(run)
+      }),
+    { git: true, config: (url) => providerCfg(url) },
+  ),
+)
+
 it.live("session.processor effect tests defer retry to prompt loop after persisted tool output", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>

@@ -9,6 +9,7 @@ import { useToast } from "@tui/ui/toast"
 import { useDialog } from "@tui/ui/dialog"
 import { DialogConfirm } from "@tui/ui/dialog-confirm"
 import { DialogPrompt } from "@tui/ui/dialog-prompt"
+import { CommandDeck, CommandDeckContext, commandDeckLayout } from "@tui/component/command-deck"
 import { Locale } from "@/util/locale"
 import { formatDuration } from "@/util/format"
 import * as Model from "../../util/model"
@@ -396,8 +397,16 @@ function modelLabel(
 }
 
 function eventTimeLabel(event: LoopEvent) {
-  if (!event.time?.created) return "event"
-  return new Date(event.time.created).toLocaleTimeString()
+  const created = event.time?.created ?? event.time?.updated
+  if (created === undefined) return "event"
+  return new Date(created).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  })
 }
 
 function compact(value: string | undefined, width: number) {
@@ -766,6 +775,7 @@ export function Loops() {
   const snapshotError = createMemo(() => currentSnapshotResult()?.error)
   const detail = createMemo(() => currentSnapshot()?.workflow ?? selected())
   const frame = createMemo(() => loopRouteFrameLayout(dimensions().width))
+  const deck = createMemo(() => commandDeckLayout(dimensions()))
   const width = createMemo(() => frame().width)
   const narrow = createMemo(() => frame().narrow)
   const stacked = createMemo(() => frame().stacked)
@@ -1038,28 +1048,79 @@ export function Loops() {
   })
 
   return (
-    <box flexDirection="column" width="100%" height="100%" paddingLeft={frame().paddingX} paddingRight={frame().paddingX} paddingTop={frame().compact ? 0 : 1} paddingBottom={frame().compact ? 0 : 1} gap={frame().compact ? 0 : 1}>
-      <Header scope={scope()} view={view()} scheduledCount={activeCounts().scheduled} blockedCount={activeCounts().blocked} historyCount={historyCount()} width={width()} narrow={narrow()} compact={frame().compact} />
+    <Show when={deck().wide} fallback={
+      <box flexDirection="column" width="100%" height="100%" paddingLeft={frame().paddingX} paddingRight={frame().paddingX} paddingTop={frame().compact ? 0 : 1} paddingBottom={frame().compact ? 0 : 1} gap={frame().compact ? 0 : 1}>
+        <Header scope={scope()} view={view()} scheduledCount={activeCounts().scheduled} blockedCount={activeCounts().blocked} historyCount={historyCount()} width={width()} narrow={narrow()} compact={frame().compact} />
 
-      <Show
-        when={allLoops().length}
-        fallback={<EmptyState loading={loops.loading} error={listError()} historyCount={historyCount()} view={view()} />}
+        <Show
+          when={allLoops().length}
+          fallback={<EmptyState loading={loops.loading} error={listError()} historyCount={historyCount()} view={view()} />}
+        >
+          <Show
+            when={!stacked()}
+            fallback={<StackedView scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} detail={detail()} detailRows={detailRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={width()} compact={frame().compact} />}
+          >
+            <box flexDirection="row" flexGrow={1} minHeight={0} gap={1}>
+              <box width={listWidth()} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
+                <LoopList scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} width={listWidth() - 4} compact={frame().compact} />
+              </box>
+              <box flexGrow={1} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
+                <LoopDetail detail={detail()} rows={detailRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={detailWidth() - 4} />
+              </box>
+            </box>
+          </Show>
+        </Show>
+      </box>
+    }>
+      <CommandDeck
+        page="loops"
+        subtitle={() => `${scope() === "project" ? "current project" : "all projects"} · ${view() === "active" ? "scheduled + blocked" : "history · newest first"}`}
+        status={() => listError() ? "ERROR" : loops.loading ? "LOADING" : "LIVE"}
+         summary={() => `active ${activeCounts().scheduled} · blocked ${activeCounts().blocked} · history ${historyCount()}`}
+        footer="↑↓ Select   Enter Open   h History   r Refresh   / Find   ? Help   q Back"
+         rail={
+          <LoopList
+            scope={scope()}
+            view={view()}
+            items={visibleLoops()}
+            pagination={view() === "history" ? historyPageData() : undefined}
+            selected={selected()}
+            select={setSelectedID}
+            width={Math.max(14, deck().railWidth - 4)}
+            compact
+          />
+        }
+        context={
+          <CommandDeckContext
+            title={detail()?.name || detail()?.objective || detail()?.id || "Selected loop"}
+            rows={[
+              ["state", detail() ? stateLabel(detail()!) : "none"],
+              ["phase", detail()?.phase ?? "none"],
+              ["next", detail() ? loopWakeupLabel(detail()!) : "none"],
+              ["model", detail() ? modelLabel(sync.data.provider, detail()!, currentSnapshot()?.rootSession) : "none"],
+              ["agent", detail()?.spec?.agent ?? "default"],
+              ["runs", String(runs().length)],
+            ]}
+          >
+            <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column" gap={1}>
+              <text fg={theme.textMuted} wrapMode="none">ACTIONS</text>
+              <text fg={theme.text} wrapMode="none">o Open chat</text>
+              <text fg={theme.text} wrapMode="none">p Pause · u Resume</text>
+              <text fg={theme.text} wrapMode="none">s Stop (confirm)</text>
+            </box>
+          </CommandDeckContext>
+        }
       >
         <Show
-          when={!stacked()}
-          fallback={<StackedView scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} detail={detail()} detailRows={detailRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={width()} compact={frame().compact} />}
+          when={allLoops().length}
+          fallback={<EmptyState loading={loops.loading} error={listError()} historyCount={historyCount()} view={view()} />}
         >
-          <box flexDirection="row" flexGrow={1} minHeight={0} gap={1}>
-            <box width={listWidth()} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-              <LoopList scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} width={listWidth() - 4} compact={frame().compact} />
-            </box>
-            <box flexGrow={1} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-              <LoopDetail detail={detail()} rows={detailRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={detailWidth() - 4} />
-            </box>
+          <box flexDirection="column" minHeight={0} flexGrow={1} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
+            <LoopDetail detail={detail()} rows={detailRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={Math.max(30, deck().contentWidth - 4)} />
           </box>
         </Show>
-      </Show>
-    </box>
+      </CommandDeck>
+    </Show>
   )
 }
 
@@ -1189,6 +1250,10 @@ function LoopDetail(props: {
   width: number
 }) {
   const { theme } = useTheme()
+  const stopMousePropagation = (event?: unknown) => {
+    const maybeEvent = event as { stopPropagation?: () => void } | undefined
+    maybeEvent?.stopPropagation?.()
+  }
   const eventRows = createMemo(() => props.events.length * 3)
   const eventViewportHeight = createMemo(() => Math.min(18, Math.max(3, eventRows())))
   const eventScrollbarVisible = createMemo(() => eventRows() > eventViewportHeight())
@@ -1287,6 +1352,7 @@ function LoopDetail(props: {
                     <scrollbox
                       height={eventViewportHeight()}
                       horizontalScrollbarOptions={{ visible: false }}
+                      onMouseScroll={stopMousePropagation}
                       verticalScrollbarOptions={{
                         visible: true,
                         trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border },

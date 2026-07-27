@@ -59,14 +59,20 @@ export const TUI_SESSION_MESSAGE_SYNC_LIMIT = 50
 export const TUI_SESSION_MESSAGE_PAGE_WINDOW = 3
 export const TUI_SESSION_MESSAGE_STORE_LIMIT = TUI_SESSION_MESSAGE_SYNC_LIMIT * TUI_SESSION_MESSAGE_PAGE_WINDOW
 export const TUI_SESSION_MESSAGE_PART_SYNC_LIMIT = 96
+export const TUI_SESSION_MESSAGE_PART_STORE_LIMIT = 256
 export const COMPACTED_TOOL_CALLS_KV_KEY = "compacted_tool_calls_visible"
 const TUI_TEXT_PREVIEW_CHARS = 128 * 1024
 const TUI_TOOL_OUTPUT_PREVIEW_CHARS = 16 * 1024
 const TUI_METADATA_PREVIEW_CHARS = 4 * 1024
-const TUI_DIFF_PREVIEW_CHARS = 3 * TUI_METADATA_PREVIEW_CHARS
+const TUI_DIFF_PREVIEW_CHARS = 512 * 1024
+const TUI_CONTENT_PREVIEW_CHARS = 512 * 1024
 const TUI_FIELD_PREVIEW_CHARS = 2 * 1024
 const TUI_PATCH_FILE_LIMIT = 256
 const TUI_PREVIEW_ARRAY_LIMIT = 8
+const TUI_PENDING_PART_DELTA_SESSION_LIMIT = 4
+const TUI_PENDING_PART_DELTA_MESSAGE_LIMIT = 16
+const TUI_PENDING_PART_DELTA_PART_LIMIT = 4
+const TUI_PENDING_PART_DELTA_FIELD_LIMIT = 4
 const trace = Log.create({ service: "tui.sync" })
 
 function previewString(input: string | undefined, maxChars: number, label: string) {
@@ -88,29 +94,31 @@ function previewDiff(input: string) {
   return `${input.slice(0, head)}${marker}${input.slice(input.length - (budget - head))}`
 }
 
-function previewUnknown(input: unknown, maxChars: number, label: string, depth = 0): unknown {
+function previewUnknown(input: unknown, maxChars: number, label: string, depth = 0, preserveCurrentArray = false): unknown {
   if (typeof input === "string") return previewString(input, maxChars, label)
   if (!input || typeof input !== "object") return input
   if (depth >= 4) return "[nested value omitted]"
   if (Array.isArray(input)) {
     const itemLimit = Math.min(TUI_PREVIEW_ARRAY_LIMIT, Math.max(1, Math.floor(maxChars / 1024)))
     const itemMaxChars = Math.max(256, Math.floor(maxChars / itemLimit))
-    return input.slice(0, itemLimit).map((item) => previewUnknown(item, itemMaxChars, label, depth + 1))
+    const items = preserveCurrentArray ? input : input.slice(0, itemLimit)
+    return items.map((item) => previewUnknown(item, itemMaxChars, label, depth + 1))
   }
 
   const result: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(input)) {
     const diffLike = key === "diff" || key === "patch"
-    const nextMax =
-      diffLike || key === "output" || key === "content"
-        ? diffLike
-          ? TUI_DIFF_PREVIEW_CHARS
-          : maxChars
-        : Math.min(maxChars, TUI_FIELD_PREVIEW_CHARS)
+    const nextMax = diffLike
+      ? TUI_DIFF_PREVIEW_CHARS
+      : key === "content"
+        ? TUI_CONTENT_PREVIEW_CHARS
+        : key === "output"
+          ? maxChars
+          : Math.min(maxChars, TUI_FIELD_PREVIEW_CHARS)
     result[key] =
       diffLike && typeof value === "string"
         ? previewDiff(value)
-        : previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
+        : previewUnknown(value, nextMax, `${label}.${key}`, depth + 1, key === "todos")
   }
   return result
 }
@@ -203,8 +211,17 @@ function preserveLivePart(current: Part, incoming: Part) {
   return preserveRunningShellOutput(current, preserveAppendOnlyPartText(current, incoming))
 }
 
+function trimStoredParts(parts: Part[]) {
+  if (parts.length <= TUI_SESSION_MESSAGE_PART_STORE_LIMIT) return parts
+  const head = Math.min(32, Math.floor(TUI_SESSION_MESSAGE_PART_STORE_LIMIT / 4))
+  return [
+    ...parts.slice(0, head),
+    ...parts.slice(parts.length - (TUI_SESSION_MESSAGE_PART_STORE_LIMIT - head)),
+  ]
+}
+
 function mergeFetchedParts(current: Part[] | undefined, incoming: Part[]) {
-  if (!current?.length) return incoming
+  if (!current?.length) return trimStoredParts(incoming)
 
   const currentByID = new Map(current.map((part) => [part.id, part]))
   const seen = new Set<string>()
@@ -219,7 +236,7 @@ function mergeFetchedParts(current: Part[] | undefined, incoming: Part[]) {
     merged.push(part)
   }
 
-  return merged.toSorted((a, b) => a.id.localeCompare(b.id))
+  return trimStoredParts(merged.toSorted((a, b) => a.id.localeCompare(b.id)))
 }
 
 function mergeMessageInfo(current: Message | undefined, incoming: Message): Message {
@@ -247,6 +264,8 @@ type SessionMessagePageItem = {
   partsMore?: boolean
   partsCursor?: string
 }
+
+type FullToolPart = Extract<Part, { type: "tool" }>
 
 function normalizeSessionMessages(messages: readonly Message[]) {
   const byID = new Map<string, Message>()
@@ -517,6 +536,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     const pinnedSessionMessages = new Map<string, Set<string>>()
     const removedSessionMessages = new Map<string, Set<string>>()
     const pendingPartDeltas = new Map<string, Map<string, Map<string, Map<string, string>>>>()
+    const fullMessageRequests = new Map<string, Promise<SessionMessagePageItem>>()
     const sessionStatusTimers = new Map<string, Timer>()
     let syncedWorkspace = project.workspace.current()
     let bootstrapGeneration = 0
@@ -612,6 +632,32 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       return (await response.json()) as SessionMessagePageItem
     }
 
+    async function fetchFullSessionMessage(input: { sessionID: string; messageID: string }) {
+      const url = new URL(
+        `/session/${encodeURIComponent(input.sessionID)}/message/${encodeURIComponent(input.messageID)}`,
+        sdk.url,
+      )
+      url.searchParams.set("view", "full")
+      if (sdk.directory) url.searchParams.set("directory", sdk.directory)
+      const response = await sdk.fetch(url.toString(), { headers: sdk.headers })
+      if (!response.ok) throw new Error(`full session message failed: ${response.status} ${response.statusText}`)
+      return (await response.json()) as SessionMessagePageItem
+    }
+
+    async function loadFullToolPart(sessionID: string, messageID: string, partID: string) {
+      const key = `${sessionID}\u0000${messageID}`
+      const current = fullMessageRequests.get(key)
+      const request = current ?? fetchFullSessionMessage({ sessionID, messageID })
+      if (!current) fullMessageRequests.set(key, request)
+      try {
+        const item = await request
+        if (item.info.sessionID !== sessionID || item.info.id !== messageID) return undefined
+        return item.parts.find((part): part is FullToolPart => part.type === "tool" && part.id === partID)
+      } finally {
+        if (fullMessageRequests.get(key) === request) fullMessageRequests.delete(key)
+      }
+    }
+
     async function fetchSessionMessageWindow(sessionID: string) {
       const first = await fetchSessionMessagePage({ sessionID, limit: TUI_SESSION_MESSAGE_SYNC_LIMIT })
       let items = first.items
@@ -682,6 +728,45 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       pendingPartDeltas.delete(sessionID)
     }
 
+    function prunePendingPartDeltas(sessionID: string) {
+      const byMessage = pendingPartDeltas.get(sessionID)
+      if (!byMessage) return
+
+      while (byMessage.size > TUI_PENDING_PART_DELTA_MESSAGE_LIMIT) {
+        const oldest = byMessage.keys().next().value
+        if (!oldest) break
+        byMessage.delete(oldest)
+      }
+
+      for (const [messageID, byPart] of byMessage) {
+        while (byPart.size > TUI_PENDING_PART_DELTA_PART_LIMIT) {
+          const oldest = byPart.keys().next().value
+          if (!oldest) break
+          byPart.delete(oldest)
+        }
+        for (const [partID, fields] of byPart) {
+          while (fields.size > TUI_PENDING_PART_DELTA_FIELD_LIMIT) {
+            const oldest = fields.keys().next().value
+            if (!oldest) break
+            fields.delete(oldest)
+          }
+          if (fields.size === 0) byPart.delete(partID)
+        }
+        if (byPart.size === 0) byMessage.delete(messageID)
+      }
+
+      if (byMessage.size === 0) {
+        pendingPartDeltas.delete(sessionID)
+        return
+      }
+
+      while (pendingPartDeltas.size > TUI_PENDING_PART_DELTA_SESSION_LIMIT) {
+        const oldest = [...pendingPartDeltas.keys()].find((id) => id !== activeSessionID)
+        if (!oldest) break
+        pendingPartDeltas.delete(oldest)
+      }
+    }
+
     function queuePartDelta(sessionID: string, messageID: string, partID: string, field: string, delta: string) {
       const byMessage = pendingPartDeltas.get(sessionID) ?? new Map<string, Map<string, Map<string, string>>>()
       const byPart = byMessage.get(messageID) ?? new Map<string, Map<string, string>>()
@@ -691,6 +776,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       byPart.set(partID, fields)
       byMessage.set(messageID, byPart)
       pendingPartDeltas.set(sessionID, byMessage)
+      prunePendingPartDeltas(sessionID)
     }
 
     function applyPendingPartDeltas(part: Part) {
@@ -833,6 +919,38 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       removed.add(messageID)
       removedSessionMessages.set(sessionID, removed)
       return removed
+    }
+
+    function removeLoadedSessionMessage(sessionID: string, messageID: string) {
+      const messages = store.message[sessionID]
+      if (!messages) {
+        clearPendingPartDeltas(sessionID, messageID)
+        return
+      }
+      const index = messages.findIndex((message) => message.id === messageID)
+      if (index < 0) {
+        clearPendingPartDeltas(sessionID, messageID)
+        return
+      }
+      batch(() => {
+        setStore(
+          "message",
+          sessionID,
+          produce((draft) => {
+            draft.splice(index, 1)
+          }),
+        )
+        setStore(
+          "part",
+          produce((draft) => delete draft[messageID]),
+        )
+        setStore(
+          "message_part_paging",
+          produce((draft) => delete draft[messageID]),
+        )
+      })
+      clearPendingPartDeltas(sessionID, messageID)
+      recomputeLatestAssistant(sessionID)
     }
 
     function applySessionMessagePage(input: {
@@ -1026,11 +1144,19 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       if (pendingInputRefreshTimer) clearTimeout(pendingInputRefreshTimer)
       for (const timer of sessionStatusTimers.values()) clearTimeout(timer)
       sessionStatusTimers.clear()
+      unsubscribeEvent()
       sessionCacheSeen.clear()
+      sessionMessagePaging.clear()
+      sessionMessageSyncGeneration.clear()
+      sessionMessageSyncQueued.clear()
+      pendingPartDeltas.clear()
+      fullMessageRequests.clear()
+      pinnedSessionMessages.clear()
+      removedSessionMessages.clear()
       activeSessionID = undefined
     })
 
-    event.subscribe((event) => {
+    const unsubscribeEvent = event.subscribe((event) => {
       const eventProperties = (event as { properties?: Record<string, unknown> }).properties
       trace.trace("event", {
         id: typeof (event as { id?: unknown }).id === "string" ? (event as { id: string }).id : undefined,
@@ -1072,7 +1198,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
       switch (event.type) {
         case "server.instance.disposed":
-          void bootstrap()
+          void bootstrap({ fatal: false })
           break
         case "permission.replied": {
           const requests = store.permission[event.properties.sessionID]
@@ -1371,33 +1497,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             if (pinned?.size === 0) pinnedSessionMessages.delete(sessionID)
           }
           if (!isRevertRemoval && pinnedSessionMessages.get(sessionID)?.has(messageID)) break
-          const messages = store.message[sessionID]
-          if (!messages) {
-            clearPendingPartDeltas(sessionID, messageID)
-            break
-          }
-          const index = messages.findIndex((message) => message.id === messageID)
-          if (index >= 0) {
-            batch(() => {
-              setStore(
-                "message",
-                sessionID,
-                produce((draft) => {
-                  draft.splice(index, 1)
-                }),
-              )
-              setStore(
-                "part",
-                produce((draft) => delete draft[messageID]),
-              )
-              setStore(
-                "message_part_paging",
-                produce((draft) => delete draft[messageID]),
-              )
-            })
-            clearPendingPartDeltas(sessionID, messageID)
-            recomputeLatestAssistant(sessionID)
-          }
+          removeLoadedSessionMessage(sessionID, messageID)
           break
         }
         case "message.part.updated": {
@@ -1408,6 +1508,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             type: event.properties.part.type,
           })
           if (removedSessionMessages.get(event.properties.part.sessionID)?.has(event.properties.part.messageID)) break
+          const loadedMessage = (store.message[event.properties.part.sessionID] ?? []).some(
+            (message) => message.id === event.properties.part.messageID,
+          )
+          if (!loadedMessage && !store.part[event.properties.part.messageID]) {
+            clearPendingPartDeltas(event.properties.part.sessionID, event.properties.part.messageID)
+            break
+          }
           const incomingPart = previewPartForStore(applyPendingPartDeltas(event.properties.part))
           const parts = store.part[event.properties.part.messageID]
           if (!parts) {
@@ -1420,18 +1527,23 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             setStore("part", event.properties.part.messageID, result.index, reconcile(next))
             break
           }
-          setStore(
-            "part",
-            event.properties.part.messageID,
-            produce((draft) => {
-              draft.splice(result.index, 0, incomingPart)
-            }),
-          )
+          setStore("part", event.properties.part.messageID, reconcile(trimStoredParts([
+            ...parts.slice(0, result.index),
+            incomingPart,
+            ...parts.slice(result.index),
+          ])))
           break
         }
 
         case "message.part.delta": {
           if (removedSessionMessages.get(event.properties.sessionID)?.has(event.properties.messageID)) break
+          const loadedMessage = (store.message[event.properties.sessionID] ?? []).some(
+            (message) => message.id === event.properties.messageID,
+          )
+          if (!loadedMessage && !store.part[event.properties.messageID]) {
+            clearPendingPartDeltas(event.properties.sessionID, event.properties.messageID)
+            break
+          }
           const parts = store.part[event.properties.messageID]
           if (!parts) {
             queuePartDelta(
@@ -1650,12 +1762,12 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         })
         .catch(async (e) => {
           await reportBootstrapError(e)
-          if (!fatal) throw e
+          if (fatal) throw e
         })
     }
 
     onMount(() => {
-      void bootstrap()
+      void bootstrap({ fatal: false })
     })
 
     const result = {
@@ -1684,6 +1796,17 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           if (!pinned) return
           pinned.delete(messageID)
           if (pinned.size === 0) pinnedSessionMessages.delete(sessionID)
+        },
+        removeMessage(sessionID: string, messageID: string) {
+          markSessionMessageRemoved(sessionID, messageID)
+          removeLoadedSessionMessage(sessionID, messageID)
+        },
+        async restoreMessage(sessionID: string, messageID: string) {
+          const removed = removedSessionMessages.get(sessionID)
+          if (!removed?.delete(messageID)) return
+          if (removed.size === 0) removedSessionMessages.delete(sessionID)
+          sessionMessagePaging.delete(sessionID)
+          await result.session.sync(sessionID, { force: true })
         },
         async reloadMessages(sessionID: string) {
           touchSessionCache(sessionID, true)
@@ -1769,6 +1892,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             throw error
           }
         },
+        loadFullToolPart,
         async loadOlder(sessionID: string) {
           touchSessionCache(sessionID, true)
           const page = sessionMessagePaging.get(sessionID)
@@ -1918,6 +2042,19 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       },
       bootstrap,
     }
+
+    const unsubscribeConnection = sdk.event.on("event", (event) => {
+      if (event.payload.type !== "server.connected" || !sdk.connection.recoveringSince) return
+      const sessionID = activeSessionID
+      void bootstrap({ fatal: false })
+        .then(() => (sessionID ? result.session.sync(sessionID, { force: true }) : undefined))
+        .catch((error) => {
+          Log.Default.warn("tui recovery refresh failed", {
+            error: error instanceof Error ? error.message : String(error),
+          })
+        })
+    })
+    onCleanup(unsubscribeConnection)
     return result
   },
 })

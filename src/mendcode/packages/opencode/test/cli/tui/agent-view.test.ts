@@ -7,6 +7,10 @@ import {
   countAgentViewCommands,
   formatAgentViewOrchestrationSummary,
   agentViewCommandTouchesSession,
+  agentViewLoopRootSessionIDs,
+  filterAgentViewLoopSessions,
+  isAgentViewCompletedLoop,
+  isAgentViewLoopSession,
   isAgentViewCommandActionable,
   isAgentViewSessionFallbackVisible,
   isAgentViewSessionVisible,
@@ -53,6 +57,37 @@ describe("Agent View visibility", () => {
     expect(formatAgentViewPathLabel("C:\\Users\\obed\\Code\\MendCode")).toBe("Code/MendCode")
     expect(formatAgentViewDetailLabel("/Users/obed/Code/MendCode")).toBe("Code/MendCode")
     expect(formatAgentViewDetailLabel("Loop active: ready")).toBe("Loop active: ready")
+  })
+
+  test("keeps every workflow root classified as a loop, including paused and old manual roots", () => {
+    const roots = agentViewLoopRootSessionIDs([
+      { rootSessionID: "ses_paused_manual" },
+      { rootSessionID: "ses_old_manual" },
+      { rootSessionID: undefined },
+    ])
+
+    expect(isAgentViewLoopSession({ sessionID: "ses_paused_manual", title: "A normal-looking title", loopRootSessionIDs: roots })).toBe(true)
+    expect(isAgentViewLoopSession({ sessionID: "ses_old_manual", title: "Another title", loopRootSessionIDs: roots })).toBe(true)
+    expect(isAgentViewLoopSession({ sessionID: "ses_title_fallback", title: "Loop: legacy root", loopRootSessionIDs: roots })).toBe(true)
+    expect(isAgentViewLoopSession({ sessionID: "ses_summary_fallback", title: "legacy root", summary: "Loop paused: paused", loopRootSessionIDs: roots })).toBe(true)
+  })
+
+  test("filters loop roots out of the regular session list", () => {
+    const roots = agentViewLoopRootSessionIDs([{ rootSessionID: "ses_loop" }])
+    const sessions = [
+      { id: "ses_loop", title: "Manual loop" },
+      { id: "ses_legacy", title: "Loop: old root" },
+      { id: "ses_chat", title: "Normal chat" },
+    ]
+
+    expect(filterAgentViewLoopSessions(sessions, roots)).toEqual([{ id: "ses_chat", title: "Normal chat" }])
+  })
+
+  test("identifies completed loop rows without hiding failed or paused loops", () => {
+    expect(isAgentViewCompletedLoop({ state: "completed" })).toBe(true)
+    expect(isAgentViewCompletedLoop({ summary: "Loop completed: completed" })).toBe(true)
+    expect(isAgentViewCompletedLoop({ state: "failed", summary: "Loop failed: terminal" })).toBe(false)
+    expect(isAgentViewCompletedLoop({ state: "paused", summary: "Loop paused: paused" })).toBe(false)
   })
 
   test("hides completed temp sessions but keeps active or awaiting rows", () => {

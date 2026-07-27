@@ -38,7 +38,7 @@ import {
   webSearchUrlLines,
   wrapTimelineLine,
 } from "@/mend/tui/timeline/normalize"
-import { TimelineDiff } from "@/cli/cmd/tui/routes/session/renderers/diff"
+import { TimelineCode, TimelineDiff } from "@/cli/cmd/tui/routes/session/renderers/diff"
 import { diffStatsFromPatch, formatDiffStats, patchFileTitle } from "@/cli/cmd/tui/routes/session/renderers/diff-label"
 import { formatDuration } from "@/util/format"
 import {
@@ -56,11 +56,12 @@ import {
   renderPlanMarkdown,
   renderPlanMarkdownStatic,
   renderStreamingMarkdownTail,
-} from "@/cli/cmd/tui/util/plan-markdown"
+} from "@/cli/cmd/tui/util/markdown-render"
 import { StyledPlanMarkdown } from "@/cli/cmd/tui/component/styled-plan-markdown"
 import { CompactionPanel } from "@/cli/cmd/tui/component/compaction-panel"
 import { visibleUserMessageText } from "@/cli/cmd/tui/routes/session/user-message-display"
 import { MemoryGraphCanvasRows, memoryGraphMiniMap } from "@/cli/cmd/tui/routes/memory"
+import { compactMemoryGraphRows, compactMemoryGraphSnapshot } from "@/cli/cmd/tui/util/memory-graph"
 
 const id = "internal:session-v2-debug"
 const route = "session.v2.messages"
@@ -184,6 +185,7 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
                   </Match>
                   <Match when={message.type === "assistant"}>
                     <AssistantMessage
+                      sessionID={props.sessionID}
                       message={message as SessionMessageAssistant}
                       last={lastAssistant()?.id === message.id}
                       syntax={syntax()}
@@ -421,6 +423,7 @@ function UnknownMessage(props: { message: SessionMessage }) {
 }
 
 function AssistantMessage(props: {
+  sessionID: string
   message: SessionMessageAssistant
   last: boolean
   syntax: SyntaxStyle
@@ -461,7 +464,11 @@ function AssistantMessage(props: {
               />
             </Match>
             <Match when={part.type === "tool"}>
-              <AssistantTool part={part as SessionMessageAssistantTool} />
+              <AssistantTool
+                sessionID={props.sessionID}
+                messageID={props.message.id}
+                part={part as SessionMessageAssistantTool}
+              />
             </Match>
           </Switch>
         )}
@@ -701,7 +708,7 @@ function ReasoningHeader(props: { done: boolean; title: string | null }) {
   )
 }
 
-function AssistantTool(props: { part: SessionMessageAssistantTool }) {
+function AssistantTool(props: { sessionID: string; messageID: string; part: SessionMessageAssistantTool }) {
   const mend = useMendTuiProfile()
   const input = createMemo(() => toolInputRecord(props.part.state.input))
   const rowOnly = createMemo(() => {
@@ -721,6 +728,8 @@ function AssistantTool(props: { part: SessionMessageAssistantTool }) {
     get output() {
       return props.part.state.status === "pending" ? undefined : toolOutput(props.part.state.content)
     },
+    sessionID: props.sessionID,
+    messageID: props.messageID,
     part: props.part,
   }
   return (
@@ -894,10 +903,38 @@ function PresentationToolRow(props: {
 }
 
 type ToolProps = {
+  sessionID: string
+  messageID: string
   input: Record<string, unknown>
   metadata: Record<string, unknown>
   output?: string
   part: SessionMessageAssistantTool
+}
+
+function fullToolMetadata(part: unknown) {
+  if (!isRecord(part) || !isRecord(part.state) || !isRecord(part.state.metadata)) return undefined
+  return part.state.metadata
+}
+
+function fullToolMetadataString(part: unknown, key: string) {
+  const value = fullToolMetadata(part)?.[key]
+  return typeof value === "string" ? value : undefined
+}
+
+function fullToolInputString(part: unknown, key: string) {
+  if (!isRecord(part) || !isRecord(part.state) || !isRecord(part.state.input)) return undefined
+  const value = part.state.input[key]
+  return typeof value === "string" ? value : undefined
+}
+
+function fullToolMetadataPatch(part: unknown, filePath: string) {
+  const files = fullToolMetadata(part)?.files
+  if (!Array.isArray(files)) return undefined
+  const file = files.find((item) => {
+    if (!isRecord(item)) return false
+    return [item.filePath, item.movePath, item.relativePath].some((value) => value === filePath)
+  })
+  return isRecord(file) && typeof file.patch === "string" ? file.patch : undefined
 }
 
 function GenericTool(props: ToolProps) {
@@ -1305,8 +1342,13 @@ function WebSearch(props: ToolProps) {
 
 function Write(props: ToolProps) {
   const { theme, syntax } = useTheme()
+  const sync = useSync()
   const filePath = createMemo(() => stringValue(props.input.filePath) ?? "")
   const content = createMemo(() => stringValue(props.input.content) ?? "")
+  const loadFullContent = () =>
+    sync.session
+      .loadFullToolPart(props.sessionID, props.messageID, props.part.id)
+      .then((part) => fullToolInputString(part, "content"))
   return (
     <Switch>
       <Match when={content() && props.part.state.status === "completed"}>
@@ -1317,17 +1359,15 @@ function Write(props: ToolProps) {
           contentGap={0}
           paddingBottom={0}
         >
-          <box backgroundColor={theme.diffAddedBg}>
-            <line_number fg={theme.diffHighlightAdded} minWidth={3} paddingRight={1}>
-              <code
-                conceal={false}
-                fg={theme.text}
-                filetype={filetype(filePath())}
-                syntaxStyle={syntax()}
-                content={content()}
-              />
-            </line_number>
-          </box>
+          <TimelineCode
+            content={content()}
+            filetype={filetype(filePath())}
+            syntaxStyle={syntax()}
+            foregroundColor={theme.text}
+            lineNumberColor={theme.diffHighlightAdded}
+            backgroundColor={theme.diffAddedBg}
+            loadFull={loadFullContent}
+          />
           <Diagnostics diagnostics={props.metadata.diagnostics} filePath={filePath()} />
         </BlockTool>
       </Match>
@@ -1342,16 +1382,26 @@ function Write(props: ToolProps) {
 
 function Edit(props: ToolProps) {
   const { syntax } = useTheme()
+  const sync = useSync()
   const filePath = createMemo(() => stringValue(props.input.filePath) ?? "")
   const diff = createMemo(() => stringValue(props.metadata.diff))
   const title = createMemo(() => `Edited ${normalizePath(filePath())} ${formatDiffStats(diffStatsFromPatch(diff() ?? ""))}`.trim())
+  const loadFullDiff = () =>
+    sync.session
+      .loadFullToolPart(props.sessionID, props.messageID, props.part.id)
+      .then((part) => fullToolMetadataString(part, "diff"))
   return (
     <Switch>
       <Match when={diff()}>
         {(diff) => (
           <BlockTool title={title()} part={props.part} contentGap={0} paddingBottom={0}>
             <box>
-              <TimelineDiff diff={diff()} filetype={filetype(filePath())} syntaxStyle={syntax()} />
+              <TimelineDiff
+                diff={diff()}
+                filetype={filetype(filePath())}
+                syntaxStyle={syntax()}
+                loadFull={loadFullDiff}
+              />
             </box>
             <Diagnostics diagnostics={props.metadata.diagnostics} filePath={filePath()} />
           </BlockTool>
@@ -1368,6 +1418,7 @@ function Edit(props: ToolProps) {
 
 function ApplyPatch(props: ToolProps) {
   const { syntax, theme } = useTheme()
+  const sync = useSync()
   const files = createMemo(() => arrayValue(props.metadata.files).flatMap((item) => (isRecord(item) ? [item] : [])))
   const fullDiff = createMemo(() => stringValue(props.metadata.diff))
   const fileTitle = (file: Record<string, unknown>) => {
@@ -1380,6 +1431,10 @@ function ApplyPatch(props: ToolProps) {
     return undefined
   }
   const patchForFile = (file: Record<string, unknown>) => stringValue(file.patch) ?? fullDiff()
+  const loadFullPatch = (filePath: string) =>
+    sync.session
+      .loadFullToolPart(props.sessionID, props.messageID, props.part.id)
+      .then((part) => fullToolMetadataPatch(part, filePath))
   return (
     <Switch>
       <Match when={files().length > 0}>
@@ -1398,6 +1453,7 @@ function ApplyPatch(props: ToolProps) {
                   view="unified"
                   filetype={filetype(stringValue(file.filePath) ?? stringValue(file.relativePath))}
                   syntaxStyle={syntax()}
+                  loadFull={() => loadFullPatch(stringValue(file.filePath) ?? stringValue(file.relativePath) ?? "")}
                 />
               </box>
             </BlockTool>
@@ -1507,27 +1563,11 @@ function Skill(props: ToolProps) {
   )
 }
 
-type MemoryGraphSnapshot = {
-  action?: string
-  query?: string
-  health?: { graphHealth?: string; connectedFacts?: number; isolatedFacts?: number; orphanLinks?: number }
-  facts: Array<{ id: string; text: string; scope: string; categoryIDs: string[]; retrievalPriority?: number; materialized?: boolean }>
-  links: Array<{ from: string; to: string; kind: string }>
-  categories: Array<{ id: string; label: string; count: number }>
-}
-
-function memoryGraphSnapshot(value: unknown): MemoryGraphSnapshot | undefined {
-  if (!value || typeof value !== "object") return
-  const record = value as Partial<MemoryGraphSnapshot>
-  if (!Array.isArray(record.facts) || !Array.isArray(record.links) || !Array.isArray(record.categories)) return
-  return record as MemoryGraphSnapshot
-}
-
 function MemoryGraph(props: ToolProps) {
   const dimensions = useTerminalDimensions()
   const { theme } = useTheme()
   const route = useRoute()
-  const snapshot = createMemo(() => memoryGraphSnapshot(props.metadata.graphSnapshot))
+  const snapshot = createMemo(() => compactMemoryGraphSnapshot(props.metadata.graphSnapshot))
   const panelWidth = createMemo(() => Math.max(40, Math.min(72, dimensions().width - 12)))
   const mapWidth = createMemo(() => Math.max(24, panelWidth() - 4))
   const graph = createMemo(() => {
@@ -1539,7 +1579,7 @@ function MemoryGraph(props: ToolProps) {
       categories: data.categories,
       width: mapWidth(),
       height: panelWidth() < 54 ? 5 : 6,
-      connectedOnly: true,
+      connectedOnly: false,
     })
   })
   const title = createMemo(() => {
@@ -1563,11 +1603,8 @@ function MemoryGraph(props: ToolProps) {
     return `${state} · ${frame.stats} · ${frame.scene.edges.length} links`
   })
   const detailRows = createMemo(() => {
-    const frame = graph()
-    if (!frame) return []
-    if (frame.relationRows.length) return frame.relationRows.slice(0, 2)
-    if (frame.isolatedRows.length) return frame.isolatedRows.slice(0, 2)
-    return frame.labels.slice(0, 2)
+    const data = snapshot()
+    return data ? compactMemoryGraphRows(data, panelWidth() - 2) : []
   })
   const openGraph = () => route.navigate({
     type: "memory",
@@ -1594,7 +1631,7 @@ function MemoryGraph(props: ToolProps) {
           </Show>
           <text fg={healthTone()} wrapMode="none">{short(footer(), panelWidth() - 2)}</text>
           <For each={detailRows()}>
-            {(row) => <text fg={theme.textMuted} wrapMode="none">{short(row, panelWidth() - 2)}</text>}
+            {(row) => <text fg={theme.textMuted} wrapMode="none">{row}</text>}
           </For>
           <text fg={theme.primary} wrapMode="none">Open /memory-graph for the full view</text>
         </box>

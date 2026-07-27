@@ -39,9 +39,11 @@ export function resolveDualReadDbPathFromLayout(
 ) {
   const mend = mendChannelDbPath(dataDir, installationChannel, disableChannelDb)
   const legacy = legacyChannelDbPath(dataDir, installationChannel, disableChannelDb)
+  const mendLocal = mendChannelDbPath(dataDir, "local", disableChannelDb)
   const baseMend = path.join(dataDir, "mendcode.db")
   const baseLegacy = path.join(dataDir, "opencode.db")
   if (existsSync(mend)) return mend
+  if (existsSync(mendLocal)) return mendLocal
   if (existsSync(legacy)) return legacy
   if (existsSync(baseMend)) return baseMend
   if (existsSync(baseLegacy)) return baseLegacy

@@ -16,6 +16,13 @@ const OFFICIAL_PLUGIN_FILENAME = "herdr-agent-state.js"
 
 let reportSeq = Date.now() * 1000
 
+type HerdrPaneChannel = {
+  token: symbol
+  queue: Promise<void>
+}
+
+const herdrPaneChannels = new Map<string, HerdrPaneChannel>()
+
 export type HerdrState = "idle" | "working" | "blocked"
 
 type HerdrEvent = {
@@ -32,6 +39,7 @@ export type HerdrPluginState = {
   currentSessionID?: string
   loopWorkflowsByRootSessionID?: Record<string, TrackedLoopWorkflow>
   activeToolCallsBySessionID?: Record<string, Record<string, ActiveToolCall>>
+  activeTurnSessionIDs?: Record<string, true>
 }
 
 type HerdrAction =
@@ -194,6 +202,57 @@ function clearActiveToolCall(state: HerdrPluginState, input: { sessionID?: strin
 function hasActiveLocalTools(state: HerdrPluginState, sessionID: string | undefined) {
   if (!sessionID) return false
   return Object.keys(state.activeToolCallsBySessionID?.[sessionID] ?? {}).length > 0
+}
+
+function hasActiveTurn(state: HerdrPluginState, sessionID: string | undefined) {
+  if (!sessionID) return false
+  return state.activeTurnSessionIDs?.[sessionID] === true
+}
+
+function rememberActiveTurn(state: HerdrPluginState, sessionID: string | undefined) {
+  if (!sessionID) return
+  state.activeTurnSessionIDs = {
+    ...(state.activeTurnSessionIDs ?? {}),
+    [sessionID]: true,
+  }
+}
+
+function clearActiveTurn(state: HerdrPluginState, sessionID: string | undefined) {
+  if (!sessionID || !state.activeTurnSessionIDs?.[sessionID]) return
+  const next = { ...state.activeTurnSessionIDs }
+  delete next[sessionID]
+  state.activeTurnSessionIDs = Object.keys(next).length > 0 ? next : undefined
+}
+
+function createHerdrReporter() {
+  const paneID = process.env.HERDR_PANE_ID
+  if (!paneID) return undefined
+
+  const channel = herdrPaneChannels.get(paneID) ?? {
+    token: Symbol(),
+    queue: Promise.resolve(),
+  }
+  const token = Symbol()
+  channel.token = token
+  herdrPaneChannels.set(paneID, channel)
+
+  const isCurrent = () => channel.token === token
+  const enqueue = (work: () => Promise<void>) => {
+    const run = channel.queue.catch(() => {}).then(async () => {
+      if (!isCurrent()) return
+      await work()
+    })
+    channel.queue = run.catch(() => {})
+    return run.catch(() => {})
+  }
+
+  return {
+    enqueue,
+    isCurrent,
+    invalidate() {
+      if (isCurrent()) channel.token = Symbol()
+    },
+  }
 }
 
 function stateFromSessionStatus(status: unknown): {
@@ -446,47 +505,65 @@ function reportDisplayAgent() {
   })
 }
 
-async function reportInitialAgentPresence() {
+async function reportInitialAgentPresence(isCurrent: () => boolean) {
+  if (!isCurrent()) return
   await socketRequest("pane.release_agent", {}, LEGACY_IDENTITY)
+  if (!isCurrent()) return
   await requestState("pane.report_agent", { state: "idle" })
+  if (!isCurrent()) return
   await reportDisplayAgent()
 }
 
-async function syncSelectedSessionStatus(input: PluginInput, state: HerdrPluginState, sessionID: string) {
+async function syncSelectedSessionStatus(
+  input: PluginInput,
+  state: HerdrPluginState,
+  sessionID: string,
+  isCurrent: () => boolean,
+) {
   if (await isLoopSession(input.client, state, sessionID)) return
   try {
     const client = input.client
     const response = await client.session.status()
     const reported = stateFromSessionStatus(response.data?.[sessionID]) ?? {
-      state: hasActiveLocalTools(state, sessionID) ? "working" as const : "idle" as const,
+      state: hasActiveLocalTools(state, sessionID) || hasActiveTurn(state, sessionID) ? "working" as const : "idle" as const,
     }
     await applyHerdrAction({
       kind: "report",
-      ...(reported.state === "idle" && hasActiveLocalTools(state, sessionID) ? { state: "working" as const } : reported),
+      ...(reported.state === "idle" && (hasActiveLocalTools(state, sessionID) || hasActiveTurn(state, sessionID))
+        ? { state: "working" as const }
+        : reported),
       sessionID,
-    })
+    }, isCurrent)
   } catch {
     // Ignore sync failures here; live session events still update Herdr.
   }
 }
 
-async function reportCurrentSessionStatus(client: PluginInput["client"], state: HerdrPluginState, sessionID: string, fallback: HerdrState) {
+async function reportCurrentSessionStatus(
+  client: PluginInput["client"],
+  state: HerdrPluginState,
+  sessionID: string,
+  fallback: HerdrState,
+  isCurrent: () => boolean,
+) {
   try {
     const response = await client.session.status()
     const reported = stateFromSessionStatus(response.data?.[sessionID]) ?? {
-      state: hasActiveLocalTools(state, sessionID) ? "working" as const : fallback,
+      state: hasActiveLocalTools(state, sessionID) || hasActiveTurn(state, sessionID) ? "working" as const : fallback,
     }
     await applyHerdrAction({
       kind: "report",
-      ...(reported.state === "idle" && hasActiveLocalTools(state, sessionID) ? { state: "working" as const } : reported),
+      ...(reported.state === "idle" && (hasActiveLocalTools(state, sessionID) || hasActiveTurn(state, sessionID))
+        ? { state: "working" as const }
+        : reported),
       sessionID,
-    })
+    }, isCurrent)
   } catch {
     await applyHerdrAction({
       kind: "report",
-      state: hasActiveLocalTools(state, sessionID) ? "working" : fallback,
+      state: hasActiveLocalTools(state, sessionID) || hasActiveTurn(state, sessionID) ? "working" : fallback,
       sessionID,
-    })
+    }, isCurrent)
   }
 }
 
@@ -502,6 +579,7 @@ async function herdrActionForPluginEvent(
     if (workflow) rememberLoopWorkflow(state, workflow)
     return undefined
   }
+  if (type === "server.instance.disposed" && event.properties?.directory !== input.directory) return undefined
 
   const eventSessionID = sessionIDFromProperties(event.properties)
   const currentSessionID = state.currentSessionID
@@ -516,21 +594,32 @@ async function herdrActionForPluginEvent(
   }
 
   const action = herdrActionForEvent(event, state)
+  if (type === "session.deleted") clearActiveTurn(state, eventSessionID)
+  if (action?.kind === "report" && action.sessionID) {
+    if (action.state === "working") rememberActiveTurn(state, action.sessionID)
+    if (type === "session.idle") clearActiveTurn(state, action.sessionID)
+    if (action.state === "idle" && type !== "session.idle" && hasActiveTurn(state, action.sessionID)) {
+      return { ...action, state: "working" as const }
+    }
+  }
   if (isIdleAction(action) && action.sessionID && hasActiveLocalTools(state, action.sessionID)) {
     return { kind: "report" as const, state: "working" as const, sessionID: action.sessionID }
   }
   return action
 }
 
-async function applyHerdrAction(action: HerdrAction | undefined) {
-  if (!action) return
+async function applyHerdrAction(action: HerdrAction | undefined, isCurrent: () => boolean) {
+  if (!action || !isCurrent()) return
   if (action.kind === "release") {
     await requestState("pane.release_agent", {})
+    if (!isCurrent()) return
     await socketRequest("pane.release_agent", {}, LEGACY_IDENTITY)
+    if (!isCurrent()) return
     await request("pane.release_agent", {})
     return
   }
   await reportDisplayAgent()
+  if (!isCurrent()) return
   if (action.kind === "session") {
     await request("pane.report_agent_session", { agent_session_id: action.sessionID })
     return
@@ -541,6 +630,7 @@ async function applyHerdrAction(action: HerdrAction | undefined) {
     message: action.message,
     custom_status: action.customStatus,
   })
+  if (!isCurrent()) return
   if (action.sessionID) {
     await request("pane.report_agent_session", { agent_session_id: action.sessionID })
   }
@@ -549,61 +639,74 @@ async function applyHerdrAction(action: HerdrAction | undefined) {
 export const HerdrAgentStatePlugin: Plugin = async (input) => {
   if (!shouldEnableHerdrAgentStatePlugin()) return {}
 
+  const reporter = createHerdrReporter()
+  if (!reporter) return {}
   const state: HerdrPluginState = {}
-  await reportInitialAgentPresence()
+  await reporter.enqueue(() => reportInitialAgentPresence(reporter.isCurrent))
 
   return {
-    "chat.message": async ({ sessionID }) => {
-      if (await isLoopSession(input.client, state, sessionID)) return
-      if (!(await shouldHandleHookSession(input.client, state, sessionID))) return
-      state.currentSessionID = sessionID
-      await applyHerdrAction({
-        kind: "session",
-        sessionID,
-      })
-      await applyHerdrAction({
-        kind: "report",
-        state: "working",
-        sessionID,
-      })
-    },
-    "tool.execute.before": async ({ sessionID, callID, tool }) => {
-      const selectedParentID = state.currentSessionID
-      if (
-        selectedParentID &&
-        selectedParentID !== sessionID &&
-        (await selectedChildSessionID(input.client, selectedParentID, sessionID))
-      ) return
-      if (await isLoopSession(input.client, state, sessionID)) return
-      if (!(await shouldHandleHookSession(input.client, state, sessionID))) return
-      state.currentSessionID = sessionID
-      rememberActiveToolCall(state, { sessionID, callID, tool })
-      await applyHerdrAction({
-        kind: "report",
-        state: "working",
-        sessionID,
-      })
-    },
-    "tool.execute.after": async ({ sessionID, callID, tool }) => {
-      const selectedParentID = state.currentSessionID
-      if (
-        selectedParentID &&
-        selectedParentID !== sessionID &&
-        (await selectedChildSessionID(input.client, selectedParentID, sessionID))
-      ) return
-      if (await isLoopSession(input.client, state, sessionID)) return
-      if (!(await shouldHandleHookSession(input.client, state, sessionID))) return
-      state.currentSessionID = sessionID
-      clearActiveToolCall(state, { sessionID, callID, tool })
-      await reportCurrentSessionStatus(input.client, state, sessionID, "idle")
-    },
-    event: async ({ event }) => {
-      const herdrEvent = event as HerdrEvent
-      await applyHerdrAction(await herdrActionForPluginEvent(input, herdrEvent, state))
-      if (herdrEvent.type !== "tui.session.select") return
-      const sessionID = sessionIDFromProperties(herdrEvent.properties)
-      if (!sessionID) return
-      await syncSelectedSessionStatus(input, state, sessionID)
-    },
+    "chat.message": ({ sessionID }) =>
+      reporter.enqueue(async () => {
+        if (await isLoopSession(input.client, state, sessionID)) return
+        if (!(await shouldHandleHookSession(input.client, state, sessionID))) return
+        state.currentSessionID = sessionID
+        rememberActiveTurn(state, sessionID)
+        await applyHerdrAction({
+          kind: "session",
+          sessionID,
+        }, reporter.isCurrent)
+        await applyHerdrAction({
+          kind: "report",
+          state: "working",
+          sessionID,
+        }, reporter.isCurrent)
+      }),
+    "tool.execute.before": ({ sessionID, callID, tool }) =>
+      reporter.enqueue(async () => {
+        const selectedParentID = state.currentSessionID
+        if (
+          selectedParentID &&
+          selectedParentID !== sessionID &&
+          (await selectedChildSessionID(input.client, selectedParentID, sessionID))
+        ) return
+        if (await isLoopSession(input.client, state, sessionID)) return
+        if (!(await shouldHandleHookSession(input.client, state, sessionID))) return
+        state.currentSessionID = sessionID
+        rememberActiveTurn(state, sessionID)
+        rememberActiveToolCall(state, { sessionID, callID, tool })
+        await applyHerdrAction({
+          kind: "report",
+          state: "working",
+          sessionID,
+        }, reporter.isCurrent)
+      }),
+    "tool.execute.after": ({ sessionID, callID, tool }) =>
+      reporter.enqueue(async () => {
+        const selectedParentID = state.currentSessionID
+        if (
+          selectedParentID &&
+          selectedParentID !== sessionID &&
+          (await selectedChildSessionID(input.client, selectedParentID, sessionID))
+        ) return
+        if (await isLoopSession(input.client, state, sessionID)) return
+        if (!(await shouldHandleHookSession(input.client, state, sessionID))) return
+        state.currentSessionID = sessionID
+        clearActiveToolCall(state, { sessionID, callID, tool })
+        await reportCurrentSessionStatus(input.client, state, sessionID, "idle", reporter.isCurrent)
+      }),
+    event: ({ event }) =>
+      reporter.enqueue(async () => {
+        const herdrEvent = event as HerdrEvent
+        const action = await herdrActionForPluginEvent(input, herdrEvent, state)
+        await applyHerdrAction(action, reporter.isCurrent)
+        if (action?.kind === "release" && herdrEvent.type === "server.instance.disposed") {
+          reporter.invalidate()
+          return
+        }
+        if (herdrEvent.type !== "tui.session.select") return
+        const sessionID = sessionIDFromProperties(herdrEvent.properties)
+        if (!sessionID) return
+        await syncSelectedSessionStatus(input, state, sessionID, reporter.isCurrent)
+      }),
   }
 }

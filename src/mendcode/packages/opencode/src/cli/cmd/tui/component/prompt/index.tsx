@@ -53,7 +53,7 @@ import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import * as Editor from "@tui/util/editor"
 import { useExit } from "../../context/exit"
 import * as Clipboard from "../../util/clipboard"
-import type { AssistantMessage, FilePart, Part, UserMessage } from "@mendcode/sdk/v2"
+import type { AssistantMessage, FilePart, OpencodeClient, Part, UserMessage } from "@mendcode/sdk/v2"
 import { TuiEvent } from "../../event"
 import { iife } from "@/util/iife"
 import { Locale } from "@/util/locale"
@@ -128,7 +128,7 @@ export async function fetchLoopWorkflowsFromServer(input: {
     const data = await response.json().catch(() => undefined)
     return Array.isArray(data) ? (data as LoopWorkflowInfo[]) : []
   } catch {
-    // Loop status is auxiliary; a shared-server reconnect must not crash the TUI.
+    // Loop status is auxiliary; a server reconnect must not crash the TUI.
     return [] as LoopWorkflowInfo[]
   }
 }
@@ -262,6 +262,170 @@ function formatEditorContext(selection: EditorSelection) {
 let stashed: { prompt: PromptInfo; cursor: number } | undefined
 const workingStartedAtBySession = new Map<string, number>()
 
+type PromptAsyncInput = Parameters<OpencodeClient["session"]["promptAsync"]>[0]
+
+type PendingPromptDelivery = {
+  request: PromptAsyncInput
+  attempt: number
+  nextAttemptAt: number
+  inFlight: boolean
+  state: "pending" | "accepted"
+}
+
+const pendingPromptDeliveries = new Map<string, PendingPromptDelivery>()
+// In-flight cancellation must not make a newly submitted prompt render as queued.
+const pendingPromptDeliveryInFlightBySession = new Map<string, Set<string>>()
+const latestPromptDeliveryKeyBySession = new Map<string, string>()
+const cancelledPromptDeliveryKeys = new Set<string>()
+const pendingPromptDeliveryListeners = new Set<() => void>()
+
+function pendingPromptDeliveryKey(request: PromptAsyncInput) {
+  return `${request.sessionID}:${request.messageID ?? ""}`
+}
+
+function notifyPendingPromptDeliveryListeners() {
+  for (const listener of pendingPromptDeliveryListeners) listener()
+}
+
+export function promptDeliveryIsQueued(state: "pending" | "accepted") {
+  return state === "pending"
+}
+
+export function subscribePendingPromptDeliveries(listener: () => void) {
+  pendingPromptDeliveryListeners.add(listener)
+  return () => pendingPromptDeliveryListeners.delete(listener)
+}
+
+export function pendingPromptDeliveryMessageIDs(sessionID: string) {
+  return new Set(
+    [...pendingPromptDeliveries.values()]
+      // Accepted prompts stay tracked for reconnect recovery, but are no longer queued in the transcript.
+      .filter((delivery) => delivery.request.sessionID === sessionID && promptDeliveryIsQueued(delivery.state))
+      .map((delivery) => delivery.request.messageID)
+      .filter((messageID): messageID is string => Boolean(messageID)),
+  )
+}
+
+const PROMPT_DELIVERY_RETRY_INTERVAL = 1000
+const ACCEPTED_PROMPT_RETRY_INTERVAL = 5000
+
+export function promptDeliveryRetryDelay(_attempt: number) {
+  return PROMPT_DELIVERY_RETRY_INTERVAL
+}
+
+export function isRetryablePromptDelivery(input: { error?: unknown; response?: Response }) {
+  if (!input.error) return false
+  if (!input.response) return true
+  return input.response.status === 408 || input.response.status === 425 || input.response.status === 429 || input.response.status >= 500
+}
+
+export function promptDeliveryErrorMessage(error: unknown) {
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error === "string" && error) return error
+  if (error && typeof error === "object") {
+    const value = error as { message?: unknown; data?: { message?: unknown } }
+    if (typeof value.data?.message === "string" && value.data.message) return value.data.message
+    if (typeof value.message === "string" && value.message) return value.message
+  }
+  return "The server rejected this prompt."
+}
+
+function queuePendingPromptDelivery(request: PromptAsyncInput) {
+  const key = pendingPromptDeliveryKey(request)
+  const delivery = pendingPromptDeliveries.get(key)
+  if (delivery) {
+    delivery.request = request
+    delivery.attempt += 1
+    delivery.nextAttemptAt = Date.now() + promptDeliveryRetryDelay(delivery.attempt)
+    delivery.inFlight = false
+    delivery.state = "pending"
+  } else {
+    pendingPromptDeliveries.set(key, {
+      request,
+      attempt: 1,
+      nextAttemptAt: Date.now() + promptDeliveryRetryDelay(1),
+      inFlight: false,
+      state: "pending",
+    })
+  }
+  notifyPendingPromptDeliveryListeners()
+}
+
+function acceptPendingPromptDelivery(request: PromptAsyncInput) {
+  const key = pendingPromptDeliveryKey(request)
+  const delivery = pendingPromptDeliveries.get(key)
+  if (delivery) {
+    delivery.request = request
+    delivery.state = "accepted"
+    delivery.inFlight = false
+    delivery.nextAttemptAt = Date.now() + ACCEPTED_PROMPT_RETRY_INTERVAL
+  } else {
+    pendingPromptDeliveries.set(key, {
+      request,
+      attempt: 0,
+      nextAttemptAt: Date.now() + ACCEPTED_PROMPT_RETRY_INTERVAL,
+      inFlight: false,
+      state: "accepted",
+    })
+  }
+  notifyPendingPromptDeliveryListeners()
+}
+
+function settlePendingPromptDelivery(request: PromptAsyncInput) {
+  const key = pendingPromptDeliveryKey(request)
+  if (!pendingPromptDeliveries.delete(key)) return
+  if (latestPromptDeliveryKeyBySession.get(request.sessionID) === key) latestPromptDeliveryKeyBySession.delete(request.sessionID)
+  notifyPendingPromptDeliveryListeners()
+}
+
+function cancelPendingPromptDeliveryKey(sessionID: string, key: string) {
+  const inFlight = pendingPromptDeliveryInFlightBySession.get(sessionID)
+  const wasInFlight = inFlight?.delete(key) ?? false
+  if (inFlight && inFlight.size === 0) pendingPromptDeliveryInFlightBySession.delete(sessionID)
+  const removed = pendingPromptDeliveries.delete(key)
+  if (latestPromptDeliveryKeyBySession.get(sessionID) === key) latestPromptDeliveryKeyBySession.delete(sessionID)
+  if (wasInFlight) cancelledPromptDeliveryKeys.add(key)
+  if (removed || wasInFlight) notifyPendingPromptDeliveryListeners()
+}
+
+export function cancelPendingPromptDelivery(sessionID: string, messageID: string) {
+  cancelPendingPromptDeliveryKey(sessionID, `${sessionID}:${messageID}`)
+}
+
+function pendingPromptDeliveriesForSession(sessionID: string) {
+  return [...pendingPromptDeliveries.values()].filter((delivery) => delivery.request.sessionID === sessionID)
+}
+
+export function pendingPromptDeliveryIsActive(sessionID: string) {
+  return (pendingPromptDeliveryInFlightBySession.get(sessionID)?.size ?? 0) > 0 || pendingPromptDeliveriesForSession(sessionID).length > 0
+}
+
+function beginPendingPromptDelivery(request: PromptAsyncInput) {
+  const key = pendingPromptDeliveryKey(request)
+  const inFlight = pendingPromptDeliveryInFlightBySession.get(request.sessionID) ?? new Set<string>()
+  inFlight.add(key)
+  pendingPromptDeliveryInFlightBySession.set(request.sessionID, inFlight)
+}
+
+function endPendingPromptDelivery(request: PromptAsyncInput) {
+  const key = pendingPromptDeliveryKey(request)
+  const inFlight = pendingPromptDeliveryInFlightBySession.get(request.sessionID)
+  inFlight?.delete(key)
+  if (inFlight?.size === 0) pendingPromptDeliveryInFlightBySession.delete(request.sessionID)
+  if (cancelledPromptDeliveryKeys.has(key) && !pendingPromptDeliveries.has(key)) cancelledPromptDeliveryKeys.delete(key)
+}
+
+function cancelPendingPromptDeliveriesForInterrupt(sessionID: string, activeAssistantParentID?: string) {
+  const keys = new Set<string>()
+  if (activeAssistantParentID) keys.add(`${sessionID}:${activeAssistantParentID}`)
+  else {
+    for (const key of pendingPromptDeliveryInFlightBySession.get(sessionID) ?? []) keys.add(key)
+    const latestKey = latestPromptDeliveryKeyBySession.get(sessionID)
+    if (latestKey) keys.add(latestKey)
+  }
+  for (const key of keys) cancelPendingPromptDeliveryKey(sessionID, key)
+}
+
 export function latestPendingAssistantID(
   messages: Array<{ id: string; role: string; time: { created?: number; completed?: number } }>,
 ) {
@@ -292,19 +456,23 @@ export function shouldClearWorkingStartedAt(input: {
 export function shouldEnableSessionInterrupt(input: {
   statusType: string
   hasActiveWorkingAssistant?: boolean
+  hasPendingPromptDelivery?: boolean
   autocompleteVisible?: boolean
+  promptFocused?: boolean
 }) {
+  if (input.promptFocused === false || input.autocompleteVisible) return false
   if (input.statusType !== "idle") return true
-  return Boolean(input.hasActiveWorkingAssistant) && !input.autocompleteVisible
+  return Boolean(input.hasActiveWorkingAssistant || input.hasPendingPromptDelivery)
 }
 
 export function shouldInterruptImmediately(input: {
   statusType: string
   hasDraft?: boolean
   hasActiveWorkingAssistant?: boolean
+  hasPendingPromptDelivery?: boolean
 }) {
   if (input.hasDraft) return false
-  return input.statusType !== "idle" || Boolean(input.hasActiveWorkingAssistant)
+  return input.statusType !== "idle" || Boolean(input.hasActiveWorkingAssistant || input.hasPendingPromptDelivery)
 }
 
 export function shouldAcceptPromptInterruptFocus(input: { inputFocused: boolean; currentFocusedRenderable?: unknown; promptInput?: unknown }) {
@@ -436,9 +604,31 @@ export function promptCursorEndOffset(text: string) {
   return text.length
 }
 
-export function promptCursorOffsetAfterArrow(input: { cursorOffset: number; text: string; direction: "left" | "right" }) {
-  if (input.direction === "left") return Math.max(0, input.cursorOffset - 1)
-  return Math.min(promptCursorEndOffset(input.text), input.cursorOffset + 1)
+export function promptCursorOffsetAfterArrow(input: {
+  cursorOffset: number
+  text: string
+  direction: "left" | "right"
+  atomicRanges?: readonly { start: number; end: number }[]
+}) {
+  const textEnd = promptCursorEndOffset(input.text)
+  const cursorOffset = Math.max(0, Math.min(textEnd, input.cursorOffset))
+  const atomicRanges = (input.atomicRanges ?? [])
+    .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start)
+    .map((range) => ({
+      start: Math.max(0, Math.min(textEnd, range.start)),
+      end: Math.max(0, Math.min(textEnd, range.end)),
+    }))
+    .filter((range) => range.end > range.start)
+
+  if (input.direction === "left") {
+    const atomicRange = atomicRanges.find((range) => cursorOffset > range.start && cursorOffset <= range.end)
+    if (atomicRange) return Math.max(0, atomicRange.start - 1)
+    return Math.max(0, cursorOffset - 1)
+  }
+
+  const atomicRange = atomicRanges.find((range) => cursorOffset >= range.start && cursorOffset < range.end)
+  if (atomicRange) return atomicRange.end
+  return Math.min(textEnd, cursorOffset + 1)
 }
 
 export function promptCursorOffsetFromMouse(input: { visualOffset: number; text: string }) {
@@ -461,6 +651,9 @@ export function Prompt(props: PromptProps) {
   let anchor: BoxRenderable
   let suppressPromptInputSync = false
   let submitPending = false
+  let pendingPromptRetryTimer: ReturnType<typeof setTimeout> | undefined
+  let pendingPromptRetryInFlight = false
+  let promptDisposed = false
   let autocomplete: AutocompleteRef
   let lastPastedContentClick: { time: number; offset: number } | undefined
 
@@ -495,7 +688,15 @@ export function Prompt(props: PromptProps) {
   const [compactionActive, setCompactionActive] = createSignal(false)
   const [mascotHover, setMascotHover] = createSignal(false)
   let clearWorkingStartTimer: Timer | undefined
-  const messageHistoryItems = createMemo(() => props.historyItems?.().filter((item) => item.input.length > 0 || item.parts.length > 0) ?? [])
+  const messageHistoryItems = createMemo(() => {
+    const supplied = props.historyItems?.().filter((item) => item.input.length > 0 || item.parts.length > 0) ?? []
+    const stored = history.items(props.historyScope).filter((item) => item.input.length > 0 || item.parts.length > 0)
+    if (supplied.length === 0) return stored
+    if (stored.length === 0) return supplied
+
+    const suppliedInputs = new Set(supplied.map((item) => item.input))
+    return [...supplied, ...stored.filter((item) => !suppliedInputs.has(item.input))]
+  })
   const allowStoredPromptHistoryFallback = createMemo(() =>
     shouldUseStoredPromptHistoryFallback({
       historyItems: props.historyItems,
@@ -1105,16 +1306,24 @@ export function Prompt(props: PromptProps) {
         keybind: "session_interrupt",
         category: "Session",
           hidden: true,
-          enabled: shouldEnableSessionInterrupt({
-            statusType: status().type,
-            hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
-            autocompleteVisible: Boolean(autocomplete?.visible),
-          }),
+          enabled: () =>
+            shouldEnableSessionInterrupt({
+              statusType: status().type,
+              hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+              hasPendingPromptDelivery: Boolean(props.sessionID && pendingPromptDeliveryIsActive(props.sessionID)),
+              autocompleteVisible: Boolean(autocomplete?.visible),
+              promptFocused: shouldAcceptPromptInterruptFocus({
+                inputFocused: Boolean(input?.focused),
+                currentFocusedRenderable: renderer.currentFocusedRenderable,
+                promptInput: input,
+              }),
+            }),
           onSelect: (dialog) => {
             const immediateInterrupt = shouldInterruptImmediately({
               statusType: status().type,
               hasDraft: store.prompt.input.trim().length > 0 || store.prompt.parts.length > 0,
               hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+              hasPendingPromptDelivery: Boolean(props.sessionID && pendingPromptDeliveryIsActive(props.sessionID)),
             })
             if (autocomplete?.visible && !immediateInterrupt) return
             if (!shouldAcceptPromptInterruptFocus({ inputFocused: input.focused, currentFocusedRenderable: renderer.currentFocusedRenderable, promptInput: input })) return
@@ -1125,6 +1334,7 @@ export function Prompt(props: PromptProps) {
             }
             if (!props.sessionID) return
             if (immediateInterrupt) {
+              cancelPendingPromptDeliveriesForInterrupt(props.sessionID, findActiveWorkingAssistant()?.parentID)
               void sdk.client.session.abort({
                 sessionID: props.sessionID,
               })
@@ -1140,6 +1350,7 @@ export function Prompt(props: PromptProps) {
             }, 5000)
 
             if (store.interrupt >= 2) {
+              cancelPendingPromptDeliveriesForInterrupt(props.sessionID, findActiveWorkingAssistant()?.parentID)
               void sdk.client.session.abort({
                 sessionID: props.sessionID,
               })
@@ -1240,24 +1451,12 @@ export function Prompt(props: PromptProps) {
         title: "Skills",
         value: "prompt.skills",
         category: "Prompt",
+        description: "View and activate or deactivate skills for this project",
         slash: {
           name: "skills",
         },
         onSelect: () => {
-          dialog.replace(() => (
-            <DialogSkill
-              onSelect={(skill) => {
-                const next = `/${skill} `
-                input.setText(next)
-                setStore("prompt", {
-                  input: next,
-                  parts: [],
-                })
-                input.gotoBufferEnd()
-                syncSlashCommandExtmark(next)
-              }}
-            />
-          ))
+          dialog.replace(() => <DialogSkill />)
         },
       },
       {
@@ -1339,7 +1538,9 @@ export function Prompt(props: PromptProps) {
   })
 
   onCleanup(() => {
+    promptDisposed = true
     if (input.focused) input.blur()
+    if (pendingPromptRetryTimer) clearTimeout(pendingPromptRetryTimer)
     if (store.prompt.input) {
       const prompt = unwrap(store.prompt)
       const cleanInput = cleanPromptInputText(prompt.input)
@@ -1583,30 +1784,6 @@ export function Prompt(props: PromptProps) {
     })
   }
 
-  function removeOptimisticUserTurn(input: { sessionID: string; messageID: string; created: number }) {
-    sync.session.unpinMessage(input.sessionID, input.messageID)
-    const messages = sync.data.message[input.sessionID]
-    const index = messages?.findIndex((item) => item.id === input.messageID) ?? -1
-    const message = index >= 0 ? messages?.[index] : undefined
-    if (!messages || index < 0 || message?.time.created !== input.created) return
-
-    batch(() => {
-      sync.set(
-        "message",
-        input.sessionID,
-        produce((draft) => {
-          draft.splice(index, 1)
-        }),
-      )
-      sync.set(
-        "part",
-        produce((draft) => {
-          delete draft[input.messageID]
-        }),
-      )
-    })
-  }
-
   function clearPromptForSubmit() {
     suppressPromptInputSync = true
     // Keep the editor's in-memory undo point so a cleared draft can be
@@ -1650,6 +1827,205 @@ export function Prompt(props: PromptProps) {
     restoreExtmarksFromParts(prompt.parts)
     input.gotoBufferEnd()
   }
+
+  function schedulePendingPromptRetry() {
+    if (promptDisposed || pendingPromptRetryTimer || !props.sessionID) return
+    const nextAttemptAt = pendingPromptDeliveriesForSession(props.sessionID)
+      .filter((delivery) => !delivery.inFlight)
+      .map((delivery) => delivery.nextAttemptAt)
+      .sort((a, b) => a - b)[0]
+    if (nextAttemptAt === undefined) return
+    pendingPromptRetryTimer = setTimeout(() => {
+      pendingPromptRetryTimer = undefined
+      void retryPendingPromptDeliveries()
+    }, Math.max(0, nextAttemptAt - Date.now()))
+  }
+
+  function wakePendingPromptRetry(forceAccepted = false) {
+    if (promptDisposed || !props.sessionID) return
+    if (pendingPromptRetryTimer) clearTimeout(pendingPromptRetryTimer)
+    pendingPromptRetryTimer = setTimeout(() => {
+      pendingPromptRetryTimer = undefined
+      void retryPendingPromptDeliveries({ forceAccepted })
+    }, 0)
+  }
+
+  async function storedPromptDeliveryState(request: PromptAsyncInput) {
+    if (!request.messageID) return "unknown" as const
+    const result = await sdk.client.session.message({
+      sessionID: request.sessionID,
+      messageID: request.messageID,
+    })
+    if (!result.error) {
+      const messages = await sdk.client.session.messages({
+        sessionID: request.sessionID,
+        limit: 100,
+        view: "tui",
+      })
+      if (
+        !messages.error &&
+        messages.data?.some(
+          (message) =>
+            message.info.role === "assistant" &&
+            message.info.parentID === request.messageID &&
+            message.info.time.completed !== undefined,
+        )
+      ) {
+        return "completed" as const
+      }
+      return "accepted" as const
+    }
+    if (result.response?.status === 404) return "missing" as const
+    return "unknown" as const
+  }
+
+  function handlePromptDeliveryFailure(input: {
+    request: PromptAsyncInput
+    error?: unknown
+    response?: Response
+    notify: boolean
+  }) {
+    if (isRetryablePromptDelivery(input)) {
+      queuePendingPromptDelivery(input.request)
+      if (input.notify) {
+        toast.show({
+          title: "Prompt queued",
+          message: "Connection lost. The prompt remains in this session and will be sent automatically after reconnecting.",
+          variant: "warning",
+          duration: 5000,
+        })
+      }
+      wakePendingPromptRetry()
+      return
+    }
+
+    settlePendingPromptDelivery(input.request)
+    toast.show({
+      title: "Prompt not sent",
+      message: `${promptDeliveryErrorMessage(input.error)} The prompt remains in session history; press Enter to retry it.`,
+      variant: "error",
+      duration: 5000,
+    })
+  }
+
+  async function deliverPrompt(
+    request: PromptAsyncInput,
+    options?: { retry?: boolean; notify?: boolean; forceAccepted?: boolean },
+  ) {
+    const retry = options?.retry === true
+    const forceAccepted = options?.forceAccepted === true
+    const deliveryKey = pendingPromptDeliveryKey(request)
+    if (!retry) {
+      cancelledPromptDeliveryKeys.delete(deliveryKey)
+      latestPromptDeliveryKeyBySession.set(request.sessionID, deliveryKey)
+    }
+    beginPendingPromptDelivery(request)
+    try {
+      if (cancelledPromptDeliveryKeys.has(deliveryKey)) return
+      if (retry && !forceAccepted) {
+        const delivery = pendingPromptDeliveries.get(pendingPromptDeliveryKey(request))
+        if (delivery?.state === "accepted" && !request.replaceExisting) return
+        const state = await storedPromptDeliveryState(request).catch(() => "unknown" as const)
+        if (cancelledPromptDeliveryKeys.has(deliveryKey)) return
+        if (state === "completed") {
+          settlePendingPromptDelivery(request)
+          return
+        }
+        if (state === "accepted" && !request.replaceExisting) {
+          acceptPendingPromptDelivery(request)
+          schedulePendingPromptRetry()
+          return
+        }
+        if (state !== "missing" && !request.replaceExisting) {
+          queuePendingPromptDelivery(request)
+          return
+        }
+      }
+
+      try {
+        const result = await sdk.client.session.promptAsync(request)
+        if (cancelledPromptDeliveryKeys.has(deliveryKey)) return
+        if (!result.error) {
+          if (!request.messageID) {
+            settlePendingPromptDelivery(request)
+            return
+          }
+          if (forceAccepted) {
+            const state = await storedPromptDeliveryState(request).catch(() => "unknown" as const)
+            if (cancelledPromptDeliveryKeys.has(deliveryKey)) return
+            if (state === "completed") {
+              settlePendingPromptDelivery(request)
+              return
+            }
+          }
+          acceptPendingPromptDelivery(request)
+          schedulePendingPromptRetry()
+          return
+        }
+        handlePromptDeliveryFailure({
+          request,
+          error: result.error,
+          response: result.response,
+          notify: options?.notify ?? !retry,
+        })
+      } catch (error) {
+        if (cancelledPromptDeliveryKeys.has(deliveryKey)) return
+        handlePromptDeliveryFailure({ request, error, notify: options?.notify ?? !retry })
+      }
+    } finally {
+      endPendingPromptDelivery(request)
+    }
+  }
+
+  async function retryPendingPromptDeliveries(input?: { forceAccepted?: boolean }) {
+    if (pendingPromptRetryInFlight || !props.sessionID) return
+    pendingPromptRetryInFlight = true
+    try {
+      const now = Date.now()
+      const forceAccepted = input?.forceAccepted === true
+      for (const delivery of pendingPromptDeliveriesForSession(props.sessionID)) {
+        if (delivery.inFlight) continue
+        if (!forceAccepted && delivery.nextAttemptAt > now) continue
+        delivery.inFlight = true
+        try {
+          await deliverPrompt(delivery.request, {
+            retry: true,
+            forceAccepted: forceAccepted || delivery.state === "accepted",
+          })
+        } finally {
+          delivery.inFlight = false
+        }
+      }
+    } finally {
+      pendingPromptRetryInFlight = false
+      schedulePendingPromptRetry()
+    }
+  }
+
+  createEffect(() => {
+    if (sdk.connection.status === "connected") wakePendingPromptRetry()
+  })
+
+  createEffect(() => {
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    const messages = sync.data.message[sessionID] ?? []
+    for (const delivery of pendingPromptDeliveriesForSession(sessionID)) {
+      const messageID = delivery.request.messageID
+      if (!messageID) continue
+      if (messages.some((message) => message.role === "assistant" && message.parentID === messageID && message.time.completed !== undefined)) {
+        settlePendingPromptDelivery(delivery.request)
+      }
+    }
+  })
+
+  onMount(() => {
+    const unsubscribe = sdk.event.on("event", (event) => {
+      if (event.payload.type !== "server.connected") return
+      void retryPendingPromptDeliveries({ forceAccepted: true })
+    })
+    onCleanup(unsubscribe)
+  })
 
   async function submit() {
     if (submitPending) return false
@@ -1808,7 +2184,6 @@ export function Prompt(props: PromptProps) {
     local.model.set(selectedModel)
     local.model.variant.set(variant, { model: selectedModel })
 
-    const messageID = MessageID.ascending()
     workingStartedAtBySession.set(sessionID, Date.now())
     setWorkingStartedAt(workingStartedAtBySession.get(sessionID))
     const inputText = submittedPrompt.inputText
@@ -1835,6 +2210,11 @@ export function Prompt(props: PromptProps) {
           ]
         : []
     const promptParts = [...editorParts, ...submittedPrompt.parts.map(assign)]
+    const slashInvocation = findSlashCommandInvocation(inputText, () => true)
+    const slashServerCommand = slashInvocation
+      ? sync.data.command.find((command) => command.name === slashInvocation.name)
+      : undefined
+    const messageID = MessageID.ascending()
     trace.trace("submit", {
       sessionID,
       messageID,
@@ -1843,10 +2223,6 @@ export function Prompt(props: PromptProps) {
       partTypes: promptParts.map((part) => part.type),
       status: status().type,
     })
-    const slashInvocation = findSlashCommandInvocation(inputText, () => true)
-    const slashServerCommand = slashInvocation
-      ? sync.data.command.find((command) => command.name === slashInvocation.name)
-      : undefined
     let skillInvocation: Awaited<ReturnType<typeof findSkill>>
     try {
       skillInvocation =
@@ -1859,6 +2235,14 @@ export function Prompt(props: PromptProps) {
       restorePromptAfterSubmitFailure(promptSnapshot)
       throw error
     }
+
+    history.append(
+      {
+        ...promptSnapshot,
+        mode: currentMode,
+      },
+      props.historyScope,
+    )
 
     if (store.mode === "shell") {
       void sdk.client.session.shell({
@@ -1918,44 +2302,14 @@ export function Prompt(props: PromptProps) {
         created: optimisticCreated,
         parts: skillPromptParts,
       })
-      sdk.client.session
-        .promptAsync({
-          sessionID,
-          ...selectedModel,
-          messageID,
-          agent: agent.name,
-          model: selectedModel,
-          variant,
-          parts: skillPromptParts,
-        })
-        .then((result) => {
-          trace.trace("prompt-result", {
-            sessionID,
-            messageID,
-            error: result.error ? String(result.error) : undefined,
-          })
-          if (!result.error) return
-          removeOptimisticUserTurn({ sessionID, messageID, created: optimisticCreated })
-          toast.show({
-            title: "Prompt not sent",
-            message:
-              result.error instanceof Error && result.error.message
-                ? result.error.message
-                : "The server rejected this prompt.",
-            variant: "error",
-            duration: 5000,
-          })
-        })
-        .catch(() => {
-          void sync.session.sync(sessionID, { force: true }).catch(() => undefined)
-          toast.show({
-            title: "Prompt delivery uncertain",
-            message:
-              "The server may have accepted this prompt. The message was kept visible while MendCode reconnects.",
-            variant: "warning",
-            duration: 5000,
-          })
-        })
+      void deliverPrompt({
+        sessionID,
+        messageID,
+        agent: agent.name,
+        model: selectedModel,
+        variant,
+        parts: skillPromptParts,
+      })
       if (editorParts.length > 0) editor.markSelectionSent()
     } else if (slashInvocation && slashServerCommand) {
       void sdk.client.session.command({
@@ -1984,53 +2338,16 @@ export function Prompt(props: PromptProps) {
         created: optimisticCreated,
         parts: promptParts,
       })
-      sdk.client.session
-        .promptAsync({
-          sessionID,
-          ...selectedModel,
-          messageID,
-          agent: agent.name,
-          model: selectedModel,
-          variant,
-          parts: promptParts,
-        })
-        .then((result) => {
-          trace.trace("prompt-result", {
-            sessionID,
-            messageID,
-            error: result.error ? String(result.error) : undefined,
-          })
-          if (!result.error) return
-          removeOptimisticUserTurn({ sessionID, messageID, created: optimisticCreated })
-          toast.show({
-            title: "Prompt not sent",
-            message:
-              result.error instanceof Error && result.error.message
-                ? result.error.message
-                : "The server rejected this prompt.",
-            variant: "error",
-            duration: 5000,
-          })
-        })
-        .catch(() => {
-          void sync.session.sync(sessionID, { force: true }).catch(() => undefined)
-          toast.show({
-            title: "Prompt delivery uncertain",
-            message:
-              "The server may have accepted this prompt. The message was kept visible while MendCode reconnects.",
-            variant: "warning",
-            duration: 5000,
-          })
-        })
+      void deliverPrompt({
+        sessionID,
+        messageID,
+        agent: agent.name,
+        model: selectedModel,
+        variant,
+        parts: promptParts,
+      })
       if (editorParts.length > 0) editor.markSelectionSent()
     }
-    history.append(
-      {
-        ...promptSnapshot,
-        mode: currentMode,
-      },
-      props.historyScope,
-    )
     input.extmarks.clear()
     setStore("prompt", {
       input: "",
@@ -2171,6 +2488,14 @@ export function Prompt(props: PromptProps) {
         draft.extmarkToPartIndex.set(extmarkId, partIndex)
       }),
     )
+    // Native clipboard reads can leave the renderer without a focused target; do not steal focus from another control.
+    if (
+      dialog.stack.length === 0 &&
+      !input.isDestroyed &&
+      renderer.currentFocusedRenderable === null
+    ) {
+      input.focus()
+    }
     return
   }
 
@@ -2711,12 +3036,7 @@ export function Prompt(props: PromptProps) {
   })
   const effectiveConnectionStatus = createMemo(() => {
     const connection = sdk.connection
-    if (
-      workingStatusActive() &&
-      connection.status === "connected" &&
-      connection.recoveringSince &&
-      (!connection.lastApplicationEventAt || connection.lastApplicationEventAt < connection.recoveringSince)
-    ) {
+    if (workingStatusActive() && connection.status === "connected" && connection.recoveringSince) {
       return "reconnecting" as const
     }
     return connection.status
@@ -2940,6 +3260,7 @@ export function Prompt(props: PromptProps) {
         fileStyleId={fileStyleId}
         agentStyleId={agentStyleId}
         promptPartTypeId={() => promptPartTypeId}
+        skills={() => availableSkills() ?? []}
       />
       <box
         ref={(r) => (anchor = r)}
@@ -3167,10 +3488,12 @@ export function Prompt(props: PromptProps) {
                   if (store.mode === "normal") autocomplete.onKeyDown(e)
                   if (!autocomplete.visible) {
                     if (shouldHandlePromptCursorArrow(e)) {
+                      // cursorOffset writes bypass OpenTUI's extmark movement wrappers; keep virtual prompt parts atomic.
                       input.cursorOffset = promptCursorOffsetAfterArrow({
                         cursorOffset: input.cursorOffset,
                         text: input.plainText,
                         direction: e.name === "left" ? "left" : "right",
+                        atomicRanges: input.extmarks.getVirtual(),
                       })
                       e.preventDefault()
                       return

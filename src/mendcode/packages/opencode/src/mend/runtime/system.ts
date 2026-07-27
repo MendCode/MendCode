@@ -8,6 +8,8 @@ import { mendPaths, resolveMendProjectRoot } from "../config/paths"
 import { mendRuntimeVersion } from "./version"
 
 const DONOR_COMMAND_OVERRIDE_ENV = "MENDCODE_ALLOW_DONOR_COMMANDS"
+const SOURCE_RUNTIME_OVERRIDE_ENV = "MENDCODE_USE_SOURCE_RUNTIME"
+const RUNTIME_BINARY_OVERRIDE_ENV = "MENDCODE_RUNTIME_BINARY"
 const BASELINE_OPENCODE_COMMIT = "aa3c99a3c0a609ea4dd485355627e3161251584a"
 const GLOBAL_LAYOUT_MIGRATION_DONE_BASENAME = ".mendcode-global-layout-v0.done"
 const JSON_STORAGE_MIGRATION_DONE_BASENAME = ".mendcode-json-storage-migration-v0.done"
@@ -179,11 +181,36 @@ function activeOwnedRuntimeWorkflows(root = mendPaths().root) {
   return found.sort()
 }
 
+export function resolveCompiledRuntimeBinary(
+  pkg: string,
+  environment: Record<string, string | undefined> = process.env,
+) {
+  if (environment[SOURCE_RUNTIME_OVERRIDE_ENV] === "1") return
+
+  const override = environment[RUNTIME_BINARY_OVERRIDE_ENV]
+  if (override && existsSync(override)) return override
+
+  const platform = process.platform === "win32" ? "windows" : process.platform
+  const base = `mendcode-${platform}-${process.arch}`
+  const names =
+    process.arch === "x64"
+      ? [`${base}-baseline`, base, `${base}-baseline-musl`, `${base}-musl`]
+      : [base, `${base}-musl`]
+  const binary = process.platform === "win32" ? "mendcode.exe" : "mendcode"
+  return names.map((name) => path.join(pkg, "dist", name, "bin", binary)).find(existsSync)
+}
+
 export function runtimeAdapterCommand(args: string[] = [], root = mendPaths().root) {
   const owned = ownedRuntimeStatus(root)
   const runtimeRoot = owned.adopted ? ownedRuntimeRoot(root) : engineRoot(root)
   const pkg = owned.adopted ? path.join(ownedRuntimeRoot(root), "packages", "opencode") : enginePkg(root)
-  return { command: "bun", args: ["--cwd", pkg, "--no-install", "--conditions=browser", "src/index.ts", ...args], cwd: runtimeRoot }
+  const compiled = resolveCompiledRuntimeBinary(pkg)
+  if (compiled) return { command: compiled, args, cwd: runtimeRoot }
+  return {
+    command: "bun",
+    args: ["--cwd", pkg, "--no-install", "--conditions=browser", "src/index.ts", ...args],
+    cwd: runtimeRoot,
+  }
 }
 
 export function adapterStatus(root = mendPaths().root) {

@@ -151,6 +151,51 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
       return this
     },
   }
+  type CustomizationState = ReturnType<HostPluginApi["ui"]["runtime"]["customization"]["get"]>
+  let customizationState: CustomizationState = {
+    contextBar: true,
+    diffCount: true,
+    diffFiles: true,
+    sessionTitle: true,
+    projectPath: true,
+    terminalTitle: true,
+    sessionAccent: "theme" as const,
+    terminalTitleTemplate: "{product} | {session}",
+  }
+  const customization =
+    opts.ui?.runtime?.customization ??
+    ({
+      get: () => customizationState,
+      set(patch) {
+        customizationState = { ...customizationState, ...patch }
+        return customizationState
+      },
+      reset() {
+        customizationState = {
+          contextBar: true,
+          diffCount: true,
+          diffFiles: true,
+          sessionTitle: true,
+          projectPath: true,
+          terminalTitle: true,
+          sessionAccent: "theme",
+          terminalTitleTemplate: "{product} | {session}",
+        }
+        return customizationState
+      },
+      setTerminalTitle(input) {
+        return this.set({
+          ...(input?.enabled === undefined ? {} : { terminalTitle: input.enabled }),
+          ...(input?.template === undefined ? {} : { terminalTitleTemplate: input.template }),
+        })
+      },
+      setSessionAccent(accent) {
+        return this.set({ sessionAccent: accent })
+      },
+      setDiffFiles(visible) {
+        return this.set({ diffFiles: visible })
+      },
+    } as HostPluginApi["ui"]["runtime"]["customization"])
 
   function kvGet(name: string): unknown
   function kvGet<Value>(name: string, fallback: Value): Value
@@ -289,6 +334,7 @@ export function createTuiPluginApi(opts: Opts = {}): HostPluginApi {
         focused: opts.ui?.overlay?.focused ?? (() => undefined),
       },
       runtime: {
+        customization,
         setStatus: opts.ui?.runtime?.setStatus ?? (() => true),
         clearStatus: opts.ui?.runtime?.clearStatus ?? (() => true),
         setWidget: opts.ui?.runtime?.setWidget ?? (() => true),

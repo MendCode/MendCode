@@ -27,6 +27,16 @@ export type MemoryCategoryPolicy = {
 
 export type MemoryPolicyScope = "global" | "project"
 
+export type MemoryCategoryPolicyLayer = {
+  categoryID: string
+  default: MemoryCategoryPolicy
+  global: MemoryCategoryPolicy
+  project: MemoryCategoryPolicy
+  effective: MemoryCategoryPolicy
+  globalOverridden: boolean
+  projectOverridden: boolean
+}
+
 export const DEFAULT_MEMORY_CATEGORIES: MemoryCategory[] = [
   {
     id: "project.objective",
@@ -236,10 +246,25 @@ function applyPolicyOverrides(
 }
 
 export async function readMemoryCategoryPolicies(root?: string) {
+  const layers = await readMemoryCategoryPolicyLayers(root)
+  return Object.fromEntries(Object.values(layers).map((layer) => [layer.categoryID, layer.effective]))
+}
+
+export async function readMemoryCategoryPolicyLayers(root?: string) {
   const base = normalizeMemoryCategoryPolicies({})
-  const globalOverrides = await readPolicyOverrides("global", root).catch(() => ({}))
-  const projectOverrides = await readPolicyOverrides("project", root).catch(() => ({}))
-  return applyPolicyOverrides(applyPolicyOverrides(base, globalOverrides), projectOverrides)
+  const globalOverrides: Record<string, unknown> = await readPolicyOverrides("global", root).catch(() => ({}))
+  const projectOverrides: Record<string, unknown> = await readPolicyOverrides("project", root).catch(() => ({}))
+  const global = applyPolicyOverrides(base, globalOverrides)
+  const effective = applyPolicyOverrides(global, projectOverrides)
+  return Object.fromEntries(DEFAULT_MEMORY_CATEGORIES.map((category) => [category.id, {
+    categoryID: category.id,
+    default: base[category.id]!,
+    global: global[category.id]!,
+    project: effective[category.id]!,
+    effective: effective[category.id]!,
+    globalOverridden: typeof globalOverrides[category.id] === "object" && globalOverrides[category.id] !== null,
+    projectOverridden: typeof projectOverrides[category.id] === "object" && projectOverrides[category.id] !== null,
+  } satisfies MemoryCategoryPolicyLayer]))
 }
 
 export async function writeMemoryCategoryPolicy(
@@ -262,6 +287,18 @@ export async function writeMemoryCategoryPolicy(
   await mkdir(path.dirname(file), { recursive: true })
   await writeFile(file, `${JSON.stringify({ ...current, [category.id]: nextRaw }, null, 2)}\n`)
   return { path: file, scope, policy: normalized }
+}
+
+export async function resetMemoryCategoryPolicy(scope: MemoryPolicyScope, categoryID: string, root?: string) {
+  const category = memoryCategoryByID(categoryID)
+  const file = policyFile(scope, root)
+  const current = await readPolicyOverrides(scope, root).catch(() => ({}))
+  if (!(category.id in current)) return { path: file, scope, categoryID: category.id, reset: false }
+  const next = { ...current }
+  delete next[category.id]
+  await mkdir(path.dirname(file), { recursive: true })
+  await writeFile(file, `${JSON.stringify(next, null, 2)}\n`)
+  return { path: file, scope, categoryID: category.id, reset: true }
 }
 
 export function inferMemoryCategoryIDs(input: { text?: string | null; tags?: string[] | null; source?: string | null }) {

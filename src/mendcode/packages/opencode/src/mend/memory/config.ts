@@ -45,6 +45,8 @@ export type MemoryConfig = {
   dreamConsolidationPolicy: DreamConsolidationPolicy
   dreamAutoApplyMinConfidence: number
   dreamAutoApplyMinDurability: number
+  dreamGraphAutoApplyMinConfidence: number
+  dreamGraphAutoApplyMinDurability: number
   dreamAutoApplyMaxChangeRisk: number
   dreamAutoApplyAllowedCategories: string[]
   dreamAutoApplyBlockedSensitivity: Array<"medium" | "high">
@@ -77,9 +79,11 @@ export const defaultMemoryConfig: MemoryConfig = {
   memoryAutoApplyAllowedCategories: ["project.commands", "project.stack", "user.preferences", "agent.policy", "memory.policy"],
   memoryAutoApplyBlockedSensitivity: ["medium", "high"],
   dreamWritePolicy: "pending",
-  dreamConsolidationPolicy: "disabled",
+  dreamConsolidationPolicy: "auto-consolidate",
   dreamAutoApplyMinConfidence: 0.9,
   dreamAutoApplyMinDurability: 0.85,
+  dreamGraphAutoApplyMinConfidence: 0.75,
+  dreamGraphAutoApplyMinDurability: 0.7,
   dreamAutoApplyMaxChangeRisk: 0.2,
   dreamAutoApplyAllowedCategories: ["project.commands", "project.stack", "agent.policy", "memory.policy"],
   dreamAutoApplyBlockedSensitivity: ["medium", "high"],
@@ -228,6 +232,8 @@ export function normalizeMemoryConfig(input: unknown): MemoryConfig {
     dreamConsolidationPolicy: dreamConsolidationPolicy(raw.dreamConsolidationPolicy, defaultMemoryConfig.dreamConsolidationPolicy),
     dreamAutoApplyMinConfidence: boundedNumberValue(raw.dreamAutoApplyMinConfidence, defaultMemoryConfig.dreamAutoApplyMinConfidence, 0, 1),
     dreamAutoApplyMinDurability: boundedNumberValue(raw.dreamAutoApplyMinDurability, defaultMemoryConfig.dreamAutoApplyMinDurability, 0, 1),
+    dreamGraphAutoApplyMinConfidence: boundedNumberValue(raw.dreamGraphAutoApplyMinConfidence, defaultMemoryConfig.dreamGraphAutoApplyMinConfidence, 0, 1),
+    dreamGraphAutoApplyMinDurability: boundedNumberValue(raw.dreamGraphAutoApplyMinDurability, defaultMemoryConfig.dreamGraphAutoApplyMinDurability, 0, 1),
     dreamAutoApplyMaxChangeRisk: boundedNumberValue(raw.dreamAutoApplyMaxChangeRisk, defaultMemoryConfig.dreamAutoApplyMaxChangeRisk, 0, 1),
     dreamAutoApplyAllowedCategories: stringList(raw.dreamAutoApplyAllowedCategories, defaultMemoryConfig.dreamAutoApplyAllowedCategories),
     dreamAutoApplyBlockedSensitivity: blockedSensitivity(raw.dreamAutoApplyBlockedSensitivity, defaultMemoryConfig.dreamAutoApplyBlockedSensitivity),

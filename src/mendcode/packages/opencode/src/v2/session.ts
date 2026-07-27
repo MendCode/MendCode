@@ -126,11 +126,29 @@ export const layer = Layer.effect(
 
     const TUI_V2_TEXT_PREVIEW_CHARS = 128 * 1024
     const TUI_V2_METADATA_PREVIEW_CHARS = 4 * 1024
+    const TUI_V2_DIFF_PREVIEW_CHARS = 512 * 1024
+    const TUI_V2_CONTENT_PREVIEW_CHARS = 512 * 1024
     const TUI_V2_FIELD_PREVIEW_CHARS = 2 * 1024
 
     function previewString(input: string | undefined, maxChars: number, _label: string) {
       if (!input || input.length <= maxChars) return input
       return input.slice(0, maxChars)
+    }
+
+    function previewToolInputContent(input: string, label: string) {
+      if (input.length <= TUI_V2_CONTENT_PREVIEW_CHARS) return input
+      const marker = `\n[${label} preview truncated: omitted ${input.length - TUI_V2_CONTENT_PREVIEW_CHARS} chars; showing the beginning.]\n`
+      const budget = Math.max(0, TUI_V2_CONTENT_PREVIEW_CHARS - marker.length)
+      return `${input.slice(0, budget)}${marker}`
+    }
+
+    function previewDiff(input: string) {
+      if (input.length <= TUI_V2_DIFF_PREVIEW_CHARS) return input
+      const marker = "\n[Diff preview truncated: too large to render safely. Show more to inspect the full diff.]\n"
+      const budget = Math.max(0, TUI_V2_DIFF_PREVIEW_CHARS - marker.length)
+      if (budget <= 0) return marker.slice(0, TUI_V2_DIFF_PREVIEW_CHARS)
+      const head = Math.floor(budget / 3)
+      return `${input.slice(0, head)}${marker}${input.slice(input.length - (budget - head))}`
     }
 
     function previewUnknown(input: unknown, maxChars: number, label: string, depth = 0): unknown {
@@ -141,11 +159,20 @@ export const layer = Layer.effect(
 
       const result: Record<string, unknown> = {}
       for (const [key, value] of Object.entries(input)) {
-        const nextMax =
-          key === "output" || key === "diff" || key === "content"
-            ? maxChars
-            : Math.min(maxChars, TUI_V2_FIELD_PREVIEW_CHARS)
-        result[key] = previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
+        const diffLike = key === "diff" || key === "patch"
+        const nextMax = diffLike
+          ? TUI_V2_DIFF_PREVIEW_CHARS
+          : key === "content"
+            ? TUI_V2_CONTENT_PREVIEW_CHARS
+            : key === "output"
+              ? maxChars
+              : Math.min(maxChars, TUI_V2_FIELD_PREVIEW_CHARS)
+        result[key] =
+          diffLike && typeof value === "string"
+            ? previewDiff(value)
+            : key === "content" && typeof value === "string"
+              ? previewToolInputContent(value, `${label}.${key}`)
+              : previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
       }
       return result
     }

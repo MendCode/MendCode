@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test"
 import path from "path"
 import { parseTimelineDiffRows, timelineDiffFileStatus } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
 import { diffStatsFromPatch, formatDiffStats, patchFileTitle } from "../../src/cli/cmd/tui/routes/session/renderers/diff-label"
+import { compactMemoryGraphRows, compactMemoryGraphSnapshot } from "../../src/cli/cmd/tui/util/memory-graph"
 import { compactionArcadeFrames, compactionStageStates, compactionSummaryPreview, rawReasoningDisplay, resolveTuiPresentation, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
-import { groupTimelineParts, isTimelineStackStart, timelineCollapseLabel } from "../../src/mend/tui/timeline/group"
+import { groupTimelineParts, isTimelineStackStart, timelineCollapseLabel, timelineNodeKeys } from "../../src/mend/tui/timeline/group"
 import {
   normalizeToolEvent,
   shouldRenderCompactTool,
@@ -91,6 +92,39 @@ describe("mend tui presentation renderers", () => {
     expect(toolPresentationIconForProfile("minimal", undefined, "failure")).toBe("×")
     expect(toolPresentationIconForProfile("mendcode", "read")).toBe("□")
     expect(toolPresentationIconForProfile("mendcode", undefined, "failure")).toBe("×")
+  })
+
+  test("compact memory graph rows keep relation endpoints readable without duplicates", () => {
+    const snapshot = compactMemoryGraphSnapshot({
+      facts: [
+        { id: "fact_a", text: "Use the complete durable memory text for the source endpoint.", scope: "project", categoryIDs: ["memory.policy"], materialized: true },
+        { id: "fact_b", text: "Keep the related destination memory readable in session tools.", scope: "project", categoryIDs: ["memory.policy"], materialized: true },
+        { id: "fact_c", text: "An isolated memory remains visible when no relation exists.", scope: "project", categoryIDs: ["memory.policy"], materialized: true },
+      ],
+      links: [{ from: "fact_a", to: "fact_b", kind: "supports" }],
+      categories: [{ id: "memory.policy", label: "Memory policy", count: 3 }],
+    })
+    if (!snapshot) throw new Error("expected graph snapshot")
+
+    expect(compactMemoryGraphRows(snapshot, 120)).toEqual([
+      "From · Use the complete durable memory text for the source endpoint.",
+      "Relation · supports",
+      "To · Keep the related destination memory readable in session tools.",
+    ])
+    expect(new Set(compactMemoryGraphRows(snapshot, 120)).size).toBe(3)
+  })
+
+  test("compact memory graph rows explain isolated memories", () => {
+    const snapshot = compactMemoryGraphSnapshot({
+      facts: [{ id: "fact_a", text: "This isolated memory should still be readable.", scope: "global", categoryIDs: ["agent.policy"], materialized: true }],
+      links: [],
+      categories: [],
+    })
+    if (!snapshot) throw new Error("expected graph snapshot")
+    expect(compactMemoryGraphRows(snapshot, 80)).toEqual([
+      "Memory · This isolated memory should still be readable.",
+      "Relation · isolated (global)",
+    ])
   })
 
   test("webfetch uses a domain summary instead of raw input dumps", () => {
@@ -413,6 +447,39 @@ describe("mend tui presentation renderers", () => {
       type: "row",
       state: "running",
     })
+  })
+
+  test("large tool batches keep a bounded render list and stable node keys", () => {
+    const tools = Array.from({ length: 500 }, (_, index) => ({
+      id: `batch-read-${index}`,
+      type: "tool",
+      tool: "read",
+      state: { status: "completed", input: { filePath: `batch-${index}.ts` }, output: "" },
+    }))
+    const nodes = groupTimelineParts("mendcode", tools, { completed: true })
+    const nextNodes = groupTimelineParts("mendcode", [...tools, { ...tools.at(-1)!, id: "batch-read-new" }], {
+      completed: true,
+    })
+    const keys = timelineNodeKeys(nodes)
+    const nextKeys = timelineNodeKeys(nextNodes)
+
+    expect(nodes.length).toBeLessThanOrEqual(6)
+    expect(nextKeys.filter((key) => keys.includes(key)).length).toBeGreaterThanOrEqual(keys.length - 1)
+    expect(new Set(keys).size).toBe(keys.length)
+  })
+
+  test("large raw tool batches compact otherwise heavy tool components", () => {
+    const tasks = Array.from({ length: 500 }, (_, index) => ({
+      id: `batch-task-${index}`,
+      type: "tool",
+      tool: "task",
+      state: { status: "completed", input: { description: `task ${index}` }, output: "done" },
+    }))
+
+    expect(groupTimelineParts("raw", tasks)).toHaveLength(500)
+    const compacted = groupTimelineParts("raw", tasks, { forceCompact: true })
+    expect(compacted.length).toBeLessThanOrEqual(6)
+    expect(compacted[0]).toMatchObject({ type: "collapse", count: 495 })
   })
 
   test("active streaming timeline keeps a single top collapse row", () => {
@@ -807,11 +874,11 @@ describe("mend tui presentation renderers", () => {
     expect(rows.map((row) => row.text).join("\n")).not.toContain("\ufffdPNG")
   })
 
-  test("timeline diff parser caps very large text diffs", () => {
-    const body = Array.from({ length: 4_000 }, (_, index) => `+line ${index}`).join("\n")
+  test("timeline diff parser caps only very large text diffs", () => {
+    const body = Array.from({ length: 20_500 }, (_, index) => `+line ${index}`).join("\n")
     const rows = parseTimelineDiffRows(["+++ b/huge.ts", "@@ -0,0 +1,4000 @@", body].join("\n"))
 
-    expect(rows.length).toBeLessThanOrEqual(3_601)
+    expect(rows.length).toBeLessThanOrEqual(20_001)
     expect(rows.at(-1)).toEqual({
       kind: "meta",
       text: expect.stringContaining("Diff preview truncated: too large to render safely"),

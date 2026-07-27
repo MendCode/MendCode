@@ -51,7 +51,7 @@ export const Event = {
 export interface Interface {
   readonly get: (sessionID: SessionID) => Effect.Effect<Info>
   readonly list: () => Effect.Effect<Map<SessionID, Info>>
-  readonly set: (sessionID: SessionID, status: Info) => Effect.Effect<void>
+  readonly set: (sessionID: SessionID, status: Info, options?: { notify?: boolean }) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionStatus") {}
@@ -124,22 +124,36 @@ export const layer = Layer.effect(
       return result
     })
 
-    const set = Effect.fn("SessionStatus.set")(function* (sessionID: SessionID, status: Info) {
+    const set = Effect.fn("SessionStatus.set")(function* (
+      sessionID: SessionID,
+      status: Info,
+      options?: { notify?: boolean },
+    ) {
       const data = yield* InstanceState.get(state)
       const now = Date.now()
       if (status.type === "idle") {
-        yield* bus.publish(Event.Status, { sessionID, status })
-        yield* bus.publish(Event.Idle, { sessionID })
+        if (options?.notify !== false) {
+          yield* bus.publish(Event.Status, { sessionID, status })
+          yield* bus.publish(Event.Idle, { sessionID })
+        }
         data.delete(sessionID)
         Database.use((db) => db.delete(SessionStatusTable).where(eq(SessionStatusTable.session_id, sessionID)).run())
         return
       }
-      const row = Database.use((db) =>
-        db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, sessionID)).get(),
-      )
-      const nextStatus = withStartedAt(status, data.get(sessionID) ?? row, now) as StoredStatus
-      yield* bus.publish(Event.Status, { sessionID, status: nextStatus })
-      data.set(sessionID, { time_created: row?.time_created ?? now, time_updated: now, data: nextStatus })
+      const current = data.get(sessionID)
+      const row = current
+        ? undefined
+        : Database.use((db) =>
+            db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, sessionID)).get(),
+          )
+      const nextStatus = withStartedAt(status, current ?? row, now) as StoredStatus
+      if (options?.notify !== false) yield* bus.publish(Event.Status, { sessionID, status: nextStatus })
+      data.set(sessionID, {
+        time_created: current?.time_created ?? row?.time_created ?? now,
+        time_updated: now,
+        data: nextStatus,
+      })
+      if (options?.notify === false) return
       try {
         Database.use((db) =>
           db

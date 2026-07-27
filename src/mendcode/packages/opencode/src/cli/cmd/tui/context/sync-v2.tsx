@@ -24,6 +24,7 @@ type ShellOutputEvent = {
 }
 
 const PREVIEW_TEXT_LIMIT = 128 * 1024
+const PREVIEW_CONTENT_LIMIT = 512 * 1024
 
 function previewText(value: string) {
   if (value.length <= PREVIEW_TEXT_LIMIT) return value
@@ -33,6 +34,20 @@ function previewText(value: string) {
   const head = Math.floor(budget / 3)
   const tail = budget - head
   return `${value.slice(0, head)}${marker}${value.slice(value.length - tail)}`
+}
+
+function previewContent(value: string) {
+  if (value.length <= PREVIEW_CONTENT_LIMIT) return value
+  const marker = `\n[Tool input content preview truncated: omitted ${value.length - PREVIEW_CONTENT_LIMIT} chars; showing the beginning.]\n`
+  const budget = Math.max(0, PREVIEW_CONTENT_LIMIT - marker.length)
+  return `${value.slice(0, budget)}${marker}`
+}
+
+function previewToolInput(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input
+  const result = { ...(input as Record<string, unknown>) }
+  if (typeof result.content === "string") result.content = previewContent(result.content)
+  return result
 }
 
 function previewToolContent<T>(content: T): T {
@@ -45,11 +60,14 @@ function previewToolContent<T>(content: T): T {
 
 function previewTool(part: SessionMessageAssistantTool): SessionMessageAssistantTool {
   const state = part.state
-  if (state.status === "pending") return part
+  if (state.status === "pending") {
+    return { ...part, state: { ...state, input: previewToolInput(state.input) } } as SessionMessageAssistantTool
+  }
   return {
     ...part,
     state: {
       ...state,
+      input: previewToolInput(state.input),
       content: previewToolContent(state.content),
     },
   } as SessionMessageAssistantTool

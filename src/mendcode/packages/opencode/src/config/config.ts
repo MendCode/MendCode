@@ -314,6 +314,19 @@ export const Info = Schema.Struct({
       continue_loop_on_deny: Schema.optional(Schema.Boolean).annotate({
         description: "Continue the agent loop when a tool call is denied",
       }),
+      subagent_depth: Schema.optional(NonNegativeInt).annotate({
+        description: "Maximum nested task depth from a root session (default: 1)",
+      }),
+      subagent_max_children: Schema.optional(PositiveInt).annotate({
+        description: "Maximum active direct subagent tasks per session (default: 4)",
+      }),
+      subagent_max_descendants: Schema.optional(PositiveInt).annotate({
+        description: "Maximum active subagent tasks per root session (default: 16)",
+      }),
+      subagent_owner_wake: Schema.optional(Schema.Boolean).annotate({
+        description:
+          "Let completed background subagents wake an idle parent agent. Disabled by default; applies to global and project config.",
+      }),
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",
       }),

@@ -1,6 +1,8 @@
 const LIVE_SHELL_OUTPUT_PREVIEW_LIMIT = 30_000
 const MAX_TERMINAL_CURSOR_ROWS = 2_000
 const MAX_TERMINAL_CURSOR_COLUMNS = LIVE_SHELL_OUTPUT_PREVIEW_LIMIT
+const MAX_RENDERED_TERMINAL_CELLS = LIVE_SHELL_OUTPUT_PREVIEW_LIMIT + 5
+const MAX_TERMINAL_PREVIEW_LINE_CHARS = 2_048
 const MAX_REPLAY_OVERLAP = 8_192
 
 function clampLiveShellOutput(output: string) {
@@ -18,11 +20,16 @@ export function selectShellOutput(input: { running: boolean; live?: string; fina
 }
 
 export function latestTerminalOutputPreview(text: string, maxLines: number) {
-  const lines = text.split("\n")
+  const input = clampLiveShellOutput(text)
+  const lines = input.split("\n")
   const limit = Math.max(1, Math.floor(maxLines))
-  if (lines.length <= limit) return { text, overflow: false, hiddenLines: 0 }
+  const hasOversizedLine = lines.some((line) => line.length > MAX_TERMINAL_PREVIEW_LINE_CHARS)
+  if (lines.length <= limit && !hasOversizedLine) return { text: input, overflow: false, hiddenLines: 0 }
 
-  const tail = lines.slice(-limit)
+  const tail = lines.slice(-limit).map((line) => {
+    if (line.length <= MAX_TERMINAL_PREVIEW_LINE_CHARS) return line
+    return "..." + line.slice(-MAX_TERMINAL_PREVIEW_LINE_CHARS)
+  })
   const hintLines = lines.filter((line) => /(?:full output|output excerpt).*saved to:/i.test(line) || line.includes("...output truncated...")).slice(0, 3)
   const previewLines = ["...", ...hintLines.filter((line) => !tail.includes(line)), ...tail]
   return {
@@ -33,23 +40,56 @@ export function latestTerminalOutputPreview(text: string, maxLines: number) {
 }
 
 export function renderTerminalOutput(text: string) {
-  const lines = [""]
+  const input = clampLiveShellOutput(text)
+  const lines: string[][] = [[]]
   let row = 0
   let column = 0
   let savedRow = 0
   let savedColumn = 0
+  let renderedCells = 0
 
   const ensureLine = (index: number) => {
-    while (lines.length <= index) lines.push("")
+    while (lines.length <= index) lines.push([])
   }
 
   const clampCursorRow = (value: number) => Math.max(0, Math.min(value, lines.length + MAX_TERMINAL_CURSOR_ROWS))
   const clampColumn = (value: number) => Math.max(0, Math.min(value, MAX_TERMINAL_CURSOR_COLUMNS))
-  const currentLine = () => lines[row] ?? ""
-
-  const writeLine = (value: string) => {
+  const currentLine = () => {
     ensureLine(row)
-    lines[row] = value
+    return lines[row]!
+  }
+
+  const fill = (line: string[], start: number, end: number, value: string) => {
+    const from = Math.max(0, start)
+    const to = Math.min(end, line.length, MAX_TERMINAL_CURSOR_COLUMNS + 1)
+    for (let index = from; index < to; index++) line[index] = value
+  }
+
+  const extend = (line: string[], end: number) => {
+    const to = Math.min(
+      end,
+      MAX_TERMINAL_CURSOR_COLUMNS + 1,
+      line.length + Math.max(0, MAX_RENDERED_TERMINAL_CELLS - renderedCells),
+    )
+    if (to <= line.length) return
+    const previousLength = line.length
+    line.length = to
+    renderedCells += to - previousLength
+    fill(line, previousLength, to, " ")
+  }
+
+  const truncate = (line: string[], length: number) => {
+    const nextLength = Math.max(0, Math.min(length, line.length))
+    renderedCells -= line.length - nextLength
+    line.length = nextLength
+  }
+
+  const writeCharacter = (value: string) => {
+    const line = currentLine()
+    extend(line, column + 1)
+    if (column >= line.length) return
+    line[column] = value
+    column = clampColumn(column + 1)
   }
 
   const csiValue = (params: string[], index: number, fallback: number) => {
@@ -57,9 +97,9 @@ export function renderTerminalOutput(text: string) {
     return Number.isFinite(value) && value > 0 ? value : fallback
   }
 
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index]!
-    if (char === "\r" && text[index + 1] === "\n") {
+  for (let index = 0; index < input.length; index++) {
+    const char = input[index]!
+    if (char === "\r" && input[index + 1] === "\n") {
       row++
       ensureLine(row)
       column = 0
@@ -67,10 +107,10 @@ export function renderTerminalOutput(text: string) {
       continue
     }
     if (char === "\u001b") {
-      const next = text[index + 1]
+      const next = input[index + 1]
       if (next === "]") {
-        const bell = text.indexOf("\u0007", index + 2)
-        const terminator = text.indexOf("\u001b\\", index + 2)
+        const bell = input.indexOf("\u0007", index + 2)
+        const terminator = input.indexOf("\u001b\\", index + 2)
         const end = bell < 0 ? terminator : terminator < 0 ? bell : Math.min(bell, terminator)
         if (end < 0) break
         index = end + (end === terminator ? 1 : 0)
@@ -122,13 +162,13 @@ export function renderTerminalOutput(text: string) {
       }
       if (next !== "[") continue
       let end = index + 2
-      while (end < text.length) {
-        const code = text.charCodeAt(end)
+      while (end < input.length) {
+        const code = input.charCodeAt(end)
         if (code >= 0x40 && code <= 0x7e) break
         end++
       }
-      if (end >= text.length) break
-      const sequence = text.slice(index, end + 1)
+      if (end >= input.length) break
+      const sequence = input.slice(index, end + 1)
       const final = sequence.at(-1)
       const params = sequence.slice(2, -1).split(";")
       if (final === "s") {
@@ -143,24 +183,29 @@ export function renderTerminalOutput(text: string) {
       if (final === "K") {
         const mode = Number.parseInt(params[0] ?? "0", 10) || 0
         const line = currentLine()
-        if (mode === 2) writeLine("")
-        if (mode === 1) writeLine(" ".repeat(Math.min(column + 1, line.length)) + line.slice(column + 1))
-        if (mode === 0) writeLine(line.slice(0, column))
+        if (mode === 2) truncate(line, 0)
+        if (mode === 1) fill(line, 0, column + 1, " ")
+        if (mode === 0) truncate(line, column)
       }
       if (final === "J") {
         const mode = Number.parseInt(params[0] ?? "0", 10) || 0
         if (mode === 2 || mode === 3) {
-          lines.splice(0, lines.length, "")
+          renderedCells = 0
+          lines.splice(0, lines.length, [])
           row = 0
           column = 0
         }
         if (mode === 1) {
-          for (let lineIndex = 0; lineIndex < row; lineIndex++) lines[lineIndex] = ""
-          writeLine(" ".repeat(Math.min(column + 1, currentLine().length)) + currentLine().slice(column + 1))
+          for (let lineIndex = 0; lineIndex < row; lineIndex++) {
+            renderedCells -= lines[lineIndex]?.length ?? 0
+            lines[lineIndex] = []
+          }
+          fill(currentLine(), 0, column + 1, " ")
         }
         if (mode === 0) {
-          writeLine(currentLine().slice(0, column))
-          lines.splice(row + 1)
+          truncate(currentLine(), column)
+          const removed = lines.splice(row + 1)
+          renderedCells -= removed.reduce((sum, line) => sum + line.length, 0)
         }
       }
       if (final === "A") {
@@ -191,7 +236,7 @@ export function renderTerminalOutput(text: string) {
       if (final === "X") {
         const line = currentLine()
         const count = csiValue(params, 0, 1)
-        writeLine(line.slice(0, column) + " ".repeat(Math.min(count, Math.max(0, line.length - column))) + line.slice(column + count))
+        fill(line, column, column + Math.min(count, Math.max(0, line.length - column)), " ")
       }
       index = end
       continue
@@ -212,20 +257,18 @@ export function renderTerminalOutput(text: string) {
     }
     if (char === "\t") {
       const nextTabColumn = clampColumn(column + (8 - (column % 8)))
-      const line = currentLine()
-      writeLine(line.padEnd(nextTabColumn, " "))
+      extend(currentLine(), nextTabColumn)
       column = nextTabColumn
       continue
     }
     if (char < " " && char !== "\t") continue
 
-    const line = currentLine()
-    const padded = line.length < column ? line.padEnd(column, " ") : line
-    writeLine(padded.slice(0, column) + char + padded.slice(column + 1))
-    column = clampColumn(column + 1)
+    writeCharacter(char)
   }
 
-  return lines.join("\n")
+  const rendered = lines.map((line) => line.join(""))
+  const visible = rendered.length > MAX_TERMINAL_CURSOR_ROWS ? rendered.slice(-MAX_TERMINAL_CURSOR_ROWS) : rendered
+  return visible.join("\n")
 }
 
 function replayCandidate(text: string) {

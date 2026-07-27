@@ -311,6 +311,109 @@ describe("tool.task", () => {
     }),
   )
 
+  it.instance("rejects nested task creation once the default depth is exhausted", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const backgroundTasks = yield* BackgroundTask.Service
+      const { chat, assistant } = yield* seed()
+      const child = yield* sessions.create({ parentID: chat.id, title: "Existing parent" })
+      const parentTask = yield* backgroundTasks.start({
+        taskID: child.id,
+        parentSessionID: chat.id,
+        rootSessionID: chat.id,
+        depth: 1,
+        startRunning: true,
+        title: "Existing parent",
+        agent: "general",
+      })
+      const childAssistant = yield* sessions.updateMessage({
+        ...assistant,
+        id: MessageID.ascending(),
+        parentID: assistant.id,
+        sessionID: child.id,
+        mode: "general",
+        agent: "general",
+      } satisfies MessageV2.Assistant)
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+
+      const exit = yield* def
+        .execute(
+          {
+            description: "nested task",
+            prompt: "delegate once more",
+            subagent_type: "general",
+          },
+          {
+            sessionID: child.id,
+            messageID: childAssistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: stubOps() },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      yield* backgroundTasks.finish({ taskID: child.id, generation: parentTask.generation, state: "completed" })
+    }),
+  )
+
+  it.instance(
+    "allows one nested level when configured and reports the durable tree metadata",
+    () =>
+      Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const backgroundTasks = yield* BackgroundTask.Service
+        const { chat, assistant } = yield* seed()
+        const child = yield* sessions.create({ parentID: chat.id, title: "Existing parent" })
+        const parentTask = yield* backgroundTasks.start({
+          taskID: child.id,
+          parentSessionID: chat.id,
+          rootSessionID: chat.id,
+          depth: 1,
+          startRunning: true,
+          title: "Existing parent",
+          agent: "general",
+        })
+        const childAssistant = yield* sessions.updateMessage({
+          ...assistant,
+          id: MessageID.ascending(),
+          parentID: assistant.id,
+          sessionID: child.id,
+          mode: "general",
+          agent: "general",
+        } satisfies MessageV2.Assistant)
+        const tool = yield* TaskTool
+        const def = yield* tool.init()
+        const result = yield* def.execute(
+          {
+            description: "nested task",
+            prompt: "delegate once more",
+            subagent_type: "general",
+          },
+          {
+            sessionID: child.id,
+            messageID: childAssistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: stubOps({ text: "nested result" }) },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+
+        expect(result.metadata.depth).toBe(2)
+        expect(result.output).toContain("task_status: completed")
+        yield* backgroundTasks.finish({ taskID: child.id, generation: parentTask.generation, state: "completed" })
+      }),
+    { config: { experimental: { subagent_depth: 2 } } },
+  )
+
   it.instance("execute marks parent as waiting for subagent with a non-stale TTL", () =>
     Effect.gen(function* () {
       const status = yield* SessionStatus.Service

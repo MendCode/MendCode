@@ -71,6 +71,29 @@ const RETRYABLE_NETWORK_ERROR_CODES = new Set([
   "UND_ERR_SOCKET",
 ])
 
+function normalizedNetworkErrorCode(code: unknown) {
+  if (typeof code !== "string") return undefined
+  const normalized = code.toUpperCase()
+  if (RETRYABLE_NETWORK_ERROR_CODES.has(normalized)) return normalized
+
+  // The AI SDK wraps some fetch transport failures with descriptive codes
+  // instead of the Node errno used by the retry policy.
+  switch (normalized) {
+    case "CONNECTIONREFUSED":
+      return "ECONNREFUSED"
+    case "CONNECTIONRESET":
+      return "ECONNRESET"
+    case "CONNECTIONABORTED":
+      return "ECONNABORTED"
+    case "NETWORKUNREACHABLE":
+      return "ENETUNREACH"
+    case "HOSTUNREACHABLE":
+      return "EHOSTUNREACH"
+    default:
+      return undefined
+  }
+}
+
 type RetryableNetworkError = {
   message: string
   metadata: Record<string, string>
@@ -780,15 +803,24 @@ function previewInfoForTui(message: Info): Info {
 const TUI_TEXT_PREVIEW_CHARS = 128 * 1024
 const TUI_TOOL_OUTPUT_PREVIEW_CHARS = 16 * 1024
 const TUI_METADATA_PREVIEW_CHARS = 4 * 1024
-const TUI_DIFF_PREVIEW_CHARS = 3 * TUI_METADATA_PREVIEW_CHARS
+const TUI_DIFF_PREVIEW_CHARS = 512 * 1024
+const TUI_CONTENT_PREVIEW_CHARS = 512 * 1024
 const TUI_FIELD_PREVIEW_CHARS = 2 * 1024
 const TUI_PATCH_FILE_LIMIT = 256
 const TUI_PREVIEW_ARRAY_LIMIT = 8
 const TUI_SUMMARY_DIFF_LIMIT = 64
+const TUI_PARTS_PAGE_LIMIT = 96
 
 function previewString(input: string, maxChars: number, _label: string) {
   if (input.length <= maxChars) return input
   return input.slice(0, maxChars)
+}
+
+function previewContent(input: string, label: string) {
+  if (input.length <= TUI_CONTENT_PREVIEW_CHARS) return input
+  const marker = `\n[${label} preview truncated: omitted ${input.length - TUI_CONTENT_PREVIEW_CHARS} chars; showing the beginning.]\n`
+  const budget = Math.max(0, TUI_CONTENT_PREVIEW_CHARS - marker.length)
+  return `${input.slice(0, budget)}${marker}`
 }
 
 function previewDiff(input: string) {
@@ -815,15 +847,18 @@ function previewUnknown(input: unknown, maxChars: number, label: string, depth =
   const result: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(input)) {
     const diffLike = key === "diff" || key === "patch"
-    const nextMax =
-      diffLike || key === "output" || key === "content"
-        ? diffLike
-          ? TUI_DIFF_PREVIEW_CHARS
-          : maxChars
-        : Math.min(maxChars, TUI_FIELD_PREVIEW_CHARS)
+    const nextMax = diffLike
+      ? TUI_DIFF_PREVIEW_CHARS
+      : key === "content"
+        ? TUI_CONTENT_PREVIEW_CHARS
+        : key === "output"
+          ? maxChars
+          : Math.min(maxChars, TUI_FIELD_PREVIEW_CHARS)
     result[key] =
       diffLike && typeof value === "string"
         ? previewDiff(value)
+        : key === "content" && typeof value === "string"
+          ? previewContent(value, `${label}.${key}`)
         : previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
   }
   return result
@@ -998,9 +1033,9 @@ function hydrate(
             .all(),
         )
         const more = partRows.length > limit
-        const selected = more ? partRows.slice(0, limit) : partRows
+        const selected = (options.partFilter ? partRows.filter(options.partFilter) : partRows).slice(0, limit)
         const parts = selected.map((row) => part(row, options.view))
-        const last = selected.at(-1)
+        const last = selected.at(-1) ?? (more ? partRows.at(-1) : undefined)
         partByMessage.set(messageID, {
           parts,
           more,
@@ -1597,7 +1632,7 @@ function latestTuiUserMessage(sessionID: SessionID) {
       .limit(25)
       .all(),
   )
-  return hydrate(rows, { view: "tui" }).find(
+  return hydrate(rows, { view: "tui", partsLimit: TUI_PARTS_PAGE_LIMIT }).find(
     (message) =>
       message.info.role === "user" &&
       message.parts.some(
@@ -1611,6 +1646,7 @@ function compactedPage(input: {
   limit: number
   before?: Cursor
   after?: Cursor
+  partsLimit?: number
 }): PageResult | undefined {
   const boundary = compactedHistoryBoundary(input.sessionID)
   if (!boundary) return
@@ -1681,11 +1717,15 @@ function compactedPage(input: {
       )
       .map((entry) => entry.row.id),
   )
-  const items = hydrate(pageSlice.map((entry) => entry.row), {
-    view: "tui",
-    partFilter: (row) =>
-      !simpleHistoryMessageIDs.has(row.message_id) || row.data.type === "text" || row.data.type === "compaction",
-  })
+  const items = hydrate(
+    pageSlice.map((entry) => entry.row),
+    {
+      view: "tui",
+      partsLimit: input.partsLimit ?? TUI_PARTS_PAGE_LIMIT,
+      partFilter: (row) =>
+        !simpleHistoryMessageIDs.has(row.message_id) || row.data.type === "text" || row.data.type === "compaction",
+    },
+  )
   if (!ascending) items.reverse()
   const latestUser = !input.before && !input.after ? latestTuiUserMessage(input.sessionID) : undefined
   if (latestUser && !items.some((item) => item.info.id === latestUser.info.id)) {
@@ -1711,8 +1751,10 @@ export function page(input: {
 }): PageResult {
   const before = input.before ? cursor.decode(input.before) : undefined
   const after = input.after ? cursor.decode(input.after) : undefined
+  const partsLimit =
+    input.view === "tui" || input.view === "tui-all" ? (input.partsLimit ?? TUI_PARTS_PAGE_LIMIT) : input.partsLimit
   if (input.view === "tui") {
-    const compacted = compactedPage({ sessionID: input.sessionID, limit: input.limit, before, after })
+    const compacted = compactedPage({ sessionID: input.sessionID, limit: input.limit, before, after, partsLimit })
     if (compacted) return compacted
   }
   const where = before
@@ -1745,7 +1787,7 @@ export function page(input: {
 
   const more = rows.length > input.limit
   const slice = more ? rows.slice(0, input.limit) : rows
-  const items = hydrate(slice, { view: input.view, partsLimit: input.partsLimit })
+  const items = hydrate(slice, { view: input.view, partsLimit })
   if (!after) items.reverse()
   const tail = slice.at(-1)
   return {
@@ -1799,9 +1841,11 @@ export function get(input: {
       .get(),
   )
   if (!row) throw new NotFoundError({ message: `Message not found: ${input.messageID}` })
+  const partsLimit =
+    input.view === "tui" || input.view === "tui-all" ? (input.partsLimit ?? TUI_PARTS_PAGE_LIMIT) : input.partsLimit
   return hydrate([row], {
     view: input.view,
-    partsLimit: input.partsLimit,
+    partsLimit,
     partsAfter: input.partsAfter,
   })[0]
 }
@@ -2218,12 +2262,17 @@ function findEmbeddedDataUrlDownloadError(e: unknown): EmbeddedDataUrlDownloadEr
 function retryableNetworkError(e: unknown): RetryableNetworkError | undefined {
   if (typeof e !== "object" || e === null) return undefined
 
-  const err = e as SystemError & { cause?: unknown }
-  const code = typeof err.code === "string" ? err.code : undefined
+  const err = e as SystemError & { cause?: unknown; errors?: unknown }
+  const code = normalizedNetworkErrorCode(err.code)
   const syscall = typeof err.syscall === "string" ? err.syscall : undefined
   const message = errorMessage(e)
   const lower = message.toLowerCase()
   const cause: RetryableNetworkError | undefined = retryableNetworkError(err.cause)
+  const nested: RetryableNetworkError | undefined = Array.isArray(err.errors)
+    ? err.errors.map((item) => retryableNetworkError(item)).find((item): item is RetryableNetworkError => Boolean(item))
+    : undefined
+
+  if (nested) return nested
 
   if (code && RETRYABLE_NETWORK_ERROR_CODES.has(code)) {
     return {
@@ -2238,8 +2287,14 @@ function retryableNetworkError(e: unknown): RetryableNetworkError | undefined {
 
   if (
     lower.includes("fetch failed") ||
+    lower.includes("cannot connect to api") ||
+    lower.includes("unable to connect") ||
     lower.includes("network error") ||
     lower.includes("networkerror") ||
+    lower.includes("network connection") ||
+    lower.includes("network unavailable") ||
+    lower.includes("network changed") ||
+    lower.includes("offline") ||
     lower.includes("connection closed") ||
     lower.includes("connection reset") ||
     lower.includes("connection aborted") ||
@@ -2253,6 +2308,9 @@ function retryableNetworkError(e: unknown): RetryableNetworkError | undefined {
     lower.includes("no route to host") ||
     lower.includes("socket hang up") ||
     lower.includes("premature close") ||
+    lower.includes("operation was aborted") ||
+    lower.includes("request aborted") ||
+    lower.includes("stream aborted") ||
     lower.includes("read timed out") ||
     lower.includes("stream timed out") ||
     lower.includes("sse read timed out") ||
@@ -2269,6 +2327,34 @@ function retryableNetworkError(e: unknown): RetryableNetworkError | undefined {
   }
 
   return cause
+}
+
+export function isNetworkError(error: unknown) {
+  if (!APIError.isInstance(error)) return false
+  const metadata = error.data.metadata
+  const code = normalizedNetworkErrorCode(metadata?.code)
+  if (code) return true
+
+  const message = error.data.message.toLowerCase()
+  return [
+    "fetch failed",
+    "network",
+    "connection",
+    "cannot connect to api",
+    "unable to connect",
+    "socket",
+    "timed out",
+    "timeout",
+    "unreachable",
+    "no route to host",
+    "offline",
+    "disconnected",
+    "request aborted",
+    "operation was aborted",
+    "stream aborted",
+    "premature close",
+    "terminated",
+  ].some((marker) => message.includes(marker))
 }
 
 function networkRetryMessage(code: string) {

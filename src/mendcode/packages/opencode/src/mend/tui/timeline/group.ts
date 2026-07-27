@@ -29,6 +29,7 @@ export type TimelineNode = TimelinePart | TimelineRow | TimelineCollapse
 export type TimelineGroupOptions = {
   showReasoningRows?: boolean
   completed?: boolean
+  forceCompact?: boolean
 }
 
 const MAX_VISIBLE_COMPLETED_ROWS = 5
@@ -37,8 +38,8 @@ function isTimelineRow(node: TimelineNode): node is TimelineRow {
   return node.type === "row" && "title" in node && "state" in node
 }
 
-export function shouldGroupTimeline(profile: MendPresentationProfile) {
-  return profile === "minimal" || profile === "mendcode"
+export function shouldGroupTimeline(profile: MendPresentationProfile, forceCompact = false) {
+  return forceCompact || profile === "minimal" || profile === "mendcode"
 }
 
 export function isTimelineStackStart(nodes: Array<{ type: string; text?: string }>, index: number) {
@@ -47,15 +48,26 @@ export function isTimelineStackStart(nodes: Array<{ type: string; text?: string 
   return previous?.type === "text" && Boolean(previous.text?.trim())
 }
 
-export function timelineCollapseLabel(collapse: Pick<TimelineCollapse, "count" | "rows">, options: { expanded?: boolean } = {}) {
+export function timelineNodeKeys(nodes: ReadonlyArray<{ type: string; id?: string }>) {
+  return nodes.map((node, index) => `${node.type}:${node.id || index}`)
+}
+
+export function timelineCollapseLabel(
+  collapse: Pick<TimelineCollapse, "count" | "rows">,
+  options: { expanded?: boolean } = {},
+) {
   const toolRows = collapse.rows.filter((row) => row.tool).length
   const nounBase = toolRows > 0 && toolRows === collapse.rows.length ? "tool" : "item"
   const noun = collapse.count === 1 ? nounBase : `${nounBase}s`
   return `${Locale.number(collapse.count)} ${noun} ${options.expanded ? "shown" : "more"}`
 }
 
-export function groupTimelineParts(profile: MendPresentationProfile, parts: TimelinePart[], options: TimelineGroupOptions = {}) {
-  if (!shouldGroupTimeline(profile)) return parts
+export function groupTimelineParts(
+  profile: MendPresentationProfile,
+  parts: TimelinePart[],
+  options: TimelineGroupOptions = {},
+) {
+  if (!shouldGroupTimeline(profile, options.forceCompact)) return parts
 
   const nodes = parts.flatMap((part): TimelineNode[] => {
     if (isInvisiblePart(part)) return []
@@ -64,10 +76,15 @@ export function groupTimelineParts(profile: MendPresentationProfile, parts: Time
   return collapseCompletedRows(nodes)
 }
 
-function rowNode(profile: MendPresentationProfile, part: TimelinePart, options: TimelineGroupOptions): TimelineRow | undefined {
-  if (part.type === "reasoning") return profile === "minimal" && options.showReasoningRows ? reasoningRow(part) : undefined
+function rowNode(
+  profile: MendPresentationProfile,
+  part: TimelinePart,
+  options: TimelineGroupOptions,
+): TimelineRow | undefined {
+  if (part.type === "reasoning")
+    return profile === "minimal" && options.showReasoningRows ? reasoningRow(part) : undefined
   if (part.type !== "tool" || !part.tool || !part.state) return
-  if (!shouldRenderCompactTool(profile, part.tool)) return
+  if (!options.forceCompact && !shouldRenderCompactTool(profile, part.tool)) return
 
   const event = normalizeToolEvent({
     tool: part.tool,

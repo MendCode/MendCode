@@ -10,6 +10,7 @@ import { tsmStatus } from "../config/tsm"
 
 const primaryCommands = [
   "run",
+  "session",
   "chat",
   "status",
   "doctor",
@@ -147,6 +148,8 @@ function usage(exitCode = 0) {
 Usage:
   mendcode                         open MendCode in the current project
   mendcode run [message..]         open MendCode with message ready to send
+  mendcode -s <session_id>         reopen an existing session
+  mendcode session <operation>     automate sessions with human or JSON output
   mendcode chat [message..]        run a control-plane chat turn
   mendcode --worktree [target]     open MendCode in a git worktree by branch/path/id
   mendcode --tsm [target|--all]    open TSM workspace with MendCode split
@@ -201,8 +204,11 @@ function advancedUsage(exitCode = 0) {
 
 Primary public surface:
   mendcode
-  mendcode run [message..]
-  mendcode chat [message..]
+   mendcode run [message..]
+   mendcode -s <session_id>
+   mendcode session <operation>
+   mendcode chat [message..]
+
   mendcode --worktree [branch|path|id]
   mendcode --tsm [branch|path|id|--all]
   mendcode status|doctor
@@ -274,7 +280,7 @@ function looksLikeSessionID(value: string) {
 
 export function runtimeArgsForSessionShortcut(sessionID: string, cwd = shellCwd()) {
   if (!looksLikeSessionID(sessionID)) throw new Error(`Invalid MendCode session id: ${sessionID}`)
-  return [cwd, "--session", sessionID]
+  return [cwd, "-s", sessionID]
 }
 
 function shellCwd() {
@@ -294,14 +300,18 @@ function controlPlaneEnv(root: string) {
   }
 }
 
-function runtimeEnv(root: string) {
+export function runtimeEnv(root: string, baseEnv: Record<string, string | undefined> = process.env) {
   const paths = mendPaths(root)
+  const env = { ...baseEnv }
+  if (env.MENDCODE_CONFIG_DIR === paths.mendDir) delete env.MENDCODE_CONFIG_DIR
+  if (env.OPENCODE_CONFIG_DIR === paths.mendDir) delete env.OPENCODE_CONFIG_DIR
   return {
-    ...process.env,
+    ...env,
     MENDCODE: "1",
     MENDCODE_VERSION: mendVersion(root),
     MENDCODE_ROOT: root,
-    MENDCODE_CONFIG_DIR: paths.mendDir,
+    MENDCODE_CONFIG_DIR: env.MENDCODE_CONFIG_DIR,
+    OPENCODE_CONFIG_DIR: env.OPENCODE_CONFIG_DIR,
     OPENCODE_CONFIG: paths.generatedOpencodeConfig,
   }
 }
@@ -309,7 +319,11 @@ function runtimeEnv(root: string) {
 function runControlPlane(args: string[], root = mendPaths().root) {
   const paths = mendPaths(root)
   const bunBin = process.env.MENDCODE_BUN_BIN || "bun"
-  const result = spawnSync(bunBin, [paths.runtimeControlPlane, ...args], {
+  const backgroundDaemon =
+    (args[0] === "loops" && args[1] === "daemon") ||
+    (args[0] === "memory" && args[1] === "dream" && args[2] === "daemon")
+  const entrypoint = backgroundDaemon ? paths.runtimeBackgroundDaemon : paths.runtimeControlPlane
+  const result = spawnSync(bunBin, [entrypoint, ...args], {
     cwd: paths.ownedRuntimePackage,
     env: controlPlaneEnv(root),
     stdio: "inherit",
@@ -337,7 +351,7 @@ function enforceDonorIdentityGuard(args: string[]) {
     throw new Error([
       `Blocked legacy session restore command for: ${legacySessionID}`,
       "MendCode owns session restore through its public CLI; the donor runtime is internal compatibility only.",
-      `Use: mendcode --session ${legacySessionID}`,
+      `Use: mendcode -s ${legacySessionID}`,
       "If this came from Herdr/tmux restore, replace the saved command with the MendCode command above.",
       `Temporary internal override: ${status.overrideEnv}=1 mendcode opencode -- ${args.join(" ") || "--help"}`,
     ].join("\n"))
@@ -486,6 +500,30 @@ async function runTsmShortcut(args: string[]) {
 }
 
 function runTuiWithMessage(args: string[]) {
+  const headlessFlags = new Set([
+    "--format",
+    "--json",
+    "--command",
+    "--file",
+    "-f",
+    "--title",
+    "--attach",
+    "--password",
+    "--username",
+    "--port",
+    "--share",
+    "--variant",
+    "--thinking",
+    "--dangerously-skip-permissions",
+  ])
+  if (args.some((arg) => headlessFlags.has(arg.split("=", 1)[0]))) {
+    const normalized = args.flatMap((arg) => (arg === "--json" ? ["--format", "json"] : [arg]))
+    if (!normalized.includes("--dir") && !normalized.some((arg) => arg === "--attach" || arg.startsWith("--attach="))) {
+      normalized.unshift("--dir", shellCwd())
+    }
+    return runRuntime(["run", ...normalized])
+  }
+
   const passthrough: string[] = []
   const message: string[] = []
   for (let i = 0; i < args.length; i++) {
@@ -502,6 +540,16 @@ function runTuiWithMessage(args: string[]) {
   return runRuntime([shellCwd(), "--initial-message", message.join(" "), ...passthrough])
 }
 
+function runSession(args: string[]) {
+  const forwarded = args.some((arg) => arg === "--dir" || arg.startsWith("--dir=")) ? args : ["--dir", shellCwd(), ...args]
+  return runRuntime(["session", ...forwarded])
+}
+
+function runSessionShortcut(args: string[]) {
+  if (args.length !== 1) throw new Error("Usage: mendcode -s <session_id>")
+  return runRuntime(runtimeArgsForSessionShortcut(args[0]!))
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const [cmd, ...args] = argv
   try {
@@ -510,11 +558,11 @@ export async function main(argv = process.argv.slice(2)) {
     if (cmd === "help" || cmd === "-h" || cmd === "--help") usage(0)
     if (cmd.startsWith("ses_")) {
       if (!looksLikeSessionID(cmd)) throw new Error(`Invalid MendCode session id: ${cmd}`)
-      if (args.length) throw new Error(`Usage: mendcode --session ${cmd}\nThe shortcut \`mendcode ${cmd}\` opens that session and does not accept extra arguments.`)
-      return runRuntime(runtimeArgsForSessionShortcut(cmd))
+      throw new Error(`Usage: mendcode -s ${cmd}\nSession shortcuts require the -s argument.`)
     }
     if (cmd === "--worktree") return await runWorktreeShortcut(args)
     if (cmd === "--tsm") return await runTsmShortcut(args)
+    if (cmd === "-s" || cmd === "--session") return runSessionShortcut(args)
     if (cmd.startsWith("-")) return runRuntime([shellCwd(), cmd, ...args])
     if (cmd === "opencode") {
       const donorArgs = args[0] === "--" ? args.slice(1) : args
@@ -522,6 +570,7 @@ export async function main(argv = process.argv.slice(2)) {
       return runRuntime(donorArgs)
     }
     if (cmd === "run") return runTuiWithMessage(args)
+    if (cmd === "session") return runSession(args)
     if (cmd === "--") {
       enforceDonorIdentityGuard(args)
       return runRuntime(args)

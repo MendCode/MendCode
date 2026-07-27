@@ -305,6 +305,122 @@ describe("plugin.herdr", () => {
     ).toBe(false)
   })
 
+  test("serializes concurrent status events in bus order", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    let getCalls = 0
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          get: async () => {
+            getCalls += 1
+            if (getCalls === 1) await new Promise((resolve) => setTimeout(resolve, 10))
+            return { data: { id: "ses_race" } }
+          },
+        },
+      },
+    } as any)
+    requests.length = 0
+
+    const busy = hooks.event?.({
+      event: {
+        type: "session.status",
+        properties: { sessionID: "ses_race", status: { type: "busy" } },
+      },
+    } as any)
+    const idle = hooks.event?.({
+      event: {
+        type: "session.idle",
+        properties: { sessionID: "ses_race" },
+      },
+    } as any)
+    await Promise.all([busy, idle])
+
+    const stateReports = requests.filter(
+      (request) => request.method === "pane.report_agent" && request.params.source === "mendcode:state",
+    )
+    expect(stateReports.at(-1)?.params.state).toBe("idle")
+  })
+
+  test("does not downgrade an active chat from a stale idle status", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const hooks = await HerdrAgentStatePlugin({
+      client: {
+        session: {
+          get: async () => ({ data: { id: "ses_active" } }),
+        },
+      },
+    } as any)
+    await hooks["chat.message"]?.({ sessionID: "ses_active" } as any, { message: {}, parts: [] } as any)
+    requests.length = 0
+
+    await hooks.event?.({
+      event: {
+        type: "session.status",
+        properties: { sessionID: "ses_active", status: { type: "idle" } },
+      },
+    } as any)
+
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.state === "working",
+      ),
+    ).toBe(true)
+    expect(requests.some((request) => request.method === "pane.report_agent" && request.params.state === "idle")).toBe(
+      false,
+    )
+  })
+
+  test("does not let a disposed old instance release a newer reporter", async () => {
+    process.env.HERDR_ENV = "1"
+    process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"
+    process.env.HERDR_PANE_ID = "w1:p1"
+    delete process.env.MENDCODE_DISABLE_HERDR_REPORTING
+
+    const requests = captureHerdrRequests()
+    const directory = "/tmp/mendcode-herdr"
+    const client = {
+      session: {
+        get: async () => ({ data: { id: "ses_current" } }),
+      },
+    }
+    const oldHooks = await HerdrAgentStatePlugin({ client, directory } as any)
+    requests.length = 0
+    const currentHooks = await HerdrAgentStatePlugin({ client, directory } as any)
+    requests.length = 0
+
+    await oldHooks.event?.({
+      event: {
+        type: "server.instance.disposed",
+        properties: { directory },
+      },
+    } as any)
+
+    expect(requests.some((request) => request.method === "pane.release_agent")).toBe(false)
+
+    await currentHooks["chat.message"]?.({ sessionID: "ses_current" } as any, { message: {}, parts: [] } as any)
+    expect(
+      requests.some(
+        (request) =>
+          request.method === "pane.report_agent" &&
+          request.params.source === "mendcode:state" &&
+          request.params.state === "working",
+      ),
+    ).toBe(true)
+  })
+
   test("syncs the live MendCode session state when selecting an already-active session", async () => {
     process.env.HERDR_ENV = "1"
     process.env.HERDR_SOCKET_PATH = "/tmp/herdr.sock"

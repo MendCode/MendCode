@@ -4,7 +4,7 @@ import path from "path"
 import { memoryPaths, readMemoryConfig, type DreamConsolidationPolicy, type MemoryConfig, type MemoryScope } from "./config"
 import { readMemoryFacts, type MemoryFact } from "./graph"
 import type { DreamEvidenceRef } from "./dream-sources"
-import { readMemoryEntries, type MemoryEntry } from "./store"
+import { archiveMemoryEntries, readMemoryEntries, type MemoryEntry } from "./store"
 import {
   applyMemoryProposal,
   archiveMemoryProposal,
@@ -69,6 +69,134 @@ export type DreamConsolidationModelInput = {
 }
 
 export type DreamConsolidationModel = (input: DreamConsolidationModelInput) => Promise<DreamConsolidationDecision[]>
+
+function comparableMemoryText(value: string) {
+  return redactMemoryText(value).text.toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim()
+}
+
+function isConsolidationDuplicate(candidate: string, existing: string) {
+  if (!candidate || !existing) return false
+  const candidateConcept = memoryConceptKey(candidate)
+  const existingConcept = memoryConceptKey(existing)
+  if (candidateConcept && candidateConcept === existingConcept) return true
+  if (candidate === existing || candidate.includes(existing) || existing.includes(candidate)) return true
+  const candidateTerms = new Set(candidate.split(" ").filter((term) => term.length > 3))
+  const existingTerms = new Set(existing.split(" ").filter((term) => term.length > 3))
+  const shared = [...candidateTerms].filter((term) => existingTerms.has(term)).length
+  return shared >= 4
+    && shared / Math.max(1, Math.min(candidateTerms.size, existingTerms.size)) >= 0.8
+    && shared / Math.max(1, Math.max(candidateTerms.size, existingTerms.size)) >= 0.65
+}
+
+function memoryConceptKey(value: string) {
+  const text = comparableMemoryText(value)
+  const noPermanentRemoval = /\b(?:never permanently (?:delete|remove)|(?:permanent|permanently) (?:delet|remov)|nunca (?:eliminar|borrar) permanentemente|(?:eliminacion|borrado) permanente)\b/.test(text)
+  const trashPolicy = /\b(?:trash|recycle bin|papelera)\b/.test(text)
+  if (noPermanentRemoval && trashPolicy) return "safety-no-permanent-delete"
+
+  const confirmation = /\b(?:clarifying questions|ask(?:\s+\S+){0,4}\s+questions|obtain(?:\s+\S+){0,4}\s+confirmation|preguntas aclaratorias|pedir(?:\s+\S+){0,4}\s+confirmacion|obtener(?:\s+\S+){0,4}\s+confirmacion)\b/.test(text)
+  const featureOrPlan = /\b(?:feature|features|implementation plan|plan de implementacion|implementar|implementing)\b/.test(text)
+  if (confirmation && featureOrPlan) return "agent-confirmation-before-change"
+
+  const directWork = /\b(?:work directly by default|default to direct work|direct work by default|trabajar directamente por defecto|trabajo directo por defecto|few or no subagents|few subagents|pocos o ningun subagente|usar pocos subagentes)\b/.test(text)
+  const delegation = /\b(?:subagents?|subagentes?|reviewers?|revisores?)\b/.test(text)
+  if (directWork && delegation) return "agent-direct-work-by-default"
+
+  const projectScope = /\b(?:repo(?:sitory)?|product|repositorio|proyecto)\b/.test(text)
+  const scopePolicy = /\b(?:project scope|scope de proyecto|alcance de proyecto|specific to|especifica de)\b/.test(text)
+  if (projectScope && scopePolicy) return "memory-project-scope"
+  return null
+}
+
+export function isMemoryMaintenanceInstruction(value: string, metadata?: { tags?: string[]; categoryIDs?: string[] }) {
+  const text = comparableMemoryText(value)
+  if (!text) return false
+  const metadataText = [...(metadata?.tags ?? []), ...(metadata?.categoryIDs ?? [])].join(" ")
+  const mentionsMemory = /\b(?:memory|memories|memoria|memorias|policy|policies|politica|politicas|scope|alcance)\b/i.test(text)
+    || /\b(?:memory|memoria|policy|politica|consolidation|maintenance|mantenimiento)\b/i.test(comparableMemoryText(metadataText))
+  const maintenance = /\b(?:maintenance|mantenimiento|consolid\w*|deduplic\w*|recategor\w*|reclassif\w*|reclasif\w*|classif\w*|clasif\w*|canonical\w*|canonic\w*|archiv(?:ar|e|ed|al|ad[oa]s?|amiento|ando|ing)|retir\w*|merg\w*)\b/i.test(text)
+  const controlInstruction = /\b(?:memory proposal|move memory|mover la memoria|dream proposal|propuesta de dream|dejar como propuesta|revisable antes de aplicar|target mem|category mem)\b/i.test(text)
+  return mentionsMemory && (maintenance || controlInstruction)
+}
+
+function maintenanceTopic(value: string) {
+  const text = comparableMemoryText(value)
+  if (/trash|recycle|permanent|delete|elimin|borr|directori|archivo/.test(text)) return "file-safety"
+  if (/subagent|reviewer|review|subagente/.test(text)) return "delegation"
+  if (/confirm|pregunt|clarif|feature|plan/.test(text)) return "confirmation"
+  if (/scope|repo|repository|product|proyecto|alcance/.test(text)) return "scope"
+  return "memory"
+}
+
+function canonicalMemoryRank(entry: MemoryEntry) {
+  return Number(entry.source !== "memory-dream") * 10 + entry.confidence
+}
+
+function isProtectedCanonical(entry: MemoryEntry) {
+  return entry.source === "memory-tool" || entry.source === "manual-cli"
+}
+
+export async function cleanupGeneratedMemoryEntries(root?: string) {
+  const entries = await readMemoryEntries("global", root)
+  const maintenanceSources = new Set(["memory-dream", "memory-side-chat"])
+  const maintenance = entries.filter((entry) => maintenanceSources.has(entry.source) && isMemoryMaintenanceInstruction(entry.text, entry))
+  const maintenanceIDs = new Set(maintenance.map((entry) => entry.id))
+  const retained: MemoryEntry[] = []
+  const selections: Array<{ id: string; reason: string; canonicalEntryID?: string | null }> = []
+
+  for (const entry of entries.filter((item) => !maintenanceIDs.has(item.id)).toSorted((a, b) => canonicalMemoryRank(b) - canonicalMemoryRank(a) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))) {
+    const comparable = comparableMemoryText(entry.text)
+    const canonical = isProtectedCanonical(entry) ? undefined : retained.find((item) => isConsolidationDuplicate(comparable, comparableMemoryText(item.text)))
+    if (canonical) {
+      selections.push({ id: entry.id, canonicalEntryID: canonical.id, reason: "Dream archived a duplicate active memory in favor of an existing canonical entry." })
+      continue
+    }
+    retained.push(entry)
+  }
+
+  const canonicalByTopic = new Map<string, MemoryEntry>()
+  for (const entry of retained) {
+    const topic = maintenanceTopic(entry.text)
+    if (!canonicalByTopic.has(topic)) canonicalByTopic.set(topic, entry)
+  }
+  for (const entry of maintenance) {
+    const topic = maintenanceTopic(entry.text)
+    const canonical = canonicalByTopic.get(topic)
+    selections.push({
+      id: entry.id,
+      canonicalEntryID: canonical?.id,
+      reason: "Dream archived a generated memory-maintenance instruction; maintenance belongs to the consolidator, not active memory.",
+    })
+  }
+
+  if (!selections.length) return { archived: [], retained: entries.length }
+  const result = await archiveMemoryEntries("global", selections, root)
+  return { archived: result.archived, retained: Math.max(0, entries.length - result.archived.length) }
+}
+
+export const deterministicDreamConsolidator: DreamConsolidationModel = async (input) => {
+  const existing = [
+    ...input.entries.map((entry) => comparableMemoryText(entry.text)),
+    ...input.historicalProposals.filter((proposal) => proposal.status === "applied").map((proposal) => comparableMemoryText(proposal.text)),
+  ]
+  return input.proposals.map((proposal) => {
+    const comparable = comparableMemoryText(proposal.text)
+    const duplicate = existing.some((item) => isConsolidationDuplicate(comparable, item))
+    existing.push(comparable)
+    return {
+      proposalID: proposal.id,
+      resolution: duplicate ? "archive" : "apply",
+      reason: duplicate
+        ? "Archived by deterministic consolidation because the same memory is already applied."
+        : "Recommended for deterministic host safety gates; unsafe proposals are archived instead of applied.",
+      confidence: proposal.confidence,
+      durability: proposal.durability,
+      changeRisk: proposal.changeRisk,
+      categoryIDs: proposal.categoryIDs,
+      evidenceRefs: proposal.evidenceRefs,
+    }
+  })
+}
 
 export type DreamConsolidationDecisionStatus = "applied" | "archived" | "rejected" | "superseded" | "preview" | "failed"
 
@@ -200,8 +328,9 @@ const CONSOLIDATOR_INSTRUCTIONS = [
   "You have read-only context and no tools. Never request shell, Git, MCP, filesystem, or source edits.",
   "Return JSON only in the shape {\"decisions\":[...]}; do not include markdown or prose.",
   "Return exactly one decision for every proposal in the current batch using its proposalID.",
-  "Use resolution=apply for a safe existing proposal, update/remove for a targeted change, merge or supersede for duplicates, and archive/reject for uncertain, stale, contradictory, noisy, sensitive, or unsupported material.",
-  "Use canonicalProposalID when merging or superseding. Never invent target IDs.",
+  "Existing fact nodes are read-only context; consolidate only pending memory proposals and never delete or merge canonical facts directly.",
+  "Use resolution=apply for a safe existing proposal, update/remove for a targeted change, merge or supersede for duplicate proposals, and archive/reject for uncertain, stale, contradictory, noisy, sensitive, or unsupported material.",
+  "Use canonicalProposalID when merging or superseding proposals. Never invent target IDs.",
   "Prefer fewer durable memories over transient status, logs, todos, implementation details, or guesses.",
   "A decision is a recommendation only; deterministic host safety gates are authoritative.",
 ].join("\n")

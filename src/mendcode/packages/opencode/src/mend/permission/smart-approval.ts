@@ -87,6 +87,30 @@ const SAFE_COMMANDS = new Set([
   "write-output",
 ])
 
+const SAFE_BUN_VALIDATIONS = new Set(["typecheck"])
+const SAFE_VALIDATION_COMMANDS = new Set([
+  "biome",
+  "eslint",
+  "flake8",
+  "hadolint",
+  "markdownlint",
+  "mypy",
+  "phpcs",
+  "phpstan",
+  "prettier",
+  "pylint",
+  "pyright",
+  "ruff",
+  "shellcheck",
+  "swiftlint",
+  "tsc",
+  "tsgo",
+  "yamllint",
+])
+const READ_ONLY_VALIDATION_FLAG_RE = /^(?:--check(?:-only)?|--dry-run|--list-different|--no-emit|--syntax-only|--validate|--verify)$/i
+const WRITE_OR_EXECUTION_FLAG_RE =
+  /^(?:-i|--emit(?:-|=|$)|--fix(?:-|=|$)|--install(?:-|=|$)|--out(?:dir|file|-dir|-file)(?:=|$)|--run(?:-|=|$)|--watch(?:-|=|$)|--write(?:-|=|$))/i
+
 const SAFE_GIT_COMMANDS = new Set([
   "branch",
   "describe",
@@ -110,57 +134,6 @@ const UNSAFE_RG_COMMAND_RE = /(?:^|\s)--pre(?:=|\s|$)/i
 const UNSAFE_EXECUTION_ARGUMENT_RE =
   /^--?(?:command|cmd|compress-program|editor|exec(?:dir)?|ext-diff|ok(?:dir)?|pager|pre|program|receive-pack|textconv|upload-pack|use-compress-program)(?:=|$)/i
 const UNSAFE_SPECIAL_PATH_RE = /(?:^|[\\/])dev\/(?:fd|tcp|udp)(?:[\\/]|$)/i
-const CLEARLY_DESTRUCTIVE_COMMANDS = new Set([
-  "rm",
-  "unlink",
-  "rmdir",
-  "del",
-  "erase",
-  "remove-item",
-  "rd",
-  "chmod",
-  "chown",
-  "sudo",
-  "su",
-  "kill",
-  "pkill",
-  "killall",
-  "dd",
-  "mkfs",
-  "fdisk",
-  "parted",
-  "diskutil",
-  "mount",
-  "umount",
-  "format",
-  "systemctl",
-  "service",
-  "crontab",
-  "reboot",
-  "shutdown",
-  "launchctl",
-])
-const SCRIPT_INTERPRETERS = new Set([
-  "bash",
-  "sh",
-  "zsh",
-  "fish",
-  "pwsh",
-  "powershell",
-  "python",
-  "python3",
-  "node",
-  "bun",
-  "deno",
-  "ruby",
-  "perl",
-  "php",
-  "java",
-])
-const CLEARLY_DESTRUCTIVE_OPERATION_RE =
-  /\b(?:rm|unlink|rmdir|del|erase|remove-item|chmod|chown|sudo|su|kill|pkill|killall|dd|mkfs|fdisk|parted|diskutil|mount|umount|format|systemctl|service|crontab|reboot|shutdown)\b|(?:-rf|-fr|--force|--recursive|--delete|--hard|--no-preserve-root)/i
-const DOWNLOAD_TO_INTERPRETER_RE =
-  /\b(?:curl|wget)\b[^;&\n]*\|\s*(?:bash|sh|zsh|fish|pwsh|powershell|python|python3|node|bun|deno|ruby|perl|php)\b/i
 const CLEARLY_MALICIOUS_REASON_RE =
   /\b(?:malicious|malware|phishing|credential(?:s)?(?: theft| exfiltration)?|exfiltrat(?:e|ion)|exploit|command injection)\b/i
 
@@ -306,6 +279,26 @@ function isSafeGit(tokens: string[]) {
   return true
 }
 
+function isSafeBunValidation(tokens: string[]) {
+  const subcommand = commandName(tokens[1] || "")
+  const script = subcommand === "run" ? commandName(tokens[2] || "") : subcommand
+  const argumentStart = subcommand === "run" ? 3 : 2
+  return SAFE_BUN_VALIDATIONS.has(script) && tokens.length === argumentStart
+}
+
+function isSafeValidationCommand(tokens: string[]) {
+  const name = commandName(tokens[0] || "")
+  const args = tokens.slice(1)
+  if (args.some((arg) => WRITE_OR_EXECUTION_FLAG_RE.test(arg) || UNSAFE_EXECUTION_ARGUMENT_RE.test(arg))) return false
+  if (name === "go") return commandName(args[0] || "") === "vet"
+  if (name === "tsc" || name === "tsgo") return args.some((arg) => arg.toLowerCase() === "--noemit")
+  if (name === "biome") return commandName(args[0] || "") === "check"
+  if (name === "ruff") return commandName(args[0] || "") === "check"
+  if (SAFE_VALIDATION_COMMANDS.has(name)) return true
+  if (name === "git" || DANGEROUS_COMMAND_NAME_RE.test(name)) return false
+  return args.some((arg) => READ_ONLY_VALIDATION_FLAG_RE.test(arg))
+}
+
 function isSafeSegment(tokens: string[]) {
   const first = tokens[0]
   if (!first || first.includes("/") || first.includes("\\") || first.startsWith(".") || first.startsWith("~"))
@@ -315,7 +308,9 @@ function isSafeSegment(tokens: string[]) {
   if (tokens.slice(1).some((token) => UNSAFE_SPECIAL_PATH_RE.test(token))) return false
 
   const name = commandName(first)
+  if (name === "bun") return isSafeBunValidation(tokens)
   if (name === "git") return isSafeGit(tokens)
+  if (isSafeValidationCommand(tokens)) return true
   if (!SAFE_COMMANDS.has(name)) return false
   if (name === "find" && tokens.slice(1).some((arg) => UNSAFE_FIND_ARGUMENT_RE.test(arg))) return false
   if ((name === "rg" || name === "ripgrep") && tokens.slice(1).some((arg) => UNSAFE_RG_ARGUMENT_RE.test(arg)))
@@ -325,12 +320,13 @@ function isSafeSegment(tokens: string[]) {
 
 function isSafeShellCommand(command: string) {
   const segments = splitCommand(command)
-  // Auto-approval is intentionally limited to one simple command. A pipeline
-  // or chain can hide a second command whose safety is not captured by the
-  // first command's allowlist entry.
-  if (!segments || segments.length !== 1) return false
-  const tokens = tokenize(segments[0] || "")
-  return Boolean(tokens && tokens.length > 0 && isSafeSegment(tokens))
+  // Chains and pipelines are safe only when every segment is independently
+  // bounded and read-only; one unsafe segment keeps the whole request manual.
+  if (!segments || segments.length === 0) return false
+  return segments.every((segment) => {
+    const tokens = tokenize(segment)
+    return Boolean(tokens && tokens.length > 0 && isSafeSegment(tokens))
+  })
 }
 
 function isKnownRiskyCommand(command: string) {
@@ -370,25 +366,6 @@ function commandFromRequest(request: PermissionRequest) {
   return requestCommands(request).join("\n")
 }
 
-function isClearlyDestructiveCommand(command: string) {
-  if (DOWNLOAD_TO_INTERPRETER_RE.test(command)) return true
-  const segments = splitCommand(command)
-  if (!segments) return false
-
-  return segments.some((segment) => {
-    const tokens = tokenize(segment)
-    if (!tokens?.length) return false
-    const name = commandName(tokens[0] || "")
-    if (CLEARLY_DESTRUCTIVE_COMMANDS.has(name)) return true
-    if (name === "git") return tokens.slice(1).some((arg) => UNSAFE_GIT_ARGUMENT_RE.test(arg))
-    if (name === "find") return tokens.slice(1).some((arg) => UNSAFE_FIND_ARGUMENT_RE.test(arg))
-    if (name === "rg" || name === "ripgrep") return tokens.slice(1).some((arg) => UNSAFE_RG_ARGUMENT_RE.test(arg))
-    if (!SCRIPT_INTERPRETERS.has(name)) return false
-    return tokens.slice(1).some((arg) => /^(?:-c|--command|-e|--eval|--execute)$/i.test(arg)) &&
-      CLEARLY_DESTRUCTIVE_OPERATION_RE.test(segment)
-  })
-}
-
 export function normalizeSmartPermissionDecision(
   request: PermissionRequest,
   decision: SmartPermissionDecision,
@@ -396,22 +373,13 @@ export function normalizeSmartPermissionDecision(
   if (request.permission !== ShellID.ToolID && request.permission !== "bash")
     return decision
 
-  const commands = requestCommands(request)
-  if (commands.length === 0) return decision
-  if (commands.some(isClearlyDestructiveCommand)) {
-    if (decision.decision === "reject") return decision
-    return {
-      ...decision,
-      decision: "reject",
-      reason: "The command is clearly destructive and cannot be auto-approved.",
-    }
-  }
+  if (requestCommands(request).length === 0) return decision
   if (decision.decision !== "reject" || reasonIndicatesClearMaliciousness(decision.reason)) return decision
 
   return {
     ...decision,
     decision: "ask",
-    reason: "This command is not clearly destructive; manual approval is required.",
+    reason: "Manual approval is required for this command.",
   }
 }
 
@@ -425,6 +393,11 @@ export function shouldTriggerSmartApproval(request: PermissionRequest) {
   const command = commandFromRequest(request)
   if (!command) return false
   return isKnownRiskyCommand(command)
+}
+
+export function shouldReviewSmartApproval(request: PermissionRequest) {
+  if (request.permission !== ShellID.ToolID && request.permission !== "bash") return false
+  return requestCommands(request).length > 0
 }
 
 export function isSafeSmartPermissionRequest(request: PermissionRequest) {
@@ -460,8 +433,8 @@ export async function reviewPermissionRequestWithModel(
   request: PermissionRequest,
   root: string,
 ): Promise<SmartPermissionDecision> {
-  if (!shouldTriggerSmartApproval(request))
-    return { triggered: false, decision: "ask", reason: "Not a risky shell permission." }
+  if (!shouldReviewSmartApproval(request))
+    return { triggered: false, decision: "ask", reason: "Not a shell permission." }
 
   const config = await readPermissionsConfig()
   const resolved = await resolveModelRoles(root)
@@ -494,12 +467,18 @@ export async function reviewPermissionRequestWithModel(
         "You are a security gate for one local terminal permission request, not a general assistant.",
         'Return only JSON: {"decision":"allow|reject|ask","reason":"short reason"}.',
         "Allow only a command you can prove is read-only, bounded, and free of shell execution or side effects.",
-        "Never auto-allow scripts or script interpreters, even when the path looks trusted or the script name sounds harmless.",
+        "If a command is genuinely normal, bounded, and read-only, return allow; do not reject it merely because it uses a shell, git, or a known validation runtime.",
+        "Examples of commands that may be allowed when their complete arguments are safe: git show, git status, git diff, git log, ls, pwd, cat, rg, and read-only validation commands from any language.",
+        "Known read-only validation examples include exact bun typecheck or bun run typecheck with no extra arguments, tsc or tsgo --noEmit, eslint, prettier --check, biome check, ruff check, mypy, pyright, shellcheck, and go vet.",
+        "A chain or pipeline may be allowed when every segment is independently read-only, for example git status --short && git diff --stat -- path/to/file.",
+        "Treat other Bun commands as potentially executable: bun test, bun run with another script, bun -e, bun x, and arbitrary script paths must stay ask.",
+        "Never auto-allow arbitrary scripts or script interpreters, even when the path looks trusted or the script name sounds harmless.",
         "Never auto-allow network access, package installation, containers, services, process control, disk operations, or remote code.",
         "A plain curl or wget request is not inherently prohibited: return ask so the user can approve it manually.",
-        "Reject only clearly destructive or malicious commands, such as deletion, overwrite, privilege escalation, or downloading content into an interpreter.",
+        "Commands that can delete, overwrite, change repository state, execute scripts, install packages, start services, or access the network must return ask so the user can choose; do not auto-allow or auto-reject solely because of those capabilities.",
+        "Reject only when the complete command or reviewer evidence shows clear malicious intent, such as malware, phishing, credential theft, exfiltration, or command injection.",
         "Treat shell operators, aliases, substitutions, quoted text, flags, and every chained command as part of the security decision.",
-        "Use ask for scripts, runtimes, benign or unknown network targets, and whenever safety cannot be proven from the complete command.",
+        "Use ask for scripts, runtimes, removal commands, run commands, writes, benign or unknown network targets, and whenever safety cannot be proven from the complete command.",
         "The patterns and always fields are scope hints, not approval to broaden access.",
       ].join("\n"),
       messages: [

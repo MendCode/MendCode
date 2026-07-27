@@ -42,6 +42,10 @@ export type AgentViewSessionItem = {
   session?: Session
 }
 
+export type AgentViewLoopWorkflowRef = {
+  rootSessionID?: string | null
+}
+
 export type AgentViewCommand = {
   id: string
   sourceSessionID: string
@@ -75,6 +79,36 @@ export type AgentViewOrchestrationSummary = {
 }
 
 const visibleCompletedWindowMs = 24 * 60 * 60 * 1000
+
+export function agentViewLoopRootSessionIDs(workflows: readonly AgentViewLoopWorkflowRef[]) {
+  return new Set(workflows.flatMap((workflow) => (workflow.rootSessionID ? [workflow.rootSessionID] : [])))
+}
+
+export function isAgentViewLoopSession(input: {
+  sessionID: string
+  title?: string | null
+  summary?: string | null
+  loopRootSessionIDs?: ReadonlySet<string>
+}) {
+  if (input.loopRootSessionIDs?.has(input.sessionID)) return true
+  const title = input.title?.trim().toLowerCase() ?? ""
+  const summary = input.summary?.trim().toLowerCase() ?? ""
+  return title.startsWith("loop:") || summary.startsWith("loop ")
+}
+
+export function isAgentViewCompletedLoop(input: { state?: string | null; summary?: string | null }) {
+  if (input.state === "completed") return true
+  return input.summary?.trim().toLowerCase().startsWith("loop completed") ?? false
+}
+
+export function filterAgentViewLoopSessions<T extends { id: string; title?: string | null }>(
+  sessions: readonly T[],
+  loopRootSessionIDs: ReadonlySet<string>,
+) {
+  return sessions.filter(
+    (session) => !isAgentViewLoopSession({ sessionID: session.id, title: session.title, loopRootSessionIDs }),
+  )
+}
 
 function normalizePath(value: string) {
   return value.replaceAll("\\", "/")

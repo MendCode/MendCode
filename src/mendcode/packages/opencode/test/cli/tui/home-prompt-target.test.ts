@@ -156,10 +156,13 @@ describe("Home split welcome sizing", () => {
     expect(homeRightPanelContainerWidth({ rightPanelWidth: 44, twoColumn: false })).toBe(44)
   })
 
-  test("formats active Agent View elapsed time from a stable start", () => {
+  test("formats Agent View elapsed time from a stable start without a live timer", () => {
     const now = 1_800_000_010_000
     expect(homeAgentViewElapsedLabel({ now, startedAt: now - 11_000 })).toBe("11s")
     expect(homeAgentViewElapsedLabel({ now, startedAt: now - 65_000 })).toBe("1m")
+    expect(homeAgentViewElapsedLabel({ now, startedAt: now - 7 * 24 * 60 * 60 * 1_000 })).toBe("1w")
+    expect(homeAgentViewElapsedLabel({ now, startedAt: now - 30 * 24 * 60 * 60 * 1_000 })).toBe("1mo")
+    expect(homeAgentViewElapsedLabel({ now, startedAt: now - 365 * 24 * 60 * 60 * 1_000 })).toBe("1y")
     expect(homeAgentViewElapsedLabel({ now })).toBe("0s")
   })
 

@@ -11,9 +11,18 @@ export type TimelineDiffRow = {
 
 export type TimelineDiffFileStatus = "added" | "removed" | undefined
 
-const MAX_RENDER_DIFF_CHARS = 360_000
-const MAX_RENDER_DIFF_ROWS = 3_600
+const MAX_RENDER_DIFF_CHARS = 2_000_000
+const MAX_RENDER_DIFF_ROWS = 20_000
+export const TIMELINE_DIFF_TRUNCATION_PREFIX = "Diff preview truncated:"
 const NON_TEXT_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffd]/
+
+export function timelineDiffHasPreviewMarker(diff: string) {
+  return diff.includes(TIMELINE_DIFF_TRUNCATION_PREFIX)
+}
+
+export function timelineDiffIsTruncationRow(row: TimelineDiffRow) {
+  return row.kind === "meta" && row.text.startsWith(TIMELINE_DIFF_TRUNCATION_PREFIX)
+}
 
 export function timelineDiffFileStatus(diff: string): TimelineDiffFileStatus {
   if (/^(?:new file mode|--- \/dev\/null)/m.test(diff)) return "added"
@@ -85,7 +94,7 @@ export function parseTimelineDiffRows(diff: string): TimelineDiffRow[] {
     if (rows.length >= MAX_RENDER_DIFF_ROWS) {
       rows.push({
         kind: "meta",
-        text: `Diff preview truncated: too large to render safely (${diff.length.toLocaleString()} chars total). Show more from the full diff.`,
+        text: `${TIMELINE_DIFF_TRUNCATION_PREFIX} too large to render safely (${diff.length.toLocaleString()} chars total). Show more from the full diff.`,
       })
       return rows
     }
@@ -158,7 +167,7 @@ export function parseTimelineDiffRows(diff: string): TimelineDiffRow[] {
   if (truncated) {
     rows.push({
       kind: "meta",
-      text: `Diff preview truncated: too large to render safely (${diff.length.toLocaleString()} chars total). Show more from the full diff.`,
+      text: `${TIMELINE_DIFF_TRUNCATION_PREFIX} too large to render safely (${diff.length.toLocaleString()} chars total). Show more from the full diff.`,
     })
   }
 

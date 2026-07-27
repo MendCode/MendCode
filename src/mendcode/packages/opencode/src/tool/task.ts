@@ -23,6 +23,10 @@ export interface TaskPromptOps {
 
 const id = "task"
 const SUBAGENT_WAIT_STATUS_TTL_MS = 6 * 60 * 60 * 1000
+const SUBAGENT_CANCEL_TIMEOUT_MS = 1_000
+const SUBAGENT_DEFAULT_MAX_DEPTH = 1
+const SUBAGENT_DEFAULT_MAX_CHILDREN = 4
+const SUBAGENT_DEFAULT_MAX_DESCENDANTS = 16
 const ORCHESTRATION_ARTIFACT_MAX_CHARS = 24_000
 const ORCHESTRATION_ARTIFACTS = [".agents/orchestration/CHAT.md", ".agents/orchestration/STATUS.md"] as const
 
@@ -248,6 +252,26 @@ export const TaskTool = Tool.define(
         ? yield* sessions.get(SessionID.make(taskID)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
       const parent = yield* sessions.get(ctx.sessionID)
+      const tree = yield* Effect.gen(function* () {
+        // Session parentage also represents loop/evaluator ownership. Only a
+        // registered task contributes to the subagent depth budget, so a task
+        // launched from a loop root still starts at depth one.
+        const parentTask = yield* backgroundTasks.get(parent.id)
+        return {
+          rootSessionID: parentTask?.rootSessionID ?? parent.id,
+          depth: (parentTask?.depth ?? 0) + 1,
+        }
+      })
+      const maxDepth = cfg.experimental?.subagent_depth ?? SUBAGENT_DEFAULT_MAX_DEPTH
+      if (tree.depth > maxDepth) {
+        return yield* Effect.fail(
+          new Error(`Subagent depth limit reached (${tree.depth}/${maxDepth}); resume the current task instead.`),
+        )
+      }
+      const limits = {
+        maxChildren: cfg.experimental?.subagent_max_children ?? SUBAGENT_DEFAULT_MAX_CHILDREN,
+        maxDescendants: cfg.experimental?.subagent_max_descendants ?? SUBAGENT_DEFAULT_MAX_DESCENDANTS,
+      }
       const nextSession =
         session ??
         (yield* sessions.create({
@@ -310,6 +334,9 @@ export const TaskTool = Tool.define(
         metadata: {
           sessionId: nextSession.id,
           model,
+          status: params.background ? "started" : "running",
+          rootSessionID: tree.rootSessionID,
+          depth: tree.depth,
         },
       })
 
@@ -321,6 +348,9 @@ export const TaskTool = Tool.define(
           metadata: {
             sessionId: nextSession.id,
             model,
+            status: params.background ? "started" : "running",
+            rootSessionID: tree.rootSessionID,
+            depth: tree.depth,
           },
         })
       }
@@ -329,10 +359,37 @@ export const TaskTool = Tool.define(
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
       const runCancel = yield* EffectBridge.make()
       const abortEvent = yield* Deferred.make<"user" | "external">()
+      const childCancelFinished = yield* Deferred.make<void>()
 
       const messageID = MessageID.ascending()
       const cancel = ops.cancel(nextSession.id)
+      const cancelChild = cancel.pipe(
+        Effect.timeout(SUBAGENT_CANCEL_TIMEOUT_MS),
+        Effect.ignore,
+        Effect.catchCause(() => Effect.void),
+        Effect.ensuring(status.set(nextSession.id, { type: "idle" })),
+        Effect.ensuring(Deferred.succeed(childCancelFinished, undefined).pipe(Effect.asVoid)),
+      )
+      let childCancelStarted = false
       let parentAborted = isExplicitUserAbort(ctx)
+
+      const task = yield* backgroundTasks.start({
+        taskID: nextSession.id,
+        parentSessionID: ctx.sessionID,
+        rootSessionID: tree.rootSessionID,
+        depth: tree.depth,
+        limits,
+        startRunning: true,
+        originMessageID: ctx.messageID,
+        originCallID: ctx.callID,
+        title: params.description,
+        agent: next.name,
+        model: {
+          providerID: model.providerID,
+          modelID: model.modelID,
+          variant,
+        },
+      })
 
       const output = (input: {
         status: "started" | "completed" | "interrupted" | "failed" | "retained"
@@ -361,6 +418,8 @@ export const TaskTool = Tool.define(
             sessionId: nextSession.id,
             model,
             status: input.status,
+            rootSessionID: tree.rootSessionID,
+            depth: tree.depth,
           },
           output: lines.join("\n"),
         }
@@ -385,11 +444,43 @@ export const TaskTool = Tool.define(
           })
         })
 
+      const finishTask = Effect.fn("TaskTool.finishTask")(function* (input: {
+        state: "completed" | "failed" | "cancelled" | "interrupted"
+        error?: unknown
+        extraParts?: readonly MessageV2.Part[]
+      }) {
+        const current = yield* backgroundTasks.get(nextSession.id, task.generation)
+        if (!current || BackgroundTask.isTerminal(current.state)) return
+        const history = yield* sessions
+          .messages({ sessionID: nextSession.id })
+          .pipe(Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])))
+        yield* backgroundTasks.finish({
+          taskID: nextSession.id,
+          generation: task.generation,
+          state: input.state,
+          // Only background launches may wake an idle parent. Foreground
+          // tasks already return their result through the active tool call.
+          background: params.background === true,
+          result: {
+            summary: yield* subagentEvidenceText(history, input.extraParts),
+            error: input.error ? errorText(input.error) : undefined,
+            changedFiles: unique([
+              ...history.flatMap((item) => changedFiles(item.parts)),
+              ...changedFiles(input.extraParts ?? []),
+            ]),
+          },
+        })
+      })
+
       function onAbort() {
         const reason = isExplicitUserAbort(ctx) ? "user" : "external"
         parentAborted = reason === "user"
         runCancel.fork(Deferred.succeed(abortEvent, reason))
-        if (parentAborted) runCancel.fork(cancel)
+        if (parentAborted && !childCancelStarted) {
+          childCancelStarted = true
+          runCancel.fork(backgroundTasks.requestCancel({ taskID: nextSession.id, generation: task.generation }).pipe(Effect.asVoid))
+          runCancel.fork(cancelChild)
+        }
       }
 
       const prompt = Effect.gen(function* () {
@@ -412,74 +503,50 @@ export const TaskTool = Tool.define(
         })
       })
 
-      if (params.background) {
-        const task = yield* backgroundTasks.start({
-          taskID: nextSession.id,
-          parentSessionID: ctx.sessionID,
-          originMessageID: ctx.messageID,
-          originCallID: ctx.callID,
-          title: params.description,
-          agent: next.name,
-          model: {
-            providerID: model.providerID,
-            modelID: model.modelID,
-            variant,
-          },
-        })
-        const running = yield* backgroundTasks.markRunning({ taskID: nextSession.id, generation: task.generation })
-        yield* status.set(nextSession.id, { type: "busy" })
-        yield* prompt.pipe(
-          Effect.flatMap((message) =>
-            Effect.gen(function* () {
-              const history = yield* sessions
-                .messages({ sessionID: nextSession.id })
-                .pipe(Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])))
-              const text = yield* subagentEvidenceText(history, message.parts)
-              const error = message.info.role === "assistant" ? message.info.error : undefined
-              const current = yield* backgroundTasks.get(nextSession.id, task.generation)
-              const state = error
-                ? current?.controlIntent === "cancel" && isAbortError(error)
-                  ? "cancelled"
-                  : isAbortError(error)
-                    ? "interrupted"
-                    : "failed"
-                : "completed"
-              yield* backgroundTasks.finish({
-                taskID: nextSession.id,
-                generation: task.generation,
-                state,
-                result: {
-                  summary: text,
-                  error: error ? errorText(error) : undefined,
-                  changedFiles: unique(history.flatMap((item) => changedFiles(item.parts))),
-                },
-              })
-            }),
-          ),
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              const error = Cause.squash(cause)
-              const history = yield* sessions
-                .messages({ sessionID: nextSession.id })
-                .pipe(Effect.catchCause(() => Effect.succeed([] as MessageV2.WithParts[])))
-              const current = yield* backgroundTasks.get(nextSession.id, task.generation)
-              yield* backgroundTasks.finish({
-                taskID: nextSession.id,
-                generation: task.generation,
-                state:
-                  current?.controlIntent === "cancel" && (Cause.hasInterrupts(cause) || isAbortError(error))
+      // Keep the durable registry in sync for both foreground joins and
+      // background runs. A foreground parent may disconnect while this fiber
+      // continues, so completion must be attached to the child work itself.
+      const runPrompt = prompt.pipe(
+        Effect.tap((message) => {
+          const error = message.info.role === "assistant" ? message.info.error : undefined
+          return backgroundTasks.get(nextSession.id, task.generation).pipe(
+            Effect.flatMap((current) =>
+              finishTask({
+                state: error
+                  ? current?.controlIntent === "cancel" && isAbortError(error)
                     ? "cancelled"
-                    : Cause.hasInterrupts(cause) || isAbortError(error)
+                    : isAbortError(error)
                       ? "interrupted"
-                      : "failed",
-                result: {
-                  summary: yield* subagentEvidenceText(history),
-                  error: errorText(error),
-                  changedFiles: unique(history.flatMap((item) => changedFiles(item.parts))),
-                },
-              })
-            }).pipe(Effect.catchCause(() => Effect.void)),
-          ),
+                      : "failed"
+                  : "completed",
+                error,
+                extraParts: message.parts,
+              }),
+            ),
+          )
+        }),
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            const error = Cause.squash(cause)
+            const current = yield* backgroundTasks.get(nextSession.id, task.generation)
+            yield* finishTask({
+              state:
+                current?.controlIntent === "cancel" && (Cause.hasInterrupts(cause) || isAbortError(error))
+                  ? "cancelled"
+                  : Cause.hasInterrupts(cause) || isAbortError(error)
+                    ? "interrupted"
+                    : "failed",
+              error,
+            })
+            return yield* Effect.failCause(cause)
+          }),
+        ),
+      )
+
+      if (params.background) {
+        yield* status.set(nextSession.id, { type: "busy" })
+        yield* runPrompt.pipe(
+          Effect.catchCause(() => Effect.void),
           Effect.ensuring(status.set(nextSession.id, { type: "idle" })),
           Effect.forkIn(scope),
         )
@@ -492,7 +559,9 @@ export const TaskTool = Tool.define(
           metadata: {
             ...started.metadata,
             generation: task.generation,
-            revision: running.revision,
+            revision: task.revision,
+            rootSessionID: tree.rootSessionID,
+            depth: tree.depth,
           },
         }
       }
@@ -503,8 +572,8 @@ export const TaskTool = Tool.define(
           if (ctx.abort.aborted) onAbort()
         }),
         () =>
-          Effect.gen(function* () {
-            const child = yield* prompt.pipe(Effect.forkIn(scope))
+         Effect.gen(function* () {
+            const child = yield* runPrompt.pipe(Effect.forkIn(scope))
 
             yield* status.set(ctx.sessionID, {
               type: "busy",
@@ -520,13 +589,16 @@ export const TaskTool = Tool.define(
               ),
               Effect.flatMap((outcome) => {
                 if (outcome.type === "abort") {
-                  return errorOutput({
-                    error: new DOMException(
-                      outcome.reason === "user" ? "Aborted" : "Connection interrupted; subagent session retained",
-                      "AbortError",
-                    ),
-                    interrupted: outcome.reason === "user",
-                    status: outcome.reason === "user" ? "interrupted" : "retained",
+                  return Effect.gen(function* () {
+                    if (outcome.reason === "user") yield* Deferred.await(childCancelFinished)
+                    return yield* errorOutput({
+                      error: new DOMException(
+                        outcome.reason === "user" ? "Aborted" : "Connection interrupted; subagent session retained",
+                        "AbortError",
+                      ),
+                      interrupted: outcome.reason === "user",
+                      status: outcome.reason === "user" ? "interrupted" : "retained",
+                    })
                   })
                 }
                 if (Exit.isFailure(outcome.exit)) {
@@ -559,7 +631,17 @@ export const TaskTool = Tool.define(
           }),
         (_, exit) =>
           Effect.gen(function* () {
-            if (Exit.hasInterrupts(exit) && parentAborted) yield* cancel
+            if (Exit.hasInterrupts(exit) && (parentAborted || isExplicitUserAbort(ctx))) {
+              if (childCancelStarted) {
+                yield* Deferred.await(childCancelFinished)
+              } else {
+                childCancelStarted = true
+                yield* backgroundTasks
+                  .requestCancel({ taskID: nextSession.id, generation: task.generation })
+                  .pipe(Effect.asVoid, Effect.catchCause(() => Effect.void))
+                yield* cancelChild
+              }
+            }
           }).pipe(
             Effect.ensuring(
               Effect.sync(() => {

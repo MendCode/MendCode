@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { isSetupComplete } from "../../src/mend/setup/state"
 
 describe("setup state optional steps", () => {
-  test("health, package, tui, memory, and permissions steps are optional for completion", () => {
+  test("legacy health and optional steps do not block completion", () => {
     expect(isSetupComplete({
       version: 0,
       completedOnce: false,

@@ -30,7 +30,7 @@ describe("session exit summary", () => {
     expect(rendered).toContain("Session")
     expect(rendered).toContain("Implement memory graph")
     expect(rendered).toContain("Continue")
-    expect(rendered).toContain("mend -s ses_123")
+    expect(rendered).toContain("mendcode -s ses_123")
   })
 
   test("renders pet logo with product title without replacing it", () => {
@@ -46,7 +46,7 @@ describe("session exit summary", () => {
 
     expect(rendered).toContain("/\\_/\\")
     expect(rendered).toContain("█▀▀▄")
-    expect(rendered).toContain("mend -s ses_pet")
+    expect(rendered).toContain("mendcode -s ses_pet")
   })
 
   test("narrow layout prioritizes resume details over ascii art", () => {
@@ -59,7 +59,7 @@ describe("session exit summary", () => {
     })
 
     expect(rendered).toContain("VeryLongCustomMendCode")
-    expect(rendered).toContain("mend -s ses_narrow")
+    expect(rendered).toContain("mendcode -s ses_narrow")
     expect(rendered).toContain("Usage")
     expect(rendered).not.toContain("████")
   })

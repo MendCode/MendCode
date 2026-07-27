@@ -25,6 +25,12 @@ export type MemoryEntry = {
   updatedAt: string
 }
 
+export type ArchivedMemoryEntry = MemoryEntry & {
+  archivedAt: string
+  archiveReason: string
+  canonicalEntryID: string | null
+}
+
 export type MemoryStatus = {
   enabled: boolean
   configScope: "global" | "project"
@@ -97,6 +103,23 @@ function lineToEntry(line: string): MemoryEntry | null {
   }
 }
 
+function lineToArchivedEntry(line: string): ArchivedMemoryEntry | null {
+  try {
+    const parsed = JSON.parse(line)
+    if (!parsed || typeof parsed.text !== "string" || !parsed.text.trim()) return null
+    if (typeof parsed.archivedAt !== "string" || !parsed.archivedAt.trim()) return null
+    if (typeof parsed.archiveReason !== "string" || !parsed.archiveReason.trim()) return null
+    return {
+      ...normalizeMemoryEntry(parsed),
+      archivedAt: parsed.archivedAt,
+      archiveReason: parsed.archiveReason,
+      canonicalEntryID: typeof parsed.canonicalEntryID === "string" && parsed.canonicalEntryID.trim() ? parsed.canonicalEntryID : null,
+    }
+  } catch {
+    return null
+  }
+}
+
 async function readTextIfExists(file: string) {
   if (!existsSync(file)) return ""
   return readFile(file, "utf8")
@@ -107,6 +130,13 @@ export async function readMemoryEntries(scope: MemoryScope, root?: string) {
   const file = scope === "global" ? paths.globalEntries : paths.projectEntries
   const text = await readTextIfExists(file)
   return text.split("\n").map((line) => line.trim()).filter(Boolean).map(lineToEntry).filter((entry): entry is MemoryEntry => Boolean(entry))
+}
+
+export async function readArchivedMemoryEntries(scope: MemoryScope, root?: string) {
+  const paths = memoryPaths(root)
+  const file = path.join(scope === "global" ? paths.globalDir : paths.projectDir, "archived.jsonl")
+  const text = await readTextIfExists(file)
+  return text.split("\n").map((line) => line.trim()).filter(Boolean).map(lineToArchivedEntry).filter((entry): entry is ArchivedMemoryEntry => Boolean(entry))
 }
 
 export async function readMemorySummary(scope: MemoryScope, root?: string) {
@@ -132,6 +162,47 @@ async function writeMemoryEntries(scope: MemoryScope, entries: MemoryEntry[], ro
   await mkdir(path.dirname(file), { recursive: true })
   await writeFile(file, entries.map((entry) => JSON.stringify(entry)).join("\n") + (entries.length ? "\n" : ""))
   await refreshMemoryIndex(root)
+}
+
+export async function archiveMemoryEntries(
+  scope: MemoryScope,
+  selections: Array<{ id: string; reason: string; canonicalEntryID?: string | null }>,
+  root?: string,
+) {
+  const entries = await readMemoryEntries(scope, root)
+  const requested = new Map(selections.filter((selection) => selection.id && selection.reason.trim()).map((selection) => [selection.id, selection]))
+  const archived = entries.filter((entry) => requested.has(entry.id))
+  if (!archived.length) return { archived: [], skipped: selections.map((selection) => selection.id) }
+  const existingArchived = await readArchivedMemoryEntries(scope, root)
+  const archivedIDs = new Set(existingArchived.map((entry) => entry.id))
+  const archivedAt = new Date().toISOString()
+  const records = archived
+    .filter((entry) => !archivedIDs.has(entry.id))
+    .map((entry) => ({
+      ...entry,
+      archivedAt,
+      archiveReason: requested.get(entry.id)!.reason.trim(),
+      canonicalEntryID: requested.get(entry.id)!.canonicalEntryID ?? null,
+    } satisfies ArchivedMemoryEntry))
+  const paths = memoryPaths(root)
+  const archiveFile = path.join(scope === "global" ? paths.globalDir : paths.projectDir, "archived.jsonl")
+  if (records.length) {
+    await mkdir(path.dirname(archiveFile), { recursive: true })
+    const previous = await readTextIfExists(archiveFile)
+    await writeFile(archiveFile, `${previous}${records.map((entry) => JSON.stringify(entry)).join("\n")}\n`)
+  }
+  await writeMemoryEntries(scope, entries.filter((entry) => !requested.has(entry.id)), root)
+  return { archived: records, skipped: selections.filter((selection) => !records.some((entry) => entry.id === selection.id)).map((selection) => selection.id) }
+}
+
+export async function restoreArchivedMemoryEntries(scope: MemoryScope, ids: string[], root?: string) {
+  const active = await readMemoryEntries(scope, root)
+  const activeIDs = new Set(active.map((entry) => entry.id))
+  const archived = await readArchivedMemoryEntries(scope, root)
+  const restored = archived.filter((entry) => ids.includes(entry.id) && !activeIDs.has(entry.id))
+  if (!restored.length) return { restored: [] }
+  await writeMemoryEntries(scope, [...active, ...restored.map(({ archivedAt: _archivedAt, archiveReason: _archiveReason, canonicalEntryID: _canonicalEntryID, ...entry }) => entry)], root)
+  return { restored }
 }
 
 export async function updateMemoryEntry(scope: MemoryScope, id: string, patch: Partial<MemoryEntry>, root?: string) {

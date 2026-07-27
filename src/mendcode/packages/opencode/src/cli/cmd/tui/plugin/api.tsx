@@ -4,6 +4,7 @@ import type {
   TuiAiApi,
   TuiAiPromptInput,
   TuiAiSession,
+  TuiCustomizationApi,
   TuiMemoryGraphFact,
   TuiMemoryApi,
   TuiSessionApi,
@@ -46,6 +47,11 @@ import { setMendEditor, setMendEditorVisual } from "@/mend/tui/editor-host"
 import { Process } from "@/util/process"
 import { memoryOverview } from "@/mend/memory/overview"
 import { deleteMemoryFact, deleteMemoryFactLink, upsertMemoryFact, upsertMemoryFactLink } from "@/mend/memory/graph"
+import {
+  readMendTuiCustomization,
+  resetMendTuiCustomization,
+  writeMendTuiCustomization,
+} from "@/mend/tui/customization"
 
 type RouteEntry = {
   key: symbol
@@ -520,6 +526,32 @@ function aiApi(input: Input): TuiAiApi {
   }
 }
 
+function tuiCustomizationApi(input: Input): TuiCustomizationApi {
+  const read = () => readMendTuiCustomization((key, fallback) => input.kv.get(key, fallback))
+  const set = (patch: Parameters<TuiCustomizationApi["set"]>[0]) =>
+    writeMendTuiCustomization((key, fallback) => input.kv.get(key, fallback), input.kv.set, patch)
+
+  return {
+    get: read,
+    set,
+    reset() {
+      return resetMendTuiCustomization(input.kv.set)
+    },
+    setTerminalTitle(options) {
+      const patch: Parameters<TuiCustomizationApi["set"]>[0] = {}
+      if (options?.enabled !== undefined) patch.terminalTitle = options.enabled
+      if (options?.template !== undefined) patch.terminalTitleTemplate = options.template
+      return set(patch)
+    },
+    setSessionAccent(accent) {
+      return set({ sessionAccent: accent })
+    },
+    setDiffFiles(visible) {
+      return set({ diffFiles: visible })
+    },
+  }
+}
+
 function mendAppApi(): MendExtensionApi["app"] {
   return {
     get version() {
@@ -533,6 +565,8 @@ function mendAppApi(): MendExtensionApi["app"] {
         "ui.dialog",
         "ui.slot",
         "ui.overlay",
+        "ui.customization",
+        "ui.widgets",
         "shell.spawn",
         "overlay.custom",
         "overlay.nonCapturing",
@@ -695,6 +729,7 @@ export function createTuiApi(input: Input): TuiPluginApi & MendExtensionApi {
         },
       },
       runtime: {
+        customization: tuiCustomizationApi(input),
         setStatus(id, value, options) {
           return setMendStatus(id, value, options)
         },

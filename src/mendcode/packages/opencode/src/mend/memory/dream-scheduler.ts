@@ -5,6 +5,7 @@ import path from "path"
 import { memoryPaths, readGlobalMemoryConfig, writeGlobalMemoryConfig } from "./config"
 import { readDreamRuns, runMemoryDream, type DreamModelAdapter, type DreamRun } from "./dream"
 import type { DreamSourcePermissions } from "./dream-sources"
+import { listMemoryProposals } from "./proposals"
 import { memoryWorkspaceOverview, type MemoryWorkspace } from "./workspaces"
 
 const OVERNIGHT_MISSED_GRACE_MINUTES = 60
@@ -164,13 +165,25 @@ export async function evaluateDreamSchedule(input: {
   const now = input.now ?? new Date()
   const date = scheduleDate(now, input.window)
   const runs = await readDreamRuns(input.root)
-  const completedToday = runs.some((run) =>
+  const completedRunsToday = runs.filter((run) =>
     run.status === "completed" &&
     scheduleDate(new Date(run.startedAt), input.window) === date &&
     (input.workspaceID ? run.workspaceID === input.workspaceID : true) &&
     (input.groupID ? run.groupID === input.groupID : true))
+  const latestCompletedAt = completedRunsToday
+    .map((run) => run.completedAt ?? run.startedAt)
+    .toSorted((left, right) => right.localeCompare(left))[0]
+  const pending = latestCompletedAt
+    ? await listMemoryProposals(input.root, "pending").catch(() => [])
+    : []
+  const hasPendingWorkSinceLastRun = latestCompletedAt
+    ? pending.some((proposal) => (proposal.updatedAt || proposal.createdAt).localeCompare(latestCompletedAt) > 0)
+    : false
   if (!input.window.enabled) return { action: "disabled" as const, date, reason: "Dream schedule disabled" }
-  if (completedToday) return { action: "skip" as const, date, reason: "Dream already ran today" }
+  if (completedRunsToday.length && !hasPendingWorkSinceLastRun) return { action: "skip" as const, date, reason: "Dream already ran today" }
+  if (completedRunsToday.length && hasPendingWorkSinceLastRun && insideWindow(now, input.window)) {
+    return { action: "run" as const, date, reason: "New pending memory work arrived after the last Dream run" }
+  }
   if (insideWindow(now, input.window)) return { action: "run" as const, date, reason: "Inside configured Dream window" }
   const start = minutes(input.window.start)
   const end = minutes(input.window.end)

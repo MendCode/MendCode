@@ -12,7 +12,7 @@ import { DialogPrompt } from "@tui/ui/dialog-prompt"
 import { DialogSelect } from "@tui/ui/dialog-select"
 import { useToast } from "@tui/ui/toast"
 import { useMendTuiProfile } from "@tui/context/mend"
-import { setupDoctor, setupPlan, setupReadiness, aiStatus, providerAuthStatus } from "@/mend/runtime/readiness"
+import { setupReadiness, providerAuthStatus } from "@/mend/runtime/readiness"
 import { budgetStatus, writeBudgetPolicy } from "@/mend/runtime/budget"
 import {
   modelPresets,
@@ -43,16 +43,20 @@ import type { RegistryMarketplacePackManifest } from "@/mend/runtime/registry/ma
 import { mendTuiCapabilityVersion, visibleCustomizationCapabilities } from "@/mend/tui/capabilities"
 import { listActiveCustomizations } from "@/mend/tui/customization-state"
 import { applyTuiPreset, readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
+import { defaultTuiProfile } from "@/mend/profile"
 import type { MendPromptChromePreset } from "@/mend/tui/prompt-chrome"
+import { CommandDeck } from "@tui/component/command-deck"
 import {
   dismissSetup,
   isSetupComplete,
   markSetupStepComplete,
   openSetupState,
   setSetupCurrentStep,
+  requiredSetupSteps,
   setupSteps,
 } from "@/mend/setup/state"
 import { SetupRail } from "./setup-rail"
+import { SetupActionBar } from "./action-bar"
 
 const baseModelRoleOrder = [
   "default",
@@ -90,6 +94,40 @@ const promptModeDetails: Record<MendPromptMode, { summary: string; runtime: stri
     adds: "focus plus MendCode runtime knowledge; Mflow/TSM only when configured active or relevant",
   },
 }
+
+export type SetupPresetID = "default" | "minimal" | "full" | "custom"
+
+export const setupPresetDetails: Record<SetupPresetID, { title: string; summary: string; changes: string; safety: string }> = {
+  default: {
+    title: "Use current defaults",
+    summary: "Keep provider, models, and existing settings unchanged.",
+    changes: "No optional feature is enabled by this choice; configure only what you need below.",
+    safety: "Safest when you are upgrading or already have a working config.",
+  },
+  minimal: {
+    title: "Minimal MendCode",
+    summary: "Quiet prompt, compact TUI, memory and extra presentation features off.",
+    changes: "Sets minimal prompt context, compact layout, hidden optional surfaces, memory off, and approval permissions.",
+    safety: "Provider and model settings are preserved; no packages or credentials are removed.",
+  },
+  full: {
+    title: "Full MendCode",
+    summary: "Use the complete TUI and MendCode context with guarded memory learning.",
+    changes: "Sets full prompt context, spacious TUI, visible runtime surfaces, memory retrieval and approval-gated proposals.",
+    safety: "Memory writes remain approval-gated; provider and model settings are preserved.",
+  },
+  custom: {
+    title: "Configure manually",
+    summary: "Skip presets and walk through every setup step yourself.",
+    changes: "Does not write settings; it only opens the provider step.",
+    safety: "Best for mixed providers, custom role routing, or an existing team policy.",
+  },
+}
+
+export const setupPresetList = (Object.entries(setupPresetDetails) as Array<[
+  SetupPresetID,
+  (typeof setupPresetDetails)[SetupPresetID],
+]>).map(([id, detail]) => ({ id, ...detail }))
 const roleDescriptions: Record<string, string> = {
   default: "Fallback chat model and generated config model.",
   build: "Model used when the TUI is in build mode.",
@@ -104,7 +142,7 @@ const roleDescriptions: Record<string, string> = {
   memoryDream:
     "Background model for manual/scheduled memory maintenance that writes reviewable proposals only.",
   memoryAssistant:
-    "Memory page side-chat assistant that answers memory questions and can draft reviewable proposals only.",
+    "Memory assistant for supported integrations that answers memory questions and drafts reviewable proposals only.",
   permissionReviewer:
     "Hidden permission reviewer model that quickly checks risky shell permission prompts in Smart Approval.",
 }
@@ -329,7 +367,7 @@ export function Setup() {
   const mend = useMendTuiProfile()
   const sync = useSync()
   const local = useLocal()
-  const initialStep = data.step && setupSteps.includes(data.step) ? data.step : "provider"
+  const initialStep = data.step && setupSteps.includes(data.step) ? data.step : "start"
   const [selected, setSelected] = createSignal<SetupStepID>(initialStep)
   const [refresh, setRefresh] = createSignal(0)
   const reload = () => setRefresh((value) => value + 1)
@@ -337,10 +375,9 @@ export function Setup() {
   const [summary] = createResource(refresh, async () => {
     const root = mend.root
     const state = await openSetupState(selected(), root)
-    const [setup, ai, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, packages, permissions] = await Promise.all(
+    const [setup, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, packages, permissions] = await Promise.all(
       [
         setupReadiness(root),
-        aiStatus(root),
         providerAuthStatus(null, null, {}, root),
         resolveModelRoles(root),
         readModelsConfig(root),
@@ -364,7 +401,7 @@ export function Setup() {
         root,
       )
       : null
-    return { state, setup, ai, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, packages, memory, memoryExtractorAuth, permissions }
+    return { state, setup, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, packages, memory, memoryExtractorAuth, permissions }
   })
 
   const setupSummary = createMemo(() => summary.latest ?? summary())
@@ -375,6 +412,10 @@ export function Setup() {
   const complete = createMemo(() => {
     const state = setupSummary()?.state
     return state ? isSetupComplete(state) : false
+  })
+  const requiredProgress = createMemo(() => {
+    const state = setupSummary()?.state
+    return requiredSetupSteps.filter((step) => state?.completedSteps.includes(step)).length
   })
   const promptPanelWidth = createMemo(() => Math.max(20, dimensions().width - (compact() ? 4 : narrow() ? 12 : 44)))
   const connectedProviderIDs = createMemo(() => sync.data.provider_next.connected)
@@ -438,6 +479,148 @@ export function Setup() {
 
   const chooseProvider = async () => {
     dialog.replace(() => <DialogProvider postAuth="close" onAuthReady={reload} />)
+  }
+
+  const applySetupTuiPreset = async (preset: "minimal" | "full") => {
+    const applied = await applyTuiPreset(preset === "minimal" ? "compact" : "spacious", mend.root)
+    const current = applied.profile
+    const defaults = defaultTuiProfile()
+    if (preset === "minimal") {
+      await writeActiveTuiProfile({
+        ...current,
+        profile: "minimal-runtime",
+        promptChrome: { ...current.promptChrome, preset: "minimal" },
+        presentation: {
+          ...current.presentation,
+          profile: "minimal",
+          message: { ...current.presentation.message, renderer: "markdown" },
+          reasoning: { ...current.presentation.reasoning, defaultVisibility: "collapsed" },
+          activity: {
+            ...current.presentation.activity,
+            style: "minimal",
+            placement: "footer",
+            maxLines: 1,
+            showModel: false,
+            showTokens: false,
+            showElapsed: false,
+            showInterruptHint: false,
+          },
+          compaction: {
+            ...current.presentation.compaction,
+            style: "minimal",
+            showProgress: false,
+            allowScratchpad: false,
+            arcade: "off",
+          },
+        },
+        layout: {
+          ...current.layout,
+          density: "compact",
+          spacing: "tight",
+          zones: {
+            ...current.layout.zones,
+            sidebar: { ...current.layout.zones.sidebar, enabled: false, compact: true, width: 0 },
+            header: { ...current.layout.zones.header, enabled: false },
+            footer: { ...current.layout.zones.footer, enabled: false },
+            prompt: { ...current.layout.zones.prompt, rightSurface: false },
+          },
+        },
+        widgets: { ...current.widgets, enabled: ["focus"], order: ["focus"] },
+        surfaces: {
+          ...current.surfaces,
+          model: { ...current.surfaces.model, visible: false },
+          provider: { ...current.surfaces.provider, visible: false },
+          status: { ...current.surfaces.status, visible: false },
+        },
+      }, mend.root)
+      return
+    }
+
+    await writeActiveTuiProfile({
+      ...current,
+      profile: "full-runtime",
+      promptChrome: { ...current.promptChrome, preset: "box" },
+      presentation: {
+        ...defaults.presentation,
+        activity: {
+          ...defaults.presentation.activity,
+          showModel: true,
+          showTokens: true,
+          showElapsed: true,
+          showInterruptHint: true,
+        },
+        compaction: { ...defaults.presentation.compaction, style: "cockpit", showProgress: true, allowScratchpad: true },
+      },
+      layout: {
+        ...current.layout,
+        density: "spacious",
+        spacing: "loose",
+        zones: {
+          ...current.layout.zones,
+          sidebar: { ...current.layout.zones.sidebar, enabled: true, compact: false, width: 28 },
+          header: { ...current.layout.zones.header, enabled: true },
+          footer: { ...current.layout.zones.footer, enabled: true },
+          prompt: { ...current.layout.zones.prompt, rightSurface: true },
+        },
+      },
+      widgets: { ...defaults.widgets, config: { ...current.widgets.config, ...defaults.widgets.config } },
+      surfaces: { ...defaults.surfaces },
+    }, mend.root)
+  }
+
+  const applyStandaloneTuiPreset = async (preset: "minimal" | "full") => {
+    try {
+      await applySetupTuiPreset(preset)
+      await mend.reload()
+      await mark("tui")
+      reload()
+      toast.show({ variant: "success", message: `${preset === "minimal" ? "Minimal" : "Full"} TUI profile applied.`, duration: 4000 })
+    } catch (error) {
+      toast.show({ variant: "error", message: error instanceof Error ? error.message : "TUI profile preset failed.", duration: 6000 })
+    }
+  }
+
+  const applySetupPreset = async (preset: SetupPresetID) => {
+    try {
+      if (preset === "minimal") {
+        await writePromptMode("minimal", mend.root)
+        await writeGlobalMemoryConfig({ enabled: false, use: false, generate: false }, mend.root)
+        await writePermissionsConfig({ mode: "approval" })
+        await applySetupTuiPreset("minimal")
+      }
+      if (preset === "full") {
+        await writePromptMode("full", mend.root)
+        await writeGlobalMemoryConfig({ enabled: true, use: true, generate: true, requireApprovalForGenerated: true }, mend.root)
+        await writePermissionsConfig({ mode: "approval" })
+        await applySetupTuiPreset("full")
+      }
+      if (preset === "minimal" || preset === "full") await mend.reload()
+      await mark("start")
+      const next: SetupStepID = "provider"
+      setSelected(next)
+      await setSetupCurrentStep(next, mend.root)
+      reload()
+      dialog.clear()
+      toast.show({ variant: "success", message: `${setupPresetDetails[preset].title} selected.`, duration: 4000 })
+    } catch (error) {
+      toast.show({ variant: "error", message: error instanceof Error ? error.message : "Setup preset failed.", duration: 6000 })
+    }
+  }
+
+  const chooseSetupPreset = () => {
+    dialog.replace(() => (
+      <DialogSelect
+        title="Setup starting point"
+        current={setupSummary()?.state.completedSteps.includes("start") ? "default" : undefined}
+        options={setupPresetList.map((preset) => ({
+          title: preset.title,
+          value: preset.id,
+          category: "Setup presets",
+          description: `${preset.summary} ${preset.safety}`,
+          onSelect: () => applySetupPreset(preset.id),
+        }))}
+      />
+    ))
   }
 
   const setupModelRoles = createMemo<SetupModelRole[]>(() => {
@@ -571,6 +754,41 @@ export function Setup() {
     dialog.replace(() => <DialogSelect title={`Model role: ${roleName}`} options={options} />)
   }
 
+  const applyProviderModelPreset = async (providerID: string, modelID: string) => {
+    const config = await readModelsConfig(mend.root)
+    const role = { providerID, modelID, authMode: inferAuthMode(providerID, modelID) }
+    config.enabled = true
+    for (const name of ["default", "build", "code", "plan", "subagent"]) config.roles[name] = { ...role }
+    if (!config.roles.small?.providerID || !config.roles.small.modelID) config.roles.small = { ...role }
+    await writeGlobalModelsConfig(config)
+    await syncGlobalPrimaryAgentModels(mend.root)
+    await refreshGeneratedRuntimeModelConfig(mend.root)
+    await mark("models")
+    reload()
+    dialog.clear()
+    toast.show({ variant: "success", message: `Primary model preset applied from ${providerID}.`, duration: 4000 })
+  }
+
+  const chooseProviderModelPreset = (providerID: string) => {
+    const provider = sync.data.provider.find((item) => item.id === providerID)
+    if (!provider) return
+    const options = Object.entries(provider.models)
+      .filter(([, model]) => model.status !== "deprecated")
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([modelID, model]) => ({
+        title: model.name || modelID,
+        value: modelID,
+        category: providerDisplayName(provider),
+        description: `${provider.id}/${modelID} · ${inferAuthMode(provider.id, modelID) || "provider auth"}`,
+        onSelect: () => applyProviderModelPreset(provider.id, modelID),
+      }))
+    if (!options.length) {
+      toast.show({ variant: "warning", message: `${providerDisplayName(provider)} has no selectable models.`, duration: 4000 })
+      return
+    }
+    dialog.replace(() => <DialogSelect title={`${providerDisplayName(provider)} baseline model`} options={options} />)
+  }
+
   const applyModelOnboardingPreset = async (preset: "subscription" | "api-balanced" | "api-budget") => {
     const config = await readModelsConfig(mend.root)
     const primary = preset === "subscription"
@@ -636,14 +854,23 @@ export function Setup() {
             description: "Use stronger primary roles and cheaper helper roles; requires OPENAI_API_KEY.",
             onSelect: async () => applyModelOnboardingPreset("api-balanced"),
           },
-          {
-            title: "OpenAI API budget preset",
+           {
+             title: "OpenAI API budget preset",
             value: "api-budget",
             category: "Onboarding presets",
             description: "Use mini/nano API presets for lower-cost onboarding and smoke tests.",
-            onSelect: async () => applyModelOnboardingPreset("api-budget"),
-          },
-          ...setupModelRoles().map((role) => ({
+             onSelect: async () => applyModelOnboardingPreset("api-budget"),
+           },
+           ...sync.data.provider
+             .filter((provider) => Object.keys(provider.models).length > 0)
+             .map((provider) => ({
+               title: `${providerDisplayName(provider)} baseline preset`,
+               value: `provider:${provider.id}`,
+               category: "Connected provider",
+               description: "Pick one model from this provider and use it for the primary MendCode roles.",
+               onSelect: () => chooseProviderModelPreset(provider.id),
+             })),
+           ...setupModelRoles().map((role) => ({
             title: roleLabel(role),
             value: role,
             category: roleCategory(role),
@@ -1647,28 +1874,6 @@ export function Setup() {
     ))
   }
 
-  const runHealthCheck = async () => {
-    try {
-      const doctor = await setupDoctor(mend.root)
-      const plan = await setupPlan(mend.root)
-      await mark("health")
-      reload()
-      toast.show({
-        variant: doctor.ok ? "success" : "warning",
-        message: doctor.ok
-          ? `Health ok; setup plan written to ${plan.path}.`
-          : `Health has ${doctor.failures.length} failure(s), ${doctor.warnings.length} warning(s). Plan: ${plan.path}`,
-        duration: 6000,
-      })
-    } catch (error) {
-      toast.show({
-        variant: "error",
-        message: error instanceof Error ? error.message : "Setup health check failed.",
-        duration: 7000,
-      })
-    }
-  }
-
   const finish = async () => {
     const state = setupSummary()?.state
     if (!state || !isSetupComplete(state)) {
@@ -1683,10 +1888,10 @@ export function Setup() {
   }
 
   const runPrimaryAction = async (step: SetupStepID) => {
+    if (step === "start") return chooseSetupPreset()
     if (step === "provider") return chooseProvider()
     if (step === "models") return chooseModelRoleMenu()
     if (step === "budget") return chooseBudget()
-    if (step === "health") return runHealthCheck()
     if (step === "package") return choosePackageMetadata()
     if (step === "tui") return chooseTuiProfile()
     if (step === "prompt") return choosePromptMode()
@@ -1765,22 +1970,13 @@ export function Setup() {
   })
 
   return (
-    <box
-      width="100%"
-      height="100%"
-      flexDirection="column"
-      paddingLeft={compact() ? 0 : 2}
-      paddingRight={compact() ? 0 : 2}
-      paddingTop={compact() ? 0 : 1}
-      paddingBottom={compact() ? 0 : 1}
+    <CommandDeck
+      page="setup"
+      subtitle={() => `${requiredProgress()}/${requiredSetupSteps.length} required · ${active()} step`}
+      status={() => complete() ? "READY" : providerReady() ? "SETUP" : "BLOCKED"}
+      summary={() => `${providerLabel()} · ${setupSummary()?.prompt.mode || "focus"} prompt · ${data.minimal ? "minimal mode" : "customizable"}`}
+      footer="↑↓/jk Step   Enter Configure   Esc/Q Leave   R Refresh"
     >
-      <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
-        <text fg={theme.text}>MendCode Setup</text>
-        <Show when={!compact()}>
-          <text fg={theme.textMuted}>j/k move · enter configure · esc leave</text>
-        </Show>
-      </box>
-      <Show when={!compact()}><box height={1} /></Show>
       <box flexGrow={1} minHeight={0} flexDirection={narrow() ? "column" : "row"} gap={compact() ? 0 : 2}>
         <SetupRail
           active={active()}
@@ -1829,6 +2025,40 @@ export function Setup() {
           >
             <Show when={setupSummary()} fallback={<text fg={theme.textMuted}>Loading setup state...</text>}>
               <Switch>
+              <Match when={active() === "start"}>
+                <box flexDirection="column" gap={1}>
+                  <text fg={theme.primary}>Quick start</text>
+                  <text fg={theme.textMuted}>
+                    Choose a starting profile first. Every choice stays editable in the steps below, and provider/model
+                    credentials are never guessed or overwritten by a presentation preset.
+                  </text>
+                  <box flexDirection={narrow() ? "column" : "row"} gap={1}>
+                    <box flexDirection="column" width={narrow() ? "100%" : "40%"} minWidth={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} gap={1}>
+                      <text fg={theme.primary}>CURRENT BASELINE</text>
+                      <text>Provider: {providerLabel()}</text>
+                      <text>Models: {setupSummary()?.models.defaultModel || "not configured"}</text>
+                      <text>Prompt: {setupSummary()?.prompt.mode || "focus"}</text>
+                      <text>TUI: {mend.profile.layout.density} · {mend.profile.presentation.profile}</text>
+                      <text>Memory: {setupSummary()?.memory.enabled ? "enabled" : "off"}</text>
+                      <text>Permissions: {setupSummary()?.permissions.mode || "approval"}</text>
+                      <text fg={theme.textMuted}>Required progress: {requiredProgress()}/{requiredSetupSteps.length}</text>
+                    </box>
+                    <box flexDirection="column" flexGrow={1} minWidth={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} gap={1}>
+                      <text fg={theme.primary}>STARTING PROFILES</text>
+                      <For each={setupPresetList}>
+                        {(preset) => (
+                          <box flexDirection="column" gap={0} onMouseDown={() => void applySetupPreset(preset.id)}>
+                            <text fg={preset.id === "default" ? theme.primary : theme.text}>{preset.title}</text>
+                            <text fg={theme.textMuted}>{truncateSetupText(preset.summary, promptPanelWidth())}</text>
+                            <text fg={theme.textMuted}>{truncateSetupText(`  ${preset.changes}`, promptPanelWidth())}</text>
+                          </box>
+                        )}
+                      </For>
+                    </box>
+                  </box>
+                  <text fg={theme.textMuted}>Enter opens the profile picker. Use Custom when you want to configure each step manually.</text>
+                </box>
+              </Match>
               <Match when={active() === "provider"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme.primary}>Provider Manager</text>
@@ -1862,21 +2092,26 @@ export function Setup() {
                       provider/model is pinned in `~/.mendcode/models.yaml`.
                     </text>
                   </Show>
-                  <Show when={!narrow()}>
-                    <text fg={theme.textMuted}>
-                      Enter opens Provider Manager. Select a provider to add or refresh auth; press d on saved auth to
-                      disconnect it. Multiple providers can stay connected, then Models decides which roles use them.
-                    </text>
-                  </Show>
-                </box>
+                   <Show when={!narrow()}>
+                     <text fg={theme.textMuted}>
+                       Enter opens Provider Manager. Select a provider to add or refresh auth; press d on saved auth to
+                       disconnect it. Multiple providers can stay connected, then Models decides which roles use them.
+                     </text>
+                   </Show>
+                   <SetupActionBar actions={[{ label: "Open Provider Manager", active: true, onPress: () => void chooseProvider() }]} />
+                   <text fg={theme.textMuted}>Next: connect auth here, then choose a model preset or provider baseline in Models.</text>
+                 </box>
               </Match>
               <Match when={active() === "models"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme.primary}>Models</text>
-                  <text fg={theme.textMuted}>
-                    Pick the main models first. The Subagents role sets the default for background workers, but each
-                    subagent can still override its model in that agent's own config.
-                  </text>
+                   <text fg={theme.textMuted}>
+                     Pick the main models first. The Subagents role sets the default for background workers, but each
+                     subagent can still override its model in that agent's own config.
+                   </text>
+                   <text fg={theme.primary}>MODEL PRESETS</text>
+                   <text fg={theme.textMuted}>ChatGPT subscription uses OAuth; OpenAI API uses an API key; connected provider presets use that provider's model catalog.</text>
+                   <text fg={theme.textMuted}>OpenRouter, Anthropic, and other providers appear here only after their runtime auth/catalog is available.</text>
                   <For each={primaryModelRoles}>
                     {(role) => (
                       <box flexDirection="row" justifyContent="space-between" onMouseDown={() => chooseModelRole(role)}>
@@ -1904,9 +2139,10 @@ export function Setup() {
                       {additionalModelRoles().length} configured · press Enter to edit the full role list
                     </text>
                   </Show>
-                  <box flexGrow={1} />
-                  <text fg={theme.textMuted}>Enter opens onboarding presets plus all model roles. Click any visible row to edit it.</text>
-                </box>
+                   <box flexGrow={1} />
+                   <text fg={theme.textMuted}>Enter opens onboarding presets plus all model roles. Click any visible row to edit it.</text>
+                   <SetupActionBar actions={[{ label: "Open model presets", active: true, onPress: chooseModelRoleMenu }]} />
+                 </box>
               </Match>
                <Match when={active() === "budget"}>
                  <box flexDirection="column" gap={1}>
@@ -1923,33 +2159,9 @@ export function Setup() {
                    <text fg={theme.textMuted}>
                      API usage mode can warn/stop by USD thresholds before provider calls.
                    </text>
+                   <SetupActionBar actions={[{ label: "Configure budget", active: true, onPress: chooseBudget }]} />
                  </box>
                </Match>
-              <Match when={active() === "health"}>
-                <box flexDirection="column" gap={1}>
-                  <text fg={theme.primary}>Health Check</text>
-                  <text>Status: {setupSummary()?.setup.blockers.length ? "needs attention" : "ready"}</text>
-                  <text>AI ready: {setupSummary()?.ai.ready ? "yes" : "no"}</text>
-                  <text>Default model: {setupSummary()?.setup.defaultModel || "not set"}</text>
-                  <text>Generated config: {setupSummary()?.setup.generatedConfig ? "yes" : "no"}</text>
-                  <text>Local bin: {setupSummary()?.setup.localBin || "missing"}</text>
-                  <text>PATH link points here: {setupSummary()?.setup.pathPointsHere ? "yes" : "no"}</text>
-                  <Show when={setupSummary()?.setup.blockers.length}>
-                    <box flexDirection="column" gap={0}>
-                      <text fg={theme.warning}>Blockers / warnings:</text>
-                      <For each={(setupSummary()?.setup.blockers || []).slice(0, 5)}>
-                        {(blocker) => <text fg={theme.warning}>{truncateSetupText(String(blocker), promptPanelWidth())}</text>}
-                      </For>
-                    </box>
-                  </Show>
-                  <text fg={theme.textMuted}>
-                    Enter runs setupDoctor + setupPlan and writes .mendcode/setup/plan.json for local inspection.
-                  </text>
-                  <text fg={theme.textMuted}>
-                    This step reads readiness only; it does not call providers, run donor auth, or print secrets.
-                  </text>
-                </box>
-              </Match>
               <Match when={active() === "prompt"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme.primary}>Prompt Mode</text>
@@ -1998,10 +2210,11 @@ export function Setup() {
                   <text fg={theme.textMuted}>
                     Available now: {surfacedCustomizationCapabilities.map((item) => item.id).join(", ")}
                   </text>
-                  <text fg={theme.textMuted}>
-                    Blocked in v1: transcript.renderers, prompt.parser.override, sync.bootstrap.override
-                  </text>
-                </box>
+                   <text fg={theme.textMuted}>
+                     Blocked in v1: transcript.renderers, prompt.parser.override, sync.bootstrap.override
+                   </text>
+                   <SetupActionBar actions={[{ label: "Choose prompt mode", active: true, onPress: choosePromptMode }]} />
+                 </box>
               </Match>
               <Match when={active() === "package"}>
                 <box flexDirection="column" gap={1}>
@@ -2039,16 +2252,22 @@ export function Setup() {
                   <text>Prompt chrome: {mend.profile.promptChrome.preset}</text>
                   <text>Presentation: {mend.profile.presentation.profile}</text>
                   <text>Activity: global spinner footer</text>
-                  <text fg={theme.textMuted}>
-                    Enter sets title-vs-mascot identity, product name, logo font, and prompt chrome preset.
-                  </text>
+                   <text fg={theme.textMuted}>
+                     Enter sets title-vs-mascot identity, product name, logo font, and prompt chrome preset.
+                   </text>
+                   <text fg={theme.textMuted}>Quick profiles: Minimal hides optional surfaces; Full restores the complete MendCode presentation.</text>
                   <text fg={theme.textMuted}>
                     Mascot mode uses MendBug by default and can be overridden from global TUI config.
                   </text>
-                  <text fg={theme.textMuted}>
-                    Setup-owned or setup-visible surfaces: {setupVisibleCapabilities.map((item) => item.id).join(", ")}
-                  </text>
-                </box>
+                   <text fg={theme.textMuted}>
+                     Setup-owned or setup-visible surfaces: {setupVisibleCapabilities.map((item) => item.id).join(", ")}
+                   </text>
+                   <SetupActionBar actions={[
+                     { label: "Minimal TUI", onPress: () => void applyStandaloneTuiPreset("minimal") },
+                     { label: "Full TUI", active: true, onPress: () => void applyStandaloneTuiPreset("full") },
+                     { label: "Edit TUI profile", onPress: () => void chooseTuiProfile() },
+                   ]} />
+                 </box>
               </Match>
               <Match when={active() === "memory"}>
                 <box flexDirection="column" gap={1}>
@@ -2058,7 +2277,8 @@ export function Setup() {
                   </text>
                   <text>Enabled: {setupSummary()?.memory.enabled ? "yes" : "no"}</text>
                   <text>Input memory: {setupSummary()?.memory.use ? "on" : "off"}</text>
-                  <text>Memory learning: {setupSummary()?.memory.generate ? "on" : "off"} · {memoryLearningStatus()}</text>
+                   <text>Memory learning: {setupSummary()?.memory.generate ? "on" : "off"} · {memoryLearningStatus()}</text>
+                   <text fg={theme.textMuted}>Default and Minimal keep memory off. Full enables retrieval and approval-gated proposals; it never auto-applies generated changes.</text>
                   <text>
                     Context limit: {setupSummary()?.memory.maxPromptTokens} tokens · project {setupSummary()?.memory.projectMaxEntries}
                     /request · global {setupSummary()?.memory.globalCompactionMaxEntries}/after compaction
@@ -2096,10 +2316,11 @@ export function Setup() {
                   <text fg={theme.textMuted}>
                     Enter toggles memory config. Retrieval is local-only; learning uses the configured extractor role.
                   </text>
-                  <text fg={theme.textMuted}>
-                    Memory is injected as soft context; current user intent and repo evidence still win.
-                  </text>
-                </box>
+                   <text fg={theme.textMuted}>
+                     Memory is injected as soft context; current user intent and repo evidence still win.
+                   </text>
+                   <SetupActionBar actions={[{ label: "Configure memory", active: true, onPress: chooseMemory }]} />
+                 </box>
               </Match>
               <Match when={active() === "permissions"}>
                 <box flexDirection="column" gap={1}>
@@ -2126,8 +2347,9 @@ export function Setup() {
                     Full Access is the renamed auto-accept mode for the TUI session. It does not change OS sandboxing by
                     itself.
                   </text>
-                  <text fg={theme.textMuted}>Enter changes the global default in your MendCode config.</text>
-                </box>
+                   <text fg={theme.textMuted}>Enter changes the global default in your MendCode config.</text>
+                   <SetupActionBar actions={[{ label: "Configure permissions", active: true, onPress: choosePermissions }]} />
+                 </box>
               </Match>
               </Switch>
             </Show>
@@ -2136,7 +2358,7 @@ export function Setup() {
             <text fg={theme.textMuted} wrapMode="none">
               {compact()
                 ? truncateSetupText("Required: provider, models, budget, prompt", promptPanelWidth())
-                : "Required: provider, models, budget, prompt · optional: health, package, tui, memory, permissions"}
+                : "Required: provider, models, budget, prompt · optional: start, tui, memory, permissions, package"}
             </text>
             <text fg={complete() ? theme.success : theme.textMuted} wrapMode="none" onMouseDown={() => void finish()}>
               {complete() ? "Finish setup" : "Setup incomplete"}
@@ -2144,6 +2366,6 @@ export function Setup() {
           </box>
         </box>
       </box>
-    </box>
+    </CommandDeck>
   )
 }

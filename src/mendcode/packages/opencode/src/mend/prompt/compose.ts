@@ -3,7 +3,7 @@ import { readMendConfig } from "../config/project"
 import { readWorktreePolicy, tsmStatus } from "../config/worktree"
 import { readMflowConfig } from "../config/mflow"
 import type { MendPromptMode } from "./mode"
-import { focusNames, readPromptSource, resolvePromptSourceFile, sourceForFocus } from "./sources"
+import { focusNames, promptBehaviorForModel, promptBehaviorText, readPromptSource, resolvePromptSourceFile, sourceForFocus } from "./sources"
 import { composeCustomizationCapabilitySection } from "./capabilities"
 
 export type PromptBaseSource = "mendcode-harness-source" | "opencode-generic-provider-fallback" | "minimal-base"
@@ -122,12 +122,22 @@ function loopWorkflowBrief() {
   ].join("\n")
 }
 
+function focusMendCodeBasics() {
+  return [
+    "MendCode basics:",
+    "- For independent work that can run concurrently, call `task` with `background: true`, keep each returned `task_id`, and use `task_status` with `get` or `wait` to inspect and collect the results before finishing.",
+    "- Keep `task` in foreground when the next step depends on its result. A foreground task blocks this session, so wait for it to finish before launching the next subagent and do not claim parallel execution.",
+    "- Report a subagent as started only after `task` returns its `task_id`; if a foreground call is still running, the next subagent has not started.",
+    "- Use `loop` for durable or repeated work after the current turn; do not emulate scheduled iterations inline.",
+  ].join("\n")
+}
+
 function backgroundSubagentFull() {
   return [
     "MendCode background subagents:",
     "- For independent work that can run concurrently, call `task` with `background: true`, keep the returned task_id, and continue useful parent work immediately.",
     "- Use `task_status` with action `get` to inspect one task, `list` to rediscover child task IDs, `wait` when the result is now a dependency, or `cancel` to stop a registered background task.",
-    "- Wait timeouts release only the waiter; they do not cancel the child. Completion, failure, cancellation, and needs-input notifications are host events and never trigger a provider call automatically.",
+     "- Wait timeouts release only the waiter; they do not cancel the child. Completion, failure, cancellation, and needs-input notifications do not trigger provider calls by default. When `experimental.subagent_owner_wake` is enabled, an idle parent may receive one coalesced internal runtime wake; it is not a user message.",
     "- Do not busy-poll. Check after meaningful parent progress, when the result becomes a dependency, or before the final response.",
     "- Keep `task` in foreground when the very next step depends on its result.",
     "- Collect relevant background results before claiming completion; surface failed, waiting, or retrying tasks honestly.",
@@ -158,12 +168,13 @@ function loopWorkflowFull() {
   ].join("\n")
 }
 
-function focusFallback(focusID: string, reason: string) {
+function focusFallback(focusID: string, reason: string, behavior: string[] = []) {
   return [
     `Active focus: ${focusNames[focusID] || focusID} (${focusID}).`,
     `Harness prompt fallback: ${reason}.`,
     "Use a small MendCode coding baseline: inspect before editing, keep changes scoped, and verify with executable evidence.",
     "Preserve MendCode product identity. Do not claim to be an upstream CLI, company, or official harness.",
+    ...(behavior.length ? ["Focus behavior baseline:", ...behavior.map((item) => `- ${item}`)] : []),
   ].join("\n")
 }
 
@@ -258,6 +269,7 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
   const source = sourceForFocus(focusID)
   const harness = await readPromptSource(source, sourceInput)
   const found = source ? resolvePromptSourceFile(source, sourceInput) : null
+  const modelBehavior = promptBehaviorForModel({ focusID, modelID: input.modelID })
   const sections: PromptSection[] = []
   const includeProjectInstructions = mode === "full"
   const includeSkillsByDefault = mode === "full"
@@ -301,10 +313,32 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
           id: "fallback",
           label: "MendCode focus fallback",
           source: "opencode-generic-provider-fallback",
-          text: focusFallback(focusID, fallbackReason),
+          text: focusFallback(focusID, fallbackReason, source?.behavior),
         }),
       )
     }
+  }
+
+  if (mode !== "minimal" && modelBehavior) {
+    sections.push(
+      section({
+        id: "model-behavior",
+        label: modelBehavior.label,
+        source: "mendcode-context",
+        text: promptBehaviorText(modelBehavior),
+      }),
+    )
+  }
+
+  if (mode === "focus") {
+    sections.push(
+      section({
+        id: "focus-mendcode-basics",
+        label: "MendCode basics",
+        source: "mendcode-context",
+        text: focusMendCodeBasics(),
+      }),
+    )
   }
 
   if (mode === "full") {

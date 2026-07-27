@@ -1,4 +1,4 @@
-import { DateTime, Effect, Stream } from "effect"
+import { DateTime, Effect, Fiber, Stream } from "effect"
 import os from "os"
 import * as Tool from "./tool"
 import path from "path"
@@ -29,6 +29,9 @@ export { Parameters } from "./shell/prompt"
 
 const MAX_METADATA_LENGTH = 30_000
 const METADATA_UPDATE_INTERVAL = 250
+const ABORT_GRACE_PERIOD_MS = 250
+const MAX_TERMINAL_PREVIEW_CHARS = MAX_METADATA_LENGTH * 2
+const MAX_TERMINAL_PREVIEW_LINES = 2_000
 const DEFAULT_TIMEOUT = Flag.OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS || 2 * 60 * 1000
 const CWD = new Set(["cd", "chdir", "popd", "pushd", "push-location", "set-location"])
 const FILES = new Set([
@@ -235,6 +238,11 @@ function pathArgs(list: Part[], ps: boolean, cmd = false) {
 
 function preview(text: string) {
   if (text.length <= MAX_METADATA_LENGTH) return text
+  const hint = /^(\.\.\.output truncated\.\.\.\n\n(?:Full output|Output excerpt) saved to:\s+\S+\n\n)/.exec(text)?.[1]
+  if (hint) {
+    const tail = Math.max(0, MAX_METADATA_LENGTH - hint.length - 5)
+    return `${hint}...\n\n${text.slice(-tail)}`
+  }
   return "...\n\n" + text.slice(-MAX_METADATA_LENGTH)
 }
 
@@ -518,8 +526,9 @@ export const ShellTool = Tool.define(
       let lastMetadataUpdate = 0
       const pendingOutputDelta = createShellOutputDeltaBuffer()
       let lastOutputEvent = 0
-      let terminalPreviewLines = [""]
+      let terminalPreviewLines: string[][] = [[]]
       let terminalPreviewColumn = 0
+      let terminalPreviewCells = 0
       let pendingStoredCarriageReturn = false
       let previousStoredEndedWithNewline = false
 
@@ -555,7 +564,11 @@ export const ShellTool = Tool.define(
             continue
           }
           if (char === "\n") {
-            terminalPreviewLines.push("")
+            terminalPreviewLines.push([])
+            if (terminalPreviewLines.length > MAX_TERMINAL_PREVIEW_LINES * 2) {
+              const removed = terminalPreviewLines.splice(0, terminalPreviewLines.length - MAX_TERMINAL_PREVIEW_LINES)
+              terminalPreviewCells -= removed.reduce((sum, line) => sum + line.length, 0)
+            }
             terminalPreviewColumn = 0
             continue
           }
@@ -564,20 +577,30 @@ export const ShellTool = Tool.define(
             continue
           }
 
-          const index = terminalPreviewLines.length - 1
-          const line = terminalPreviewLines[index] ?? ""
-          const padded = line.length < terminalPreviewColumn ? line.padEnd(terminalPreviewColumn, " ") : line
-          terminalPreviewLines[index] =
-            padded.slice(0, terminalPreviewColumn) + char + padded.slice(terminalPreviewColumn + 1)
+          if (terminalPreviewColumn >= MAX_TERMINAL_PREVIEW_CHARS) continue
+          const line = terminalPreviewLines[terminalPreviewLines.length - 1]!
+          const target = terminalPreviewColumn + 1
+          const available = Math.max(0, MAX_TERMINAL_PREVIEW_CHARS - terminalPreviewCells)
+          const nextLength = Math.min(target, line.length + available)
+          if (line.length < nextLength) {
+            const previousLength = line.length
+            line.length = nextLength
+            line.fill(" ", previousLength)
+            terminalPreviewCells += nextLength - previousLength
+          }
+          if (terminalPreviewColumn >= line.length) continue
+          line[terminalPreviewColumn] = char
           terminalPreviewColumn++
         }
 
-        const rendered = terminalPreviewLines.join("\n")
+        let rendered = terminalPreviewLines.map((line) => line.join("")).join("\n")
         if (rendered.length > MAX_METADATA_LENGTH * 2) {
-          terminalPreviewLines = rendered.slice(-MAX_METADATA_LENGTH).split("\n")
+          rendered = rendered.slice(-MAX_METADATA_LENGTH)
+          terminalPreviewLines = rendered.split("\n").map((line) => [...line])
           terminalPreviewColumn = terminalPreviewLines.at(-1)?.length ?? 0
+          terminalPreviewCells = terminalPreviewLines.reduce((sum, line) => sum + line.length, 0)
         }
-        return terminalPreviewLines.join("\n")
+        return rendered
       }
       const normalizeStoredChunk = (chunk: string) => {
         let text = chunk
@@ -635,7 +658,7 @@ export const ShellTool = Tool.define(
       const runPipe = Effect.gen(function* () {
         const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
 
-        yield* Effect.forkScoped(Stream.runForEach(Stream.decodeText(handle.all), processChunk))
+        const outputFiber = yield* Effect.forkScoped(Stream.runForEach(Stream.decodeText(handle.all), processChunk))
 
         const abort = Effect.callback<void>((resume) => {
           if (ctx.abort.aborted) return resume(Effect.void)
@@ -653,11 +676,16 @@ export const ShellTool = Tool.define(
         ])
 
         if (exit.kind === "abort") {
-          yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+          const grace = yield* Effect.raceFirst(
+            handle.exitCode.pipe(Effect.as("exited" as const)),
+            Effect.sleep(ABORT_GRACE_PERIOD_MS).pipe(Effect.as("grace-expired" as const)),
+          )
+          if (grace === "grace-expired") yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
         }
         if (exit.kind === "timeout") {
           yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
         }
+        yield* Fiber.await(outputFiber).pipe(Effect.exit, Effect.asVoid)
 
         return exit
       })
@@ -692,7 +720,7 @@ export const ShellTool = Tool.define(
       if (end.cut) cut = true
       if (!file && cut) {
         const excerpt = savedOutput.text()
-        const saved = yield* trunc.writeOutput(excerpt.text, { complete: excerpt.complete })
+        const saved = yield* trunc.writeOutput(excerpt.text, { complete: excerpt.complete && !aborted })
         file = saved.path
         savedOutputComplete = saved.complete
       }

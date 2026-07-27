@@ -45,6 +45,8 @@ const log = Log.create({ service: "session" })
 const parentTitlePrefix = "New session - "
 const childTitlePrefix = "Child session - "
 const LIVE_PART_DELTA_PERSIST_INTERVAL_MS = 500
+const MAX_PENDING_PART_DELTA_FIELD_CHARS = 256 * 1024
+const MAX_PENDING_PART_DELTAS = 64
 
 function createDefaultTitle(isChild = false) {
   return (isChild ? childTitlePrefix : parentTitlePrefix) + new Date().toISOString()
@@ -541,6 +543,15 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
     }
     const pendingPartDeltas = new Map<string, PendingPartDelta>()
 
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        for (const pending of pendingPartDeltas.values()) {
+          if (pending.timer) clearTimeout(pending.timer)
+        }
+        pendingPartDeltas.clear()
+      }),
+    )
+
     function partDeltaKey(input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) {
       return `${input.sessionID}:${input.messageID}:${input.partID}`
     }
@@ -549,7 +560,15 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
       const record = part as unknown as Record<string, unknown>
       const current = record[field]
       if (current !== undefined && typeof current !== "string") return false
-      record[field] = `${current ?? ""}${delta}`
+      const next = `${current ?? ""}${delta}`
+      if (next.length <= MAX_PENDING_PART_DELTA_FIELD_CHARS) {
+        record[field] = next
+        return true
+      }
+      const marker = `\n[Live part delta capped: omitted ${next.length - MAX_PENDING_PART_DELTA_FIELD_CHARS} chars]\n`
+      const budget = Math.max(0, MAX_PENDING_PART_DELTA_FIELD_CHARS - marker.length)
+      const head = Math.floor(budget / 3)
+      record[field] = `${next.slice(0, head)}${marker}${next.slice(next.length - (budget - head))}`
       return true
     }
 
@@ -917,6 +936,13 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
       if (!pending) {
         const part = yield* getPart(input)
         if (!part) return
+        while (pendingPartDeltas.size >= MAX_PENDING_PART_DELTAS) {
+          const oldest = pendingPartDeltas.keys().next().value
+          if (!oldest) break
+          const stale = pendingPartDeltas.get(oldest)
+          if (stale?.timer) clearTimeout(stale.timer)
+          pendingPartDeltas.delete(oldest)
+        }
         pending = {
           part: structuredClone(part),
           version: 0,

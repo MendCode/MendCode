@@ -13,6 +13,7 @@ import {
   COMPACTED_TOOL_CALLS_KV_KEY,
   releasablePinnedSessionMessageIDs,
   SyncProvider,
+  TUI_SESSION_MESSAGE_PART_STORE_LIMIT,
   TUI_SESSION_MESSAGE_STORE_LIMIT,
   TUI_SESSION_MESSAGE_SYNC_LIMIT,
   useSync,
@@ -143,6 +144,61 @@ async function mount(
   await ready
   await wait(() => sync.status === "complete")
   return { app, kv, sync, session: calls.session }
+}
+
+async function mountSSE(
+  overrides: Record<string, Response | unknown | ((url: URL) => Response | unknown)> = {},
+) {
+  const calls = createFetch(overrides)
+  const controllers: ReadableStreamDefaultController<Uint8Array>[] = []
+  const fetch = Object.assign(
+    (async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : String(input))
+      if (url.pathname === "/global/event") {
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controllers.push(controller)
+            },
+          }),
+          { headers: { "content-type": "text/event-stream" } },
+        )
+      }
+      return calls.fetch(input)
+    }) as typeof globalThis.fetch,
+    { preconnect: globalThis.fetch.preconnect.bind(globalThis.fetch) },
+  )
+  let sync!: ReturnType<typeof useSync>
+  let done!: () => void
+  const ready = new Promise<void>((resolve) => {
+    done = resolve
+  })
+
+  const app = await testRender(() => (
+    <ArgsProvider>
+      <ExitProvider>
+        <KVProvider>
+          <SDKProvider url="http://test" directory={directory} fetch={fetch}>
+            <ProjectProvider>
+              <SyncProvider>
+                <Probe
+                  onReady={(ctx) => {
+                    sync = ctx.sync
+                    done()
+                  }}
+                />
+              </SyncProvider>
+            </ProjectProvider>
+          </SDKProvider>
+        </KVProvider>
+      </ExitProvider>
+    </ArgsProvider>
+  ))
+
+  await ready
+  await wait(() => sync.status === "complete")
+  await wait(() => controllers.length === 1)
+  return { app, sync, controllers, session: calls.session }
 }
 
 function Probe(props: { onReady: (ctx: { kv: ReturnType<typeof useKV>; sync: ReturnType<typeof useSync> }) => void }) {
@@ -1900,6 +1956,153 @@ describe("tui sync", () => {
     }
   })
 
+  test("loads a full tool part on demand without expanding the stored preview", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    const sessionID = "ses_full_tool_part"
+    const messageID = "msg_full_tool_part"
+    const partID = "prt_full_tool_part"
+    const content = `BEGIN FILE\n${"x".repeat(600 * 1024)}\nEND FILE`
+    const info = {
+      id: sessionID,
+      projectID: "proj_test",
+      directory,
+      title: "Full tool part",
+      version: "test",
+      time: { created: 1, updated: 2 },
+    }
+    const message = {
+      id: messageID,
+      sessionID,
+      role: "assistant",
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-test" },
+      tokens: {},
+      time: { created: 1, completed: 1 },
+    }
+    const previewPart = {
+      id: partID,
+      messageID,
+      sessionID,
+      type: "tool",
+      tool: "edit",
+      state: {
+        status: "completed",
+        input: { filePath: "huge.ts", content },
+        output: "",
+        title: "huge.ts",
+        metadata: { diff: "[Diff preview truncated: too large to render safely.]" },
+        time: { start: 1, end: 2 },
+      },
+    }
+    const fullPart = {
+      ...previewPart,
+      state: {
+        ...previewPart.state,
+        input: { filePath: "huge.ts", content },
+        metadata: { diff: "+++ b/huge.ts\n@@ -0,0 +1,2 @@\n+first\n+last" },
+      },
+    }
+    let fullRequests = 0
+    const { app, sync } = await mount({
+      [`/session/${sessionID}`]: info,
+      [`/session/${sessionID}/message`]: [{ info: message, parts: [previewPart] }],
+      [`/session/${sessionID}/message/${messageID}`]: (url: URL) => {
+        fullRequests += 1
+        expect(url.searchParams.get("view")).toBe("full")
+        return { info: message, parts: [fullPart] }
+      },
+      [`/session/${sessionID}/todo`]: [],
+      [`/session/${sessionID}/diff`]: [],
+    })
+
+    try {
+      await sync.session.sync(sessionID, { force: true })
+      const loaded = await sync.session.loadFullToolPart(sessionID, messageID, partID)
+      const storedInput = (sync.data.part[messageID]?.[0] as { state?: { input?: { content?: string } } } | undefined)?.state?.input
+
+      expect(fullRequests).toBe(1)
+      expect(loaded?.type).toBe("tool")
+      expect(loaded?.state.status === "completed" ? loaded.state.input?.content : undefined).toBe(content)
+      expect(storedInput?.content).toContain("tool input.content preview truncated")
+      expect(storedInput?.content?.length).toBeLessThanOrEqual(512 * 1024)
+      expect(loaded?.state.status === "completed" ? loaded.state.metadata?.diff : undefined).toContain("+last")
+      expect((sync.data.part[messageID]?.[0] as { state?: { metadata?: { diff?: string } } } | undefined)?.state?.metadata?.diff).toContain(
+        "Diff preview truncated",
+      )
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("keeps every todo item in the stored todowrite preview", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    const sessionID = "ses_todowrite_preview"
+    const messageID = "msg_todowrite_preview"
+    const todos = Array.from({ length: 12 }, (_, index) => ({
+      content: `Task ${index + 1}`,
+      status: index === 0 ? "in_progress" : "pending",
+      priority: "medium",
+    }))
+    const info = {
+      id: sessionID,
+      projectID: "proj_test",
+      directory,
+      title: "Todo preview",
+      version: "test",
+      time: { created: 1, updated: 2 },
+    }
+    const message = {
+      id: messageID,
+      sessionID,
+      role: "assistant",
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-test" },
+      tokens: {},
+      time: { created: 1, completed: 1 },
+    }
+    const part = {
+      id: "prt_todowrite_preview",
+      messageID,
+      sessionID,
+      type: "tool",
+      tool: "todowrite",
+      state: {
+        status: "completed",
+        input: { todos },
+        output: JSON.stringify(todos),
+        title: "12 todos",
+        metadata: { todos },
+        time: { start: 1, end: 2 },
+      },
+    }
+
+    const { app, sync } = await mount({
+      [`/session/${sessionID}`]: info,
+      [`/session/${sessionID}/message`]: [{ info: message, parts: [part] }],
+      [`/session/${sessionID}/todo`]: todos,
+      [`/session/${sessionID}/diff`]: [],
+    })
+
+    try {
+      await sync.session.sync(sessionID, { force: true })
+      const stored = sync.data.part[messageID]?.[0]
+      expect(stored?.type).toBe("tool")
+      expect(stored?.type === "tool" && stored.state.status === "completed" ? stored.state.input.todos : undefined).toHaveLength(12)
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
   test("session sync keeps newer live messages over stale fetched snapshots", async () => {
     const previous = Global.Path.state
     await using tmp = await tmpdir()
@@ -3116,6 +3319,162 @@ describe("tui sync", () => {
 
       await wait(() => (sync.data.part[messageID]?.[0] as { text?: string } | undefined)?.text === updatedPart.text)
       expect(sync.data.part[messageID]?.[0]).toMatchObject(updatedPart)
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("bounds live part storage and ignores orphan part updates", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    let emit!: (event: GlobalEvent) => void
+    const sessionID = "ses_part_store_limit"
+    const messageID = "msg_part_store_limit"
+    const { app, sync } = await mount(
+      {},
+      {
+        events: eventSource({
+          onSubscribe: (handler) => {
+            emit = handler
+          },
+        }),
+      },
+    )
+
+    try {
+      sync.set("message", sessionID, [
+        {
+          id: messageID,
+          sessionID,
+          role: "assistant",
+          agent: "build",
+          model: { providerID: "openai", modelID: "gpt-test" },
+          tokens: {},
+          time: { created: 1 },
+        } as any,
+      ])
+
+      for (let index = 0; index < TUI_SESSION_MESSAGE_PART_STORE_LIMIT + 64; index++) {
+        const part = {
+          id: `prt_part_store_${String(index).padStart(4, "0")}`,
+          messageID,
+          sessionID,
+          type: "text",
+          text: "chunk",
+          time: { start: index },
+        }
+        emit({
+          directory,
+          project: "proj_test",
+          payload: {
+            id: `evt_part_store_${index}`,
+            type: "message.part.updated",
+            properties: { sessionID, part, time: index },
+          },
+        } as GlobalEvent)
+      }
+
+      await wait(() => (sync.data.part[messageID]?.length ?? 0) === TUI_SESSION_MESSAGE_PART_STORE_LIMIT)
+      expect(sync.data.part[messageID]?.[0]?.id).toBe("prt_part_store_0000")
+      expect(sync.data.part[messageID]?.at(-1)?.id).toBe(
+        `prt_part_store_${String(TUI_SESSION_MESSAGE_PART_STORE_LIMIT + 63).padStart(4, "0")}`,
+      )
+
+      const orphanMessageID = "msg_orphan_part_store"
+      for (let index = 0; index < 64; index++) {
+        emit({
+          directory,
+          project: "proj_test",
+          payload: {
+            id: `evt_orphan_part_store_${index}`,
+            type: "message.part.updated",
+            properties: {
+              sessionID,
+              part: {
+                id: `prt_orphan_part_store_${index}`,
+                messageID: orphanMessageID,
+                sessionID,
+                type: "text",
+                text: "orphan",
+                time: { start: index },
+              },
+              time: index,
+            },
+          },
+        } as GlobalEvent)
+      }
+      await Bun.sleep(30)
+      expect(sync.data.part[orphanMessageID]).toBeUndefined()
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("legacy sync refetches the active session after an SSE reconnect", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    const sessionID = "ses_legacy_reconnect"
+    const messageBefore = {
+      info: {
+        id: "msg_legacy_before",
+        sessionID,
+        role: "user",
+        agent: "user",
+        time: { created: 1 },
+      },
+      parts: [],
+    }
+    const messageAfter = {
+      ...messageBefore,
+      info: {
+        ...messageBefore.info,
+        id: "msg_legacy_after",
+        time: { created: 2 },
+      },
+    }
+    let page = 0
+    const { app, sync, controllers } = await mountSSE({
+      [`/session/${sessionID}`]: {
+        id: sessionID,
+        projectID: "proj_test",
+        directory,
+        title: "Reconnect test",
+        time: { created: 1, updated: 1 },
+      },
+      [`/session/${sessionID}/message`]: () => [[messageBefore], [messageAfter]][Math.min(page++, 1)],
+      [`/session/${sessionID}/todo`]: [],
+      [`/session/${sessionID}/diff`]: [],
+    })
+
+    try {
+      await sync.session.sync(sessionID)
+      expect(sync.data.message[sessionID]?.[0]?.id).toBe(messageBefore.info.id)
+
+      controllers[0].close()
+      await wait(() => controllers.length === 2)
+      controllers[1].enqueue(
+        new TextEncoder().encode(
+          `data: ${JSON.stringify({
+            directory,
+            project: "proj_test",
+            payload: { id: "evt_legacy_reconnected", type: "server.connected", properties: {} },
+          })}\n\n`,
+        ),
+      )
+
+      await wait(() => sync.data.message[sessionID]?.some((message) => message.id === messageAfter.info.id) === true)
+      expect(sync.data.message[sessionID]?.map((message) => message.id)).toEqual([
+        messageBefore.info.id,
+        messageAfter.info.id,
+      ])
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous

@@ -3,6 +3,47 @@ import type { PromptInfo } from "./history"
 type PromptPart = PromptInfo["parts"][number]
 type PromptTextPart = Extract<PromptPart, { type: "text" }>
 
+function offsetPromptPart(part: PromptPart, offset: number) {
+  if (offset === 0) return part
+  if (part.type === "text" && part.source?.text) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        text: {
+          ...part.source.text,
+          start: part.source.text.start + offset,
+          end: part.source.text.end + offset,
+        },
+      },
+    } satisfies PromptPart
+  }
+  if (part.type === "file" && part.source?.text) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        text: {
+          ...part.source.text,
+          start: part.source.text.start + offset,
+          end: part.source.text.end + offset,
+        },
+      },
+    } satisfies PromptPart
+  }
+  if (part.type === "agent" && part.source) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        start: part.source.start + offset,
+        end: part.source.end + offset,
+      },
+    } satisfies PromptPart
+  }
+  return part
+}
+
 type RuntimeClipboardPart = {
   type: string
   text?: string
@@ -283,4 +324,17 @@ export function restorePromptFromSubmittedParts(parts: readonly unknown[]): Prom
   }
 
   return { input, parts: promptParts }
+}
+
+export function appendPromptInfo(current: PromptInfo | undefined, appended: PromptInfo): PromptInfo {
+  if (!current || (current.input.length === 0 && current.parts.length === 0)) return appended
+  if (appended.input.length === 0 && appended.parts.length === 0) return current
+
+  const separator = current.input.length > 0 && appended.input.length > 0 ? "\n\n" : ""
+  const offset = current.input.length + separator.length
+  return {
+    input: `${current.input}${separator}${appended.input}`,
+    parts: [...current.parts, ...appended.parts.map((part) => offsetPromptPart(part, offset))],
+    mode: current.mode ?? appended.mode,
+  }
 }

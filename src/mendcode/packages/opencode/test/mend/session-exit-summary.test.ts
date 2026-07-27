@@ -24,7 +24,7 @@ describe("session exit summary", () => {
     expect(summary).toContain("Session")
     expect(summary).toContain("Memory graph follow-up")
     expect(summary).toContain("Continue")
-    expect(summary).toContain("mend -s ses_123")
+    expect(summary).toContain("mendcode -s ses_123")
     expect(summary).toContain("Usage")
     expect(summary).toContain("↑1,200 ↓300")
     expect(summary).toContain("Context")
@@ -55,7 +55,7 @@ describe("session exit summary", () => {
     expect(summary).toContain("(=^.^=)")
     expect(summary).toContain(renderAsciiText("MendLab", "mendcode").split("\n")[0].trim())
     expect(summary).toContain("Pet session")
-    expect(summary).toContain("mend -s ses_pet")
+    expect(summary).toContain("mendcode -s ses_pet")
   })
 
   test("prioritizes resume details on tiny widths and omits unavailable usage", () => {
@@ -69,7 +69,7 @@ describe("session exit summary", () => {
     expect(summary).toContain("MendCode")
     expect(summary).toContain("Session")
     expect(summary).toContain("Continue")
-    expect(summary).toContain("mend -s ses_tiny")
+    expect(summary).toContain("mendcode -s ses_tiny")
     expect(summary).not.toContain("Usage")
     expect(summary).not.toContain("unavailable")
     for (const line of summary.split("\n")) {

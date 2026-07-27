@@ -4,6 +4,7 @@ import type { SetupStepID } from "@tui/context/route"
 import { useTheme } from "@tui/context/theme"
 
 const labels: Record<SetupStepID, string> = {
+  start: "Quick Start",
   provider: "Connect Provider",
   models: "Models",
   budget: "Budget",
@@ -24,7 +25,7 @@ export function setupRailStepStatus(
 ): SetupRailStepStatus {
   if (step === "provider" && summary?.authBlocked) return "auth blocked"
   if (state?.completedSteps.includes(step)) return "complete"
-  if (step === "health" || step === "package" || step === "tui" || step === "memory" || step === "permissions") return "optional"
+  if (step === "start" || step === "health" || step === "package" || step === "tui" || step === "memory" || step === "permissions") return "optional"
   return "pending"
 }
 
@@ -84,11 +85,13 @@ export function SetupRail(props: {
           {(step, index) => {
             const status = () => setupRailStepStatus(step, props.state, props.summary)
             return (
-              <box flexDirection="row" justifyContent="space-between" onMouseDown={() => props.onSelect(step)}>
-                <text fg={props.active === step ? theme.primary : theme.text}>
+              <box flexDirection="row" width="100%" gap={1} onMouseDown={() => props.onSelect(step)}>
+                <text flexGrow={1} minWidth={0} overflow="hidden" wrapMode="none" fg={props.active === step ? theme.primary : theme.text}>
                   {index() + 1}. {labels[step]}
                 </text>
-                <text fg={statusColor(status(), theme)}>{status()}</text>
+                <text width={12} wrapMode="none" fg={statusColor(status(), theme)}>
+                  {status()}
+                </text>
               </box>
             )
           }}

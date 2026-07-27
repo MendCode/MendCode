@@ -1,21 +1,12 @@
 import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
-import { BoxRenderable, MouseButton, MouseEvent, type ScrollBoxRenderable, type TextareaRenderable } from "@opentui/core"
+import { BoxRenderable, MouseButton, MouseEvent } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { asciiGraphNearestNode, asciiGraphRuns, layoutAsciiGraph, renderAsciiGraph, type AsciiGraphCell } from "@mendcode/plugin/tui"
-import { memoryOverview } from "@/mend/memory/overview"
+import { memoryGraphOverview, memoryOverview } from "@/mend/memory/overview"
 import { applyMemoryProposal, rejectMemoryProposal, updateMemoryProposal, type MemoryProposal } from "@/mend/memory/proposals"
-import { deleteMemoryEntry, updateMemoryEntry, type MemoryEntry } from "@/mend/memory/store"
-import {
-  listMemorySideChats,
-  createMemorySideChatSession,
-  readMemorySideChat,
-  sendMemorySideChatMessage,
-  startMemorySideChat,
-  type MemorySideChatResponder,
-  type MemorySideChatSession,
-} from "@/mend/memory/side-chat"
+import { deleteMemoryEntry, readMemoryEntries, updateMemoryEntry, type MemoryEntry } from "@/mend/memory/store"
 import { registerMemoryWorkspace, type MemoryWorkspace } from "@/mend/memory/workspaces"
-import { writeMemoryCategoryPolicy, type MemoryCategoryPolicy, type MemoryPolicyScope, type MemoryWritePolicy } from "@/mend/memory/categories"
+import { resetMemoryCategoryPolicy, writeMemoryCategoryPolicy, type MemoryCategoryPolicy, type MemoryPolicyScope, type MemoryWritePolicy } from "@/mend/memory/categories"
 import { applyDreamGraphProposal, rejectDreamGraphProposal } from "@/mend/memory/dream"
 import { readDreamScheduleState, type DreamScheduleState, type DreamScheduleWindow } from "@/mend/memory/dream-scheduler"
 import { Locale } from "@/util/locale"
@@ -23,37 +14,51 @@ import { useProject } from "@tui/context/project"
 import { routeReturnTarget, useRoute } from "@tui/context/route"
 import { useSDK } from "@tui/context/sdk"
 import { useTheme } from "@tui/context/theme"
-import { useTextareaKeybindings } from "@tui/component/textarea-keybindings"
+import { useCommandDialog } from "@tui/component/dialog-command"
+import { CommandDeck, commandDeckLayout } from "@tui/component/command-deck"
+import { useKV } from "@tui/context/kv"
 import { DialogConfirm } from "@tui/ui/dialog-confirm"
 import { DialogPrompt } from "@tui/ui/dialog-prompt"
-import { DialogSelect, type DialogSelectOption } from "@tui/ui/dialog-select"
+import { DialogSelect } from "@tui/ui/dialog-select"
 import { useDialog } from "@tui/ui/dialog"
 import { useToast } from "@tui/ui/toast"
 
 type MemoryOverview = Awaited<ReturnType<typeof memoryOverview>>
+type MemoryGraphOverview = Awaited<ReturnType<typeof memoryGraphOverview>>
+type MemoryGraphFactView = MemoryOverview["facts"][number]
 type DreamRunDetailView = MemoryOverview["dreamRunDetails"][number]
-type MemoryTab = "overview" | "project" | "global" | "graph" | "policy" | "dream"
+type MemoryTab = "memories" | "graph" | "dream" | "rules"
+type MemoryScopeFilter = "current" | "global" | "all"
+type MemoryListEntry = {
+  entry: MemoryEntry
+  root: string
+  projectLabel: string
+}
 type Selection =
-  | { kind: "entry"; entry: MemoryEntry }
+  | { kind: "entry"; entry: MemoryEntry; root: string; projectLabel: string }
   | { kind: "proposal"; proposal: MemoryProposal }
-  | { kind: "policy"; category: MemoryOverview["categories"][number]; policy: MemoryCategoryPolicy }
+  | { kind: "policy"; category: MemoryOverview["categories"][number]; policy: MemoryCategoryPolicy; layer: NonNullable<MemoryOverview["policyLayers"]>[string] | null }
   | { kind: "dream"; detail: DreamRunDetailView | null }
   | { kind: "overview" }
 
 const TABS: Array<{ id: MemoryTab; label: string; compactLabel: string }> = [
-  { id: "overview", label: "Overview", compactLabel: "Overview" },
-  { id: "project", label: "Project memories", compactLabel: "Project" },
-  { id: "global", label: "Global memories", compactLabel: "Global" },
+  { id: "memories", label: "Memories", compactLabel: "Memories" },
   { id: "graph", label: "Graph", compactLabel: "Graph" },
-  { id: "policy", label: "Policy & categories", compactLabel: "Policy" },
   { id: "dream", label: "Dream", compactLabel: "Dream" },
+  { id: "rules", label: "Rules", compactLabel: "Rules" },
 ]
 
 const WRITE_POLICIES: MemoryWritePolicy[] = ["disabled", "pending", "auto-apply-safe", "manual-only"]
 const ENTRY_ROW_LIMIT = 11
-const PROPOSAL_ROW_LIMIT = 10
 const POLICY_ROW_LIMIT = 12
 const DREAM_RUN_ROW_LIMIT = 8
+
+export function memoryListWindow<T>(items: T[], selectedIndex: number, limit: number) {
+  const size = Math.max(1, limit)
+  const selected = Math.max(0, Math.min(selectedIndex, Math.max(0, items.length - 1)))
+  const start = Math.max(0, Math.min(selected - Math.floor(size / 2), Math.max(0, items.length - size)))
+  return items.slice(start, start + size).map((item, offset) => ({ item, index: start + offset }))
+}
 
 export function memoryLayoutForDimensions(input: { width: number; height: number }) {
   return {
@@ -81,36 +86,6 @@ function short(value: string | null | undefined, width: number) {
   return Locale.truncate(text, Math.max(1, width))
 }
 
-async function askMemorySideChat(
-  sdk: ReturnType<typeof useSDK>,
-  root: string,
-  payload: Parameters<MemorySideChatResponder>[0],
-) {
-  const headers = new Headers(sdk.headers)
-  headers.set("content-type", "application/json")
-  const url = new URL("/memory/side-chat", sdk.url)
-  if (sdk.directory) url.searchParams.set("directory", sdk.directory)
-  const response = await sdk.fetch(url.toString(), {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      root,
-      message: payload.message,
-      history: payload.history,
-      context: payload.context,
-    }),
-    signal: payload.signal,
-  })
-  if (!response.ok) {
-    return { text: `memory side chat failed: ${response.status} ${response.statusText}`, actions: [] }
-  }
-  const json = await response.json().catch(() => null) as Awaited<ReturnType<MemorySideChatResponder>> | null
-  return {
-    text: typeof json?.text === "string" && json.text.trim() ? json.text : "No memory assistant response.",
-    actions: Array.isArray(json?.actions) ? json.actions : [],
-  }
-}
-
 export function memoryPreviewText(value: string | null | undefined, max = 96) {
   const compact = (value ?? "").replace(/\s+/g, " ").trim()
   const redacted = compact
@@ -124,8 +99,9 @@ export function shouldMemoryRouteHandleKey(input: {
   dialogOpen: boolean
   defaultPrevented?: boolean
   textInputActive?: boolean
+  emergency?: boolean
 }) {
-  return !input.dialogOpen && input.defaultPrevented !== true && input.textInputActive !== true
+  return !input.dialogOpen && (input.emergency === true || (input.defaultPrevented !== true && input.textInputActive !== true))
 }
 
 export function memoryTabCellWidths(input: { width: number; labels?: string[]; count?: number; gap?: number }) {
@@ -154,27 +130,81 @@ export function memoryTabPresentation(input: { width: number; active: MemoryTab 
 }
 
 export function memoryGraphCommandHints(width: number) {
-  const essentials = [
-    { key: "↑↓←→", label: "select" },
-    { key: "F", label: "find" },
-    { key: "P", label: "projects" },
-    { key: "I", label: "isolates" },
-    { key: "Esc", label: "back" },
-  ]
-  if (width < 72) return essentials
-  return [
-    essentials[0]!,
-    { key: "Click", label: "focus" },
-    ...essentials.slice(1, 4),
+  const hints = [
+    { key: "arrows", label: "move map" },
+    { key: "HJKL", label: "select memory" },
+    { key: "drag/trackpad", label: "pan" },
     { key: "+/-", label: "zoom" },
-    { key: "[ ]", label: "cycle" },
-    { key: "R", label: "refresh" },
-    essentials[4]!,
+    { key: "Esc", label: "done" },
   ]
+  if (width < 72) return [hints[0]!, hints[1]!, hints[3]!, hints[4]!]
+  return hints
+}
+
+export function memoryGraphNavigationDirection(input: { name: string; shift?: boolean }) {
+  if (input.name === "h") return { x: -1, y: 0 } as const
+  if (input.name === "l") return { x: 1, y: 0 } as const
+  if (input.name === "k") return { x: 0, y: -1 } as const
+  if (input.name === "j") return { x: 0, y: 1 } as const
+  return null
+}
+
+export function memoryGraphPanDirection(name: string) {
+  if (name === "left") return { x: -1, y: 0 } as const
+  if (name === "right") return { x: 1, y: 0 } as const
+  if (name === "up") return { x: 0, y: -1 } as const
+  if (name === "down") return { x: 0, y: 1 } as const
+  return null
+}
+
+export function memoryGraphPanViewport(input: {
+  viewport: { x?: number; y?: number; zoom: number }
+  transform: { centerX: number; centerY: number; scaleX: number; scaleY: number; dotsX: number; dotsY: number }
+  cells: { x: number; y: number }
+}) {
+  return {
+    ...input.viewport,
+    x: (input.viewport.x ?? input.transform.centerX) + (input.cells.x * input.transform.dotsX) / input.transform.scaleX,
+    y: (input.viewport.y ?? input.transform.centerY) + (input.cells.y * input.transform.dotsY) / input.transform.scaleY,
+  }
+}
+
+const MEMORY_GRAPH_NODE_TONES = ["accent", "success", "warning", "error", "syntaxString", "syntaxNumber", "syntaxKeyword"] as const
+
+export function memoryGraphNodeTone(index: number) {
+  return MEMORY_GRAPH_NODE_TONES[Math.abs(Math.floor(index)) % MEMORY_GRAPH_NODE_TONES.length]!
+}
+
+function memoryGraphNodeColor(theme: ReturnType<typeof useTheme>["theme"], index: number) {
+  const palette = MEMORY_GRAPH_NODE_TONES
+    .map((tone) => theme[tone])
+    .filter((color) => Math.hypot(color.r - theme.primary.r, color.g - theme.primary.g, color.b - theme.primary.b) >= 0.22)
+  return palette[Math.abs(Math.floor(index)) % palette.length] ?? theme.text
 }
 
 function comparableRoot(root: string) {
   return root.replace(/\/+$/, "")
+}
+
+export type MemoryGraphViewPreference = {
+  version: 2
+  scope: "all" | "project"
+  projectRoot: string | null
+  showIsolates: boolean
+}
+
+export function normalizeMemoryGraphViewPreference(value: unknown, projectRoots: string[], defaultProjectRoot?: string): MemoryGraphViewPreference {
+  const candidate = value && typeof value === "object" ? value as Partial<MemoryGraphViewPreference> : {}
+  const projectRoot = typeof candidate.projectRoot === "string"
+    ? projectRoots.find((root) => comparableRoot(root) === comparableRoot(candidate.projectRoot!)) ?? null
+    : projectRoots.find((root) => comparableRoot(root) === comparableRoot(defaultProjectRoot ?? "")) ?? null
+  const migrated = candidate.version !== 2
+  return {
+    version: 2,
+    scope: migrated ? (projectRoot ? "project" : "all") : candidate.scope === "project" && projectRoot ? "project" : "all",
+    projectRoot: migrated && projectRoot ? projectRoot : candidate.scope === "project" ? projectRoot : null,
+    showIsolates: migrated ? false : candidate.showIsolates === true,
+  }
 }
 
 export function memorySidebarProjectWorkspaces(input: { currentRoot: string; workspaces: MemoryWorkspace[] }) {
@@ -198,22 +228,6 @@ function formatTime(value: string | null | undefined) {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
 }
 
-export function sideChatInputArtifacts(value: string) {
-  const text = value.trim()
-  if (!text) return []
-  const artifacts: string[] = []
-  const markdownImageRefs = text.match(/!\[[^\]]*]\([^)]+\)/gi)?.length ?? 0
-  const dataImageRefs = text.match(/data:image\/[a-z0-9.+-]+;base64,/gi)?.length ?? 0
-  const imagePathRefs = text.match(/(?:^|\s)(?:\/[^\s]+|[A-Za-z0-9_.-]+\/[^\s]+)\.(?:png|jpe?g|gif|webp|heic|svg)(?=\s|$)/gi)?.length ?? 0
-  const filePathRefs = text.match(/(?:^|\s)(?:\/[^\s]+|[A-Za-z0-9_.-]+\/[^\s]+)\.(?:pdf|txt|md|json|csv|log|tsx?|jsx?|py|rs|go|yaml|yml)(?=\s|$)/gi)?.length ?? 0
-  const imageRefs = Math.max(markdownImageRefs, dataImageRefs) + imagePathRefs
-  if (imageRefs > 0) artifacts.push(`pasted image ref${imageRefs === 1 ? "" : "s"} · ${imageRefs}`)
-  if (filePathRefs > 0) artifacts.push(`pasted file ref${filePathRefs === 1 ? "" : "s"} · ${filePathRefs}`)
-  const lineCount = text.split(/\r?\n/).length
-  if (lineCount >= 3 || text.length >= 400) artifacts.push(`pasted text · ${lineCount} lines · ${Locale.number(text.length)} chars`)
-  return artifacts
-}
-
 function nextWritePolicy(value: MemoryWritePolicy) {
   const index = WRITE_POLICIES.indexOf(value)
   return WRITE_POLICIES[(index + 1) % WRITE_POLICIES.length] ?? "pending"
@@ -228,8 +242,10 @@ type MemoryGraphMiniFact = {
   text: string
   scope: string
   categoryIDs: string[]
+  ownerWorkspaceIDs?: string[]
   retrievalPriority?: number
   materialized?: boolean
+  stale?: boolean
 }
 
 type MemoryGraphMiniLink = {
@@ -253,23 +269,48 @@ export function memoryGraphMiniMap(input: {
   connectedOnly?: boolean
   selectedID?: string
   zoom?: number
+  viewport?: { x?: number; y?: number; zoom?: number }
+  maxNodes?: number
 }) {
   const width = Math.max(20, Math.min(180, Math.floor(input.width)))
   const height = Math.max(6, Math.min(72, Math.floor(input.height ?? 10)))
-  const materializedFacts = input.facts.filter((fact) => fact.materialized !== false)
-  const legacyDerivedFacts = input.facts.length - materializedFacts.length
-  const linkedIDs = new Set(input.links.flatMap((link) => [link.from, link.to]))
+  const graphEligibleFacts = input.facts.filter((fact) => !fact.stale && !fact.categoryIDs.includes("volatile.reject"))
+  const materializedFacts = graphEligibleFacts.filter((fact) => fact.materialized !== false)
+  const legacyDerivedFacts = graphEligibleFacts.length - materializedFacts.length
+  const filteredFacts = input.facts.length - graphEligibleFacts.length
+  const graphFactIDs = new Set(materializedFacts.map((fact) => fact.id))
+  const graphLinks = input.links.filter((link) => graphFactIDs.has(link.from) && graphFactIDs.has(link.to))
+  const filteredLinks = input.links.length - graphLinks.length
+  const linkedIDs = new Set(graphLinks.flatMap((link) => [link.from, link.to]))
   const isolatedFacts = materializedFacts.filter((fact) => !linkedIDs.has(fact.id))
   const graphFacts = input.connectedOnly ? materializedFacts.filter((fact) => linkedIDs.has(fact.id)) : materializedFacts
+  const maxNodes = Math.max(1, input.maxNodes ?? (width < 44 ? 10 : width < 64 ? 16 : 24))
+  const rank = (facts: MemoryGraphMiniFact[]) => facts.toSorted((a, b) => (a.retrievalPriority ?? 99) - (b.retrievalPriority ?? 99) || a.id.localeCompare(b.id))
+  const connectedFacts = rank(graphFacts.filter((fact) => linkedIDs.has(fact.id)))
+  const disconnectedFacts = rank(graphFacts.filter((fact) => !linkedIDs.has(fact.id)))
+  const isolateSlots = input.connectedOnly ? 0 : Math.min(disconnectedFacts.length, Math.max(1, Math.floor(maxNodes / 2)))
+  const reservedConnected = connectedFacts.slice(0, maxNodes - isolateSlots)
+  const reservedDisconnected = disconnectedFacts.slice(0, isolateSlots)
+  const reservedIDs = new Set([...reservedConnected, ...reservedDisconnected].map((fact) => fact.id))
+  const sampledFacts = graphFacts.length <= maxNodes
+    ? graphFacts
+    : [...reservedConnected, ...reservedDisconnected, ...[...connectedFacts, ...disconnectedFacts].filter((fact) => !reservedIDs.has(fact.id)).slice(0, maxNodes - reservedIDs.size)]
+  const selectedFact = graphFacts.find((fact) => fact.id === input.selectedID)
+  const visibleFacts = selectedFact && !sampledFacts.some((fact) => fact.id === selectedFact.id)
+    ? [...sampledFacts.slice(0, -1), selectedFact]
+    : sampledFacts
   const scene = layoutAsciiGraph({
-    nodes: graphFacts.map((fact) => ({
+    nodes: visibleFacts.map((fact) => ({
       id: fact.id,
       label: memoryPreviewText(fact.text, width < 44 ? 18 : 26),
       group: fact.categoryIDs[0] ?? "uncategorized",
+      layoutGroup: fact.scope === "global" ? "global" : `project:${fact.ownerWorkspaceIDs?.[0] ?? "current"}`,
       weight: Math.max(0, 10 - (fact.retrievalPriority ?? 10)),
     })),
-    edges: input.links,
-    maxNodes: width < 44 ? 10 : width < 64 ? 16 : 24,
+    edges: graphLinks,
+    maxNodes: visibleFacts.length || 1,
+    selectedID: input.selectedID,
+    centerGroups: ["global"],
   })
   if (!scene.nodes.length) {
     return {
@@ -286,8 +327,9 @@ export function memoryGraphMiniMap(input: {
       relationRows: [],
       isolatedRows: isolatedFacts.slice(0, width < 44 ? 3 : 5).map((fact) => `○ ${memoryPreviewText(fact.text, 34)}`),
       emptyState: materializedFacts.length ? "disconnected" : legacyDerivedFacts > 0 ? "legacy-only" : "empty",
-      stats: `connected 0 · isolated ${isolatedFacts.length} · visible 0/${materializedFacts.length}`,
-      status: `${materializedFacts.length}/${input.facts.length} materialized · ${legacyDerivedFacts} legacy-derived · 0/${input.links.length} links`,
+      stats: `connected 0 · ${input.connectedOnly ? "hidden isolates" : "isolated"} ${isolatedFacts.length} · visible 0/${materializedFacts.length}`,
+      status: `${materializedFacts.length}/${graphEligibleFacts.length} materialized · ${legacyDerivedFacts} legacy-derived · ${filteredFacts} filtered · ${filteredLinks} links filtered · 0/${graphLinks.length} links`,
+      transform: null,
     }
   }
   const visibleIDs = new Set(scene.nodes.map((node) => node.id))
@@ -304,7 +346,11 @@ export function memoryGraphMiniMap(input: {
     selectedID: focus?.id,
     labelMode: "none",
     labelMaxLength: width < 44 ? 16 : 22,
-    viewport: { zoom: Math.max(0.4, Math.min(4, input.zoom ?? 1)) },
+    viewport: {
+      x: input.viewport?.x,
+      y: input.viewport?.y,
+      zoom: Math.max(0.4, Math.min(4, input.viewport?.zoom ?? input.zoom ?? 1)),
+    },
   })
   const minimap = renderAsciiGraph(scene, {
     width: width < 44 ? 10 : 16,
@@ -336,8 +382,9 @@ export function memoryGraphMiniMap(input: {
       : [],
     isolatedRows: isolatedFacts.slice(0, width < 44 ? 3 : 5).map((fact) => `○ ${memoryPreviewText(fact.text, 34)}`),
     emptyState: "materialized",
-    stats: `connected ${connectedIDs.size} · isolated ${isolatedFacts.length} · visible ${facts.length}/${materializedFacts.length}`,
-    status: `${materializedFacts.length}/${input.facts.length} materialized · ${legacyDerivedFacts} legacy-derived · ${facts.length}/${materializedFacts.length} visible · ${explicitLinks.length}/${input.links.length} links · ${categories.length} categories`,
+    stats: `connected ${connectedIDs.size} · ${input.connectedOnly ? "hidden isolates" : "isolated"} ${isolatedFacts.length} · visible ${facts.length}/${materializedFacts.length}`,
+    status: `${materializedFacts.length}/${graphEligibleFacts.length} materialized · ${legacyDerivedFacts} legacy-derived · ${filteredFacts} filtered · ${filteredLinks} links filtered · ${facts.length}/${materializedFacts.length} visible · ${explicitLinks.length}/${graphLinks.length} links · ${categories.length} categories`,
+    transform: frame.transform,
   }
 }
 
@@ -348,7 +395,7 @@ function memoryGraphMiniMapLabel(fact: MemoryGraphMiniFact, max: number) {
 type MemoryGraphWorkspaceRef = Pick<MemoryWorkspace, "id" | "root" | "displayName">
 
 export function memoryGraphFactProjectLabels(input: {
-  fact: Pick<MemoryOverview["facts"][number], "scope" | "ownerWorkspaceIDs">
+  fact: Pick<MemoryGraphFactView, "scope" | "ownerWorkspaceIDs">
   workspaces: MemoryGraphWorkspaceRef[]
   activeRoot: string
   activeLabel: string
@@ -369,9 +416,9 @@ export function memoryGraphFactProjectLabels(input: {
 }
 
 export function memoryGraphSearchMatches(input: {
-  facts: MemoryOverview["facts"]
+  facts: MemoryGraphFactView[]
   query: string
-  projectLabel: (fact: MemoryOverview["facts"][number]) => string
+  projectLabel: (fact: MemoryGraphFactView) => string
   limit?: number
 }) {
   const terms = input.query.trim().toLowerCase().split(/\s+/).filter(Boolean)
@@ -391,13 +438,12 @@ export function MemoryGraphCanvasRows(props: {
 }) {
   const { theme } = useTheme()
   const categoryIndex = createMemo(() => new Map(props.categories.map((category, index) => [category.id, index])))
-  const palette = () => [theme.primary, theme.secondary, theme.accent, theme.success, theme.info, theme.warning]
   const color = (cell: Omit<AsciiGraphCell, "char">) => {
     if (cell.kind === "selected") return theme.primary
     if (cell.kind === "conflict") return theme.warning
     if (cell.kind === "edge") return theme.borderActive
     if (cell.kind === "label") return theme.text
-    if (cell.kind === "node") return palette()[(categoryIndex().get(cell.group ?? "") ?? 0) % palette().length] ?? theme.primary
+    if (cell.kind === "node") return memoryGraphNodeColor(theme, categoryIndex().get(cell.group ?? "") ?? 0)
     return theme.textMuted
   }
   return (
@@ -452,13 +498,13 @@ function Panel(props: {
   )
 }
 
-function Header(props: { root: string; tab: MemoryTab; narrow: boolean; live: boolean }) {
+function Header(props: { root: string; tab: MemoryTab; narrow: boolean; live: boolean; pending: number; onReview: () => void }) {
   const { theme } = useTheme()
   const tab = () => TABS.find((item) => item.id === props.tab)?.label ?? "Memory"
   const status = () => `MendCode · ${tab()} · SSE ${props.live ? "live" : "waiting"}`
   const shortcuts = props.tab === "graph"
-    ? "/memory-graph"
-    : "1-6 tabs · ↑↓ select · e edit · c side chat · esc"
+    ? "1-4 tabs · Enter map · ←→ tabs · V review · esc"
+    : "1-4 tabs · ←→/hl tabs · ↑↓/jk select · V review · esc"
   return (
     <Switch>
       <Match when={props.narrow}>
@@ -470,7 +516,7 @@ function Header(props: { root: string; tab: MemoryTab; narrow: boolean; live: bo
             {short(status(), 72)}
           </text>
           <text fg={theme.textMuted} wrapMode="none">
-            {short(shortcuts, 72)}
+            {short(`${shortcuts} · Review pending (${props.pending})`, 72)}
           </text>
         </box>
       </Match>
@@ -488,8 +534,8 @@ function Header(props: { root: string; tab: MemoryTab; narrow: boolean; live: bo
             <text fg={theme.textMuted} wrapMode="none">
               {short(props.root, 52)}
             </text>
-            <text fg={theme.textMuted} wrapMode="none">
-              events refresh automatically
+            <text fg={props.pending ? theme.warning : theme.textMuted} wrapMode="none" onMouseUp={props.onReview}>
+              Review pending ({props.pending}) · events refresh automatically
             </text>
           </box>
         </box>
@@ -542,22 +588,24 @@ function TabBar(props: { tab: MemoryTab; width: number; onSelect: (tab: MemoryTa
   )
 }
 
-function GraphCommandBar(props: { width: number }) {
+function GraphCommandBar(props: { width: number; focused: boolean }) {
   const { theme } = useTheme()
   const hints = createMemo(() => memoryGraphCommandHints(props.width))
   return (
     <box height={1} flexShrink={0} overflow="hidden">
-      <text wrapMode="none">
-        <For each={hints()}>
-          {(hint, index) => (
-            <>
-              <Show when={index() > 0}><span style={{ fg: theme.textMuted }}> · </span></Show>
-              <span style={{ fg: theme.primary }}>{hint.key}</span>
-              <span style={{ fg: theme.textMuted }}> {hint.label}</span>
-            </>
-          )}
-        </For>
-      </text>
+      <Show when={props.focused} fallback={<text wrapMode="none"><span style={{ fg: theme.primary }}>Enter/Click</span><span style={{ fg: theme.textMuted }}> explore map · </span><span style={{ fg: theme.primary }}>←→</span><span style={{ fg: theme.textMuted }}> tabs · </span><span style={{ fg: theme.primary }}>P</span><span style={{ fg: theme.textMuted }}> scope · </span><span style={{ fg: theme.primary }}>/</span><span style={{ fg: theme.textMuted }}> find</span></text>}>
+        <text wrapMode="none">
+          <For each={hints()}>
+            {(hint, index) => (
+              <>
+                <Show when={index() > 0}><span style={{ fg: theme.textMuted }}> · </span></Show>
+                <span style={{ fg: theme.primary }}>{hint.key}</span>
+                <span style={{ fg: theme.textMuted }}> {hint.label}</span>
+              </>
+            )}
+          </For>
+        </text>
+      </Show>
     </box>
   )
 }
@@ -567,50 +615,57 @@ function Sidebar(props: {
   currentRoot: string
   activeRoot: string
   selectedWorkspaceID: string | null
+  scope: MemoryScopeFilter
   width: number
   height?: number | `${number}%`
   onSelectWorkspace: (id: string | null) => void
-  onTab: (tab: MemoryTab) => void
+  onScope: (scope: MemoryScopeFilter) => void
 }) {
   const { theme } = useTheme()
   const workspaces = () => memorySidebarProjectWorkspaces({
     currentRoot: props.currentRoot,
     workspaces: props.data.workspaces?.activeWorkspaces ?? [],
   })
-  const groups = () => props.data.workspaces?.activeGroups ?? []
+  const pathLabel = (root: string) => Locale.truncateMiddle(root, Math.max(12, props.width - 4))
+  const scopeMark = (scope: MemoryScopeFilter) => props.scope === scope ? "[x]" : "[ ]"
   return (
-    <Panel title="Projects" width={props.width} height={props.height}>
+    <Panel title="Browse memories" width={props.width} height={props.height}>
       <box flexDirection="column" minHeight={0} flexGrow={1} overflow="hidden" gap={1}>
-        <box height={2} overflow="hidden" onMouseUp={() => props.onSelectWorkspace(null)}>
-          <text fg={props.selectedWorkspaceID === null ? theme.success : theme.text} wrapMode="none">
-            {short("Current project", props.width - 4)}
+        <box height={2} overflow="hidden" onMouseUp={() => {
+          props.onSelectWorkspace(null)
+          props.onScope("current")
+        }}>
+          <text fg={props.scope === "current" ? theme.success : theme.text} wrapMode="none">
+            {scopeMark("current")} This project
           </text>
           <text fg={theme.textMuted} wrapMode="none">
-            {short(props.currentRoot, props.width - 4)}
+            {short(`${props.data.projectEntries.length} memories · ${pathLabel(props.currentRoot)}`, props.width - 4)}
           </text>
         </box>
 
-        <box height={1} overflow="hidden" onMouseUp={() => props.onTab("global")}>
-          <text fg={theme.primary} wrapMode="none">
-            {short(`Global memories · ${props.data.globalEntries.length}`, props.width - 4)}
+        <box height={2} overflow="hidden" onMouseUp={() => props.onScope("global")}>
+          <text fg={props.scope === "global" ? theme.success : theme.text} wrapMode="none">
+            {scopeMark("global")} Shared memory
+          </text>
+          <text fg={theme.textMuted} wrapMode="none">
+            {short(`${props.data.globalEntries.length} memories · available everywhere`, props.width - 4)}
           </text>
         </box>
 
-        <Show when={groups().length > 0}>
-          <text fg={theme.textMuted} wrapMode="none">
-            Groups
+        <box height={2} overflow="hidden" onMouseUp={() => props.onScope("all")}>
+          <text fg={props.scope === "all" ? theme.success : theme.text} wrapMode="none">
+            {scopeMark("all")} All projects
           </text>
-          <For each={groups().slice(0, 4)}>
-            {(group) => (
-              <text fg={theme.textMuted} wrapMode="none">
-                {short(`${group.label} · ${group.workspaceIDs.length}`, props.width - 4)}
-              </text>
-            )}
-          </For>
-        </Show>
+          <text fg={theme.textMuted} wrapMode="none">
+            Search memories across every project
+          </text>
+        </box>
 
+        <text fg={theme.primary} wrapMode="none">
+          Projects
+        </text>
         <text fg={theme.textMuted} wrapMode="none">
-          Other project memories
+          Click a project to focus its memories
         </text>
         <Show
           when={workspaces().length > 0}
@@ -631,12 +686,15 @@ function Sidebar(props: {
             <box flexDirection="column" gap={1} overflow="hidden">
               <For each={workspaces()}>
                 {(workspace) => (
-                  <box height={2} overflow="hidden" onMouseUp={() => props.onSelectWorkspace(workspace.id)}>
+                  <box height={2} overflow="hidden" onMouseUp={() => {
+                    props.onSelectWorkspace(workspace.id)
+                    props.onScope("current")
+                  }}>
                     <text fg={props.selectedWorkspaceID === workspace.id ? theme.success : theme.text} wrapMode="none">
-                      {short(workspace.displayName, props.width - 4)}
+                      {props.selectedWorkspaceID === workspace.id ? ">" : " "} {short(workspace.displayName, props.width - 6)}
                     </text>
                     <text fg={theme.textMuted} wrapMode="none">
-                      {short(workspace.root, props.width - 4)}
+                      {short(pathLabel(workspace.root), props.width - 4)}
                     </text>
                   </box>
                 )}
@@ -649,46 +707,10 @@ function Sidebar(props: {
   )
 }
 
-function KpiStrip(props: { data: MemoryOverview; pending: MemoryProposal[]; width: number; stacked?: boolean }) {
-  const { theme } = useTheme()
-  const cards = () => [
-    stat("saved", String(props.data.globalEntries.length + props.data.projectEntries.length), `${props.data.globalEntries.length} global · ${props.data.projectEntries.length} project`),
-    stat("pending", String(props.pending.length), `${props.data.proposals.length} proposals`),
-    stat("projects", String(props.data.workspaces?.activeWorkspaces.length ?? 0), `${props.data.workspaces?.activeGroups.length ?? 0} groups`),
-    stat("dream", props.data.dream?.status ?? "none", props.data.dream ? `${props.data.dream.proposals.length} proposals` : "idle"),
-  ]
-  if (props.stacked) {
-    return (
-      <Panel title="Memory activity" height={8}>
-        <MetricRows width={props.width - 4} items={cards()} />
-      </Panel>
-    )
-  }
-  return (
-    <box flexDirection="row" height={5} overflow="hidden" gap={1}>
-      <For each={cards()}>
-        {(item, index) => (
-          <box flexDirection="column" flexGrow={1} minWidth={0} overflow="hidden" borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-            <text fg={theme.primary} wrapMode="none">
-              {item.label}
-            </text>
-            <text fg={index() === 0 ? theme.success : theme.text} wrapMode="none">
-              {short(item.value, Math.max(6, props.width / 4 - 4))}
-            </text>
-            <text fg={theme.textMuted} wrapMode="none">
-              {short(item.detail, Math.max(6, props.width / 4 - 4))}
-            </text>
-          </box>
-        )}
-      </For>
-    </box>
-  )
-}
-
 type MemoryGraphFrame = ReturnType<typeof memoryGraphMiniMap>
 
 function MemoryGraphExplorer(props: {
-  data: MemoryOverview
+  data: MemoryGraphOverview
   frame: MemoryGraphFrame
   width: number
   height: number
@@ -700,10 +722,14 @@ function MemoryGraphExplorer(props: {
   workspaces: MemoryGraphWorkspaceRef[]
   showAll: boolean
   zoom: number
+  focused: boolean
   searching: boolean
   query: string
-  searchMatches: MemoryOverview["facts"]
+  searchMatches: MemoryGraphFactView[]
   onSelect: (id: string) => void
+  onFocus: () => void
+  onEmergencyExit: (interrupt: boolean) => void
+  onPan: (cells: { x: number; y: number }) => void
   onPreviousProject: () => void
   onNextProject: () => void
   onChooseProject: () => void
@@ -717,7 +743,7 @@ function MemoryGraphExplorer(props: {
   const inspectorWidth = () => layout().inspectorWidth
   const health = createMemo(() => props.data.graphHealth)
   const healthTone = createMemo(() => health().graphHealth === "connected" ? theme.success : health().graphHealth === "empty" ? theme.textMuted : theme.warning)
-  const healthLine = createMemo(() => `${health().graphHealth} · ${props.frame.stats} · ${props.frame.scene.edges.length} persisted links`)
+  const healthLine = createMemo(() => `${health().graphHealth} · ${props.frame.stats} · ${props.data.links.length} persisted links`)
   const selectedFact = createMemo(() => props.data.facts.find((fact) => fact.id === props.selectedID))
   const selectedLinks = createMemo(() => props.data.links.flatMap((link) => {
     if (link.from !== props.selectedID && link.to !== props.selectedID) return []
@@ -727,27 +753,63 @@ function MemoryGraphExplorer(props: {
     return fact ? [{ link, fact, outbound }] : []
   }))
   const categoryLabel = (id: string) => props.data.categories.find((category) => category.id === id)?.label ?? id
-  const projectLabels = (fact: MemoryOverview["facts"][number]) => memoryGraphFactProjectLabels({
+  const projectLabels = (fact: MemoryGraphFactView) => memoryGraphFactProjectLabels({
     fact,
     workspaces: props.workspaces,
     activeRoot: props.activeRoot,
     activeLabel: props.activeLabel,
   })
   let canvasBox: BoxRenderable | undefined
+  let dragPoint: { x: number; y: number } | undefined
 
   function mouse(event: MouseEvent) {
-    if (!canvasBox || event.button !== MouseButton.LEFT || event.type !== "down") return
+    if (!canvasBox) return
+    if (event.type === "scroll" && event.scroll) {
+      props.onFocus()
+      const direction = memoryGraphPanDirection(event.scroll.direction)
+      if (!direction) return
+      const delta = Math.max(1, Math.min(4, Math.abs(event.scroll.delta || 1)))
+      props.onPan({ x: direction.x * delta * 3, y: direction.y * delta * 2 })
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
+    if (event.button !== MouseButton.LEFT) return
+    if (event.type === "drag") {
+      props.onFocus()
+      const previous = dragPoint ?? { x: event.x, y: event.y }
+      const delta = { x: event.x - previous.x, y: event.y - previous.y }
+      dragPoint = { x: event.x, y: event.y }
+      if (delta.x || delta.y) props.onPan({ x: -delta.x, y: -delta.y })
+      event.preventDefault()
+      event.stopPropagation()
+      return
+    }
+    if (event.type === "up" || event.type === "drag-end") {
+      dragPoint = undefined
+      return
+    }
+    if (event.type !== "down") return
+    canvasBox.focus()
+    props.onFocus()
+    dragPoint = { x: event.x, y: event.y }
     const x = event.x - canvasBox.x
     const y = event.y - canvasBox.y
     const hit = Object.entries(props.frame.nodeCells)
       .map(([id, point]) => ({ id, distance: Math.hypot(point.x - x, point.y - y) }))
       .filter((item) => item.distance <= 2)
       .toSorted((a, b) => a.distance - b.distance)[0]
-    if (!hit) return
-    props.onSelect(hit.id)
+    if (hit) props.onSelect(hit.id)
     event.preventDefault()
     event.stopPropagation()
   }
+
+  createEffect(() => {
+    const focused = props.focused
+    if (!canvasBox || canvasBox.isDestroyed) return
+    if (focused && !canvasBox.focused) canvasBox.focus()
+    if (!focused && canvasBox.focused) canvasBox.blur()
+  })
 
   const Inspector = () => (
     <box flexDirection="column" width={inspectorWidth()} minWidth={0} minHeight={0} overflow="hidden" gap={1}>
@@ -843,17 +905,17 @@ function MemoryGraphExplorer(props: {
       <box flexDirection="row" height={2} flexShrink={0} justifyContent="space-between" overflow="hidden">
         <box flexDirection="column" overflow="hidden">
           <box flexDirection="row" overflow="hidden">
-            <text fg={theme.textMuted}>Project </text>
+            <text fg={theme.textMuted}>Scope </text>
             <text fg={theme.primary} onMouseUp={props.onPreviousProject}>‹ </text>
             <text fg={theme.success} wrapMode="none" onMouseUp={props.onChooseProject}>{short(props.activeLabel, 28)}</text>
             <text fg={theme.primary} onMouseUp={props.onNextProject}> ›</text>
             <text fg={theme.textMuted} wrapMode="none"> · {props.projectPosition}</text>
           </box>
-          <text fg={theme.textMuted} wrapMode="none">{short(props.activeRoot, Math.max(24, props.width - 74))}</text>
+          <text fg={theme.textMuted} wrapMode="none">{short(props.activeLabel === "All projects" ? `${props.data.workspaces.length} registered projects · union view` : props.activeRoot, Math.max(24, props.width - 74))}</text>
         </box>
         <box flexDirection="column" alignItems="flex-end" overflow="hidden">
           <text fg={props.showAll ? theme.success : theme.text} wrapMode="none" onMouseUp={props.onToggleAll}>
-            {props.showAll ? "Including isolates" : "Connected network"} · {props.frame.scene.nodes.length}/{props.data.materializedFactCount}
+            {props.showAll ? "Including isolates" : "Connected network"} · {props.frame.scene.nodes.length}/{props.data.materializedFactCount} sampled
           </text>
           <box flexDirection="row" overflow="hidden">
             <text fg={theme.textMuted} wrapMode="none">zoom {props.zoom.toFixed(1)}x · {props.data.legacyDerivedFactCount} legacy outside graph · </text>
@@ -878,7 +940,7 @@ function MemoryGraphExplorer(props: {
             fallback={
               <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
                 <text fg={healthTone()} wrapMode="none">
-                  {props.frame.emptyState === "legacy-only" ? "Legacy-derived memories exist, but no graph facts are materialized." : "No persisted relationships for this project yet."}
+                  {props.frame.emptyState === "legacy-only" ? "Legacy-derived memories exist, but no graph facts are materialized." : "No persisted relationships in this scope yet."}
                 </text>
                 <text fg={theme.primary} wrapMode="none">Press i to include isolates, or use memory_graph link to connect facts.</text>
               </box>
@@ -892,16 +954,35 @@ function MemoryGraphExplorer(props: {
               minWidth={0}
               flexShrink={0}
               borderStyle="single"
-              borderColor={theme.border}
+              borderColor={props.focused ? theme.primary : theme.border}
+              focusable={true}
               overflow="hidden"
               onMouse={mouse}
+              onKeyDown={(event) => {
+                if (props.searching) return
+                if (event.name !== "escape" && !(event.ctrl && event.name === "c")) return
+                event.preventDefault()
+                event.stopPropagation()
+                props.onEmergencyExit(event.ctrl && event.name === "c")
+              }}
             >
               <MemoryGraphCanvasRows cells={props.frame.cells} categories={props.data.categories} />
             </box>
           </Show>
           <text fg={healthTone()} wrapMode="none">{short(healthLine(), props.canvasWidth)}</text>
           <Show when={roomy()}>
-            <text fg={theme.textMuted} wrapMode="none">{short(props.frame.legend.join(" · ") || "No active graph categories", props.canvasWidth)}</text>
+            <Show when={props.frame.legend.length} fallback={<text fg={theme.textMuted} wrapMode="none">No active graph categories</text>}>
+              <text wrapMode="none">
+                <For each={props.frame.legend}>
+                  {(label, index) => (
+                    <>
+                      <Show when={index() > 0}><span style={{ fg: theme.textMuted }}> · </span></Show>
+                      <span style={{ fg: memoryGraphNodeColor(theme, index()) }}>{label}</span>
+                    </>
+                  )}
+                </For>
+              </text>
+            </Show>
           </Show>
           <Show when={selectedFact()}>
             {(fact) => (
@@ -919,16 +1000,24 @@ function MemoryGraphExplorer(props: {
         </Show>
       </box>
 
-      <GraphCommandBar width={props.width} />
+      <GraphCommandBar width={props.width} focused={props.focused} />
     </box>
   )
 }
 
+function memoryScopeTitle(scope: MemoryScopeFilter, currentProject: string) {
+  if (scope === "global") return "Global memories"
+  if (scope === "all") return "All project memories"
+  return `${currentProject} memories`
+}
+
 function EntryRows(props: {
-  entries: MemoryEntry[]
+  entries: MemoryListEntry[]
   selectedIndex: number
   width: number
+  limit?: number
   onSelect: (index: number) => void
+  showProject?: boolean
 }) {
   const { theme } = useTheme()
   return (
@@ -937,79 +1026,24 @@ function EntryRows(props: {
       fallback={<text fg={theme.textMuted}>No saved memory in this scope.</text>}
     >
       <box flexDirection="column" gap={1} overflow="hidden">
-        <For each={props.entries.slice(0, ENTRY_ROW_LIMIT)}>
-          {(entry, index) => {
-            const selected = () => props.selectedIndex === index()
+        <For each={memoryListWindow(props.entries, props.selectedIndex, props.limit ?? ENTRY_ROW_LIMIT)}>
+          {(row) => {
+            const item = () => row.item
+            const entry = () => item().entry
+            const selected = () => props.selectedIndex === row.index
             return (
-              <box height={2} overflow="hidden" onMouseUp={() => props.onSelect(index())}>
+              <box height={2} overflow="hidden" onMouseUp={() => props.onSelect(row.index)}>
                 <box flexDirection="row" justifyContent="space-between" height={1} overflow="hidden">
-                  <text fg={selected() ? theme.success : entry.scope === "global" ? theme.primary : theme.text} wrapMode="none">
-                    {short(`${entry.scope} · ${memoryOriginLabel(entry.source)} · ${(entry.categoryIDs ?? ["uncategorized"])[0] ?? "uncategorized"}`, Math.max(16, props.width - 18))}
+                  <text fg={selected() ? theme.success : entry().scope === "global" ? theme.primary : theme.text} wrapMode="none">
+                    {short(`${props.showProject ? `${item().projectLabel} · ` : ""}${entry().scope} · ${memoryOriginLabel(entry().source)} · ${(entry().categoryIDs ?? ["uncategorized"])[0] ?? "uncategorized"}`, Math.max(16, props.width - 18))}
                   </text>
                   <text fg={theme.textMuted} wrapMode="none">
-                    {formatDate(entry.updatedAt)}
+                    {formatDate(entry().updatedAt)}
                   </text>
                 </box>
                 <text fg={selected() ? theme.text : theme.textMuted} wrapMode="none">
-                  {memoryPreviewText(entry.text, props.width)}
+                  {memoryPreviewText(entry().text, props.width)}
                 </text>
-              </box>
-            )
-          }}
-        </For>
-      </box>
-    </Show>
-  )
-}
-
-function ProposalRows(props: {
-  proposals: MemoryProposal[]
-  selectedIndex: number
-  width: number
-  onSelect: (index: number) => void
-}) {
-  const { theme } = useTheme()
-  return (
-    <Show
-      when={props.proposals.length > 0}
-      fallback={
-        <box flexDirection="column" flexGrow={1} justifyContent="center" overflow="hidden" gap={1}>
-          <text fg={theme.textMuted} wrapMode="none">
-            No pending generated memories.
-          </text>
-          <text fg={theme.primary} wrapMode="none">
-            Side chat and Dream proposals land here.
-          </text>
-        </box>
-      }
-    >
-      <box flexDirection="column" gap={1} overflow="hidden">
-        <For each={props.proposals.slice(0, PROPOSAL_ROW_LIMIT)}>
-          {(proposal, index) => {
-            const selected = () => props.selectedIndex === index()
-            return (
-              <box
-                height={selected() ? 3 : 2}
-                overflow="hidden"
-                onMouseDown={() => props.onSelect(index())}
-                onMouseUp={() => props.onSelect(index())}
-              >
-                <box flexDirection="row" justifyContent="space-between" height={1} overflow="hidden">
-                  <text fg={selected() ? theme.success : theme.warning} wrapMode="none">
-                    {short(`${proposal.operation} · ${proposal.scope} · ${memoryOriginLabel(proposal.source)} · ${proposal.categoryIDs[0] ?? "uncategorized"}`, Math.max(18, props.width - 18))}
-                  </text>
-                  <text fg={theme.textMuted} wrapMode="none">
-                    {Math.round(proposal.confidence * 100)}%
-                  </text>
-                </box>
-                <text fg={selected() ? theme.text : theme.textMuted} wrapMode="none">
-                  {memoryPreviewText(proposal.text, props.width)}
-                </text>
-                <Show when={selected()}>
-                  <text fg={theme.primary} wrapMode="none">
-                    {short("a apply · x reject · e edit · details below", props.width)}
-                  </text>
-                </Show>
               </box>
             )
           }}
@@ -1024,6 +1058,7 @@ function PolicyRows(props: {
   selectedIndex: number
   width: number
   policyScope: MemoryPolicyScope
+  limit?: number
   onSelect: (index: number) => void
 }) {
   const { theme } = useTheme()
@@ -1032,24 +1067,29 @@ function PolicyRows(props: {
     <box flexDirection="column" gap={1} overflow="hidden">
       <box height={1} overflow="hidden">
         <text fg={theme.textMuted} wrapMode="none">
-          {short(`editing ${props.policyScope} policies · p cycle write mode · o prompt on/off`, props.width)}
+          {short(`editing ${props.policyScope} overrides · p write · o prompt · s scope · x reset`, props.width)}
         </text>
       </box>
-      <For each={rows().slice(0, POLICY_ROW_LIMIT)}>
-        {(row, index) => {
-          const selected = () => props.selectedIndex === index()
+      <For each={memoryListWindow(rows(), props.selectedIndex, props.limit ?? POLICY_ROW_LIMIT)}>
+        {(windowRow) => {
+          const row = () => windowRow.item
+          const selected = () => props.selectedIndex === windowRow.index
+          const layer = () => props.data.policyLayers?.[row().category.id]
           return (
-            <box height={2} overflow="hidden" onMouseUp={() => props.onSelect(index())}>
+            <box height={3} overflow="hidden" onMouseUp={() => props.onSelect(windowRow.index)}>
               <box flexDirection="row" justifyContent="space-between" height={1} overflow="hidden">
                 <text fg={selected() ? theme.success : theme.text} wrapMode="none">
-                  {short(row.category.label, Math.max(14, props.width - 30))}
+                  {short(row().category.label, Math.max(14, props.width - 30))}
                 </text>
-                <text fg={row.policy.promptEnabled ? theme.primary : theme.textMuted} wrapMode="none">
-                  {row.policy.promptEnabled ? "prompt:on" : "prompt:off"}
+                <text fg={row().policy.promptEnabled ? theme.primary : theme.textMuted} wrapMode="none">
+                  {row().policy.promptEnabled ? "prompt:on" : "prompt:off"}
                 </text>
               </box>
               <text fg={theme.textMuted} wrapMode="none">
-                {short(`${row.policy.writePolicy} · priority ${row.policy.promptPriority} · ${row.category.description}`, props.width)}
+                {short(`effective ${row().policy.writePolicy} · priority ${row().policy.promptPriority} · ${row().category.description}`, props.width)}
+              </text>
+              <text fg={theme.textMuted} wrapMode="none">
+                {short(layer() ? `default ${layer()!.default.writePolicy} · global ${layer()!.global.writePolicy}${layer()!.globalOverridden ? "*" : ""} · project ${layer()!.project.writePolicy}${layer()!.projectOverridden ? "*" : ""}` : "policy inheritance unavailable", props.width)}
               </text>
             </box>
           )
@@ -1059,31 +1099,22 @@ function PolicyRows(props: {
   )
 }
 
-function OverviewContent(props: {
-  data: MemoryOverview
-  pending: MemoryProposal[]
-  selectedIndex: number
-  width: number
-  stacked?: boolean
-  onSelectProposal: (index: number) => void
-}) {
-  return (
-    <box flexDirection="column" gap={1} minHeight={0} flexGrow={1}>
-      <KpiStrip data={props.data} pending={props.pending} width={props.width} stacked={props.stacked} />
-      <box flexDirection="column" gap={1} minHeight={0} flexGrow={1}>
-        <Panel title="Pending Queue" grow>
-          <ProposalRows proposals={props.pending} selectedIndex={props.selectedIndex} width={Math.max(30, props.width - 6)} onSelect={props.onSelectProposal} />
-        </Panel>
-      </box>
-    </box>
-  )
-}
-
 function dreamWindowLabel(window: DreamScheduleWindow | null | undefined) {
   if (!window || !window.enabled) return "not scheduled"
   const zone = window.timezone ? ` ${window.timezone}` : ""
   if (window.start === window.end) return `fixed ${window.start}${zone}`
   return `window ${window.start}-${window.end}${zone}`
+}
+
+function dreamConsolidationLabel(policy: MemoryOverview["config"]["dreamConsolidationPolicy"]) {
+  if (policy === "auto-consolidate") return "auto-consolidate · safe decisions only"
+  if (policy === "preview") return "preview · proposals remain pending"
+  return "disabled · pending proposals stay in the review queue"
+}
+
+function dreamRoleLabel(role: MemoryOverview["dreamRole"]) {
+  if (role.ok) return `${role.roleName} · ${role.providerID}/${role.modelID}`
+  return `${role.reason} · local fallback available`
 }
 
 function memoryOriginLabel(source: string | null | undefined) {
@@ -1213,10 +1244,10 @@ export function dreamTranscriptRows(detail: DreamTranscriptDetail | null | undef
         label: proposal.status,
         detail: `graph ${proposal.kind} · ${proposal.reason}${proposal.status === "rejected" && proposal.rejectionReason ? ` · ${proposal.rejectionReason}` : ""}`,
       } satisfies DreamTranscriptRow]
-    }).slice(-3))
+    }))
   }
   if (detail.decisions.length) {
-    rows.push(...detail.decisions.slice(-3).map((decision) => ({
+    rows.push(...detail.decisions.map((decision) => ({
       at: decision.at,
       tone: dreamTranscriptTone(decision.status),
       label: decision.status,
@@ -1237,7 +1268,7 @@ export function dreamTranscriptRows(detail: DreamTranscriptDetail | null | undef
       detail: detail.safety?.failures.join("; ") || detail.run.failureReason || "Dream failed",
     })
   }
-  return rows.toSorted((a, b) => a.at.localeCompare(b.at)).slice(-10)
+  return rows.toSorted((a, b) => a.at.localeCompare(b.at))
 }
 
 function dreamActivityPriority(label: string) {
@@ -1268,8 +1299,198 @@ function fallbackDreamRunDetail(run: MemoryOverview["dreamRuns"][number]) {
     proposals: [],
     graphProposals: [],
     decisions: [],
+    consolidation: null,
     safety: null,
   } satisfies DreamRunDetailView
+}
+
+function dreamToneGlyph(tone: DreamTranscriptRow["tone"]) {
+  if (tone === "success") return "✓"
+  if (tone === "warning") return "!"
+  if (tone === "error") return "×"
+  return "•"
+}
+
+function dreamItemTone(status: string | null | undefined, theme: ReturnType<typeof useTheme>["theme"]) {
+  if (status === "applied" || status === "completed" || status === "created-proposal" || status === "auto-applied-proposal") return theme.success
+  if (status === "failed") return theme.error
+  if (status === "pending" || status === "rejected" || status?.startsWith("skipped")) return theme.warning
+  return theme.text
+}
+
+function DreamSection(props: { title: string; count?: number; children: any }) {
+  const { theme } = useTheme()
+  return (
+    <box flexDirection="column" gap={1} minWidth={0}>
+      <box flexDirection="row" gap={1} height={1} overflow="hidden">
+        <text fg={theme.accent} wrapMode="none">{props.title}</text>
+        <Show when={props.count !== undefined}><text fg={theme.textMuted} wrapMode="none">{props.count}</text></Show>
+      </box>
+      {props.children}
+    </box>
+  )
+}
+
+function DreamRunDetailContent(props: {
+  detail: DreamRunDetailView
+  width: number
+  onApplyGraphProposal?: (runID: string, proposalID: string) => void
+  onRejectGraphProposal?: (runID: string, proposalID: string) => void
+}) {
+  const { theme } = useTheme()
+  const detail = () => props.detail
+  const activity = createMemo(() => dreamLatestActivity(detail()))
+  const timeline = createMemo(() => dreamTranscriptRows(detail()))
+  const roomy = () => props.width >= 104
+  const primaryWidth = () => roomy() ? Math.max(54, Math.floor(props.width * 0.6)) : props.width - 2
+  const secondaryWidth = () => roomy() ? Math.max(36, props.width - primaryWidth() - 4) : props.width - 2
+  const proposalCount = () => dreamRunProposalCount(detail())
+  const pendingGraph = () => detail().graphProposals.filter((proposal) => (proposal.status ?? "pending") === "pending").length
+  const statusTone = () => dreamRunStatusTone(detail().run.status, theme)
+  const sourcePermissions = () => detail().run.permissionSnapshot
+  const outcome = () => detail().run.failureReason
+    ?? (detail().consolidation ? `Consolidated ${detail().consolidation!.pendingBefore} pending items to ${detail().consolidation!.pendingAfter}.` : activity()?.detail)
+    ?? "Run completed without a recorded outcome."
+
+  return (
+    <scrollbox
+      flexGrow={1}
+      minHeight={0}
+      horizontalScrollbarOptions={{ visible: false }}
+      verticalScrollbarOptions={{ visible: true, trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border } }}
+    >
+      <box flexDirection="column" gap={2} minWidth={0} paddingRight={1}>
+        <box flexDirection={props.width >= 72 ? "row" : "column"} justifyContent="space-between" minWidth={0} gap={1}>
+          <box flexDirection="column" minWidth={0} flexGrow={1}>
+            <text fg={statusTone()} wrapMode="none">
+              {dreamToneGlyph(detail().run.status === "completed" ? "success" : detail().run.status === "failed" ? "error" : detail().run.status === "running" ? "info" : "warning")} {dreamRunStatusLabel(detail().run.status)}
+            </text>
+            <text fg={theme.text} wrapMode="word">{memoryPreviewText(outcome(), Math.max(80, props.width * 3))}</text>
+          </box>
+          <box flexDirection="column" alignItems={props.width >= 72 ? "flex-end" : "flex-start"} minWidth={0}>
+            <text fg={theme.textMuted} wrapMode="none">{formatDate(detail().run.completedAt ?? detail().run.startedAt)} {formatTime(detail().run.completedAt ?? detail().run.startedAt)}{durationLabel(detail().run.startedAt, detail().run.completedAt) ? ` · ${durationLabel(detail().run.startedAt, detail().run.completedAt)}` : ""}</text>
+            <text fg={theme.textMuted} wrapMode="none">{short(`${detail().run.source} · ${detail().run.workspaceID ?? "global"}`, 36)}</text>
+          </box>
+        </box>
+
+        <text wrapMode="none">
+          <span style={{ fg: proposalCount() ? theme.success : theme.textMuted }}>{proposalCount()} memory changes</span>
+          <span style={{ fg: theme.textMuted }}> · </span>
+          <span style={{ fg: pendingGraph() ? theme.warning : detail().graphProposals.length ? theme.success : theme.textMuted }}>{detail().graphProposals.length} graph links</span>
+          <span style={{ fg: theme.textMuted }}> · </span>
+          <span style={{ fg: detail().evidence.length ? theme.info : theme.textMuted }}>{detail().evidence.length} evidence</span>
+          <span style={{ fg: theme.textMuted }}> · </span>
+          <span style={{ fg: detail().safety?.failures.length ? theme.error : detail().safety?.redactions ? theme.warning : theme.textMuted }}>{detail().safety?.redactions ?? 0} redactions</span>
+        </text>
+
+        <box flexDirection={roomy() ? "row" : "column"} gap={2} minWidth={0} alignItems="flex-start">
+          <box flexDirection="column" gap={2} width={primaryWidth()} minWidth={0}>
+            <DreamSection title="Timeline" count={timeline().length}>
+              <For each={timeline()}>
+                {(row) => (
+                  <box flexDirection="row" gap={1} minWidth={0}>
+                    <text width={9} flexShrink={0} fg={dreamTranscriptColor(row.tone, theme)} wrapMode="none">{dreamToneGlyph(row.tone)} {formatTime(row.at)}</text>
+                    <box flexDirection="column" minWidth={0} flexGrow={1}>
+                      <text fg={dreamTranscriptColor(row.tone, theme)} wrapMode="none">{short(row.label, Math.max(18, primaryWidth() - 12))}</text>
+                      <text fg={theme.textMuted} wrapMode="word">{memoryPreviewText(row.detail, primaryWidth() * 4)}</text>
+                    </box>
+                  </box>
+                )}
+              </For>
+            </DreamSection>
+
+            <DreamSection title="Memory changes" count={detail().proposals.length}>
+              <Show when={detail().proposals.length} fallback={<text fg={theme.textMuted}>No memory proposals were created by this run.</text>}>
+                <For each={detail().proposals}>
+                  {(proposal) => (
+                    <box flexDirection="column" minWidth={0}>
+                      <text fg={dreamItemTone(proposal.status, theme)} wrapMode="none">
+                        {proposal.status === "applied" ? "✓" : proposal.status === "rejected" ? "×" : "•"} {proposal.status ?? "historical"} · {proposal.operation ?? "create"} · {proposal.scope ?? "memory"}
+                      </text>
+                      <text fg={theme.text} wrapMode="word">{memoryPreviewText(proposal.text ?? "No proposal text stored.", primaryWidth() * 4)}</text>
+                      <text fg={theme.textMuted} wrapMode="word">{memoryPreviewText(`${proposal.id}${proposal.appliedEntryID ? ` · entry ${proposal.appliedEntryID}` : ""}${proposal.resolution || proposal.reason ? ` · ${proposal.resolution ?? proposal.reason}` : ""}`, primaryWidth() * 3)}</text>
+                    </box>
+                  )}
+                </For>
+              </Show>
+            </DreamSection>
+
+            <DreamSection title="Graph changes" count={detail().graphProposals.length}>
+              <Show when={detail().graphProposals.length} fallback={<text fg={theme.textMuted}>No graph relationships were proposed.</text>}>
+                <For each={detail().graphProposals}>
+                  {(proposal) => (
+                    <box flexDirection="column" gap={0} minWidth={0}>
+                      <text fg={dreamItemTone(proposal.status ?? "pending", theme)} wrapMode="none">
+                        {(proposal.status ?? "pending") === "applied" ? "✓" : proposal.status === "rejected" ? "×" : "!"} {proposal.status ?? "pending"} · {proposal.kind} · {Math.round(proposal.confidence * 100)}%
+                      </text>
+                      <text fg={theme.text} wrapMode="word">from  {memoryPreviewText(proposal.fromSummary, primaryWidth() * 2)}</text>
+                      <text fg={theme.text} wrapMode="word">to    {memoryPreviewText(proposal.toSummary, primaryWidth() * 2)}</text>
+                      <text fg={theme.textMuted} wrapMode="word">{memoryPreviewText(`${proposal.reason} · ${proposal.linkID ? `link ${proposal.linkID}` : proposal.id}`, primaryWidth() * 3)}</text>
+                      <Show when={(proposal.status ?? "pending") === "pending"}>
+                        <box flexDirection="row" gap={2} height={1} overflow="hidden">
+                          <text fg={theme.success} wrapMode="none" onMouseUp={() => props.onApplyGraphProposal?.(detail().run.id, proposal.id)}>[apply]</text>
+                          <text fg={theme.error} wrapMode="none" onMouseUp={() => props.onRejectGraphProposal?.(detail().run.id, proposal.id)}>[reject]</text>
+                        </box>
+                      </Show>
+                    </box>
+                  )}
+                </For>
+              </Show>
+            </DreamSection>
+          </box>
+
+          <box flexDirection="column" gap={2} width={secondaryWidth()} minWidth={0}>
+            <DreamSection title="Consolidation">
+              <Show when={detail().consolidation} fallback={<text fg={theme.textMuted}>No consolidation pass was recorded.</text>}>
+                {(consolidation) => (
+                  <box flexDirection="column" gap={1} minWidth={0}>
+                    <text fg={dreamItemTone(consolidation().status, theme)} wrapMode="none">{consolidation().status === "failed" ? "×" : "✓"} {consolidation().status} · {consolidation().policy}</text>
+                    <text fg={theme.text} wrapMode="none">queue  {consolidation().pendingBefore} → {consolidation().pendingAfter}</text>
+                    <text fg={theme.textMuted} wrapMode="word">{consolidation().applied} applied · {consolidation().archived} archived · {consolidation().rejected} rejected · {consolidation().superseded} superseded</text>
+                    <For each={consolidation().decisions}>
+                      {(decision) => <text fg={dreamItemTone(decision.status, theme)} wrapMode="word">{memoryPreviewText(`${decision.status}/${decision.resolution} · ${decision.reason}`, secondaryWidth() * 3)}</text>}
+                    </For>
+                  </box>
+                )}
+              </Show>
+            </DreamSection>
+
+            <DreamSection title="Evidence" count={detail().evidence.length}>
+              <Show when={detail().evidence.length} fallback={<text fg={theme.textMuted}>No evidence snapshot was stored.</text>}>
+                <For each={detail().evidence}>
+                  {(evidence, index) => (
+                    <box flexDirection="column" minWidth={0}>
+                      <text fg={evidence.redacted ? theme.warning : theme.info} wrapMode="none">{evidence.redacted ? "!" : "◆"} {dreamEvidenceLabel(evidence)}</text>
+                      <text fg={theme.text} wrapMode="word">{memoryPreviewText(evidence.excerpt || "No excerpt stored.", secondaryWidth() * 3)}</text>
+                      <text fg={theme.textMuted} wrapMode="none">ref {index() + 1}/{detail().evidence.length}{evidence.hash ? ` · hash ${evidence.hash.slice(0, 10)}` : ""}</text>
+                    </box>
+                  )}
+                </For>
+              </Show>
+            </DreamSection>
+
+            <DreamSection title="Safety">
+              <box flexDirection="column" gap={1} minWidth={0}>
+                <text fg={detail().safety?.failures.length ? theme.error : theme.success} wrapMode="word">{detail().safety?.failures.length ? `× ${detail().safety!.failures.length} failures` : "✓ No safety failures recorded"}</text>
+                <text fg={theme.textMuted} wrapMode="word">{detail().safety?.reads.length ?? detail().evidence.length} reads · {detail().safety?.redactions ?? 0} redactions · {detail().safety?.skippedSources.length ?? 0} skipped sources</text>
+                <For each={detail().safety?.failures ?? []}>{(failure) => <text fg={theme.error} wrapMode="word">{memoryPreviewText(failure, secondaryWidth() * 3)}</text>}</For>
+                <For each={detail().safety?.skippedSources ?? []}>{(source) => <text fg={theme.warning} wrapMode="word">! skipped · {memoryPreviewText(source, secondaryWidth() * 2)}</text>}</For>
+              </box>
+            </DreamSection>
+
+            <DreamSection title="Run input">
+              <box flexDirection="column" minWidth={0}>
+                <text fg={theme.text} wrapMode="word">{detail().run.writePolicySnapshot} writes · {detail().run.workspaceID ?? "global workspace"} · {detail().run.groupID ?? "no group"}</text>
+                <text fg={theme.textMuted} wrapMode="word">files {sourcePermissions().files ? "on" : "off"} · sessions {sourcePermissions().sessions ? "on" : "off"} · git {sourcePermissions().git ? "on" : "off"} · raw diff {sourcePermissions().allowRawDiff ? "on" : "off"}</text>
+                <text fg={theme.textMuted} wrapMode="word">{sourcePermissions().roots?.length ?? 0} allowed roots · max {sourcePermissions().maxFiles ?? "default"} files · {sourcePermissions().maxBytes ? `${Locale.number(sourcePermissions().maxBytes!)} bytes` : "default byte limit"}</text>
+                <text fg={theme.textMuted} wrapMode="none">{short(detail().run.id, secondaryWidth())}</text>
+              </box>
+            </DreamSection>
+          </box>
+        </box>
+      </box>
+    </scrollbox>
+  )
 }
 
 function DreamContent(props: {
@@ -1277,6 +1498,7 @@ function DreamContent(props: {
   schedule: DreamScheduleState | null | undefined
   width: number
   selectedIndex: number
+  limit?: number
   onSelectRun: (index: number) => void
 }) {
   const { theme } = useTheme()
@@ -1284,10 +1506,11 @@ function DreamContent(props: {
   const details = () => props.data.dreamRunDetails ?? []
   const runs = () => details().length ? details() : (props.data.dreamRuns ?? []).map(fallbackDreamRunDetail)
   const schedule = () => props.schedule
+  const pendingCount = () => props.data.proposals.filter((proposal) => proposal.status === "pending").length
   return (
     <box flexDirection="column" gap={1} minHeight={0} flexGrow={1}>
-      <Panel title="Dream overview" height={10}>
-        <box flexDirection="row" gap={2} height={4} overflow="hidden">
+      <Panel title="Dream overview" height={props.width < 88 ? 8 : 12}>
+        <box flexDirection="row" gap={2} height={props.width < 88 ? 3 : 4} overflow="hidden">
           <box flexDirection="column" width="32%" overflow="hidden">
             <text fg={dream()?.status === "failed" ? theme.error : dream()?.status === "completed" ? theme.success : theme.primary} wrapMode="none">
               {short(dream()?.status ?? "idle", Math.max(10, props.width * 0.32))}
@@ -1309,19 +1532,26 @@ function DreamContent(props: {
               {String(dream()?.proposals.length ?? 0)}
             </text>
             <text fg={theme.textMuted} wrapMode="none">
-              proposals
+              latest run
             </text>
           </box>
         </box>
-        <text fg={theme.primary} wrapMode="none">
-          {short(`Dream write policy: ${props.data.config.dreamWritePolicy} · default is reviewable proposals.`, props.width)}
+        <Show when={props.width >= 88}>
+          <text fg={theme.primary} wrapMode="none">
+            {short(`Dream write: ${props.data.config.dreamWritePolicy} · consolidation: ${dreamConsolidationLabel(props.data.config.dreamConsolidationPolicy)}`, props.width)}
+          </text>
+        </Show>
+        <text fg={pendingCount() > 0 ? theme.warning : theme.textMuted} wrapMode="none">
+          {short(`pending queue: ${pendingCount()} · ${props.data.dreamRole.ok ? "model" : "status"}: ${dreamRoleLabel(props.data.dreamRole)}`, props.width)}
         </text>
         <text fg={theme.textMuted} wrapMode="none">
           {memoryPreviewText(`latest activity: ${props.data.dreamLatestActivity ? `${props.data.dreamLatestActivity.kind} · ${props.data.dreamLatestActivity.summary}` : "none"}`, props.width)}
         </text>
-        <text fg={theme.textMuted} wrapMode="none">
-          {short(`source ${dream()?.source ?? schedule()?.reason ?? "not scheduled"} · last ${dream() ? formatDate(dream()!.startedAt) : "none"}`, props.width)}
-        </text>
+        <Show when={props.width >= 88}>
+          <text fg={theme.textMuted} wrapMode="none">
+            {short(`source ${dream()?.source ?? schedule()?.reason ?? "not scheduled"} · ${schedule()?.manualTriggerRequired ? "manual trigger required" : schedule()?.status ?? "not scheduled"} · last ${dream() ? formatDate(dream()!.startedAt) : "none"}`, props.width)}
+          </text>
+        </Show>
       </Panel>
       <Panel title="Dream runs" grow>
         <Show when={runs().length > 0} fallback={
@@ -1338,17 +1568,19 @@ function DreamContent(props: {
             <text fg={theme.textMuted} wrapMode="none">
               {short("Select a run to inspect events, proposals, evidence, and safety details below.", props.width)}
             </text>
-            <For each={runs().slice(0, DREAM_RUN_ROW_LIMIT)}>
-              {(detail, index) => {
-                const run = () => detail.run
-                const selectedRun = () => props.selectedIndex === index()
+            <For each={memoryListWindow(runs(), props.selectedIndex, props.limit ?? DREAM_RUN_ROW_LIMIT)}>
+              {(row) => {
+                const detail = () => row.item
+                const run = () => detail().run
+                const selectedRun = () => props.selectedIndex === row.index
                 const color = () => dreamRunStatusTone(run().status, theme)
-                const reads = () => detail.safety?.reads.length ?? detail.evidence.length
-                const redactions = () => detail.safety?.redactions ?? 0
+                const reads = () => detail().safety?.reads.length ?? detail().evidence.length
+                const redactions = () => detail().safety?.redactions ?? 0
                 const duration = () => durationLabel(run().startedAt, run().completedAt)
-                const skipped = () => dreamSkippedDecisionCount(detail)
+                const skipped = () => dreamSkippedDecisionCount(detail())
+                const consolidation = () => detail().consolidation
                 return (
-                  <box height={4} overflow="hidden" onMouseUp={() => props.onSelectRun(index())}>
+                  <box height={4} overflow="hidden" onMouseUp={() => props.onSelectRun(row.index)}>
                     <box flexDirection="row" justifyContent="space-between" height={1} overflow="hidden">
                       <text fg={selectedRun() ? theme.success : color()} wrapMode="none">
                         {short(`${selectedRun() ? "› " : "  "}${dreamRunStatusLabel(run().status)} · ${run().workspaceID ?? "global"}`, Math.max(18, props.width - 24))}
@@ -1358,14 +1590,14 @@ function DreamContent(props: {
                       </text>
                     </box>
                     <text fg={selectedRun() ? theme.text : theme.textMuted} wrapMode="none">
-                      {short(`${dreamRunProposalCount(detail)} proposals · ${detail.graphProposals.length} graph · ${skipped()} skipped · ${detail.evidence.length} evidence · ${reads()} reads · ${redactions()} redactions${duration() ? ` · ${duration()}` : ""}`, props.width)}
+                      {short(`${dreamRunProposalCount(detail())} latest proposals · ${detail().graphProposals.length} graph · ${skipped()} skipped · ${detail().evidence.length} evidence · ${reads()} reads · ${redactions()} redactions${duration() ? ` · ${duration()}` : ""}`, props.width)}
                     </text>
                     <text fg={theme.textMuted} wrapMode="none">
-                      {memoryPreviewText(detail.events.at(-1)?.message ?? run().failureReason ?? run().id, props.width)}
+                      {memoryPreviewText(consolidation() ? `queue ${consolidation()!.pendingBefore} → ${consolidation()!.pendingAfter} · ${consolidation()!.policy}` : detail().events.at(-1)?.message ?? run().failureReason ?? run().id, props.width)}
                     </text>
                     <Show when={selectedRun()}>
                       <text fg={theme.primary} wrapMode="none">
-                        {short(`inspecting ${run().id}`, props.width)}
+                        {short(`Enter open · ${run().id}`, props.width)}
                       </text>
                     </Show>
                   </box>
@@ -1391,7 +1623,7 @@ function Inspector(props: {
 }) {
   const { theme } = useTheme()
   return (
-    <Panel title="Inspector" grow>
+    <Panel title="Details" grow>
       <scrollbox
         flexGrow={1}
         minHeight={0}
@@ -1405,28 +1637,26 @@ function Inspector(props: {
         }}
       >
         <Switch>
-          <Match when={props.selection.kind === "entry" ? props.selection.entry : undefined}>
-            {(entry) => (
-              <box flexDirection="column" gap={1} overflow="hidden">
-              <MetricRows
-                width={props.width}
-                items={[
-                  stat("scope", entry().scope),
-                  stat("category", (entry().categoryIDs ?? ["uncategorized"]).join(", ")),
-                  stat("confidence", `${Math.round(entry().confidence * 100)}%`),
-                  stat("sensitivity", entry().sensitivity),
-                  stat("source", entry().source),
-                  stat("updated", formatDate(entry().updatedAt)),
-                ]}
-              />
-              <text fg={theme.text} wrapMode="word">
-                {memoryPreviewText(entry().text, props.width * 20)}
-              </text>
-              <text fg={theme.textMuted} wrapMode="none">
-                e edit · delete type DELETE
-              </text>
-            </box>
-          )}
+          <Match when={props.selection.kind === "entry" ? props.selection : undefined}>
+            {(selection) => {
+              const entry = () => selection().entry
+              return (
+                <box flexDirection="column" gap={1} overflow="hidden">
+                  <text fg={theme.primary} wrapMode="none">
+                    {short(`${selection().projectLabel} · ${entry().scope} · ${(entry().categoryIDs ?? ["uncategorized"]).join(", ")}`, props.width)}
+                  </text>
+                  <text fg={theme.text} wrapMode="word">
+                    {memoryPreviewText(entry().text, props.width * 8)}
+                  </text>
+                  <text fg={theme.textMuted} wrapMode="none">
+                    {short(`${memoryOriginLabel(entry().source)} · ${Math.round(entry().confidence * 100)}% confidence · updated ${formatDate(entry().updatedAt)}`, props.width)}
+                  </text>
+                  <text fg={theme.textMuted} wrapMode="none">
+                    e edit · delete type DELETE
+                  </text>
+                </box>
+              )
+            }}
         </Match>
         <Match when={props.selection.kind === "proposal" ? props.selection.proposal : undefined}>
           {(proposal) => (
@@ -1472,17 +1702,18 @@ function Inspector(props: {
                 width={props.width}
                 items={[
                   stat("category", selection().category.label),
-                  stat("write", selection().policy.writePolicy),
-                  stat("prompt", selection().policy.promptEnabled ? "enabled" : "disabled"),
-                  stat("priority", String(selection().policy.promptPriority)),
-                  stat("scope", props.policyScope),
+                  stat("effective", selection().policy.writePolicy, `prompt ${selection().policy.promptEnabled ? "on" : "off"} · priority ${selection().policy.promptPriority}`),
+                  stat("default", selection().layer?.default.writePolicy ?? "unknown", `prompt ${selection().layer?.default.promptEnabled ? "on" : "off"}`),
+                  stat("global", selection().layer?.global.writePolicy ?? "unknown", selection().layer?.globalOverridden ? "explicit override" : "inherits default"),
+                  stat("project", selection().layer?.project.writePolicy ?? "unknown", selection().layer?.projectOverridden ? "explicit override" : "inherits global"),
+                  stat("editing", props.policyScope, "p write · o prompt · s scope · x reset"),
                 ]}
               />
               <text fg={theme.text} wrapMode="word">
                 {short(selection().category.description, props.width * 20)}
               </text>
               <text fg={theme.textMuted} wrapMode="none">
-                p cycle write mode · o prompt on/off
+                Effective priority is project override, then global override, then default.
               </text>
             </box>
           )}
@@ -1506,16 +1737,23 @@ function Inspector(props: {
                   stat("status", dreamRunStatusLabel(detail().run.status), durationLabel(detail().run.startedAt, detail().run.completedAt)),
                   stat("source", detail().run.source, detail().run.workspaceID ?? "global"),
                   stat("policy", detail().run.writePolicySnapshot, `${dreamSkippedDecisionCount(detail())} skipped`),
-                  stat("proposals", String(dreamRunProposalCount(detail())), "pending review"),
+                  stat("proposals", String(dreamRunProposalCount(detail())), `${detail().proposals.filter((proposal) => proposal.status === "applied").length} applied`),
                   stat("graph", String(detail().graphProposals.filter((proposal) => (proposal.status ?? "pending") === "pending").length), `${detail().graphProposals.length} link proposals`),
+                  stat("consolidation", detail().consolidation?.status ?? "not run", detail().consolidation ? `${detail().consolidation!.pendingBefore} → ${detail().consolidation!.pendingAfter} pending` : undefined),
                   stat("evidence", String(detail().evidence.length), `${detail().safety?.reads.length ?? detail().evidence.length} reads`),
                   stat("safety", `${detail().safety?.redactions ?? 0} redactions`, `${detail().safety?.skippedSources.length ?? 0} skipped`),
                 ]}
               />
+              <box flexDirection="column" gap={0}>
+                <text fg={theme.primary} wrapMode="none">Inputs</text>
+                <text fg={theme.textMuted} wrapMode="word">
+                  {memoryPreviewText(`workspace ${detail().run.workspaceID ?? "none"} · group ${detail().run.groupID ?? "none"} · root ${detail().run.projectRoot ?? "none"} · files ${detail().run.permissionSnapshot?.files ? "allowed" : "off"} · roots ${detail().run.permissionSnapshot?.roots?.join(", ") || "none"} · max ${detail().run.permissionSnapshot?.maxFiles ?? "unknown"} files / ${detail().run.permissionSnapshot?.maxBytes ?? "unknown"} bytes`, props.width * 5)}
+                </text>
+              </box>
               <Show when={dreamTranscriptRows(detail()).length > 0}>
                 <box flexDirection="column" gap={0}>
                   <text fg={theme.primary} wrapMode="none">Dream timeline</text>
-                  <For each={dreamTranscriptRows(detail()).slice(-6)}>
+                  <For each={dreamTranscriptRows(detail())}>
                     {(row) => (
                       <text fg={dreamTranscriptColor(row.tone, theme)} wrapMode="word">
                         {memoryPreviewText(`${formatTime(row.at)} · ${row.label} · ${row.detail}`, props.width * 3)}
@@ -1535,10 +1773,10 @@ function Inspector(props: {
               <Show when={detail().proposals.length > 0}>
                 <box flexDirection="column" gap={0}>
                   <text fg={theme.primary} wrapMode="none">Proposals</text>
-                  <For each={detail().proposals.slice(0, 3)}>
+                  <For each={detail().proposals}>
                     {(proposal) => (
                       <text fg={theme.text} wrapMode="word">
-                        {memoryPreviewText(`${proposal.operation ?? "create"} · ${proposal.scope ?? "memory"} · ${proposal.text ?? proposal.id}`, props.width * 3)}
+                        {memoryPreviewText(`${proposal.id} · ${proposal.operation ?? "create"} · ${proposal.scope ?? "memory"} · ${proposal.status ?? "historical"}${proposal.appliedEntryID ? ` · entry ${proposal.appliedEntryID}` : ""} · ${proposal.resolution ?? proposal.reason ?? "no resolution"} · ${proposal.text ?? proposal.id}`, props.width * 5)}
                       </text>
                     )}
                   </For>
@@ -1547,10 +1785,10 @@ function Inspector(props: {
               <Show when={detail().decisions.length > 0}>
                 <box flexDirection="column" gap={0}>
                   <text fg={theme.primary} wrapMode="none">Dream decisions</text>
-                  <For each={detail().decisions.slice(0, 3)}>
+                  <For each={detail().decisions}>
                     {(decision) => (
                       <text fg={decision.status === "created-proposal" ? theme.text : theme.warning} wrapMode="word">
-                        {memoryPreviewText(`${decision.status} · ${decision.reason}`, props.width * 3)}
+                        {memoryPreviewText(`${decision.status} · proposal ${decision.proposalID ?? "none"} · entry ${decision.entryID ?? "none"} · ${decision.reason}`, props.width * 4)}
                       </text>
                     )}
                   </For>
@@ -1559,11 +1797,14 @@ function Inspector(props: {
               <Show when={detail().graphProposals.length > 0}>
                 <box flexDirection="column" gap={0}>
                   <text fg={theme.primary} wrapMode="none">Graph proposals</text>
-                  <For each={detail().graphProposals.slice(0, 3)}>
+                  <For each={detail().graphProposals}>
                     {(proposal) => (
                       <box flexDirection="column" gap={0} overflow="hidden">
                         <text fg={proposal.status === "applied" ? theme.success : proposal.status === "rejected" ? theme.warning : theme.text} wrapMode="word">
                           {memoryPreviewText(dreamGraphProposalLabel(proposal), props.width * 3)}
+                        </text>
+                        <text fg={theme.textMuted} wrapMode="word">
+                          {memoryPreviewText(`${proposal.id} · ${proposal.from} → ${proposal.to} · link ${proposal.linkID ?? "not applied"} · evidence ${proposal.evidenceRefs.join(", ") || "none"}`, props.width * 4)}
                         </text>
                         <Show when={(proposal.status ?? "pending") === "pending"}>
                           <box flexDirection="row" gap={1} height={1} overflow="hidden">
@@ -1580,6 +1821,23 @@ function Inspector(props: {
                   </For>
                 </box>
               </Show>
+              <Show when={detail().consolidation}>
+                {(consolidation) => (
+                  <box flexDirection="column" gap={0}>
+                    <text fg={theme.primary} wrapMode="none">Consolidation</text>
+                    <text fg={consolidation().status === "failed" ? theme.error : theme.text} wrapMode="word">
+                      {memoryPreviewText(`${consolidation().id} · ${consolidation().policy} · queue ${consolidation().pendingBefore} → ${consolidation().pendingAfter} · ${consolidation().applied} applied · ${consolidation().archived} archived · ${consolidation().rejected} rejected · ${consolidation().superseded} superseded`, props.width * 4)}
+                    </text>
+                    <For each={consolidation().decisions}>
+                      {(decision) => (
+                        <text fg={decision.status === "applied" ? theme.success : decision.status === "failed" ? theme.error : theme.warning} wrapMode="word">
+                          {memoryPreviewText(`${decision.status}/${decision.resolution} · proposal ${decision.proposalID ?? "none"} · entry ${decision.entryID ?? "none"} · ${decision.reason}`, props.width * 4)}
+                        </text>
+                      )}
+                    </For>
+                  </box>
+                )}
+              </Show>
               <Show when={pendingGraphProposal()}>
                 {(proposal) => (
                   <box flexDirection="column" gap={0} overflow="hidden">
@@ -1592,7 +1850,7 @@ function Inspector(props: {
               <Show when={detail().evidence.length > 0}>
                 <box flexDirection="column" gap={0}>
                   <text fg={theme.primary} wrapMode="none">Evidence</text>
-                  <For each={detail().evidence.slice(0, 3)}>
+                  <For each={detail().evidence}>
                     {(evidence) => (
                       <text fg={theme.textMuted} wrapMode="none">
                         {short(dreamEvidenceLabel(evidence), props.width)}
@@ -1627,370 +1885,6 @@ function Inspector(props: {
   )
 }
 
-function SideChatPanel(props: {
-  chat: MemorySideChatSession | null
-  width: number
-  activeContext: string
-  input: string
-  inputActive: boolean
-  busy: boolean
-  scrollToken: number
-  chatCount: number
-  onNewChat: () => void
-  onHistory: () => void
-  onInput: (value: string) => void
-  onInputActive: (active: boolean) => void
-  onSubmit: () => void
-}) {
-  const { theme } = useTheme()
-  const textareaKeybindings = useTextareaKeybindings()
-  const history = () => props.chat?.history ?? []
-  const artifacts = createMemo(() => sideChatInputArtifacts(props.input))
-  const inputHeight = createMemo(() => artifacts().length || props.input.includes("\n") ? 5 : 4)
-  const historyTextSize = createMemo(() => history().reduce((total, message) => total + message.text.length, 0))
-  const showScrollbar = createMemo(() => history().length > 4 || historyTextSize() > props.width * 9)
-  let textarea: TextareaRenderable | undefined
-  let historyScroll: ScrollBoxRenderable | undefined
-
-  function scrollHistoryToBottom() {
-    const scroll = historyScroll
-    if (!scroll || scroll.isDestroyed) return
-    scroll.scrollTo(scroll.scrollHeight)
-  }
-
-  createEffect(() => {
-    if (!textarea || textarea.isDestroyed) return
-    if (props.inputActive) textarea.focus()
-    else textarea.blur()
-  })
-
-  createEffect(() => {
-    if (!textarea || textarea.isDestroyed) return
-    if (textarea.plainText === props.input) return
-    textarea.setText(props.input)
-  })
-
-  createEffect(() => {
-    if (!textarea || textarea.isDestroyed) return
-    textarea.traits = props.busy ? { suspend: true, status: "BUSY" } : { status: "MEMORY" }
-  })
-
-  createEffect(() => {
-    `${history().length}:${historyTextSize()}:${props.busy ? "busy" : "idle"}:${props.scrollToken}`
-    if (!historyScroll || historyScroll.isDestroyed) return
-    queueMicrotask(() => {
-      scrollHistoryToBottom()
-      setTimeout(scrollHistoryToBottom, 0)
-      setTimeout(scrollHistoryToBottom, 40)
-    })
-  })
-
-  return (
-    <Panel width={props.width} grow>
-      <box flexDirection="column" gap={1} overflow="hidden" minHeight={0} flexGrow={1}>
-        <box flexDirection="column" height={2} overflow="hidden">
-          <box flexDirection="row" justifyContent="space-between" height={1} overflow="hidden">
-            <box flexDirection="row" gap={1} overflow="hidden">
-              <text fg={theme.success} wrapMode="none" onMouseUp={props.onNewChat}>
-                [new]
-              </text>
-              <text fg={theme.primary} wrapMode="none" onMouseUp={props.onHistory}>
-                {short(`[history ${props.chatCount}]`, 13)}
-              </text>
-            </box>
-          </box>
-          <text fg={theme.textMuted} wrapMode="none">
-            {Locale.truncateMiddle(props.activeContext, Math.max(16, props.width - 4))}
-          </text>
-        </box>
-        <Show
-          when={history().length > 0}
-          fallback={
-            <box flexDirection="column" flexGrow={1} justifyContent="center" gap={1} overflow="hidden">
-              <text fg={theme.textMuted} wrapMode="word">
-                Ask memory questions and manage proposals.
-              </text>
-              <text fg={theme.primary} wrapMode="word">
-                Can inspect categories, saved memories, and pending changes.
-              </text>
-              <text fg={theme.textMuted} wrapMode="word">
-                Draft create/edit/delete/move memory actions for review.
-              </text>
-              <text fg={theme.textMuted} wrapMode="word">
-                Draft reviewable category policy and Dream schedule proposals.
-              </text>
-            </box>
-          }
-        >
-          <scrollbox
-            ref={(value: ScrollBoxRenderable) => {
-              historyScroll = value
-            }}
-            flexGrow={1}
-            minHeight={0}
-            width="100%"
-            horizontalScrollbarOptions={{ visible: false }}
-            verticalScrollbarOptions={{
-              visible: showScrollbar(),
-              trackOptions: {
-                backgroundColor: theme.backgroundPanel,
-                foregroundColor: theme.border,
-              },
-            }}
-          >
-            <box flexDirection="column" gap={1} width="100%">
-              <For each={history()}>
-                {(message) => {
-                  const user = () => message.role === "user"
-                  return (
-                    <box flexDirection="column" alignItems={user() ? "flex-end" : "flex-start"}>
-                      <box
-                        flexDirection="column"
-                        width={Math.max(20, Math.floor(props.width * 0.82))}
-                        borderStyle="single"
-                        borderColor={user() ? theme.success : theme.border}
-                        paddingLeft={1}
-                        paddingRight={1}
-                      >
-                        <box flexDirection="row" justifyContent="space-between" height={1} overflow="hidden">
-                          <text fg={user() ? theme.success : theme.primary} wrapMode="none">
-                            {user() ? "you" : "assistant"}
-                          </text>
-                          <text fg={theme.textMuted} wrapMode="none">
-                            {formatTime(message.createdAt)}
-                          </text>
-                        </box>
-                        <text fg={theme.text} wrapMode="word">
-                          {message.text}
-                        </text>
-                      </box>
-                    </box>
-                  )
-                }}
-              </For>
-              <Show when={props.busy}>
-                <box flexDirection="column" alignItems="flex-start">
-                  <box
-                    flexDirection="column"
-                    width={Math.max(22, Math.floor(props.width * 0.72))}
-                    borderStyle="single"
-                    borderColor={theme.primary}
-                    paddingLeft={1}
-                    paddingRight={1}
-                  >
-                    <box flexDirection="row" justifyContent="space-between" height={1} overflow="hidden">
-                      <text fg={theme.primary} wrapMode="none">
-                        assistant
-                      </text>
-                      <text fg={theme.textMuted} wrapMode="none">
-                        working
-                      </text>
-                    </box>
-                    <text fg={theme.textMuted} wrapMode="word">
-                      thinking...
-                    </text>
-                  </box>
-                </box>
-              </Show>
-            </box>
-          </scrollbox>
-        </Show>
-        <box
-          flexDirection="column"
-          height={inputHeight()}
-          borderStyle="single"
-          borderColor={theme.primary}
-          paddingLeft={1}
-          paddingRight={1}
-          overflow="hidden"
-          onMouseDown={() => {
-            props.onInputActive(true)
-            textarea?.focus()
-          }}
-        >
-          <textarea
-            height={2}
-            width="100%"
-            initialValue={props.input}
-            placeholder="Ask memory side chat..."
-            placeholderColor={theme.textMuted}
-            textColor={props.busy ? theme.textMuted : theme.text}
-            focusedTextColor={props.busy ? theme.textMuted : theme.text}
-            cursorColor={props.busy ? theme.backgroundElement : theme.primary}
-            keyBindings={props.busy ? [] : textareaKeybindings()}
-            onSubmit={() => {
-              if (props.busy) return
-              props.onSubmit()
-            }}
-            onContentChange={() => props.onInput(textarea?.plainText ?? "")}
-            onKeyDown={(event) => {
-              props.onInputActive(true)
-              if (event.name !== "escape") return
-              event.preventDefault()
-              event.stopPropagation()
-              textarea?.blur()
-              props.onInputActive(false)
-            }}
-            ref={(value: TextareaRenderable) => {
-              textarea = value
-              textarea.traits = props.busy ? { suspend: true, status: "BUSY" } : { status: "MEMORY" }
-            }}
-          />
-          <Show
-            when={artifacts().length > 0}
-            fallback={
-              <text fg={theme.textMuted} wrapMode="none">
-                {props.busy ? "thinking..." : props.inputActive ? "enter send · paste image/file path · esc blur" : "c focus · paste text/image path"}
-              </text>
-            }
-          >
-            <text fg={theme.primary} wrapMode="none">
-              {short(artifacts().join(" · "), props.width)}
-            </text>
-          </Show>
-        </box>
-      </box>
-    </Panel>
-  )
-}
-
-function memorySideChatPageContext(input: {
-  data: MemoryOverview
-  baseData?: MemoryOverview | null
-  selection: Selection
-  activeRoot: string
-  currentRoot: string
-  selectedWorkspace: MemoryWorkspace | null
-  activeContext: string
-  policyScope: MemoryPolicyScope
-}) {
-  const memoryIndex = (label: string, entries: MemoryEntry[], limit: number) => entries.slice(0, limit).map((entry) => [
-    `- id=${entry.id}`,
-    `scope=${entry.scope}`,
-    `source=${label}`,
-    `categories=${(entry.categoryIDs ?? ["uncategorized"]).join(", ")}`,
-    `updated=${formatDate(entry.updatedAt)}`,
-    `text=${memoryPreviewText(entry.text, 260)}`,
-  ].join(" · "))
-  const selected = input.selection
-  const lines = [
-    `activeRoot: ${input.activeRoot}`,
-    `currentRoot: ${input.currentRoot}`,
-    `focus: ${input.selectedWorkspace ? `${input.selectedWorkspace.displayName} (${input.selectedWorkspace.root})` : "none"}`,
-    `visibleContext: ${input.activeContext}`,
-    `visibleSaved: ${input.data.globalEntries.length} global, ${input.data.projectEntries.length} project`,
-    `allMemoryContext: global plus current project memories are always included; focus only narrows answer priority`,
-    `pending: ${input.data.proposals.filter((proposal) => proposal.status === "pending").length}`,
-  ]
-  const base = input.baseData
-  lines.push(
-    "<category_graph>",
-    ...input.data.categories.map((category) => {
-      const policy = input.data.policies[category.id]
-      return [
-        `- id=${category.id}`,
-        `label=${category.label}`,
-        `count=${category.count}`,
-        `description=${category.description}`,
-        `writePolicy=${policy?.writePolicy ?? "unknown"}`,
-        `prompt=${policy?.promptEnabled ? "on" : "off"}`,
-      ].join(" · ")
-    }),
-    "</category_graph>",
-  )
-  lines.push(
-    "<memory_control_actions>",
-    "- create-memory: draft a new global/project memory proposal",
-    "- edit-memory/delete-memory: draft a reviewable change for an existing memory id",
-    "- move-memory: draft a reviewable category/scope move for an existing memory id",
-    "- create-category/edit-category/delete-category: draft reviewable category/policy changes",
-    "- propose-policy: draft extraction, write policy, prompt, or save-behavior changes",
-    "- dream-dry-run: draft Dream schedule/source/dry-run changes",
-    "</memory_control_actions>",
-  )
-  if (base) {
-    const currentProject = base.projectEntries.slice(0, 5).map((entry) => `- [current project] ${memoryPreviewText(entry.text, 260)}`)
-    const global = base.globalEntries.slice(0, 5).map((entry) => `- [global] ${memoryPreviewText(entry.text, 260)}`)
-    lines.push(
-      "<all_memory_context_sample>",
-      ...(global.length || currentProject.length ? [...global, ...currentProject] : ["- none"]),
-      "</all_memory_context_sample>",
-    )
-    lines.push(
-      "<memory_index>",
-      ...memoryIndex("global", base.globalEntries, 18),
-      ...memoryIndex("current-project", base.projectEntries, 18),
-      "</memory_index>",
-    )
-  }
-  if (input.selectedWorkspace) {
-    const focused = input.data.projectEntries.slice(0, 6).map((entry) => `- [focused project] ${memoryPreviewText(entry.text, 260)}`)
-    lines.push(
-      "<focused_workspace_context_sample>",
-      ...(focused.length ? focused : ["- no focused project memory entries"]),
-      "</focused_workspace_context_sample>",
-    )
-    lines.push(
-      "<focused_workspace_memory_index>",
-      ...memoryIndex("focused-project", input.data.projectEntries, 24),
-      "</focused_workspace_memory_index>",
-    )
-  }
-  if (selected.kind === "entry") {
-    lines.push(
-      "<selected_memory>",
-      `id: ${selected.entry.id}`,
-      `scope: ${selected.entry.scope}`,
-      `categories: ${(selected.entry.categoryIDs ?? ["uncategorized"]).join(", ")}`,
-      `text: ${memoryPreviewText(selected.entry.text, 720)}`,
-      "</selected_memory>",
-    )
-  } else if (selected.kind === "proposal") {
-    lines.push(
-      "<selected_proposal>",
-      `id: ${selected.proposal.id}`,
-      `operation: ${selected.proposal.operation}`,
-      `scope: ${selected.proposal.scope}`,
-      `categories: ${selected.proposal.categoryIDs.join(", ") || "uncategorized"}`,
-      `text: ${memoryPreviewText(selected.proposal.text, 720)}`,
-      "</selected_proposal>",
-    )
-  } else if (selected.kind === "policy") {
-    lines.push(
-      "<selected_policy>",
-      `scope: ${input.policyScope}`,
-      `category: ${selected.category.id} (${selected.category.label})`,
-      `description: ${selected.category.description}`,
-      `writePolicy: ${selected.policy.writePolicy}`,
-      `promptEnabled: ${selected.policy.promptEnabled}`,
-      "</selected_policy>",
-    )
-  } else if (selected.kind === "dream") {
-    const detail = selected.detail
-    lines.push(
-      "<dream>",
-      `status: ${input.data.dream?.status ?? "none"}`,
-      `source: ${input.data.dream?.source ?? "not scheduled"}`,
-      `proposals: ${input.data.dream?.proposals.length ?? 0}`,
-      `selectedRun: ${detail?.run.id ?? "none"}`,
-      `selectedRunStatus: ${detail?.run.status ?? "none"}`,
-      `latestActivity: ${input.data.dreamLatestActivity ? `${input.data.dreamLatestActivity.kind}:${input.data.dreamLatestActivity.summary}` : "none"}`,
-      `selectedRunTimeline: ${detail ? dreamTranscriptRows(detail).slice(-6).map((row) => `${row.label}:${row.detail}`).join(" | ") : "none"}`,
-      `selectedRunEvents: ${detail?.events.map((event) => `${event.status}:${event.message}`).slice(-6).join(" | ") ?? "none"}`,
-      `selectedRunGraphProposals: ${detail?.graphProposals.slice(0, 6).map((proposal) => dreamGraphProposalLabel(proposal)).join(" | ") ?? "none"}`,
-      `selectedRunEvidence: ${detail?.evidence.slice(0, 8).map((item) => dreamEvidenceLabel(item)).join(" | ") ?? "none"}`,
-      `selectedRunSafety: reads=${detail?.safety?.reads.length ?? 0} redactions=${detail?.safety?.redactions ?? 0} skipped=${detail?.safety?.skippedSources.length ?? 0}`,
-      "schedule guidance: prefer a flexible Dream window/range such as 18:00-23:00 over a fixed time like 21:00",
-      "</dream>",
-    )
-  } else {
-    const project = input.data.projectEntries.slice(0, 4).map((entry) => `- [project] ${memoryPreviewText(entry.text, 220)}`)
-    const global = input.data.globalEntries.slice(0, 4).map((entry) => `- [global] ${memoryPreviewText(entry.text, 220)}`)
-    lines.push("<visible_memory_sample>", ...(project.length || global.length ? [...project, ...global] : ["- none"]), "</visible_memory_sample>")
-  }
-  return lines.join("\n")
-}
-
 function LoadingMemory(props: { tiny: boolean }) {
   const { theme } = useTheme()
   return (
@@ -2015,63 +1909,103 @@ export function Memory() {
   const project = useProject()
   const sdk = useSDK()
   const dialog = useDialog()
+  const command = useCommandDialog()
+  const kv = useKV()
   const toast = useToast()
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const currentRoot = createMemo(() => project.instance.directory() || process.cwd())
   const [selectedWorkspaceID, setSelectedWorkspaceID] = createSignal<string | null>(null)
-  const [tab, setTab] = createSignal<MemoryTab>(route.data.type === "memory" && route.data.view === "graph" ? "graph" : "overview")
+  const [tab, setTab] = createSignal<MemoryTab>(route.data.type === "memory" && route.data.view === "graph" ? "graph" : "memories")
+  const [memoryScope, setMemoryScope] = createSignal<MemoryScopeFilter>("current")
   const [selectedIndex, setSelectedIndex] = createSignal(0)
   const [policyScope, setPolicyScope] = createSignal<MemoryPolicyScope>("project")
   const [live, setLive] = createSignal(true)
-  const [chat, setChat] = createSignal<MemorySideChatSession | null>(null)
-  const [sideChatInput, setSideChatInput] = createSignal("")
-  const [sideChatInputActive, setSideChatInputActive] = createSignal(false)
-  const [sideChatBusy, setSideChatBusy] = createSignal(false)
-  const [sideChatScrollToken, setSideChatScrollToken] = createSignal(0)
   const [graphSelectedID, setGraphSelectedID] = createSignal<string>()
-  const [graphShowAll, setGraphShowAll] = createSignal(false)
-  const [graphZoom, setGraphZoom] = createSignal(1)
+  const [graphFocused, setGraphFocused] = createSignal(false)
+  const [graphViewport, setGraphViewport] = createSignal({ x: undefined as number | undefined, y: undefined as number | undefined, zoom: 1 })
+  const [storedGraphView, setStoredGraphView] = kv.signal<MemoryGraphViewPreference>("memory.graph.view.v1", { version: 2, scope: "project", projectRoot: null, showIsolates: false })
   const [graphSearching, setGraphSearching] = createSignal(false)
   const [graphQuery, setGraphQuery] = createSignal("")
-  const [chatSessions, { refetch: refetchChatSessions }] = createResource(currentRoot, (root) => listMemorySideChats(root))
+  const [dreamDetailOpen, setDreamDetailOpen] = createSignal(false)
   const [baseOverview, { refetch: refetchBase }] = createResource(currentRoot, memoryOverview)
   const selectedWorkspace = createMemo(() => baseOverview()?.workspaces?.activeWorkspaces.find((workspace) => workspace.id === selectedWorkspaceID()) ?? null)
   const activeRoot = createMemo(() => selectedWorkspace()?.root ?? currentRoot())
   const [dreamSchedule, { refetch: refetchDreamSchedule }] = createResource(() => readDreamScheduleState())
   const [overview, { refetch }] = createResource(activeRoot, memoryOverview)
   const layout = createMemo(() => memoryLayoutForDimensions(dimensions()))
+  const deck = createMemo(() => commandDeckLayout({ ...dimensions(), hasRail: true, hasContext: false }))
   const width = createMemo(() => dimensions().width)
   const tiny = createMemo(() => layout().tiny)
   const medium = createMemo(() => layout().medium)
   const wide = createMemo(() => layout().wide)
   const contentWidth = createMemo(() => layout().contentWidth)
+  const memoryRowLimit = createMemo(() => Math.max(2, Math.min(ENTRY_ROW_LIMIT, Math.floor((dimensions().height - 17) / 3))))
+  const policyRowLimit = createMemo(() => Math.max(3, Math.min(POLICY_ROW_LIMIT, Math.floor((dimensions().height - 10) / 4))))
+  const dreamRunRowLimit = createMemo(() => Math.max(2, Math.min(DREAM_RUN_ROW_LIMIT, Math.floor((dimensions().height - 21) / 5))))
   const sidebarWidth = createMemo(() => wide() ? 32 : 30)
-  const sideChatWidth = createMemo(() => Math.min(64, Math.max(48, Math.floor(width() * 0.28))))
-  const mainContentWidth = createMemo(() => Math.max(44, contentWidth() - sidebarWidth() - sideChatWidth() - 2))
-  const inspectorHeight = createMemo(() => tab() === "dream" ? (wide() ? 15 : 13) : (wide() ? 7 : 8))
+  const mainContentWidth = createMemo(() => Math.max(44, contentWidth() - sidebarWidth() - 2))
+  const inspectorHeight = createMemo(() => tab() === "dream" ? (wide() ? 15 : 13) : 10)
   const data = createMemo(() => overview())
   const pending = createMemo(() => data()?.proposals.filter((proposal) => proposal.status === "pending") ?? [])
   const projectEntries = createMemo(() => data()?.projectEntries ?? [])
   const globalEntries = createMemo(() => data()?.globalEntries ?? [])
   const graphWorkspaces = createMemo(() => baseOverview()?.workspaces?.activeWorkspaces ?? [])
+  const projectLabelForRoot = (root: string) => {
+    const workspace = graphWorkspaces().find((item) => comparableRoot(item.root) === comparableRoot(root))
+    return workspace?.displayName ?? root.split(/[\\/]/).filter(Boolean).at(-1) ?? root
+  }
+  const projectRoots = createMemo(() => [...new Set([currentRoot(), ...graphWorkspaces().map((workspace) => workspace.root)])])
+  const [allProjectEntries, { refetch: refetchAllProjectEntries }] = createResource(
+    () => memoryScope() === "all" ? projectRoots().join("\u0000") : "",
+    async (key) => {
+      if (!key) return [] as MemoryListEntry[]
+      const roots = key.split("\u0000").filter(Boolean)
+      const groups = await Promise.all(roots.map(async (root) => {
+        const entries = await readMemoryEntries("project", root).catch(() => [])
+        return entries.map((entry) => ({ entry, root, projectLabel: projectLabelForRoot(root) }))
+      }))
+      return groups.flat()
+    },
+  )
+  const memoryEntries = createMemo<MemoryListEntry[]>(() => {
+    const current = data()
+    if (!current) return []
+    if (memoryScope() === "global") return globalEntries().map((entry) => ({ entry, root: activeRoot(), projectLabel: "Global" }))
+    if (memoryScope() === "all") return [
+      ...globalEntries().map((entry) => ({ entry, root: activeRoot(), projectLabel: "Global" })),
+      ...(allProjectEntries() ?? []),
+    ]
+    return projectEntries().map((entry) => ({ entry, root: activeRoot(), projectLabel: projectLabelForRoot(activeRoot()) }))
+  })
   const graphProjectOptions = createMemo(() => {
     const current = comparableRoot(currentRoot())
     const currentWorkspace = graphWorkspaces().find((workspace) => comparableRoot(workspace.root) === current)
     return [
-      { id: null as string | null, root: currentRoot(), label: currentWorkspace?.displayName ?? current.split(/[\\/]/).filter(Boolean).at(-1) ?? currentRoot() },
+      { id: currentWorkspace?.id ?? `root:${current}`, root: currentRoot(), label: currentWorkspace?.displayName ?? current.split(/[\\/]/).filter(Boolean).at(-1) ?? currentRoot() },
       ...memorySidebarProjectWorkspaces({ currentRoot: currentRoot(), workspaces: graphWorkspaces() })
-        .map((workspace) => ({ id: workspace.id as string | null, root: workspace.root, label: workspace.displayName })),
+        .map((workspace) => ({ id: workspace.id, root: workspace.root, label: workspace.displayName })),
     ]
   })
-  const graphActiveLabel = createMemo(() => selectedWorkspace()?.displayName ?? graphProjectOptions()[0]?.label ?? activeRoot())
+  const graphView = createMemo(() => normalizeMemoryGraphViewPreference(storedGraphView(), graphProjectOptions().map((option) => option.root), currentRoot()))
+  const graphSelectedProject = createMemo(() => graphView().scope === "project"
+    ? graphProjectOptions().find((option) => comparableRoot(option.root) === comparableRoot(graphView().projectRoot ?? "")) ?? null
+    : null)
+  const graphActiveRoot = createMemo(() => graphSelectedProject()?.root ?? currentRoot())
+  const graphActiveLabel = createMemo(() => graphView().scope === "all" ? "All projects" : graphSelectedProject()?.label ?? "All projects")
   const graphProjectPosition = createMemo(() => {
-    const index = graphProjectOptions().findIndex((option) => option.id === selectedWorkspaceID())
-    return `${Math.max(0, index) + 1}/${graphProjectOptions().length}`
+    const index = graphSelectedProject() ? graphProjectOptions().findIndex((option) => option.id === graphSelectedProject()!.id) + 1 : 0
+    return `${index + 1}/${graphProjectOptions().length + 1}`
   })
-  const graphLayout = createMemo(() => memoryGraphExplorerLayout({ width: contentWidth(), height: Math.max(12, dimensions().height - 8) }))
+  const graphWorkspaceSelection = createMemo(() => (graphView().scope === "all" ? graphProjectOptions() : graphSelectedProject() ? [graphSelectedProject()!] : graphProjectOptions()).map((option) => ({
+    id: option.id,
+    root: option.root,
+    displayName: option.label,
+  })))
+  const [graphOverview, { refetch: refetchGraph }] = createResource(graphWorkspaceSelection, memoryGraphOverview)
+  const graphLayout = createMemo(() => memoryGraphExplorerLayout({ width: deck().wide ? deck().contentWidth : contentWidth(), height: Math.max(12, dimensions().height - 8) }))
   const graphFrame = createMemo(() => {
-    const current = data()
+    const current = graphOverview()
     if (!current) return
     return memoryGraphMiniMap({
       facts: current.facts,
@@ -2079,13 +2013,14 @@ export function Memory() {
       categories: current.categories,
       width: graphLayout().canvasWidth,
       height: graphLayout().canvasHeight,
-      connectedOnly: !graphShowAll(),
+      connectedOnly: !graphView().showIsolates,
       selectedID: graphSelectedID(),
-      zoom: graphZoom(),
+      viewport: graphViewport(),
+      maxNodes: 64,
     })
   })
   const graphSearchMatches = createMemo(() => {
-    const current = data()
+    const current = graphOverview()
     if (!current) return []
     return memoryGraphSearchMatches({
       facts: current.facts.filter((fact) => fact.materialized),
@@ -2093,7 +2028,7 @@ export function Memory() {
       projectLabel: (fact) => memoryGraphFactProjectLabels({
         fact,
         workspaces: graphWorkspaces(),
-        activeRoot: activeRoot(),
+        activeRoot: graphActiveRoot(),
         activeLabel: graphActiveLabel(),
       }).join(" "),
     })
@@ -2101,34 +2036,38 @@ export function Memory() {
   const visibleCount = createMemo(() => {
     const current = data()
     if (!current) return 1
-    if (tab() === "project") return Math.max(1, Math.min(projectEntries().length, ENTRY_ROW_LIMIT))
-    if (tab() === "global") return Math.max(1, Math.min(globalEntries().length, ENTRY_ROW_LIMIT))
-    if (tab() === "policy") return Math.max(1, Math.min(current.categories.length, POLICY_ROW_LIMIT))
-    if (tab() === "overview") return Math.max(1, Math.min(pending().length, PROPOSAL_ROW_LIMIT))
-    if (tab() === "dream") return Math.max(1, Math.min(current.dreamRunDetails.length || current.dreamRuns.length, DREAM_RUN_ROW_LIMIT))
+    if (tab() === "memories") return Math.max(1, memoryEntries().length)
+    if (tab() === "rules") return Math.max(1, current.categories.length)
+    if (tab() === "dream") return Math.max(1, current.dreamRunDetails.length || current.dreamRuns.length)
     return 1
   })
   const selection = createMemo<Selection>(() => {
     const current = data()
     if (!current) return { kind: "overview" }
     const index = Math.max(0, Math.min(selectedIndex(), visibleCount() - 1))
-    if (tab() === "project") return projectEntries()[index] ? { kind: "entry", entry: projectEntries()[index]! } : { kind: "overview" }
-    if (tab() === "global") return globalEntries()[index] ? { kind: "entry", entry: globalEntries()[index]! } : { kind: "overview" }
-    if (tab() === "policy") {
+    if (tab() === "memories") {
+      const item = memoryEntries()[index]
+      return item ? { kind: "entry", ...item } : { kind: "overview" }
+    }
+    if (tab() === "rules") {
       const category = current.categories[index] ?? current.categories[0]
       const policy = category ? current.policies[category.id] : undefined
-      return category && policy ? { kind: "policy", category, policy } : { kind: "overview" }
+      return category && policy ? { kind: "policy", category, policy, layer: current.policyLayers?.[category.id] ?? null } : { kind: "overview" }
     }
     if (tab() === "dream") {
       const details = current.dreamRunDetails.length ? current.dreamRunDetails : current.dreamRuns.map(fallbackDreamRunDetail)
       return { kind: "dream", detail: details[index] ?? null }
     }
-    return pending()[index] ? { kind: "proposal", proposal: pending()[index]! } : { kind: "overview" }
+    return { kind: "overview" }
+  })
+  const selectedDreamDetail = createMemo(() => {
+    const item = selection()
+    return item.kind === "dream" ? item.detail : null
   })
   const activeContext = createMemo(() => {
     const item = selection()
-    const focus = selectedWorkspace() ? `focus ${selectedWorkspace()!.displayName}` : "all memories"
-    if (item.kind === "entry") return `${focus} · ${item.entry.scope} · ${(item.entry.categoryIDs ?? []).join(", ")}`
+    const focus = selectedWorkspace() ? `focus ${selectedWorkspace()!.displayName}` : "current project"
+    if (item.kind === "entry") return `${item.projectLabel} · ${item.entry.scope} · ${(item.entry.categoryIDs ?? []).join(", ")}`
     if (item.kind === "proposal") return `${focus} · ${item.proposal.operation} proposal`
     if (item.kind === "policy") return `${focus} · ${policyScope()} policy · ${item.category.label}`
     if (item.kind === "dream") return `${focus} · Dream${item.detail ? ` · ${item.detail.run.status}` : ""}`
@@ -2144,11 +2083,20 @@ export function Memory() {
   })
 
   createEffect(() => {
-    activeRoot()
+    `${graphView().scope}:${graphView().projectRoot ?? "all"}`
     setGraphSelectedID(undefined)
     setGraphQuery("")
     setGraphSearching(false)
-    setGraphZoom(1)
+    setGraphFocused(false)
+    setGraphViewport({ x: undefined, y: undefined, zoom: 1 })
+  })
+
+  createEffect(() => {
+    if (!baseOverview()) return
+    const normalized = graphView()
+    const stored = storedGraphView()
+    if (stored?.version === normalized.version && stored.scope === normalized.scope && stored.projectRoot === normalized.projectRoot && stored.showIsolates === normalized.showIsolates) return
+    setStoredGraphView(() => normalized)
   })
 
   createEffect(() => {
@@ -2161,29 +2109,48 @@ export function Memory() {
     setGraphSelectedID(frame.selectedID)
   })
 
-  createEffect(() => {
-    const session = chat()
-    if (session && session.root !== currentRoot()) setChat(null)
-  })
-
   async function reload(message = "Memory refreshed") {
-    await Promise.allSettled([refetchBase(), refetch(), refetchDreamSchedule()])
+    await Promise.allSettled([refetchBase(), refetch(), refetchGraph(), refetchDreamSchedule(), refetchAllProjectEntries()])
     toast.show(toastInput("success", message))
   }
 
+  function updateGraphView(patch: Partial<Omit<MemoryGraphViewPreference, "version">>) {
+    setStoredGraphView((value) => ({
+       ...normalizeMemoryGraphViewPreference(value, graphProjectOptions().map((option) => option.root), currentRoot()),
+      ...patch,
+       version: 2,
+    }))
+  }
+
   function selectGraphFact(id: string) {
-    const current = data()?.facts.find((fact) => fact.id === id)
+    const current = graphOverview()?.facts.find((fact) => fact.id === id)
     if (!current?.materialized) return
-    if (!graphFrame()?.scene.nodes.some((node) => node.id === id)) setGraphShowAll(true)
+    if (!graphFrame()?.scene.nodes.some((node) => node.id === id)) updateGraphView({ showIsolates: true })
     setGraphSelectedID(id)
+    const node = graphFrame()?.scene.nodes.find((item) => item.id === id)
+    if (node) setGraphViewport((value) => ({ ...value, x: node.x, y: node.y }))
     setGraphSearching(false)
+    setGraphFocused(true)
+  }
+
+  function panGraph(cells: { x: number; y: number }) {
+    const transform = graphFrame()?.transform
+    if (!transform) return
+    setGraphViewport((viewport) => memoryGraphPanViewport({ viewport, transform, cells }))
+  }
+
+  function leaveGraph(interrupt: boolean) {
+    setGraphSearching(false)
+    setGraphFocused(false)
+    if (interrupt) route.navigate(routeReturnTarget(route.data))
   }
 
   function cycleGraphProject(direction: 1 | -1) {
-    const options = graphProjectOptions()
+    const options = [null, ...graphProjectOptions()]
     if (!options.length) return
-    const current = Math.max(0, options.findIndex((option) => option.id === selectedWorkspaceID()))
-    setSelectedWorkspaceID(options[(current + direction + options.length) % options.length]?.id ?? null)
+    const current = graphView().scope === "all" ? 0 : Math.max(1, options.findIndex((option) => option?.id === graphSelectedProject()?.id))
+    const next = options[(current + direction + options.length) % options.length] ?? null
+    updateGraphView(next ? { scope: "project", projectRoot: next.root } : { scope: "all" })
   }
 
   function showGraphProjectPicker() {
@@ -2191,17 +2158,29 @@ export function Memory() {
       <DialogSelect
         title="Graph project"
         placeholder="Search project roots"
-        options={graphProjectOptions().map((option) => ({
-          title: option.label,
-          value: option.id ?? "__current__",
-          category: option.id === selectedWorkspaceID() ? "Active" : "Projects",
-          description: option.root,
-          searchText: `${option.label} ${option.root}`,
-          onSelect: () => {
-            dialog.clear()
-            setSelectedWorkspaceID(option.id)
+        options={[
+          {
+            title: "All projects",
+            value: "__all__",
+            category: graphView().scope === "all" ? "Active" : "Scope",
+            description: `Union of ${graphProjectOptions().length} registered projects`,
+            onSelect: () => {
+              dialog.clear()
+              updateGraphView({ scope: "all" })
+            },
           },
-        }))}
+          ...graphProjectOptions().map((option) => ({
+            title: option.label,
+            value: option.id,
+            category: graphSelectedProject()?.id === option.id ? "Active" : "Projects",
+            description: option.root,
+            searchText: `${option.label} ${option.root}`,
+            onSelect: () => {
+              dialog.clear()
+              updateGraphView({ scope: "project", projectRoot: option.root })
+            },
+          })),
+        ]}
       />
     ))
   }
@@ -2215,7 +2194,7 @@ export function Memory() {
       })
       dialog.clear()
       if (!next?.trim() || next.trim() === item.entry.text) return
-      await updateMemoryEntry(item.entry.scope, item.entry.id, { text: next.trim() }, activeRoot())
+      await updateMemoryEntry(item.entry.scope, item.entry.id, { text: next.trim() }, item.root)
       await reload("Memory entry updated")
       return
     }
@@ -2241,7 +2220,7 @@ export function Memory() {
     })
     dialog.clear()
     if (confirm !== "DELETE") return
-    await deleteMemoryEntry(item.entry.scope, item.entry.id, activeRoot())
+    await deleteMemoryEntry(item.entry.scope, item.entry.id, item.root)
     await reload("Memory entry deleted")
   }
 
@@ -2349,168 +2328,26 @@ export function Memory() {
   async function cycleSelectedPolicy() {
     const item = selection()
     if (item.kind !== "policy") return
-    await writeMemoryCategoryPolicy(policyScope(), item.category.id, { writePolicy: nextWritePolicy(item.policy.writePolicy) }, activeRoot())
+    const layer = data()?.policyLayers?.[item.category.id]
+    const current = policyScope() === "global" ? layer?.global.writePolicy : layer?.project.writePolicy
+    await writeMemoryCategoryPolicy(policyScope(), item.category.id, { writePolicy: nextWritePolicy(current ?? item.policy.writePolicy) }, activeRoot())
     await reload("Category write policy updated")
   }
 
   async function toggleSelectedPolicyPrompt() {
     const item = selection()
     if (item.kind !== "policy") return
-    await writeMemoryCategoryPolicy(policyScope(), item.category.id, { promptEnabled: !item.policy.promptEnabled }, activeRoot())
+    const layer = data()?.policyLayers?.[item.category.id]
+    const current = policyScope() === "global" ? layer?.global.promptEnabled : layer?.project.promptEnabled
+    await writeMemoryCategoryPolicy(policyScope(), item.category.id, { promptEnabled: !(current ?? item.policy.promptEnabled) }, activeRoot())
     await reload("Category prompt policy updated")
   }
 
-  async function submitSideChatMessage() {
-    const message = sideChatInput().trim()
-    if (!message || sideChatBusy()) {
-      setSideChatInputActive(true)
-      return
-    }
-    setSideChatBusy(true)
+  async function resetSelectedPolicy() {
     const item = selection()
-    const nextCategoryID = item.kind === "policy" ? item.category.id : item.kind === "entry" ? item.entry.categoryIDs[0] ?? null : null
-    const sessionRoot = currentRoot()
-    const existingSession = chat()
-    const session = existingSession?.root === sessionRoot
-      ? {
-        ...existingSession,
-        selectedWorkspaceID: selectedWorkspaceID(),
-        selectedCategoryID: nextCategoryID,
-      }
-      : await startMemorySideChat({
-        root: sessionRoot,
-        selectedWorkspaceID: selectedWorkspaceID(),
-        selectedCategoryID: nextCategoryID,
-      })
-    const now = new Date().toISOString()
-    setChat({
-      ...session,
-      status: "running",
-      history: [
-        ...session.history,
-        {
-          id: `ui_${Date.now()}`,
-          role: "user",
-          text: message,
-          createdAt: now,
-        },
-      ],
-    })
-    setSideChatScrollToken((value) => value + 1)
-    setSideChatInput("")
-    try {
-      const result = await sendMemorySideChatMessage({
-        session,
-        message,
-        pageContext: data()
-          ? memorySideChatPageContext({
-            data: data()!,
-            baseData: baseOverview(),
-            selection: item,
-            activeRoot: activeRoot(),
-            currentRoot: currentRoot(),
-            selectedWorkspace: selectedWorkspace(),
-            activeContext: activeContext(),
-            policyScope: policyScope(),
-          })
-          : activeContext(),
-        responder: (payload) => askMemorySideChat(sdk, sessionRoot, payload),
-      })
-      setChat(result.session)
-      setSideChatScrollToken((value) => value + 1)
-      void refetchChatSessions()
-      await reload(result.proposals.length ? "Side chat created proposal" : "Side chat updated")
-    } finally {
-      setSideChatBusy(false)
-      setSideChatInputActive(true)
-    }
-  }
-
-  function selectPendingProposal(index: number) {
-    setSideChatInputActive(false)
-    setSelectedIndex(index)
-  }
-
-  async function newSideChat() {
-    const item = selection()
-    const session = createMemorySideChatSession({
-      root: currentRoot(),
-      selectedWorkspaceID: selectedWorkspaceID(),
-      selectedCategoryID: item.kind === "policy"
-        ? item.category.id
-        : item.kind === "entry"
-          ? item.entry.categoryIDs[0] ?? null
-          : null,
-    })
-    setChat(session)
-    setSideChatInput("")
-    setSideChatInputActive(true)
-    setSideChatScrollToken((value) => value + 1)
-  }
-
-  function sessionTitle(session: MemorySideChatSession) {
-    const firstUser = session.history.find((message) => message.role === "user")?.text
-    return firstUser ? memoryPreviewText(firstUser, 42) : "Empty memory chat"
-  }
-
-  function sessionDescription(session: MemorySideChatSession) {
-    const last = session.history.at(-1)
-    const pieces = [
-      `${session.history.length} messages`,
-      session.proposals.length ? `${session.proposals.length} proposals` : "",
-      last ? `${last.role}: ${memoryPreviewText(last.text, 72)}` : "",
-    ].filter(Boolean)
-    return pieces.join(" · ")
-  }
-
-  function showSideChatHistory() {
-    const sessions = chatSessions() ?? []
-    const options: DialogSelectOption<string>[] = sessions.length
-      ? sessions.map((session) => ({
-        title: sessionTitle(session),
-        value: session.id,
-        category: formatDate(session.updatedAt),
-        description: sessionDescription(session),
-        searchText: `${session.id} ${session.root} ${session.history.map((message) => message.text).join(" ")}`,
-        onSelect: () => {
-          dialog.clear()
-          void readMemorySideChat(session.id, currentRoot()).then((loaded) => {
-            if (!loaded) {
-              toast.error("Memory chat history entry no longer exists")
-              return
-            }
-            setChat(loaded)
-            setSideChatInput("")
-            setSideChatInputActive(true)
-            setSideChatScrollToken((value) => value + 1)
-          }).catch((err) => toast.error(err))
-        },
-      }))
-      : [{
-        title: "No memory chats yet",
-        value: "",
-        description: "Start a new side chat, then it will appear here.",
-        disabled: true,
-      }]
-    dialog.replace(() => (
-      <DialogSelect
-        title="Memory chat history"
-        placeholder="Search memory chats"
-        options={[
-          {
-            title: "[new] Start new memory chat",
-            value: "__new__",
-            category: "Actions",
-            description: "Create a fresh side chat for this memory root.",
-            onSelect: () => {
-              dialog.clear()
-              void newSideChat().catch((err) => toast.error(err))
-            },
-          },
-          ...options,
-        ]}
-      />
-    ))
+    if (item.kind !== "policy") return
+    const result = await resetMemoryCategoryPolicy(policyScope(), item.category.id, activeRoot())
+    await reload(result.reset ? "Category override reset" : "Category already inherited")
   }
 
   function moveTab(direction: 1 | -1) {
@@ -2519,16 +2356,33 @@ export function Memory() {
     if (next) {
       setTab(next.id)
       setSelectedIndex(0)
+      setDreamDetailOpen(false)
+      setGraphFocused(false)
     }
   }
 
+  function selectMemoryScope(scope: MemoryScopeFilter) {
+    setMemoryScope(scope)
+    setSelectedIndex(0)
+    setTab("memories")
+  }
+
   useKeyboard((evt) => {
+    const graphEmergency = tab() === "graph" && (evt.name === "escape" || (evt.ctrl && evt.name === "c"))
     if (!shouldMemoryRouteHandleKey({
       dialogOpen: dialog.stack.length > 0,
       defaultPrevented: evt.defaultPrevented,
-      textInputActive: sideChatInputActive(),
+      emergency: graphEmergency,
     })) return
     if (tab() === "graph") {
+      if (evt.ctrl && evt.name === "c") {
+        evt.preventDefault()
+        evt.stopPropagation()
+        setGraphSearching(false)
+        setGraphFocused(false)
+        route.navigate(routeReturnTarget(route.data))
+        return
+      }
       if (graphSearching()) {
         if (evt.name === "escape") {
           evt.preventDefault()
@@ -2563,19 +2417,24 @@ export function Memory() {
         showGraphProjectPicker()
         return
       }
+      if (evt.name === "a") {
+        evt.preventDefault()
+        updateGraphView({ scope: "all" })
+        return
+      }
       if (evt.name === "i") {
         evt.preventDefault()
-        setGraphShowAll((value) => !value)
+        updateGraphView({ showIsolates: !graphView().showIsolates })
         return
       }
       if (evt.name === "+" || evt.name === "=") {
         evt.preventDefault()
-        setGraphZoom((value) => Math.min(4, Number((value * 1.25).toFixed(2))))
+        setGraphViewport((value) => ({ ...value, zoom: Math.min(4, Number((value.zoom * 1.25).toFixed(2))) }))
         return
       }
       if (evt.name === "-") {
         evt.preventDefault()
-        setGraphZoom((value) => Math.max(0.4, Number((value / 1.25).toFixed(2))))
+        setGraphViewport((value) => ({ ...value, zoom: Math.max(0.4, Number((value.zoom / 1.25).toFixed(2))) }))
         return
       }
       if (evt.name === "[") {
@@ -2593,21 +2452,35 @@ export function Memory() {
         void reload("Memory graph refreshed").catch((err) => toast.error(err))
         return
       }
-      const direction = evt.name === "left" || evt.name === "h"
-        ? { x: -1, y: 0 }
-        : evt.name === "right" || evt.name === "l"
-          ? { x: 1, y: 0 }
-          : evt.name === "up" || evt.name === "k"
-            ? { x: 0, y: -1 }
-            : evt.name === "down" || evt.name === "j"
-              ? { x: 0, y: 1 }
-              : null
-      if (direction) {
+      if (evt.name === "return" && !graphFocused()) {
         evt.preventDefault()
-        const frame = graphFrame()
-        if (frame) setGraphSelectedID(asciiGraphNearestNode(frame.scene, graphSelectedID(), direction))
+        setGraphFocused(true)
         return
       }
+      if (evt.name === "escape" && graphFocused()) {
+        evt.preventDefault()
+        setGraphFocused(false)
+        return
+      }
+      const panDirection = memoryGraphPanDirection(evt.name)
+      if (panDirection && graphFocused()) {
+        evt.preventDefault()
+        panGraph({ x: panDirection.x * 4, y: panDirection.y * 2 })
+        return
+      }
+      const direction = memoryGraphNavigationDirection({ name: evt.name })
+      if (direction && graphFocused()) {
+        evt.preventDefault()
+        const frame = graphFrame()
+        const next = frame ? asciiGraphNearestNode(frame.scene, graphSelectedID(), direction) : undefined
+        if (next) selectGraphFact(next)
+        return
+      }
+    }
+    if (tab() === "dream" && dreamDetailOpen() && (evt.name === "escape" || evt.name === "q")) {
+      evt.preventDefault()
+      setDreamDetailOpen(false)
+      return
     }
     if (evt.name === "escape" || evt.name === "q") {
       evt.preventDefault()
@@ -2634,6 +2507,12 @@ export function Memory() {
       setSelectedIndex(Math.max(0, selectedIndex() - 1))
       return
     }
+    const selected = selection()
+    if (evt.name === "return" && tab() === "dream" && selected.kind === "dream" && selected.detail) {
+      evt.preventDefault()
+      setDreamDetailOpen(true)
+      return
+    }
     const tabNumber = Number(evt.name)
     if (Number.isInteger(tabNumber) && tabNumber >= 1 && tabNumber <= TABS.length) {
       evt.preventDefault()
@@ -2644,6 +2523,11 @@ export function Memory() {
     if (evt.name === "e") {
       evt.preventDefault()
       void editSelection().catch((err) => toast.error(err))
+      return
+    }
+    if (evt.name === "v") {
+      evt.preventDefault()
+      command.trigger("mendcode.memory.status")
       return
     }
     if (evt.name === "delete" || evt.name === "backspace") {
@@ -2658,6 +2542,10 @@ export function Memory() {
     }
     if (evt.name === "x") {
       evt.preventDefault()
+      if (tab() === "rules") {
+        void resetSelectedPolicy().catch((err) => toast.error(err))
+        return
+      }
       void rejectSelectedProposal().catch((err) => toast.error(err))
       return
     }
@@ -2671,14 +2559,10 @@ export function Memory() {
       void toggleSelectedPolicyPrompt().catch((err) => toast.error(err))
       return
     }
-    if (evt.name === "g") {
+    if (evt.name === "s" && tab() === "rules") {
       evt.preventDefault()
       setPolicyScope(policyScope() === "project" ? "global" : "project")
       return
-    }
-    if (evt.name === "c") {
-      evt.preventDefault()
-      setSideChatInputActive(true)
     }
   })
 
@@ -2690,93 +2574,173 @@ export function Memory() {
     const unsubscribe = sdk.event.on("event", (event) => {
       const type = String(event.payload.type)
       if (type !== "memory.workspace" && type !== "memory.dream") return
-      if (event.directory && event.directory !== activeRoot() && event.directory !== currentRoot()) return
+      if (event.directory && graphView().scope !== "all" && event.directory !== activeRoot() && event.directory !== currentRoot() && event.directory !== graphActiveRoot()) return
       setLive(true)
-      void Promise.allSettled([refetchBase(), refetch(), refetchDreamSchedule()])
+      void Promise.allSettled([refetchBase(), refetch(), refetchGraph(), refetchDreamSchedule()])
     })
     onCleanup(() => {
       void unsubscribe?.()
     })
   })
 
-  const renderMain = (current: MemoryOverview) => (
+  const renderMain = (current: MemoryOverview, availableWidth = contentWidth()) => (
     <Switch>
-      <Match when={tab() === "overview"}>
-        <OverviewContent
-          data={current}
-          pending={pending()}
-          selectedIndex={selectedIndex()}
-          width={contentWidth()}
-          stacked={!medium()}
-          onSelectProposal={selectPendingProposal}
-        />
-      </Match>
-      <Match when={tab() === "project"}>
-        <Panel title="Project memories" grow>
-          <EntryRows entries={projectEntries()} selectedIndex={selectedIndex()} width={contentWidth()} onSelect={setSelectedIndex} />
-        </Panel>
-      </Match>
-      <Match when={tab() === "global"}>
-        <Panel title="Global memories" grow>
-          <EntryRows entries={globalEntries()} selectedIndex={selectedIndex()} width={contentWidth()} onSelect={setSelectedIndex} />
+      <Match when={tab() === "memories"}>
+        <Panel title={memoryScopeTitle(memoryScope(), projectLabelForRoot(activeRoot()))} grow>
+          <EntryRows entries={memoryEntries()} selectedIndex={selectedIndex()} width={Math.max(30, availableWidth - 4)} limit={memoryRowLimit()} showProject={memoryScope() === "all"} onSelect={setSelectedIndex} />
         </Panel>
       </Match>
       <Match when={tab() === "graph"}>
-        <Show when={graphFrame()}>
-          {(frame) => (
-            <MemoryGraphExplorer
-              data={current}
-              frame={frame()}
-              width={contentWidth()}
-              height={Math.max(12, dimensions().height - 8)}
-              canvasWidth={graphLayout().canvasWidth}
-              selectedID={graphSelectedID()}
-              activeRoot={activeRoot()}
-              activeLabel={graphActiveLabel()}
-              projectPosition={graphProjectPosition()}
-              workspaces={graphWorkspaces()}
-              showAll={graphShowAll()}
-              zoom={graphZoom()}
-              searching={graphSearching()}
-              query={graphQuery()}
-              searchMatches={graphSearchMatches()}
-              onSelect={selectGraphFact}
-              onPreviousProject={() => cycleGraphProject(-1)}
-              onNextProject={() => cycleGraphProject(1)}
-              onChooseProject={showGraphProjectPicker}
-              onToggleAll={() => setGraphShowAll((value) => !value)}
-              onBeginSearch={() => {
-                setGraphQuery("")
-                setGraphSearching(true)
-              }}
-              onRefresh={() => void reload("Memory graph refreshed").catch((err) => toast.error(err))}
-            />
-          )}
+        <Show when={graphFrame() && graphOverview()} fallback={<LoadingMemory tiny={tiny()} />}>
+          <MemoryGraphExplorer
+            data={graphOverview()!}
+            frame={graphFrame()!}
+            width={availableWidth}
+            height={Math.max(12, dimensions().height - 10)}
+            canvasWidth={graphLayout().canvasWidth}
+            selectedID={graphSelectedID()}
+            activeRoot={graphActiveRoot()}
+            activeLabel={graphActiveLabel()}
+            projectPosition={graphProjectPosition()}
+            workspaces={graphWorkspaceSelection()}
+            showAll={graphView().showIsolates}
+            zoom={graphViewport().zoom}
+            focused={graphFocused()}
+            searching={graphSearching()}
+            query={graphQuery()}
+            searchMatches={graphSearchMatches()}
+            onSelect={selectGraphFact}
+            onFocus={() => setGraphFocused(true)}
+            onEmergencyExit={leaveGraph}
+            onPan={panGraph}
+            onPreviousProject={() => cycleGraphProject(-1)}
+            onNextProject={() => cycleGraphProject(1)}
+            onChooseProject={showGraphProjectPicker}
+            onToggleAll={() => updateGraphView({ showIsolates: !graphView().showIsolates })}
+            onBeginSearch={() => {
+              setGraphQuery("")
+              setGraphSearching(true)
+            }}
+            onRefresh={() => void reload("Memory graph refreshed").catch((err) => toast.error(err))}
+          />
         </Show>
       </Match>
-      <Match when={tab() === "policy"}>
-        <Panel title="Policy & categories" grow>
-          <PolicyRows data={current} selectedIndex={selectedIndex()} width={contentWidth()} policyScope={policyScope()} onSelect={setSelectedIndex} />
-        </Panel>
+      <Match when={tab() === "rules"}>
+        <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
+          <Panel title="Rules & categories" grow>
+            <PolicyRows data={current} selectedIndex={selectedIndex()} width={Math.max(30, availableWidth - 4)} policyScope={policyScope()} limit={policyRowLimit()} onSelect={setSelectedIndex} />
+          </Panel>
+          <box height={inspectorHeight()} minHeight={0}>
+            <Inspector selection={selection()} width={Math.max(30, availableWidth - 4)} policyScope={policyScope()} />
+          </box>
+        </box>
       </Match>
       <Match when={tab() === "dream"}>
-        <DreamContent data={current} schedule={dreamSchedule()} width={contentWidth()} selectedIndex={selectedIndex()} onSelectRun={setSelectedIndex} />
+        <Show
+          when={dreamDetailOpen() && selectedDreamDetail()}
+          fallback={<DreamContent data={current} schedule={dreamSchedule()} width={availableWidth} selectedIndex={selectedIndex()} limit={dreamRunRowLimit()} onSelectRun={setSelectedIndex} />}
+        >
+          <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
+            <box height={1} overflow="hidden">
+              <text fg={theme.primary} wrapMode="none" onMouseUp={() => setDreamDetailOpen(false)}>Dream runs / {selectedDreamDetail()?.run.id ?? "run"} · Esc back</text>
+            </box>
+            <Panel title={`Dream run · ${dreamRunStatusLabel(selectedDreamDetail()!.run.status)}`} grow>
+            <DreamRunDetailContent
+                detail={selectedDreamDetail()!}
+                width={availableWidth - 4}
+                onApplyGraphProposal={(runID, proposalID) => void applySelectedGraphProposal(runID, proposalID).catch((err) => toast.error(err))}
+                onRejectGraphProposal={(runID, proposalID) => void rejectSelectedGraphProposal(runID, proposalID).catch((err) => toast.error(err))}
+              />
+            </Panel>
+          </box>
+        </Show>
       </Match>
     </Switch>
   )
 
   return (
-    <box flexDirection="column" width="100%" height="100%" paddingLeft={2} paddingRight={2} paddingTop={1} paddingBottom={1} gap={1}>
-      <Header root={activeRoot()} tab={tab()} narrow={width() < 118} live={live()} />
+    <box flexDirection="column" width="100%" height="100%" paddingLeft={deck().wide ? 0 : 2} paddingRight={deck().wide ? 0 : 2} paddingTop={1} paddingBottom={1} gap={deck().wide ? 0 : 1}>
+      <Show when={deck().wide}>
+        <Show when={data()} fallback={<LoadingMemory tiny={false} />}>
+          {(current) => (
+            <CommandDeck
+              page="memory"
+              subtitle={() => `${tab()} · ${activeContext()}`}
+              status={() => overview.error ? "ERROR" : live() ? "LIVE" : "PAUSED"}
+               summary={() => `${current().facts.length} facts · ${pending().length} pending · ${graphOverview()?.links.length ?? 0} edges`}
+                footer={() => {
+                  const compact = width() < 120
+                  if (tab() === "graph") {
+                    return compact
+                      ? "Arrows Pan · HJKL Select · P Project · / Find · +/- Zoom · R Refresh · Esc/Q Back"
+                      : "Arrows Pan · HJKL Select · Enter Focus · P Project · [/] Cycle · +/- Zoom · / Find · I Isolates · V Review · R Refresh · Esc/Q Back"
+                  }
+                  return compact
+                    ? "↑↓/JK Select · ←→/HL Tabs · 1-4 Tabs · P Policy · V Review · R Refresh · Q Back"
+                    : "↑↓/JK Select · ←→/HL Tabs · 1-4 Tabs · Enter Open · E Edit · A Apply · X Reject · P Policy · O Prompt · V Review · R Refresh · Q Back"
+                }}
+               rail={
+
+                <Sidebar
+                  data={baseOverview() ?? current()}
+                  currentRoot={currentRoot()}
+                  activeRoot={activeRoot()}
+                  selectedWorkspaceID={selectedWorkspaceID()}
+                  scope={memoryScope()}
+                  width={Math.max(22, deck().railWidth - 2)}
+                  height="100%"
+                  onSelectWorkspace={(id) => {
+                    setSelectedWorkspaceID(id)
+                    setSelectedIndex(0)
+                    selectMemoryScope("current")
+                  }}
+                  onScope={selectMemoryScope}
+                />
+               }
+
+            >
+              <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
+                <TabBar tab={tab()} width={deck().contentWidth} onSelect={(next) => {
+                  setTab(next)
+                  setSelectedIndex(0)
+                  setDreamDetailOpen(false)
+                  setGraphFocused(false)
+                }} />
+                <box flexGrow={1} minHeight={0}>
+                  {renderMain(current(), deck().contentWidth)}
+                </box>
+                <Show when={tab() === "memories"}>
+                  <box height={inspectorHeight()} minHeight={0}>
+                    <Inspector
+                      selection={selection()}
+                      width={Math.max(32, deck().contentWidth - 4)}
+                      policyScope={policyScope()}
+                      onApplyProposal={() => void applySelectedProposal().catch((err) => toast.error(err))}
+                      onRejectProposal={() => void rejectSelectedProposal().catch((err) => toast.error(err))}
+                      onApplyGraphProposal={(runID, proposalID) => void applySelectedGraphProposal(runID, proposalID).catch((err) => toast.error(err))}
+                      onRejectGraphProposal={(runID, proposalID) => void rejectSelectedGraphProposal(runID, proposalID).catch((err) => toast.error(err))}
+                      onEditSelection={() => void editSelection().catch((err) => toast.error(err))}
+                    />
+                  </box>
+                </Show>
+              </box>
+            </CommandDeck>
+          )}
+        </Show>
+      </Show>
+      <Show when={!deck().wide}>
+      <Header root={tab() === "graph" ? graphActiveRoot() : activeRoot()} tab={tab()} narrow={width() < 118} live={live()} pending={pending().length} onReview={() => command.trigger("mendcode.memory.status")} />
       <Show when={data()} fallback={<LoadingMemory tiny={tiny()} />}>
         {(current) => (
           <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
             <TabBar tab={tab()} width={contentWidth()} onSelect={(next) => {
               setTab(next)
               setSelectedIndex(0)
+              setDreamDetailOpen(false)
+              setGraphFocused(false)
             }} />
             <Switch>
-              <Match when={tab() === "graph"}>
+              <Match when={tab() === "graph" || tab() === "dream" || tab() === "rules"}>
                 {renderMain(current())}
               </Match>
               <Match when={wide()}>
@@ -2786,16 +2750,14 @@ export function Memory() {
                     currentRoot={currentRoot()}
                     activeRoot={activeRoot()}
                     selectedWorkspaceID={selectedWorkspaceID()}
+                    scope={memoryScope()}
                     width={sidebarWidth()}
                     onSelectWorkspace={(id) => {
                       setSelectedWorkspaceID(id)
                       setSelectedIndex(0)
-                      setTab("project")
+                      selectMemoryScope("current")
                     }}
-                    onTab={(next) => {
-                      setTab(next)
-                      setSelectedIndex(0)
-                    }}
+                    onScope={selectMemoryScope}
                   />
                   <box flexDirection="column" minWidth={0} minHeight={0} flexGrow={1} gap={1}>
                     <box flexGrow={1} minHeight={0}>
@@ -2814,25 +2776,7 @@ export function Memory() {
                       />
                     </box>
                   </box>
-                  <SideChatPanel
-                    chat={chat()}
-                    width={sideChatWidth()}
-                    activeContext={activeContext()}
-                    input={sideChatInput()}
-                    inputActive={sideChatInputActive()}
-                    busy={sideChatBusy()}
-                    scrollToken={sideChatScrollToken()}
-                    chatCount={chatSessions()?.length ?? 0}
-                    onNewChat={() => void newSideChat().catch((err) => toast.error(err))}
-                    onHistory={showSideChatHistory}
-                    onInput={setSideChatInput}
-                    onInputActive={setSideChatInputActive}
-                    onSubmit={() => void submitSideChatMessage().catch((err) => {
-                        setSideChatBusy(false)
-                        toast.error(err)
-                      })}
-                  />
-                </box>
+                 </box>
               </Match>
               <Match when={medium()}>
                 <box flexDirection="row" minHeight={0} flexGrow={1} gap={1}>
@@ -2841,16 +2785,14 @@ export function Memory() {
                     currentRoot={currentRoot()}
                     activeRoot={activeRoot()}
                     selectedWorkspaceID={selectedWorkspaceID()}
+                    scope={memoryScope()}
                     width={sidebarWidth()}
                     onSelectWorkspace={(id) => {
                       setSelectedWorkspaceID(id)
                       setSelectedIndex(0)
-                      setTab("project")
+                      selectMemoryScope("current")
                     }}
-                    onTab={(next) => {
-                      setTab(next)
-                      setSelectedIndex(0)
-                    }}
+                    onScope={selectMemoryScope}
                   />
                   <box flexDirection="column" minWidth={0} minHeight={0} flexGrow={1} gap={1}>
                     {renderMain(current())}
@@ -2888,17 +2830,15 @@ export function Memory() {
                       currentRoot={currentRoot()}
                       activeRoot={activeRoot()}
                       selectedWorkspaceID={selectedWorkspaceID()}
+                      scope={memoryScope()}
                       width={contentWidth()}
                       height={tiny() ? 7 : 9}
                       onSelectWorkspace={(id) => {
                         setSelectedWorkspaceID(id)
                         setSelectedIndex(0)
-                        setTab("project")
+                        selectMemoryScope("current")
                       }}
-                      onTab={(next) => {
-                        setTab(next)
-                        setSelectedIndex(0)
-                      }}
+                      onScope={selectMemoryScope}
                     />
                     <box height={tiny() ? 22 : 26} minHeight={0}>
                       {renderMain(current())}
@@ -2915,32 +2855,13 @@ export function Memory() {
                         onEditSelection={() => void editSelection().catch((err) => toast.error(err))}
                       />
                     </box>
-                    <box height={tiny() ? 24 : 28} minHeight={0}>
-                      <SideChatPanel
-                        chat={chat()}
-                        width={contentWidth()}
-                        activeContext={activeContext()}
-                        input={sideChatInput()}
-                        inputActive={sideChatInputActive()}
-                        busy={sideChatBusy()}
-                        scrollToken={sideChatScrollToken()}
-                        chatCount={chatSessions()?.length ?? 0}
-                        onNewChat={() => void newSideChat().catch((err) => toast.error(err))}
-                        onHistory={showSideChatHistory}
-                        onInput={setSideChatInput}
-                        onInputActive={setSideChatInputActive}
-                        onSubmit={() => void submitSideChatMessage().catch((err) => {
-                          setSideChatBusy(false)
-                          toast.error(err)
-                        })}
-                      />
-                    </box>
                   </box>
                 </scrollbox>
               </Match>
             </Switch>
           </box>
         )}
+      </Show>
       </Show>
       <Show when={overview.error}>
         <text fg={theme.error} wrapMode="none">

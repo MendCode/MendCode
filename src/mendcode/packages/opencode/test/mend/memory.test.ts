@@ -5,20 +5,20 @@ import { mkdir, rm, writeFile } from "fs/promises"
 import { tmpdir as osTmpdir } from "os"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
-import { appendMemoryEntry, deleteMemoryEntry, memoryStatus, readMemoryEntries, updateMemoryEntry } from "../../src/mend/memory/store"
+import { appendMemoryEntry, archiveMemoryEntries, deleteMemoryEntry, memoryStatus, readArchivedMemoryEntries, readMemoryEntries, restoreArchivedMemoryEntries, updateMemoryEntry } from "../../src/mend/memory/store"
 import { retrieveMemory } from "../../src/mend/memory/retrieve"
 import { memoryPaths, readGlobalMemoryConfig, readMemoryConfig, resolveProjectMemoryRoot, writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../../src/mend/memory/config"
 import { applyMemoryProposal, autoProposeMemoriesFromSession, extractorPrompt, importCodexMemories, listMemoryProposals, memoryExtractorCandidateMessage, memoryExtractorFailureReason, proposeMemoriesFromExtractorText, proposeMemoriesWithExtractor, proposeMemory, readMemoryExtractorContext, rejectMemoryProposal, updateMemoryProposal } from "../../src/mend/memory/proposals"
-import { DEFAULT_MEMORY_CATEGORIES, inferMemoryCategoryIDs, normalizeMemoryCategoryPolicies, readMemoryCategoryPolicies, scopeReasonForMemory, writeMemoryCategoryPolicy } from "../../src/mend/memory/categories"
-import { readMemoryFacts, readMemoryGraph, repairMemoryGraph, upsertMemoryFact, upsertMemoryFactLink, validateMemoryGraph } from "../../src/mend/memory/graph"
+import { DEFAULT_MEMORY_CATEGORIES, inferMemoryCategoryIDs, normalizeMemoryCategoryPolicies, readMemoryCategoryPolicies, readMemoryCategoryPolicyLayers, resetMemoryCategoryPolicy, scopeReasonForMemory, writeMemoryCategoryPolicy } from "../../src/mend/memory/categories"
+import { materializeLegacyMemoryFacts, readMemoryFacts, readMemoryGraph, repairMemoryGraph, upsertMemoryFact, upsertMemoryFactLink, validateMemoryGraph } from "../../src/mend/memory/graph"
 import { registerMemoryWorkspace, memoryWorkspaceOverview, writeWorkspaceRegistry } from "../../src/mend/memory/workspaces"
 import { allowedDreamGitCommands, collectDreamFileEvidence, isDreamFileAllowed } from "../../src/mend/memory/dream-sources"
-import { applyDreamGraphProposal, latestDreamStatus, readDreamRunDetail, readDreamRuns, rejectDreamGraphProposal, runMemoryDream, type DreamGraphProposal } from "../../src/mend/memory/dream"
+import { applyDreamGraphProposal, latestDreamStatus, parseDreamCandidates, readDreamRunDetail, readDreamRuns, rejectDreamGraphProposal, resolveMemoryDreamRole, runMemoryDream, type DreamGraphProposal } from "../../src/mend/memory/dream"
 import { listMemorySessionDigests, writeMemorySessionDigestFromSession } from "../../src/mend/memory/session-digests"
-import { parseDreamConsolidationOutput, readDreamConsolidationRun } from "../../src/mend/memory/dream-consolidation"
+import { cleanupGeneratedMemoryEntries, deterministicDreamConsolidator, isMemoryMaintenanceInstruction, parseDreamConsolidationOutput, readDreamConsolidationRun } from "../../src/mend/memory/dream-consolidation"
 import { dreamScheduleWindowFromText, evaluateDreamSchedule, readDreamScheduleState, runGlobalDreamSchedulerTick, runScheduledMemoryDream } from "../../src/mend/memory/dream-scheduler"
 import { listMemorySideChats, memoryAssistantFailureReason, parseMemorySideChatResponse, resolveMemoryAssistantRole, resolveMemoryAssistantRuntimeRole, sendMemorySideChatMessage, startMemorySideChat } from "../../src/mend/memory/side-chat"
-import { memoryOverview } from "../../src/mend/memory/overview"
+import { memoryGraphOverview, memoryOverview } from "../../src/mend/memory/overview"
 import { GlobalBus } from "../../src/bus/global"
 import { writeModelsConfig } from "../../src/mend/config/models"
 import { dreamServicePlan } from "../../src/mend/runtime/dream-service"
@@ -52,7 +52,10 @@ describe("mend memory", () => {
     expect(config.generate).toBe(false)
     expect(config.memoryWritePolicy).toBe("pending")
     expect(config.dreamWritePolicy).toBe("pending")
+    expect(config.dreamConsolidationPolicy).toBe("auto-consolidate")
     expect(config.dreamAutoApplyMinConfidence).toBe(0.9)
+    expect(config.dreamGraphAutoApplyMinConfidence).toBe(0.75)
+    expect(config.dreamGraphAutoApplyMinDurability).toBe(0.7)
     expect(status.input).toBe(false)
     expect(status.output).toBe(false)
     expect(status.promptModeIndependent).toBe(true)
@@ -75,6 +78,8 @@ describe("mend memory", () => {
       dreamWritePolicy: "disabled",
       dreamAutoApplyMinConfidence: 0.95,
       dreamAutoApplyMinDurability: 0.9,
+      dreamGraphAutoApplyMinConfidence: 0.8,
+      dreamGraphAutoApplyMinDurability: 0.72,
       dreamAutoApplyMaxChangeRisk: 0.1,
       dreamAutoApplyAllowedCategories: ["memory.policy"],
       dreamAutoApplyBlockedSensitivity: ["high"],
@@ -91,9 +96,53 @@ describe("mend memory", () => {
     expect(config.dreamWritePolicy).toBe("disabled")
     expect(config.dreamAutoApplyMinConfidence).toBe(0.95)
     expect(config.dreamAutoApplyMinDurability).toBe(0.9)
+    expect(config.dreamGraphAutoApplyMinConfidence).toBe(0.8)
+    expect(config.dreamGraphAutoApplyMinDurability).toBe(0.72)
     expect(config.dreamAutoApplyMaxChangeRisk).toBe(0.1)
     expect(config.dreamAutoApplyAllowedCategories).toEqual(["memory.policy"])
     expect(config.dreamAutoApplyBlockedSensitivity).toEqual(["high"])
+  })
+
+  test("parses Dream model candidates from strict JSON and fenced output", () => {
+    const candidates = parseDreamCandidates(`\`\`\`json
+{"candidates":[{"text":"Keep Dream runs auditable.","reason":"Durable memory policy","confidence":0.95,"durability":0.9,"changeRisk":0.1,"categoryIDs":["memory.policy"],"scope":"global","evidenceRefs":["file:AGENTS.md"],"recommendedDisposition":"pending"}]}
+\`\`\``)
+
+    expect(candidates).toEqual([{
+      text: "Keep Dream runs auditable.",
+      reason: "Durable memory policy",
+      confidence: 0.95,
+      durability: 0.9,
+      changeRisk: 0.1,
+      categoryIDs: ["memory.policy"],
+      scope: "global",
+      evidenceRefs: ["file:AGENTS.md"],
+      recommendedDisposition: "pending",
+    }])
+  })
+
+  test("Dream resolves the configured memoryDream role instead of silently skipping the model", async () => {
+    await using dir = await tmpdir()
+    await writeProjectMemoryConfig({ memoryDreamRole: "memoryDream" }, dir.path)
+    await writeModelsConfig({
+      version: 0,
+      enabled: true,
+      roles: {
+        memoryDream: {
+          providerID: "openai",
+          modelID: "gpt-5.6-sol",
+          authMode: "provider-oauth-or-token",
+        },
+      },
+    }, dir.path)
+
+    expect(await resolveMemoryDreamRole(dir.path)).toEqual({
+      ok: true,
+      roleName: "memoryDream",
+      providerID: "openai",
+      modelID: "gpt-5.6-sol",
+      authMode: "provider-oauth-or-token",
+    })
   })
 
   test("normalizes legacy Dream window times and rejects invalid ranges", async () => {
@@ -934,11 +983,25 @@ describe("mend memory", () => {
 
     const policies = await readMemoryCategoryPolicies(dir.path)
     const overview = await memoryOverview(dir.path)
+    const layers = await readMemoryCategoryPolicyLayers(dir.path)
 
     expect(policies["project.commands"]?.writePolicy).toBe("manual-only")
     expect(policies["project.commands"]?.promptEnabled).toBe(false)
     expect(policies["project.commands"]?.promptPriority).toBe(7)
     expect(overview.policies["project.commands"]?.writePolicy).toBe("manual-only")
+    expect(layers["project.commands"]).toMatchObject({
+      default: { writePolicy: "pending" },
+      global: { writePolicy: "auto-apply-safe", promptPriority: 7 },
+      project: { writePolicy: "manual-only", promptEnabled: false, promptPriority: 7 },
+      effective: { writePolicy: "manual-only", promptEnabled: false, promptPriority: 7 },
+      globalOverridden: true,
+      projectOverridden: true,
+    })
+    expect((await resetMemoryCategoryPolicy("project", "project.commands", dir.path)).reset).toBe(true)
+    expect((await readMemoryCategoryPolicyLayers(dir.path))["project.commands"]).toMatchObject({
+      project: { writePolicy: "auto-apply-safe", promptEnabled: true, promptPriority: 7 },
+      projectOverridden: false,
+    })
   })
 
   test("proposal records category, scope reason, and can demote project facts from global", async () => {
@@ -1001,6 +1064,130 @@ describe("mend memory", () => {
     expect(validation.health.connectedFacts).toBe(2)
     expect(overview.graphHealth.graphHealth).toBe("connected")
     expect(repaired.facts).toBeGreaterThan(0)
+  })
+
+  test("graph overview unions projects, deduplicates global facts, and preserves isolates", async () => {
+    await using firstRoot = await tmpdir()
+    await using secondRoot = await tmpdir()
+    const shared = {
+      id: "shared_global_fact",
+      scope: "global" as const,
+      text: "A global memory fact appears once across every project graph.",
+      categoryIDs: ["memory.policy"],
+      confidence: 0.95,
+    }
+    const first = await upsertMemoryFact({ id: "project_fact", text: "First project graph fact remains isolated.", categoryIDs: ["project.architecture"] }, firstRoot.path)
+    const second = await upsertMemoryFact({ id: "project_fact", text: "Second project graph fact keeps a root-safe visual id.", categoryIDs: ["project.architecture"] }, secondRoot.path)
+    await upsertMemoryFact(shared, firstRoot.path)
+    await upsertMemoryFact(shared, secondRoot.path)
+
+    const overview = await memoryGraphOverview([
+      { id: "ws_first", root: firstRoot.path, displayName: "First" },
+      { id: "ws_second", root: secondRoot.path, displayName: "Second" },
+    ])
+
+    expect(overview.workspaces).toHaveLength(2)
+    expect(overview.facts.filter((fact) => fact.factID === shared.id)).toHaveLength(1)
+    expect(overview.facts.map((fact) => fact.id)).toEqual(expect.arrayContaining([`ws_first:${first.id}`, `ws_second:${second.id}`, `global:${shared.id}`]))
+    expect(overview.graphHealth.isolatedFacts).toBe(3)
+    expect(overview.materializedFactCount).toBe(3)
+  })
+
+  test("graph materialization brings legacy global and project memories into the shared graph", async () => {
+    await using dir = await tmpdir()
+    const global = await appendMemoryEntry({ scope: "global", text: "The user prefers concise memory explanations.", categoryIDs: ["user.preferences"] }, dir.path)
+    const project = await appendMemoryEntry({ scope: "project", text: "This project keeps memory graph explanations concise.", categoryIDs: ["memory.policy"], cwd: dir.path }, dir.path)
+
+    const first = await materializeLegacyMemoryFacts(dir.path)
+    const second = await materializeLegacyMemoryFacts(dir.path)
+
+    expect(first.added).toBe(2)
+    expect(second.added).toBe(0)
+    expect(first.graph.facts.map((fact) => fact.legacyEntryID)).toEqual(expect.arrayContaining([global.id, project.id]))
+    expect(first.graph.facts.filter((fact) => fact.legacyMaterialized)).toHaveLength(2)
+    expect(second.changed).toBe(false)
+  })
+
+  test("graph materialization preserves explicit entry categories instead of re-inferring volatile noise", async () => {
+    await using dir = await tmpdir()
+    const entry = await appendMemoryEntry({
+      scope: "project",
+      text: "The runtime status contract is covered by focused tests.",
+      categoryIDs: ["project.commands"],
+      cwd: dir.path,
+    }, dir.path)
+
+    const materialized = await materializeLegacyMemoryFacts(dir.path)
+    const fact = materialized.graph.facts.find((item) => item.legacyEntryID === entry.id)
+
+    expect(fact?.categoryIDs).toEqual(["project.commands"])
+    expect(fact?.categoryIDs).not.toContain("volatile.reject")
+  })
+
+  test("graph overview hides stale and explicitly volatile facts without deleting them", async () => {
+    await using dir = await tmpdir()
+    const visible = await upsertMemoryFact({ text: "Durable architecture fact.", categoryIDs: ["project.architecture"] }, dir.path)
+    const volatile = await upsertMemoryFact({ text: "Fast-changing fact.", categoryIDs: ["volatile.reject"] }, dir.path)
+    const stale = await upsertMemoryFact({ text: "Obsolete architecture fact.", categoryIDs: ["project.architecture"], stale: true }, dir.path)
+
+    const overview = await memoryGraphOverview([{ id: "current", root: dir.path, displayName: "Current" }])
+
+    expect(overview.facts.map((fact) => fact.factID)).toContain(visible.id)
+    expect(overview.facts.map((fact) => fact.factID)).not.toContain(volatile.id)
+    expect(overview.facts.map((fact) => fact.factID)).not.toContain(stale.id)
+    expect((await readMemoryGraph(dir.path)).facts.map((fact) => fact.id)).toEqual(expect.arrayContaining([visible.id, volatile.id, stale.id]))
+  })
+
+  test("memory archival removes active duplicates while preserving a reversible record", async () => {
+    await using dir = await tmpdir()
+    const first = await appendMemoryEntry({ scope: "global", text: "Keep the canonical global memory policy.", source: "memory-tool" }, dir.path)
+    const second = await appendMemoryEntry({ scope: "global", text: "Keep the duplicate global memory policy.", source: "memory-dream" }, dir.path)
+
+    const archived = await archiveMemoryEntries("global", [{ id: second.id, reason: "Duplicate of canonical memory.", canonicalEntryID: first.id }], dir.path)
+
+    expect(archived.archived).toHaveLength(1)
+    expect((await readMemoryEntries("global", dir.path)).map((entry) => entry.id)).toEqual([first.id])
+    expect(await readArchivedMemoryEntries("global", dir.path)).toEqual([
+      expect.objectContaining({ id: second.id, archiveReason: "Duplicate of canonical memory.", canonicalEntryID: first.id }),
+    ])
+
+    const restored = await restoreArchivedMemoryEntries("global", [second.id], dir.path)
+    expect(restored.restored).toEqual([expect.objectContaining({ id: second.id })])
+    expect((await readMemoryEntries("global", dir.path)).map((entry) => entry.id)).toEqual([first.id, second.id])
+  })
+
+  test("Dream distinguishes real safety policies from maintenance and deduplicates translated variants", async () => {
+    await using dir = await tmpdir()
+    const canonical = await appendMemoryEntry({
+      scope: "global",
+      text: "Safety rule: never permanently delete files or directories; move requested removals to Trash/Recycle Bin.",
+      source: "memory-tool",
+      categoryIDs: ["user.preferences"],
+      confidence: 1,
+    }, dir.path)
+    const translatedDuplicate = await appendMemoryEntry({
+      scope: "global",
+      text: "Política global: nunca eliminar permanentemente archivos o directorios; toda remoción debe enviarse a Trash/Recycle Bin.",
+      source: "memory-dream",
+      categoryIDs: ["user.preferences"],
+      confidence: 1,
+    }, dir.path)
+    const maintenance = await appendMemoryEntry({
+      scope: "global",
+      text: "Memory maintenance: consolidate duplicate global file-deletion safety policies and keep one canonical Trash/Recycle Bin rule.",
+      source: "memory-dream",
+      categoryIDs: ["memory.policy"],
+    }, dir.path)
+
+    expect(isMemoryMaintenanceInstruction(canonical.text)).toBe(false)
+    expect(isMemoryMaintenanceInstruction(translatedDuplicate.text)).toBe(false)
+    expect(isMemoryMaintenanceInstruction(maintenance.text)).toBe(true)
+    expect(isMemoryMaintenanceInstruction("Clasificar esta regla como política del agente, no como memoria sin categoría.", { categoryIDs: ["memory.policy"] })).toBe(true)
+
+    const result = await cleanupGeneratedMemoryEntries(dir.path)
+    expect(result.archived.map((entry) => entry.id)).toEqual(expect.arrayContaining([translatedDuplicate.id, maintenance.id]))
+    expect((await readMemoryEntries("global", dir.path)).map((entry) => entry.id)).toEqual([canonical.id])
+    expect((await readArchivedMemoryEntries("global", dir.path)).find((entry) => entry.id === translatedDuplicate.id)).toEqual(expect.objectContaining({ canonicalEntryID: canonical.id }))
   })
 
   test("graph health stays empty when only legacy-derived facts exist", async () => {
@@ -1205,13 +1392,13 @@ describe("mend memory", () => {
       confidence: 0.9,
     }, dir.path)
     const second = await upsertMemoryFact({
-      text: "Memory graph links remain reviewable and are never auto-applied by Dream.",
+      text: "Dream graph proposals remain reviewable and are never auto-applied by Dream.",
       categoryIDs: ["memory.policy"],
       provenance: ["seed:second"],
       confidence: 0.86,
     }, dir.path)
 
-    const run = await runMemoryDream({ root: dir.path, model: async () => [] })
+    const run = await runMemoryDream({ root: dir.path, model: async () => [], consolidationPolicy: "preview" })
     const detail = await readDreamRunDetail(dir.path, run.id)
     const overview = await memoryOverview(dir.path)
 
@@ -1221,16 +1408,86 @@ describe("mend memory", () => {
       from: first.id,
       to: second.id,
       kind: "related",
-      reason: "Shared memory category: memory.policy",
+      status: "pending",
+       reason: "Semantic overlap (dream, proposals) within memory.policy",
     })
     expect(detail?.events.some((event) => event.message.includes("graph links"))).toBe(true)
     expect(overview.dreamRunDetails[0]?.graphProposals).toHaveLength(1)
     expect(overview.dreamLatestActivity?.summary).toContain("Dream completed")
 
     await upsertMemoryFactLink({ from: first.id, to: second.id, kind: "related" }, dir.path)
-    const duplicateRun = await runMemoryDream({ root: dir.path, model: async () => [] })
+    const duplicateRun = await runMemoryDream({ root: dir.path, model: async () => [], consolidationPolicy: "preview" })
 
     expect((await readDreamRunDetail(dir.path, duplicateRun.id))?.graphProposals).toHaveLength(0)
+  })
+
+  test("Dream does not infer graph links from category membership alone", async () => {
+    await using dir = await tmpdir()
+    await upsertMemoryFact({ text: "Release branches use the dev integration branch.", categoryIDs: ["memory.policy"], confidence: 0.95 }, dir.path)
+    await upsertMemoryFact({ text: "Terminal colors must satisfy WCAG contrast ratios.", categoryIDs: ["memory.policy"], confidence: 0.95 }, dir.path)
+
+    const run = await runMemoryDream({ root: dir.path, model: async () => [], consolidationPolicy: "preview" })
+
+    expect((await readDreamRunDetail(dir.path, run.id))?.graphProposals).toHaveLength(0)
+  })
+
+  test("Dream accepts typed model graph links only for real fact endpoints", async () => {
+    await using dir = await tmpdir()
+    const first = await upsertMemoryFact({ text: "Architecture decisions are supported by validation evidence.", categoryIDs: ["project.architecture"], confidence: 0.95 }, dir.path)
+    const second = await upsertMemoryFact({ text: "Focused validation commands prove architecture behavior.", categoryIDs: ["project.commands"], confidence: 0.95 }, dir.path)
+
+    const run = await runMemoryDream({
+      root: dir.path,
+      consolidationPolicy: "preview",
+      model: async () => ({
+        candidates: [],
+        graphLinks: [
+          { from: first.id, to: second.id, kind: "supports", confidence: 0.95, reason: "Validation evidence supports the architecture decision.", evidenceRefs: [] },
+          { from: "missing", to: second.id, kind: "supports", confidence: 0.99, reason: "Invalid endpoint must be ignored.", evidenceRefs: [] },
+        ],
+      }),
+    })
+
+    expect((await readDreamRunDetail(dir.path, run.id))?.graphProposals).toEqual([
+      expect.objectContaining({ from: first.id, to: second.id, kind: "supports", status: "pending" }),
+    ])
+  })
+
+  test("Dream auto-applies evidenced model related links even when lexical overlap is sparse", async () => {
+    await using dir = await tmpdir()
+    const first = await upsertMemoryFact({
+      text: "Provider OAuth transport identity protocol headers require neutral version affinity.",
+      categoryIDs: ["project.architecture"],
+      confidence: 0.9,
+      durability: 0.8,
+    }, dir.path)
+    const second = await upsertMemoryFact({
+      text: "Provider OAuth review evidence safety audit.",
+      categoryIDs: ["project.architecture"],
+      confidence: 0.9,
+      durability: 0.8,
+    }, dir.path)
+
+    const run = await runMemoryDream({
+      root: dir.path,
+      model: async () => ({
+        candidates: [],
+        graphLinks: [{
+          from: first.id,
+          to: second.id,
+          kind: "related",
+          confidence: 0.9,
+          reason: "The model supplied evidence that these transport policies belong together.",
+          evidenceRefs: [`memory:${first.id}`, `memory:${second.id}`],
+        }],
+      }),
+    })
+    const detail = await readDreamRunDetail(dir.path, run.id)
+
+    expect(detail?.graphProposals).toEqual([
+      expect.objectContaining({ from: first.id, to: second.id, kind: "related", status: "applied" }),
+    ])
+    expect((await readMemoryGraph(dir.path)).links).toEqual([expect.objectContaining({ from: first.id, to: second.id, kind: "related" })])
   })
 
   test("Dream auto-safe policy applies graph links that pass endpoint policy", async () => {
@@ -1244,14 +1501,14 @@ describe("mend memory", () => {
       dreamAutoApplyBlockedSensitivity: ["medium", "high"],
     }, dir.path)
     const first = await upsertMemoryFact({
-      text: "Dream may connect safe memory policy facts under an explicit auto-safe policy.",
+      text: "Dream may connect safe policy facts under an explicit auto-safe policy with validated endpoint thresholds.",
       categoryIDs: ["memory.policy"],
       confidence: 0.95,
       durability: 0.9,
       changeRisk: 0.1,
     }, dir.path)
     const second = await upsertMemoryFact({
-      text: "Auto-safe graph links must still satisfy endpoint confidence and risk thresholds.",
+      text: "Auto-safe links relate safe policy facts through validated endpoint thresholds while checking independent risk evidence.",
       categoryIDs: ["memory.policy"],
       confidence: 0.94,
       durability: 0.91,
@@ -1264,7 +1521,7 @@ describe("mend memory", () => {
 
     expect(graph.links).toEqual([expect.objectContaining({ from: first.id, to: second.id, kind: "related" })])
     expect(detail?.graphProposals[0]).toMatchObject({ status: "applied", linkID: graph.links[0]?.id })
-    expect(detail?.events.some((event) => event.message.includes("1 auto-applied"))).toBe(true)
+    expect(detail?.events.some((event) => event.message.includes("1 applied"))).toBe(true)
   })
 
   test("Dream graph proposal apply creates one validated graph link and audits status", async () => {
@@ -1279,7 +1536,7 @@ describe("mend memory", () => {
       categoryIDs: ["memory.policy"],
       confidence: 0.88,
     }, dir.path)
-    const run = await runMemoryDream({ root: dir.path, model: async () => [] })
+    const run = await runMemoryDream({ root: dir.path, model: async () => [], consolidationPolicy: "preview" })
     const proposal = (await readDreamRunDetail(dir.path, run.id))?.graphProposals[0]
     if (!proposal) throw new Error("expected Dream graph proposal")
 
@@ -1307,11 +1564,11 @@ describe("mend memory", () => {
       confidence: 0.9,
     }, dir.path)
     await upsertMemoryFact({
-      text: "Rejected Dream graph proposals should not mutate the memory graph.",
+      text: "Rejected Dream graph proposals must remain visible to reviewer while leaving the memory graph unchanged.",
       categoryIDs: ["memory.policy"],
       confidence: 0.88,
     }, dir.path)
-    const run = await runMemoryDream({ root: dir.path, model: async () => [] })
+    const run = await runMemoryDream({ root: dir.path, model: async () => [], consolidationPolicy: "preview" })
     const proposal = (await readDreamRunDetail(dir.path, run.id))?.graphProposals[0]
     if (!proposal) throw new Error("expected Dream graph proposal")
 
@@ -1326,7 +1583,7 @@ describe("mend memory", () => {
     expect(detail?.graphProposals[0]?.reviewedAt).toBeTruthy()
   })
 
-  test("Dream graph proposals ignore legacy-only facts outside the materialized graph", async () => {
+  test("Dream materializes legacy facts before proposing graph relationships", async () => {
     await using dir = await tmpdir()
     await appendMemoryEntry({
       scope: "project",
@@ -1336,17 +1593,330 @@ describe("mend memory", () => {
     }, dir.path)
     await appendMemoryEntry({
       scope: "project",
-      text: "Another legacy-only memory policy fact should not create graph review links by itself.",
+      text: "Another legacy memory policy fact should create Dream graph review links only after validation.",
       tags: ["memory.policy"],
       confidence: 0.88,
     }, dir.path)
 
     const run = await runMemoryDream({ root: dir.path, model: async () => [] })
 
-    expect((await readDreamRunDetail(dir.path, run.id))?.graphProposals).toHaveLength(0)
+    expect((await readDreamRunDetail(dir.path, run.id))?.graphProposals).toHaveLength(1)
   })
 
-  test("Dream default reads memories plus safe project files, writes logs and reviewable proposals", async () => {
+  test("Dream proposes semantic bridges between global and project memories", async () => {
+    await using dir = await tmpdir()
+    const global = await upsertMemoryFact({
+      scope: "global",
+      text: "The user prefers concise memory explanations and durable policy context.",
+      categoryIDs: ["user.preferences"],
+      confidence: 0.95,
+    }, dir.path)
+    const project = await upsertMemoryFact({
+      scope: "project",
+      text: "This project keeps memory policy explanations concise and durable.",
+      categoryIDs: ["memory.policy"],
+      confidence: 0.9,
+    }, dir.path)
+
+    const run = await runMemoryDream({ root: dir.path, model: async () => [], consolidationPolicy: "preview" })
+    const proposal = (await readDreamRunDetail(dir.path, run.id))?.graphProposals[0]
+
+    expect(proposal).toMatchObject({
+      from: global.id,
+      to: project.id,
+      kind: "related",
+      status: "pending",
+    })
+    expect(proposal?.reason).toContain("bridges global and project memory")
+  })
+
+  test("Dream keeps both memory scopes in the bounded graph context", async () => {
+    await using dir = await tmpdir()
+    for (const index of Array.from({ length: 40 }, (_, value) => value)) {
+      await upsertMemoryFact({
+        scope: "global",
+        text: `Unrelated global policy detail ${index} applies only to an isolated concern.`,
+        categoryIDs: ["memory.policy"],
+        confidence: 0.7,
+      }, dir.path)
+    }
+    const global = await upsertMemoryFact({
+      scope: "global",
+      text: "The user prefers concise memory explanations and durable policy context.",
+      categoryIDs: ["user.preferences"],
+      confidence: 0.95,
+    }, dir.path)
+    const project = await upsertMemoryFact({
+      scope: "project",
+      text: "This project keeps memory policy explanations concise and durable.",
+      categoryIDs: ["project.architecture"],
+      ownerWorkspaceIDs: [dir.path],
+      confidence: 0.95,
+    }, dir.path)
+
+    const run = await runMemoryDream({ root: dir.path, model: async () => [], consolidationPolicy: "preview" })
+    const proposal = (await readDreamRunDetail(dir.path, run.id))?.graphProposals.find((item) => item.from === global.id && item.to === project.id)
+
+    expect(proposal).toMatchObject({ kind: "related", status: "pending" })
+    expect(proposal?.reason).toContain("bridges global and project memory")
+  })
+
+  test("Dream does not turn duplicate same-scope graph suggestions into links", async () => {
+    await using dir = await tmpdir()
+    const first = await upsertMemoryFact({
+      scope: "global",
+      text: "Never permanently delete files or directories; move requested removals to Trash or Recycle Bin.",
+      categoryIDs: ["memory.policy"],
+    }, dir.path)
+    const second = await upsertMemoryFact({
+      scope: "global",
+      text: "Requested file removals must go to Trash or Recycle Bin instead of permanent deletion.",
+      categoryIDs: ["memory.policy"],
+    }, dir.path)
+
+    const run = await runMemoryDream({
+      root: dir.path,
+      consolidationPolicy: "preview",
+      model: async () => ({
+        candidates: [],
+        graphLinks: [{
+          from: first.id,
+          to: second.id,
+          kind: "related",
+          confidence: 0.98,
+          reason: "Both facts express the same safety policy.",
+          evidenceRefs: [],
+        }],
+      }),
+    })
+
+    expect((await readDreamRunDetail(dir.path, run.id))?.graphProposals).toHaveLength(0)
+    expect((await readMemoryGraph(dir.path)).links).toHaveLength(0)
+  })
+
+  test("Dream auto-applies one safe global bridge per project even when categories differ", async () => {
+    await using dir = await tmpdir()
+    const global = await upsertMemoryFact({
+      scope: "global",
+      text: "The user prefers concise memory explanations and durable policy context.",
+      categoryIDs: ["user.preferences"],
+      confidence: 0.96,
+      durability: 0.95,
+      changeRisk: 0.05,
+    }, dir.path)
+    const project = await upsertMemoryFact({
+      scope: "project",
+      text: "This project keeps memory policy explanations concise and durable.",
+      categoryIDs: ["project.architecture"],
+      ownerWorkspaceIDs: [dir.path],
+      confidence: 0.96,
+      durability: 0.95,
+      changeRisk: 0.05,
+    }, dir.path)
+
+    const run = await runMemoryDream({ root: dir.path, model: async () => [] })
+    const detail = await readDreamRunDetail(dir.path, run.id)
+    const graph = await readMemoryGraph(dir.path)
+    const bridge = graph.links.find((link) => link.from === global.id && link.to === project.id)
+
+    expect(run.status).toBe("completed")
+    expect(detail?.graphProposals).toEqual([
+      expect.objectContaining({ from: global.id, to: project.id, kind: "related", status: "applied" }),
+    ])
+    expect(bridge).toMatchObject({ from: global.id, to: project.id, kind: "related" })
+  })
+
+  test("Dream auto-applies a reversible semantic bridge below content-write thresholds", async () => {
+    await using dir = await tmpdir()
+    const global = await upsertMemoryFact({
+      scope: "global",
+      text: "The user prefers concise memory explanations and durable policy context.",
+      categoryIDs: ["user.preferences"],
+      confidence: 0.8,
+      durability: 0.8,
+      changeRisk: 0.05,
+    }, dir.path)
+    const project = await upsertMemoryFact({
+      scope: "project",
+      text: "This project keeps memory policy explanations concise and durable.",
+      categoryIDs: ["project.architecture"],
+      ownerWorkspaceIDs: [dir.path],
+      confidence: 0.8,
+      durability: 0.8,
+      changeRisk: 0.05,
+    }, dir.path)
+
+    const run = await runMemoryDream({ root: dir.path, model: async () => [] })
+    const detail = await readDreamRunDetail(dir.path, run.id)
+    const graph = await readMemoryGraph(dir.path)
+
+    expect(detail?.graphProposals).toEqual([
+      expect.objectContaining({ from: global.id, to: project.id, kind: "related", status: "applied" }),
+    ])
+    expect(graph.links).toEqual([expect.objectContaining({ from: global.id, to: project.id, kind: "related" })])
+  })
+
+  test("Dream automatically applies a reversible global bridge at the graph confidence floor", async () => {
+    await using dir = await tmpdir()
+    await upsertMemoryFact({
+      scope: "global",
+      text: "The user prefers concise memory explanations and durable policy context.",
+      categoryIDs: ["user.preferences"],
+      confidence: 0.7,
+      durability: 0.8,
+    }, dir.path)
+    await upsertMemoryFact({
+      scope: "project",
+      text: "This project keeps memory policy explanations concise and durable.",
+      categoryIDs: ["project.architecture"],
+      ownerWorkspaceIDs: [dir.path],
+      confidence: 0.7,
+      durability: 0.8,
+    }, dir.path)
+
+    const run = await runMemoryDream({ root: dir.path, model: async () => [] })
+    const detail = await readDreamRunDetail(dir.path, run.id)
+    const graph = await readMemoryGraph(dir.path)
+
+    expect(detail?.graphProposals).toEqual([
+      expect.objectContaining({ kind: "related", status: "applied" }),
+    ])
+    expect(graph.links).toEqual([expect.objectContaining({ kind: "related" })])
+    expect(detail?.events.some((event) => event.message.includes("1 applied, 0 rejected, 0 pending review"))).toBe(true)
+  })
+
+  test("Dream automatically rejects unsafe graph links instead of leaving review pending", async () => {
+    await using dir = await tmpdir()
+    const first = await upsertMemoryFact({
+      text: "A durable architecture fact has bounded validation evidence.",
+      categoryIDs: ["project.architecture"],
+      confidence: 0.8,
+      durability: 0.8,
+    }, dir.path)
+    const second = await upsertMemoryFact({
+      text: "A separate command fact has bounded validation evidence.",
+      categoryIDs: ["project.commands"],
+      confidence: 0.8,
+      durability: 0.8,
+    }, dir.path)
+
+    const run = await runMemoryDream({
+      root: dir.path,
+      model: async () => ({
+        candidates: [],
+        graphLinks: [{
+          from: first.id,
+          to: second.id,
+          kind: "supports",
+          confidence: 0.99,
+          reason: "The model asserted a typed link without an auto-safe policy.",
+          evidenceRefs: [],
+        }],
+      }),
+    })
+    const detail = await readDreamRunDetail(dir.path, run.id)
+
+    expect(detail?.graphProposals).toEqual([
+      expect.objectContaining({ kind: "supports", status: "rejected", rejectionReason: expect.stringContaining("safety gate") }),
+    ])
+    expect(detail?.graphProposals.filter((proposal) => proposal.status === "pending")).toHaveLength(0)
+    expect((await readMemoryGraph(dir.path)).links).toHaveLength(0)
+  })
+
+  test("Dream consolidator archives near-duplicate people memories before applying a new node", async () => {
+    await using dir = await tmpdir()
+    const existing = await appendMemoryEntry({
+      scope: "global",
+      text: "The user prefers concise answers in Spanish for future sessions.",
+      categoryIDs: ["user.preferences"],
+    }, dir.path)
+    const proposal = await proposeMemory({
+      scope: "global",
+      text: "User prefers concise answers in Spanish.",
+      categoryIDs: ["user.preferences"],
+      confidence: 0.98,
+      durability: 0.95,
+      changeRisk: 0.05,
+    }, dir.path)
+
+    const decisions = await deterministicDreamConsolidator({
+      runID: "dream_near_duplicate",
+      root: dir.path,
+      batchIndex: 0,
+      batchCount: 1,
+      entries: [existing],
+      facts: [],
+      proposals: [proposal],
+      historicalProposals: [],
+      digests: [],
+      evidence: [],
+    })
+
+    expect(decisions).toEqual([expect.objectContaining({ proposalID: proposal.id, resolution: "archive" })])
+  })
+
+  test("Dream archives generated maintenance instructions without keeping them as memories", async () => {
+    await using dir = await tmpdir()
+    await appendMemoryEntry({
+      scope: "global",
+      text: "Before implementing features, ask clarifying questions and obtain confirmation.",
+      source: "memory-tool",
+      categoryIDs: ["agent.policy"],
+    }, dir.path)
+    await appendMemoryEntry({
+      scope: "global",
+      text: "Work directly by default and use few subagents for difficult tasks.",
+      source: "memory-tool",
+      categoryIDs: ["agent.policy"],
+    }, dir.path)
+    await appendMemoryEntry({
+      scope: "global",
+      text: "Consolidate duplicate global policies about asking clarifying questions before implementing features.",
+      source: "memory-dream",
+      categoryIDs: ["memory.policy"],
+    }, dir.path)
+    await appendMemoryEntry({
+      scope: "global",
+      text: "Memory maintenance: consolidate duplicate global subagent policies into one canonical memory.",
+      source: "memory-dream",
+      categoryIDs: ["memory.policy"],
+    }, dir.path)
+    await appendMemoryEntry({
+      scope: "global",
+      text: "Dream proposal: configure a daily Dream window and leave it as a revisable proposal before applying.",
+      source: "memory-side-chat",
+      categoryIDs: ["memory.dream"],
+    }, dir.path)
+
+    const first = await cleanupGeneratedMemoryEntries(dir.path)
+    const second = await cleanupGeneratedMemoryEntries(dir.path)
+
+    expect(first.archived).toHaveLength(3)
+    expect(second.archived).toHaveLength(0)
+    expect((await readMemoryEntries("global", dir.path)).map((entry) => entry.source)).toEqual(["memory-tool", "memory-tool"])
+    expect((await readArchivedMemoryEntries("global", dir.path)).map((entry) => entry.archiveReason)).toHaveLength(3)
+  })
+
+  test("Dream skips maintenance candidates before creating proposals", async () => {
+    await using dir = await tmpdir()
+    const run = await runMemoryDream({
+      root: dir.path,
+      model: async () => [{
+        text: "Consolidate duplicate global memory policies into one canonical memory.",
+        categoryIDs: ["memory.policy"],
+        scope: "global",
+        confidence: 0.99,
+        durability: 0.99,
+        changeRisk: 0.01,
+      }],
+    })
+    const detail = await readDreamRunDetail(dir.path, run.id)
+
+    expect(await listMemoryProposals(dir.path, "all")).toHaveLength(0)
+    expect(detail?.decisions).toEqual([expect.objectContaining({ status: "skipped-policy" })])
+  })
+
+  test("Dream default reads safe inputs and resolves generated proposals through auto-consolidation", async () => {
     await using dir = await tmpdir()
     await writeFile(path.join(dir.path, "AGENTS.md"), "Always run focused memory tests from packages/opencode.\n")
     await appendMemoryEntry({
@@ -1367,14 +1937,17 @@ describe("mend memory", () => {
       },
     })
     const status = await latestDreamStatus(dir.path)
-    const proposals = await listMemoryProposals(dir.path, "pending")
+    const proposals = await listMemoryProposals(dir.path, "all")
+    const detail = await readDreamRunDetail(dir.path, run.id)
 
     expect(run.role).toBe("memoryDream")
     expect(run.status).toBe("completed")
     expect(status?.id).toBe(run.id)
     expect(proposals.some((proposal) => proposal.source === "memory-dream")).toBe(true)
     expect(proposals.some((proposal) => proposal.evidenceRefs.includes(`dream:${run.id}`))).toBe(true)
-    expect((await readDreamRunDetail(dir.path, run.id))?.events.at(-1)?.status).toBe("completed")
+    expect(proposals.filter((proposal) => proposal.status === "pending")).toHaveLength(0)
+    expect(detail?.consolidation).toMatchObject({ status: "completed", pendingAfter: 0 })
+    expect(detail?.events.at(-1)?.status).toBe("completed")
     expect((await readMemoryEntries("project", dir.path)).length).toBe(1)
   })
 
@@ -1612,10 +2185,12 @@ describe("mend memory", () => {
     await writeFile(path.join(dir.path, "AGENTS.md"), "Always run bun test test/mend/memory.test.ts from packages/opencode for memory changes.\n")
 
     const run = await runMemoryDream({ root: dir.path })
-    const proposals = await listMemoryProposals(dir.path, "pending")
+    const proposals = await listMemoryProposals(dir.path, "all")
+    const detail = await readDreamRunDetail(dir.path, run.id)
 
     expect(run.status).toBe("completed")
-    expect(proposals.some((proposal) => proposal.source === "memory-dream" && proposal.text.includes("Project convention from AGENTS.md"))).toBe(true)
+    expect(proposals.some((proposal) => proposal.source === "memory-dream" && proposal.status !== "pending")).toBe(true)
+    expect(detail?.consolidation).toMatchObject({ status: "completed", pendingAfter: 0 })
     expect(proposals.some((proposal) => proposal.evidenceRefs.some((ref) => ref.startsWith("file:")))).toBe(true)
     expect((await readMemoryEntries("project", dir.path))).toHaveLength(0)
   })
@@ -2225,6 +2800,46 @@ describe("mend memory", () => {
     expect(rerun.runs).toHaveLength(0)
   })
 
+  test("scheduled Dream revisits a window when new pending work arrives after the daily run", async () => {
+    await using dir = await tmpdir()
+    const window = { enabled: true, start: "00:00", end: "23:59" }
+    const first = await runScheduledMemoryDream({
+      root: dir.path,
+      window,
+      now: new Date("2026-06-18T00:30:00Z"),
+      workspaceID: "ws_pending",
+      permissions: { files: false },
+      model: async () => [],
+    })
+    await Bun.sleep(2)
+    const proposal = await proposeMemory({
+      text: "Dream should revisit new pending memory work during the active window.",
+      scope: "project",
+      categoryIDs: ["memory.dream"],
+      source: "test",
+    }, dir.path)
+    const evaluation = await evaluateDreamSchedule({
+      root: dir.path,
+      window,
+      now: new Date("2026-06-18T00:45:00Z"),
+      workspaceID: "ws_pending",
+    })
+    const second = await runScheduledMemoryDream({
+      root: dir.path,
+      window,
+      now: new Date("2026-06-18T00:45:00Z"),
+      workspaceID: "ws_pending",
+      permissions: { files: false },
+      model: async () => [],
+    })
+
+    expect(first).toMatchObject({ status: "completed" })
+    expect(proposal.status).toBe("pending")
+    expect(evaluation).toMatchObject({ action: "run", reason: "New pending memory work arrived after the last Dream run" })
+    expect(second).toMatchObject({ status: "completed" })
+    expect(await readDreamRuns(dir.path)).toHaveLength(2)
+  })
+
   test("scheduled Dream uses an atomic lock for concurrent ticks", async () => {
     await using dir = await tmpdir()
     let release!: () => void
@@ -2617,7 +3232,7 @@ describe("mend memory", () => {
     expect(pending.length).toBe(0)
   })
 
-  test("normalizes Dream consolidation policy without changing legacy Dream defaults", async () => {
+  test("normalizes Dream consolidation policy while preserving the Dream proposal policy", async () => {
     await using dir = await tmpdir()
 
     await writeProjectMemoryConfig({ dreamConsolidationPolicy: "auto-consolidate" }, dir.path)
@@ -2681,6 +3296,20 @@ describe("mend memory", () => {
       changeRisk: 0.9,
       source: "test",
     }, dir.path)
+    const firstGraphFact = await upsertMemoryFact({
+      text: "Dream pipeline graph validation keeps durable memory decisions connected.",
+      categoryIDs: ["memory.policy"],
+      confidence: 0.96,
+      durability: 0.95,
+      changeRisk: 0.05,
+    }, dir.path)
+    const secondGraphFact = await upsertMemoryFact({
+      text: "Dream pipeline graph decisions connect validated durable memories.",
+      categoryIDs: ["memory.policy"],
+      confidence: 0.96,
+      durability: 0.95,
+      changeRisk: 0.05,
+    }, dir.path)
 
     const run = await runMemoryDream({
       root: dir.path,
@@ -2710,6 +3339,11 @@ describe("mend memory", () => {
     expect(allProposals.find((proposal) => proposal.id === accepted.id)?.resolution).toBe("applied")
     expect(allProposals.find((proposal) => proposal.id === uncertain.id)?.resolution).toBe("archived")
     expect(detail?.consolidation?.pendingAfter).toBe(0)
+    const graphPair = detail?.graphProposals.find((proposal) =>
+      proposal.status === "applied"
+      && ((proposal.from === firstGraphFact.id && proposal.to === secondGraphFact.id)
+        || (proposal.from === secondGraphFact.id && proposal.to === firstGraphFact.id)))
+    expect(graphPair?.status).toBe("applied")
     expect(consumedDigests.find((item) => item.id === digest.id)?.consumedBy).toContain(run.id)
   })
 

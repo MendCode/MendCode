@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   movePromptHistoryItems,
+  mergePromptHistoryRecords,
   promptHistoryRecordFromUnknown,
   promptHistoryRecordsForScope,
   type PromptInfo,
@@ -9,6 +10,15 @@ import {
 const prompt = (input: string): PromptInfo => ({ input, parts: [] })
 
 describe("prompt history scope", () => {
+  test("keeps a prompt appended while the history file is still loading", () => {
+    expect(
+      mergePromptHistoryRecords({
+        loaded: [{ prompt: prompt("already on disk") }],
+        pending: [{ prompt: prompt("submitted during load") }],
+      }).map((item) => item.prompt.input),
+    ).toEqual(["already on disk", "submitted during load"])
+  })
+
   test("reads legacy unscoped entries", () => {
     expect(promptHistoryRecordFromUnknown(prompt("old global"))).toEqual({ prompt: prompt("old global") })
   })

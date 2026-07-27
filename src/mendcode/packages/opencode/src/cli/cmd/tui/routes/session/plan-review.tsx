@@ -8,7 +8,7 @@ import { useSDK } from "../../context/sdk"
 import { useDialog } from "../../ui/dialog"
 import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../context/tui-config"
-import { renderPlanMarkdown } from "../../util/plan-markdown"
+import { renderPlanMarkdown } from "../../util/markdown-render"
 import { StyledPlanMarkdown } from "../../component/styled-plan-markdown"
 
 type Stage = "preview" | "edit" | "comment" | "reject"

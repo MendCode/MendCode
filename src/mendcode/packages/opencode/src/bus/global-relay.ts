@@ -1,4 +1,5 @@
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync, truncateSync } from "fs"
+import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync } from "fs"
+import { appendFile, mkdir, stat, truncate } from "fs/promises"
 import path from "path"
 import { Global } from "@mendcode/core/global"
 import type { GlobalEvent } from "./global"
@@ -11,6 +12,9 @@ type RelayEnvelope = {
 }
 
 const RELAY_INTERVAL_MS = 40
+const RELAY_FLUSH_DELAY_MS = 25
+const RELAY_BATCH_MAX_BYTES = 256 * 1024
+const RELAY_PENDING_MAX_BYTES = 2 * 1024 * 1024
 const DEFAULT_RELAY_MAX_BYTES = 8 * 1024 * 1024
 const SOURCE_ID = `${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2)}`
 const RELAY_PATH = process.env.MENDCODE_GLOBAL_EVENT_RELAY_FILE || path.join(Global.Path.state, "global-events.jsonl")
@@ -19,6 +23,10 @@ let sequence = 0
 let offset = 0
 let carry = ""
 let started = false
+let flushTimer: ReturnType<typeof setTimeout> | undefined
+let flushPromise: Promise<void> | undefined
+let pendingBytes = 0
+const pendingLines: Array<{ data: string; bytes: number }> = []
 
 export function globalEventRelayPath() {
   return RELAY_PATH
@@ -38,19 +46,9 @@ function relayMaxBytes() {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : DEFAULT_RELAY_MAX_BYTES
 }
 
-function capRelayFile(maxBytes: number) {
-  if (!existsSync(RELAY_PATH)) return
-  const size = statSync(RELAY_PATH).size
-  if (size < maxBytes) return
-  truncateSync(RELAY_PATH, 0)
-  offset = 0
-  carry = ""
-}
-
 export function appendGlobalEvent(event: GlobalEvent) {
   if (!shouldRelay(event)) return
   try {
-    ensureRelayDir()
     const maxBytes = relayMaxBytes()
     const envelope: RelayEnvelope = {
       source: SOURCE_ID,
@@ -59,12 +57,88 @@ export function appendGlobalEvent(event: GlobalEvent) {
       event,
     }
     const line = JSON.stringify(envelope) + "\n"
-    if (Buffer.byteLength(line) > maxBytes) return
-    capRelayFile(maxBytes)
-    appendFileSync(RELAY_PATH, line, { mode: 0o600 })
+    const bytes = Buffer.byteLength(line)
+    if (bytes > maxBytes || bytes > RELAY_PENDING_MAX_BYTES) return
+
+    // GlobalBus.emit runs on the shared server event loop. Queue the disk write
+    // so event delivery and provider/tool work never wait on JSONL persistence.
+    // Relay delivery is best-effort, so discard the oldest backlog when the
+    // filesystem cannot keep up instead of retaining events without a bound.
+    while (pendingLines.length > 0 && pendingBytes + bytes > RELAY_PENDING_MAX_BYTES) {
+      const dropped = pendingLines.shift()
+      if (dropped) pendingBytes -= dropped.bytes
+    }
+    if (pendingBytes + bytes > RELAY_PENDING_MAX_BYTES) return
+    pendingLines.push({ data: line, bytes })
+    pendingBytes += bytes
+    scheduleFlush()
   } catch {
     // Relay is best-effort; in-process subscribers already received the event.
   }
+}
+
+function scheduleFlush() {
+  if (flushTimer !== undefined || flushPromise !== undefined) return
+  flushTimer = setTimeout(() => {
+    flushTimer = undefined
+    void flushGlobalEventRelay()
+  }, RELAY_FLUSH_DELAY_MS)
+  flushTimer.unref?.()
+}
+
+async function writeBatch(lines: Array<{ data: string; bytes: number }>, maxBytes: number) {
+  let batch = ""
+  let batchBytes = 0
+
+  const flushBatch = async () => {
+    if (!batch) return
+    await mkdir(path.dirname(RELAY_PATH), { recursive: true })
+    const currentSize = await stat(RELAY_PATH).then((result) => result.size).catch(() => 0)
+    if (currentSize >= maxBytes || currentSize + batchBytes > maxBytes) {
+      await truncate(RELAY_PATH, 0)
+      offset = 0
+      carry = ""
+    }
+    await appendFile(RELAY_PATH, batch, { mode: 0o600 })
+    batch = ""
+    batchBytes = 0
+  }
+
+  for (const line of lines) {
+    if (line.bytes > maxBytes) continue
+    if (batchBytes > 0 && batchBytes + line.bytes > Math.min(maxBytes, RELAY_BATCH_MAX_BYTES)) {
+      await flushBatch()
+    }
+    batch += line.data
+    batchBytes += line.bytes
+  }
+  await flushBatch()
+}
+
+function flushQueuedEvents() {
+  if (flushPromise !== undefined) return flushPromise
+  if (pendingLines.length === 0) return Promise.resolve()
+
+  const lines = pendingLines.splice(0)
+  pendingBytes = 0
+  flushPromise = writeBatch(lines, relayMaxBytes())
+    .catch(() => {
+      // Relay is best-effort; in-process subscribers already received events.
+    })
+    .finally(() => {
+      flushPromise = undefined
+      if (pendingLines.length > 0) scheduleFlush()
+    })
+  return flushPromise
+}
+
+/** Flush queued relay writes for deterministic tests and graceful shutdown. */
+export function flushGlobalEventRelay() {
+  if (flushTimer !== undefined) {
+    clearTimeout(flushTimer)
+    flushTimer = undefined
+  }
+  return flushQueuedEvents()
 }
 
 function readAvailable(emit: (event: GlobalEvent) => void) {

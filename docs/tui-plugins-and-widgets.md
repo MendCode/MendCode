@@ -98,6 +98,40 @@ export default {
 
 Use unique widget IDs. Reusing an ID replaces the previous render function for that widget.
 
+## Live TUI Customization API
+
+The host exposes the session chrome contract through `api.ui.runtime.customization`. It updates the running TUI and persists the change; no route reload or process restart is required.
+
+```tsx
+export default {
+  id: "company.chrome",
+  async tui(api) {
+    api.ui.runtime.customization.setTerminalTitle({
+      enabled: true,
+      template: "CompanyCode · {session} · {path}",
+    })
+    api.ui.runtime.customization.setSessionAccent("random")
+    api.ui.runtime.customization.setDiffFiles(true)
+
+    api.ui.runtime.setWidget("company.review", () => <text>Review tools ready</text>, {
+      placement: "aboveEditor",
+      order: 20,
+    })
+  },
+}
+```
+
+Available customization methods:
+
+- `get()` reads the normalized live contract.
+- `set(patch)` updates one or more chrome settings.
+- `setTerminalTitle({ enabled, template })` controls terminal title output. Templates support `{product}`, `{session}`, `{route}`, and `{path}`.
+- `setSessionAccent("theme" | "random" | "#rrggbb")` selects the session header accent. `random` is deterministic for a session ID.
+- `setDiffFiles(boolean)` toggles the changed-file count beside diff totals.
+- `reset()` restores the default chrome settings without changing profile files or project/session data.
+
+`setWidget`, `clearWidget`, `focusWidget`, and `blurWidget` remain the widget API. Widgets are intentionally separate from the session chrome toggles, so turning off a built-in header item does not remove plugin-owned widgets.
+
 ## Shell-Backed Widgets
 
 Use `api.shell.spawn()` when a widget needs live command output. The process output is streamed to plugin code and kept in a capped in-memory tail. It is intended for low-overhead widgets such as status panes, `neofetch`-style summaries, notes exporters, todo dashboards, log tails, and simple command monitors.
@@ -261,7 +295,7 @@ Use `setFooter()` only when one package intentionally owns the complete footer.
 
 ## Floating Overlays
 
-Use `api.ui.overlay.open()` for temporary floating UI owned by a plugin: side-chat helpers, checklists, short inspectors, or contextual command surfaces. Overlays are not PTYs and are not the host-owned Memory Center side-chat; they are plugin-rendered Solid surfaces that can be opened from commands and closed by ID or via the render context.
+Use `api.ui.overlay.open()` for temporary floating UI owned by a plugin: side-chat helpers, checklists, short inspectors, or contextual command surfaces. Overlays are not PTYs and are separate from the host memory assistant API; they are plugin-rendered Solid surfaces that can be opened from commands and closed by ID or via the render context.
 
 ```tsx
 /** @jsxImportSource @opentui/solid */
@@ -322,7 +356,7 @@ Plugin overlays are automatically cleaned up when a plugin is deactivated or dis
 
 Use the right surface for the job:
 
-- **Memory Center side-chat:** host-owned memory review UI and graph proposals.
+- **Memory assistant API:** host-owned memory review actions and graph proposals for supported integrations.
 - **Plugin floating side-chat:** plugin-owned temporary overlay using `api.ui.overlay.open()`.
 - **External TUI app:** requires PTY/pane support; `shell.spawn()` and overlays do not emulate full-screen terminal apps like `graf` or `cava`.
 
@@ -453,6 +487,7 @@ The complete public TUI contract is exported from `@mendcode/plugin/tui`:
 | Floating UI | `ui.overlay` | Side chats, inspectors, popovers, non-capturing status panels |
 | Editor | `ui.Prompt`, `ui.runtime.setEditor`, `setEditorVisual` | Replace or decorate prompt input |
 | Persistent UI | `ui.runtime.setWidget`, `setFooter`, `setFooterEntry`, `setStatus` | Panels, footer data, status indicators |
+| Live chrome | `ui.runtime.customization` | Terminal title, session accent, diff visibility, rollback |
 | Session AI | `session`, `metadata`, `ai` | Create, inspect, prompt, organize, and stop sessions |
 | Memory | `memory` | Read and mutate graph facts/links and call Memory side chat |
 | Host state | `state`, `event`, `client` | React to events and inspect synced TUI state |

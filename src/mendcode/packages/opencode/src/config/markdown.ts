@@ -1,36 +1,27 @@
 import { NamedError } from "@mendcode/core/util/error"
 import matter from "gray-matter"
-import { createRequire } from "module"
-import path from "path"
 import { z } from "zod"
 import { Filesystem } from "@/util/filesystem"
 
 export const FILE_REGEX = /(?<![\w`])@(\.?[^\s`,.]*(?:\.[^\s`,.]+)*)/g
 export const SHELL_REGEX = /!`([^`]+)`/g
 
-type YamlCompatModule = {
-  load: (input: string) => unknown
-  dump: (input: object) => string
-}
-
-const require = createRequire(import.meta.url)
 type MatterOptions = NonNullable<Parameters<typeof matter>[1]>
-const yamlMatterOptions = (() => {
-  try {
-    const matterPath = require.resolve("gray-matter")
-    const yaml = require(path.join(path.dirname(matterPath), "..", "js-yaml")) as YamlCompatModule
-    return {
-      engines: {
-        yaml: {
-          parse: (input: string) => (yaml.load(input) ?? {}) as object,
-          stringify: (input: object) => yaml.dump(input),
-        },
+
+const yamlMatterOptions = {
+  engines: {
+    yaml: {
+      parse(input: string) {
+        const wrapped = fallbackSanitization(`---\n${input}\n---`)
+        const frontmatter = wrapped.match(/^---\r?\n([\s\S]*?)\r?\n---$/)?.[1] ?? input
+        return (Bun.YAML.parse(frontmatter) ?? {}) as object
       },
-    } satisfies MatterOptions
-  } catch {
-    return undefined
-  }
-})()
+      stringify(input: object) {
+        return Bun.YAML.stringify(input)
+      },
+    },
+  },
+} satisfies MatterOptions
 
 export function files(template: string) {
   return Array.from(template.matchAll(FILE_REGEX))

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "../../fixture/fixture"
-import { resolveSharedServerURL, resolveThreadDirectory } from "../../../src/cli/cmd/tui/thread"
+import { resolveRuntimeEntrypoint, resolveSharedServerURL, resolveThreadDirectory } from "../../../src/cli/cmd/tui/thread"
 
 describe("tui thread", () => {
   async function check(project?: string) {
@@ -37,5 +37,11 @@ describe("tui thread", () => {
   test("rejects credentials and unsupported shared server URLs", () => {
     expect(() => resolveSharedServerURL("ftp://127.0.0.1:4096")).toThrow("http or https")
     expect(() => resolveSharedServerURL("http://user:password@127.0.0.1:4096")).toThrow("credentials")
+  })
+
+  test("does not use virtual BunFS paths for the shared server child", () => {
+    expect(resolveRuntimeEntrypoint("/$bunfs/root/src/index.js", process.cwd())).toBeUndefined()
+    expect(resolveRuntimeEntrypoint("B:/~BUN/root/src/index.js", process.cwd())).toBeUndefined()
+    expect(resolveRuntimeEntrypoint("src/index.ts", process.cwd())).toBe(path.resolve(process.cwd(), "src/index.ts"))
   })
 })

@@ -15,6 +15,141 @@ export type ModelRole = {
 }
 export type ModelsConfig = { version: 0; enabled: boolean; roles: Record<string, ModelRole> }
 
+export type PromptModelRef = {
+  providerID?: string | null
+  modelID?: string | null
+  id?: string | null
+  variant?: string | null
+}
+
+export type PromptModelSource =
+  | "cli"
+  | "user-message"
+  | "session"
+  | "subagent"
+  | "profile/tui"
+  | "project"
+  | "role/focus"
+  | "fallback"
+
+export type PromptModelSelection = {
+  model?: { providerID: string; modelID: string }
+  variant?: string | null
+  source: PromptModelSource
+}
+
+export function parsePromptModel(value?: string | null): PromptModelRef | undefined {
+  if (!value) return undefined
+  const [providerID, ...rest] = value.split("/")
+  const modelID = rest.join("/")
+  if (!providerID || !modelID) return undefined
+  return { providerID, modelID }
+}
+
+function promptModelRef(ref?: PromptModelRef) {
+  if (!ref?.providerID) return undefined
+  const modelID = ref.modelID ?? ref.id
+  if (!modelID) return undefined
+  return { providerID: ref.providerID, modelID }
+}
+
+export function resolveEffectivePromptSelection(input: {
+  hasSession: boolean
+  sessionUsesSubagent: boolean
+  explicitModel?: PromptModelRef
+  explicitVariant?: string
+  localModel?: PromptModelRef
+  localModelSource?: PromptModelSource
+  localOverride?: PromptModelRef
+  localOverrideUpdatedAt?: number
+  userModel?: PromptModelRef
+  userModelCreatedAt?: number
+  sessionModel?: PromptModelRef
+  agentModel?: PromptModelRef
+  }): PromptModelSelection {
+
+  const explicit = promptModelRef(input.explicitModel)
+  if (explicit) {
+    return {
+      model: explicit,
+      variant: input.explicitVariant,
+      source: "cli",
+    }
+  }
+
+  const localOverrideIsNewer =
+    input.localOverride &&
+    (!input.hasSession || !input.userModelCreatedAt || (input.localOverrideUpdatedAt ?? 0) > input.userModelCreatedAt)
+  if (localOverrideIsNewer) {
+    return {
+      model: promptModelRef(input.localOverride),
+      variant: input.localOverride?.variant,
+      source: "profile/tui",
+    }
+  }
+
+  if (!input.hasSession) {
+    return {
+      model: promptModelRef(input.localModel),
+      variant: input.localModel?.variant,
+      source: input.localModelSource ?? "fallback",
+    }
+  }
+
+  const userModel = promptModelRef(input.userModel)
+  if (userModel) {
+    return {
+      model: userModel,
+      variant: input.userModel?.variant,
+      source: "user-message",
+    }
+  }
+
+  const sessionModel = promptModelRef(input.sessionModel)
+  if (sessionModel) {
+    return {
+      model: sessionModel,
+      variant: input.sessionModel?.variant,
+      source: "session",
+    }
+  }
+
+  if (input.sessionUsesSubagent) {
+    const agentModel = promptModelRef(input.agentModel)
+    if (agentModel) {
+      return {
+        model: agentModel,
+        variant: input.agentModel?.variant,
+        source: "subagent",
+      }
+    }
+  }
+
+  return {
+    model: promptModelRef(input.localModel),
+    variant: input.localModel?.variant,
+    source: input.localModelSource ?? "fallback",
+  }
+}
+
+export function resolveLocalPromptModel(input: {
+  configModel?: string
+  configuredRoleModel?: PromptModelRef
+  agentModel?: PromptModelRef
+  defaultRoleModel?: PromptModelRef
+  fallbackModel?: PromptModelRef
+}) {
+  const configuredRoleModel = promptModelRef(input.configuredRoleModel)
+  if (configuredRoleModel) return { model: input.configuredRoleModel, source: "role/focus" as const }
+  const agentModel = promptModelRef(input.agentModel)
+  if (agentModel) return { model: input.agentModel, source: "profile/tui" as const }
+  const configModel = parsePromptModel(input.configModel)
+  if (configModel) return { model: configModel, source: "project" as const }
+  const defaultRoleModel = promptModelRef(input.defaultRoleModel)
+  if (defaultRoleModel) return { model: input.defaultRoleModel, source: "role/focus" as const }
+  return { model: input.fallbackModel, source: "fallback" as const }
+}
+
 function withoutRemovedModelRoles(config: ModelsConfig): ModelsConfig {
   if (!Object.hasOwn(config.roles, "review")) return config
   const roles = Object.fromEntries(Object.entries(config.roles).filter(([name]) => name !== "review"))
@@ -126,7 +261,7 @@ export const defaultModelsConfig: ModelsConfig = {
     memoryAssistant: {
       providerID: null,
       modelID: null,
-      reason: "Memory page side-chat assistant model for constrained memory questions and proposals.",
+      reason: "Memory assistant model for supported integrations and reviewable memory proposals.",
     },
     permissionReviewer: {
       providerID: null,

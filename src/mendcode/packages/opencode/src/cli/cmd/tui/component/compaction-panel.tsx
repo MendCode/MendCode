@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, For, onCleanup, Show, type JSX } from "solid-js"
-import type { BoxRenderable, MouseEvent, TextareaRenderable } from "@opentui/core"
-import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
+import type { BoxRenderable, MouseEvent, Renderable, TextareaRenderable } from "@opentui/core"
+import { useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { SplitBorder } from "./border"
 import { useTheme } from "../context/theme"
 import { useMendTuiProfile } from "../context/mend"
@@ -56,6 +56,21 @@ export type CompactionArcadeGame = {
 
 export function shouldRenderCompactionArcade(input: { style: "minimal" | "cockpit" | "arcade" | "quiet"; arcade: string }) {
   return input.style === "arcade" && input.arcade !== "off"
+}
+
+export function shouldAcceptCompactionArcadeFocus(input: {
+  arcadeFocused: boolean
+  currentFocusedRenderable?: unknown
+  arcadeInput?: unknown
+}) {
+  return input.arcadeFocused && input.currentFocusedRenderable === input.arcadeInput
+}
+
+let focusedCompactionArcade: BoxRenderable | undefined
+
+export function isCompactionArcadeFocused() {
+  const arcade = focusedCompactionArcade
+  return Boolean(arcade && !arcade.isDestroyed && arcade.focused)
 }
 
 export function shouldBlurCompactionArcadeWhenOffscreen(input: {
@@ -293,6 +308,7 @@ export function CompactionPanel(props: {
 }) {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
+  const renderer = useRenderer()
   const mend = useMendTuiProfile()
   const kv = useKV()
   const textareaKeybindings = useTextareaKeybindings()
@@ -359,6 +375,7 @@ export function CompactionPanel(props: {
   const [saveFailure, setSaveFailure] = createSignal<string>()
   let scratchpadInput: TextareaRenderable | undefined
   let arcadeBox: BoxRenderable | undefined
+  let arcadePreviousFocus: Renderable | null = null
   let lastScratchpadKey: string | undefined
   let lastArcadeGameID: string | undefined
   let saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -380,15 +397,34 @@ export function CompactionPanel(props: {
     persistSnakeHighScore(next)
   }
 
+  function arcadeOwnsFocus() {
+    return shouldAcceptCompactionArcadeFocus({
+      arcadeFocused: arcadeFocused(),
+      currentFocusedRenderable: renderer.currentFocusedRenderable,
+      arcadeInput: arcadeBox,
+    })
+  }
+
   function focusArcade() {
-    if (!activeArcadeGame()) return
+    if (!activeArcadeGame() || !arcadeBox || arcadeBox.isDestroyed) return
+    arcadePreviousFocus = renderer.currentFocusedRenderable
+    arcadeBox.focus()
+    if (renderer.currentFocusedRenderable !== arcadeBox) {
+      arcadePreviousFocus = null
+      return
+    }
+    focusedCompactionArcade = arcadeBox
     setArcadeFocused(true)
-    arcadeBox?.focus()
   }
 
   function blurArcade(event?: { preventDefault?: () => void; stopPropagation?: () => void }, input?: { consume?: boolean }) {
+    const ownsFocus = arcadeOwnsFocus()
+    const previousFocus = arcadePreviousFocus
+    arcadePreviousFocus = null
+    if (focusedCompactionArcade === arcadeBox) focusedCompactionArcade = undefined
     setArcadeFocused(false)
-    arcadeBox?.blur()
+    if (arcadeBox && !arcadeBox.isDestroyed) arcadeBox.blur()
+    if (ownsFocus && previousFocus && !previousFocus.isDestroyed && previousFocus !== arcadeBox) previousFocus.focus()
     if (input?.consume === false) return
     event?.preventDefault?.()
     event?.stopPropagation?.()
@@ -397,7 +433,7 @@ export function CompactionPanel(props: {
   function blurArcadeIfOffscreen() {
     if (!arcadeBox || arcadeBox.isDestroyed) return false
     if (!shouldBlurCompactionArcadeWhenOffscreen({
-      focused: arcadeFocused(),
+      focused: arcadeOwnsFocus(),
       screenY: arcadeBox.screenY,
       height: arcadeBox.height,
       viewportHeight: dimensions().height,
@@ -405,6 +441,8 @@ export function CompactionPanel(props: {
     blurArcade(undefined, { consume: false })
     return true
   }
+
+  onCleanup(() => blurArcade(undefined, { consume: false }))
 
   function consumeMouseEvent(event?: { preventDefault?: () => void; stopPropagation?: () => void }) {
     event?.preventDefault?.()
@@ -446,7 +484,7 @@ export function CompactionPanel(props: {
     const timer = setInterval(() => {
       const game = activeArcadeGame()
       if (game) {
-        if (!arcadeFocused()) return
+        if (!arcadeOwnsFocus()) return
         if (blurArcadeIfOffscreen()) return
         const state = arcadeState()
         const next = game.tick?.(state) ?? state
@@ -462,7 +500,7 @@ export function CompactionPanel(props: {
     const id = game?.id
     if (id === lastArcadeGameID) return
     lastArcadeGameID = id
-    setArcadeFocused(false)
+    blurArcade(undefined, { consume: false })
     if (game) {
       const state = game.id === snakeArcadeGame.id ? initialSnakeState(globalSnakeHighScore()) : game.initialState()
       setArcadeStateAndPersist(state)
@@ -481,7 +519,14 @@ export function CompactionPanel(props: {
   })
 
   useKeyboard((event) => {
-    if (!arcadeFocused()) return
+    if (!arcadeOwnsFocus()) {
+      if (arcadeFocused()) {
+        arcadePreviousFocus = null
+        if (focusedCompactionArcade === arcadeBox) focusedCompactionArcade = undefined
+        setArcadeFocused(false)
+      }
+      return
+    }
     if (blurArcadeIfOffscreen()) return
     if (scratchpadInput && !scratchpadInput.isDestroyed && scratchpadInput.focused) return
     if (handleArcadeKey(event)) return
@@ -651,6 +696,7 @@ export function CompactionPanel(props: {
             }}
             flexDirection="column"
             alignItems="center"
+            focusable={true}
             border={["top", "bottom", "left", "right"]}
             borderColor={arcadeFocused() ? theme.borderActive : theme.border}
             paddingLeft={2}

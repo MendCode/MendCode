@@ -97,11 +97,11 @@ export function renderSessionExitSummary(input: SessionExitSummaryInput) {
   const width = Math.max(24, input.width)
   const details: Array<[string, string]> = [
     input.sessionTitle ? ["Session", input.sessionTitle] : undefined,
-    input.sessionID ? ["Continue", `mend -s ${input.sessionID}`] : undefined,
+    input.sessionID ? ["Continue", `mendcode -s ${input.sessionID}`] : undefined,
     ...usageRows(input.usage),
   ].filter((item): item is [string, string] => Boolean(item))
   const labelWidth = Math.min(10, Math.max(7, ...details.map(([label]) => label.length)))
-  const valueWidth = Math.max(8, width - labelWidth - 5)
+  const valueWidth = Math.max(8, width - labelWidth - 4)
   const detailLines = details.map(([label, value]) => `  ${label.padEnd(labelWidth)} ${truncate(value, valueWidth)}`)
   return [...identityLines(input).map((line) => `  ${line}`), "", ...detailLines, ""].join("\n")
 }

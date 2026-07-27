@@ -1,23 +1,40 @@
-# MendCode
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/branding/mendcode-logo-horizontal-white.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/branding/mendcode-logo-horizontal-master.svg">
+    <img src="docs/assets/branding/mendcode-logo-horizontal-master.svg" alt="MendCode" width="420">
+  </picture>
+</h1>
 
-The customizable coding terminal.
+<p align="center"><strong>The customizable coding terminal.</strong></p>
 
-[![Release](https://img.shields.io/github/v/release/MendCode/MendCode?style=flat&label=release)](https://github.com/MendCode/MendCode/releases)
-[![License](https://img.shields.io/github/license/MendCode/MendCode?style=flat)](LICENSE)
-[![Website](https://img.shields.io/badge/website-mendcode.dev-111827)](https://www.mendcode.dev/)
-[![Docs](https://img.shields.io/badge/docs-github-2563eb)](docs/README.md)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-16a34a)](CONTRIBUTING.md)
+<p align="center">
+  <a href="https://github.com/MendCode/MendCode/releases"><img src="https://img.shields.io/github/v/release/MendCode/MendCode?style=flat&label=release&color=C96D3A" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/MendCode/MendCode?style=flat&color=9FB08E" alt="License"></a>
+  <a href="https://www.mendcode.dev/"><img src="https://img.shields.io/badge/website-mendcode.dev-3F8F83" alt="Website"></a>
+  <a href="docs/README.md"><img src="https://img.shields.io/badge/docs-github-9FB08E" alt="Docs"></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-C96D3A" alt="PRs welcome"></a>
+</p>
 
 MendCode is a terminal-first coding-agent harness you can make your own: a
 public `mendcode` CLI, configurable model roles, review gates, Changes Review,
 Memory Center, Plan Mode Markdown, Agent View, reusable team packages, project MCP config,
 Herdr/mflow/worktree coordination, Usage Insights, release/security gates, and a
 customizable TUI for home identity, prompt chrome, widgets, panels, dialogs, and
-themes without patching runtime internals.
+themes without patching runtime internals. Local agents can also control the
+same session runtime through versioned JSON commands for progress, waiting, and
+cancellation.
 
-[Website](https://www.mendcode.dev/) · [Docs](docs/README.md) · [Feature map](docs/features.md) · [Acknowledgements](ACKNOWLEDGEMENTS.md)
+<p align="center">
+  <a href="https://www.mendcode.dev/">Website</a> ·
+  <a href="docs/README.md">Docs</a> ·
+  <a href="docs/features.md">Feature map</a> ·
+  <a href="ACKNOWLEDGEMENTS.md">Acknowledgements</a>
+</p>
 
-![MendCode README banner](docs/assets/banners/readme-hero-banner.png)
+<p align="center">
+  <img src="docs/assets/banners/readme-hero-banner.png" alt="MendCode terminal field banner" width="1200">
+</p>
 
 ## Contents
 
@@ -44,7 +61,8 @@ Most coding agents give you a chat box. MendCode gives you the harness around it
 | Review current code changes | `/changes` opens a responsive TUI diff workspace with comments and agent-visible review context between model turns. |
 | Keep repeat work moving | Loop Workflows create durable, monitorable loop sessions with contract-aware report-only wakeups, `/loop` creation, `/loops` supervision, and optional per-project OS services. |
 | Keep risky actions explicit | Permission modes, smart permission review, preview-first worktree actions, and approval-gated memory proposals. |
-| Route work to the right model | Model roles for planning, building, review, subagents, summaries, compaction, memory extraction, Dream, memory side chat, and permission review. |
+| Route work to the right model | Model roles for planning, building, explicit review agents, subagents, summaries, compaction, memory extraction, Dream, memory side chat, and permission review. |
+| Let local agents drive real sessions | `mendcode session` and `mendcode run --format json` expose the existing runtime for machine-readable session control, events, waiting, inspection, and cancellation. |
 | Coordinate parallel terminal work | Optional mflow locks plus optional TSM/worktree orchestration for multi-session work. |
 | See local activity without cloud analytics | Usage Insights for tokens, sessions, AI time, prompt volume, changed files, top tools, top agents, top models, cache mix, daily activity, and selected-day details. |
 
@@ -90,6 +108,7 @@ Useful commands after setup:
 | --- | --- |
 | `mendcode run "review this repo and draft a plan"` | You want to open MendCode with an initial task ready. |
 | `mendcode chat "summarize current status"` | You want a quick control-plane turn without entering the full TUI. |
+| `mendcode session list --format json` | Another local agent needs to discover and control MendCode sessions. |
 | `mendcode status` / `mendcode doctor` | You want readiness or diagnostics. |
 | `mendcode setup status` | You want to inspect setup state after the guided setup screen. |
 | `mendcode marketplace status` | You want to inspect active team/runtime marketplace packages. |
@@ -409,6 +428,7 @@ mendcode tsm setup
 | Install, configure, and check readiness | [CLI, setup, and configuration](docs/cli-setup-configuration.md) |
 | Shape the visual terminal experience | [Customization](docs/customization.md) |
 | Share marketplace packages | [Marketplace and team sharing](docs/packages-and-team-sharing.md) |
+| Let another agent control sessions | [Automation runtime](docs/automation-runtime.md) |
 | Extend the TUI with code | [TUI plugins and widgets](docs/tui-plugins-and-widgets.md) |
 | Use plan review gates | [Plan Mode](docs/plan-mode.md) |
 | Review working-tree changes | [Changes Review](docs/changes-review.md) |
@@ -478,8 +498,13 @@ context, then verify live code before changing behavior.
 
 - Source of truth: `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`.
 - Re-run public help before adding command examples.
-- Primary public surfaces include opening the TUI, `run`, `chat`, `status`,
-  `doctor`, `setup`, `marketplace`, `mflow`, `worktree`, and `tsm`.
+- Primary public surfaces include opening the TUI, `run`, `session`, `chat`,
+  `status`, `doctor`, `setup`, `marketplace`, `mflow`, `worktree`, and `tsm`.
+- Automation details live in [docs/automation-runtime.md](docs/automation-runtime.md):
+  `mendcode.cli.v1` JSON envelopes, session lifecycle commands, progress events,
+  bounded waiting, cancellation, secret redaction, and shared model/agent
+  selection. It is a wrapper over the existing runtime, not a second provider
+  or session implementation.
 - Support surfaces include `models`, `providers`, `auth`, `permissions`,
   `memory`, and `focus`.
 - Internal debug surfaces such as `adapter`, `ai`, `bench`, `budget`, `config`,

@@ -1,4 +1,10 @@
-import type { TuiAiApi, TuiMemoryApi, TuiSessionApi, TuiSessionMetadataApi } from "@mendcode/plugin/tui"
+import type {
+  TuiAiApi,
+  TuiCustomizationApi,
+  TuiMemoryApi,
+  TuiSessionApi,
+  TuiSessionMetadataApi,
+} from "@mendcode/plugin/tui"
 
 export type Dispose = () => void
 export type MendKeyEvent = {
@@ -86,6 +92,7 @@ export type MendOverlayApi = {
 }
 
 export type MendUiRuntimeApi = {
+  customization: TuiCustomizationApi
   setStatus(id: string, value?: string, input?: { order?: number }): boolean
   clearStatus(id: string): boolean
   setWidget(

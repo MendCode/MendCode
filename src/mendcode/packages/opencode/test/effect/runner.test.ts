@@ -137,6 +137,51 @@ describe("Runner", () => {
   )
 
   it.live(
+    "deduplicates queued work with the same queue key",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string, string>(s)
+      const activeGate = yield* Deferred.make<void>()
+      const ran = yield* Ref.make<string[]>([])
+
+      const active = yield* runner
+        .ensureRunning(
+          Effect.gen(function* () {
+            yield* Ref.update(ran, (items) => [...items, "active"])
+            yield* Deferred.await(activeGate)
+            return "active"
+          }),
+          { queueKey: "message" },
+        )
+        .pipe(Effect.forkChild)
+      yield* Effect.sleep("10 millis")
+
+      const firstQueued = yield* runner
+        .ensureRunning(
+          Effect.gen(function* () {
+            yield* Ref.update(ran, (items) => [...items, "queued"])
+            return "queued"
+          }),
+          { queue: true, queueKey: "message" },
+        )
+        .pipe(Effect.forkChild)
+      const duplicateQueued = yield* runner
+        .ensureRunning(
+          Effect.fail("duplicate should not run"),
+          { queue: true, queueKey: "message" },
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Deferred.succeed(activeGate, undefined)
+
+      expect(yield* Fiber.join(active)).toBe("active")
+      expect(yield* Fiber.join(firstQueued)).toBe("queued")
+      expect(yield* Fiber.join(duplicateQueued)).toBe("queued")
+      expect(yield* Ref.get(ran)).toEqual(["active", "queued"])
+    }),
+  )
+
+  it.live(
     "ensureRunning runs every queued work in FIFO order",
     Effect.gen(function* () {
       const s = yield* Scope.Scope
@@ -171,6 +216,51 @@ describe("Runner", () => {
       expect(yield* Fiber.join(a)).toBe("queued")
       expect(yield* Fiber.join(b)).toBe("second-queued")
       expect(yield* Ref.get(calls)).toBe(2)
+    }),
+  )
+
+  it.live(
+    "cancels only the matching queued work",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s, { onInterrupt: Effect.succeed("cancelled") })
+      const activeGate = yield* Deferred.make<void>()
+      const ran = yield* Ref.make<string[]>([])
+
+      const active = yield* runner
+        .ensureRunning(
+          Effect.gen(function* () {
+            yield* Ref.update(ran, (items) => [...items, "active"])
+            yield* Deferred.await(activeGate)
+            return "active"
+          }),
+        )
+        .pipe(Effect.forkChild)
+      yield* Effect.sleep("10 millis")
+
+      const removed = yield* runner
+        .ensureRunning(Effect.succeed("removed"), { queue: true, queueKey: "removed" })
+        .pipe(Effect.forkChild)
+      const kept = yield* runner
+        .ensureRunning(
+          Effect.gen(function* () {
+            yield* Ref.update(ran, (items) => [...items, "kept"])
+            return "kept"
+          }),
+          { queue: true, queueKey: "kept" },
+        )
+        .pipe(Effect.forkChild)
+
+      yield* Effect.gen(function* () {
+        while (runner.state._tag !== "RunningThenRun") yield* Effect.yieldNow
+      }).pipe(Effect.timeout("250 millis"))
+      expect(yield* runner.cancelPending((key) => key === "removed")).toBe(true)
+      yield* Deferred.succeed(activeGate, undefined)
+
+      expect(yield* Fiber.join(active)).toBe("active")
+      expect(yield* Fiber.join(removed)).toBe("cancelled")
+      expect(yield* Fiber.join(kept)).toBe("kept")
+      expect(yield* Ref.get(ran)).toEqual(["active", "kept"])
     }),
   )
 

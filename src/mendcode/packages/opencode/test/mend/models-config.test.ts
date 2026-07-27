@@ -5,7 +5,9 @@ import { tmpdir } from "../fixture/fixture"
 import { initProject } from "../../src/mend/config/project"
 import {
   modelRoleProjection,
+  parsePromptModel,
   refreshGeneratedRuntimeModelConfig,
+  resolveEffectivePromptSelection,
   resolveModelRoles,
 } from "../../src/mend/config/models"
 
@@ -117,5 +119,68 @@ describe("mend model roles", () => {
       if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
       else process.env.XDG_CONFIG_HOME = previousXdgConfigHome
     }
+  })
+
+  test("resolves prompt models with the same explicit, session, and subagent precedence", () => {
+    expect(parsePromptModel("openai/gpt-5.6")).toEqual({ providerID: "openai", modelID: "gpt-5.6" })
+    expect(parsePromptModel("gpt-5.6")).toBeUndefined()
+
+    expect(
+      resolveEffectivePromptSelection({
+        hasSession: true,
+        sessionUsesSubagent: true,
+        explicitModel: parsePromptModel("openai/gpt-5.6"),
+        explicitVariant: "max",
+        userModel: { providerID: "anthropic", modelID: "claude-sonnet" },
+        sessionModel: { providerID: "google", modelID: "gemini" },
+        agentModel: { providerID: "openai", modelID: "gpt-5.5" },
+        localModel: { providerID: "openai", modelID: "gpt-5.4" },
+      }),
+    ).toMatchObject({
+      model: { providerID: "openai", modelID: "gpt-5.6" },
+      variant: "max",
+      source: "cli",
+    })
+
+    expect(
+      resolveEffectivePromptSelection({
+        hasSession: true,
+        sessionUsesSubagent: false,
+        localOverride: { providerID: "openai", modelID: "gpt-5.6" },
+        localOverrideUpdatedAt: 20,
+        userModelCreatedAt: 10,
+        userModel: { providerID: "anthropic", modelID: "claude-sonnet" },
+      }),
+    ).toMatchObject({ model: { providerID: "openai", modelID: "gpt-5.6" }, source: "profile/tui" })
+
+    expect(
+      resolveEffectivePromptSelection({
+        hasSession: true,
+        sessionUsesSubagent: true,
+        userModel: { providerID: "anthropic", modelID: "claude-sonnet" },
+        sessionModel: { providerID: "google", modelID: "gemini" },
+        agentModel: { providerID: "openai", modelID: "gpt-5.5" },
+        localModel: { providerID: "openai", modelID: "gpt-5.4" },
+      }),
+    ).toMatchObject({ model: { providerID: "anthropic", modelID: "claude-sonnet" }, source: "user-message" })
+
+    expect(
+      resolveEffectivePromptSelection({
+        hasSession: true,
+        sessionUsesSubagent: true,
+        sessionModel: { providerID: "google", modelID: "gemini" },
+        agentModel: { providerID: "openai", modelID: "gpt-5.5" },
+        localModel: { providerID: "openai", modelID: "gpt-5.4" },
+      }),
+    ).toMatchObject({ model: { providerID: "google", modelID: "gemini" }, source: "session" })
+
+    expect(
+      resolveEffectivePromptSelection({
+        hasSession: true,
+        sessionUsesSubagent: true,
+        agentModel: { providerID: "openai", modelID: "gpt-5.5" },
+        localModel: { providerID: "openai", modelID: "gpt-5.4" },
+      }),
+    ).toMatchObject({ model: { providerID: "openai", modelID: "gpt-5.5" }, source: "subagent" })
   })
 })

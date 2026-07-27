@@ -81,7 +81,9 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
 }
 
 function factFromLegacyEntry(entry: MemoryEntry): MemoryFact {
-  const categoryIDs = inferMemoryCategoryIDs({ text: entry.text, tags: entry.tags, source: entry.source })
+  const categoryIDs = normalizeMemoryCategoryIDs(entry.categoryIDs?.length
+    ? entry.categoryIDs
+    : inferMemoryCategoryIDs({ text: entry.text, tags: entry.tags, source: entry.source }))
   const priority = Math.min(...categoryIDs.map((id) => memoryCategoryByID(id).promptPriority))
   return {
     id: `legacy_${entry.id}`,
@@ -104,6 +106,11 @@ function factFromLegacyEntry(entry: MemoryEntry): MemoryFact {
     retrievalPriority: priority,
     legacyMaterialized: true,
   }
+}
+
+export function isMemoryGraphVisibleFact(fact: Pick<MemoryFact, "categoryIDs" | "stale" | "text">) {
+  if (fact.stale || fact.categoryIDs.includes("volatile.reject")) return false
+  return !/^\s*(?:trace|traza)\s+\d+\b/i.test(fact.text)
 }
 
 export function normalizeMemoryFact(input: Partial<MemoryFact> & { text: string }): MemoryFact {
@@ -231,12 +238,27 @@ function sharedSemanticCategories(a: MemoryFact, b: MemoryFact, allowedCategoryI
   return a.categoryIDs.filter((categoryID) => categoryID !== "uncategorized" && categories.has(categoryID) && (!allowed || allowed.has(categoryID)))
 }
 
+function semanticOverlapScore(a: MemoryFact, b: MemoryFact) {
+  const left = new Set(a.normalizedSummary.toLowerCase().split(/[^\p{L}\p{N}_.@/-]+/u).filter((term) => term.length > 3))
+  const right = new Set(b.normalizedSummary.toLowerCase().split(/[^\p{L}\p{N}_.@/-]+/u).filter((term) => term.length > 3))
+  return [...left].filter((term) => right.has(term)).length / Math.max(1, Math.min(left.size, right.size))
+}
+
+function isCrossScopeSemanticMatch(a: MemoryFact, b: MemoryFact, allowedCategoryIDs?: string[]) {
+  const allowed = allowedCategoryIDs?.length ? new Set(allowedCategoryIDs) : undefined
+  return a.scope !== b.scope
+    && (a.scope === "global" || b.scope === "global")
+    && (!allowed || [...a.categoryIDs, ...b.categoryIDs].some((categoryID) => allowed.has(categoryID)))
+    && semanticOverlapScore(a, b) >= 0.25
+}
+
 function relatedFactScore(fact: MemoryFact, candidate: MemoryFact, allowedCategoryIDs?: string[]) {
   const terms = new Set(fact.normalizedSummary.toLowerCase().split(/[^\p{L}\p{N}_.@/-]+/u).filter((term) => term.length > 3))
   const candidateTerms = new Set(candidate.normalizedSummary.toLowerCase().split(/[^\p{L}\p{N}_.@/-]+/u).filter((term) => term.length > 3))
   const overlap = [...terms].filter((term) => candidateTerms.has(term)).length / Math.max(1, Math.min(terms.size, candidateTerms.size))
   return sharedSemanticCategories(fact, candidate, allowedCategoryIDs).length * 100
     + overlap * 10
+    + (isCrossScopeSemanticMatch(fact, candidate, allowedCategoryIDs) ? 20 : 0)
     + (fact.scope === candidate.scope ? 2 : 0)
     + candidate.confidence
     + candidate.durability
@@ -250,7 +272,7 @@ export async function connectMemoryFactToRelatedFact(id: string, root?: string, 
   const existing = graph.links.find((link) => link.from === id || link.to === id)
   if (existing) return existing
   const candidate = graph.facts
-    .filter((item) => item.id !== id && item.sensitivity === "low" && !item.stale && sharedSemanticCategories(fact, item, allowedCategoryIDs).length > 0)
+    .filter((item) => item.id !== id && item.sensitivity === "low" && !item.stale && (sharedSemanticCategories(fact, item, allowedCategoryIDs).length > 0 || isCrossScopeSemanticMatch(fact, item, allowedCategoryIDs)))
     .toSorted((a, b) => relatedFactScore(fact, b, allowedCategoryIDs) - relatedFactScore(fact, a, allowedCategoryIDs) || a.id.localeCompare(b.id))[0]
   if (!candidate) return null
   return upsertMemoryFactLink({ from: id, to: candidate.id, kind: "related" }, root)
@@ -262,6 +284,34 @@ export async function legacyFacts(root?: string) {
     readMemoryEntries("project", root).catch(() => []),
   ])
   return [...globalEntries, ...projectEntries].map(factFromLegacyEntry)
+}
+
+export async function materializeLegacyMemoryFacts(root?: string) {
+  const graph = await readMemoryGraph(root)
+  const legacy = await legacyFacts(root)
+  const legacyByEntryID = new Map(legacy.flatMap((fact) => fact.legacyEntryID ? [[fact.legacyEntryID, fact] as const] : []))
+  const synced = [...legacyByEntryID.values()].map((fact) => {
+    const existing = graph.facts.find((item) => item.legacyEntryID === fact.legacyEntryID || item.id === fact.id)
+    return normalizeMemoryFact({
+      ...(existing ?? fact),
+      ...fact,
+      id: existing?.id ?? fact.id,
+      ownerWorkspaceIDs: fact.scope === "project"
+        ? [...new Set([...(existing?.ownerWorkspaceIDs ?? []), ...fact.ownerWorkspaceIDs, memoryPaths(root).root].filter((value): value is string => Boolean(value)))]
+        : existing?.ownerWorkspaceIDs ?? fact.ownerWorkspaceIDs,
+      createdAt: existing?.createdAt ?? fact.createdAt,
+      updatedAt: fact.updatedAt,
+      legacyMaterialized: true,
+    })
+  })
+  const syncedIDs = new Set(synced.map((fact) => fact.id))
+  const explicit = graph.facts.filter((fact) => !fact.legacyMaterialized || !fact.legacyEntryID || syncedIDs.has(fact.id))
+  const facts = [...explicit.filter((fact) => !syncedIDs.has(fact.id)), ...synced]
+  const factIDs = new Set(facts.map((fact) => fact.id))
+  const links = graph.links.filter((link) => factIDs.has(link.from) && factIDs.has(link.to))
+  const changed = JSON.stringify(facts) !== JSON.stringify(graph.facts) || JSON.stringify(links) !== JSON.stringify(graph.links)
+  if (changed) await writeMemoryGraph({ ...graph, facts, links }, root)
+  return { graph: { ...graph, facts, links }, added: Math.max(0, synced.length - graph.facts.filter((fact) => syncedIDs.has(fact.id)).length), changed }
 }
 
 export async function readMemoryFacts(root?: string) {

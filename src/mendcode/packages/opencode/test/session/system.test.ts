@@ -116,6 +116,20 @@ describe("session.system", () => {
     }
   })
 
+  test("adds model guidance after resolving the real model behind a compatible transport", async () => {
+    await using tmp = await tmpdir()
+    const promptModePath = path.join(tmp.path, ".mendcode", "prompt-mode.json")
+    await mkdir(path.dirname(promptModePath), { recursive: true })
+    await writeFile(promptModePath, JSON.stringify({ version: 0, mode: "focus", live: "runtime-run-chat" }))
+
+    const output = await SystemPrompt.mendPromptPolicy(fakeModel("anthropic", "deepseek-v4-pro[1m]"), tmp.path)
+
+    expect(output).toContain("Focus: deepseek")
+    expect(output).toContain("DeepSeek V4 public behavior guidance")
+    expect(output).toContain("compatibility layers may alias Claude model names")
+    expect(output).toContain("not an upstream hidden prompt")
+  })
+
   test("loads persisted MendCode prompt mode for live session policy", async () => {
     await using tmp = await tmpdir()
     const promptModePath = path.join(tmp.path, ".mendcode", "prompt-mode.json")
@@ -145,6 +159,9 @@ describe("session.system", () => {
 
     expect(output).toContain("Mode: focus")
     expect(output).toContain("monitored loops or repeated autonomous iterations")
+    expect(output).toContain("`task` with `background: true`")
+    expect(output).toContain("foreground task blocks this session")
+    expect(output).toContain("only after `task` returns its `task_id`")
     expect(output).not.toContain("Persistent memory operations")
     expect(output).not.toContain("MendCode CLI map")
     expect(output).not.toContain("MendCode marketplace and extension contract")

@@ -34,7 +34,7 @@ export const defaultMendConfig = {
     globalCompactionMaxEntries: 50,
     extractorRole: "memoryExtractor",
     consolidatorRole: "none",
-    dreamConsolidationPolicy: "disabled",
+    dreamConsolidationPolicy: "auto-consolidate",
     requireApprovalForGenerated: true,
   },
   package: {

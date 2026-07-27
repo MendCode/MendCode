@@ -135,6 +135,50 @@ describe("session transcript virtual window", () => {
     ])
   })
 
+  test("keeps a queued turn at the tail when its assistant starts", () => {
+    const waiting = [
+      { id: "user-1", role: "user" },
+      { id: "assistant-1", role: "assistant", parentID: "user-1" },
+      { id: "user-2", role: "user" },
+      { id: "assistant-2", role: "assistant", parentID: "user-1" },
+    ]
+    expect(sessionTranscriptRows(waiting, new Set(["user-2"])).map((message) => message.id)).toEqual([
+      "user-1",
+      "assistant-1",
+      "assistant-2",
+      "user-2",
+    ])
+
+    const dispatched = [...waiting, { id: "assistant-3", role: "assistant", parentID: "user-2" }]
+    expect(sessionTranscriptRows(dispatched, new Set()).map((message) => message.id)).toEqual([
+      "user-1",
+      "assistant-1",
+      "assistant-2",
+      "user-2",
+      "assistant-3",
+    ])
+  })
+
+  test("keeps post-compaction assistant output after the compaction summary", () => {
+    const messages = [
+      { id: "user-1", role: "user" },
+      { id: "assistant-before", role: "assistant", parentID: "user-1" },
+      { id: "compaction-user", role: "user" },
+      { id: "compaction-summary", role: "assistant", parentID: "compaction-user" },
+      { id: "assistant-after", role: "assistant", parentID: "user-1" },
+    ]
+
+    expect(
+      sessionTranscriptRows(messages, new Set(), { boundaryIDs: new Set(["compaction-user"]) }).map((message) => message.id),
+    ).toEqual([
+      "user-1",
+      "assistant-before",
+      "compaction-user",
+      "compaction-summary",
+      "assistant-after",
+    ])
+  })
+
   test("deduplicates transcript rows before moving queued messages", () => {
     const messages = [
       { id: "old", version: 1 },

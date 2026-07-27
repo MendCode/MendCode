@@ -52,4 +52,35 @@ describe("config HttpApi", () => {
       lsp: false,
     })
   })
+
+  test("persists per-skill activation overrides", async () => {
+    await using tmp = await tmpdir({ config: { formatter: false, lsp: false } })
+    const disposed = waitDisposed(tmp.path)
+
+    const response = await app().request("/config", {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        "x-opencode-directory": tmp.path,
+      },
+      body: JSON.stringify({
+        permission: {
+          skill: {
+            "project-skill": "deny",
+          },
+        },
+        formatter: false,
+        lsp: false,
+      }),
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      permission: { skill: { "project-skill": "deny" } },
+    })
+    await disposed
+    expect(await Bun.file(path.join(tmp.path, "config.json")).json()).toMatchObject({
+      permission: { skill: { "project-skill": "deny" } },
+    })
+  })
 })

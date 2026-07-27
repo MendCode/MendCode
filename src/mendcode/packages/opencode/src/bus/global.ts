@@ -9,6 +9,11 @@ export type GlobalEvent = {
   payload: any
 }
 
+export function matchesGlobalEventDirectory(event: GlobalEvent, directory?: string) {
+  if (!directory) return true
+  return !event.directory || event.directory === "global" || event.directory === directory
+}
+
 class GlobalBusEmitter extends EventEmitter<{
   event: [GlobalEvent]
 }> {

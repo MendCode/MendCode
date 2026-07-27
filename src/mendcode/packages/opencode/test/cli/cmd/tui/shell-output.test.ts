@@ -97,6 +97,19 @@ test("terminal output renderer bounds synthetic cursor movement", () => {
   expect(renderTerminalOutput("x\u001b[999999Cy").length).toBeLessThanOrEqual(30_002)
 })
 
+test("terminal output renderer stays bounded for long unbroken whitespace", () => {
+  const rendered = renderTerminalOutput(" ".repeat(100_000) + "done")
+
+  expect(rendered.length).toBeLessThanOrEqual(30_005)
+  expect(rendered.endsWith("done")).toBe(true)
+})
+
+test("terminal output renderer limits expanded rows", () => {
+  const rendered = renderTerminalOutput("line\n".repeat(10_000))
+
+  expect(rendered.split("\n").length).toBeLessThanOrEqual(2_000)
+})
+
 test("shell output preview keeps tail-only semantics", () => {
   expect(previewShellOutput("x".repeat(30_001))).toBe("...\n\n" + "x".repeat(30_000))
 })
@@ -117,4 +130,12 @@ test("latest terminal preview renders only tail while keeping saved-output hints
   expect(
     latestTerminalOutputPreview("...output truncated...\n\nFull output saved to: /tmp/out\nold\nnew", 1).text,
   ).toBe("...\n...output truncated...\nFull output saved to: /tmp/out\nnew")
+})
+
+test("latest terminal preview bounds long unbroken lines", () => {
+  const preview = latestTerminalOutputPreview("x".repeat(10_000), 10)
+
+  expect(preview.overflow).toBe(true)
+  expect(preview.text.length).toBeLessThanOrEqual(2_055)
+  expect(preview.text.endsWith("x".repeat(2_048))).toBe(true)
 })

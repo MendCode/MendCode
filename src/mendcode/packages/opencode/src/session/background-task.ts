@@ -48,6 +48,8 @@ export type Result = Schema.Schema.Type<typeof Result>
 export const Snapshot = Schema.Struct({
   taskID: SessionID,
   parentSessionID: SessionID,
+  rootSessionID: SessionID,
+  depth: NonNegativeInt,
   generation: NonNegativeInt,
   revision: NonNegativeInt,
   state: State,
@@ -89,6 +91,16 @@ export const Event = {
       title: Schema.String,
       summary: Schema.optional(Schema.String),
       error: Schema.optional(Schema.String),
+      background: Schema.optional(Schema.Boolean),
+    }),
+  ),
+  OwnerWake: BusEvent.define(
+    "background_task.owner_wake",
+    Schema.Struct({
+      wakeID: Schema.String,
+      parentSessionID: SessionID,
+      taskIDs: Schema.Array(SessionID),
+      taskTitles: Schema.Array(Schema.String),
     }),
   ),
 }
@@ -96,6 +108,14 @@ export const Event = {
 export type StartInput = {
   taskID: SessionID
   parentSessionID: SessionID
+  rootSessionID?: SessionID
+  depth?: number
+  limits?: {
+    maxChildren?: number
+    maxDescendants?: number
+  }
+  /** Start atomically as running so observers never see a stuck queued task. */
+  startRunning?: boolean
   originMessageID?: MessageID
   originCallID?: string
   title: string
@@ -111,6 +131,7 @@ export type FinishInput = {
   taskID: SessionID
   generation: number
   state: Extract<State, "completed" | "failed" | "cancelled" | "interrupted">
+  background?: boolean
   result?: Partial<Omit<Result, "transcriptSessionID">> & { transcriptSessionID?: SessionID }
 }
 
@@ -132,6 +153,7 @@ export type RunAction =
   | {
       type: "finish"
       state: Extract<BackgroundTaskState, "completed" | "failed" | "cancelled" | "interrupted">
+      background?: boolean
       result: BackgroundTaskResultData
     }
 
@@ -142,6 +164,7 @@ export type ReducedRun = {
 }
 
 const terminalStates = new Set<BackgroundTaskState>(["paused", "completed", "failed", "cancelled", "interrupted"])
+const activeStates = new Set<BackgroundTaskState>(["queued", "running", "needs_input"])
 const RESULT_MAX_CHARS = 24_000
 const RESULT_MAX_FILES = 200
 const OWNER_LEASE_MS = 6 * 60 * 60 * 1000
@@ -223,6 +246,8 @@ function fromRows(task: TaskRow, run: RunRow): Snapshot {
   return {
     taskID: task.task_id,
     parentSessionID: task.parent_session_id,
+    rootSessionID: task.root_session_id ?? task.parent_session_id,
+    depth: Math.max(0, task.depth ?? 1),
     generation: run.generation,
     revision: run.revision,
     state: run.state,
@@ -300,6 +325,7 @@ export function listSnapshots(parentSessionID: SessionID) {
 export interface Interface {
   readonly start: (input: StartInput) => Effect.Effect<Snapshot>
   readonly markRunning: (input: { taskID: SessionID; generation: number }) => Effect.Effect<Snapshot>
+  readonly reclaimExpired: (input?: { now?: number }) => Effect.Effect<Snapshot[]>
   readonly finish: (input: FinishInput) => Effect.Effect<Snapshot>
   readonly requestCancel: (input: { taskID: SessionID; generation?: number }) => Effect.Effect<Snapshot | undefined>
   readonly get: (taskID: SessionID, generation?: number) => Effect.Effect<Snapshot | undefined>
@@ -353,6 +379,9 @@ export const layer = Layer.effect(
             title: input.snapshot.title,
             summary: input.snapshot.result?.summary,
             error: input.snapshot.result?.error,
+            ...(input.event.payload?.background !== undefined
+              ? { background: input.event.payload.background }
+              : {}),
           },
           { id: input.event.id },
         )
@@ -379,6 +408,8 @@ export const layer = Layer.effect(
       const snapshot = Database.transaction(
         (db) => {
           const now = Date.now()
+          const rootSessionID = input.rootSessionID ?? input.parentSessionID
+          const depth = Math.max(0, Math.floor(input.depth ?? 1))
           const current = db
             .select()
             .from(BackgroundTaskTable)
@@ -399,7 +430,45 @@ export const layer = Layer.effect(
               throw new Error(`Background task ${input.taskID} is already ${previous.state}`)
             }
           }
+
+          // Admission happens in the same immediate transaction as
+          // registration. Only active runs consume the budget, so completed
+          // children do not permanently reduce a parent's capacity.
+          const activeTasks = db
+            .select()
+            .from(BackgroundTaskTable)
+            .all()
+            .flatMap((task) => {
+              const run = db
+                .select()
+                .from(BackgroundTaskRunTable)
+                .where(
+                  and(
+                    eq(BackgroundTaskRunTable.task_id, task.task_id),
+                    eq(BackgroundTaskRunTable.generation, task.current_generation),
+                  ),
+                )
+                .get()
+              return run && activeStates.has(run.state) ? [{ task, run }] : []
+            })
+          const maxChildren = input.limits?.maxChildren
+          if (
+            maxChildren !== undefined &&
+            activeTasks.filter(({ task }) => task.parent_session_id === input.parentSessionID).length >= maxChildren
+          ) {
+            throw new Error(`Subagent direct-child limit reached for session ${input.parentSessionID}`)
+          }
+          const maxDescendants = input.limits?.maxDescendants
+          if (
+            maxDescendants !== undefined &&
+            activeTasks.filter(({ task }) => (task.root_session_id ?? task.parent_session_id) === rootSessionID).length >=
+              maxDescendants
+          ) {
+            throw new Error(`Subagent descendant limit reached for root session ${rootSessionID}`)
+          }
+
           const generation = (current?.current_generation ?? 0) + 1
+          const startRunning = input.startRunning === true
           db.insert(BackgroundTaskTable)
             .values({
               task_id: input.taskID,
@@ -410,6 +479,8 @@ export const layer = Layer.effect(
               title: input.title,
               agent: input.agent,
               model: input.model,
+              root_session_id: rootSessionID,
+              depth,
               time_created: current?.time_created ?? now,
               time_updated: now,
             })
@@ -423,6 +494,8 @@ export const layer = Layer.effect(
                 title: input.title,
                 agent: input.agent,
                 model: input.model,
+                root_session_id: rootSessionID,
+                depth,
                 time_updated: now,
                 time_dismissed: null,
               },
@@ -432,15 +505,15 @@ export const layer = Layer.effect(
             task_id: input.taskID,
             generation,
             revision: 1,
-            state: "queued" as const,
+            state: startRunning ? ("running" as const) : ("queued" as const),
             control_intent: "none" as const,
-            owner_runtime_id: null,
-            lease_expires_at: null,
+            owner_runtime_id: startRunning ? runtimeID : null,
+            lease_expires_at: startRunning ? now + OWNER_LEASE_MS : null,
             result: null,
             time_created: now,
             time_updated: now,
             time_queued: now,
-            time_started: null,
+            time_started: startRunning ? now : null,
             time_finished: null,
           }
           db.insert(BackgroundTaskRunTable).values(run).run()
@@ -454,6 +527,8 @@ export const layer = Layer.effect(
               title: input.title,
               agent: input.agent ?? null,
               model: input.model ?? null,
+              root_session_id: rootSessionID,
+              depth,
               time_created: current?.time_created ?? now,
               time_updated: now,
               time_dismissed: null,
@@ -522,6 +597,9 @@ export const layer = Layer.effect(
               title: task.title,
               summary: snapshot.result?.summary,
               error: snapshot.result?.error,
+              ...(input.action.type === "finish" && input.action.background !== undefined
+                ? { background: input.action.background }
+                : {}),
             },
             time_created: next.value.time_updated,
             time_updated: next.value.time_updated,
@@ -561,11 +639,48 @@ export const layer = Layer.effect(
         action: {
           type: "finish",
           state: input.state,
+          background: input.background,
           result: boundResult(input),
         },
       })
       if (!snapshot) throw new Error(`Background task ${input.taskID} was not registered`)
       return snapshot
+    })
+
+    const reclaimExpired = Effect.fn("BackgroundTask.reclaimExpired")(function* (input?: { now?: number }) {
+      const now = input?.now ?? Date.now()
+      const expired = Database.use((db) =>
+        db
+          .select()
+          .from(BackgroundTaskRunTable)
+          .all()
+          .filter(
+            (run) =>
+              run.state === "running" &&
+              run.lease_expires_at !== null &&
+              run.lease_expires_at <= now,
+          ),
+      )
+      const results = yield* Effect.forEach(
+        expired,
+        (run) =>
+          update({
+            taskID: run.task_id,
+            generation: run.generation,
+            action: {
+              type: "finish",
+              state: "interrupted",
+              result: {
+                summary: `Runtime lease expired before the subagent completed. Resume with task_id ${run.task_id}.`,
+                error: "Runtime lease expired",
+                changedFiles: [],
+                transcriptSessionID: run.task_id,
+              },
+            },
+          }),
+        { concurrency: 1 },
+      )
+      return results.filter((snapshot): snapshot is Snapshot => Boolean(snapshot))
     })
 
     const requestCancel = Effect.fn("BackgroundTask.requestCancel")(function* (input: {
@@ -623,7 +738,9 @@ export const layer = Layer.effect(
       )
     })
 
-    return Service.of({ start, markRunning, finish, requestCancel, get, list, wait })
+    yield* reclaimExpired()
+
+    return Service.of({ start, markRunning, reclaimExpired, finish, requestCancel, get, list, wait })
   }),
 )
 

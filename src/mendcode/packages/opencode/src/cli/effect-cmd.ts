@@ -19,7 +19,7 @@ export class CliError extends Schema.TaggedErrorClass<CliError>()("CliError", {
 
 export const fail = (message: string, exitCode = 1) => Effect.fail(new CliError({ message, exitCode }))
 
-interface EffectCmdOpts<Args, A> {
+interface EffectCmdOpts<Args, A, E> {
   command: string | readonly string[]
   aliases?: string | readonly string[]
   describe: string | false
@@ -48,7 +48,7 @@ interface EffectCmdOpts<Args, A> {
   instance?: boolean | ((args: Args) => boolean)
   /** Defaults to process.cwd(). Override for commands that take a directory positional. */
   directory?: (args: Args) => string
-  handler: (args: WithDoubleDash<Args>) => Effect.Effect<A, CliError, AppServices | InstanceStore.Service>
+  handler: (args: WithDoubleDash<Args>) => Effect.Effect<A, E, AppServices | InstanceStore.Service>
 }
 
 /**
@@ -68,7 +68,7 @@ interface EffectCmdOpts<Args, A> {
  * `effectCmd`, swapping the underlying `cmd()` factory for effect/cli's
  * `Command.make(...)` won't touch any handler bodies.
  */
-export const effectCmd = <Args, A>(opts: EffectCmdOpts<Args, A>) =>
+export const effectCmd = <Args, A, E>(opts: EffectCmdOpts<Args, A, E>) =>
   cmd<{}, Args>({
     command: opts.command,
     aliases: opts.aliases,

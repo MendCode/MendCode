@@ -11,6 +11,8 @@ export function DialogTimeline(props: {
   sessionID: string
   onMove: (messageID: string) => void
   setPrompt?: (prompt: PromptInfo) => void
+  isQueued?: (messageID: string) => boolean
+  onEditPrompt?: (messageID: string, prompt: PromptInfo) => boolean | Promise<boolean>
 }) {
   const sync = useSync()
   const dialog = useDialog()
@@ -33,8 +35,15 @@ export function DialogTimeline(props: {
         value: message.id,
         footer: Locale.time(message.time.created),
         onSelect: (dialog) => {
+          const queued = props.isQueued?.(message.id) ?? false
           dialog.replace(() => (
-            <DialogMessage messageID={message.id} sessionID={props.sessionID} setPrompt={props.setPrompt} />
+            <DialogMessage
+              messageID={message.id}
+              sessionID={props.sessionID}
+              queued={queued}
+              setPrompt={props.setPrompt}
+              onEditPrompt={queued ? props.onEditPrompt : undefined}
+            />
           ))
         },
       })

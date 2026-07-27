@@ -17,11 +17,12 @@ The pitch is not “another chat box.” The pitch is a configurable coding term
 | Plan Mode                       | The agent presents a Markdown plan inside a TUI review modal; the user can approve, edit, comment, or reject before implementation starts. Approval switches into the configured implementation agent. | [Plan Mode](plan-mode.md)                                                                |
 | Changes Review                  | `/changes` opens a responsive TUI diff workspace with file/block/line navigation, comments, reload, return-to-chat behavior, and agent-visible review context between model turns.                     | [Changes Review](changes-review.md)                                                      |
 | Loop Workflows                  | Durable, monitorable loop sessions with `/loop` creation, `/loops` supervision, Agent View roots, contract-aware report-only mode, and a per-project OS background service.                                     | [Loop Workflows](loop-workflows.md)                                                      |
+| Automation runtime              | Let another local agent create, continue, inspect, wait for, stream, and cancel real MendCode sessions through the same runtime, with versioned JSON output and shared model selection.                | [Automation runtime](automation-runtime.md)                                              |
 | Usage Insights                  | Local activity dashboard for tokens, sessions, AI time, words, tools, agents, models, changed files, daily activity, selected-day detail, cache mix, and optional weather.                              | [Usage Insights](usage-insights.md)                                                      |
 | Approval-gated memory           | Memory can retrieve context without silently turning every session into permanent state. Generated memories become reviewable proposals first.                                                         | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory)       |
 | Memory Center, graph, and Dream | Route-level memory workspace with saved/pending memories, categories, policy controls, Dream logs, and constrained memory side chat.                                                                   | [Memory Center](memory-center.md)                                                        |
 | Smart permissions               | Choose `approval`, `smart`, or `full_access`. Smart mode auto-approves bounded read-only shell work and can route risky decisions through a configured `permissionReviewer` role.                         | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory)       |
-| Model roles                     | Configure task-specific roles for default, small, plan, build, review, subagent, title, compaction, summary, memory extraction, Dream, memory side chat, and permission review.                        | [CLI, setup, and configuration](cli-setup-configuration.md#models)                       |
+| Model roles                     | Configure task-specific roles for default, small, plan, build/code, subagent, title, compaction, summary, memory extraction, Dream, memory side chat, and permission review.                     | [CLI, setup, and configuration](cli-setup-configuration.md#models)                       |
 | Local provider bridges          | Connect local provider CLIs such as Claude Code through validated setup/auth surfaces while keeping credentials in local tool state.                                                                    | [CLI, setup, and configuration](cli-setup-configuration.md#connect-provider)             |
 | mflow coordination              | Optional local-first coordination and locks for multiple agents working around the same repo.                                                                                                          | [mflow coordination](mflow.md)                                                           |
 | TSM and worktrees               | Open MendCode in managed/adopted worktrees or TSM terminal workspaces with preview-first safety.                                                                                                       | [TSM and worktrees](tsm-and-worktrees.md)                                                |
@@ -46,6 +47,20 @@ Run a control-plane turn without opening the full interactive surface:
 ```bash
 mendcode chat "summarize current status"
 ```
+
+Drive the same session runtime from another local agent:
+
+```bash
+mendcode session create --title "Implement the feature" --format json
+mendcode session send ses_... "Inspect the repository and implement the change" --format json
+mendcode session wait ses_... --timeout-ms 1800000 --format json
+mendcode session events ses_... --follow --format json
+```
+
+Automation output is newline-delimited `mendcode.cli.v1` JSON. Use `inspect` or
+`export` for a snapshot, `events` for progress, and `cancel` to stop active
+work. The detailed command contract, lifecycle states, model precedence, and
+redaction rules live in [Automation runtime](automation-runtime.md).
 
 Inspect readiness and product subsystems:
 
@@ -142,10 +157,12 @@ Configurable surfaces include:
 - prompt lead string: `❭`, `>`, `mendcode>`, `ship>`, team-specific markers
 - prompt status row: mode, model, provider, reasoning, context, permission mode, command hints, agent hints, script-backed status
 - home identity: generated ASCII title or custom ASCII mascot
+- independent Home and session ASCII art: large `surfaces.homeLogo.text` plus compact activity mascot states
 - home layout: centered welcome or split layout
 - split panel: actions or Agent View
 - chat presentation: raw, minimal, or MendCode activity-oriented rendering
 - activity mascot states for thinking, reading, searching, running, patching, testing, blocked, done, and error phases
+- profile/package sharing for team-created logos and mascots; first-class ASCII-pack import is not available yet
 - widgets, slots, custom routes, dialogs, footer entries, and themes through plugins
 
 Good demo profile:
@@ -396,7 +413,6 @@ MendCode avoids hardcoding one model for every task. Model config can route diff
 - `plan`
 - `build`
 - `code`
-- `review`
 - `subagent`
 - `title`
 - `compaction`

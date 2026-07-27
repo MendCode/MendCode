@@ -28,11 +28,18 @@ export const ServeCommand = effectCmd({
           username: credentials.username,
           password: credentials.password,
           startedAt: new Date().toISOString(),
+          runtimeID: process.env.MENDCODE_SHARED_SERVER_RUNTIME_ID || "unknown",
         }),
       )
     }
     console.log(`MendCode runtime server listening on http://${server.hostname}:${server.port}`)
 
-    yield* Effect.never
+    if (!process.env.MENDCODE_SHARED_SERVER_STATE_FILE) yield* Effect.never
+    yield* Effect.promise(() =>
+      SharedServer.waitForClientLeases({
+        pid: process.pid,
+        stop: () => server.stop(true),
+      }),
+    )
   }),
 })

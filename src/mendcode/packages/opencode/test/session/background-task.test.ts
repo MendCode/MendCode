@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Fiber, Layer, Scope } from "effect"
 import { BackgroundTask, reduceRun, type RunValue } from "@/session/background-task"
-import { BackgroundTaskEventTable } from "@/session/background-task.sql"
+import { BackgroundTaskEventTable, BackgroundTaskRunTable } from "@/session/background-task.sql"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { Database, eq } from "@/storage/db"
@@ -79,6 +79,7 @@ describe("background task service", () => {
         taskID: child.id,
         generation: first.generation,
         state: "completed",
+        background: true,
         result: { summary: "Cache is healthy.", changedFiles: ["src/cache.ts", "src/cache.ts"] },
       })
       const waited = yield* Fiber.join(waiter)
@@ -89,6 +90,7 @@ describe("background task service", () => {
       )
       expect(events).toHaveLength(1)
       expect(events[0]?.time_delivered).toBeNumber()
+      expect(events[0]?.payload).toMatchObject({ background: true })
 
       const second = yield* tasks.start({
         taskID: child.id,
@@ -145,6 +147,70 @@ describe("background task service", () => {
       const result = yield* tasks.wait({ taskID: child.id, timeoutMs: 10 })
       expect(result).toMatchObject({ timedOut: true, snapshot: { state: "running", controlIntent: "none" } })
       expect((yield* tasks.get(child.id))?.state).toBe("running")
+    }),
+  )
+
+  it.instance("admits active children atomically and can start without a queued gap", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const tasks = yield* BackgroundTask.Service
+      const parent = yield* sessions.create({ title: "Parent" })
+      const firstChild = yield* sessions.create({ parentID: parent.id, title: "First child" })
+      const secondChild = yield* sessions.create({ parentID: parent.id, title: "Second child" })
+      const first = yield* tasks.start({
+        taskID: firstChild.id,
+        parentSessionID: parent.id,
+        rootSessionID: parent.id,
+        depth: 1,
+        limits: { maxChildren: 1, maxDescendants: 2 },
+        startRunning: true,
+        title: "First child",
+      })
+      expect(first).toMatchObject({ state: "running", rootSessionID: parent.id, depth: 1 })
+
+      const rejected = yield* tasks
+        .start({
+          taskID: secondChild.id,
+          parentSessionID: parent.id,
+          rootSessionID: parent.id,
+          depth: 1,
+          limits: { maxChildren: 1, maxDescendants: 2 },
+          startRunning: true,
+          title: "Second child",
+        })
+        .pipe(Effect.exit)
+      expect(rejected._tag).toBe("Failure")
+    }),
+  )
+
+  it.instance("reclaims an expired runtime lease as an explicit interruption", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const tasks = yield* BackgroundTask.Service
+      const parent = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({ parentID: parent.id, title: "Expired child" })
+      const run = yield* tasks.start({
+        taskID: child.id,
+        parentSessionID: parent.id,
+        startRunning: true,
+        title: "Expired child",
+      })
+      Database.use((db) =>
+        db
+          .update(BackgroundTaskRunTable)
+          .set({ lease_expires_at: 10 })
+          .where(eq(BackgroundTaskRunTable.task_id, child.id))
+          .run(),
+      )
+
+      const reclaimed = yield* tasks.reclaimExpired({ now: 11 })
+      expect(reclaimed).toHaveLength(1)
+      expect(reclaimed[0]).toMatchObject({
+        taskID: child.id,
+        generation: run.generation,
+        state: "interrupted",
+        result: { error: "Runtime lease expired" },
+      })
     }),
   )
 })

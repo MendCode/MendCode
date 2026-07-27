@@ -570,6 +570,7 @@ function pluginApi(runtime: RuntimeState, plugin: PluginEntry, scope: PluginScop
   }
 
   const runtimeUi: TuiPluginApi["ui"]["runtime"] = {
+    customization: api.ui.runtime.customization,
     setStatus(id, value, input) {
       if (!value) return runtimeUi.clearStatus(id)
       const ok = api.ui.runtime.setStatus(id, value, input)

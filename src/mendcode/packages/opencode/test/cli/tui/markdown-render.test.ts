@@ -18,7 +18,7 @@ import {
   renderStreamingMarkdownTail,
   streamingMarkdownCommitIndex,
   visibleStreamingMarkdownPreview,
-} from "../../../src/cli/cmd/tui/util/plan-markdown"
+} from "../../../src/cli/cmd/tui/util/markdown-render"
 import { styledPlanMarkdownSegments, visibleStyledPlanMarkdownLines } from "../../../src/cli/cmd/tui/util/styled-plan-lines"
 
 const originalTermaid = process.env.MENDCODE_TERMAID_BIN
@@ -37,6 +37,33 @@ test("renderPlanMarkdown renders simple mermaid flowcharts without termaid", asy
   expect(result).toContain("Edit markdown")
   expect(result).toContain("╭")
   expect(result).not.toContain("flowchart TD")
+})
+
+test("renderPlanMarkdown centers Mermaid TD branches around their parent", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Root] --> B[Left branch]",
+    "  A --> C[Right branch]",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 100)
+  const lines = result.split("\n")
+  const boxColumn = (label: string) => {
+    const contentColumn = lines.find((line) => line.includes(`│ ${label}`))?.indexOf(`│ ${label}`) ?? -1
+    return contentColumn < 0 ? -1 : contentColumn - 1
+  }
+  const rootColumn = boxColumn("Root")
+  const leftColumn = boxColumn("Left branch")
+  const rightColumn = boxColumn("Right branch")
+
+  expect(rootColumn).toBeGreaterThan(0)
+  expect(leftColumn).toBeLessThan(rootColumn)
+  expect(rightColumn).toBeGreaterThan(rootColumn)
+  expect(result).toContain("┌")
+  expect(result).toContain("▼")
 })
 
 test("planReviewInlineTitle removes redundant Plan prefix", () => {
@@ -197,9 +224,9 @@ test("renderPlanMarkdown supports pipe-style mermaid edge labels", async () => {
   ].join("\n")
 
   const result = await renderPlanMarkdown(markdown, 100)
-  expect(result).toContain("├─ Yes")
+  expect(result).toContain("Yes")
   expect(result).toContain("│ Approve  │")
-  expect(result).toContain("└─ No")
+  expect(result).toContain("No")
   expect(result).toContain("│ Edit     │")
   expect(result).not.toContain("|Yes|")
 })
@@ -228,11 +255,11 @@ test("renderPlanMarkdown renders branch continuations as vertical boxes", async 
   ].join("\n")
 
   const result = await renderPlanMarkdown(markdown, 120)
-  expect(result).toContain("├─ Yes")
+  expect(result).toContain("Yes")
   expect(result).toContain("│ Create first workspace │")
   expect(result).toContain("│ Offer guided action │")
   expect(result).toContain("│ Track activation │")
-  expect(result).toContain("└─ No")
+  expect(result).toContain("No")
   expect(result).toContain("│ Show correction │")
   expect(result).toContain("↺ Data valid?")
 })
@@ -251,10 +278,10 @@ test("renderPlanMarkdown wraps long branch continuations into vertical boxes", a
   ].join("\n")
 
   const result = await renderPlanMarkdown(markdown, 120)
-  expect(result).toContain("├─ Yes")
+  expect(result).toContain("Yes")
   expect(result).toContain("│ Try product examples │")
   expect(result).toContain("│ Confirm onboarding complete │")
-  expect(result).toContain("└─ No")
+  expect(result).toContain("No")
   expect(result).toContain("│ Review troubleshooting │")
   expect(result).toContain("│ Fix missing runtime or port issue │")
   expect(result).not.toContain(
@@ -1090,4 +1117,56 @@ test("renderPlanMarkdown keeps unsupported mermaid blocks as code", async () => 
   const markdown = ["Plan", "", "```mermaid", "unknownDiagram", "  A --> B", "```"].join("\n")
 
   expect(await renderPlanMarkdown(markdown, 80)).toBe(markdown)
+})
+
+test("Mermaid TUI smoke matrix keeps flow, sequence, and chart output visual", () => {
+  const flow = renderPlanMarkdownStatic(
+    [
+      "```mermaid",
+      "flowchart TD",
+      "  A[Request] --> B{Valid?}",
+      "  B -->|Yes| C[Process]",
+      "  B -->|No| D[Reject]",
+      "```",
+    ].join("\n"),
+    100,
+    { tableMode: "grid" },
+  )
+  const flowLines = flow.split("\n")
+  const labelsLine = flowLines.find((line) => line.includes("Yes") && line.includes("No"))
+  const arrowsLine = flowLines.find((line) => (line.match(/▼/g)?.length ?? 0) === 2)
+  expect(labelsLine).toBeDefined()
+  expect(arrowsLine).toBeDefined()
+  expect(arrowsLine?.indexOf("▼")).toBe((labelsLine?.indexOf("Yes") ?? -1) + 1)
+  expect(arrowsLine?.lastIndexOf("▼")).toBe((labelsLine?.indexOf("No") ?? -1) + 1)
+  expect(flow).not.toContain("flowchart TD")
+
+  const sequence = renderPlanMarkdownStatic(
+    [
+      "```mermaid",
+      "sequenceDiagram",
+      "  participant U as User",
+      "  participant API as API",
+      "  U->>API: POST /items",
+      "  API-->>U: 201 Created",
+      "```",
+    ].join("\n"),
+    100,
+    { tableMode: "grid" },
+  )
+  expect(sequence).toContain("│ User")
+  expect(sequence).toContain("│ API")
+  expect(sequence).toContain("POST /items")
+  expect(sequence).toContain("▶")
+  expect(sequence).not.toContain("sequenceDiagram")
+
+  const chart = renderPlanMarkdownStatic(
+    ["```mermaid", "pie title Status", '  "Done" : 70', '  "Todo" : 30', "```"].join("\n"),
+    100,
+    { tableMode: "grid" },
+  )
+  expect(chart).toContain("Status")
+  expect(chart).toContain("████")
+  expect(chart).toContain("70 (70.0%)")
+  expect(chart).not.toContain("pie title")
 })

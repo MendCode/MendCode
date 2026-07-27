@@ -44,12 +44,15 @@ export const BackgroundTaskTable = sqliteTable(
       modelID: string
       variant?: string
     }>(),
+    root_session_id: text().$type<SessionID>(),
+    depth: integer().notNull().default(1),
     ...Timestamps,
     time_dismissed: integer(),
     time_expires: integer(),
   },
   (table) => [
     index("background_task_parent_idx").on(table.parent_session_id),
+    index("background_task_root_idx").on(table.root_session_id),
     index("background_task_updated_idx").on(table.time_updated),
   ],
 )
@@ -96,6 +99,7 @@ export const BackgroundTaskEventTable = sqliteTable(
       title?: string
       summary?: string
       error?: string
+      background?: boolean
     }>(),
     ...Timestamps,
     time_delivered: integer(),

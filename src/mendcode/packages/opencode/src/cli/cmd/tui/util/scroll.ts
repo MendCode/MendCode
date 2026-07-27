@@ -36,3 +36,13 @@ export function isScrollboxAtBottom(scroll: ScrollboxPosition, tolerance = 1) {
 export function isScrollboxAtTop(scroll: Pick<ScrollboxPosition, "scrollTop">, tolerance = 0) {
   return scroll.scrollTop <= tolerance
 }
+
+export type SessionScrollState = {
+  top: number
+  follow: boolean
+}
+
+export function sessionScrollTarget(state?: SessionScrollState) {
+  if (!state || state.follow) return "bottom" as const
+  return Math.max(0, state.top)
+}

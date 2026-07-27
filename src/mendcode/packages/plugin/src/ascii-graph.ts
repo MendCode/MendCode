@@ -6,6 +6,7 @@ export type AsciiGraphNode = {
   id: string
   label?: string
   group?: string
+  layoutGroup?: string
   weight?: number
 }
 
@@ -80,6 +81,7 @@ export type LayoutAsciiGraphInput = {
   maxNodes?: number
   selectedID?: string
   iterations?: number
+  centerGroups?: string[]
 }
 
 export type RenderAsciiGraphInput = {
@@ -157,14 +159,19 @@ export function layoutAsciiGraph(input: LayoutAsciiGraphInput): AsciiGraphScene 
   if (selected && !visible.some((node) => node.id === selected.id)) visible[visible.length - 1] = selected
   const visibleIDs = new Set(visible.map((node) => node.id))
   const edges = validEdges.filter((edge) => visibleIDs.has(edge.from) && visibleIDs.has(edge.to))
-  const groupIDs = Array.from(new Set(visible.map((node) => node.group ?? ""))).sort()
-  const groupCenters = new Map(groupIDs.map((group, index) => {
-    const angle = groupIDs.length === 1 ? 0 : (index / groupIDs.length) * Math.PI * 2 - Math.PI / 2
-    return [group, { x: Math.cos(angle) * 46, y: Math.sin(angle) * 30 }] as const
-  }))
+  const groupIDs = Array.from(new Set(visible.map((node) => node.layoutGroup ?? node.group ?? ""))).sort()
+  const centeredGroups = new Set(input.centerGroups ?? [])
+  const outerGroups = groupIDs.filter((group) => !centeredGroups.has(group))
+  const groupCenters = new Map([
+    ...groupIDs.filter((group) => centeredGroups.has(group)).map((group) => [group, { x: 0, y: 0 }] as const),
+    ...outerGroups.map((group, index) => {
+      const angle = outerGroups.length === 1 ? 0 : (index / outerGroups.length) * Math.PI * 2 - Math.PI / 2
+      return [group, { x: Math.cos(angle) * 46, y: Math.sin(angle) * 30 }] as const
+    }),
+  ])
   const nodes = visible.map((node, index): AsciiGraphLayoutNode => {
     const seed = hash(node.id)
-    const base = groupCenters.get(node.group ?? "") ?? { x: 0, y: 0 }
+    const base = groupCenters.get(node.layoutGroup ?? node.group ?? "") ?? { x: 0, y: 0 }
     const angle = ((seed % 10_000) / 10_000) * Math.PI * 2
     const radius = visible.length === 1 ? 0 : 14 + ((seed >>> 12) % 24)
     return {
@@ -215,7 +222,7 @@ export function layoutAsciiGraph(input: LayoutAsciiGraphInput): AsciiGraphScene 
     const temperature = 10 * (1 - iteration / Math.max(1, iterations)) + 0.15
     for (const node of nodes) {
       const shift = displacement.get(node.id)!
-      const groupCenter = groupCenters.get(node.group ?? "") ?? { x: 0, y: 0 }
+      const groupCenter = groupCenters.get(node.layoutGroup ?? node.group ?? "") ?? { x: 0, y: 0 }
       shift.x += (groupCenter.x - node.x) * 0.18 - node.x * 0.025
       shift.y += (groupCenter.y - node.y) * 0.18 - node.y * 0.025
       const distance = Math.max(0.01, Math.hypot(shift.x, shift.y))

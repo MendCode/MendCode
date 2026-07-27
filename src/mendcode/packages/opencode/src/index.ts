@@ -12,6 +12,7 @@ import { Heap } from "./cli/heap"
 import { ensureProcessMetadata } from "@mendcode/core/util/opencode-process"
 import path from "path"
 import { existsSync } from "fs"
+import { automationJSONRequested, writeAutomationEnvelope } from "./cli/automation"
 
 const processMetadata = ensureProcessMetadata("main")
 
@@ -262,9 +263,20 @@ try {
     })
   }
   Log.Default.error("fatal", data)
+  if (automationJSONRequested(args)) {
+    writeAutomationEnvelope({
+      kind: "error",
+      event: "cli.error",
+      data: {
+        name: e instanceof Error ? e.name : "Error",
+        message: e instanceof Error ? e.message : errorMessage(e),
+        ...(data.code ? { code: data.code } : {}),
+      },
+    })
+  }
   const formatted = FormatError(e)
-  if (formatted) UI.error(formatted)
-  if (formatted === undefined) {
+  if (!automationJSONRequested(args) && formatted) UI.error(formatted)
+  if (!automationJSONRequested(args) && formatted === undefined) {
     UI.error("Unexpected error, check log file at " + Log.file() + " for more details" + EOL)
     process.stderr.write(errorMessage(e) + EOL)
   }

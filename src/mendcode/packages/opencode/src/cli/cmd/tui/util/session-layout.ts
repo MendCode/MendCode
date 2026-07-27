@@ -29,6 +29,7 @@ export type SessionUsageBarLayout = {
 export type SessionGitDiffStatsLayout = {
   added: number
   removed: number
+  files?: number
 }
 
 export function sessionHorizontalInset(edgeToEdge: boolean) {
@@ -39,7 +40,7 @@ export function sessionContentWidth(terminalWidth: number, edgeToEdge: boolean) 
   return Math.max(1, terminalWidth - sessionHorizontalInset(edgeToEdge))
 }
 
-function compactNumber(value: number) {
+export function compactNumber(value: number) {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(".0", "")}M`
   if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(".0", "")}K`
   return value.toString()
@@ -77,12 +78,24 @@ export function sessionUsageBarDisplayWidth(input: SessionUsageBarLayout) {
   return sessionUsageBarLabels(input).displayWidth
 }
 
-export function sessionDiffStatsLabel(input: SessionGitDiffStatsLayout) {
-  return `+${compactNumber(input.added)} -${compactNumber(input.removed)}`
+export function sessionDiffStatsLabel(
+  input: SessionGitDiffStatsLayout,
+  options: { showCounts?: boolean; showFiles?: boolean } = {},
+) {
+  const counts = options.showCounts === false ? [] : [`+${compactNumber(input.added)}`, `-${compactNumber(input.removed)}`]
+  const files = options.showFiles && input.files !== undefined ? [`${compactNumber(input.files)} file${input.files === 1 ? "" : "s"}`] : []
+  return [...files, ...counts].join(" ")
 }
 
-export function sessionTopMetricsWidth(input: { diff?: SessionGitDiffStatsLayout; usage?: SessionUsageBarLayout }) {
-  const diffWidth = input.diff ? Bun.stringWidth(sessionDiffStatsLabel(input.diff)) : 0
+export function sessionTopMetricsWidth(input: {
+  diff?: SessionGitDiffStatsLayout
+  usage?: SessionUsageBarLayout
+  showDiffCount?: boolean
+  showDiffFiles?: boolean
+}) {
+  const diffWidth = input.diff
+    ? Bun.stringWidth(sessionDiffStatsLabel(input.diff, { showCounts: input.showDiffCount, showFiles: input.showDiffFiles }))
+    : 0
   const usageWidth = input.usage ? sessionUsageBarDisplayWidth(input.usage) : 0
   const separatorWidth = input.diff && input.usage ? 3 : 0
 

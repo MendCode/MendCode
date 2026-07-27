@@ -68,9 +68,12 @@ export const TaskStatusTool = Tool.define(
         `task_generation: ${input.snapshot.generation}`,
         `task_revision: ${input.snapshot.revision}`,
         `task_source: registry`,
+        `task_root_session_id: ${input.snapshot.rootSessionID}`,
+        `task_depth: ${input.snapshot.depth}`,
         `subagent: ${input.snapshot.agent ?? "unknown"}`,
         `title: ${input.snapshot.title}`,
       ]
+      if (input.snapshot.leaseExpiresAt) lines.push(`lease_expires_at: ${input.snapshot.leaseExpiresAt}`)
       if (input.snapshot.controlIntent !== "none") lines.push(`control_intent: ${input.snapshot.controlIntent}`)
       if (input.timedOut !== undefined) lines.push(`wait_timed_out: ${input.timedOut}`)
       if (input.snapshot.result?.error) lines.push(`task_error: ${input.snapshot.result.error}`)
@@ -117,8 +120,9 @@ export const TaskStatusTool = Tool.define(
                 agent: item.agent,
                 title: item.title,
                 source: "registry",
-                generation: item.generation,
-                updated: item.time.updated,
+                      generation: item.generation,
+                      depth: item.depth,
+                      updated: item.time.updated,
               })),
               ...legacy.map(({ task, state }) => ({
                 id: task.id,
@@ -127,6 +131,7 @@ export const TaskStatusTool = Tool.define(
                 title: task.title,
                 source: "legacy_derived",
                 generation: undefined,
+                depth: undefined,
                 updated: task.time.updated,
               })),
             ].toSorted((a, b) => b.updated - a.updated || b.id.localeCompare(a.id))
@@ -137,6 +142,7 @@ export const TaskStatusTool = Tool.define(
                       `task_id: ${item.id}`,
                       `status: ${item.state}`,
                       item.generation ? `generation: ${item.generation}` : undefined,
+                      item.depth !== undefined ? `depth: ${item.depth}` : undefined,
                       `source: ${item.source}`,
                       `subagent: ${item.agent ?? "unknown"}`,
                       `title: ${item.title}`,

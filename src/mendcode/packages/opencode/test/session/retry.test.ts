@@ -9,16 +9,20 @@ import { MessageV2 } from "../../src/session/message-v2"
 import { ProviderID } from "../../src/provider/schema"
 import { SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
+import { Session as SessionNs } from "../../src/session/session"
+import { Database, eq } from "../../src/storage/db"
+import { SessionStatusTable } from "../../src/session/session.sql"
 import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const providerID = ProviderID.make("test")
 const it = testEffect(Layer.mergeAll(SessionStatus.defaultLayer, CrossSpawnSpawner.defaultLayer))
+const itWithSession = testEffect(Layer.mergeAll(SessionStatus.defaultLayer, SessionNs.defaultLayer, CrossSpawnSpawner.defaultLayer))
 
-function apiError(headers?: Record<string, string>): MessageV2.APIError {
+function apiError(headers?: Record<string, string>, message = "boom"): MessageV2.APIError {
   return MessageV2.APIError.Schema.parse(
     new MessageV2.APIError({
-      message: "boom",
+      message,
       isRetryable: true,
       responseHeaders: headers,
     }).toObject(),
@@ -34,6 +38,12 @@ describe("session.retry.delay", () => {
     const error = apiError()
     const delays = Array.from({ length: 10 }, (_, index) => SessionRetry.delay(index + 1, error))
     expect(delays).toStrictEqual([2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000, 30000, 30000])
+  })
+
+  test("keeps network retries on a short interval instead of reaching 30 seconds", () => {
+    const error = apiError(undefined, "Network connection lost")
+    expect(SessionRetry.delay(1, error)).toBe(SessionRetry.RETRY_NETWORK_INTERVAL)
+    expect(SessionRetry.delay(99, error)).toBe(SessionRetry.RETRY_NETWORK_INTERVAL)
   })
 
   test("prefers retry-after-ms when shorter than exponential", () => {
@@ -110,6 +120,66 @@ describe("session.retry.delay", () => {
           attempt: 2,
           message: "boom",
         })
+      }),
+    ),
+  )
+
+  itWithSession.instance("does not write SQLite for a silently throttled retry status", () =>
+    Effect.gen(function* () {
+      const sessions = yield* SessionNs.Service
+      const status = yield* SessionStatus.Service
+      const session = yield* sessions.create({ title: "retry persistence" })
+
+      yield* status.set(session.id, { type: "busy" })
+      const before = Database.use((db) =>
+        db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, session.id)).get(),
+      )
+
+      yield* status.set(
+        session.id,
+        { type: "retry", attempt: 2, message: "Network connection lost", next: Date.now() + 1_000 },
+        { notify: false },
+      )
+      const silent = Database.use((db) =>
+        db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, session.id)).get(),
+      )
+
+      expect(silent?.time_updated).toBe(before?.time_updated)
+      expect(silent?.data).toMatchObject({ type: "busy" })
+      expect(yield* status.get(session.id)).toMatchObject({ type: "retry", attempt: 2 })
+
+      yield* status.set(
+        session.id,
+        { type: "retry", attempt: 3, message: "Network connection lost", next: Date.now() + 1_000 },
+      )
+      const persisted = Database.use((db) =>
+        db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, session.id)).get(),
+      )
+      expect(persisted?.data).toMatchObject({ type: "retry", attempt: 3 })
+    }),
+  )
+
+  it.live("keeps transient network retries alive past the normal retry cap", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const error = MessageV2.APIError.Schema.parse(
+          new MessageV2.APIError({
+            message: "Network connection lost",
+            isRetryable: true,
+            responseHeaders: { "retry-after-ms": "0" },
+            metadata: { code: "ENETDOWN" },
+          }).toObject(),
+        )
+        const step = yield* Schedule.toStepWithMetadata(
+          SessionRetry.policy({
+            parse: (err) => MessageV2.APIError.Schema.parse(err),
+            set: () => Effect.void,
+          }),
+        )
+
+        for (let attempt = 0; attempt < SessionRetry.RETRY_MAX_ATTEMPTS + 2; attempt++) {
+          yield* step(error)
+        }
       }),
     ),
   )
@@ -302,6 +372,31 @@ describe("session.message-v2.fromError", () => {
     expect(result.data.metadata?.code).toBe("ENOTFOUND")
   })
 
+  test("retries AI SDK connection refusal errors wrapped in an API call error", () => {
+    const cause = Object.assign(new Error("connect failed"), {
+      code: "ConnectionRefused",
+    })
+    const error = Object.assign(
+      new APICallError({
+        message: "Cannot connect to API: Unable to connect. Is the computer able to access the url?",
+        url: "https://chatgpt.com/backend-api/codex/responses",
+        requestBodyValues: {},
+        isRetryable: false,
+      }),
+      { cause },
+    )
+
+    const result = MessageV2.fromError(error, { providerID: ProviderID.make("openai") })
+
+    expect(MessageV2.APIError.isInstance(result)).toBe(true)
+    if (!MessageV2.APIError.isInstance(result)) throw new Error("expected APIError")
+    expect(result.data.isRetryable).toBe(true)
+    expect(result.data.message).toBe("Provider connection refused")
+    expect(result.data.metadata?.code).toBe("ECONNREFUSED")
+    expect(SessionRetry.retryable(result)).toBe("Provider connection refused")
+    expect(SessionRetry.delay(99, result)).toBe(SessionRetry.RETRY_NETWORK_INTERVAL)
+  })
+
   test("converts connection timeouts to retryable APIError", () => {
     const error = Object.assign(new Error("connection timed out"), {
       code: "ETIMEDOUT",
@@ -337,6 +432,7 @@ describe("session.message-v2.fromError", () => {
         input: Object.assign(new Error("connect EHOSTUNREACH"), { code: "EHOSTUNREACH" }),
         message: "Network unavailable",
       },
+      { input: new Error("Network connection lost"), message: "Network connection lost" },
       { input: new Error("socket hang up"), message: "Network connection lost" },
     ]
 

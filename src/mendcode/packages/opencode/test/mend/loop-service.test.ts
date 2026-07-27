@@ -105,11 +105,30 @@ describe("loop service plans", () => {
     expect(plist).toContain("<key>ProgramArguments</key>")
     expect(plist).toContain("<key>EnvironmentVariables</key>")
     expect(plist).toContain("<key>MENDCODE_SHELL_CWD</key>")
+    expect(plist).toContain("<key>MENDCODE_LOOP_SERVICE</key>")
+    expect(plist).toContain("<key>MENDCODE_DB</key>")
     expect(plist).toContain("<key>WorkingDirectory</key>")
     expect(plist).toContain("/tmp/acme &amp; &quot;repo&quot;")
     expect(plist).toContain("<key>StartInterval</key>")
     expect(plist).toContain("<integer>60</integer>")
+    expect(plist).toContain("<key>RunAtLoad</key>\n  <false/>")
     expect(plist).not.toContain("<key>KeepAlive</key>")
+  })
+
+  test("gates macOS launches with native SQLite before starting Bun", () => {
+    const plan = loopServicePlan({
+      projectRoot: "/tmp/repo",
+      execute: true,
+      reportOnly: true,
+      command: "/opt/mendcode",
+      platform: "darwin",
+    })
+
+    expect(plan.serviceProgramArguments.slice(0, 2)).toEqual(["/bin/sh", "-c"])
+    expect(plan.serviceProgramArguments[2]).toContain("/usr/bin/sqlite3 -readonly")
+    expect(plan.serviceProgramArguments[2]).toContain("launchctl bootout")
+    expect(plan.serviceProgramArguments[2]).toContain("/opt/mendcode loops daemon")
+    expect(loopServicePlist(plan)).toContain("<string>/bin/sh</string>")
   })
 
   test("builds a Linux user systemd unit with configurable directories", () => {

@@ -51,6 +51,10 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const state = yield* InstanceState.make<State>(
       Effect.fn("Bus.state")(function* (ctx) {
+        // Internal subscribers must see every lifecycle event. The SSE layer
+        // owns backpressure and can reconnect/resync; sliding here would drop
+        // terminal events such as session.status=idle without notifying the
+        // producer or the subscriber.
         const wildcard = yield* PubSub.unbounded<Payload>()
         const typed = new Map<string, PubSub.PubSub<Payload>>()
 

@@ -9,6 +9,8 @@ import {
   setupLabelValueLine,
   setupMemoryDialogCurrentValue,
   setupMemoryLearningStatus,
+  setupPresetDetails,
+  setupPresetList,
   setupProviderAuthMessage,
   setupShouldChooseHomeSplitPanel,
   setupShouldShowExtractorAuthBlocker,
@@ -35,15 +37,20 @@ import {
   memoryGraphCommandHints,
   memoryGraphExplorerLayout,
   memoryGraphFactProjectLabels,
+  memoryGraphNavigationDirection,
   memoryGraphMiniMap,
+  memoryGraphNodeTone,
+  memoryGraphPanDirection,
+  memoryGraphPanViewport,
   memoryGraphSearchMatches,
+  memoryListWindow,
   memoryLayoutForDimensions,
+  normalizeMemoryGraphViewPreference,
   memoryPreviewText,
   memorySidebarProjectWorkspaces,
   memoryTabCellWidths,
   memoryTabPresentation,
   shouldMemoryRouteHandleKey,
-  sideChatInputArtifacts,
 } from "../../src/cli/cmd/tui/routes/memory"
 import {
   contextAutoCompactLabel,
@@ -65,10 +72,12 @@ import {
 } from "../../src/cli/cmd/tui/util/fast-boot"
 
 describe("setup route smoke", () => {
-  test("includes optional health, package, tui, memory, and permissions steps in the setup flow contract", () => {
-    expect(setupSteps).toEqual(["provider", "models", "budget", "health", "package", "tui", "prompt", "memory", "permissions"])
+  test("starts with quick-start profiles and keeps health out of the setup flow", () => {
+    expect(setupSteps).toEqual(["start", "provider", "models", "budget", "prompt", "tui", "memory", "permissions", "package"])
     expect(requiredSetupSteps).toEqual(["provider", "models", "budget", "prompt"])
-    expect(setupRailStepStatus("health")).toBe("optional")
+    expect(setupRailStepStatus("start")).toBe("optional")
+    expect(setupPresetList.map((preset) => preset.id)).toEqual(["default", "minimal", "full", "custom"])
+    expect(setupPresetDetails.minimal.changes).toContain("memory off")
   })
 
   test("keeps setup status copy within terminal row budgets", () => {
@@ -295,8 +304,8 @@ describe("setup route smoke", () => {
     expect(loopRouteStackedListHeight(12, true, 14)).toBe(6)
     expect(loopRouteStackedListHeight(12, true, 12)).toBe(4)
     expect(loopRouteStackedListHeight(12, false, 20)).toBe(8)
-    expect(loopRouteKeyHint({ width: 46, narrow: true, compact: true })).toBe("a/h · o · q")
-    expect(loopRouteKeyHint({ width: 88, narrow: true, compact: true })).toBe("a/h view · pgup/dn page · o chat · q back")
+    expect(loopRouteKeyHint({ width: 46, narrow: true, compact: true })).toBe("c/g · a/h · o · q")
+    expect(loopRouteKeyHint({ width: 88, narrow: true, compact: true })).toBe("c project · g all · a/h view · pgup/dn page · o chat · q back")
   })
 
   test("loops route reserves non-shrinking responsive header rows", () => {
@@ -716,6 +725,52 @@ describe("setup route smoke", () => {
     expect(graph.legend.join("\n")).toContain("Commands")
   })
 
+  test("memory graph mini map filters stale and volatile facts with their orphan links", () => {
+    const graph = memoryGraphMiniMap({
+      width: 48,
+      height: 8,
+      categories: [
+        { id: "project.commands", label: "Commands", count: 1 },
+        { id: "volatile.reject", label: "Volatile", count: 1 },
+      ],
+      facts: [
+        { id: "visible", scope: "project", categoryIDs: ["project.commands"], text: "Durable command" },
+        { id: "volatile", scope: "project", categoryIDs: ["volatile.reject"], text: "Transient command" },
+        { id: "stale", scope: "project", categoryIDs: ["project.commands"], text: "Old command", stale: true },
+      ],
+      links: [
+        { from: "visible", to: "volatile", kind: "related" },
+        { from: "volatile", to: "stale", kind: "related" },
+      ],
+    })
+
+    expect(graph.scene.nodes.map((node) => node.id)).toEqual(["visible"])
+    expect(graph.scene.edges).toEqual([])
+    expect(graph.status).toContain("2 filtered")
+    expect(graph.status).toContain("2 links filtered")
+  })
+
+  test("memory graph sampling reserves and fills capacity for isolated facts", () => {
+    const graph = memoryGraphMiniMap({
+      facts: Array.from({ length: 20 }, (_, index) => ({
+        id: `isolated_${index}`,
+        text: `Isolated durable memory ${index}`,
+        scope: "project",
+        categoryIDs: ["memory.policy"],
+        materialized: true,
+        retrievalPriority: index,
+      })),
+      links: [],
+      categories: [{ id: "memory.policy", label: "Memory policy", count: 20 }],
+      width: 80,
+      height: 10,
+      maxNodes: 10,
+    })
+
+    expect(graph.scene.nodes).toHaveLength(10)
+    expect(graph.stats).toContain("isolated 20")
+  })
+
   test("memory graph mini map keeps empty state honest when nothing is materialized", () => {
     const graph = memoryGraphMiniMap({
       width: 42,
@@ -819,7 +874,7 @@ describe("setup route smoke", () => {
     expect(graph.selectedID).toBe("b")
     expect(graph.nodeCells.b).toBeDefined()
     expect(graph.isolatedRows).toEqual(["○ Standalone memory"])
-    expect(graph.stats).toContain("connected 2 · isolated 1 · visible 2/3")
+    expect(graph.stats).toContain("connected 2 · hidden isolates 1 · visible 2/3")
   })
 
   test("memory graph explorer gives wide terminals a dominant canvas and narrow terminals a stacked inspector", () => {
@@ -913,21 +968,58 @@ describe("setup route smoke", () => {
     expect(shouldMemoryRouteHandleKey({ dialogOpen: true })).toBe(false)
     expect(shouldMemoryRouteHandleKey({ dialogOpen: false, defaultPrevented: true })).toBe(false)
     expect(shouldMemoryRouteHandleKey({ dialogOpen: false, textInputActive: true })).toBe(false)
+    expect(shouldMemoryRouteHandleKey({ dialogOpen: false, defaultPrevented: true, emergency: true })).toBe(true)
+    expect(shouldMemoryRouteHandleKey({ dialogOpen: true, defaultPrevented: true, emergency: true })).toBe(false)
   })
 
   test("memory tabs stay content-sized instead of stretching across wide terminals", () => {
-    const labels = ["  1 Overview", "  2 Project", "● 3 Graph"]
+    const labels = ["  1 Memories", "● 2 Graph", "  3 Dream", "  4 Rules"]
     expect(memoryTabCellWidths({ width: 80, labels, gap: 2 })).toEqual(labels.map((label) => label.length))
-    expect(memoryTabCellWidths({ width: 40, labels: [" 1", " 2", "●3", " 4", " 5", " 6"], gap: 1 })).toEqual([2, 2, 2, 2, 2, 2])
-    expect(memoryTabCellWidths({ width: 65 })).toEqual([8, 8, 8, 8, 8, 8])
+    expect(memoryTabCellWidths({ width: 40, labels: [" 1", "●2", " 3", " 4"], gap: 1 })).toEqual([4, 4, 4, 4])
+    expect(memoryTabCellWidths({ width: 65 })).toEqual([8, 8, 8, 8])
     expect(memoryTabPresentation({ width: 160, active: "graph" }).mode).toBe("full")
-    expect(memoryTabPresentation({ width: 80, active: "graph" }).mode).toBe("compact")
-    expect(memoryTabPresentation({ width: 40, active: "graph" })).toMatchObject({ mode: "numeric", labels: [" 1", " 2", " 3", "●4", " 5", " 6"] })
+    expect(memoryTabPresentation({ width: 80, active: "graph" }).mode).toBe("full")
+    expect(memoryTabPresentation({ width: 28, active: "graph" })).toMatchObject({ mode: "numeric", labels: [" 1", "●2", " 3", " 4"] })
   })
 
   test("memory graph command bar removes secondary actions on narrow terminals", () => {
-    expect(memoryGraphCommandHints(140).map((item) => item.key)).toEqual(["↑↓←→", "Click", "F", "P", "I", "+/-", "[ ]", "R", "Esc"])
-    expect(memoryGraphCommandHints(60).map((item) => item.key)).toEqual(["↑↓←→", "F", "P", "I", "Esc"])
+    expect(memoryGraphCommandHints(140).map((item) => item.key)).toEqual(["arrows", "HJKL", "drag/trackpad", "+/-", "Esc"])
+    expect(memoryGraphCommandHints(60).map((item) => item.key)).toEqual(["arrows", "HJKL", "+/-", "Esc"])
+  })
+
+  test("memory graph separates free pan from memory-to-memory navigation", () => {
+    expect(memoryGraphPanDirection("left")).toEqual({ x: -1, y: 0 })
+    expect(memoryGraphPanDirection("down")).toEqual({ x: 0, y: 1 })
+    expect(memoryGraphNavigationDirection({ name: "left" })).toBeNull()
+    expect(memoryGraphNavigationDirection({ name: "h" })).toEqual({ x: -1, y: 0 })
+    expect(memoryGraphNavigationDirection({ name: "j" })).toEqual({ x: 0, y: 1 })
+    expect(memoryGraphPanViewport({
+      viewport: { x: undefined, y: undefined, zoom: 2 },
+      transform: { centerX: 10, centerY: 20, scaleX: 2, scaleY: 4, dotsX: 2, dotsY: 4 },
+      cells: { x: 4, y: -2 },
+    })).toEqual({ x: 14, y: 18, zoom: 2 })
+  })
+
+  test("memory graph reserves primary selection tone outside category palette", () => {
+    const tones = Array.from({ length: 14 }, (_, index) => memoryGraphNodeTone(index))
+    expect(tones).not.toContain("primary")
+    expect(tones).not.toContain("secondary")
+    expect(tones).not.toContain("info")
+    expect(new Set(tones).size).toBeGreaterThanOrEqual(6)
+  })
+
+  test("memory graph view defaults to the current connected project and migrates old preferences", () => {
+    expect(normalizeMemoryGraphViewPreference(undefined, ["/code/A"], "/code/A")).toEqual({ version: 2, scope: "project", projectRoot: "/code/A", showIsolates: false })
+    expect(normalizeMemoryGraphViewPreference({ version: 1, scope: "all", projectRoot: null, showIsolates: true }, ["/code/A"], "/code/A")).toEqual({ version: 2, scope: "project", projectRoot: "/code/A", showIsolates: false })
+    expect(normalizeMemoryGraphViewPreference({ version: 2, scope: "project", projectRoot: "/code/A", showIsolates: false }, ["/code/A"], "/code/A")).toEqual({ version: 2, scope: "project", projectRoot: "/code/A", showIsolates: false })
+    expect(normalizeMemoryGraphViewPreference({ version: 2, scope: "project", projectRoot: "/code/missing", showIsolates: false }, ["/code/A"], "/code/A")).toEqual({ version: 2, scope: "all", projectRoot: null, showIsolates: false })
+  })
+
+  test("memory list windows keep selections beyond fixed presentation caps visible", () => {
+    expect(memoryListWindow(Array.from({ length: 20 }, (_, index) => index), 17, 8)).toEqual([
+      { item: 12, index: 12 }, { item: 13, index: 13 }, { item: 14, index: 14 }, { item: 15, index: 15 },
+      { item: 16, index: 16 }, { item: 17, index: 17 }, { item: 18, index: 18 }, { item: 19, index: 19 },
+    ])
   })
 
   test("context usage label reflects configured compaction threshold", () => {
@@ -973,13 +1065,6 @@ describe("setup route smoke", () => {
       { label: "Reasoning", value: "4" },
       { label: "Compactions", value: "0" },
     ])
-  })
-
-  test("memory side chat summarizes pasted text in the input chrome", () => {
-    expect(sideChatInputArtifacts("line one\nline two\nline three")).toEqual(["pasted text · 3 lines · 28 chars"])
-    expect(sideChatInputArtifacts("![clip](data:image/png;base64,abc)")).toEqual(["pasted image ref · 1"])
-    expect(sideChatInputArtifacts("/tmp/clip.png\n/tmp/context.md")).toEqual(["pasted image ref · 1", "pasted file ref · 1"])
-    expect(sideChatInputArtifacts("short")).toEqual([])
   })
 
   test("memory sidebar keeps current project fixed and sorts other project memories", () => {

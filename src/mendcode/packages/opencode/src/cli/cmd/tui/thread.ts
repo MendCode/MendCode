@@ -3,7 +3,9 @@ import { tui } from "./app"
 import { Rpc } from "@/util/rpc"
 import { type rpc } from "./worker"
 import { spawn, type ChildProcess } from "child_process"
+import { stat } from "fs/promises"
 import path from "path"
+import { existsSync } from "fs"
 import { fileURLToPath } from "url"
 import { UI } from "@/cli/ui"
 import * as Log from "@mendcode/core/util/log"
@@ -25,7 +27,7 @@ import {
 import { validateSession } from "./validate-session"
 import { loadMendTuiProfile } from "@/mend/profile"
 import { ServerAuth } from "@/server/auth"
-import { SharedServer, type SharedServerState } from "./shared-server"
+import { SharedServer, type SharedServerClientLease, type SharedServerState } from "./shared-server"
 import { isProcessMemoryUsage, processMemoryUsage, type DiagnosticsSnapshot } from "@/util/process-memory"
 
 declare global {
@@ -66,6 +68,7 @@ async function probeSharedServer(input: { url: string; directory: string; header
     baseUrl: input.url,
     directory: input.directory,
     headers: input.headers,
+    signal: AbortSignal.timeout(5_000),
   })
   await client.global.health({ throwOnError: true })
   await client.session.list({ limit: 1 }, { throwOnError: true })
@@ -78,32 +81,66 @@ function sharedServerConnection(state: SharedServerState) {
   }
 }
 
-async function connectToLocalSharedServer(directory: string) {
+type LocalSharedServerConnection = ReturnType<typeof sharedServerConnection> & {
+  lease: SharedServerClientLease
+}
+
+async function connectToLocalSharedServer(directory: string, runtimeID: string, lease?: SharedServerClientLease) {
   const state = await SharedServer.readState()
-  if (!state) return
+  if (!state || state.runtimeID !== runtimeID) return
   const connection = sharedServerConnection(state)
   try {
     await probeSharedServer({ ...connection, directory })
-    return connection
+    return {
+      ...connection,
+      lease: lease ?? (await SharedServer.acquireClientLease()),
+    }
   } catch {
     return
   }
 }
 
-async function waitForLocalSharedServer(directory: string, timeoutMs = 12_000) {
+async function waitForLocalSharedServer(
+  directory: string,
+  runtimeID: string,
+  lease?: SharedServerClientLease,
+  timeoutMs = 12_000,
+) {
   const started = Date.now()
   while (Date.now() - started < timeoutMs) {
-    const connection = await connectToLocalSharedServer(directory)
+    const connection = await connectToLocalSharedServer(directory, runtimeID, lease)
     if (connection) return connection
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   return
 }
 
-function runtimeEntrypoint(runtimeCwd: string) {
-  const entry = process.argv[1]
+async function stopLocalSharedServer(pid: number) {
+  if (pid === process.pid || !SharedServer.isProcessAlive(pid)) return true
+  try {
+    process.kill(pid, "SIGTERM")
+  } catch {
+    return !SharedServer.isProcessAlive(pid)
+  }
+
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
+    if (!SharedServer.isProcessAlive(pid)) return true
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  return !SharedServer.isProcessAlive(pid)
+}
+
+export function resolveRuntimeEntrypoint(entry: string | undefined, runtimeCwd: string) {
   if (!entry || !/(^|[\\/])src[\\/]index\.(?:ts|js)$/.test(entry)) return
-  return path.isAbsolute(entry) ? entry : path.resolve(runtimeCwd, entry)
+  if (entry.includes("$bunfs") || entry.includes("~BUN")) return
+  const resolved = path.isAbsolute(entry) ? entry : path.resolve(runtimeCwd, entry)
+  if (!existsSync(resolved)) return
+  return resolved
+}
+
+function runtimeEntrypoint(runtimeCwd: string) {
+  return resolveRuntimeEntrypoint(process.argv[1], runtimeCwd)
 }
 
 function sharedServerCommand(runtimeCwd: string) {
@@ -135,7 +172,7 @@ function sharedServerCommand(runtimeCwd: string) {
   }
 }
 
-function sharedServerEnvironment(credentials: ReturnType<typeof SharedServer.credentials>) {
+function sharedServerEnvironment(credentials: ReturnType<typeof SharedServer.credentials>, runtimeID: string) {
   const env = { ...process.env }
   for (const key of [
     "MENDCODE_ROOT",
@@ -152,6 +189,7 @@ function sharedServerEnvironment(credentials: ReturnType<typeof SharedServer.cre
     "MENDCODE_PUBLIC_BIN",
     "OPENCODE_PROCESS_ROLE",
     "OPENCODE_RUN_ID",
+    "MENDCODE_SHARED_SERVER_RUNTIME_ID",
   ]) {
     delete env[key]
   }
@@ -162,23 +200,61 @@ function sharedServerEnvironment(credentials: ReturnType<typeof SharedServer.cre
     OPENCODE_SERVER_USERNAME: credentials.username,
     OPENCODE_SERVER_PASSWORD: credentials.password,
     MENDCODE_SHARED_SERVER_STATE_FILE: SharedServer.statePath(),
+    MENDCODE_SHARED_SERVER_RUNTIME_ID: runtimeID,
   }
 }
 
-async function ensureLocalSharedServer(input: { directory: string; runtimeCwd: string }) {
-  const existing = await connectToLocalSharedServer(input.directory)
+async function sharedServerRuntimeID(runtimeCwd: string) {
+  const entry = runtimeEntrypoint(runtimeCwd)
+  const executable = entry || process.execPath
+  const metadata = await stat(executable).catch(() => undefined)
+  return [executable, metadata?.size ?? "unknown", metadata?.mtimeMs ?? "unknown"].join(":")
+}
+
+async function ensureLocalSharedServer(input: {
+  directory: string
+  runtimeCwd: string
+  lease?: SharedServerClientLease
+}): Promise<LocalSharedServerConnection | undefined> {
+  const runtimeID = await sharedServerRuntimeID(input.runtimeCwd)
+  const existing = await connectToLocalSharedServer(input.directory, runtimeID, input.lease)
   if (existing) return existing
 
   const release = await SharedServer.acquireLock()
-  if (!release) return waitForLocalSharedServer(input.directory)
+  if (!release) return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
 
   let child: ChildProcess | undefined
   let connected = false
   try {
-    const startedByAnotherClient = await connectToLocalSharedServer(input.directory)
+    const startedByAnotherClient = await connectToLocalSharedServer(input.directory, runtimeID, input.lease)
     if (startedByAnotherClient) {
       connected = true
       return startedByAnotherClient
+    }
+
+    const state = await SharedServer.readState()
+    if (state) {
+      const activeClients = await SharedServer.activeClientLeaseCount()
+      const effectiveClients = activeClients + (input.lease ? 0 : 1)
+      const live = SharedServer.isProcessAlive(state.pid)
+      const runtimeMatches = state.runtimeID === runtimeID
+
+      if (!runtimeMatches && live && activeClients > 0) {
+        // Keep clients on the old runtime, but let this client start a fresh
+        // server instead of silently inheriting stale code.
+        await SharedServer.clearState()
+      } else {
+        const canReplace =
+          !live ||
+          SharedServer.shouldReplaceLiveServer({
+            pid: state.pid,
+            currentPid: process.pid,
+            activeClients: effectiveClients,
+          })
+        if (!canReplace) return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
+        if (!(await stopLocalSharedServer(state.pid))) return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
+        await SharedServer.clearStateIfOwned(state.pid)
+      }
     }
 
     await SharedServer.clearState()
@@ -186,14 +262,21 @@ async function ensureLocalSharedServer(input: { directory: string; runtimeCwd: s
     const command = sharedServerCommand(input.runtimeCwd)
     child = spawn(command.command, command.args, {
       cwd: command.cwd,
-      env: sharedServerEnvironment(credentials),
+      env: sharedServerEnvironment(credentials, runtimeID),
       detached: true,
       stdio: "ignore",
     })
-    child.on("error", () => undefined)
+    child.on("error", (error) => {
+      Log.Default.warn("shared server process failed to start", {
+        command: command.command,
+        args: command.args,
+        cwd: command.cwd,
+        error: errorMessage(error),
+      })
+    })
     child.unref()
 
-    const started = await waitForLocalSharedServer(input.directory)
+    const started = await waitForLocalSharedServer(input.directory, runtimeID, input.lease)
     if (!started) return
     connected = true
     return started
@@ -327,8 +410,6 @@ export const TuiThreadCommand = cmd({
       // Must be the very first thing — disables CTRL_C_EVENT before any Worker
       // spawn or async work so the OS cannot kill the process group.
       win32DisableProcessedInput()
-      const runtimeCwd = process.cwd()
-
       if (args.fork && !args.continue && !args.session) {
         UI.error("--fork requires --continue or --session")
         process.exitCode = 1
@@ -337,6 +418,7 @@ export const TuiThreadCommand = cmd({
 
       // Resolve relative --project paths from PWD, then use the real cwd after
       // chdir so the thread and worker share the same directory key.
+      const runtimeCwd = process.cwd()
       const next = resolveThreadDirectory(args.project)
       try {
         process.chdir(next)
@@ -368,19 +450,19 @@ export const TuiThreadCommand = cmd({
         return
       }
 
-      let sharedServerHeaders = sharedServerURL ? ServerAuth.headers() : undefined
-      let sharedServer = sharedServerURL
-      if (sharedServer) {
+      let serverHeaders: RequestInit["headers"] = sharedServerURL ? ServerAuth.headers() : undefined
+      let serverURL = sharedServerURL
+      if (serverURL) {
         try {
-          await probeSharedServer({ url: sharedServer, directory: cwd, headers: sharedServerHeaders })
+          await probeSharedServer({ url: serverURL, directory: cwd, headers: serverHeaders })
         } catch (error) {
           UI.println(
             UI.Style.TEXT_WARNING_BOLD +
               "! " +
               UI.Style.TEXT_NORMAL +
-              `Shared server unavailable; falling back to the local runtime. ${errorMessage(error)}`,
+              `Server unavailable; falling back to the local runtime. ${errorMessage(error)}`,
           )
-          sharedServer = undefined
+          serverURL = undefined
         }
       }
 
@@ -388,15 +470,22 @@ export const TuiThreadCommand = cmd({
         args.isolated ||
         process.env.MENDCODE_DISABLE_SHARED_SERVER === "1" ||
         process.env.OPENCODE_DISABLE_SHARED_SERVER === "1"
-      if (!sharedServer && !isolated && !networkOptionSet) {
-        const local = await ensureLocalSharedServer({ directory: cwd, runtimeCwd })
-        if (local) {
-          sharedServer = local.url
-          sharedServerHeaders = local.headers
+      let localSharedServer: LocalSharedServerConnection | undefined
+      if (
+        SharedServer.shouldUseSharedServer({
+          serverURL,
+          isolated,
+          networkOptionSet,
+        })
+      ) {
+        localSharedServer = await ensureLocalSharedServer({ directory: cwd, runtimeCwd })
+        if (localSharedServer) {
+          serverURL = localSharedServer.url
+          serverHeaders = localSharedServer.headers
         }
       }
 
-      const file = sharedServer ? undefined : await target()
+      const file = serverURL ? undefined : await target()
       const env = sanitizedProcessEnv({
         [OPENCODE_PROCESS_ROLE]: "worker",
         [OPENCODE_RUN_ID]: ensureRunID(),
@@ -437,6 +526,13 @@ export const TuiThreadCommand = cmd({
         process.off("uncaughtException", error)
         process.off("unhandledRejection", error)
         process.off("SIGUSR2", reload)
+        const lease = localSharedServer?.lease
+        localSharedServer = undefined
+        await lease?.release().catch((error) => {
+          Log.Default.warn("shared server lease release failed", {
+            error: errorMessage(error),
+          })
+        })
         if (!client || !worker) return
         await withTimeout(client.call("shutdown", undefined), 5000).catch((error) => {
           Log.Default.warn("worker shutdown failed", {
@@ -458,10 +554,10 @@ export const TuiThreadCommand = cmd({
         network.port !== 0 ||
         network.hostname !== "127.0.0.1"
 
-      const transport: ThreadTransport = sharedServer
+      let transport: ThreadTransport = serverURL
         ? {
-            url: sharedServer,
-            headers: sharedServerHeaders,
+            url: serverURL,
+            headers: serverHeaders,
           }
         : external
           ? {
@@ -476,27 +572,46 @@ export const TuiThreadCommand = cmd({
               events: createEventSource(client!),
             }
 
-      try {
-        await validateSession({
-          url: transport.url,
-          sessionID: args.session,
-          directory: cwd,
-          fetch: transport.fetch,
-          headers: transport.headers,
-        })
-      } catch (error) {
-        UI.error(errorMessage(error))
-        process.exitCode = 1
-        return
-      }
+      const reconnect = localSharedServer
+        ? async () => {
+            const current = localSharedServer
+            if (!current) throw new Error("local shared server connection is unavailable")
+            const refreshed = await ensureLocalSharedServer({
+              directory: cwd,
+              runtimeCwd,
+              lease: current.lease,
+            })
+            if (!refreshed) throw new Error("local shared server is unavailable")
+            localSharedServer = refreshed
+            serverURL = refreshed.url
+            serverHeaders = refreshed.headers
+            transport.url = refreshed.url
+            transport.headers = refreshed.headers
+            return { url: refreshed.url, headers: refreshed.headers }
+          }
+        : undefined
 
-      if (client) {
-        setTimeout(() => {
-          client.call("checkUpgrade", { directory: cwd }).catch(() => {})
-        }, 1000).unref?.()
-      }
-
       try {
+        try {
+          await validateSession({
+            url: transport.url,
+            sessionID: args.session,
+            directory: cwd,
+            fetch: transport.fetch,
+            headers: transport.headers,
+          })
+        } catch (error) {
+          UI.error(errorMessage(error))
+          process.exitCode = 1
+          return
+        }
+
+        if (client) {
+          setTimeout(() => {
+            client.call("checkUpgrade", { directory: cwd }).catch(() => {})
+          }, 1000).unref?.()
+        }
+
         await tui({
           url: transport.url,
           ...(args.diagnostics
@@ -525,6 +640,7 @@ export const TuiThreadCommand = cmd({
             : {}),
           config,
           mendProfile,
+          reconnect: reconnect ? { refresh: reconnect } : undefined,
           directory: cwd,
           fetch: transport.fetch,
           headers: transport.headers,

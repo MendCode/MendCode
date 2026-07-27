@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import {
+  shouldAcceptCompactionArcadeFocus,
   shouldBlurCompactionArcadeWhenOffscreen,
   shouldRenderCompactionArcade,
 } from "@/cli/cmd/tui/component/compaction-panel"
@@ -8,6 +9,10 @@ import {
   promptCursorOffsetAfterArrow,
   promptCursorOffsetFromMouse,
   fetchLoopWorkflowsFromServer,
+  isRetryablePromptDelivery,
+  promptDeliveryErrorMessage,
+  promptDeliveryIsQueued,
+  promptDeliveryRetryDelay,
   promptDraftHistoryAction,
   mergeOptimisticUserParts,
   optimisticUserMessage,
@@ -112,6 +117,37 @@ describe("prompt draft history", () => {
   test("uses the configured redo binding without stealing terminal suspend", () => {
     expect(promptDraftHistoryAction({ undo: false, redo: true, canUndo: false, canRedo: true })).toBe("redo")
     expect(promptDraftHistoryAction({ undo: true, redo: true, canUndo: true, canRedo: true })).toBe("undo")
+  })
+})
+
+describe("prompt delivery recovery", () => {
+  test("retries a delivery with no HTTP response instead of treating it as a rejection", () => {
+    expect(isRetryablePromptDelivery({ error: new Error("network down") })).toBe(true)
+    expect(
+      isRetryablePromptDelivery({ error: { message: "bad request" }, response: new Response(null, { status: 400 }) }),
+    ).toBe(false)
+    expect(
+      isRetryablePromptDelivery({
+        error: { message: "server unavailable" },
+        response: new Response(null, { status: 503 }),
+      }),
+    ).toBe(true)
+  })
+
+  test("keeps retrying prompt delivery at a short offline interval", () => {
+    expect(promptDeliveryRetryDelay(1)).toBe(1000)
+    expect(promptDeliveryRetryDelay(5)).toBe(1000)
+    expect(promptDeliveryRetryDelay(99)).toBe(1000)
+  })
+
+  test("extracts structured server error messages", () => {
+    expect(promptDeliveryErrorMessage({ data: { message: "invalid prompt" } })).toBe("invalid prompt")
+    expect(promptDeliveryErrorMessage(undefined)).toBe("The server rejected this prompt.")
+  })
+
+  test("does not render an accepted delivery as queued", () => {
+    expect(promptDeliveryIsQueued("pending")).toBe(true)
+    expect(promptDeliveryIsQueued("accepted")).toBe(false)
   })
 })
 
@@ -363,28 +399,28 @@ describe("queued user turn", () => {
     ).toBe(user.id)
   })
 
-  test("pins the active user while follow mode keeps the transcript at the tail", () => {
+  test("pins the active user only after it crosses the viewport top", () => {
     expect(
       shouldPinSessionStickyUserHeader({
         pinnedUserID: "msg_new",
         pinnedAnchor: { id: "msg_new", y: 140 },
-        follow: true,
-      }),
-    ).toBe(true)
-
-    expect(
-      shouldPinSessionStickyUserHeader({
-        pinnedUserID: "msg_new",
-        pinnedAnchor: { id: "msg_new", y: 140 },
-        follow: false,
+        top: 100,
       }),
     ).toBe(false)
 
     expect(
       shouldPinSessionStickyUserHeader({
         pinnedUserID: "msg_new",
+        pinnedAnchor: { id: "msg_new", y: 40 },
+        top: 100,
+      }),
+    ).toBe(true)
+
+    expect(
+      shouldPinSessionStickyUserHeader({
+        pinnedUserID: "msg_new",
         pinnedAnchor: { id: "msg_old", y: 140 },
-        follow: true,
+        top: 100,
       }),
     ).toBe(false)
   })
@@ -416,10 +452,14 @@ describe("resolveWorkingStartedAt", () => {
 
   test("keeps interrupt enabled for orphaned unfinished assistant messages", () => {
     expect(shouldEnableSessionInterrupt({ statusType: "busy" })).toBe(true)
-    expect(shouldEnableSessionInterrupt({ statusType: "busy", autocompleteVisible: true })).toBe(true)
+    expect(shouldEnableSessionInterrupt({ statusType: "busy", autocompleteVisible: true })).toBe(false)
     expect(shouldEnableSessionInterrupt({ statusType: "retry" })).toBe(true)
     expect(shouldEnableSessionInterrupt({ statusType: "idle" })).toBe(false)
     expect(shouldEnableSessionInterrupt({ statusType: "idle", hasActiveWorkingAssistant: true })).toBe(true)
+    expect(shouldEnableSessionInterrupt({ statusType: "idle", hasPendingPromptDelivery: true })).toBe(true)
+    expect(shouldEnableSessionInterrupt({ statusType: "busy", promptFocused: false })).toBe(false)
+    expect(shouldEnableSessionInterrupt({ statusType: "busy", promptFocused: true })).toBe(true)
+    expect(shouldEnableSessionInterrupt({ statusType: "busy", autocompleteVisible: true })).toBe(false)
     expect(
       shouldEnableSessionInterrupt({
         statusType: "idle",
@@ -436,6 +476,7 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldInterruptImmediately({ statusType: "retry", hasDraft: true })).toBe(false)
     expect(shouldInterruptImmediately({ statusType: "idle" })).toBe(false)
     expect(shouldInterruptImmediately({ statusType: "idle", hasActiveWorkingAssistant: true })).toBe(true)
+    expect(shouldInterruptImmediately({ statusType: "idle", hasPendingPromptDelivery: true })).toBe(true)
     expect(shouldInterruptImmediately({ statusType: "idle", hasActiveWorkingAssistant: true, hasDraft: true })).toBe(
       false,
     )
@@ -452,6 +493,32 @@ describe("resolveWorkingStartedAt", () => {
     ).toBe(false)
     expect(
       shouldAcceptPromptInterruptFocus({ inputFocused: false, currentFocusedRenderable: promptInput, promptInput }),
+    ).toBe(false)
+  })
+
+  test("accepts compaction arcade input only while the arcade owns renderer focus", () => {
+    const promptInput = {}
+    const arcadeInput = {}
+    expect(
+      shouldAcceptCompactionArcadeFocus({
+        arcadeFocused: true,
+        currentFocusedRenderable: arcadeInput,
+        arcadeInput,
+      }),
+    ).toBe(true)
+    expect(
+      shouldAcceptCompactionArcadeFocus({
+        arcadeFocused: true,
+        currentFocusedRenderable: promptInput,
+        arcadeInput,
+      }),
+    ).toBe(false)
+    expect(
+      shouldAcceptCompactionArcadeFocus({
+        arcadeFocused: false,
+        currentFocusedRenderable: arcadeInput,
+        arcadeInput,
+      }),
     ).toBe(false)
   })
 
@@ -504,6 +571,29 @@ describe("resolveWorkingStartedAt", () => {
     expect(promptCursorEndOffset("line 1\nline 2")).toBe("line 1\nline 2".length)
     expect(promptCursorEndOffset("好a")).toBe("好a".length)
     expect(promptCursorOffsetAfterArrow({ text: "好a", cursorOffset: 2, direction: "right" })).toBe(2)
+  })
+
+  test("treats virtual prompt parts as atomic cursor ranges", () => {
+    const text = "ask [Image 1] now"
+    const imageStart = text.indexOf("[Image 1]")
+    const imageEnd = imageStart + "[Image 1]".length
+    const atomicRanges = [{ start: imageStart, end: imageEnd }]
+
+    expect(promptCursorOffsetAfterArrow({ text, cursorOffset: imageStart - 1, direction: "right", atomicRanges })).toBe(
+      imageStart,
+    )
+    expect(promptCursorOffsetAfterArrow({ text, cursorOffset: imageStart, direction: "right", atomicRanges })).toBe(
+      imageEnd,
+    )
+    expect(promptCursorOffsetAfterArrow({ text, cursorOffset: imageStart + 3, direction: "right", atomicRanges })).toBe(
+      imageEnd,
+    )
+    expect(promptCursorOffsetAfterArrow({ text, cursorOffset: imageEnd, direction: "left", atomicRanges })).toBe(
+      imageStart - 1,
+    )
+    expect(promptCursorOffsetAfterArrow({ text, cursorOffset: imageStart + 3, direction: "left", atomicRanges })).toBe(
+      imageStart - 1,
+    )
   })
 
   test("syncs mouse-click prompt cursor offset to the visual cursor position", () => {

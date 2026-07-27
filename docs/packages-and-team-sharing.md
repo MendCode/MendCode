@@ -13,6 +13,7 @@ The official registry repo is `https://github.com/MendCode/mendcode-marketplace`
 | Team standard | commands, agents, modes, skills, focus default, model roles, permission defaults, TUI profile. | Provider tokens, local auth files, personal memory. |
 | Review mode bundle | review agent, review mode, prompt templates, stricter permission mode, review model role. | Branch mutations or CI credentials. |
 | UI theme | TUI profile, theme tokens, prompt chrome, status script, widgets, pages. | Runtime service activation. |
+| ASCII art pack | TUI profile with a Home logo, session mascot states, or both. | Separate art-pack manifest/importer; static art is shared through the TUI profile. |
 | Tool pack | Custom tool calls, tool docs, supporting scripts, prompt mode hints. | Arbitrary background daemons or secrets. |
 | MCP bundle | MCP server config/files, commands, docs/context files. | Secrets required by the MCP server. |
 | Worktree policy | worktree policy, package docs, optional TSM hints. | Destructive worktree operations at install time. |
@@ -39,6 +40,16 @@ Package artifacts can include:
 - budget config
 - memory config
 - permissions config
+
+### Sharing ASCII art
+
+There is no special `pet` or `asciiArt` artifact type. Shareable art belongs in the package's TUI profile:
+
+- Home-only art: `identity.logoMode: "mascot"` and `surfaces.homeLogo.text`.
+- Session-only art: `presentation.activity.mascot`, including `hover` and `states`.
+- Full identity pack: both sections together; they remain independent after installation.
+
+A package can therefore contain a logo, a session companion, or a complete branded terminal identity without shipping a plugin. Keep the art monospaced, narrow enough for the target terminals, and data-only. Use a plugin only when the package needs dynamic rendering, custom dialogs, or behavior beyond static profile values.
 
 Package manifests are read from:
 
@@ -177,6 +188,7 @@ Before sharing a package:
 5. Install it in a throwaway checkout.
 6. Run `mendcode marketplace status`, `mendcode models status`, and `mendcode permissions status`.
 7. Open the TUI and verify prompt marker, status row, command palette entries, Agent View/home layout, and any widgets.
+8. If the package includes ASCII art, verify both Home and session mascot surfaces in a narrow terminal and confirm that missing activity states fall back cleanly.
 
 ## What Does Not Belong in Packages
 

@@ -574,7 +574,7 @@ function isInternalCompactionUser(message: MessageV2.WithParts) {
 function latestUserRequestContext(messages: MessageV2.WithParts[]) {
   const latest = messages.findLast((msg) => msg.info.role === "user" && !isInternalCompactionUser(msg))
   if (!latest) return []
-  const text = compactText(messageText(latest), 2_500) || "(empty user message)"
+  const text = compactTextHead(messageText(latest), 2_500) || "(empty user message)"
   return [
     [
       "Latest Real User Request Evidence:",
@@ -881,6 +881,15 @@ function compactText(text: string, maxChars: number) {
   const head = Math.floor(budget / 3)
   const tail = budget - head
   return `${trimmed.slice(0, head)}${marker}${trimmed.slice(trimmed.length - tail)}`
+}
+
+function compactTextHead(text: string, maxChars: number) {
+  const trimmed = text.trim()
+  if (trimmed.length <= maxChars) return trimmed
+  const marker = `\n[truncated: omitted ${trimmed.length - maxChars} chars; showing initial context only]\n`
+  const budget = Math.max(0, maxChars - marker.length)
+  if (budget <= 0) return trimmed.slice(0, maxChars)
+  return `${trimmed.slice(0, budget)}${marker}`
 }
 
 function localRescueSummary(input: { previousSummary?: string; context: string[]; reason: string }) {

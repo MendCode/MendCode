@@ -7104,6 +7104,7 @@ export type SessionMessagesResponse = SessionMessagesResponses[keyof SessionMess
 export type SessionPromptData = {
   body?: {
     messageID?: string
+    replaceExisting?: boolean
     model?: {
       providerID: string
       modelID: string
@@ -7474,6 +7475,7 @@ export type SessionSummarizeResponse = SessionSummarizeResponses[keyof SessionSu
 export type SessionPromptAsyncData = {
   body?: {
     messageID?: string
+    replaceExisting?: boolean
     model?: {
       providerID: string
       modelID: string

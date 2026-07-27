@@ -1,5 +1,9 @@
 import { Config } from "@/config/config"
-import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
+import {
+  GlobalBus,
+  matchesGlobalEventDirectory,
+  type GlobalEvent as GlobalBusEvent,
+} from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { Bus } from "@/bus"
 import { Installation } from "@/installation"
@@ -33,10 +37,12 @@ function parseBody(body: string) {
   }
 }
 
-function eventResponse() {
+function eventResponse(directory?: string) {
   log.info("global event connected")
   const events = Stream.callback<GlobalBusEvent>((queue) => {
-    const handler = (event: GlobalBusEvent) => Queue.offerUnsafe(queue, event)
+    const handler = (event: GlobalBusEvent) => {
+      if (matchesGlobalEventDirectory(event, directory)) Queue.offerUnsafe(queue, event)
+    }
     return Effect.acquireRelease(
       Effect.sync(() => GlobalBus.on("event", handler)),
       () => Effect.sync(() => GlobalBus.off("event", handler)),
@@ -81,7 +87,9 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     const event = Effect.fn("GlobalHttpApi.event")(function* () {
-      return eventResponse()
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const directory = new URL(request.url, "http://localhost").searchParams.get("directory") ?? undefined
+      return eventResponse(directory)
     })
 
     const configGet = Effect.fn("GlobalHttpApi.configGet")(function* () {

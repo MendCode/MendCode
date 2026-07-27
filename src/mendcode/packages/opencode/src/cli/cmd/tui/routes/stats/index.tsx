@@ -16,14 +16,15 @@ import { routeReturnTarget, useRoute } from "@tui/context/route"
 import { useSDK } from "@tui/context/sdk"
 import { useTheme } from "@tui/context/theme"
 import { useSync } from "@tui/context/sync"
-import { useMendTuiProfile } from "@tui/context/mend"
 import { useProject } from "@tui/context/project"
 import { useKV } from "@tui/context/kv"
 import { useDialog } from "@tui/ui/dialog"
 import { DialogPrompt } from "@tui/ui/dialog-prompt"
 import { Spinner } from "@tui/component/spinner"
+import { CommandDeck, commandDeckLayout } from "@tui/component/command-deck"
 import { Locale } from "@/util/locale"
 import path from "path"
+import { abortAfterAny } from "@/util/abort"
 import {
   buildUsageInsights,
   formatInsightDuration,
@@ -40,8 +41,11 @@ const ADVANCED_DAYS = 365
 const WEATHER_KV_KEY = "stats_weather"
 export const STATS_CACHE_KEY = "stats_insights_v2"
 const STATS_CACHE_STALE_MS = 5 * 60 * 1000
-const STATS_TODAY_CACHE_STALE_MS = 60 * 1000
-const STATS_REQUEST_TIMEOUT_MS = 15 * 1000
+const STATS_TODAY_CACHE_STALE_MS = 5 * 60 * 1000
+const STATS_REQUEST_TIMEOUT_MS = 10 * 1000
+const STATS_AGGREGATE_MESSAGE_LIMIT = 200
+const STATS_FALLBACK_SESSION_LIMIT = 100
+const STATS_FALLBACK_MESSAGE_LIMIT = 100
 const STATS_MESSAGE_FETCH_CONCURRENCY = 12
 const HEATMAP_ROWS = 7
 const HEATMAP_COLUMNS = Math.ceil(DEFAULT_DAYS / HEATMAP_ROWS)
@@ -159,6 +163,7 @@ function Panel(props: {
   grow?: boolean
   height?: number | `${number}%`
   onMouseUp?: () => void
+  titlePaddingTop?: number
 }) {
   const { theme } = useTheme()
   return (
@@ -174,15 +179,19 @@ function Panel(props: {
       borderColor={theme.border}
       paddingLeft={1}
       paddingRight={1}
-      paddingTop={1}
+      paddingTop={props.titlePaddingTop ?? 1}
       paddingBottom={1}
       gap={1}
       onMouseUp={props.onMouseUp}
     >
-      <text fg={theme.primary} wrapMode="none">
-        {props.title}
-      </text>
-      {props.children}
+      <box height={1} overflow="hidden">
+        <text fg={theme.primary} wrapMode="none">
+          {props.title}
+        </text>
+      </box>
+      <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden" gap={1}>
+        {props.children}
+      </box>
     </box>
   )
 }
@@ -211,53 +220,6 @@ function MetricRows(props: {
         }}
       </For>
     </box>
-  )
-}
-
-function Header(props: { advanced: boolean; scope: StatsScope; mode: HeatMode; narrow: boolean }) {
-  const { theme } = useTheme()
-  const mend = useMendTuiProfile()
-  const view =
-    props.scope === "global" ? "global stats" : props.scope === "project" ? "project stats" : "directory stats"
-  const status = `${mend.profile.identity.productName} · ${view} · ${props.mode} · 365d${props.advanced ? "" : " · compact"}`
-  const shortcuts = "↑/↓ day · ←/→ week · m/tab mode · 1/2/3 views · r refresh · esc"
-  return (
-    <Switch>
-      <Match when={props.narrow}>
-        <box flexDirection="column" height={3} overflow="hidden">
-          <box height={1} overflow="hidden">
-            <text fg={theme.text} wrapMode="none">
-              Usage Insights
-            </text>
-          </box>
-          <box height={1} overflow="hidden">
-            <text fg={theme.textMuted} wrapMode="none">
-              {status}
-            </text>
-          </box>
-          <box height={1} overflow="hidden">
-            <text fg={theme.textMuted} wrapMode="none">
-              {shortcuts}
-            </text>
-          </box>
-        </box>
-      </Match>
-      <Match when={!props.narrow}>
-        <box flexDirection="row" justifyContent="space-between" height={2} overflow="hidden">
-          <box flexDirection="column" height={2} overflow="hidden">
-            <text fg={theme.text} wrapMode="none">
-              Usage Insights
-            </text>
-            <text fg={theme.textMuted} wrapMode="none">
-              {status}
-            </text>
-          </box>
-          <text fg={theme.textMuted} wrapMode="none">
-            {shortcuts}
-          </text>
-        </box>
-      </Match>
-    </Switch>
   )
 }
 
@@ -524,7 +486,7 @@ function LoadingStats(props: { tiny: boolean; error?: string }) {
           </text>
         </box>
       </Panel>
-      <Panel title="Token activity · daily · 365 days" grow>
+       <Panel title="Token activity · daily · 365 days" titlePaddingTop={0} grow>
         <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
           <text fg={theme.textMuted} wrapMode="none">
             · · · · · · · · · · · · · · · · · · · · ·
@@ -590,7 +552,7 @@ function CompactStats(props: {
       <Panel title="Activity" height={8}>
         <MetricRows items={props.headline.slice(0, 4)} maxWidth={props.contentWidth} />
       </Panel>
-      <Panel title={`Token activity · ${props.mode} · 365 days`} grow>
+       <Panel title={`Token activity · ${props.mode} · 365 days`} titlePaddingTop={0} grow>
         <TokenActivityView
           insights={props.insights}
           mode={props.mode}
@@ -655,7 +617,7 @@ function MainDashboard(props: {
 
       <box flexDirection={props.wide ? "row" : "column"} flexGrow={1} minHeight={0} gap={1}>
         <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0} gap={1}>
-          <Panel title={`Token activity · ${props.mode} · 365 days`} grow>
+          <Panel title={`Token activity · ${props.mode} · 365 days`} titlePaddingTop={0} grow>
             <TokenActivityView
               insights={props.data}
               mode={props.mode}
@@ -1016,7 +978,8 @@ async function listGlobalSessions(sdk: ReturnType<typeof useSDK>, query: Session
     const response = await sdk.fetch(statsURL(sdk, "/experimental/session", query), { headers, signal })
     if (!response.ok) throw new Error(`global stats failed: ${response.status}`)
     return (await response.json()) as SessionInsightInput["session"][]
-  } catch {
+  } catch (error) {
+    if (signal.aborted) throw error
     const result = await sdk.client.experimental.session.list(query, { throwOnError: true, signal })
     return (result.data ?? []) as SessionInsightInput["session"][]
   }
@@ -1057,14 +1020,16 @@ async function loadInsights(
     advanced: boolean
     scope: StatsScope
     query: SessionScopeQuery
+    cached?: boolean
+    signal?: AbortSignal
     onFirstBatch?: (insights: UsageInsights) => void
   },
 ) {
   const days = options.advanced ? ADVANCED_DAYS : DEFAULT_DAYS
   const end = Date.now()
   const start = end - days * DAY_MS
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), STATS_REQUEST_TIMEOUT_MS)
+  const timeout = abortAfterAny(STATS_REQUEST_TIMEOUT_MS, ...(options.signal ? [options.signal] : []))
+  const signal = timeout.signal
   const query: SessionListQuery = {
     start,
     limit: options.advanced ? 1000 : 250,
@@ -1072,39 +1037,52 @@ async function loadInsights(
   }
   try {
     if (options.scope === "global") {
-      if (options.onFirstBatch && query.limit > 250) {
+      if (options.onFirstBatch && query.limit > STATS_FALLBACK_SESSION_LIMIT) {
         const partial = await loadGlobalUsageInsights(
           sdk,
           {
             start,
-            limit: 250,
-            messageLimit: 500,
+            limit: STATS_FALLBACK_SESSION_LIMIT,
+            messageLimit: STATS_FALLBACK_MESSAGE_LIMIT,
           },
-          controller.signal,
+          signal,
         ).catch(() => undefined)
         if (partial) options.onFirstBatch(partial)
       }
+      let aggregateError: unknown
       const aggregated = await loadGlobalUsageInsights(
         sdk,
         {
           start,
           limit: query.limit,
-          messageLimit: 500,
+          messageLimit: STATS_AGGREGATE_MESSAGE_LIMIT,
         },
-        controller.signal,
-      ).catch(() => undefined)
+        signal,
+      ).catch((error) => {
+        aggregateError = error
+        return undefined
+      })
       if (aggregated) return aggregated
+      // Never fan out transcript requests behind a cached view. If the aggregate
+      // endpoint is unavailable, keep the last snapshot interactive instead.
+      if (options.cached) {
+        throw aggregateError instanceof Error ? aggregateError : new Error("Usage insights endpoint unavailable")
+      }
+    }
+    const fallbackQuery: SessionListQuery = {
+      ...query,
+      limit: Math.min(query.limit, STATS_FALLBACK_SESSION_LIMIT),
     }
     const sessions =
       options.scope === "global"
-        ? await listGlobalSessions(sdk, query, controller.signal)
-        : ((await sdk.client.session.list(query, { throwOnError: true, signal: controller.signal })).data ?? [])
+        ? await listGlobalSessions(sdk, fallbackQuery, signal)
+        : ((await sdk.client.session.list(fallbackQuery, { throwOnError: true, signal })).data ?? [])
     const items = await mapStatsSessionsInBatches(
       sessions,
       async (session) => {
         const result = await sdk.client.session.messages(
-          { sessionID: session.id, limit: 500, view: "tui" },
-          { throwOnError: true, signal: controller.signal },
+          { sessionID: session.id, limit: STATS_FALLBACK_MESSAGE_LIMIT, view: "tui" },
+          { throwOnError: true, signal },
         )
         return { session, messages: result.data ?? [] } as SessionInsightInput
       },
@@ -1116,10 +1094,10 @@ async function loadInsights(
     )
     return buildUsageInsights(items, { start, end })
   } catch (error) {
-    if (controller.signal.aborted) throw new Error(`Usage insights timed out after ${STATS_REQUEST_TIMEOUT_MS / 1000}s`)
+    if (signal.aborted) throw new Error(`Usage insights timed out after ${STATS_REQUEST_TIMEOUT_MS / 1000}s`)
     throw error
   } finally {
-    clearTimeout(timeout)
+    timeout.clearTimeout()
   }
 }
 
@@ -1193,6 +1171,7 @@ export function Stats() {
   const dialog = useDialog()
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
+  const deck = createMemo(() => commandDeckLayout({ ...dimensions(), hasRail: false, hasContext: false }))
   const [advanced, setAdvanced] = createSignal(true)
   const [scope] = createSignal<StatsScope>(route.data.type === "stats" ? (route.data.scope ?? "global") : "global")
   const [mode, setMode] = createSignal<HeatMode>("daily")
@@ -1209,15 +1188,14 @@ export function Stats() {
   const [refreshingInsights, setRefreshingInsights] = createSignal(false)
   const [insightError, setInsightError] = createSignal<string | undefined>()
   const [statsRefreshTick, setStatsRefreshTick] = createSignal(0)
+  let activeInsightRequest: AbortController | undefined
   let selectedDayTimer: ReturnType<typeof setTimeout> | undefined
   let pendingSelectedDay: { index: number; key: string | undefined } | undefined
   const tiny = createMemo(() => dimensions().width < 92 || dimensions().height < 26)
   const narrow = createMemo(() => !tiny() && dimensions().width < 124)
   const wide = createMemo(() => dimensions().width >= 142 && dimensions().height >= 34)
   const roomy = createMemo(() => dimensions().width >= 170 && dimensions().height >= 38)
-  const compactTall = createMemo(() => dimensions().height >= 42)
   const showDetails = createMemo(() => advanced() && dimensions().height >= 38 && !tiny() && !narrow())
-  const contentWidth = createMemo(() => Math.max(28, dimensions().width - 12))
   const heatColumns = createMemo(() => {
     return HEATMAP_COLUMNS
   })
@@ -1246,6 +1224,7 @@ export function Stats() {
   onCleanup(() => {
     clearInterval(statsRefreshPoll)
     if (selectedDayTimer) clearTimeout(selectedDayTimer)
+    activeInsightRequest?.abort()
   })
   createEffect(() => {
     if (!kv.ready) return
@@ -1282,11 +1261,17 @@ export function Stats() {
       }
       setInsightError(undefined)
       setRefreshingInsights(true)
+      activeInsightRequest?.abort()
+      const request = new AbortController()
+      activeInsightRequest = request
       try {
         const next = await loadInsights(sdk, {
           ...input,
+          cached: Boolean(cached),
+          signal: request.signal,
           onFirstBatch: cached ? undefined : (partial) => setCachedInsights(normalizeUsageInsights(partial)),
         })
+        if (activeInsightRequest !== request) return cachedInsights()
         const updated = Date.now()
         const normalized = normalizeUsageInsights(next)
         const payload = { updated, data: normalized ?? next }
@@ -1296,12 +1281,16 @@ export function Stats() {
         setInsightError(undefined)
         return next
       } catch (error) {
+        if (activeInsightRequest !== request) return cachedInsights()
         setInsightError(error instanceof Error ? error.message : "Usage insights failed")
         const fallback = cachedInsights()
         if (fallback) return fallback
         throw error
       } finally {
-        setRefreshingInsights(false)
+        if (activeInsightRequest === request) {
+          activeInsightRequest = undefined
+          setRefreshingInsights(false)
+        }
       }
     },
   )
@@ -1439,9 +1428,13 @@ export function Stats() {
 
   useKeyboard((evt) => {
     if (evt.name === "escape") {
-      route.navigate(routeReturnTarget(route.data))
       evt.preventDefault()
       evt.stopPropagation()
+      const request = activeInsightRequest
+      activeInsightRequest = undefined
+      request?.abort()
+      setRefreshingInsights(false)
+      route.navigate(routeReturnTarget(route.data))
       return
     }
     if (evt.name === "a") {
@@ -1463,7 +1456,7 @@ export function Stats() {
     if (evt.name === "r") {
       evt.preventDefault()
       evt.stopPropagation()
-      setInsightRefreshRequest((value) => value + 1)
+      if (!refreshingInsights()) setInsightRefreshRequest((value) => value + 1)
       return
     }
     if (evt.name === "w") {
@@ -1598,24 +1591,27 @@ export function Stats() {
     ]
   })
   return (
-    <box
-      flexDirection="column"
-      width="100%"
-      height="100%"
-      paddingLeft={1}
-      paddingRight={1}
-      paddingTop={1}
-      paddingBottom={1}
-      gap={1}
+    <CommandDeck
+      page="stats"
+      subtitle={() => `${scope() === "global" ? "global" : scope() === "project" ? "project" : "directory"} · ${mode()} · ${advanced() ? ADVANCED_DAYS : DEFAULT_DAYS}d`}
+      status={() =>
+        insightError() ? (visibleInsights() ? "STALE" : "ERROR") : refreshingInsights() ? "SYNCING" : visibleInsights() ? "LIVE" : "LOADING"
+      }
+      summary={() => {
+        const current = totals()
+        return current
+          ? `${formatInsightNumber(current.sessions)} sessions · ${formatInsightNumber(current.tokens)} tokens · ${formatInsightDuration(current.aiResponseMs)} AI`
+          : "loading insights"
+      }}
+      footer="↑↓ Day   ←→ Week   A Details   M/Tab Mode   1/2/3 Views   R Refresh   W Weather   Esc/Q Back"
     >
-      <Header advanced={showDetails()} scope={scope()} mode={mode()} narrow={tiny()} />
-      <Switch>
-        <Match when={!visibleInsights()}>
-          <LoadingStats tiny={tiny()} error={insightError()} />
-        </Match>
-        <Match when={visibleInsights()}>
-          {(data) => (
-            <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
+      <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
+        <Switch>
+          <Match when={!visibleInsights()}>
+            <LoadingStats tiny={tiny()} error={insightError()} />
+          </Match>
+          <Match when={visibleInsights()}>
+            {(data) => (
               <Switch>
                 <Match when={tiny()}>
                   <scrollbox
@@ -1635,7 +1631,7 @@ export function Stats() {
                       insights={data()}
                       mode={mode()}
                       columns={heatColumns()}
-                      contentWidth={contentWidth()}
+                      contentWidth={deck().contentWidth}
                       selectedDay={selectedDay()}
                       selectedDayIndex={selectedDayIndex()}
                       activityLoading={selectedDayLoading()}
@@ -1663,7 +1659,7 @@ export function Stats() {
                     responseRows={responseRows()}
                     outcomeRows={outcomeRows()}
                     statusRows={statusRows()}
-                    contentWidth={contentWidth()}
+                    contentWidth={deck().contentWidth}
                     weatherConfig={weatherConfig()}
                     weather={weather()}
                     weatherLoading={weather.loading || (weatherConfig().enabled && !weatherReady())}
@@ -1672,10 +1668,10 @@ export function Stats() {
                   />
                 </Match>
               </Switch>
-            </box>
-          )}
-        </Match>
-      </Switch>
-    </box>
+            )}
+          </Match>
+        </Switch>
+      </box>
+    </CommandDeck>
   )
 }

@@ -309,7 +309,14 @@ export type TuiWidgetOptions = {
   dispose?: TuiDispose
 }
 
-export type TuiOverlayAnchor = "top-center" | "center" | "bottom-center" | "top-left" | "top-right" | "bottom-left" | "bottom-right"
+export type TuiOverlayAnchor =
+  | "top-center"
+  | "center"
+  | "bottom-center"
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right"
 export type TuiOverlaySize = number | `${number}%` | "auto"
 export type TuiOverlayRenderContext = {
   /** Close the overlay that owns this render context. */
@@ -344,7 +351,11 @@ export type TuiOverlayOptions = {
 }
 export type TuiOverlayApi = {
   /** Open or replace a plugin-owned floating overlay. Runtime plugins clean open overlays on dispose. */
-  open: (id: string, render: (context: TuiOverlayRenderContext) => JSX.Element | string | number | null, options?: TuiOverlayOptions) => boolean
+  open: (
+    id: string,
+    render: (context: TuiOverlayRenderContext) => JSX.Element | string | number | null,
+    options?: TuiOverlayOptions,
+  ) => boolean
   /** Close a plugin-owned floating overlay by ID. */
   close: (id: string) => boolean
   /** Focus a capturable plugin-owned overlay by ID. */
@@ -362,7 +373,17 @@ export type TuiCompactionArcadeRender = {
   cells?: TuiCompactionArcadeCell[][]
 }
 
-export type TuiCompactionArcadeCellTone = "primary" | "muted" | "text" | "wall" | "empty" | "head" | "body" | "food" | "danger" | "accent"
+export type TuiCompactionArcadeCellTone =
+  | "primary"
+  | "muted"
+  | "text"
+  | "wall"
+  | "empty"
+  | "head"
+  | "body"
+  | "food"
+  | "danger"
+  | "accent"
 
 export type TuiCompactionArcadeCell = {
   text: string
@@ -379,7 +400,30 @@ export type TuiCompactionArcadeGame<State = unknown> = {
   render: (state: State) => TuiCompactionArcadeRender
 }
 
+export type TuiSessionAccent = "theme" | "random" | `#${string}`
+
+export type TuiCustomization = {
+  contextBar: boolean
+  diffCount: boolean
+  diffFiles: boolean
+  sessionTitle: boolean
+  projectPath: boolean
+  terminalTitle: boolean
+  sessionAccent: TuiSessionAccent
+  terminalTitleTemplate: string
+}
+
+export type TuiCustomizationApi = {
+  get: () => TuiCustomization
+  set: (patch: Partial<TuiCustomization>) => TuiCustomization
+  reset: () => TuiCustomization
+  setTerminalTitle: (input?: { enabled?: boolean; template?: string }) => TuiCustomization
+  setSessionAccent: (accent: TuiSessionAccent) => TuiCustomization
+  setDiffFiles: (visible: boolean) => TuiCustomization
+}
+
 export type TuiRuntimeApi = {
+  customization: TuiCustomizationApi
   setStatus: (id: string, value?: string, input?: { order?: number }) => boolean
   clearStatus: (id: string) => boolean
   setWidget: (
@@ -830,7 +874,9 @@ export type TuiAiPromptInput = string | Omit<TuiSessionPromptInput, "sessionID">
 export type TuiAiSession = {
   readonly id: string
   prompt: (input: TuiAiPromptInput) => ReturnType<OpencodeClient["session"]["prompt"]>
-  promptAsync: (input: Omit<TuiSessionPromptAsyncInput, "sessionID"> | string) => ReturnType<OpencodeClient["session"]["promptAsync"]>
+  promptAsync: (
+    input: Omit<TuiSessionPromptAsyncInput, "sessionID"> | string,
+  ) => ReturnType<OpencodeClient["session"]["promptAsync"]>
   messages: (input?: Omit<TuiSessionMessagesInput, "sessionID">) => ReturnType<OpencodeClient["session"]["messages"]>
   update: (input: Omit<TuiSessionUpdateInput, "sessionID">) => ReturnType<OpencodeClient["session"]["update"]>
   abort: () => ReturnType<OpencodeClient["session"]["abort"]>
