@@ -3,6 +3,47 @@ import type { PromptInfo } from "./history"
 type PromptPart = PromptInfo["parts"][number]
 type PromptTextPart = Extract<PromptPart, { type: "text" }>
 
+function offsetPromptPart(part: PromptPart, offset: number) {
+  if (offset === 0) return part
+  if (part.type === "text" && part.source?.text) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        text: {
+          ...part.source.text,
+          start: part.source.text.start + offset,
+          end: part.source.text.end + offset,
+        },
+      },
+    } satisfies PromptPart
+  }
+  if (part.type === "file" && part.source?.text) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        text: {
+          ...part.source.text,
+          start: part.source.text.start + offset,
+          end: part.source.text.end + offset,
+        },
+      },
+    } satisfies PromptPart
+  }
+  if (part.type === "agent" && part.source) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        start: part.source.start + offset,
+        end: part.source.end + offset,
+      },
+    } satisfies PromptPart
+  }
+  return part
+}
+
 type RuntimeClipboardPart = {
   type: string
   text?: string
@@ -25,12 +66,9 @@ function asClipboardPart(part: unknown): RuntimeClipboardPart {
   return part as RuntimeClipboardPart
 }
 
-function imageMarkdown(part: RuntimeClipboardPart) {
-  if (!part.url?.startsWith("data:") || !part.mime?.startsWith("image/")) return
-  const match = part.url.match(/^data:([^;,]+);base64,([A-Za-z0-9+/=\s]+)$/)
-  if (!match || !match[1].startsWith("image/")) return
-  const filename = (part.filename || "image").replace(/[\]\n\r]/g, " ").trim() || "image"
-  return `![${filename}](data:${match[1]};base64,${match[2].replace(/\s+/g, "")})`
+function imagePlaceholder(part: RuntimeClipboardPart, index: number) {
+  const filename = part.filename?.replace(/[\]\n\r]/g, " ").trim()
+  return filename ? `[Image ${index}: ${filename}]` : `[Image ${index} attached]`
 }
 
 export function messagePartsToPortableClipboard(parts: readonly unknown[]) {
@@ -43,26 +81,19 @@ export function messagePartsToPortableClipboard(parts: readonly unknown[]) {
     if (part.type === "file" && part.mime?.startsWith("image/") && part.url?.startsWith("data:")) attachments.push(part)
   }
 
-  for (const attachment of attachments) {
-    const markdown = imageMarkdown(attachment)
-    if (!markdown) continue
-    const placeholder = attachment.source?.text?.value
-    if (placeholder && text.includes(placeholder)) {
-      text = text.replace(placeholder, markdown)
+  for (const [index, attachment] of attachments.entries()) {
+    const placeholder = imagePlaceholder(attachment, index + 1)
+    const source = attachment.source?.text?.value
+    if (source && text.includes(source)) {
+      text = text.replace(source, placeholder)
       continue
     }
-    text += `${text && !text.endsWith("\n") ? "\n\n" : ""}${markdown}`
+    text += `${text && !text.endsWith("\n") ? "\n\n" : ""}${placeholder}`
   }
 
   return {
     text,
     imageCount: attachments.length,
-    firstImage: attachments[0]
-      ? {
-          mime: attachments[0].mime!,
-          data: attachments[0].url!.replace(/^data:[^;,]+;base64,/, "").replace(/\s+/g, ""),
-        }
-      : undefined,
   }
 }
 
@@ -102,6 +133,99 @@ export function shouldSummarizePastedContent(text: string) {
 
 export function shouldSummarizePastedContentWithThreshold(text: string, minChars: number) {
   return text.length > Math.max(1, minChars)
+}
+
+function shiftPromptPart(part: PromptPart, input: { start: number; delta: number }) {
+  if (part.type === "text" && part.source?.text && part.source.text.start > input.start) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        text: {
+          ...part.source.text,
+          start: part.source.text.start + input.delta,
+          end: part.source.text.end + input.delta,
+        },
+      },
+    } satisfies PromptPart
+  }
+  if (part.type === "file" && part.source?.text && part.source.text.start > input.start) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        text: {
+          ...part.source.text,
+          start: part.source.text.start + input.delta,
+          end: part.source.text.end + input.delta,
+        },
+      },
+    } satisfies PromptPart
+  }
+  if (part.type === "agent" && part.source && part.source.start > input.start) {
+    return {
+      ...part,
+      source: {
+        ...part.source,
+        start: part.source.start + input.delta,
+        end: part.source.end + input.delta,
+      },
+    } satisfies PromptPart
+  }
+  return part
+}
+
+function expandPastedContentPartAt(
+  prompt: PromptInfo,
+  index: number,
+  input?: { replaceStart?: number; replaceEnd?: number },
+) {
+  const part = prompt.parts[index]
+  if (!part || part.type !== "text" || !part.source?.text) return
+
+  const label = part.source.text.value
+  const labelStart = prompt.input.indexOf(label, part.source.text.start)
+  const start = input?.replaceStart ?? labelStart
+  if (start === -1) return
+
+  const end = input?.replaceEnd ?? start + label.length
+  const delta = part.text.length - (end - start)
+  return {
+    input: `${prompt.input.slice(0, start)}${part.text}${prompt.input.slice(end)}`,
+    parts: prompt.parts
+      .filter((_, partIndex) => partIndex !== index)
+      .map((item) => shiftPromptPart(item, { start, delta })),
+    cursorOffset: start + part.text.length,
+  } satisfies PromptInfo & { cursorOffset: number }
+}
+
+export function expandPastedContentInPrompt(prompt: PromptInfo, pastedText: string) {
+  const index = prompt.parts.findLastIndex(
+    (part) => part.type === "text" && part.text === pastedText && Boolean(part.source?.text?.value),
+  )
+  return expandPastedContentPartAt(prompt, index)
+}
+
+export function expandPastedContentAtOffset(prompt: PromptInfo, offset: number) {
+  const index = prompt.parts.findIndex((part) => {
+    if (part.type !== "text" || !part.source?.text?.value) return false
+    return offset >= part.source.text.start && offset <= part.source.text.end
+  })
+  return expandPastedContentPartAt(prompt, index)
+}
+
+export function expandEditedPastedContentInPrompt(prompt: PromptInfo) {
+  const index = prompt.parts.findIndex((part) => {
+    if (part.type !== "text" || !part.source?.text) return false
+    const visible = prompt.input.slice(part.source.text.start, part.source.text.end)
+    return visible !== part.source.text.value
+  })
+  const part = prompt.parts[index]
+  if (!part || part.type !== "text" || !part.source?.text) return
+  return expandPastedContentPartAt(prompt, index, {
+    replaceStart: part.source.text.start,
+    replaceEnd: part.source.text.end,
+  })
 }
 
 export function promptSubmitParts(prompt: PromptInfo) {
@@ -200,4 +324,17 @@ export function restorePromptFromSubmittedParts(parts: readonly unknown[]): Prom
   }
 
   return { input, parts: promptParts }
+}
+
+export function appendPromptInfo(current: PromptInfo | undefined, appended: PromptInfo): PromptInfo {
+  if (!current || (current.input.length === 0 && current.parts.length === 0)) return appended
+  if (appended.input.length === 0 && appended.parts.length === 0) return current
+
+  const separator = current.input.length > 0 && appended.input.length > 0 ? "\n\n" : ""
+  const offset = current.input.length + separator.length
+  return {
+    input: `${current.input}${separator}${appended.input}`,
+    parts: [...current.parts, ...appended.parts.map((part) => offsetPromptPart(part, offset))],
+    mode: current.mode ?? appended.mode,
+  }
 }

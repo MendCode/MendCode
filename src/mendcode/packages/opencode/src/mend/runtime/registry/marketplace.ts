@@ -33,8 +33,11 @@ export type RegistryMarketplacePackManifest = {
     modes?: number
     skills?: number
     plugins?: number
+    tools?: number
     prompts?: number
     mcpFiles?: number
+    pages?: number
+    widgets?: number
     extensions?: number
   }
 }
@@ -69,8 +72,11 @@ function synthesizeManifestFromPackageManifest(
       modes: summarizeArtifactCount(manifest.artifacts?.modes),
       skills: summarizeArtifactCount(manifest.artifacts?.skills),
       plugins: summarizeArtifactCount(manifest.artifacts?.plugins),
+      tools: summarizeArtifactCount(manifest.artifacts?.tools),
       prompts: summarizeArtifactCount(manifest.artifacts?.prompts),
       mcpFiles: summarizeArtifactCount(manifest.artifacts?.mcp),
+      pages: summarizeArtifactCount(manifest.artifacts?.pages),
+      widgets: summarizeArtifactCount(manifest.artifacts?.widgets),
       extensions: summarizeArtifactCount(manifest.artifacts?.extensions),
     },
   } satisfies RegistryMarketplacePackManifest
@@ -144,8 +150,11 @@ function parseManifest(raw: unknown, fallbackSource: RuntimeRegistryEntry): Regi
       ...(typeof runtime.modes === "number" ? { modes: runtime.modes } : {}),
       ...(typeof runtime.skills === "number" ? { skills: runtime.skills } : {}),
       ...(typeof runtime.plugins === "number" ? { plugins: runtime.plugins } : {}),
+      ...(typeof runtime.tools === "number" ? { tools: runtime.tools } : {}),
       ...(typeof runtime.prompts === "number" ? { prompts: runtime.prompts } : {}),
       ...(typeof runtime.mcpFiles === "number" ? { mcpFiles: runtime.mcpFiles } : {}),
+      ...(typeof runtime.pages === "number" ? { pages: runtime.pages } : {}),
+      ...(typeof runtime.widgets === "number" ? { widgets: runtime.widgets } : {}),
       ...(typeof runtime.extensions === "number" ? { extensions: runtime.extensions } : {}),
     } : undefined,
   }
@@ -193,8 +202,11 @@ function synthesizeManifestFromPack(pack: RuntimePack, entry: RuntimeRegistryEnt
       modes: pack.modes?.length || 0,
       skills: pack.skills?.length || 0,
       plugins: pack.plugins?.length || 0,
+      tools: pack.tools?.length || 0,
       prompts: pack.prompts?.templates?.length || 0,
       mcpFiles: pack.mcp?.files?.length || 0,
+      pages: pack.pages?.length || 0,
+      widgets: pack.widgets?.length || 0,
       extensions: pack.extensions?.length || 0,
     },
   } satisfies RegistryMarketplacePackManifest

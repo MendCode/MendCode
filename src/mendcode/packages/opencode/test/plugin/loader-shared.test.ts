@@ -329,6 +329,63 @@ describe("plugin.loader.shared", () => {
     }
   })
 
+  test("loads npm server plugin from package server export with backslashes", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const mod = path.join(dir, "mods", "acme-plugin")
+        const dist = path.join(mod, "dist")
+        const mark = path.join(dir, "server-called.txt")
+        await fs.mkdir(dist, { recursive: true })
+
+        await Bun.write(
+          path.join(mod, "package.json"),
+          JSON.stringify(
+            {
+              name: "acme-plugin",
+              type: "module",
+              exports: {
+                ".": "./index.js",
+                "./server": ".\\dist\\server.js",
+              },
+            },
+            null,
+            2,
+          ),
+        )
+        await Bun.write(path.join(mod, "index.js"), 'import "./main-throws.js"\nexport default {}\n')
+        await Bun.write(path.join(mod, "main-throws.js"), 'throw new Error("main loaded")\n')
+        await Bun.write(
+          path.join(dist, "server.js"),
+          [
+            "export default {",
+            "  server: async () => {",
+            `    await Bun.write(${JSON.stringify(mark)}, "called")`,
+            "    return {}",
+            "  },",
+            "}",
+            "",
+          ].join("\n"),
+        )
+
+        await Bun.write(path.join(dir, "mendcode.json"), JSON.stringify({ plugin: ["acme-plugin@1.0.0"] }, null, 2))
+
+        return {
+          mod,
+          mark,
+        }
+      },
+    })
+
+    const install = spyOn(Npm, "add").mockResolvedValue({ directory: tmp.extra.mod, entrypoint: undefined })
+
+    try {
+      await load(tmp.path)
+      expect(await Bun.file(tmp.extra.mark).text()).toBe("called")
+    } finally {
+      install.mockRestore()
+    }
+  })
+
   test("loads npm server plugin from package server export without leading dot", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
@@ -923,6 +980,42 @@ export default {
     ])
   })
 
+  test("reads oc-themes with backslash separators from package manifest", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const mod = path.join(dir, "mod")
+        await fs.mkdir(path.join(mod, "themes"), { recursive: true })
+        await Bun.write(
+          path.join(mod, "package.json"),
+          JSON.stringify(
+            {
+              name: "acme-plugin",
+              version: "1.0.0",
+              "oc-themes": ["themes\\one.json", ".\\themes\\one.json", "themes\\two.json"],
+            },
+            null,
+            2,
+          ),
+        )
+
+        return { mod }
+      },
+    })
+
+    const file = path.join(tmp.extra.mod, "package.json")
+    const json = await Filesystem.readJson<Record<string, unknown>>(file)
+    const list = readPackageThemes("acme-plugin", {
+      dir: tmp.extra.mod,
+      pkg: file,
+      json,
+    })
+
+    expect(list).toEqual([
+      Filesystem.resolve(path.join(tmp.extra.mod, "themes", "one.json")),
+      Filesystem.resolve(path.join(tmp.extra.mod, "themes", "two.json")),
+    ])
+  })
+
   test("handles no-entrypoint tui packages via missing callback", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
@@ -986,6 +1079,294 @@ export default {
     } finally {
       install.mockRestore()
     }
+  })
+
+  test("treats .mendcode pages as tui-only when loading server plugins", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const page = path.join(dir, ".mendcode", "pages", "memory-graph.tsx")
+        await fs.mkdir(path.dirname(page), { recursive: true })
+        await Bun.write(
+          page,
+          `/** @jsxImportSource @opentui/solid */
+export default {
+  id: "demo.memory-graph-page",
+  tui: async (api) => {
+    api.route.register([{ name: "memory-graph", render: () => <box><text>Memory graph</text></box> }])
+  },
+}
+`,
+        )
+        return { page, spec: pathToFileURL(page).href }
+      },
+    })
+    const missing: string[] = []
+    const errors: string[] = []
+
+    const loaded = await PluginLoader.loadExternal({
+      items: [{ spec: tmp.extra.spec, scope: "local", source: path.join(tmp.path, ".mendcode", "tui.json") }],
+      kind: "server",
+      report: {
+        missing(_candidate, _retry, message) {
+          missing.push(message)
+        },
+        error(_candidate, _retry, stage) {
+          errors.push(stage)
+        },
+      },
+    })
+
+    expect(loaded).toEqual([])
+    expect(missing).toEqual([`Plugin ${tmp.extra.spec} does not expose a server entrypoint`])
+    expect(errors).toEqual([])
+  })
+
+  test("treats nested .mendcode pages as tui-only when loading server plugins", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const page = path.join(dir, ".mendcode", "pages", "graphs", "memory-graph.tsx")
+        await fs.mkdir(path.dirname(page), { recursive: true })
+        await Bun.write(
+          page,
+          `/** @jsxImportSource @opentui/solid */
+export default {
+  id: "demo.memory-graph-page.nested",
+  tui: async (api) => {
+    api.route.register([{ name: "memory-graph", render: () => <box><text>Memory graph</text></box> }])
+  },
+}
+`,
+        )
+        return { spec: pathToFileURL(page).href }
+      },
+    })
+    const missing: string[] = []
+    const errors: string[] = []
+
+    const loaded = await PluginLoader.loadExternal({
+      items: [{ spec: tmp.extra.spec, scope: "local", source: path.join(tmp.path, ".mendcode", "tui.json") }],
+      kind: "server",
+      report: {
+        missing(_candidate, _retry, message) {
+          missing.push(message)
+        },
+        error(_candidate, _retry, stage) {
+          errors.push(stage)
+        },
+      },
+    })
+
+    expect(loaded).toEqual([])
+    expect(missing).toEqual([`Plugin ${tmp.extra.spec} does not expose a server entrypoint`])
+    expect(errors).toEqual([])
+  })
+
+  test("keeps nested .mendcode pages loadable as tui plugins", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const page = path.join(dir, ".mendcode", "pages", "graphs", "memory-graph.tsx")
+        await fs.mkdir(path.dirname(page), { recursive: true })
+        await Bun.write(
+          page,
+          [
+            "export default {",
+            '  id: "demo.memory-graph-page.nested",',
+            "  tui: async () => ({}),",
+            "}",
+            "",
+          ].join("\n"),
+        )
+        return { spec: pathToFileURL(page).href }
+      },
+    })
+
+    const loaded = await PluginLoader.loadExternal({
+      items: [{ spec: tmp.extra.spec, scope: "local", source: path.join(tmp.path, ".mendcode", "tui.json") }],
+      kind: "tui",
+      finish: async (item) => item.entry,
+    })
+
+    expect(loaded).toEqual([tmp.extra.spec])
+  })
+
+  test("treats .mendcode page directories as tui-only when loading server plugins", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const page = path.join(dir, ".mendcode", "page", "memory-graph")
+        await fs.mkdir(page, { recursive: true })
+        await Bun.write(
+          path.join(page, "index.tsx"),
+          `/** @jsxImportSource @opentui/solid */
+export default {
+  id: "demo.memory-graph-page.dir",
+  tui: async (api) => {
+    api.route.register([{ name: "memory-graph", render: () => <box><text>Memory graph</text></box> }])
+  },
+}
+`,
+        )
+        return { spec: pathToFileURL(page).href }
+      },
+    })
+    const missing: string[] = []
+    const errors: string[] = []
+
+    const loaded = await PluginLoader.loadExternal({
+      items: [{ spec: tmp.extra.spec, scope: "local", source: path.join(tmp.path, ".mendcode", "tui.json") }],
+      kind: "server",
+      report: {
+        missing(_candidate, _retry, message) {
+          missing.push(message)
+        },
+        error(_candidate, _retry, stage) {
+          errors.push(stage)
+        },
+      },
+    })
+
+    expect(loaded).toEqual([])
+    expect(missing).toEqual([`Plugin ${tmp.extra.spec} does not expose a server entrypoint`])
+    expect(errors).toEqual([])
+  })
+
+  test("treats packaged .mendcode page directories as tui-only when loading server plugins", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const page = path.join(dir, ".mendcode", "pages", "memory-graph")
+        await fs.mkdir(page, { recursive: true })
+        await Bun.write(
+          path.join(page, "package.json"),
+          JSON.stringify({ name: "memory-graph-page", exports: { "./tui": "./index.tsx" } }, null, 2),
+        )
+        await Bun.write(
+          path.join(page, "index.tsx"),
+          `/** @jsxImportSource @opentui/solid */
+export default {
+  id: "demo.memory-graph-page.package",
+  tui: async (api) => {
+    api.route.register([{ name: "memory-graph", render: () => <box><text>Memory graph</text></box> }])
+  },
+}
+`,
+        )
+        return { spec: pathToFileURL(page).href }
+      },
+    })
+    const missing: string[] = []
+    const errors: string[] = []
+
+    const loaded = await PluginLoader.loadExternal({
+      items: [{ spec: tmp.extra.spec, scope: "local", source: path.join(tmp.path, ".mendcode", "tui.json") }],
+      kind: "server",
+      report: {
+        missing(_candidate, _retry, message) {
+          missing.push(message)
+        },
+        error(_candidate, _retry, stage) {
+          errors.push(stage)
+        },
+      },
+    })
+
+    expect(loaded).toEqual([])
+    expect(missing).toEqual([`Plugin ${tmp.extra.spec} does not expose a server entrypoint`])
+    expect(errors).toEqual([])
+  })
+
+  test("keeps local non-page server plugin directories loadable", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const plugin = path.join(dir, "pages", "server-plugin")
+        await fs.mkdir(plugin, { recursive: true })
+        await Bun.write(
+          path.join(plugin, "index.ts"),
+          [
+            "export default {",
+            '  id: "demo.local-server-plugin",',
+            "  server: async () => ({}),",
+            "}",
+            "",
+          ].join("\n"),
+        )
+        return { spec: pathToFileURL(plugin).href }
+      },
+    })
+
+    const loaded = await PluginLoader.loadExternal({
+      items: [{ spec: tmp.extra.spec, scope: "local", source: path.join(tmp.path, "mendcode.json") }],
+      kind: "server",
+      finish: async (item) => item.entry,
+    })
+
+    expect(loaded).toEqual([pathToFileURL(path.join(tmp.path, "pages", "server-plugin", "index.ts")).href])
+  })
+
+  test("treats local .mendcode OpenTUI plugins as tui-only when loading server plugins", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const plugin = path.join(dir, ".mendcode", "plugins", "graph-side-chat.tsx")
+        await fs.mkdir(path.dirname(plugin), { recursive: true })
+        await Bun.write(
+          plugin,
+          `/** @jsxImportSource @opentui/solid */
+export default {
+  id: "demo.graph-side-chat",
+  tui: async (api) => {
+    api.slot.register("session.side", () => <box><text>Graph</text></box>)
+  },
+}
+`,
+        )
+        return { spec: pathToFileURL(plugin).href }
+      },
+    })
+    const missing: string[] = []
+    const errors: string[] = []
+
+    const loaded = await PluginLoader.loadExternal({
+      items: [{ spec: tmp.extra.spec, scope: "local", source: path.join(tmp.path, ".mendcode", "tui.json") }],
+      kind: "server",
+      report: {
+        missing(_candidate, _retry, message) {
+          missing.push(message)
+        },
+        error(_candidate, _retry, stage) {
+          errors.push(stage)
+        },
+      },
+    })
+
+    expect(loaded).toEqual([])
+    expect(missing).toEqual([`Plugin ${tmp.extra.spec} does not expose a server entrypoint`])
+    expect(errors).toEqual([])
+  })
+
+  test("keeps local .mendcode server plugins loadable when they do not use OpenTUI", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        const plugin = path.join(dir, ".mendcode", "plugins", "server.ts")
+        await fs.mkdir(path.dirname(plugin), { recursive: true })
+        await Bun.write(
+          plugin,
+          [
+            "export default {",
+            '  id: "demo.local-mendcode-server-plugin",',
+            "  server: async () => ({})",
+            "}",
+            "",
+          ].join("\n"),
+        )
+        return { spec: pathToFileURL(plugin).href }
+      },
+    })
+
+    const loaded = await PluginLoader.loadExternal({
+      items: [{ spec: tmp.extra.spec, scope: "local", source: path.join(tmp.path, ".mendcode", "tui.json") }],
+      kind: "server",
+      finish: async (item) => item.entry,
+    })
+
+    expect(loaded).toEqual([tmp.extra.spec])
   })
 
   test("passes package metadata for entrypoint tui plugins", async () => {

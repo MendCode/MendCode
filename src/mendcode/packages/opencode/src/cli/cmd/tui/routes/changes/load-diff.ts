@@ -3,6 +3,7 @@ import fs from "fs"
 import path from "path"
 
 const MAX_UNTRACKED_BYTES = 200_000
+const MAX_GIT_PATCH_BYTES = 16 * 1024 * 1024
 
 export type LoadedWorkspaceDiff = {
   diff: string
@@ -11,19 +12,35 @@ export type LoadedWorkspaceDiff = {
   error?: string
 }
 
+type GitResult =
+  | { ok: true; stdout: string }
+  | { ok: false; stdout: string; error: string; code?: string }
+
+type GitRunner = (cwd: string, args: string[]) => GitResult
+
 export function loadWorkspaceDiff(root: string): LoadedWorkspaceDiff {
-  const tracked = runGit(root, ["diff", "--no-ext-diff", "--patch", "HEAD", "--"])
+  return loadWorkspaceDiffWithGit(root, runGit)
+}
+
+export function loadWorkspaceDiffWithGit(root: string, git: GitRunner): LoadedWorkspaceDiff {
+  const tracked = git(root, ["diff", "--name-only", "-z", "HEAD", "--"])
   if (!tracked.ok) return { diff: "", untracked: [], skipped: [], error: tracked.error }
 
-  const untracked = runGit(root, ["ls-files", "--others", "--exclude-standard"])
-  const untrackedFiles = untracked.ok
-    ? untracked.stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-    : []
-  const patchParts = [tracked.stdout.trimEnd()].filter(Boolean)
+  const patchParts: string[] = []
   const skipped: string[] = []
+  for (const file of parseGitPathList(tracked.stdout)) {
+    const diff = git(root, ["diff", "--no-ext-diff", "--patch", "HEAD", "--", file])
+    if (diff.ok) {
+      if (diff.stdout.trim()) patchParts.push(diff.stdout.trimEnd())
+      continue
+    }
+    if (!isBufferOverflow(diff)) return { diff: patchParts.join("\n"), untracked: [], skipped, error: diff.error }
+    skipped.push(file)
+    patchParts.push(metadataOnlyPatch(file))
+  }
+
+  const untracked = git(root, ["ls-files", "--others", "--exclude-standard", "-z"])
+  const untrackedFiles = untracked.ok ? parseGitPathList(untracked.stdout) : []
 
   for (const file of untrackedFiles) {
     const full = path.join(root, file)
@@ -32,7 +49,7 @@ export function loadWorkspaceDiff(root: string): LoadedWorkspaceDiff {
       skipped.push(file)
       continue
     }
-    const diff = runGit(root, ["diff", "--no-index", "--patch", "--", "/dev/null", file])
+    const diff = git(root, ["diff", "--no-index", "--patch", "--", "/dev/null", file])
     if (diff.stdout.trim()) patchParts.push(normalizeNoIndexPatch(diff.stdout, file))
   }
 
@@ -43,18 +60,34 @@ export function loadWorkspaceDiff(root: string): LoadedWorkspaceDiff {
   }
 }
 
-function runGit(cwd: string, args: string[]) {
+function runGit(cwd: string, args: string[]): GitResult {
   const result = spawnSync("git", args, {
     cwd,
     encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
+    maxBuffer: MAX_GIT_PATCH_BYTES,
   })
   const stdout = result.stdout ?? ""
   const stderr = result.stderr ?? ""
-  if (result.error) return { ok: false as const, stdout, error: result.error.message }
+  if (result.error) {
+    const error = result.error as Error & { code?: string }
+    return { ok: false as const, stdout, error: error.message, code: error.code }
+  }
   if ((result.status ?? 0) > 1)
     return { ok: false as const, stdout, error: stderr.trim() || `git ${args.join(" ")} failed` }
   return { ok: true as const, stdout }
+}
+
+export function parseGitPathList(stdout: string) {
+  return stdout.split("\0").filter(Boolean)
+}
+
+function isBufferOverflow(result: GitResult) {
+  return !result.ok && (result.code === "ENOBUFS" || result.error.includes("ENOBUFS") || result.error.includes("maxBuffer"))
+}
+
+function metadataOnlyPatch(file: string) {
+  const escaped = file.replace(/\\/g, "/")
+  return [`diff --git a/${escaped} b/${escaped}`, `--- a/${escaped}`, `+++ b/${escaped}`].join("\n")
 }
 
 function safeStat(file: string) {

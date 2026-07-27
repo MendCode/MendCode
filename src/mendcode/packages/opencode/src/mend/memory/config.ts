@@ -8,6 +8,17 @@ import { activeMendPackageProjection } from "../runtime/packages"
 
 export type MemoryScope = "global" | "project"
 
+export type MemoryDreamWindow = {
+  enabled: boolean
+  start: string
+  end: string
+  timezone?: string
+}
+
+export type GeneratedMemoryWritePolicy = "pending" | "auto-safe" | "model-decides" | "disabled"
+export type MemoryDreamWritePolicy = GeneratedMemoryWritePolicy
+export type DreamConsolidationPolicy = "disabled" | "preview" | "auto-consolidate"
+
 export type MemoryConfig = {
   version: 0
   configScope: "global" | "project"
@@ -23,6 +34,22 @@ export type MemoryConfig = {
   consolidatorRole: string
   memoryDreamRole: string
   memoryAssistantRole: string
+  dreamWindow: MemoryDreamWindow | null
+  memoryWritePolicy: GeneratedMemoryWritePolicy
+  memoryAutoApplyMinConfidence: number
+  memoryAutoApplyMinDurability: number
+  memoryAutoApplyMaxChangeRisk: number
+  memoryAutoApplyAllowedCategories: string[]
+  memoryAutoApplyBlockedSensitivity: Array<"medium" | "high">
+  dreamWritePolicy: MemoryDreamWritePolicy
+  dreamConsolidationPolicy: DreamConsolidationPolicy
+  dreamAutoApplyMinConfidence: number
+  dreamAutoApplyMinDurability: number
+  dreamGraphAutoApplyMinConfidence: number
+  dreamGraphAutoApplyMinDurability: number
+  dreamAutoApplyMaxChangeRisk: number
+  dreamAutoApplyAllowedCategories: string[]
+  dreamAutoApplyBlockedSensitivity: Array<"medium" | "high">
   minIdleMinutes: number
   minBudgetRemainingUsd: number | null
   requireApprovalForGenerated: boolean
@@ -44,6 +71,22 @@ export const defaultMemoryConfig: MemoryConfig = {
   consolidatorRole: "none",
   memoryDreamRole: "memoryDream",
   memoryAssistantRole: "memoryAssistant",
+  dreamWindow: null,
+  memoryWritePolicy: "pending",
+  memoryAutoApplyMinConfidence: 0.9,
+  memoryAutoApplyMinDurability: 0.85,
+  memoryAutoApplyMaxChangeRisk: 0.2,
+  memoryAutoApplyAllowedCategories: ["project.commands", "project.stack", "user.preferences", "agent.policy", "memory.policy"],
+  memoryAutoApplyBlockedSensitivity: ["medium", "high"],
+  dreamWritePolicy: "pending",
+  dreamConsolidationPolicy: "auto-consolidate",
+  dreamAutoApplyMinConfidence: 0.9,
+  dreamAutoApplyMinDurability: 0.85,
+  dreamGraphAutoApplyMinConfidence: 0.75,
+  dreamGraphAutoApplyMinDurability: 0.7,
+  dreamAutoApplyMaxChangeRisk: 0.2,
+  dreamAutoApplyAllowedCategories: ["project.commands", "project.stack", "agent.policy", "memory.policy"],
+  dreamAutoApplyBlockedSensitivity: ["medium", "high"],
   minIdleMinutes: 30,
   minBudgetRemainingUsd: 0.25,
   requireApprovalForGenerated: true,
@@ -74,9 +117,54 @@ function scopes(value: unknown): MemoryScope[] {
   return out.length ? [...new Set(out)] : defaultMemoryConfig.scopes
 }
 
+function generatedMemoryWritePolicy(value: unknown, fallback: GeneratedMemoryWritePolicy): GeneratedMemoryWritePolicy {
+  return value === "pending" || value === "auto-safe" || value === "model-decides" || value === "disabled" ? value : fallback
+}
+
+function dreamConsolidationPolicy(value: unknown, fallback: DreamConsolidationPolicy): DreamConsolidationPolicy {
+  return value === "preview" || value === "auto-consolidate" || value === "disabled" ? value : fallback
+}
+
+function stringList(value: unknown, fallback: string[]) {
+  if (!Array.isArray(value)) return fallback
+  const out = value.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim())
+  return out.length ? [...new Set(out)] : fallback
+}
+
+function blockedSensitivity(value: unknown, fallback: Array<"medium" | "high">) {
+  if (!Array.isArray(value)) return fallback
+  const out = value.filter((item): item is "medium" | "high" => item === "medium" || item === "high")
+  return out.length ? [...new Set(out)] : fallback
+}
+
 function roleValue(value: unknown, fallback: string) {
   if (typeof value !== "string" || !value.trim()) return fallback
   return value === "summary" ? fallback : value
+}
+
+function timeValue(value: unknown) {
+  if (typeof value !== "string") return undefined
+  const match = value.trim().match(/^(\d{1,2}):(\d{2})$/)
+  if (!match) return undefined
+  const hour = Number(match[1])
+  const minute = Number(match[2])
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return undefined
+  return `${String(hour).padStart(2, "0")}:${match[2]}`
+}
+
+function dreamWindow(value: unknown, fallback: MemoryDreamWindow | null) {
+  if (value === null) return null
+  if (typeof value !== "object" || value === null) return fallback
+  const raw = value as Record<string, unknown>
+  const start = timeValue(raw.start)
+  const end = timeValue(raw.end)
+  if (!start || !end) return fallback
+  return {
+    enabled: bool(raw.enabled, true),
+    start,
+    end,
+    ...(typeof raw.timezone === "string" && raw.timezone.trim() ? { timezone: raw.timezone.trim() } : {}),
+  }
 }
 
 export function globalMemoryDir() {
@@ -133,6 +221,22 @@ export function normalizeMemoryConfig(input: unknown): MemoryConfig {
     consolidatorRole: roleValue(raw.consolidatorRole, defaultMemoryConfig.consolidatorRole),
     memoryDreamRole: roleValue(raw.memoryDreamRole, defaultMemoryConfig.memoryDreamRole),
     memoryAssistantRole: roleValue(raw.memoryAssistantRole, defaultMemoryConfig.memoryAssistantRole),
+    dreamWindow: dreamWindow(raw.dreamWindow, defaultMemoryConfig.dreamWindow),
+    memoryWritePolicy: generatedMemoryWritePolicy(raw.memoryWritePolicy, defaultMemoryConfig.memoryWritePolicy),
+    memoryAutoApplyMinConfidence: boundedNumberValue(raw.memoryAutoApplyMinConfidence, defaultMemoryConfig.memoryAutoApplyMinConfidence, 0, 1),
+    memoryAutoApplyMinDurability: boundedNumberValue(raw.memoryAutoApplyMinDurability, defaultMemoryConfig.memoryAutoApplyMinDurability, 0, 1),
+    memoryAutoApplyMaxChangeRisk: boundedNumberValue(raw.memoryAutoApplyMaxChangeRisk, defaultMemoryConfig.memoryAutoApplyMaxChangeRisk, 0, 1),
+    memoryAutoApplyAllowedCategories: stringList(raw.memoryAutoApplyAllowedCategories, defaultMemoryConfig.memoryAutoApplyAllowedCategories),
+    memoryAutoApplyBlockedSensitivity: blockedSensitivity(raw.memoryAutoApplyBlockedSensitivity, defaultMemoryConfig.memoryAutoApplyBlockedSensitivity),
+    dreamWritePolicy: generatedMemoryWritePolicy(raw.dreamWritePolicy, defaultMemoryConfig.dreamWritePolicy),
+    dreamConsolidationPolicy: dreamConsolidationPolicy(raw.dreamConsolidationPolicy, defaultMemoryConfig.dreamConsolidationPolicy),
+    dreamAutoApplyMinConfidence: boundedNumberValue(raw.dreamAutoApplyMinConfidence, defaultMemoryConfig.dreamAutoApplyMinConfidence, 0, 1),
+    dreamAutoApplyMinDurability: boundedNumberValue(raw.dreamAutoApplyMinDurability, defaultMemoryConfig.dreamAutoApplyMinDurability, 0, 1),
+    dreamGraphAutoApplyMinConfidence: boundedNumberValue(raw.dreamGraphAutoApplyMinConfidence, defaultMemoryConfig.dreamGraphAutoApplyMinConfidence, 0, 1),
+    dreamGraphAutoApplyMinDurability: boundedNumberValue(raw.dreamGraphAutoApplyMinDurability, defaultMemoryConfig.dreamGraphAutoApplyMinDurability, 0, 1),
+    dreamAutoApplyMaxChangeRisk: boundedNumberValue(raw.dreamAutoApplyMaxChangeRisk, defaultMemoryConfig.dreamAutoApplyMaxChangeRisk, 0, 1),
+    dreamAutoApplyAllowedCategories: stringList(raw.dreamAutoApplyAllowedCategories, defaultMemoryConfig.dreamAutoApplyAllowedCategories),
+    dreamAutoApplyBlockedSensitivity: blockedSensitivity(raw.dreamAutoApplyBlockedSensitivity, defaultMemoryConfig.dreamAutoApplyBlockedSensitivity),
     minIdleMinutes: numberValue(raw.minIdleMinutes, defaultMemoryConfig.minIdleMinutes, 0),
     minBudgetRemainingUsd: nullableNumber(raw.minBudgetRemainingUsd, defaultMemoryConfig.minBudgetRemainingUsd, 0),
     requireApprovalForGenerated: bool(raw.requireApprovalForGenerated, defaultMemoryConfig.requireApprovalForGenerated),
@@ -165,6 +269,16 @@ export async function readMemoryConfig(root?: string): Promise<MemoryConfig> {
   })
 }
 
+export async function readGlobalMemoryConfig(): Promise<MemoryConfig> {
+  const paths = memoryPaths()
+  const globalConfig = await readJsonIfExists(paths.globalConfig).catch(() => null)
+  return normalizeMemoryConfig({
+    ...defaultMemoryConfig,
+    ...(globalConfig || {}),
+    configScope: "global",
+  })
+}
+
 export async function writeProjectMemoryConfig(config: Partial<MemoryConfig>, root?: string) {
   const paths = memoryPaths(root)
   const current = await readMemoryConfig(paths.root)
@@ -176,7 +290,7 @@ export async function writeProjectMemoryConfig(config: Partial<MemoryConfig>, ro
 
 export async function writeGlobalMemoryConfig(config: Partial<MemoryConfig>, root?: string) {
   const paths = memoryPaths(root)
-  const current = await readMemoryConfig(paths.root)
+  const current = await readGlobalMemoryConfig()
   const next = normalizeMemoryConfig({ ...current, ...config, configScope: "global" })
   await mkdir(path.dirname(paths.globalConfig), { recursive: true })
   await writeFile(paths.globalConfig, `${JSON.stringify(next, null, 2)}\n`)

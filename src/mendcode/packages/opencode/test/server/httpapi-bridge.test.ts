@@ -401,6 +401,23 @@ describe("HttpApi server", () => {
     })
   })
 
+  test("serves an on-demand global memory sample from Effect HttpApi", async () => {
+    const response = await app().request(GlobalPaths.memory)
+    const body = await response.json()
+
+    expect(response.status).toBe(200)
+    expect(body).toMatchObject({
+      role: "server",
+      pid: expect.any(Number),
+      rss: expect.any(Number),
+      heapTotal: expect.any(Number),
+      heapUsed: expect.any(Number),
+      external: expect.any(Number),
+      arrayBuffers: expect.any(Number),
+      uptimeSeconds: expect.any(Number),
+    })
+  })
+
   test("serves global event stream from Effect HttpApi", async () => {
     const response = await app().request(GlobalPaths.event)
     if (!response.body) throw new Error("missing event stream body")

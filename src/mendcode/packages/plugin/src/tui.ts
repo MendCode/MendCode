@@ -1,3 +1,24 @@
+export {
+  asciiGraphCellToWorld,
+  asciiGraphNearestNode,
+  asciiGraphRuns,
+  asciiGraphWithNodePosition,
+  layoutAsciiGraph,
+  renderAsciiGraph,
+  type AsciiGraphCell,
+  type AsciiGraphCellKind,
+  type AsciiGraphEdge,
+  type AsciiGraphFrame,
+  type AsciiGraphLabelMode,
+  type AsciiGraphLayoutNode,
+  type AsciiGraphMarker,
+  type AsciiGraphNode,
+  type AsciiGraphPoint,
+  type AsciiGraphRun,
+  type AsciiGraphScene,
+  type AsciiGraphViewport,
+} from "./ascii-graph.js"
+
 import type {
   AgentPart,
   OpencodeClient,
@@ -264,18 +285,160 @@ export type TuiKV = {
 
 export type TuiWidgetPlacement = "aboveEditor" | "belowEditor" | "sessionBottomDock"
 
+export type TuiWidgetSize = number | "auto"
+
+export type TuiWidgetRenderContext = {
+  requestRender: () => void
+  maxFps: number
+}
+
+export type TuiWidgetOptions = {
+  placement?: TuiWidgetPlacement
+  order?: number
+  title?: string
+  width?: TuiWidgetSize
+  minWidth?: number
+  maxWidth?: number
+  height?: TuiWidgetSize
+  interactive?: boolean
+  onVisible?: () => boolean | void
+  onFocus?: () => boolean | void
+  onKey?: (event: ParsedKey) => boolean | void
+  maxFps?: number
+  requestRender?: () => void
+  dispose?: TuiDispose
+}
+
+export type TuiOverlayAnchor =
+  | "top-center"
+  | "center"
+  | "bottom-center"
+  | "top-left"
+  | "top-right"
+  | "bottom-left"
+  | "bottom-right"
+export type TuiOverlaySize = number | `${number}%` | "auto"
+export type TuiOverlayRenderContext = {
+  /** Close the overlay that owns this render context. */
+  close: () => boolean
+  /** Focus the overlay that owns this render context. */
+  focus: () => boolean
+  /** Remove focus from the overlay that owns this render context. */
+  blur: () => boolean
+  /** Whether the overlay that owns this render context currently has focus. */
+  focused: () => boolean
+  /** Request a TUI render when plugin-local overlay state changes outside Solid signals. */
+  requestRender: () => void
+}
+export type TuiOverlayOptions = {
+  anchor?: TuiOverlayAnchor
+  width?: TuiOverlaySize
+  height?: TuiOverlaySize
+  maxHeight?: TuiOverlaySize
+  margin?: {
+    top?: number
+    right?: number
+    bottom?: number
+    left?: number
+  }
+  nonCapturing?: boolean
+  modal?: boolean
+  allowStack?: boolean
+  title?: string
+  onFocus?: () => boolean | void
+  onClose?: TuiDispose
+  requestRender?: () => void
+}
+export type TuiOverlayApi = {
+  /** Open or replace a plugin-owned floating overlay. Runtime plugins clean open overlays on dispose. */
+  open: (
+    id: string,
+    render: (context: TuiOverlayRenderContext) => JSX.Element | string | number | null,
+    options?: TuiOverlayOptions,
+  ) => boolean
+  /** Close a plugin-owned floating overlay by ID. */
+  close: (id: string) => boolean
+  /** Focus a capturable plugin-owned overlay by ID. */
+  focus: (id: string) => boolean
+  /** Blur a plugin-owned overlay. Without an ID, blur whichever overlay is focused. */
+  blur: (id?: string) => boolean
+  /** Read the currently focused overlay ID, if any. */
+  focused: () => string | undefined
+}
+
+export type TuiCompactionArcadeRender = {
+  title?: string
+  status?: string
+  lines?: string[]
+  cells?: TuiCompactionArcadeCell[][]
+}
+
+export type TuiCompactionArcadeCellTone =
+  | "primary"
+  | "muted"
+  | "text"
+  | "wall"
+  | "empty"
+  | "head"
+  | "body"
+  | "food"
+  | "danger"
+  | "accent"
+
+export type TuiCompactionArcadeCell = {
+  text: string
+  tone?: TuiCompactionArcadeCellTone
+}
+
+export type TuiCompactionArcadeGame<State = unknown> = {
+  id: string
+  label: string
+  intervalMs?: number
+  initialState: () => State
+  tick?: (state: State) => State
+  key?: (state: State, key: string) => State | undefined
+  render: (state: State) => TuiCompactionArcadeRender
+}
+
+export type TuiSessionAccent = "theme" | "random" | `#${string}`
+
+export type TuiCustomization = {
+  contextBar: boolean
+  diffCount: boolean
+  diffFiles: boolean
+  sessionTitle: boolean
+  projectPath: boolean
+  terminalTitle: boolean
+  sessionAccent: TuiSessionAccent
+  terminalTitleTemplate: string
+}
+
+export type TuiCustomizationApi = {
+  get: () => TuiCustomization
+  set: (patch: Partial<TuiCustomization>) => TuiCustomization
+  reset: () => TuiCustomization
+  setTerminalTitle: (input?: { enabled?: boolean; template?: string }) => TuiCustomization
+  setSessionAccent: (accent: TuiSessionAccent) => TuiCustomization
+  setDiffFiles: (visible: boolean) => TuiCustomization
+}
+
 export type TuiRuntimeApi = {
+  customization: TuiCustomizationApi
   setStatus: (id: string, value?: string, input?: { order?: number }) => boolean
   clearStatus: (id: string) => boolean
   setWidget: (
     id: string,
-    render?: (() => JSX.Element | null) | undefined,
-    input?: { placement?: TuiWidgetPlacement; order?: number },
+    render?: ((context: TuiWidgetRenderContext) => JSX.Element | null) | undefined,
+    input?: TuiWidgetOptions,
   ) => boolean
   clearWidget: (id: string) => boolean
+  focusWidget: (id: string) => boolean
+  blurWidget: (id?: string) => boolean
   setFooter: (renderer?: (() => JSX.Element | null) | undefined) => boolean
   setFooterEntry: (id: string, render?: (() => JSX.Element | null) | undefined, input?: { order?: number }) => boolean
   setWorkingIndicator: (input?: { frames?: string[]; intervalMs?: number; visible?: boolean }) => boolean
+  registerCompactionArcadeGame: (game: TuiCompactionArcadeGame) => boolean
+  clearCompactionArcadeGame: (id: string) => boolean
   setEditorVisual: (input?: {
     showPlaceholder?: boolean
     normalPrefix?: string
@@ -332,6 +495,8 @@ type TuiConfigView = Pick<PluginConfig, "$schema" | "theme" | "keybinds" | "plug
 
 export type TuiApp = {
   readonly version: string
+  /** Runtime-discovered public extension capabilities. */
+  readonly capabilities?: ReadonlyArray<string>
 }
 
 type Frozen<Value> = Value extends (...args: never[]) => unknown
@@ -428,6 +593,79 @@ export type TuiEventBus = {
   on: <Type extends Event["type"]>(type: Type, handler: (event: Extract<Event, { type: Type }>) => void) => () => void
 }
 
+export type TuiShellOutputEvent = {
+  stream: "stdout" | "stderr"
+  text: string
+  output: string
+}
+
+export type TuiShellExitEvent = {
+  code: number
+  output: string
+  stderr: string
+}
+
+export type TuiShellSpawnOptions = {
+  cwd?: string
+  env?: Record<string, string | undefined>
+  shell?: boolean | string
+  maxBuffer?: number
+}
+
+export type TuiShellProcess = {
+  readonly pid: number | undefined
+  write: (data: string | Uint8Array) => boolean
+  stop: () => Promise<void>
+  output: () => string
+  stderr: () => string
+  onOutput: (handler: (event: TuiShellOutputEvent) => void) => () => void
+  onExit: (handler: (event: TuiShellExitEvent) => void) => () => void
+  exited: Promise<number>
+}
+
+export type TuiShellApi = {
+  spawn: (command: string | string[], options?: TuiShellSpawnOptions) => TuiShellProcess
+}
+
+export type TuiPtyOutputEvent = {
+  text: string
+  output: string
+  screen: string
+  rows: string[]
+}
+
+export type TuiPtyExitEvent = {
+  code: number
+  output: string
+}
+
+export type TuiPtySpawnOptions = {
+  cwd?: string
+  env?: Record<string, string | undefined>
+  cols?: number
+  rows?: number
+  maxBuffer?: number
+  term?: string
+}
+
+export type TuiPtyProcess = {
+  readonly id: string
+  readonly pid: number | undefined
+  write: (data: string | Uint8Array) => boolean
+  resize: (cols: number, rows: number) => void
+  stop: () => Promise<void>
+  output: () => string
+  screen: () => string
+  rows: () => string[]
+  onOutput: (handler: (event: TuiPtyOutputEvent) => void) => () => void
+  onExit: (handler: (event: TuiPtyExitEvent) => void) => () => void
+  exited: Promise<number>
+}
+
+export type TuiPtyApi = {
+  spawn: (command: string | string[], options?: TuiPtySpawnOptions) => Promise<TuiPtyProcess>
+}
+
 export type TuiDispose = () => void | Promise<void>
 
 export type TuiLifecycle = {
@@ -486,6 +724,172 @@ export type TuiWorkspace = {
   set: (workspaceID?: string) => void
 }
 
+export type TuiMemoryGraphFact = {
+  id: string
+  legacyEntryID: string | null
+  text: string
+  normalizedSummary: string
+  scope: string
+  ownerWorkspaceIDs: string[]
+  ownerGroupIDs: string[]
+  categoryIDs: string[]
+  provenance: string[]
+  createdAt: string
+  updatedAt: string
+  verifiedAt: string | null
+  confidence: number
+  durability: number
+  changeRisk: number
+  sensitivity: "low" | "medium" | "high"
+  stale: boolean
+  retrievalPriority: number
+  materialized: boolean
+}
+
+export type TuiMemoryGraphLink = {
+  id: string
+  from: string
+  to: string
+  kind: string
+  createdAt: string
+}
+
+export type TuiMemoryGraphCategory = {
+  id: string
+  label: string
+  count: number
+}
+
+export type TuiMemoryGraphSnapshot = {
+  root: string
+  facts: TuiMemoryGraphFact[]
+  links: TuiMemoryGraphLink[]
+  categories: TuiMemoryGraphCategory[]
+  health: {
+    graphHealth: string
+    materializedFacts: number
+    legacyFacts: number
+    links: number
+    connectedFacts: number
+    isolatedFacts: number
+    orphanLinks: number
+  }
+}
+
+export type TuiMemoryGraphFactInput = {
+  id?: string
+  text: string
+  scope?: "global" | "project" | "workspace" | "group-view"
+  ownerWorkspaceIDs?: string[]
+  ownerGroupIDs?: string[]
+  categoryIDs?: string[]
+  normalizedSummary?: string
+  provenance?: string[]
+  confidence?: number
+  durability?: number
+  changeRisk?: number
+  sensitivity?: "low" | "medium" | "high"
+  stale?: boolean
+  retrievalPriority?: number
+}
+
+export type TuiMemoryGraphLinkInput = {
+  id?: string
+  from: string
+  to: string
+  kind: "related" | "conflicts" | "supersedes" | "supports"
+  createdAt?: string
+}
+
+export type TuiMemoryGraphDeleteResult = {
+  ok: boolean
+  id: string
+  deletedLinks?: number
+}
+
+export type TuiMemoryApi = {
+  /** Read the current project's persisted memory graph without granting arbitrary filesystem access. */
+  graph: () => Promise<TuiMemoryGraphSnapshot>
+  /** Ask the instance-backed Memory side chat and receive structured proposed actions. */
+  sideChat: OpencodeClient["memory"]["sideChat"]
+  /** Create or update a materialized graph fact in the current project. */
+  upsertGraphFact: (input: TuiMemoryGraphFactInput) => Promise<TuiMemoryGraphFact>
+  /** Delete a materialized graph fact and any links that point to it. */
+  deleteGraphFact: (id: string) => Promise<TuiMemoryGraphDeleteResult>
+  /** Create or update a graph link in the current project. */
+  upsertGraphLink: (input: TuiMemoryGraphLinkInput) => Promise<TuiMemoryGraphLink>
+  /** Delete a graph link by ID. */
+  deleteGraphLink: (id: string) => Promise<TuiMemoryGraphDeleteResult>
+}
+
+export type TuiSessionApi = {
+  /** Return the session currently visible in the TUI, if the active route is a session. */
+  current: () => string | undefined
+  list: OpencodeClient["session"]["list"]
+  create: OpencodeClient["session"]["create"]
+  status: OpencodeClient["session"]["status"]
+  delete: OpencodeClient["session"]["delete"]
+  get: OpencodeClient["session"]["get"]
+  update: OpencodeClient["session"]["update"]
+  children: OpencodeClient["session"]["children"]
+  todo: OpencodeClient["session"]["todo"]
+  diff: OpencodeClient["session"]["diff"]
+  messages: OpencodeClient["session"]["messages"]
+  prompt: OpencodeClient["session"]["prompt"]
+  promptAsync: OpencodeClient["session"]["promptAsync"]
+  command: OpencodeClient["session"]["command"]
+  shell: OpencodeClient["session"]["shell"]
+  deleteMessage: OpencodeClient["session"]["deleteMessage"]
+  message: OpencodeClient["session"]["message"]
+  fork: OpencodeClient["session"]["fork"]
+  abort: OpencodeClient["session"]["abort"]
+  interrupt: OpencodeClient["session"]["interrupt"]
+  init: OpencodeClient["session"]["init"]
+  summarize: OpencodeClient["session"]["summarize"]
+  revert: OpencodeClient["session"]["revert"]
+  unrevert: OpencodeClient["session"]["unrevert"]
+  background: OpencodeClient["session"]["background"]
+  agentView: OpencodeClient["session"]["agentView"]
+  agentCommand: OpencodeClient["session"]["agentCommand"]
+}
+
+export type TuiSessionMetadataApi = {
+  /** Return the session currently visible in the TUI, if any. */
+  current: () => string | undefined
+  list: OpencodeClient["session"]["agentView"]["metadata"]["list"]
+  get: OpencodeClient["session"]["agentView"]["metadata"]["get"]
+  patch: OpencodeClient["session"]["agentView"]["metadata"]["patch"]
+  getCurrent: () => Promise<Awaited<ReturnType<OpencodeClient["session"]["agentView"]["metadata"]["get"]>>>
+}
+
+export type TuiSessionCreateInput = NonNullable<Parameters<OpencodeClient["session"]["create"]>[0]>
+type TuiSessionPromptInput = NonNullable<Parameters<OpencodeClient["session"]["prompt"]>[0]>
+type TuiSessionPromptAsyncInput = NonNullable<Parameters<OpencodeClient["session"]["promptAsync"]>[0]>
+type TuiSessionMessagesInput = NonNullable<Parameters<OpencodeClient["session"]["messages"]>[0]>
+type TuiSessionUpdateInput = NonNullable<Parameters<OpencodeClient["session"]["update"]>[0]>
+
+export type TuiAiPromptInput = string | Omit<TuiSessionPromptInput, "sessionID">
+
+/** A persistent MendCode session that a plugin can use as an AI-backed page or modal. */
+export type TuiAiSession = {
+  readonly id: string
+  prompt: (input: TuiAiPromptInput) => ReturnType<OpencodeClient["session"]["prompt"]>
+  promptAsync: (
+    input: Omit<TuiSessionPromptAsyncInput, "sessionID"> | string,
+  ) => ReturnType<OpencodeClient["session"]["promptAsync"]>
+  messages: (input?: Omit<TuiSessionMessagesInput, "sessionID">) => ReturnType<OpencodeClient["session"]["messages"]>
+  update: (input: Omit<TuiSessionUpdateInput, "sessionID">) => ReturnType<OpencodeClient["session"]["update"]>
+  abort: () => ReturnType<OpencodeClient["session"]["abort"]>
+  delete: () => ReturnType<OpencodeClient["session"]["delete"]>
+}
+
+export type TuiAiApi = {
+  /** Wrap an existing session as a plugin-owned AI handle. */
+  open: (sessionID: string) => TuiAiSession
+  /** Create a regular MendCode session that can power a custom page or modal. */
+  create: (input?: TuiSessionCreateInput) => Promise<TuiAiSession>
+}
+
 export type TuiPluginApi = {
   app: TuiApp
   command: {
@@ -508,6 +912,7 @@ export type TuiPluginApi = {
     Prompt: (props: TuiPromptProps) => JSX.Element
     toast: (input: TuiToast) => void
     dialog: TuiDialogStack
+    overlay: TuiOverlayApi
     runtime: TuiRuntimeApi
   }
   keybind: {
@@ -518,9 +923,15 @@ export type TuiPluginApi = {
   readonly tuiConfig: Frozen<TuiConfigView>
   kv: TuiKV
   state: TuiState
+  session: TuiSessionApi
+  metadata: TuiSessionMetadataApi
+  ai: TuiAiApi
+  memory: TuiMemoryApi
   theme: TuiTheme
   client: OpencodeClient
   event: TuiEventBus
+  shell: TuiShellApi
+  pty: TuiPtyApi
   renderer: CliRenderer
   slots: TuiSlots
   plugins: {

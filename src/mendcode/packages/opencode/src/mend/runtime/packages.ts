@@ -47,6 +47,7 @@ export type MendPackageProjection = {
   skills: { paths: string[] }
   packages: InstalledMendPackage[]
   runtimePacks: RuntimePack[]
+  tuiProfiles: unknown[]
   warnings: string[]
 }
 
@@ -95,9 +96,12 @@ function packFileAllowlist(pack: RuntimePack | null | undefined) {
   for (const file of pack.modes || []) add(file)
   for (const file of pack.skills || []) add(file)
   for (const file of pack.plugins || []) add(file)
+  for (const file of pack.tools || []) add(file)
   for (const file of pack.prompts?.templates || []) add(file)
   for (const file of pack.mcp?.files || []) add(file)
   for (const file of pack.context?.include || []) add(file)
+  for (const file of pack.pages || []) add(file)
+  for (const file of pack.widgets || []) add(file)
   for (const file of pack.extensions || []) add(file)
   if (pack.models.default.providerID || pack.models.default.modelID || Object.keys(pack.models.roles).length) {
     add(".mendcode/models.yaml")
@@ -255,6 +259,7 @@ export async function activeMendPackageProjection(root = mendPaths().root): Prom
     skills: { paths: [] },
     packages: [],
     runtimePacks: [],
+    tuiProfiles: [],
     warnings: [],
   }
 
@@ -281,6 +286,14 @@ export async function activeMendPackageProjection(root = mendPaths().root): Prom
     projection.agent = mergeDeep(projection.agent, await ConfigAgent.loadMode(packageMendDir)) as typeof projection.agent
     projection.plugin.push(...await ConfigPlugin.load(packageMendDir))
     projection.skills.paths.push(packageMendDir)
+    const tuiProfileFile = path.join(packageMendDir, "tui", "profile.json")
+    if (existsSync(tuiProfileFile)) {
+      try {
+        projection.tuiProfiles.push(JSON.parse(await readFile(tuiProfileFile, "utf8")))
+      } catch (error) {
+        projection.warnings.push(`${id}: invalid .mendcode/tui/profile.json: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
 
     const mcp = await readMendMcpConfigFromDir(packageRoot, path.join(packageMendDir, "mcp"))
     projection.warnings.push(...mcp.warnings.map((warning) => `${id}: ${warning}`))

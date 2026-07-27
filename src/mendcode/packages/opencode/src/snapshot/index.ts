@@ -33,6 +33,7 @@ export type FileDiff = typeof FileDiff.Type
 const log = Log.create({ service: "snapshot" })
 const prune = "7.days"
 const limit = 2 * 1024 * 1024
+const diffPatchLineLimit = 5_000
 const core = ["-c", "core.longpaths=true", "-c", "core.symlinks=true"]
 const cfg = ["-c", "core.autocrlf=false", ...core]
 const quote = [...cfg, "-c", "core.quotepath=false"]
@@ -526,8 +527,17 @@ export const layer: Layer.Layer<
                 ref: string
               }
 
+              const shouldOmitPatch = (row: Row) => row.additions + row.deletions > diffPatchLineLimit
+              const omittedPatch = (row: Row) =>
+                [
+                  `Diff patch omitted for disk/RAM safety.`,
+                  `Changed lines: ${row.additions + row.deletions}.`,
+                  `Limit: ${diffPatchLineLimit}.`,
+                ].join("\n")
+
               const show = Effect.fnUntraced(function* (row: Row) {
                 if (row.binary) return ["", ""]
+                if (shouldOmitPatch(row)) return ["", ""]
                 if (row.status === "added") {
                   return [
                     "",
@@ -555,6 +565,7 @@ export const layer: Layer.Layer<
                 function* (rows: Row[]) {
                   const refs = rows.flatMap((row) => {
                     if (row.binary) return []
+                    if (shouldOmitPatch(row)) return []
                     if (row.status === "added")
                       return [{ file: row.file, side: "after", ref: `${to}:${row.file}` } satisfies Ref]
                     if (row.status === "deleted") {
@@ -708,6 +719,16 @@ export const layer: Layer.Layer<
                 const text = yield* load(run)
 
                 for (const row of run) {
+                  if (shouldOmitPatch(row)) {
+                    result.push({
+                      file: row.file,
+                      patch: omittedPatch(row),
+                      additions: row.additions,
+                      deletions: row.deletions,
+                      status: row.status,
+                    })
+                    continue
+                  }
                   const hit = text?.get(row.file) ?? { before: "", after: "" }
                   const [before, after] = row.binary ? ["", ""] : text ? [hit.before, hit.after] : yield* show(row)
                   result.push({

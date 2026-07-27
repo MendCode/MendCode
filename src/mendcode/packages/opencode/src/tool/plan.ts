@@ -32,22 +32,52 @@ export const resolvePlanExitAgent = Effect.fn("Plan.resolvePlanExitAgent")(funct
 export function switchToBuildAgent(input: {
   session: Session.Interface
   provider: Provider.Interface
+  agents: Agent.Interface
   sessionID: SessionID
   text: string
   agent?: string
 }) {
   return Effect.gen(function* () {
-    const model = getLastModel(input.sessionID) ?? (yield* input.provider.defaultModel())
     const agent = input.agent?.trim() || "build"
+    const ag = yield* input.agents.get(agent)
+    const lastModel = getLastModel(input.sessionID)
+    const model = ag?.model ?? lastModel ?? (yield* input.provider.defaultModel())
+    const candidateVariant =
+      ag?.model && ag.variant
+        ? ag.variant
+        : lastModel?.providerID === model.providerID && lastModel?.modelID === model.modelID
+          ? lastModel.variant
+          : undefined
+    const fullModel = candidateVariant
+      ? yield* input.provider.getModel(model.providerID, model.modelID).pipe(Effect.catchDefect(() => Effect.void))
+      : undefined
+    const variant =
+      candidateVariant && fullModel ? (fullModel.variants?.[candidateVariant] ? candidateVariant : undefined) : candidateVariant
+    const selectedModel = {
+      providerID: model.providerID,
+      modelID: model.modelID,
+      variant,
+    }
+    const time = Date.now()
 
     const msg: MessageV2.User = {
       id: MessageID.ascending(),
       sessionID: input.sessionID,
       role: "user",
-      time: { created: Date.now() },
+      time: { created: time },
       agent,
-      model,
+      model: selectedModel,
     }
+    yield* input.session.setAgentModel({
+      sessionID: input.sessionID,
+      agent,
+      model: {
+        providerID: selectedModel.providerID,
+        id: selectedModel.modelID,
+        variant: selectedModel.variant,
+      },
+      time,
+    })
     yield* input.session.updateMessage(msg)
     yield* input.session.updatePart({
       id: PartID.ascending(),
@@ -101,6 +131,7 @@ export const PlanExitTool = Tool.define(
           yield* switchToBuildAgent({
             session,
             provider,
+            agents,
             sessionID: ctx.sessionID,
             agent: planExitAgent,
             text: `Implement this approved plan. The plan at ${plan} has been approved; edit files as needed and execute it.`,

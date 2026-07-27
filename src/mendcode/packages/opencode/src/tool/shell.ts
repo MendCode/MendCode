@@ -1,6 +1,5 @@
-import { DateTime, Effect, Stream } from "effect"
+import { DateTime, Effect, Fiber, Stream } from "effect"
 import os from "os"
-import { createWriteStream } from "node:fs"
 import * as Tool from "./tool"
 import path from "path"
 import { Bus } from "@/bus"
@@ -24,11 +23,15 @@ import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner
 import { ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
 import { Shell as ShellEvent } from "@/v2/session-event"
+import { createShellOutputDeltaBuffer } from "./shell-output"
 
 export { Parameters } from "./shell/prompt"
 
 const MAX_METADATA_LENGTH = 30_000
 const METADATA_UPDATE_INTERVAL = 250
+const ABORT_GRACE_PERIOD_MS = 250
+const MAX_TERMINAL_PREVIEW_CHARS = MAX_METADATA_LENGTH * 2
+const MAX_TERMINAL_PREVIEW_LINES = 2_000
 const DEFAULT_TIMEOUT = Flag.OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS || 2 * 60 * 1000
 const CWD = new Set(["cd", "chdir", "popd", "pushd", "push-location", "set-location"])
 const FILES = new Set([
@@ -235,7 +238,61 @@ function pathArgs(list: Part[], ps: boolean, cmd = false) {
 
 function preview(text: string) {
   if (text.length <= MAX_METADATA_LENGTH) return text
+  const hint = /^(\.\.\.output truncated\.\.\.\n\n(?:Full output|Output excerpt) saved to:\s+\S+\n\n)/.exec(text)?.[1]
+  if (hint) {
+    const tail = Math.max(0, MAX_METADATA_LENGTH - hint.length - 5)
+    return `${hint}...\n\n${text.slice(-tail)}`
+  }
   return "...\n\n" + text.slice(-MAX_METADATA_LENGTH)
+}
+
+function utf8Start(text: string, maxBytes: number) {
+  const buffer = Buffer.from(text, "utf8")
+  if (buffer.byteLength <= maxBytes) return text
+  let end = Math.max(0, maxBytes)
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) end--
+  return buffer.subarray(0, end).toString("utf8")
+}
+
+function utf8End(text: string, maxBytes: number) {
+  const buffer = Buffer.from(text, "utf8")
+  if (buffer.byteLength <= maxBytes) return text
+  let start = Math.max(0, buffer.byteLength - maxBytes)
+  while (start < buffer.byteLength && (buffer[start] & 0xc0) === 0x80) start++
+  return buffer.subarray(start).toString("utf8")
+}
+
+function createSavedOutputExcerpt() {
+  const budget = Math.max(1024, Truncate.MAX_SAVED_BYTES - 512)
+  const headBudget = Math.floor(budget / 2)
+  const tailBudget = budget - headBudget
+  let head = ""
+  let tail = ""
+  let totalBytes = 0
+
+  return {
+    append(text: string) {
+      const size = Buffer.byteLength(text, "utf8")
+      totalBytes += size
+      const headRemaining = headBudget - Buffer.byteLength(head, "utf8")
+      if (headRemaining > 0) {
+        const nextHead = utf8Start(text, headRemaining)
+        head += nextHead
+        tail += text.slice(nextHead.length)
+      } else {
+        tail += text
+      }
+      tail = utf8End(tail, tailBudget)
+    },
+    text() {
+      const capturedBytes = Buffer.byteLength(head, "utf8") + Buffer.byteLength(tail, "utf8")
+      if (totalBytes <= capturedBytes) return { text: head + tail, complete: true }
+      return {
+        text: `${head}\n\n[Saved output excerpt: omitted ${totalBytes - capturedBytes} bytes]\n\n${tail}`,
+        complete: false,
+      }
+    },
+  }
 }
 
 function tail(text: string, maxLines: number, maxBytes: number) {
@@ -276,7 +333,8 @@ const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boole
   return tree
 })
 
-const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan) {
+const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan, command: string) {
+  const metadata = { source: "shell", command }
   if (scan.dirs.size > 0) {
     const globs = Array.from(scan.dirs).map((dir) => {
       if (process.platform === "win32") return AppFileSystem.normalizePathPattern(path.join(dir, "*"))
@@ -286,7 +344,7 @@ const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan)
       permission: "external_directory",
       patterns: globs,
       always: globs,
-      metadata: {},
+      metadata,
     })
   }
 
@@ -295,7 +353,7 @@ const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan)
     permission: ShellID.ToolID,
     patterns: Array.from(scan.patterns),
     always: Array.from(scan.always),
-    metadata: {},
+    metadata,
   })
 })
 
@@ -456,20 +514,21 @@ export const ShellTool = Tool.define(
     ) {
       const limits = yield* trunc.limits()
       const keep = limits.maxBytes * 2
-      let full = ""
       let last = ""
       const list: Chunk[] = []
       let used = 0
       let file = ""
-      let sink: ReturnType<typeof createWriteStream> | undefined
+      let savedOutputComplete = true
+      const savedOutput = createSavedOutputExcerpt()
       let cut = false
       let expired = false
       let aborted: "user" | "external" | undefined
       let lastMetadataUpdate = 0
-      let pendingOutputDelta = ""
+      const pendingOutputDelta = createShellOutputDeltaBuffer()
       let lastOutputEvent = 0
-      let terminalPreviewLines = [""]
+      let terminalPreviewLines: string[][] = [[]]
       let terminalPreviewColumn = 0
+      let terminalPreviewCells = 0
       let pendingStoredCarriageReturn = false
       let previousStoredEndedWithNewline = false
 
@@ -485,11 +544,11 @@ export const ShellTool = Tool.define(
         })
       }
       const flushOutputEvent = (force?: boolean) => {
-        if (!ctx.callID || !pendingOutputDelta) return Effect.void
+        if (!ctx.callID || !pendingOutputDelta.hasPending()) return Effect.void
         const now = Date.now()
         if (!force && now - lastOutputEvent < METADATA_UPDATE_INTERVAL) return Effect.void
-        const delta = pendingOutputDelta
-        pendingOutputDelta = ""
+        const delta = pendingOutputDelta.take()
+        if (!delta) return Effect.void
         lastOutputEvent = now
         return bus.publish(ShellEvent.Output, {
           sessionID: ctx.sessionID,
@@ -505,7 +564,11 @@ export const ShellTool = Tool.define(
             continue
           }
           if (char === "\n") {
-            terminalPreviewLines.push("")
+            terminalPreviewLines.push([])
+            if (terminalPreviewLines.length > MAX_TERMINAL_PREVIEW_LINES * 2) {
+              const removed = terminalPreviewLines.splice(0, terminalPreviewLines.length - MAX_TERMINAL_PREVIEW_LINES)
+              terminalPreviewCells -= removed.reduce((sum, line) => sum + line.length, 0)
+            }
             terminalPreviewColumn = 0
             continue
           }
@@ -514,20 +577,30 @@ export const ShellTool = Tool.define(
             continue
           }
 
-          const index = terminalPreviewLines.length - 1
-          const line = terminalPreviewLines[index] ?? ""
-          const padded = line.length < terminalPreviewColumn ? line.padEnd(terminalPreviewColumn, " ") : line
-          terminalPreviewLines[index] =
-            padded.slice(0, terminalPreviewColumn) + char + padded.slice(terminalPreviewColumn + 1)
+          if (terminalPreviewColumn >= MAX_TERMINAL_PREVIEW_CHARS) continue
+          const line = terminalPreviewLines[terminalPreviewLines.length - 1]!
+          const target = terminalPreviewColumn + 1
+          const available = Math.max(0, MAX_TERMINAL_PREVIEW_CHARS - terminalPreviewCells)
+          const nextLength = Math.min(target, line.length + available)
+          if (line.length < nextLength) {
+            const previousLength = line.length
+            line.length = nextLength
+            line.fill(" ", previousLength)
+            terminalPreviewCells += nextLength - previousLength
+          }
+          if (terminalPreviewColumn >= line.length) continue
+          line[terminalPreviewColumn] = char
           terminalPreviewColumn++
         }
 
-        const rendered = terminalPreviewLines.join("\n")
+        let rendered = terminalPreviewLines.map((line) => line.join("")).join("\n")
         if (rendered.length > MAX_METADATA_LENGTH * 2) {
-          terminalPreviewLines = rendered.slice(-MAX_METADATA_LENGTH).split("\n")
+          rendered = rendered.slice(-MAX_METADATA_LENGTH)
+          terminalPreviewLines = rendered.split("\n").map((line) => [...line])
           terminalPreviewColumn = terminalPreviewLines.at(-1)?.length ?? 0
+          terminalPreviewCells = terminalPreviewLines.reduce((sum, line) => sum + line.length, 0)
         }
-        return terminalPreviewLines.join("\n")
+        return rendered
       }
       const normalizeStoredChunk = (chunk: string) => {
         let text = chunk
@@ -566,6 +639,7 @@ export const ShellTool = Tool.define(
         }
         previousStoredEndedWithNewline = outputChunk.endsWith("\n")
         const size = Buffer.byteLength(outputChunk, "utf-8")
+        savedOutput.append(outputChunk)
         list.push({ text: outputChunk, size })
         used += size
         while (used > keep && list.length > 1) {
@@ -576,26 +650,7 @@ export const ShellTool = Tool.define(
         }
 
         last = preview(updateTerminalPreview(chunk))
-        if (!rewrite) pendingOutputDelta += outputChunk
-
-        if (file) {
-          sink?.write(outputChunk)
-        } else {
-          full += outputChunk
-          if (Buffer.byteLength(full, "utf-8") > limits.maxBytes) {
-            return trunc.write(full).pipe(
-              Effect.andThen((next) =>
-                Effect.sync(() => {
-                  file = next
-                  cut = true
-                  sink = createWriteStream(next, { flags: "a" })
-                  full = ""
-                }),
-              ),
-              Effect.andThen(flushMetadata(true)),
-            )
-          }
-        }
+        if (!rewrite) pendingOutputDelta.append(outputChunk)
 
         return flushMetadata().pipe(Effect.andThen(() => flushOutputEvent()))
       }
@@ -603,7 +658,7 @@ export const ShellTool = Tool.define(
       const runPipe = Effect.gen(function* () {
         const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
 
-        yield* Effect.forkScoped(Stream.runForEach(Stream.decodeText(handle.all), processChunk))
+        const outputFiber = yield* Effect.forkScoped(Stream.runForEach(Stream.decodeText(handle.all), processChunk))
 
         const abort = Effect.callback<void>((resume) => {
           if (ctx.abort.aborted) return resume(Effect.void)
@@ -621,11 +676,16 @@ export const ShellTool = Tool.define(
         ])
 
         if (exit.kind === "abort") {
-          yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+          const grace = yield* Effect.raceFirst(
+            handle.exitCode.pipe(Effect.as("exited" as const)),
+            Effect.sleep(ABORT_GRACE_PERIOD_MS).pipe(Effect.as("grace-expired" as const)),
+          )
+          if (grace === "grace-expired") yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
         }
         if (exit.kind === "timeout") {
           yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
         }
+        yield* Fiber.await(outputFiber).pipe(Effect.exit, Effect.asVoid)
 
         return exit
       })
@@ -652,41 +712,34 @@ export const ShellTool = Tool.define(
         meta.push(
           aborted === "user"
             ? "User aborted the command"
-            : "Command output interrupted before completion; no explicit user cancel was recorded",
+            : "Command execution stopped before completion because the parent run lost its connection; no explicit user cancel was recorded",
         )
       }
       const raw = list.map((item) => item.text).join("")
       const end = tail(raw, limits.maxLines, limits.maxBytes)
       if (end.cut) cut = true
-      if (!file && end.cut) {
-        file = yield* trunc.write(raw)
+      if (!file && cut) {
+        const excerpt = savedOutput.text()
+        const saved = yield* trunc.writeOutput(excerpt.text, { complete: excerpt.complete && !aborted })
+        file = saved.path
+        savedOutputComplete = saved.complete
       }
 
       let output = end.text
       if (!output) output = "(no output)"
 
       if (cut && file) {
-        output = `...output truncated...\n\nFull output saved to: ${file}\n\n` + output
+        const savedLine = savedOutputComplete ? `Full output saved to: ${file}` : `Output excerpt saved to: ${file}`
+        output = `...output truncated...\n\n${savedLine}\n\n` + output
       }
 
       if (meta.length > 0) {
         output += "\n\n<shell_metadata>\n" + meta.join("\n") + "\n</shell_metadata>"
       }
-      if (sink) {
-        const stream = sink
-        yield* Effect.promise(
-          () =>
-            new Promise<void>((resolve) => {
-              stream.end(() => resolve())
-              stream.on("error", () => resolve())
-            }),
-        )
-      }
-
       return {
         title: input.description,
         metadata: {
-          output: last || preview(output),
+          output: preview(output),
           exit: code,
           description: input.description,
           truncated: cut,
@@ -726,7 +779,7 @@ export const ShellTool = Tool.define(
                   )
                   const scan = yield* collect(tree.rootNode, cwd, ps, shell, executeInstance)
                   if (!containsPath(cwd, executeInstance)) scan.dirs.add(cwd)
-                  yield* ask(ctx, scan)
+                  yield* ask(ctx, scan, params.command)
                 }),
               )
 

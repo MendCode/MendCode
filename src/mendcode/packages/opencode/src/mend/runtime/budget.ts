@@ -4,6 +4,21 @@ import path from "path"
 import { mendPaths } from "../config/paths"
 import { modelPresets, resolveModelRoles } from "../config/models"
 
+export type BudgetUsageMode = "subscription" | "api-usage"
+
+type BudgetConfig = {
+  mode?: unknown
+  warnUsd?: unknown
+  stopUsd?: unknown
+}
+
+export function normalizeBudgetUsageMode(config?: { budgets?: BudgetConfig } | null): BudgetUsageMode {
+  if (config?.budgets?.mode === "api-usage") return "api-usage"
+  if (config?.budgets?.mode === "subscription") return "subscription"
+  if (typeof config?.budgets?.warnUsd === "number" || typeof config?.budgets?.stopUsd === "number") return "api-usage"
+  return "subscription"
+}
+
 type BudgetSpendState = {
   version: 0
   telemetry: { available: boolean; source: string | null; currentUsd: number | null; updatedAt: string | null }
@@ -19,6 +34,12 @@ const defaultSpendState: BudgetSpendState = {
 async function readJsonIfExists<T>(file: string, fallback: T): Promise<T> {
   if (!existsSync(file)) return fallback
   return JSON.parse(await readFile(file, "utf8")) as T
+}
+
+export async function readBudgetUsageMode(root?: string, fallback: BudgetUsageMode = "subscription") {
+  const file = mendPaths(root).mendConfig
+  if (!existsSync(file)) return fallback
+  return normalizeBudgetUsageMode(await readJsonIfExists<{ budgets?: BudgetConfig }>(file, {}))
 }
 
 async function writeJson(file: string, value: unknown) {
@@ -137,14 +158,18 @@ export async function budgetEnforcementStatus(input: { providerID?: string | nul
   const resolvedAuthMode = preset?.authMode || input.authMode || "unknown"
   const suppliedUsd = spendState.telemetry?.available === true ? spendState.telemetry.currentUsd || 0 : 0
   const currentUsd = suppliedUsd + knownRunHistoryUsd(runSummary)
+  const mode = normalizeBudgetUsageMode(cfg)
   const warnUsd = cfg.budgets?.warnUsd
   const stopUsd = cfg.budgets?.stopUsd
-  const enforced = Boolean(pricing)
+  const subscriptionOAuth = resolvedAuthMode === "chatgpt-subscription-oauth"
+  const enforced = mode === "api-usage" && Boolean(pricing)
   const warnings: string[] = []
   const blockers: string[] = []
   let state = "not-enforced"
-  let reason = "pricing unavailable for selected provider/model; no USD budget enforcement"
-  if (resolvedAuthMode === "chatgpt-subscription-oauth") reason = "subscription OAuth run; tokens are counted but USD budget enforcement does not apply"
+  let reason = mode === "subscription"
+    ? "subscription budget mode; token and USD budget enforcement does not apply"
+    : "pricing unavailable for selected provider/model; no USD budget enforcement"
+  if (mode === "api-usage" && subscriptionOAuth) reason = "API usage budget mode selected, but subscription OAuth has no API-priced spend to enforce"
   if (enforced) {
     state = "ok"
     reason = "pricing preset available; fail-closed stop gate is active before provider calls"
@@ -158,6 +183,7 @@ export async function budgetEnforcementStatus(input: { providerID?: string | nul
     }
   }
   return {
+    mode,
     enforced,
     state,
     reason,
@@ -188,6 +214,7 @@ export async function budgetStatus(root?: string) {
     runHistoryRecords(paths.root),
   ])
   const validation = validateBudgetSpendState(spendState)
+  const mode = normalizeBudgetUsageMode(cfg)
   const defaultRole: any = resolved.roles.default || {}
   const enforcement = await budgetEnforcementStatus({
     providerID: defaultRole.providerID || null,
@@ -195,6 +222,7 @@ export async function budgetStatus(root?: string) {
     authMode: defaultRole.authMode || null,
   }, paths.root)
   return {
+    mode,
     warnUsd: cfg.budgets?.warnUsd,
     stopUsd: cfg.budgets?.stopUsd,
     expensiveModelRequiresConfirm: cfg.budgets?.expensiveModelRequiresConfirm !== false,
@@ -216,17 +244,24 @@ export async function budgetStatus(root?: string) {
   }
 }
 
-export async function writeBudgetPolicy(input: { warnUsd: number | null; stopUsd: number | null; expensiveModelRequiresConfirm: boolean }, root?: string) {
+export async function writeBudgetPolicy(input: {
+  mode?: BudgetUsageMode
+  warnUsd: number | null
+  stopUsd: number | null
+  expensiveModelRequiresConfirm: boolean
+}, root?: string) {
   if (input.warnUsd !== null && (!Number.isFinite(input.warnUsd) || input.warnUsd < 0)) throw new Error("warnUsd must be a non-negative number or null")
   if (input.stopUsd !== null && (!Number.isFinite(input.stopUsd) || input.stopUsd < 0)) throw new Error("stopUsd must be a non-negative number or null")
   if (input.warnUsd !== null && input.stopUsd !== null && input.stopUsd < input.warnUsd) throw new Error("stopUsd must be greater than or equal to warnUsd")
   const paths = mendPaths(root)
   const cfg = await readJsonIfExists<any>(paths.mendConfig, {})
+  const mode = input.mode ?? (input.warnUsd !== null || input.stopUsd !== null ? "api-usage" : normalizeBudgetUsageMode(cfg))
   cfg.version = cfg.version ?? 0
   cfg.budgets = {
     ...(cfg.budgets || {}),
-    warnUsd: input.warnUsd ?? undefined,
-    stopUsd: input.stopUsd ?? undefined,
+    mode,
+    warnUsd: mode === "subscription" ? undefined : input.warnUsd ?? undefined,
+    stopUsd: mode === "subscription" ? undefined : input.stopUsd ?? undefined,
     expensiveModelRequiresConfirm: input.expensiveModelRequiresConfirm,
   }
   await writeJson(paths.mendConfig, cfg)

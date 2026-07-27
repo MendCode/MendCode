@@ -1044,7 +1044,7 @@ function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model
 
   return {
     ...base,
-    variants: mapValues(ProviderTransform.variants(base), (v) => v),
+    variants: mapValues(ProviderTransform.variants(base, model.reasoning_options), (v) => v),
   }
 }
 

@@ -1,12 +1,14 @@
 import { Keybind } from "@/util/keybind"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule, TuiPluginStatus } from "@mendcode/plugin/tui"
-import { useTerminalDimensions } from "@opentui/solid"
+import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { fileURLToPath } from "url"
 import { DialogSelect, type DialogSelectOption } from "@tui/ui/dialog-select"
-import { createEffect, createMemo, createSignal } from "solid-js"
+import { Show, createEffect, createMemo, createSignal } from "solid-js"
 
 const id = "internal:plugin-manager"
 const key = Keybind.parse("space").at(0)
+const add = Keybind.parse("shift+i").at(0)
+const tab = Keybind.parse("tab").at(0)
 
 function state(api: TuiPluginApi, item: TuiPluginStatus) {
   if (!item.enabled) {
@@ -33,6 +35,111 @@ function meta(item: TuiPluginStatus, width: number) {
   const next = source(item.spec)
   if (next) return next
   return item.spec
+}
+
+function Install(props: { api: TuiPluginApi }) {
+  const [global, setGlobal] = createSignal(false)
+  const [busy, setBusy] = createSignal(false)
+
+  useKeyboard((event) => {
+    if (event.name !== "tab") return
+    event.preventDefault()
+    event.stopPropagation()
+    if (busy()) return
+    setGlobal((value) => !value)
+  })
+
+  return (
+    <props.api.ui.DialogPrompt
+      title="Install plugin"
+      placeholder="npm package name"
+      busy={busy()}
+      busyText="Installing plugin..."
+      description={() => (
+        <box flexDirection="row" gap={1}>
+          <text fg={props.api.theme.current.textMuted}>scope:</text>
+          <text fg={busy() ? props.api.theme.current.textMuted : props.api.theme.current.text}>
+            {global() ? "global" : "local"}
+          </text>
+          <Show when={!busy()}>
+            <text fg={props.api.theme.current.textMuted}>({Keybind.toString(tab)} toggle)</text>
+          </Show>
+        </box>
+      )}
+      onConfirm={(raw) => {
+        if (busy()) return
+        const spec = raw.trim()
+        if (!spec) {
+          props.api.ui.toast({
+            variant: "error",
+            message: "Plugin package name is required",
+          })
+          return
+        }
+
+        setBusy(true)
+        void props.api.plugins
+          .install(spec, { global: global() })
+          .then((result) => {
+            if (!result.ok) {
+              props.api.ui.toast({
+                variant: "error",
+                message: result.message,
+              })
+              if (result.message.includes("marketplace/registry")) {
+                props.api.ui.toast({
+                  variant: "info",
+                  message: "Use `mendcode marketplace install <pack-id>` for MendCode-managed packages.",
+                })
+              } else if (result.missing) {
+                props.api.ui.toast({
+                  variant: "info",
+                  message: "Check npm registry/auth settings and try again.",
+                })
+              }
+              show(props.api)
+              return
+            }
+
+            props.api.ui.toast({
+              variant: "success",
+              message: `Installed ${spec} (${global() ? "global" : "local"}: ${result.dir})`,
+            })
+            if (!result.tui) {
+              props.api.ui.toast({
+                variant: "info",
+                message: "Package has no TUI target to load in this app.",
+              })
+              show(props.api)
+              return
+            }
+
+            return props.api.plugins.add(spec).then((ok) => {
+              if (!ok) {
+                props.api.ui.toast({
+                  variant: "warning",
+                  message: "Installed plugin, but runtime load failed. Restart the TUI to retry.",
+                })
+                show(props.api)
+                return
+              }
+
+              props.api.ui.toast({
+                variant: "success",
+                message: `Loaded ${spec} in the current session.`,
+              })
+              show(props.api)
+            })
+          })
+          .finally(() => {
+            setBusy(false)
+          })
+      }}
+      onCancel={() => {
+        show(props.api)
+      }}
+    />
+  )
 }
 
 function row(api: TuiPluginApi, item: TuiPluginStatus, width: number): DialogSelectOption<string> {
@@ -126,16 +233,27 @@ function show(api: TuiPluginApi) {
   api.ui.dialog.replace(() => <View api={api} />)
 }
 
+function showInstall(api: TuiPluginApi) {
+  api.ui.dialog.replace(() => <Install api={api} />)
+}
+
 const tui: TuiPlugin = async (api) => {
   api.command.register(() => [
     {
-      title: "Internal TUI plugins",
+      title: "Plugins",
       value: "plugins.list",
       keybind: "plugin_manager",
-      category: "Developer",
-      hidden: true,
+      category: "System",
       onSelect() {
         show(api)
+      },
+    },
+    {
+      title: "Install plugin",
+      value: "plugins.install",
+      category: "System",
+      onSelect() {
+        showInstall(api)
       },
     },
   ])

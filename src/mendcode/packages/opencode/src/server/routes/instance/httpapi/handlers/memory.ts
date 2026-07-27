@@ -11,7 +11,10 @@ export const memoryHandlers = HttpApiBuilder.group(InstanceHttpApi, "memory", (h
       payload: typeof MemorySideChatPayload.Type
     }) {
       const instance = yield* InstanceState.context
-      return yield* runMemorySideChat(ctx.payload, instance.directory)
+      return yield* runMemorySideChat({
+        ...ctx.payload,
+        history: ctx.payload.history ? [...ctx.payload.history] : undefined,
+      }, instance.directory)
     })
 
     return handlers.handle("sideChat", sideChat)

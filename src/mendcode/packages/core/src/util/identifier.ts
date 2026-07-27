@@ -1,4 +1,4 @@
-import { randomBytes } from "crypto"
+import { randomInt } from "node:crypto"
 
 export namespace Identifier {
   const LENGTH = 26
@@ -18,9 +18,8 @@ export namespace Identifier {
   function randomBase62(length: number): string {
     const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
     let result = ""
-    const bytes = randomBytes(length)
     for (let i = 0; i < length; i++) {
-      result += chars[bytes[i] % 62]
+      result += chars[randomInt(chars.length)]
     }
     return result
   }

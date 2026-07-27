@@ -67,7 +67,7 @@ function unquoteGitPath(input: string) {
 export interface Interface {
   readonly summarize: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<void>
   readonly diff: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Snapshot.FileDiff[]>
-  readonly computeDiff: (input: { messages: MessageV2.WithParts[] }) => Effect.Effect<Snapshot.FileDiff[]>
+  readonly computeDiff: (input: { messages: ReadonlyArray<Pick<MessageV2.WithParts, "parts">> }) => Effect.Effect<Snapshot.FileDiff[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionSummary") {}
@@ -80,7 +80,7 @@ export const layer = Layer.effect(
     const storage = yield* Storage.Service
     const bus = yield* Bus.Service
 
-    const computeDiff = Effect.fn("SessionSummary.computeDiff")(function* (input: { messages: MessageV2.WithParts[] }) {
+    const computeDiff = Effect.fn("SessionSummary.computeDiff")(function* (input: { messages: ReadonlyArray<Pick<MessageV2.WithParts, "parts">> }) {
       let from: string | undefined
       let to: string | undefined
       for (const item of input.messages) {

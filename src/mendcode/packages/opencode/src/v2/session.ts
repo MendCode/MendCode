@@ -20,6 +20,11 @@ export type Delivery = Schema.Schema.Type<typeof Delivery>
 
 export const DefaultDelivery = "immediate" satisfies Delivery
 
+export const MessageView = Schema.Literals(["full", "tui"]).annotate({
+  identifier: "Session.MessageView",
+})
+export type MessageView = Schema.Schema.Type<typeof MessageView>
+
 export class Info extends Schema.Class<Info>("Session.Info")({
   id: SessionID,
   parentID: optionalOmitUndefined(SessionID),
@@ -80,6 +85,7 @@ export interface Interface {
     sessionID: SessionID
     limit?: number
     order?: "asc" | "desc"
+    view?: MessageView
     cursor?: {
       id: SessionMessage.ID
       time: number
@@ -117,6 +123,178 @@ export const layer = Layer.effect(
 
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type })
+
+    const TUI_V2_TEXT_PREVIEW_CHARS = 128 * 1024
+    const TUI_V2_METADATA_PREVIEW_CHARS = 4 * 1024
+    const TUI_V2_DIFF_PREVIEW_CHARS = 512 * 1024
+    const TUI_V2_CONTENT_PREVIEW_CHARS = 512 * 1024
+    const TUI_V2_FIELD_PREVIEW_CHARS = 2 * 1024
+
+    function previewString(input: string | undefined, maxChars: number, _label: string) {
+      if (!input || input.length <= maxChars) return input
+      return input.slice(0, maxChars)
+    }
+
+    function previewToolInputContent(input: string, label: string) {
+      if (input.length <= TUI_V2_CONTENT_PREVIEW_CHARS) return input
+      const marker = `\n[${label} preview truncated: omitted ${input.length - TUI_V2_CONTENT_PREVIEW_CHARS} chars; showing the beginning.]\n`
+      const budget = Math.max(0, TUI_V2_CONTENT_PREVIEW_CHARS - marker.length)
+      return `${input.slice(0, budget)}${marker}`
+    }
+
+    function previewDiff(input: string) {
+      if (input.length <= TUI_V2_DIFF_PREVIEW_CHARS) return input
+      const marker = "\n[Diff preview truncated: too large to render safely. Show more to inspect the full diff.]\n"
+      const budget = Math.max(0, TUI_V2_DIFF_PREVIEW_CHARS - marker.length)
+      if (budget <= 0) return marker.slice(0, TUI_V2_DIFF_PREVIEW_CHARS)
+      const head = Math.floor(budget / 3)
+      return `${input.slice(0, head)}${marker}${input.slice(input.length - (budget - head))}`
+    }
+
+    function previewUnknown(input: unknown, maxChars: number, label: string, depth = 0): unknown {
+      if (typeof input === "string") return previewString(input, maxChars, label)
+      if (!input || typeof input !== "object") return input
+      if (depth >= 4) return input
+      if (Array.isArray(input)) return input.map((item) => previewUnknown(item, maxChars, label, depth + 1))
+
+      const result: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(input)) {
+        const diffLike = key === "diff" || key === "patch"
+        const nextMax = diffLike
+          ? TUI_V2_DIFF_PREVIEW_CHARS
+          : key === "content"
+            ? TUI_V2_CONTENT_PREVIEW_CHARS
+            : key === "output"
+              ? maxChars
+              : Math.min(maxChars, TUI_V2_FIELD_PREVIEW_CHARS)
+        result[key] =
+          diffLike && typeof value === "string"
+            ? previewDiff(value)
+            : key === "content" && typeof value === "string"
+              ? previewToolInputContent(value, `${label}.${key}`)
+              : previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
+      }
+      return result
+    }
+
+    function previewToolContent<T>(content: T): T {
+      if (!Array.isArray(content)) return content
+      return content.map((item) => {
+        if (!item || typeof item !== "object" || !("type" in item) || item.type !== "text" || typeof item.text !== "string") return item
+        return { ...item, text: previewString(item.text, TUI_V2_TEXT_PREVIEW_CHARS, "tool content") ?? "" }
+      }) as T
+    }
+
+    function previewToolState(state: SessionMessage.ToolState): SessionMessage.ToolState {
+      if (state.status === "pending") {
+        return new SessionMessage.ToolStatePending({
+          ...state,
+          input: previewString(state.input, TUI_V2_FIELD_PREVIEW_CHARS, "tool input") ?? "",
+        })
+      }
+
+      if (state.status === "running") {
+        return new SessionMessage.ToolStateRunning({
+          ...state,
+          input: previewUnknown(state.input, TUI_V2_FIELD_PREVIEW_CHARS, "tool input") as Record<string, unknown>,
+          structured: previewUnknown(
+            state.structured,
+            TUI_V2_METADATA_PREVIEW_CHARS,
+            "tool structured output",
+          ) as typeof state.structured,
+          content: previewToolContent(state.content),
+        })
+      }
+      if (state.status === "completed") {
+        return new SessionMessage.ToolStateCompleted({
+          ...state,
+          input: previewUnknown(state.input, TUI_V2_FIELD_PREVIEW_CHARS, "tool input") as Record<string, unknown>,
+          structured: previewUnknown(
+            state.structured,
+            TUI_V2_METADATA_PREVIEW_CHARS,
+            "tool structured output",
+          ) as typeof state.structured,
+          content: previewToolContent(state.content),
+        })
+      }
+      return new SessionMessage.ToolStateError({
+        ...state,
+        input: previewUnknown(state.input, TUI_V2_FIELD_PREVIEW_CHARS, "tool input") as Record<string, unknown>,
+        structured: previewUnknown(
+          state.structured,
+          TUI_V2_METADATA_PREVIEW_CHARS,
+          "tool structured output",
+        ) as typeof state.structured,
+        content: previewToolContent(state.content),
+      })
+    }
+
+    function previewContent(content: SessionMessage.AssistantContent): SessionMessage.AssistantContent {
+      if (content.type === "text") {
+        return new SessionMessage.AssistantText({
+          ...content,
+          text: previewString(content.text, TUI_V2_TEXT_PREVIEW_CHARS, "assistant text") ?? "",
+        })
+      }
+      if (content.type === "reasoning") {
+        return new SessionMessage.AssistantReasoning({
+          ...content,
+          text: previewString(content.text, TUI_V2_TEXT_PREVIEW_CHARS, "assistant reasoning") ?? "",
+        })
+      }
+      return new SessionMessage.AssistantTool({
+        ...content,
+        provider: content.provider
+          ? {
+              ...content.provider,
+              metadata: previewUnknown(
+                content.provider.metadata,
+                TUI_V2_METADATA_PREVIEW_CHARS,
+                "tool provider metadata",
+              ) as typeof content.provider.metadata,
+            }
+          : content.provider,
+        state: previewToolState(content.state),
+      })
+    }
+
+    function previewMessageForTui(message: SessionMessage.Message): SessionMessage.Message {
+      if (message.type === "shell") {
+        return new SessionMessage.Shell({
+          ...message,
+          output: previewString(message.output, TUI_V2_TEXT_PREVIEW_CHARS, "shell output") ?? "",
+        })
+      }
+      if (message.type === "user") {
+        return new SessionMessage.User({
+          ...message,
+          text: previewString(message.text, TUI_V2_TEXT_PREVIEW_CHARS, "user message") ?? "",
+        })
+      }
+      if (message.type === "synthetic") {
+        return new SessionMessage.Synthetic({
+          ...message,
+          text: previewString(message.text, TUI_V2_TEXT_PREVIEW_CHARS, "synthetic message") ?? "",
+        })
+      }
+      if (message.type === "compaction") {
+        return new SessionMessage.Compaction({
+          ...message,
+          summary: previewString(message.summary, TUI_V2_TEXT_PREVIEW_CHARS, "compaction summary") ?? "",
+          include: previewString(message.include, TUI_V2_TEXT_PREVIEW_CHARS, "compaction include"),
+        })
+      }
+      if (message.type !== "assistant") return message
+      return new SessionMessage.Assistant({
+        ...message,
+        content: message.content.map((content) => previewContent(content)),
+      })
+    }
+
+    function decodeForView(row: typeof SessionMessageTable.$inferSelect, view: MessageView | undefined) {
+      const message = decode(row)
+      return view === "tui" ? previewMessageForTui(message) : message
+    }
 
     function fromRow(row: typeof SessionTable.$inferSelect): Info {
       return new Info({
@@ -229,7 +407,7 @@ export const layer = Layer.effect(
           const rows = input.limit === undefined ? query.all() : query.limit(input.limit).all()
           return direction === "previous" ? rows.toReversed() : rows
         })
-        return rows.map((row) => decode(row))
+        return rows.map((row) => decodeForView(row, input.view))
       }),
       context: Effect.fn("V2Session.context")(function* (sessionID) {
         const rows = Database.use((db) => {

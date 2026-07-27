@@ -9,8 +9,11 @@ export const MANAGED_PROVIDER_LIMIT_MESSAGE = "Managed provider usage limit exce
 
 export const RETRY_INITIAL_DELAY = 2000
 export const RETRY_BACKOFF_FACTOR = 2
-export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds
+export const RETRY_MAX_DELAY_NO_HEADERS = 30_000 // 30 seconds for non-network provider errors
+export const RETRY_NETWORK_INTERVAL = 1000
 export const RETRY_MAX_DELAY = 2_147_483_647 // max 32-bit signed integer for setTimeout
+export const RETRY_MAX_ATTEMPTS = 8
+export const RETRY_MAX_DURATION_MS = 15 * 60 * 1000
 
 function cap(ms: number) {
   return Math.min(ms, RETRY_MAX_DELAY)
@@ -42,10 +45,12 @@ export function delay(attempt: number, error?: MessageV2.APIError) {
         }
       }
 
+      if (MessageV2.isNetworkError(error)) return RETRY_NETWORK_INTERVAL
       return cap(RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1))
     }
   }
 
+  if (error && MessageV2.isNetworkError(error)) return RETRY_NETWORK_INTERVAL
   return cap(Math.min(RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1), RETRY_MAX_DELAY_NO_HEADERS))
 }
 
@@ -105,15 +110,26 @@ export function retryable(error: Err) {
 export function policy(opts: {
   parse: (error: unknown) => Err
   set: (input: { attempt: number; message: string; next: number }) => Effect.Effect<void>
+  maxAttempts?: number
+  maxDurationMs?: number
 }) {
+  const startedAt = Date.now()
+  const maxAttempts = Math.max(1, Math.floor(opts.maxAttempts ?? RETRY_MAX_ATTEMPTS))
+  const maxDurationMs = Math.max(1, Math.floor(opts.maxDurationMs ?? RETRY_MAX_DURATION_MS))
   return Schedule.fromStepWithMetadata(
     Effect.succeed((meta: Schedule.InputMetadata<unknown>) => {
       const error = opts.parse(meta.input)
       const message = retryable(error)
       if (!message) return Cause.done(meta.attempt)
+      const networkFailure = MessageV2.isNetworkError(error)
+      const attemptLimit = networkFailure && opts.maxAttempts === undefined ? Number.POSITIVE_INFINITY : maxAttempts
+      const durationLimit = networkFailure && opts.maxDurationMs === undefined ? Number.POSITIVE_INFINITY : maxDurationMs
+      if (meta.attempt >= attemptLimit || Date.now() - startedAt >= durationLimit) {
+        return Cause.done(meta.attempt)
+      }
       return Effect.gen(function* () {
-        const wait = delay(meta.attempt, MessageV2.APIError.isInstance(error) ? error : undefined)
         const now = yield* Clock.currentTimeMillis
+        const wait = delay(meta.attempt, MessageV2.APIError.isInstance(error) ? error : undefined)
         yield* opts.set({ attempt: meta.attempt, message, next: now + wait })
         return [meta.attempt, Duration.millis(wait)] as [number, Duration.Duration]
       })

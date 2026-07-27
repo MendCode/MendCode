@@ -140,6 +140,44 @@ function sessionStatusEvent() {
   }
 }
 
+function syncCompactionEndedEvent(input: { directory: string; workspace?: string }): GlobalEvent {
+  return {
+    directory: input.directory,
+    workspace: input.workspace,
+    payload: {
+      type: "sync",
+      id: "evt_compaction_ended",
+      syncEvent: {
+        id: "evt_compaction_ended",
+        type: "session.next.compaction.ended.0",
+        data: {
+          sessionID: "ses_test",
+          timestamp: new Date(0).toISOString(),
+          text: "summary",
+        },
+      },
+    },
+  } as any
+}
+
+function syncCompactedEvent(input: { directory: string; workspace?: string }): GlobalEvent {
+  return {
+    directory: input.directory,
+    workspace: input.workspace,
+    payload: {
+      type: "sync",
+      id: "evt_compacted",
+      syncEvent: {
+        id: "evt_compacted",
+        type: "session.compacted.0",
+        data: {
+          sessionID: "ses_test",
+        },
+      },
+    },
+  } as any
+}
+
 function createSseFetch() {
   const controllers: ReadableStreamDefaultController<Uint8Array>[] = []
   const handle = async () =>
@@ -264,6 +302,88 @@ describe("useEvent", () => {
     }
   })
 
+  test("does not deliver a global event twice when it carries a workspace", async () => {
+    const { app, emit, project, seen } = await mount()
+
+    try {
+      project.workspace.set("ws_a")
+      emit(event(update("1.2.4"), { directory: "global", workspace: "ws_a" }))
+
+      await wait(() => seen.length === 1)
+
+      expect(seen).toEqual([update("1.2.4")])
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("forwards sync compaction ended events for session hydration", async () => {
+    const { app, emit, seen } = await mount()
+
+    try {
+      emit(syncCompactionEndedEvent({ directory: "/tmp/root" }))
+
+      await wait(() => seen.length === 1)
+
+      expect(seen[0]).toMatchObject({
+        type: "session.next.compaction.ended",
+        properties: { sessionID: "ses_test", text: "summary" },
+      })
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("forwards sync compacted events so compaction UI can clear", async () => {
+    const { app, emit, seen } = await mount()
+
+    try {
+      emit(syncCompactedEvent({ directory: "/tmp/root" }))
+
+      await wait(() => seen.length === 1)
+
+      expect(seen[0]).toMatchObject({
+        type: "session.compacted",
+        properties: { sessionID: "ses_test" },
+      })
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("deduplicates direct and sync copies of the same event", async () => {
+    const { app, emit, seen } = await mount()
+
+    try {
+      emit(
+        event(
+          {
+            id: "evt_compaction_ended",
+            type: "session.next.compaction.ended",
+            properties: {
+              sessionID: "ses_test",
+              timestamp: 0,
+              text: "summary",
+            },
+          } as Event,
+          { directory: "/tmp/root" },
+        ),
+      )
+      const sync = syncCompactionEndedEvent({ directory: "/tmp/root" })
+      sync.payload.id = "evt_sync_wrapper"
+      emit(sync)
+
+      await wait(() => seen.length === 1)
+      expect(seen).toHaveLength(1)
+      expect(seen[0]).toMatchObject({
+        id: "evt_compaction_ended",
+        type: "session.next.compaction.ended",
+      })
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   test("SDK event stream reports reconnecting and reconnects after a dropped stream", async () => {
     const { app, sdk, controllers } = await mountSSE()
 
@@ -282,6 +402,10 @@ describe("useEvent", () => {
       expect(sdk.connection.recoveringSince).toBeNumber()
 
       controllers[1].enqueue(sseEvent(sessionStatusEvent()))
+      await Bun.sleep(30)
+      expect(sdk.connection.recoveringSince).toBeNumber()
+
+      controllers[1].enqueue(sseEvent(heartbeatEvent()))
       await wait(() => sdk.connection.recoveringSince === undefined)
       expect(sdk.connection.lastApplicationEventAt).toBeNumber()
     } finally {
@@ -289,7 +413,35 @@ describe("useEvent", () => {
     }
   })
 
-  test("SDK event stream marks an open but silent stream as reconnecting", async () => {
+  test("SDK event stream refreshes a shared connection after repeated server restarts", async () => {
+    let refreshes = 0
+    const { app, sdk, controllers } = await mountSSE({
+      reconnect: {
+        retryDelay: 1,
+        maxRetryDelay: 1,
+        refresh: async () => ({ url: `http://test-${++refreshes}` }),
+      },
+    })
+
+    try {
+      controllers[0].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
+
+      controllers[0].close()
+      await wait(() => controllers.length === 2)
+      expect(refreshes).toBeGreaterThanOrEqual(2)
+      controllers[1].close()
+      await wait(() => controllers.length === 3)
+      expect(sdk.connection.status).not.toBe("failed")
+
+      controllers[2].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("SDK event stream restarts an open but silent stream", async () => {
     const { app, sdk, controllers } = await mountSSE({
       reconnect: {
         staleDelay: 500,
@@ -302,26 +454,55 @@ describe("useEvent", () => {
 
       await wait(() => sdk.connection.status === "reconnecting", 2000)
       expect(sdk.connection.error).toBe("Event stream stalled")
+      await wait(() => controllers.length === 2)
 
-      controllers[0].enqueue(sseEvent(heartbeatEvent()))
+      controllers[1].enqueue(sseEvent(heartbeatEvent()))
       await wait(() => sdk.connection.status === "connected")
-      expect(sdk.connection.recoveringSince).toBeNumber()
+      expect(sdk.connection.recoveringSince).toBeUndefined()
 
-      controllers[0].enqueue(sseEvent(sessionStatusEvent()))
+      controllers[1].enqueue(sseEvent(sessionStatusEvent()))
       await wait(() => sdk.connection.recoveringSince === undefined)
     } finally {
       app.renderer.destroy()
     }
   })
 
-  test("SDK event stream stops reconnecting after max attempts", async () => {
+  test("SDK event stream restarts a hung reconnect attempt", async () => {
+    const { app, sdk, controllers } = await mountSSE({
+      reconnect: {
+        retryDelay: 1,
+        maxRetryDelay: 1,
+        staleDelay: 500,
+      },
+    })
+
+    try {
+      controllers[0].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
+
+      controllers[0].close()
+      await wait(() => controllers.length === 2)
+      await wait(() => sdk.connection.status === "reconnecting")
+
+      await wait(() => controllers.length === 3 && sdk.connection.error === "Reconnect attempt timed out", 2500)
+      controllers[2].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("SDK event stream stops after max attempts until system resume", async () => {
     const { app, sdk, controllers } = await mountSSE({
       reconnect: {
         maxAttempts: 2,
         retryDelay: 1,
         maxRetryDelay: 1,
+        staleDelay: 500,
       },
     })
+    const originalNow = Date.now
+    let nowOffset = 0
 
     try {
       controllers[0].close()
@@ -336,7 +517,18 @@ describe("useEvent", () => {
       controllers[2].close()
       await wait(() => sdk.connection.status === "failed")
       expect(sdk.connection.attempt).toBe(2)
+
+      await Bun.sleep(1200)
+      expect(sdk.connection.status).toBe("failed")
+      expect(controllers).toHaveLength(3)
+
+      Date.now = () => originalNow() + nowOffset
+      nowOffset = 10_000
+      await wait(() => controllers.length === 4 && sdk.connection.status === "reconnecting", 2500)
+      controllers[3].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
     } finally {
+      Date.now = originalNow
       app.renderer.destroy()
     }
   })

@@ -68,6 +68,22 @@ export function expandPastedContentPlaceholders(text: string, parts: readonly Pa
   return `${expanded}${separator}${unmatched.join("\n\n")}`
 }
 
+export function expandedUserMessageOffset(input: { offset: number; maxOffset: number }) {
+  return Math.max(0, Math.min(Math.max(0, input.maxOffset), input.offset))
+}
+
+export function expandedUserMessagePageOffset(input: {
+  currentOffset: number
+  viewportRows: number
+  maxOffset: number
+  direction: "up" | "down"
+}) {
+  return expandedUserMessageOffset({
+    offset: input.currentOffset + (input.direction === "up" ? -input.viewportRows : input.viewportRows),
+    maxOffset: input.maxOffset,
+  })
+}
+
 export function userMessageDisplayText(text: string, options: UserMessageDisplayOptions = {}): UserMessageDisplay {
   const maxLines = Math.max(1, options.maxLines ?? 18)
   const maxChars = Math.max(20, options.maxChars ?? 2400)

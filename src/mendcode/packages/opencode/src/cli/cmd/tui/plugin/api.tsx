@@ -1,5 +1,21 @@
 import type { ParsedKey } from "@opentui/core"
-import type { TuiDialogSelectOption, TuiPluginApi, TuiRouteDefinition, TuiSlotProps } from "@mendcode/plugin/tui"
+import type {
+  TuiDialogSelectOption,
+  TuiAiApi,
+  TuiAiPromptInput,
+  TuiAiSession,
+  TuiCustomizationApi,
+  TuiMemoryGraphFact,
+  TuiMemoryApi,
+  TuiSessionApi,
+  TuiSessionMetadataApi,
+  TuiPluginApi,
+  TuiPtyApi,
+  TuiRouteDefinition,
+  TuiShellApi,
+  TuiShellOutputEvent,
+  TuiSlotProps,
+} from "@mendcode/plugin/tui"
 import type { MendExtensionApi, MendRouteDefinition, MendRouteName, MendSlotRegistration } from "@/mend/sdk"
 import type { useCommandDialog } from "@tui/component/dialog-command"
 import type { useEvent } from "@tui/context/event"
@@ -17,15 +33,25 @@ import { DialogConfirm } from "../ui/dialog-confirm"
 import { DialogPrompt } from "../ui/dialog-prompt"
 import { DialogSelect, type DialogSelectOption as SelectOption } from "../ui/dialog-select"
 import { Prompt } from "../component/prompt"
+import { registerCompactionArcadeGame, unregisterCompactionArcadeGame } from "../component/compaction-panel"
 import { Slot as HostSlot } from "./slots"
 import type { useToast } from "../ui/toast"
 import { InstallationVersion } from "@mendcode/core/installation/version"
 import { visibleCustomizationCapabilities } from "@/mend/tui/capabilities"
 import { clearMendStatus, setMendStatus } from "@/mend/tui/status"
-import { clearMendWidget, setMendWidget } from "@/mend/tui/widgets"
+import { blurMendWidget, clearMendWidget, focusMendWidget, setMendWidget, type MendWidgetRenderContext } from "@/mend/tui/widgets"
+import { blurMendOverlay, clearMendOverlay, focusMendOverlay, readFocusedMendOverlayID, setMendOverlay, type MendOverlayRenderContext } from "@/mend/tui/overlays"
 import { setMendFooter, setMendFooterEntry } from "@/mend/tui/footer"
 import { setMendWorkingIndicator } from "@/mend/tui/working-indicator"
 import { setMendEditor, setMendEditorVisual } from "@/mend/tui/editor-host"
+import { Process } from "@/util/process"
+import { memoryOverview } from "@/mend/memory/overview"
+import { deleteMemoryFact, deleteMemoryFactLink, upsertMemoryFact, upsertMemoryFactLink } from "@/mend/memory/graph"
+import {
+  readMendTuiCustomization,
+  resetMendTuiCustomization,
+  writeMendTuiCustomization,
+} from "@/mend/tui/customization"
 
 type RouteEntry = {
   key: symbol
@@ -177,6 +203,98 @@ function mapOptionCb<Value>(cb?: (item: TuiDialogSelectOption<Value>) => void) {
   return (item: SelectOption<Value>) => cb(pickOption(item))
 }
 
+const DEFAULT_SHELL_BUFFER = 64_000
+
+function commandArgs(command: string | string[]) {
+  if (Array.isArray(command)) return command
+  return process.platform === "win32" ? ["cmd.exe", "/d", "/s", "/c", command] : ["sh", "-lc", command]
+}
+
+function capShellBuffer(text: string, max: number) {
+  if (max <= 0) return ""
+  if (text.length <= max) return text
+  return text.slice(text.length - max)
+}
+
+function shellApi(): TuiShellApi {
+  return {
+    spawn(command, options = {}) {
+      const maxBuffer = Math.max(0, options.maxBuffer ?? DEFAULT_SHELL_BUFFER)
+      const outputHandlers = new Set<(event: TuiShellOutputEvent) => void>()
+      const exitHandlers = new Set<(event: { code: number; output: string; stderr: string }) => void>()
+      let output = ""
+      let stderr = ""
+
+      const proc = Process.spawn(commandArgs(command), {
+        cwd: options.cwd,
+        env: options.env as NodeJS.ProcessEnv | undefined,
+        shell: Array.isArray(command) ? options.shell : false,
+        stdin: "pipe",
+        stdout: "pipe",
+        stderr: "pipe",
+      })
+
+      const emit = (stream: "stdout" | "stderr", chunk: unknown) => {
+        const text = Buffer.isBuffer(chunk) ? chunk.toString() : String(chunk)
+        output = capShellBuffer(output + text, maxBuffer)
+        if (stream === "stderr") stderr = capShellBuffer(stderr + text, maxBuffer)
+        const event = { stream, text, output }
+        for (const handler of outputHandlers) handler(event)
+      }
+
+      proc.stdout?.on("data", (chunk) => emit("stdout", chunk))
+      proc.stderr?.on("data", (chunk) => emit("stderr", chunk))
+
+      const exited = proc.exited.then((code) => {
+        const event = { code, output, stderr }
+        for (const handler of exitHandlers) handler(event)
+        return code
+      })
+      void exited.catch(() => undefined)
+
+      return {
+        get pid() {
+          return proc.pid
+        },
+        write(data) {
+          if (!proc.stdin || proc.stdin.destroyed) return false
+          return proc.stdin.write(data)
+        },
+        async stop() {
+          await Process.stop(proc)
+        },
+        output() {
+          return output
+        },
+        stderr() {
+          return stderr
+        },
+        onOutput(handler) {
+          outputHandlers.add(handler)
+          return () => {
+            outputHandlers.delete(handler)
+          }
+        },
+        onExit(handler) {
+          exitHandlers.add(handler)
+          return () => {
+            exitHandlers.delete(handler)
+          }
+        },
+        exited,
+      }
+    },
+  }
+}
+
+function ptyApi(): TuiPtyApi {
+  return {
+    async spawn() {
+      throw new Error("TUI PTY widgets are disabled in this build. Use the widget/overlay substrate for interactive UI and api.shell.spawn only for non-interactive output.")
+    },
+  }
+}
+
 function stateApi(sync: ReturnType<typeof useSync>): TuiPluginApi["state"] {
   return {
     get ready() {
@@ -238,6 +356,202 @@ function stateApi(sync: ReturnType<typeof useSync>): TuiPluginApi["state"] {
   }
 }
 
+function currentSessionID(route: ReturnType<typeof useRoute>) {
+  const current = routeCurrent(route)
+  if (current.name !== "session") return undefined
+  const sessionID = current.params?.sessionID
+  return typeof sessionID === "string" ? sessionID : undefined
+}
+
+function sessionApi(input: Input): TuiSessionApi {
+  const session = input.sdk.client.session
+  return {
+    current: () => currentSessionID(input.route),
+    list: (...args) => session.list(...args),
+    create: (...args) => session.create(...args),
+    status: (...args) => session.status(...args),
+    delete: (...args) => session.delete(...args),
+    get: (...args) => session.get(...args),
+    update: (...args) => session.update(...args),
+    children: (...args) => session.children(...args),
+    todo: (...args) => session.todo(...args),
+    diff: (...args) => session.diff(...args),
+    messages: (...args) => session.messages(...args),
+    prompt: (...args) => session.prompt(...args),
+    promptAsync: (...args) => session.promptAsync(...args),
+    command: (...args) => session.command(...args),
+    shell: (...args) => session.shell(...args),
+    deleteMessage: (...args) => session.deleteMessage(...args),
+    message: (...args) => session.message(...args),
+    fork: (...args) => session.fork(...args),
+    abort: (...args) => session.abort(...args),
+    interrupt: (...args) => session.interrupt(...args),
+    init: (...args) => session.init(...args),
+    summarize: (...args) => session.summarize(...args),
+    revert: (...args) => session.revert(...args),
+    unrevert: (...args) => session.unrevert(...args),
+    background: session.background,
+    agentView: session.agentView,
+    agentCommand: session.agentCommand,
+  }
+}
+
+function metadataApi(input: Input): TuiSessionMetadataApi {
+  const metadata = input.sdk.client.session.agentView.metadata
+  return {
+    current: () => currentSessionID(input.route),
+    list: (...args) => metadata.list(...args),
+    get: (...args) => metadata.get(...args),
+    patch: (...args) => metadata.patch(...args),
+    getCurrent() {
+      const sessionID = currentSessionID(input.route)
+      if (!sessionID) return Promise.reject(new Error("No session route is currently active"))
+      return metadata.get({ sessionID })
+    },
+  }
+}
+
+function memoryFactView(fact: {
+  id: string
+  legacyEntryID: string | null
+  text: string
+  normalizedSummary: string
+  scope: string
+  ownerWorkspaceIDs: string[]
+  ownerGroupIDs: string[]
+  categoryIDs: string[]
+  provenance: string[]
+  createdAt: string
+  updatedAt: string
+  verifiedAt: string | null
+  confidence: number
+  durability: number
+  changeRisk: number
+  sensitivity: "low" | "medium" | "high"
+  stale: boolean
+  retrievalPriority: number
+  materialized: boolean
+}): TuiMemoryGraphFact {
+  return {
+    id: fact.id,
+    legacyEntryID: fact.legacyEntryID,
+    text: fact.text,
+    normalizedSummary: fact.normalizedSummary,
+    scope: fact.scope,
+    ownerWorkspaceIDs: fact.ownerWorkspaceIDs,
+    ownerGroupIDs: fact.ownerGroupIDs,
+    categoryIDs: fact.categoryIDs,
+    provenance: fact.provenance,
+    createdAt: fact.createdAt,
+    updatedAt: fact.updatedAt,
+    verifiedAt: fact.verifiedAt,
+    confidence: fact.confidence,
+    durability: fact.durability,
+    changeRisk: fact.changeRisk,
+    sensitivity: fact.sensitivity,
+    stale: fact.stale,
+    retrievalPriority: fact.retrievalPriority,
+    materialized: fact.materialized,
+  }
+}
+
+function memoryApi(input: Input): TuiMemoryApi {
+  const root = () => input.sync.path.directory
+  return {
+    async graph() {
+      const overview = await memoryOverview(root())
+      return {
+        root: root(),
+        facts: overview.facts.map(memoryFactView),
+        links: overview.links.map((link) => ({ id: link.id, from: link.from, to: link.to, kind: link.kind, createdAt: link.createdAt })),
+        categories: overview.categories.map((category) => ({ id: category.id, label: category.label, count: category.count })),
+        health: overview.graphHealth,
+      }
+    },
+    sideChat(...args) {
+      return input.sdk.client.memory.sideChat(...args)
+    },
+    async upsertGraphFact(fact) {
+      const next = await upsertMemoryFact(fact, root())
+      return memoryFactView({ ...next, materialized: true })
+    },
+    deleteGraphFact(id) {
+      return deleteMemoryFact(id, root())
+    },
+    async upsertGraphLink(link) {
+      const next = await upsertMemoryFactLink(link, root())
+      return { id: next.id, from: next.from, to: next.to, kind: next.kind, createdAt: next.createdAt }
+    },
+    deleteGraphLink(id) {
+      return deleteMemoryFactLink(id, root())
+    },
+  }
+}
+
+function aiPromptParameters(input: TuiAiPromptInput | string) {
+  return typeof input === "string" ? { parts: [{ type: "text" as const, text: input }] } : input
+}
+
+function aiApi(input: Input): TuiAiApi {
+  const client = input.sdk.client
+  const open = (sessionID: string): TuiAiSession => ({
+    id: sessionID,
+    prompt(prompt) {
+      return client.session.prompt({ ...aiPromptParameters(prompt), sessionID })
+    },
+    promptAsync(prompt) {
+      return client.session.promptAsync({ ...aiPromptParameters(prompt), sessionID })
+    },
+    messages(parameters) {
+      return client.session.messages({ ...(parameters ?? {}), sessionID })
+    },
+    update(parameters) {
+      return client.session.update({ ...parameters, sessionID })
+    },
+    abort() {
+      return client.session.abort({ sessionID })
+    },
+    delete() {
+      return client.session.delete({ sessionID })
+    },
+  })
+
+  return {
+    open,
+    async create(parameters) {
+      const result = await client.session.create(parameters)
+      if (!result.data?.id) throw new Error("MendCode did not return an ID for the plugin AI session")
+      return open(result.data.id)
+    },
+  }
+}
+
+function tuiCustomizationApi(input: Input): TuiCustomizationApi {
+  const read = () => readMendTuiCustomization((key, fallback) => input.kv.get(key, fallback))
+  const set = (patch: Parameters<TuiCustomizationApi["set"]>[0]) =>
+    writeMendTuiCustomization((key, fallback) => input.kv.get(key, fallback), input.kv.set, patch)
+
+  return {
+    get: read,
+    set,
+    reset() {
+      return resetMendTuiCustomization(input.kv.set)
+    },
+    setTerminalTitle(options) {
+      const patch: Parameters<TuiCustomizationApi["set"]>[0] = {}
+      if (options?.enabled !== undefined) patch.terminalTitle = options.enabled
+      if (options?.template !== undefined) patch.terminalTitleTemplate = options.template
+      return set(patch)
+    },
+    setSessionAccent(accent) {
+      return set({ sessionAccent: accent })
+    },
+    setDiffFiles(visible) {
+      return set({ diffFiles: visible })
+    },
+  }
+}
+
 function mendAppApi(): MendExtensionApi["app"] {
   return {
     get version() {
@@ -250,8 +564,29 @@ function mendAppApi(): MendExtensionApi["app"] {
         "route.navigate",
         "ui.dialog",
         "ui.slot",
+        "ui.overlay",
+        "ui.customization",
+        "ui.widgets",
+        "shell.spawn",
+        "overlay.custom",
+        "overlay.nonCapturing",
+        "overlay.focus",
         "theme.set",
+        "theme.install",
         "state.read",
+        "session.read",
+        "session.write",
+        "session.prompt",
+        "session.command",
+        "session.shell",
+        "session.delete",
+        "session.ai",
+        "metadata.read",
+        "metadata.write",
+        "memory.graph.read",
+        "memory.graph.write",
+        "memory.graph.delete",
+        "memory.side-chat",
         "lifecycle.dispose",
       ]
     },
@@ -265,6 +600,10 @@ export function createTuiApi(input: Input): TuiPluginApi & MendExtensionApi {
       return () => {}
     },
   }
+  const session = sessionApi(input)
+  const metadata = metadataApi(input)
+  const ai = aiApi(input)
+  const memory = memoryApi(input)
 
   return {
     app: mendAppApi(),
@@ -369,7 +708,28 @@ export function createTuiApi(input: Input): TuiPluginApi & MendExtensionApi {
           return input.dialog.stack.length > 0
         },
       },
+      overlay: {
+        open(id, render, options) {
+          return setMendOverlay(id, render as (context: MendOverlayRenderContext) => unknown, {
+            ...options,
+            requestRender: options?.requestRender ?? (() => input.renderer.requestRender()),
+          })
+        },
+        close(id) {
+          return clearMendOverlay(id)
+        },
+        focus(id) {
+          return focusMendOverlay(id)
+        },
+        blur(id) {
+          return blurMendOverlay(id)
+        },
+        focused() {
+          return readFocusedMendOverlayID()
+        },
+      },
       runtime: {
+        customization: tuiCustomizationApi(input),
         setStatus(id, value, options) {
           return setMendStatus(id, value, options)
         },
@@ -377,10 +737,19 @@ export function createTuiApi(input: Input): TuiPluginApi & MendExtensionApi {
           return clearMendStatus(id)
         },
         setWidget(id, render, options) {
-          return setMendWidget(id, render, options)
+          return setMendWidget(id, render as ((context: MendWidgetRenderContext) => unknown) | undefined, {
+            ...options,
+            requestRender: options?.requestRender ?? (() => input.renderer.requestRender()),
+          })
         },
         clearWidget(id) {
           return clearMendWidget(id)
+        },
+        focusWidget(id) {
+          return focusMendWidget(id)
+        },
+        blurWidget(id) {
+          return blurMendWidget(id)
         },
         setFooter(renderer) {
           return setMendFooter(renderer)
@@ -390,6 +759,12 @@ export function createTuiApi(input: Input): TuiPluginApi & MendExtensionApi {
         },
         setWorkingIndicator(input) {
           return setMendWorkingIndicator(input)
+        },
+        registerCompactionArcadeGame(game) {
+          return registerCompactionArcadeGame(game)
+        },
+        clearCompactionArcadeGame(id) {
+          return unregisterCompactionArcadeGame(id)
         },
         setEditorVisual(input) {
           return setMendEditorVisual(input)
@@ -432,17 +807,23 @@ export function createTuiApi(input: Input): TuiPluginApi & MendExtensionApi {
         },
       },
     },
+    session,
+    metadata,
+    ai,
+    memory,
     get client() {
       return input.sdk.client
     },
     event: input.event,
+    shell: shellApi(),
+    pty: ptyApi(),
     renderer: input.renderer,
-      slots: {
-        register(...args: any[]) {
-          void args
-          throw new Error("slots.register is only available in plugin context")
-        },
-      } as TuiPluginApi["slots"] & MendExtensionApi["slots"],
+    slots: {
+      register(...args: any[]) {
+        void args
+        throw new Error("slots.register is only available in plugin context")
+      },
+    } as TuiPluginApi["slots"] & MendExtensionApi["slots"],
     plugins: {
       list() {
         return []

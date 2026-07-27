@@ -10,6 +10,11 @@ export type EventSource = {
   subscribe: (handler: (event: GlobalEvent) => void) => Promise<() => void>
 }
 
+export type SDKConnectionRefresh = () => Promise<{
+  url: string
+  headers?: RequestInit["headers"]
+}>
+
 export type SDKConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected" | "failed"
 
 type SDKConnection = {
@@ -28,6 +33,15 @@ function errorMessage(error: unknown) {
   return "Connection lost"
 }
 
+function eventID(event: GlobalEvent) {
+  const payload = event.payload as { type?: unknown; id?: unknown; syncEvent?: unknown }
+  if (payload.type === "sync" && payload.syncEvent && typeof payload.syncEvent === "object") {
+    const id = (payload.syncEvent as { id?: unknown }).id
+    if (typeof id === "string" && id) return id
+  }
+  return typeof payload.id === "string" && payload.id ? payload.id : undefined
+}
+
 export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
   name: "SDK",
   init: (props: {
@@ -41,18 +55,26 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       retryDelay?: number
       maxRetryDelay?: number
       staleDelay?: number
+      refresh?: SDKConnectionRefresh
     }
   }) => {
     const abort = new AbortController()
     let sse: AbortController | undefined
 
-    function createSDK() {
+    let activeURL = props.url
+    let activeHeaders = props.headers
+
+    function createSDK(input?: { url: string; headers?: RequestInit["headers"] }) {
+      if (input) {
+        activeURL = input.url
+        activeHeaders = input.headers
+      }
       return createOpencodeClient({
-        baseUrl: props.url,
+        baseUrl: activeURL,
         signal: abort.signal,
         directory: props.directory,
         fetch: props.fetch,
-        headers: props.headers,
+        headers: activeHeaders,
       })
     }
 
@@ -70,11 +92,17 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     let queue: GlobalEvent[] = []
     let timer: Timer | undefined
     let last = 0
+    const seenEventIDs = new Set<string>()
+    const seenEventOrder: string[] = []
+    const maxSeenEventIDs = 4096
     let watchdog: Timer | undefined
-    const maxReconnectAttempts = props.reconnect?.maxAttempts ?? 10
+    let watchdogLastTick = Date.now()
+    let sseAttemptStartedAt = Date.now()
+    const maxReconnectAttempts = props.reconnect?.maxAttempts ?? Number.POSITIVE_INFINITY
     const retryDelay = props.reconnect?.retryDelay ?? 1000
-    const maxRetryDelay = props.reconnect?.maxRetryDelay ?? 30000
+    const maxRetryDelay = props.reconnect?.maxRetryDelay ?? 30_000
     const staleDelay = Math.max(500, props.reconnect?.staleDelay ?? 25_000)
+    const watchdogInterval = Math.max(1_000, Math.min(5_000, Math.floor(staleDelay / 2)))
 
     const sleep = (ms: number, signal: AbortSignal) =>
       new Promise<void>((resolve) => {
@@ -110,10 +138,23 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     const isControlEvent = (type: string) => type === "server.connected" || type === "server.heartbeat"
 
     const handleEvent = (event: GlobalEvent) => {
-      const now = Date.now()
       const type = event.payload.type as string
+      if (!isControlEvent(type)) {
+        const id = eventID(event)
+        if (id) {
+          if (seenEventIDs.has(id)) return
+          seenEventIDs.add(id)
+          seenEventOrder.push(id)
+          if (seenEventOrder.length > maxSeenEventIDs) {
+            const expired = seenEventOrder.shift()
+            if (expired) seenEventIDs.delete(expired)
+          }
+        }
+      }
+      const now = Date.now()
       const wasReconnecting = connection.status === "reconnecting" || connection.status === "failed"
-      const recoveringSince = wasReconnecting ? connection.recoveringSince ?? now : connection.recoveringSince
+      const recoveringSince = wasReconnecting ? (connection.recoveringSince ?? now) : connection.recoveringSince
+      const recoveryConfirmed = type === "server.heartbeat" && recoveringSince !== undefined
       const applicationEventAt = isControlEvent(type) ? connection.lastApplicationEventAt : now
 
       if (type === "server.connected" || type === "server.heartbeat") {
@@ -124,7 +165,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
           error: undefined,
           lastEventAt: now,
           lastApplicationEventAt: applicationEventAt,
-          recoveringSince,
+          recoveringSince: recoveryConfirmed ? undefined : recoveringSince,
         })
       } else {
         setConnection({
@@ -134,7 +175,10 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
           error: undefined,
           lastEventAt: now,
           lastApplicationEventAt: now,
-          recoveringSince: undefined,
+          // An application event may have been buffered while the stream was
+          // recovering. Keep the recovery marker until a fresh heartbeat proves
+          // that the transport is healthy, so the TUI does not flash "generating".
+          recoveringSince,
         })
       }
 
@@ -153,36 +197,58 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
     const startWatchdog = () => {
       if (watchdog) clearInterval(watchdog)
+      watchdogLastTick = Date.now()
       watchdog = setInterval(() => {
         if (abort.signal.aborted) return
-        if (connection.status !== "connected") return
+        const now = Date.now()
+        const drift = now - watchdogLastTick
+        watchdogLastTick = now
+        const resumed = drift > Math.max(staleDelay, watchdogInterval + 5_000)
         const lastSeen = connection.lastEventAt
-        if (!lastSeen || Date.now() - lastSeen <= staleDelay) return
-        setConnection({
-          status: "reconnecting",
-          attempt: Math.max(connection.attempt, 1),
-          nextRetryAt: undefined,
-          error: "Event stream stalled",
-          lastEventAt: lastSeen,
-          lastApplicationEventAt: connection.lastApplicationEventAt,
-          recoveringSince: connection.recoveringSince ?? Date.now(),
-        })
-      }, Math.max(1_000, Math.min(5_000, Math.floor(staleDelay / 2))))
+        const stalled = connection.status === "connected" && (!lastSeen || now - lastSeen > staleDelay)
+        const reconnectStalled =
+          (connection.status === "connecting" || connection.status === "reconnecting") &&
+          now - sseAttemptStartedAt > staleDelay &&
+          (!connection.nextRetryAt || connection.nextRetryAt <= now)
+        if (!resumed && !stalled && !reconnectStalled) return
+        if (connection.status === "disconnected") return
+        if (connection.status === "failed" && !resumed) return
+        const reason = resumed
+          ? "System resumed; refreshing event stream"
+          : stalled
+            ? "Event stream stalled"
+            : "Reconnect attempt timed out"
+        startSSE({ reconnecting: true, reason })
+      }, watchdogInterval)
     }
 
-    function startSSE() {
+    function startSSE(input?: { reconnecting?: boolean; reason?: string }) {
       sse?.abort()
       const ctrl = new AbortController()
       sse = ctrl
       ;(async () => {
         let attempt = 0
-        setConnection("status", "connecting")
+        setConnection({
+          status: input?.reconnecting ? "reconnecting" : "connecting",
+          attempt: input?.reconnecting ? Math.max(connection.attempt, 1) : 0,
+          nextRetryAt: undefined,
+          error: input?.reason,
+          lastEventAt: connection.lastEventAt,
+          lastApplicationEventAt: connection.lastApplicationEventAt,
+          recoveringSince: input?.reconnecting
+            ? (connection.recoveringSince ?? Date.now())
+            : connection.recoveringSince,
+        })
         while (true) {
           if (abort.signal.aborted || ctrl.signal.aborted) break
+          sseAttemptStartedAt = Date.now()
 
           let error: unknown
           let connectedThisAttempt = false
           try {
+            if (props.reconnect?.refresh) {
+              sdk = createSDK(await props.reconnect.refresh())
+            }
             const events = await sdk.global.event({
               signal: ctrl.signal,
               sseMaxRetryAttempts: 0,
@@ -274,9 +340,15 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       },
       directory: props.directory,
       event: emitter,
-      fetch: props.fetch ?? fetch,
-      headers: props.headers,
-      url: props.url,
+      get fetch() {
+        return props.fetch ?? fetch
+      },
+      get headers() {
+        return activeHeaders
+      },
+      get url() {
+        return activeURL
+      },
       connection,
     }
   },

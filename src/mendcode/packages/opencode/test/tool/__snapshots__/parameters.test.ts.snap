@@ -208,7 +208,7 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "action": {
-      "description": "Loop workflow action. Use activate to create/start a loop, draft to create a reviewable draft, show/list to inspect, and pause/resume/stop/run_once for control.",
+      "description": "Loop workflow action. Use activate to create/start a loop, draft to create a reviewable draft, show/list to inspect, update_agent to change the loop agent, and pause/resume/stop/delete/run_once for control.",
       "enum": [
         "draft",
         "activate",
@@ -217,12 +217,14 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
         "pause",
         "resume",
         "stop",
+        "delete",
         "run_once",
+        "update_agent",
       ],
       "type": "string",
     },
     "agent": {
-      "description": "Optional MendCode agent/profile name to use when the loop runner wakes this workflow.",
+      "description": "Optional MendCode agent/profile name to use when the loop runner wakes this workflow. With action=update_agent, set this to the new agent name or an empty string to use the default agent.",
       "type": "string",
     },
     "budgetMode": {

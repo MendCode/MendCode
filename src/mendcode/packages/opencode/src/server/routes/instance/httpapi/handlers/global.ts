@@ -1,5 +1,9 @@
 import { Config } from "@/config/config"
-import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
+import {
+  GlobalBus,
+  matchesGlobalEventDirectory,
+  type GlobalEvent as GlobalBusEvent,
+} from "@/bus/global"
 import { EffectBridge } from "@/effect/bridge"
 import { Bus } from "@/bus"
 import { Installation } from "@/installation"
@@ -12,6 +16,7 @@ import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
+import { processMemoryUsage } from "@/util/process-memory"
 
 const log = Log.create({ service: "server" })
 
@@ -32,10 +37,12 @@ function parseBody(body: string) {
   }
 }
 
-function eventResponse() {
+function eventResponse(directory?: string) {
   log.info("global event connected")
   const events = Stream.callback<GlobalBusEvent>((queue) => {
-    const handler = (event: GlobalBusEvent) => Queue.offerUnsafe(queue, event)
+    const handler = (event: GlobalBusEvent) => {
+      if (matchesGlobalEventDirectory(event, directory)) Queue.offerUnsafe(queue, event)
+    }
     return Effect.acquireRelease(
       Effect.sync(() => GlobalBus.on("event", handler)),
       () => Effect.sync(() => GlobalBus.off("event", handler)),
@@ -75,8 +82,14 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       return { healthy: true as const, version: Installation.displayVersion(), channel: Installation.channel() }
     })
 
+    const memory = Effect.fn("GlobalHttpApi.memory")(function* () {
+      return processMemoryUsage("server")
+    })
+
     const event = Effect.fn("GlobalHttpApi.event")(function* () {
-      return eventResponse()
+      const request = yield* HttpServerRequest.HttpServerRequest
+      const directory = new URL(request.url, "http://localhost").searchParams.get("directory") ?? undefined
+      return eventResponse(directory)
     })
 
     const configGet = Effect.fn("GlobalHttpApi.configGet")(function* () {
@@ -147,6 +160,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
 
     return handlers
       .handle("health", health)
+      .handle("memory", memory)
       .handleRaw("event", event)
       .handle("configGet", configGet)
       .handle("configUpdate", configUpdate)

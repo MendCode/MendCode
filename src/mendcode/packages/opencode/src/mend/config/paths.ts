@@ -14,6 +14,19 @@ export function mendRuntimeRoot() {
   return path.resolve(here, "../../../../../../..")
 }
 
+export function resolveMendProjectRoot(
+  cwd = process.cwd(),
+  override = process.env.MENDCODE_SHELL_CWD,
+  runtimeRoot = mendRuntimeRoot(),
+) {
+  const current = path.resolve(cwd)
+  if (!override) return current
+  const configured = path.resolve(override)
+  const runtimePackage = path.join(path.resolve(runtimeRoot), "src", "mendcode", "packages", "opencode")
+  if (configured === path.resolve(runtimeRoot) && current !== configured && current !== runtimePackage) return current
+  return configured
+}
+
 export function mendPaths(root = mendRuntimeRoot()) {
   return {
     root,
@@ -22,6 +35,7 @@ export function mendPaths(root = mendRuntimeRoot()) {
     ownedRuntimeRoot: path.join(root, "src", "mendcode"),
     ownedRuntimePackage: path.join(root, "src", "mendcode", "packages", "opencode"),
     runtimeControlPlane: path.join(root, "src", "mendcode", "packages", "opencode", "src", "mend", "cli", "control-plane.ts"),
+    runtimeBackgroundDaemon: path.join(root, "src", "mendcode", "packages", "opencode", "src", "mend", "cli", "background-daemon.ts"),
     runtimeAssetsRoot: path.join(root, "src", "mendcode", "packages", "opencode", "src", "mend", "assets"),
     runtimeTuiAssets: path.join(root, "src", "mendcode", "packages", "opencode", "src", "mend", "assets", "tui"),
     runtimePromptEvidenceAssets: path.join(root, "src", "mendcode", "packages", "opencode", "src", "mend", "assets", "prompt-sources"),

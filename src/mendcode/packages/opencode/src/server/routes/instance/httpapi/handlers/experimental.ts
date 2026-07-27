@@ -5,6 +5,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { MCP } from "@/mcp"
 import { Project } from "@/project/project"
 import { Session } from "@/session/session"
+import { buildUsageInsightsFromDatabase } from "@/session/usage-insights"
 import { ToolRegistry } from "@/tool/registry"
 import * as EffectZod from "@/util/effect-zod"
 import { Worktree } from "@/worktree"
@@ -12,7 +13,7 @@ import { Effect, Option } from "effect"
 import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { ConsoleSwitchPayload, SessionListQuery, ToolListQuery } from "../groups/experimental"
+import { ConsoleSwitchPayload, SessionListQuery, ToolListQuery, UsageInsightsQuery } from "../groups/experimental"
 
 export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "experimental", (handlers) =>
   Effect.gen(function* () {
@@ -135,6 +136,22 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       })
     })
 
+    const usageInsights = Effect.fn("ExperimentalHttpApi.usageInsights")(function* (ctx: {
+      query: typeof UsageInsightsQuery.Type
+    }) {
+      const end = Date.now()
+      const sessions = Array.from(Session.listGlobal({
+        start: ctx.query.start,
+        limit: Math.max(1, Math.min(1000, ctx.query.limit ?? 1000)),
+      }))
+      return buildUsageInsightsFromDatabase({
+        sessions,
+        start: ctx.query.start,
+        end,
+        messageLimit: ctx.query.messageLimit,
+      })
+    })
+
     const resource = Effect.fn("ExperimentalHttpApi.resource")(function* () {
       return yield* mcp.resources()
     })
@@ -150,6 +167,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       .handle("worktreeRemove", worktreeRemove)
       .handle("worktreeReset", worktreeReset)
       .handle("session", session)
+      .handle("usageInsights", usageInsights)
       .handle("resource", resource)
   }),
 )

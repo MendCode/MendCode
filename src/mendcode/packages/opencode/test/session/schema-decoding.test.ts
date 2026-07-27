@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 
 import { Session } from "@/session/session"
+import { MessageV2 } from "../../src/session/message-v2"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
-import { SessionStatus } from "../../src/session/status"
+import { BUSY_STATUS_STALE_MS, SessionStatus, freshStatus, withStartedAt } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
 import { Todo } from "../../src/session/todo"
 import { SessionID, MessageID, PartID } from "../../src/session/schema"
@@ -221,6 +222,26 @@ describe("SessionSummary.DiffInput", () => {
   })
 })
 
+describe("MessageV2.CompactionPart", () => {
+  const decode = decodeUnknown(MessageV2.CompactionPart)
+
+  test("accepts post_prompt for visible post-compaction followups", () => {
+    const input = {
+      id: partID,
+      sessionID,
+      messageID,
+      type: "compaction" as const,
+      auto: true,
+      overflow: true,
+      resume: true,
+      post_prompt: "Continue implementing the approved plan.",
+    }
+
+    expect(decode(input)).toEqual(input)
+    expect(MessageV2.CompactionPart.zod.parse(input)).toEqual(input)
+  })
+})
+
 describe("SessionStatus.Info", () => {
   const decode = decodeUnknown(SessionStatus.Info)
 
@@ -233,11 +254,13 @@ describe("SessionStatus.Info", () => {
       message: "mflow waiting for shared-test.md",
       until: 500,
     })
-    expect(decode({ type: "busy", kind: "memory-extract", message: "Preparing memory proposal..." })).toEqual({
+    expect(decode({ type: "busy", kind: "memory-extract", message: "Preparing memory proposal...", startedAt: 100 })).toEqual({
       type: "busy",
       kind: "memory-extract",
       message: "Preparing memory proposal...",
+      startedAt: 100,
     })
+    expect(SessionStatus.Info.zod.parse({ type: "busy", startedAt: 100 })).toEqual({ type: "busy", startedAt: 100 })
     expect(SessionStatus.Info.zod.parse({ type: "idle" })).toEqual({ type: "idle" })
   })
 
@@ -250,6 +273,42 @@ describe("SessionStatus.Info", () => {
   test("rejects unknown type", () => {
     expect(() => decode({ type: "bogus" })).toThrow()
     expect(() => SessionStatus.Info.zod.parse({ type: "bogus" })).toThrow()
+  })
+
+  test("recovers stale busy status while preserving explicit retry and busy deadlines", () => {
+    const now = 200_000
+    expect(freshStatus({ time_updated: now - BUSY_STATUS_STALE_MS - 1, data: { type: "busy" } }, now)).toBeUndefined()
+    expect(freshStatus({ time_updated: now - BUSY_STATUS_STALE_MS + 1, data: { type: "busy" } }, now)).toEqual({
+      type: "busy",
+    })
+    expect(freshStatus({ time_updated: 1, data: { type: "busy", until: now + 1 } }, now)).toEqual({
+      type: "busy",
+      until: now + 1,
+    })
+    expect(freshStatus({ time_updated: 1, data: { type: "retry", attempt: 1, message: "wait", next: now + 1 } }, now)).toEqual({
+      type: "retry",
+      attempt: 1,
+      message: "wait",
+      next: now + 1,
+    })
+  })
+
+  test("adds stable busy startedAt without resetting an existing active status", () => {
+    const now = 200_000
+    expect(withStartedAt({ type: "busy" }, undefined, now)).toEqual({ type: "busy", startedAt: now })
+    expect(
+      withStartedAt(
+        { type: "busy", message: "still working" },
+        { time_created: now - 15_000, time_updated: now - 1_000, data: { type: "busy", startedAt: now - 15_000 } },
+        now,
+      ),
+    ).toEqual({ type: "busy", message: "still working", startedAt: now - 15_000 })
+    expect(withStartedAt({ type: "retry", attempt: 1, message: "wait", next: now + 1 }, undefined, now)).toEqual({
+      type: "retry",
+      attempt: 1,
+      message: "wait",
+      next: now + 1,
+    })
   })
 })
 

@@ -6,7 +6,7 @@ MendCode has a MendCode-owned control plane wrapped around an adapted terminal c
 
 MendCode is a downstream project built on the opencode codebase. In open-source terms, it is a derivative work with substantial product/runtime additions rather than a simple mirror fork. The opencode lineage is preserved in the MIT license and in [ACKNOWLEDGEMENTS.md](../ACKNOWLEDGEMENTS.md).
 
-MendCode's own layer includes the `mendcode` public CLI, MendCode-owned config/control plane, setup flow, package and registry system, mflow coordination, optional TSM/worktree orchestration, model-role projection, prompt/TUI customization, and public docs.
+MendCode's own layer includes the `mendcode` public CLI, MendCode-owned config/control plane, setup flow, package and registry system, mflow coordination, Loop Workflows, optional TSM/worktree orchestration, model-role projection, prompt/TUI customization, and public docs.
 
 ## Repository Layout
 
@@ -32,7 +32,34 @@ MendCode keeps user-facing state under `.mendcode/` and generates compatibility 
 - Generated runtime files are implementation detail.
 - Donor/runtime hot paths are guarded and should not be the public customization API.
 
-The public router is `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`. It routes commands such as `mendcode setup`, `mendcode packages`, `mendcode mflow`, `mendcode tsm`, and `mendcode worktree` to the MendCode control plane.
+The public router is `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`. It routes commands such as `mendcode setup`, `mendcode packages`, `mendcode mflow`, `mendcode loops`, `mendcode session`, `mendcode tsm`, and `mendcode worktree` to the MendCode-owned runtime/control plane.
+
+## Automation Boundary
+
+The automation surface is a CLI boundary over the existing runtime, not a
+second agent implementation:
+
+```text
+mendcode session / mendcode run --format json
+        -> public-bin.ts
+        -> opencode CLI command
+        -> Session / SessionPrompt / SessionStatus / Bus / LoopWorkflow
+        -> project database and provider runtime
+        -> mendcode.cli.v1 JSON envelopes
+```
+
+`src/mendcode/packages/opencode/src/cli/cmd/session.ts` owns lifecycle
+operations such as create, send, inspect, wait, events, and cancel. It reads
+the same session messages, pending questions and permissions, subagents, loops,
+events, and diff data used by the TUI. `src/mendcode/packages/opencode/src/cli/cmd/run.ts`
+provides the lower-level streaming path for a prompt, while
+`src/mendcode/packages/opencode/src/cli/automation.ts` versions envelopes and
+redacts secret-like fields.
+
+Model selection is shared rather than duplicated: `cli/model-selection.ts` and
+`mend/config/models.ts` apply explicit CLI overrides, TUI overrides, message
+and session models, subagent models, configured roles, and provider fallback in
+one resolver used by both automation and the prompt UI.
 
 ## Core Runtime Packages
 
@@ -49,9 +76,10 @@ The public router is `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`
 ## MendCode-Owned Subsystems
 
 - Setup/onboarding: provider, models, budget, package, TUI, prompt, memory, permissions.
-- Models: role-based model config for default, plan, build/code, review, subagent, title, compaction, summary, memory extraction, and permission review.
+- Models: role-based model config for default, plan, build/code, subagent, title, compaction, summary, memory extraction, and permission review.
 - Runtime packages: shareable `.mendcode` bundles with commands, agents, modes, skills, plugins, prompts, MCP, widgets, TUI profile, models, focus, budget, memory, permissions, and worktree policy.
 - mflow: optional coordination and file-lock layer for concurrent agents.
+- Loop Workflows: durable model/runner/tool in `src/mendcode/packages/opencode/src/session/loop.ts`, `src/mendcode/packages/opencode/src/session/loop-runner.ts`, and `src/mendcode/packages/opencode/src/tool/loop.ts`; `/loops` dashboard under `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/loops/`; legacy and Effect route stacks under `src/mendcode/packages/opencode/src/server/routes/instance/`; and public CLI/service controls in `src/mendcode/packages/opencode/src/mend/cli/control-plane.ts` and `src/mendcode/packages/opencode/src/mend/runtime/loop-service.ts`.
 - TSM/worktrees: optional terminal-session/worktree executor with MendCode-owned safety registry.
 - TUI customization: profile, prompt chrome, activity messages, mascot/logo, widgets, surfaces, density, theme.
 

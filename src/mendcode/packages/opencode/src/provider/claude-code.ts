@@ -11,6 +11,7 @@ import type {
   LanguageModelV3Usage,
   SharedV3Warning,
 } from "@ai-sdk/provider"
+import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { Auth } from "@/auth"
 import type { Provider } from "./provider"
 import { ModelID, ProviderID } from "./schema"
@@ -24,6 +25,12 @@ export type Settings = {
   homePath: string
   launchArgs: string
   workingDirectory: string
+}
+
+type ClaudeQueryFactory = typeof query
+
+type CreateOptions = Partial<Settings> & {
+  createQuery?: ClaudeQueryFactory
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -234,8 +241,8 @@ export async function probe(settings: Settings): Promise<{ ok: true; version: st
     }
   }
   const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
+    new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
+    new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
     proc.exited,
   ])
   if (code !== 0) {
@@ -258,6 +265,7 @@ type AuthStatus = {
   loggedIn?: boolean
   authMethod?: string
   subscriptionType?: string
+  apiProvider?: string
   email?: string
 }
 
@@ -278,8 +286,8 @@ export async function authStatus(
     }
   }
   const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
+    new Response(proc.stdout as ReadableStream<Uint8Array>).text(),
+    new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
     proc.exited,
   ])
   if (code !== 0) {
@@ -294,6 +302,12 @@ export async function authStatus(
       return {
         ok: false,
         error: "Claude Code is installed but not authenticated. Run `claude auth login` first.",
+      }
+    }
+    if (status.apiProvider && status.apiProvider !== "firstParty") {
+      return {
+        ok: false,
+        error: `Claude Code is authenticated with ${status.apiProvider}, but this provider requires a Claude subscription login.`,
       }
     }
     return { ok: true, status }
@@ -342,6 +356,32 @@ function splitArgs(input: string): string[] {
   return args
 }
 
+function launchArgsToExtraArgs(input: string): Record<string, string | null> | undefined {
+  const tokens = splitArgs(input)
+  const extra: Record<string, string | null> = {}
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]
+    if (!token.startsWith("-")) continue
+    const normalized = token.replace(/^-+/, "")
+    if (!normalized) continue
+    const equals = normalized.indexOf("=")
+    const key = equals >= 0 ? normalized.slice(0, equals) : normalized
+    if (!key) continue
+    if (equals >= 0) {
+      extra[key] = normalized.slice(equals + 1)
+      continue
+    }
+    const next = tokens[i + 1]
+    if (next && !next.startsWith("-")) {
+      extra[key] = next
+      i++
+      continue
+    }
+    extra[key] = null
+  }
+  return Object.keys(extra).length > 0 ? extra : undefined
+}
+
 function promptToText(prompt: LanguageModelV3Prompt): string {
   return prompt
     .map((message) => {
@@ -385,11 +425,30 @@ function finishUsage(value: any): LanguageModelV3Usage {
   return usage(value?.usage ?? value?.message?.usage)
 }
 
+function streamEventDelta(message: SDKMessage): { kind: "text" | "reasoning"; text: string } | undefined {
+  if (message.type !== "stream_event") return undefined
+  const event = message.event as unknown as Record<string, unknown>
+  if (event.type !== "content_block_delta") return undefined
+  const delta = event.delta as Record<string, unknown> | undefined
+  if (!delta) return undefined
+  if (delta.type === "text_delta" && typeof delta.text === "string") return { kind: "text", text: delta.text }
+  if (typeof delta.text === "string") return { kind: "text", text: delta.text }
+  if (typeof delta.thinking === "string") return { kind: "reasoning", text: delta.thinking }
+  return undefined
+}
+
+function resultErrorText(message: SDKResultMessage) {
+  if (message.subtype === "success") return undefined
+  const joined = Array.isArray(message.errors) ? message.errors.filter(Boolean).join("\n") : ""
+  return joined || message.stop_reason || message.subtype
+}
+
 async function* streamClaude(options: {
   settings: Settings
   modelId: string
   prompt: string
   call: LanguageModelV3CallOptions
+  createQuery: ClaudeQueryFactory
 }): AsyncGenerator<LanguageModelV3StreamPart> {
   const warnings: SharedV3Warning[] = []
   if (options.call.tools?.length) {
@@ -401,74 +460,87 @@ async function* streamClaude(options: {
   }
   yield { type: "stream-start", warnings }
 
-  const args = [
-    "-p",
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    "--model",
-    options.modelId,
-    ...splitArgs(options.settings.launchArgs),
-  ]
-  const proc = Bun.spawn([options.settings.binaryPath, ...args], {
-    cwd: options.settings.workingDirectory || process.cwd(),
-    env: env(options.settings),
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  options.call.abortSignal?.addEventListener("abort", () => proc.kill(), { once: true })
-  proc.stdin.write(options.prompt)
-  proc.stdin.end()
-
   const textID = "claude-code-text"
+  const reasoningID = "claude-code-reasoning"
   let started = false
+  let reasoningStarted = false
   let finalUsage = usage()
   let finishReason: LanguageModelV3FinishReason = {
     unified: "stop",
     raw: "stop",
   }
-  const decoder = new TextDecoder()
-  const reader = proc.stdout.getReader()
-  let buffer = ""
+  let finalText = ""
+  const abortController = new AbortController()
+  const onAbort = () => abortController.abort(options.call.abortSignal?.reason)
+  if (options.call.abortSignal?.aborted) onAbort()
+  else options.call.abortSignal?.addEventListener("abort", onAbort, { once: true })
+  const extraArgs = launchArgsToExtraArgs(options.settings.launchArgs)
+  let queryRuntime: ReturnType<ClaudeQueryFactory> | undefined
 
-  while (true) {
-    const part = await reader.read()
-    if (part.done) break
-    buffer += decoder.decode(part.value, { stream: true })
-    const lines = buffer.split(/\r?\n/)
-    buffer = lines.pop() ?? ""
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed) continue
-      let raw: unknown = trimmed
-      try {
-        raw = JSON.parse(trimmed)
-      } catch {}
-      if (options.call.includeRawChunks) yield { type: "raw", rawValue: raw }
-      const text = extractText(raw)
-      if (text) {
+  try {
+    queryRuntime = options.createQuery({
+      prompt: options.prompt,
+      options: {
+        abortController,
+        cwd: options.settings.workingDirectory || process.cwd(),
+        env: env(options.settings),
+        model: options.modelId,
+        pathToClaudeCodeExecutable: options.settings.binaryPath,
+        includePartialMessages: true,
+        systemPrompt: { type: "preset", preset: "claude_code" },
+        settingSources: ["user", "project", "local"],
+        ...(extraArgs ? { extraArgs } : {}),
+      },
+    })
+    for await (const message of queryRuntime) {
+      if (options.call.includeRawChunks) yield { type: "raw", rawValue: message }
+      const delta = streamEventDelta(message)
+      if (delta?.kind === "text" && delta.text) {
         if (!started) {
           started = true
           yield { type: "text-start", id: textID }
         }
-        yield { type: "text-delta", id: textID, delta: text }
+        yield { type: "text-delta", id: textID, delta: delta.text }
+        continue
       }
-      if (raw && typeof raw === "object" && (raw as any).type === "result") {
-        finalUsage = finishUsage(raw)
-        finishReason = { unified: "stop", raw: (raw as any).subtype ?? "result" }
+      if (delta?.kind === "reasoning" && delta.text) {
+        if (!reasoningStarted) {
+          reasoningStarted = true
+          yield { type: "reasoning-start", id: reasoningID }
+        }
+        yield { type: "reasoning-delta", id: reasoningID, delta: delta.text }
+        continue
+      }
+      const text = extractText(message)
+      if (text && message.type === "assistant" && !started) {
+        finalText += text
+      }
+      if (message.type === "result") {
+        finalUsage = finishUsage(message)
+        finishReason = { unified: message.subtype === "success" ? "stop" : "error", raw: message.stop_reason ?? message.subtype }
+        const errorText = resultErrorText(message)
+        if (errorText) yield { type: "error", error: new Error(errorText) }
+        if (message.subtype === "success" && message.result && !started && !finalText) finalText += message.result
       }
     }
+  } catch (e) {
+    yield { type: "error", error: e }
+    if (reasoningStarted) yield { type: "reasoning-end", id: reasoningID }
+    if (started) yield { type: "text-end", id: textID }
+    yield { type: "finish", usage: finalUsage, finishReason: { unified: "error", raw: e instanceof Error ? e.message : String(e) } }
+    return
+  } finally {
+    options.call.abortSignal?.removeEventListener("abort", onAbort)
+    queryRuntime?.close()
   }
 
-  const stderr = await new Response(proc.stderr).text()
-  const code = await proc.exited
-  if (started) yield { type: "text-end", id: textID }
-  if (code !== 0) {
-    yield { type: "error", error: new Error(stderr.trim() || `Claude Code exited with ${code}`) }
-    yield { type: "finish", usage: finalUsage, finishReason: { unified: "error", raw: String(code) } }
-    return
+  if (finalText && !started) {
+    started = true
+    yield { type: "text-start", id: textID }
+    yield { type: "text-delta", id: textID, delta: finalText }
   }
+  if (reasoningStarted) yield { type: "reasoning-end", id: reasoningID }
+  if (started) yield { type: "text-end", id: textID }
   yield { type: "finish", usage: finalUsage, finishReason }
 }
 
@@ -493,31 +565,49 @@ class ClaudeCodeLanguageModel implements LanguageModelV3 {
   constructor(
     readonly modelId: string,
     private readonly settings: Settings,
+    private readonly createQuery: ClaudeQueryFactory,
   ) {}
 
   async doGenerate(options: LanguageModelV3CallOptions): Promise<LanguageModelV3GenerateResult> {
     const stream = await this.doStream(options)
-    let text = ""
+    const blocks: Record<string, { type: "text" | "reasoning"; text: string }> = {}
+    const order: string[] = []
     let finalUsage = usage()
     let finishReason: LanguageModelV3GenerateResult["finishReason"] = { unified: "stop", raw: "stop" }
+    let warnings: SharedV3Warning[] = []
     const reader = stream.stream.getReader()
     while (true) {
       const next = await reader.read()
       if (next.done) break
       const part = next.value
-      if (part.type === "text-delta") text += part.delta
+      if (part.type === "stream-start") warnings = part.warnings
+      if (part.type === "text-start") {
+        blocks[part.id] = { type: "text", text: "" }
+        order.push(part.id)
+      }
+      if (part.type === "reasoning-start") {
+        blocks[part.id] = { type: "reasoning", text: "" }
+        order.push(part.id)
+      }
+      if ((part.type === "text-delta" || part.type === "reasoning-delta") && blocks[part.id]) {
+        blocks[part.id].text += part.delta
+      }
       if (part.type === "finish") {
         finalUsage = part.usage
         finishReason = part.finishReason
       }
       if (part.type === "error") throw part.error
     }
-    const content: LanguageModelV3Content[] = text ? [{ type: "text", text }] : []
+    const content: LanguageModelV3Content[] = order.flatMap((id) => {
+      const block = blocks[id]
+      if (!block?.text) return []
+      return [{ type: block.type, text: block.text }]
+    })
     return {
       content,
       finishReason,
       usage: finalUsage,
-      warnings: [],
+      warnings,
     }
   }
 
@@ -530,17 +620,18 @@ class ClaudeCodeLanguageModel implements LanguageModelV3 {
           modelId: this.modelId,
           prompt,
           call: options,
+          createQuery: this.createQuery,
         }),
       ),
     }
   }
 }
 
-export function createClaudeCode(options: Partial<Settings> = {}) {
+export function createClaudeCode(options: CreateOptions = {}) {
   const settings = normalizeSettings(options)
   return {
     languageModel(modelId: string) {
-      return new ClaudeCodeLanguageModel(modelId, settings)
+      return new ClaudeCodeLanguageModel(modelId, settings, options.createQuery ?? query)
     },
   }
 }

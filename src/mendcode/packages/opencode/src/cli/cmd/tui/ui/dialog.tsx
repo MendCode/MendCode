@@ -7,6 +7,10 @@ import { useToast } from "./toast"
 import { Flag } from "@mendcode/core/flag/flag"
 import * as Selection from "@tui/util/selection"
 
+export function commandDialogWidth(width: number) {
+  return Math.min(148, Math.max(96, Math.floor(width * 0.72)))
+}
+
 export function Dialog(
   props: ParentProps<{
     size?: "medium" | "large" | "xlarge" | "command"
@@ -21,7 +25,7 @@ export function Dialog(
   const width = () => {
     if (props.size === "xlarge") return 116
     if (props.size === "large") return 88
-    if (props.size === "command") return 84
+    if (props.size === "command") return commandDialogWidth(dimensions().width)
     return 60
   }
 

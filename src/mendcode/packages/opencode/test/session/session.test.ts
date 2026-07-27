@@ -363,6 +363,63 @@ describe("live part delta persistence", () => {
     },
     { timeout: 30000 },
   )
+
+  test(
+    "caps oversized pending live part delta snapshots",
+    async () => {
+      await WithInstance.provide({
+        directory: projectRoot,
+        fn: async () => {
+          const info = await create({})
+          try {
+            const messageID = MessageID.ascending()
+            await updateMessage({
+              id: messageID,
+              sessionID: info.id,
+              role: "assistant",
+              time: { created: Date.now() },
+              agent: "build",
+              model: { providerID: "test", modelID: "test" },
+              path: { cwd: projectRoot, root: projectRoot },
+              summary: false,
+              cost: 0,
+              tokens: {
+                input: 0,
+                output: 0,
+                reasoning: 0,
+                cache: { read: 0, write: 0 },
+              },
+            } as unknown as MessageV2.Info)
+
+            const part = await updatePart({
+              id: PartID.ascending(),
+              messageID,
+              sessionID: info.id,
+              type: "text",
+              text: "",
+              time: { start: Date.now() },
+            })
+            await updatePartDelta({
+              sessionID: info.id,
+              messageID,
+              partID: part.id,
+              field: "text",
+              delta: "x".repeat(300 * 1024),
+            })
+            await new Promise((resolve) => setTimeout(resolve, 700))
+
+            const persisted = await getPart({ sessionID: info.id, messageID, partID: part.id })
+            if (!persisted || persisted.type !== "text") throw new Error("Expected text part")
+            expect(persisted.text.length).toBeLessThanOrEqual(256 * 1024)
+            expect(persisted.text).toContain("[Live part delta capped:")
+          } finally {
+            await remove(info.id)
+          }
+        },
+      })
+    },
+    { timeout: 30000 },
+  )
 })
 
 describe("Session", () => {

@@ -1,0 +1,35 @@
+{
+  "version": 0,
+  "id": "codex-local",
+  "packageVersion": "0.1.0",
+  "title": "MendCode Local Runtime Pack",
+  "description": "Local-first MendCode package manifest generated from shareable project configuration.",
+  "kind": "bundle",
+  "channel": "local",
+  "compatibility": {
+    "mendcode": "^0.1.20",
+    "runtimePack": "^0"
+  },
+  "artifacts": {
+    "agents": [
+      ".mendcode/agents/sub/arrogant-savant.md",
+      ".mendcode/agents/sub/mythos.md"
+    ],
+    "plugins": [
+      ".mendcode/plugins/mflow-lock.js"
+    ],
+    "mcp": [
+      ".mendcode/mcp/mflow.json",
+      ".mendcode/mcp/playwright.json"
+    ]
+  },
+  "distribution": {
+    "source": {
+      "type": "local",
+      "url": null
+    },
+    "trust": {
+      "signatureRequired": false
+    }
+  }
+}

@@ -70,6 +70,11 @@ export type AutocompleteOption = {
   path?: string
 }
 
+type SkillAutocompleteInfo = {
+  name: string
+  description?: string
+}
+
 export function Autocomplete(props: {
   value: string
   sessionID?: string
@@ -81,6 +86,7 @@ export function Autocomplete(props: {
   fileStyleId: number
   agentStyleId: number
   promptPartTypeId: () => number
+  skills: () => SkillAutocompleteInfo[]
 }) {
   const editor = useEditorContext()
   const sdk = useSDK()
@@ -401,6 +407,18 @@ export function Autocomplete(props: {
       )
   })
 
+  function insertSlashCommand(name: string) {
+    const newText = "/" + name + " "
+    const cursor = props.input().logicalCursor
+    const previousOffset = props.input().cursorOffset
+    props.input().cursorOffset = store.index
+    const start = props.input().logicalCursor
+    props.input().cursorOffset = previousOffset
+    props.input().deleteRange(start.row, start.col, cursor.row, cursor.col)
+    props.input().insertText(newText)
+    props.input().cursorOffset = store.index + Bun.stringWidth(newText)
+  }
+
   const commands = createMemo((): AutocompleteOption[] => {
     const nativeSlashes = command.slashes()
     const nativeSlashNames = new Set(
@@ -419,17 +437,22 @@ export function Autocomplete(props: {
         display: "/" + serverCommand.name + label,
         description: serverCommand.description,
         onSelect: () => {
-          const newText = "/" + serverCommand.name + " "
-          const cursor = props.input().logicalCursor
-          const previousOffset = props.input().cursorOffset
-          props.input().cursorOffset = store.index
-          const start = props.input().logicalCursor
-          props.input().cursorOffset = previousOffset
-          props.input().deleteRange(start.row, start.col, cursor.row, cursor.col)
-          props.input().insertText(newText)
-          props.input().cursorOffset = store.index + Bun.stringWidth(newText)
+          insertSlashCommand(serverCommand.name)
         },
       })
+    }
+
+    const commandNames = new Set(
+      results.map((item) => item.display.trim().split(/\s+/)[0]?.slice(1).replace(/:(mcp|skill)$/, "")),
+    )
+    for (const skill of props.skills()) {
+      if (nativeSlashNames.has(skill.name) || commandNames.has(skill.name)) continue
+      results.push({
+        display: "/" + skill.name + ":skill",
+        description: skill.description,
+        onSelect: () => insertSlashCommand(skill.name),
+      })
+      commandNames.add(skill.name)
     }
 
     results.sort((a, b) => a.display.localeCompare(b.display))

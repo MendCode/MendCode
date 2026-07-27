@@ -185,6 +185,14 @@
           },
           "additionalProperties": true
         },
+        "input": {
+          "type": "object",
+          "properties": {
+            "pasteSummary": { "type": "boolean" },
+            "pasteSummaryMinChars": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": true
+        },
         "activity": {
           "type": "object",
           "properties": {
@@ -214,6 +222,20 @@
                 "type": "array",
                 "items": { "type": "string" }
               }
+            }
+          },
+          "additionalProperties": true
+        },
+        "compaction": {
+          "type": "object",
+          "properties": {
+            "style": { "enum": ["minimal", "cockpit", "arcade", "quiet"] },
+            "showProgress": { "type": "boolean" },
+            "allowScratchpad": { "type": "boolean" },
+            "arcade": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Built-ins: off, stars, snake, blocks. Custom game IDs may be registered by TUI code/plugins."
             }
           },
           "additionalProperties": true
@@ -274,7 +296,22 @@
           "required": ["sidebar", "header", "footer", "session", "prompt"],
           "properties": {
             "sidebar": { "type": "object", "required": ["enabled", "compact", "width"] },
-            "header": { "type": "object", "required": ["enabled"] },
+            "header": {
+              "type": "object",
+              "required": ["enabled"],
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "title": {
+                  "type": "object",
+                  "properties": {
+                    "visible": { "type": "boolean" },
+                    "align": { "enum": ["left", "center", "right"] }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "additionalProperties": true
+            },
             "footer": { "type": "object", "required": ["enabled"] },
             "session": {
               "type": "object",
