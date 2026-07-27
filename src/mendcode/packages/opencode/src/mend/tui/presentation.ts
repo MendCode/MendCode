@@ -116,6 +116,13 @@ const cockpitCompactionConfig: MendPresentationConfig["compaction"] = {
   arcade: "off",
 }
 
+const arcadeCompactionConfig: MendPresentationConfig["compaction"] = {
+  style: "arcade",
+  showProgress: true,
+  allowScratchpad: true,
+  arcade: "snake",
+}
+
 const minimalCompactionConfig: MendPresentationConfig["compaction"] = {
   style: "minimal",
   showProgress: false,
@@ -140,7 +147,7 @@ export const defaultPresentationConfig: MendPresentationConfig = {
     defaultVisibility: "collapsed",
   },
   activity: neutralActivityConfig,
-  compaction: minimalCompactionConfig,
+  compaction: arcadeCompactionConfig,
   symbols: {
     assistantDone: "◈",
   },

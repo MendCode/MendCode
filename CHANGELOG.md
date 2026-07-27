@@ -2,15 +2,22 @@
 
 ## Unreleased
 
+### Changed
+
+- Add configurable context-pack presentation with arcade, cockpit, minimal, and quiet modes plus setup controls.
+- Improve TUI selection dialogs with large layouts, structured command search, readable wrapping, and a `?` help key.
+
 ### Fixed
 
 - Keep TUI message state idempotent when duplicate `message.updated` events arrive in the same batch, preventing temporary assistant duplication or disappearance during queued and normal turns.
 - Preserve the latest real user turn and its visible assistant output across bounded refreshes, stale removals, and compaction-related updates.
 - Keep prompt/queue working state, compaction progress, background-task notifications, and session rendering synchronized during active turns.
+- Persist async prompts before acknowledging them with HTTP 204 and surface prompt failures through the existing session error event.
 
 ### Tests
 
 - Add regressions for batched duplicate message updates, pinned user turns, sparse refreshes, bounded transcript retention, compaction pairing, and prompt working-state transitions.
+- Add command-search and async-prompt persistence regressions.
 
 ## 0.1.20 - 2026-06-27
 

@@ -58,6 +58,7 @@ const KeybindsSchema = Schema.Struct({
   model_cycle_favorite: keybind("none", "Next favorite model"),
   model_cycle_favorite_reverse: keybind("none", "Previous favorite model"),
   command_list: keybind("ctrl+p", "List available commands"),
+  help: keybind("?", "Open help"),
   agent_mode_picker: keybind("shift+tab", "Open mode picker"),
   agent_list: keybind("<leader>a", "List primary agents"),
   agent_cycle: keybind("tab", "Next primary agent"),

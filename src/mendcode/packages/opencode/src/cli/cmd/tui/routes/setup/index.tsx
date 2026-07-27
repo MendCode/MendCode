@@ -101,7 +101,7 @@ export const setupPresetDetails: Record<SetupPresetID, { title: string; summary:
   default: {
     title: "Use current defaults",
     summary: "Keep provider, models, and existing settings unchanged.",
-    changes: "No optional feature is enabled by this choice; configure only what you need below.",
+    changes: "Keeps existing settings unchanged; new defaults use the normal TUI and arcade context pack.",
     safety: "Safest when you are upgrading or already have a working config.",
   },
   minimal: {
@@ -113,7 +113,7 @@ export const setupPresetDetails: Record<SetupPresetID, { title: string; summary:
   full: {
     title: "Full MendCode",
     summary: "Use the complete TUI and MendCode context with guarded memory learning.",
-    changes: "Sets full prompt context, spacious TUI, visible runtime surfaces, memory retrieval and approval-gated proposals.",
+    changes: "Sets full prompt context, spacious TUI, visible runtime surfaces, arcade context packing, memory retrieval and approval-gated proposals.",
     safety: "Memory writes remain approval-gated; provider and model settings are preserved.",
   },
   custom: {
@@ -549,7 +549,7 @@ export function Setup() {
           showElapsed: true,
           showInterruptHint: true,
         },
-        compaction: { ...defaults.presentation.compaction, style: "cockpit", showProgress: true, allowScratchpad: true },
+        compaction: { ...defaults.presentation.compaction, style: "arcade", showProgress: true, allowScratchpad: true, arcade: "snake" },
       },
       layout: {
         ...current.layout,
@@ -2044,7 +2044,10 @@ export function Setup() {
                       <text fg={theme.textMuted}>Required progress: {requiredProgress()}/{requiredSetupSteps.length}</text>
                     </box>
                     <box flexDirection="column" flexGrow={1} minWidth={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} gap={1}>
-                      <text fg={theme.primary}>STARTING PROFILES</text>
+                      <text fg={theme.primary}>SETUP PRESETS</text>
+                      <text fg={theme.textMuted}>
+                        Presets change the TUI, prompt, memory, and permissions defaults. Provider and model credentials stay unchanged.
+                      </text>
                       <For each={setupPresetList}>
                         {(preset) => (
                           <box flexDirection="column" gap={0} onMouseDown={() => void applySetupPreset(preset.id)}>
@@ -2056,7 +2059,7 @@ export function Setup() {
                       </For>
                     </box>
                   </box>
-                  <text fg={theme.textMuted}>Enter opens the profile picker. Use Custom when you want to configure each step manually.</text>
+                  <text fg={theme.textMuted}>Enter opens the setup preset picker. Choose Configure manually to set each step yourself.</text>
                 </box>
               </Match>
               <Match when={active() === "provider"}>

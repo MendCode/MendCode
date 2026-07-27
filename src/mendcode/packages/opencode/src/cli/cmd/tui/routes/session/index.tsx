@@ -3785,18 +3785,20 @@ export function Session() {
                             />
                           </Match>
                           <Match when={message().role === "assistant"}>
-                            <AssistantMessage
-                              last={lastAssistant()?.id === message().id}
-                              message={message() as AssistantMessage}
-                              parts={sync.data.part[message().id] ?? []}
-                              simpleHistory={
-                                !showCompactedToolCalls() &&
-                                shouldUseSimpleSessionHistory({
-                                  messageID: message().id,
-                                  fullStartID: fullHistoryStartID(),
-                                })
-                              }
-                            />
+                            <box id={message().id} width="100%" flexDirection="column" flexShrink={0}>
+                              <AssistantMessage
+                                last={lastAssistant()?.id === message().id}
+                                message={message() as AssistantMessage}
+                                parts={sync.data.part[message().id] ?? []}
+                                simpleHistory={
+                                  !showCompactedToolCalls() &&
+                                  shouldUseSimpleSessionHistory({
+                                    messageID: message().id,
+                                    fullStartID: fullHistoryStartID(),
+                                  })
+                                }
+                              />
+                            </box>
                           </Match>
                             </Switch>
                             )

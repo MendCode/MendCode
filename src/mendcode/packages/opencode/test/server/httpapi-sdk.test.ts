@@ -653,6 +653,34 @@ describe("HttpApi SDK", () => {
     ),
   )
 
+  parity("persists async prompts before acknowledging them across backends", (backend) =>
+    withFakeLlm(backend, ({ sdk, llm }) =>
+      Effect.gen(function* () {
+        yield* llm.text("async response")
+        const session = yield* capture(() => sdk.session.create({ title: "async prompt" }))
+        const sessionID = String(record(session.data).id)
+        const asyncPrompt = yield* capture(() =>
+          sdk.session.promptAsync({
+            sessionID,
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            parts: [{ type: "text", text: "persist before ack" }],
+          }),
+        )
+        const messages = yield* capture(() => sdk.session.messages({ sessionID }))
+
+        expect(asyncPrompt.status).toBe(204)
+        expect(JSON.stringify(messages.data)).toContain("persist before ack")
+        yield* llm.wait(1)
+        return {
+          status: asyncPrompt.status,
+          persisted: JSON.stringify(messages.data).includes("persist before ack"),
+          calls: yield* llm.calls,
+        }
+      }),
+    ),
+  )
+
   parity("matches generated SDK prompt streaming through fake LLM across backends", (backend) =>
     withFakeLlm(backend, ({ sdk, llm }) =>
       Effect.gen(function* () {

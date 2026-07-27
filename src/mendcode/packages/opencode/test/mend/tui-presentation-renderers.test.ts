@@ -26,12 +26,12 @@ function isTimelineRowWithTitle(node: ReturnType<typeof groupTimelineParts>[numb
 }
 
 describe("mend tui presentation renderers", () => {
-  test("compaction defaults to public-safe minimal mode", () => {
+  test("compaction defaults to the normal arcade context pack", () => {
     expect(resolveTuiPresentation({}).compaction).toEqual({
-      style: "minimal",
-      showProgress: false,
-      allowScratchpad: false,
-      arcade: "off",
+      style: "arcade",
+      showProgress: true,
+      allowScratchpad: true,
+      arcade: "snake",
     })
     expect(resolveTuiPresentation({ profile: "mendcode", compaction: { style: "cockpit", showProgress: true, allowScratchpad: true, arcade: "snake" } }).compaction).toEqual({
       style: "cockpit",
@@ -40,6 +40,7 @@ describe("mend tui presentation renderers", () => {
       arcade: "snake",
     })
     expect(resolveTuiPresentation({ compaction: { arcade: "custom-game" } }).compaction.arcade).toBe("custom-game")
+    expect(resolveTuiPresentation({ profile: "mendcode" }).compaction.style).toBe("arcade")
   })
 
   test("compaction cockpit helpers skip empty headings and expose arcade modes", () => {

@@ -364,6 +364,7 @@ export interface Interface {
   readonly cancelQueued: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<boolean>
   readonly interrupt: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts>
+  readonly promptAsync: (input: PromptInput) => Effect.Effect<MessageV2.WithParts>
   readonly loop: (input: LoopInput) => Effect.Effect<MessageV2.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts>
   readonly command: (input: CommandInput) => Effect.Effect<MessageV2.WithParts>
@@ -2526,6 +2527,30 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       })
     })
 
+    const promptAsync: (input: PromptInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn(
+      "SessionPrompt.promptAsync",
+    )(function* (input: PromptInput) {
+      // Persist the user turn before acknowledging prompt_async. The loop is
+      // deliberately forked only after this succeeds so a 204 never means
+      // "accepted" while the message still exists only in a background fiber.
+      const message = yield* prompt({ ...input, noReply: true })
+      if (input.noReply === true) return message
+
+      yield* loop({ sessionID: input.sessionID, queue: true, targetMessageID: message.info.id }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            yield* Effect.logError("prompt_async failed", { sessionID: input.sessionID, cause })
+            yield* bus.publish(Session.Event.Error, {
+              sessionID: input.sessionID,
+              error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
+            })
+          }),
+        ),
+        Effect.forkIn(scope, { startImmediately: true }),
+      )
+      return message
+    })
+
     const shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.shell")(
       function* (input: ShellInput) {
         const ready = yield* Latch.make()
@@ -2798,6 +2823,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       cancelQueued,
       interrupt,
       prompt,
+      promptAsync,
       loop,
       shell,
       command,

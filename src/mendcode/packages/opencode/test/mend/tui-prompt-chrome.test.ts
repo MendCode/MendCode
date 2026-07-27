@@ -21,8 +21,10 @@ describe("mend tui prompt chrome", () => {
     expect(defaultTuiProfile().workingIndicator.showTokenUsage).toBe(true)
     expect(defaultTuiProfile().presentation.profile).toBe("mendcode")
     expect(defaultTuiProfile().presentation.activity.maxLines).toBe(1)
-    expect(defaultTuiProfile().presentation.compaction.style).toBe("minimal")
-    expect(defaultTuiProfile().presentation.compaction.arcade).toBe("off")
+    expect(defaultTuiProfile().presentation.compaction.style).toBe("arcade")
+    expect(defaultTuiProfile().presentation.compaction.showProgress).toBe(true)
+    expect(defaultTuiProfile().presentation.compaction.allowScratchpad).toBe(true)
+    expect(defaultTuiProfile().presentation.compaction.arcade).toBe("snake")
     expect(defaultTuiProfile().layout.zones.session.stickyUserHeader).toBe(true)
     expect(defaultTuiProfile().layout.zones.session.submitScrollMode).toBe("bottom")
     expect(validateMendTuiProfile(defaultTuiProfile()).ok).toBe(true)
@@ -153,7 +155,7 @@ describe("mend tui prompt chrome", () => {
     expect(resolveTuiPresentation({ profile: "minimal" }).activity.maxLines).toBe(1)
     expect(resolveTuiPresentation({ profile: "minimal" }).compaction.style).toBe("minimal")
     expect(resolveTuiPresentation({ profile: "mendcode" }).reasoning.defaultVisibility).toBe("collapsed")
-    expect(resolveTuiPresentation({ profile: "mendcode" }).compaction.style).toBe("minimal")
+    expect(resolveTuiPresentation({ profile: "mendcode" }).compaction.style).toBe("arcade")
   })
 
   test("presentation compaction overrides stay backward compatible", () => {
@@ -173,7 +175,7 @@ describe("mend tui prompt chrome", () => {
       allowScratchpad: true,
       arcade: "stars",
     })
-    expect(resolveTuiPresentation({ profile: "mendcode" }).compaction.allowScratchpad).toBe(false)
+    expect(resolveTuiPresentation({ profile: "mendcode" }).compaction.allowScratchpad).toBe(true)
   })
 
   test("raw and full presentations can show reasoning before completion", () => {
@@ -328,6 +330,7 @@ describe("mend tui prompt chrome", () => {
     expect(keybinds.todo_toggle).toBe("ctrl+t")
     expect(keybinds.variant_cycle).toBe("f3")
     expect(keybinds.variant_list).toBe("shift+f3")
+    expect(keybinds.help).toBe("?")
   })
 
   test("prompt status supports per-side scripts and preserves legacy left script fallback", () => {

@@ -66,7 +66,7 @@ export function SetupRail(props: {
   const activeIndex = () => Math.max(0, setupSteps.indexOf(props.active))
   const activeStatus = () => setupRailStepStatus(props.active, props.state, props.summary)
   return (
-    <box width={props.narrow ? "100%" : 30} flexShrink={0} borderColor={theme.border} borderStyle="single" paddingLeft={1} paddingRight={1} paddingTop={props.narrow ? 0 : 1} paddingBottom={props.narrow ? 0 : 1}>
+    <box width={props.narrow ? "100%" : 36} flexShrink={0} borderColor={theme.border} borderStyle="single" paddingLeft={1} paddingRight={1} paddingTop={props.narrow ? 0 : 1} paddingBottom={props.narrow ? 0 : 1}>
       <Show
         when={!props.narrow}
         fallback={

@@ -95,10 +95,10 @@
       }
     },
     "compaction": {
-      "style": "minimal",
-      "showProgress": false,
-      "allowScratchpad": false,
-      "arcade": "off"
+      "style": "arcade",
+      "showProgress": true,
+      "allowScratchpad": true,
+      "arcade": "snake"
     },
     "symbols": {
       "assistantDone": "◈"

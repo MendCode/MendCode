@@ -168,6 +168,8 @@ import {
   messageRendererForPresentationProfile,
   presentationProfileTitle,
   resolveTuiPresentation,
+  type MendCompactionArcade,
+  type MendCompactionStyle,
   type MendMessageRenderer,
   type MendPresentationProfile,
 } from "@/mend/tui/presentation"
@@ -1079,7 +1081,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
           setFirstRunIntroRun((value) => value + 1)
           setFirstRunIntroVisible(true)
         }
-        route.navigate({ type: "setup", step: state.currentStep, minimal: Boolean(state.dismissedAt) })
+        route.navigate({ type: "setup", step: state.currentStep })
       })
       .catch(toast.error)
   })
@@ -1144,6 +1146,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     dialog.replace(() => (
       <DialogSelect
         title="tsm"
+        size="large"
         renderFilter={false}
         current="status"
         options={[
@@ -1244,6 +1247,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     dialog.replace(() => (
       <DialogSelect
         title="worktrees"
+        size="large"
         renderFilter={false}
         current="status"
         options={[
@@ -1353,6 +1357,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     dialog.replace(() => (
       <DialogSelect
         title="mflow details"
+        size="large"
         renderFilter={false}
         current="state"
         options={[
@@ -1455,6 +1460,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
           () => (
             <DialogSelect
               title="local mflow relay"
+              size="large"
               current={scan[0]?.url ?? "localhost"}
               renderFilter={false}
               options={[
@@ -1691,6 +1697,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     dialog.replace(() => (
       <DialogSelect
         title="mflow"
+        size="large"
         renderFilter={false}
         current="status"
         options={[
@@ -2161,6 +2168,174 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
                 }),
               }),
               `Message rendering is now ${item.value}.`,
+            ),
+        }))}
+      />
+    ))
+  }
+  const compactionStyleTitle = (style: MendCompactionStyle) => {
+    if (style === "arcade") return "Arcade"
+    if (style === "cockpit") return "Cockpit"
+    if (style === "quiet") return "Quiet"
+    return "Minimal"
+  }
+  const compactionArcadeTitle = (arcade: MendCompactionArcade) => {
+    if (arcade === "off") return "Off"
+    if (arcade === "snake") return "Snake"
+    if (arcade === "stars") return "Stars"
+    if (arcade === "blocks") return "Blocks"
+    return arcade
+  }
+  const showCompactionStyle = () => {
+    const current = mend.profile.presentation.compaction.style
+    const options: Array<{ title: string; value: MendCompactionStyle; description: string }> = [
+      {
+        title: "Arcade",
+        value: "arcade",
+        description: "Show context stages, the packed summary, scratchpad, and the selected arcade game.",
+      },
+      {
+        title: "Cockpit",
+        value: "cockpit",
+        description: "Show context stages, packed summary, and scratchpad without a game.",
+      },
+      {
+        title: "Minimal",
+        value: "minimal",
+        description: "Show only a short packing status line.",
+      },
+      {
+        title: "Quiet",
+        value: "quiet",
+        description: "Show only a compact divider while context is being packed.",
+      },
+    ]
+    dialog.replace(() => (
+      <DialogSelect
+        title="Context pack presentation"
+        current={current}
+        options={options.map((item) => ({
+          title: item.title,
+          value: item.value,
+          category: "Context pack",
+          description: item.description,
+          onSelect: () =>
+            void updatePromptChrome(
+              (profile) => {
+                const compaction = profile.presentation.compaction
+                return {
+                  ...profile,
+                  presentation: resolveTuiPresentation({
+                    ...profile.presentation,
+                    compaction: {
+                      ...compaction,
+                      style: item.value,
+                      showProgress: item.value === "arcade" ? true : compaction.showProgress,
+                      allowScratchpad: item.value === "arcade" ? true : compaction.allowScratchpad,
+                      arcade: item.value === "arcade" && compaction.arcade === "off" ? "snake" : compaction.arcade,
+                    },
+                  }),
+                }
+              },
+              `Context pack presentation is now ${compactionStyleTitle(item.value)}.`,
+            ),
+        }))}
+      />
+    ))
+  }
+  const showCompactionArcade = () => {
+    const current = mend.profile.presentation.compaction.arcade
+    const options: Array<{ title: string; value: MendCompactionArcade; description: string }> = [
+      { title: "Off", value: "off", description: "Do not show an arcade game during context packing." },
+      { title: "Snake", value: "snake", description: "Classic keyboard-driven Snake game." },
+      { title: "Stars", value: "stars", description: "Ambient starfield animation while context is packed." },
+      { title: "Blocks", value: "blocks", description: "Animated block pattern while context is packed." },
+    ]
+    dialog.replace(() => (
+      <DialogSelect
+        title="Context pack arcade"
+        current={current}
+        options={options.map((item) => ({
+          title: item.title,
+          value: item.value,
+          category: "Context pack",
+          description: item.description,
+          onSelect: () =>
+            void updatePromptChrome(
+              (profile) => ({
+                ...profile,
+                presentation: resolveTuiPresentation({
+                  ...profile.presentation,
+                  compaction: {
+                    ...profile.presentation.compaction,
+                    style: item.value === "off" ? profile.presentation.compaction.style : "arcade",
+                    showProgress: item.value === "off" ? profile.presentation.compaction.showProgress : true,
+                    allowScratchpad: item.value === "off" ? profile.presentation.compaction.allowScratchpad : true,
+                    arcade: item.value,
+                  },
+                }),
+              }),
+              `Context pack arcade is now ${compactionArcadeTitle(item.value)}.`,
+            ),
+        }))}
+      />
+    ))
+  }
+  const showCompactionProgress = () => {
+    const current = mend.profile.presentation.compaction.showProgress ? "on" : "off"
+    const options = [
+      { title: "On", value: "on", description: "Show capture, memory, tail, and continue stages." },
+      { title: "Off", value: "off", description: "Hide the context packing stage row." },
+    ] as const
+    dialog.replace(() => (
+      <DialogSelect
+        title="Context pack progress"
+        current={current}
+        options={options.map((item) => ({
+          title: item.title,
+          value: item.value,
+          category: "Context pack",
+          description: item.description,
+          onSelect: () =>
+            void updatePromptChrome(
+              (profile) => ({
+                ...profile,
+                presentation: resolveTuiPresentation({
+                  ...profile.presentation,
+                  compaction: { ...profile.presentation.compaction, showProgress: item.value === "on" },
+                }),
+              }),
+              `Context pack progress is now ${item.value}.`,
+            ),
+        }))}
+      />
+    ))
+  }
+  const showCompactionScratchpad = () => {
+    const current = mend.profile.presentation.compaction.allowScratchpad ? "on" : "off"
+    const options = [
+      { title: "On", value: "on", description: "Show the editable follow-up scratchpad after compaction." },
+      { title: "Off", value: "off", description: "Hide the follow-up scratchpad." },
+    ] as const
+    dialog.replace(() => (
+      <DialogSelect
+        title="Context pack scratchpad"
+        current={current}
+        options={options.map((item) => ({
+          title: item.title,
+          value: item.value,
+          category: "Context pack",
+          description: item.description,
+          onSelect: () =>
+            void updatePromptChrome(
+              (profile) => ({
+                ...profile,
+                presentation: resolveTuiPresentation({
+                  ...profile.presentation,
+                  compaction: { ...profile.presentation.compaction, allowScratchpad: item.value === "on" },
+                }),
+              }),
+              `Context pack scratchpad is now ${item.value}.`,
             ),
         }))}
       />
@@ -3402,6 +3577,38 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
         onSelect: showMessageRenderer,
       },
       {
+        value: "advanced.compaction.style",
+        title: "Context pack presentation",
+        category: "Context pack",
+        description: "Choose the normal, arcade, minimal, or quiet context packing surface.",
+        status: compactionStyleTitle(mend.profile.presentation.compaction.style),
+        onSelect: showCompactionStyle,
+      },
+      {
+        value: "advanced.compaction.arcade",
+        title: "Context pack arcade",
+        category: "Context pack",
+        description: "Choose Snake, Stars, Blocks, or no arcade surface during compaction.",
+        status: compactionArcadeTitle(mend.profile.presentation.compaction.arcade),
+        onSelect: showCompactionArcade,
+      },
+      {
+        value: "advanced.compaction.progress",
+        title: "Context pack progress",
+        category: "Context pack",
+        description: "Show or hide the context packing stage row.",
+        status: mend.profile.presentation.compaction.showProgress ? "On" : "Off",
+        onSelect: showCompactionProgress,
+      },
+      {
+        value: "advanced.compaction.scratchpad",
+        title: "Context pack scratchpad",
+        category: "Context pack",
+        description: "Show or hide the editable follow-up scratchpad.",
+        status: mend.profile.presentation.compaction.allowScratchpad ? "On" : "Off",
+        onSelect: showCompactionScratchpad,
+      },
+      {
         value: "advanced.prompt.submit",
         title: "Submit scroll behavior",
         category: "Advanced profile",
@@ -4556,6 +4763,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     {
       title: "Help",
       value: "help.show",
+      keybind: ["setup", "stats", "memory", "changes", "loops"].includes(route.data.type) ? "help" : undefined,
       slash: {
         name: "help",
       },

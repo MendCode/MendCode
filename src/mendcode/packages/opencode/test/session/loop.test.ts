@@ -97,6 +97,13 @@ function runRunner<A, E>(
           const response = typeof promptText === "function" ? promptText(prompts) : promptText
           return typeof response === "string" || response === undefined ? promptMessage(response) : response
         }),
+      promptAsync: (input: PromptInput) =>
+        Effect.sync(() => {
+          prompts++
+          promptCalls.push(input)
+          const response = typeof promptText === "function" ? promptText(prompts) : promptText
+          return typeof response === "string" || response === undefined ? promptMessage(response) : response
+        }),
       loop: () => Effect.succeed(promptMessage()),
       shell: () => Effect.succeed(promptMessage()),
       command: () => Effect.succeed(promptMessage()),
