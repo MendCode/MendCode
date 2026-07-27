@@ -21,6 +21,7 @@ import * as Log from "@mendcode/core/util/log"
 import { ConfigVariable } from "@/config/variable"
 import { Npm } from "@mendcode/core/npm"
 import path from "path"
+import { activeMendPackageProjection } from "@/mend/runtime/packages"
 
 const log = Log.create({ service: "tui.config" })
 
@@ -179,14 +180,24 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
     }
   }
 
+  const packages = yield* Effect.promise(() => activeMendPackageProjection(ctx.directory).catch(() => undefined))
+  if (packages?.plugin.length) {
+    const plugins = ConfigPlugin.deduplicatePluginOrigins([
+      ...(acc.result.plugin_origins ?? []),
+      ...packages.plugin.map((spec) => ({
+        spec,
+        scope: "local" as const,
+        source: path.join(ctx.directory, ".mendcode", "packages", "state.json"),
+      })),
+    ])
+    acc.result.plugin = plugins.map((item) => item.spec)
+    acc.result.plugin_origins = plugins
+  }
+
   const keybinds = { ...(acc.result.keybinds ?? {}) }
   if (process.platform === "win32") {
-    // Native Windows terminals do not support POSIX suspend, so prefer prompt undo.
+    // Native Windows terminals do not support POSIX suspend.
     keybinds.terminal_suspend = "none"
-    keybinds.input_undo ??= unique([
-      "ctrl+z",
-      ...ConfigKeybinds.Keybinds.shape.input_undo.parse(undefined).split(","),
-    ]).join(",")
   }
   acc.result.keybinds = ConfigKeybinds.Keybinds.parse(keybinds)
 

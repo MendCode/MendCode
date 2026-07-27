@@ -45,6 +45,8 @@ const log = Log.create({ service: "session" })
 const parentTitlePrefix = "New session - "
 const childTitlePrefix = "Child session - "
 const LIVE_PART_DELTA_PERSIST_INTERVAL_MS = 500
+const MAX_PENDING_PART_DELTA_FIELD_CHARS = 256 * 1024
+const MAX_PENDING_PART_DELTAS = 64
 
 function createDefaultTitle(isChild = false) {
   return (isChild ? childTitlePrefix : parentTitlePrefix) + new Date().toISOString()
@@ -254,6 +256,7 @@ export const SetRevertInput = Schema.Struct({
 export const MessagesInput = Schema.Struct({
   sessionID: SessionID,
   limit: Schema.optional(NonNegativeInt),
+  view: Schema.optional(Schema.Literals(["full", "tui"])),
 }).pipe(withStatics((s) => ({ zod: zod(s) })))
 export type ListInput = {
   directory?: string
@@ -488,7 +491,11 @@ export interface Interface {
   readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void>
   readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
-  readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<MessageV2.WithParts[]>
+  readonly messages: (input: {
+    sessionID: SessionID
+    limit?: number
+    view?: MessageV2.PageView
+  }) => Effect.Effect<MessageV2.WithParts[]>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
   readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
   readonly updateMessage: <T extends MessageV2.Info>(msg: T) => Effect.Effect<T>
@@ -536,6 +543,15 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
     }
     const pendingPartDeltas = new Map<string, PendingPartDelta>()
 
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        for (const pending of pendingPartDeltas.values()) {
+          if (pending.timer) clearTimeout(pending.timer)
+        }
+        pendingPartDeltas.clear()
+      }),
+    )
+
     function partDeltaKey(input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) {
       return `${input.sessionID}:${input.messageID}:${input.partID}`
     }
@@ -544,7 +560,15 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
       const record = part as unknown as Record<string, unknown>
       const current = record[field]
       if (current !== undefined && typeof current !== "string") return false
-      record[field] = `${current ?? ""}${delta}`
+      const next = `${current ?? ""}${delta}`
+      if (next.length <= MAX_PENDING_PART_DELTA_FIELD_CHARS) {
+        record[field] = next
+        return true
+      }
+      const marker = `\n[Live part delta capped: omitted ${next.length - MAX_PENDING_PART_DELTA_FIELD_CHARS} chars]\n`
+      const budget = Math.max(0, MAX_PENDING_PART_DELTA_FIELD_CHARS - marker.length)
+      const head = Math.floor(budget / 3)
+      record[field] = `${next.slice(0, head)}${marker}${next.slice(next.length - (budget - head))}`
       return true
     }
 
@@ -555,14 +579,21 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
         const version = pending.version
         const part = structuredClone(pending.part)
         pending.flush = Effect.runPromise(
-          sync.run(
-            MessageV2.Event.PartUpdated,
-            {
-              sessionID: part.sessionID,
-              part,
-              time: Date.now(),
-            },
-          ),
+          Effect.gen(function* () {
+            const hasInstance = yield* InstanceState.directory.pipe(
+              Effect.as(true),
+              Effect.catchCause(() => Effect.succeed(false)),
+            )
+            if (!hasInstance) return
+            yield* sync.run(
+              MessageV2.Event.PartUpdated,
+              {
+                sessionID: part.sessionID,
+                part,
+                time: Date.now(),
+              },
+            )
+          }),
         )
           .catch((error) => {
             log.warn("live part delta persist failed", {
@@ -857,11 +888,15 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
         .pipe(Effect.orElseSucceed((): Snapshot.FileDiff[] => []))
     })
 
-    const messages = Effect.fn("Session.messages")(function* (input: { sessionID: SessionID; limit?: number }) {
+    const messages = Effect.fn("Session.messages")(function* (input: {
+      sessionID: SessionID
+      limit?: number
+      view?: MessageV2.PageView
+    }) {
       if (input.limit) {
-        return MessageV2.page({ sessionID: input.sessionID, limit: input.limit }).items
+        return MessageV2.page({ sessionID: input.sessionID, limit: input.limit, view: input.view }).items
       }
-      return Array.from(MessageV2.stream(input.sessionID)).reverse()
+      return Array.from(MessageV2.stream(input.sessionID, { view: input.view })).reverse()
     })
 
     const removeMessage = Effect.fn("Session.removeMessage")(function* (input: {
@@ -901,6 +936,13 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
       if (!pending) {
         const part = yield* getPart(input)
         if (!part) return
+        while (pendingPartDeltas.size >= MAX_PENDING_PART_DELTAS) {
+          const oldest = pendingPartDeltas.keys().next().value
+          if (!oldest) break
+          const stale = pendingPartDeltas.get(oldest)
+          if (stale?.timer) clearTimeout(stale.timer)
+          pendingPartDeltas.delete(oldest)
+        }
         pending = {
           part: structuredClone(part),
           version: 0,

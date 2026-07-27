@@ -1,7 +1,6 @@
 import * as InstanceState from "@/effect/instance-state"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { Agent } from "@/agent/agent"
-import { Bus } from "@/bus"
 import { Command } from "@/command"
 import { Permission } from "@/permission"
 import { PermissionID } from "@/permission/schema"
@@ -16,22 +15,32 @@ import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { BackgroundSession } from "@/session/background"
-import { MessageID, PartID, SessionID } from "@/session/schema"
+import { AgentViewMetadata } from "@/session/agent-view-metadata"
+import { AgentView } from "@/session/agent-view"
+import { AgentCommand } from "@/session/agent-command"
+import { AgentCommandPolicy } from "@/session/agent-command-policy"
+import { AgentCommandID, MessageID, PartID, SessionID } from "@/session/schema"
 import { NotFoundError } from "@/storage/storage"
-import { NamedError } from "@mendcode/core/util/error"
-import { Cause, Effect, Option, Schema, Scope } from "effect"
+import { Effect, Option, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder, HttpApiError, HttpApiSchema } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
+import * as ApiError from "../errors"
 import {
   CommandPayload,
+  AgentCommandCreatePayload,
+  AgentCommandListQuery,
+  AgentCommandSessionQuery,
+  AgentCommandUpdatePayload,
+  AgentViewMetadataPayload,
   BackgroundRegisterPayload,
   BackgroundWriterPayload,
   DiffQuery,
   ForkPayload,
   InitPayload,
   ListQuery,
+  MessageQuery,
   MessagesQuery,
   PermissionResponsePayload,
   PromptPayload,
@@ -54,10 +63,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const permissionSvc = yield* Permission.Service
     const statusSvc = yield* SessionStatus.Service
     const backgroundSvc = yield* BackgroundSession.Service
+    const agentViewMetadataSvc = yield* AgentViewMetadata.Service
+    const agentViewSvc = yield* AgentView.Service
+    const agentCommandSvc = yield* AgentCommand.Service
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
-    const bus = yield* Bus.Service
-    const scope = yield* Scope.Scope
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
       return yield* session.list({
@@ -78,6 +88,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const backgroundList = Effect.fn("SessionHttpApi.backgroundList")(function* () {
       const statuses = yield* statusSvc.list()
       const items = yield* backgroundSvc.list()
+      const metadataBySessionID = new Map((yield* agentViewMetadataSvc.list()).map((info) => [info.sessionID, info]))
       return yield* Effect.all(
         items.map((info) =>
           session.get(info.sessionID).pipe(
@@ -85,24 +96,108 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
               BackgroundSession.toEntry({
                 info,
                 status: statuses.get(info.sessionID),
+                metadata: metadataBySessionID.get(info.sessionID),
                 session: BackgroundSession.sessionInfo(sessionInfo),
               }),
             ),
-            Effect.catch(() =>
-              Effect.succeed(
-                BackgroundSession.toEntry({
-                  info,
-                  status: statuses.get(info.sessionID),
-                }),
-              ),
-            ),
+                Effect.catchIf(NotFoundError.isInstance, () =>
+                  Effect.succeed(
+                    BackgroundSession.toEntry({
+                      info,
+                      status: statuses.get(info.sessionID),
+                      metadata: metadataBySessionID.get(info.sessionID),
+                    }),
+                  ),
+                ),
+
           ),
         ),
       )
     })
 
+    const agentViewList = Effect.fn("SessionHttpApi.agentViewList")(function* (ctx: { query: typeof ListQuery.Type }) {
+      return yield* agentViewSvc.list({
+        directory: ctx.query.scope === "project" ? undefined : ctx.query.directory,
+        scope: ctx.query.scope,
+        path: ctx.query.path,
+        roots: ctx.query.roots,
+        start: ctx.query.start,
+        search: ctx.query.search,
+        limit: ctx.query.limit,
+      })
+    })
+
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
       return yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID))
+    })
+
+    const agentViewMetadataList = Effect.fn("SessionHttpApi.agentViewMetadataList")(function* () {
+      return yield* agentViewMetadataSvc.list()
+    })
+
+    const agentViewMetadataGet = Effect.fn("SessionHttpApi.agentViewMetadataGet")(function* (ctx: {
+      params: { sessionID: SessionID }
+    }) {
+      yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID))
+      return (yield* agentViewMetadataSvc.get(ctx.params.sessionID)) ?? null
+    })
+
+    const agentViewMetadataPatch = Effect.fn("SessionHttpApi.agentViewMetadataPatch")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof AgentViewMetadataPayload.Type
+    }) {
+      yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID))
+      return yield* agentViewMetadataSvc.patch({ sessionID: ctx.params.sessionID, ...ctx.payload })
+    })
+
+    const agentCommandList = Effect.fn("SessionHttpApi.agentCommandList")(function* (ctx: {
+      query: typeof AgentCommandListQuery.Type
+    }) {
+      return yield* agentCommandSvc.list(ctx.query)
+    })
+
+    const agentCommandPolicy = Effect.fn("SessionHttpApi.agentCommandPolicy")(function* () {
+      return AgentCommandPolicy.matrix()
+    })
+
+    const agentCommandListBySession = Effect.fn("SessionHttpApi.agentCommandListBySession")(function* (ctx: {
+      params: { sessionID: SessionID }
+      query: typeof AgentCommandSessionQuery.Type
+    }) {
+      yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID))
+      return yield* agentCommandSvc.list({ targetSessionID: ctx.params.sessionID, state: ctx.query.state })
+    })
+
+    const agentCommandCreate = Effect.fn("SessionHttpApi.agentCommandCreate")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof AgentCommandCreatePayload.Type
+    }) {
+      yield* SessionError.mapStorageNotFound(session.get(ctx.payload.sourceSessionID))
+      yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID))
+      return yield* agentCommandSvc.create({ targetSessionID: ctx.params.sessionID, ...ctx.payload }).pipe(
+        Effect.catchIf(NotFoundError.isInstance, (error) => Effect.fail(ApiError.notFound(error.data.message))),
+      )
+    })
+
+    const agentCommandPatch = Effect.fn("SessionHttpApi.agentCommandPatch")(function* (ctx: {
+      params: { sessionID: SessionID; commandID: AgentCommandID }
+      payload: typeof AgentCommandUpdatePayload.Type
+    }) {
+      yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID))
+      return yield* agentCommandSvc.update({ id: ctx.params.commandID, targetSessionID: ctx.params.sessionID, ...ctx.payload }).pipe(
+        Effect.catchIf(NotFoundError.isInstance, (error) => Effect.fail(ApiError.notFound(error.data.message))),
+        Effect.catchTag("AgentCommandInvalidStateTransitionError", (error) =>
+          Effect.fail(
+            ApiError.badRequest({
+              name: error.name,
+              message: error.message,
+              commandID: error.commandID,
+              from: error.from,
+              to: error.to,
+            }),
+          ),
+        ),
+      )
     })
 
     const backgroundRegister = Effect.fn("SessionHttpApi.backgroundRegister")(function* (ctx: {
@@ -156,9 +251,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       query: typeof MessagesQuery.Type
     }) {
-      if (ctx.query.before && ctx.query.limit === undefined) return yield* new HttpApiError.BadRequest({})
-      if (ctx.query.before) {
-        const before = ctx.query.before
+      if ((ctx.query.before || ctx.query.after) && ctx.query.limit === undefined) return yield* new HttpApiError.BadRequest({})
+      if (ctx.query.before && ctx.query.after) return yield* new HttpApiError.BadRequest({})
+      if (ctx.query.before || ctx.query.after) {
+        const before = ctx.query.before ?? ctx.query.after!
         yield* Effect.try({
           try: () => MessageV2.cursor.decode(before),
           catch: () => new HttpApiError.BadRequest({}),
@@ -166,37 +262,59 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       }
       yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID))
       if (ctx.query.limit === undefined || ctx.query.limit === 0) {
-        return yield* session.messages({ sessionID: ctx.params.sessionID })
+        return yield* session.messages({ sessionID: ctx.params.sessionID, view: ctx.query.view })
       }
 
       const page = MessageV2.page({
         sessionID: ctx.params.sessionID,
         limit: ctx.query.limit,
-        before: ctx.query.before,
-      })
-      if (!page.cursor) return page.items
+         before: ctx.query.before,
+         after: ctx.query.after,
+         view: ctx.query.view,
+         partsLimit: ctx.query.partsLimit,
+       })
+      if (!page.cursor && !page.sparse) return page.items
+
+      if (!page.cursor) {
+        return HttpServerResponse.jsonUnsafe(page.items, {
+          headers: {
+            "Access-Control-Expose-Headers": "Link, X-Next-Cursor, X-Message-View-Sparse",
+            "X-Message-View-Sparse": "true",
+          },
+        })
+      }
 
       const request = yield* HttpServerRequest.HttpServerRequest
       // toURL() honors the Host + x-forwarded-proto headers, so the Link
       // header echoes the real origin instead of a hard-coded localhost.
       const url = Option.getOrElse(HttpServerRequest.toURL(request), () => new URL(request.url, "http://localhost"))
       url.searchParams.set("limit", ctx.query.limit.toString())
-      url.searchParams.set("before", page.cursor)
+      if (ctx.query.after) url.searchParams.set("after", page.cursor)
+      else url.searchParams.set("before", page.cursor)
       return HttpServerResponse.jsonUnsafe(page.items, {
         headers: {
-          "Access-Control-Expose-Headers": "Link, X-Next-Cursor",
+          "Access-Control-Expose-Headers": "Link, X-Next-Cursor, X-Message-View-Sparse",
           Link: `<${url.toString()}>; rel="next"`,
           "X-Next-Cursor": page.cursor,
+          ...(page.sparse ? { "X-Message-View-Sparse": "true" } : {}),
         },
       })
     })
 
     const message = Effect.fn("SessionHttpApi.message")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
+      query: typeof MessageQuery.Type
     }) {
       return yield* SessionError.mapStorageNotFound(
         Effect.try({
-          try: () => MessageV2.get({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }),
+          try: () =>
+            MessageV2.get({
+              sessionID: ctx.params.sessionID,
+              messageID: ctx.params.messageID,
+              view: ctx.query.view,
+              partsLimit: ctx.query.partsLimit,
+              partsAfter: ctx.query.partsAfter,
+            }),
           catch: (error) => error,
         }).pipe(Effect.catch((error) => (NotFoundError.isInstance(error) ? Effect.fail(error) : Effect.die(error)))),
       )
@@ -258,6 +376,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* promptSvc.cancel(ctx.params.sessionID)
+      return true
+    })
+
+    const interrupt = Effect.fn("SessionHttpApi.interrupt")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* promptSvc.interrupt(ctx.params.sessionID)
       return true
     })
 
@@ -336,18 +459,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
     }) {
-      yield* promptSvc.prompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.gen(function* () {
-            yield* Effect.logError("prompt_async failed", { sessionID: ctx.params.sessionID, cause })
-            yield* bus.publish(Session.Event.Error, {
-              sessionID: ctx.params.sessionID,
-              error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
-            })
-          }),
-        ),
-        Effect.forkIn(scope, { startImmediately: true }),
-      )
+      yield* promptSvc.promptAsync({ ...ctx.payload, sessionID: ctx.params.sessionID })
       return HttpApiSchema.NoContent.make()
     })
 
@@ -387,7 +499,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const deleteMessage = Effect.fn("SessionHttpApi.deleteMessage")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
-      yield* runState.assertNotBusy(ctx.params.sessionID)
+      const cancelled = yield* promptSvc.cancelQueued(ctx.params)
+      if (!cancelled) yield* runState.assertNotBusy(ctx.params.sessionID)
       yield* session.removeMessage(ctx.params)
       return true
     })
@@ -420,7 +533,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("list", list)
       .handle("status", status)
       .handle("backgroundList", backgroundList)
+      .handle("agentViewList", agentViewList)
       .handle("get", get)
+      .handle("agentViewMetadataList", agentViewMetadataList)
+      .handle("agentViewMetadataGet", agentViewMetadataGet)
+      .handle("agentViewMetadataPatch", agentViewMetadataPatch)
+      .handle("agentCommandList", agentCommandList)
+      .handle("agentCommandPolicy", agentCommandPolicy)
+      .handle("agentCommandListBySession", agentCommandListBySession)
+      .handle("agentCommandCreate", agentCommandCreate)
+      .handle("agentCommandPatch", agentCommandPatch)
       .handle("backgroundRegister", backgroundRegister)
       .handle("backgroundRemove", backgroundRemove)
       .handle("backgroundWriterAcquire", backgroundWriterAcquire)
@@ -435,6 +557,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("update", update)
       .handle("fork", fork)
       .handle("abort", abort)
+      .handle("interrupt", interrupt)
       .handle("init", init)
       .handle("share", share)
       .handle("unshare", unshare)

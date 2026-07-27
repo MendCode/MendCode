@@ -8,6 +8,25 @@ import { TuiConfig } from "../../../src/cli/cmd/tui/config/tui"
 
 const { TuiPluginRuntime } = await import("../../../src/cli/cmd/tui/plugin/runtime")
 
+test("keeps external installs behind the MendCode marketplace gate", async () => {
+  const previousMendcode = process.env.MENDCODE
+  const previousAllow = process.env.MENDCODE_ALLOW_TUI_PLUGIN_INSTALL
+  process.env.MENDCODE = "1"
+  delete process.env.MENDCODE_ALLOW_TUI_PLUGIN_INSTALL
+
+  try {
+    await expect(TuiPluginRuntime.installPlugin("demo-plugin")).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining("marketplace/registry"),
+    })
+  } finally {
+    if (previousMendcode === undefined) delete process.env.MENDCODE
+    else process.env.MENDCODE = previousMendcode
+    if (previousAllow === undefined) delete process.env.MENDCODE_ALLOW_TUI_PLUGIN_INSTALL
+    else process.env.MENDCODE_ALLOW_TUI_PLUGIN_INSTALL = previousAllow
+  }
+})
+
 test("installs plugin without loading it", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
@@ -49,6 +68,8 @@ test("installs plugin without loading it", async () => {
     },
   })
 
+  const previousAllow = process.env.MENDCODE_ALLOW_TUI_PLUGIN_INSTALL
+  process.env.MENDCODE_ALLOW_TUI_PLUGIN_INSTALL = "1"
   process.env.OPENCODE_PLUGIN_META_FILE = path.join(tmp.path, "plugin-meta.json")
   const config: TuiConfig.Info = {
     plugin: [],
@@ -83,5 +104,7 @@ test("installs plugin without loading it", async () => {
     cwd.mockRestore()
     wait.mockRestore()
     delete process.env.OPENCODE_PLUGIN_META_FILE
+    if (previousAllow === undefined) delete process.env.MENDCODE_ALLOW_TUI_PLUGIN_INSTALL
+    else process.env.MENDCODE_ALLOW_TUI_PLUGIN_INSTALL = previousAllow
   }
 })

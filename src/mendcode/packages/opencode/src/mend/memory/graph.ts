@@ -42,6 +42,16 @@ export type MemoryGraph = {
   policies: ReturnType<typeof normalizeMemoryCategoryPolicies>
 }
 
+export type MemoryGraphHealth = {
+  materializedFacts: number
+  legacyFacts: number
+  links: number
+  connectedFacts: number
+  isolatedFacts: number
+  orphanLinks: number
+  graphHealth: "empty" | "disconnected" | "partial" | "connected"
+}
+
 function graphDir(root?: string) {
   return path.join(memoryPaths(root).projectDir, "graph")
 }
@@ -71,7 +81,9 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
 }
 
 function factFromLegacyEntry(entry: MemoryEntry): MemoryFact {
-  const categoryIDs = inferMemoryCategoryIDs({ text: entry.text, tags: entry.tags, source: entry.source })
+  const categoryIDs = normalizeMemoryCategoryIDs(entry.categoryIDs?.length
+    ? entry.categoryIDs
+    : inferMemoryCategoryIDs({ text: entry.text, tags: entry.tags, source: entry.source }))
   const priority = Math.min(...categoryIDs.map((id) => memoryCategoryByID(id).promptPriority))
   return {
     id: `legacy_${entry.id}`,
@@ -94,6 +106,11 @@ function factFromLegacyEntry(entry: MemoryEntry): MemoryFact {
     retrievalPriority: priority,
     legacyMaterialized: true,
   }
+}
+
+export function isMemoryGraphVisibleFact(fact: Pick<MemoryFact, "categoryIDs" | "stale" | "text">) {
+  if (fact.stale || fact.categoryIDs.includes("volatile.reject")) return false
+  return !/^\s*(?:trace|traza)\s+\d+\b/i.test(fact.text)
 }
 
 export function normalizeMemoryFact(input: Partial<MemoryFact> & { text: string }): MemoryFact {
@@ -161,13 +178,104 @@ export async function writeMemoryGraph(graph: Pick<MemoryGraph, "facts" | "links
 
 export async function upsertMemoryFact(input: Partial<MemoryFact> & { text: string }, root?: string) {
   const graph = await readMemoryGraph(root)
-  const fact = normalizeMemoryFact(input)
-  const index = graph.facts.findIndex((item) => item.id === fact.id)
+  const index = typeof input.id === "string" && input.id
+    ? graph.facts.findIndex((item) => item.id === input.id)
+    : -1
+  const definedInput = Object.fromEntries(Object.entries(input).filter((entry) => entry[1] !== undefined)) as Partial<MemoryFact> & { text: string }
+  const fact = index === -1
+    ? normalizeMemoryFact(input)
+    : normalizeMemoryFact({
+        ...graph.facts[index],
+        ...definedInput,
+        id: graph.facts[index]!.id,
+        createdAt: graph.facts[index]!.createdAt,
+        updatedAt: new Date().toISOString(),
+      })
   const facts = [...graph.facts]
   if (index === -1) facts.push(fact)
-  else facts[index] = { ...fact, updatedAt: new Date().toISOString() }
+  else facts[index] = fact
   await writeMemoryGraph({ ...graph, facts }, root)
   return fact
+}
+
+export async function deleteMemoryFact(id: string, root?: string) {
+  const graph = await readMemoryGraph(root)
+  if (!graph.facts.some((fact) => fact.id === id)) return { ok: false, id, deletedLinks: 0 }
+  const facts = graph.facts.filter((fact) => fact.id !== id)
+  const links = graph.links.filter((link) => link.from !== id && link.to !== id)
+  await writeMemoryGraph({ ...graph, facts, links }, root)
+  return { ok: true, id, deletedLinks: graph.links.length - links.length }
+}
+
+export async function upsertMemoryFactLink(
+  input: Omit<MemoryFactLink, "id" | "createdAt"> & Partial<Pick<MemoryFactLink, "id" | "createdAt">>,
+  root?: string,
+) {
+  const graph = await readMemoryGraph(root)
+  const link: MemoryFactLink = {
+    id: input.id || nowID("memlink"),
+    from: input.from,
+    to: input.to,
+    kind: input.kind,
+    createdAt: input.createdAt || new Date().toISOString(),
+  }
+  const links = graph.links.filter((item) => item.id !== link.id)
+  links.push(link)
+  await writeMemoryGraph({ ...graph, links }, root)
+  return link
+}
+
+export async function deleteMemoryFactLink(id: string, root?: string) {
+  const graph = await readMemoryGraph(root)
+  if (!graph.links.some((link) => link.id === id)) return { ok: false, id }
+  await writeMemoryGraph({ ...graph, links: graph.links.filter((link) => link.id !== id) }, root)
+  return { ok: true, id }
+}
+
+function sharedSemanticCategories(a: MemoryFact, b: MemoryFact, allowedCategoryIDs?: string[]) {
+  const categories = new Set(b.categoryIDs)
+  const allowed = allowedCategoryIDs?.length ? new Set(allowedCategoryIDs) : undefined
+  return a.categoryIDs.filter((categoryID) => categoryID !== "uncategorized" && categories.has(categoryID) && (!allowed || allowed.has(categoryID)))
+}
+
+function semanticOverlapScore(a: MemoryFact, b: MemoryFact) {
+  const left = new Set(a.normalizedSummary.toLowerCase().split(/[^\p{L}\p{N}_.@/-]+/u).filter((term) => term.length > 3))
+  const right = new Set(b.normalizedSummary.toLowerCase().split(/[^\p{L}\p{N}_.@/-]+/u).filter((term) => term.length > 3))
+  return [...left].filter((term) => right.has(term)).length / Math.max(1, Math.min(left.size, right.size))
+}
+
+function isCrossScopeSemanticMatch(a: MemoryFact, b: MemoryFact, allowedCategoryIDs?: string[]) {
+  const allowed = allowedCategoryIDs?.length ? new Set(allowedCategoryIDs) : undefined
+  return a.scope !== b.scope
+    && (a.scope === "global" || b.scope === "global")
+    && (!allowed || [...a.categoryIDs, ...b.categoryIDs].some((categoryID) => allowed.has(categoryID)))
+    && semanticOverlapScore(a, b) >= 0.25
+}
+
+function relatedFactScore(fact: MemoryFact, candidate: MemoryFact, allowedCategoryIDs?: string[]) {
+  const terms = new Set(fact.normalizedSummary.toLowerCase().split(/[^\p{L}\p{N}_.@/-]+/u).filter((term) => term.length > 3))
+  const candidateTerms = new Set(candidate.normalizedSummary.toLowerCase().split(/[^\p{L}\p{N}_.@/-]+/u).filter((term) => term.length > 3))
+  const overlap = [...terms].filter((term) => candidateTerms.has(term)).length / Math.max(1, Math.min(terms.size, candidateTerms.size))
+  return sharedSemanticCategories(fact, candidate, allowedCategoryIDs).length * 100
+    + overlap * 10
+    + (isCrossScopeSemanticMatch(fact, candidate, allowedCategoryIDs) ? 20 : 0)
+    + (fact.scope === candidate.scope ? 2 : 0)
+    + candidate.confidence
+    + candidate.durability
+    - candidate.retrievalPriority / 1000
+}
+
+export async function connectMemoryFactToRelatedFact(id: string, root?: string, allowedCategoryIDs?: string[]) {
+  const graph = await readMemoryGraph(root)
+  const fact = graph.facts.find((item) => item.id === id)
+  if (!fact) return null
+  const existing = graph.links.find((link) => link.from === id || link.to === id)
+  if (existing) return existing
+  const candidate = graph.facts
+    .filter((item) => item.id !== id && item.sensitivity === "low" && !item.stale && (sharedSemanticCategories(fact, item, allowedCategoryIDs).length > 0 || isCrossScopeSemanticMatch(fact, item, allowedCategoryIDs)))
+    .toSorted((a, b) => relatedFactScore(fact, b, allowedCategoryIDs) - relatedFactScore(fact, a, allowedCategoryIDs) || a.id.localeCompare(b.id))[0]
+  if (!candidate) return null
+  return upsertMemoryFactLink({ from: id, to: candidate.id, kind: "related" }, root)
 }
 
 export async function legacyFacts(root?: string) {
@@ -176,6 +284,34 @@ export async function legacyFacts(root?: string) {
     readMemoryEntries("project", root).catch(() => []),
   ])
   return [...globalEntries, ...projectEntries].map(factFromLegacyEntry)
+}
+
+export async function materializeLegacyMemoryFacts(root?: string) {
+  const graph = await readMemoryGraph(root)
+  const legacy = await legacyFacts(root)
+  const legacyByEntryID = new Map(legacy.flatMap((fact) => fact.legacyEntryID ? [[fact.legacyEntryID, fact] as const] : []))
+  const synced = [...legacyByEntryID.values()].map((fact) => {
+    const existing = graph.facts.find((item) => item.legacyEntryID === fact.legacyEntryID || item.id === fact.id)
+    return normalizeMemoryFact({
+      ...(existing ?? fact),
+      ...fact,
+      id: existing?.id ?? fact.id,
+      ownerWorkspaceIDs: fact.scope === "project"
+        ? [...new Set([...(existing?.ownerWorkspaceIDs ?? []), ...fact.ownerWorkspaceIDs, memoryPaths(root).root].filter((value): value is string => Boolean(value)))]
+        : existing?.ownerWorkspaceIDs ?? fact.ownerWorkspaceIDs,
+      createdAt: existing?.createdAt ?? fact.createdAt,
+      updatedAt: fact.updatedAt,
+      legacyMaterialized: true,
+    })
+  })
+  const syncedIDs = new Set(synced.map((fact) => fact.id))
+  const explicit = graph.facts.filter((fact) => !fact.legacyMaterialized || !fact.legacyEntryID || syncedIDs.has(fact.id))
+  const facts = [...explicit.filter((fact) => !syncedIDs.has(fact.id)), ...synced]
+  const factIDs = new Set(facts.map((fact) => fact.id))
+  const links = graph.links.filter((link) => factIDs.has(link.from) && factIDs.has(link.to))
+  const changed = JSON.stringify(facts) !== JSON.stringify(graph.facts) || JSON.stringify(links) !== JSON.stringify(graph.links)
+  if (changed) await writeMemoryGraph({ ...graph, facts, links }, root)
+  return { graph: { ...graph, facts, links }, added: Math.max(0, synced.length - graph.facts.filter((fact) => syncedIDs.has(fact.id)).length), changed }
 }
 
 export async function readMemoryFacts(root?: string) {
@@ -187,9 +323,32 @@ export async function readMemoryFacts(root?: string) {
   return [...graph.facts, ...legacy.filter((fact) => !seen.has(fact.legacyEntryID))]
 }
 
+export function computeMemoryGraphHealth(input: { graph: Pick<MemoryGraph, "facts" | "links">; facts: MemoryFact[] }): MemoryGraphHealth {
+  const factIDs = new Set(input.facts.map((fact) => fact.id))
+  const validLinks = input.graph.links.filter((link) => factIDs.has(link.from) && factIDs.has(link.to))
+  const connectedFactIDs = new Set(validLinks.flatMap((link) => [link.from, link.to]))
+  const isolatedFacts = Math.max(0, input.facts.length - connectedFactIDs.size)
+  return {
+    materializedFacts: input.graph.facts.length,
+    legacyFacts: Math.max(0, input.facts.length - input.graph.facts.length),
+    links: input.graph.links.length,
+    connectedFacts: connectedFactIDs.size,
+    isolatedFacts,
+    orphanLinks: input.graph.links.length - validLinks.length,
+    graphHealth: input.graph.facts.length === 0
+      ? "empty"
+      : connectedFactIDs.size === 0
+        ? "disconnected"
+        : isolatedFacts === 0
+          ? "connected"
+          : "partial",
+  }
+}
+
 export async function validateMemoryGraph(root?: string) {
   const graph = await readMemoryGraph(root)
-  const factIDs = new Set(graph.facts.map((fact) => fact.id))
+  const facts = await readMemoryFacts(root)
+  const factIDs = new Set(facts.map((fact) => fact.id))
   const issues: Array<{ code: string; message: string; repairable: boolean }> = []
   for (const fact of graph.facts) {
     for (const categoryID of fact.categoryIDs) {
@@ -203,12 +362,12 @@ export async function validateMemoryGraph(root?: string) {
       issues.push({ code: "missing-link-target", message: `Link ${link.id} references missing fact`, repairable: true })
     }
   }
-  return { ok: issues.length === 0, issues }
+  return { ok: issues.length === 0, issues, health: computeMemoryGraphHealth({ graph, facts }) }
 }
 
 export async function repairMemoryGraph(root?: string) {
   const graph = await readMemoryGraph(root)
-  const factIDs = new Set(graph.facts.map((fact) => fact.id))
+  const factIDs = new Set((await readMemoryFacts(root)).map((fact) => fact.id))
   const facts = graph.facts.map((fact) => normalizeMemoryFact({
     ...fact,
     categoryIDs: normalizeMemoryCategoryIDs(fact.categoryIDs),

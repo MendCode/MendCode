@@ -33,11 +33,14 @@ import {
   type ProposeMemoriesFromTextInput,
 } from "@/mend/memory/proposals"
 import { mendMemoryContext } from "@/mend/memory/retrieve"
+import { writeMemorySessionDigest } from "@/mend/memory/session-digests"
+import { ShellID } from "@/tool/shell/id"
 import * as DateTime from "effect/DateTime"
 
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
 const DEFAULT_LLM_STREAM_IDLE_TIMEOUT_MS = 180_000
+const RETRY_STATUS_EVENT_INTERVAL_MS = 5_000
 
 function llmStreamIdleTimeoutMs() {
   const value = Number(process.env.MENDCODE_LLM_STREAM_IDLE_TIMEOUT_MS)
@@ -380,6 +383,8 @@ type PendingMemoryExtraction = {
       generate: boolean
       extractorRole?: string
       queued: boolean
+      skipped?: boolean
+      reason?: string | null
       saved: unknown[]
       proposals: unknown[]
     }
@@ -408,6 +413,7 @@ interface ProcessorContext extends Input {
   liveTokenOutputText: string
   liveTokenUpdatedAt: number
   pendingMemoryExtraction: PendingMemoryExtraction | undefined
+  usedExplicitMemoryTool: boolean
 }
 
 type StreamEvent = Event
@@ -425,6 +431,7 @@ export const layer: Layer.Layer<
   | LLM.Service
   | Permission.Service
   | PlanReview.Service
+  | Question.Service
   | Provider.Service
   | Plugin.Service
   | SessionSummary.Service
@@ -440,11 +447,13 @@ export const layer: Layer.Layer<
     const llm = yield* LLM.Service
     const permission = yield* Permission.Service
     const planReview = yield* PlanReview.Service
+    const question = yield* Question.Service
     const provider = yield* Provider.Service
     const plugin = yield* Plugin.Service
     const summary = yield* SessionSummary.Service
     const scope = yield* Scope.Scope
     const status = yield* SessionStatus.Service
+    const retryStatusPublishedAt = new Map<SessionID, number>()
 
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
@@ -470,8 +479,11 @@ export const layer: Layer.Layer<
         liveTokenOutputText: "",
         liveTokenUpdatedAt: 0,
         pendingMemoryExtraction: undefined,
+        usedExplicitMemoryTool: false,
       }
       let aborted = false
+      // Keep the retry state visible while a new provider attempt is still in setup.
+      let retrying = false
       const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
 
       const isExplicitAbort = () => aborted || (input.isManualAbort ? input.isManualAbort() : input.abort?.aborted === true)
@@ -526,26 +538,62 @@ export const layer: Layer.Layer<
         return { call, part }
       })
 
+      const taskChildSessionIDs = Effect.fn("SessionProcessor.taskChildSessionIDs")(function* () {
+        const result = new Set<SessionID>()
+        for (const toolCallID of Object.keys(ctx.toolcalls)) {
+          const match = yield* readToolCall(toolCallID)
+          if (match?.part.tool !== "task") continue
+          if (match.part.state.status !== "running" && match.part.state.status !== "pending") continue
+          const metadata = "metadata" in match.part.state && isRecord(match.part.state.metadata) ? match.part.state.metadata : {}
+          if (typeof metadata.sessionId === "string") result.add(SessionID.make(metadata.sessionId))
+        }
+        return result
+      })
+
       const hasPendingHumanInteraction = Effect.fn("SessionProcessor.hasPendingHumanInteraction")(function* () {
+        const sessionIDs = new Set<SessionID>([ctx.sessionID, ...(yield* taskChildSessionIDs())])
+        for (const sessionID of sessionIDs) {
+          const current = yield* status.get(sessionID)
+          if (sessionID !== ctx.sessionID && (current.type === "busy" || current.type === "retry")) return true
+        }
         for (const toolCallID of Object.keys(ctx.toolcalls)) {
           const match = yield* readToolCall(toolCallID)
           if (match?.part.tool === "question" && match.part.state.status === "running") return true
         }
+        for (const request of yield* question.list()) {
+          if (sessionIDs.has(request.sessionID)) return true
+        }
         for (const request of yield* permission.list()) {
-          if (request.sessionID !== ctx.sessionID) continue
+          if (!sessionIDs.has(request.sessionID)) continue
+          if (request.sessionID !== ctx.sessionID) return true
           const callID = request.tool?.callID
           if (!callID) continue
           const match = yield* readToolCall(callID)
           if (match?.part.state.status === "running" || match?.part.state.status === "pending") return true
         }
         for (const request of yield* planReview.list()) {
-          if (request.sessionID !== ctx.sessionID) continue
+          if (!sessionIDs.has(request.sessionID)) continue
+          if (request.sessionID !== ctx.sessionID) return true
           const callID = request.tool?.callID
           if (!callID) continue
           const match = yield* readToolCall(callID)
           if (match?.part.state.status === "running" || match?.part.state.status === "pending") return true
         }
         return false
+      })
+
+      const hasPendingShellTool = Effect.fn("SessionProcessor.hasPendingShellTool")(function* () {
+        for (const toolCallID of Object.keys(ctx.toolcalls)) {
+          const match = yield* readToolCall(toolCallID)
+          if (match?.part.tool !== ShellID.ToolID) continue
+          if (match.part.state.status === "pending" || match.part.state.status === "running") return true
+        }
+        return false
+      })
+
+      const keepStreamAlive = Effect.fn("SessionProcessor.keepStreamAlive")(function* () {
+        if (yield* hasPendingHumanInteraction()) return true
+        return yield* hasPendingShellTool()
       })
 
       const proposeAutomaticMemories = Effect.fn("SessionProcessor.proposeAutomaticMemories")(function* (
@@ -626,6 +674,13 @@ export const layer: Layer.Layer<
       ) {
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return
+        if (
+          match.part.tool === "memory" ||
+          match.part.tool === "memory_graph" ||
+          Boolean(output.metadata?.mendMemoryTool)
+        ) {
+          ctx.usedExplicitMemoryTool = true
+        }
         yield* session.updatePart({
           ...match.part,
           state: {
@@ -644,6 +699,9 @@ export const layer: Layer.Layer<
       const failToolCall = Effect.fn("SessionProcessor.failToolCall")(function* (toolCallID: string, error: unknown) {
         const match = yield* readToolCall(toolCallID)
         if (!match || match.part.state.status !== "running") return false
+        if (match.part.tool === "memory" || match.part.tool === "memory_graph") {
+          ctx.usedExplicitMemoryTool = true
+        }
         yield* session.updatePart({
           ...match.part,
           state: {
@@ -684,8 +742,19 @@ export const layer: Layer.Layer<
       })
 
       const handleEvent = Effect.fnUntraced(function* (value: StreamEvent) {
+        const attemptProducedContent =
+          value.type === "reasoning-start" ||
+          value.type === "text-start" ||
+          value.type === "tool-input-start" ||
+          value.type === "tool-call"
+        if (retrying && attemptProducedContent) {
+          retrying = false
+          yield* status.set(ctx.sessionID, { type: "busy" })
+        }
+
         switch (value.type) {
           case "start":
+            if (retrying) return
             yield* status.set(ctx.sessionID, { type: "busy" })
             return
 
@@ -1000,12 +1069,20 @@ export const layer: Layer.Layer<
               memoryMetadata?.output?.enabled &&
               memoryMetadata.output.generate &&
               memoryMetadata.output.extractorRole !== "none" &&
+              !ctx.usedExplicitMemoryTool &&
               memoryTurnText.trim(),
             )
             const queuedMemoryMetadata = memoryMetadata
               ? {
                   ...memoryMetadata,
-                  output: { ...memoryMetadata.output, queued: shouldQueueMemory },
+                  output: {
+                    ...memoryMetadata.output,
+                    queued: shouldQueueMemory,
+                    skipped: ctx.usedExplicitMemoryTool,
+                    reason: ctx.usedExplicitMemoryTool
+                      ? "explicit memory tool used"
+                      : null,
+                  },
                 }
               : undefined
             const finishPart = yield* session.updatePart({
@@ -1176,8 +1253,15 @@ export const layer: Layer.Layer<
         ctx.reasoningMap = {}
 
         yield* Effect.forEach(
-          Object.values(ctx.toolcalls),
-          (call) => Deferred.await(call.done).pipe(Effect.timeout("250 millis"), Effect.ignore),
+          Object.keys(ctx.toolcalls),
+          (toolCallID) =>
+            Effect.gen(function* () {
+              const call = ctx.toolcalls[toolCallID]
+              if (!call) return
+              const match = yield* readToolCall(toolCallID)
+              const timeout = match?.part.tool === ShellID.ToolID ? "3 seconds" : "250 millis"
+              yield* Deferred.await(call.done).pipe(Effect.timeout(timeout), Effect.ignore)
+            }),
           { concurrency: "unbounded" },
         )
 
@@ -1222,13 +1306,32 @@ export const layer: Layer.Layer<
             }
           }
           const explicitAbort = isExplicitAbort()
+          if (!explicitAbort) {
+            yield* session.updatePart({
+              ...part,
+              state: {
+                status: "completed",
+                input: "input" in part.state ? part.state.input : {},
+                title: "title" in part.state && part.state.title ? part.state.title : `${part.tool} retained`,
+                metadata: { ...metadata, interrupted: false, status: "retained" },
+                output: [
+                  "tool_status: retained",
+                  "",
+                  "Tool execution stopped because the parent run lost its connection before collecting the result.",
+                  "This was not treated as a user cancel or tool failure.",
+                ].join("\n"),
+                time: { start: "time" in part.state ? part.state.time.start : end, end },
+              },
+            })
+            continue
+          }
           yield* session.updatePart({
             ...part,
             state: {
               ...part.state,
               status: "error",
-              error: explicitAbort ? "Tool execution interrupted" : "Tool execution stopped before completion",
-              metadata: { ...metadata, interrupted: explicitAbort },
+              error: "Tool execution interrupted",
+              metadata: { ...metadata, interrupted: true },
               time: { start: "time" in part.state ? part.state.time.start : end, end },
             },
           })
@@ -1313,7 +1416,7 @@ export const layer: Layer.Layer<
 
             yield* timeoutStreamUnless(stream, {
               duration: idleTimeoutMs,
-              keepWaiting: hasPendingHumanInteraction(),
+              keepWaiting: keepStreamAlive(),
               onTimeout: () => new Error(`LLM stream timed out after ${idleTimeoutMs}ms without events`),
             }).pipe(
               Stream.tap((event) => handleEvent(event)),
@@ -1370,22 +1473,32 @@ export const layer: Layer.Layer<
               SessionRetry.policy({
                 parse,
                 set: (info) => {
-                  // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
-                  EventV2.run(SessionEvent.Retried.Sync, {
-                    sessionID: ctx.sessionID,
-                    attempt: info.attempt,
-                    error: {
-                      message: info.message,
-                      isRetryable: true,
-                    },
-                    timestamp: DateTime.makeUnsafe(Date.now()),
-                  })
+                  retrying = true
+                  const now = Date.now()
+                  const lastPublished = retryStatusPublishedAt.get(ctx.sessionID)
+                  const notify =
+                    info.attempt === 1 ||
+                    lastPublished === undefined ||
+                    now - lastPublished >= RETRY_STATUS_EVENT_INTERVAL_MS
+                  if (notify) {
+                    retryStatusPublishedAt.set(ctx.sessionID, now)
+                    // TODO(v2): Temporary dual-write while migrating session messages to v2 events.
+                    EventV2.run(SessionEvent.Retried.Sync, {
+                      sessionID: ctx.sessionID,
+                      attempt: info.attempt,
+                      error: {
+                        message: info.message,
+                        isRetryable: true,
+                      },
+                      timestamp: DateTime.makeUnsafe(now),
+                    })
+                  }
                   return status.set(ctx.sessionID, {
                     type: "retry",
                     attempt: info.attempt,
                     message: info.message,
                     next: info.next,
-                  })
+                  }, { notify })
                 },
               }),
             ),
@@ -1410,6 +1523,17 @@ export const layer: Layer.Layer<
         })
         const sessionID = ctx.sessionID
         const messageID = ctx.assistantMessage.id
+        yield* Effect.promise(() => writeMemorySessionDigest({
+          sessionID: String(sessionID),
+          projectRoot: pending.memoryRoot,
+          title: null,
+          summary: pending.memoryTurnText,
+          decisions: [],
+          corrections: [],
+          validations: [],
+          files: [],
+          evidenceRefs: [`session:${sessionID}:message:${messageID}`],
+        }, pending.memoryRoot).catch(() => null))
         const created = yield* proposeAutomaticMemories({
           user: pending.user,
           cwd: pending.messagePath.cwd,
@@ -1486,6 +1610,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(PlanReview.defaultLayer),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
+    Layer.provide(Question.defaultLayer),
     Layer.provide(SessionSummary.defaultLayer),
     Layer.provide(SessionStatus.defaultLayer),
     Layer.provide(Bus.layer),

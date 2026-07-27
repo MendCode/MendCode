@@ -28,6 +28,7 @@ function shouldLog(input: Level): boolean {
 
 export type Logger = {
   debug(message?: any, extra?: Record<string, any>): void
+  trace(message?: any, extra?: Record<string, any>): void
   info(message?: any, extra?: Record<string, any>): void
   error(message?: any, extra?: Record<string, any>): void
   warn(message?: any, extra?: Record<string, any>): void
@@ -176,6 +177,10 @@ export function create(tags?: Record<string, any>) {
       if (shouldLog("DEBUG")) {
         write("DEBUG " + build(message, extra))
       }
+    },
+    trace(message?: any, extra?: Record<string, any>) {
+      if (process.env.MENDCODE_TRACE !== "1") return
+      write("TRACE " + build(message, extra))
     },
     info(message?: any, extra?: Record<string, any>) {
       if (shouldLog("INFO")) {

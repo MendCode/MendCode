@@ -11,10 +11,11 @@ If you are deciding what to show on GitHub or the website, start with [Feature M
 3. [Customization](customization.md): prompt input, input marker, prompt status, home centered/split modes, Agent View, ASCII title/mascot, activity states, and team profile examples.
 4. [Plan Mode](plan-mode.md): interactive plan review modal, approve/edit/comment/reject flow, Mermaid support, and post-approval implementation handoff.
 5. [Changes Review](changes-review.md): `/changes` diff workspace, keybinds, comments, responsive layout, and agent-visible review context.
-6. [Loop Workflows](loop-workflows.md): durable loop workflows, Agent View loop sessions, dry-run/report-only/full execution modes, terminal monitor, and OS background service.
+6. [Loop Workflows](loop-workflows.md): durable loop sessions, Agent View loop roots, `/loop` creation, `/loops` supervision, dry-run/report-only/full execution modes, terminal monitor, and OS background service.
 7. [Memory Center](memory-center.md): saved memories, proposals, categories, Dream status, project grouping, and the constrained memory side agent for questions, explanations, and draft proposals.
 8. [Usage Insights](usage-insights.md): global/project activity dashboard, token heatmap, AI time, top tools/agents/models, cache behavior, and weather.
 9. [Packages and team sharing](packages-and-team-sharing.md): package commands, agents, modes, skills, prompts, MCP files, widgets, TUI profiles, model policy, permissions, memory, and worktree policy for teams.
+10. [Automation runtime](automation-runtime.md): session automation commands, versioned JSON envelopes, shared model selection, progress inspection, events, waiting, and cancellation.
 
 ## Configure The Harness
 
@@ -35,6 +36,7 @@ If you are deciding what to show on GitHub or the website, start with [Feature M
 - [Loop Workflows](loop-workflows.md): long-running, monitorable agent loops with explicit safety modes.
 - [Memory Center](memory-center.md): approval-first memory review, Dream maintenance, and constrained side-agent proposals.
 - [Usage Insights](usage-insights.md): local usage visibility without overclaiming productivity.
+- [Automation runtime](automation-runtime.md): machine-readable session control, progress events, lifecycle waiting, cancellation, and shared model selection.
 - [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory): permission modes, smart reviewer role, memory scopes, search/preview, and approval-gated proposals.
 
 ## Coordinate Local Work
@@ -56,6 +58,8 @@ If you are deciding what to show on GitHub or the website, start with [Feature M
 ```bash
 mendcode
 mendcode status
+mendcode session list --format json
+mendcode loops status
 mendcode setup status
 mendcode models status
 mendcode packages status
@@ -66,6 +70,13 @@ mendcode --worktree [branch|path|id]
 mendcode --tsm [branch|path|id|--all]
 ```
 
+## Loop Workflow Controls
+
+```text
+/loop   # create/activate a loop from natural language
+/loops  # supervise active and historical loops
+```
+
 ## TUI Customization Commands
 
 Most visual changes can be made from the command palette:
@@ -74,7 +85,7 @@ Most visual changes can be made from the command palette:
 Ctrl+P -> Home identity
 Ctrl+P -> Home title text
 Ctrl+P -> Home title font
-Ctrl+P -> Home ASCII size
+Ctrl+P -> Home mascot ASCII
 Ctrl+P -> Home welcome mode
 Ctrl+P -> Home split panel
 Ctrl+P -> Prompt chrome
@@ -101,7 +112,9 @@ CLI profile inspection exists for compatibility/debugging, but it is not the nor
 
 - `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`: public `mendcode` command router.
 - `src/mendcode/packages/opencode/src/mend/config/project.ts`: project config, focus profiles, generated runtime config, package metadata.
-- `src/mendcode/packages/opencode/src/mend/config/models.ts`: model roles and projection.
+- `src/mendcode/packages/opencode/src/mend/config/models.ts`: model roles, projection, and shared prompt-model precedence.
+- `src/mendcode/packages/opencode/src/cli/cmd/session.ts` and `src/mendcode/packages/opencode/src/cli/automation.ts`: session automation commands and the `mendcode.cli.v1` JSON envelope.
+- `src/mendcode/packages/opencode/src/cli/cmd/run.ts` and `src/mendcode/packages/opencode/src/cli/model-selection.ts`: headless streaming and runtime model/agent resolution.
 - `src/mendcode/packages/opencode/src/mend/config/permissions.ts`: global permission mode and smart-reviewer role config.
 - `src/mendcode/packages/opencode/src/mend/prompt/mode.ts`: prompt modes: `minimal`, `focus`, `full`.
 - `src/mendcode/packages/opencode/src/mend/memory/`: approval-gated memory storage, proposals, retrieval, graph, Dream, side chat, workspaces, and category policy.
@@ -120,6 +133,8 @@ CLI profile inspection exists for compatibility/debugging, but it is not the nor
 - `src/mendcode/packages/opencode/src/session/loop.ts`: loop workflow model and lifecycle.
 - `src/mendcode/packages/opencode/src/session/loop-runner.ts`: loop wakeup execution path.
 - `src/mendcode/packages/opencode/src/tool/loop.ts`: assistant-facing loop workflow tool.
+- `src/mendcode/packages/opencode/src/server/routes/instance/loop.ts` and `src/mendcode/packages/opencode/src/server/routes/instance/httpapi/handlers/loop.ts`: legacy and Effect loop read/control routes.
+- `src/mendcode/packages/opencode/src/mend/cli/control-plane.ts` and `src/mendcode/packages/opencode/src/mend/runtime/loop-service.ts`: public loop CLI controls and project OS service lifecycle.
 - `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/stats/index.tsx`: Usage Insights TUI route.
 - `src/mendcode/packages/opencode/src/provider/claude-code.ts`: local Claude Code CLI provider bridge and validation.
 - `src/mendcode/packages/plugin/src/tui.ts`: public TUI plugin/widget types.

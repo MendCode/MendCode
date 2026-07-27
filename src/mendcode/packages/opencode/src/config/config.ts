@@ -71,7 +71,16 @@ function normalizeLoadedConfig(data: unknown, source: string) {
     log.warn("tui keys in runtime config are deprecated; move them to tui.json", { path: source })
   }
 
-  const mendControlPlaneKeys = ["version", "engine", "focus", "budgets", "memory", "package", "worktree"] as const
+  const mendControlPlaneKeys = [
+    "version",
+    "engine",
+    "focus",
+    "budgets",
+    "memory",
+    "package",
+    "worktree",
+    "loop",
+  ] as const
   const removedControlPlaneKeys = mendControlPlaneKeys.filter((key) => key in copy)
   if (removedControlPlaneKeys.length) {
     mutated = true
@@ -230,6 +239,9 @@ export const Info = Schema.Struct({
     description: "Additional instruction files or patterns to include",
   }),
   layout: Schema.optional(ConfigLayout.Layout).annotate({ description: "@deprecated Always uses stretch layout." }),
+  presentation: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)).annotate({
+    description: "MendCode TUI presentation overrides, including input paste summary settings.",
+  }),
   permission: Schema.optional(ConfigPermission.Info),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
   enterprise: Schema.optional(
@@ -240,15 +252,15 @@ export const Info = Schema.Struct({
   tool_output: Schema.optional(
     Schema.Struct({
       max_lines: Schema.optional(PositiveInt).annotate({
-        description: "Maximum lines of tool output before it is truncated and saved to disk (default: 2000)",
+        description: "Maximum lines of tool output before it is truncated (default: 2000)",
       }),
       max_bytes: Schema.optional(PositiveInt).annotate({
-        description: "Maximum bytes of tool output before it is truncated and saved to disk (default: 51200)",
+        description: "Maximum bytes of tool output before it is truncated (default: 51200)",
       }),
     }),
   ).annotate({
     description:
-      "Thresholds for truncating tool output. When output exceeds either limit, the full text is written to the truncation directory and a preview is returned.",
+      "Thresholds for truncating tool output. Truncated output keeps a bounded preview and may save a bounded excerpt to the truncation directory.",
   }),
   compaction: Schema.optional(
     Schema.Struct({
@@ -268,8 +280,23 @@ export const Info = Schema.Struct({
       reserved: Schema.optional(NonNegativeInt).annotate({
         description: "Token buffer for compaction. Leaves enough window to avoid overflow during compaction.",
       }),
+      token_limit: Schema.optional(PositiveInt).annotate({
+        description:
+          "Absolute auto-compaction trigger in tokens. Takes precedence over threshold and is capped by the model input/context limit.",
+      }),
+      threshold: Schema.optional(Schema.Finite).annotate({
+        description: "Auto-compaction threshold as a percent of the model input/context limit (default: 95).",
+      }),
     }),
   ),
+  queue: Schema.optional(
+    Schema.Struct({
+      mode: Schema.optional(Schema.Literals(["after-response", "after-tools", "after-turn", "immediate"])).annotate({
+        description:
+          "How prompts submitted during an active assistant response are handled: after-response waits for the complete response (default), after-tools joins after the current tool-call iteration, immediate interrupts and starts the queued prompt, and after-turn is a deprecated alias for after-response.",
+      }),
+    }),
+  ).annotate({ description: "Default handling for prompts submitted while an assistant turn is active." }),
   experimental: Schema.optional(
     Schema.Struct({
       disable_paste_summary: Schema.optional(Schema.Boolean),
@@ -286,6 +313,19 @@ export const Info = Schema.Struct({
       }),
       continue_loop_on_deny: Schema.optional(Schema.Boolean).annotate({
         description: "Continue the agent loop when a tool call is denied",
+      }),
+      subagent_depth: Schema.optional(NonNegativeInt).annotate({
+        description: "Maximum nested task depth from a root session (default: 1)",
+      }),
+      subagent_max_children: Schema.optional(PositiveInt).annotate({
+        description: "Maximum active direct subagent tasks per session (default: 4)",
+      }),
+      subagent_max_descendants: Schema.optional(PositiveInt).annotate({
+        description: "Maximum active subagent tasks per root session (default: 16)",
+      }),
+      subagent_owner_wake: Schema.optional(Schema.Boolean).annotate({
+        description:
+          "Let completed background subagents wake an idle parent agent. Disabled by default; applies to global and project config.",
       }),
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",

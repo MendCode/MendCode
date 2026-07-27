@@ -1,6 +1,7 @@
 ---
 name: mendcode-release-flow
 description: Use for MendCode project changes, release prep, PR promotion, version bump decisions, changelog updates, installer validation, and dev-to-main synchronization. Trigger whenever work may ship to users, touches package metadata/versioning, installer/update/health/changelog behavior, or the user mentions bumping a version, release, changelog, PR to dev/main, or letting the user test before shipping.
+export: false
 ---
 
 # MendCode Release Flow

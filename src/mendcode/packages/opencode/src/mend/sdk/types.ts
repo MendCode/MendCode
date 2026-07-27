@@ -1,4 +1,21 @@
+import type {
+  TuiAiApi,
+  TuiCustomizationApi,
+  TuiMemoryApi,
+  TuiSessionApi,
+  TuiSessionMetadataApi,
+} from "@mendcode/plugin/tui"
+
 export type Dispose = () => void
+export type MendKeyEvent = {
+  name: string
+  ctrl?: boolean
+  meta?: boolean
+  shift?: boolean
+  sequence?: string
+  preventDefault?: () => void
+  stopPropagation?: () => void
+}
 
 export type MendRouteName = "home" | "session" | "setup" | string
 
@@ -41,15 +58,66 @@ export type MendToastInput = {
   duration?: number
 }
 
+export type MendOverlayAnchor = "top-center" | "center" | "bottom-center" | "top-left" | "top-right" | "bottom-left" | "bottom-right"
+export type MendOverlaySize = number | `${number}%` | "auto"
+export type MendOverlayApi = {
+  open(
+    id: string,
+    render: (context: {
+      close: () => boolean
+      focus: () => boolean
+      blur: () => boolean
+      focused: () => boolean
+      requestRender: () => void
+    }) => unknown,
+    input?: {
+      anchor?: MendOverlayAnchor
+      width?: MendOverlaySize
+      height?: MendOverlaySize
+      maxHeight?: MendOverlaySize
+      margin?: { top?: number; right?: number; bottom?: number; left?: number }
+      nonCapturing?: boolean
+      modal?: boolean
+      allowStack?: boolean
+      title?: string
+      onFocus?: () => boolean | void
+      onClose?: Dispose | (() => Promise<void>)
+      requestRender?: () => void
+    },
+  ): boolean
+  close(id: string): boolean
+  focus(id: string): boolean
+  blur(id?: string): boolean
+  focused(): string | undefined
+}
+
 export type MendUiRuntimeApi = {
+  customization: TuiCustomizationApi
   setStatus(id: string, value?: string, input?: { order?: number }): boolean
   clearStatus(id: string): boolean
   setWidget(
     id: string,
-    render?: (() => unknown) | undefined,
-    input?: { placement?: "aboveEditor" | "belowEditor" | "sessionBottomDock"; order?: number },
+    render?: ((context: { requestRender: () => void; maxFps: number }) => unknown) | undefined,
+    input?: {
+      placement?: "aboveEditor" | "belowEditor" | "sessionBottomDock"
+      order?: number
+      title?: string
+      width?: number | "auto"
+      minWidth?: number
+      maxWidth?: number
+      height?: number | "auto"
+      interactive?: boolean
+      onVisible?: () => boolean | void
+      onFocus?: () => boolean | void
+      onKey?: (event: MendKeyEvent) => boolean | void
+      maxFps?: number
+      requestRender?: () => void
+      dispose?: Dispose | (() => Promise<void>)
+    },
   ): boolean
   clearWidget(id: string): boolean
+  focusWidget(id: string): boolean
+  blurWidget(id?: string): boolean
   setFooter(renderer?: (() => unknown) | undefined): boolean
   setFooterEntry(id: string, render?: (() => unknown) | undefined, input?: { order?: number }): boolean
   setWorkingIndicator(input?: { frames?: string[]; intervalMs?: number; visible?: boolean }): boolean
@@ -96,6 +164,7 @@ export type MendExtensionApi = {
     }
   }
   ui: {
+    overlay: MendOverlayApi
     runtime: MendUiRuntimeApi
   } & Record<string, unknown>
   slots: {
@@ -116,6 +185,10 @@ export type MendExtensionApi = {
     set(key: string, value: unknown): void
     ready: boolean
   }
+  session: TuiSessionApi
+  metadata: TuiSessionMetadataApi
+  ai: TuiAiApi
+  memory: TuiMemoryApi
   state: {
     customization: {
       capabilities(): string[]

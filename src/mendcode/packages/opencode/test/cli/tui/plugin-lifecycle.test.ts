@@ -59,6 +59,224 @@ test("runs onDispose callbacks with aborted signal and is idempotent", async () 
   }
 })
 
+test("stops plugin pty processes on dispose", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const file = path.join(dir, "pty-plugin.ts")
+      const spec = pathToFileURL(file).href
+
+      await Bun.write(
+        file,
+        `export default {
+  id: "demo.pty",
+  tui: async (api) => {
+    await api.pty.spawn("watch-date", { cols: 20, rows: 4 })
+  },
+}
+`,
+      )
+
+      return { spec }
+    },
+  })
+
+  let stopped = 0
+  const { config, restore } = mockTuiRuntime(tmp.path, [tmp.extra.spec])
+
+  try {
+    await TuiPluginRuntime.init({
+      api: createTuiPluginApi({
+        pty: {
+          spawn: async () => ({
+            id: "pty-test",
+            pid: 123,
+            write: () => true,
+            resize: () => {},
+            stop: async () => {
+              stopped += 1
+            },
+            output: () => "",
+            screen: () => "",
+            rows: () => [],
+            onOutput: () => () => {},
+            onExit: () => () => {},
+            exited: Promise.resolve(0),
+          }),
+        },
+      }),
+      config,
+    })
+    await TuiPluginRuntime.dispose()
+
+    expect(stopped).toBe(1)
+  } finally {
+    await TuiPluginRuntime.dispose()
+    restore()
+  }
+})
+
+test("cleans plugin-owned overlays and widgets on dispose", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const file = path.join(dir, "ui-plugin.ts")
+      const spec = pathToFileURL(file).href
+
+      await Bun.write(
+        file,
+        `export default {
+  id: "demo.ui",
+  tui: async (api) => {
+    api.ui.overlay.open("sidecar", () => "overlay")
+    api.ui.runtime.setWidget("dock", () => null, { placement: "sessionBottomDock" })
+  },
+}
+`,
+      )
+
+      return { spec }
+    },
+  })
+
+  const calls = {
+    overlayOpen: 0,
+    overlayClose: 0,
+    widgetSet: 0,
+    widgetClear: 0,
+  }
+  const { config, restore } = mockTuiRuntime(tmp.path, [tmp.extra.spec])
+
+  try {
+    await TuiPluginRuntime.init({
+      api: createTuiPluginApi({
+        ui: {
+          overlay: {
+            open: () => {
+              calls.overlayOpen += 1
+              return true
+            },
+            close: () => {
+              calls.overlayClose += 1
+              return true
+            },
+          },
+          runtime: {
+            setWidget: () => {
+              calls.widgetSet += 1
+              return true
+            },
+            clearWidget: () => {
+              calls.widgetClear += 1
+              return true
+            },
+          },
+        },
+      }),
+      config,
+    })
+
+    expect(calls).toEqual({
+      overlayOpen: 1,
+      overlayClose: 0,
+      widgetSet: 1,
+      widgetClear: 0,
+    })
+
+    await TuiPluginRuntime.dispose()
+    expect(calls).toEqual({
+      overlayOpen: 1,
+      overlayClose: 1,
+      widgetSet: 1,
+      widgetClear: 1,
+    })
+  } finally {
+    await TuiPluginRuntime.dispose()
+    restore()
+  }
+})
+
+test("cleans command-opened plugin side-chat overlay on dispose", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const file = path.join(dir, "side-chat-plugin.ts")
+      const spec = pathToFileURL(file).href
+
+      await Bun.write(
+        file,
+        `export default {
+  id: "demo.sidechat",
+  tui: async (api) => {
+    const history = ["ready"]
+    api.command.register(() => [
+      {
+        title: "Open Plugin Side Chat",
+        value: "demo.sidechat.open",
+        category: "Demo",
+        onSelect() {
+          api.ui.overlay.open(
+            "demo.sidechat",
+            (context) => history.concat(context.close ? "closable" : "missing").join(" | "),
+            { title: "Plugin Side Chat", anchor: "bottom-right", width: "38%", height: 12, modal: false },
+          )
+        },
+      },
+    ])
+  },
+}
+`,
+      )
+
+      return { spec }
+    },
+  })
+
+  const calls = {
+    commandDrop: 0,
+    overlayOpen: 0,
+    overlayClose: 0,
+  }
+  const { config, restore } = mockTuiRuntime(tmp.path, [tmp.extra.spec])
+  let commandProvider: (() => Array<{ value: string; onSelect?: () => void }>) | undefined
+  let commandDropped = false
+
+  try {
+    const api = createTuiPluginApi({
+      ui: {
+        overlay: {
+          open: () => {
+            calls.overlayOpen += 1
+            return true
+          },
+          close: () => {
+            calls.overlayClose += 1
+            return true
+          },
+        },
+      },
+    })
+    api.command.register = (cb) => {
+      commandProvider = cb
+      return () => {
+        if (commandDropped) return
+        commandDropped = true
+        calls.commandDrop += 1
+        commandProvider = undefined
+      }
+    }
+
+    await TuiPluginRuntime.init({ api, config })
+    expect(calls).toEqual({ commandDrop: 0, overlayOpen: 0, overlayClose: 0 })
+
+    commandProvider?.().find((item) => item.value === "demo.sidechat.open")?.onSelect?.()
+    expect(calls).toEqual({ commandDrop: 0, overlayOpen: 1, overlayClose: 0 })
+
+    await TuiPluginRuntime.dispose()
+    expect(calls).toEqual({ commandDrop: 1, overlayOpen: 1, overlayClose: 1 })
+  } finally {
+    await TuiPluginRuntime.dispose()
+    restore()
+  }
+})
+
 test("rolls back failed plugin and continues loading next", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="3131.12" height="600" viewBox="0 0 3131.12 600" role="img" aria-labelledby="title">
+  <title id="title">MendCode horizontal logo</title>
+  <g id="mendcode-symbol" transform="translate(30 40)">
+    <path d="M 442 336 L 355 450 L 160 450 L 60 350 L 60 170 L 160 70 L 355 70 L 645 450 L 840 450 L 940 350 L 940 170 L 840 70 L 645 70 L 558 184" fill="none" stroke="#FFFFFF" stroke-width="82" stroke-linecap="butt" stroke-linejoin="bevel" stroke-miterlimit="2"/>
+  </g>
+  <g id="mendcode-wordmark" fill="#FFFFFF" aria-label="MendCode">
+    <path d="M52 0V700H224L390 376L556 700H728V0H589V521L424 204H356L191 521V0Z" transform="translate(1098.754 443.000) scale(0.4085714 -0.4085714)"/>
+    <path d="M45 106V454L151 560H545V246H187V120H525V0H151ZM187 324 421 334V448H187Z" transform="translate(1410.086 443.000) scale(0.4085714 -0.4085714)"/>
+    <path d="M52 0V560H458L568 450V0H426V436H194V0Z" transform="translate(1643.789 443.000) scale(0.4085714 -0.4085714)"/>
+    <path d="M568 700V0H159L45 114V446L159 560H426V700ZM187 120H426V440H187Z" transform="translate(1889.749 443.000) scale(0.4085714 -0.4085714)"/>
+    <path d="M50 108V592L158 700H516V571H196V129H526V0H158Z" transform="translate(2135.709 443.000) scale(0.4085714 -0.4085714)"/>
+    <path d="M45 106V454L151 560H449L555 454V106L449 0H151ZM187 116H413V444H187Z" transform="translate(2354.703 443.000) scale(0.4085714 -0.4085714)"/>
+    <path d="M568 700V0H159L45 114V446L159 560H426V700ZM187 120H426V440H187Z" transform="translate(2592.491 443.000) scale(0.4085714 -0.4085714)"/>
+    <path d="M45 106V454L151 560H545V246H187V120H525V0H151ZM187 324 421 334V448H187Z" transform="translate(2838.451 443.000) scale(0.4085714 -0.4085714)"/>
+  </g>
+</svg>

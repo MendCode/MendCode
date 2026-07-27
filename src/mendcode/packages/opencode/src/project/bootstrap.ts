@@ -12,6 +12,7 @@ import { ShareNext } from "@/share/share-next"
 import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
 import { Service } from "./bootstrap-service"
+import { startGlobalDreamBackgroundService } from "@/mend/memory/dream-scheduler"
 
 export { Service } from "./bootstrap-service"
 export type { Interface } from "./bootstrap-service"
@@ -42,6 +43,7 @@ export const layer = Layer.effect(
       yield* plugin.init()
       // Each service self-manages its own slow work via Effect.forkScoped against
       // its per-instance state scope. We just await materialization here.
+      yield* Effect.sync(() => startGlobalDreamBackgroundService())
       yield* Effect.forEach(
         [lsp, shareNext, format, file, fileWatcher, vcs, snapshot, project],
         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),

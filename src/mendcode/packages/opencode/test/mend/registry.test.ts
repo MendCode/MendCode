@@ -5,6 +5,8 @@ import path from "path"
 import { tmpdir } from "../fixture/fixture"
 import { runtimeRegistryAdd, runtimeRegistryApply, runtimeRegistryApplySource, runtimeRegistryInstallPack, runtimeRegistryPreview, runtimeRegistryPublishPlan, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistrySign, runtimeRegistrySmoke } from "../../src/mend/runtime/registry"
 
+const controlPlane = path.resolve(import.meta.dir, "../../src/mend/cli/control-plane.ts")
+
 async function writeJson(file: string, value: unknown) {
   await mkdir(path.dirname(file), { recursive: true })
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`)
@@ -28,6 +30,17 @@ function git(args: string[], cwd: string) {
     },
   })
   if (result.status !== 0) throw new Error(String(result.stderr || result.stdout || "").trim())
+}
+
+function runControlPlane(args: string[], cwd: string) {
+  return spawnSync("bun", [controlPlane, ...args], {
+    cwd,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      MENDCODE_SHELL_CWD: cwd,
+    },
+  })
 }
 
 describe("runtime registry marketplace", () => {
@@ -125,10 +138,43 @@ describe("runtime registry marketplace", () => {
     const result = await runtimeRegistryInstallPack("review-pack", "official", dir.path)
 
     expect(result.package.id).toBe("review-pack")
+    expect(result.writesConfig).toBe(false)
+    expect(result.projectionSynced).toBe(true)
     expect(result.copied).toContain(".mendcode/commands/review.md")
     expect(result.copied).not.toContain(".mendcode/commands/alpha.md")
     await expect(readFile(path.join(dir.path, ".mendcode", "packages", "installed", "review-pack", ".mendcode", "commands", "review.md"), "utf8")).resolves.toBe("review command\n")
     await expect(readFile(path.join(dir.path, ".mendcode", "packages", "installed", "review-pack", ".mendcode", "commands", "alpha.md"), "utf8")).rejects.toThrow()
+    await expect(readFile(path.join(dir.path, "mend-package.json"), "utf8")).rejects.toThrow()
+    await expect(readFile(path.join(dir.path, ".mendcode", "tui", "profile.json"), "utf8")).rejects.toThrow()
+  })
+
+  test("control-plane marketplace commands target the shell project root", async () => {
+    await using dir = await tmpdir()
+    await using source = await tmpdir()
+    await writeJson(path.join(source.path, ".mendcode", "marketplace", "index.json"), {
+      version: 0,
+      packs: [
+        {
+          id: "project-pack",
+          version: "1.0.0",
+          title: "Project Pack",
+          source: { type: "github", url: "packages/project-pack" },
+        },
+      ],
+    })
+    await writeText(path.join(source.path, "packages", "project-pack", ".mendcode", "commands", "project.md"), "project command\n")
+
+    const add = runControlPlane(["marketplace", "add-source", "fixture", "--type", "local", "--url", source.path], dir.path)
+    expect(add.status).toBe(0)
+
+    const install = runControlPlane(["marketplace", "install", "project-pack", "fixture"], dir.path)
+    expect(install.status).toBe(0)
+
+    await expect(readFile(path.join(dir.path, ".mendcode", "packages", "installed", "project-pack", ".mendcode", "commands", "project.md"), "utf8")).resolves.toBe("project command\n")
+
+    const status = runControlPlane(["marketplace", "status"], dir.path)
+    expect(status.status).toBe(0)
+    expect(JSON.parse(status.stdout).enabled.map((item: { id: string }) => item.id)).toContain("project-pack")
   })
 
   test("falls back to synthetic pack metadata when no marketplace index exists", async () => {

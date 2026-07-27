@@ -77,6 +77,34 @@ describe("Bus", () => {
         await Bus.publish(TestEvent.Ping, { value: 1 })
       })
     })
+
+    test("does not drop lifecycle events while a subscriber is temporarily slow", async () => {
+      await using tmp = await tmpdir()
+      const received: number[] = []
+      let release!: () => void
+      const blocked = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const expected = Array.from({ length: 256 }, (_, value) => value)
+
+      await withInstance(tmp.path, async () => {
+        let first = true
+        Bus.subscribe(TestEvent.Ping, async (evt) => {
+          if (first) {
+            first = false
+            await blocked
+          }
+          received.push(evt.properties.value)
+        })
+        await Bun.sleep(10)
+        await Promise.all(expected.map((value) => Bus.publish(TestEvent.Ping, { value })))
+        release()
+        const deadline = Date.now() + 2_000
+        while (received.length < expected.length && Date.now() < deadline) await Bun.sleep(10)
+      })
+
+      expect(received).toEqual(expected)
+    })
   })
 
   describe("unsubscribe", () => {

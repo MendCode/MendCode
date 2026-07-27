@@ -579,6 +579,50 @@ it.live("ask - resolves immediately when action is allow", () =>
   ),
 )
 
+it.live("ask - Smart mode forces an allowed bash request through pending approval", () =>
+  withDir({ git: true }, () =>
+    Effect.gen(function* () {
+      const fiber = yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["curl -I https://example.com"],
+        metadata: {},
+        always: [],
+        ruleset: [
+          { permission: "*", pattern: "*", action: "allow" },
+          Permission.sessionModeRule("smart"),
+        ],
+      }).pipe(Effect.forkScoped)
+
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(fiber)
+    }),
+  ),
+)
+
+it.live("ask - Smart mode preserves an explicit deny", () =>
+  withDir({ git: true }, () =>
+    Effect.gen(function* () {
+      const err = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_test"),
+          permission: "bash",
+          patterns: ["curl -I https://example.com"],
+          metadata: {},
+          always: [],
+          ruleset: [
+            { permission: "*", pattern: "*", action: "allow" },
+            { permission: "bash", pattern: "curl *", action: "deny" },
+            Permission.sessionModeRule("smart"),
+          ],
+        }),
+      )
+      expect(err).toBeInstanceOf(Permission.DeniedError)
+    }),
+  ),
+)
+
 it.live("ask - throws DeniedError when action is deny", () =>
   withDir({ git: true }, () =>
     Effect.gen(function* () {

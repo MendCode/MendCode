@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import {
   sessionContentWidth,
+  sessionDiffStatsLabel,
+  sessionLoopReceipt,
   sessionPendingInputSessionIDs,
+  sessionTaskContinuation,
   sessionTopMetricsWidth,
+  sessionTopbarLayout,
   sessionTopbarLeftLabel,
   sessionTopbarLeftWidth,
   sessionUsageBarDisplayWidth,
@@ -84,6 +88,14 @@ describe("session layout", () => {
     ).toBe(24)
   })
 
+  test("can show changed file count without changing the default diff label", () => {
+    const diff = { added: 2_600, removed: 710, files: 12 }
+
+    expect(sessionDiffStatsLabel(diff)).toBe("+2.6K -710")
+    expect(sessionDiffStatsLabel(diff, { showFiles: true })).toBe("12 files +2.6K -710")
+    expect(sessionDiffStatsLabel(diff, { showCounts: false, showFiles: true })).toBe("12 files")
+  })
+
   test("truncates the topbar path before it can overlap metrics", () => {
     const metricsWidth = 24
     const leftWidth = sessionTopbarLeftWidth({ contentWidth: 60, metricsWidth })
@@ -96,5 +108,120 @@ describe("session layout", () => {
     expect(leftWidth).toBe(35)
     expect(Bun.stringWidth(label)).toBeLessThanOrEqual(leftWidth)
     expect(label).toContain("…")
+  })
+
+  test("sizes the header title from terminal width instead of leftover spacing", () => {
+    expect(sessionTopbarLayout({ contentWidth: 240, metricsWidth: 24, titleVisible: true })).toMatchObject({
+      leftWidth: 91,
+      titleWidth: 81,
+      metricsWidth: 24,
+    })
+    expect(sessionTopbarLayout({ contentWidth: 240, metricsWidth: 24, navWidth: 80, titleVisible: true })).toMatchObject({
+      leftWidth: 91,
+      titleWidth: 81,
+      metricsWidth: 24,
+    })
+  })
+
+  test("caps nav and metrics so the proportional title keeps room on small terminals", () => {
+    const layout = sessionTopbarLayout({ contentWidth: 60, metricsWidth: 40, navWidth: 50, titleVisible: true })
+
+    expect(layout.metricsWidth).toBe(18)
+    expect(layout.titleWidth).toBe(20)
+    expect(layout.leftWidth).toBe(22)
+    expect(layout.navWidth).toBeLessThanOrEqual(Math.floor(layout.leftWidth * 0.6))
+    expect(layout.pathWidth + layout.navWidth + 1).toBe(layout.leftWidth)
+  })
+
+  test("gives the path all non-metric width when the title is hidden", () => {
+    expect(sessionTopbarLayout({ contentWidth: 80, metricsWidth: 16, navWidth: 20, titleVisible: false })).toMatchObject({
+      leftWidth: 64,
+      titleWidth: 0,
+      metricsWidth: 16,
+    })
+  })
+
+  test("labels running loop actions with in-progress copy", () => {
+    expect(sessionLoopReceipt({ action: "activate", toolStatus: "running" })).toEqual({ label: "starting", tone: "active" })
+    expect(sessionLoopReceipt({ action: "pause", toolStatus: "running" })).toEqual({ label: "pausing", tone: "warning" })
+    expect(sessionLoopReceipt({ action: "show", toolStatus: "running" })).toEqual({ label: "searching", tone: "info" })
+  })
+
+  test("labels completed loop tool actions with outcome copy", () => {
+    expect(sessionLoopReceipt({ action: "activate", toolStatus: "completed" })).toEqual({ label: "started", tone: "success" })
+    expect(sessionLoopReceipt({ action: "resume", toolStatus: "completed" })).toEqual({ label: "resumed", tone: "success" })
+    expect(sessionLoopReceipt({ action: "update_agent", toolStatus: "completed" })).toEqual({ label: "updated", tone: "success" })
+    expect(sessionLoopReceipt({ action: "stop", toolStatus: "completed" })).toEqual({ label: "stopped", tone: "danger" })
+    expect(sessionLoopReceipt({ action: "list", toolStatus: "completed" })).toEqual({ label: "searched", tone: "muted" })
+  })
+
+  test("falls back to workflow state when no action outcome is available", () => {
+    expect(sessionLoopReceipt({ workflowState: "sleeping", workflowPhase: "waiting" })).toEqual({ label: "waiting", tone: "warning" })
+    expect(sessionLoopReceipt({ workflowState: "draft", workflowPhase: "draft" })).toEqual({ label: "draft", tone: "info" })
+    expect(sessionLoopReceipt({ workflowState: "active", workflowPhase: "ready" })).toEqual({ label: "ready", tone: "info" })
+    expect(sessionLoopReceipt({ workflowState: "working", workflowPhase: "monitor" })).toEqual({ label: "running", tone: "active" })
+    expect(sessionLoopReceipt({ workflowState: "blocked", workflowPhase: "budget_exhausted" })).toEqual({ label: "budget reached", tone: "warning" })
+    expect(sessionLoopReceipt({ workflowState: "needs_input" })).toEqual({ label: "needs input", tone: "warning" })
+    expect(sessionLoopReceipt({ workflowState: "failed" })).toEqual({ label: "failed", tone: "danger" })
+    expect(sessionLoopReceipt({ workflowState: "completed" })).toEqual({ label: "complete", tone: "success" })
+  })
+
+  test("uses workflow state for show/list and problem states", () => {
+    expect(sessionLoopReceipt({ action: "show", toolStatus: "completed", workflowState: "sleeping", workflowPhase: "waiting" })).toEqual({ label: "waiting", tone: "warning" })
+    expect(sessionLoopReceipt({ action: "list", toolStatus: "completed", workflowState: "completed" })).toEqual({ label: "complete", tone: "success" })
+    expect(sessionLoopReceipt({ action: "activate", toolStatus: "completed", workflowState: "failed" })).toEqual({ label: "failed", tone: "danger" })
+  })
+
+  test("renders only the latest call when a task resumes the same subagent", () => {
+    const entries = [
+      { callID: "call-1", sessionID: "ses_child", status: "completed" },
+      { callID: "call-2", sessionID: "ses_child", taskID: "ses_child", status: "running" },
+    ]
+
+    expect(sessionTaskContinuation({ entries, callID: "call-1", sessionID: "ses_child" })).toEqual({
+      duplicate: true,
+      activeResume: false,
+      resumed: false,
+      resumeCount: 1,
+    })
+    expect(sessionTaskContinuation({ entries, callID: "call-2", sessionID: "ses_child", taskID: "ses_child" })).toEqual({
+      duplicate: false,
+      activeResume: true,
+      resumed: true,
+      resumeCount: 1,
+    })
+  })
+
+  test("uses task_id to detect resumed task calls before metadata arrives", () => {
+    const entries = [
+      { callID: "call-1", sessionID: "ses_child", status: "completed" },
+      { callID: "call-2", taskID: "ses_child", status: "running" },
+    ]
+
+    expect(sessionTaskContinuation({ entries, callID: "call-2", taskID: "ses_child" })).toMatchObject({
+      duplicate: false,
+      activeResume: true,
+      resumed: true,
+    })
+  })
+
+  test("does not collapse unrelated task calls", () => {
+    const entries = [
+      { callID: "call-1", sessionID: "ses_child_1", status: "completed" },
+      { callID: "call-2", sessionID: "ses_child_2", status: "running" },
+    ]
+
+    expect(sessionTaskContinuation({ entries, callID: "call-1", sessionID: "ses_child_1" })).toEqual({
+      duplicate: false,
+      activeResume: false,
+      resumed: false,
+      resumeCount: 0,
+    })
+    expect(sessionTaskContinuation({ entries, callID: "call-2", sessionID: "ses_child_2" })).toEqual({
+      duplicate: false,
+      activeResume: false,
+      resumed: false,
+      resumeCount: 0,
+    })
   })
 })

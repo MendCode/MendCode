@@ -23,6 +23,9 @@ export const MessageGroup = HttpApiGroup.make("v2.message")
           order: Schema.optional(Schema.Union([Schema.Literal("asc"), Schema.Literal("desc")])).annotate({
             description: "Message order for the first page. Use desc for newest first or asc for oldest first.",
           }),
+          view: Schema.optional(Schema.Union([Schema.Literal("full"), Schema.Literal("tui")])).annotate({
+            description: "Use tui to return bounded message previews for terminal rendering.",
+          }),
           cursor: Schema.optional(Schema.Never),
         }),
         Schema.Struct({
@@ -39,6 +42,9 @@ export const MessageGroup = HttpApiGroup.make("v2.message")
           cursor: Schema.String.annotate({
             description:
               "Opaque pagination cursor returned as cursor.previous or cursor.next in the previous response. Do not combine with order.",
+          }),
+          view: Schema.optional(Schema.Union([Schema.Literal("full"), Schema.Literal("tui")])).annotate({
+            description: "Use tui to return bounded message previews for terminal rendering.",
           }),
           order: Schema.optional(Schema.Never),
         }),

@@ -7,6 +7,7 @@ import { Ripgrep } from "../file/ripgrep"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import DESCRIPTION from "./grep.txt"
 import * as Tool from "./tool"
+import * as Truncate from "./truncate"
 
 const MAX_LINE_LENGTH = 2000
 
@@ -25,6 +26,7 @@ export const GrepTool = Tool.define(
   Effect.gen(function* () {
     const fs = yield* AppFileSystem.Service
     const rg = yield* Ripgrep.Service
+    const truncate = yield* Truncate.Service
 
     return {
       description: DESCRIPTION,
@@ -137,13 +139,15 @@ export const GrepTool = Tool.define(
             output.push("(Some paths were inaccessible and skipped)")
           }
 
+          const bounded = yield* truncate.output(output.join("\n"))
           return {
             title: params.pattern,
             metadata: {
               matches: total,
-              truncated,
+              truncated: truncated || bounded.truncated,
+              ...(bounded.truncated ? { outputPath: bounded.outputPath } : {}),
             },
-            output: output.join("\n"),
+            output: bounded.content,
           }
         }).pipe(Effect.orDie),
     }

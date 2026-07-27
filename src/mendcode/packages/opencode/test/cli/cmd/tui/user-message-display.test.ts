@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
   BLANK_USER_MESSAGE_DISPLAY_TEXT,
+  expandedUserMessageOffset,
+  expandedUserMessagePageOffset,
   expandPastedContentPlaceholders,
   isPastedContentPart,
   userMessageDisplayText,
@@ -71,5 +73,15 @@ describe("user message display text", () => {
     ])
 
     expect(expanded).toBe("visible text\n\n[Pasted Content 20 chars]\nmissing source paste")
+  })
+
+  test("clamps expanded message offsets for header and scrollbar controls", () => {
+    expect(expandedUserMessageOffset({ offset: -10, maxOffset: 100 })).toBe(0)
+    expect(expandedUserMessageOffset({ offset: 10, maxOffset: -1 })).toBe(0)
+    expect(expandedUserMessageOffset({ offset: 40, maxOffset: 100 })).toBe(40)
+    expect(expandedUserMessageOffset({ offset: 120, maxOffset: 100 })).toBe(100)
+    expect(expandedUserMessagePageOffset({ currentOffset: 0, viewportRows: 15, maxOffset: 505, direction: "down" })).toBe(15)
+    expect(expandedUserMessagePageOffset({ currentOffset: 510, viewportRows: 15, maxOffset: 505, direction: "down" })).toBe(505)
+    expect(expandedUserMessagePageOffset({ currentOffset: 5, viewportRows: 15, maxOffset: 505, direction: "up" })).toBe(0)
   })
 })

@@ -108,4 +108,26 @@ describe("tool.grep", () => {
       expect(result.output).toContain("Line 2: line2")
     }),
   )
+
+  it.instance("caps large match output before it enters the prompt", () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const file = path.join(test.directory, "large.txt")
+      const content = Array.from({ length: 100 }, (_, index) => `needle ${index} ${"x".repeat(2100)}`).join("\n")
+      yield* Effect.promise(() => Bun.write(file, content))
+      const info = yield* GrepTool
+      const grep = yield* info.init()
+      const result = yield* grep.execute(
+        {
+          pattern: "needle",
+          path: file,
+        },
+        ctx,
+      )
+      expect(result.metadata.matches).toBe(100)
+      expect(result.metadata.truncated).toBe(true)
+      expect(Buffer.byteLength(result.output, "utf8")).toBeLessThan(55_000)
+      expect(result.output).toContain("truncated")
+    }),
+  )
 })

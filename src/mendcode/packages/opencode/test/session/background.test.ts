@@ -73,7 +73,7 @@ describe("background sessions", () => {
     })
   })
 
-  test("writer lease allows one attached writer and many read-only followers", async () => {
+  test("writer presence is non-exclusive so multiple terminals stay writable", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
       directory: tmp.path,
@@ -87,18 +87,16 @@ describe("background sessions", () => {
         expect(first.info.writer?.clientID).toBe("terminal-a")
 
         const second = await svc.acquireWriter({ sessionID: session.id, clientID: "terminal-b", ttlMs: 60_000 })
-        expect(second.acquired).toBe(false)
-        expect(second.info?.writer?.clientID).toBe("terminal-a")
+        expect(second.acquired).toBe(true)
+        if (!second.acquired) throw new Error("expected second terminal acquisition")
+        expect(second.info.writer?.clientID).toBe("terminal-b")
 
-        expect(await svc.releaseWriter({ sessionID: session.id, clientID: "terminal-b" })).toBeUndefined()
+        expect(await svc.releaseWriter({ sessionID: session.id, clientID: "terminal-a" })).toBeUndefined()
+        const current = await svc.get(session.id)
+        expect(current?.writer?.clientID).toBe("terminal-b")
 
-        const released = await svc.releaseWriter({ sessionID: session.id, clientID: "terminal-a" })
+        const released = await svc.releaseWriter({ sessionID: session.id, clientID: "terminal-b" })
         expect(released?.writer).toBeUndefined()
-
-        const third = await svc.acquireWriter({ sessionID: session.id, clientID: "terminal-b", ttlMs: 60_000 })
-        expect(third.acquired).toBe(true)
-        if (!third.acquired) throw new Error("expected second terminal after release")
-        expect(third.info.writer?.clientID).toBe("terminal-b")
       },
     })
   })

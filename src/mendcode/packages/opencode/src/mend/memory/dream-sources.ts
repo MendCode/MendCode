@@ -22,7 +22,9 @@ export type DreamEvidenceRef = {
   redacted: boolean
 }
 
-const excludedPathPattern = /(^|\/)(\.git|node_modules|dist|build|coverage|\.next|\.cache)(\/|$)|(^|\/)\.env[^/]*$|(^|\/)[^/]*\.env$|\b(secret|token|credential|password)\b/i
+const excludedPathPattern = /(^|\/)(\.git|\.mendcode|node_modules|dist|build|coverage|\.next|\.cache)(\/|$)|(^|\/)\.env[^/]*$|(^|\/)[^/]*\.env$|\b(secret|token|credential|password)\b/i
+const DEFAULT_MAX_FILES = 4
+const DEFAULT_MAX_BYTES = 16_000
 
 export function redactDreamExcerpt(text: string) {
   const redacted = redactMemoryText(text)
@@ -63,8 +65,8 @@ async function walkAllowedFiles(root: string, limit: number, maxBytes: number) {
 export async function collectDreamFileEvidence(permissions: DreamSourcePermissions = {}) {
   if (!permissions.files) return { evidence: [] as DreamEvidenceRef[], skipped: ["filesystem source disabled"] }
   const roots = (permissions.roots ?? []).map((root) => path.resolve(root)).filter((root) => existsSync(root))
-  const maxFiles = Math.max(0, Math.min(permissions.maxFiles ?? 8, 50))
-  const maxBytes = Math.max(512, Math.min(permissions.maxBytes ?? 32_000, 256_000))
+  const maxFiles = Math.max(0, Math.min(permissions.maxFiles ?? DEFAULT_MAX_FILES, 50))
+  const maxBytes = Math.max(512, Math.min(permissions.maxBytes ?? DEFAULT_MAX_BYTES, 256_000))
   const evidence: DreamEvidenceRef[] = []
   for (const root of roots) {
     for (const file of await walkAllowedFiles(root, maxFiles - evidence.length, maxBytes)) {
@@ -94,5 +96,5 @@ export function allowedDreamGitCommands(permissions: DreamSourcePermissions = {}
     "git diff --stat",
     "git diff --name-only",
   ]
-  return permissions.allowRawDiff ? [...commands, "git diff --stat"] : commands
+  return permissions.allowRawDiff ? [...commands, "git diff --no-ext-diff --unified=0"] : commands
 }

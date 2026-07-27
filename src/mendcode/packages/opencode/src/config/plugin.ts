@@ -30,7 +30,7 @@ export type Origin = {
 export async function load(dir: string) {
   const plugins: Spec[] = []
 
-  for (const item of await Glob.scan("{plugin,plugins}/*.{ts,js}", {
+  for (const item of await Glob.scan("{plugin,plugins,page,pages}/**/*.{ts,tsx,js,jsx}", {
     cwd: dir,
     absolute: true,
     dot: true,

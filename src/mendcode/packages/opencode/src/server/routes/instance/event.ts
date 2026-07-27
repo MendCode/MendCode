@@ -9,6 +9,8 @@ import { AsyncQueue } from "@/util/queue"
 import "@/server/event"
 
 const log = Log.create({ service: "server" })
+const EVENT_QUEUE_MAX_ITEMS = 512
+const EVENT_QUEUE_MAX_BYTES = 8 * 1024 * 1024
 
 export const EventRoutes = () =>
   new Hono().get(
@@ -38,7 +40,12 @@ export const EventRoutes = () =>
       c.header("X-Accel-Buffering", "no")
       c.header("X-Content-Type-Options", "nosniff")
       return streamSSE(c, async (stream) => {
-        const q = new AsyncQueue<string | null>()
+        const q = new AsyncQueue<string | null>({
+          maxItems: EVENT_QUEUE_MAX_ITEMS,
+          maxBytes: EVENT_QUEUE_MAX_BYTES,
+          sizeOf: (value) => (typeof value === "string" ? Buffer.byteLength(value) : 0),
+        })
+        let unsub: () => void = () => undefined
         let done = false
 
         q.push(
@@ -51,13 +58,16 @@ export const EventRoutes = () =>
 
         // Send heartbeat every 10s to prevent stalled proxy streams.
         const heartbeat = setInterval(() => {
-          q.push(
-            JSON.stringify({
-              id: Bus.createID(),
-              type: "server.heartbeat",
-              properties: {},
-            }),
+          if (
+            !q.push(
+              JSON.stringify({
+                id: Bus.createID(),
+                type: "server.heartbeat",
+                properties: {},
+              }),
+            )
           )
+            stop()
         }, 10_000)
 
         const stop = () => {
@@ -65,12 +75,12 @@ export const EventRoutes = () =>
           done = true
           clearInterval(heartbeat)
           unsub()
-          q.push(null)
+          q.close(null)
           log.info("event disconnected")
         }
 
-        const unsub = Bus.subscribeAll((event) => {
-          q.push(JSON.stringify(event))
+        unsub = Bus.subscribeAll((event) => {
+          if (!q.push(JSON.stringify(event))) stop()
           if (event.type === Bus.InstanceDisposed.type) {
             stop()
           }

@@ -206,6 +206,7 @@ export const layer = Layer.effect(
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
     const auth = yield* McpAuth.Service
     const bus = yield* Bus.Service
+    const lazyStart = process.env.MENDCODE_MCP_LAZY_START === "1"
 
     type Transport = StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport
 
@@ -485,6 +486,7 @@ export const layer = Layer.effect(
                 s.status[key] = { status: "disabled" }
                 return
               }
+              if (lazyStart) return
 
               const result = yield* create(key, mcp).pipe(Effect.catch(() => Effect.void))
               if (!result) return
@@ -582,6 +584,21 @@ export const layer = Layer.effect(
       return yield* storeClient(s, name, result.mcpClient, result.defs!, mcp.timeout)
     })
 
+    const ensureConnected = Effect.fn("MCP.ensureConnected")(function* (names?: ReadonlySet<string>) {
+      if (!lazyStart) return
+
+      const s = yield* InstanceState.get(state)
+      const config = yield* effectiveConfig()
+      const entries = Object.entries(config).flatMap(([name, mcp]) => {
+        if (names && !names.has(name)) return []
+        if (!isMcpConfigured(mcp) || mcp.enabled === false) return []
+        if (s.clients[name] || s.status[name]) return []
+        return [[name, mcp] as const]
+      })
+
+      yield* Effect.forEach(entries, ([name, mcp]) => createAndStore(name, mcp), { concurrency: "unbounded" })
+    })
+
     const add = Effect.fn("MCP.add")(function* (name: string, mcp: ConfigMCP.Info) {
       yield* createAndStore(name, mcp)
       const s = yield* InstanceState.get(state)
@@ -606,6 +623,8 @@ export const layer = Layer.effect(
 
     const tools = Effect.fn("MCP.tools")(function* () {
       const result: Record<string, Tool> = {}
+      yield* InstanceState.get(state)
+      yield* ensureConnected()
       const s = yield* InstanceState.get(state)
 
       const cfg = yield* cfgSvc.get()
@@ -662,6 +681,7 @@ export const layer = Layer.effect(
     }
 
     const prompts = Effect.fn("MCP.prompts")(function* () {
+      yield* ensureConnected()
       const s = yield* InstanceState.get(state)
       const cfg = yield* cfgSvc.get()
       return yield* collectFromConnected<PromptInfo>(
@@ -674,6 +694,7 @@ export const layer = Layer.effect(
     })
 
     const resources = Effect.fn("MCP.resources")(function* () {
+      yield* ensureConnected()
       const s = yield* InstanceState.get(state)
       const cfg = yield* cfgSvc.get()
       return yield* collectFromConnected<ResourceInfo>(
@@ -691,6 +712,7 @@ export const layer = Layer.effect(
       label: string,
       meta?: Record<string, unknown>,
     ) {
+      yield* ensureConnected(new Set([clientName]))
       const s = yield* InstanceState.get(state)
       const client = s.clients[clientName]
       if (!client) {

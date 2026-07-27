@@ -3,17 +3,20 @@ import { spawnSync } from "child_process"
 import { existsSync, readFileSync } from "fs"
 import path from "path"
 import { generatedConfigNeedsSync, initProject, syncProject } from "../config/project"
-import { mendPaths } from "../config/paths"
+import { mendPaths, resolveMendProjectRoot } from "../config/paths"
 import { donorIdentityGuardStatus, runtimeAdapterCommand } from "../runtime/system"
 import { worktreeStatus } from "../config/worktree"
 import { tsmStatus } from "../config/tsm"
 
 const primaryCommands = [
   "run",
+  "session",
   "chat",
   "status",
   "doctor",
   "setup",
+  "install",
+  "marketplace",
   "packages",
   "loops",
   "mflow",
@@ -52,7 +55,7 @@ const deprecatedAliases = ["init", "sync", "package", "prompts"]
 const deprecationMessages: Record<string, string> = {
   init: "Deprecated alias: `mendcode init` is kept for compatibility. Use `mendcode setup status` for setup checks; project init remains internal.",
   sync: "Deprecated alias: `mendcode sync` is kept for compatibility. Use `mendcode setup status` or `mendcode status` for normal workflows.",
-  package: "Deprecated alias: `mendcode package` is kept for compatibility. Use `mendcode packages`.",
+  package: "Deprecated alias: `mendcode package` is kept for compatibility. Use `mendcode marketplace`.",
   prompts: "Deprecated alias: `mendcode prompts` is kept for compatibility. Prompt internals are not part of the public workflow.",
 }
 const internalCommandWarning =
@@ -82,9 +85,11 @@ const controlPlaneRoutes: Record<string, (args: string[]) => string[]> = {
   permissions: (args) => ["permissions", args[0] || "status", ...args.slice(1)],
   auth: (args) => ["auth", args[0] || "status", ...args.slice(1)],
   setup: (args) => ["setup", args[0] || "status"],
-  packages: (args) => ["packages", args[0] || "status", ...args.slice(1)],
+  install: (args) => ["marketplace", "install", ...args],
+  marketplace: (args) => ["marketplace", args[0] || "status", ...args.slice(1)],
+  packages: (args) => ["marketplace", args[0] || "status", ...args.slice(1)],
   loops: (args) => ["loops", args[0] || "status", ...args.slice(1)],
-  package: (args) => ["packages", args[0] || "status", ...args.slice(1)],
+  package: (args) => ["marketplace", args[0] || "status", ...args.slice(1)],
   ai: (args) => ["ai", ...args],
   runtime: (args) => {
     const sub = args[0] || "status"
@@ -143,6 +148,8 @@ function usage(exitCode = 0) {
 Usage:
   mendcode                         open MendCode in the current project
   mendcode run [message..]         open MendCode with message ready to send
+  mendcode -s <session_id>         reopen an existing session
+  mendcode session <operation>     automate sessions with human or JSON output
   mendcode chat [message..]        run a control-plane chat turn
   mendcode --worktree [target]     open MendCode in a git worktree by branch/path/id
   mendcode --tsm [target|--all]    open TSM workspace with MendCode split
@@ -152,20 +159,27 @@ Workflows:
   mendcode doctor                  run local diagnostics
   mendcode setup status|plan|doctor
                                 inspect setup readiness and local diagnostics
-  mendcode packages status|list    inspect installed/active MendCode packages
-  mendcode packages create --id <id> --title <name> [--include skills,modes,plugins]
+  mendcode marketplace status|list
+                                inspect installed/active marketplace packs
+  mendcode marketplace create --id <id> --title <name> [--include skills,modes,tools,pages,widgets]
                                 package selected local harness config
-  mendcode packages install <pack-id> [source-id]
-  mendcode packages install-source <source-id>
-  mendcode packages enable|disable <id>
-                                select or deselect a runtime package
-  mendcode loops status|list     inspect local Loop Workflows
-  mendcode loops examples        list built-in Loop templates
-  mendcode loops show|monitor <id>
+  mendcode marketplace install <pack-id> [source-id]
+  mendcode install <pack-id> [source-id]
+                                install a marketplace pack from the official or named source
+  mendcode marketplace install-source <source-id>
+  mendcode marketplace enable|disable <id>
+                                select or deselect a marketplace pack
+   mendcode loops status|list     inspect local Loop Workflows
+   mendcode loops examples        list built-in Loop templates
+   mendcode loops draft --name <name> --objective <text>
+                                 create a draft; use --daily-at HH:mm --timezone Area/City for local daily runs
+   mendcode loops show|monitor <id>
   mendcode loops tick [id]        preview one due loop iteration
                                 inspect or monitor one Loop Workflow journal
   mendcode loops service status|start|stop
                                 manage the per-project background Loop service
+  mendcode memory dream service status|start|stop
+                                manage the global background Dream service
   mendcode mflow status            inspect mflow activation, daemon, and locks
   mendcode mflow setup             guided mflow setup for this repo
   mendcode mflow activate --room <room> --accept-public-relay-limits
@@ -190,18 +204,26 @@ function advancedUsage(exitCode = 0) {
 
 Primary public surface:
   mendcode
-  mendcode run [message..]
-  mendcode chat [message..]
+   mendcode run [message..]
+   mendcode -s <session_id>
+   mendcode session <operation>
+   mendcode chat [message..]
+
   mendcode --worktree [branch|path|id]
   mendcode --tsm [branch|path|id|--all]
   mendcode status|doctor
   mendcode setup status|plan|doctor
-  mendcode packages status|list|create|install|install-source|enable|disable|remove
+  mendcode marketplace status|list|create|install|install-source|enable|disable|remove
+  mendcode packages status|list|create|install|install-source|enable|disable|remove  compatibility alias
   mendcode loops status|list|examples|show|tail|monitor|tick|daemon|service|draft|activate|run|pause|resume|stop
   mendcode loops activate <id> [--no-service]
   mendcode loops tick <id> --execute [--report-only]
   mendcode loops service install|start|stop|restart|status|logs|uninstall [--service-dir <path>] [--log-dir <path>]
-  mendcode loops daemon --quiet       suppress idle heartbeat lines for background services
+  mendcode loops daemon --once --quiet  run one due-loop pass for scheduled background services
+  mendcode memory dream run|consolidate|tick|daemon|service
+  mendcode memory dream run --preview|--auto  run a manual consolidation pass
+  mendcode memory dream daemon --once   run one scheduled Dream pass and exit
+  mendcode memory dream service install|start|stop|restart|status|logs|uninstall [--service-dir <path>] [--log-dir <path>]
   mendcode mflow status|setup|activate|deactivate|remove
   mendcode worktree status|plan|create|open|adopt|remove|reset|doctor
   mendcode tsm status|plan|setup|activate|deactivate|remove|doctor
@@ -221,7 +243,7 @@ Internal/debug-only surface, intentionally hidden from normal help:
 Deprecated legacy aliases kept for compatibility:
   init -> project init
   sync -> project sync
-  package -> packages
+  package -> marketplace
   prompts -> prompt
 `
   ;(exitCode ? console.error : console.log)(out)
@@ -252,8 +274,17 @@ function suggestCommand(value: string, candidates = [...primaryCommands, ...adva
   return match && match.score <= Math.max(2, Math.floor(value.length / 3)) ? match.candidate : undefined
 }
 
+function looksLikeSessionID(value: string) {
+  return /^ses_[A-Za-z0-9]+$/.test(value)
+}
+
+export function runtimeArgsForSessionShortcut(sessionID: string, cwd = shellCwd()) {
+  if (!looksLikeSessionID(sessionID)) throw new Error(`Invalid MendCode session id: ${sessionID}`)
+  return [cwd, "-s", sessionID]
+}
+
 function shellCwd() {
-  return path.resolve(process.env.MENDCODE_SHELL_CWD || process.cwd())
+  return resolveMendProjectRoot()
 }
 
 function controlPlaneEnv(root: string) {
@@ -269,14 +300,18 @@ function controlPlaneEnv(root: string) {
   }
 }
 
-function runtimeEnv(root: string) {
+export function runtimeEnv(root: string, baseEnv: Record<string, string | undefined> = process.env) {
   const paths = mendPaths(root)
+  const env = { ...baseEnv }
+  if (env.MENDCODE_CONFIG_DIR === paths.mendDir) delete env.MENDCODE_CONFIG_DIR
+  if (env.OPENCODE_CONFIG_DIR === paths.mendDir) delete env.OPENCODE_CONFIG_DIR
   return {
-    ...process.env,
+    ...env,
     MENDCODE: "1",
     MENDCODE_VERSION: mendVersion(root),
     MENDCODE_ROOT: root,
-    MENDCODE_CONFIG_DIR: paths.mendDir,
+    MENDCODE_CONFIG_DIR: env.MENDCODE_CONFIG_DIR,
+    OPENCODE_CONFIG_DIR: env.OPENCODE_CONFIG_DIR,
     OPENCODE_CONFIG: paths.generatedOpencodeConfig,
   }
 }
@@ -284,7 +319,11 @@ function runtimeEnv(root: string) {
 function runControlPlane(args: string[], root = mendPaths().root) {
   const paths = mendPaths(root)
   const bunBin = process.env.MENDCODE_BUN_BIN || "bun"
-  const result = spawnSync(bunBin, [paths.runtimeControlPlane, ...args], {
+  const backgroundDaemon =
+    (args[0] === "loops" && args[1] === "daemon") ||
+    (args[0] === "memory" && args[1] === "dream" && args[2] === "daemon")
+  const entrypoint = backgroundDaemon ? paths.runtimeBackgroundDaemon : paths.runtimeControlPlane
+  const result = spawnSync(bunBin, [entrypoint, ...args], {
     cwd: paths.ownedRuntimePackage,
     env: controlPlaneEnv(root),
     stdio: "inherit",
@@ -305,6 +344,17 @@ function enforceDonorIdentityGuard(args: string[]) {
   if (!status.active) {
     console.error(`WARN: internal donor override enabled via ${status.overrideEnv}; do not use this as public MendCode UX.`)
     return
+  }
+  const sessionFlagIndex = args.findIndex((arg) => arg === "--session" || arg === "-s")
+  const legacySessionID = sessionFlagIndex >= 0 ? args[sessionFlagIndex + 1] : undefined
+  if (legacySessionID && looksLikeSessionID(legacySessionID)) {
+    throw new Error([
+      `Blocked legacy session restore command for: ${legacySessionID}`,
+      "MendCode owns session restore through its public CLI; the donor runtime is internal compatibility only.",
+      `Use: mendcode -s ${legacySessionID}`,
+      "If this came from Herdr/tmux restore, replace the saved command with the MendCode command above.",
+      `Temporary internal override: ${status.overrideEnv}=1 mendcode opencode -- ${args.join(" ") || "--help"}`,
+    ].join("\n"))
   }
   const token = args.find((arg) => arg && arg !== "--" && !arg.startsWith("-")) || "help"
   throw new Error([
@@ -450,6 +500,30 @@ async function runTsmShortcut(args: string[]) {
 }
 
 function runTuiWithMessage(args: string[]) {
+  const headlessFlags = new Set([
+    "--format",
+    "--json",
+    "--command",
+    "--file",
+    "-f",
+    "--title",
+    "--attach",
+    "--password",
+    "--username",
+    "--port",
+    "--share",
+    "--variant",
+    "--thinking",
+    "--dangerously-skip-permissions",
+  ])
+  if (args.some((arg) => headlessFlags.has(arg.split("=", 1)[0]))) {
+    const normalized = args.flatMap((arg) => (arg === "--json" ? ["--format", "json"] : [arg]))
+    if (!normalized.includes("--dir") && !normalized.some((arg) => arg === "--attach" || arg.startsWith("--attach="))) {
+      normalized.unshift("--dir", shellCwd())
+    }
+    return runRuntime(["run", ...normalized])
+  }
+
   const passthrough: string[] = []
   const message: string[] = []
   for (let i = 0; i < args.length; i++) {
@@ -463,24 +537,40 @@ function runTuiWithMessage(args: string[]) {
     else message.push(arg)
   }
   if (!message.length) throw new Error("Usage: mendcode run [message..]")
-  return runRuntime([process.cwd(), "--initial-message", message.join(" "), ...passthrough])
+  return runRuntime([shellCwd(), "--initial-message", message.join(" "), ...passthrough])
+}
+
+function runSession(args: string[]) {
+  const forwarded = args.some((arg) => arg === "--dir" || arg.startsWith("--dir=")) ? args : ["--dir", shellCwd(), ...args]
+  return runRuntime(["session", ...forwarded])
+}
+
+function runSessionShortcut(args: string[]) {
+  if (args.length !== 1) throw new Error("Usage: mendcode -s <session_id>")
+  return runRuntime(runtimeArgsForSessionShortcut(args[0]!))
 }
 
 export async function main(argv = process.argv.slice(2)) {
   const [cmd, ...args] = argv
   try {
-    if (!cmd) return runRuntime([process.cwd()])
+    if (!cmd) return runRuntime([shellCwd()])
     if (cmd === "help" && args[0] === "advanced") advancedUsage(0)
     if (cmd === "help" || cmd === "-h" || cmd === "--help") usage(0)
+    if (cmd.startsWith("ses_")) {
+      if (!looksLikeSessionID(cmd)) throw new Error(`Invalid MendCode session id: ${cmd}`)
+      throw new Error(`Usage: mendcode -s ${cmd}\nSession shortcuts require the -s argument.`)
+    }
     if (cmd === "--worktree") return await runWorktreeShortcut(args)
     if (cmd === "--tsm") return await runTsmShortcut(args)
-    if (cmd.startsWith("-")) return runRuntime([process.cwd(), cmd, ...args])
+    if (cmd === "-s" || cmd === "--session") return runSessionShortcut(args)
+    if (cmd.startsWith("-")) return runRuntime([shellCwd(), cmd, ...args])
     if (cmd === "opencode") {
       const donorArgs = args[0] === "--" ? args.slice(1) : args
       enforceDonorIdentityGuard(donorArgs)
       return runRuntime(donorArgs)
     }
     if (cmd === "run") return runTuiWithMessage(args)
+    if (cmd === "session") return runSession(args)
     if (cmd === "--") {
       enforceDonorIdentityGuard(args)
       return runRuntime(args)

@@ -42,6 +42,16 @@ export const Model = Schema.Struct({
       output: Schema.Finite,
     }),
   ),
+  compaction: Schema.optional(
+    Schema.Struct({
+      token_limit: Schema.optional(PositiveInt).annotate({
+        description: "Absolute auto-compaction trigger in tokens for this provider model.",
+      }),
+      threshold: Schema.optional(Schema.Finite).annotate({
+        description: "Auto-compaction threshold percent for this provider model.",
+      }),
+    }),
+  ),
   modalities: Schema.optional(
     Schema.Struct({
       input: Schema.mutable(Schema.Array(Schema.Literals(["text", "audio", "image", "video", "pdf"]))),
@@ -108,6 +118,16 @@ export const Info = Schema.Struct({
       }),
       [Schema.Record(Schema.String, Schema.Any)],
     ),
+  ),
+  compaction: Schema.optional(
+    Schema.Struct({
+      token_limit: Schema.optional(PositiveInt).annotate({
+        description: "Absolute auto-compaction trigger in tokens for all models in this provider.",
+      }),
+      threshold: Schema.optional(Schema.Finite).annotate({
+        description: "Auto-compaction threshold percent for all models in this provider.",
+      }),
+    }),
   ),
   models: Schema.optional(Schema.Record(Schema.String, Model)),
 })

@@ -24,6 +24,13 @@ const Cost = Schema.Struct({
   ),
 })
 
+const ReasoningOption = Schema.Struct({
+  type: Schema.String,
+  values: Schema.optional(Schema.Array(Schema.String)),
+  min: Schema.optional(Schema.Finite),
+  max: Schema.optional(Schema.Finite),
+})
+
 export const Model = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
@@ -31,6 +38,7 @@ export const Model = Schema.Struct({
   release_date: Schema.String,
   attachment: Schema.Boolean,
   reasoning: Schema.Boolean,
+  reasoning_options: Schema.optional(Schema.Array(ReasoningOption)),
   temperature: Schema.Boolean,
   tool_call: Schema.Boolean,
   interleaved: Schema.optional(

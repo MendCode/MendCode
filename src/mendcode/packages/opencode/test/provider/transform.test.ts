@@ -314,6 +314,7 @@ describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
     expect(result.reasoningEffort).toBe("medium")
     expect(result.reasoningSummary).toBe("auto")
+    expect(result.include).toEqual(["reasoning.encrypted_content"])
   })
 
   test("gpt-5-pro requests reasoning summaries by default", () => {
@@ -321,6 +322,39 @@ describe("ProviderTransform.options - gpt-5 textVerbosity", () => {
     const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
     expect(result.reasoningEffort).toBe("medium")
     expect(result.reasoningSummary).toBe("auto")
+  })
+
+  test("OpenRouter gpt-5.6 uses OpenRouter reasoning shape", () => {
+    const model = {
+      ...createGpt5Model("openai/gpt-5.6"),
+      id: "openrouter/openai/gpt-5.6",
+      providerID: "openrouter",
+      api: {
+        id: "openai/gpt-5.6",
+        url: "https://openrouter.ai/api/v1",
+        npm: "@openrouter/ai-sdk-provider",
+      },
+    }
+    const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
+    expect(result.reasoning).toEqual({ effort: "medium" })
+    expect(result.reasoningEffort).toBeUndefined()
+    expect(result.prompt_cache_key).toBe(sessionID)
+  })
+
+  test("OpenAI-compatible gpt-5.6 keeps OAI effort but skips reasoningSummary", () => {
+    const model = {
+      ...createGpt5Model("gpt-5.6"),
+      providerID: "custom-oai-compatible",
+      api: {
+        id: "gpt-5.6",
+        url: "https://compat.example/v1",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    }
+    const result = ProviderTransform.options({ model, sessionID, providerOptions: {} })
+    expect(result.reasoningEffort).toBe("medium")
+    expect(result.reasoningSummary).toBeUndefined()
+    expect(result.textVerbosity).toBe("low")
   })
 })
 
@@ -2465,6 +2499,40 @@ describe("ProviderTransform.variants", () => {
     })
   })
 
+  test("GLM-5.2 picker follows models.dev declared reasoning efforts", () => {
+    const model = createMockModel({
+      id: "glm-5.2",
+      providerID: "opencode-go",
+      api: {
+        id: "glm-5.2",
+        url: "https://mendcode.ai/zen/go/v1",
+        npm: "@ai-sdk/openai-compatible",
+      },
+    })
+    const result = ProviderTransform.variants(model, [
+      { type: "effort", values: ["none", "low", "medium", "high", "xhigh", "max"] },
+    ] as const)
+    expect(Object.keys(result)).toEqual(["none", "low", "medium", "high", "xhigh", "max"])
+    expect(result.max).toEqual({ reasoningEffort: "max" })
+  })
+
+  test("OpenRouter GLM-5.2 picker maps declared efforts to OpenRouter reasoning", () => {
+    const model = createMockModel({
+      id: "openrouter/z-ai/glm-5.2",
+      providerID: "openrouter",
+      api: {
+        id: "z-ai/glm-5.2",
+        url: "https://openrouter.ai/api/v1",
+        npm: "@openrouter/ai-sdk-provider",
+      },
+    })
+    const result = ProviderTransform.variants(model, [{ type: "effort", values: ["high", "xhigh"] }] as const)
+    expect(result).toEqual({
+      high: { reasoning: { effort: "high" } },
+      xhigh: { reasoning: { effort: "xhigh" } },
+    })
+  })
+
   test("opencode go does not expose generic variants for non-GLM-5.2 GLM models", () => {
     const model = createMockModel({
       id: "glm-5",
@@ -2918,6 +2986,26 @@ describe("ProviderTransform.variants", () => {
       })
       const result = ProviderTransform.variants(model)
       expect(Object.keys(result)).toEqual(["low", "medium", "high", "xhigh"])
+    })
+
+    test("gpt-5.6 includes max reasoning", () => {
+      const model = createMockModel({
+        id: "gpt-5.6",
+        release_date: "2026-07-09",
+        providerID: "github-copilot",
+        api: {
+          id: "gpt-5.6",
+          url: "https://api.githubcopilot.com",
+          npm: "@ai-sdk/github-copilot",
+        },
+      })
+      const result = ProviderTransform.variants(model)
+      expect(Object.keys(result)).toEqual(["low", "medium", "high", "xhigh", "max"])
+      expect(result.max).toEqual({
+        reasoningEffort: "max",
+        reasoningSummary: "auto",
+        include: ["reasoning.encrypted_content"],
+      })
     })
   })
 

@@ -3,6 +3,8 @@ import { mkdir, writeFile } from "fs/promises"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
 import { oauthStateUsableForRun, setupPlan, setupReadiness } from "../../src/mend/runtime/readiness"
+import { selectOpenAIAuthMode } from "../../src/mend/runtime/provider-adapters"
+import { selectProviderAuthState } from "../../src/mend/runtime/auth-state"
 import { formatRuntimePackPlan, runtimePackPlan } from "../../src/mend/runtime/pack"
 
 async function writeJson(file: string, value: unknown) {
@@ -33,6 +35,23 @@ describe("setup and runtime package visibility", () => {
       if (originalOpenAIClientID === undefined) delete process.env.OPENAI_OAUTH_CLIENT_ID
       else process.env.OPENAI_OAUTH_CLIENT_ID = originalOpenAIClientID
     }
+  })
+
+  test("resolves hybrid OpenAI roles to the usable transport", () => {
+    expect(selectOpenAIAuthMode({ configuredAuthMode: "provider-oauth-or-token", apiKeyAvailable: true, oauthAvailable: false })).toBe("api-key")
+    expect(selectOpenAIAuthMode({ configuredAuthMode: "provider-oauth-or-token", apiKeyAvailable: false, oauthAvailable: true })).toBe("chatgpt-subscription-oauth")
+    expect(selectOpenAIAuthMode({ configuredAuthMode: "api-key", apiKeyAvailable: false, oauthAvailable: true })).toBe("api-key")
+    expect(selectOpenAIAuthMode({ configuredAuthMode: "chatgpt-subscription-oauth", apiKeyAvailable: true, oauthAvailable: false })).toBe("chatgpt-subscription-oauth")
+  })
+
+  test("prefers the freshest provider auth snapshot over a stale repaired copy", () => {
+    const stale = { type: "oauth", access: "stale", refresh: "stale", expires: Date.now() - 60_000, source: "legacy-auth-json-repair" }
+    const fresh = { type: "oauth", access: "fresh", refresh: "fresh", expires: Date.now() + 3_600_000 }
+
+    expect(selectProviderAuthState([
+      { state: stale, priority: 0 },
+      { state: fresh, priority: 2 },
+    ])).toBe(fresh)
   })
 
   test("surfaces package authoring metadata in setup readiness and plan", async () => {

@@ -1,5 +1,6 @@
 import { BusEvent } from "@/bus/bus-event"
 import { Schema } from "effect"
+import "@/session/background-task"
 
 export const Event = {
   Connected: BusEvent.define("server.connected", Schema.Struct({})),
