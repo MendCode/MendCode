@@ -424,6 +424,7 @@ const context = createContext<{
   providers: () => ReadonlyMap<string, Provider>
   loopWorkflows: () => readonly SessionLoopWorkflow[]
   refreshLoopWorkflows: () => Promise<readonly SessionLoopWorkflow[]>
+  latestTodoWritePartID: () => string | undefined
   sync: ReturnType<typeof useSync>
   tui: ReturnType<typeof useTuiConfig>
 }>()
@@ -693,6 +694,15 @@ export function Session() {
 
   const lastAssistant = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant")
+  })
+  const latestTodoWritePartID = createMemo(() => {
+    for (const message of messages().toReversed()) {
+      const part = sync.data.part[message.id]?.findLast(
+        (candidate) => candidate.type === "tool" && candidate.tool === "todowrite",
+      )
+      if (part) return part.id
+    }
+    return undefined
   })
 
   const dimensions = useTerminalDimensions()
@@ -3554,6 +3564,7 @@ export function Session() {
         providers,
         loopWorkflows: loopSessionWorkflows,
         refreshLoopWorkflows,
+        latestTodoWritePartID,
         sync,
         tui: tuiConfig,
       }}
@@ -7227,7 +7238,12 @@ function parseTodoOutput(output?: string): Array<{ content: string; status: stri
 }
 
 function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
-  const todos = createMemo(() => props.input.todos ?? props.metadata.todos ?? parseTodoOutput(props.output))
+  const ctx = use()
+  const currentTodos = createMemo(() => {
+    if (ctx.latestTodoWritePartID() !== props.part.id) return undefined
+    return ctx.sync.data.todo[props.part.sessionID]
+  })
+  const todos = createMemo(() => currentTodos() ?? props.input.todos ?? props.metadata.todos ?? parseTodoOutput(props.output))
   const content = createMemo(() =>
     todos()
       .map((todo) => todoMarkdown(todo.status, todo.content))
