@@ -15,6 +15,16 @@ export const MFLOW_LEGACY_PUBLIC_RELAY_DISPLAY = "https://mflow-signal.obed0101.
 export const MFLOW_PACKAGE = "mflow-cli"
 export const MFLOW_DEFAULT_RELAY_PORT = 8787
 
+export function isLegacyPublicMflowRelay(value: string) {
+  try {
+    const url = new URL(value)
+    const legacy = new URL(MFLOW_LEGACY_PUBLIC_RELAY)
+    return url.protocol === legacy.protocol && url.hostname === legacy.hostname
+  } catch {
+    return false
+  }
+}
+
 export type MflowMode = "disabled" | "enabled-stopped" | "running"
 export type MflowRelayMode = "local" | "public" | "legacy-public" | "remote" | "custom"
 

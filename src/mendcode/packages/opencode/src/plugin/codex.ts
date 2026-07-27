@@ -185,13 +185,13 @@ function stripImageDetail(input: unknown): void {
   Object.values(input).forEach(stripImageDetail)
 }
 
-function invalidCodexChatGPTRequestResponse(error: unknown) {
+function invalidCodexChatGPTRequestResponse(_error: unknown) {
   return new Response(
     JSON.stringify({
       error: {
         type: "invalid_request_error",
         code: "invalid_request",
-        message: error instanceof Error ? error.message : String(error),
+        message: "Invalid Codex request",
       },
     }),
     {
@@ -216,11 +216,8 @@ async function generatePKCE(): Promise<PkceCodes> {
 }
 
 function generateRandomString(length: number): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
-  const bytes = crypto.getRandomValues(new Uint8Array(length))
-  return Array.from(bytes)
-    .map((b) => chars[b % chars.length])
-    .join("")
+  const bytes = crypto.getRandomValues(new Uint8Array(Math.ceil((length * 3) / 4)))
+  return base64UrlEncode(bytes.buffer).slice(0, length)
 }
 
 function base64UrlEncode(buffer: ArrayBuffer): string {
@@ -376,7 +373,7 @@ const HTML_SUCCESS = `<!doctype html>
   </body>
 </html>`
 
-const HTML_ERROR = (error: string) => `<!doctype html>
+const HTML_ERROR = () => `<!doctype html>
 <html>
   <head>
     <title>MendCode - Codex Authorization Failed</title>
@@ -419,7 +416,7 @@ const HTML_ERROR = (error: string) => `<!doctype html>
     <div class="container">
       <h1>Authorization Failed</h1>
       <p>An error occurred during authorization.</p>
-      <div class="error">${error}</div>
+      <div class="error">Authorization could not be completed safely. Return to MendCode and try again.</div>
     </div>
   </body>
 </html>`
@@ -453,7 +450,7 @@ async function startOAuthServer(): Promise<{ port: number; redirectUri: string }
         pendingOAuth?.reject(new Error(errorMsg))
         pendingOAuth = undefined
         res.writeHead(200, { "Content-Type": "text/html" })
-        res.end(HTML_ERROR(errorMsg))
+        res.end(HTML_ERROR())
         return
       }
 
@@ -462,7 +459,7 @@ async function startOAuthServer(): Promise<{ port: number; redirectUri: string }
         pendingOAuth?.reject(new Error(errorMsg))
         pendingOAuth = undefined
         res.writeHead(400, { "Content-Type": "text/html" })
-        res.end(HTML_ERROR(errorMsg))
+        res.end(HTML_ERROR())
         return
       }
 
@@ -471,7 +468,7 @@ async function startOAuthServer(): Promise<{ port: number; redirectUri: string }
         pendingOAuth?.reject(new Error(errorMsg))
         pendingOAuth = undefined
         res.writeHead(400, { "Content-Type": "text/html" })
-        res.end(HTML_ERROR(errorMsg))
+        res.end(HTML_ERROR())
         return
       }
 

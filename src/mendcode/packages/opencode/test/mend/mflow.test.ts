@@ -3,7 +3,7 @@ import { createHash } from "crypto"
 import { mkdir, readFile, stat, writeFile } from "fs/promises"
 import path from "path"
 import { tmpdir } from "../fixture/fixture"
-import { activateMflow, deactivateMflow, enforceMflowBeforeEdit, mflowControlStatus, mflowEditTargets, mflowLocalRelayGuide, mflowReadTargets, readMflowConfig, releaseMflowLocks, waitMflowBeforeRead } from "../../src/mend/config/mflow"
+import { activateMflow, deactivateMflow, enforceMflowBeforeEdit, isLegacyPublicMflowRelay, mflowControlStatus, mflowEditTargets, mflowLocalRelayGuide, mflowReadTargets, readMflowConfig, releaseMflowLocks, waitMflowBeforeRead } from "../../src/mend/config/mflow"
 
 async function exists(file: string) {
   try {
@@ -23,6 +23,14 @@ describe("mflow MendCode integration", () => {
       relayMode: "local",
       signaling: "ws://localhost:8787",
     })
+  })
+
+  test("recognizes only the exact legacy public relay host", () => {
+    expect(isLegacyPublicMflowRelay("wss://mflow-signal.obed0101.deno.net")).toBe(true)
+    expect(isLegacyPublicMflowRelay("wss://mflow-signal.obed0101.deno.net/path")).toBe(true)
+    expect(isLegacyPublicMflowRelay("wss://evil.example/mflow-signal.obed0101.deno.net")).toBe(false)
+    expect(isLegacyPublicMflowRelay("wss://mflow-signal.obed0101.deno.net.evil.example")).toBe(false)
+    expect(isLegacyPublicMflowRelay("not a URL")).toBe(false)
   })
 
   test("requires explicit acceptance before using the legacy public relay", async () => {

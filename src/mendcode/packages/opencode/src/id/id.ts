@@ -1,5 +1,5 @@
 import z from "zod"
-import { randomBytes } from "crypto"
+import { randomInt } from "node:crypto"
 
 const prefixes = {
   event: "evt",
@@ -50,9 +50,8 @@ function generateID(prefix: keyof typeof prefixes, direction: "descending" | "as
 function randomBase62(length: number): string {
   const chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
   let result = ""
-  const bytes = randomBytes(length)
   for (let i = 0; i < length; i++) {
-    result += chars[bytes[i] % 62]
+    result += chars[randomInt(chars.length)]
   }
   return result
 }

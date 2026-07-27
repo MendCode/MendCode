@@ -91,6 +91,7 @@ import {
   deactivateMflow,
   mflowLocalRelayGuide,
   mflowControlStatus,
+  isLegacyPublicMflowRelay,
   removeMflowConfig,
   scanMflowRelays,
   startMflowDaemon,
@@ -1119,7 +1120,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       config.relayMode === "local"
         ? "Local"
         : config.relayMode === "legacy-public" ||
-            (config.relayMode === "public" && config.signaling.includes("mflow-signal.obed0101.deno.net"))
+            (config.relayMode === "public" && isLegacyPublicMflowRelay(config.signaling))
           ? "Legacy public"
           : "Public"
     return {
@@ -1372,7 +1373,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
             title:
               config.relayMode === "local"
                 ? "Local relay"
-                : config.relayMode === "legacy-public" || config.signaling.includes("mflow-signal.obed0101.deno.net")
+                : config.relayMode === "legacy-public" || isLegacyPublicMflowRelay(config.signaling)
                   ? "Legacy public relay"
                   : "Public relay URL",
             value: "relay",
@@ -1451,7 +1452,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
   const configureAndActivateMflowFromTui = async () => {
     const current = (await mflowControlStatus(mend.root)).config
     const currentIsLegacyPublic =
-      current.relayMode === "legacy-public" || current.signaling.includes("mflow-signal.obed0101.deno.net")
+      current.relayMode === "legacy-public" || isLegacyPublicMflowRelay(current.signaling)
     const showLocalRelayPicker = async (): Promise<string | null> => {
       const scan = await scanMflowRelays()
       return new Promise((resolve) => {

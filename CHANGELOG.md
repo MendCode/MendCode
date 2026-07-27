@@ -13,6 +13,7 @@
 - Preserve the latest real user turn and its visible assistant output across bounded refreshes, stale removals, and compaction-related updates.
 - Keep prompt/queue working state, compaction progress, background-task notifications, and session rendering synchronized during active turns.
 - Persist async prompts before acknowledging them with HTTP 204 and surface prompt failures through the existing session error event.
+- Harden legacy relay URL recognition, OAuth error pages, and cryptographic ID/PKCE generation against security scanner findings.
 
 ### Tests
 
