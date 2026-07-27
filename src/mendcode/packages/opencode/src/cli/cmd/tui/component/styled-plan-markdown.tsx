@@ -1,7 +1,7 @@
 import { RGBA, type SyntaxStyle } from "@opentui/core"
 import { For, Match, Show, Switch, createMemo } from "solid-js"
 import { normalizeHexColor } from "../util/hex-colors"
-import { styledPlanMarkdownSegments } from "../util/styled-plan-lines"
+import { styledPlanMarkdownSegments, type StyledPlanMarkdownSegment } from "../util/styled-plan-lines"
 
 type StyledPlanMarkdownProps = {
   content: string
@@ -16,10 +16,12 @@ type StyledPlanMarkdownProps = {
     columnFitter?: "balanced"
     wrapMode?: "char"
   }
+  streaming?: boolean
   stableTextMode?: boolean
   colorizeHex?: boolean
   streamingTail?: string
   streamingTailColorizeHex?: boolean
+  streamingTailMode?: "text" | "markdown"
 }
 
 const HEX_PATTERN = /(^|[^A-Za-z0-9_])(#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}))(?![A-Za-z0-9_])/g
@@ -105,9 +107,14 @@ function isMarkdownTableLine(line: string) {
   return trimmed.length > 1 && trimmed.startsWith("|") && trimmed.endsWith("|")
 }
 
+function hasInlineCodeSpan(line: string) {
+  return /(^|[^\\])`[^`\n]+`/.test(line)
+}
+
 export function shouldColorizeHexMarkdownLine(line: string, inFence = false) {
   if (inFence) return false
   if (isMarkdownTableLine(line)) return false
+  if (hasInlineCodeSpan(line)) return false
   return hasStyledHexColors(line)
 }
 
@@ -226,30 +233,66 @@ function MarkdownSegment(props: StyledPlanMarkdownProps & { content: string }) {
   )
 }
 
+const MARKDOWN_SYNTAX_PATTERN = /(?:^\s{0,3}#{1,6}\s+\S|^\s{0,3}(?:[-*+] |\d+\. )|^\s{0,3}>\s|^\s*```|^\s*\|.*\|\s*$|\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\[[^\]]+\]\([^)]+\))/m
+
+export function shouldRenderStableTextPlain(content: string, stableTextMode?: boolean) {
+  return Boolean(stableTextMode && !MARKDOWN_SYNTAX_PATTERN.test(content))
+}
+
+function PlanMarkdownSegment(props: StyledPlanMarkdownProps & { segment: StyledPlanMarkdownSegment }) {
+  return (
+    <Switch>
+      <Match when={props.segment.kind === "text" || shouldRenderStableTextPlain(props.segment.content, props.stableTextMode)}>
+        <HexStyledLines content={props.segment.content} fallback={props.fg} colorize={props.colorizeHex} width={props.width} />
+      </Match>
+      <Match when={true}>
+        <MarkdownSegment {...props} content={props.segment.content} />
+      </Match>
+    </Switch>
+  )
+}
+
+function reuseStableSegments(previous: StyledPlanMarkdownSegment[], next: StyledPlanMarkdownSegment[]) {
+  return next.map((segment, index) => {
+    const prior = previous[index]
+    return prior?.kind === segment.kind && prior.content === segment.content ? prior : segment
+  })
+}
+
 export function StyledPlanMarkdown(props: StyledPlanMarkdownProps) {
-  const segments = createMemo(() => styledPlanMarkdownSegments(props.content))
+  let previousSegments: StyledPlanMarkdownSegment[] = []
+  let previousTailSegments: StyledPlanMarkdownSegment[] = []
+  const segments = createMemo(() => {
+    previousSegments = reuseStableSegments(previousSegments, styledPlanMarkdownSegments(props.content))
+    return previousSegments
+  })
   const streamingTail = createMemo(() => props.streamingTail ?? "")
+  const streamingTailSegments = createMemo(() => {
+    previousTailSegments = reuseStableSegments(previousTailSegments, styledPlanMarkdownSegments(streamingTail()))
+    return previousTailSegments
+  })
 
   return (
     <box flexDirection="column" flexShrink={0}>
       <For each={segments()}>
-        {(segment) => (
-          <Switch>
-            <Match when={props.stableTextMode || segment.kind === "text"}>
-              <HexStyledLines content={segment.content} fallback={props.fg} colorize={props.colorizeHex} width={props.width} />
-            </Match>
-            <Match when={true}>
-              <MarkdownSegment {...props} content={segment.content} />
-            </Match>
-          </Switch>
-        )}
+        {(segment) => <PlanMarkdownSegment {...props} segment={segment} />}
       </For>
       <Show when={streamingTail().length > 0}>
-        <HexStyledLines
-          content={streamingTail()}
-          fallback={props.fg}
-          colorize={props.streamingTailColorizeHex ?? props.colorizeHex}
-        />
+        <Switch>
+          <Match when={props.streamingTailMode === "markdown"}>
+            <For each={streamingTailSegments()}>
+              {(segment) => <PlanMarkdownSegment {...props} segment={segment} colorizeHex={props.streamingTailColorizeHex ?? props.colorizeHex} />}
+            </For>
+          </Match>
+          <Match when={true}>
+            <HexStyledLines
+              content={streamingTail()}
+              fallback={props.fg}
+              colorize={props.streamingTailColorizeHex ?? props.colorizeHex}
+              width={props.width}
+            />
+          </Match>
+        </Switch>
       </Show>
     </box>
   )

@@ -52,16 +52,22 @@ export type PluginEntry = {
 }
 
 const INDEX_FILES = ["index.ts", "index.tsx", "index.js", "index.mjs", "index.cjs"]
+const TUI_PLUGIN_MARKERS = ["@jsxImportSource @opentui/solid", "@opentui/solid/jsx-runtime", "@opentui/solid/jsx-dev-runtime", "from \"@opentui/solid\"", "from '@opentui/solid'"]
 
 export function pluginSource(spec: string): PluginSource {
   if (isPathPluginSpec(spec)) return "file"
   return "npm"
 }
 
+function normalizePluginPath(raw: string) {
+  return raw.includes("\\") ? raw.replaceAll("\\", "/") : raw
+}
+
 function resolveExportPath(raw: string, dir: string) {
-  if (raw.startsWith("file://")) return fileURLToPath(raw)
-  if (path.isAbsolute(raw)) return raw
-  return path.resolve(dir, raw)
+  const next = normalizePluginPath(raw)
+  if (next.startsWith("file://")) return fileURLToPath(next)
+  if (isAbsolutePath(next)) return next
+  return path.resolve(dir, next)
 }
 
 function isAbsolutePath(raw: string) {
@@ -114,8 +120,30 @@ function resolvePackageEntrypoint(spec: string, kind: PluginKind, pkg: PluginPac
 }
 
 function targetPath(target: string) {
-  if (target.startsWith("file://")) return fileURLToPath(target)
-  if (path.isAbsolute(target)) return target
+  const file = normalizePluginPath(target)
+  if (file.startsWith("file://")) return fileURLToPath(file)
+  if (isAbsolutePath(file)) return file
+}
+
+function isCustomTuiPageTarget(target: string) {
+  const file = targetPath(target)
+  if (!file) return false
+  const parts = Filesystem.resolve(file).split(/[\\/]+/)
+  const index = parts.lastIndexOf(".mendcode")
+  return index >= 0 && ["page", "pages"].includes(parts[index + 1] ?? "") && parts.length > index + 2
+}
+
+async function isCustomTuiPluginTarget(target: string) {
+  const file = targetPath(target)
+  if (!file) return false
+  const parts = Filesystem.resolve(file).split(/[\\/]+/)
+  const index = parts.lastIndexOf(".mendcode")
+  if (index < 0 || parts[index + 1] !== "plugins" || parts.length <= index + 2) return false
+  const stat = await Filesystem.statAsync(file)
+  const entry = stat?.isDirectory() ? await resolveDirectoryIndex(file) : file
+  if (!entry || !/\.[cm]?[jt]sx?$/.test(entry)) return false
+  const source = await Filesystem.readText(entry).catch(() => "")
+  return TUI_PLUGIN_MARKERS.some((marker) => source.includes(marker))
 }
 
 async function resolveDirectoryIndex(dir: string) {
@@ -135,6 +163,8 @@ async function resolveTargetDirectory(target: string) {
 
 async function resolvePluginEntrypoint(spec: string, target: string, kind: PluginKind, pkg?: PluginPackage) {
   const source = pluginSource(spec)
+  if (kind === "server" && source === "file" && isCustomTuiPageTarget(target)) return undefined
+  if (kind === "server" && source === "file" && await isCustomTuiPluginTarget(target)) return undefined
   const hit =
     pkg ?? (source === "npm" ? await readPluginPackage(target) : await readPluginPackage(target).catch(() => undefined))
   if (!hit) return target
@@ -174,7 +204,11 @@ export function isPathPluginSpec(spec: string) {
 
 export async function resolvePathPluginTarget(spec: string) {
   const raw = spec.startsWith("file://") ? fileURLToPath(spec) : spec
-  const file = path.isAbsolute(raw) || /^[A-Za-z]:[\\/]/.test(raw) ? raw : path.resolve(raw)
+  const file = (() => {
+    const next = normalizePluginPath(raw)
+    if (isAbsolutePath(next)) return next
+    return path.resolve(next)
+  })()
   const stat = await Filesystem.statAsync(file)
   if (!stat?.isDirectory()) {
     if (spec.startsWith("file://")) return spec

@@ -1,23 +1,32 @@
-# MendCode
+<p align="center">
+  <img src="docs/assets/banners/readme-hero-banner.png" alt="MendCode terminal field banner" width="1200">
+</p>
 
-The customizable coding terminal.
+<p align="center"><strong>The customizable coding terminal.</strong></p>
 
-[![Release](https://img.shields.io/github/v/release/MendCode/MendCode?style=flat&label=release)](https://github.com/MendCode/MendCode/releases)
-[![License](https://img.shields.io/github/license/MendCode/MendCode?style=flat)](LICENSE)
-[![Website](https://img.shields.io/badge/website-mendcode.dev-111827)](https://www.mendcode.dev/)
-[![Docs](https://img.shields.io/badge/docs-github-2563eb)](docs/README.md)
-[![PRs welcome](https://img.shields.io/badge/PRs-welcome-16a34a)](CONTRIBUTING.md)
+<p align="center">
+  <a href="https://github.com/MendCode/MendCode/releases"><img src="https://img.shields.io/github/v/release/MendCode/MendCode?style=flat&label=release&color=C96D3A" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/MendCode/MendCode?style=flat&color=9FB08E" alt="License"></a>
+  <a href="https://www.mendcode.dev/"><img src="https://img.shields.io/badge/website-mendcode.dev-3F8F83" alt="Website"></a>
+  <a href="docs/README.md"><img src="https://img.shields.io/badge/docs-github-9FB08E" alt="Docs"></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-C96D3A" alt="PRs welcome"></a>
+</p>
 
 MendCode is a terminal-first coding-agent harness you can make your own: a
 public `mendcode` CLI, configurable model roles, review gates, Changes Review,
 Memory Center, Plan Mode Markdown, Agent View, reusable team packages, project MCP config,
 Herdr/mflow/worktree coordination, Usage Insights, release/security gates, and a
 customizable TUI for home identity, prompt chrome, widgets, panels, dialogs, and
-themes without patching runtime internals.
+themes without patching runtime internals. Local agents can also control the
+same session runtime through versioned JSON commands for progress, waiting, and
+cancellation.
 
-[Website](https://www.mendcode.dev/) · [Docs](docs/README.md) · [Feature map](docs/features.md) · [Acknowledgements](ACKNOWLEDGEMENTS.md)
-
-![MendCode README banner](docs/assets/banners/readme-hero-banner.png)
+<p align="center">
+  <a href="https://www.mendcode.dev/">Website</a> ·
+  <a href="docs/README.md">Docs</a> ·
+  <a href="docs/features.md">Feature map</a> ·
+  <a href="ACKNOWLEDGEMENTS.md">Acknowledgements</a>
+</p>
 
 ## Contents
 
@@ -42,9 +51,10 @@ Most coding agents give you a chat box. MendCode gives you the harness around it
 | Share a tuned setup with a team | Runtime packages for commands, agents, modes, skills, prompts, MCP config, plugins, TUI profile, model roles, permissions, memory defaults, and worktree policy. |
 | Review before implementation | Plan Mode renders Markdown, including Mermaid when supported, inside a TUI review modal before switching to the implementation agent. |
 | Review current code changes | `/changes` opens a responsive TUI diff workspace with comments and agent-visible review context between model turns. |
-| Keep repeat work moving | Loop Workflows create durable, monitorable agent loops with safe report-only wakeups, Agent View sessions, and optional per-project OS services. |
+| Keep repeat work moving | Loop Workflows create durable, monitorable loop sessions with contract-aware report-only wakeups, `/loop` creation, `/loops` supervision, and optional per-project OS services. |
 | Keep risky actions explicit | Permission modes, smart permission review, preview-first worktree actions, and approval-gated memory proposals. |
-| Route work to the right model | Model roles for planning, building, review, subagents, summaries, compaction, memory extraction, Dream, memory side chat, and permission review. |
+| Route work to the right model | Model roles for planning, building, explicit review agents, subagents, summaries, compaction, memory extraction, Dream, memory side chat, and permission review. |
+| Let local agents drive real sessions | `mendcode session` and `mendcode run --format json` expose the existing runtime for machine-readable session control, events, waiting, inspection, and cancellation. |
 | Coordinate parallel terminal work | Optional mflow locks plus optional TSM/worktree orchestration for multi-session work. |
 | See local activity without cloud analytics | Usage Insights for tokens, sessions, AI time, prompt volume, changed files, top tools, top agents, top models, cache mix, daily activity, and selected-day details. |
 
@@ -90,9 +100,11 @@ Useful commands after setup:
 | --- | --- |
 | `mendcode run "review this repo and draft a plan"` | You want to open MendCode with an initial task ready. |
 | `mendcode chat "summarize current status"` | You want a quick control-plane turn without entering the full TUI. |
+| `mendcode session list --format json` | Another local agent needs to discover and control MendCode sessions. |
 | `mendcode status` / `mendcode doctor` | You want readiness or diagnostics. |
 | `mendcode setup status` | You want to inspect setup state after the guided setup screen. |
-| `mendcode packages status` | You want to inspect active team/runtime packages. |
+| `mendcode marketplace status` | You want to inspect active team/runtime marketplace packages. |
+| `mendcode install <pack-id>` | You want the short marketplace install path for a package. |
 | `mendcode mflow status` | You are coordinating multiple agents around the same repo. |
 | `mendcode --worktree feature-branch` | You want to open MendCode against a branch/path/id worktree target. |
 | `mendcode --tsm feature-branch` | You want a TSM workspace with a MendCode split. |
@@ -246,9 +258,9 @@ dialogs, footer entries, and theme tokens.</p>
 </tr>
 </table>
 
-### Package Your Harness
+### Marketplace Your Harness
 
-A MendCode package captures the reusable parts of a team setup:
+A MendCode marketplace package captures the reusable parts of a team setup:
 
 ```text
 .mendcode/
@@ -258,23 +270,27 @@ A MendCode package captures the reusable parts of a team setup:
   skills/
   prompts/
   plugins/
+  tools/
+  pages/
   tui/
   widgets/
 ```
 
 Packages can include MCP config, context docs, scripts, TUI profiles, theme
-tokens, model roles, focus defaults, budget posture, permission defaults,
-memory defaults, and worktree policy.
+tokens, custom tool calls, custom TUI pages, shell-backed widgets, model roles,
+focus defaults, budget posture, permission defaults, memory defaults, and
+worktree policy.
 
 Packages must not include provider tokens, OAuth state, `.env*`,
 `.mendcode/auth`, local databases, room secrets, or machine-local cache/run
 state.
 
 ```bash
-mendcode packages create --id acme-standard --title "Acme Standard" --include skills,modes,plugins
-mendcode packages list
-mendcode packages install acme-standard
-mendcode packages enable acme-standard
+mendcode marketplace create --id acme-standard --title "Acme Standard" --include skills,modes,plugins,tools,pages
+mendcode marketplace list
+mendcode install acme-standard
+mendcode marketplace install acme-standard
+mendcode marketplace enable acme-standard
 ```
 
 ### Plan Mode
@@ -317,10 +333,11 @@ See [Changes Review](docs/changes-review.md).
 
 ### Loop Workflows
 
-Loop Workflows are durable, monitorable agent loops for objectives that should
-keep moving across controlled iterations. A loop starts as a draft, becomes an
-activated root session, records run/journal events, appears in Agent View, and
-can be woken manually or by a per-project background service.
+Loop Workflows are durable, monitorable loop sessions for objectives that should
+keep moving across controlled iterations. A loop starts from `/loop`, is
+supervised in `/loops`, becomes an activated root session, records run/journal
+events, appears in Agent View, and can be woken manually or by a per-project
+background service.
 
 <p align="center">
   <img src="docs/assets/screenshots/loop-workflow-created.png" alt="MendCode Loop Workflow receipt in chat" width="980">
@@ -338,9 +355,10 @@ mendcode loops tick loop_... --execute --report-only
 mendcode loops monitor loop_...
 ```
 
-The safe test path is `--execute --report-only`: the agent wakes and writes
-transcript activity, but edit/write/patch/shell/subagent tools are denied.
-Full execution remains explicit through `--execute` or
+For a workflow whose durable contract is already report-only/read-only,
+`--execute --report-only` wakes the agent and writes transcript activity without
+edit/write/patch/shell/subagent tools. Edit-capable workflows keep their
+contract; full execution remains explicit through `--execute` or
 `mendcode loops service start --allow-edits`.
 
 See [Loop Workflows](docs/loop-workflows.md).
@@ -401,7 +419,8 @@ mendcode tsm setup
 | Understand the whole product surface | [Feature map](docs/features.md) |
 | Install, configure, and check readiness | [CLI, setup, and configuration](docs/cli-setup-configuration.md) |
 | Shape the visual terminal experience | [Customization](docs/customization.md) |
-| Share team packages | [Packages and team sharing](docs/packages-and-team-sharing.md) |
+| Share marketplace packages | [Marketplace and team sharing](docs/packages-and-team-sharing.md) |
+| Let another agent control sessions | [Automation runtime](docs/automation-runtime.md) |
 | Extend the TUI with code | [TUI plugins and widgets](docs/tui-plugins-and-widgets.md) |
 | Use plan review gates | [Plan Mode](docs/plan-mode.md) |
 | Review working-tree changes | [Changes Review](docs/changes-review.md) |
@@ -471,8 +490,13 @@ context, then verify live code before changing behavior.
 
 - Source of truth: `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`.
 - Re-run public help before adding command examples.
-- Primary public surfaces include opening the TUI, `run`, `chat`, `status`,
-  `doctor`, `setup`, `packages`, `mflow`, `worktree`, and `tsm`.
+- Primary public surfaces include opening the TUI, `run`, `session`, `chat`,
+  `status`, `doctor`, `setup`, `marketplace`, `mflow`, `worktree`, and `tsm`.
+- Automation details live in [docs/automation-runtime.md](docs/automation-runtime.md):
+  `mendcode.cli.v1` JSON envelopes, session lifecycle commands, progress events,
+  bounded waiting, cancellation, secret redaction, and shared model/agent
+  selection. It is a wrapper over the existing runtime, not a second provider
+  or session implementation.
 - Support surfaces include `models`, `providers`, `auth`, `permissions`,
   `memory`, and `focus`.
 - Internal debug surfaces such as `adapter`, `ai`, `bench`, `budget`, `config`,
@@ -482,11 +506,11 @@ context, then verify live code before changing behavior.
 ### Core product story
 
 - MendCode is the customizable coding terminal: CLI, TUI, setup flow, model
-  roles, permission policy, memory, runtime packages, Plan Mode, Usage Insights,
-  optional mflow coordination, optional TSM and worktree orchestration, widgets,
-  plugins, and TUI profiles.
+  roles, permission policy, memory, runtime marketplace packages, Plan Mode,
+  Usage Insights, optional mflow coordination, optional TSM and worktree
+  orchestration, widgets, plugins, and TUI profiles.
 - The pitch is not another chat prompt. The pitch is a configurable harness:
-  prompt chrome, status rows, model roles, memory policy, team packages,
+  prompt chrome, status rows, model roles, memory policy, marketplace packages,
   workflow coordination, review gates, and local observability.
 
 ### TUI customization
@@ -501,13 +525,13 @@ context, then verify live code before changing behavior.
 - Good demo profile: mascot identity, split home, `agentManager` right panel,
   `top-bottom` prompt chrome, `mendcode>` lead text, and outside prompt status.
 
-### Packages
+### Marketplace Packages
 
-- Main docs: [Packages and team sharing](docs/packages-and-team-sharing.md).
-- Packages can include commands, agents, modes, skills, prompts, MCP config,
-  context docs, scripts, plugins, widgets, components, TUI profile, themes,
-  model roles, focus defaults, budget posture, permission defaults, memory
-  defaults, and worktree policy.
+- Main docs: [Marketplace and team sharing](docs/packages-and-team-sharing.md).
+- Marketplace packages can include commands, agents, modes, skills, prompts,
+  MCP config, context docs, scripts, plugins, widgets, components, custom tools,
+  custom pages, TUI profile, themes, model roles, focus defaults, budget
+  posture, permission defaults, memory defaults, and worktree policy.
 - Packages must not include provider tokens, OAuth state, `.env*`, auth state,
   local databases, room secrets, or machine-local run/cache state.
 
@@ -553,6 +577,8 @@ context, then verify live code before changing behavior.
 - [Plan Mode](docs/plan-mode.md): plan review flow.
 - [Changes Review](docs/changes-review.md): responsive diff review, comments,
   keybinds, and agent-visible review context.
+- [Loop Workflows](docs/loop-workflows.md): durable loop sessions, root
+  session/evaluator boundaries, `/loop`, `/loops`, and service controls.
 - [Memory Center](docs/memory-center.md): saved/pending memories, categories,
   Dream maintenance, and the constrained memory side agent.
 - [Usage Insights](docs/usage-insights.md): local activity dashboard.
@@ -583,3 +609,11 @@ TSM/worktree orchestration, Plan Mode review flow, Usage Insights dashboard,
 memory policy, model-role projection, and terminal UI customization layer.
 
 See [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) for attribution.
+
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/branding/mendcode-logo-horizontal-white.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/branding/mendcode-logo-horizontal-master.svg">
+    <img src="docs/assets/branding/mendcode-logo-horizontal-master.svg" alt="MendCode" width="420">
+  </picture>
+</h1>

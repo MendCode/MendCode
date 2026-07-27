@@ -19,7 +19,9 @@ export function resolveActivityPhase(input: ActivitySignalInput): MendActivityPh
   if (input.connection && input.connection !== "connected") return "blocked"
   if (input.retry || input.status === "retry") return "retrying"
   if (input.status === "idle") return "done"
+  if (input.status === "busy" && input.statusKind === "subagent-wait") return "subagents"
   if (input.status === "busy" && input.statusKind === "memory-extract") return "memory"
+  if (input.status === "busy" && input.statusKind === "compaction") return "compacting"
 
   const activeNames = (input.activeToolNames ?? []).map((item) => item.toLowerCase())
   const activeToolPhase = phaseForToolNames(activeNames)
@@ -76,6 +78,7 @@ function phaseForToolNames(names: string[]): MendActivityPhase | undefined {
     return "searching"
   }
   if (names.some((name) => name.includes("plan") || name.includes("spec") || name.includes("review"))) return "planning"
+  if (names.some((name) => name === "task" || name.includes("subagent"))) return "subagents"
   if (
     names.some(
       (name) => name.includes("bash") || name.includes("shell") || name.includes("exec") || name.includes("command"),

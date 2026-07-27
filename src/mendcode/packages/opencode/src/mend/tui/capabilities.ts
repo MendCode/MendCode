@@ -25,6 +25,8 @@ export type MendCapabilityPublicID =
   | "session.bottomDock"
   | "editor.widget.above"
   | "editor.widget.below"
+  | "overlay.custom"
+  | "overlay.nonCapturing"
   | "footer.entry"
   | "footer.replace"
   | "workingIndicator.frames"
@@ -294,6 +296,44 @@ const registry = [
     contractVersion: MEND_TUI_CAPABILITY_CONTRACT_VERSION,
     mapsFromUserIntents: ["widget below editor", "panel below chat input", "prompt footer widget"],
     nearestSafeAlternatives: ["editor.widget.above", "footer.entry"],
+  },
+  {
+    id: "overlay.custom",
+    label: "Interactive overlay substrate",
+    productSurface: "custom overlay substrate",
+    runtimeIDs: ["overlay.custom"],
+    legacyIDs: [],
+    trust: "trusted",
+    status: "available",
+    tier: "trusted-only",
+    owner: "mend/tui/widgets + plugin runtime",
+    fallback: "Skip the overlay and keep interaction inside widgets, slots, or the existing prompt.",
+    docs: "Phase 3 substrate for trusted overlay-style UI. This is not full side-chat ownership and does not reopen PTY embedding.",
+    entrypoints: ["runtime", "prompt.full", "status", "plugin"],
+    operations: ["replace", "inspect"],
+    contractVersion: MEND_TUI_CAPABILITY_CONTRACT_VERSION,
+    mapsFromUserIntents: ["interactive overlay", "custom overlay", "floating panel", "side chat overlay"],
+    nearestSafeAlternatives: ["overlay.nonCapturing", "sidebar.content", "session.bottomDock"],
+    migrationHints: ["Prefer widget/slot substrate first; full side chat is still host-owned."],
+  },
+  {
+    id: "overlay.nonCapturing",
+    label: "Non-capturing overlay substrate",
+    productSurface: "non-capturing overlay substrate",
+    runtimeIDs: ["overlay.nonCapturing"],
+    legacyIDs: [],
+    trust: "trusted",
+    status: "available",
+    tier: "public-safe",
+    owner: "mend/tui/widgets + plugin runtime",
+    fallback: "Render helper information in safe slots or widgets without intercepting input focus.",
+    docs: "Phase 3 safe overlay surface for hover/status/help layers that should not capture prompt input or replace the chat host.",
+    entrypoints: ["runtime", "prompt.full", "status", "help", "plugin"],
+    operations: ["augment", "inspect"],
+    contractVersion: MEND_TUI_CAPABILITY_CONTRACT_VERSION,
+    mapsFromUserIntents: ["overlay hint", "non capturing overlay", "status overlay", "hover help"],
+    nearestSafeAlternatives: ["session.prompt.right", "footer.entry", "sidebar.content"],
+    migrationHints: ["Use for informative overlays; interactive side-chat flows remain out of scope for this substrate."],
   },
   {
     id: "footer.entry",
@@ -718,6 +758,28 @@ export function resolveCustomizationIntent(request: string): MendCustomizationRe
 
   if (containsAny(text, ["widget above", "above editor", "above chat input"])) {
     return resolution(request, "resolved", "editor.widget.above", "setWidget", "This request maps to the trusted above-editor widget contract.")
+  }
+
+  if (containsAny(text, ["non capturing overlay", "non-capturing overlay", "overlay hint", "status overlay", "hover help"])) {
+    return resolution(
+      request,
+      "resolved",
+      "overlay.nonCapturing",
+      "augment",
+      "This request maps to the safe non-capturing overlay substrate.",
+      ["session.prompt.right", "footer.entry"],
+    )
+  }
+
+  if (containsAny(text, ["interactive overlay", "custom overlay", "floating panel", "side chat overlay", "side chat"])) {
+    return resolution(
+      request,
+      "clarify",
+      "overlay.custom",
+      "replace",
+      "Overlay requests map to the trusted overlay substrate, but full side-chat ownership is still host-managed in this phase.",
+      ["overlay.nonCapturing", "sidebar.content", "session.bottomDock"],
+    )
   }
 
   if (containsAny(text, ["bottom dock", "session dock", "bottom session widget", "beside todos", "beside todo"])) {

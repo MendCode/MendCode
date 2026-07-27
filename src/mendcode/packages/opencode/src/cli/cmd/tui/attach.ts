@@ -6,6 +6,18 @@ import { TuiConfig } from "@/cli/cmd/tui/config/tui"
 import { errorMessage } from "@/util/error"
 import { validateSession } from "./validate-session"
 import { ServerAuth } from "@/server/auth"
+import { loadMendTuiProfile } from "@/mend/profile"
+import { isProcessMemoryUsage, processMemoryUsage, type DiagnosticsSnapshot } from "@/util/process-memory"
+
+async function readServerDiagnostics(input: { url: string; headers: RequestInit["headers"] }) {
+  const response = await fetch(new URL("/global/diagnostics/memory", input.url), {
+    headers: input.headers,
+  })
+  if (!response.ok) throw new Error(`diagnostics endpoint returned HTTP ${response.status}`)
+  const value: unknown = await response.json()
+  if (!isProcessMemoryUsage(value)) throw new Error("diagnostics endpoint returned an invalid response")
+  return value
+}
 
 export const AttachCommand = cmd({
   command: "attach <url>",
@@ -44,6 +56,11 @@ export const AttachCommand = cmd({
         alias: ["u"],
         type: "string",
         describe: "basic auth username (defaults to OPENCODE_SERVER_USERNAME or 'mendcode')",
+      })
+      .option("diagnostics", {
+        type: "boolean",
+        default: false,
+        describe: "enable the on-demand diagnostics command",
       }),
   handler: async (args) => {
     const unguard = win32InstallCtrlCGuard()
@@ -68,6 +85,7 @@ export const AttachCommand = cmd({
       })()
       const headers = ServerAuth.headers({ password: args.password, username: args.username })
       const config = await TuiConfig.get()
+      const mendProfile = await loadMendTuiProfile(directory ?? process.cwd(), config)
 
       try {
         await validateSession({
@@ -84,7 +102,26 @@ export const AttachCommand = cmd({
 
       await tui({
         url: args.url,
+        ...(args.diagnostics
+          ? {
+              async onDiagnostics(): Promise<DiagnosticsSnapshot> {
+                const tui = processMemoryUsage("tui")
+                try {
+                  return {
+                    tui,
+                    server: await readServerDiagnostics({ url: args.url, headers }),
+                  }
+                } catch (error) {
+                  return {
+                    tui,
+                    serverError: errorMessage(error),
+                  }
+                }
+              },
+            }
+          : {}),
         config,
+        mendProfile,
         args: {
           continue: args.continue,
           sessionID: args.session,

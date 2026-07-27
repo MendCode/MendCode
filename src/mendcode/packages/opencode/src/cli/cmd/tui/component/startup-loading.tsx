@@ -2,10 +2,16 @@ import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-j
 import { useTheme } from "../context/theme"
 import { Spinner } from "./spinner"
 
-export function StartupLoading(props: { ready: () => boolean }) {
+export function startupLoadingText(input: { pluginsReady: boolean; syncLoading?: boolean }) {
+  if (!input.pluginsReady) return "Loading plugins..."
+  if (input.syncLoading) return "Loading workspace..."
+  return "Finishing startup..."
+}
+
+export function StartupLoading(props: { ready: () => boolean; text?: () => string; delayMs?: number }) {
   const theme = useTheme().theme
   const [show, setShow] = createSignal(false)
-  const text = createMemo(() => (props.ready() ? "Finishing startup..." : "Loading plugins..."))
+  const text = createMemo(() => props.text?.() ?? (props.ready() ? "Finishing startup..." : "Loading plugins..."))
   let wait: NodeJS.Timeout | undefined
 
   createEffect(() => {
@@ -24,7 +30,7 @@ export function StartupLoading(props: { ready: () => boolean }) {
     wait = setTimeout(() => {
       wait = undefined
       setShow(true)
-    }, 500).unref()
+    }, props.delayMs ?? 500).unref()
   })
 
   onCleanup(() => {
@@ -33,7 +39,7 @@ export function StartupLoading(props: { ready: () => boolean }) {
 
   return (
     <Show when={show()}>
-      <box position="absolute" zIndex={5000} left={0} right={0} bottom={1} justifyContent="center" alignItems="center">
+      <box position="absolute" zIndex={5000} left={0} right={0} top={1} justifyContent="center" alignItems="center">
         <box backgroundColor={theme.backgroundPanel} paddingLeft={1} paddingRight={1}>
           <Spinner color={theme.textMuted}>{text()}</Spinner>
         </box>

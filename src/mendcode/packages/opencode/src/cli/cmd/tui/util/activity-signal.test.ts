@@ -2,6 +2,17 @@ import { describe, expect, test } from "bun:test"
 import { resolveActivityPhase } from "./activity-signal"
 
 describe("resolveActivityPhase", () => {
+  test("keeps reconnecting transport out of generating phases", () => {
+    expect(
+      resolveActivityPhase({
+        status: "busy",
+        connection: "reconnecting",
+        livePhase: "output",
+        liveOutputTokens: 42,
+      }),
+    ).toBe("blocked")
+  })
+
   test("labels busy request without assistant evidence as sending", () => {
     expect(
       resolveActivityPhase({

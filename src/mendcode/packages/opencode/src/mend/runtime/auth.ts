@@ -4,8 +4,8 @@ import { spawnSync } from "child_process"
 import path from "path"
 import { mendPaths } from "../config/paths"
 import { providerLoginPlan } from "./readiness"
+import { mendRuntimeVersion } from "./version"
 
-const MEND_VERSION = "0.2.0-phase2"
 const OPENAI_OAUTH_PORT = 1455
 const OPENAI_OAUTH_TIMEOUT_MS = 5 * 60 * 1000
 
@@ -179,7 +179,7 @@ async function openaiHeadlessOAuth() {
   const issuer = openaiOAuthIssuer()
   const response = await fetch(`${issuer}/api/accounts/deviceauth/usercode`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "User-Agent": `mendcode/${MEND_VERSION}` },
+    headers: { "Content-Type": "application/json", "User-Agent": `mendcode/${mendRuntimeVersion()}` },
     body: JSON.stringify({ client_id: openaiOAuthClientID() }),
   })
   if (!response.ok) throw new Error(`Failed to initiate OpenAI device authorization: ${response.status}`)
@@ -190,7 +190,7 @@ async function openaiHeadlessOAuth() {
   while (Date.now() < deadline) {
     const poll = await fetch(`${issuer}/api/accounts/deviceauth/token`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": `mendcode/${MEND_VERSION}` },
+      headers: { "Content-Type": "application/json", "User-Agent": `mendcode/${mendRuntimeVersion()}` },
       body: JSON.stringify({ device_auth_id: data.device_auth_id, user_code: data.user_code }),
     })
     if (poll.ok) {

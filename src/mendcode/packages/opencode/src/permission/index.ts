@@ -37,6 +37,13 @@ export const Ruleset = Schema.mutable(Schema.Array(Rule))
   .pipe(withStatics((s) => ({ zod: zod(s) })))
 export type Ruleset = Schema.Schema.Type<typeof Ruleset>
 
+export const SESSION_MODE_PERMISSION = "__mendcode_session_permission_mode__"
+export type SessionPermissionMode = "approval" | "smart" | "full_access"
+
+export function sessionModeRule(mode: SessionPermissionMode): Rule {
+  return { permission: SESSION_MODE_PERMISSION, pattern: mode, action: "allow" }
+}
+
 export class Request extends Schema.Class<Request>("PermissionRequest")({
   id: PermissionID,
   sessionID: SessionID,
@@ -179,15 +186,23 @@ export const layer = Layer.effect(
     const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
+      const modeRule = ruleset.findLast((rule) => rule.permission === SESSION_MODE_PERMISSION)
+      const mode = modeRule?.pattern
+      const evaluationRuleset = modeRule ? ruleset.filter((rule) => rule.permission !== SESSION_MODE_PERMISSION) : ruleset
       let needsAsk = false
 
       for (const pattern of request.patterns) {
-        const rule = evaluate(request.permission, pattern, ruleset, approved)
+        const rule = evaluate(request.permission, pattern, evaluationRuleset, approved)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
-          return yield* new DeniedError({
-            ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
-          })
+          return yield* new DeniedError({ ruleset: evaluationRuleset.filter((rule) => Wildcard.match(request.permission, rule.permission)) })
+        }
+        if (
+          request.permission === "bash" &&
+          (mode === "approval" || mode === "smart")
+        ) {
+          needsAsk = true
+          continue
         }
         if (rule.action === "allow") continue
         needsAsk = true

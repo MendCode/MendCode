@@ -1,6 +1,6 @@
 import type { ModelRole } from "../config/models"
 
-export type PromptFocusID = "codex" | "claude" | "gemini" | "kimi" | "deepseek" | "mistral" | "local" | "generic"
+export type PromptFocusID = "codex" | "claude" | "gemini" | "kimi" | "deepseek" | "glm" | "mistral" | "minimax" | "grok" | "local" | "generic"
 
 export type PromptFocusResolution = {
   focusID: PromptFocusID
@@ -14,7 +14,10 @@ const modelRules: Array<{ match: RegExp; focusID: PromptFocusID; reason: string 
   { match: /(^|[^a-z0-9])(claude|anthropic)([^a-z0-9]|$)/i, focusID: "claude", reason: "model id matches Anthropic/Claude family" },
   { match: /(^|[^a-z0-9])(gemini|palm)([^a-z0-9]|$)/i, focusID: "gemini", reason: "model id matches Google/Gemini family" },
   { match: /(^|[^a-z0-9])(deepseek)([^a-z0-9]|$)/i, focusID: "deepseek", reason: "model id matches DeepSeek family" },
+  { match: /(^|[^a-z0-9])(glm|zhipu|z[-_.]?ai)([^a-z0-9]|$)/i, focusID: "glm", reason: "model id matches GLM/Zhipu family" },
   { match: /(^|[^a-z0-9])(mistral|codestral|devstral)([^a-z0-9]|$)/i, focusID: "mistral", reason: "model id matches Mistral family" },
+  { match: /(^|[^a-z0-9])(minimax|mini[-_.]?max)([^a-z0-9]|$)/i, focusID: "minimax", reason: "model id matches MiniMax family" },
+  { match: /(^|[^a-z0-9])(grok|xai)([^a-z0-9]|$)/i, focusID: "grok", reason: "model id matches xAI/Grok family" },
   { match: /(^|[^a-z0-9])(ollama|llama|qwen|local)([^a-z0-9]|$)/i, focusID: "local", reason: "model id matches local/open model family" },
 ]
 
@@ -24,7 +27,10 @@ const providerHints: Array<{ match: RegExp; focusID: PromptFocusID; reason: stri
   { match: /(^|[^a-z0-9])(gemini|google)([^a-z0-9]|$)/i, focusID: "gemini", reason: "provider hints Google/Gemini behavior when model family is unknown" },
   { match: /(^|[^a-z0-9])(kimi|moonshot)([^a-z0-9]|$)/i, focusID: "kimi", reason: "provider hints Kimi/Moonshot behavior when model family is unknown" },
   { match: /(^|[^a-z0-9])(deepseek)([^a-z0-9]|$)/i, focusID: "deepseek", reason: "provider hints DeepSeek behavior when model family is unknown" },
+  { match: /(^|[^a-z0-9])(glm|zhipu|z[-_.]?ai)([^a-z0-9]|$)/i, focusID: "glm", reason: "provider hints GLM/Zhipu behavior when model family is unknown" },
   { match: /(^|[^a-z0-9])(mistral)([^a-z0-9]|$)/i, focusID: "mistral", reason: "provider hints Mistral behavior when model family is unknown" },
+  { match: /(^|[^a-z0-9])(minimax|mini[-_.]?max)([^a-z0-9]|$)/i, focusID: "minimax", reason: "provider hints MiniMax behavior when model family is unknown" },
+  { match: /(^|[^a-z0-9])(grok|xai)([^a-z0-9]|$)/i, focusID: "grok", reason: "provider hints xAI/Grok behavior when model family is unknown" },
   { match: /(^|[^a-z0-9])(ollama|local)([^a-z0-9]|$)/i, focusID: "local", reason: "provider hints local behavior when model family is unknown" },
 ]
 

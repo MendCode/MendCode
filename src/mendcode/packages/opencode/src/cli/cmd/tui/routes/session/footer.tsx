@@ -25,9 +25,10 @@ export function Footer() {
   const sdk = useSDK()
   const connectionLabel = createMemo(() => {
     const state = sdk.connection
-    if (state.status === "connected") return
+    const recovering = state.status === "connected" && state.recoveringSince !== undefined
+    if (state.status === "connected" && !recovering) return
     if (state.status === "connecting") return "connecting"
-    if (state.status === "reconnecting") return `reconnecting${state.attempt > 1 ? ` #${state.attempt}` : ""}`
+    if (state.status === "reconnecting" || recovering) return `reconnecting${state.attempt > 1 ? ` #${state.attempt}` : ""}`
     if (state.status === "failed") return `connection lost after ${state.attempt} retries`
     return "disconnected"
   })

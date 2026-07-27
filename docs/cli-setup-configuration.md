@@ -11,11 +11,66 @@ mendcode                         # open MendCode TUI in the current project
 mendcode --worktree [target]     # open MendCode in a git worktree by branch/path/id
 mendcode --tsm [target|--all]    # open TSM workspace with a MendCode split
 mendcode run "message"           # open TUI with an initial message
+mendcode session list --format json
 mendcode chat "message"          # run a control-plane chat turn
 mendcode status
+mendcode loops status             # list loop workflows
 mendcode doctor
 mendcode check
 ```
+
+## Automation Runtime
+
+`mendcode session` exposes the real session, prompt, status, event, subagent,
+loop, permission, question, and diff state to another local agent. It does not
+create a second provider stack or a separate session database; it uses the same
+runtime and project directory as the TUI.
+
+```bash
+mendcode session create --title "Implement the feature" --format json
+mendcode session send ses_... "Do the work" --async --format json
+mendcode session status ses_... --format json
+mendcode session inspect ses_... --format json
+mendcode session wait ses_... --timeout-ms 1800000 --format json
+mendcode session events ses_... --follow --format json
+mendcode session cancel ses_... --format json
+```
+
+Available lifecycle operations are `create`, `list`, `get`, `inspect`,
+`rename`, `fork`, `archive`, `delete`, `send`, `status`, `wait`, `cancel`,
+`events`, and `export`. `send --async` returns immediately after starting a
+detached MendCode runtime; `wait` and `events` can then monitor the same
+session. Without `--async`, `send` waits for the prompt operation to finish.
+
+JSON output is line-delimited and uses the versioned `mendcode.cli.v1` envelope:
+
+```json
+{
+  "protocol": "mendcode.cli.v1",
+  "kind": "event | result | error",
+  "event": "session.completed",
+  "eventID": "evt_...",
+  "timestamp": 1760000000000,
+  "sessionID": "ses_...",
+  "data": {}
+}
+```
+
+`mendcode run --format json` is the lower-level streaming surface for tool,
+step, text, reasoning, and session lifecycle events. Secret-like fields are
+redacted before JSON emission, while normal usage counters remain available.
+See [Automation runtime](automation-runtime.md) for the complete contract.
+
+## Loop Workflow Controls
+
+Use the canonical loop guide for the full contract and lifecycle details: [Loop Workflows](loop-workflows.md).
+
+```text
+/loop   # natural-language loop creation/activation inside the TUI
+/loops  # operator dashboard for active and historical loops
+```
+
+The public loop CLI supports `status`/`list`, `examples`/`templates`, `draft`, `show`, `tail`, `monitor`, `tick`, `daemon`, `service`, `run`, `activate`, `pause`, `resume`, and `stop`. Use `tick ... --execute` for a real agent turn; `run` is record-only. Signal, override, delete, and agent-retarget actions belong to the assistant tool or local API rather than the public CLI.
 
 ## Setup Flow
 
@@ -87,7 +142,7 @@ only; the CLI remains responsible for its own login/session files.
 
 Common MendCode config paths:
 
-- `.mendcode/mendcode.json`: project config, focus defaults, package metadata, budget/worktree policy, and integration settings.
+- `.mendcode/mendcode.json`: project config, focus defaults, package metadata, budget/worktree policy, loop service settings, and integration settings.
 - `.mendcode/generated/opencode.json`: generated compatibility config for the adapted runtime.
 - `.mendcode/prompt-mode.json`: persisted prompt mode consumed by `mendcode run`, `mendcode chat`, and the TUI footer.
 - `.mendcode/models.yaml`: project model-role config.
@@ -102,6 +157,29 @@ Common MendCode config paths:
 - `.mflow/config.toml`: mflow runtime config scaffold.
 - `.mendcode/tsm/state.json`: optional TSM state.
 - `.mendcode/worktree/state.json`: managed/adopted worktree registry.
+
+## Prompt Draft Undo and Redo
+
+The TUI keeps a temporary in-memory edit history for the active prompt:
+
+- `Ctrl+_` undoes the latest prompt edit. On many keyboards, press `Ctrl+Shift+-`.
+- `Ctrl+Y` redoes a prompt edit.
+- On macOS, `⌘Z` and `⌘⇧Z` are also available by default.
+- `Ctrl+Z` remains the POSIX terminal suspend shortcut and does not undo prompt text.
+
+This history is intentionally not persisted. It can recover text cleared while the
+prompt is still open, but closing the prompt or TUI discards it.
+
+Override the bindings in `.mendcode/tui.json` or `~/.config/mendcode/tui.json`:
+
+```jsonc
+{
+  "keybinds": {
+    "input_undo": "ctrl+_,super+z",
+    "input_redo": "ctrl+y,super+shift+z"
+  }
+}
+```
 
 ## Focus Profiles
 
@@ -157,7 +235,6 @@ Common roles:
 - `plan`
 - `build`
 - `code`
-- `review`
 - `subagent`
 - `title`
 - `compaction`
@@ -209,7 +286,13 @@ mendcode models use-preset <preset-id> --enable
 mendcode models plan
 ```
 
-The CLI currently writes the default model role directly. For non-default roles such as `build`, `review`, `subagent`, `memoryExtractor`, `memoryDream`, `memoryAssistant`, or `permissionReviewer`, edit `models.yaml` and run `mendcode models plan` / `mendcode models status` to verify projection. Public docs should keep model examples provider-neutral; teams can pin their own provider and model choices in local or package-specific config.
+The CLI currently writes the default model role directly. For non-default roles
+such as `build`, `code`, `subagent`, `memoryExtractor`, `memoryDream`,
+`memoryAssistant`, or `permissionReviewer`, edit `models.yaml` and run
+`mendcode models plan` / `mendcode models status` to verify projection. Roles
+are explicit; the generic `review` role is not part of the model configuration.
+Public docs should keep model examples provider-neutral; teams can pin their own
+provider and model choices in local or package-specific config.
 
 ## Permissions And Memory
 
@@ -229,7 +312,7 @@ Permission modes:
 | Mode | Behavior |
 | --- | --- |
 | `approval` | Manual approval remains the default posture. |
-| `smart` | Uses an AI-assisted reviewer role for configured triggers. If the reviewer role is not configured, MendCode asks instead of silently approving. |
+| `smart` | Auto-approves only bounded read-only shell requests. Risky or ambiguous requests use the configured AI reviewer when applicable, and fall back to a prompt if it is unavailable; scripts, deletes, writes, privilege changes, network commands, and other non-read-only commands are never auto-approved. |
 | `full_access` | Reduces permission prompts for the current policy surface, but explicit deny rules still matter. Use only when that trust posture is intentional. |
 
 Configure permissions:

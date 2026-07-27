@@ -5,6 +5,7 @@ import { zod } from "@/util/effect-zod"
 import { NonNegativeInt, withStatics } from "@/util/schema"
 import { Context, Effect, Layer, Schema } from "effect"
 import { BackgroundSessionTable } from "./session.sql"
+import { AgentViewMetadata } from "./agent-view-metadata"
 import { SessionID } from "./schema"
 import { SessionStatus } from "./status"
 
@@ -71,6 +72,7 @@ const SessionInfo = Schema.Struct({
 export const Entry = Schema.Struct({
   ...InfoFields,
   session: Schema.optional(SessionInfo),
+  metadata: Schema.optional(AgentViewMetadata.Info),
 })
   .annotate({ identifier: "BackgroundSessionEntry" })
   .pipe(withStatics((s) => ({ zod: zod(s) })))
@@ -199,6 +201,7 @@ export function toEntry(input: {
   status?: SessionStatus.Info
   pendingInput?: number
   session?: EntrySession
+  metadata?: AgentViewMetadata.Info
 }): Entry {
   return {
     ...input.info,
@@ -208,6 +211,7 @@ export function toEntry(input: {
       pendingInput: input.pendingInput,
     }),
     session: input.session,
+    metadata: input.metadata,
   }
 }
 
@@ -296,10 +300,6 @@ export const layer = Layer.effect(
             .where(eq(BackgroundSessionTable.session_id, input.sessionID))
             .get()
           if (!row) return { acquired: false }
-          const writer = row.data.writer
-          if (writer && writer.clientID !== input.clientID && writer.expires > now) {
-            return { acquired: false, info: fromRow(row) }
-          }
           const data: Data = {
             ...row.data,
             writer: {

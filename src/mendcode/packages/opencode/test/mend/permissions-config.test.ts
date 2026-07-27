@@ -24,6 +24,22 @@ describe("mend permissions config", () => {
     expect(raw).toMatchObject({ version: 0, mode: "smart", reviewerRole: "small" })
   })
 
+  test("changes the persisted default without creating a session override", async () => {
+    await using tmp = await tmpdir()
+    const configDir = path.join(tmp.path, "config")
+
+    await writePermissionsConfig({ mode: "full_access" }, configDir)
+    await writePermissionsConfig({ mode: "approval" }, configDir)
+
+    expect(await readPermissionsConfig(configDir)).toMatchObject({ mode: "approval" })
+    expect(JSON.parse(await readFile(globalPermissionsConfigPath(configDir), "utf8"))).toEqual({
+      version: 0,
+      mode: "approval",
+      reviewerRole: "permissionReviewer",
+      trigger: "dangerous-shell",
+    })
+  })
+
   test("normalizes invalid mode to manual approval", async () => {
     await using tmp = await tmpdir()
     const configDir = path.join(tmp.path, "config")

@@ -8,7 +8,7 @@ import { readModelsConfig, resolveModelRoles } from "../config/models"
 import { resolvePromptFocusForRole } from "../prompt/focus-resolver"
 import { mendTuiCapabilityVersion, visibleCustomizationCapabilities } from "../tui/capabilities"
 import { listActiveCustomizations } from "../tui/customization-state"
-import { mflowControlStatus } from "../config/mflow"
+import { isLegacyPublicMflowRelay, mflowControlStatus } from "../config/mflow"
 
 async function readJson(file: string) {
   try { return JSON.parse(await readFile(file, "utf8")) } catch { return null }
@@ -86,7 +86,7 @@ export async function mflowStatusSummary(root?: string) {
   const locks = summarizeMflowLocks(status.locks.output)
   const relayLabel = config.relayMode === "local"
     ? "local"
-    : config.relayMode === "legacy-public" || (config.relayMode === "public" && config.signaling.includes("mflow-signal.obed0101.deno.net"))
+    : config.relayMode === "legacy-public" || (config.relayMode === "public" && isLegacyPublicMflowRelay(config.signaling))
       ? "legacy public"
       : "public"
   return [

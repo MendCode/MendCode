@@ -1,0 +1,92 @@
+import { describe, expect, test } from "bun:test"
+import {
+  parseState,
+  acquireClientLease,
+  activeClientLeaseCount,
+  shouldReplaceLiveServer,
+  shouldUseSharedServer,
+  waitForClientLeases,
+} from "../../../src/cli/cmd/tui/shared-server"
+import { tmpdir } from "../../fixture/fixture"
+import fs from "fs/promises"
+import path from "path"
+
+const valid = {
+  version: 1 as const,
+  pid: 123,
+  url: "http://127.0.0.1:4096/",
+  username: "mendcode",
+  password: "local-secret",
+  startedAt: "2026-07-19T00:00:00.000Z",
+  runtimeID: "mendcode-test-runtime",
+}
+
+describe("shared server state", () => {
+  test("accepts a valid loopback server state", () => {
+    expect(parseState(valid)).toEqual(valid)
+  })
+
+  test("rejects malformed or non-loopback state", () => {
+    expect(parseState({ ...valid, pid: 0 })).toBeUndefined()
+    expect(parseState({ ...valid, url: "http://user:password@127.0.0.1:4096/" })).toBeUndefined()
+    expect(parseState({ ...valid, url: "http://0.0.0.0:4096/" })).toBeUndefined()
+  })
+
+  test("does not replace a live server while another TUI client is active", () => {
+    expect(shouldReplaceLiveServer({ pid: 456, currentPid: 123, activeClients: 1 })).toBe(true)
+    expect(shouldReplaceLiveServer({ pid: 456, currentPid: 123, activeClients: 2 })).toBe(false)
+    expect(shouldReplaceLiveServer({ pid: 123, currentPid: 123, activeClients: 1 })).toBe(false)
+    expect(
+      shouldReplaceLiveServer({ pid: 456, currentPid: 123, activeClients: 1, allowLiveServerReplacement: false }),
+    ).toBe(false)
+  })
+
+  test("uses the shared server by default and keeps private mode opt-in", () => {
+    expect(shouldUseSharedServer({ networkOptionSet: false })).toBe(true)
+    expect(shouldUseSharedServer({ networkOptionSet: false, isolated: true })).toBe(false)
+    expect(shouldUseSharedServer({ networkOptionSet: true })).toBe(false)
+    expect(shouldUseSharedServer({ networkOptionSet: false, serverURL: "http://127.0.0.1:4096" })).toBe(false)
+    expect(shouldUseSharedServer({ networkOptionSet: false, disabledByEnvironment: true })).toBe(false)
+  })
+
+  test("counts and releases client leases", async () => {
+    await using tmp = await tmpdir()
+    expect(await activeClientLeaseCount(tmp.path)).toBe(0)
+    const lease = await acquireClientLease(tmp.path)
+    expect(await activeClientLeaseCount(tmp.path)).toBe(1)
+    await lease.release()
+    expect(await activeClientLeaseCount(tmp.path)).toBe(0)
+  })
+
+  test("keeps a live lease active across stale timestamps and recreates it after removal", async () => {
+    await using tmp = await tmpdir()
+    const lease = await acquireClientLease(tmp.path, 5)
+    const leaseName = (await fs.readdir(tmp.path))[0]
+    if (!leaseName) throw new Error("lease file was not created")
+    const leasePath = path.join(tmp.path, leaseName)
+    const stale = new Date(Date.now() - 10_000)
+
+    await fs.utimes(leasePath, stale, stale)
+    expect(await activeClientLeaseCount(tmp.path, 1)).toBe(1)
+
+    await fs.rm(leasePath)
+    await Bun.sleep(30)
+    expect(await activeClientLeaseCount(tmp.path, 1)).toBe(1)
+
+    await lease.release()
+  })
+
+  test("stops after the lease directory stays idle", async () => {
+    await using tmp = await tmpdir()
+    let stopped = 0
+    await waitForClientLeases({
+      directory: tmp.path,
+      pollMs: 1,
+      idleGraceMs: 4,
+      stop: async () => {
+        stopped++
+      },
+    })
+    expect(stopped).toBe(1)
+  })
+})

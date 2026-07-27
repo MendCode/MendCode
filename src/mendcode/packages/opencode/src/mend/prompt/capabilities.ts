@@ -10,6 +10,9 @@ export function composeCustomizationCapabilitySection() {
     "MendCode TUI customization capabilities:",
     `- Contract version: ${mendTuiCapabilityVersion()}`,
     "- Prefer MendCode-owned seams before hot-path edits.",
+    "- Live session chrome: Ctrl+P -> Customize TUI or /customize opens one grouped modal; Space/Enter applies toggles without restarting the TUI. Home/profile entries are actions opened with Enter, not toggles.",
+    "- Public plugin API: api.ui.runtime.customization controls terminal title templates, deterministic session accents, diff file visibility, and reset; api.ui.runtime.setWidget controls plugin-owned widgets.",
+    "- Rollback: use Reset TUI customization or api.ui.runtime.customization.reset(); this does not alter profiles, sessions, messages, or project data.",
   ]
   for (const capability of visibleCustomizationCapabilities()) {
     lines.push(
@@ -33,6 +36,8 @@ export function composeCustomizationCapabilitySection() {
       .map((item) => `${item.id} -> ${item.nearestSafeAlternatives.join("/")}`)
       .join(", ")}`,
   )
-  lines.push("- When a requested capability is blocked or unsupported, name the blocker and route to the nearest safe surface instead of implying Pi-style arbitrary control.")
+  lines.push(
+    "- When a requested capability is blocked or unsupported, name the blocker and route to the nearest safe surface instead of implying Pi-style arbitrary control.",
+  )
   return lines.join("\n")
 }

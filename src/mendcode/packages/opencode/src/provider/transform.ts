@@ -19,6 +19,8 @@ function mimeToModality(mime: string): Modality | undefined {
 
 export const OUTPUT_TOKEN_MAX = Flag.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX || 32_000
 
+const INCLUDE_ENCRYPTED_REASONING = ["reasoning.encrypted_content"] as const
+
 export function sanitizeSurrogates(content: string) {
   return content.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD")
 }
@@ -502,6 +504,7 @@ const WIDELY_SUPPORTED_EFFORTS = ["low", "medium", "high"]
 const OPENAI_EFFORTS = ["none", "minimal", ...WIDELY_SUPPORTED_EFFORTS, "xhigh"]
 const OPENAI_GPT5_1_EFFORTS = ["none", ...WIDELY_SUPPORTED_EFFORTS]
 const OPENAI_GPT5_2_PLUS_EFFORTS = [...OPENAI_GPT5_1_EFFORTS, "xhigh"]
+const OPENAI_GPT5_6_PLUS_EFFORTS = [...OPENAI_GPT5_2_PLUS_EFFORTS, "max"]
 const OPENAI_GPT5_PRO_EFFORTS = ["high"]
 const OPENAI_GPT5_PRO_2_PLUS_EFFORTS = ["medium", "high", "xhigh"]
 const OPENAI_GPT5_CHAT_EFFORTS = ["medium"]
@@ -533,6 +536,7 @@ function versionedGpt5ReasoningEfforts(apiId: string) {
   const version = gpt5Version(apiId)
   if (version === undefined) return undefined
   if (version === 1) return OPENAI_GPT5_1_EFFORTS
+  if (version >= 6) return OPENAI_GPT5_6_PLUS_EFFORTS
   return OPENAI_GPT5_2_PLUS_EFFORTS
 }
 
@@ -577,6 +581,17 @@ function openaiCompatibleReasoningEfforts(id: string) {
   return gpt5CodexReasoningEfforts(apiId) ?? versionedGpt5ReasoningEfforts(apiId) ?? OPENAI_EFFORTS
 }
 
+type ReasoningOptionInput = {
+  readonly type: string
+  readonly values?: readonly string[]
+}
+
+function declaredReasoningEfforts(options?: readonly ReasoningOptionInput[]) {
+  return options
+    ?.find((option) => option.type === "effort" && option.values?.length)
+    ?.values?.filter((value): value is string => typeof value === "string" && value.length > 0)
+}
+
 function anthropicAdaptiveEfforts(apiId: string): string[] | null {
   if (["opus-4-7", "opus-4.7"].some((v) => apiId.includes(v))) {
     return ["low", "medium", "high", "xhigh", "max"]
@@ -587,11 +602,15 @@ function anthropicAdaptiveEfforts(apiId: string): string[] | null {
   return null
 }
 
-export function variants(model: Provider.Model): Record<string, Record<string, any>> {
+export function variants(
+  model: Provider.Model,
+  reasoningOptions?: readonly ReasoningOptionInput[],
+): Record<string, Record<string, any>> {
   if (!model.capabilities.reasoning) return {}
 
   const id = model.id.toLowerCase()
   const apiId = model.api.id.toLowerCase()
+  const declaredEfforts = declaredReasoningEfforts(reasoningOptions)
   const glm52 = ["glm-5.2", "glm-5-2", "glm-5p2"].some((name) => id.includes(name) || apiId.includes(name))
   if (apiId.includes("minimax-m3") && ["@ai-sdk/anthropic", "@ai-sdk/openai-compatible"].includes(model.api.npm)) {
     return {
@@ -601,22 +620,18 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
   }
   const adaptiveEfforts = anthropicAdaptiveEfforts(model.api.id)
   if (glm52 && model.api.npm === "@openrouter/ai-sdk-provider") {
+    const efforts = declaredEfforts ?? ["high", "xhigh"]
     return {
-      high: { reasoning: { effort: "high" } },
-      xhigh: { reasoning: { effort: "xhigh" } },
+      ...Object.fromEntries(efforts.map((effort) => [effort, { reasoning: { effort } }])),
     }
   }
   if (glm52 && model.api.npm === "@ai-sdk/openai-compatible") {
-    return {
-      high: { reasoningEffort: "high" },
-      max: { reasoningEffort: "max" },
-    }
+    const efforts = declaredEfforts ?? ["high", "max"]
+    return Object.fromEntries(efforts.map((effort) => [effort, { reasoningEffort: effort }]))
   }
   if (glm52 && model.api.npm === "@ai-sdk/anthropic") {
-    return {
-      high: { effort: "high" },
-      max: { effort: "max" },
-    }
+    const efforts = declaredEfforts ?? ["high", "max"]
+    return Object.fromEntries(efforts.map((effort) => [effort, { effort }]))
   }
   if (
     id.includes("deepseek-chat") ||
@@ -650,9 +665,9 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
   switch (model.api.npm) {
     case "@openrouter/ai-sdk-provider":
       return Object.fromEntries(
-        (model.api.id.startsWith("openai/") || id.includes("gpt")
+        (declaredEfforts ?? (model.api.id.startsWith("openai/") || id.includes("gpt")
           ? openaiCompatibleReasoningEfforts(model.api.id)
-          : WIDELY_SUPPORTED_EFFORTS
+          : WIDELY_SUPPORTED_EFFORTS)
         ).map((effort) => [effort, { reasoning: { effort } }]),
       )
 
@@ -664,7 +679,7 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
       // OAI-style for all upstreams, with an extended effort set for OpenAI
       // models that support it.
       if (model.api.id.startsWith("openai/")) {
-        const efforts = openaiReasoningEfforts(model.api.id, model.release_date)
+        const efforts = declaredEfforts ?? openaiReasoningEfforts(model.api.id, model.release_date)
         return Object.fromEntries(efforts.map((effort) => [effort, { reasoningEffort: effort }]))
       }
       return Object.fromEntries(WIDELY_SUPPORTED_EFFORTS.map((effort) => [effort, { reasoningEffort: effort }]))
@@ -727,7 +742,12 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
           ]),
         )
       }
-      return Object.fromEntries(OPENAI_EFFORTS.map((effort) => [effort, { reasoningEffort: effort }]))
+      return Object.fromEntries(
+        (declaredEfforts ?? openaiCompatibleReasoningEfforts(model.api.id)).map((effort) => [
+          effort,
+          { reasoningEffort: effort },
+        ]),
+      )
 
     case "@ai-sdk/github-copilot":
       if (model.id.includes("gemini")) {
@@ -738,6 +758,9 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
         return Object.fromEntries(WIDELY_SUPPORTED_EFFORTS.map((effort) => [effort, { reasoningEffort: effort }]))
       }
       const copilotEfforts = iife(() => {
+        if (declaredEfforts) return declaredEfforts
+        const version = gpt5Version(id)
+        if (version !== undefined && version >= 6) return [...WIDELY_SUPPORTED_EFFORTS, "xhigh", "max"]
         if (id.includes("5.1-codex-max") || id.includes("5.2") || id.includes("5.3"))
           return [...WIDELY_SUPPORTED_EFFORTS, "xhigh"]
         const arr = [...WIDELY_SUPPORTED_EFFORTS]
@@ -750,7 +773,7 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
           {
             reasoningEffort: effort,
             reasoningSummary: "auto",
-            include: ["reasoning.encrypted_content"],
+            include: INCLUDE_ENCRYPTED_REASONING,
           },
         ]),
       )
@@ -768,7 +791,10 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
     case "@ai-sdk/openai-compatible":
       if (id.includes("gpt")) {
         return Object.fromEntries(
-          openaiCompatibleReasoningEfforts(model.api.id).map((effort) => [effort, { reasoningEffort: effort }]),
+          (declaredEfforts ?? openaiCompatibleReasoningEfforts(model.api.id)).map((effort) => [
+            effort,
+            { reasoningEffort: effort },
+          ]),
         )
       }
       const efforts = [...WIDELY_SUPPORTED_EFFORTS]
@@ -780,30 +806,26 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
     case "@ai-sdk/azure":
       // https://v5.ai-sdk.dev/providers/ai-sdk-providers/azure
       if (id === "o1-mini") return {}
-      const azureEfforts = ["low", "medium", "high"]
-      if (id.includes("gpt-5-") || id === "gpt-5") {
-        azureEfforts.unshift("minimal")
-      }
       return Object.fromEntries(
-        azureEfforts.map((effort) => [
+        (declaredEfforts ?? openaiReasoningEfforts(model.api.id, model.release_date)).map((effort) => [
           effort,
           {
             reasoningEffort: effort,
             reasoningSummary: "auto",
-            include: ["reasoning.encrypted_content"],
+            include: INCLUDE_ENCRYPTED_REASONING,
           },
         ]),
       )
     case "@ai-sdk/openai": {
       // https://v5.ai-sdk.dev/providers/ai-sdk-providers/openai
-      const efforts = openaiReasoningEfforts(model.api.id, model.release_date)
+      const efforts = declaredEfforts ?? openaiReasoningEfforts(model.api.id, model.release_date)
       return Object.fromEntries(
         efforts.map((effort) => [
           effort,
           {
             reasoningEffort: effort,
             reasoningSummary: "auto",
-            include: ["reasoning.encrypted_content"],
+            include: INCLUDE_ENCRYPTED_REASONING,
           },
         ]),
       )
@@ -1126,7 +1148,11 @@ export function options(input: {
   }
 
   if (input.model.api.id.includes("gpt-5") && !input.model.api.id.includes("gpt-5-chat")) {
-    result["reasoningEffort"] = "medium"
+    if (input.model.api.npm === "@openrouter/ai-sdk-provider") {
+      result["reasoning"] = { effort: "medium" }
+    } else {
+      result["reasoningEffort"] = "medium"
+    }
     // Only inject reasoningSummary for providers that support it natively.
     // @ai-sdk/openai-compatible proxies (e.g. LiteLLM) do not understand this
     // parameter and return "Unknown parameter: 'reasoningSummary'".
@@ -1136,6 +1162,9 @@ export function options(input: {
       input.model.api.npm === "@ai-sdk/github-copilot"
     ) {
       result["reasoningSummary"] = "auto"
+    }
+    if (input.model.api.npm === "@ai-sdk/openai") {
+      result["include"] = INCLUDE_ENCRYPTED_REASONING
     }
 
     // Only set textVerbosity for non-chat gpt-5.x models
@@ -1151,7 +1180,7 @@ export function options(input: {
 
     if (input.model.providerID.startsWith("opencode")) {
       result["promptCacheKey"] = input.sessionID
-      result["include"] = ["reasoning.encrypted_content"]
+      result["include"] = INCLUDE_ENCRYPTED_REASONING
       result["reasoningSummary"] = "auto"
     }
   }

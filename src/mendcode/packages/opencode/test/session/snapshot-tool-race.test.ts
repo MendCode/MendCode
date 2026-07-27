@@ -14,6 +14,7 @@
 import { expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
+import type { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 import fs from "fs/promises"
 import path from "path"
 import { Session } from "@/session/session"
@@ -158,7 +159,13 @@ function makeHttp() {
   )
 }
 
-const it = testEffect(makeHttp())
+const it = testEffect(
+  makeHttp() as unknown as Layer.Layer<
+    Session.Service | SessionSummary.Service | SessionPrompt.Service | TestLLMServer | ChildProcessSpawner,
+    never,
+    never
+  >,
+)
 
 const providerCfg = (url: string) => ({
   provider: {

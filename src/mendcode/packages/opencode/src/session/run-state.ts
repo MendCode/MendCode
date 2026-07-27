@@ -8,13 +8,19 @@ import { SessionStatus } from "./status"
 
 export interface Interface {
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void>
+  readonly isBusy: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
+  readonly cancelQueued: (sessionID: SessionID, queueKey: string) => Effect.Effect<boolean>
   readonly ensureRunning: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<MessageV2.WithParts>,
     work: Effect.Effect<MessageV2.WithParts>,
-    options?: { queue?: boolean },
+    options?: Runner.EnsureRunningOptions,
   ) => Effect.Effect<MessageV2.WithParts>
+  readonly interrupt: (
+    sessionID: SessionID,
+    options?: NonNullable<Runner.EnsureRunningOptions["interrupt"]>,
+  ) => Effect.Effect<void>
   readonly startShell: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<MessageV2.WithParts>,
@@ -75,6 +81,11 @@ export const layer = Layer.effect(
       if (existing?.busy) throw new Session.BusyError(sessionID)
     })
 
+    const isBusy = Effect.fn("SessionRunState.isBusy")(function* (sessionID: SessionID) {
+      const data = yield* InstanceState.get(state)
+      return data.runners.get(sessionID)?.busy ?? false
+    })
+
     const cancel = Effect.fn("SessionRunState.cancel")(function* (sessionID: SessionID) {
       const data = yield* InstanceState.get(state)
       const existing = data.runners.get(sessionID)
@@ -85,11 +96,31 @@ export const layer = Layer.effect(
       yield* existing.cancel
     })
 
+    const cancelQueued = Effect.fn("SessionRunState.cancelQueued")(function* (
+      sessionID: SessionID,
+      queueKey: string,
+    ) {
+      const data = yield* InstanceState.get(state)
+      const existing = data.runners.get(sessionID)
+      if (!existing) return false
+      return yield* existing.cancelPending((key) => key === queueKey)
+    })
+
+    const interrupt = Effect.fn("SessionRunState.interrupt")(function* (
+      sessionID: SessionID,
+      options?: NonNullable<Runner.EnsureRunningOptions["interrupt"]>,
+    ) {
+      const data = yield* InstanceState.get(state)
+      const existing = data.runners.get(sessionID)
+      if (!existing) return
+      yield* existing.interruptCurrent(options)
+    })
+
     const ensureRunning = Effect.fn("SessionRunState.ensureRunning")(function* (
       sessionID: SessionID,
       onInterrupt: Effect.Effect<MessageV2.WithParts>,
       work: Effect.Effect<MessageV2.WithParts>,
-      options?: { queue?: boolean },
+      options?: Runner.EnsureRunningOptions,
     ) {
       return yield* (yield* runner(sessionID, onInterrupt)).ensureRunning(work, options)
     })
@@ -103,7 +134,7 @@ export const layer = Layer.effect(
       return yield* (yield* runner(sessionID, onInterrupt)).startShell(work, ready)
     })
 
-    return Service.of({ assertNotBusy, cancel, ensureRunning, startShell })
+    return Service.of({ assertNotBusy, isBusy, cancel, cancelQueued, ensureRunning, interrupt, startShell })
   }),
 )
 

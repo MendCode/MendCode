@@ -13,6 +13,135 @@ export type PromptSource = {
   behavior: string[]
 }
 
+export type PromptBehaviorProfile = {
+  id: string
+  focusID: string
+  label: string
+  sourcePolicy: "public-model-guidance" | "mendcode-compatibility"
+  behavior: string[]
+}
+
+const modelBehaviorProfiles: Array<PromptBehaviorProfile & { match: RegExp }> = [
+  {
+    id: "gpt-5.6",
+    focusID: "codex",
+    label: "GPT-5.6 compatibility",
+    sourcePolicy: "mendcode-compatibility",
+    match: /(^|[^a-z0-9])gpt[-_.:/]?5[-_.:/]?6([^a-z0-9]|$)/i,
+    behavior: [
+      "No public GPT-5.6-specific Codex harness snapshot is tracked; use the actual runtime contract instead of assuming GPT-5.2 behavior.",
+      "Treat aliases, transport, reasoning settings, caching, and advanced features as runtime configuration; use only capabilities exposed by this session.",
+    ],
+  },
+  {
+    id: "claude-sonnet-5",
+    focusID: "claude",
+    label: "Claude Sonnet 5 public behavior guidance",
+    sourcePolicy: "public-model-guidance",
+    match: /(^|[^a-z0-9])claude[-_.:/]?sonnet[-_.:/]?5(?:3)?([^a-z0-9]|$)/i,
+    behavior: [
+      "State instructions explicitly and scope them to every item they govern; do not rely on silent generalization.",
+      "For complex coding or agentic work, use tools deliberately, verify results, and provide useful progress updates without repetitive forced summaries.",
+      "Keep simple responses concise and expand only when the task complexity requires it.",
+    ],
+  },
+  {
+    id: "claude-opus-5",
+    focusID: "claude",
+    label: "Claude Opus 5 public behavior guidance",
+    sourcePolicy: "public-model-guidance",
+    match: /(^|[^a-z0-9])claude[-_.:/]?opus[-_.:/]?5(?:3)?([^a-z0-9]|$)/i,
+    behavior: [
+      "Treat complex coding as long-horizon agentic work: decompose the task, use tools, inspect results, and self-verify before reporting completion.",
+      "Keep the requested scope and runtime permissions explicit instead of inferring capabilities from the model name or transport.",
+    ],
+  },
+  {
+    id: "glm-5.2",
+    focusID: "glm",
+    label: "GLM-5.2 public behavior guidance",
+    sourcePolicy: "public-model-guidance",
+    match: /(^|[^a-z0-9])(?:glm|zhipu|z[-_.]?ai)[-_.:/]?5[-_.:/]?2([^a-z0-9]|$)/i,
+    behavior: [
+      "Treat long-horizon work as iterative: plan, use tools, inspect results, and revise rather than stopping after the first pass.",
+      "Use repository evidence and the context actually exposed by the runtime; do not assume a large context window or reasoning mode is available.",
+      "Keep reasoning effort and thinking controls as runtime configuration; do not promise max, high, or disabled thinking unless the session exposes it.",
+    ],
+  },
+  {
+    id: "glm-5.1",
+    focusID: "glm",
+    label: "GLM-5.1 public behavior guidance",
+    sourcePolicy: "public-model-guidance",
+    match: /(^|[^a-z0-9])(?:glm|zhipu|z[-_.]?ai)[-_.:/]?5[-_.:/]?1([^a-z0-9]|$)/i,
+    behavior: [
+      "Treat long-horizon work as iterative: plan, use tools, inspect results, and revise rather than stopping after the first pass.",
+      "Use repository evidence and the context actually exposed by the runtime; do not assume a large context window or reasoning mode is available.",
+      "Keep reasoning effort and thinking controls as runtime configuration; do not promise max, high, or disabled thinking unless the session exposes it.",
+    ],
+  },
+  {
+    id: "deepseek-v4",
+    focusID: "deepseek",
+    label: "DeepSeek V4 public behavior guidance",
+    sourcePolicy: "public-model-guidance",
+    match: /(^|[^a-z0-9])deepseek[-_.:/]?v?4(?:[-_.:/]?(?:flash|pro))?(?:\[[^\]]+\])?([^a-z0-9]|$)/i,
+    behavior: [
+      "Use the actual model and tools exposed by the provider; compatibility layers may alias Claude model names to DeepSeek models.",
+      "Treat thinking, context limits, web search, and subagent settings as runtime configuration rather than prompt guarantees.",
+      "On long tasks, use tools and verify results; report uncertainty instead of inventing provider-specific behavior.",
+    ],
+  },
+  {
+    id: "deepseek-v3.2-exp",
+    focusID: "deepseek",
+    label: "DeepSeek V3.2-Exp public behavior guidance",
+    sourcePolicy: "public-model-guidance",
+    match: /(^|[^a-z0-9])deepseek[-_.:/]?v?3[-_.:/]?2(?:[-_.:/]?exp)?([^a-z0-9]|$)/i,
+    behavior: [
+      "Use the actual model and tools exposed by the provider; do not infer capabilities from an OpenAI- or Anthropic-compatible transport.",
+      "Treat thinking, context limits, web search, and subagent settings as runtime configuration rather than prompt guarantees.",
+      "For coding work, iterate with tools and verify the result before reporting completion.",
+    ],
+  },
+  {
+    id: "kimi-k2.5",
+    focusID: "kimi",
+    label: "Kimi K2.5 public behavior guidance",
+    sourcePolicy: "public-model-guidance",
+    match: /(^|[^a-z0-9])(?:kimi|moonshot)[-_.:/]?k2[-_.:/]?5([^a-z0-9]|$)/i,
+    behavior: [
+      "Treat multimodal and agentic capabilities as runtime features; use only the tools and modes exposed by the current provider.",
+      "Keep instant and thinking modes as runtime configuration rather than assuming one from the model name.",
+      "Use the coding toolchain deliberately, inspect outputs, and verify changes before reporting completion.",
+    ],
+  },
+  {
+    id: "minimax-m2",
+    focusID: "minimax",
+    label: "MiniMax M2 public behavior guidance",
+    sourcePolicy: "public-model-guidance",
+    match: /(^|[^a-z0-9])(?:minimax|mini[-_.]?max)[-_.:/]?m2(?:[-_.:/]?(?:1|5|7))?([^a-z0-9]|$)/i,
+    behavior: [
+      "Treat MiniMax M2.x as coding and agentic model guidance, not as a replacement for MendCode's runtime policy.",
+      "Use tools and skills only when exposed by the current session; do not infer Agent Teams or dynamic tool search from the model name alone.",
+      "Verify tool results and keep the final response proportional to the requested work.",
+    ],
+  },
+  {
+    id: "grok-code-fast-1",
+    focusID: "grok",
+    label: "Grok Code Fast 1 public safety guidance",
+    sourcePolicy: "public-model-guidance",
+    match: /(^|[^a-z0-9])grok[-_.:/]?code[-_.:/]?fast[-_.:/]?1([^a-z0-9]|$)/i,
+    behavior: [
+      "The official xAI source provides a safety prefix, not a complete coding-agent harness; do not present it as one.",
+      "Keep safety boundaries explicit and use the actual tools, permissions, and runtime contract exposed by MendCode.",
+      "Do not expose proprietary prompts or infer hidden xAI behavior from a model alias.",
+    ],
+  },
+]
+
 const promptSources: Record<string, PromptSource> = {
   codex: {
     label: "OpenAI Codex",
@@ -52,7 +181,7 @@ const promptSources: Record<string, PromptSource> = {
     label: "Mistral Vibe",
     license: "Apache-2.0",
     sourcePolicy: "oss-source",
-    promptPath: "mistral/system_prompt.py",
+    promptPath: "mistral/cli_2026-07_v2.md",
     fallbackPath: "mistral/cli.md",
     behavior: ["max-turn/max-price gates", "AGENTS.md layering", "custom system prompt ids", "tool allow/deny patterns"],
   },
@@ -72,6 +201,30 @@ const promptSources: Record<string, PromptSource> = {
     fallbackPath: null,
     behavior: ["model+thinking auto-routing", "visible reasoning stream", "parallel-first tools", "cost/cache/context awareness"],
   },
+  minimax: {
+    label: "MiniMax-family",
+    license: "public-reference-unverified",
+    sourcePolicy: "behavior-only",
+    promptPath: null,
+    fallbackPath: null,
+    behavior: ["coding and agentic workflow awareness", "tool and skill capability boundaries", "runtime-model honesty", "verified outputs"],
+  },
+  grok: {
+    label: "xAI/Grok-family",
+    license: "public-safety-reference",
+    sourcePolicy: "behavior-only",
+    promptPath: null,
+    fallbackPath: null,
+    behavior: ["explicit safety boundaries", "runtime capability awareness", "no proprietary prompt claims", "verified coding outputs"],
+  },
+  glm: {
+    label: "GLM-family",
+    license: "public-reference-unverified",
+    sourcePolicy: "behavior-only",
+    promptPath: null,
+    fallbackPath: null,
+    behavior: ["long-horizon task decomposition", "tool-driven iteration", "reasoning-effort awareness", "context-aware execution"],
+  },
 }
 
 export const focusNames: Record<string, string> = {
@@ -81,7 +234,10 @@ export const focusNames: Record<string, string> = {
   kimi: "Kimi CLI",
   mistral: "Mistral Vibe",
   deepseek: "DeepSeek",
+  glm: "GLM/Zhipu",
   local: "Local/open model",
+  minimax: "MiniMax",
+  grok: "xAI/Grok",
   generic: "Generic MendCode",
 }
 
@@ -100,6 +256,20 @@ function sourceFile(root: string, rel: string | null | undefined) {
 
 export function sourceForFocus(focusID: string) {
   return promptSources[focusID] || null
+}
+
+export function promptBehaviorForModel(input: { focusID?: string | null; modelID?: string | null }) {
+  const focusID = input.focusID || ""
+  const modelID = input.modelID || ""
+  return modelBehaviorProfiles.find((profile) => profile.focusID === focusID && profile.match.test(modelID)) || null
+}
+
+export function promptBehaviorText(profile: PromptBehaviorProfile) {
+  return [
+    `Model-specific MendCode adapter: ${profile.label}.`,
+    `Source policy: ${profile.sourcePolicy}; this is behavioral guidance, not an upstream hidden prompt.`,
+    ...profile.behavior.map((item) => `- ${item}`),
+  ].join("\n")
 }
 
 function sourceMetadataDir(source: PromptSource) {
@@ -129,7 +299,8 @@ export function resolvePromptSourceFile(source: PromptSource | null, input: { ro
     else if (modelKey.includes("gpt-5.1")) candidates.push(source.promptFiles?.["gpt-5.1"])
     else if (modelKey.includes("gpt-5-codex") || modelKey === "codex" || modelKey.includes("codex")) candidates.push(source.promptFiles?.["gpt-5-codex"])
   }
-  candidates.push(source.promptPath, source.fallbackPath)
+  if (modelKey && source.label === "OpenAI Codex" && candidates.length === 0) candidates.push(source.fallbackPath)
+  else candidates.push(source.promptPath, source.fallbackPath)
   for (const candidate of candidates.filter(Boolean)) {
     const file = path.isAbsolute(candidate!) ? candidate! : sourceFile(root, candidate)!
     if (existsSync(file)) return file

@@ -532,20 +532,192 @@ function pluginApi(runtime: RuntimeState, plugin: PluginEntry, scope: PluginScop
     },
   }
 
+  const shell: TuiPluginApi["shell"] = {
+    spawn(command, options) {
+      const proc = api.shell.spawn(command, options)
+      scope.track(() => {
+        void proc.stop()
+      })
+      return proc
+    },
+  }
+
+  const pty: TuiPluginApi["pty"] = {
+    async spawn(command, options) {
+      const proc = await api.pty.spawn(command, options)
+      scope.track(() => {
+        void proc.stop()
+      })
+      return proc
+    },
+  }
+
+  const ownedUi = new Map<string, () => void>()
+  const rememberUi = (key: string, cleanup: TuiDispose) => {
+    ownedUi.get(key)?.()
+    ownedUi.set(key, scope.lifecycle.onDispose(cleanup))
+  }
+  const forgetUi = (key: string) => {
+    const off = ownedUi.get(key)
+    if (!off) return
+    ownedUi.delete(key)
+    off()
+  }
+  const clearOwnedUi = (key: string, clear: () => boolean) => {
+    const ok = clear()
+    if (ok) forgetUi(key)
+    return ok
+  }
+
+  const runtimeUi: TuiPluginApi["ui"]["runtime"] = {
+    customization: api.ui.runtime.customization,
+    setStatus(id, value, input) {
+      if (!value) return runtimeUi.clearStatus(id)
+      const ok = api.ui.runtime.setStatus(id, value, input)
+      if (ok)
+        rememberUi(`status:${id}`, () => {
+          api.ui.runtime.clearStatus(id)
+        })
+      return ok
+    },
+    clearStatus(id) {
+      return clearOwnedUi(`status:${id}`, () => api.ui.runtime.clearStatus(id))
+    },
+    setWidget(id, render, input) {
+      if (!render) return runtimeUi.clearWidget(id)
+      const ok = api.ui.runtime.setWidget(id, render, input)
+      if (ok)
+        rememberUi(`widget:${id}`, () => {
+          api.ui.runtime.clearWidget(id)
+        })
+      return ok
+    },
+    clearWidget(id) {
+      return clearOwnedUi(`widget:${id}`, () => api.ui.runtime.clearWidget(id))
+    },
+    focusWidget(id) {
+      return api.ui.runtime.focusWidget(id)
+    },
+    blurWidget(id) {
+      return api.ui.runtime.blurWidget(id)
+    },
+    setFooter(renderer) {
+      const ok = api.ui.runtime.setFooter(renderer)
+      if (!ok) return false
+      if (!renderer) {
+        forgetUi("footer")
+        return true
+      }
+      rememberUi("footer", () => {
+        api.ui.runtime.setFooter()
+      })
+      return true
+    },
+    setFooterEntry(id, render, input) {
+      if (!render) return clearOwnedUi(`footer-entry:${id}`, () => api.ui.runtime.setFooterEntry(id))
+      const ok = api.ui.runtime.setFooterEntry(id, render, input)
+      if (ok)
+        rememberUi(`footer-entry:${id}`, () => {
+          api.ui.runtime.setFooterEntry(id)
+        })
+      return ok
+    },
+    setWorkingIndicator(input) {
+      const ok = api.ui.runtime.setWorkingIndicator(input)
+      if (!ok) return false
+      if (!input) {
+        forgetUi("working-indicator")
+        return true
+      }
+      rememberUi("working-indicator", () => {
+        api.ui.runtime.setWorkingIndicator()
+      })
+      return true
+    },
+    registerCompactionArcadeGame(game) {
+      const ok = api.ui.runtime.registerCompactionArcadeGame(game)
+      if (ok)
+        rememberUi(`compaction-arcade:${game.id}`, () => {
+          api.ui.runtime.clearCompactionArcadeGame(game.id)
+        })
+      return ok
+    },
+    clearCompactionArcadeGame(id) {
+      return clearOwnedUi(`compaction-arcade:${id}`, () => api.ui.runtime.clearCompactionArcadeGame(id))
+    },
+    setEditorVisual(input) {
+      const ok = api.ui.runtime.setEditorVisual(input)
+      if (!ok) return false
+      if (!input) {
+        forgetUi("editor-visual")
+        return true
+      }
+      rememberUi("editor-visual", () => {
+        api.ui.runtime.setEditorVisual()
+      })
+      return true
+    },
+    setEditor(factory) {
+      const ok = api.ui.runtime.setEditor(factory)
+      if (!ok) return false
+      if (!factory) {
+        forgetUi("editor")
+        return true
+      }
+      rememberUi("editor", () => {
+        api.ui.runtime.setEditor()
+      })
+      return true
+    },
+  }
+
+  const ui: TuiPluginApi["ui"] = {
+    ...api.ui,
+    overlay: {
+      open(id, render, options) {
+        const ok = api.ui.overlay.open(id, render, options)
+        if (ok)
+          rememberUi(`overlay:${id}`, () => {
+            api.ui.overlay.close(id)
+          })
+        return ok
+      },
+      close(id) {
+        return clearOwnedUi(`overlay:${id}`, () => api.ui.overlay.close(id))
+      },
+      focus(id) {
+        return api.ui.overlay.focus(id)
+      },
+      blur(id) {
+        return api.ui.overlay.blur(id)
+      },
+      focused() {
+        return api.ui.overlay.focused()
+      },
+    },
+    runtime: runtimeUi,
+  }
+
   return {
     app: api.app,
     command,
     route,
-    ui: api.ui,
+    ui,
     keybind: api.keybind,
     tuiConfig: api.tuiConfig,
     kv: api.kv,
     state: api.state,
+    session: api.session,
+    metadata: api.metadata,
+    ai: api.ai,
+    memory: api.memory,
     theme,
     get client() {
       return api.client
     },
     event,
+    shell,
+    pty,
     renderer: api.renderer,
     slots,
     plugins: {

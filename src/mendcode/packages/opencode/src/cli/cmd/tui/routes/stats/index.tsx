@@ -1,19 +1,34 @@
-import { For, Match, Show, Switch, createEffect, createMemo, createResource, createSignal, onCleanup } from "solid-js"
+import {
+  For,
+  Match,
+  Show,
+  Switch,
+  batch,
+  createEffect,
+  createMemo,
+  createResource,
+  createSelector,
+  createSignal,
+  onCleanup,
+} from "solid-js"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { routeReturnTarget, useRoute } from "@tui/context/route"
 import { useSDK } from "@tui/context/sdk"
 import { useTheme } from "@tui/context/theme"
 import { useSync } from "@tui/context/sync"
-import { useMendTuiProfile } from "@tui/context/mend"
 import { useProject } from "@tui/context/project"
 import { useKV } from "@tui/context/kv"
 import { useDialog } from "@tui/ui/dialog"
 import { DialogPrompt } from "@tui/ui/dialog-prompt"
+import { Spinner } from "@tui/component/spinner"
+import { CommandDeck, commandDeckLayout } from "@tui/component/command-deck"
 import { Locale } from "@/util/locale"
 import path from "path"
+import { abortAfterAny } from "@/util/abort"
 import {
   buildUsageInsights,
   formatInsightDuration,
+  formatInsightNumber,
   normalizeUsageInsights,
   type DailyUsage,
   type SessionInsightInput,
@@ -24,9 +39,17 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_DAYS = 365
 const ADVANCED_DAYS = 365
 const WEATHER_KV_KEY = "stats_weather"
-export const STATS_CACHE_KEY = "stats_insights"
+export const STATS_CACHE_KEY = "stats_insights_v2"
+const STATS_CACHE_STALE_MS = 5 * 60 * 1000
+const STATS_TODAY_CACHE_STALE_MS = 5 * 60 * 1000
+const STATS_REQUEST_TIMEOUT_MS = 10 * 1000
+const STATS_AGGREGATE_MESSAGE_LIMIT = 200
+const STATS_FALLBACK_SESSION_LIMIT = 100
+const STATS_FALLBACK_MESSAGE_LIMIT = 100
+const STATS_MESSAGE_FETCH_CONCURRENCY = 12
 const HEATMAP_ROWS = 7
 const HEATMAP_COLUMNS = Math.ceil(DEFAULT_DAYS / HEATMAP_ROWS)
+const HEAT_MODES: HeatMode[] = ["daily", "weekly", "cumulative"]
 
 type HeatMode = "daily" | "weekly" | "cumulative"
 type StatsScope = "global" | "project" | "directory"
@@ -78,7 +101,55 @@ function heatGlyph(value: number, peak: number) {
 }
 
 function heatColor(theme: ReturnType<typeof useTheme>["theme"], value: number, peak: number) {
-  return [theme.textMuted, theme.border, theme.accent, theme.primary, theme.success][intensity(value, peak)]
+  return [theme.textMuted, theme.primary, theme.accent, theme.warning, theme.success][intensity(value, peak)]
+}
+
+export function statsDayTokenValue(
+  day: Pick<DailyUsage, "tokens" | "inputTokens" | "outputTokens" | "reasoningTokens" | "cacheTokens">,
+) {
+  const components = day.inputTokens + day.outputTokens + day.reasoningTokens + day.cacheTokens
+  return day.tokens > 0 || components <= 0 ? day.tokens : components
+}
+
+export function statsDayVisualValue(
+  day: Pick<
+    DailyUsage,
+    | "tokens"
+    | "inputTokens"
+    | "outputTokens"
+    | "reasoningTokens"
+    | "cacheTokens"
+    | "sessions"
+    | "messages"
+    | "userMessages"
+    | "aiResponseMs"
+    | "toolMs"
+  >,
+) {
+  const tokens = statsDayTokenValue(day)
+  if (tokens > 0) return tokens
+  return day.messages > day.userMessages || day.sessions > 0 || day.aiResponseMs > 0 || day.toolMs > 0 ? 1 : 0
+}
+
+export function statsGraphSeries(input: {
+  days: readonly DailyUsage[]
+  mode: Exclude<HeatMode, "daily">
+  rowCount?: number
+}) {
+  const rowCount = Math.max(1, input.rowCount ?? HEATMAP_ROWS)
+  let running = 0
+  return Array.from({ length: Math.ceil(input.days.length / rowCount) }, (_, column) => {
+    const start = column * rowCount
+    const slice = input.days.slice(start, start + rowCount)
+    const weekly = slice.reduce((sum, day) => sum + statsDayTokenValue(day), 0)
+    running += weekly
+    return {
+      index: start,
+      endIndex: start + Math.max(0, slice.length - 1),
+      value: input.mode === "cumulative" ? running : weekly,
+      day: slice.at(-1)?.day,
+    }
+  })
 }
 
 function stat(label: string, value: string, detail?: string) {
@@ -92,6 +163,7 @@ function Panel(props: {
   grow?: boolean
   height?: number | `${number}%`
   onMouseUp?: () => void
+  titlePaddingTop?: number
 }) {
   const { theme } = useTheme()
   return (
@@ -107,15 +179,19 @@ function Panel(props: {
       borderColor={theme.border}
       paddingLeft={1}
       paddingRight={1}
-      paddingTop={1}
+      paddingTop={props.titlePaddingTop ?? 1}
       paddingBottom={1}
       gap={1}
       onMouseUp={props.onMouseUp}
     >
-      <text fg={theme.primary} wrapMode="none">
-        {props.title}
-      </text>
-      {props.children}
+      <box height={1} overflow="hidden">
+        <text fg={theme.primary} wrapMode="none">
+          {props.title}
+        </text>
+      </box>
+      <box flexDirection="column" flexGrow={1} minHeight={0} overflow="hidden" gap={1}>
+        {props.children}
+      </box>
     </box>
   )
 }
@@ -144,53 +220,6 @@ function MetricRows(props: {
         }}
       </For>
     </box>
-  )
-}
-
-function Header(props: { advanced: boolean; scope: StatsScope; narrow: boolean }) {
-  const { theme } = useTheme()
-  const mend = useMendTuiProfile()
-  const view =
-    props.scope === "global" ? "global stats" : props.scope === "project" ? "project stats" : "directory stats"
-  const status = `${mend.profile.identity.productName} · ${view} · daily · 365d${props.advanced ? "" : " · compact"}`
-  const shortcuts = "↑/↓ day · ←/→ week · a details · r refresh · w weather · esc"
-  return (
-    <Switch>
-      <Match when={props.narrow}>
-        <box flexDirection="column" height={3} overflow="hidden">
-          <box height={1} overflow="hidden">
-            <text fg={theme.text} wrapMode="none">
-              Usage Insights
-            </text>
-          </box>
-          <box height={1} overflow="hidden">
-            <text fg={theme.textMuted} wrapMode="none">
-              {status}
-            </text>
-          </box>
-          <box height={1} overflow="hidden">
-            <text fg={theme.textMuted} wrapMode="none">
-              {shortcuts}
-            </text>
-          </box>
-        </box>
-      </Match>
-      <Match when={!props.narrow}>
-        <box flexDirection="row" justifyContent="space-between" height={2} overflow="hidden">
-          <box flexDirection="column" height={2} overflow="hidden">
-            <text fg={theme.text} wrapMode="none">
-              Usage Insights
-            </text>
-            <text fg={theme.textMuted} wrapMode="none">
-              {status}
-            </text>
-          </box>
-          <text fg={theme.textMuted} wrapMode="none">
-            {shortcuts}
-          </text>
-        </box>
-      </Match>
-    </Switch>
   )
 }
 
@@ -223,9 +252,11 @@ function BigNumber(props: { label: string; value: string; detail?: string; accen
   const { theme } = useTheme()
   return (
     <Panel title={props.label} grow>
-      <text fg={props.accent ? theme.success : theme.text} wrapMode="none">
-        {props.value}
-      </text>
+      <box height={2} justifyContent="center" overflow="hidden">
+        <text fg={props.accent ? theme.success : theme.primary} wrapMode="none">
+          <span style={{ bold: true }}>{props.value}</span>
+        </text>
+      </box>
       <Show when={props.detail}>
         <text fg={theme.textMuted} wrapMode="none">
           {props.detail}
@@ -249,9 +280,16 @@ const CLOCK_DIGITS: Record<string, string[]> = {
   ":": ["     ", "  █  ", "  █  ", "     ", "  █  ", "  █  ", "     "],
 }
 
-function clockAscii(value: string) {
+const CLOCK_WIDTH = 29
+
+export function clockAscii(value: string) {
   const chars = value.replace(/\s[AP]M$/, "").split("")
-  return Array.from({ length: 7 }, (_, row) => chars.map((char) => CLOCK_DIGITS[char]?.[row] ?? "     ").join(" "))
+  return Array.from({ length: 7 }, (_, row) =>
+    chars
+      .map((char) => CLOCK_DIGITS[char]?.[row] ?? "     ")
+      .join(" ")
+      .padEnd(CLOCK_WIDTH),
+  )
 }
 
 function ClockWidget(props: { tall?: boolean }) {
@@ -264,16 +302,18 @@ function ClockWidget(props: { tall?: boolean }) {
     now().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric", year: "numeric" }),
   )
   return (
-    <Panel title="Clock" height={props.tall ? 14 : 12}>
-      <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={0}>
-        <For each={clockAscii(time())}>
-          {(line) => (
-            <text fg={theme.success} wrapMode="none">
-              {line}
-            </text>
-          )}
-        </For>
-        <box height={1} overflow="hidden">
+    <Panel title="Clock" height={props.tall ? 15 : 14}>
+      <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
+        <box flexDirection="column" width={CLOCK_WIDTH} height={7} overflow="hidden">
+          <For each={clockAscii(time())}>
+            {(line) => (
+              <text fg={theme.success} wrapMode="none">
+                {line}
+              </text>
+            )}
+          </For>
+        </box>
+        <box flexDirection="row" width={CLOCK_WIDTH} height={1} justifyContent="center" overflow="hidden">
           <text fg={theme.textMuted} wrapMode="none">
             {date()}
           </text>
@@ -432,21 +472,21 @@ function StatusSummary(props: {
   )
 }
 
-function LoadingStats(props: { tiny: boolean }) {
+function LoadingStats(props: { tiny: boolean; error?: string }) {
   const { theme } = useTheme()
   return (
     <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
       <Panel title="Activity" height={props.tiny ? 8 : 7}>
         <box flexDirection="column" flexGrow={1} justifyContent="center" overflow="hidden" gap={1}>
           <text fg={theme.text} wrapMode="none">
-            Loading session metrics...
+            {props.error ? "Usage insights unavailable" : "Loading session metrics..."}
           </text>
           <text fg={theme.textMuted} wrapMode="none">
-            Reading global cached stats first.
+            {props.error ? "Press r to retry." : "Reading global cached stats first."}
           </text>
         </box>
       </Panel>
-      <Panel title="Token activity · daily · 365 days" grow>
+       <Panel title="Token activity · daily · 365 days" titlePaddingTop={0} grow>
         <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
           <text fg={theme.textMuted} wrapMode="none">
             · · · · · · · · · · · · · · · · · · · · ·
@@ -461,9 +501,9 @@ function LoadingStats(props: { tiny: boolean }) {
 }
 
 function selectedDayRows(day: DailyUsage) {
-  const number = (value: number | undefined) => Locale.number(value ?? 0)
+  const number = (value: number | undefined) => formatInsightNumber(value ?? 0)
   return [
-    stat("tokens", number(day.tokens), `${number(day.cacheTokens)} cache`),
+    stat("tokens", number(statsDayTokenValue(day)), `${number(day.cacheTokens)} cache included`),
     stat(
       "mix",
       `${number(day.inputTokens)} in`,
@@ -501,7 +541,7 @@ function CompactStats(props: {
   contentWidth: number
   selectedDay?: DailyUsage
   selectedDayIndex?: number
-  onSelectDay?: (index: number) => void
+  activityLoading?: boolean
   tokenRows?: Array<{ label: string; value: string; detail?: string }>
   responseRows?: Array<{ label: string; value: string; detail?: string }>
   statusRows?: Array<{ label: string; value: string; detail?: string }>
@@ -512,8 +552,8 @@ function CompactStats(props: {
       <Panel title="Activity" height={8}>
         <MetricRows items={props.headline.slice(0, 4)} maxWidth={props.contentWidth} />
       </Panel>
-      <Panel title="Token activity · daily · 365 days" grow>
-        <UsageHeatmap
+       <Panel title={`Token activity · ${props.mode} · 365 days`} titlePaddingTop={0} grow>
+        <TokenActivityView
           insights={props.insights}
           mode={props.mode}
           columns={props.columns}
@@ -521,7 +561,7 @@ function CompactStats(props: {
           rows={7}
           labels={true}
           selectedIndex={props.selectedDayIndex}
-          onSelectDay={props.onSelectDay}
+          loading={props.activityLoading}
         />
         <SelectedDayDetail day={props.selectedDay} width={props.contentWidth} compact />
       </Panel>
@@ -550,7 +590,7 @@ function MainDashboard(props: {
   heatCellWidth: number
   selectedDay?: DailyUsage
   selectedDayIndex?: number
-  onSelectDay: (index: number) => void
+  activityLoading?: boolean
   kpis: Array<{ label: string; value: string; detail?: string }>
   tokenRows: Array<{ label: string; value: string; detail?: string }>
   responseRows: Array<{ label: string; value: string; detail?: string }>
@@ -577,15 +617,15 @@ function MainDashboard(props: {
 
       <box flexDirection={props.wide ? "row" : "column"} flexGrow={1} minHeight={0} gap={1}>
         <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0} gap={1}>
-          <Panel title="Token activity · daily · 365 days" grow>
-            <UsageHeatmap
+          <Panel title={`Token activity · ${props.mode} · 365 days`} titlePaddingTop={0} grow>
+            <TokenActivityView
               insights={props.data}
               mode={props.mode}
               columns={props.heatColumns}
               cellWidth={props.heatCellWidth}
               labels={props.roomy}
               selectedIndex={props.selectedDayIndex}
-              onSelectDay={props.onSelectDay}
+              loading={props.activityLoading}
             />
             <SelectedDayDetail day={props.selectedDay} width={props.contentWidth} />
           </Panel>
@@ -626,7 +666,10 @@ function MainDashboard(props: {
                   </Match>
                   <Match when={props.data.topTools.length > 0}>
                     <ListRows
-                      items={props.data.topTools.map((item) => ({ name: item.name, right: Locale.number(item.count) }))}
+                      items={props.data.topTools.map((item) => ({
+                        name: item.name,
+                        right: formatInsightNumber(item.count),
+                      }))}
                       nameWidth={20}
                     />
                   </Match>
@@ -636,13 +679,15 @@ function MainDashboard(props: {
                 <ListRows
                   items={props.data.topAgents
                     .slice(0, 3)
-                    .map((item) => ({ name: item.name, right: Locale.number(item.count) }))}
+                    .map((item) => ({ name: item.name, right: formatInsightNumber(item.count) }))}
                   nameWidth={22}
                 />
                 <ListRows
-                  items={props.data.topModels
-                    .slice(0, 2)
-                    .map((item) => ({ name: item.name, right: Locale.number(item.tokens), color: theme.textMuted }))}
+                  items={props.data.topModels.slice(0, 2).map((item) => ({
+                    name: item.name,
+                    right: formatInsightNumber(item.tokens),
+                    color: theme.textMuted,
+                  }))}
                   nameWidth={24}
                 />
               </Panel>
@@ -708,6 +753,120 @@ type HeatCell = {
   value: number
 }
 
+function UsageGraph(props: {
+  insights: UsageInsights
+  mode: Exclude<HeatMode, "daily">
+  columns: number
+  cellWidth?: number
+  rows?: number
+  selectedIndex?: number
+}) {
+  const { theme } = useTheme()
+  const rowCount = createMemo(() => props.rows ?? 7)
+  const visible = createMemo(() => props.insights.days.slice(-props.columns * rowCount()))
+  const visibleStart = createMemo(() => Math.max(0, props.insights.days.length - visible().length))
+  const series = createMemo(() => statsGraphSeries({ days: visible(), mode: props.mode, rowCount: rowCount() }))
+  const peak = createMemo(() => Math.max(1, ...series().map((point) => point.value)))
+  const cellWidth = createMemo(() => Math.max(1, props.cellWidth ?? 2))
+  const graphHeight = createMemo(() => Math.max(4, Math.min(8, rowCount())))
+  const selectedColumn = createMemo(() => {
+    const selected = props.selectedIndex
+    if (selected === undefined) return undefined
+    return series().findIndex(
+      (point) => selected >= visibleStart() + point.index && selected <= visibleStart() + point.endIndex,
+    )
+  })
+  const isSelectedColumn = createSelector(selectedColumn)
+  const labels = createMemo(() => timelineLabels(visible()))
+  const graphCell = (point: ReturnType<typeof statsGraphSeries>[number], row: number) => {
+    if (point.value <= 0) return "".padEnd(cellWidth())
+    const level = Math.round((point.value / peak()) * (graphHeight() - 1))
+    const rowLevel = graphHeight() - 1 - row
+    return (rowLevel <= level ? "█" : " ").padEnd(cellWidth())
+  }
+  return (
+    <box flexDirection="column" flexGrow={1} minHeight={0} gap={0}>
+      <box flexDirection="column" flexGrow={1} justifyContent="center" gap={0}>
+        <For each={Array.from({ length: graphHeight() }, (_, index) => index)}>
+          {(row) => (
+            <box flexDirection="row" gap={0} height={1} justifyContent="space-between" width="100%">
+              <For each={series()}>
+                {(point, column) => (
+                  <text
+                    fg={
+                      isSelectedColumn(column())
+                        ? theme.warning
+                        : props.mode === "cumulative"
+                          ? theme.primary
+                          : theme.success
+                    }
+                    wrapMode="none"
+                  >
+                    {graphCell(point, row)}
+                  </text>
+                )}
+              </For>
+            </box>
+          )}
+        </For>
+      </box>
+      <Show when={props.rows !== 7}>
+        <box flexDirection="row" justifyContent="space-between" paddingTop={1} overflow="hidden">
+          <For each={labels()}>{(label) => <text fg={theme.textMuted}>{label}</text>}</For>
+        </box>
+      </Show>
+    </box>
+  )
+}
+
+function TokenActivityView(props: {
+  insights: UsageInsights
+  mode: HeatMode
+  columns: number
+  cellWidth?: number
+  rows?: number
+  labels?: boolean
+  selectedIndex?: number
+  loading?: boolean
+}) {
+  return (
+    <Show
+      when={!props.loading}
+      fallback={
+        <box flexDirection="column" width="100%" flexGrow={1} minHeight={0} justifyContent="center" alignItems="center">
+          <Spinner>updating token activity…</Spinner>
+        </box>
+      }
+    >
+      <box flexDirection="column" flexGrow={1} minHeight={0} gap={0}>
+        <Switch>
+          <Match when={props.mode === "daily"}>
+            <UsageHeatmap
+              insights={props.insights}
+              mode="daily"
+              columns={props.columns}
+              cellWidth={props.cellWidth}
+              rows={props.rows}
+              labels={props.labels}
+              selectedIndex={props.selectedIndex}
+            />
+          </Match>
+          <Match when={props.mode === "weekly" || props.mode === "cumulative"}>
+            <UsageGraph
+              insights={props.insights}
+              mode={props.mode === "cumulative" ? "cumulative" : "weekly"}
+              columns={props.columns}
+              cellWidth={props.cellWidth}
+              rows={props.rows}
+              selectedIndex={props.selectedIndex}
+            />
+          </Match>
+        </Switch>
+      </box>
+    </Show>
+  )
+}
+
 function UsageHeatmap(props: {
   insights: UsageInsights
   mode: HeatMode
@@ -716,7 +875,6 @@ function UsageHeatmap(props: {
   rows?: number
   labels?: boolean
   selectedIndex?: number
-  onSelectDay?: (index: number) => void
 }) {
   const { theme } = useTheme()
   const rowCount = createMemo(() => props.rows ?? 7)
@@ -726,7 +884,7 @@ function UsageHeatmap(props: {
   const cellWidth = createMemo(() => Math.max(1, props.cellWidth ?? 2))
   const values = createMemo(() => {
     if (props.mode === "weekly") {
-      const daily = visible().map((day) => day.tokens + day.userWords * 3 + day.sessions * 500)
+      const daily = visible().map(statsDayTokenValue)
       return daily.map((_, index) => {
         const column = Math.floor(index / rowCount())
         const start = column * rowCount()
@@ -735,7 +893,7 @@ function UsageHeatmap(props: {
     }
     let running = 0
     return visible().map((day) => {
-      const value = day.tokens
+      const value = props.mode === "daily" ? statsDayVisualValue(day) : statsDayTokenValue(day)
       if (props.mode === "cumulative") {
         running += value
         return running
@@ -761,9 +919,10 @@ function UsageHeatmap(props: {
     })
   })
   const labels = createMemo(() => timelineLabels(visible()))
+  const isSelected = createSelector(() => props.selectedIndex)
   const cellText = (cell: HeatCell) => {
     if (cell.index === undefined) return "".padEnd(cellWidth())
-    if (cell.index === props.selectedIndex) return "▣".padEnd(cellWidth())
+    if (isSelected(cell.index)) return "▣".padEnd(cellWidth())
     return heatGlyph(cell.value, peak()).padEnd(cellWidth())
   }
 
@@ -776,10 +935,12 @@ function UsageHeatmap(props: {
               <For each={row}>
                 {(cell) => (
                   <text
-                    fg={cell.index === props.selectedIndex ? theme.warning : heatColor(theme, cell.value, peak())}
+                    fg={
+                      cell.index !== undefined && isSelected(cell.index)
+                        ? theme.warning
+                        : heatColor(theme, cell.value, peak())
+                    }
                     wrapMode="none"
-                    onMouseOver={() => cell.index !== undefined && props.onSelectDay?.(cell.index)}
-                    onMouseUp={() => cell.index !== undefined && props.onSelectDay?.(cell.index)}
                   >
                     {cellText(cell)}
                   </text>
@@ -810,45 +971,183 @@ function statsURL(
   return url
 }
 
-async function listGlobalSessions(sdk: ReturnType<typeof useSDK>, query: SessionListQuery) {
+async function listGlobalSessions(sdk: ReturnType<typeof useSDK>, query: SessionListQuery, signal: AbortSignal) {
   const headers = new Headers(sdk.headers)
   if (sdk.directory) headers.set("x-mendcode-directory", encodeURIComponent(sdk.directory))
   try {
-    const response = await sdk.fetch(statsURL(sdk, "/experimental/session", query), { headers })
+    const response = await sdk.fetch(statsURL(sdk, "/experimental/session", query), { headers, signal })
     if (!response.ok) throw new Error(`global stats failed: ${response.status}`)
     return (await response.json()) as SessionInsightInput["session"][]
-  } catch {
-    const result = await sdk.client.experimental.session.list(query, { throwOnError: true })
+  } catch (error) {
+    if (signal.aborted) throw error
+    const result = await sdk.client.experimental.session.list(query, { throwOnError: true, signal })
     return (result.data ?? []) as SessionInsightInput["session"][]
   }
 }
 
+async function loadGlobalUsageInsights(
+  sdk: ReturnType<typeof useSDK>,
+  input: { start: number; limit: number; messageLimit: number },
+  signal: AbortSignal,
+) {
+  const headers = new Headers(sdk.headers)
+  if (sdk.directory) headers.set("x-mendcode-directory", encodeURIComponent(sdk.directory))
+  const response = await sdk.fetch(statsURL(sdk, "/experimental/usage-insights", input), { headers, signal })
+  if (!response.ok) throw new Error(`usage insights failed: ${response.status}`)
+  return (await response.json()) as UsageInsights
+}
+
+export async function mapStatsSessionsInBatches<T, R>(
+  input: readonly T[],
+  load: (item: T) => Promise<R>,
+  options: { concurrency?: number; onBatch?: (items: readonly R[], batch: number, batches: number) => void } = {},
+) {
+  const concurrency = Math.max(1, Math.floor(options.concurrency ?? STATS_MESSAGE_FETCH_CONCURRENCY))
+  const batches = Array.from({ length: Math.ceil(input.length / concurrency) }, (_, index) =>
+    input.slice(index * concurrency, (index + 1) * concurrency),
+  )
+  const result: R[] = []
+  for (const [index, batch] of batches.entries()) {
+    result.push(...(await Promise.all(batch.map(load))))
+    options.onBatch?.(result, index, batches.length)
+  }
+  return result
+}
+
 async function loadInsights(
   sdk: ReturnType<typeof useSDK>,
-  options: { advanced: boolean; scope: StatsScope; query: SessionScopeQuery },
+  options: {
+    advanced: boolean
+    scope: StatsScope
+    query: SessionScopeQuery
+    cached?: boolean
+    signal?: AbortSignal
+    onFirstBatch?: (insights: UsageInsights) => void
+  },
 ) {
   const days = options.advanced ? ADVANCED_DAYS : DEFAULT_DAYS
-  const start = Date.now() - days * DAY_MS
+  const end = Date.now()
+  const start = end - days * DAY_MS
+  const timeout = abortAfterAny(STATS_REQUEST_TIMEOUT_MS, ...(options.signal ? [options.signal] : []))
+  const signal = timeout.signal
   const query: SessionListQuery = {
     start,
     limit: options.advanced ? 1000 : 250,
     ...options.query,
   }
-  const sessions =
-    options.scope === "global"
-      ? await listGlobalSessions(sdk, query)
-      : ((await sdk.client.session.list(query, { throwOnError: true })).data ?? [])
-  const items = await Promise.all(
-    sessions.map(async (session) => {
-      const result = await sdk.client.session.messages({ sessionID: session.id, limit: 500 })
-      return { session, messages: result.data ?? [] } as SessionInsightInput
-    }),
-  )
-  return buildUsageInsights(items, { start, end: Date.now() })
+  try {
+    if (options.scope === "global") {
+      if (options.onFirstBatch && query.limit > STATS_FALLBACK_SESSION_LIMIT) {
+        const partial = await loadGlobalUsageInsights(
+          sdk,
+          {
+            start,
+            limit: STATS_FALLBACK_SESSION_LIMIT,
+            messageLimit: STATS_FALLBACK_MESSAGE_LIMIT,
+          },
+          signal,
+        ).catch(() => undefined)
+        if (partial) options.onFirstBatch(partial)
+      }
+      let aggregateError: unknown
+      const aggregated = await loadGlobalUsageInsights(
+        sdk,
+        {
+          start,
+          limit: query.limit,
+          messageLimit: STATS_AGGREGATE_MESSAGE_LIMIT,
+        },
+        signal,
+      ).catch((error) => {
+        aggregateError = error
+        return undefined
+      })
+      if (aggregated) return aggregated
+      // Never fan out transcript requests behind a cached view. If the aggregate
+      // endpoint is unavailable, keep the last snapshot interactive instead.
+      if (options.cached) {
+        throw aggregateError instanceof Error ? aggregateError : new Error("Usage insights endpoint unavailable")
+      }
+    }
+    const fallbackQuery: SessionListQuery = {
+      ...query,
+      limit: Math.min(query.limit, STATS_FALLBACK_SESSION_LIMIT),
+    }
+    const sessions =
+      options.scope === "global"
+        ? await listGlobalSessions(sdk, fallbackQuery, signal)
+        : ((await sdk.client.session.list(fallbackQuery, { throwOnError: true, signal })).data ?? [])
+    const items = await mapStatsSessionsInBatches(
+      sessions,
+      async (session) => {
+        const result = await sdk.client.session.messages(
+          { sessionID: session.id, limit: STATS_FALLBACK_MESSAGE_LIMIT, view: "tui" },
+          { throwOnError: true, signal },
+        )
+        return { session, messages: result.data ?? [] } as SessionInsightInput
+      },
+      {
+        onBatch: (loaded, batch, batches) => {
+          if (batch === 0 && batches > 1) options.onFirstBatch?.(buildUsageInsights([...loaded], { start, end }))
+        },
+      },
+    )
+    return buildUsageInsights(items, { start, end })
+  } catch (error) {
+    if (signal.aborted) throw new Error(`Usage insights timed out after ${STATS_REQUEST_TIMEOUT_MS / 1000}s`)
+    throw error
+  } finally {
+    timeout.clearTimeout()
+  }
 }
 
-export function usageInsightsCacheKey(scope: StatsScope) {
-  return `${STATS_CACHE_KEY}:${scope}`
+export function usageInsightsCacheKey(scope: StatsScope, query: SessionScopeQuery = {}, directory?: string) {
+  if (scope === "global") return `${STATS_CACHE_KEY}:${scope}`
+  const identity =
+    directory || query.scope || query.directory || query.path
+      ? JSON.stringify([directory ?? null, query.scope ?? null, query.directory ?? null, query.path ?? null])
+      : ""
+  return `${STATS_CACHE_KEY}:${scope}${identity ? `:${encodeURIComponent(identity)}` : ""}`
+}
+
+export function statsSelectedDayIndex(input: {
+  days: readonly { day: string }[]
+  selectedDay?: string
+  selectedIndex?: number
+}) {
+  if (input.days.length <= 0) return undefined
+  const selectedDayIndex = input.selectedDay ? input.days.findIndex((day) => day.day === input.selectedDay) : -1
+  if (selectedDayIndex >= 0) return selectedDayIndex
+
+  if (input.selectedIndex === undefined || input.selectedIndex < 0 || input.selectedIndex >= input.days.length) {
+    return input.days.length - 1
+  }
+  return input.selectedIndex
+}
+
+function statsLocalDayKey(now = Date.now()) {
+  const date = new Date(now)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, "0")
+  const day = String(date.getDate()).padStart(2, "0")
+  return `${year}-${month}-${day}`
+}
+
+export function statsCacheNeedsRefresh(input: {
+  updated?: number
+  days: readonly { day: string }[]
+  now?: number
+  staleMs?: number
+  todayStaleMs?: number
+}) {
+  const now = input.now ?? Date.now()
+  const staleMs = input.staleMs ?? STATS_CACHE_STALE_MS
+  const todayStaleMs = input.todayStaleMs ?? STATS_TODAY_CACHE_STALE_MS
+  if (!input.updated || now - input.updated > staleMs) return true
+  const latestDay = input.days.at(-1)?.day
+  const today = statsLocalDayKey(now)
+  if (latestDay && latestDay < today) return true
+  return Boolean(latestDay === today && now - input.updated > todayStaleMs)
 }
 
 export async function warmUsageInsightsCache(input: {
@@ -859,7 +1158,7 @@ export async function warmUsageInsightsCache(input: {
 }) {
   const scope = input.scope ?? "global"
   const next = await loadInsights(input.sdk, { advanced: true, scope, query: input.query ?? {} })
-  input.kv.set(usageInsightsCacheKey(scope), { updated: Date.now(), data: next })
+  input.kv.set(usageInsightsCacheKey(scope, input.query, input.sdk.directory), { updated: Date.now(), data: next })
   return next
 }
 
@@ -872,25 +1171,31 @@ export function Stats() {
   const dialog = useDialog()
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
+  const deck = createMemo(() => commandDeckLayout({ ...dimensions(), hasRail: false, hasContext: false }))
   const [advanced, setAdvanced] = createSignal(true)
   const [scope] = createSignal<StatsScope>(route.data.type === "stats" ? (route.data.scope ?? "global") : "global")
-  const mode = () => "daily" as const
+  const [mode, setMode] = createSignal<HeatMode>("daily")
   const [weatherConfig, setWeatherConfig] = createSignal<StatsWeatherConfig>({ enabled: false })
   const [weatherRefresh, setWeatherRefresh] = createSignal(0)
   const [weatherError, setWeatherError] = createSignal<string | undefined>()
   const [weatherReady, setWeatherReady] = createSignal(false)
   const [selectedDayIndex, setSelectedDayIndex] = createSignal<number | undefined>()
+  const [selectedDayKey, setSelectedDayKey] = createSignal<string | undefined>()
+  const [selectedDayLoading, setSelectedDayLoading] = createSignal(false)
   const [cacheUpdated, setCacheUpdated] = createSignal<number | undefined>()
   const [cacheReady, setCacheReady] = createSignal(false)
   const [insightRefreshRequest, setInsightRefreshRequest] = createSignal(0)
   const [refreshingInsights, setRefreshingInsights] = createSignal(false)
+  const [insightError, setInsightError] = createSignal<string | undefined>()
+  const [statsRefreshTick, setStatsRefreshTick] = createSignal(0)
+  let activeInsightRequest: AbortController | undefined
+  let selectedDayTimer: ReturnType<typeof setTimeout> | undefined
+  let pendingSelectedDay: { index: number; key: string | undefined } | undefined
   const tiny = createMemo(() => dimensions().width < 92 || dimensions().height < 26)
   const narrow = createMemo(() => !tiny() && dimensions().width < 124)
   const wide = createMemo(() => dimensions().width >= 142 && dimensions().height >= 34)
   const roomy = createMemo(() => dimensions().width >= 170 && dimensions().height >= 38)
-  const compactTall = createMemo(() => dimensions().height >= 42)
   const showDetails = createMemo(() => advanced() && dimensions().height >= 38 && !tiny() && !narrow())
-  const contentWidth = createMemo(() => Math.max(28, dimensions().width - 12))
   const heatColumns = createMemo(() => {
     return HEATMAP_COLUMNS
   })
@@ -912,8 +1217,15 @@ export function Stats() {
     if (current.directory) return { directory: current.directory }
     return { scope: "project" }
   })
-  const statsCacheKey = createMemo(() => usageInsightsCacheKey(scope()))
+  const statsCacheKey = createMemo(() => usageInsightsCacheKey(scope(), scopeQuery(), sdk.directory))
   const [cachedInsights, setCachedInsights] = createSignal<UsageInsights | undefined>()
+  let lastAutoRefreshCacheSignature: string | undefined
+  const statsRefreshPoll = setInterval(() => setStatsRefreshTick((value) => value + 1), STATS_TODAY_CACHE_STALE_MS)
+  onCleanup(() => {
+    clearInterval(statsRefreshPoll)
+    if (selectedDayTimer) clearTimeout(selectedDayTimer)
+    activeInsightRequest?.abort()
+  })
   createEffect(() => {
     if (!kv.ready) return
     setCacheReady(false)
@@ -943,22 +1255,56 @@ export function Stats() {
     async (input) => {
       if (!input.ready) return undefined
       const cached = cachedInsights()
-      if (cached && input.refresh === 0) return cached
+      if (cached && input.refresh === 0) {
+        setInsightError(undefined)
+        return cached
+      }
+      setInsightError(undefined)
       setRefreshingInsights(true)
+      activeInsightRequest?.abort()
+      const request = new AbortController()
+      activeInsightRequest = request
       try {
-        const next = await loadInsights(sdk, input)
+        const next = await loadInsights(sdk, {
+          ...input,
+          cached: Boolean(cached),
+          signal: request.signal,
+          onFirstBatch: cached ? undefined : (partial) => setCachedInsights(normalizeUsageInsights(partial)),
+        })
+        if (activeInsightRequest !== request) return cachedInsights()
         const updated = Date.now()
         const normalized = normalizeUsageInsights(next)
         const payload = { updated, data: normalized ?? next }
         setCachedInsights(normalized)
         setCacheUpdated(updated)
         kv.set(statsCacheKey(), payload)
+        setInsightError(undefined)
         return next
+      } catch (error) {
+        if (activeInsightRequest !== request) return cachedInsights()
+        setInsightError(error instanceof Error ? error.message : "Usage insights failed")
+        const fallback = cachedInsights()
+        if (fallback) return fallback
+        throw error
       } finally {
-        setRefreshingInsights(false)
+        if (activeInsightRequest === request) {
+          activeInsightRequest = undefined
+          setRefreshingInsights(false)
+        }
       }
     },
   )
+  createEffect(() => {
+    const refreshTick = statsRefreshTick()
+    if (!kv.ready || !cacheReady() || refreshingInsights()) return
+    const cached = cachedInsights()
+    if (!cached) return
+    const signature = `${statsCacheKey()}:${cacheUpdated() ?? 0}:${cached.days.at(-1)?.day ?? "none"}:${refreshTick}`
+    if (lastAutoRefreshCacheSignature === signature) return
+    if (!statsCacheNeedsRefresh({ updated: cacheUpdated(), days: cached.days })) return
+    lastAutoRefreshCacheSignature = signature
+    setInsightRefreshRequest((value) => value + 1)
+  })
   const [weather] = createResource(
     () => ({ config: weatherConfig(), refresh: weatherRefresh(), ready: weatherReady() }),
     async ({ config, ready }) => {
@@ -1025,43 +1371,92 @@ export function Stats() {
   createEffect(() => {
     const data = visibleInsights()
     if (!data || data.days.length === 0) return
-    const current = selectedDayIndex()
-    if (current === undefined || current < 0 || current >= data.days.length) {
-      setSelectedDayIndex(data.days.length - 1)
-    }
+    const nextSelectedDayIndex = statsSelectedDayIndex({
+      days: data.days,
+      selectedDay: selectedDayKey(),
+      selectedIndex: selectedDayIndex(),
+    })
+    if (nextSelectedDayIndex === undefined) return
+    const nextSelectedDayKey = data.days[nextSelectedDayIndex]?.day
+    if (selectedDayIndex() === nextSelectedDayIndex && selectedDayKey() === nextSelectedDayKey) return
+    batch(() => {
+      setSelectedDayIndex(nextSelectedDayIndex)
+      setSelectedDayKey(nextSelectedDayKey)
+    })
   })
 
   function selectDay(index: number) {
     const data = visibleInsights()
     if (!data || data.days.length === 0) return
-    setSelectedDayIndex(Math.max(0, Math.min(data.days.length - 1, index)))
+    const next = Math.max(0, Math.min(data.days.length - 1, index))
+    const key = data.days[next]?.day
+    const current = pendingSelectedDay?.index ?? selectedDayIndex()
+    if (current === next && pendingSelectedDay === undefined) return
+    pendingSelectedDay = { index: next, key }
+    setSelectedDayLoading(true)
+    if (selectedDayTimer) return
+    selectedDayTimer = setTimeout(() => {
+      const pending = pendingSelectedDay
+      pendingSelectedDay = undefined
+      selectedDayTimer = undefined
+      if (!pending) {
+        setSelectedDayLoading(false)
+        return
+      }
+      batch(() => {
+        setSelectedDayIndex(pending.index)
+        setSelectedDayKey(pending.key)
+        setSelectedDayLoading(false)
+      })
+    }, 0)
   }
 
   function moveSelectedDay(delta: number) {
     const data = visibleInsights()
     if (!data || data.days.length === 0) return
-    selectDay((selectedDayIndex() ?? data.days.length - 1) + delta)
+    selectDay((pendingSelectedDay?.index ?? selectedDayIndex() ?? data.days.length - 1) + delta)
   }
 
   function moveSelectedColumn(delta: number) {
     moveSelectedDay(delta * HEATMAP_ROWS)
   }
 
+  function cycleMode() {
+    const index = HEAT_MODES.indexOf(mode())
+    setMode(HEAT_MODES[(index + 1) % HEAT_MODES.length] ?? "daily")
+  }
+
   useKeyboard((evt) => {
     if (evt.name === "escape") {
-      route.navigate(routeReturnTarget(route.data))
       evt.preventDefault()
       evt.stopPropagation()
+      const request = activeInsightRequest
+      activeInsightRequest = undefined
+      request?.abort()
+      setRefreshingInsights(false)
+      route.navigate(routeReturnTarget(route.data))
       return
     }
     if (evt.name === "a") {
       setAdvanced((value) => !value)
       return
     }
+    if (evt.name === "m" || evt.name === "tab") {
+      evt.preventDefault()
+      evt.stopPropagation()
+      cycleMode()
+      return
+    }
+    if (evt.name === "1" || evt.name === "2" || evt.name === "3") {
+      evt.preventDefault()
+      evt.stopPropagation()
+      setMode(evt.name === "1" ? "daily" : evt.name === "2" ? "weekly" : "cumulative")
+      return
+    }
     if (evt.name === "r") {
       evt.preventDefault()
       evt.stopPropagation()
-      setInsightRefreshRequest((value) => value + 1)
+      if (!refreshingInsights()) setInsightRefreshRequest((value) => value + 1)
       return
     }
     if (evt.name === "w") {
@@ -1070,25 +1465,25 @@ export function Stats() {
       configureWeather()
       return
     }
-    if (evt.name === "left" || evt.name === "h") {
+    if (evt.name === "left") {
       evt.preventDefault()
       evt.stopPropagation()
       moveSelectedColumn(-1)
       return
     }
-    if (evt.name === "right" || evt.name === "l") {
+    if (evt.name === "right") {
       evt.preventDefault()
       evt.stopPropagation()
       moveSelectedColumn(1)
       return
     }
-    if (evt.name === "up" || evt.name === "k") {
+    if (evt.name === "up") {
       evt.preventDefault()
       evt.stopPropagation()
       moveSelectedDay(-1)
       return
     }
-    if (evt.name === "down" || evt.name === "j") {
+    if (evt.name === "down") {
       evt.preventDefault()
       evt.stopPropagation()
       moveSelectedDay(1)
@@ -1107,15 +1502,23 @@ export function Stats() {
     const current = totals()
     if (!current) return []
     return [
-      stat("tokens", Locale.number(current.tokens), `${Locale.number(current.peakTokens)} peak day`),
-      stat("sessions", Locale.number(current.sessions), `${Locale.number(current.activeDays)} active days`),
+      stat(
+        "tokens",
+        formatInsightNumber(current.tokens),
+        `${formatInsightNumber(current.peakTokens)} peak day · ${formatInsightNumber(current.cacheTokens)} cache included`,
+      ),
+      stat("sessions", formatInsightNumber(current.sessions), `${formatInsightNumber(current.activeDays)} active days`),
       stat(
         "AI generating",
         formatInsightDuration(current.aiResponseMs),
         `${formatInsightDuration(current.longestTaskMs)} longest`,
       ),
-      stat("user words", Locale.number(current.userWords), `${Locale.number(current.userMessages)} prompts`),
-      stat("cache tokens", Locale.number(current.cacheTokens)),
+      stat(
+        "user words",
+        formatInsightNumber(current.userWords),
+        `${formatInsightNumber(current.userMessages)} prompts`,
+      ),
+      stat("cache tokens", formatInsightNumber(current.cacheTokens)),
       stat("streak", `${current.currentStreak} days`, `${current.longestStreak} longest`),
     ]
   })
@@ -1123,32 +1526,36 @@ export function Stats() {
     const current = totals()
     if (!current) return []
     return [
-      stat("tokens", Locale.number(current.tokens), `${Locale.number(current.peakTokens)} peak`),
-      stat("sessions", Locale.number(current.sessions), `${Locale.number(current.activeDays)} days`),
+      stat(
+        "tokens",
+        formatInsightNumber(current.tokens),
+        `${formatInsightNumber(current.peakTokens)} peak · ${formatInsightNumber(current.cacheTokens)} cache included`,
+      ),
+      stat("sessions", formatInsightNumber(current.sessions), `${formatInsightNumber(current.activeDays)} days`),
       stat(
         "AI time",
         formatInsightDuration(current.aiResponseMs),
         `${formatInsightDuration(current.longestTaskMs)} longest`,
       ),
-      stat("words", Locale.number(current.userWords), `${Locale.number(current.userMessages)} prompts`),
+      stat("words", formatInsightNumber(current.userWords), `${formatInsightNumber(current.userMessages)} prompts`),
     ]
   })
   const tokenRows = createMemo(() => {
     const current = totals()
     if (!current) return []
     return [
-      stat("input", Locale.number(current.inputTokens)),
-      stat("output", Locale.number(current.outputTokens)),
-      stat("reasoning", Locale.number(current.reasoningTokens)),
-      stat("cache", Locale.number(current.cacheTokens)),
+      stat("input", formatInsightNumber(current.inputTokens)),
+      stat("output", formatInsightNumber(current.outputTokens)),
+      stat("reasoning", formatInsightNumber(current.reasoningTokens)),
+      stat("cache", formatInsightNumber(current.cacheTokens)),
     ]
   })
   const outcomeRows = createMemo(() => {
     const current = totals()
     if (!current) return []
     return [
-      stat("sessions with code changes", Locale.number(current.sessionsWithCodeChanges)),
-      stat("changed files", Locale.number(current.changedFiles)),
+      stat("sessions with code changes", formatInsightNumber(current.sessionsWithCodeChanges)),
+      stat("changed files", formatInsightNumber(current.changedFiles)),
       stat("tool runtime", formatInsightDuration(current.toolMs)),
       stat("loaded window", advanced() ? `${ADVANCED_DAYS} days` : `${DEFAULT_DAYS} days`),
     ]
@@ -1159,15 +1566,19 @@ export function Stats() {
     if (!current) return []
     return [
       stat("window", advanced() ? `${ADVANCED_DAYS} days` : `${DEFAULT_DAYS} days`),
-      stat("visible sync", Locale.number(sync.data.session.length)),
-      stat("active days", Locale.number(current.activeDays)),
-      stat("sessions", Locale.number(current.sessions)),
-      stat("prompts", Locale.number(current.userMessages)),
+      stat("visible sync", formatInsightNumber(sync.data.session.length)),
+      stat("active days", formatInsightNumber(current.activeDays)),
+      stat("sessions", formatInsightNumber(current.sessions)),
+      stat("prompts", formatInsightNumber(current.userMessages)),
       stat("streak", `${current.currentStreak}d`, `${current.longestStreak} longest`),
-      stat("cache tokens", Locale.number(current.cacheTokens)),
-      stat("cache age", cacheAgeLabel(cacheUpdated()), refreshingInsights() ? "refreshing" : "ready"),
-      stat("changed files", Locale.number(current.changedFiles)),
-      stat("code sessions", Locale.number(current.sessionsWithCodeChanges)),
+      stat("cache tokens", formatInsightNumber(current.cacheTokens)),
+      stat(
+        "cache age",
+        cacheAgeLabel(cacheUpdated()),
+        insightError() ? "stale" : refreshingInsights() ? "refreshing" : "ready",
+      ),
+      stat("changed files", formatInsightNumber(current.changedFiles)),
+      stat("code sessions", formatInsightNumber(current.sessionsWithCodeChanges)),
     ]
   })
   const responseRows = createMemo(() => {
@@ -1176,28 +1587,31 @@ export function Stats() {
     return [
       stat("AI generating", formatInsightDuration(current.aiResponseMs)),
       stat("tool runtime", formatInsightDuration(current.toolMs)),
-      stat("cache", Locale.number(current.cacheTokens)),
+      stat("cache", formatInsightNumber(current.cacheTokens)),
     ]
   })
   return (
-    <box
-      flexDirection="column"
-      width="100%"
-      height="100%"
-      paddingLeft={1}
-      paddingRight={1}
-      paddingTop={1}
-      paddingBottom={1}
-      gap={1}
+    <CommandDeck
+      page="stats"
+      subtitle={() => `${scope() === "global" ? "global" : scope() === "project" ? "project" : "directory"} · ${mode()} · ${advanced() ? ADVANCED_DAYS : DEFAULT_DAYS}d`}
+      status={() =>
+        insightError() ? (visibleInsights() ? "STALE" : "ERROR") : refreshingInsights() ? "SYNCING" : visibleInsights() ? "LIVE" : "LOADING"
+      }
+      summary={() => {
+        const current = totals()
+        return current
+          ? `${formatInsightNumber(current.sessions)} sessions · ${formatInsightNumber(current.tokens)} tokens · ${formatInsightDuration(current.aiResponseMs)} AI`
+          : "loading insights"
+      }}
+      footer="↑↓ Day   ←→ Week   A Details   M/Tab Mode   1/2/3 Views   R Refresh   W Weather   Esc/Q Back"
     >
-      <Header advanced={showDetails()} scope={scope()} narrow={tiny()} />
-      <Switch>
-        <Match when={!visibleInsights()}>
-          <LoadingStats tiny={tiny()} />
-        </Match>
-        <Match when={visibleInsights()}>
-          {(data) => (
-            <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
+      <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
+        <Switch>
+          <Match when={!visibleInsights()}>
+            <LoadingStats tiny={tiny()} error={insightError()} />
+          </Match>
+          <Match when={visibleInsights()}>
+            {(data) => (
               <Switch>
                 <Match when={tiny()}>
                   <scrollbox
@@ -1217,10 +1631,10 @@ export function Stats() {
                       insights={data()}
                       mode={mode()}
                       columns={heatColumns()}
-                      contentWidth={contentWidth()}
+                      contentWidth={deck().contentWidth}
                       selectedDay={selectedDay()}
                       selectedDayIndex={selectedDayIndex()}
-                      onSelectDay={selectDay}
+                      activityLoading={selectedDayLoading()}
                       tokenRows={tokenRows()}
                       responseRows={responseRows()}
                       statusRows={statusRows()}
@@ -1239,13 +1653,13 @@ export function Stats() {
                     heatCellWidth={heatCellWidth()}
                     selectedDay={selectedDay()}
                     selectedDayIndex={selectedDayIndex()}
-                    onSelectDay={selectDay}
+                    activityLoading={selectedDayLoading()}
                     kpis={kpis()}
                     tokenRows={tokenRows()}
                     responseRows={responseRows()}
                     outcomeRows={outcomeRows()}
                     statusRows={statusRows()}
-                    contentWidth={contentWidth()}
+                    contentWidth={deck().contentWidth}
                     weatherConfig={weatherConfig()}
                     weather={weather()}
                     weatherLoading={weather.loading || (weatherConfig().enabled && !weatherReady())}
@@ -1254,10 +1668,10 @@ export function Stats() {
                   />
                 </Match>
               </Switch>
-            </box>
-          )}
-        </Match>
-      </Switch>
-    </box>
+            )}
+          </Match>
+        </Switch>
+      </box>
+    </CommandDeck>
   )
 }

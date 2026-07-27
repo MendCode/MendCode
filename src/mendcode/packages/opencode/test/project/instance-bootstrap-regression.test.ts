@@ -9,13 +9,20 @@ import { WithInstance } from "../../src/project/with-instance"
 import { InstanceRuntime } from "../../src/project/instance-runtime"
 import { InstanceMiddleware } from "../../src/server/routes/instance/middleware"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
+import { isGlobalDreamBackgroundServiceRunning, stopGlobalDreamBackgroundService } from "../../src/mend/memory/dream-scheduler"
+import { writeGlobalMemoryConfig } from "../../src/mend/memory/config"
 
 // These regressions cover the legacy instance-loading paths fixed by PRs
 // #25389 and #25449. The plugin config hook writes a marker file, and the test
 // bodies deliberately avoid touching Plugin or config directly. The marker only
 // exists if InstanceBootstrap ran at the instance boundary.
 
+const originalMemoryDir = process.env.MENDCODE_MEMORY_DIR
+
 afterEach(async () => {
+  stopGlobalDreamBackgroundService()
+  if (originalMemoryDir === undefined) delete process.env.MENDCODE_MEMORY_DIR
+  else process.env.MENDCODE_MEMORY_DIR = originalMemoryDir
   await disposeAllInstances()
 })
 
@@ -24,6 +31,7 @@ async function bootstrapFixture() {
     init: async (dir) => {
       const marker = path.join(dir, "config-hook-fired")
       const pluginFile = path.join(dir, "plugin.ts")
+      process.env.MENDCODE_MEMORY_DIR = path.join(dir, "global-memory")
       await Bun.write(
         pluginFile,
         [
@@ -57,6 +65,19 @@ test("Instance.provide runs InstanceBootstrap before fn (boundary invariant)", a
   })
 
   expect(existsSync(tmp.extra)).toBe(true)
+})
+
+test("InstanceBootstrap starts global Dream background service", async () => {
+  await using tmp = await bootstrapFixture()
+  await writeGlobalMemoryConfig({ dreamWindow: { enabled: true, start: "00:00", end: "23:59" } }, tmp.path)
+
+  expect(isGlobalDreamBackgroundServiceRunning()).toBe(false)
+  const first = await cliBootstrap(tmp.path, async () => isGlobalDreamBackgroundServiceRunning())
+  const second = await cliBootstrap(tmp.path, async () => isGlobalDreamBackgroundServiceRunning())
+
+  expect(first).toBe(true)
+  expect(second).toBe(true)
+  expect(isGlobalDreamBackgroundServiceRunning()).toBe(true)
 })
 
 test("CLI bootstrap runs InstanceBootstrap before callback", async () => {

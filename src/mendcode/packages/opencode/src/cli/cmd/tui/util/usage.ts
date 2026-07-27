@@ -15,6 +15,10 @@ type AssistantUsageInput = {
   scope?: "turn" | "total"
 }
 
+type AssistantUsageOptions = {
+  config?: unknown
+}
+
 export type AssistantUsageSummary = {
   model: string
   scope: "turn" | "total"
@@ -41,8 +45,6 @@ const money = new Intl.NumberFormat("en-US", {
   currency: "USD",
 })
 
-const CONTEXT_USAGE_RESERVED = 20_000
-const OUTPUT_TOKEN_MAX = 32_000
 const COMPACT_CONTEXT_LABEL_WIDTH = 4
 
 function safe(value: number | undefined) {
@@ -62,15 +64,12 @@ export function assistantTokenTotals(message: Pick<AssistantMessage, "tokens">) 
   }
 }
 
-export function usableContextLimit(model: Provider["models"][string] | undefined) {
+export function usableContextLimit(model: Provider["models"][string] | undefined, _config?: unknown) {
   const context = safe(model?.limit.context)
   if (context <= 0) return undefined
 
-  const output = Math.min(safe(model?.limit.output) || OUTPUT_TOKEN_MAX, OUTPUT_TOKEN_MAX)
-  const reserved = Math.min(CONTEXT_USAGE_RESERVED, output)
   const input = safe(model?.limit.input)
-
-  return input > 0 ? Math.max(0, input - reserved) : Math.max(0, context - output)
+  return input > 0 ? input : context
 }
 
 export function compactContextTokenLabel(tokens: number | undefined) {
@@ -90,7 +89,11 @@ export function compactContextTokenLabel(tokens: number | undefined) {
   return label.slice(0, COMPACT_CONTEXT_LABEL_WIDTH).padEnd(COMPACT_CONTEXT_LABEL_WIDTH)
 }
 
-function formatUsage(input: AssistantUsageInput, providers?: ProviderIndex): AssistantUsageSummary | undefined {
+function formatUsage(
+  input: AssistantUsageInput,
+  providers?: ProviderIndex,
+  options: AssistantUsageOptions = {},
+): AssistantUsageSummary | undefined {
   const tokens = assistantTokenTotals(input)
   if (tokens.context <= 0) return
 
@@ -101,7 +104,7 @@ function formatUsage(input: AssistantUsageInput, providers?: ProviderIndex): Ass
   const scope = input.scope ?? "turn"
   const model = Model.name(providers, input.providerID, input.modelID)
   const modelInfo = Model.get(providers, input.providerID, input.modelID)
-  const contextLimit = scope === "total" ? undefined : usableContextLimit(modelInfo)
+  const contextLimit = scope === "total" ? undefined : usableContextLimit(modelInfo, options.config)
   const contextPercent = contextLimit ? Math.round((tokens.context / contextLimit) * 100) : undefined
   const contextPct = contextPercent === undefined ? "" : ` ${contextPercent}%`
   const tokenLabel = `↑${Locale.number(tokens.input)} ↓${Locale.number(tokens.output)}`
@@ -131,23 +134,27 @@ function formatUsage(input: AssistantUsageInput, providers?: ProviderIndex): Ass
   }
 }
 
-export function formatAssistantUsage(message: AssistantMessage, providers?: ProviderIndex) {
-  return formatUsage(message, providers)
+export function formatAssistantUsage(message: AssistantMessage, providers?: ProviderIndex, options: AssistantUsageOptions = {}) {
+  return formatUsage(message, providers, options)
 }
 
 export function formatLatestAssistantContextUsage(
   messages: AssistantMessage[],
   providers?: ProviderIndex,
-  options: { include?: (message: AssistantMessage) => boolean } = {},
+  options: { include?: (message: AssistantMessage) => boolean; config?: unknown } = {},
 ) {
   for (const message of messages.toReversed()) {
     if (options.include && !options.include(message)) continue
-    const usage = formatAssistantUsage(message, providers)
+    const usage = formatAssistantUsage(message, providers, { config: options.config })
     if (usage) return usage
   }
 }
 
-export function formatAssistantLiveUsage(message: AssistantMessage, providers?: ProviderIndex) {
+export function formatAssistantLiveUsage(
+  message: AssistantMessage,
+  providers?: ProviderIndex,
+  options: AssistantUsageOptions = {},
+) {
   if (!message.liveUsage) return
   return formatUsage(
     {
@@ -165,6 +172,7 @@ export function formatAssistantLiveUsage(message: AssistantMessage, providers?: 
       source: message.liveUsage.source,
     },
     providers,
+    options,
   )
 }
 

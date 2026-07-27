@@ -11,6 +11,7 @@ export const ProviderID = providerIdSchema.pipe(
   withStatics((schema: typeof providerIdSchema) => ({
     zod: zod(schema),
     // Well-known providers
+    mendcode: schema.make("mendcode"),
     opencode: schema.make("opencode"),
     anthropic: schema.make("anthropic"),
     openai: schema.make("openai"),

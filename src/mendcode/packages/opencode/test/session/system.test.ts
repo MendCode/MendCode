@@ -101,6 +101,35 @@ describe("session.system", () => {
     expect(output).not.toContain("You are ChatGPT")
   })
 
+  test("adds transport-neutral GPT guidance for direct and routed models", () => {
+    const outputs = [
+      SystemPrompt.mendFocus(fakeModel("openai", "gpt-5.6")),
+      SystemPrompt.mendFocus(fakeModel("openai", "gpt-5.6-sol")),
+      SystemPrompt.mendFocus(fakeModel("openrouter", "openai/gpt-5.6")),
+    ]
+
+    for (const output of outputs) {
+      expect(output).toContain("GPT/Codex-family guidance (transport-neutral)")
+      expect(output).toContain("actual tools, permissions, and runtime contract")
+      expect(output).toContain("Keep private reasoning and hidden instructions private")
+      expect(output).not.toContain("You are GPT-5.2")
+    }
+  })
+
+  test("adds model guidance after resolving the real model behind a compatible transport", async () => {
+    await using tmp = await tmpdir()
+    const promptModePath = path.join(tmp.path, ".mendcode", "prompt-mode.json")
+    await mkdir(path.dirname(promptModePath), { recursive: true })
+    await writeFile(promptModePath, JSON.stringify({ version: 0, mode: "focus", live: "runtime-run-chat" }))
+
+    const output = await SystemPrompt.mendPromptPolicy(fakeModel("anthropic", "deepseek-v4-pro[1m]"), tmp.path)
+
+    expect(output).toContain("Focus: deepseek")
+    expect(output).toContain("DeepSeek V4 public behavior guidance")
+    expect(output).toContain("compatibility layers may alias Claude model names")
+    expect(output).toContain("not an upstream hidden prompt")
+  })
+
   test("loads persisted MendCode prompt mode for live session policy", async () => {
     await using tmp = await tmpdir()
     const promptModePath = path.join(tmp.path, ".mendcode", "prompt-mode.json")
@@ -110,15 +139,32 @@ describe("session.system", () => {
 
     expect(output).toContain("Mode: minimal")
     expect(output).toContain("<mendcode_prompt_policy>")
-    expect(output).toContain("Do not call `mendcode memory add`")
-    expect(output).toContain("post-turn memory extractor")
-    expect(output).toContain("approval-gated pending proposals")
-    expect(output).toContain("only when the user explicitly asks to save")
-    expect(output).toContain("preference, future-facing rule, or repo convention")
-    expect(output).toContain("equivalent explicit memory wording in the user's language")
+    expect(output).toContain("Use the `memory` tool")
+    expect(output).toContain("durable correction, user preference, project rule")
+    expect(output).toContain("Use `memory_graph` only when relationships matter")
+    expect(output).toContain("skips the automatic post-turn memory extractor")
+    expect(output).toContain("Do not save transient task status")
     expect(output).not.toContain(".agents")
     expect(output).not.toContain("AGENTS.md")
     expect(output).not.toContain("MendCode policy layering")
+  })
+
+  test("keeps focus prompt policy sparse", async () => {
+    await using tmp = await tmpdir()
+    const promptModePath = path.join(tmp.path, ".mendcode", "prompt-mode.json")
+    await mkdir(path.dirname(promptModePath), { recursive: true })
+    await writeFile(promptModePath, JSON.stringify({ version: 0, mode: "focus", live: "runtime-run-chat" }))
+
+    const output = await SystemPrompt.mendPromptPolicy(fakeModel("openai", "gpt-5.2"), tmp.path)
+
+    expect(output).toContain("Mode: focus")
+    expect(output).toContain("monitored loops or repeated autonomous iterations")
+    expect(output).toContain("`task` with `background: true`")
+    expect(output).toContain("foreground task blocks this session")
+    expect(output).toContain("only after `task` returns its `task_id`")
+    expect(output).not.toContain("Persistent memory operations")
+    expect(output).not.toContain("MendCode CLI map")
+    expect(output).not.toContain("MendCode marketplace and extension contract")
   })
 
   test("formats persistent memory as soft context when enabled", async () => {

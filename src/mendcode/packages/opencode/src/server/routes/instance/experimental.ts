@@ -9,6 +9,7 @@ import { Instance } from "@/project/instance"
 import { Project } from "@/project/project"
 import { MCP } from "@/mcp"
 import { Session } from "@/session/session"
+import { buildUsageInsightsFromDatabase } from "@/session/usage-insights"
 import { Config } from "@/config/config"
 import { ConsoleState } from "@/config/console-state"
 import { Account } from "@/account/account"
@@ -41,6 +42,11 @@ const QueryBoolean = z.union([
   z.preprocess((value) => (value === "true" ? true : value === "false" ? false : value), z.boolean()),
   z.enum(["true", "false"]),
 ])
+const UsageInsightsQuery = z.object({
+  start: z.coerce.number(),
+  limit: z.coerce.number().optional(),
+  messageLimit: z.coerce.number().optional(),
+})
 
 function queryBoolean(value: z.infer<typeof QueryBoolean> | undefined) {
   if (value === undefined) return
@@ -392,6 +398,36 @@ export const ExperimentalRoutes = lazy(() =>
         }
         return c.json(list)
       },
+    )
+    .get(
+      "/usage-insights",
+      describeRoute({
+        summary: "Get aggregated usage insights",
+        description: "Aggregate recent session usage server-side without transferring every transcript to the TUI.",
+        operationId: "experimental.usageInsights.get",
+        responses: {
+          200: {
+            description: "Aggregated usage insights",
+            content: { "application/json": { schema: resolver(z.unknown()) } },
+          },
+        },
+      }),
+      validator("query", UsageInsightsQuery),
+      async (c) =>
+        jsonRequest("ExperimentalRoutes.usageInsights", c, function* () {
+          const query = c.req.valid("query")
+          const end = Date.now()
+          const sessions = Array.from(Session.listGlobal({
+            start: query.start,
+            limit: Math.max(1, Math.min(1000, query.limit ?? 1000)),
+          }))
+          return buildUsageInsightsFromDatabase({
+            sessions,
+            start: query.start,
+            end,
+            messageLimit: query.messageLimit,
+          })
+        }),
     )
     .get(
       "/resource",

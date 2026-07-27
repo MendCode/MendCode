@@ -2,7 +2,6 @@ import type { MendTuiProfile } from "../profile"
 import type { MendActivityPhase } from "./presentation"
 
 export type MendLogoMode = "title" | "mascot"
-export type MendHomeLogoSize = "compact" | "default" | "large"
 
 export type MendActivityMascotConfig = {
   enabled: boolean
@@ -16,7 +15,11 @@ export type MendMascotLineHitbox = {
 }
 
 function cleanAsciiLiteral(value: string) {
-  return value.replace(/^\n/, "").trimEnd()
+  const lines = value.replace(/^\n/, "").trimEnd().split("\n")
+  const indentation = Math.min(
+    ...lines.filter((line) => line.trim()).map((line) => line.match(/^\s*/)?.[0].length ?? 0),
+  )
+  return lines.map((line) => line.slice(indentation)).join("\n")
 }
 
 function stripActivityStateText(value: string) {
@@ -33,32 +36,6 @@ export const defaultHomeMascot = cleanAsciiLiteral(String.raw`
    /_|___|_\
       \_/
 `)
-
-export const compactHomeMascot = defaultHomeMascot
-
-export const largeHomeMascot = cleanAsciiLiteral(String.raw`
-        .-.
-     .-(o o)-.
-    /  |[+]|  \
-   /___|___|___\
-       \___/
-`)
-
-export const extraLargeHomeMascot = cleanAsciiLiteral(String.raw`
-          .-.
-      .--(o o)--.
-     /    |[+]|    \
-    /_____|___|_____\
-      ___/_____\___
-         \_____/
-           \_/
-`)
-
-function homeMascotBySize(size: MendHomeLogoSize | undefined) {
-  if (size === "compact") return compactHomeMascot
-  if (size === "large") return largeHomeMascot
-  return defaultHomeMascot
-}
 
 export const defaultActivityMascotStates: MendActivityMascotConfig["states"] = {
   idle: String.raw`
@@ -77,9 +54,14 @@ export const defaultActivityMascotStates: MendActivityMascotConfig["states"] = {
  /[+]\
 `,
   memory: String.raw`
-  .-.
- (o m)
- /[+]\
+   .-.
+  (o m)
+  /[+]\
+`,
+  compacting: String.raw`
+   .-.
+  (o c)
+  /[+]\
 `,
   reading: String.raw`
   .-.
@@ -119,6 +101,11 @@ export const defaultActivityMascotStates: MendActivityMascotConfig["states"] = {
   testing: String.raw`
   .-.
  (o T)
+ /[+]\
+`,
+  subagents: String.raw`
+  .-.
+ (o S)
  /[+]\
 `,
   browsing: String.raw`
@@ -165,11 +152,10 @@ export const defaultActivityMascotConfig: MendActivityMascotConfig = {
 }
 
 export function homeMascotText(profile: MendTuiProfile) {
-  return profile.surfaces.homeLogo?.text?.trimEnd() || homeMascotBySize(profile.surfaces.homeLogo?.size)
+  return profile.surfaces.homeLogo?.text?.trimEnd() || defaultHomeMascot
 }
 
 export function activityMascotText(profile: MendTuiProfile, phase: MendActivityPhase | "idle" | "error") {
-  if (profile.identity.logoMode !== "mascot") return
   const mascot = profile.presentation.activity.mascot
   if (mascot.enabled === false) return
   const text = mascot.states[phase] || mascot.states.idle || defaultActivityMascotStates[phase] || defaultActivityMascotStates.idle
@@ -177,7 +163,6 @@ export function activityMascotText(profile: MendTuiProfile, phase: MendActivityP
 }
 
 export function activityMascotHoverText(profile: MendTuiProfile) {
-  if (profile.identity.logoMode !== "mascot") return
   const mascot = profile.presentation.activity.mascot
   if (mascot.enabled === false) return
   const text = mascot.hover || defaultActivityMascotHover

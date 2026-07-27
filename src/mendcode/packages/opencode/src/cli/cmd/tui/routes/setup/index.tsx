@@ -3,7 +3,7 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { routeReturnTarget, useRoute, useRouteData, type SetupStepID } from "@tui/context/route"
 import { useTheme } from "@tui/context/theme"
 import { useSync } from "@tui/context/sync"
-import { createDialogProviderOptions } from "@tui/component/dialog-provider"
+import { DialogProvider } from "@tui/component/dialog-provider"
 import { providerDisplayName } from "@tui/util/provider-origin"
 import { useLocal } from "@tui/context/local"
 import { useDialog } from "@tui/ui/dialog"
@@ -12,7 +12,7 @@ import { DialogPrompt } from "@tui/ui/dialog-prompt"
 import { DialogSelect } from "@tui/ui/dialog-select"
 import { useToast } from "@tui/ui/toast"
 import { useMendTuiProfile } from "@tui/context/mend"
-import { setupReadiness, aiStatus, providerAuthStatus } from "@/mend/runtime/readiness"
+import { setupReadiness, providerAuthStatus } from "@/mend/runtime/readiness"
 import { budgetStatus, writeBudgetPolicy } from "@/mend/runtime/budget"
 import {
   modelPresets,
@@ -31,26 +31,37 @@ import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } fr
 import { packageMetadata, packageMetadataSet, syncGlobalPrimaryAgentModels, syncProject } from "@/mend/config/project"
 import { applyRuntimePack } from "@/mend/runtime/pack"
 import { disableAllMendPackages, listMendPackages, removeMendPackage, setMendPackageEnabled } from "@/mend/runtime/packages"
-import { runtimeRegistryAdd, runtimeRegistryApplySource, runtimeRegistryInstallPack, runtimeRegistrySearch } from "@/mend/runtime/registry"
+import {
+  runtimeRegistryAdd,
+  runtimeRegistryApplySource,
+  runtimeRegistryInstallPack,
+  runtimeRegistryList,
+  runtimeRegistryRemove,
+  runtimeRegistrySearch,
+} from "@/mend/runtime/registry"
+import type { RegistryMarketplacePackManifest } from "@/mend/runtime/registry/marketplace"
 import { mendTuiCapabilityVersion, visibleCustomizationCapabilities } from "@/mend/tui/capabilities"
 import { listActiveCustomizations } from "@/mend/tui/customization-state"
 import { applyTuiPreset, readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
+import { defaultTuiProfile } from "@/mend/profile"
 import type { MendPromptChromePreset } from "@/mend/tui/prompt-chrome"
+import { CommandDeck } from "@tui/component/command-deck"
 import {
   dismissSetup,
   isSetupComplete,
   markSetupStepComplete,
   openSetupState,
   setSetupCurrentStep,
+  requiredSetupSteps,
   setupSteps,
 } from "@/mend/setup/state"
 import { SetupRail } from "./setup-rail"
+import { SetupActionBar } from "./action-bar"
 
 const baseModelRoleOrder = [
   "default",
   "build",
   "plan",
-  "review",
   "subagent",
   "small",
   "title",
@@ -62,7 +73,7 @@ const baseModelRoleOrder = [
   "permissionReviewer",
 ] as const
 type SetupModelRole = string
-const primaryModelRoles = ["default", "build", "plan", "review"] as const
+const primaryModelRoles = ["default", "build", "plan"] as const
 const internalModelRoles = ["subagent", "small", "title", "compaction", "summary", "memoryExtractor", "memoryDream", "memoryAssistant", "permissionReviewer"] as const
 const promptModes: MendPromptMode[] = ["minimal", "focus", "full"]
 const promptModeDetails: Record<MendPromptMode, { summary: string; runtime: string; adds: string }> = {
@@ -83,12 +94,45 @@ const promptModeDetails: Record<MendPromptMode, { summary: string; runtime: stri
     adds: "focus plus MendCode runtime knowledge; Mflow/TSM only when configured active or relevant",
   },
 }
+
+export type SetupPresetID = "default" | "minimal" | "full" | "custom"
+
+export const setupPresetDetails: Record<SetupPresetID, { title: string; summary: string; changes: string; safety: string }> = {
+  default: {
+    title: "Use current defaults",
+    summary: "Keep provider, models, and existing settings unchanged.",
+    changes: "Keeps existing settings unchanged; new defaults use the normal TUI and arcade context pack.",
+    safety: "Safest when you are upgrading or already have a working config.",
+  },
+  minimal: {
+    title: "Minimal MendCode",
+    summary: "Quiet prompt, compact TUI, memory and extra presentation features off.",
+    changes: "Sets minimal prompt context, compact layout, hidden optional surfaces, memory off, and approval permissions.",
+    safety: "Provider and model settings are preserved; no packages or credentials are removed.",
+  },
+  full: {
+    title: "Full MendCode",
+    summary: "Use the complete TUI and MendCode context with guarded memory learning.",
+    changes: "Sets full prompt context, spacious TUI, visible runtime surfaces, arcade context packing, memory retrieval and approval-gated proposals.",
+    safety: "Memory writes remain approval-gated; provider and model settings are preserved.",
+  },
+  custom: {
+    title: "Configure manually",
+    summary: "Skip presets and walk through every setup step yourself.",
+    changes: "Does not write settings; it only opens the provider step.",
+    safety: "Best for mixed providers, custom role routing, or an existing team policy.",
+  },
+}
+
+export const setupPresetList = (Object.entries(setupPresetDetails) as Array<[
+  SetupPresetID,
+  (typeof setupPresetDetails)[SetupPresetID],
+]>).map(([id, detail]) => ({ id, ...detail }))
 const roleDescriptions: Record<string, string> = {
   default: "Fallback chat model and generated config model.",
   build: "Model used when the TUI is in build mode.",
   plan: "Model used when the TUI is in plan mode.",
-  review: "Review/checking role for future and projected role routing.",
-  subagent: "Default model for background subagent task sessions.",
+  subagent: "Default model for new background subagent task sessions. Individual agent configs can still override it.",
   small: "Runtime small-model fallback for title generation and lightweight internal work.",
   title: "Hidden runtime agent that generates conversation titles.",
   compaction: "Hidden runtime agent that compacts long context.",
@@ -98,7 +142,7 @@ const roleDescriptions: Record<string, string> = {
   memoryDream:
     "Background model for manual/scheduled memory maintenance that writes reviewable proposals only.",
   memoryAssistant:
-    "Memory page side-chat assistant that answers memory questions and can draft reviewable proposals only.",
+    "Memory assistant for supported integrations that answers memory questions and drafts reviewable proposals only.",
   permissionReviewer:
     "Hidden permission reviewer model that quickly checks risky shell permission prompts in Smart Approval.",
 }
@@ -106,7 +150,6 @@ const roleLabels: Record<string, string> = {
   default: "Default chat",
   build: "Build",
   plan: "Plan",
-  review: "Review",
   subagent: "Subagents",
   small: "Small/cheap",
   title: "Chat titles",
@@ -199,12 +242,109 @@ export function setupShouldShowExtractorAuthBlocker(input: {
   return !(auth.providerID && input.connectedProviderIDs?.includes(auth.providerID))
 }
 
+export function setupMemoryDialogCurrentValue(memory?: { enabled?: boolean; generate?: boolean } | null) {
+  if (memory?.generate) return "generate"
+  return memory?.enabled ? "enable-use" : "disable"
+}
+
+export function setupShouldChooseHomeSplitPanel(welcomeMode: "centered" | "split") {
+  return welcomeMode === "split"
+}
+
 function normalizeProductName(value: string) {
   return value.trim() || "MendCode"
 }
 
+function registrySourceIDFromURL(value: string) {
+  const clean = value.trim().replace(/\.git$/, "")
+  const last = clean.split(/[/:]/).filter(Boolean).at(-1) || "package-source"
+  const slug = last.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "")
+  return `url-${slug || "package-source"}`.slice(0, 64)
+}
+
+export function isPublicGitHubURL(value: string) {
+  try {
+    const url = new URL(value.trim())
+    return (
+      url.protocol === "https:" &&
+      url.hostname.toLowerCase() === "github.com" &&
+      !url.username &&
+      !url.password &&
+      !url.search &&
+      !url.hash &&
+      url.pathname.split("/").filter(Boolean).length === 2
+    )
+  } catch {
+    return false
+  }
+}
+
+function setupMarketplaceRuntimeSummary(pack: RegistryMarketplacePackManifest) {
+  const runtime = pack.runtime || {}
+  return [
+    ["commands", runtime.commands],
+    ["agents", runtime.agents],
+    ["skills", runtime.skills],
+    ["plugins", runtime.plugins],
+    ["pages", runtime.pages],
+    ["widgets", runtime.widgets],
+    ["MCP", runtime.mcpFiles],
+  ]
+    .filter(([, count]) => typeof count === "number" && count > 0)
+    .map(([label, count]) => `${count} ${label}`)
+    .join(" · ") || "No runtime artifacts advertised"
+}
+
+function setupMarketplaceBadgeTitle(title: string, badge?: string | null) {
+  return `${badge ? `[${badge}] ` : ""}${title}`
+}
+
+function setupMarketplaceCategory(input: { badge?: string | null; channel?: string | null; sourceID?: string | null }) {
+  const state = input.badge === "active" ? "Active" : input.badge === "installed" ? "Installed" : undefined
+  return [state, input.channel || input.sourceID].filter(Boolean).join(" · ") || "Packages"
+}
+
+function setupMarketplaceSearchText(parts: Array<string | null | undefined>) {
+  return parts.filter(Boolean).join(" ")
+}
+
+function setupMarketplaceInstallPreview(input: {
+  pack: RegistryMarketplacePackManifest
+  sourceID: string
+  sourceURL?: string | null
+  sourceType?: string
+  fetchesNetwork?: boolean
+  digest?: { algorithm: "sha256"; value: string }
+}) {
+  return [
+    `Source: ${input.sourceURL || input.sourceID}`,
+    `Source id: ${input.sourceID}`,
+    `Source type: ${input.sourceType || input.pack.source?.type || "unknown"}`,
+    `Package: ${input.pack.id}@${input.pack.version}`,
+    `Runtime: ${setupMarketplaceRuntimeSummary(input.pack)}`,
+    `Fetches network: ${input.fetchesNetwork ? "yes" : "no"}`,
+    `Digest: ${input.digest ? `${input.digest.algorithm}:${input.digest.value.slice(0, 12)}...` : input.pack.digest ? `${input.pack.digest.algorithm}:${input.pack.digest.value.slice(0, 12)}...` : "not pinned"}`,
+    `Signature: ${input.pack.signature ? `${input.pack.signature.algorithm}:${input.pack.signature.value.slice(0, 12)}...` : "not signed"}`,
+    "",
+    "Review before install:",
+    "- Trust only repos you expect to run MendCode package content from.",
+    "- Packages may add commands, skills, plugins, widgets, pages, scripts, and MCP config.",
+    "- MendCode copies allowlisted package files only; local sessions, auth, runs, cache, and customizations stay untouched.",
+  ].join("\n")
+}
+
 function presetRole(preset: (typeof modelPresets)[keyof typeof modelPresets]): ModelRole {
   return { providerID: preset.providerID, modelID: preset.modelID, authMode: preset.authMode }
+}
+
+export function inferModelPresetAuthMode(providerID: string, modelID: string) {
+  const matches = [...new Set(
+    Object.values(modelPresets)
+      .filter((preset) => preset.providerID === providerID && preset.modelID === modelID && preset.authMode)
+      .map((preset) => preset.authMode),
+  )]
+  if (matches.length !== 1) return null
+  return matches[0]
 }
 
 function parseOptionalUsd(value: string | null, label: string) {
@@ -227,19 +367,17 @@ export function Setup() {
   const mend = useMendTuiProfile()
   const sync = useSync()
   const local = useLocal()
-  const initialStep = data.step && setupSteps.includes(data.step) ? data.step : "provider"
+  const initialStep = data.step && setupSteps.includes(data.step) ? data.step : "start"
   const [selected, setSelected] = createSignal<SetupStepID>(initialStep)
   const [refresh, setRefresh] = createSignal(0)
   const reload = () => setRefresh((value) => value + 1)
-  const providerOptions = createDialogProviderOptions()
 
   const [summary] = createResource(refresh, async () => {
     const root = mend.root
     const state = await openSetupState(selected(), root)
-    const [setup, ai, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, packages, permissions] = await Promise.all(
+    const [setup, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, packages, permissions] = await Promise.all(
       [
         setupReadiness(root),
-        aiStatus(root),
         providerAuthStatus(null, null, {}, root),
         resolveModelRoles(root),
         readModelsConfig(root),
@@ -263,18 +401,23 @@ export function Setup() {
         root,
       )
       : null
-    return { state, setup, ai, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, packages, memory, memoryExtractorAuth, permissions }
+    return { state, setup, auth, models, modelsConfig, budget, prompt, promptPolicies, pkg, packages, memory, memoryExtractorAuth, permissions }
   })
 
   const setupSummary = createMemo(() => summary.latest ?? summary())
   const narrow = createMemo(() => dimensions().width < 110)
+  const compact = createMemo(() => dimensions().width < 72)
   const current = createMemo(() => setupSummary()?.state.currentStep || selected())
   const active = createMemo(() => selected() || current())
   const complete = createMemo(() => {
     const state = setupSummary()?.state
     return state ? isSetupComplete(state) : false
   })
-  const promptPanelWidth = createMemo(() => Math.max(56, dimensions().width - (narrow() ? 12 : 44)))
+  const requiredProgress = createMemo(() => {
+    const state = setupSummary()?.state
+    return requiredSetupSteps.filter((step) => state?.completedSteps.includes(step)).length
+  })
+  const promptPanelWidth = createMemo(() => Math.max(20, dimensions().width - (compact() ? 4 : narrow() ? 12 : 44)))
   const connectedProviderIDs = createMemo(() => sync.data.provider_next.connected)
   const connectedProviderNames = createMemo(() =>
     connectedProviderIDs().map(
@@ -335,31 +478,146 @@ export function Setup() {
   }
 
   const chooseProvider = async () => {
-    const auth = setupSummary()?.auth as any
+    dialog.replace(() => <DialogProvider postAuth="close" onAuthReady={reload} />)
+  }
+
+  const applySetupTuiPreset = async (preset: "minimal" | "full") => {
+    const applied = await applyTuiPreset(preset === "minimal" ? "compact" : "spacious", mend.root)
+    const current = applied.profile
+    const defaults = defaultTuiProfile()
+    if (preset === "minimal") {
+      await writeActiveTuiProfile({
+        ...current,
+        profile: "minimal-runtime",
+        promptChrome: { ...current.promptChrome, preset: "minimal" },
+        presentation: {
+          ...current.presentation,
+          profile: "minimal",
+          message: { ...current.presentation.message, renderer: "markdown" },
+          reasoning: { ...current.presentation.reasoning, defaultVisibility: "collapsed" },
+          activity: {
+            ...current.presentation.activity,
+            style: "minimal",
+            placement: "footer",
+            maxLines: 1,
+            showModel: false,
+            showTokens: false,
+            showElapsed: false,
+            showInterruptHint: false,
+          },
+          compaction: {
+            ...current.presentation.compaction,
+            style: "minimal",
+            showProgress: false,
+            allowScratchpad: false,
+            arcade: "off",
+          },
+        },
+        layout: {
+          ...current.layout,
+          density: "compact",
+          spacing: "tight",
+          zones: {
+            ...current.layout.zones,
+            sidebar: { ...current.layout.zones.sidebar, enabled: false, compact: true, width: 0 },
+            header: { ...current.layout.zones.header, enabled: false },
+            footer: { ...current.layout.zones.footer, enabled: false },
+            prompt: { ...current.layout.zones.prompt, rightSurface: false },
+          },
+        },
+        widgets: { ...current.widgets, enabled: ["focus"], order: ["focus"] },
+        surfaces: {
+          ...current.surfaces,
+          model: { ...current.surfaces.model, visible: false },
+          provider: { ...current.surfaces.provider, visible: false },
+          status: { ...current.surfaces.status, visible: false },
+        },
+      }, mend.root)
+      return
+    }
+
+    await writeActiveTuiProfile({
+      ...current,
+      profile: "full-runtime",
+      promptChrome: { ...current.promptChrome, preset: "box" },
+      presentation: {
+        ...defaults.presentation,
+        activity: {
+          ...defaults.presentation.activity,
+          showModel: true,
+          showTokens: true,
+          showElapsed: true,
+          showInterruptHint: true,
+        },
+        compaction: { ...defaults.presentation.compaction, style: "arcade", showProgress: true, allowScratchpad: true, arcade: "snake" },
+      },
+      layout: {
+        ...current.layout,
+        density: "spacious",
+        spacing: "loose",
+        zones: {
+          ...current.layout.zones,
+          sidebar: { ...current.layout.zones.sidebar, enabled: true, compact: false, width: 28 },
+          header: { ...current.layout.zones.header, enabled: true },
+          footer: { ...current.layout.zones.footer, enabled: true },
+          prompt: { ...current.layout.zones.prompt, rightSurface: true },
+        },
+      },
+      widgets: { ...defaults.widgets, config: { ...current.widgets.config, ...defaults.widgets.config } },
+      surfaces: { ...defaults.surfaces },
+    }, mend.root)
+  }
+
+  const applyStandaloneTuiPreset = async (preset: "minimal" | "full") => {
+    try {
+      await applySetupTuiPreset(preset)
+      await mend.reload()
+      await mark("tui")
+      reload()
+      toast.show({ variant: "success", message: `${preset === "minimal" ? "Minimal" : "Full"} TUI profile applied.`, duration: 4000 })
+    } catch (error) {
+      toast.show({ variant: "error", message: error instanceof Error ? error.message : "TUI profile preset failed.", duration: 6000 })
+    }
+  }
+
+  const applySetupPreset = async (preset: SetupPresetID) => {
+    try {
+      if (preset === "minimal") {
+        await writePromptMode("minimal", mend.root)
+        await writeGlobalMemoryConfig({ enabled: false, use: false, generate: false }, mend.root)
+        await writePermissionsConfig({ mode: "approval" })
+        await applySetupTuiPreset("minimal")
+      }
+      if (preset === "full") {
+        await writePromptMode("full", mend.root)
+        await writeGlobalMemoryConfig({ enabled: true, use: true, generate: true, requireApprovalForGenerated: true }, mend.root)
+        await writePermissionsConfig({ mode: "approval" })
+        await applySetupTuiPreset("full")
+      }
+      if (preset === "minimal" || preset === "full") await mend.reload()
+      await mark("start")
+      const next: SetupStepID = "provider"
+      setSelected(next)
+      await setSetupCurrentStep(next, mend.root)
+      reload()
+      dialog.clear()
+      toast.show({ variant: "success", message: `${setupPresetDetails[preset].title} selected.`, duration: 4000 })
+    } catch (error) {
+      toast.show({ variant: "error", message: error instanceof Error ? error.message : "Setup preset failed.", duration: 6000 })
+    }
+  }
+
+  const chooseSetupPreset = () => {
     dialog.replace(() => (
       <DialogSelect
-        title="Connect a provider"
-        current={currentProviderID()}
-        options={providerOptions().map((option) => ({
-          ...option,
-          gutter: option.value === currentProviderID() ? undefined : option.gutter,
-          onSelect: async () => {
-            const alreadyReady = auth?.mendRunReady && auth?.providerID === option.value
-            if (!alreadyReady) {
-              await option.onSelect?.()
-            }
-            reload()
-            if (alreadyReady) {
-              await mark("provider")
-              toast.show({ variant: "success", message: "Provider step accepted.", duration: 3000 })
-              return
-            }
-            toast.show({
-              variant: "warning",
-              message: "Provider auth must be ready before this step is complete.",
-              duration: 5000,
-            })
-          },
+        title="Setup starting point"
+        current={setupSummary()?.state.completedSteps.includes("start") ? "default" : undefined}
+        options={setupPresetList.map((preset) => ({
+          title: preset.title,
+          value: preset.id,
+          category: "Setup presets",
+          description: `${preset.summary} ${preset.safety}`,
+          onSelect: () => applySetupPreset(preset.id),
         }))}
       />
     ))
@@ -369,7 +627,7 @@ export function Setup() {
     const agentRoles = sync.data.agent
       .filter((agent) => agent.mode !== "subagent" && !agent.hidden)
       .map((agent) => agent.name)
-      .filter((name) => name !== "default")
+      .filter((name) => name !== "default" && name !== "review")
     return [...new Set([...baseModelRoleOrder, ...agentRoles])]
   })
 
@@ -397,11 +655,7 @@ export function Setup() {
   const inferAuthMode = (providerID: string, modelID: string) => {
     const currentAuth = setupSummary()?.auth as any
     if (currentAuth?.providerID === providerID && typeof currentAuth.authMode === "string") return currentAuth.authMode
-    const preset = Object.values(modelPresets).find(
-      (item) => item.providerID === providerID && item.modelID === modelID,
-    )
-    if (preset?.authMode) return preset.authMode
-    return null
+    return inferModelPresetAuthMode(providerID, modelID)
   }
 
   const saveModelRoleWithVariant = async (roleName: SetupModelRole, role: ModelRole) => {
@@ -500,32 +754,174 @@ export function Setup() {
     dialog.replace(() => <DialogSelect title={`Model role: ${roleName}`} options={options} />)
   }
 
+  const applyProviderModelPreset = async (providerID: string, modelID: string) => {
+    const config = await readModelsConfig(mend.root)
+    const role = { providerID, modelID, authMode: inferAuthMode(providerID, modelID) }
+    config.enabled = true
+    for (const name of ["default", "build", "code", "plan", "subagent"]) config.roles[name] = { ...role }
+    if (!config.roles.small?.providerID || !config.roles.small.modelID) config.roles.small = { ...role }
+    await writeGlobalModelsConfig(config)
+    await syncGlobalPrimaryAgentModels(mend.root)
+    await refreshGeneratedRuntimeModelConfig(mend.root)
+    await mark("models")
+    reload()
+    dialog.clear()
+    toast.show({ variant: "success", message: `Primary model preset applied from ${providerID}.`, duration: 4000 })
+  }
+
+  const chooseProviderModelPreset = (providerID: string) => {
+    const provider = sync.data.provider.find((item) => item.id === providerID)
+    if (!provider) return
+    const options = Object.entries(provider.models)
+      .filter(([, model]) => model.status !== "deprecated")
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([modelID, model]) => ({
+        title: model.name || modelID,
+        value: modelID,
+        category: providerDisplayName(provider),
+        description: `${provider.id}/${modelID} · ${inferAuthMode(provider.id, modelID) || "provider auth"}`,
+        onSelect: () => applyProviderModelPreset(provider.id, modelID),
+      }))
+    if (!options.length) {
+      toast.show({ variant: "warning", message: `${providerDisplayName(provider)} has no selectable models.`, duration: 4000 })
+      return
+    }
+    dialog.replace(() => <DialogSelect title={`${providerDisplayName(provider)} baseline model`} options={options} />)
+  }
+
+  const applyModelOnboardingPreset = async (preset: "subscription" | "api-balanced" | "api-budget") => {
+    const config = await readModelsConfig(mend.root)
+    const primary = preset === "subscription"
+      ? presetRole(modelPresets["openai-codex-subscription-gpt-5.6-sol"])
+      : preset === "api-balanced"
+        ? presetRole(modelPresets["openai-api-gpt-5.6"])
+        : presetRole(modelPresets["openai-api-gpt-5-mini"])
+    const defaultRole = preset === "subscription"
+      ? presetRole(modelPresets["openai-codex-subscription-gpt-5.6-sol"])
+      : preset === "api-balanced"
+        ? presetRole(modelPresets["openai-api-gpt-5.6"])
+        : presetRole(modelPresets["openai-api-gpt-5-mini"])
+    const helper = preset === "api-balanced"
+      ? presetRole(modelPresets["openai-api-gpt-5-mini"])
+      : preset === "api-budget"
+        ? presetRole(modelPresets["openai-api-gpt-5-nano"])
+        : defaultRole
+    config.enabled = true
+    config.roles.default = defaultRole
+    config.roles.build = primary
+    config.roles.code = primary
+    config.roles.plan = defaultRole
+    config.roles.subagent = primary
+    config.roles.small = helper
+    config.roles.title = helper
+    config.roles.compaction = helper
+    config.roles.summary = helper
+    config.roles.memoryExtractor = helper
+    config.roles.memoryDream = helper
+    config.roles.memoryAssistant = helper
+    config.roles.permissionReviewer = helper
+    await writeGlobalModelsConfig(config)
+    await syncGlobalPrimaryAgentModels(mend.root)
+    await refreshGeneratedRuntimeModelConfig(mend.root)
+    await writeBudgetPolicy(
+      preset === "subscription"
+        ? { mode: "subscription", warnUsd: null, stopUsd: null, expensiveModelRequiresConfirm: false }
+        : { mode: "api-usage", warnUsd: 1, stopUsd: 3, expensiveModelRequiresConfirm: true },
+      mend.root,
+    )
+    await mark("models")
+    await mark("budget")
+    dialog.clear()
+    toast.show({ variant: "success", message: "Model and usage preset applied.", duration: 4000 })
+  }
+
   const chooseModelRoleMenu = () => {
     dialog.replace(() => (
       <DialogSelect
         title="Model Roles"
-        options={setupModelRoles().map((role) => ({
-          title: roleLabel(role),
-          value: role,
-          category: roleCategory(role),
-          description: roleDescriptions[role] || "Additional primary agent role.",
-          footer: roleLabels[role] ? `role id: ${role}` : undefined,
-          onSelect: () => chooseModelRole(role),
-        }))}
+        options={[
+          {
+            title: "ChatGPT subscription preset",
+            value: "subscription",
+            category: "Onboarding presets",
+            description: "Use Codex OAuth defaults; no API-key billing contract is written.",
+            onSelect: async () => applyModelOnboardingPreset("subscription"),
+          },
+          {
+            title: "OpenAI API balanced preset",
+            value: "api-balanced",
+            category: "Onboarding presets",
+            description: "Use stronger primary roles and cheaper helper roles; requires OPENAI_API_KEY.",
+            onSelect: async () => applyModelOnboardingPreset("api-balanced"),
+          },
+           {
+             title: "OpenAI API budget preset",
+            value: "api-budget",
+            category: "Onboarding presets",
+            description: "Use mini/nano API presets for lower-cost onboarding and smoke tests.",
+             onSelect: async () => applyModelOnboardingPreset("api-budget"),
+           },
+           ...sync.data.provider
+             .filter((provider) => Object.keys(provider.models).length > 0)
+             .map((provider) => ({
+               title: `${providerDisplayName(provider)} baseline preset`,
+               value: `provider:${provider.id}`,
+               category: "Connected provider",
+               description: "Pick one model from this provider and use it for the primary MendCode roles.",
+               onSelect: () => chooseProviderModelPreset(provider.id),
+             })),
+           ...setupModelRoles().map((role) => ({
+            title: roleLabel(role),
+            value: role,
+            category: roleCategory(role),
+            description: roleDescriptions[role] || "Additional primary agent role.",
+            footer: roleLabels[role] ? `role id: ${role}` : undefined,
+            onSelect: () => chooseModelRole(role),
+          })),
+        ]}
       />
     ))
   }
 
   const chooseBudget = () => {
     dialog.replace(() => (
-      <DialogSelect
-        title="Budget Policy"
-        options={[
+       <DialogSelect
+         title="Budget Policy"
+         current={setupSummary()?.budget?.mode === "api-usage" ? "api-usage" : "subscription"}
+         options={[
           {
-            title: "Set USD limits",
+            title: "Subscription usage preset",
+            value: "subscription",
+            category: "Usage mode",
+            description: "No loop token/cost budget and no API USD warn/stop gate.",
+            onSelect: async () => {
+              await writeBudgetPolicy(
+                { mode: "subscription", warnUsd: null, stopUsd: null, expensiveModelRequiresConfirm: false },
+                mend.root,
+              )
+              await mark("budget")
+              toast.show({ variant: "success", message: "Subscription usage mode enabled; no budget limits configured.", duration: 4000 })
+            },
+          },
+          {
+            title: "API usage preset",
+            value: "api-usage",
+            category: "Usage mode",
+            description: "Use API-priced USD enforcement with $1 warning and $3 stop defaults.",
+            onSelect: async () => {
+              await writeBudgetPolicy(
+                { mode: "api-usage", warnUsd: 1, stopUsd: 3, expensiveModelRequiresConfirm: true },
+                mend.root,
+              )
+              await mark("budget")
+              toast.show({ variant: "success", message: "API usage mode enabled with $1/$3 USD limits.", duration: 4000 })
+            },
+          },
+          {
+            title: "Set API USD limits",
             value: "custom",
-            category: "Budget",
-            description: "Choose your own warn and stop thresholds. Blank means no limit.",
+            category: "API usage",
+            description: "Choose your own warn and stop thresholds. Blank means no API USD limit.",
             onSelect: async () => {
               const current = setupSummary()?.budget as any
               const warnInput = await DialogPrompt.show(dialog, "Warn USD", {
@@ -552,7 +948,7 @@ export function Setup() {
                 const warnUsd = parseOptionalUsd(warnInput, "Warn USD")
                 const stopUsd = parseOptionalUsd(stopInput, "Stop USD")
                 await writeBudgetPolicy(
-                  { warnUsd, stopUsd, expensiveModelRequiresConfirm: current?.expensiveModelRequiresConfirm !== false },
+                  { mode: "api-usage", warnUsd, stopUsd, expensiveModelRequiresConfirm: current?.expensiveModelRequiresConfirm !== false },
                   mend.root,
                 )
                 await mark("budget")
@@ -637,7 +1033,7 @@ export function Setup() {
     dialog.replace(() => (
       <DialogSelect
         title="Memory"
-        current={current?.enabled ? "enabled" : "disabled"}
+        current={setupMemoryDialogCurrentValue(current)}
         options={[
           {
             title: "Enable memory use (opt-in)",
@@ -702,7 +1098,7 @@ export function Setup() {
         title: "Smart Approval",
         value: "smart",
         category: "Permission mode",
-        description: "Use the configured reviewer model only for risky shell/script/delete prompts.",
+        description: "Auto-approve bounded read-only commands; review risky shell, script, and delete prompts.",
       },
       {
         title: "Full Access",
@@ -830,9 +1226,122 @@ export function Setup() {
     reload()
   }
 
+  const exportSafeRuntimeSnapshot = async () => {
+    const confirmed = await DialogConfirm.show(
+      dialog,
+      "Export safe runtime snapshot",
+      [
+        "Writes mend-package.json and .mendcode/runtime-pack.json for shareable setup config.",
+        "Secrets, auth files, sessions, runs, cache, and local provider tokens are excluded.",
+      ].join("\n"),
+    )
+    if (!confirmed) return
+    try {
+      const snapshot = await applyRuntimePack(mend.root)
+      await mark("package")
+      reload()
+      toast.show({
+        variant: "success",
+        message: `Safe snapshot exported: ${snapshot.packPath}`,
+        duration: 5000,
+      })
+      dialog.clear()
+    } catch (error) {
+      toast.show({
+        variant: "error",
+        message: error instanceof Error ? error.message : "Safe runtime snapshot export failed.",
+        duration: 7000,
+      })
+    }
+  }
+
+  const ensureRegistrySourceIDAvailable = async (sourceID: string) => {
+    const registry = await runtimeRegistryList(mend.root)
+    if (registry.entries.some((entry) => entry.id === sourceID)) {
+      throw new Error(`Registry source already exists: ${sourceID}. Choose a new source id.`)
+    }
+  }
+
+  const removeFailedRegistrySource = async (sourceID: string) => {
+    try {
+      await runtimeRegistryRemove(sourceID, mend.root)
+    } catch {
+      // Best effort cleanup only; the visible error should stay focused on the failed install.
+    }
+  }
+
+  const showImportedSourcePackages = async (input: {
+    sourceID: string
+    sourceURL: string
+    result: Awaited<ReturnType<typeof runtimeRegistrySearch>>
+    title: string
+    installErrorMessage: string
+  }) => {
+    let keepSource = false
+    dialog.replace(() => (
+      <DialogSelect
+        title={input.title}
+        options={input.result.results.map((pack) => ({
+          title: setupMarketplaceBadgeTitle(pack.title || pack.id),
+          value: pack.id,
+          category: setupMarketplaceCategory({ channel: pack.channel, sourceID: input.sourceID }),
+          description: pack.description || setupMarketplaceRuntimeSummary(pack),
+          searchText: setupMarketplaceSearchText([
+            pack.id,
+            pack.title,
+            pack.description,
+            setupMarketplaceRuntimeSummary(pack),
+            pack.channel,
+            input.sourceID,
+            ...(pack.tags || []),
+          ]),
+          footer: pack.version,
+          onSelect: async () => {
+            keepSource = true
+            try {
+              const confirmed = await DialogConfirm.show(
+                dialog,
+                `Install ${pack.title || pack.id}`,
+                setupMarketplaceInstallPreview({
+                  pack,
+                  sourceID: input.sourceID,
+                  sourceURL: input.result.source.url || input.sourceURL,
+                  sourceType: input.result.source.type,
+                  fetchesNetwork: input.result.fetchesNetwork,
+                  digest: input.result.digest,
+                }),
+              )
+              if (!confirmed) {
+                await removeFailedRegistrySource(input.sourceID)
+                keepSource = false
+                return
+              }
+              const installed = await runtimeRegistryInstallPack(pack.id, input.sourceID, mend.root)
+              await syncPackageRuntime()
+              toast.show({ variant: "success", message: `Installed package: ${installed.package.id}.`, duration: 5000 })
+              dialog.clear()
+            } catch (error) {
+              await removeFailedRegistrySource(input.sourceID)
+              keepSource = false
+              toast.show({
+                variant: "error",
+                message: error instanceof Error ? error.message : input.installErrorMessage,
+                duration: 7000,
+              })
+            }
+          },
+        }))}
+      />
+    ), () => {
+      if (keepSource) return
+      void removeFailedRegistrySource(input.sourceID)
+    })
+  }
+
   const chooseOfficialPackage = async () => {
     try {
       const result = await runtimeRegistrySearch("", "official", mend.root)
+      const packages = await listMendPackages(mend.root)
       if (!result.results.length) {
         toast.show({ variant: "warning", message: "No official packages found in the registry.", duration: 5000 })
         return
@@ -840,26 +1349,28 @@ export function Setup() {
       dialog.replace(() => (
         <DialogSelect
           title="Official Packages"
-          options={result.results.map((pack) => ({
-            title: pack.title || pack.id,
+          options={result.results.map((pack) => {
+            const installed = packages.installed.find((item) => item.id === pack.id)
+            const badge = installed ? installed.enabled ? "active" : "installed" : null
+            return {
+            title: setupMarketplaceBadgeTitle(pack.title || pack.id, badge),
             value: pack.id,
-            category: pack.channel || "official",
-            description: pack.description || `${pack.runtime?.commands || 0} commands · ${pack.runtime?.skills || 0} skills`,
-            footer: pack.version,
+            category: setupMarketplaceCategory({ badge, channel: pack.channel, sourceID: "official" }),
+            description: pack.description || setupMarketplaceRuntimeSummary(pack),
+            searchText: setupMarketplaceSearchText([pack.id, pack.title, pack.description, setupMarketplaceRuntimeSummary(pack), pack.channel, badge, ...(pack.tags || [])]),
+            footer: [pack.version, badge].filter(Boolean).join(" · "),
             onSelect: async () => {
               const confirmed = await DialogConfirm.show(
                 dialog,
                 `Install ${pack.title || pack.id}`,
-                [
-                  `Source: official`,
-                  `Package: ${pack.id}@${pack.version}`,
-                  `Fetches network: ${result.fetchesNetwork ? "yes" : "no"}`,
-                  `Digest: ${pack.digest ? `${pack.digest.algorithm}:${pack.digest.value.slice(0, 12)}...` : "not pinned"}`,
-                  `Signature: ${pack.signature ? `${pack.signature.algorithm}:${pack.signature.value.slice(0, 12)}...` : "not signed"}`,
-                  "",
-                  "Will activate as a package overlay for the next message.",
-                  "Will not touch local sessions, auth, runs, cache, or existing local customization files.",
-                ].join("\n"),
+                setupMarketplaceInstallPreview({
+                  pack,
+                  sourceID: "official",
+                  sourceURL: result.source.url,
+                  sourceType: result.source.type,
+                  fetchesNetwork: result.fetchesNetwork,
+                  digest: result.digest,
+                }),
               )
               if (!confirmed) return
               const installed = await runtimeRegistryInstallPack(pack.id, "official", mend.root)
@@ -867,7 +1378,8 @@ export function Setup() {
               toast.show({ variant: "success", message: `Installed package: ${installed.package.id}.`, duration: 5000 })
               dialog.clear()
             },
-          }))}
+            }
+          })}
         />
       ))
     } catch (error) {
@@ -892,8 +1404,32 @@ export function Setup() {
       description: () => <text fg={theme.textMuted}>Stable id for this local registry source.</text>,
     })
     if (!sourceID?.trim()) return
+    let sourceAdded = false
     try {
+      await ensureRegistrySourceIDAvailable(sourceID.trim())
       await runtimeRegistryAdd([sourceID.trim(), "--type", "local", "--url", sourcePath.trim(), "--note", "Setup-added local package source."], mend.root)
+      sourceAdded = true
+      const result = await runtimeRegistrySearch("", sourceID.trim(), mend.root)
+      if (result.results.length > 1) {
+        await showImportedSourcePackages({
+          sourceID: sourceID.trim(),
+          sourceURL: sourcePath.trim(),
+          result,
+          title: "Packages from local source",
+          installErrorMessage: "Local package install failed.",
+        })
+        return
+      }
+      if (result.results.length === 1) {
+        const installed = await runtimeRegistryInstallPack(result.results[0]!.id, sourceID.trim(), mend.root)
+        await syncPackageRuntime()
+        toast.show({
+          variant: "success",
+          message: `Installed local package source: ${installed.package.id}.`,
+          duration: 5000,
+        })
+        return
+      }
       const preview = await runtimeRegistryApplySource(sourceID.trim(), mend.root)
       await syncPackageRuntime()
       toast.show({
@@ -902,9 +1438,85 @@ export function Setup() {
         duration: 5000,
       })
     } catch (error) {
+      if (sourceAdded) await removeFailedRegistrySource(sourceID.trim())
       toast.show({
         variant: "error",
         message: error instanceof Error ? error.message : "Local package install failed.",
+        duration: 7000,
+      })
+    }
+  }
+
+  const installGitHubPackageUrl = async () => {
+    const sourceURL = await DialogPrompt.show(dialog, "GitHub package URL", {
+      value: "",
+      placeholder: "https://github.com/org/mendcode-package.git",
+      description: () => (
+        <text fg={theme.textMuted}>Public git URL containing a MendCode package or marketplace catalog.</text>
+      ),
+    })
+    if (!sourceURL?.trim()) return
+    if (!isPublicGitHubURL(sourceURL)) {
+      toast.show({
+        variant: "error",
+        message: "Package URL must be a public https://github.com/<org>/<repo> URL. Use local path for filesystem packages.",
+        duration: 7000,
+      })
+      return
+    }
+    const sourceID = await DialogPrompt.show(dialog, "Source id", {
+      value: registrySourceIDFromURL(sourceURL),
+      placeholder: "url-my-package",
+      description: () => <text fg={theme.textMuted}>Saved in .mendcode/registry.json; no credentials are stored.</text>,
+    })
+    if (!sourceID?.trim()) return
+    let sourceAdded = false
+    try {
+      await ensureRegistrySourceIDAvailable(sourceID.trim())
+      await runtimeRegistryAdd([sourceID.trim(), "--type", "github", "--url", sourceURL.trim(), "--note", "Setup-added GitHub package source."], mend.root)
+      sourceAdded = true
+      const result = await runtimeRegistrySearch("", sourceID.trim(), mend.root)
+      if (result.results.length > 1) {
+        await showImportedSourcePackages({
+          sourceID: sourceID.trim(),
+          sourceURL: sourceURL.trim(),
+          result,
+          title: "Packages from URL",
+          installErrorMessage: "Package URL install failed.",
+        })
+        return
+      }
+      if (result.results.length === 1) {
+        const pack = result.results[0]!
+        const confirmed = await DialogConfirm.show(
+          dialog,
+          `Install ${pack.title || pack.id}`,
+          setupMarketplaceInstallPreview({
+            pack,
+            sourceID: sourceID.trim(),
+            sourceURL: result.source.url || sourceURL.trim(),
+            sourceType: result.source.type,
+            fetchesNetwork: result.fetchesNetwork,
+            digest: result.digest,
+          }),
+        )
+        if (!confirmed) {
+          await removeFailedRegistrySource(sourceID.trim())
+          return
+        }
+        const installed = await runtimeRegistryInstallPack(pack.id, sourceID.trim(), mend.root)
+        await syncPackageRuntime()
+        toast.show({ variant: "success", message: `Installed package: ${installed.package.id}.`, duration: 5000 })
+        dialog.clear()
+        return
+      }
+      await removeFailedRegistrySource(sourceID.trim())
+      toast.show({ variant: "warning", message: "No installable MendCode packages found in that GitHub repo.", duration: 6000 })
+    } catch (error) {
+      if (sourceAdded) await removeFailedRegistrySource(sourceID.trim())
+      toast.show({
+        variant: "error",
+        message: error instanceof Error ? error.message : "Package URL install failed.",
         duration: 7000,
       })
     }
@@ -928,10 +1540,11 @@ export function Setup() {
             },
           },
           ...packages.installed.map((item) => ({
-            title: `${item.enabled ? "[x]" : "[ ]"} ${item.title || item.id}`,
+            title: setupMarketplaceBadgeTitle(item.title || item.id, item.enabled ? "active" : "installed"),
             value: item.id,
-            category: item.enabled ? "Active" : "Installed",
+            category: setupMarketplaceCategory({ badge: item.enabled ? "active" : "installed", channel: item.channel, sourceID: item.sourceType }),
             description: item.description || item.root,
+            searchText: setupMarketplaceSearchText([item.id, item.title, item.description, item.root, item.version, item.channel, item.sourceType, item.enabled ? "active enabled selected" : "installed inactive disabled"]),
             footer: item.version || item.channel || item.sourceType,
             onSelect: async () => {
               await setMendPackageEnabled(item.id, !item.enabled, mend.root)
@@ -987,15 +1600,29 @@ export function Setup() {
             title: "Browse official packages",
             value: "official",
             category: "Install",
-            description: "Install a curated package from MendCode/mendcode-packages.",
+            description: "Install a curated package from MendCode/mendcode-marketplace.",
             onSelect: () => void chooseOfficialPackage(),
           },
           {
-            title: "Install local package path",
+            title: "Import local package path",
             value: "local-path",
-            category: "Install",
-            description: "Install a local package directory or manifest as an overlay.",
+            category: "Import",
+            description: "Import a local package directory or manifest as an overlay; secrets remain local.",
             onSelect: () => void installLocalPackagePath(),
+          },
+          {
+            title: "Import GitHub package URL",
+            value: "github-url",
+            category: "Import",
+            description: "Add a public package repository or marketplace catalog, then import from it.",
+            onSelect: () => void installGitHubPackageUrl(),
+          },
+          {
+            title: "Export safe config snapshot",
+            value: "export-safe",
+            category: "Export",
+            description: "Write mend-package.json + runtime-pack without auth, sessions, runs, cache, or secrets.",
+            onSelect: () => void exportSafeRuntimeSnapshot(),
           },
           {
             title: "Create/update local package",
@@ -1037,7 +1664,7 @@ export function Setup() {
                 title: "ASCII mascot",
                 value: "mascot",
                 category: "Home",
-                description: "Use the MendBug mascot as the home logo and compact activity feedback.",
+                description: "Use ASCII mascot art as the Home logo.",
                 onSelect: async () => resolve("mascot"),
               },
             ]}
@@ -1100,45 +1727,6 @@ export function Setup() {
       )
     })
     if (logoFont === null) return
-    const logoSize =
-      identityMode === "mascot"
-        ? await new Promise<"compact" | "default" | "large" | null>((resolve) => {
-            dialog.replace(
-              () => (
-                <DialogSelect
-                  title="Home ASCII size"
-                  current={current.surfaces.homeLogo?.size || "default"}
-                  renderFilter={false}
-                  options={[
-                    {
-                      title: "Compact",
-                      value: "compact",
-                      category: "Home",
-                      description: "Small MendBug for tight terminal windows.",
-                      onSelect: async () => resolve("compact"),
-                    },
-                    {
-                      title: "Default",
-                      value: "default",
-                      category: "Home",
-                      description: "Larger default MendBug identity.",
-                      onSelect: async () => resolve("default"),
-                    },
-                    {
-                      title: "Large",
-                      value: "large",
-                      category: "Home",
-                      description: "Big MendBug for spacious home screens.",
-                      onSelect: async () => resolve("large"),
-                    },
-                  ]}
-                />
-              ),
-              () => resolve(null),
-            )
-          })
-        : current.surfaces.homeLogo?.size || "default"
-    if (logoSize === null) return
     const welcomeMode = await new Promise<"centered" | "split" | null>((resolve) => {
       dialog.replace(
         () => (
@@ -1168,34 +1756,36 @@ export function Setup() {
       )
     })
     if (welcomeMode === null) return
-    const rightPanel = await new Promise<"actions" | "agentManager" | null>((resolve) => {
-      dialog.replace(
-        () => (
-          <DialogSelect
-            title="Home activity panel"
-            current={current.surfaces.homeWelcome?.rightPanel || "agentManager"}
-            renderFilter={false}
-            options={[
-              {
-                title: "Actions",
-                value: "actions",
-                category: "Home",
-                description: "Show Resume, Open commands, and Quit in the split panel.",
-                onSelect: async () => resolve("actions"),
-              },
-              {
-                title: "Agent View",
-                value: "agentManager",
-                category: "Home",
-                description: "Show global sessions grouped by input, working, and completed.",
-                onSelect: async () => resolve("agentManager"),
-              },
-            ]}
-          />
-        ),
-        () => resolve(null),
-      )
-    })
+    const rightPanel = setupShouldChooseHomeSplitPanel(welcomeMode)
+      ? await new Promise<"actions" | "agentManager" | null>((resolve) => {
+          dialog.replace(
+            () => (
+              <DialogSelect
+                title="Home split panel"
+                current={current.surfaces.homeWelcome?.rightPanel || "agentManager"}
+                renderFilter={false}
+                options={[
+                  {
+                    title: "Actions",
+                    value: "actions",
+                    category: "Home",
+                    description: "Show Resume, Open commands, and Quit in the split panel.",
+                    onSelect: async () => resolve("actions"),
+                  },
+                  {
+                    title: "Agent View",
+                    value: "agentManager",
+                    category: "Home",
+                    description: "Show global sessions grouped by input, working, and completed.",
+                    onSelect: async () => resolve("agentManager"),
+                  },
+                ]}
+              />
+            ),
+            () => resolve(null),
+          )
+        })
+      : current.surfaces.homeWelcome?.rightPanel || "agentManager"
     if (rightPanel === null) return
     const applyTuiIdentityPreset = async (
       preset: "comfortable" | "compact" | "spacious",
@@ -1214,7 +1804,7 @@ export function Setup() {
             identity: { productName: normalizeProductName(productName), tagline: "", logoMode: identityMode, logoFont },
             surfaces: {
               ...current.surfaces,
-              homeLogo: { ...(current.surfaces.homeLogo || {}), size: logoSize },
+              homeLogo: { ...(current.surfaces.homeLogo || {}) },
               homeWelcome: { ...(current.surfaces.homeWelcome || {}), mode: welcomeMode, rightPanel },
             },
           },
@@ -1298,6 +1888,7 @@ export function Setup() {
   }
 
   const runPrimaryAction = async (step: SetupStepID) => {
+    if (step === "start") return chooseSetupPreset()
     if (step === "provider") return chooseProvider()
     if (step === "models") return chooseModelRoleMenu()
     if (step === "budget") return chooseBudget()
@@ -1330,9 +1921,6 @@ export function Setup() {
     if (!providerID) return "not selected"
     return sync.data.provider.find((provider) => provider.id === providerID)?.name ?? providerID
   })
-  const currentProviderID = createMemo(
-    () => auth()?.providerID || activeRuntimeProviderID() || connectedProviderIDs()[0] || undefined,
-  )
   const providerReady = createMemo(() => {
     const status = auth()
     if (status?.providerID) return status.mendRunReady === true || connectedProviderIDs().includes(status.providerID)
@@ -1382,21 +1970,14 @@ export function Setup() {
   })
 
   return (
-    <box
-      width="100%"
-      height="100%"
-      flexDirection="column"
-      paddingLeft={2}
-      paddingRight={2}
-      paddingTop={1}
-      paddingBottom={1}
+    <CommandDeck
+      page="setup"
+      subtitle={() => `${requiredProgress()}/${requiredSetupSteps.length} required · ${active()} step`}
+      status={() => complete() ? "READY" : providerReady() ? "SETUP" : "BLOCKED"}
+      summary={() => `${providerLabel()} · ${setupSummary()?.prompt.mode || "focus"} prompt · ${data.minimal ? "minimal mode" : "customizable"}`}
+      footer="↑↓/jk Step   Enter Configure   Esc/Q Leave   R Refresh"
     >
-      <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
-        <text fg={theme.text}>MendCode Setup</text>
-        <text fg={theme.textMuted}>j/k move · enter configure · esc leave</text>
-      </box>
-      <box height={1} />
-      <box flexGrow={1} minHeight={0} flexDirection={narrow() ? "column" : "row"} gap={2}>
+      <box flexGrow={1} minHeight={0} flexDirection={narrow() ? "column" : "row"} gap={compact() ? 0 : 2}>
         <SetupRail
           active={active()}
           state={setupSummary()?.state}
@@ -1426,9 +2007,9 @@ export function Setup() {
           minHeight={0}
           borderColor={theme.border}
           borderStyle="single"
-          paddingLeft={1}
-          paddingRight={1}
-          paddingTop={1}
+          paddingLeft={compact() ? 0 : 1}
+          paddingRight={compact() ? 0 : 1}
+          paddingTop={compact() ? 0 : 1}
         >
           <scrollbox
             flexGrow={1}
@@ -1444,10 +2025,50 @@ export function Setup() {
           >
             <Show when={setupSummary()} fallback={<text fg={theme.textMuted}>Loading setup state...</text>}>
               <Switch>
+              <Match when={active() === "start"}>
+                <box flexDirection="column" gap={1}>
+                  <text fg={theme.primary}>Quick start</text>
+                  <text fg={theme.textMuted}>
+                    Choose a starting profile first. Every choice stays editable in the steps below, and provider/model
+                    credentials are never guessed or overwritten by a presentation preset.
+                  </text>
+                  <box flexDirection={narrow() ? "column" : "row"} gap={1}>
+                    <box flexDirection="column" width={narrow() ? "100%" : "40%"} minWidth={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} gap={1}>
+                      <text fg={theme.primary}>CURRENT BASELINE</text>
+                      <text>Provider: {providerLabel()}</text>
+                      <text>Models: {setupSummary()?.models.defaultModel || "not configured"}</text>
+                      <text>Prompt: {setupSummary()?.prompt.mode || "focus"}</text>
+                      <text>TUI: {mend.profile.layout.density} · {mend.profile.presentation.profile}</text>
+                      <text>Memory: {setupSummary()?.memory.enabled ? "enabled" : "off"}</text>
+                      <text>Permissions: {setupSummary()?.permissions.mode || "approval"}</text>
+                      <text fg={theme.textMuted}>Required progress: {requiredProgress()}/{requiredSetupSteps.length}</text>
+                    </box>
+                    <box flexDirection="column" flexGrow={1} minWidth={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1} paddingTop={1} paddingBottom={1} gap={1}>
+                      <text fg={theme.primary}>SETUP PRESETS</text>
+                      <text fg={theme.textMuted}>
+                        Presets change the TUI, prompt, memory, and permissions defaults. Provider and model credentials stay unchanged.
+                      </text>
+                      <For each={setupPresetList}>
+                        {(preset) => (
+                          <box flexDirection="column" gap={0} onMouseDown={() => void applySetupPreset(preset.id)}>
+                            <text fg={preset.id === "default" ? theme.primary : theme.text}>{preset.title}</text>
+                            <text fg={theme.textMuted}>{truncateSetupText(preset.summary, promptPanelWidth())}</text>
+                            <text fg={theme.textMuted}>{truncateSetupText(`  ${preset.changes}`, promptPanelWidth())}</text>
+                          </box>
+                        )}
+                      </For>
+                    </box>
+                  </box>
+                  <text fg={theme.textMuted}>Enter opens the setup preset picker. Choose Configure manually to set each step yourself.</text>
+                </box>
+              </Match>
               <Match when={active() === "provider"}>
                 <box flexDirection="column" gap={1}>
-                  <text fg={theme.primary}>Connect Provider</text>
-                  <text>Provider: {providerLabel()}</text>
+                  <text fg={theme.primary}>Provider Manager</text>
+                  <text>Primary runtime provider: {providerLabel()}</text>
+                  <text>
+                    Connected providers: {connectedProviderNames().length ? connectedProviderNames().join(", ") : "none"}
+                  </text>
                   <text>
                     Auth: {providerStatusText()} · {auth()?.authMode || "not pinned in project config"}
                   </text>
@@ -1474,20 +2095,26 @@ export function Setup() {
                       provider/model is pinned in `~/.mendcode/models.yaml`.
                     </text>
                   </Show>
-                  <Show when={!narrow()}>
-                    <text fg={theme.textMuted}>
-                      Enter opens the full provider picker. Configure auth here, then choose runtime models in the
-                      Models step.
-                    </text>
-                  </Show>
-                </box>
+                   <Show when={!narrow()}>
+                     <text fg={theme.textMuted}>
+                       Enter opens Provider Manager. Select a provider to add or refresh auth; press d on saved auth to
+                       disconnect it. Multiple providers can stay connected, then Models decides which roles use them.
+                     </text>
+                   </Show>
+                   <SetupActionBar actions={[{ label: "Open Provider Manager", active: true, onPress: () => void chooseProvider() }]} />
+                   <text fg={theme.textMuted}>Next: connect auth here, then choose a model preset or provider baseline in Models.</text>
+                 </box>
               </Match>
               <Match when={active() === "models"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme.primary}>Models</text>
-                  <text fg={theme.textMuted}>
-                    Pick the main models first. Background helpers can use cheaper models.
-                  </text>
+                   <text fg={theme.textMuted}>
+                     Pick the main models first. The Subagents role sets the default for background workers, but each
+                     subagent can still override its model in that agent's own config.
+                   </text>
+                   <text fg={theme.primary}>MODEL PRESETS</text>
+                   <text fg={theme.textMuted}>ChatGPT subscription uses OAuth; OpenAI API uses an API key; connected provider presets use that provider's model catalog.</text>
+                   <text fg={theme.textMuted}>OpenRouter, Anthropic, and other providers appear here only after their runtime auth/catalog is available.</text>
                   <For each={primaryModelRoles}>
                     {(role) => (
                       <box flexDirection="row" justifyContent="space-between" onMouseDown={() => chooseModelRole(role)}>
@@ -1515,26 +2142,29 @@ export function Setup() {
                       {additionalModelRoles().length} configured · press Enter to edit the full role list
                     </text>
                   </Show>
-                  <box flexGrow={1} />
-                  <text fg={theme.textMuted}>Enter opens all model roles. Click any visible row to edit it.</text>
-                </box>
+                   <box flexGrow={1} />
+                   <text fg={theme.textMuted}>Enter opens onboarding presets plus all model roles. Click any visible row to edit it.</text>
+                   <SetupActionBar actions={[{ label: "Open model presets", active: true, onPress: chooseModelRoleMenu }]} />
+                 </box>
               </Match>
-              <Match when={active() === "budget"}>
-                <box flexDirection="column" gap={1}>
-                  <text fg={theme.primary}>Budget</text>
-                  <text>Warn USD: {budget()?.warnUsd ?? "no limit"}</text>
-                  <text>Stop USD: {budget()?.stopUsd ?? "no limit"}</text>
-                  <text>
-                    Expensive model confirmation: {budget()?.expensiveModelRequiresConfirm === false ? "off" : "on"}
-                  </text>
-                  <text fg={theme.textMuted}>
-                    Subscription OAuth can count tokens but cannot enforce API-priced USD spend.
-                  </text>
-                  <text fg={theme.textMuted}>
-                    API-key priced models can warn/stop by USD thresholds before provider calls.
-                  </text>
-                </box>
-              </Match>
+               <Match when={active() === "budget"}>
+                 <box flexDirection="column" gap={1}>
+                   <text fg={theme.primary}>Budget</text>
+                   <text>Usage mode: {budget()?.mode === "api-usage" ? "API usage" : "Subscription"}</text>
+                   <text>Warn USD: {budget()?.warnUsd ?? "no limit"}</text>
+                   <text>Stop USD: {budget()?.stopUsd ?? "no limit"}</text>
+                   <text>
+                     Expensive model confirmation: {budget()?.expensiveModelRequiresConfirm === false ? "off" : "on"}
+                   </text>
+                   <text fg={theme.textMuted}>
+                     Subscription mode leaves token and USD budgets unenforced.
+                   </text>
+                   <text fg={theme.textMuted}>
+                     API usage mode can warn/stop by USD thresholds before provider calls.
+                   </text>
+                   <SetupActionBar actions={[{ label: "Configure budget", active: true, onPress: chooseBudget }]} />
+                 </box>
+               </Match>
               <Match when={active() === "prompt"}>
                 <box flexDirection="column" gap={1}>
                   <text fg={theme.primary}>Prompt Mode</text>
@@ -1583,14 +2213,15 @@ export function Setup() {
                   <text fg={theme.textMuted}>
                     Available now: {surfacedCustomizationCapabilities.map((item) => item.id).join(", ")}
                   </text>
-                  <text fg={theme.textMuted}>
-                    Blocked in v1: transcript.renderers, prompt.parser.override, sync.bootstrap.override
-                  </text>
-                </box>
+                   <text fg={theme.textMuted}>
+                     Blocked in v1: transcript.renderers, prompt.parser.override, sync.bootstrap.override
+                   </text>
+                   <SetupActionBar actions={[{ label: "Choose prompt mode", active: true, onPress: choosePromptMode }]} />
+                 </box>
               </Match>
               <Match when={active() === "package"}>
                 <box flexDirection="column" gap={1}>
-                  <text fg={theme.primary}>Package Metadata</text>
+                  <text fg={theme.primary}>Packages Store & Manager</text>
                   <text>ID: {setupSummary()?.pkg.id || "generated from local runtime"}</text>
                   <text>Title: {setupSummary()?.pkg.title || "unset"}</text>
                   <text>Description: {setupSummary()?.pkg.description || "unset"}</text>
@@ -1601,14 +2232,15 @@ export function Setup() {
                     Installed packages: {setupSummary()?.packages.installed.length || 0} · active{" "}
                     {setupSummary()?.packages.enabled.length || 0}
                   </text>
-                  <text>Install: official registry, local package path, or authored local snapshot</text>
-                  <text>Snapshot: mend-package.json + .mendcode/runtime-pack.json</text>
+                  <text>Import: official registry, public GitHub package URL, or local package path</text>
+                  <text>Manage: activate/deactivate installed overlays, remove snapshots, or update local metadata</text>
+                  <text>Export: mend-package.json + .mendcode/runtime-pack.json safe config snapshot</text>
                   <text fg={theme.textMuted}>
                     This metadata feeds generated `mend-package.json`, runtime-pack snapshots, and registry previews.
                   </text>
                   <text fg={theme.textMuted}>
-                    Enter opens package actions. Package overlays install under .mendcode/packages/installed and do not
-                    replace local sessions, auth, runs, cache, or customization files.
+                    Enter opens import/export/package actions. Package overlays install under .mendcode/packages/installed
+                    and do not replace local sessions, auth, runs, cache, or customization files.
                   </text>
                 </box>
               </Match>
@@ -1623,16 +2255,22 @@ export function Setup() {
                   <text>Prompt chrome: {mend.profile.promptChrome.preset}</text>
                   <text>Presentation: {mend.profile.presentation.profile}</text>
                   <text>Activity: global spinner footer</text>
-                  <text fg={theme.textMuted}>
-                    Enter sets title-vs-mascot identity, product name, logo font, and prompt chrome preset.
-                  </text>
+                   <text fg={theme.textMuted}>
+                     Enter sets title-vs-mascot identity, product name, logo font, and prompt chrome preset.
+                   </text>
+                   <text fg={theme.textMuted}>Quick profiles: Minimal hides optional surfaces; Full restores the complete MendCode presentation.</text>
                   <text fg={theme.textMuted}>
                     Mascot mode uses MendBug by default and can be overridden from global TUI config.
                   </text>
-                  <text fg={theme.textMuted}>
-                    Setup-owned or setup-visible surfaces: {setupVisibleCapabilities.map((item) => item.id).join(", ")}
-                  </text>
-                </box>
+                   <text fg={theme.textMuted}>
+                     Setup-owned or setup-visible surfaces: {setupVisibleCapabilities.map((item) => item.id).join(", ")}
+                   </text>
+                   <SetupActionBar actions={[
+                     { label: "Minimal TUI", onPress: () => void applyStandaloneTuiPreset("minimal") },
+                     { label: "Full TUI", active: true, onPress: () => void applyStandaloneTuiPreset("full") },
+                     { label: "Edit TUI profile", onPress: () => void chooseTuiProfile() },
+                   ]} />
+                 </box>
               </Match>
               <Match when={active() === "memory"}>
                 <box flexDirection="column" gap={1}>
@@ -1642,7 +2280,8 @@ export function Setup() {
                   </text>
                   <text>Enabled: {setupSummary()?.memory.enabled ? "yes" : "no"}</text>
                   <text>Input memory: {setupSummary()?.memory.use ? "on" : "off"}</text>
-                  <text>Memory learning: {setupSummary()?.memory.generate ? "on" : "off"} · {memoryLearningStatus()}</text>
+                   <text>Memory learning: {setupSummary()?.memory.generate ? "on" : "off"} · {memoryLearningStatus()}</text>
+                   <text fg={theme.textMuted}>Default and Minimal keep memory off. Full enables retrieval and approval-gated proposals; it never auto-applies generated changes.</text>
                   <text>
                     Context limit: {setupSummary()?.memory.maxPromptTokens} tokens · project {setupSummary()?.memory.projectMaxEntries}
                     /request · global {setupSummary()?.memory.globalCompactionMaxEntries}/after compaction
@@ -1662,7 +2301,9 @@ export function Setup() {
                       )}
                     </text>
                   </Show>
-                  <text>Consolidation model: {setupSummary()?.memory.consolidatorRole || "none"} · no background spend</text>
+                  <text>
+                    Consolidation model: {setupSummary()?.memory.consolidatorRole || "none"} · policy {setupSummary()?.memory.dreamConsolidationPolicy || "disabled"}
+                  </text>
                   <text>
                     Dream model: {setupSummary()?.memory.memoryDreamRole || "memoryDream"} · manual/scheduled runs write proposals only
                   </text>
@@ -1678,10 +2319,11 @@ export function Setup() {
                   <text fg={theme.textMuted}>
                     Enter toggles memory config. Retrieval is local-only; learning uses the configured extractor role.
                   </text>
-                  <text fg={theme.textMuted}>
-                    Memory is injected as soft context; current user intent and repo evidence still win.
-                  </text>
-                </box>
+                   <text fg={theme.textMuted}>
+                     Memory is injected as soft context; current user intent and repo evidence still win.
+                   </text>
+                   <SetupActionBar actions={[{ label: "Configure memory", active: true, onPress: chooseMemory }]} />
+                 </box>
               </Match>
               <Match when={active() === "permissions"}>
                 <box flexDirection="column" gap={1}>
@@ -1694,35 +2336,39 @@ export function Setup() {
                         ? "Smart Approval"
                         : "Require approval"}
                   </text>
-                  <text>Smart trigger: risky shell/script/delete prompts only</text>
+                  <text>Smart policy: safe read-only commands pass; risky shell/script/delete prompts stay gated</text>
                   <text>
                     Permission reviewer model:{" "}
                     {modelLabel(modelRole(setupSummary()?.permissions.reviewerRole || "permissionReviewer"))}
                   </text>
                   <text fg={theme.textMuted}>
-                    Smart Approval uses the reviewer model for fast allow/reject/ask decisions; non-risky permission
-                    prompts still use the normal prompt.
+                    Smart Approval auto-approves only bounded read-only shell requests. Risky or ambiguous requests stay
+                    gated and can be reviewed by the configured model; a model response can never auto-approve a command
+                    that is not provably read-only.
                   </text>
                   <text fg={theme.textMuted}>
                     Full Access is the renamed auto-accept mode for the TUI session. It does not change OS sandboxing by
                     itself.
                   </text>
-                  <text fg={theme.textMuted}>Enter changes the global default in your MendCode config.</text>
-                </box>
+                   <text fg={theme.textMuted}>Enter changes the global default in your MendCode config.</text>
+                   <SetupActionBar actions={[{ label: "Configure permissions", active: true, onPress: choosePermissions }]} />
+                 </box>
               </Match>
               </Switch>
             </Show>
           </scrollbox>
-          <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
-            <text fg={theme.textMuted}>
-              Required: provider, models, budget, prompt · optional: package, tui, memory, permissions
+          <box flexDirection={compact() ? "column" : "row"} justifyContent="space-between" flexShrink={0}>
+            <text fg={theme.textMuted} wrapMode="none">
+              {compact()
+                ? truncateSetupText("Required: provider, models, budget, prompt", promptPanelWidth())
+                : "Required: provider, models, budget, prompt · optional: start, tui, memory, permissions, package"}
             </text>
-            <text fg={complete() ? theme.success : theme.textMuted} onMouseDown={() => void finish()}>
-              Finish setup
+            <text fg={complete() ? theme.success : theme.textMuted} wrapMode="none" onMouseDown={() => void finish()}>
+              {complete() ? "Finish setup" : "Setup incomplete"}
             </text>
           </box>
         </box>
       </box>
-    </box>
+    </CommandDeck>
   )
 }

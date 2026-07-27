@@ -16,12 +16,13 @@ The pitch is not “another chat box.” The pitch is a configurable coding term
 | Package system                  | Bundle commands, agents, modes, skills, prompts, MCP config, TUI profile, widgets, model roles, permission defaults, memory defaults, and worktree policy.                                             | [Packages and team sharing](packages-and-team-sharing.md)                                |
 | Plan Mode                       | The agent presents a Markdown plan inside a TUI review modal; the user can approve, edit, comment, or reject before implementation starts. Approval switches into the configured implementation agent. | [Plan Mode](plan-mode.md)                                                                |
 | Changes Review                  | `/changes` opens a responsive TUI diff workspace with file/block/line navigation, comments, reload, return-to-chat behavior, and agent-visible review context between model turns.                     | [Changes Review](changes-review.md)                                                      |
-| Loop Workflows                  | Durable, monitorable agent loops with draft/activate/tick controls, Agent View loop sessions, terminal monitor, report-only safety mode, and a per-project OS background service.                      | [Loop Workflows](loop-workflows.md)                                                      |
+| Loop Workflows                  | Durable, monitorable loop sessions with `/loop` creation, `/loops` supervision, Agent View roots, contract-aware report-only mode, and a per-project OS background service.                                     | [Loop Workflows](loop-workflows.md)                                                      |
+| Automation runtime              | Let another local agent create, continue, inspect, wait for, stream, and cancel real MendCode sessions through the same runtime, with versioned JSON output and shared model selection.                | [Automation runtime](automation-runtime.md)                                              |
 | Usage Insights                  | Local activity dashboard for tokens, sessions, AI time, words, tools, agents, models, changed files, daily activity, selected-day detail, cache mix, and optional weather.                              | [Usage Insights](usage-insights.md)                                                      |
 | Approval-gated memory           | Memory can retrieve context without silently turning every session into permanent state. Generated memories become reviewable proposals first.                                                         | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory)       |
 | Memory Center, graph, and Dream | Route-level memory workspace with saved/pending memories, categories, policy controls, Dream logs, and constrained memory side chat.                                                                   | [Memory Center](memory-center.md)                                                        |
-| Smart permissions               | Choose `approval`, `smart`, or `full_access`. Smart mode can route risky permission decisions through a configured `permissionReviewer` role.                                                          | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory)       |
-| Model roles                     | Configure task-specific roles for default, small, plan, build, review, subagent, title, compaction, summary, memory extraction, Dream, memory side chat, and permission review.                        | [CLI, setup, and configuration](cli-setup-configuration.md#models)                       |
+| Smart permissions               | Choose `approval`, `smart`, or `full_access`. Smart mode auto-approves bounded read-only shell work and can route risky decisions through a configured `permissionReviewer` role.                         | [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory)       |
+| Model roles                     | Configure task-specific roles for default, small, plan, build/code, subagent, title, compaction, summary, memory extraction, Dream, memory side chat, and permission review.                     | [CLI, setup, and configuration](cli-setup-configuration.md#models)                       |
 | Local provider bridges          | Connect local provider CLIs such as Claude Code through validated setup/auth surfaces while keeping credentials in local tool state.                                                                    | [CLI, setup, and configuration](cli-setup-configuration.md#connect-provider)             |
 | mflow coordination              | Optional local-first coordination and locks for multiple agents working around the same repo.                                                                                                          | [mflow coordination](mflow.md)                                                           |
 | TSM and worktrees               | Open MendCode in managed/adopted worktrees or TSM terminal workspaces with preview-first safety.                                                                                                       | [TSM and worktrees](tsm-and-worktrees.md)                                                |
@@ -46,6 +47,20 @@ Run a control-plane turn without opening the full interactive surface:
 ```bash
 mendcode chat "summarize current status"
 ```
+
+Drive the same session runtime from another local agent:
+
+```bash
+mendcode session create --title "Implement the feature" --format json
+mendcode session send ses_... "Inspect the repository and implement the change" --format json
+mendcode session wait ses_... --timeout-ms 1800000 --format json
+mendcode session events ses_... --follow --format json
+```
+
+Automation output is newline-delimited `mendcode.cli.v1` JSON. Use `inspect` or
+`export` for a snapshot, `events` for progress, and `cancel` to stop active
+work. The detailed command contract, lifecycle states, model precedence, and
+redaction rules live in [Automation runtime](automation-runtime.md).
 
 Inspect readiness and product subsystems:
 
@@ -89,7 +104,14 @@ These are good demo moments because they show MendCode as a product surface, not
 | `Ctrl+X`, then `s` | Open runtime status.                                                                                                                              |
 | `Ctrl+X`, then `l` | Switch/resume sessions.                                                                                                                           |
 | `Ctrl+X`, then `n` | Start a new session.                                                                                                                              |
+| `Ctrl+_`           | Undo the most recent prompt edit. On many keyboards this is `Ctrl+Shift+-`.                                                                       |
+| `Ctrl+Y`           | Redo a prompt edit.                                                                                                                                 |
+| `⌘Z` / `⌘⇧Z`       | Undo / redo prompt edits on macOS.                                                                                                                  |
+| `Ctrl+Z`           | Suspend the terminal on POSIX systems; it is not the prompt undo shortcut.                                                                         |
 | `Esc`              | Interrupt the current session or leave focused route views.                                                                                       |
+
+Prompt undo/redo history is temporary and stays in memory only. It can recover text
+cleared while the prompt remains open, but it is not persisted as a prompt archive.
 
 Slash commands are also registered for common surfaces:
 
@@ -109,6 +131,8 @@ Slash commands are also registered for common surfaces:
 /sessions
 /resume
 /new
+/loop
+/loops
 /models
 /agents
 /variants
@@ -133,10 +157,12 @@ Configurable surfaces include:
 - prompt lead string: `❭`, `>`, `mendcode>`, `ship>`, team-specific markers
 - prompt status row: mode, model, provider, reasoning, context, permission mode, command hints, agent hints, script-backed status
 - home identity: generated ASCII title or custom ASCII mascot
+- independent Home and session ASCII art: large `surfaces.homeLogo.text` plus compact activity mascot states
 - home layout: centered welcome or split layout
 - split panel: actions or Agent View
 - chat presentation: raw, minimal, or MendCode activity-oriented rendering
 - activity mascot states for thinking, reading, searching, running, patching, testing, blocked, done, and error phases
+- profile/package sharing for team-created logos and mascots; first-class ASCII-pack import is not available yet
 - widgets, slots, custom routes, dialogs, footer entries, and themes through plugins
 
 Good demo profile:
@@ -258,7 +284,9 @@ mendcode loops monitor loop_...
 mendcode loops service start
 ```
 
-The safe testing path is `--execute --report-only`: MendCode wakes the loop root session and records transcript activity, but denies edit, write, patch, shell, and subagent tools. Full execution requires `--execute` for manual ticks or `mendcode loops service start --allow-edits` for the OS service.
+For a durable report-only/read-only workflow, `--execute --report-only` wakes the loop root session and records transcript activity without exposing mutation, shell, or subagent tools. It does not downgrade an edit-capable contract. Real agent execution uses `mendcode loops tick ... --execute`; `run` / `run_once` records a monitor iteration without a model call, still consumes iteration budget, and can block a `max-goal` workflow when that budget is exhausted.
+
+Supervised completion can combine allowlisted executable validations, evidence-only success checks, independent judgment, deterministic rubric coverage, authenticated local HTTP signal ingress, audited non-critical overrides, and bounded append-triggered artifact retention.
 
 See [Loop Workflows](loop-workflows.md) for lifecycle, monitor, Agent View behavior, and service details.
 
@@ -267,8 +295,8 @@ Important release notes for this page:
 - loops are durable database records, not just long-running prompts
 - activation creates a root session visible in Agent View under `Looping`
 - run journals record created, activated, wake, started, completed, failed, paused, resumed, and stopped events
-- report-only execution wakes the agent while denying mutation and shell/subagent tools
-- service mode is per project and defaults to report-only for safer background operation
+- report-only/read-only workflow contracts suppress mutation and shell/subagent tools during execution
+- service mode is per project and requests report-only execution by default, while the durable workflow contract remains authoritative
 
 ## Memory, Memory Page, And Dream
 
@@ -385,7 +413,6 @@ MendCode avoids hardcoding one model for every task. Model config can route diff
 - `plan`
 - `build`
 - `code`
-- `review`
 - `subagent`
 - `title`
 - `compaction`
@@ -411,7 +438,7 @@ Permission modes:
 | Mode          | Behavior                                                                                                                                             |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `approval`    | Manual approval remains the normal review posture.                                                                                                   |
-| `smart`       | Risky prompts can be routed to a configured `permissionReviewer` model role. If the role is not usable, MendCode asks instead of silently approving. |
+| `smart`       | Bounded read-only shell requests pass automatically. Risky or ambiguous requests stay gated and may use a configured `permissionReviewer`; the reviewer cannot auto-approve non-read-only commands. |
 | `full_access` | Reduces prompts for the current trust posture, while explicit deny rules still matter.                                                               |
 
 Safety principles:
