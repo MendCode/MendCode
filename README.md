@@ -1,10 +1,6 @@
-<h1 align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/branding/mendcode-logo-horizontal-white.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/assets/branding/mendcode-logo-horizontal-master.svg">
-    <img src="docs/assets/branding/mendcode-logo-horizontal-master.svg" alt="MendCode" width="420">
-  </picture>
-</h1>
+<p align="center">
+  <img src="docs/assets/banners/readme-hero-banner.png" alt="MendCode terminal field banner" width="1200">
+</p>
 
 <p align="center"><strong>The customizable coding terminal.</strong></p>
 
@@ -30,10 +26,6 @@ cancellation.
   <a href="docs/README.md">Docs</a> ·
   <a href="docs/features.md">Feature map</a> ·
   <a href="ACKNOWLEDGEMENTS.md">Acknowledgements</a>
-</p>
-
-<p align="center">
-  <img src="docs/assets/banners/readme-hero-banner.png" alt="MendCode terminal field banner" width="1200">
 </p>
 
 ## Contents
@@ -617,3 +609,11 @@ TSM/worktree orchestration, Plan Mode review flow, Usage Insights dashboard,
 memory policy, model-role projection, and terminal UI customization layer.
 
 See [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md) for attribution.
+
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/branding/mendcode-logo-horizontal-white.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/branding/mendcode-logo-horizontal-master.svg">
+    <img src="docs/assets/branding/mendcode-logo-horizontal-master.svg" alt="MendCode" width="420">
+  </picture>
+</h1>
