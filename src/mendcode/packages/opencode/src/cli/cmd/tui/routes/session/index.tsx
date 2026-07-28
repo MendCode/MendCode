@@ -3947,47 +3947,50 @@ export function Session() {
                 />
               </Show>
               <For each={listMendWidgets("aboveEditor")}>{(item) => <RenderMendWidget item={item} />}</For>
-              <box visible={visible()} position="relative" zIndex={2500} overflow="visible" width="100%">
-                <TuiPluginRuntime.Slot
-                  name="session_prompt"
-                  mode="replace"
-                  session_id={route.sessionID}
-                  visible={visible()}
-                  disabled={promptDisabled()}
-                  on_submit={handlePromptSubmit}
-                  ref={bind}
-                >
-                  {
-                    renderMendEditor({
-                      sessionID: route.sessionID,
-                      permissionMode: permissionMode(),
-                      permissionModeLabel: permissionModeLabel(),
-                      permissionPending: permissionPendingCount(),
-                      visible: visible(),
-                      disabled: promptDisabled(),
-                      ref: bind,
-                      onSubmit: handlePromptSubmit,
-                      right: <TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />,
-                      defaultEditor: () => (
-                        <Prompt
-                          visible={visible()}
-                          ref={bind}
-                          disabled={promptDisabled()}
-                          historyScope={`session:${route.sessionID}`}
-                          historyItems={sessionPromptHistory}
-                          workspaceID={project.workspace.current()}
-                          sessionID={route.sessionID}
-                          permissionMode={permissionMode()}
-                          permissionModeLabel={permissionModeLabel()}
-                          permissionPending={permissionPendingCount()}
-                          onSubmit={handlePromptSubmit}
-                          right={<TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
-                        />
-                      ),
-                    }) as any
-                  }
-                </TuiPluginRuntime.Slot>
-              </box>
+              {/* Do not keep the hidden prompt subtree mounted while a question/permission owns input. */}
+              <Show when={visible()}>
+                <box position="relative" zIndex={2500} overflow="visible" width="100%">
+                  <TuiPluginRuntime.Slot
+                    name="session_prompt"
+                    mode="replace"
+                    session_id={route.sessionID}
+                    visible={visible()}
+                    disabled={promptDisabled()}
+                    on_submit={handlePromptSubmit}
+                    ref={bind}
+                  >
+                    {
+                      renderMendEditor({
+                        sessionID: route.sessionID,
+                        permissionMode: permissionMode(),
+                        permissionModeLabel: permissionModeLabel(),
+                        permissionPending: permissionPendingCount(),
+                        visible: visible(),
+                        disabled: promptDisabled(),
+                        ref: bind,
+                        onSubmit: handlePromptSubmit,
+                        right: <TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />,
+                        defaultEditor: () => (
+                          <Prompt
+                            visible={visible()}
+                            ref={bind}
+                            disabled={promptDisabled()}
+                            historyScope={`session:${route.sessionID}`}
+                            historyItems={sessionPromptHistory}
+                            workspaceID={project.workspace.current()}
+                            sessionID={route.sessionID}
+                            permissionMode={permissionMode()}
+                            permissionModeLabel={permissionModeLabel()}
+                            permissionPending={permissionPendingCount()}
+                            onSubmit={handlePromptSubmit}
+                            right={<TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
+                          />
+                        ),
+                      }) as any
+                    }
+                  </TuiPluginRuntime.Slot>
+                </box>
+              </Show>
               <For each={listMendWidgets("belowEditor")}>{(item) => <RenderMendWidget item={item} />}</For>
             </box>
           </Show>
