@@ -40,6 +40,10 @@ export function isScrollboxAtTop(scroll: Pick<ScrollboxPosition, "scrollTop">, t
 export type SessionScrollState = {
   top: number
   follow: boolean
+  anchor?: {
+    id: string
+    offset: number
+  }
 }
 
 export function sessionScrollTarget(state?: SessionScrollState) {

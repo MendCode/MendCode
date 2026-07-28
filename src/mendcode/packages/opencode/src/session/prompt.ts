@@ -121,7 +121,7 @@ export function ownerWakePromptText(events: readonly OwnerWakeNotification[]) {
       return `- task_id: ${event.taskID} · state: ${event.state} · title: ${event.title}${detail ? ` · detail: ${detail}` : ""}`
     }),
     "",
-    "Decide the next useful action. If other background tasks may still be active, inspect them with task_status or wait. If the required work is ready, continue it or report the result. Do not claim completion without collecting the relevant task evidence. If no action is needed, keep the acknowledgement concise.",
+    "Decide the next useful action. Do not poll or wait for other active tasks from this wake; each background task will emit its own completion notification. Use `task_status` only when a task's terminal result is required now, and do not claim completion without collecting the relevant task evidence. If no action is needed, keep the acknowledgement concise.",
     "</mendcode_runtime_event>",
   ].join("\n")
 }
@@ -211,8 +211,8 @@ export function shouldResumeAfterAutoCompaction(finish: string | undefined, hasR
   return finish !== "stop"
 }
 
-export function shouldResumeAfterActiveCompaction(_finish: string | undefined) {
-  return true
+export function shouldResumeAfterActiveCompaction(finish: string | undefined, hasRunnableToolCalls = false) {
+  return shouldResumeAfterAutoCompaction(finish, hasRunnableToolCalls)
 }
 
 export function shouldPreflightPromptOverflow(input: {
@@ -683,7 +683,14 @@ export const layer = Layer.effect(
           user: firstInfo,
           providerID: input.providerID,
           modelID: input.modelID,
-          messages: [{ role: "user", content: "Generate a title for this conversation:\n" }, ...msgs],
+          messages: [
+            {
+              role: "user",
+              content:
+                "Generate a short, descriptive title for this conversation in 3 to 5 words. Return only the title, with no quotes, punctuation, or explanation:\n",
+            },
+            ...msgs,
+          ],
         })
         return
       }
@@ -713,7 +720,8 @@ export const layer = Layer.effect(
         "Generate an updated title for this conversation.",
         "",
         "Rules:",
-        "- Return only one concise title.",
+        "- Return only one concise title of 3 to 5 words.",
+        "- Use the shortest clear wording that captures the dominant topic.",
         "- Prefer the current dominant topic over the first greeting/request.",
         "- Do not include quotes, punctuation wrappers, or explanations.",
         "- Avoid duplicating recent session titles unless it is clearly still the best title.",
@@ -944,6 +952,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             return run.promise(
               Effect.gen(function* () {
                 const ctx = context(args, options)
+                yield* status.set(ctx.sessionID, {
+                  type: "busy",
+                  message: SessionStatus.activityLabelForTool(item.id),
+                })
                 const instance = yield* InstanceState.context
                 const mflowReads = yield* Effect.promise(() =>
                   waitMflowBeforeRead({
@@ -962,7 +974,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   }),
                 )
                 if (mflowReads.waited.length) {
-                  yield* status.set(ctx.sessionID, { type: "busy" })
+                  yield* status.set(ctx.sessionID, {
+                    type: "busy",
+                    message: SessionStatus.activityLabelForTool(item.id),
+                  })
                 }
                 const mflowLocks = yield* Effect.promise(() =>
                   enforceMflowBeforeEdit({
@@ -981,7 +996,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   }),
                 )
                 if (mflowLocks.locked.length) {
-                  yield* status.set(ctx.sessionID, { type: "busy" })
+                  yield* status.set(ctx.sessionID, {
+                    type: "busy",
+                    message: SessionStatus.activityLabelForTool(item.id),
+                  })
                 }
                 yield* plugin.trigger(
                   "tool.execute.before",
@@ -1019,7 +1037,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   yield* input.processor.completeToolCall(options.toolCallId, output)
                 }
                 return output
-              }),
+              }).pipe(Effect.ensuring(status.set(input.session.id, { type: "busy" }))),
             )
           },
         })
@@ -1037,6 +1055,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           run.promise(
             Effect.gen(function* () {
               const ctx = context(args, opts)
+              yield* status.set(ctx.sessionID, {
+                type: "busy",
+                message: SessionStatus.activityLabelForTool(key),
+              })
               yield* plugin.trigger(
                 "tool.execute.before",
                 { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
@@ -1108,10 +1130,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 yield* input.processor.completeToolCall(opts.toolCallId, output)
               }
               return output
-            }),
+            }).pipe(Effect.ensuring(status.set(input.session.id, { type: "busy" }))),
           )
         tools[key] = item
       }
+
 
       return tools
     })
@@ -1169,6 +1192,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         subagent_type: task.agent,
         command: task.command,
       }
+      yield* status.set(sessionID, {
+        type: "busy",
+        message: SessionStatus.activityLabelForTool(TaskTool.id),
+      })
       yield* plugin.trigger(
         "tool.execute.before",
         { tool: TaskTool.id, sessionID, callID: part.id },
@@ -1268,6 +1295,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               }
             }),
           ),
+          Effect.ensuring(status.set(sessionID, { type: "busy" })),
         )
 
       const attachments = result?.attachments?.map((attachment) => ({
@@ -2020,6 +2048,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       return { info, parts }
     }, Effect.scoped)
 
+    const registerOwnerWakeSession = Effect.fn("SessionPrompt.registerOwnerWakeSession")(function* (
+      sessionID: SessionID,
+    ) {
+      const wake = yield* InstanceState.get(ownerWakeState)
+      wake.sessions.add(sessionID)
+      return wake
+    })
+
     const prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.prompt")(
       function* (input: PromptInput) {
         log.trace("prompt-start", {
@@ -2032,8 +2068,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           (part) => part.type === "text" && part.synthetic === true && part.metadata?.kind === OWNER_WAKE_PART_KIND,
         )
         if (input.noReply !== true) {
-          const wake = yield* InstanceState.get(ownerWakeState)
-          wake.sessions.add(input.sessionID)
+          const wake = yield* registerOwnerWakeSession(input.sessionID)
           if (!ownerWakePrompt) wake.pending.delete(input.sessionID)
         }
         yield* revert.cleanup(session)
@@ -2103,12 +2138,22 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       let step = 0
       let initialMessageIDs: ReadonlySet<string> | undefined
       const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+      const beginCompaction = Effect.fnUntraced(function* () {
+        yield* state.setInterruptible(sessionID, false)
+        yield* status.set(sessionID, {
+          type: "busy",
+          kind: "compaction",
+          message: SessionStatus.SESSION_ACTIVITY_COMPACTION,
+        })
+      })
 
       while (true) {
-        yield* status.set(sessionID, { type: "busy" })
+
+        yield* status.set(sessionID, { type: "busy", message: SessionStatus.SESSION_ACTIVITY_WAITING })
         yield* slog.info("loop", { step })
 
         let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
+
         if (!initialMessageIDs) {
           const targetIndex = targetMessageID ? msgs.findIndex((message) => message.info.id === targetMessageID) : -1
           initialMessageIDs = new Set(
@@ -2170,14 +2215,18 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         }
 
         if (task?.type === "compaction") {
-          const result = yield* compaction.process({
-            messages: msgs,
-            parentID: lastUser.id,
-            sessionID,
-            auto: task.auto,
-            overflow: task.overflow,
-            resume: task.resume,
-          })
+          yield* beginCompaction()
+          const result = yield* compaction
+            .process({
+              messages: msgs,
+              parentID: lastUser.id,
+              sessionID,
+              auto: task.auto,
+              overflow: task.overflow,
+              resume: task.resume,
+            })
+            .pipe(Effect.ensuring(state.setInterruptible(sessionID, true)))
+
           if (result === "stop") break
           continue
         }
@@ -2192,6 +2241,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               reason: "no real user input since summary",
             })
           } else {
+            yield* beginCompaction()
             yield* compaction.create({
               sessionID,
               agent: lastUser.agent,
@@ -2361,7 +2411,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             const rescueCompactions = autoRescueCompactionCount(msgs)
             const rescueAlreadyAttempted = rescueCompactions > 0
             const canResumeAfterRescue = shouldResumeAfterAutoRescueCompaction(msgs)
-            yield* slog.warn("pre-provider compaction", {
+             yield* beginCompaction()
+             yield* slog.warn("pre-provider compaction", {
               promptTokens,
               reason: duplicateAutoCompaction
                 ? "synthetic resume still exceeded effective provider/model threshold before request dispatch"
@@ -2436,12 +2487,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               const hasUsefulParts = handleParts.some(
                 (part) => part.type === "text" || part.type === "tool" || part.type === "patch" || part.type === "file",
               )
-              if (!handle.message.finish && !hasUsefulParts) {
+               if (!handle.message.finish && !hasUsefulParts) {
                 yield* sessions
                   .removeMessage({ sessionID, messageID: handle.message.id })
                   .pipe(Effect.catch(() => Effect.void))
-              }
-              yield* compaction.create({
+               }
+               yield* beginCompaction()
+               yield* compaction.create({
                 sessionID,
                 agent: lastUser.agent,
                 model: lastUser.model,
@@ -2455,16 +2507,21 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   : "The prompt still exceeded the provider/model context after the preserved tail was discarded. Produce the smallest final rescue summary without auto-resuming; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference.",
               })
               return "continue" as const
-            }
-            yield* compaction.create({
+             }
+             const resumeAfterCompaction = shouldResumeAfterActiveCompaction(
+               handle.message.finish,
+               hasRunnableToolCalls(MessageV2.parts(handle.message.id)),
+             )
+             yield* beginCompaction()
+             yield* compaction.create({
               sessionID,
               agent: lastUser.agent,
               model: lastUser.model,
               auto: true,
-              overflow: shouldResumeAfterActiveCompaction(handle.message.finish),
-              resume: shouldResumeAfterActiveCompaction(handle.message.finish),
-            })
-            return "continue" as const
+              overflow: true,
+              resume: resumeAfterCompaction,
+             })
+             return "continue" as const
           }
           if (finished && !handle.message.error && !hasRunnableToolCalls(MessageV2.parts(handle.message.id))) {
             return "break" as const
@@ -2499,7 +2556,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           promptAbortControllers.set(input.sessionID, controller)
           return controller
         }),
-        (controller) => runLoop(input.sessionID, controller.signal, input.targetMessageID, queueMode === "after-tools"),
+        (controller) =>
+          runLoop(input.sessionID, controller.signal, input.targetMessageID, queueMode === "after-tools").pipe(
+            Effect.ensuring(state.setInterruptible(input.sessionID, true)),
+          ),
         (controller) =>
           Effect.sync(() => {
             if (promptAbortControllers.get(input.sessionID) === controller)
@@ -2536,6 +2596,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       const message = yield* prompt({ ...input, noReply: true })
       if (input.noReply === true) return message
 
+      // prompt() persists the message with noReply=true so prompt_async can
+      // acknowledge it before forking the loop. Register the session here as
+      // well; otherwise a background task launched by this async turn has no
+      // owner-wake recipient.
+      yield* registerOwnerWakeSession(input.sessionID)
       yield* loop({ sessionID: input.sessionID, queue: true, targetMessageID: message.info.id }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
@@ -2697,7 +2762,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       function* (sessionID: SessionID) {
         const wakeState = yield* InstanceState.get(ownerWakeState)
         const cfg = yield* config.get()
-        if (cfg.experimental?.subagent_owner_wake !== true) {
+        if (cfg.subagent_owner_wake === false) {
           wakeState.pending.delete(sessionID)
           return
         }
@@ -2783,7 +2848,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         properties: OwnerWakeNotification
       }) {
         const cfg = yield* config.get()
-        if (cfg.experimental?.subagent_owner_wake !== true) return
+        if (cfg.subagent_owner_wake === false) return
         const notification = event.properties
         if (notification.background !== true || !event.state.sessions.has(notification.parentSessionID)) return
 

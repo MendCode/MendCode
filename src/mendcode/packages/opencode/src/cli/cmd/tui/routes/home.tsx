@@ -26,13 +26,18 @@ import type { MendTuiProfile } from "@/mend/profile"
 import {
   agentViewLoopRootSessionIDs,
   isAgentViewSessionFallbackVisible,
-  isAgentViewCompletedLoop,
+  isAgentViewCompletedLoopSession,
+  isAgentViewActiveState,
+  isAgentViewLiveLoopWorkflow,
   isAgentViewLoopSession,
   isAgentViewSessionVisible,
+  agentViewBusyActivity,
+  agentViewParentSessionIDsWithActiveChildren,
   formatAgentViewDetailLabel,
   formatAgentViewPathLabel,
   formatAgentViewSessionTime,
   countAgentViewCommands,
+  retainAgentViewActiveRows,
   summarizeAgentViewOrchestration,
   type AgentViewBackgroundSession,
   type AgentViewCommand,
@@ -93,8 +98,6 @@ type AgentViewLoopWorkflow = {
 }
 
 type AgentViewActivity = "needsInput" | "looping" | "working" | "completed"
-
-const activeLoopWorkflowStates = new Set(["active", "sleeping", "working", "needs_input", "blocked"])
 
 export function resolveHomePromptTarget(input: { workspaceID?: string; selectedAgentViewSessionID?: string }) {
   return {
@@ -261,8 +264,17 @@ export function homeAgentViewRecentlyActive(input: { now: number; lastSeenAt?: n
   return input.lastSeenAt !== undefined && input.now - input.lastSeenAt <= input.graceMs
 }
 
-export function mergeAgentViewAggregateFallback<T extends { sessionID: string }>(primary: readonly T[], fallback: readonly T[]) {
-  return [...primary, ...fallback.filter((item) => !primary.some((current) => current.sessionID === item.sessionID))]
+export function mergeAgentViewAggregateFallback<T extends { sessionID: string; state?: string | null }>(
+  primary: readonly T[],
+  fallback: readonly T[],
+) {
+  const fallbackByID = new Map(fallback.map((item) => [item.sessionID, item]))
+  const merged = primary.map((item) => {
+    const alternate = fallbackByID.get(item.sessionID)
+    if (item.state !== "completed" || !alternate || !isAgentViewActiveState(alternate.state)) return item
+    return { ...item, state: alternate.state }
+  })
+  return [...merged, ...fallback.filter((item) => !primary.some((current) => current.sessionID === item.sessionID))]
 }
 
 export function homeSplitLogoMaxWidth(input: {
@@ -476,7 +488,10 @@ export function HomeSurface(props: {
   const [hoveredAgentViewSessionID, setHoveredAgentViewSessionID] = createSignal<string | undefined>()
   const agentViewActiveSeenAt = new Map<string, number>()
   const agentViewActiveKind = new Map<string, "needsInput" | "looping" | "working">()
-  const agentViewActiveGraceMs = 6_000
+  const agentViewActivityStartedAt = new Map<string, number>()
+  const agentViewSessionCache = new Map<string, { item: AgentViewSessionItem; seenAt: number }>()
+  const agentViewMissingRowGraceMs = 30_000
+  const agentViewActiveGraceMs = agentViewMissingRowGraceMs
   let agentViewRefreshTimer: ReturnType<typeof setTimeout> | undefined
   let agentViewPollTimer: ReturnType<typeof setInterval> | undefined
   let agentViewRefreshInFlight: Promise<void> | undefined
@@ -732,22 +747,49 @@ export function HomeSurface(props: {
     if (agentViewPollTimer) clearInterval(agentViewPollTimer)
   })
 
-  const pendingInputCount = (sessionID: string) => {
-    const pendingCommands = countAgentViewCommands({ commands: globalAgentCommands(), sessionID, states: ["pending"] })
-    const local =
-      (sync.data.permission[sessionID]?.length ?? 0) +
-      (sync.data.question[sessionID]?.length ?? 0) +
-      (sync.data.plan_review[sessionID]?.length ?? 0)
-    return Math.max(globalPendingInput()[sessionID] ?? 0, local) + pendingCommands
-  }
-  const activeForegroundState = (sessionID: string): BackgroundSessionInfo["state"] | undefined => {
-    const status = globalStatuses()[sessionID] ?? sync.data.session_status[sessionID]
-    if (pendingInputCount(sessionID) > 0 || status?.type === "retry") return "needs_input"
-    if (status?.type === "busy") return "working"
-    return undefined
-  }
+   const pendingInputCount = (sessionID: string) => {
+     const pendingCommands = countAgentViewCommands({ commands: globalAgentCommands(), sessionID, states: ["pending"] })
+     const local =
+       (sync.data.permission[sessionID]?.length ?? 0) +
+       (sync.data.question[sessionID]?.length ?? 0) +
+       (sync.data.plan_review[sessionID]?.length ?? 0)
+     return Math.max(globalPendingInput()[sessionID] ?? 0, local) + pendingCommands
+   }
+   const agentViewSessionRecords = createMemo(() => {
+     const byID = new Map<string, Session>()
+     for (const session of sync.data.session) byID.set(session.id, session)
+     for (const session of globalSessions()) byID.set(session.id, session)
+     return [...byID.values()]
+   })
+   const agentViewStatuses = createMemo(() => ({ ...sync.data.session_status, ...globalStatuses() }))
+   const agentViewActiveChildParentSessionIDs = createMemo(() =>
+     agentViewParentSessionIDsWithActiveChildren({
+       sessions: agentViewSessionRecords(),
+       statuses: agentViewStatuses(),
+       backgrounds: globalBackgroundSessions(),
+     }),
+   )
+   const activeForegroundState = (sessionID: string): BackgroundSessionInfo["state"] | undefined => {
+     const status = globalStatuses()[sessionID] ?? sync.data.session_status[sessionID]
+     if (pendingInputCount(sessionID) > 0 || status?.type === "retry") return "needs_input"
+     if (status?.type === "busy" || agentViewActiveChildParentSessionIDs().has(sessionID)) return "working"
+     return undefined
+   }
+
   const statusStartedAt = (status: SessionStatus | undefined) =>
     status?.type === "busy" ? status.startedAt : undefined
+  const isAgentViewSnapshotActive = (item: AgentViewSessionItem) => {
+    const sessionID = item.background.sessionID
+    const status = globalStatuses()[sessionID] ?? sync.data.session_status[sessionID]
+    return (
+      isAgentViewActiveState(item.background.state) ||
+      pendingInputCount(sessionID) > 0 ||
+      status?.type === "busy" ||
+      status?.type === "retry" ||
+      agentViewActiveChildParentSessionIDs().has(sessionID) ||
+      agentViewActiveSeenAt.has(sessionID)
+    )
+  }
   const loopWorkflowByRootSessionID = createMemo(() => {
     const result = new Map<string, AgentViewLoopWorkflow>()
     for (const workflow of globalLoopWorkflows()) {
@@ -756,12 +798,34 @@ export function HomeSurface(props: {
     return result
   })
   const loopRootSessionIDs = createMemo(() => agentViewLoopRootSessionIDs(globalLoopWorkflows()))
+  const completedLoopRootSessionIDs = createMemo(
+    () =>
+      new Set(
+        globalLoopWorkflows().flatMap((workflow) =>
+          workflow.rootSessionID && workflow.state.trim().toLowerCase() === "completed" ? [workflow.rootSessionID] : [],
+        ),
+      ),
+  )
   const loopWorkflowForSession = (sessionID: string) => loopWorkflowByRootSessionID().get(sessionID)
-  const agentViewStartedAt = (item: AgentViewSessionItem) =>
-    loopWorkflowForSession(item.background.sessionID)?.time?.created ??
-    statusStartedAt(globalStatuses()[item.background.sessionID] ?? sync.data.session_status[item.background.sessionID]) ??
-    item.background.process?.started ??
-    item.background.time.created
+  const agentViewStartedAt = (item: AgentViewSessionItem) => {
+    const sessionID = item.background.sessionID
+    const status = globalStatuses()[sessionID] ?? sync.data.session_status[sessionID]
+    const candidate =
+      loopWorkflowForSession(sessionID)?.time?.created ??
+      statusStartedAt(status) ??
+      item.background.process?.started ??
+      item.background.time.created
+    if (!isAgentViewSnapshotActive(item)) {
+      if (status?.type === "idle" || ["completed", "failed", "stopped"].includes(item.background.state)) {
+        agentViewActivityStartedAt.delete(sessionID)
+      }
+      return candidate
+    }
+    const previous = agentViewActivityStartedAt.get(sessionID)
+    const startedAt = previous === undefined ? candidate : Math.min(previous, candidate)
+    agentViewActivityStartedAt.set(sessionID, startedAt)
+    return startedAt
+  }
   const isLoopSession = (item: AgentViewSessionItem) =>
     isAgentViewLoopSession({
       sessionID: item.background.sessionID,
@@ -769,25 +833,46 @@ export function HomeSurface(props: {
       summary: item.background.summary,
       loopRootSessionIDs: loopRootSessionIDs(),
     })
-  const isCompletedLoopSession = (item: AgentViewSessionItem) =>
-    isAgentViewCompletedLoop({
-      state: loopWorkflowForSession(item.background.sessionID)?.state,
+  const isCompletedLoopSession = (item: AgentViewSessionItem) => {
+    const sessionID = item.background.sessionID
+    const input = {
+      sessionID,
+      title: item.background.session?.title ?? item.session?.title,
       summary: item.background.summary,
-    })
+      loopRootSessionIDs: loopRootSessionIDs(),
+    }
+    if (completedLoopRootSessionIDs().has(sessionID)) return true
+    return (
+      isAgentViewCompletedLoopSession({ ...input, state: loopWorkflowForSession(sessionID)?.state }) ||
+      isAgentViewCompletedLoopSession({ ...input, state: item.background.state })
+    )
+  }
+  const isNonLiveLoopSession = (item: AgentViewSessionItem) => {
+    const workflow = loopWorkflowForSession(item.background.sessionID)
+    if (workflow) return !isAgentViewLiveLoopWorkflow(workflow) && !isAgentViewSnapshotActive(item)
+    if (!isLoopSession(item)) return false
+    if (!item.background.session && !item.session) return !isAgentViewSnapshotActive(item)
+    if (isCompletedLoopSession(item)) return !isAgentViewSnapshotActive(item)
+    const state = item.background.state.trim().toLowerCase()
+    return (state === "completed" || state === "failed" || state === "stopped") && !isAgentViewSnapshotActive(item)
+  }
   const backgroundStateForLoopWorkflow = (workflow: AgentViewLoopWorkflow): BackgroundSessionInfo["state"] => {
-    if (workflow.state === "working") return "working"
-    if (workflow.state === "needs_input") return "needs_input"
-    if (workflow.state === "failed") return "failed"
-    if (workflow.state === "stopped" || workflow.state === "paused") return "stopped"
-    if (!activeLoopWorkflowStates.has(workflow.state)) return "completed"
+    const state = workflow.state.trim().toLowerCase()
+    if (state === "working") return "working"
+    if (state === "needs_input") return "needs_input"
+    if (state === "failed") return "failed"
+    if (state === "stopped" || state === "paused") return "stopped"
+    if (!isAgentViewLiveLoopWorkflow({ state })) return "completed"
     return "queued"
   }
   const rawAgentViewActivity = (item: AgentViewSessionItem): AgentViewActivity => {
     const sessionID = item.background.sessionID
     const status = globalStatuses()[sessionID] ?? sync.data.session_status[sessionID]
-    if (isLoopSession(item)) return "looping"
-    if (item.background.state === "failed" || item.background.state === "stopped") return "completed"
-    if (pendingInputCount(sessionID) > 0 || status?.type === "retry" || item.background.state === "needs_input") return "needsInput"
+     if (isLoopSession(item)) return "looping"
+     if (item.background.state === "failed" || item.background.state === "stopped") return "completed"
+     if (pendingInputCount(sessionID) > 0 || status?.type === "retry" || item.background.state === "needs_input") return "needsInput"
+     if (agentViewActiveChildParentSessionIDs().has(sessionID)) return "working"
+
     if (status?.type === "busy" || item.background.state === "queued" || item.background.state === "working") return "working"
     return "completed"
   }
@@ -804,6 +889,7 @@ export function HomeSurface(props: {
     if (status?.type === "idle") {
       agentViewActiveSeenAt.delete(sessionID)
       agentViewActiveKind.delete(sessionID)
+      agentViewActivityStartedAt.delete(sessionID)
       return raw
     }
 
@@ -812,6 +898,7 @@ export function HomeSurface(props: {
     if (lastKind && homeAgentViewRecentlyActive({ now, lastSeenAt, graceMs: agentViewActiveGraceMs })) return lastKind
     agentViewActiveSeenAt.delete(sessionID)
     agentViewActiveKind.delete(sessionID)
+    agentViewActivityStartedAt.delete(sessionID)
     return raw
   }
   const agentViewSessions = createMemo(() => {
@@ -844,7 +931,6 @@ export function HomeSurface(props: {
         }
       })
       .filter(isInAgentViewScope)
-      .filter((item) => !isCompletedLoopSession(item))
     const backgroundIDs = new Set(backgroundItems.map((item) => item.background.sessionID))
     const foregroundItems = Array.from(byID.values())
       .filter((session) => agentViewGlobalScope() || !agentViewDirectory() || isDirectoryInAgentViewScope(session.directory, agentViewDirectory()))
@@ -885,9 +971,27 @@ export function HomeSurface(props: {
             : background,
         }
       })
-      .filter((item) => !isCompletedLoopSession(item))
-    const items = [...backgroundItems, ...foregroundItems]
+    const freshItems = [...backgroundItems, ...foregroundItems].filter((item) => !isNonLiveLoopSession(item))
     const now = Date.now()
+    for (const item of freshItems) {
+      agentViewSessionCache.set(item.background.sessionID, { item, seenAt: now })
+    }
+    const items = retainAgentViewActiveRows({
+      next: freshItems,
+      cached: [...agentViewSessionCache.values()],
+      key: (item) => item.background.sessionID,
+      active: (item) => isInAgentViewScope(item) && isAgentViewSnapshotActive(item),
+      now,
+      graceMs: agentViewMissingRowGraceMs,
+    })
+    const itemIDs = new Set(items.map((item) => item.background.sessionID))
+    for (const [sessionID] of agentViewSessionCache) {
+      if (itemIDs.has(sessionID)) continue
+      agentViewSessionCache.delete(sessionID)
+      agentViewActiveSeenAt.delete(sessionID)
+      agentViewActiveKind.delete(sessionID)
+      agentViewActivityStartedAt.delete(sessionID)
+    }
     const visible = items.filter((item) =>
       homeAgentViewRecentlyActive({
         now,
@@ -908,12 +1012,14 @@ export function HomeSurface(props: {
           sessionID: item.background.sessionID,
           states: ["accepted", "running"],
         }),
-        blockedCommands: countAgentViewCommands({
-          commands: globalAgentCommands(),
-          sessionID: item.background.sessionID,
-          states: ["rejected", "failed", "expired"],
-        }),
-        now,
+         blockedCommands: countAgentViewCommands({
+           commands: globalAgentCommands(),
+           sessionID: item.background.sessionID,
+           states: ["rejected", "failed", "expired"],
+         }),
+         activeChild: agentViewActiveChildParentSessionIDs().has(item.background.sessionID),
+         now,
+
       }),
     )
     const displayItems = visible.length > 0 ? visible : items.filter(isAgentViewSessionFallbackVisible)
@@ -928,20 +1034,13 @@ export function HomeSurface(props: {
     const looping: ReturnType<typeof agentViewSessions> = []
     const working: ReturnType<typeof agentViewSessions> = []
     const completed: ReturnType<typeof agentViewSessions> = []
-    const visibleIDs = new Set<string>()
     const now = Date.now()
     for (const item of agentViewSessions()) {
-      visibleIDs.add(item.background.sessionID)
       const activity = agentViewActivity(item, now)
       if (activity === "needsInput") needsInput.push(item)
       else if (activity === "looping") looping.push(item)
       else if (activity === "working") working.push(item)
       else completed.push(item)
-    }
-    for (const sessionID of agentViewActiveSeenAt.keys()) {
-      if (visibleIDs.has(sessionID)) continue
-      agentViewActiveSeenAt.delete(sessionID)
-      agentViewActiveKind.delete(sessionID)
     }
     return { needsInput, looping, working, completed }
   })
@@ -1051,10 +1150,16 @@ export function HomeSurface(props: {
     if (activeCommands > 0) return `${activeCommands} command${activeCommands === 1 ? "" : "s"} active`
     const failedCommands = countAgentViewCommands({ commands: globalAgentCommands(), sessionID: item.background.sessionID, states: ["rejected", "failed", "expired"] })
     if (failedCommands > 0) return `${failedCommands} command${failedCommands === 1 ? "" : "s"} blocked`
-    const pending = pendingInputCount(item.background.sessionID)
-    if (pending > 0) return `${pending} input request${pending === 1 ? "" : "s"}`
-    if (item.background.error) return Locale.truncateMiddle(item.background.error, Math.max(12, rightPanelWidth() - 22))
-    const agentName = item.background.session?.agent || item.session?.agent
+     const pending = pendingInputCount(item.background.sessionID)
+     if (pending > 0) return `${pending} input request${pending === 1 ? "" : "s"}`
+     if (item.background.error) return Locale.truncateMiddle(item.background.error, Math.max(12, rightPanelWidth() - 22))
+     const status = globalStatuses()[item.background.sessionID] ?? sync.data.session_status[item.background.sessionID]
+     if (status?.type === "retry") return Locale.truncateMiddle(status.message, Math.max(12, rightPanelWidth() - 22))
+     const activity = agentViewBusyActivity(status)
+     if (activity) return Locale.truncateMiddle(activity, Math.max(12, rightPanelWidth() - 22))
+     if (agentViewActiveChildParentSessionIDs().has(item.background.sessionID)) return "Working with a subagent"
+     const agentName = item.background.session?.agent || item.session?.agent
+
     const summaryIsState =
       item.background.summary === item.background.state ||
       (item.background.state === "completed" && item.background.summary === "working")
@@ -1062,9 +1167,8 @@ export function HomeSurface(props: {
     if (item.background.summary && !summaryIsState && !summaryIsAgent) {
       return Locale.truncateMiddle(formatAgentViewDetailLabel(item.background.summary) ?? item.background.summary, Math.max(12, rightPanelWidth() - 22))
     }
-    const status = globalStatuses()[item.background.sessionID] ?? sync.data.session_status[item.background.sessionID]
-    if (status?.type === "retry") return Locale.truncateMiddle(status.message, Math.max(12, rightPanelWidth() - 22))
-    if (status?.type === "busy") {
+     if (status?.type === "busy") {
+
       return (
         formatAgentViewDetailLabel(item.background.summary) ||
         formatAgentViewPathLabel(item.background.session?.path) ||

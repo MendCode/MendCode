@@ -8,13 +8,20 @@ import {
   formatAgentViewOrchestrationSummary,
   agentViewCommandTouchesSession,
   agentViewLoopRootSessionIDs,
+  filterAgentViewLiveLoopWorkflows,
   filterAgentViewLoopSessions,
+  isAgentViewActiveState,
   isAgentViewCompletedLoop,
+  isAgentViewCompletedLoopSession,
+  isAgentViewLiveLoopWorkflow,
   isAgentViewLoopSession,
   isAgentViewCommandActionable,
   isAgentViewSessionFallbackVisible,
   isAgentViewSessionVisible,
+  agentViewBusyActivity,
+  agentViewParentSessionIDsWithActiveChildren,
   isTemporaryAgentViewDirectory,
+  retainAgentViewActiveRows,
   summarizeAgentViewOrchestration,
   type AgentViewCommand,
   type AgentViewBackgroundSession,
@@ -59,6 +66,62 @@ describe("Agent View visibility", () => {
     expect(formatAgentViewDetailLabel("Loop active: ready")).toBe("Loop active: ready")
   })
 
+  test("prefers activity messages only for busy sessions", () => {
+    expect(agentViewBusyActivity({ type: "busy", message: "Inspecting files" })).toBe("Inspecting files")
+    expect(agentViewBusyActivity({ type: "busy", message: "  Running a command  " })).toBe("Running a command")
+    expect(agentViewBusyActivity({ type: "busy", message: "   " })).toBeUndefined()
+    expect(agentViewBusyActivity({ type: "retry", message: "retrying" })).toBeUndefined()
+    expect(agentViewBusyActivity({ type: "idle", message: "stale activity" })).toBeUndefined()
+  })
+
+  test("projects active child sessions onto every live parent ancestor", () => {
+    const activeParents = agentViewParentSessionIDsWithActiveChildren({
+      sessions: [
+        { id: "ses_root" },
+        { id: "ses_parent", parentID: "ses_root" },
+        { id: "ses_child", parentID: "ses_parent" },
+        { id: "ses_done", parentID: "ses_root" },
+      ],
+      statuses: {
+        ses_child: { type: "busy" },
+        ses_done: { type: "idle" },
+      },
+    })
+
+    expect(activeParents).toEqual(new Set(["ses_parent", "ses_root"]))
+  })
+
+  test("keeps an old parent visible while its child is active", () => {
+    expect(
+      isAgentViewSessionVisible({
+        item: item({ sessionID: "ses_parent", updated: now - 25 * 60 * 60 * 1_000 }),
+        activeChild: true,
+        now,
+      }),
+    ).toBe(true)
+  })
+
+  test("retains active rows during a transient refresh gap", () => {
+    const next = [{ sessionID: "ses_new", state: "working" }]
+    const cached = [
+      { item: { sessionID: "ses_worker", state: "working" }, seenAt: now - 1_000 },
+      { item: { sessionID: "ses_done", state: "completed" }, seenAt: now - 1_000 },
+    ]
+
+    expect(isAgentViewActiveState(" WORKING ")).toBe(true)
+    expect(isAgentViewActiveState("completed")).toBe(false)
+    expect(
+      retainAgentViewActiveRows({
+        next,
+        cached,
+        key: (item) => item.sessionID,
+        active: (item) => isAgentViewActiveState(item.state),
+        now,
+        graceMs: 5_000,
+      }),
+    ).toEqual([...next, cached[0].item])
+  })
+
   test("keeps every workflow root classified as a loop, including paused and old manual roots", () => {
     const roots = agentViewLoopRootSessionIDs([
       { rootSessionID: "ses_paused_manual" },
@@ -86,8 +149,45 @@ describe("Agent View visibility", () => {
   test("identifies completed loop rows without hiding failed or paused loops", () => {
     expect(isAgentViewCompletedLoop({ state: "completed" })).toBe(true)
     expect(isAgentViewCompletedLoop({ summary: "Loop completed: completed" })).toBe(true)
+    expect(isAgentViewCompletedLoop({ state: " Completed " })).toBe(true)
     expect(isAgentViewCompletedLoop({ state: "failed", summary: "Loop failed: terminal" })).toBe(false)
     expect(isAgentViewCompletedLoop({ state: "paused", summary: "Loop paused: paused" })).toBe(false)
+  })
+
+  test("classifies only live loop workflow states for Agent View", () => {
+    for (const state of ["active", "sleeping", "working", "needs_input", "blocked", " WORKING "]) {
+      expect(isAgentViewLiveLoopWorkflow({ state })).toBe(true)
+    }
+    for (const state of ["draft", "paused", "completed", "failed", "stopped", "deleted", "cancelled", undefined]) {
+      expect(isAgentViewLiveLoopWorkflow({ state })).toBe(false)
+    }
+  })
+
+  test("filters terminal and non-live loop workflows before Agent View maps roots", () => {
+    const workflows = [
+      { id: "live", state: "sleeping", rootSessionID: "ses_live" },
+      { id: "done", state: "completed", rootSessionID: "ses_done" },
+      { id: "cancelled", state: "cancelled", rootSessionID: "ses_cancelled" },
+      { id: "failed", state: "failed", rootSessionID: "ses_failed" },
+    ]
+
+    expect(filterAgentViewLiveLoopWorkflows(workflows)).toEqual([workflows[0]])
+  })
+
+  test("identifies completed loop sessions from title or workflow roots", () => {
+    const roots = agentViewLoopRootSessionIDs([{ rootSessionID: "ses_root" }])
+
+    expect(isAgentViewCompletedLoopSession({ sessionID: "ses_title", title: "Loop: complete me", state: "completed" })).toBe(true)
+    expect(
+      isAgentViewCompletedLoopSession({
+        sessionID: "ses_summary",
+        title: "Loop: complete me",
+        state: "working",
+        summary: "Loop completed: completed",
+      }),
+    ).toBe(true)
+    expect(isAgentViewCompletedLoopSession({ sessionID: "ses_root", title: "Manual loop", state: "completed", loopRootSessionIDs: roots })).toBe(true)
+    expect(isAgentViewCompletedLoopSession({ sessionID: "ses_chat", title: "Normal chat", state: "completed" })).toBe(false)
   })
 
   test("hides completed temp sessions but keeps active or awaiting rows", () => {

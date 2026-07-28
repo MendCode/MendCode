@@ -204,7 +204,7 @@ export const Parameters = Schema.Struct({
   }),
   background: Schema.optional(Schema.Boolean).annotate({
     description:
-      "Return immediately while the subagent continues. Use task_status with the returned task_id to inspect it later.",
+      "Return immediately while the subagent continues. Keep the returned task_id; if no independent parent work remains, end the current turn instead of polling task_status or wait.",
   }),
   command: Schema.optional(Schema.String).annotate({ description: "The command that triggered this task" }),
 })
@@ -552,7 +552,7 @@ export const TaskTool = Tool.define(
         )
         const started = output({
           status: "started",
-          text: `Subagent started in the background. Use task_status with task_id ${nextSession.id} to inspect progress or collect the result.`,
+          text: `Subagent started in the background. Keep task_id ${nextSession.id} for a later inspection or resume; use task_status with task_id ${nextSession.id} later, not for same-turn polling. If no independent parent work remains, end this turn and wait for the runtime completion notification; do not call task_status.wait or poll in this turn.`,
         })
         return {
           ...started,

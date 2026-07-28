@@ -19,6 +19,7 @@ export function sessionPendingInputSessionIDs(input: {
 
 const SESSION_SIDE_PADDING = 2
 const SESSION_USAGE_BAR_CELLS = 8
+const SESSION_TITLE_WIDTH_BONUS = 2
 
 export type SessionUsageBarLayout = {
   context: number
@@ -115,6 +116,8 @@ export type SessionTopbarLayout = {
   leftWidth: number
   titleWidth: number
   metricsWidth: number
+  titleGapWidth: number
+  metricsGapWidth: number
 }
 
 export function sessionTopbarLayout(input: {
@@ -124,15 +127,38 @@ export function sessionTopbarLayout(input: {
   titleVisible?: boolean
 }): SessionTopbarLayout {
   const contentWidth = Math.max(1, Math.floor(input.contentWidth))
-  const metricsWidth = Math.min(Math.max(0, Math.floor(input.metricsWidth)), Math.floor(contentWidth * 0.3))
-  const titleWidth = input.titleVisible
-    ? Math.min(Math.max(12, Math.floor(contentWidth * 0.34)), Math.max(0, contentWidth - metricsWidth))
+  const titleVisible = input.titleVisible === true
+  const requestedMetricsWidth = Math.min(Math.max(0, Math.floor(input.metricsWidth)), Math.floor(contentWidth * 0.3))
+  const titleGap = titleVisible ? 1 : 0
+  const metricsGap = requestedMetricsWidth > 0 ? 1 : 0
+  const titleAvailableWidth = Math.max(0, contentWidth - requestedMetricsWidth - titleGap - metricsGap)
+  const requestedTitleWidth = titleVisible
+    ? Math.min(Math.max(8, Math.floor(contentWidth * 0.34) + SESSION_TITLE_WIDTH_BONUS), titleAvailableWidth)
     : 0
-  const leftWidth = input.titleVisible
-    ? Math.min(Math.floor(contentWidth * 0.38), Math.max(0, contentWidth - titleWidth - metricsWidth))
-    : Math.max(0, contentWidth - metricsWidth)
-  const navWidth = Math.min(Math.max(0, Math.floor(input.navWidth ?? 0)), Math.floor(leftWidth * 0.6))
+
+  const metricsWidth = requestedMetricsWidth
+  const titleLeftBias = metricsWidth > 0 ? Math.min(3, Math.floor(metricsWidth / 4)) : 0
+  let titleWidth = requestedTitleWidth
+  while (titleWidth > 0) {
+    const titleStart = Math.max(0, Math.floor((contentWidth - titleWidth) / 2) - titleLeftBias)
+    const titleGapWidth = titleStart > 0 ? 1 : 0
+    const leftWidth = Math.max(0, titleStart - titleGapWidth)
+    const metricsGapWidth = metricsWidth > 0 && (leftWidth > 0 || titleWidth > 0) ? 1 : 0
+    const regions = leftWidth + titleGapWidth + titleWidth + metricsGapWidth + metricsWidth
+    if (regions <= contentWidth) break
+    titleWidth -= 1
+  }
+  const titleStart = titleWidth > 0 ? Math.max(0, Math.floor((contentWidth - titleWidth) / 2) - titleLeftBias) : 0
+  const titleGapWidth = titleWidth > 0 && titleStart > 0 ? 1 : 0
+  const leftWidth = titleWidth > 0
+    ? Math.max(0, titleStart - titleGapWidth)
+    : Math.max(0, contentWidth - metricsWidth - (metricsWidth > 0 ? 1 : 0))
+
+  const requestedNavWidth = Math.min(Math.max(0, Math.floor(input.navWidth ?? 0)), Math.floor(leftWidth * 0.6))
+  const minimumPathWidth = requestedNavWidth > 0 ? Math.min(18, Math.max(8, Math.floor(contentWidth * 0.2))) : 0
+  const navWidth = Math.min(requestedNavWidth, Math.max(0, leftWidth - minimumPathWidth - 1))
   const pathWidth = Math.max(0, leftWidth - navWidth - (navWidth > 0 ? 1 : 0))
+  const metricsGapWidth = metricsWidth > 0 && (leftWidth > 0 || titleWidth > 0) ? 1 : 0
 
   return {
     pathWidth,
@@ -140,6 +166,70 @@ export function sessionTopbarLayout(input: {
     leftWidth,
     titleWidth,
     metricsWidth,
+    titleGapWidth,
+    metricsGapWidth,
+  }
+}
+
+export type SessionTopbarNavItem = {
+  icon: string
+  label: string
+  key?: string
+}
+
+export type SessionTopbarNavItemLayout = SessionTopbarNavItem & {
+  showLabel: boolean
+  showKey: boolean
+  text: string
+  width: number
+}
+
+const SESSION_TOPBAR_NAV_GAP = 1
+const SESSION_TOPBAR_NAV_VARIANTS = [
+  { showLabel: true, showKey: true, score: 3 },
+  { showLabel: false, showKey: true, score: 2 },
+  { showLabel: false, showKey: false, score: 1 },
+] as const
+
+export function sessionTopbarNavLayout(input: { width: number; items: readonly SessionTopbarNavItem[] }) {
+  const width = Math.max(0, Math.floor(input.width))
+  const items = input.items.slice(0, 3)
+  const candidates = Array.from({ length: items.length + 1 }, (_, visibleCount) =>
+    Array.from({ length: SESSION_TOPBAR_NAV_VARIANTS.length ** visibleCount }, (_, mask) => {
+      const layout = items.slice(0, visibleCount).map((item, index) => {
+        const variant =
+          SESSION_TOPBAR_NAV_VARIANTS[
+            Math.floor(mask / SESSION_TOPBAR_NAV_VARIANTS.length ** index) % SESSION_TOPBAR_NAV_VARIANTS.length
+          ]
+        const text = [
+          item.icon,
+          variant.showLabel ? item.label : undefined,
+          variant.showKey && item.key ? item.key : undefined,
+        ]
+          .filter((value): value is string => Boolean(value))
+          .join(" ")
+        return {
+          ...item,
+          ...variant,
+          showKey: variant.showKey && Boolean(item.key),
+          text,
+          width: Bun.stringWidth(text),
+        }
+      })
+      const totalWidth =
+        layout.reduce((total, item) => total + item.width, 0) + Math.max(0, visibleCount - 1) * SESSION_TOPBAR_NAV_GAP
+      const score = visibleCount * 1000 + layout.reduce((total, item) => total + item.score, 0)
+      return { layout, totalWidth, score, visibleCount }
+    }),
+  ).flat()
+  const selected = candidates
+    .filter((candidate) => candidate.totalWidth <= width)
+    .toSorted((a, b) => b.score - a.score || a.totalWidth - b.totalWidth)[0]
+
+  return {
+    gap: selected && selected.visibleCount > 1 ? SESSION_TOPBAR_NAV_GAP : 0,
+    items: (selected?.layout ?? []) as SessionTopbarNavItemLayout[],
+    width: selected?.totalWidth ?? 0,
   }
 }
 
@@ -151,7 +241,7 @@ export function sessionTopbarLeftWidthWithTitle(input: { contentWidth: number; m
 
 export function sessionHeaderTitleAlign(value: unknown): SessionHeaderTitleAlign {
   if (value === "left" || value === "center" || value === "right") return value
-  return "right"
+  return "center"
 }
 
 export function sessionHeaderTitleJustify(align: SessionHeaderTitleAlign) {
@@ -200,6 +290,56 @@ export function truncateMiddleDisplay(value: string, maxWidth: number) {
   }
 
   return `${start}${ellipsis}${end}`
+}
+
+export function truncateEndDisplay(value: string, maxWidth: number) {
+  if (maxWidth <= 0) return ""
+  if (Bun.stringWidth(value) <= maxWidth) return value
+
+  const ellipsis = "…"
+  const ellipsisWidth = Bun.stringWidth(ellipsis)
+  if (maxWidth <= ellipsisWidth) return ellipsis
+
+  let result = ""
+  let resultWidth = 0
+  for (const char of [...value]) {
+    const width = Bun.stringWidth(char)
+    if (resultWidth + width + ellipsisWidth > maxWidth) break
+    result += char
+    resultWidth += width
+  }
+
+  return `${result.trimEnd()}${ellipsis}`
+}
+
+export function sessionHeaderTitleDisplay(input: {
+  value: string
+  maxWidth: number
+  animated?: boolean
+  offset?: number
+}) {
+  if (input.maxWidth <= 0) return ""
+  if (!input.animated || Bun.stringWidth(input.value) <= input.maxWidth) {
+    return truncateEndDisplay(input.value, input.maxWidth)
+  }
+
+  const title = [...input.value]
+  const cycle = [...title, " ", "·", " "]
+  const offset = Math.max(0, Math.floor(input.offset ?? 0)) % cycle.length
+  const start = (cycle.length - offset) % cycle.length
+  const result: string[] = []
+  let width = 0
+
+  for (let index = 0; index < cycle.length + title.length; index++) {
+    const char = cycle[(start + index) % cycle.length]
+    const charWidth = Bun.stringWidth(char)
+    if (width + charWidth > input.maxWidth) break
+    result.push(char)
+    width += charWidth
+    if (width === input.maxWidth) break
+  }
+
+  return result.join("")
 }
 
 export function sessionTopbarLeftLabel(input: {

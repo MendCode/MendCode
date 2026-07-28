@@ -78,29 +78,33 @@ describe("mend prompt composition", () => {
     expect(policy.sections.find((item) => item.id === "model-behavior")?.text).toContain("not an upstream hidden prompt")
   })
 
-  test("focus teaches basic background subagents while full mode keeps the expanded contract", async () => {
+  test("all prompt modes teach notification-driven background subagents", async () => {
     const minimal = await composePromptPolicy({ mode: "minimal", focusID: "codex" })
     const focus = await composePromptPolicy({ mode: "focus", focusID: "codex" })
     const full = await composePromptPolicy({ mode: "full", focusID: "codex" })
 
+    expect(minimal.policyInstructions).toContain("background: true")
+    expect(minimal.policyInstructions).toContain("end the current turn")
+    expect(minimal.policyInstructions).toContain("Do not call `task_status` or `wait` repeatedly")
     expect(minimal.sections.find((item) => item.id === "focus-mendcode-basics")).toBeUndefined()
     const focusSection = focus.sections.find((item) => item.id === "focus-mendcode-basics")
     expect(focusSection?.text).toContain("`task` with `background: true`")
     expect(focusSection?.text).toContain("`task_status`")
+    expect(focusSection?.text).toContain("do not poll")
     expect(focusSection?.text).toContain("foreground task blocks this session")
     expect(focusSection?.text).toContain("only after `task` returns its `task_id`")
-    expect(focusSection?.text).not.toContain("Do not busy-poll")
 
     const section = full.sections.find((item) => item.id === "background-subagents")
     expect(section?.text).toContain("`task` with `background: true`")
     expect(section?.text).toContain("`task_status`")
     expect(section?.text).toContain("`wait`")
     expect(section?.text).toContain("`cancel`")
-    expect(section?.text).toContain("do not trigger provider calls by default")
-    expect(section?.text).toContain("experimental.subagent_owner_wake")
+    expect(section?.text).toContain("automatically deliver at most one coalesced internal runtime wake")
+    expect(section?.text).toContain("subagent_owner_wake: false")
     expect(section?.text).toContain("not a user message")
     expect(section?.text).toContain("Do not busy-poll")
-    expect(section?.text).toContain("before the final response")
+    expect(section?.text).toContain("end the turn")
+    expect(section?.text).toContain("retry a timed-out `wait`")
     expect(section?.text).toContain("Use `loop`")
   })
 

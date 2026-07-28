@@ -16,7 +16,7 @@ When NOT to use the Task tool:
 
 Usage notes:
 1. Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses
-2. Set `background: true` to return immediately. Use `task_status` to list/get the task, wait for its result, or cancel it when necessary.
+2. Set `background: true` to return immediately. Keep the task_id and end the current turn when no independent parent work remains; use `task_status` later to inspect/cancel/collect results instead of polling or repeating `wait`.
 3. When a foreground agent is done, it will return a single message back to you. The result returned by the agent is not visible to the user. To show the user the result, you should send a text message back to the user with a concise summary of the result. The output includes a task_id you can reuse later to continue the same subagent session.
 4. Each agent invocation starts with a fresh context unless you provide task_id to resume a previous subagent session. When starting fresh, provide a detailed autonomous task and the exact expected result.
 5. The agent's outputs should generally be trusted

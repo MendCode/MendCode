@@ -1533,6 +1533,7 @@ describe("tool.task", () => {
 
       expect(result.metadata.status).toBe("started")
       expect(result.output).toContain(`task_status with task_id ${result.metadata.sessionId}`)
+      expect(result.output).toContain("do not call task_status.wait")
       yield* Effect.promise(() => ready.promise)
       expect(yield* status.get(result.metadata.sessionId)).toMatchObject({ type: "busy" })
       expect(yield* status.get(chat.id)).toEqual({ type: "idle" })

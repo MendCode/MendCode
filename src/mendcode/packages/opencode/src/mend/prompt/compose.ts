@@ -104,6 +104,10 @@ function minimalBoundary() {
     "If the user asks the loop to write, edit, fix, implement, code, or create files, use normal execution rather than report-only; report-only is for inspection/monitoring/reporting objectives.",
     "Do not claim tests, builds, provider calls, or file writes passed unless they actually ran.",
     "Do not expose secrets or raw auth tokens.",
+    "Background subagents:",
+    "- `task` with `background: true` returns a `task_id` immediately. Do not call `task_status` or `wait` repeatedly in the same turn.",
+    "- If no independent parent work remains, end the current turn and let the runtime completion notification/owner wake resume the parent; do not sleep, poll, or retry a timed-out `wait`.",
+    "- Use `task_status` later to inspect, cancel, or collect a result, and never claim background work is complete without its evidence.",
   ].join("\n")
 }
 
@@ -125,7 +129,8 @@ function loopWorkflowBrief() {
 function focusMendCodeBasics() {
   return [
     "MendCode basics:",
-    "- For independent work that can run concurrently, call `task` with `background: true`, keep each returned `task_id`, and use `task_status` with `get` or `wait` to inspect and collect the results before finishing.",
+    "- For independent work that can run concurrently, call `task` with `background: true` and keep each returned `task_id`; do not poll with `task_status` or `wait` in the same turn.",
+    "- If no useful parent work remains, end the turn and let the runtime notification/owner wake resume it; use `task_status` later to inspect, cancel, or collect results.",
     "- Keep `task` in foreground when the next step depends on its result. A foreground task blocks this session, so wait for it to finish before launching the next subagent and do not claim parallel execution.",
     "- Report a subagent as started only after `task` returns its `task_id`; if a foreground call is still running, the next subagent has not started.",
     "- Use `loop` for durable or repeated work after the current turn; do not emulate scheduled iterations inline.",
@@ -136,10 +141,10 @@ function backgroundSubagentFull() {
   return [
     "MendCode background subagents:",
     "- For independent work that can run concurrently, call `task` with `background: true`, keep the returned task_id, and continue useful parent work immediately.",
-    "- Use `task_status` with action `get` to inspect one task, `list` to rediscover child task IDs, `wait` when the result is now a dependency, or `cancel` to stop a registered background task.",
-     "- Wait timeouts release only the waiter; they do not cancel the child. Completion, failure, cancellation, and needs-input notifications do not trigger provider calls by default. When `experimental.subagent_owner_wake` is enabled, an idle parent may receive one coalesced internal runtime wake; it is not a user message.",
-    "- Do not busy-poll. Check after meaningful parent progress, when the result becomes a dependency, or before the final response.",
-    "- Keep `task` in foreground when the very next step depends on its result.",
+    "- After a background launch, do not call `task_status` or `wait` just to monitor it in the same turn. If no useful parent work remains, end the turn and let the runtime completion notification/owner wake resume the parent.",
+    "- Do not busy-poll, sleep, or retry a timed-out `wait` in the same turn. Use `task_status` later to inspect, rediscover, collect, or `cancel` a task.",
+    "- Keep `task` in foreground when the very next step depends on its result; if background work is already running, end the turn instead of waiting synchronously.",
+    "- A `wait` timeout releases only the waiter and does not cancel the child. Background completion, failure, cancellation, and needs-input notifications automatically deliver at most one coalesced internal runtime wake to an idle parent; it is not a user message. This is the default CLI behavior and can be disabled with `subagent_owner_wake: false`.",
     "- Collect relevant background results before claiming completion; surface failed, waiting, or retrying tasks honestly.",
     "- Background subagents are runtime-scoped concurrent jobs, not durable scheduled workflows. Use `loop` for monitored repetition or wakeups after MendCode exits.",
   ].join("\n")
