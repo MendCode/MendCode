@@ -52,6 +52,13 @@ const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
 const releaseAssetsFlag = process.argv.includes("--release-assets")
+const excludedOS = new Set(
+  process.argv
+    .filter((arg) => arg.startsWith("--exclude-os="))
+    .flatMap((arg) => arg.slice("--exclude-os=".length).split(","))
+    .map((value) => value.trim())
+    .filter(Boolean),
+)
 const plugin = createSolidTransformPlugin()
 const skipEmbedWebUi = process.argv.includes("--skip-embed-web-ui")
 
@@ -144,26 +151,27 @@ const allTargets: {
   },
 ]
 
-const targets = singleFlag
-  ? allTargets.filter((item) => {
-      if (item.os !== process.platform || item.arch !== process.arch) {
-        return false
-      }
+const targets = allTargets.filter((item) => {
+  if (excludedOS.has(item.os)) return false
+  if (!singleFlag) return true
 
-      // When building for the current platform, prefer a single native binary by default.
-      // Baseline binaries require additional Bun artifacts and can be flaky to download.
-      if (item.avx2 === false) {
-        return baselineFlag
-      }
+  if (item.os !== process.platform || item.arch !== process.arch) {
+    return false
+  }
 
-      // also skip abi-specific builds for the same reason
-      if (item.abi !== undefined) {
-        return false
-      }
+  // When building for the current platform, prefer a single native binary by default.
+  // Baseline binaries require additional Bun artifacts and can be flaky to download.
+  if (item.avx2 === false) {
+    return baselineFlag
+  }
 
-      return true
-    })
-  : allTargets
+  // also skip abi-specific builds for the same reason
+  if (item.abi !== undefined) {
+    return false
+  }
+
+  return true
+})
 
 await $`rm -rf dist`
 
@@ -230,10 +238,14 @@ for (const item of targets) {
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
     const binaryPath = `dist/${name}/bin/${binaryName}`
-    console.log(`Running smoke test: ${binaryPath} --version`)
+    console.log(`Running smoke test: ${binaryPath} --version && --help`)
     try {
       const versionOutput = await $`${binaryPath} --version`.text()
-      console.log(`Smoke test passed: ${versionOutput.trim()}`)
+      const helpOutput = await $`${binaryPath} --help 2>&1`.text()
+      if (!helpOutput.includes("Commands:")) {
+        throw new Error("--help did not produce the command list")
+      }
+      console.log(`Smoke test passed: ${versionOutput.trim()} and --help startup`)
     } catch (e) {
       console.error(`Smoke test failed for ${name}:`, e)
       process.exit(1)
