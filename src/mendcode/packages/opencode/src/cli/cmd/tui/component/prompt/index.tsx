@@ -296,11 +296,15 @@ export function subscribePendingPromptDeliveries(listener: () => void) {
   return () => pendingPromptDeliveryListeners.delete(listener)
 }
 
-export function pendingPromptDeliveryMessageIDs(sessionID: string) {
+export function pendingPromptDeliveryMessageIDs(sessionID: string, options?: { includeAccepted?: boolean }) {
   return new Set(
     [...pendingPromptDeliveries.values()]
-      // Accepted prompts stay tracked for reconnect recovery, but are no longer queued in the transcript.
-      .filter((delivery) => delivery.request.sessionID === sessionID && promptDeliveryIsQueued(delivery.state))
+      // Accepted prompts stay tracked for reconnect recovery; compaction keeps them queued visually until the turn starts.
+      .filter(
+        (delivery) =>
+          delivery.request.sessionID === sessionID &&
+          (promptDeliveryIsQueued(delivery.state) || options?.includeAccepted === true),
+      )
       .map((delivery) => delivery.request.messageID)
       .filter((messageID): messageID is string => Boolean(messageID)),
   )
@@ -427,10 +431,16 @@ function cancelPendingPromptDeliveriesForInterrupt(sessionID: string, activeAssi
 }
 
 export function latestPendingAssistantID(
-  messages: Array<{ id: string; role: string; time: { created?: number; completed?: number } }>,
+  messages: Array<{
+    id: string
+    role: string
+    time: { created?: number; completed?: number }
+    finish?: string
+  }>,
 ) {
   const latestAssistant = messages.findLast((message) => message.role === "assistant")
   if (!latestAssistant || latestAssistant.time.completed) return
+  if (latestAssistant.finish && !["tool-calls", "unknown"].includes(latestAssistant.finish)) return
   return latestAssistant.id
 }
 
@@ -754,8 +764,14 @@ export function Prompt(props: PromptProps) {
   })
   createEffect(
     on(
-      () => status().type !== "idle" || compactionActive(),
-      (active) => {
+      () =>
+        [
+          status().type !== "idle" || compactionActive(),
+          status().type,
+          hasActiveWorkingAssistant(),
+          Boolean(props.permissionPending),
+        ] as const,
+      ([active, statusType, hasActiveAssistant, permissionPending]) => {
         const sessionID = props.sessionID
         if (clearWorkingStartTimer) {
           clearTimeout(clearWorkingStartTimer)
@@ -773,9 +789,9 @@ export function Prompt(props: PromptProps) {
           return
         }
         if (!shouldClearWorkingStartedAt({
-          statusType: status().type,
-          hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
-          permissionPending: Boolean(props.permissionPending),
+          statusType,
+          hasActiveWorkingAssistant: hasActiveAssistant,
+          permissionPending,
         })) {
           return
         }

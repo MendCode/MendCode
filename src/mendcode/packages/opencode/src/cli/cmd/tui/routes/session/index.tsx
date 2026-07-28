@@ -138,10 +138,13 @@ import {
   sessionLoopReceipt,
   sessionHeaderTitleAlign,
   sessionHeaderTitleJustify,
+  sessionHeaderTitleDisplay,
   sessionTopMetricsWidth,
   sessionTopbarLeftLabel,
   sessionTopbarLayout,
+  sessionTopbarNavLayout,
   sessionUsageBarLabels,
+  type SessionTopbarNavItem,
 } from "../../util/session-layout"
 import {
   sessionBottomDockLayout,
@@ -180,6 +183,7 @@ import { readMendTuiCustomization, resolveMendSessionAccent } from "@/mend/tui/c
 import { formatDuration } from "@/util/format"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
 import {
+  isSafeSmartPermissionRequest,
   reviewPermissionRequestWithModel,
   shouldReviewSmartApproval,
 } from "@/mend/permission/smart-approval"
@@ -425,6 +429,7 @@ const context = createContext<{
   loopWorkflows: () => readonly SessionLoopWorkflow[]
   refreshLoopWorkflows: () => Promise<readonly SessionLoopWorkflow[]>
   latestTodoWritePartID: () => string | undefined
+  latestCompletedTodoWritePartID: () => string | undefined
   sync: ReturnType<typeof useSync>
   tui: ReturnType<typeof useTuiConfig>
 }>()
@@ -573,7 +578,7 @@ function sessionMatchesLoopWorkflow(
 
 export function Session() {
   const route = useRouteData("session")
-  const { navigate } = useRoute()
+  const { navigate: navigateRoute } = useRoute()
   const sync = useSync()
   const event = useEvent()
   const project = useProject()
@@ -640,6 +645,10 @@ export function Session() {
     const status = sync.data.session_status?.[route.sessionID]?.type
     return status === "busy" || status === "retry"
   })
+  const sessionCompacting = createMemo(() => {
+    const status = sync.data.session_status?.[route.sessionID]
+    return status?.type === "busy" && status.kind === "compaction"
+  })
   const activeTurnAssistantID = createMemo(() => {
     const unfinished = pending()
     if (unfinished) return unfinished
@@ -657,7 +666,8 @@ export function Session() {
           working: sessionWorking(),
         }),
       )
-      for (const messageID of pendingPromptDeliveryMessageIDs(route.sessionID)) queued.add(messageID)
+      for (const messageID of pendingPromptDeliveryMessageIDs(route.sessionID, { includeAccepted: sessionCompacting() }))
+        queued.add(messageID)
       return queued
     },
   )
@@ -695,15 +705,21 @@ export function Session() {
   const lastAssistant = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant")
   })
-  const latestTodoWritePartID = createMemo(() => {
+  const latestTodoWritePartIDs = createMemo(() => {
+    let latest: string | undefined
+    let latestCompleted: string | undefined
     for (const message of messages().toReversed()) {
-      const part = sync.data.part[message.id]?.findLast(
-        (candidate) => candidate.type === "tool" && candidate.tool === "todowrite",
-      )
-      if (part) return part.id
+      const parts = sync.data.part[message.id] ?? []
+      latest ??= parts.findLast((candidate) => candidate.type === "tool" && candidate.tool === "todowrite")?.id
+      latestCompleted ??= parts.findLast(
+        (candidate) => candidate.type === "tool" && candidate.tool === "todowrite" && candidate.state.status === "completed",
+      )?.id
+      if (latest && latestCompleted) break
     }
-    return undefined
+    return { latest, latestCompleted }
   })
+  const latestTodoWritePartID = createMemo(() => latestTodoWritePartIDs().latest)
+  const latestCompletedTodoWritePartID = createMemo(() => latestTodoWritePartIDs().latestCompleted)
 
   const dimensions = useTerminalDimensions()
   const tuiCustomization = createMemo(() => readMendTuiCustomization((key, fallback) => kv.get(key, fallback)))
@@ -719,7 +735,8 @@ export function Session() {
   const [showAssistantMetadata, _setShowAssistantMetadata] = kv.signal("assistant_metadata_visibility", true)
   const [showScrollbar, setShowScrollbar] = kv.signal("scrollbar_visible", false)
   const [diffWrapMode] = kv.signal<"word" | "none">("diff_wrap_mode", "word")
-  const [_animationsEnabled, _setAnimationsEnabled] = kv.signal("animations_enabled", true)
+  const [animationsEnabled] = kv.signal("animations_enabled", true)
+  const [headerTitleOffset, setHeaderTitleOffset] = createSignal(0)
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
   const [showCompactedToolCalls, setShowCompactedToolCalls] = kv.signal(COMPACTED_TOOL_CALLS_KV_KEY, false)
   const [showTodos, setShowTodos] = kv.signal("session_todos_visible", false)
@@ -875,12 +892,12 @@ export function Session() {
   )
   const sessionTopNavLabel = createMemo(() => {
     if (session()?.parentID) {
-      return `↖ Parent ${keybind.print("session_parent")}  ← Prev ${keybind.print("session_child_cycle_reverse")}  → Next ${keybind.print("session_child_cycle")}`
+      return `↖ Parent ${keybind.print("session_parent")} ← Prev ${keybind.print("session_child_cycle_reverse")} → Next ${keybind.print("session_child_cycle")}`
     }
     if (!currentLoopWorkflow()) return ""
     const parent = currentLoopWorkflow()?.ownerSessionID ? "Parent" : "Agent View"
     if (loopRootWorkflows().length <= 1) return `↖ ${parent} ${keybind.print("session_parent")}`
-    return `↖ ${parent} ${keybind.print("session_parent")}  ← Prev loop ${keybind.print("session_child_cycle_reverse")}  → Next loop ${keybind.print("session_child_cycle")}`
+    return `↖ ${parent} ${keybind.print("session_parent")} ← Prev loop ${keybind.print("session_child_cycle_reverse")} → Next loop ${keybind.print("session_child_cycle")}`
   })
   const topbarNavVisible = createMemo(() => Boolean(session()?.parentID || currentLoopWorkflow()))
   const topbarNavWidth = createMemo(() => (topbarNavVisible() ? Bun.stringWidth(sessionTopNavLabel()) : 0))
@@ -900,6 +917,30 @@ export function Session() {
       titleVisible: headerTitleVisible(),
     }),
   )
+  const headerTitleDisplay = createMemo(() =>
+    sessionHeaderTitleDisplay({
+      value: headerTitleText(),
+      maxWidth: topbarLayout().titleWidth,
+      animated: animationsEnabled(),
+      offset: headerTitleOffset(),
+    }),
+  )
+  createEffect(
+    on([headerTitleText, () => topbarLayout().titleWidth, animationsEnabled], () => {
+      setHeaderTitleOffset(0)
+    }),
+  )
+  onMount(() => {
+    const timer = setInterval(() => {
+      const width = topbarLayout().titleWidth
+      if (!animationsEnabled() || width <= 0 || Bun.stringWidth(headerTitleText()) <= width) {
+        if (headerTitleOffset() !== 0) setHeaderTitleOffset(0)
+        return
+      }
+      setHeaderTitleOffset((offset) => offset + 1)
+    }, 350)
+    onCleanup(() => clearInterval(timer))
+  })
   const topbarLeftLabel = createMemo(() => {
     if (!tuiCustomization().projectPath) return ""
     return sessionTopbarLeftLabel({
@@ -1215,8 +1256,13 @@ export function Session() {
   }
 
   async function smartReviewPendingPermissions() {
+    let accepted = 0
     let reviewed = 0
     for (const request of permissions()) {
+      if (isSafeSmartPermissionRequest(request)) {
+        if (await replyPermissionOnce(request)) accepted++
+        continue
+      }
       if (smartReviewedPermissionIDs.has(request.id)) continue
       if (!shouldReviewSmartApproval(request)) {
         setSmartPermissionStatus("Smart needs your approval")
@@ -1251,7 +1297,7 @@ export function Session() {
         throw error
       }
     }
-    return { accepted: 0, reviewed }
+    return { accepted, reviewed }
   }
 
   createEffect(
@@ -1885,10 +1931,17 @@ export function Session() {
     // Route updates remount the transcript before this effect runs. Never save the
     // newly mounted session's initial position under the session we just left.
     if (route.sessionID !== sessionID || !scroll || scroll.isDestroyed) return
+    const anchor = captureScrollAnchor()
     sessionScrollStates.set(sessionID, {
       top: scroll.scrollTop,
       follow: followSessionOutput(),
+      anchor,
     })
+  }
+
+  const navigate = (...args: Parameters<typeof navigateRoute>) => {
+    rememberSessionScroll(activeSessionID)
+    return navigateRoute(...args)
   }
 
   const captureScrollAnchor = () => {
@@ -1906,11 +1959,11 @@ export function Session() {
     return scrollAnchor
   }
 
-  const restoreScrollAnchor = () => {
+  const restoreScrollAnchor = (options?: { preserveMissing?: boolean }) => {
     if (!scroll || scroll.isDestroyed || !scrollAnchor) return false
     const child = scroll.getChildren().find((item) => item.id === scrollAnchor?.id)
     if (!child) {
-      captureScrollAnchor()
+      if (!options?.preserveMissing) captureScrollAnchor()
       return false
     }
 
@@ -1953,6 +2006,9 @@ export function Session() {
     const currentSessionID = route.sessionID
     if (restoringSessionScroll && currentSessionID === activeSessionID) return
     if (shouldHoldSessionSubmitScroll({ sessionID: currentSessionID, submitSessionID: submitBottomScrollSessionID })) return
+    // Keep the active session's snapshot live while its keyed transcript still owns
+    // the scrollbox. The route effect may run after that box has been remounted.
+    rememberSessionScroll(currentSessionID)
     setSessionScrollTop(scrollTop)
     const history = sync.session.history(currentSessionID)
     const atTop = isScrollboxAtTop(scroll)
@@ -2144,7 +2200,8 @@ export function Session() {
         }
         if (target !== "bottom") {
           renderer.requestRender()
-          scroll.scrollTo(target)
+          const restored = state?.anchor ? restoreScrollAnchor({ preserveMissing: true }) : false
+          if (!restored) scroll.scrollTo(target)
           lastObservedScrollTop = scroll.scrollTop
           lastObservedScrollHeight = scroll.scrollHeight
           lastObservedViewportHeight = scroll.viewport.height
@@ -2186,7 +2243,7 @@ export function Session() {
         scrollPagingToken += 1
         scrollPagingInFlight = false
         suppressedPagingBoundary = undefined
-        scrollAnchor = undefined
+        scrollAnchor = remembered?.anchor
         lastObservedScrollTop = 0
         lastObservedScrollHeight = 0
         lastObservedViewportHeight = 0
@@ -3565,6 +3622,7 @@ export function Session() {
         loopWorkflows: loopSessionWorkflows,
         refreshLoopWorkflows,
         latestTodoWritePartID,
+        latestCompletedTodoWritePartID,
         sync,
         tui: tuiConfig,
       }}
@@ -3596,11 +3654,15 @@ export function Session() {
                       mode={session()?.parentID ? "subagent" : "loop"}
                       canCycle={session()?.parentID ? true : loopRootWorkflows().length > 1}
                       hasParent={!!currentLoopWorkflow()?.ownerSessionID}
+                      width={topbarLayout().navWidth}
                     />
                   </box>
                 </Show>
               </box>
-              <Show when={headerTitleVisible()}>
+              <Show when={topbarLayout().titleGapWidth > 0}>
+                <box width={topbarLayout().titleGapWidth} flexShrink={0} />
+              </Show>
+              <Show when={headerTitleVisible() && topbarLayout().titleWidth > 0}>
                 <box
                   width={topbarLayout().titleWidth}
                   flexShrink={0}
@@ -3608,19 +3670,21 @@ export function Session() {
                   justifyContent={headerTitleJustify()}
                 >
                   <text fg={sessionAccent()} wrapMode="none">
-                    {Locale.truncate(headerTitleText(), topbarLayout().titleWidth)}
+                    {headerTitleDisplay()}
                   </text>
                 </box>
               </Show>
-              <box flexGrow={1} minWidth={0} />
-              <box width={topbarLayout().metricsWidth} overflow="hidden" flexShrink={0} justifyContent="flex-end">
-                <SessionTopMetrics
-                  diff={topbarDiffStats()}
-                  usage={topbarUsage()}
-                  showDiffCount={tuiCustomization().diffCount}
-                  showDiffFiles={tuiCustomization().diffFiles}
-                />
-              </box>
+              <box flexGrow={1} minWidth={topbarLayout().metricsGapWidth} />
+              <Show when={topbarLayout().metricsWidth > 0}>
+                <box width={topbarLayout().metricsWidth} overflow="hidden" flexShrink={0} justifyContent="flex-end">
+                  <SessionTopMetrics
+                    diff={topbarDiffStats()}
+                    usage={topbarUsage()}
+                    showDiffCount={tuiCustomization().diffCount}
+                    showDiffFiles={tuiCustomization().diffFiles}
+                  />
+                </box>
+              </Show>
             </box>
             <Show when={loopStatusLabel()}>
               {(label) => (
@@ -3883,49 +3947,47 @@ export function Session() {
                 />
               </Show>
               <For each={listMendWidgets("aboveEditor")}>{(item) => <RenderMendWidget item={item} />}</For>
-              <Show when={visible()}>
-                <box position="relative" zIndex={2500} overflow="visible" width="100%">
-                  <TuiPluginRuntime.Slot
-                    name="session_prompt"
-                    mode="replace"
-                    session_id={route.sessionID}
-                    visible={visible()}
-                    disabled={promptDisabled()}
-                    on_submit={handlePromptSubmit}
-                    ref={bind}
-                  >
-                    {
-                      renderMendEditor({
-                        sessionID: route.sessionID,
-                        permissionMode: permissionMode(),
-                        permissionModeLabel: permissionModeLabel(),
-                        permissionPending: permissionPendingCount(),
-                        visible: visible(),
-                        disabled: promptDisabled(),
-                        ref: bind,
-                        onSubmit: handlePromptSubmit,
-                        right: <TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />,
-                        defaultEditor: () => (
-                          <Prompt
-                            visible={visible()}
-                            ref={bind}
-                            disabled={promptDisabled()}
-                            historyScope={`session:${route.sessionID}`}
-                            historyItems={sessionPromptHistory}
-                            workspaceID={project.workspace.current()}
-                            sessionID={route.sessionID}
-                            permissionMode={permissionMode()}
-                            permissionModeLabel={permissionModeLabel()}
-                            permissionPending={permissionPendingCount()}
-                            onSubmit={handlePromptSubmit}
-                            right={<TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
-                          />
-                        ),
-                      }) as any
-                    }
-                  </TuiPluginRuntime.Slot>
-                </box>
-              </Show>
+              <box visible={visible()} position="relative" zIndex={2500} overflow="visible" width="100%">
+                <TuiPluginRuntime.Slot
+                  name="session_prompt"
+                  mode="replace"
+                  session_id={route.sessionID}
+                  visible={visible()}
+                  disabled={promptDisabled()}
+                  on_submit={handlePromptSubmit}
+                  ref={bind}
+                >
+                  {
+                    renderMendEditor({
+                      sessionID: route.sessionID,
+                      permissionMode: permissionMode(),
+                      permissionModeLabel: permissionModeLabel(),
+                      permissionPending: permissionPendingCount(),
+                      visible: visible(),
+                      disabled: promptDisabled(),
+                      ref: bind,
+                      onSubmit: handlePromptSubmit,
+                      right: <TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />,
+                      defaultEditor: () => (
+                        <Prompt
+                          visible={visible()}
+                          ref={bind}
+                          disabled={promptDisabled()}
+                          historyScope={`session:${route.sessionID}`}
+                          historyItems={sessionPromptHistory}
+                          workspaceID={project.workspace.current()}
+                          sessionID={route.sessionID}
+                          permissionMode={permissionMode()}
+                          permissionModeLabel={permissionModeLabel()}
+                          permissionPending={permissionPendingCount()}
+                          onSubmit={handlePromptSubmit}
+                          right={<TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
+                        />
+                      ),
+                    }) as any
+                  }
+                </TuiPluginRuntime.Slot>
+              </box>
               <For each={listMendWidgets("belowEditor")}>{(item) => <RenderMendWidget item={item} />}</For>
             </box>
           </Show>
@@ -3990,50 +4052,69 @@ function SessionTopMetrics(props: {
   )
 }
 
-function SessionTopNav(props: { mode: "subagent" | "loop"; canCycle?: boolean; hasParent?: boolean }) {
+function SessionTopNav(props: { mode: "subagent" | "loop"; canCycle?: boolean; hasParent?: boolean; width: number }) {
   const { theme } = useTheme()
   const keybind = useKeybind()
   const command = useCommandDialog()
   const [hover, setHover] = createSignal<"parent" | "prev" | "next" | null>(null)
-  const item = (
-    id: "parent" | "prev" | "next",
-    icon: string,
-    label: string,
-    key: string,
-    commandID: "session.parent" | "session.child.previous" | "session.child.next",
-  ) => (
-    <box
-      flexShrink={0}
-      onMouseOver={() => setHover(id)}
-      onMouseOut={() => setHover(null)}
-      onMouseUp={() => command.trigger(commandID)}
-      backgroundColor={hover() === id ? theme.backgroundElement : theme.background}
-    >
-      <text fg={theme.text} wrapMode="none">
-        {icon} {label} <span style={{ fg: theme.textMuted }}>{keybind.print(key)}</span>
-      </text>
-    </box>
-  )
+  const items = createMemo<(SessionTopbarNavItem & {
+    id: "parent" | "prev" | "next"
+    commandID: "session.parent" | "session.child.previous" | "session.child.next"
+  })[]>(() => {
+    const all = [
+      {
+        id: "parent" as const,
+        icon: "↖",
+        label: props.mode === "loop" ? (props.hasParent ? "Parent" : "Agent View") : "Parent",
+        key: keybind.print("session_parent"),
+        commandID: "session.parent" as const,
+      },
+      {
+        id: "prev" as const,
+        icon: "←",
+        label: props.mode === "loop" ? "Prev loop" : "Prev",
+        key: keybind.print("session_child_cycle_reverse"),
+        commandID: "session.child.previous" as const,
+      },
+      {
+        id: "next" as const,
+        icon: "→",
+        label: props.mode === "loop" ? "Next loop" : "Next",
+        key: keybind.print("session_child_cycle"),
+        commandID: "session.child.next" as const,
+      },
+    ]
+    return props.mode === "subagent" || props.canCycle ? all : all.slice(0, 1)
+  })
+  const layout = createMemo(() => sessionTopbarNavLayout({ width: props.width, items: items() }))
 
   return (
-    <box flexDirection="row" flexShrink={0} gap={2}>
-      {item(
-        "parent",
-        "↖",
-        props.mode === "loop" ? (props.hasParent ? "Parent" : "Agent View") : "Parent",
-        "session_parent",
-        "session.parent",
-      )}
-      <Show when={props.mode === "subagent" || props.canCycle}>
-        {item(
-          "prev",
-          "←",
-          props.mode === "loop" ? "Prev loop" : "Prev",
-          "session_child_cycle_reverse",
-          "session.child.previous",
+    <box width={Math.max(0, props.width)} overflow="hidden" flexDirection="row" flexShrink={0} gap={layout().gap}>
+      <For each={items()}>
+        {(item, index) => (
+          <Show when={layout().items[index()]}>
+            {(display) => (
+              <box
+                width={display().width}
+                flexShrink={0}
+                overflow="hidden"
+                onMouseOver={() => setHover(item.id)}
+                onMouseOut={() => setHover(null)}
+                onMouseUp={() => command.trigger(item.commandID)}
+                backgroundColor={hover() === item.id ? theme.backgroundElement : theme.background}
+              >
+                <text fg={theme.text} wrapMode="none" overflow="hidden">
+                  {display().icon}
+                  <Show when={display().showLabel}>{` ${display().label}`}</Show>
+                  <Show when={display().showKey && display().key}>
+                    {(key) => <span style={{ fg: theme.textMuted }}>{` ${key()}`}</span>}
+                  </Show>
+                </text>
+              </box>
+            )}
+          </Show>
         )}
-        {item("next", "→", props.mode === "loop" ? "Next loop" : "Next", "session_child_cycle", "session.child.next")}
-      </Show>
+      </For>
     </box>
   )
 }
@@ -7242,7 +7323,7 @@ function parseTodoOutput(output?: string): Array<{ content: string; status: stri
 function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
   const ctx = use()
   const currentTodos = createMemo(() => {
-    if (ctx.latestTodoWritePartID() !== props.part.id) return undefined
+    if (ctx.latestCompletedTodoWritePartID() !== props.part.id) return undefined
     return ctx.sync.data.todo[props.part.sessionID]
   })
   const todos = createMemo(() => currentTodos() ?? props.input.todos ?? props.metadata.todos ?? parseTodoOutput(props.output))

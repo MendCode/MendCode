@@ -159,7 +159,7 @@ test("loads JSON config file", async () => {
       const config = await load()
       expect(config.model).toBe("test/model")
       expect(config.username).toBe("testuser")
-      expect(config.experimental?.subagent_owner_wake).toBe(true)
+       expect(config.subagent_owner_wake).toBe(true)
     },
   })
 })

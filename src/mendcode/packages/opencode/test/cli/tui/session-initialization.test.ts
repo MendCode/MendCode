@@ -29,12 +29,30 @@ describe("session route initialization", () => {
     const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
     const sessionV2 = await Bun.file(new URL("../../../src/cli/cmd/tui/feature-plugins/system/session-v2.tsx", import.meta.url)).text()
 
-    expect(source).toContain("const sessionScrollStates = new Map<string, SessionScrollState>()")
-    expect(source).toContain("const scheduleSessionScrollRestore = (sessionID: string, state?: SessionScrollState) =>")
-    expect(source).toContain("if (activeSessionID !== sessionID) rememberSessionScroll(activeSessionID)")
+     expect(source).toContain("const sessionScrollStates = new Map<string, SessionScrollState>()")
+     expect(source).toContain("const scheduleSessionScrollRestore = (sessionID: string, state?: SessionScrollState) =>")
+     expect(source).toContain("const navigate = (...args: Parameters<typeof navigateRoute>) =>")
+     expect(source).toContain("return navigateRoute(...args)")
+     expect(source).toContain("if (activeSessionID !== sessionID) rememberSessionScroll(activeSessionID)")
+
     expect(source).toContain("onMouseUp={handleOpenTarget}")
     expect(sessionV2).toContain("const handleOpenFirstLoop = () =>")
     expect(sessionV2).toContain("onMouseUp={handleOpenFirstLoop}")
+  })
+
+  test("captures an outgoing anchor and restores it after transcript growth", async () => {
+    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
+    const scroll = await Bun.file(new URL("../../../src/cli/cmd/tui/util/scroll.ts", import.meta.url)).text()
+
+    expect(source).toContain("rememberSessionScroll(currentSessionID)")
+    expect(source).toContain("anchor = captureScrollAnchor()")
+    expect(source).toContain("anchor,")
+    expect(source).toContain("scrollAnchor = remembered?.anchor")
+    expect(source).toContain("const restored = state?.anchor ? restoreScrollAnchor({ preserveMissing: true }) : false")
+    expect(source).toContain("const delays = [0, 16, 50, 120, 240, 480, 960]")
+    expect(scroll).toContain("anchor?: {")
+    expect(scroll).toContain("id: string")
+    expect(scroll).toContain("offset: number")
   })
 
   test("settles submit with one post-render scroll and no stale editor spacer", async () => {
@@ -66,7 +84,7 @@ describe("session route initialization", () => {
     expect(source).toContain('return "Waiting for the current response to finish"')
     expect(source).toContain("const transcriptRows = createMemo")
     expect(source).toContain("total: transcriptRows().length")
-    expect(source).toContain("sessionTranscriptRows(messages(), queuedMessageIDs())")
+    expect(source).toContain("sessionTranscriptRows(messages(), queuedMessageIDs(), { boundaryIDs: compactionBoundaryIDs })")
     expect(source).toContain("<For each={visibleMessageIDs()}>")
     expect(source).toContain("messageByID().get(messageID)")
     expect(source).toContain("queuedMessageIDs().has(message().id)")

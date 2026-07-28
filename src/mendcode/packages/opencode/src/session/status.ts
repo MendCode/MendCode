@@ -21,7 +21,14 @@ export const Info = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("busy"),
-    kind: Schema.optional(Schema.Union([Schema.Literal("mflow-wait"), Schema.Literal("memory-extract"), Schema.Literal("subagent-wait")])),
+    kind: Schema.optional(
+      Schema.Union([
+        Schema.Literal("mflow-wait"),
+        Schema.Literal("memory-extract"),
+        Schema.Literal("subagent-wait"),
+        Schema.Literal("compaction"),
+      ]),
+    ),
     message: Schema.optional(Schema.String),
     until: Schema.optional(NonNegativeInt),
     startedAt: Schema.optional(NonNegativeInt),
@@ -58,6 +65,25 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Se
 
 export const BUSY_STATUS_STALE_MS = 60 * 1000
 const PERSISTED_STATUS_STALE_MS = 5 * 60 * 1000
+
+export const SESSION_ACTIVITY_WAITING = "Waiting for input/tools"
+export const SESSION_ACTIVITY_COMPACTION = "Compacting context"
+
+const toolActivityLabels = {
+  inspect: new Set(["read", "glob", "grep", "lsp", "webfetch", "websearch"]),
+  command: new Set(["bash", "shell"]),
+  update: new Set(["edit", "write", "apply_patch", "multiedit", "patch", "todowrite"]),
+  subagent: new Set(["task", "task_status"]),
+} as const
+
+export function activityLabelForTool(tool: string) {
+  const normalized = tool.trim().toLowerCase()
+  if (toolActivityLabels.inspect.has(normalized)) return "Inspecting files"
+  if (toolActivityLabels.command.has(normalized)) return "Running a command"
+  if (toolActivityLabels.update.has(normalized)) return "Updating files"
+  if (toolActivityLabels.subagent.has(normalized)) return "Working with a subagent"
+  return "Working with a tool"
+}
 type StoredStatus = Exclude<Info, { type: "idle" }>
 type StatusRecord = { time_created?: number; time_updated: number; data: Info }
 

@@ -14,11 +14,13 @@ const Action = Schema.Literals(["list", "get", "cancel", "wait"])
 
 export const Parameters = Schema.Struct({
   action: Action.annotate({
-    description: "List tasks, inspect one task, cancel a registered background task, or wait for one task to finish.",
+    description:
+      "List or inspect tasks, cancel a registered background task, or wait once for a task to finish; do not use wait as a polling loop.",
   }),
   task_id: Schema.optional(SessionID).annotate({ description: "Child task ID. Required for get, cancel, and wait." }),
   timeout_ms: Schema.optional(NonNegativeInt).annotate({
-    description: "Maximum wait time in milliseconds for wait. Defaults to 30000 and is capped at 300000.",
+    description:
+      "Maximum wait time in milliseconds for one wait call. Defaults to 30000 and is capped at 300000; a timeout does not justify rapid retries.",
   }),
 })
 

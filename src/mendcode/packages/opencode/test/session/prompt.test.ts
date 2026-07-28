@@ -1,7 +1,7 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect, test } from "bun:test"
-import { Cause, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
 import path from "path"
 import { fileURLToPath } from "url"
 import { NamedError } from "@mendcode/core/util/error"
@@ -68,6 +68,14 @@ import { reply, TestLLMServer } from "../lib/llm-server"
 
 void Log.init({ print: false })
 
+test("maps tool execution to bounded activity labels", () => {
+  expect(SessionStatus.activityLabelForTool("read")).toBe("Inspecting files")
+  expect(SessionStatus.activityLabelForTool("bash")).toBe("Running a command")
+  expect(SessionStatus.activityLabelForTool("apply_patch")).toBe("Updating files")
+  expect(SessionStatus.activityLabelForTool("task")).toBe("Working with a subagent")
+  expect(SessionStatus.activityLabelForTool("custom_tool")).toBe("Working with a tool")
+})
+
 test("owner wake prompts are internal runtime context", () => {
   const taskID = SessionID.make("ses_owner_wake_task")
   const text = ownerWakePromptText([
@@ -88,6 +96,7 @@ test("owner wake prompts are internal runtime context", () => {
   expect(text).toContain(`task_id: ${taskID}`)
   expect(text).toContain("not a user request")
   expect(text).toContain("task_status")
+  expect(text).toContain("Do not poll or wait")
 })
 
 const summary = Layer.succeed(
@@ -253,6 +262,29 @@ function makeHttp() {
 const it = testEffect(makeHttp())
 const unix = process.platform !== "win32" ? it.live : it.live.skip
 
+type IdleRunnerControl = {
+  started: Deferred.Deferred<void>
+  release: Deferred.Deferred<void>
+}
+
+const idleRunnerControls = new Map<string, IdleRunnerControl>()
+const controlledStatus = Layer.succeed(
+  SessionStatus.Service,
+  SessionStatus.Service.of({
+    get: () => Effect.succeed({ type: "idle" as const }),
+    list: () => Effect.succeed(new Map<SessionID, SessionStatus.Info>()),
+    set: (sessionID, next) => {
+      const control = idleRunnerControls.get(sessionID)
+      if (!control || next.type !== "idle") return Effect.void
+      return Effect.gen(function* () {
+        yield* Deferred.succeed(control.started, undefined)
+        yield* Deferred.await(control.release)
+      })
+    },
+  }),
+)
+const runStateIt = testEffect(SessionRunState.layer.pipe(Layer.provide(controlledStatus)))
+
 function promptUser(
   parts: Array<Omit<MessageV2.TextPart, "sessionID" | "messageID">>,
   id = MessageID.ascending(),
@@ -300,6 +332,77 @@ function promptAssistant(
     parts,
   }
 }
+
+runStateIt.instance("keeps the runner identity during idle cleanup", () =>
+  Effect.gen(function* () {
+    const state = yield* SessionRunState.Service
+    const sessionID = SessionID.make("ses-run-state-idle-race")
+    const control = {
+      started: yield* Deferred.make<void>(),
+      release: yield* Deferred.make<void>(),
+    }
+    const first = promptAssistant({
+      id: MessageID.ascending(),
+      finish: "stop",
+      summary: false,
+      parentID: MessageID.ascending(),
+    })
+    const firstFallback = promptAssistant({
+      id: MessageID.ascending(),
+      finish: "stop",
+      summary: false,
+      parentID: MessageID.ascending(),
+    })
+    const secondFallback = promptAssistant({
+      id: MessageID.ascending(),
+      finish: "stop",
+      summary: false,
+      parentID: MessageID.ascending(),
+    })
+    const second = promptAssistant({
+      id: MessageID.ascending(),
+      finish: "stop",
+      summary: false,
+      parentID: MessageID.ascending(),
+    })
+    const secondStarted = yield* Deferred.make<void>()
+    const secondGate = yield* Deferred.make<void>()
+    idleRunnerControls.set(sessionID, control)
+
+    return yield* Effect.gen(function* () {
+      const firstFiber = yield* state
+        .ensureRunning(sessionID, Effect.succeed(firstFallback), Effect.succeed(first))
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(control.started).pipe(Effect.timeout("1 second"))
+
+      const secondFiber = yield* state
+        .ensureRunning(
+          sessionID,
+          Effect.succeed(secondFallback),
+          Effect.gen(function* () {
+            yield* Deferred.succeed(secondStarted, undefined)
+            yield* Deferred.await(secondGate)
+            return second
+          }),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(secondStarted).pipe(Effect.timeout("1 second"))
+
+      yield* Deferred.succeed(control.release, undefined)
+      expect((yield* Fiber.join(firstFiber)).info.id).toBe(first.info.id)
+
+      yield* state.interrupt(sessionID)
+      expect((yield* Fiber.join(secondFiber)).info.id).toBe(firstFallback.info.id)
+    }).pipe(
+      Effect.ensuring(
+        Effect.gen(function* () {
+          yield* Deferred.succeed(control.release, undefined)
+          idleRunnerControls.delete(sessionID)
+        }),
+      ),
+    )
+  }),
+)
 
 function assistantInfo(
   input: Pick<MessageV2.Assistant, "id" | "finish" | "summary" | "parentID">,
@@ -420,12 +523,13 @@ test("auto compaction resumes only for active or incomplete assistant turns", ()
   expect(shouldResumeAfterAutoCompaction("stop", true)).toBe(true)
 })
 
-test("active provider compaction always resumes after writing the summary", () => {
+test("active provider compaction resumes only unfinished turns", () => {
   expect(shouldResumeAfterActiveCompaction(undefined)).toBe(true)
   expect(shouldResumeAfterActiveCompaction("tool-calls")).toBe(true)
   expect(shouldResumeAfterActiveCompaction("length")).toBe(true)
   expect(shouldResumeAfterActiveCompaction("unknown")).toBe(true)
-  expect(shouldResumeAfterActiveCompaction("stop")).toBe(true)
+  expect(shouldResumeAfterActiveCompaction("stop")).toBe(false)
+  expect(shouldResumeAfterActiveCompaction("stop", true)).toBe(true)
 })
 
 test("does not preflight an approximate prompt overflow below the configured threshold", () => {
@@ -838,15 +942,13 @@ const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
 
 // Loop semantics
 
-it.live("wakes an idle parent only for an opted-in background task", () =>
+it.live("wakes an idle parent by default for a background task", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
-      const tasks = yield* BackgroundTask.Service
-      const config = yield* Config.Service
-      expect((yield* config.get()).experimental?.subagent_owner_wake).toBe(true)
-      const parent = yield* sessions.create({ title: "Owner wake parent" })
+       const tasks = yield* BackgroundTask.Service
+       const parent = yield* sessions.create({ title: "Owner wake parent" })
       yield* llm.text("parent ready")
       yield* prompt.prompt({
         sessionID: parent.id,
@@ -892,7 +994,66 @@ it.live("wakes an idle parent only for an opted-in background task", () =>
       git: true,
       config: (url: string) => ({
         ...providerCfg(url),
-        experimental: { subagent_owner_wake: true },
+      }),
+    },
+  ),
+)
+
+it.live("wakes an async parent by default for a background task", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const tasks = yield* BackgroundTask.Service
+      const bus = yield* Bus.Service
+      const ownerWakeIDs: string[] = []
+      const off = yield* bus.subscribeCallback(BackgroundTask.Event.OwnerWake, (event) => {
+        ownerWakeIDs.push(event.properties.wakeID)
+      })
+      const parent = yield* sessions.create({ title: "Async owner wake parent" })
+      yield* llm.text("parent ready")
+      yield* prompt.promptAsync({
+        sessionID: parent.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "start" }],
+      })
+
+      const child = yield* sessions.create({ parentID: parent.id, title: "Inspect cache", agent: "general" })
+      const run = yield* tasks.start({
+        taskID: child.id,
+        parentSessionID: parent.id,
+        title: "Inspect cache",
+        agent: "general",
+        startRunning: true,
+      })
+      yield* llm.text("wake acknowledged")
+      yield* tasks.finish({
+        taskID: child.id,
+        generation: run.generation,
+        state: "completed",
+        background: true,
+        result: { summary: "Cache is healthy." },
+      })
+      yield* Effect.sleep(500)
+      off()
+
+      expect(ownerWakeIDs).toHaveLength(1)
+      expect(yield* llm.calls).toBe(2)
+      const messages = yield* sessions.messages({ sessionID: parent.id })
+      expect(
+        messages.some((message) =>
+          message.info.role === "user" &&
+          message.parts.some(
+            (part) => part.type === "text" && part.synthetic === true && part.metadata?.kind === "background_task_owner_wake",
+          ),
+        ),
+      ).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url: string) => ({
+        ...providerCfg(url),
       }),
     },
   ),
@@ -1156,6 +1317,7 @@ it.live("runs a prompt queued during compaction after the resumed turn", () =>
       const prompt = yield* SessionPrompt.Service
       const compaction = yield* SessionCompaction.Service
       const sessions = yield* Session.Service
+      const status = yield* SessionStatus.Service
       const chat = yield* sessions.create({
         title: "Pinned",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
@@ -1174,6 +1336,10 @@ it.live("runs a prompt queued during compaction after the resumed turn", () =>
 
       const first = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
       yield* llm.wait(1)
+      const compactionStatus = yield* status.get(chat.id)
+      expect(compactionStatus).toEqual(
+        expect.objectContaining({ type: "busy", kind: "compaction", message: SessionStatus.SESSION_ACTIVITY_COMPACTION }),
+      )
 
       const queued = yield* prompt
         .prompt({
@@ -1207,10 +1373,11 @@ it.live("runs a prompt queued during compaction after the resumed turn", () =>
       git: true,
       config: (url) => {
         const next = providerCfg(url)
-        return {
-          ...next,
-          compaction: { auto: false },
-          agent: {
+         return {
+           ...next,
+           compaction: { auto: false },
+           queue: { mode: "immediate" },
+           agent: {
             build: { model: "test/test-model" },
             compaction: { model: "test/test-model" },
           },
@@ -1220,7 +1387,7 @@ it.live("runs a prompt queued during compaction after the resumed turn", () =>
   ),
 )
 
-it.live("dispatches a queued prompt after compaction triggered by the active response", () =>
+it.live("does not re-dispatch a completed response after active compaction", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {
       const prompt = yield* SessionPrompt.Service
@@ -1232,7 +1399,6 @@ it.live("dispatches a queued prompt after compaction triggered by the active res
       const gate = defer<void>()
       yield* llm.push(reply().text("active response").usage({ input: 95_000, output: 1 }).wait(gate.promise).stop())
       yield* llm.text("compaction summary")
-      yield* llm.text("previous work continued")
       yield* llm.text("queued response")
 
       const active = yield* prompt
@@ -1261,15 +1427,13 @@ it.live("dispatches a queued prompt after compaction triggered by the active res
           message.info.role === "user" &&
           message.parts.some((part) => part.type === "text" && part.text === "queued after response"),
       )
-      expect(activeResult.parts.some((part) => part.type === "text" && part.text === "previous work continued")).toBe(
-        true,
-      )
+      expect(activeResult.parts.some((part) => part.type === "text" && part.text === "compaction summary")).toBe(true)
       expect(queuedResult.parts.some((part) => part.type === "text" && part.text === "queued response")).toBe(true)
       expect(queuedResult.info.agent).toBe("build")
       expect(queuedResult.info.summary).not.toBe(true)
       expect(queuedResult.info.role === "assistant" ? queuedResult.info.parentID : undefined).toBe(queuedUser?.info.id)
-      expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("queued after response"))).toBe(true)
-      expect(yield* llm.calls).toBe(4)
+       expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("queued after response"))).toBe(true)
+       expect(yield* llm.calls).toBe(3)
     }),
     {
       git: true,
@@ -1333,6 +1497,138 @@ it.live("default queue mode waits for the complete active response", () =>
     },
   ),
 )
+
+it.live("promptAsync promotes an accepted queued prompt into its own turn", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Async queue",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const gate = defer<void>()
+      yield* llm.hold("active response", gate.promise)
+      yield* llm.text("queued response")
+
+      const active = yield* prompt.promptAsync({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "active request" }],
+      })
+      yield* llm.wait(1)
+
+      const queued = yield* prompt.promptAsync({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "queued request" }],
+      })
+      gate.resolve()
+
+      yield* Effect.gen(function* () {
+        while (true) {
+          const messages = yield* sessions.messages({ sessionID: chat.id })
+          if (
+            messages.some(
+              (message) =>
+                message.info.role === "assistant" &&
+                message.info.parentID === active.info.id &&
+                message.info.time.completed !== undefined,
+            ) &&
+            messages.some(
+              (message) =>
+                message.info.role === "assistant" &&
+                message.info.parentID === queued.info.id &&
+                message.info.time.completed !== undefined,
+            )
+          )
+            return
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(Effect.timeout("2 seconds"))
+
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      const activeAssistant = messages.find(
+        (message) => message.info.role === "assistant" && message.info.parentID === active.info.id,
+      )
+      const queuedAssistants = messages.filter(
+        (message) => message.info.role === "assistant" && message.info.parentID === queued.info.id,
+      )
+      expect(activeAssistant?.parts.some((part) => part.type === "text" && part.text === "active response")).toBe(true)
+      expect(queuedAssistants).toHaveLength(1)
+      expect(queuedAssistants[0]?.parts.some((part) => part.type === "text" && part.text === "queued response")).toBe(
+        true,
+      )
+      expect(yield* llm.calls).toBe(2)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        agent: { build: { model: "test/test-model" } },
+      }),
+    },
+  ),
+)
+
+it.live("publishes bounded tool activity until the prompt returns to idle", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const bus = yield* Bus.Service
+      const chat = yield* sessions.create({
+        title: "Activity",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const statuses: SessionStatus.Info[] = []
+
+      const off = yield* bus.subscribeCallback(SessionStatus.Event.Status, (event) => {
+        if (event.properties.sessionID === chat.id) statuses.push(event.properties.status)
+      })
+
+      yield* llm.push(reply().tool("glob", { pattern: "**/*.txt" }).item())
+      yield* llm.text("done")
+
+      const run = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "inspect" }],
+        })
+        .pipe(Effect.forkChild)
+
+      yield* Effect.gen(function* () {
+        while (!statuses.some((status) => status.type === "busy" && status.message === "Inspecting files")) {
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(Effect.timeout("1 second"))
+
+      expect(statuses.some((status) => status.type === "busy" && status.message === "Inspecting files")).toBe(true)
+
+      yield* Fiber.join(run)
+      yield* Effect.gen(function* () {
+        while (!statuses.some((status) => status.type === "idle")) {
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(Effect.timeout("1 second"))
+
+      off()
+      expect(statuses.some((status) => status.type === "idle")).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        agent: { build: { model: "test/test-model" } },
+      }),
+    },
+  ),
+)
+
 
 it.live("runs distinct queued prompts in FIFO order", () =>
   provideTmpdirServer(
@@ -2527,11 +2823,13 @@ it.live(
         expect(firstBody).toContain("human turn 15")
         expect(firstBody).not.toContain("human turn 16")
         expect(firstBody).not.toContain("assistant-only-long-output")
+        expect(firstBody).toContain("3 to 5 words")
         expect(latestBody).toContain("human turn 16")
         expect(latestBody).toContain("human turn 30")
         expect(latestBody).not.toContain("human turn 15")
         expect(latestBody).not.toContain("assistant-only-long-output")
         expect(latestBody).toContain("Current and recent session titles")
+        expect(latestBody).toContain("shortest clear wording")
         expect(latestBody).toContain("E2E Title")
         expect(latestBody).toContain("Recent packaging cleanup")
       }),

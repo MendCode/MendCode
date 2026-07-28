@@ -39,6 +39,20 @@ test("renderPlanMarkdown renders simple mermaid flowcharts without termaid", asy
   expect(result).not.toContain("flowchart TD")
 })
 
+test("renderPlanMarkdown attaches single Mermaid edge labels to the vertical connector", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Approve?] -->|yes| B[Implement]",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 100)
+  expect(result).toContain("yes ──┤")
+  expect(result).not.toMatch(/\n\s+yes\s*\n/)
+})
+
 test("renderPlanMarkdown centers Mermaid TD branches around their parent", async () => {
   process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
   const markdown = [
@@ -202,10 +216,12 @@ test("renderPlanMarkdown keeps mermaid edge labels attached to the right nodes",
 
   const result = await renderPlanMarkdown(markdown, 100)
   expect(result).toContain("│ Looks correct? │")
-  expect(result).toContain("├─ Yes")
+  expect(result).toContain("Yes")
+  expect(result).not.toContain("├─ Yes")
   expect(result).toContain("│ Accept change │")
-  expect(result).toContain("└─ No")
-  expect(result).toContain("↺ Add hello message")
+  expect(result).toContain("No")
+  expect(result).not.toContain("└─ No")
+  expect(result).not.toContain("↺ Add hello message")
   expect(result).not.toContain("┌ Yes ┐")
   expect(result).not.toContain("┌ No ┐")
 })
@@ -261,7 +277,137 @@ test("renderPlanMarkdown renders branch continuations as vertical boxes", async 
   expect(result).toContain("│ Track activation │")
   expect(result).toContain("No")
   expect(result).toContain("│ Show correction │")
-  expect(result).toContain("↺ Data valid?")
+  expect(result).not.toContain("↺ Data valid?")
+})
+
+test("renderPlanMarkdown keeps cyclic branches ranked without detached loop annotations", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Data valid?] -->|Yes| B[Create first workspace]",
+    "  B --> C[Offer guided action]",
+    "  C --> D[Track activation]",
+    "  A -->|No| E[Show correction]",
+    "  E --> A",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 120)
+  const branchRow = result
+    .split("\n")
+    .find((line) => line.includes("│ Create first workspace │") && line.includes("│ Show correction │"))
+
+  expect(branchRow).toBeDefined()
+  expect(branchRow?.indexOf("Create first workspace")).toBeLessThan(branchRow?.indexOf("Show correction") ?? -1)
+  expect(result).toContain("Yes")
+  expect(result).toContain("No")
+  expect(result).not.toContain("├─ Yes")
+  expect(result).not.toContain("└─ No")
+  expect(result).not.toContain("↺ Data valid?")
+})
+
+test("renderPlanMarkdown renders multiple Mermaid back-edges as literal return lines", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Draft plan] --> B[Render Markdown]",
+    "  B --> C[Review Mermaid]",
+    "  C --> D{Approve?}",
+    "  D -->|yes| E[Implement]",
+    "  D -->|no| F[Edit plan]",
+    "  D -->|comments| G[Add comments]",
+    "  D -->|reject| H[Reject plan]",
+    "  F --> B",
+    "  G --> C",
+    "  E --> I[Done]",
+    "  H --> I",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 100)
+  expect(result).toContain("yes")
+  expect(result).toContain("no")
+  expect(result).toContain("comments")
+  expect(result).toContain("reject")
+  expect(result).toContain("│ Edit plan │")
+  expect(result).toContain("│ Add comments │")
+  expect(result).toContain("│ Done     │")
+  const doneRow = result.split("\n").findIndex((line) => line.includes("│ Done     │"))
+  expect(doneRow).toBeGreaterThan(0)
+  expect(result.split("\n")[doneRow - 2]).toContain("▼")
+  expect(result.match(/▲/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
+  expect(result).not.toContain("↩ Render Markdown")
+  expect(result).not.toContain("↩ Review Mermaid")
+  expect(result).not.toContain("↺ Render Markdown")
+  expect(result).not.toContain("↺ Review Mermaid")
+})
+
+test("renderPlanMarkdown keeps constrained Mermaid return edges connected", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Draft plan] --> B[Render Markdown]",
+    "  B --> C[Review Mermaid]",
+    "  C --> D{Approve?}",
+    "  D -->|yes| E[Implement]",
+    "  D -->|no| F[Edit plan]",
+    "  D -->|comments| G[Add comments]",
+    "  D -->|reject| H[Reject plan]",
+    "  F --> B",
+    "  G --> C",
+    "  E --> I[Done]",
+    "  H --> I",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 48)
+  expect(result).toContain("└─ Render Markdown")
+  expect(result).toContain("└─ Review Mermaid")
+  expect(result).not.toContain("↩")
+  expect(result).not.toContain("↺")
+})
+
+test("renderPlanMarkdown keeps Mermaid edges that span multiple ranks", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Start] --> B[Middle]",
+    "  B --> C[Finish]",
+    "  A --> C",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 100)
+  expect(result).toContain("│ Start    │")
+  expect(result).toContain("│ Middle   │")
+  expect(result).toContain("│ Finish   │")
+  expect(result).not.toContain("flowchart TD")
+})
+
+test("renderPlanMarkdown keeps clean branch labels in a narrow flowchart layout", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Data valid?] -->|Yes| B[Create first workspace]",
+    "  B --> C[Offer guided action]",
+    "  C --> D[Track activation]",
+    "  A -->|No| E[Show correction]",
+    "  E --> A",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 48)
+  expect(result).toContain("Yes")
+  expect(result).toContain("No")
+  expect(result).toContain("Data valid? ──┘")
+  expect(result).not.toContain("├─ Yes")
+  expect(result).not.toContain("└─ No")
+  expect(result).not.toContain("↺ Data valid?")
 })
 
 test("renderPlanMarkdown wraps long branch continuations into vertical boxes", async () => {
@@ -310,11 +456,13 @@ test("renderPlanMarkdown renders branched validation flows as boxes", async () =
   expect(result).toContain("│ Select Markdown file │")
   expect(result).toContain("│ Add hello message │")
   expect(result).toContain("Valid?")
-  expect(result).toContain("├─ Yes")
+  expect(result).toContain("Yes")
+  expect(result).not.toContain("├─ Yes")
   expect(result).toContain("│ Accept change │")
-  expect(result).toContain("└─ No")
+  expect(result).toContain("No")
+  expect(result).not.toContain("└─ No")
   expect(result).toContain("│ Fix placement or formatting │")
-  expect(result).toContain("↺ Check raw Markdown")
+  expect(result).not.toContain("↺ Check raw Markdown")
   expect(result).not.toContain("flowchart TD")
 })
 
@@ -1136,9 +1284,10 @@ test("Mermaid TUI smoke matrix keeps flow, sequence, and chart output visual", (
   const labelsLine = flowLines.find((line) => line.includes("Yes") && line.includes("No"))
   const arrowsLine = flowLines.find((line) => (line.match(/▼/g)?.length ?? 0) === 2)
   expect(labelsLine).toBeDefined()
+  expect(labelsLine).toMatch(/Yes\s+──┤/)
+  expect(labelsLine).toMatch(/No\s+──┤/)
   expect(arrowsLine).toBeDefined()
-  expect(arrowsLine?.indexOf("▼")).toBe((labelsLine?.indexOf("Yes") ?? -1) + 1)
-  expect(arrowsLine?.lastIndexOf("▼")).toBe((labelsLine?.indexOf("No") ?? -1) + 1)
+  expect(arrowsLine?.match(/▼/g)?.length).toBe(2)
   expect(flow).not.toContain("flowchart TD")
 
   const sequence = renderPlanMarkdownStatic(

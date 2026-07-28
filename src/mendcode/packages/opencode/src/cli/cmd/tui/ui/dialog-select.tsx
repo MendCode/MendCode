@@ -60,6 +60,53 @@ export type DialogSelectRef<T> = {
   filtered: DialogSelectOption<T>[]
 }
 
+export function normalizeDialogSelectText(value: string | undefined) {
+  const normalized = value?.replace(/\s+/g, " ").trim()
+  return normalized || undefined
+}
+
+export function sameDialogSelectText(first: string | undefined, second: string | undefined) {
+  const normalizedFirst = normalizeDialogSelectText(first)
+  const normalizedSecond = normalizeDialogSelectText(second)
+  return normalizedFirst !== undefined && normalizedFirst === normalizedSecond
+}
+
+export function dialogSelectOptionMaxWidth(terminalWidth: number, commandVariant = false) {
+  const cap = commandVariant ? 96 : 61
+  const chrome = commandVariant ? 18 : 20
+  return Math.max(8, Math.min(cap, Math.floor(terminalWidth) - chrome))
+}
+
+export function compactDialogSelectOption(input: {
+  title: string
+  description?: string
+  commandVariant?: boolean
+  maxWidth?: number
+}) {
+  const commandVariant = input.commandVariant === true
+  const maxWidth = Math.max(
+    1,
+    Math.floor(input.maxWidth ?? (commandVariant ? 96 : 61)),
+  )
+  const titleLimit = Math.min(commandVariant ? 48 : 61, maxWidth)
+  const rawTitle = normalizeDialogSelectText(input.title) ?? ""
+  const title = Locale.truncate(rawTitle, titleLimit)
+  const rawDescription = normalizeDialogSelectText(input.description)
+
+  if (!rawDescription || sameDialogSelectText(rawTitle, rawDescription)) {
+    return { title, description: undefined }
+  }
+
+  const descriptionWidth = maxWidth - title.length - 1
+  if (descriptionWidth < 4) return { title, description: undefined }
+  return { title, description: Locale.truncate(rawDescription, descriptionWidth) }
+}
+
+export function selectedDialogOptionIndex<T>(options: DialogSelectOption<T>[], current: T | undefined) {
+  if (current === undefined) return -1
+  return options.findIndex((option) => isDeepEqual(option.value, current))
+}
+
 export function shouldHandleDialogSelectCustomKeybinds(
   input: Pick<InputRenderable, "focused"> | undefined,
   filter: string,
@@ -136,8 +183,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
     on(
       () => props.current,
       (current) => {
-        if (current && props.selectCurrent !== false) {
-          const currentIndex = flat().findIndex((opt) => isDeepEqual(opt.value, current))
+        if (current !== undefined && props.selectCurrent !== false) {
+          const currentIndex = selectedDialogOptionIndex(flat(), current)
           if (currentIndex >= 0) {
             setStore("selected", currentIndex)
           }
@@ -511,7 +558,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
                           description={
                             commandVariant()
                               ? undefined
-                              : option.description !== category
+                              : !sameDialogSelectText(option.description, category)
                                 ? option.description
                                 : undefined
                           }
@@ -587,15 +634,15 @@ function Option(props: {
 }) {
   const { theme } = useTheme()
   const fg = selectedForeground(theme)
-  const title = createMemo(() => {
-    const value = props.title.replace(/\s+/g, " ")
-    return props.commandVariant ? Locale.truncate(value, 48) : value
-  })
-  const description = createMemo(() => {
-    if (!props.description) return undefined
-    const value = props.description.replace(/\s+/g, " ")
-    return props.commandVariant ? Locale.truncate(value, 96) : value
-  })
+  const dimensions = useTerminalDimensions()
+  const display = createMemo(() =>
+    compactDialogSelectOption({
+      title: props.title,
+      description: props.description,
+      commandVariant: props.commandVariant,
+      maxWidth: dialogSelectOptionMaxWidth(dimensions().width, props.commandVariant),
+    }),
+  )
   const footer = createMemo(() => {
     if (typeof props.footer !== "string") return props.footer
     return Locale.truncate(props.footer.replace(/\s+/g, " "), props.commandVariant ? 36 : 24)
@@ -617,13 +664,13 @@ function Option(props: {
         flexGrow={1}
         fg={props.active ? fg : props.current ? theme.primary : theme.text}
         attributes={props.active ? TextAttributes.BOLD : undefined}
-        overflow={props.commandVariant ? "hidden" : undefined}
-        wrapMode={props.commandVariant ? "none" : "word"}
+        overflow="hidden"
+        wrapMode="none"
         flexShrink={1}
         paddingLeft={props.commandVariant ? 1 : 3}
       >
-        {title()}
-        <Show when={description()}>
+        {display().title}
+        <Show when={display().description}>
           {(value) => <span style={{ fg: props.active ? fg : theme.textMuted }}> {value()}</span>}
         </Show>
       </text>

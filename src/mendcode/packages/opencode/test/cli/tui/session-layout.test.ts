@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test"
 import {
   sessionContentWidth,
   sessionDiffStatsLabel,
+  sessionHeaderTitleAlign,
+  sessionHeaderTitleDisplay,
   sessionLoopReceipt,
   sessionPendingInputSessionIDs,
   sessionTaskContinuation,
@@ -9,8 +11,10 @@ import {
   sessionTopbarLayout,
   sessionTopbarLeftLabel,
   sessionTopbarLeftWidth,
+  sessionTopbarNavLayout,
   sessionUsageBarDisplayWidth,
   sessionPromptVisible,
+  truncateEndDisplay,
 } from "../../../src/cli/cmd/tui/util/session-layout"
 
 describe("session layout", () => {
@@ -112,13 +116,13 @@ describe("session layout", () => {
 
   test("sizes the header title from terminal width instead of leftover spacing", () => {
     expect(sessionTopbarLayout({ contentWidth: 240, metricsWidth: 24, titleVisible: true })).toMatchObject({
-      leftWidth: 91,
-      titleWidth: 81,
+      leftWidth: 74,
+      titleWidth: 83,
       metricsWidth: 24,
     })
     expect(sessionTopbarLayout({ contentWidth: 240, metricsWidth: 24, navWidth: 80, titleVisible: true })).toMatchObject({
-      leftWidth: 91,
-      titleWidth: 81,
+      leftWidth: 74,
+      titleWidth: 83,
       metricsWidth: 24,
     })
   })
@@ -127,17 +131,106 @@ describe("session layout", () => {
     const layout = sessionTopbarLayout({ contentWidth: 60, metricsWidth: 40, navWidth: 50, titleVisible: true })
 
     expect(layout.metricsWidth).toBe(18)
-    expect(layout.titleWidth).toBe(20)
-    expect(layout.leftWidth).toBe(22)
+    expect(layout.titleWidth).toBe(22)
+    expect(layout.leftWidth).toBe(15)
     expect(layout.navWidth).toBeLessThanOrEqual(Math.floor(layout.leftWidth * 0.6))
-    expect(layout.pathWidth + layout.navWidth + 1).toBe(layout.leftWidth)
+    if (layout.navWidth > 0) expect(layout.pathWidth + layout.navWidth + 1).toBe(layout.leftWidth)
+    else expect(layout.pathWidth).toBe(layout.leftWidth)
+    expect(layout.titleGapWidth).toBe(1)
+    expect(layout.metricsGapWidth).toBe(1)
+    expect(layout.leftWidth + layout.titleWidth + layout.metricsWidth + layout.titleGapWidth + layout.metricsGapWidth).toBeLessThanOrEqual(60)
   })
 
   test("gives the path all non-metric width when the title is hidden", () => {
     expect(sessionTopbarLayout({ contentWidth: 80, metricsWidth: 16, navWidth: 20, titleVisible: false })).toMatchObject({
-      leftWidth: 64,
+      leftWidth: 63,
       titleWidth: 0,
       metricsWidth: 16,
+      metricsGapWidth: 1,
+    })
+  })
+
+  test("centers the title and truncates only at the end", () => {
+    expect(sessionHeaderTitleAlign(undefined)).toBe("center")
+    expect(truncateEndDisplay("Centrar título con poco ancho", 16)).toBe("Centrar título…")
+    expect(sessionHeaderTitleDisplay({ value: "Centrar título con poco ancho", maxWidth: 16 })).toBe("Centrar título…")
+  })
+
+  test("scrolls long titles without inserting a middle ellipsis when animations are enabled", () => {
+    const first = sessionHeaderTitleDisplay({ value: "Centrar título con poco ancho", maxWidth: 16, animated: true })
+    const next = sessionHeaderTitleDisplay({
+      value: "Centrar título con poco ancho",
+      maxWidth: 16,
+      animated: true,
+      offset: 3,
+    })
+
+    expect(first).not.toContain("…")
+    expect(next).not.toContain("…")
+    expect(first).not.toContain("   ")
+    expect(next).not.toContain("   ")
+    expect(next).toContain(" · ")
+    expect(first).not.toBe(next)
+    expect(Bun.stringWidth(first)).toBeLessThanOrEqual(16)
+    expect(Bun.stringWidth(next)).toBeLessThanOrEqual(16)
+  })
+
+  test("keeps the subagent path readable while reserving narrow topbar regions", () => {
+    const layout = sessionTopbarLayout({
+      contentWidth: 60,
+      metricsWidth: 40,
+      navWidth: Bun.stringWidth("↖ Parent up ← Prev left → Next right"),
+      titleVisible: true,
+    })
+    const path = sessionTopbarLeftLabel({
+      branch: "main",
+      path: "~/Code/MendCode",
+      maxWidth: layout.pathWidth,
+      isChildSession: true,
+    })
+
+    expect(layout.pathWidth).toBeGreaterThanOrEqual(8)
+    expect(Bun.stringWidth(path)).toBeLessThanOrEqual(layout.pathWidth)
+    expect(path).toContain("…")
+    expect(path.endsWith("Code")).toBe(true)
+  })
+
+  test("collapses subagent navigation as complete items instead of clipping a trailing key", () => {
+    const nav = sessionTopbarNavLayout({
+      width: 13,
+      items: [
+        { icon: "↖", label: "Parent", key: "up" },
+        { icon: "←", label: "Prev", key: "left" },
+        { icon: "→", label: "Next", key: "right" },
+      ],
+    })
+
+    expect(nav.items.map((item) => item.text)).toEqual(["↖ up", "← left", "→"])
+    expect(nav.width).toBe(Bun.stringWidth(nav.items.map((item) => item.text).join(" ")))
+    expect(nav.width).toBeLessThanOrEqual(13)
+    expect(nav.items.every((item) => Bun.stringWidth(item.text) === item.width)).toBe(true)
+  })
+
+  test("keeps every topbar region bounded across narrow terminal widths", () => {
+    Array.of(1, 2, 4, 8, 12, 20, 40, 60).forEach((contentWidth) => {
+      const layout = sessionTopbarLayout({
+        contentWidth,
+        metricsWidth: 32,
+        navWidth: 40,
+        titleVisible: true,
+      })
+      const regions =
+        layout.leftWidth +
+        layout.titleWidth +
+        layout.metricsWidth +
+        layout.titleGapWidth +
+        layout.metricsGapWidth
+
+      expect(regions).toBeLessThanOrEqual(Math.max(1, contentWidth))
+      expect(layout.pathWidth).toBeGreaterThanOrEqual(0)
+      expect(layout.navWidth).toBeGreaterThanOrEqual(0)
+      expect(layout.titleWidth).toBeGreaterThanOrEqual(0)
+      expect(layout.metricsWidth).toBeGreaterThanOrEqual(0)
     })
   })
 

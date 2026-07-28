@@ -485,6 +485,14 @@ export const layer: Layer.Layer<
       // Keep the retry state visible while a new provider attempt is still in setup.
       let retrying = false
       const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
+      const waitingStatus = () =>
+        ctx.assistantMessage.mode === "compaction"
+          ? {
+              type: "busy" as const,
+              kind: "compaction" as const,
+              message: SessionStatus.SESSION_ACTIVITY_COMPACTION,
+            }
+          : { type: "busy" as const, message: SessionStatus.SESSION_ACTIVITY_WAITING }
 
       const isExplicitAbort = () => aborted || (input.isManualAbort ? input.isManualAbort() : input.abort?.aborted === true)
 
@@ -749,13 +757,13 @@ export const layer: Layer.Layer<
           value.type === "tool-call"
         if (retrying && attemptProducedContent) {
           retrying = false
-          yield* status.set(ctx.sessionID, { type: "busy" })
+          yield* status.set(ctx.sessionID, waitingStatus())
         }
 
         switch (value.type) {
           case "start":
             if (retrying) return
-            yield* status.set(ctx.sessionID, { type: "busy" })
+            yield* status.set(ctx.sessionID, waitingStatus())
             return
 
           case "reasoning-start":
@@ -1451,7 +1459,7 @@ export const layer: Layer.Layer<
                   slog.warn("retry deferred to next prompt loop after visible tool attempt", {
                     error: errorMessage(e),
                   })
-                  yield* status.set(ctx.sessionID, { type: "busy" })
+                  yield* status.set(ctx.sessionID, waitingStatus())
                 }),
             ),
             Effect.catchIf(

@@ -11,6 +11,7 @@ export interface Interface {
   readonly isBusy: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly cancelQueued: (sessionID: SessionID, queueKey: string) => Effect.Effect<boolean>
+  readonly setInterruptible: (sessionID: SessionID, interruptible: boolean) => Effect.Effect<void>
   readonly ensureRunning: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<MessageV2.WithParts>,
@@ -62,7 +63,10 @@ export const layer = Layer.effect(
       if (existing) return existing
       const next = Runner.make<MessageV2.WithParts>(data.scope, {
         onIdle: Effect.gen(function* () {
-          data.runners.delete(sessionID)
+          // Runner keeps its state idle while this callback can still yield.
+          // Keep the instance registered so a concurrent caller cannot create a
+          // second runner while the existing one is finishing its idle effect.
+          // The instance finalizer clears this map when the project closes.
           yield* status.set(sessionID, { type: "idle" })
         }),
         onBusy: status.set(sessionID, { type: "busy" }),
@@ -106,6 +110,16 @@ export const layer = Layer.effect(
       return yield* existing.cancelPending((key) => key === queueKey)
     })
 
+    const setInterruptible = Effect.fn("SessionRunState.setInterruptible")(function* (
+      sessionID: SessionID,
+      interruptible: boolean,
+    ) {
+      const data = yield* InstanceState.get(state)
+      const existing = data.runners.get(sessionID)
+      if (!existing) return
+      yield* existing.setInterruptible(interruptible)
+    })
+
     const interrupt = Effect.fn("SessionRunState.interrupt")(function* (
       sessionID: SessionID,
       options?: NonNullable<Runner.EnsureRunningOptions["interrupt"]>,
@@ -134,7 +148,7 @@ export const layer = Layer.effect(
       return yield* (yield* runner(sessionID, onInterrupt)).startShell(work, ready)
     })
 
-    return Service.of({ assertNotBusy, isBusy, cancel, cancelQueued, ensureRunning, interrupt, startShell })
+    return Service.of({ assertNotBusy, isBusy, cancel, cancelQueued, setInterruptible, ensureRunning, interrupt, startShell })
   }),
 )
 

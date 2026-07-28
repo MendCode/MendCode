@@ -1,9 +1,5 @@
 # Changelog
 
-## Unreleased
-
-_No changes yet._
-
 ## 0.1.20 - 2026-07-28
 
 ### Added
@@ -20,6 +16,7 @@ _No changes yet._
 - Add first-run onboarding, context-pack profiles (`arcade`, `cockpit`, `minimal`, and `quiet`), structured command search, larger dialogs, widgets, overlays, themes, and plugin slots.
 - Add background-task control, subagent/session metadata, Herdr state reporting, public/local package imports, package management, and the Memory Graph example package.
 - Add installer `--setup` and `--skip-setup` options plus an optional setup launch prompt after install.
+- Add configurable context-pack presentation profiles: `arcade`, `cockpit`, `minimal`, and `quiet`, with setup controls.
 
 ### Changed
 
@@ -31,6 +28,7 @@ _No changes yet._
 - Improve `/changes` diff loading so large tracked and likely-binary patches are summarized per file with metadata instead of flooding or failing the whole review.
 - Make the `/loops` route responsive for compact and mid-width panes with shorter key hints, bounded stacked list height, and visible compact loop detail.
 - Expand public documentation, package/plugin guidance, memory and loop guides, screenshots, branding assets, and release automation.
+- Improve TUI selection dialogs with large layouts, structured command search, readable wrapping, and a `?` help key.
 
 ### Fixed
 
@@ -46,6 +44,11 @@ _No changes yet._
 - Prevent binary or oversized `apply_patch` inputs from becoming giant diffs that block the server/TUI before `Generating` starts.
 - Harden legacy relay URL recognition, OAuth error pages, cryptographic ID/PKCE generation, and release dependency paths.
 - Update release dependencies to OSV-fixed versions: `@hono/node-server` 2.0.10, `brace-expansion` 5.0.8, and `tar` 7.5.21.
+- Keep TUI message state idempotent when duplicate `message.updated` events arrive in the same batch, preventing temporary assistant duplication or disappearance during queued and normal turns.
+- Preserve the latest real user turn and its visible assistant output across bounded refreshes, stale removals, and compaction-related updates.
+- Keep prompt/queue working state, compaction progress, background-task notifications, and session rendering synchronized during active turns.
+- Persist async prompts before acknowledging them with HTTP 204 and surface prompt failures through the existing session error event.
+- Harden legacy relay URL recognition, OAuth error pages, and cryptographic ID/PKCE generation against security scanner findings.
 
 ### Tests
 
@@ -55,6 +58,9 @@ _No changes yet._
 - Add setup/package regressions for public GitHub URL validation, memory dialog state, setup health step state, and compact setup/loops layout helpers.
 - Add `/changes` regressions for per-file large patch handling and binary/large file skip messaging.
 - Pass supply-chain preflight, OSV, frozen-lockfile, release asset, SBOM, CodeQL, dependency review, security scanner, checksum, and attestation gates for the published release.
+- Add regressions for batched duplicate message updates, pinned user turns, sparse refreshes, bounded transcript retention, compaction pairing, and prompt working-state transitions.
+- Add command-search and async-prompt persistence regressions.
+- Align title-generation fixtures and session transcript assertions with the current prompt and compaction-boundary behavior.
 
 ## 0.1.19 - 2026-06-25
 
