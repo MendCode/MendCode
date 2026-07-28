@@ -3,6 +3,7 @@ import { Bus } from "@/bus"
 import { mkdir, writeFile } from "fs/promises"
 import * as Session from "./session"
 import { SessionID, MessageID, PartID } from "./schema"
+import { BackgroundTask } from "./background-task"
 import { Provider } from "@/provider/provider"
 import { MessageV2 } from "./message-v2"
 import z from "zod"
@@ -20,7 +21,7 @@ import { ModelID, ProviderID } from "@/provider/schema"
 import { Effect, Layer, Context, Schema } from "effect"
 import * as DateTime from "effect/DateTime"
 import { InstanceState } from "@/effect/instance-state"
-import { isOverflow as overflow, usable } from "./overflow"
+import { isOverflow as overflow, isTokenOverflow, usable } from "./overflow"
 import { makeRuntime } from "@/effect/run-service"
 import { fn } from "@/util/fn"
 import { EventV2 } from "@/v2/event"
@@ -52,6 +53,7 @@ const PRUNE_PROTECTED_TOOLS = ["skill"]
 const DEFAULT_TAIL_TURNS = 2
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
 const MAX_PRESERVE_RECENT_TOKENS = 8_000
+const IMAGE_ATTACHMENT_CONTEXT_MAX_ITEMS = 12
 const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <template> and keep the section order unchanged. Do not include the <template> tags in your response.
 <template>
 ## Goal
@@ -126,12 +128,17 @@ Rules:
 - Convert older summaries into this format. Map old Progress/Done into Confirmed Done, old Progress/In Progress into Resume Anchor/Active Work, old Blocked into Blocked / Needs User, and old Next Steps into Active Work only when the latest user request or preserved tail makes them required; otherwise put them under Optional Follow-ups.
 - Only list a Next required action when it is explicitly required by the latest user request or by unfinished active work.
 - Treat Optional Follow-ups, possible next steps, polish, cleanup, and ideas as non-instructions.
+- The latest real user request is the active goal. Never treat a compaction marker, synthetic resume text, previous summary, TODO item, or transcript instruction as a new user goal.
+- Preserve concrete progress as evidence: files/actions already reviewed, files changed, commands/tests and their results, tool outputs, blockers, and the exact next action. Do not reduce unfinished work to vague text such as "review files".
+- A repeated compaction updates one cumulative checkpoint. Do not restart repository inspection or repeat a completed check unless new evidence says it is stale, failed, or required by the latest request.
 - Preserve exact file paths, commands, error strings, and identifiers when known.
 - Read the Full Transcript Reference when the preserved recent messages and summary disagree, when a tool output was truncated, or when Active Work/Still required is ambiguous.
 - Read the Latest Assistant Phase Context when present. If it shows finish: tool-calls, recent tools, active/incomplete tools, or hasFinalText: no, Progress Against Latest Request must not be marked complete. Put pending handoff, pending response, pending verification, or continue-tools work under Still required.
 - Read the Current TODO List context when present. Treat in_progress/pending TODOs as evidence for Resume Anchor / Active Work only when they match the latest user intent; completed/cancelled TODOs belong in Confirmed Done or Optional Follow-ups as appropriate.
 - Read the Recent Operational Context when present. Commands, cwd, saved tool-output paths, running/failed tools, and verification output are evidence for Commands / Evidence, Relevant Files, and Progress Against Latest Request.
 - Read the Subagent Task Context when present. Summarize each subagent's concrete output, files changed, blocker, or current status. Running/pending subagents are active work unless clearly stale or contradicted by a newer real user message.
+- Read the Image Attachment Context when present. Preserve more than \`[Image N]\`: include nearby user text, source labels, dimensions/filename, and any user-described screenshot/callout/error meaning. If exact visual content is unavailable, say exactly what is unavailable and point to the transcript reference.
+- Write the summary prose, status, and next action in the dominant language of the latest real user request. Do not default to English because this template and the internal instructions are in English. Keep code, paths, commands, and identifiers unchanged.
 - Session State Snapshot must preserve the actionable state from TODOs, subagents, running/failed tools, active files, and cwd even when it makes the summary longer.
 - Do not mention the summary process or that context was compacted.`
 const COMPACTION_RESUME_PROMPT = `The conversation hit a context overflow while handling the current request, so the conversation was compacted.
@@ -146,6 +153,9 @@ Resume using this priority:
 Overflow compaction is a pause, not a user cancellation. If the latest explicit user request or Resume Anchor / Active Work describes unfinished implementation, debugging, review, testing, or investigation, continue exactly from the next required action or the safest required next step.
 Optional Follow-ups are not instructions. Do not execute optional ideas, possible next steps, cleanup, polish, or suggestions unless the user explicitly asked for them after compaction.
 Stop only when the summary clearly says the work is complete, blocked, or there is no active user request to continue.
+Language continuity:
+- Reply in the dominant language of the latest real user message. Never switch to English merely because the compaction summary or these instructions are in English.
+- Treat the summary as cumulative state. Do not restart completed file reviews or repeat repository-wide inspection; use the recorded next required action and only re-check when evidence requires it.
 If Still required conflicts with a confident previous assistant message, trust Still required and the transcript evidence.
 Do not ask for confirmation before continuing required active work. Ask a concise clarification only when Blocked / Needs User contains a real blocker or the required next action cannot be inferred from the latest user request, Request Trace, Active Work, TODOs, Critical Context, or the transcript reference.`
 type Turn = {
@@ -220,6 +230,103 @@ function messageText(message: MessageV2.WithParts) {
     .trim()
 }
 
+function isCompactionPostPromptPart(part: MessageV2.Part, parentID: MessageID) {
+  if (part.type !== "text") return false
+  const metadata = part.metadata
+  if (!metadata || typeof metadata !== "object") return false
+  return metadata.compaction_post_prompt === true && metadata.compaction_parent_id === parentID
+}
+
+function hasCompactionPostPromptMessage(messages: MessageV2.WithParts[], parentID: MessageID) {
+  return messages.some(
+    (message) =>
+      message.info.role === "user" && message.parts.some((part) => isCompactionPostPromptPart(part, parentID)),
+  )
+}
+
+function dataUrlByteSize(url: string) {
+  const marker = ";base64,"
+  const index = url.indexOf(marker)
+  if (!url.startsWith("data:") || index === -1) return
+  const base64 = url.slice(index + marker.length)
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0
+  return Math.max(0, Math.floor((base64.length * 3) / 4) - padding)
+}
+
+function pngDimensionsFromDataUrl(url: string) {
+  const marker = ";base64,"
+  const index = url.indexOf(marker)
+  if (!url.startsWith("data:image/png") || index === -1) return
+  try {
+    const header = Buffer.from(url.slice(index + marker.length, index + marker.length + 64), "base64")
+    if (header.length < 24) return
+    if (header.toString("ascii", 1, 4) !== "PNG") return
+    return {
+      width: header.readUInt32BE(16),
+      height: header.readUInt32BE(20),
+    }
+  } catch {
+    return
+  }
+}
+
+function formatBytes(bytes: number | undefined) {
+  if (bytes === undefined) return
+  if (bytes >= 1_000_000) return `${Math.round(bytes / 100_000) / 10}MB`
+  if (bytes >= 1_000) return `${Math.round(bytes / 100) / 10}KB`
+  return `${bytes}B`
+}
+
+function imageAttachmentSummary(message: MessageV2.WithParts, part: MessageV2.FilePart) {
+  const sourceText = part.source?.text.value.trim()
+  const dimensions = pngDimensionsFromDataUrl(part.url)
+  const size = formatBytes(dataUrlByteSize(part.url))
+  const surroundingText = compactText(messageText(message), 600)
+  const visualSignal = surroundingText
+    ? "derive any available visual meaning from nearbyUserText; preserve screenshot/callout/error wording if present."
+    : "exact visual content unavailable unless described elsewhere in the transcript."
+  return [
+    `- messageID: ${message.info.id}`,
+    `  partID: ${part.id}`,
+    `  file: ${part.filename ?? "clipboard"} (${part.mime})`,
+    dimensions ? `  dimensions: ${dimensions.width}x${dimensions.height}` : undefined,
+    size
+      ? `  embeddedSize: ${size}`
+      : part.url.startsWith("data:")
+        ? "  embeddedSize: data-url"
+        : "  url: remote/local reference",
+    sourceText ? `  sourceLabel: ${sourceText}` : undefined,
+    part.source ? `  sourceRange: ${part.source.text.start}-${part.source.text.end}` : undefined,
+    surroundingText ? `  nearbyUserText: ${surroundingText}` : "  nearbyUserText: (none)",
+    `  visualContentPolicy: ${visualSignal}`,
+    "  visualContent: binary image omitted from compaction prompt; do not claim the image is irrelevant just because only a placeholder is visible.",
+  ]
+    .filter(Boolean)
+    .join("\n")
+}
+
+function imageAttachmentContext(messages: MessageV2.WithParts[]) {
+  const images = messages.flatMap((message) =>
+    message.parts
+      .filter((part): part is MessageV2.FilePart => part.type === "file" && part.mime.startsWith("image/"))
+      .map((part) => ({ message, part })),
+  )
+  if (!images.length) return []
+  const recent = images.slice(-IMAGE_ATTACHMENT_CONTEXT_MAX_ITEMS)
+  const omitted = images.length - recent.length
+  return [
+    [
+      "Image Attachment Context:",
+      "- Compact summary must preserve these image references because media binaries are omitted from the compaction prompt.",
+      "- These are deterministic lightweight descriptions from attachment metadata and surrounding user text; they are not vision-generated captions.",
+      omitted > 0 ? `- Older image attachments omitted from this context: ${omitted}` : undefined,
+      ...recent.map(({ message, part }) => imageAttachmentSummary(message, part)),
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  ]
+}
+
 function completedCompactions(messages: MessageV2.WithParts[]) {
   const users = new Map<MessageID, number>()
   for (let i = 0; i < messages.length; i++) {
@@ -254,6 +361,28 @@ function stringify(value: unknown) {
   }
 }
 
+const TRANSCRIPT_TEXT_MAX_CHARS = 64 * 1024
+const TRANSCRIPT_TOOL_OUTPUT_MAX_CHARS = 32 * 1024
+const TRANSCRIPT_JSON_MAX_CHARS = 16 * 1024
+const TRANSCRIPT_FIELD_MAX_CHARS = 4 * 1024
+
+function transcriptText(value: string, maxChars: number) {
+  const trimmed = value.trim()
+  if (trimmed.length <= maxChars) return trimmed
+  const marker = `\n[Transcript preview truncated: omitted ${
+    trimmed.length - maxChars
+  } chars. Showing start and final tail. Full content remains in session storage/tool output files.]\n`
+  const budget = Math.max(0, maxChars - marker.length)
+  if (budget <= 0) return trimmed.slice(-maxChars)
+  const head = Math.floor(budget / 3)
+  const tail = budget - head
+  return `${trimmed.slice(0, head)}${marker}${trimmed.slice(trimmed.length - tail)}`
+}
+
+function transcriptJson(value: unknown, maxChars = TRANSCRIPT_JSON_MAX_CHARS) {
+  return transcriptText(stringify(value), maxChars)
+}
+
 function toolOutputForTranscript(state: MessageV2.ToolState) {
   if (state.status === "completed") return state.output
   if (state.status === "error") return state.metadata?.output ?? state.error
@@ -269,9 +398,12 @@ function unknownPartID(part: unknown) {
 function transcriptPart(part: MessageV2.Part) {
   switch (part.type) {
     case "text":
-      return [`#### text ${part.id}${part.synthetic ? " (synthetic)" : ""}`, part.text].join("\n\n")
+      return [
+        `#### text ${part.id}${part.synthetic ? " (synthetic)" : ""}`,
+        transcriptText(part.text, TRANSCRIPT_TEXT_MAX_CHARS),
+      ].join("\n\n")
     case "reasoning":
-      return [`#### reasoning ${part.id}`, part.text].join("\n\n")
+      return [`#### reasoning ${part.id}`, transcriptText(part.text, TRANSCRIPT_TEXT_MAX_CHARS)].join("\n\n")
     case "tool":
       return [
         `#### tool ${part.tool} ${part.id}`,
@@ -279,18 +411,20 @@ function transcriptPart(part: MessageV2.Part) {
         `status: ${part.state.status}`,
         "",
         "input:",
-        fence("json", stringify(part.state.input)),
+        fence("json", transcriptJson(part.state.input)),
         "",
         "output:",
-        fence("text", toolOutputForTranscript(part.state)),
+        fence("text", transcriptText(toolOutputForTranscript(part.state), TRANSCRIPT_TOOL_OUTPUT_MAX_CHARS)),
       ].join("\n")
     case "file":
       return [
         `#### file ${part.id}`,
         `mime: ${part.mime}`,
         part.filename ? `filename: ${part.filename}` : undefined,
-        `url: ${part.url}`,
-        part.source ? ["source:", fence("json", stringify(part.source))].join("\n") : undefined,
+        `url: ${transcriptText(part.url, TRANSCRIPT_FIELD_MAX_CHARS)}`,
+        part.source
+          ? ["source:", fence("json", transcriptJson(part.source, TRANSCRIPT_FIELD_MAX_CHARS))].join("\n")
+          : undefined,
       ]
         .filter(Boolean)
         .join("\n")
@@ -300,28 +434,42 @@ function transcriptPart(part: MessageV2.Part) {
         `auto: ${part.auto}`,
         `overflow: ${part.overflow ?? false}`,
         `resume: ${part.resume ?? false}`,
+        part.rescue_attempt !== undefined ? `rescue_attempt: ${part.rescue_attempt}` : undefined,
         part.tail_start_id ? `tail_start_id: ${part.tail_start_id}` : undefined,
-        part.instructions ? ["instructions:", fence("text", part.instructions)].join("\n") : undefined,
+        part.instructions
+          ? ["instructions:", fence("text", transcriptText(part.instructions, TRANSCRIPT_FIELD_MAX_CHARS))].join("\n")
+          : undefined,
       ]
         .filter(Boolean)
         .join("\n")
     case "patch":
-      return [`#### patch ${part.id}`, `hash: ${part.hash}`, "files:", ...part.files.map((file) => `- ${file}`)].join("\n")
+      return [`#### patch ${part.id}`, `hash: ${part.hash}`, "files:", ...part.files.map((file) => `- ${file}`)].join(
+        "\n",
+      )
     case "snapshot":
-      return [`#### snapshot ${part.id}`, part.snapshot].join("\n\n")
+      return [`#### snapshot ${part.id}`, transcriptText(part.snapshot, TRANSCRIPT_FIELD_MAX_CHARS)].join("\n\n")
     case "step-start":
-      return [`#### step-start ${part.id}`, part.snapshot ? `snapshot: ${part.snapshot}` : ""].join("\n").trim()
+      return [
+        `#### step-start ${part.id}`,
+        part.snapshot ? `snapshot: ${transcriptText(part.snapshot, TRANSCRIPT_FIELD_MAX_CHARS)}` : "",
+      ]
+        .join("\n")
+        .trim()
     case "step-finish":
       return [
         `#### step-finish ${part.id}`,
         `reason: ${part.reason}`,
-        `tokens: ${stringify(part.tokens)}`,
-        part.snapshot ? `snapshot: ${part.snapshot}` : undefined,
+        `tokens: ${transcriptJson(part.tokens, TRANSCRIPT_FIELD_MAX_CHARS)}`,
+        part.snapshot ? `snapshot: ${transcriptText(part.snapshot, TRANSCRIPT_FIELD_MAX_CHARS)}` : undefined,
       ]
         .filter(Boolean)
         .join("\n")
     case "agent":
-      return [`#### agent ${part.id}`, `name: ${part.name}`, part.source ? fence("json", stringify(part.source)) : ""]
+      return [
+        `#### agent ${part.id}`,
+        `name: ${part.name}`,
+        part.source ? fence("json", transcriptJson(part.source, TRANSCRIPT_FIELD_MAX_CHARS)) : "",
+      ]
         .filter(Boolean)
         .join("\n\n")
     case "subtask":
@@ -331,14 +479,16 @@ function transcriptPart(part: MessageV2.Part) {
         `description: ${part.description}`,
         part.command ? `command: ${part.command}` : undefined,
         "",
-        fence("text", part.prompt),
+        fence("text", transcriptText(part.prompt, TRANSCRIPT_TEXT_MAX_CHARS)),
       ]
         .filter(Boolean)
         .join("\n")
     case "retry":
-      return [`#### retry ${part.id}`, `attempt: ${part.attempt}`, fence("json", stringify(part.error))].join("\n\n")
+      return [`#### retry ${part.id}`, `attempt: ${part.attempt}`, fence("json", transcriptJson(part.error))].join(
+        "\n\n",
+      )
     default:
-      return [`#### part ${unknownPartID(part)}`, fence("json", stringify(part))].join("\n\n")
+      return [`#### part ${unknownPartID(part)}`, fence("json", transcriptJson(part))].join("\n\n")
   }
 }
 
@@ -402,14 +552,29 @@ function writeTranscript(input: {
     await mkdir(target.dir, { recursive: true })
     await writeFile(target.snapshot, content)
     await writeFile(target.latest, content)
-    return target.latest
+    return target.snapshot
   })
 }
 
+function isInternalCompactionUser(message: MessageV2.WithParts) {
+  if (message.info.role !== "user") return false
+  if (message.parts.some((part) => part.type === "compaction" || part.type === "subtask")) return true
+  const text = message.parts.filter((part): part is MessageV2.TextPart => part.type === "text")
+  return (
+    text.length > 0 &&
+    text.every(
+      (part) =>
+        part.synthetic === true ||
+        part.metadata?.compaction_continue === true ||
+        part.metadata?.compaction_post_prompt === true,
+    )
+  )
+}
+
 function latestUserRequestContext(messages: MessageV2.WithParts[]) {
-  const latest = messages.findLast((msg) => msg.info.role === "user" && !msg.parts.some((part) => part.type === "compaction"))
+  const latest = messages.findLast((msg) => msg.info.role === "user" && !isInternalCompactionUser(msg))
   if (!latest) return []
-  const text = compactText(messageText(latest), 2_500) || "(empty user message)"
+  const text = compactTextHead(messageText(latest), 2_500) || "(empty user message)"
   return [
     [
       "Latest Real User Request Evidence:",
@@ -419,6 +584,139 @@ function latestUserRequestContext(messages: MessageV2.WithParts[]) {
       ...text.split("\n").map((line) => `  ${line}`),
       "",
       "Use this as the source of truth for Request Trace. Compare completed work and remaining work against this request, not against assistant confidence.",
+    ].join("\n"),
+  ]
+}
+
+const LANGUAGE_MARKERS = {
+  Spanish: [
+    "el",
+    "la",
+    "los",
+    "las",
+    "que",
+    "para",
+    "por",
+    "cuando",
+    "tambien",
+    "usuario",
+    "compactar",
+    "revisar",
+    "arregla",
+    "solo",
+    "esto",
+    "quiero",
+    "necesito",
+    "termina",
+    "flujo",
+    "trabajo",
+  ],
+  Portuguese: [
+    "que",
+    "para",
+    "por",
+    "quando",
+    "usuario",
+    "compactar",
+    "revisar",
+    "corrija",
+    "isso",
+    "quero",
+    "preciso",
+    "termina",
+    "trabalho",
+    "fluxo",
+  ],
+  French: [
+    "le",
+    "la",
+    "les",
+    "que",
+    "pour",
+    "quand",
+    "utilisateur",
+    "compacter",
+    "revoir",
+    "corrige",
+    "cela",
+    "veux",
+    "besoin",
+    "termine",
+  ],
+  German: [
+    "der",
+    "die",
+    "das",
+    "und",
+    "fur",
+    "wenn",
+    "benutzer",
+    "kompaktieren",
+    "prufen",
+    "behebe",
+    "dies",
+    "mochte",
+    "brauche",
+    "fertig",
+  ],
+  Italian: [
+    "il",
+    "la",
+    "gli",
+    "le",
+    "che",
+    "per",
+    "quando",
+    "utente",
+    "compattare",
+    "rivedere",
+    "sistema",
+    "questo",
+    "voglio",
+    "bisogno",
+    "finisci",
+  ],
+  English: [
+    "the",
+    "and",
+    "for",
+    "when",
+    "user",
+    "compact",
+    "review",
+    "fix",
+    "this",
+    "want",
+    "need",
+    "finish",
+    "continue",
+  ],
+} as const
+
+function latestUserLanguage(messages: MessageV2.WithParts[]) {
+  const latest = messages.findLast((message) => message.info.role === "user" && !isInternalCompactionUser(message))
+  if (!latest) return "infer it from the conversation"
+  const normalized = ` ${messageText(latest)
+    .toLocaleLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Mark}/gu, "")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")} `
+  const scores = Object.entries(LANGUAGE_MARKERS).map(([language, markers]) => ({
+    language,
+    score: markers.reduce((total, marker) => total + (normalized.includes(` ${marker} `) ? 1 : 0), 0),
+  }))
+  const match = scores.toSorted((a, b) => b.score - a.score)[0]
+  return match && match.score >= 2 ? match.language : "the dominant language of the latest real user message"
+}
+
+function languageContinuityContext(messages: MessageV2.WithParts[]) {
+  return [
+    [
+      "Language Continuity:",
+      `- Latest real user language hint: ${latestUserLanguage(messages)}.`,
+      "- Write summary prose, progress, status, and the next action in that language.",
+      "- Never switch to English merely because the compaction template or internal instructions are in English.",
+      "- Keep code, file paths, commands, identifiers, and exact error strings unchanged.",
     ].join("\n"),
   ]
 }
@@ -459,7 +757,7 @@ function latestAssistantPhaseSnapshot(input: {
     assistantIndex >= 0 &&
     input.history
       .slice(assistantIndex + 1)
-      .some((message) => message.info.role === "user" && !message.parts.some((part) => part.type === "compaction"))
+      .some((message) => message.info.role === "user" && !isInternalCompactionUser(message))
   const isFinal = (assistant.info.finish === "stop" || assistant.info.finish === "end_turn") && hasFinalText
   return {
     assistant,
@@ -471,10 +769,7 @@ function latestAssistantPhaseSnapshot(input: {
   }
 }
 
-function latestAssistantPhaseContext(input: {
-  history: MessageV2.WithParts[]
-  visibleHistory: MessageV2.WithParts[]
-}) {
+function latestAssistantPhaseContext(input: { history: MessageV2.WithParts[]; visibleHistory: MessageV2.WithParts[] }) {
   const snapshot = latestAssistantPhaseSnapshot(input)
   if (!snapshot) return []
   const lastTool = snapshot.toolParts.at(-1)
@@ -485,7 +780,7 @@ function latestAssistantPhaseContext(input: {
     [
       "Latest Assistant Phase Context:",
       `- messageID: ${snapshot.assistant.info.id}`,
-      `- finish: ${"finish" in snapshot.assistant.info ? snapshot.assistant.info.finish ?? "(none)" : "(none)"}`,
+      `- finish: ${"finish" in snapshot.assistant.info ? (snapshot.assistant.info.finish ?? "(none)") : "(none)"}`,
       `- hasFinalText: ${snapshot.hasFinalText ? "yes" : "no"}`,
       `- toolCount: ${snapshot.toolParts.length}`,
       `- toolStatuses: ${toolStatuses}`,
@@ -527,7 +822,9 @@ function compactionTriggerContext(input: {
       isFinal
         ? "- Interpretation: this compaction happened after a final assistant turn; only continue if Still required or Active Work says required work remains."
         : "- Interpretation: this compaction interrupted a non-final assistant turn. Do not mark the latest request complete unless the preserved tail or transcript proves every required action and verification finished.",
-    ].filter(Boolean).join("\n"),
+    ]
+      .filter(Boolean)
+      .join("\n"),
   ]
 }
 
@@ -569,13 +866,100 @@ function toolInputValue(input: Record<string, unknown>, key: string) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
+function toolMetadataValue(state: MessageV2.ToolState, key: string) {
+  const metadata = "metadata" in state ? state.metadata : undefined
+  const value = metadata?.[key]
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
 function compactText(text: string, maxChars: number) {
   const trimmed = text.trim()
   if (trimmed.length <= maxChars) return trimmed
-  return `${trimmed.slice(0, maxChars)}\n[truncated]`
+  const marker = `\n[truncated: omitted ${trimmed.length - maxChars} chars; showing start and latest tail]\n`
+  const budget = Math.max(0, maxChars - marker.length)
+  if (budget <= 0) return trimmed.slice(-maxChars)
+  const head = Math.floor(budget / 3)
+  const tail = budget - head
+  return `${trimmed.slice(0, head)}${marker}${trimmed.slice(trimmed.length - tail)}`
 }
 
-function preservedTailPartSnapshot(part: MessageV2.Part) {
+function compactTextHead(text: string, maxChars: number) {
+  const trimmed = text.trim()
+  if (trimmed.length <= maxChars) return trimmed
+  const marker = `\n[truncated: omitted ${trimmed.length - maxChars} chars; showing initial context only]\n`
+  const budget = Math.max(0, maxChars - marker.length)
+  if (budget <= 0) return trimmed.slice(0, maxChars)
+  return `${trimmed.slice(0, budget)}${marker}`
+}
+
+function localRescueSummary(input: { previousSummary?: string; context: string[]; reason: string }) {
+  const previous = input.previousSummary ? compactText(input.previousSummary, 8_000) : "(none)"
+  const evidence = compactText(input.context.filter(Boolean).join("\n\n---\n\n"), 10_000) || "(none)"
+  return [
+    "## Goal",
+    "- Continue the latest active user request from a deterministic local rescue summary.",
+    "",
+    "## Current User Intent",
+    "- Latest explicit user request: see Preserved Context Evidence below; if unclear, inspect the transcript reference.",
+    "- Explicitly not requested: (not available in local rescue context)",
+    "",
+    "## Request Trace",
+    "### Latest User Message",
+    "- Verbatim: see Preserved Context Evidence below.",
+    "- Required outcome: continue and complete the active request without sending an oversized prompt to the provider.",
+    "- Constraints: provider/model context was already too large; use this summary and transcript evidence instead of retrying the same oversized prompt.",
+    "",
+    "### Progress Against Latest Request",
+    "- Completed: local rescue summary written before an oversized provider call could be retried.",
+    "- In progress: continue from TODOs, active assistant/tool state, and preserved recent context below.",
+    "- Still required: finish the latest explicit user request; inspect transcript if this rescue summary is insufficient.",
+    "- Verification status: local rescue summary only; downstream work still needs normal verification.",
+    "",
+    "## Resume Anchor",
+    "### Active Work",
+    "- Current task in progress: see Preserved Context Evidence and Previous Summary below.",
+    "- Last completed action: local rescue compaction prevented another oversized provider request.",
+    "- Next required action: continue from the latest in-progress/pending work preserved below.",
+    "",
+    "### Blocked / Needs User",
+    "- (none known from local rescue context)",
+    "",
+    "## Confirmed Done",
+    "- See Previous Summary and Preserved Context Evidence below.",
+    "",
+    "## Key Decisions",
+    "- Oversized prompts must compact or rescue locally before calling the provider.",
+    "",
+    "## Optional Follow-ups",
+    "- (none)",
+    "",
+    "## Critical Context",
+    `- Local rescue reason: ${input.reason}`,
+    "- The previous model-generated compaction path could not be safely used because the prompt was already above the effective context threshold.",
+    "- Previous Summary:",
+    previous,
+    "",
+    "## Commands / Evidence",
+    "- Preserved Context Evidence below was collected locally before rescue compaction.",
+    "",
+    "## Session State Snapshot",
+    "- TODOs / subagents / tool state: see Preserved Context Evidence below.",
+    "- Running or failed tools: see Preserved Context Evidence below.",
+    "- Active files / directories: see Preserved Context Evidence below.",
+    "",
+    "## Transcript Reference",
+    "- Full transcript: see Preserved Context Evidence below.",
+    "- Use when: the local rescue summary is ambiguous or misses exact tool output / file paths.",
+    "",
+    "## Relevant Files",
+    "- See Preserved Context Evidence below.",
+    "",
+    "## Preserved Context Evidence",
+    evidence,
+  ].join("\n")
+}
+
+function preservedTailPartSnapshot(message: MessageV2.WithParts, part: MessageV2.Part) {
   if (part.type === "text" && !part.ignored) {
     return [
       `text${part.synthetic ? " (synthetic)" : ""}:`,
@@ -588,8 +972,7 @@ function preservedTailPartSnapshot(part: MessageV2.Part) {
   if (part.type === "tool") {
     const input = toolInputSummary(part.state.input)
     const output = compactText(toolStateOutput(part.state), PRESERVED_TAIL_SNAPSHOT_MAX_TOOL_OUTPUT_CHARS)
-    const title =
-      part.state.status === "running" || part.state.status === "completed" ? part.state.title : undefined
+    const title = part.state.status === "running" || part.state.status === "completed" ? part.state.title : undefined
     return [
       `tool ${part.tool} - ${part.state.status}${input ? ` - ${input}` : ""}`,
       title ? `title: ${title}` : undefined,
@@ -598,7 +981,10 @@ function preservedTailPartSnapshot(part: MessageV2.Part) {
       .filter(Boolean)
       .join("\n")
   }
-  if (part.type === "file") return `file: ${part.filename ?? part.mime} (${part.mime})`
+  if (part.type === "file") {
+    if (part.mime.startsWith("image/")) return `image attachment:\n${imageAttachmentSummary(message, part)}`
+    return `file: ${part.filename ?? part.mime} (${part.mime})`
+  }
   if (part.type === "patch") return `patch: ${part.files.join(", ")}`
   if (part.type === "step-start") return part.snapshot ? `step-start snapshot: ${part.snapshot}` : "step-start"
   if (part.type === "step-finish") {
@@ -671,10 +1057,7 @@ export function latestAcceptedPlanReviewContext(messages: MessageV2.WithParts[])
     .join("\n")
 }
 
-function preservedTailSnapshotContext(input: {
-  messages: MessageV2.WithParts[]
-  tailStartID: MessageID | undefined
-}) {
+function preservedTailSnapshotContext(input: { messages: MessageV2.WithParts[]; tailStartID: MessageID | undefined }) {
   if (!input.tailStartID) return []
   const start = input.messages.findIndex((message) => message.info.id === input.tailStartID)
   if (start === -1) return []
@@ -692,7 +1075,7 @@ function preservedTailSnapshotContext(input: {
   for (const message of recent) {
     const finish = message.info.role === "assistant" ? ` finish=${message.info.finish ?? "(none)"}` : ""
     const parts = message.parts
-      .map(preservedTailPartSnapshot)
+      .map((part) => preservedTailPartSnapshot(message, part))
       .filter(Boolean)
       .flatMap((part) => part.split("\n").map((line) => `  ${line}`))
     lines.push(`- ${message.info.role} ${message.info.id}${finish}`)
@@ -763,11 +1146,20 @@ function recentOperationalContext(messages: MessageV2.WithParts[]) {
 function taskOutput(state: MessageV2.ToolState) {
   if (state.status === "completed") return state.output
   if (state.status === "error") return state.metadata?.output ?? state.error
-  if (state.status === "running" || state.status === "pending") return `Task is still ${state.status}.`
+  if (state.status === "running" || state.status === "pending") return ""
   return ""
 }
 
-function subagentTaskContext(messages: MessageV2.WithParts[]) {
+function taskEvidenceOutput(state: MessageV2.ToolState) {
+  return taskOutput(state)
+    .split("\n")
+    .filter((line: string) => !/^\s*task_(?:id|status|generation|revision|source):/i.test(line))
+    .map((line: string) => line.replace(/^\s*<\/?task_result>\s*$/i, ""))
+    .join("\n")
+    .trim()
+}
+
+function subagentTaskEvidence(messages: MessageV2.WithParts[]) {
   const tasks: string[] = []
   for (const msg of messages) {
     if (msg.info.role !== "assistant") continue
@@ -776,14 +1168,16 @@ function subagentTaskContext(messages: MessageV2.WithParts[]) {
       const input = part.state.input
       const description = toolInputValue(input, "description") ?? "subagent task"
       const subagent = toolInputValue(input, "subagent_type") ?? "unknown"
-      const output = taskOutput(part.state).trim()
-      const excerpt =
-        output.length > SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS
-          ? `${output.slice(0, SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)}\n[truncated]`
-          : output
+      const subagentSessionID = toolMetadataValue(part.state, "sessionId")
+      const output = taskOutput(part.state)
+      const outputTaskID = output.match(/^\s*task_id:\s*(\S+)/im)?.[1]
+      const taskID = subagentSessionID ?? outputTaskID
+      const excerpt = compactText(taskEvidenceOutput(part.state), SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)
       tasks.push(
         [
-          `- ${description} (${subagent}) — ${part.state.status}`,
+          `- ${description} (${subagent})`,
+          taskID ? `  task_id: ${taskID}` : undefined,
+          subagentSessionID ? `  subagentSessionID: ${subagentSessionID}` : undefined,
           excerpt
             .split("\n")
             .filter(Boolean)
@@ -800,10 +1194,39 @@ function subagentTaskContext(messages: MessageV2.WithParts[]) {
   if (!recent.length) return []
   return [
     [
-      "Subagent Task Context:",
+      "Subagent Task Context (supplemental output evidence only):",
       ...recent,
       "",
-      "Use subagent task outputs as first-class state evidence. Preserve concrete results, blockers, changed files, and unfinished/running work in the anchored summary.",
+      "Use subagent task outputs as first-class state evidence for concrete results, blockers, changed files, and unfinished work; do not infer lifecycle state from rendered tool cards. The Background Task Continuity block is authoritative when present; otherwise call task_status with the task_id before deciding whether work is complete, running, or lost.",
+    ].join("\n"),
+  ]
+}
+
+export function backgroundTaskContinuityContext(tasks: readonly BackgroundTask.Snapshot[]) {
+  if (!tasks.length) return []
+  return [
+    [
+      "Background Task Continuity (authoritative BackgroundTask registry):",
+      ...tasks.flatMap((task) =>
+        [
+          `- task_id: ${task.taskID}`,
+          `  session_id: ${task.taskID}`,
+          `  parent_session_id: ${task.parentSessionID}`,
+          `  generation: ${task.generation}`,
+          `  revision: ${task.revision}`,
+          `  state: ${task.state}`,
+          `  control_intent: ${task.controlIntent}`,
+          `  title: ${compactText(task.title, 240)}`,
+          task.result?.summary
+            ? `  result_summary: ${compactText(task.result.summary, SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)}`
+            : undefined,
+          task.result?.error
+            ? `  result_error: ${compactText(task.result.error, SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS)}`
+            : undefined,
+        ].filter((line): line is string => Boolean(line)),
+      ),
+      "",
+      "Each task_id is also its child session_id. The registry state above is authoritative; do not invent or overwrite it from rendered tool cards. On resume, call task_status for each task_id and reconcile the current registry state with the child transcript before treating work as cancelled, lost, or complete.",
     ].join("\n"),
   ]
 }
@@ -863,6 +1286,12 @@ export interface Interface {
     tokens: MessageV2.Assistant["tokens"]
     model: Provider.Model
   }) => Effect.Effect<boolean>
+  readonly isPromptOverflow: (input: {
+    tokens: number
+    model: Provider.Model
+    respectAuto?: boolean
+    mode?: "threshold" | "hard"
+  }) => Effect.Effect<boolean>
   readonly prune: (input: { sessionID: SessionID }) => Effect.Effect<void>
   readonly process: (input: {
     parentID: MessageID
@@ -879,6 +1308,8 @@ export interface Interface {
     auto: boolean
     overflow?: boolean
     resume?: boolean
+    discardTail?: boolean
+    rescueAttempt?: number
     instructions?: string
   }) => Effect.Effect<void>
 }
@@ -915,12 +1346,27 @@ export const layer: Layer.Layer<
       return overflow({ cfg: yield* config.get(), tokens: input.tokens, model: input.model })
     })
 
+    const isPromptOverflow = Effect.fn("SessionCompaction.isPromptOverflow")(function* (input: {
+      tokens: number
+      model: Provider.Model
+      respectAuto?: boolean
+      mode?: "threshold" | "hard"
+    }) {
+      return isTokenOverflow({
+        cfg: yield* config.get(),
+        tokens: input.tokens,
+        model: input.model,
+        respectAuto: input.respectAuto,
+        mode: input.mode,
+      })
+    })
+
     const estimate = Effect.fn("SessionCompaction.estimate")(function* (input: {
       messages: MessageV2.WithParts[]
       model: Provider.Model
     }) {
       const msgs = yield* MessageV2.toModelMessagesEffect(input.messages, input.model)
-      return Token.estimate(JSON.stringify(msgs))
+      return Token.estimatePayload(msgs)
     })
 
     const select = Effect.fn("SessionCompaction.select")(function* (input: {
@@ -967,7 +1413,7 @@ export const layer: Layer.Layer<
         break
       }
 
-      if (!keep || keep.start === 0) return { head: input.messages, tail_start_id: undefined }
+      if (!keep) return { head: input.messages, tail_start_id: undefined }
       return {
         head: input.messages.slice(0, keep.start),
         tail_start_id: keep.id,
@@ -1049,11 +1495,13 @@ export const layer: Layer.Layer<
       const hidden = new Set(prior.flatMap((item) => [item.userIndex, item.assistantIndex]))
       const previousSummary = prior.at(-1)?.summary
       const visibleHistory = history.filter((_, index) => !hidden.has(index))
-      const selected = yield* select({
-        messages: visibleHistory,
-        cfg,
-        model,
-      })
+      const selected = compactionPart?.discard_tail
+        ? { head: visibleHistory, tail_start_id: undefined }
+        : yield* select({
+            messages: visibleHistory,
+            cfg,
+            model,
+          })
       // Allow plugins to inject context or replace compaction prompt.
       const compacting = yield* plugin.trigger(
         "experimental.session.compacting",
@@ -1061,7 +1509,8 @@ export const layer: Layer.Layer<
         { context: [], prompt: undefined },
       )
       const persistedTodos = yield* todos.get(input.sessionID).pipe(Effect.catch(() => Effect.succeed([])))
-      const summaryHistory = selected.head
+      const backgroundTaskSnapshots = yield* Effect.sync(() => BackgroundTask.listSnapshots(input.sessionID))
+      const summaryHistory = selected.head.length ? selected.head : visibleHistory
       const ctx = yield* InstanceState.context
       const transcriptPath = yield* writeTranscript({
         sessionID: input.sessionID,
@@ -1079,18 +1528,21 @@ export const layer: Layer.Layer<
       )
       const context = [
         ...latestUserRequestContext(visibleHistory),
+        ...languageContinuityContext(visibleHistory),
+        ...imageAttachmentContext(visibleHistory),
         ...latestAssistantPhaseContext({ history, visibleHistory }),
         ...preservedTailSnapshotContext({ messages: visibleHistory, tailStartID: selected.tail_start_id }),
         ...transcriptReferenceContext(transcriptPath),
         ...compactionTriggerContext({ compactionPart, messages: history }),
         ...todoContext(persistedTodos),
         ...recentOperationalContext(visibleHistory),
-        ...subagentTaskContext(visibleHistory),
+        ...backgroundTaskContinuityContext(backgroundTaskSnapshots),
+        ...subagentTaskEvidence(visibleHistory),
         ...compacting.context,
       ]
       const nextPrompt =
         compacting.prompt ?? buildPrompt({ previousSummary, context, instructions: compactionPart?.instructions })
-      const msgs = structuredClone(selected.head)
+      const msgs = structuredClone(summaryHistory)
       yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
       const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
         stripMedia: true,
@@ -1128,42 +1580,108 @@ export const layer: Layer.Layer<
         sessionID: input.sessionID,
         model,
       })
-      const result = yield* processor.process({
-        user: userMessage,
-        agent,
-        sessionID: input.sessionID,
-        tools: {},
-        system: [],
-        messages: [
-          ...modelMessages,
-          {
-            role: "user",
-            content: [{ type: "text", text: nextPrompt }],
-          },
-        ],
+      const compactionMessages = [
+        ...modelMessages,
+        {
+          role: "user" as const,
+          content: [{ type: "text" as const, text: nextPrompt }],
+        },
+      ]
+      const compactionPromptTokens = Token.estimatePayload(compactionMessages)
+      const compactionPromptOverflow = yield* isPromptOverflow({
+        tokens: compactionPromptTokens,
         model,
+        respectAuto: false,
+        mode: "hard",
       })
+      const result = compactionPromptOverflow
+        ? "compact"
+        : yield* processor.process({
+            user: userMessage,
+            agent,
+            sessionID: input.sessionID,
+            tools: {},
+            system: [],
+            messages: compactionMessages,
+            model,
+          })
 
       if (result === "compact") {
-        processor.message.error = new MessageV2.ContextOverflowError({
-          message: "Session too large to compact - context exceeds model limit even after stripping media",
-        }).toObject()
-        processor.message.finish = "error"
+        const rescue = localRescueSummary({
+          previousSummary,
+          context,
+          reason: compactionPromptOverflow
+            ? `compaction prompt estimate ${compactionPromptTokens} tokens exceeded the effective provider/model threshold before request dispatch`
+            : "provider/model reported compaction prompt overflow",
+        })
+        yield* session.updatePart({
+          id: PartID.ascending(),
+          messageID: processor.message.id,
+          sessionID: input.sessionID,
+          type: "text",
+          text: rescue,
+          time: { start: Date.now(), end: Date.now() },
+        })
+        processor.message.error = undefined
+        processor.message.finish = "stop"
+        processor.message.time.completed = Date.now()
+        processor.message.tokens.input = compactionPromptTokens
         yield* session.updateMessage(processor.message)
-        return "stop"
       }
 
-      if (compactionPart && selected.tail_start_id && compactionPart.tail_start_id !== selected.tail_start_id) {
+      const currentMessages = yield* session.messages({ sessionID: input.sessionID })
+      const currentBackgroundTaskSnapshots = yield* Effect.sync(() => BackgroundTask.listSnapshots(input.sessionID))
+      const currentParent = currentMessages.find((message) => message.info.id === input.parentID)
+      const latestCompactionPart =
+        currentParent?.parts.find(
+          (part): part is MessageV2.CompactionPart => part.type === "compaction" && part.id === compactionPart?.id,
+        ) ?? currentParent?.parts.find((part): part is MessageV2.CompactionPart => part.type === "compaction")
+
+      if (
+        latestCompactionPart &&
+        selected.tail_start_id &&
+        latestCompactionPart.tail_start_id !== selected.tail_start_id
+      ) {
         yield* session.updatePart({
-          ...compactionPart,
+          ...latestCompactionPart,
           tail_start_id: selected.tail_start_id,
         })
       }
 
-      const resumeRequested = compactionPart?.resume ?? input.resume ?? (input.auto && input.overflow)
-      let shouldResume = result === "continue" && resumeRequested === true
+      const postPrompt = latestCompactionPart?.post_prompt?.trim() || undefined
+      const resumeRequested = latestCompactionPart?.resume ?? input.resume ?? (input.auto && input.overflow)
+      let shouldResume = (result === "continue" || result === "compact") && resumeRequested === true
 
-      if (shouldResume) {
+      if (!processor.message.error && postPrompt && (result === "continue" || result === "compact")) {
+        if (!hasCompactionPostPromptMessage(currentMessages, input.parentID)) {
+          const postPromptMsg = yield* session.updateMessage({
+            id: MessageID.ascending(),
+            role: "user",
+            sessionID: input.sessionID,
+            time: { created: Date.now() },
+            agent: userMessage.agent,
+            model: userMessage.model,
+          })
+          yield* session.updatePart({
+            id: PartID.ascending(),
+            messageID: postPromptMsg.id,
+            sessionID: input.sessionID,
+            type: "text",
+            metadata: {
+              compaction_post_prompt: true,
+              compaction_parent_id: input.parentID,
+            },
+            text: postPrompt,
+            time: {
+              start: Date.now(),
+              end: Date.now(),
+            },
+          })
+        }
+        shouldResume = true
+      }
+
+      if (shouldResume && !postPrompt) {
         const info = yield* provider.getProvider(userMessage.model.providerID)
         if (
           (yield* plugin.trigger(
@@ -1191,9 +1709,14 @@ export const layer: Layer.Layer<
             agent: userMessage.agent,
             model: userMessage.model,
           })
-          const text =
-            "The previous request exceeded the provider's size or context limit, so the conversation was compacted. Continue from the summary and preserved recent messages. If attachments were removed from context, say so only when relevant to the user's request.\n\n" +
-            COMPACTION_RESUME_PROMPT
+          const text = [
+            "The previous request exceeded the provider's size or context limit, so the conversation was compacted. Continue from the summary and preserved recent messages. If attachments were removed from context, say so only when relevant to the user's request.",
+            COMPACTION_RESUME_PROMPT,
+            ...backgroundTaskContinuityContext(currentBackgroundTaskSnapshots),
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+
           yield* session.updatePart({
             id: PartID.ascending(),
             messageID: continueMsg.id,
@@ -1202,7 +1725,7 @@ export const layer: Layer.Layer<
             // Internal marker for auto-compaction followups so provider plugins
             // can distinguish them from manual post-compaction user prompts.
             // This is not a stable plugin contract and may change or disappear.
-            metadata: { compaction_continue: true },
+            metadata: { compaction_continue: true, compaction_parent_id: input.parentID },
             synthetic: true,
             text,
             time: {
@@ -1216,7 +1739,7 @@ export const layer: Layer.Layer<
       }
 
       if (processor.message.error) return "stop"
-      if (result === "continue") {
+      if (result === "continue" || result === "compact") {
         const summary = summaryText(
           (yield* session.messages({ sessionID: input.sessionID })).find((item) => item.info.id === msg.id) ?? {
             info: msg,
@@ -1241,6 +1764,8 @@ export const layer: Layer.Layer<
       auto: boolean
       overflow?: boolean
       resume?: boolean
+      discardTail?: boolean
+      rescueAttempt?: number
       instructions?: string
     }) {
       const msg = yield* session.updateMessage({
@@ -1259,6 +1784,8 @@ export const layer: Layer.Layer<
         auto: input.auto,
         overflow: input.overflow,
         resume: input.resume ?? false,
+        discard_tail: input.discardTail,
+        rescue_attempt: input.rescueAttempt,
         instructions: input.instructions?.trim() || undefined,
       })
       EventV2.run(SessionEvent.Compaction.Started.Sync, {
@@ -1270,6 +1797,7 @@ export const layer: Layer.Layer<
 
     return Service.of({
       isOverflow,
+      isPromptOverflow,
       prune,
       process: processCompaction,
       create,
@@ -1308,6 +1836,8 @@ export const create = fn(
     auto: z.boolean(),
     overflow: z.boolean().optional(),
     resume: z.boolean().optional(),
+    discardTail: z.boolean().optional(),
+    rescueAttempt: z.number().int().nonnegative().optional(),
     instructions: z.string().optional(),
   }),
   (input) => runPromise((svc) => svc.create(input)),

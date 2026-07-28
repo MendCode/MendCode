@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "fs"
 import { describe, expect, test } from "bun:test"
-import { appendGlobalEvent, globalEventRelayPath } from "../../src/bus/global-relay"
-import { GlobalBus, type GlobalEvent } from "../../src/bus/global"
+import { appendGlobalEvent, flushGlobalEventRelay, globalEventRelayPath } from "../../src/bus/global-relay"
+import { GlobalBus, matchesGlobalEventDirectory, type GlobalEvent } from "../../src/bus/global"
 
 function waitForRelayedEvent(predicate: (event: GlobalEvent) => boolean) {
   return new Promise<GlobalEvent>((resolve, reject) => {
@@ -20,6 +20,23 @@ function waitForRelayedEvent(predicate: (event: GlobalEvent) => boolean) {
 }
 
 describe("GlobalBus relay", () => {
+  test("matches project events without hiding global events", () => {
+    expect(
+      matchesGlobalEventDirectory(
+        { directory: "/tmp/project-a", payload: { type: "message.updated" } },
+        "/tmp/project-a",
+      ),
+    ).toBe(true)
+    expect(
+      matchesGlobalEventDirectory(
+        { directory: "/tmp/project-b", payload: { type: "message.updated" } },
+        "/tmp/project-a",
+      ),
+    ).toBe(false)
+    expect(matchesGlobalEventDirectory({ directory: "global", payload: { type: "project.updated" } }, "/tmp/project-a")).toBe(true)
+    expect(matchesGlobalEventDirectory({ payload: { type: "server.connected" } }, "/tmp/project-a")).toBe(true)
+  })
+
   test("tails events written by another process source", async () => {
     const event: GlobalEvent = {
       directory: "/tmp/relay-project",
@@ -73,7 +90,7 @@ describe("GlobalBus relay", () => {
     expect(text).not.toContain(event.payload.id)
   })
 
-  test("caps the relay file before appending more events", () => {
+  test("caps the relay file before appending more events", async () => {
     const previous = process.env.MENDCODE_GLOBAL_EVENT_RELAY_MAX_BYTES
     process.env.MENDCODE_GLOBAL_EVENT_RELAY_MAX_BYTES = "512"
     try {
@@ -90,6 +107,7 @@ describe("GlobalBus relay", () => {
       }
 
       appendGlobalEvent(event)
+      await flushGlobalEventRelay()
 
       const text = readFileSync(globalEventRelayPath(), "utf8")
       expect(text).toContain(event.payload.id)

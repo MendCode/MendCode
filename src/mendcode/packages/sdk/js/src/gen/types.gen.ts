@@ -392,6 +392,7 @@ export type CompactionPart = {
   auto: boolean
   overflow?: boolean
   resume?: boolean
+  post_prompt?: string
   instructions?: string
   tail_start_id?: string
 }

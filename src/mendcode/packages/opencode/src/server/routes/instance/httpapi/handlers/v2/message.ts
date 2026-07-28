@@ -43,6 +43,7 @@ export const messageHandlers = HttpApiBuilder.group(InstanceHttpApi, "v2.message
           sessionID: ctx.params.sessionID,
           limit: ctx.query.limit ?? DefaultMessagesLimit,
           order,
+          view: ctx.query.view,
           cursor: decoded ? { id: decoded.id, time: decoded.time, direction: decoded.direction } : undefined,
         })
         const first = messages[0]

@@ -2,7 +2,10 @@ import { cmd } from "@/cli/cmd/cmd"
 import { tui } from "./app"
 import { Rpc } from "@/util/rpc"
 import { type rpc } from "./worker"
+import { spawn, type ChildProcess } from "child_process"
+import { stat } from "fs/promises"
 import path from "path"
+import { existsSync } from "fs"
 import { fileURLToPath } from "url"
 import { UI } from "@/cli/ui"
 import * as Log from "@mendcode/core/util/log"
@@ -10,7 +13,7 @@ import { errorMessage } from "@/util/error"
 import { withTimeout } from "@/util/timeout"
 import { withNetworkOptions, resolveNetworkOptionsNoConfig } from "@/cli/network"
 import { Filesystem } from "@/util/filesystem"
-import type { GlobalEvent } from "@mendcode/sdk/v2"
+import { createOpencodeClient, type GlobalEvent } from "@mendcode/sdk/v2"
 import type { EventSource } from "./context/sdk"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
 import { writeHeapSnapshot } from "v8"
@@ -23,12 +26,267 @@ import {
 } from "@mendcode/core/util/opencode-process"
 import { validateSession } from "./validate-session"
 import { loadMendTuiProfile } from "@/mend/profile"
+import { ServerAuth } from "@/server/auth"
+import { SharedServer, type SharedServerClientLease, type SharedServerState } from "./shared-server"
+import { isProcessMemoryUsage, processMemoryUsage, type DiagnosticsSnapshot } from "@/util/process-memory"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
 }
 
 type RpcClient = ReturnType<typeof Rpc.client<typeof rpc>>
+
+type ThreadTransport = {
+  url: string
+  fetch?: typeof fetch
+  headers?: RequestInit["headers"]
+  events?: EventSource
+}
+
+export function resolveSharedServerURL(value?: string, environment = process.env.MENDCODE_SERVER_URL) {
+  const raw = value || environment
+  if (!raw) return
+
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    throw new Error("Invalid MendCode server URL")
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("MendCode server URL must use http or https")
+  }
+  if (url.username || url.password) {
+    throw new Error("MendCode server URL must not contain credentials")
+  }
+  return url.toString()
+}
+
+async function probeSharedServer(input: { url: string; directory: string; headers?: RequestInit["headers"] }) {
+  const client = createOpencodeClient({
+    baseUrl: input.url,
+    directory: input.directory,
+    headers: input.headers,
+    signal: AbortSignal.timeout(5_000),
+  })
+  await client.global.health({ throwOnError: true })
+  await client.session.list({ limit: 1 }, { throwOnError: true })
+}
+
+function sharedServerConnection(state: SharedServerState) {
+  return {
+    url: state.url,
+    headers: ServerAuth.headers({ username: state.username, password: state.password }),
+  }
+}
+
+type LocalSharedServerConnection = ReturnType<typeof sharedServerConnection> & {
+  lease: SharedServerClientLease
+}
+
+async function connectToLocalSharedServer(directory: string, runtimeID: string, lease?: SharedServerClientLease) {
+  const state = await SharedServer.readState()
+  if (!state || state.runtimeID !== runtimeID) return
+  const connection = sharedServerConnection(state)
+  try {
+    await probeSharedServer({ ...connection, directory })
+    return {
+      ...connection,
+      lease: lease ?? (await SharedServer.acquireClientLease()),
+    }
+  } catch {
+    return
+  }
+}
+
+async function waitForLocalSharedServer(
+  directory: string,
+  runtimeID: string,
+  lease?: SharedServerClientLease,
+  timeoutMs = 12_000,
+) {
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    const connection = await connectToLocalSharedServer(directory, runtimeID, lease)
+    if (connection) return connection
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  return
+}
+
+async function stopLocalSharedServer(pid: number) {
+  if (pid === process.pid || !SharedServer.isProcessAlive(pid)) return true
+  try {
+    process.kill(pid, "SIGTERM")
+  } catch {
+    return !SharedServer.isProcessAlive(pid)
+  }
+
+  const deadline = Date.now() + 2_000
+  while (Date.now() < deadline) {
+    if (!SharedServer.isProcessAlive(pid)) return true
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  return !SharedServer.isProcessAlive(pid)
+}
+
+export function resolveRuntimeEntrypoint(entry: string | undefined, runtimeCwd: string) {
+  if (!entry || !/(^|[\\/])src[\\/]index\.(?:ts|js)$/.test(entry)) return
+  if (entry.includes("$bunfs") || entry.includes("~BUN")) return
+  const resolved = path.isAbsolute(entry) ? entry : path.resolve(runtimeCwd, entry)
+  if (!existsSync(resolved)) return
+  return resolved
+}
+
+function runtimeEntrypoint(runtimeCwd: string) {
+  return resolveRuntimeEntrypoint(process.argv[1], runtimeCwd)
+}
+
+function sharedServerCommand(runtimeCwd: string) {
+  const entry = runtimeEntrypoint(runtimeCwd)
+  if (!entry) {
+    return {
+      command: process.execPath,
+      args: ["serve", "--hostname", "127.0.0.1", "--port", "0"],
+      cwd: runtimeCwd,
+    }
+  }
+
+  const packageRoot = path.dirname(path.dirname(entry))
+  return {
+    command: process.execPath,
+    args: [
+      "--cwd",
+      packageRoot,
+      "--no-install",
+      "--conditions=browser",
+      entry,
+      "serve",
+      "--hostname",
+      "127.0.0.1",
+      "--port",
+      "0",
+    ],
+    cwd: packageRoot,
+  }
+}
+
+function sharedServerEnvironment(credentials: ReturnType<typeof SharedServer.credentials>, runtimeID: string) {
+  const env = { ...process.env }
+  for (const key of [
+    "MENDCODE_ROOT",
+    "OPENCODE_ROOT",
+    "MENDCODE_CONFIG_DIR",
+    "OPENCODE_CONFIG_DIR",
+    "MENDCODE_CONFIG",
+    "OPENCODE_CONFIG",
+    "MENDCODE_DB",
+    "OPENCODE_DB",
+    "MENDCODE_TUI_CONFIG",
+    "OPENCODE_TUI_CONFIG",
+    "MENDCODE_SHELL_CWD",
+    "MENDCODE_PUBLIC_BIN",
+    "OPENCODE_PROCESS_ROLE",
+    "OPENCODE_RUN_ID",
+    "MENDCODE_SHARED_SERVER_RUNTIME_ID",
+  ]) {
+    delete env[key]
+  }
+  return {
+    ...env,
+    MENDCODE_SERVER_USERNAME: credentials.username,
+    MENDCODE_SERVER_PASSWORD: credentials.password,
+    OPENCODE_SERVER_USERNAME: credentials.username,
+    OPENCODE_SERVER_PASSWORD: credentials.password,
+    MENDCODE_SHARED_SERVER_STATE_FILE: SharedServer.statePath(),
+    MENDCODE_SHARED_SERVER_RUNTIME_ID: runtimeID,
+  }
+}
+
+async function sharedServerRuntimeID(runtimeCwd: string) {
+  const entry = runtimeEntrypoint(runtimeCwd)
+  const executable = entry || process.execPath
+  const metadata = await stat(executable).catch(() => undefined)
+  return [executable, metadata?.size ?? "unknown", metadata?.mtimeMs ?? "unknown"].join(":")
+}
+
+async function ensureLocalSharedServer(input: {
+  directory: string
+  runtimeCwd: string
+  lease?: SharedServerClientLease
+}): Promise<LocalSharedServerConnection | undefined> {
+  const runtimeID = await sharedServerRuntimeID(input.runtimeCwd)
+  const existing = await connectToLocalSharedServer(input.directory, runtimeID, input.lease)
+  if (existing) return existing
+
+  const release = await SharedServer.acquireLock()
+  if (!release) return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
+
+  let child: ChildProcess | undefined
+  let connected = false
+  try {
+    const startedByAnotherClient = await connectToLocalSharedServer(input.directory, runtimeID, input.lease)
+    if (startedByAnotherClient) {
+      connected = true
+      return startedByAnotherClient
+    }
+
+    const state = await SharedServer.readState()
+    if (state) {
+      const activeClients = await SharedServer.activeClientLeaseCount()
+      const effectiveClients = activeClients + (input.lease ? 0 : 1)
+      const live = SharedServer.isProcessAlive(state.pid)
+      const runtimeMatches = state.runtimeID === runtimeID
+
+      if (!runtimeMatches && live && activeClients > 0) {
+        // Keep clients on the old runtime, but let this client start a fresh
+        // server instead of silently inheriting stale code.
+        await SharedServer.clearState()
+      } else {
+        const canReplace =
+          !live ||
+          SharedServer.shouldReplaceLiveServer({
+            pid: state.pid,
+            currentPid: process.pid,
+            activeClients: effectiveClients,
+          })
+        if (!canReplace) return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
+        if (!(await stopLocalSharedServer(state.pid))) return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
+        await SharedServer.clearStateIfOwned(state.pid)
+      }
+    }
+
+    await SharedServer.clearState()
+    const credentials = SharedServer.credentials()
+    const command = sharedServerCommand(input.runtimeCwd)
+    child = spawn(command.command, command.args, {
+      cwd: command.cwd,
+      env: sharedServerEnvironment(credentials, runtimeID),
+      detached: true,
+      stdio: "ignore",
+    })
+    child.on("error", (error) => {
+      Log.Default.warn("shared server process failed to start", {
+        command: command.command,
+        args: command.args,
+        cwd: command.cwd,
+        error: errorMessage(error),
+      })
+    })
+    child.unref()
+
+    const started = await waitForLocalSharedServer(input.directory, runtimeID, input.lease)
+    if (!started) return
+    connected = true
+    return started
+  } catch {
+    return
+  } finally {
+    if (!connected) child?.kill()
+    await release()
+  }
+}
 
 function createWorkerFetch(client: RpcClient): typeof fetch {
   const fn = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -70,6 +328,17 @@ async function input(value?: string) {
   if (!value) return piped
   if (!piped) return value
   return piped + "\n" + value
+}
+
+async function readServerDiagnostics(transport: ThreadTransport) {
+  const request = transport.fetch ?? fetch
+  const response = await request(new URL("/global/diagnostics/memory", transport.url), {
+    headers: transport.headers,
+  })
+  if (!response.ok) throw new Error(`diagnostics endpoint returned HTTP ${response.status}`)
+  const value: unknown = await response.json()
+  if (!isProcessMemoryUsage(value)) throw new Error("diagnostics endpoint returned an invalid response")
+  return value
 }
 
 export function resolveThreadDirectory(project?: string, envPWD = process.env.PWD, cwd = process.cwd()) {
@@ -118,6 +387,20 @@ export const TuiThreadCommand = cmd({
       .option("agent", {
         type: "string",
         describe: "agent to use",
+      })
+      .option("server-url", {
+        type: "string",
+        describe:
+          "connect to an existing MendCode server instead of starting a local worker (or use MENDCODE_SERVER_URL)",
+      })
+      .option("isolated", {
+        type: "boolean",
+        describe: "run with a private local worker instead of the shared local server",
+      })
+      .option("diagnostics", {
+        type: "boolean",
+        default: false,
+        describe: "enable the on-demand diagnostics commands",
       }),
   handler: async (args) => {
     // Keep ENABLE_PROCESSED_INPUT cleared even if other code flips it.
@@ -127,7 +410,6 @@ export const TuiThreadCommand = cmd({
       // Must be the very first thing — disables CTRL_C_EVENT before any Worker
       // spawn or async work so the OS cannot kill the process group.
       win32DisableProcessedInput()
-
       if (args.fork && !args.continue && !args.session) {
         UI.error("--fork requires --continue or --session")
         process.exitCode = 1
@@ -136,8 +418,8 @@ export const TuiThreadCommand = cmd({
 
       // Resolve relative --project paths from PWD, then use the real cwd after
       // chdir so the thread and worker share the same directory key.
+      const runtimeCwd = process.cwd()
       const next = resolveThreadDirectory(args.project)
-      const file = await target()
       try {
         process.chdir(next)
       } catch {
@@ -145,29 +427,88 @@ export const TuiThreadCommand = cmd({
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
+      const network = resolveNetworkOptionsNoConfig(args)
+      let sharedServerURL: string | undefined
+      try {
+        sharedServerURL = resolveSharedServerURL(args.serverUrl)
+      } catch (error) {
+        UI.error(errorMessage(error))
+        process.exitCode = 1
+        return
+      }
+      const networkOptionSet =
+        process.argv.includes("--port") ||
+        process.argv.includes("--hostname") ||
+        process.argv.includes("--mdns") ||
+        network.mdns ||
+        network.port !== 0 ||
+        network.hostname !== "127.0.0.1"
+
+      if (sharedServerURL && networkOptionSet) {
+        UI.error("--server-url cannot be combined with --port, --hostname, or --mdns")
+        process.exitCode = 1
+        return
+      }
+
+      let serverHeaders: RequestInit["headers"] = sharedServerURL ? ServerAuth.headers() : undefined
+      let serverURL = sharedServerURL
+      if (serverURL) {
+        try {
+          await probeSharedServer({ url: serverURL, directory: cwd, headers: serverHeaders })
+        } catch (error) {
+          UI.println(
+            UI.Style.TEXT_WARNING_BOLD +
+              "! " +
+              UI.Style.TEXT_NORMAL +
+              `Server unavailable; falling back to the local runtime. ${errorMessage(error)}`,
+          )
+          serverURL = undefined
+        }
+      }
+
+      const isolated =
+        args.isolated ||
+        process.env.MENDCODE_DISABLE_SHARED_SERVER === "1" ||
+        process.env.OPENCODE_DISABLE_SHARED_SERVER === "1"
+      let localSharedServer: LocalSharedServerConnection | undefined
+      if (
+        SharedServer.shouldUseSharedServer({
+          serverURL,
+          isolated,
+          networkOptionSet,
+        })
+      ) {
+        localSharedServer = await ensureLocalSharedServer({ directory: cwd, runtimeCwd })
+        if (localSharedServer) {
+          serverURL = localSharedServer.url
+          serverHeaders = localSharedServer.headers
+        }
+      }
+
+      const file = serverURL ? undefined : await target()
       const env = sanitizedProcessEnv({
         [OPENCODE_PROCESS_ROLE]: "worker",
         [OPENCODE_RUN_ID]: ensureRunID(),
       })
-
-      const worker = new Worker(file, {
-        env,
-      })
-      worker.onerror = (e) => {
-        Log.Default.error("thread error", {
-          message: e.message,
-          filename: e.filename,
-          lineno: e.lineno,
-          colno: e.colno,
-          error: e.error,
-        })
+      const worker = file ? new Worker(file, { env }) : undefined
+      if (worker) {
+        worker.onerror = (e) => {
+          Log.Default.error("thread error", {
+            message: e.message,
+            filename: e.filename,
+            lineno: e.lineno,
+            colno: e.colno,
+            error: e.error,
+          })
+        }
       }
 
-      const client = Rpc.client<typeof rpc>(worker)
+      const client = worker ? Rpc.client<typeof rpc>(worker) : undefined
       const error = (e: unknown) => {
         Log.Default.error("process error", { error: errorMessage(e) })
       }
       const reload = () => {
+        if (!client) return
         client.call("reload", undefined).catch((err) => {
           Log.Default.warn("worker reload failed", {
             error: errorMessage(err),
@@ -185,6 +526,14 @@ export const TuiThreadCommand = cmd({
         process.off("uncaughtException", error)
         process.off("unhandledRejection", error)
         process.off("SIGUSR2", reload)
+        const lease = localSharedServer?.lease
+        localSharedServer = undefined
+        await lease?.release().catch((error) => {
+          Log.Default.warn("shared server lease release failed", {
+            error: errorMessage(error),
+          })
+        })
+        if (!client || !worker) return
         await withTimeout(client.call("shutdown", undefined), 5000).catch((error) => {
           Log.Default.warn("worker shutdown failed", {
             error: errorMessage(error),
@@ -197,7 +546,6 @@ export const TuiThreadCommand = cmd({
       const config = await TuiConfig.get()
       const mendProfile = await loadMendTuiProfile(cwd, config)
 
-      const network = resolveNetworkOptionsNoConfig(args)
       const external =
         process.argv.includes("--port") ||
         process.argv.includes("--hostname") ||
@@ -206,47 +554,96 @@ export const TuiThreadCommand = cmd({
         network.port !== 0 ||
         network.hostname !== "127.0.0.1"
 
-      const transport = external
+      let transport: ThreadTransport = serverURL
         ? {
-            url: (await client.call("server", network)).url,
-            fetch: undefined,
-            events: undefined,
+            url: serverURL,
+            headers: serverHeaders,
           }
-        : {
-            url: "http://opencode.internal",
-            fetch: createWorkerFetch(client),
-            events: createEventSource(client),
+        : external
+          ? {
+              url: (await client!.call("server", network)).url,
+              fetch: undefined,
+              headers: ServerAuth.headers(),
+              events: undefined,
+            }
+          : {
+              url: "http://opencode.internal",
+              fetch: createWorkerFetch(client!),
+              events: createEventSource(client!),
+            }
+
+      const reconnect = localSharedServer
+        ? async () => {
+            const current = localSharedServer
+            if (!current) throw new Error("local shared server connection is unavailable")
+            const refreshed = await ensureLocalSharedServer({
+              directory: cwd,
+              runtimeCwd,
+              lease: current.lease,
+            })
+            if (!refreshed) throw new Error("local shared server is unavailable")
+            localSharedServer = refreshed
+            serverURL = refreshed.url
+            serverHeaders = refreshed.headers
+            transport.url = refreshed.url
+            transport.headers = refreshed.headers
+            return { url: refreshed.url, headers: refreshed.headers }
           }
+        : undefined
 
       try {
-        await validateSession({
-          url: transport.url,
-          sessionID: args.session,
-          directory: cwd,
-          fetch: transport.fetch,
-        })
-      } catch (error) {
-        UI.error(errorMessage(error))
-        process.exitCode = 1
-        return
-      }
+        try {
+          await validateSession({
+            url: transport.url,
+            sessionID: args.session,
+            directory: cwd,
+            fetch: transport.fetch,
+            headers: transport.headers,
+          })
+        } catch (error) {
+          UI.error(errorMessage(error))
+          process.exitCode = 1
+          return
+        }
 
-      setTimeout(() => {
-        client.call("checkUpgrade", { directory: cwd }).catch(() => {})
-      }, 1000).unref?.()
+        if (client) {
+          setTimeout(() => {
+            client.call("checkUpgrade", { directory: cwd }).catch(() => {})
+          }, 1000).unref?.()
+        }
 
-      try {
         await tui({
           url: transport.url,
-          async onSnapshot() {
-            const tui = writeHeapSnapshot("tui.heapsnapshot")
-            const server = await client.call("snapshot", undefined)
-            return [tui, server]
-          },
+          ...(args.diagnostics
+            ? {
+                async onSnapshot() {
+                  const tui = writeHeapSnapshot("tui.heapsnapshot")
+                  if (!client) return [tui]
+                  const server = await client.call("snapshot", undefined)
+                  return [tui, server]
+                },
+                async onDiagnostics(): Promise<DiagnosticsSnapshot> {
+                  const tui = processMemoryUsage("tui")
+                  try {
+                    return {
+                      tui,
+                      server: await readServerDiagnostics(transport),
+                    }
+                  } catch (error) {
+                    return {
+                      tui,
+                      serverError: errorMessage(error),
+                    }
+                  }
+                },
+              }
+            : {}),
           config,
           mendProfile,
+          reconnect: reconnect ? { refresh: reconnect } : undefined,
           directory: cwd,
           fetch: transport.fetch,
+          headers: transport.headers,
           events: transport.events,
           args: {
             continue: args.continue,

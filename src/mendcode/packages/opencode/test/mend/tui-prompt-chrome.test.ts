@@ -8,6 +8,7 @@ import {
 } from "../../src/mend/tui/prompt-status"
 import { resolveActivityPhase } from "../../src/cli/cmd/tui/util/activity-signal"
 import { activityMessagesForPhase, resolveTuiPresentation, shouldDisplayReasoning } from "../../src/mend/tui/presentation"
+import { activityMascotText } from "../../src/mend/tui/mascot"
 import { ConfigKeybinds } from "../../src/config/keybinds"
 
 describe("mend tui prompt chrome", () => {
@@ -20,6 +21,10 @@ describe("mend tui prompt chrome", () => {
     expect(defaultTuiProfile().workingIndicator.showTokenUsage).toBe(true)
     expect(defaultTuiProfile().presentation.profile).toBe("mendcode")
     expect(defaultTuiProfile().presentation.activity.maxLines).toBe(1)
+    expect(defaultTuiProfile().presentation.compaction.style).toBe("arcade")
+    expect(defaultTuiProfile().presentation.compaction.showProgress).toBe(true)
+    expect(defaultTuiProfile().presentation.compaction.allowScratchpad).toBe(true)
+    expect(defaultTuiProfile().presentation.compaction.arcade).toBe("snake")
     expect(defaultTuiProfile().layout.zones.session.stickyUserHeader).toBe(true)
     expect(defaultTuiProfile().layout.zones.session.submitScrollMode).toBe("bottom")
     expect(validateMendTuiProfile(defaultTuiProfile()).ok).toBe(true)
@@ -146,8 +151,31 @@ describe("mend tui prompt chrome", () => {
 
   test("presentation profile resolves raw minimal and mendcode defaults", () => {
     expect(resolveTuiPresentation({ profile: "raw" }).activity.style).toBe("raw")
+    expect(resolveTuiPresentation({ profile: "raw" }).compaction.style).toBe("quiet")
     expect(resolveTuiPresentation({ profile: "minimal" }).activity.maxLines).toBe(1)
+    expect(resolveTuiPresentation({ profile: "minimal" }).compaction.style).toBe("minimal")
     expect(resolveTuiPresentation({ profile: "mendcode" }).reasoning.defaultVisibility).toBe("collapsed")
+    expect(resolveTuiPresentation({ profile: "mendcode" }).compaction.style).toBe("arcade")
+  })
+
+  test("presentation compaction overrides stay backward compatible", () => {
+    const resolved = resolveTuiPresentation({
+      profile: "mendcode",
+      compaction: {
+        style: "arcade",
+        showProgress: false,
+        allowScratchpad: true,
+        arcade: "stars",
+      },
+    })
+
+    expect(resolved.compaction).toEqual({
+      style: "arcade",
+      showProgress: false,
+      allowScratchpad: true,
+      arcade: "stars",
+    })
+    expect(resolveTuiPresentation({ profile: "mendcode" }).compaction.allowScratchpad).toBe(true)
   })
 
   test("raw and full presentations can show reasoning before completion", () => {
@@ -234,7 +262,9 @@ describe("mend tui prompt chrome", () => {
     })
 
     expect(activityMessagesForPhase(profile, "testing")).toEqual(["Testing..."])
+    expect(activityMessagesForPhase(profile, "subagents")).toEqual(["Waiting for subagents..."])
     expect(activityMessagesForPhase(profile, "memory")).toEqual(["Preparing memory..."])
+    expect(activityMessagesForPhase(profile, "compacting")).toEqual(["Compacting..."])
     expect(activityMessagesForPhase(profile, "blocked")).toEqual(["Waiting..."])
     expect(validateMendTuiProfile(profile).ok).toBe(true)
   })
@@ -265,7 +295,11 @@ describe("mend tui prompt chrome", () => {
     expect(resolveActivityPhase({ status: "busy", toolNames: ["upload_artifact"] })).toBe("uploading")
     expect(resolveActivityPhase({ status: "busy", toolNames: ["download_file"] })).toBe("downloading")
     expect(resolveActivityPhase({ status: "busy", toolNames: ["pnpm_install"] })).toBe("installing")
+    expect(resolveActivityPhase({ status: "busy", activeToolNames: ["task"] })).toBe("subagents")
+    expect(resolveActivityPhase({ status: "busy", statusKind: "subagent-wait" })).toBe("subagents")
     expect(resolveActivityPhase({ status: "busy", statusKind: "memory-extract" })).toBe("memory")
+    expect(resolveActivityPhase({ status: "busy", statusKind: "compaction" })).toBe("compacting")
+    expect(activityMascotText(defaultTuiProfile(), "compacting")).toContain("c")
   })
 
   test("resolves presets into prompt border sides", () => {
@@ -296,6 +330,7 @@ describe("mend tui prompt chrome", () => {
     expect(keybinds.todo_toggle).toBe("ctrl+t")
     expect(keybinds.variant_cycle).toBe("f3")
     expect(keybinds.variant_list).toBe("shift+f3")
+    expect(keybinds.help).toBe("?")
   })
 
   test("prompt status supports per-side scripts and preserves legacy left script fallback", () => {

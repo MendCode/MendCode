@@ -34,6 +34,31 @@ function separateGeneratedTextFromHeadings(segments: StyledPlanMarkdownSegment[]
   })
 }
 
+function markdownSegments(content: string): StyledPlanMarkdownSegment[] {
+  const result: StyledPlanMarkdownSegment[] = []
+  const block: string[] = []
+  let inFence = false
+
+  const flush = () => {
+    if (block.length === 0) return
+    result.push({ kind: "markdown", content: block.join("\n") })
+    block.length = 0
+  }
+
+  for (const line of content.split("\n")) {
+    block.push(line)
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      if (!inFence) flush()
+      continue
+    }
+    if (!inFence && line.trim() === "") flush()
+  }
+
+  flush()
+  return result
+}
+
 export function styledPlanMarkdownSegments(content: string): StyledPlanMarkdownSegment[] {
   const segments: StyledPlanMarkdownSegment[] = []
   const markdown: string[] = []
@@ -42,7 +67,7 @@ export function styledPlanMarkdownSegments(content: string): StyledPlanMarkdownS
 
   const flushMarkdown = () => {
     if (markdown.length === 0) return
-    segments.push({ kind: "markdown", content: markdown.join("\n") })
+    segments.push(...markdownSegments(markdown.join("\n")))
     markdown.length = 0
   }
   const flushText = () => {

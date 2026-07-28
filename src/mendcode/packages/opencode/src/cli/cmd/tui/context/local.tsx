@@ -15,6 +15,9 @@ import { Filesystem } from "@/util/filesystem"
 import { readModelsConfig, type ModelRole } from "@/mend/config/models"
 import { useMendTuiProfile } from "./mend"
 import { useRoute } from "./route"
+import { nextPromptVariant, resolveSelectedPromptModel, resolveSelectedPromptVariant } from "../component/prompt/agent"
+
+type ModelSource = "user" | "hydrated" | "agent"
 
 export function parseModel(model: string) {
   const [providerID, ...rest] = model.split("/")
@@ -141,7 +144,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             modelID: string
           }
         >
-        modelSource: Record<string, "user" | "hydrated" | undefined>
+        modelSource: Record<string, ModelSource | undefined>
         modelUpdatedAt: Record<string, number | undefined>
         recent: {
           providerID: string
@@ -152,7 +155,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           modelID: string
         }[]
         variant: Record<string, string | undefined>
-        variantSource: Record<string, "user" | "hydrated" | undefined>
+        variantSource: Record<string, ModelSource | undefined>
         variantUpdatedAt: Record<string, number | undefined>
       }>({
         ready: false,
@@ -293,18 +296,57 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         return `agent:${name}`
       })
 
+      function scopedAgentInfo() {
+        return sync.data.agent.find((item) => item.name === scopedModelAgentName() && !item.hidden) ?? agent.current()
+      }
+
+      function configuredScopedAgentModel() {
+        const a = scopedAgentInfo()
+        return getFirstValidModel(
+          () => a && modelStore.mendRoles[a.name],
+          () => a && a.model,
+        )
+      }
+
       const currentModel = createMemo(() => {
-        const a = sync.data.agent.find((item) => item.name === scopedModelAgentName() && !item.hidden) ?? agent.current()
+        const a = scopedAgentInfo()
         const key = scopedModelKey()
+        const scopedModel = key ? modelStore.model[key] : undefined
+        const scopedSource = key ? modelStore.modelSource[key] : undefined
         return (
           getFirstValidModel(
-            () => (key ? modelStore.model[key] : undefined),
+            () => (scopedSource === "agent" ? undefined : scopedModel),
             () => a && modelStore.mendRoles[a.name],
+            () => (scopedSource === "agent" ? scopedModel : undefined),
             () => a && a.model,
             fallbackModel,
           ) ?? undefined
         )
       })
+
+      function routePromptModel() {
+        const localModel = currentModel()
+        if (route.data.type !== "session") return localModel
+        const session = sync.session.get(route.data.sessionID)
+        const user = (sync.data.message[route.data.sessionID] ?? []).findLast((item) => item.role === "user")
+        const key = scopedModelKey()
+        const source = key ? modelStore.modelSource[key] : undefined
+        const override = key && (source === "user" || source === "agent") ? modelStore.model[key] : undefined
+        const sessionAgent = sync.data.agent.find((item) => item.name === session?.agent && !item.hidden)
+        return resolveSelectedPromptModel({
+          hasSession: true,
+          sessionUsesSubagent: Boolean(
+            sessionAgent?.name && !agent.list().some((item) => item.name === sessionAgent.name),
+          ),
+          localModel,
+          localOverride: override,
+          localOverrideUpdatedAt: key ? modelStore.modelUpdatedAt[key] : undefined,
+          userModel: user?.role === "user" ? user.model : undefined,
+          userModelCreatedAt: user?.time.created,
+          sessionModel: session?.model,
+          agentModel: sessionAgent?.model,
+        })
+      }
 
       function variantScopeKey(model: { providerID: string; modelID: string } | undefined) {
         if (!model) return undefined
@@ -314,7 +356,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
       function setModel(
         model: { providerID: string; modelID: string },
-        options?: { recent?: boolean; ifUnset?: boolean; source?: "user" | "hydrated" },
+        options?: { recent?: boolean; ifUnset?: boolean; source?: ModelSource },
       ) {
         let updated = false
         batch(() => {
@@ -333,15 +375,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const existing = modelStore.model[key]
           if (
             source === "hydrated" &&
-            modelStore.modelSource[key] === "user" &&
+            (modelStore.modelSource[key] === "user" || modelStore.modelSource[key] === "agent") &&
             existing &&
             (existing.providerID !== model.providerID || existing.modelID !== model.modelID)
           ) {
             return
           }
           setModelStore("model", key, model)
-          if (source === "user" || modelStore.modelSource[key] !== "user") setModelStore("modelSource", key, source)
-          if (source === "user") setModelStore("modelUpdatedAt", key, Date.now())
+          if (source === "user" || source === "agent" || modelStore.modelSource[key] !== "user") setModelStore("modelSource", key, source)
+          if (source === "user" || source === "agent") setModelStore("modelUpdatedAt", key, Date.now())
           updated = true
           if (options?.recent) {
             const uniq = uniqueBy([model, ...modelStore.recent], (x) => `${x.providerID}/${x.modelID}`)
@@ -359,23 +401,45 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       function selectedVariant(model?: { providerID: string; modelID: string }) {
         const m = model ?? currentModel()
         if (!m) return undefined
-        const a = agent.current()
+        const a = scopedAgentInfo()
         const key = variantScopeKey(m)
         if (!key) return undefined
-        if (modelStore.variant[key] !== undefined) {
-          const value = modelStore.variant[key]
-          return value === "default" ? undefined : value
-        }
+        const value = modelStore.variant[key]
+        const stored = value === "default" ? undefined : value
+        const source = modelStore.variantSource[key]
         const role = a ? modelStore.mendRoles[a.name] : undefined
-        if (role?.providerID === m.providerID && role.modelID === m.modelID) return role.variant ?? undefined
-        return undefined
+        const localVariant = value !== undefined && source !== "agent"
+          ? stored
+          : role?.providerID === m.providerID && role.modelID === m.modelID
+            ? role.variant ?? undefined
+            : stored
+        const session = route.data.type === "session" ? sync.session.get(route.data.sessionID) : undefined
+        const user = route.data.type === "session"
+          ? (sync.data.message[route.data.sessionID] ?? []).findLast((item) => item.role === "user")
+          : undefined
+        const userModel = user?.role === "user" && user.model.providerID === m.providerID && user.model.modelID === m.modelID
+          ? user.model
+          : undefined
+        const sessionModelID = session?.model?.id
+        const sessionModel = session?.model?.providerID === m.providerID && sessionModelID === m.modelID
+          ? session.model
+          : undefined
+        return resolveSelectedPromptVariant({
+          hasSession: route.data.type === "session",
+          localVariant,
+          hasLocalVariantOverride: value !== undefined && (source === "user" || source === "agent"),
+          localVariantOverrideUpdatedAt: modelStore.variantUpdatedAt[key],
+          userModel,
+          userModelCreatedAt: userModel ? user?.time.created : undefined,
+          sessionModel,
+        })
       }
 
       function setVariant(
         value: string | undefined,
         options?: {
           ifUnset?: boolean
-          source?: "user" | "hydrated"
+          source?: ModelSource
           model?: { providerID: string; modelID: string }
         },
       ) {
@@ -387,15 +451,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         const source = options?.source ?? "user"
         if (
           source === "hydrated" &&
-          modelStore.variantSource[key] === "user" &&
+          (modelStore.variantSource[key] === "user" || modelStore.variantSource[key] === "agent") &&
           modelStore.variant[key] !== undefined &&
           modelStore.variant[key] !== (value ?? "default")
         ) {
           return
         }
         setModelStore("variant", key, value ?? "default")
-        if (source === "user" || modelStore.variantSource[key] !== "user") setModelStore("variantSource", key, source)
-        if (source === "user") setModelStore("variantUpdatedAt", key, Date.now())
+        if (source === "user" || source === "agent" || modelStore.variantSource[key] !== "user") setModelStore("variantSource", key, source)
+        if (source === "user" || source === "agent") setModelStore("variantUpdatedAt", key, Date.now())
       }
 
       return {
@@ -404,8 +468,16 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           const current = currentModel()
           if (!current) return false
           const variant = selectedVariant(current)
-          const updated = setModel(current, { recent: options?.recent })
-          if (updated) setVariant(variant, { model: current })
+          const updated = setModel(current, { recent: options?.recent, source: "user" })
+          if (updated) setVariant(variant, { model: current, source: "user" })
+          return updated
+        },
+        pinAgentCurrent(options?: { recent?: boolean }) {
+          const current = configuredScopedAgentModel() ?? currentModel()
+          if (!current) return false
+          const variant = selectedVariant(current)
+          const updated = setModel(current, { recent: options?.recent, source: "agent" })
+          if (updated) setVariant(variant, { model: current, source: "agent" })
           return updated
         },
         override() {
@@ -419,8 +491,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         overrideInfo() {
           const key = scopedModelKey()
           if (!key) return undefined
-          if (modelStore.modelSource[key] !== "user") return undefined
-          const model = modelStore.model[key]
+          if (modelStore.modelSource[key] !== "user" && modelStore.modelSource[key] !== "agent") return undefined
+          const model = modelStore.modelSource[key] === "agent" ? currentModel() : modelStore.model[key]
           if (!model || !isModelValid(model)) return undefined
           return {
             model,
@@ -535,12 +607,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           hasOverride(model?: { providerID: string; modelID: string }) {
             const key = variantScopeKey(model ?? currentModel())
             if (!key) return false
-            return modelStore.variantSource[key] === "user"
+            return modelStore.variantSource[key] === "user" || modelStore.variantSource[key] === "agent"
           },
           overrideInfo(model?: { providerID: string; modelID: string }) {
             const key = variantScopeKey(model ?? currentModel())
             if (!key) return undefined
-            if (modelStore.variantSource[key] !== "user") return undefined
+            if (modelStore.variantSource[key] !== "user" && modelStore.variantSource[key] !== "agent") return undefined
             const raw = modelStore.variant[key]
             return {
               variant: raw === "default" ? undefined : raw,
@@ -575,19 +647,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           },
           set: setVariant,
           cycle() {
-            const variants = this.list()
+            const model = routePromptModel()
+            const variants = this.list(model)
             if (variants.length === 0) return
-            const current = this.current()
-            if (!current) {
-              this.set(variants[0])
-              return
-            }
-            const index = variants.indexOf(current)
-            if (index === -1 || index === variants.length - 1) {
-              this.set(undefined)
-              return
-            }
-            this.set(variants[index + 1])
+            this.set(nextPromptVariant(variants, this.current(model)), { model })
           },
         },
       }

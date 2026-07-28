@@ -6,6 +6,7 @@ import { Server } from "../../src/server/server"
 import { Session as SessionNs } from "@/session/session"
 import { MessageV2 } from "../../src/session/message-v2"
 import { MessageID, PartID, type SessionID } from "../../src/session/schema"
+import { ModelID, ProviderID } from "../../src/provider/schema"
 import * as Log from "@mendcode/core/util/log"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 
@@ -117,6 +118,56 @@ describe("session messages endpoint", () => {
           expect(res.status).toBe(200)
           const body = (await res.json()) as MessageV2.WithParts[]
           expect(body.map((item) => item.info.id)).toEqual(ids)
+
+          await svc.remove(session.id)
+        },
+      }),
+    )
+  })
+
+  test("marks compacted tui pages as sparse", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await withoutWatcher(() =>
+      WithInstance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const session = await svc.create({})
+          const parentID = MessageID.ascending()
+          await svc.updateMessage({
+            id: parentID,
+            sessionID: session.id,
+            role: "user",
+            time: { created: 1 },
+            agent: "test",
+            model: { providerID: ProviderID.make("test"), modelID: ModelID.make("test") },
+          })
+          await svc.updatePart({
+            id: PartID.ascending(),
+            sessionID: session.id,
+            messageID: parentID,
+            type: "compaction",
+            auto: true,
+          })
+          await svc.updateMessage({
+            id: MessageID.ascending(),
+            sessionID: session.id,
+            parentID,
+            role: "assistant",
+            mode: "compaction",
+            agent: "compaction",
+            path: { cwd: tmp.path, root: tmp.path },
+            cost: 0,
+            tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+            providerID: ProviderID.make("test"),
+            modelID: ModelID.make("test"),
+            summary: true,
+            time: { created: 2, completed: 2 },
+          })
+
+          const response = await Server.Default().app.request(`/session/${session.id}/message?limit=2&view=tui`)
+          expect(response.status).toBe(200)
+          expect(response.headers.get("x-message-view-sparse")).toBe("true")
+          expect(response.headers.get("access-control-expose-headers")).toContain("X-Message-View-Sparse")
 
           await svc.remove(session.id)
         },

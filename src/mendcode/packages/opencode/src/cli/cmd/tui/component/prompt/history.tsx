@@ -57,6 +57,23 @@ export function promptHistoryRecordsForScope(records: readonly PromptHistoryReco
   return records.filter((record) => (scope ? record.scope === scope : !record.scope))
 }
 
+export function movePromptHistoryItems(input: {
+  items: readonly PromptInfo[]
+  index: number
+  direction: 1 | -1
+  currentPromptMatchesHistory: boolean
+}) {
+  if (!input.items.length) return undefined
+  if (!input.currentPromptMatchesHistory) return undefined
+  const next = input.index + input.direction
+  if (Math.abs(next) > input.items.length) return undefined
+  if (next > 0) return undefined
+  return {
+    index: next,
+    prompt: next === 0 ? { input: "", parts: [] } : input.items.at(next),
+  }
+}
+
 function historyScopeKey(scope?: PromptHistoryScope) {
   return scope || GLOBAL_SCOPE_KEY
 }
@@ -66,10 +83,24 @@ function serializeHistoryRecord(record: PromptHistoryRecord) {
   return JSON.stringify(record)
 }
 
+export function mergePromptHistoryRecords(input: {
+  loaded: readonly PromptHistoryRecord[]
+  pending: readonly PromptHistoryRecord[]
+}) {
+  return [...input.loaded, ...input.pending].slice(-MAX_HISTORY_ENTRIES)
+}
+
 export const { use: usePromptHistory, provider: PromptHistoryProvider } = createSimpleContext({
   name: "PromptHistory",
   init: () => {
     const historyPath = path.join(Global.Path.state, "prompt-history.jsonl")
+    let loaded = false
+    let pending: PromptHistoryRecord[] = []
+    let writes = Promise.resolve()
+    const queueWrite = (operation: () => Promise<void>) => {
+      writes = writes.then(operation, operation)
+    }
+
     onMount(async () => {
       const text = await Filesystem.readText(historyPath).catch(() => "")
       const lines = text
@@ -84,13 +115,16 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
         })
         .filter((line): line is PromptHistoryRecord => line !== undefined)
         .slice(-MAX_HISTORY_ENTRIES)
+      const merged = mergePromptHistoryRecords({ loaded: lines, pending })
+      pending = []
 
-      setStore("history", lines)
+      setStore("history", merged)
+      loaded = true
 
       // Rewrite file with only valid entries to self-heal corruption
-      if (lines.length > 0) {
-        const content = lines.map(serializeHistoryRecord).join("\n") + "\n"
-        writeFile(historyPath, content).catch(() => {})
+      if (merged.length > 0) {
+        const content = merged.map(serializeHistoryRecord).join("\n") + "\n"
+        queueWrite(() => writeFile(historyPath, content))
       }
     })
 
@@ -104,6 +138,7 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
         const scopeKey = historyScopeKey(scope)
         const scoped = promptHistoryRecordsForScope(store.history, scope)
         if (!scoped.length) return undefined
+        if (direction === 1 && input.length === 0) return undefined
         const index = store.indexByScope[scopeKey] ?? 0
         const current = scoped.at(index)?.prompt
         if (!current) return undefined
@@ -143,13 +178,21 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
           }),
         )
 
-        if (trimmed) {
-          const content = store.history.map(serializeHistoryRecord).join("\n") + "\n"
-          writeFile(historyPath, content).catch(() => {})
+        if (!loaded) {
+          pending.push(entry)
           return
         }
 
-        appendFile(historyPath, serializeHistoryRecord(entry) + "\n").catch(() => {})
+        if (trimmed) {
+          const content = store.history.map(serializeHistoryRecord).join("\n") + "\n"
+          queueWrite(() => writeFile(historyPath, content))
+          return
+        }
+
+        queueWrite(() => appendFile(historyPath, serializeHistoryRecord(entry) + "\n"))
+      },
+      items(scope?: PromptHistoryScope) {
+        return promptHistoryRecordsForScope(store.history, scope).map((record) => record.prompt)
       },
     }
   },

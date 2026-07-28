@@ -61,3 +61,4 @@ src/mendcode/packages/opencode/src/provider/models-snapshot.js
 
 # mflow local state
 .mflow/
+.mflowignore

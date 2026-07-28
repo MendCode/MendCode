@@ -12,6 +12,17 @@ const GlobalHealth = Schema.Struct({
   channel: Schema.String,
 })
 
+const ProcessMemory = Schema.Struct({
+  pid: Schema.Number,
+  role: Schema.String,
+  rss: Schema.Number,
+  heapTotal: Schema.Number,
+  heapUsed: Schema.Number,
+  external: Schema.Number,
+  arrayBuffers: Schema.Number,
+  uptimeSeconds: Schema.Number,
+})
+
 const GlobalEventSchema = Schema.Struct({
   directory: Schema.String,
   project: Schema.optional(Schema.String),
@@ -36,6 +47,7 @@ const GlobalUpgradeResult = Schema.Union([
 
 export const GlobalPaths = {
   health: "/global/health",
+  memory: "/global/diagnostics/memory",
   event: "/global/event",
   config: "/global/config",
   dispose: "/global/dispose",
@@ -52,6 +64,15 @@ export const GlobalApi = HttpApi.make("global").add(
           identifier: "global.health",
           summary: "Get health",
           description: "Get health information about the MendCode server.",
+        }),
+      ),
+      HttpApiEndpoint.get("memory", GlobalPaths.memory, {
+        success: described(ProcessMemory, "Current process memory usage"),
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "global.diagnostics.memory",
+          summary: "Get process memory usage",
+          description: "Get a manually requested, read-only memory sample for the current server process.",
         }),
       ),
       HttpApiEndpoint.get("event", GlobalPaths.event, {

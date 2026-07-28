@@ -12,14 +12,17 @@ Most visual settings are also available from the command palette inside the TUI:
 Ctrl+P -> Home identity
 Ctrl+P -> Home title text
 Ctrl+P -> Home title font
-Ctrl+P -> Home ASCII size
+Ctrl+P -> Home mascot ASCII
 Ctrl+P -> Home welcome mode
 Ctrl+P -> Home split panel
 Ctrl+P -> Prompt chrome
 Ctrl+P -> Prompt lead string
 Ctrl+P -> Prompt status placement
 Ctrl+P -> Chat presentation
+Ctrl+P -> Customize TUI
 ```
+
+The command palette currently edits the Home mascot directly. The compact session mascot is configured through the profile JSON or a TUI package; a dedicated per-state editor and first-class ASCII-pack importer are not available yet. Home art and session art are independent, so changing one does not overwrite the other.
 
 ## Mental Model
 
@@ -31,6 +34,51 @@ There are four layers:
 4. Runtime extensions: widgets, slots, footer entries, plugin routes, package-distributed themes, and scripts.
 
 Use the profile for stable product/team defaults. Use TUI plugins when behavior needs code, live data, custom routes, or dynamic UI.
+
+## Live TUI Customization
+
+For session chrome, use one command instead of hunting through separate appearance commands:
+
+```text
+Ctrl+P -> Customize TUI
+/customize
+```
+
+`Customize TUI` opens a grouped modal. Items marked `[on]`/`[off]` are live toggles: `Space` or `Enter` applies them immediately and the TUI does not restart. Profile entries such as Home identity, Home title, and Prompt chrome are actions, not toggles; `Enter` opens their editor and they never show a toggle state. The `Appearance` category is intentionally not exposed in the command palette. The defaults enable context usage, diff line count, session title, project location, and terminal window title; the changed-file count is off by default.
+
+The modal also exposes a deterministic random accent per session and maintenance actions. Changes are persisted in the TUI KV store under `mendcode_tui_customization`, while `terminal_title_enabled` remains a compatibility key for older profiles.
+
+### Terminal title and session accent
+
+The terminal title supports these tokens:
+
+| Token | Value |
+| --- | --- |
+| `{product}` | Active product name. |
+| `{session}` | Current session title or route label. |
+| `{route}` | Current TUI route. |
+| `{path}` | Active project path. |
+
+The public runtime API uses the same contract:
+
+```ts
+api.ui.runtime.customization.setTerminalTitle({
+  enabled: true,
+  template: "{product} · {session} · {path}",
+})
+api.ui.runtime.customization.setSessionAccent("random")
+api.ui.runtime.customization.setDiffFiles(true)
+```
+
+### Rollback
+
+To restore the default live chrome, choose `Reset TUI customization` in the modal or call:
+
+```ts
+api.ui.runtime.customization.reset()
+```
+
+This only resets the customization contract; it does not change profile files, sessions, messages, widgets, or project data.
 
 ## Recommended Product Profiles
 
@@ -296,29 +344,18 @@ That keeps the home screen logo textual and brand-like. It is the better choice 
 
 ## Mascot
 
-Mascot mode uses ASCII art as the home identity and, when enabled, as compact activity feedback.
+Mascot mode uses ASCII art as the home identity. Session activity mascot states are configured separately and can stay enabled with either Home identity mode.
 
 ```jsonc
 {
   "identity": {
     "productName": "MendCode",
     "logoMode": "mascot"
-  },
-  "surfaces": {
-    "homeLogo": {
-      "size": "default"
-    }
   }
 }
 ```
 
-Supported `surfaces.homeLogo.size` values:
-
-- `compact`
-- `default`
-- `large`
-
-You can replace the home mascot completely with `surfaces.homeLogo.text`:
+You can replace the home mascot completely with `surfaces.homeLogo.text` or `home.logo.text` in config:
 
 ```jsonc
 {
@@ -335,9 +372,13 @@ You can replace the home mascot completely with `surfaces.homeLogo.text`:
 
 Keep custom mascot art monospaced, low-height, and visually stable. The home screen adapts to terminal size; huge ASCII art will disappear on compact/tiny screens.
 
+### Change it from the TUI
+
+From Home, open `Ctrl+P` and choose **Home mascot ASCII**. Paste the multiline art, submit it, and MendCode switches Home to mascot mode. Submitting a blank value restores the default mascot. This changes only `surfaces.homeLogo.text`; it does not change the session activity mascot.
+
 ## Default Home Mascot
 
-Default `surfaces.homeLogo.size: "default"`:
+Default mascot:
 
 ```text
       .-.
@@ -345,31 +386,13 @@ Default `surfaces.homeLogo.size: "default"`:
     /|[+]|\
    /_|___|_\
       \_/
-```
-
-Compact uses the same default art:
-
-```text
-      .-.
-     (o o)
-    /|[+]|\
-   /_|___|_\
-      \_/
-```
-
-Large:
-
-```text
-        .-.
-     .-(o o)-.
-    /  |[+]|  \
-   /___|___|___\
-       \___/
 ```
 
 ## Activity Mascot States
 
-When `identity.logoMode` is `mascot`, the compact activity mascot can change with the current phase.
+The compact activity mascot above the session prompt can change with the current phase. It is independent from the Home identity mode, so Home can use a generated title while the session prompt still uses state-specific mascot art.
+
+The current built-in controls expose Home art, not individual session states. To customize the session mascot, edit the profile JSON or ship the profile through a TUI package. A single custom state is enough for a static pet; state-specific art can give the character different faces or poses while MendCode is thinking, reading, editing, running, testing, blocked, or done.
 
 The config lives at:
 
@@ -513,6 +536,50 @@ You can make it more branded:
 }
 ```
 
+## ASCII Art Slots and Sharing
+
+MendCode does not limit custom art to one kind of pet. The core profile has two independent ASCII slots:
+
+| Slot | Profile path | Use |
+| --- | --- | --- |
+| Home identity | `surfaces.homeLogo.text` plus `identity.logoMode: "mascot"` | Large static mascot, logo, or team mark on Home. |
+| Session activity | `presentation.activity.mascot` | Compact companion above the session prompt, including hover art and phase states. |
+
+A profile can customize either slot or both. A Home logo does not automatically become the session pet, and a session state set does not replace the Home identity. Banners, separators, prompt glyphs, and dynamic art belong in their corresponding profile fields or in TUI plugin slots; do not force every visual into the mascot field.
+
+### Shareable art profile
+
+Until a dedicated ASCII-pack manifest and importer exist, share art as a normal TUI profile fragment or as a package containing `tuiProfile`:
+
+```jsonc
+{
+  "identity": {
+    "logoMode": "mascot"
+  },
+  "surfaces": {
+    "homeLogo": {
+      "text": " /\\_/\\\n( o.o )\n > ^ <"
+    }
+  },
+  "presentation": {
+    "activity": {
+      "mascot": {
+        "enabled": true,
+        "hover": "  /\\_/\\\n ( ^.^ )\n  > ^ <",
+        "states": {
+          "idle": " /\\_/\\\n( o.o )\n > ^ <",
+          "thinking": " /\\_/\\\n( -.- )\n > ^ <",
+          "done": " /\\_/\\\n( ^.^ )\n > ^ <",
+          "error": " /\\_/\\\n( x.x )\n > ^ <"
+        }
+      }
+    }
+  }
+}
+```
+
+For community or team sharing, label the artifact clearly as `home-only`, `session-only`, or `full-art` and include a narrow-terminal preview. Keep art monospaced, short, terminal-safe, and data-only; packages should not need executable code merely to install ASCII art. See [Marketplace and Team Sharing](packages-and-team-sharing.md) for package distribution.
+
 ## Home Centered Mode
 
 Centered mode is the default home layout.
@@ -600,13 +667,9 @@ Agent View is the split-home session manager:
 }
 ```
 
-Agent View shows recent/background sessions grouped into:
+Agent View groups visible session rows into `Needs input`, `Looping`, `Working`, and `Completed`. Its optional session headline summarizes only current `waiting`, `looping`, and `working` counts; it does not present visible completed rows as a lifetime total. The Agent inbox headline describes durable structured coordination commands with queued, slot-capacity, and active counts rather than shell/tool execution.
 
-- `Needs input`: permission requests, questions, or plan reviews waiting on the user.
-- `Working`: running/background sessions.
-- `Completed`: recently finished sessions.
-
-It also refreshes from session/status/input events and polls while visible. Rows can be selected and opened; the prompt can target the selected Agent View session when appropriate.
+Each headline appears only while that category has active work. Completed session rows remain visible when both headlines are hidden. Rows can be selected and opened, while the Home prompt remains a new-task composer.
 
 This setup is especially good when you run multiple agents or background sessions and want the home page to show what needs attention before you type.
 
@@ -668,9 +731,6 @@ Good power-user setup:
     "logoFont": "mendcode"
   },
   "surfaces": {
-    "homeLogo": {
-      "size": "default"
-    },
     "homeWelcome": {
       "mode": "split",
       "rightPanel": "agentManager"
@@ -780,9 +840,6 @@ This fragment combines mascot home, split Agent View, compact status, custom act
     "logoFont": "mendcode"
   },
   "surfaces": {
-    "homeLogo": {
-      "size": "default"
-    },
     "homeWelcome": {
       "mode": "split",
       "rightPanel": "agentManager"
@@ -910,6 +967,14 @@ The `@mendcode/plugin` package supports:
 - slots/widgets
 - footer entries
 - runtime status
+- live TUI customization (terminal title, session accent, diff visibility)
+- session lifecycle and AI handles
+- Agent View metadata
+- memory graph reads/writes and Memory side chat
+- focused modal/overlay control
+- generated SDK access through `api.client`
+
+A TUI plugin can therefore implement a full page, modal, side chat, session assistant, dashboard, or memory workflow without editing MendCode internals. See the [complete public API](tui-plugins-and-widgets.md#public-api-surface).
 
 Useful home/prompt slots:
 
@@ -946,11 +1011,30 @@ export default {
 }
 ```
 
+A small runtime customization plugin can opt into the live chrome contract and add a widget through the same public surface:
+
+```tsx
+export default {
+  id: "team.chrome",
+  async tui(api) {
+    api.ui.runtime.customization.setTerminalTitle({
+      template: "TeamCode · {session} · {path}",
+    })
+    api.ui.runtime.customization.setSessionAccent("random")
+    api.ui.runtime.customization.setDiffFiles(true)
+    api.ui.runtime.setWidget("team.review", () => <text>Review tools ready</text>, {
+      placement: "aboveEditor",
+      order: 20,
+    })
+  },
+}
+```
+
 See [TUI plugins and widgets](tui-plugins-and-widgets.md) for full plugin examples.
 
 ## Model Customization
 
-Model behavior is controlled by model roles. This lets a team use one model for build/code, another for review, and cheaper models for title/summary/compaction.
+Model behavior is controlled by model roles. This lets a team use one model for build/code, an explicit task-specific agent for review work, and cheaper models for title/summary/compaction.
 
 ```bash
 mendcode models status
@@ -959,7 +1043,7 @@ mendcode models set-default <provider> <model> --auth-mode <auth-mode> --enable
 mendcode models plan
 ```
 
-When `models.yaml` has `enabled: false`, roles are documented but not projected into generated runtime config. The CLI supports `set-default` and `use-preset`; edit `models.yaml` for role-specific overrides such as `build`, `review`, `subagent`, `title`, and `compaction`.
+When `models.yaml` has `enabled: false`, roles are documented but not projected into generated runtime config. The CLI supports `set-default` and `use-preset`; edit `models.yaml` for role-specific overrides such as `build`, `code`, `subagent`, `title`, and `compaction`. Review work should use an explicit configured agent rather than a generic `review` role.
 
 ## Packaging a Team Theme
 

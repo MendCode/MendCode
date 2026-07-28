@@ -1,6 +1,6 @@
 import { createMemo } from "solid-js"
 import { useSync } from "@tui/context/sync"
-import { DialogSelect } from "@tui/ui/dialog-select"
+import { DialogSelect, type DialogSelectOption } from "@tui/ui/dialog-select"
 import { useSDK } from "@tui/context/sdk"
 import { useRoute } from "@tui/context/route"
 import * as Clipboard from "@tui/util/clipboard"
@@ -11,88 +11,105 @@ export function DialogMessage(props: {
   messageID: string
   sessionID: string
   setPrompt?: (prompt: PromptInfo) => void
+  onEditPrompt?: (messageID: string, prompt: PromptInfo) => boolean | Promise<boolean>
+  queued?: boolean
 }) {
   const sync = useSync()
   const sdk = useSDK()
   const message = createMemo(() => sync.data.message[props.sessionID]?.find((x) => x.id === props.messageID))
   const route = useRoute()
+  const fullParts = async (messageID: string) => {
+    const result = await sdk.client.session.message({ sessionID: props.sessionID, messageID }).catch(() => undefined)
+    return result?.data?.parts ?? sync.data.part[messageID] ?? []
+  }
+  const edit: DialogSelectOption<string> = {
+    title: "Edit",
+    value: "message.edit",
+    description: "edit this queued message in the prompt",
+    onSelect: async (dialog) => {
+      const msg = message()
+      if (!msg) return
+
+      const prompt = restorePromptFromSubmittedParts(await fullParts(msg.id))
+      const accepted = await props.onEditPrompt?.(msg.id, prompt)
+      if (accepted === false) return
+      dialog.clear()
+    },
+  }
+  const copy: DialogSelectOption<string> = {
+    title: "Copy",
+    value: "message.copy",
+    description: "message text to clipboard",
+    onSelect: async (dialog) => {
+      const msg = message()
+      if (!msg) return
+
+      const clipboard = messagePartsToPortableClipboard(await fullParts(msg.id))
+      if (!clipboard.text) return
+
+      await Clipboard.copy(clipboard.text)
+      dialog.clear()
+    },
+  }
 
   return (
     <DialogSelect
       title="Message Actions"
-      options={[
-        {
-          title: "Revert",
-          value: "session.revert",
-          description: "undo messages and file changes",
-          onSelect: (dialog) => {
-            const msg = message()
-            if (!msg) return
+      options={
+        props.queued && props.onEditPrompt
+          ? [edit, copy]
+          : [
+              {
+                title: "Revert",
+                value: "session.revert",
+                description: "undo messages and file changes",
+                onSelect: async (dialog) => {
+                  const msg = message()
+                  if (!msg) return
 
-            void sdk.client.session.revert({
-              sessionID: props.sessionID,
-              messageID: msg.id,
-            })
+                  void sdk.client.session.revert({
+                    sessionID: props.sessionID,
+                    messageID: msg.id,
+                  })
 
-            if (props.setPrompt) {
-              const parts = sync.data.part[msg.id]
-              props.setPrompt(restorePromptFromSubmittedParts(parts))
-            }
+                  if (props.setPrompt) props.setPrompt(restorePromptFromSubmittedParts(await fullParts(msg.id)))
 
-            dialog.clear()
-          },
-        },
-        {
-          title: "Copy",
-          value: "message.copy",
-          description: "message text to clipboard",
-          onSelect: async (dialog) => {
-            const msg = message()
-            if (!msg) return
-
-            const parts = sync.data.part[msg.id]
-            const clipboard = messagePartsToPortableClipboard(parts)
-            if (!clipboard.text) return
-
-            if (clipboard.imageCount === 1 && clipboard.firstImage && clipboard.text.startsWith("![")) {
-              await Clipboard.copyImage(clipboard.firstImage).catch(() => Clipboard.copy(clipboard.text))
-            } else {
-              await Clipboard.copy(clipboard.text)
-            }
-            dialog.clear()
-          },
-        },
-        {
-          title: "Fork",
-          value: "session.fork",
-          description: "create a new session",
-          onSelect: async (dialog) => {
-            const result = await sdk.client.session.fork({
-              sessionID: props.sessionID,
-              messageID: props.messageID,
-            })
-            const msg = message()
-            const prompt = msg
-              ? sync.data.part[msg.id].reduce(
-                  (agg, part) => {
-                    if (part.type === "text") {
-                      if (!part.synthetic) agg.input += part.text
-                    }
-                    if (part.type === "file") agg.parts.push(part)
-                    return agg
-                  },
-                  { input: "", parts: [] as PromptInfo["parts"] },
-                )
-              : undefined
-            route.navigate({
-              sessionID: result.data!.id,
-              type: "session",
-              prompt,
-            })
-            dialog.clear()
-          },
-        },
-      ]}
+                  dialog.clear()
+                },
+              },
+              copy,
+              {
+                title: "Fork",
+                value: "session.fork",
+                description: "create a new session",
+                onSelect: async (dialog) => {
+                  const result = await sdk.client.session.fork({
+                    sessionID: props.sessionID,
+                    messageID: props.messageID,
+                  })
+                  const msg = message()
+                  const prompt = msg
+                    ? (await fullParts(msg.id)).reduce(
+                        (agg, part) => {
+                          if (part.type === "text") {
+                            if (!part.synthetic) agg.input += part.text
+                          }
+                          if (part.type === "file") agg.parts.push(part)
+                          return agg
+                        },
+                        { input: "", parts: [] as PromptInfo["parts"] },
+                      )
+                    : undefined
+                  route.navigate({
+                    sessionID: result.data!.id,
+                    type: "session",
+                    prompt,
+                  })
+                  dialog.clear()
+                },
+              },
+            ]
+      }
     />
   )
 }

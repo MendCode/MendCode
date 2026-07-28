@@ -5,9 +5,9 @@ export type ClientOptions = {
 }
 
 export type Event =
+  | EventInstallationUpdated
+  | EventInstallationUpdateAvailable
   | EventServerInstanceDisposed
-  | EventFileEdited
-  | EventFileWatcherUpdated
   | EventLspClientDiagnostics
   | EventLspUpdated
   | EventMessagePartDelta
@@ -15,18 +15,27 @@ export type Event =
   | EventPermissionReplied
   | EventSessionDiff
   | EventSessionError
-  | EventInstallationUpdated
-  | EventInstallationUpdateAvailable
+  | EventAgentViewMetadataUpdated
+  | EventAgentViewMetadataDeleted
+  | EventAgentCommandCreated
+  | EventAgentCommandUpdated
+  | EventSessionStatus
+  | EventSessionIdle
+  | EventFileWatcherUpdated
+  | EventSkillUpdated1
+  | EventPlanReviewAsked
+  | EventPlanReviewReplied
   | EventQuestionAsked
   | EventQuestionReplied
   | EventQuestionRejected
-  | EventPlanReviewAsked
-  | EventPlanReviewReplied
-  | EventTodoUpdated
-  | EventSessionStatus
-  | EventSessionIdle
   | EventSessionNextShellOutput
+  | EventMemoryDream1
+  | EventMemoryWorkspace
+  | EventTodoUpdated
   | EventSessionCompacted
+  | EventFileEdited
+  | EventBackgroundSessionUpdated
+  | EventBackgroundSessionDeleted
   | EventTuiPromptAppend
   | EventTuiCommandExecute
   | EventTuiToastShow1
@@ -35,12 +44,16 @@ export type Event =
   | EventMcpBrowserOpenFailed
   | EventCommandExecuted
   | EventProjectUpdated
-  | EventVcsBranchUpdated
+  | EventWorktreeReady
+  | EventWorktreeFailed
+  | EventLoopWorkflowUpdated
+  | EventLoopRunUpdated
+  | EventLoopEventCreated
+  | EventLoopThreadUpdated
   | EventWorkspaceReady
   | EventWorkspaceFailed
   | EventWorkspaceStatus
-  | EventWorktreeReady
-  | EventWorktreeFailed
+  | EventVcsBranchUpdated
   | EventPtyCreated
   | EventPtyUpdated
   | EventPtyExited
@@ -191,6 +204,189 @@ export type ApiError = {
   }
 }
 
+export type AgentViewMetadata = {
+  sessionID: string
+  title?: string
+  tags: Array<string>
+  group?: string
+  priority?: "low" | "normal" | "high" | "urgent"
+  notes?: string
+  pinned: boolean
+  archived: boolean
+  time: {
+    created: number
+    updated: number
+  }
+}
+
+export type AgentCommandPolicy = {
+  decision: "safe_auto" | "same_workspace" | "approval_required" | "denied"
+  permissions: Array<string>
+  reason: string
+  ownership?: {
+    targetWriter?: {
+      clientID: string
+      expires: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type AgentCommand =
+  | {
+      id: string
+      sourceSessionID: string
+      targetSessionID: string
+      state: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
+      permissions: Array<string>
+      policy: AgentCommandPolicy
+      error?: string
+      result?: string
+      expiresAt?: number
+      time: {
+        created: number
+        updated: number
+      }
+      type: "request_summary"
+      payload: {
+        instructions?: string
+      }
+    }
+  | {
+      id: string
+      sourceSessionID: string
+      targetSessionID: string
+      state: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
+      permissions: Array<string>
+      policy: AgentCommandPolicy
+      error?: string
+      result?: string
+      expiresAt?: number
+      time: {
+        created: number
+        updated: number
+      }
+      type: "rename"
+      payload: {
+        title: string
+      }
+    }
+  | {
+      id: string
+      sourceSessionID: string
+      targetSessionID: string
+      state: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
+      permissions: Array<string>
+      policy: AgentCommandPolicy
+      error?: string
+      result?: string
+      expiresAt?: number
+      time: {
+        created: number
+        updated: number
+      }
+      type: "tag"
+      payload: {
+        tags: Array<string>
+      }
+    }
+  | {
+      id: string
+      sourceSessionID: string
+      targetSessionID: string
+      state: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
+      permissions: Array<string>
+      policy: AgentCommandPolicy
+      error?: string
+      result?: string
+      expiresAt?: number
+      time: {
+        created: number
+        updated: number
+      }
+      type: "pause_after_turn"
+      payload: {
+        reason?: string
+      }
+    }
+  | {
+      id: string
+      sourceSessionID: string
+      targetSessionID: string
+      state: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
+      permissions: Array<string>
+      policy: AgentCommandPolicy
+      error?: string
+      result?: string
+      expiresAt?: number
+      time: {
+        created: number
+        updated: number
+      }
+      type: "stop"
+      payload: {
+        reason?: string
+      }
+    }
+  | {
+      id: string
+      sourceSessionID: string
+      targetSessionID: string
+      state: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
+      permissions: Array<string>
+      policy: AgentCommandPolicy
+      error?: string
+      result?: string
+      expiresAt?: number
+      time: {
+        created: number
+        updated: number
+      }
+      type: "send_message"
+      payload: {
+        text: string
+      }
+    }
+
+export type SessionStatus =
+  | {
+      type: "idle"
+    }
+  | {
+      type: "retry"
+      attempt: number
+      message: string
+      next: number
+    }
+  | {
+      type: "busy"
+      kind?: "mflow-wait" | "memory-extract" | "subagent-wait" | "compaction"
+      message?: string
+
+      until?: number
+      startedAt?: number
+    }
+
+export type PlanReviewTool = {
+  messageID: string
+  callID: string
+}
+
+export type PlanReviewRequest = {
+  id: string
+  sessionID: string
+  title?: string
+  markdown: string
+  tool?: PlanReviewTool
+}
+
+export type PlanReviewAction = "apply" | "edit" | "reject" | "close"
+
+export type PlanReviewReplied = {
+  sessionID: string
+  requestID: string
+  action: PlanReviewAction
+}
+
 export type QuestionOption = {
   /**
    * Display text (1-5 words, concise)
@@ -247,27 +443,6 @@ export type QuestionRejected = {
   requestID: string
 }
 
-export type PlanReviewTool = {
-  messageID: string
-  callID: string
-}
-
-export type PlanReviewRequest = {
-  id: string
-  sessionID: string
-  title?: string
-  markdown: string
-  tool?: PlanReviewTool
-}
-
-export type PlanReviewAction = "apply" | "edit" | "reject" | "close"
-
-export type PlanReviewReplied = {
-  sessionID: string
-  requestID: string
-  action: PlanReviewAction
-}
-
 export type Todo = {
   /**
    * Brief description of the task
@@ -283,19 +458,26 @@ export type Todo = {
   priority: string
 }
 
-export type SessionStatus =
-  | {
-      type: "idle"
-    }
-  | {
-      type: "retry"
-      attempt: number
-      message: string
-      next: number
-    }
-  | {
-      type: "busy"
-    }
+export type BackgroundSession = {
+  sessionID: string
+  state: "queued" | "working" | "needs_input" | "completed" | "failed" | "stopped"
+  summary?: string
+  error?: string
+  pinned: boolean
+  process?: {
+    pid: number
+    started: number
+  }
+  writer?: {
+    clientID: string
+    acquired: number
+    expires: number
+  }
+  time: {
+    created: number
+    updated: number
+  }
+}
 
 export type EventTuiPromptAppend = {
   id: string
@@ -373,6 +555,313 @@ export type Project = {
     initialized?: number
   }
   sandboxes: Array<string>
+}
+
+export type LoopWorkflow = {
+  id: string
+  projectID: string
+  workspaceID?: string
+  ownerSessionID?: string
+  rootSessionID?: string
+  name: string
+  objective: string
+  state:
+    | "draft"
+    | "active"
+    | "sleeping"
+    | "working"
+    | "needs_input"
+    | "blocked"
+    | "paused"
+    | "completed"
+    | "failed"
+    | "stopped"
+  source: "converted-session" | "objective" | "template" | "manual"
+  templateID?: string
+  phase: string
+  nextWakeup?: number
+  spec: {
+    trigger?: {
+      mode?: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced"
+      intervalMs?: number
+    }
+    budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
+    completionCriteria?: Array<string>
+    successChecks?: Array<string>
+    validationChecks?: Array<{
+      id: string
+      command: string
+      timeoutMs?: number
+    }>
+    strategy?: {
+      targetTurns?: number
+      reserveTurns?: number
+      notifyOwnerOnComplete?: boolean
+    }
+    stopWhen?: Array<string>
+    gates?: Array<string>
+    model?: {
+      providerID: string
+      modelID: string
+      variant?: string
+    }
+    agent?: string
+    evaluation?: {
+      mode?: "legacy" | "deterministic" | "independent"
+      evaluatorAgent?: string
+      requireIndependentForCompletion?: boolean
+      allowWorkerSelfComplete?: boolean
+      maxEvaluatorRetries?: number
+    }
+    rubric?: {
+      name?: string
+      passThreshold?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      criteria?: Array<{
+        id: string
+        description: string
+        weight?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        minScore?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        evidenceRequired?: Array<string>
+      }>
+      mandatoryBlockers?: Array<string>
+    }
+    workspace?: {
+      mode?: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+    }
+    costBudget?: {
+      maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      maxTokens?: number
+    }
+    approvalPolicy?: {
+      requireApprovalFor?: Array<string>
+      approvedActions?: Array<string>
+    }
+    memory?: {
+      enabled?: boolean
+      sections?: Array<"tried" | "verified" | "open" | "decisions" | "rejected">
+    }
+    retention?: {
+      maxArtifacts?: number
+      maxAgeMs?: number
+      maxBytes?: number
+    }
+  }
+  policy: {
+    maxTurns?: number
+    maxRuntimeMs?: number
+    maxChildren?: number
+    maxDepth?: number
+    requireApprovalFor?: Array<string>
+    approvedActions?: Array<string>
+  }
+  metrics: {
+    turns?: number
+    children?: number
+    failures?: number
+    noProgress?: number
+    cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    inputTokens?: number
+    outputTokens?: number
+    reasoningTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }
+  memory?: {
+    entries: Array<{
+      section: "tried" | "verified" | "open" | "decisions" | "rejected"
+      summary: string
+      source?: string
+      runID?: string
+      time: {
+        created: number
+      }
+    }>
+  }
+  evaluatorReason?: string
+  failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+  time: {
+    created: number
+    updated: number
+    activated?: number
+    archived?: number
+  }
+}
+
+export type LoopRun = {
+  id: string
+  workflowID: string
+  rootSessionID?: string
+  state: "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+  trigger: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced" | "resume" | "run-once"
+  phase: string
+  nextWakeup?: number
+  evaluatorReason?: string
+  failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+  budget?: {
+    turns?: number
+    children?: number
+    failures?: number
+    noProgress?: number
+    cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    inputTokens?: number
+    outputTokens?: number
+    reasoningTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }
+  checkpoint?: {
+    status?: "complete" | "continue" | "needs_input" | "blocked" | "stop"
+    summary?: string
+    evidence?: Array<string>
+    nextAction?: string
+    confidence?: string
+  }
+  judgment?: {
+    status?: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+    summary?: string
+    evidence?: Array<string>
+    recommendedNextAction?: string
+    confidence?: string
+    failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+  }
+  rubricResult?: {
+    status: "pass" | "fail" | "blocked"
+    score: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    threshold: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    criteria: Array<{
+      id: string
+      score: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      maxScore: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      passed: boolean
+      reason: string
+      evidence: Array<string>
+    }>
+    blockers: Array<{
+      id: string
+      present: boolean
+      reason: string
+    }>
+  }
+  usage?: {
+    providerID?: string
+    modelID?: string
+    variant?: string
+    cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    durationMs?: number
+    tokens?: {
+      input?: number
+      output?: number
+      reasoning?: number
+      cacheRead?: number
+      cacheWrite?: number
+    }
+  }
+  gateResults?: Array<{
+    id: string
+    status: "pass" | "fail" | "skip" | "blocked" | "awaiting_approval"
+    summary?: string
+    failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+    evidenceArtifacts?: Array<string>
+    waiver?: {
+      action: "waive" | "accept"
+      actor: string
+      reason: string
+      time: number
+    }
+  }>
+  retry?: {
+    attempt: number
+    backoffMs?: number
+    nextWakeup?: number
+  }
+  workspaceLease?: {
+    id: string
+    workflowID: string
+    runID?: string
+    mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+    path: string
+    branch?: string
+    state: "active" | "dirty" | "promoted" | "retained" | "cleaning" | "cleaned" | "failed"
+    retention: "delete_on_success" | "retain_on_failure" | "manual"
+    created: number
+    error?: string
+  }
+  lease?: {
+    holder: string
+    acquired: number
+    heartbeat: number
+    expires: number
+  }
+  time: {
+    created: number
+    updated: number
+    started?: number
+    ended?: number
+  }
+}
+
+export type LoopEvent = {
+  id: string
+  workflowID: string
+  runID?: string
+  sessionID?: string
+  sequence: number
+  level: "debug" | "info" | "warning" | "error" | "decision"
+  type:
+    | "created"
+    | "activated"
+    | "started"
+    | "completed"
+    | "wake"
+    | "signal"
+    | "phase"
+    | "session"
+    | "child"
+    | "gate"
+    | "budget"
+    | "action"
+    | "monitor"
+    | "paused"
+    | "resumed"
+    | "stopped"
+    | "failed"
+  title: string
+  summary: string
+  data?: {
+    [key: string]: unknown
+  }
+  time: {
+    created: number
+    updated: number
+  }
+}
+
+export type LoopThread = {
+  workflowID: string
+  runID?: string
+  sessionID: string
+  role: "root" | "implementer" | "reviewer" | "verifier" | "monitor" | "research"
+  purpose: string
+  state: "queued" | "working" | "needs_input" | "completed" | "failed" | "stopped"
+  parentSessionID?: string
+  budget?: {
+    turns?: number
+    children?: number
+    failures?: number
+    noProgress?: number
+    cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    inputTokens?: number
+    outputTokens?: number
+    reasoningTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }
+  worktree?: string
+  branch?: string
+  time: {
+    created: number
+    updated: number
+  }
 }
 
 export type Pty = {
@@ -731,6 +1220,7 @@ export type CompactionPart = {
   auto: boolean
   overflow?: boolean
   resume?: boolean
+  post_prompt?: string
   instructions?: string
   tail_start_id?: string
 }
@@ -810,9 +1300,9 @@ export type GlobalEvent = {
   project?: string
   workspace?: string
   payload:
+    | EventInstallationUpdated
+    | EventInstallationUpdateAvailable
     | EventServerInstanceDisposed
-    | EventFileEdited
-    | EventFileWatcherUpdated
     | EventLspClientDiagnostics
     | EventLspUpdated
     | EventMessagePartDelta
@@ -820,18 +1310,27 @@ export type GlobalEvent = {
     | EventPermissionReplied
     | EventSessionDiff
     | EventSessionError
-    | EventInstallationUpdated
-    | EventInstallationUpdateAvailable
+    | EventAgentViewMetadataUpdated
+    | EventAgentViewMetadataDeleted
+    | EventAgentCommandCreated
+    | EventAgentCommandUpdated
+    | EventSessionStatus
+    | EventSessionIdle
+    | EventFileWatcherUpdated
+    | EventSkillUpdated
+    | EventPlanReviewAsked
+    | EventPlanReviewReplied
     | EventQuestionAsked
     | EventQuestionReplied
     | EventQuestionRejected
-    | EventPlanReviewAsked
-    | EventPlanReviewReplied
-    | EventTodoUpdated
-    | EventSessionStatus
-    | EventSessionIdle
     | EventSessionNextShellOutput
+    | EventMemoryDream
+    | EventMemoryWorkspace
+    | EventTodoUpdated
     | EventSessionCompacted
+    | EventFileEdited
+    | EventBackgroundSessionUpdated
+    | EventBackgroundSessionDeleted
     | EventTuiPromptAppend
     | EventTuiCommandExecute
     | EventTuiToastShow
@@ -840,12 +1339,16 @@ export type GlobalEvent = {
     | EventMcpBrowserOpenFailed
     | EventCommandExecuted
     | EventProjectUpdated
-    | EventVcsBranchUpdated
+    | EventWorktreeReady
+    | EventWorktreeFailed
+    | EventLoopWorkflowUpdated
+    | EventLoopRunUpdated
+    | EventLoopEventCreated
+    | EventLoopThreadUpdated
     | EventWorkspaceReady
     | EventWorkspaceFailed
     | EventWorkspaceStatus
-    | EventWorktreeReady
-    | EventWorktreeFailed
+    | EventVcsBranchUpdated
     | EventPtyCreated
     | EventPtyUpdated
     | EventPtyExited
@@ -1033,8 +1536,15 @@ export type ProviderConfig = {
      * Timeout in milliseconds for requests to this provider. Default is 300000 (5 minutes). Set to false to disable timeout.
      */
     timeout?: number | false
-    chunkTimeout?: number
-    [key: string]: unknown | string | boolean | number | false | number | undefined
+    /**
+     * Timeout in milliseconds between streamed SSE chunks for this provider. Default is 60000 (1 minute). Set to false to disable chunk timeout.
+     */
+    chunkTimeout?: number | false
+    [key: string]: unknown | string | boolean | number | false | number | false | undefined
+  }
+  compaction?: {
+    token_limit?: number
+    threshold?: number
   }
   models?: {
     [key: string]: {
@@ -1067,6 +1577,10 @@ export type ProviderConfig = {
         context: number
         input?: number
         output: number
+      }
+      compaction?: {
+        token_limit?: number
+        threshold?: number
       }
       modalities?: {
         input: Array<"text" | "audio" | "image" | "video" | "pdf">
@@ -1106,6 +1620,7 @@ export type McpLocalConfig = {
    * Command and arguments to run the MCP server
    */
   command: Array<string>
+  cwd?: string
   environment?: {
     [key: string]: string
   }
@@ -1117,6 +1632,7 @@ export type McpOAuthConfig = {
   clientId?: string
   clientSecret?: string
   scope?: string
+  callbackPort?: number
   redirectUri?: string
 }
 
@@ -1186,7 +1702,10 @@ export type Config = {
   enabled_providers?: Array<string>
   model?: string
   small_model?: string
+  subagent_model?: string
+  subagent_variant?: string
   default_agent?: string
+  plan_exit_agent?: string
   username?: string
   mode?: {
     build?: AgentConfig
@@ -1253,6 +1772,9 @@ export type Config = {
       }
   instructions?: Array<string>
   layout?: LayoutConfig
+  presentation?: {
+    [key: string]: unknown
+  }
   permission?: PermissionConfig
   tools?: {
     [key: string]: boolean
@@ -1270,9 +1792,15 @@ export type Config = {
     tail_turns?: number
     preserve_recent_tokens?: number
     reserved?: number
+    token_limit?: number
+    threshold?: number
+  }
+  queue?: {
+    mode?: "after-response" | "after-tools" | "after-turn" | "immediate"
   }
   experimental?: {
     disable_paste_summary?: boolean
+    paste_summary_min_chars?: number
     batch_tool?: boolean
     openTelemetry?: boolean
     primary_tools?: Array<string>
@@ -1662,6 +2190,120 @@ export type ProviderAuthAuthorization = {
   instructions: string
 }
 
+export type BackgroundSessionEntry = {
+  sessionID: string
+  state: "queued" | "working" | "needs_input" | "completed" | "failed" | "stopped"
+  summary?: string
+  error?: string
+  pinned: boolean
+  process?: {
+    pid: number
+    started: number
+  }
+  writer?: {
+    clientID: string
+    acquired: number
+    expires: number
+  }
+  time: {
+    created: number
+    updated: number
+  }
+  session?: {
+    id: string
+    title: string
+    directory: string
+    path?: string
+    agent?: string
+    time: {
+      created: number
+      updated: number
+    }
+  }
+  metadata?: AgentViewMetadata
+}
+
+export type AgentViewMetadataPatch = {
+  title?: string
+  tags?: Array<string>
+  group?: string
+  priority?: "low" | "normal" | "high" | "urgent"
+  notes?: string
+  pinned?: boolean
+  archived?: boolean
+}
+
+export type AgentCommandPolicyMatrixItem = {
+  type: "request_summary" | "rename" | "tag" | "pause_after_turn" | "stop" | "send_message"
+  decision: "safe_auto" | "same_workspace" | "approval_required" | "denied"
+  permissions: Array<string>
+  reason: string
+}
+
+export type AgentCommandCreate =
+  | {
+      sourceSessionID: string
+      type: "request_summary"
+      payload?: {
+        instructions?: string
+      }
+      expiresAt?: number
+    }
+  | {
+      sourceSessionID: string
+      type: "rename"
+      payload: {
+        title: string
+      }
+      expiresAt?: number
+    }
+  | {
+      sourceSessionID: string
+      type: "tag"
+      payload: {
+        tags: Array<string>
+      }
+      expiresAt?: number
+    }
+  | {
+      sourceSessionID: string
+      type: "pause_after_turn"
+      payload?: {
+        reason?: string
+      }
+      expiresAt?: number
+    }
+  | {
+      sourceSessionID: string
+      type: "stop"
+      payload?: {
+        reason?: string
+      }
+      expiresAt?: number
+    }
+  | {
+      sourceSessionID: string
+      type: "send_message"
+      payload: {
+        text: string
+      }
+      expiresAt?: number
+    }
+
+export type AgentCommandUpdate = {
+  state?: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
+  error?: string
+  result?: string
+}
+
+export type BadRequestError = {
+  data: unknown
+  errors: Array<{
+    [key: string]: unknown
+  }>
+  success: false
+}
+
 export type TextPartInput = {
   id?: string
   type: "text"
@@ -1784,6 +2426,289 @@ export type Workspace = {
   directory: string | null
   extra: unknown | null
   projectID: string
+}
+
+export type AgentCommandPolicy1 = {
+  decision: "safe_auto" | "same_workspace" | "approval_required" | "denied"
+  permissions: Array<string>
+  reason: string
+  ownership?: {
+    targetWriter?: {
+      clientID: string
+      expires: number | "NaN" | "Infinity" | "-Infinity"
+    }
+  }
+}
+
+export type LoopWorkflow1 = {
+  id: string
+  projectID: string
+  workspaceID?: string
+  ownerSessionID?: string
+  rootSessionID?: string
+  name: string
+  objective: string
+  state:
+    | "draft"
+    | "active"
+    | "sleeping"
+    | "working"
+    | "needs_input"
+    | "blocked"
+    | "paused"
+    | "completed"
+    | "failed"
+    | "stopped"
+  source: "converted-session" | "objective" | "template" | "manual"
+  templateID?: string
+  phase: string
+  nextWakeup?: number
+  spec: {
+    trigger?: {
+      mode?: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced"
+      intervalMs?: number
+    }
+    budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
+    completionCriteria?: Array<string>
+    successChecks?: Array<string>
+    validationChecks?: Array<{
+      id: string
+      command: string
+      timeoutMs?: number
+    }>
+    strategy?: {
+      targetTurns?: number
+      reserveTurns?: number
+      notifyOwnerOnComplete?: boolean
+    }
+    stopWhen?: Array<string>
+    gates?: Array<string>
+    model?: {
+      providerID: string
+      modelID: string
+      variant?: string
+    }
+    agent?: string
+    evaluation?: {
+      mode?: "legacy" | "deterministic" | "independent"
+      evaluatorAgent?: string
+      requireIndependentForCompletion?: boolean
+      allowWorkerSelfComplete?: boolean
+      maxEvaluatorRetries?: number
+    }
+    rubric?: {
+      name?: string
+      passThreshold?: number | "NaN" | "Infinity" | "-Infinity"
+      criteria?: Array<{
+        id: string
+        description: string
+        weight?: number | "NaN" | "Infinity" | "-Infinity"
+        minScore?: number | "NaN" | "Infinity" | "-Infinity"
+        evidenceRequired?: Array<string>
+      }>
+      mandatoryBlockers?: Array<string>
+    }
+    workspace?: {
+      mode?: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+    }
+    costBudget?: {
+      maxCost?: number | "NaN" | "Infinity" | "-Infinity"
+      maxTokens?: number
+    }
+    approvalPolicy?: {
+      requireApprovalFor?: Array<string>
+      approvedActions?: Array<string>
+    }
+    memory?: {
+      enabled?: boolean
+      sections?: Array<"tried" | "verified" | "open" | "decisions" | "rejected">
+    }
+    retention?: {
+      maxArtifacts?: number
+      maxAgeMs?: number
+      maxBytes?: number
+    }
+  }
+  policy: {
+    maxTurns?: number
+    maxRuntimeMs?: number
+    maxChildren?: number
+    maxDepth?: number
+    requireApprovalFor?: Array<string>
+    approvedActions?: Array<string>
+  }
+  metrics: {
+    turns?: number
+    children?: number
+    failures?: number
+    noProgress?: number
+    cost?: number | "NaN" | "Infinity" | "-Infinity"
+    inputTokens?: number
+    outputTokens?: number
+    reasoningTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }
+  memory?: {
+    entries: Array<{
+      section: "tried" | "verified" | "open" | "decisions" | "rejected"
+      summary: string
+      source?: string
+      runID?: string
+      time: {
+        created: number
+      }
+    }>
+  }
+  evaluatorReason?: string
+  failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+  time: {
+    created: number
+    updated: number
+    activated?: number
+    archived?: number
+  }
+}
+
+export type LoopRun1 = {
+  id: string
+  workflowID: string
+  rootSessionID?: string
+  state: "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+  trigger: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced" | "resume" | "run-once"
+  phase: string
+  nextWakeup?: number
+  evaluatorReason?: string
+  failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+  budget?: {
+    turns?: number
+    children?: number
+    failures?: number
+    noProgress?: number
+    cost?: number | "NaN" | "Infinity" | "-Infinity"
+    inputTokens?: number
+    outputTokens?: number
+    reasoningTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }
+  checkpoint?: {
+    status?: "complete" | "continue" | "needs_input" | "blocked" | "stop"
+    summary?: string
+    evidence?: Array<string>
+    nextAction?: string
+    confidence?: string
+  }
+  judgment?: {
+    status?: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+    summary?: string
+    evidence?: Array<string>
+    recommendedNextAction?: string
+    confidence?: string
+    failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+  }
+  rubricResult?: {
+    status: "pass" | "fail" | "blocked"
+    score: number | "NaN" | "Infinity" | "-Infinity"
+    threshold: number | "NaN" | "Infinity" | "-Infinity"
+    criteria: Array<{
+      id: string
+      score: number | "NaN" | "Infinity" | "-Infinity"
+      maxScore: number | "NaN" | "Infinity" | "-Infinity"
+      passed: boolean
+      reason: string
+      evidence: Array<string>
+    }>
+    blockers: Array<{
+      id: string
+      present: boolean
+      reason: string
+    }>
+  }
+  usage?: {
+    providerID?: string
+    modelID?: string
+    variant?: string
+    cost?: number | "NaN" | "Infinity" | "-Infinity"
+    durationMs?: number
+    tokens?: {
+      input?: number
+      output?: number
+      reasoning?: number
+      cacheRead?: number
+      cacheWrite?: number
+    }
+  }
+  gateResults?: Array<{
+    id: string
+    status: "pass" | "fail" | "skip" | "blocked" | "awaiting_approval"
+    summary?: string
+    failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+    evidenceArtifacts?: Array<string>
+    waiver?: {
+      action: "waive" | "accept"
+      actor: string
+      reason: string
+      time: number
+    }
+  }>
+  retry?: {
+    attempt: number
+    backoffMs?: number
+    nextWakeup?: number
+  }
+  workspaceLease?: {
+    id: string
+    workflowID: string
+    runID?: string
+    mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+    path: string
+    branch?: string
+    state: "active" | "dirty" | "promoted" | "retained" | "cleaning" | "cleaned" | "failed"
+    retention: "delete_on_success" | "retain_on_failure" | "manual"
+    created: number
+    error?: string
+  }
+  lease?: {
+    holder: string
+    acquired: number
+    heartbeat: number
+    expires: number
+  }
+  time: {
+    created: number
+    updated: number
+    started?: number
+    ended?: number
+  }
+}
+
+export type LoopThread1 = {
+  workflowID: string
+  runID?: string
+  sessionID: string
+  role: "root" | "implementer" | "reviewer" | "verifier" | "monitor" | "research"
+  purpose: string
+  state: "queued" | "working" | "needs_input" | "completed" | "failed" | "stopped"
+  parentSessionID?: string
+  budget?: {
+    turns?: number
+    children?: number
+    failures?: number
+    noProgress?: number
+    cost?: number | "NaN" | "Infinity" | "-Infinity"
+    inputTokens?: number
+    outputTokens?: number
+    reasoningTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }
+  worktree?: string
+  branch?: string
+  time: {
+    created: number
+    updated: number
+  }
 }
 
 export type SyncEventMessageUpdated = {
@@ -2308,28 +3233,27 @@ export type SyncEventSessionNextCompactionEnded = {
   }
 }
 
+export type EventInstallationUpdated = {
+  id: string
+  type: "installation.updated"
+  properties: {
+    version: string
+  }
+}
+
+export type EventInstallationUpdateAvailable = {
+  id: string
+  type: "installation.update-available"
+  properties: {
+    version: string
+  }
+}
+
 export type EventServerInstanceDisposed = {
   id: string
   type: "server.instance.disposed"
   properties: {
     directory: string
-  }
-}
-
-export type EventFileEdited = {
-  id: string
-  type: "file.edited"
-  properties: {
-    file: string
-  }
-}
-
-export type EventFileWatcherUpdated = {
-  id: string
-  type: "file.watcher.updated"
-  properties: {
-    file: string
-    event: "add" | "change" | "unlink"
   }
 }
 
@@ -2403,58 +3327,42 @@ export type EventSessionError = {
   }
 }
 
-export type EventInstallationUpdated = {
+export type EventAgentViewMetadataUpdated = {
   id: string
-  type: "installation.updated"
-  properties: {
-    version: string
-  }
-}
-
-export type EventInstallationUpdateAvailable = {
-  id: string
-  type: "installation.update-available"
-  properties: {
-    version: string
-  }
-}
-
-export type EventQuestionAsked = {
-  id: string
-  type: "question.asked"
-  properties: QuestionRequest
-}
-
-export type EventQuestionReplied = {
-  id: string
-  type: "question.replied"
-  properties: QuestionReplied
-}
-
-export type EventQuestionRejected = {
-  id: string
-  type: "question.rejected"
-  properties: QuestionRejected
-}
-
-export type EventPlanReviewAsked = {
-  id: string
-  type: "plan_review.asked"
-  properties: PlanReviewRequest
-}
-
-export type EventPlanReviewReplied = {
-  id: string
-  type: "plan_review.replied"
-  properties: PlanReviewReplied
-}
-
-export type EventTodoUpdated = {
-  id: string
-  type: "todo.updated"
+  type: "agent_view.metadata.updated"
   properties: {
     sessionID: string
-    todos: Array<Todo>
+    info: AgentViewMetadata
+  }
+}
+
+export type EventAgentViewMetadataDeleted = {
+  id: string
+  type: "agent_view.metadata.deleted"
+  properties: {
+    sessionID: string
+  }
+}
+
+export type EventAgentCommandCreated = {
+  id: string
+  type: "agent_command.created"
+  properties: {
+    commandID: string
+    sourceSessionID: string
+    targetSessionID: string
+    info: AgentCommand
+  }
+}
+
+export type EventAgentCommandUpdated = {
+  id: string
+  type: "agent_command.updated"
+  properties: {
+    commandID: string
+    sourceSessionID: string
+    targetSessionID: string
+    info: AgentCommand
   }
 }
 
@@ -2475,6 +3383,58 @@ export type EventSessionIdle = {
   }
 }
 
+export type EventFileWatcherUpdated = {
+  id: string
+  type: "file.watcher.updated"
+  properties: {
+    file: string
+    event: "add" | "change" | "unlink"
+  }
+}
+
+export type EventSkillUpdated = {
+  id: string
+  type: "skill.updated"
+  properties: {
+    added: Array<string>
+    changed: Array<string>
+    removed: Array<string>
+    shadowed: Array<string>
+    invalid: Array<string>
+    count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type EventPlanReviewAsked = {
+  id: string
+  type: "plan_review.asked"
+  properties: PlanReviewRequest
+}
+
+export type EventPlanReviewReplied = {
+  id: string
+  type: "plan_review.replied"
+  properties: PlanReviewReplied
+}
+
+export type EventQuestionAsked = {
+  id: string
+  type: "question.asked"
+  properties: QuestionRequest
+}
+
+export type EventQuestionReplied = {
+  id: string
+  type: "question.replied"
+  properties: QuestionReplied
+}
+
+export type EventQuestionRejected = {
+  id: string
+  type: "question.rejected"
+  properties: QuestionRejected
+}
+
 export type EventSessionNextShellOutput = {
   id: string
   type: "session.next.shell.output"
@@ -2486,9 +3446,66 @@ export type EventSessionNextShellOutput = {
   }
 }
 
+export type EventMemoryDream = {
+  id: string
+  type: "memory.dream"
+  properties: {
+    root: string
+    runID: string
+    status: "started" | "progress" | "running" | "completed" | "failed" | "canceled" | "missed"
+    message: string
+    proposalCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type EventMemoryWorkspace = {
+  id: string
+  type: "memory.workspace"
+  properties: {
+    root: string
+    workspaceID: string
+    status: "created" | "updated"
+    displayName: string
+  }
+}
+
+export type EventTodoUpdated = {
+  id: string
+  type: "todo.updated"
+  properties: {
+    sessionID: string
+    todos: Array<Todo>
+  }
+}
+
 export type EventSessionCompacted = {
   id: string
   type: "session.compacted"
+  properties: {
+    sessionID: string
+  }
+}
+
+export type EventFileEdited = {
+  id: string
+  type: "file.edited"
+  properties: {
+    file: string
+  }
+}
+
+export type EventBackgroundSessionUpdated = {
+  id: string
+  type: "background_session.updated"
+  properties: {
+    sessionID: string
+    info: BackgroundSession
+  }
+}
+
+export type EventBackgroundSessionDeleted = {
+  id: string
+  type: "background_session.deleted"
   properties: {
     sessionID: string
   }
@@ -2528,11 +3545,56 @@ export type EventProjectUpdated = {
   properties: Project
 }
 
-export type EventVcsBranchUpdated = {
+export type EventWorktreeReady = {
   id: string
-  type: "vcs.branch.updated"
+  type: "worktree.ready"
   properties: {
-    branch?: string
+    name: string
+    branch: string
+  }
+}
+
+export type EventWorktreeFailed = {
+  id: string
+  type: "worktree.failed"
+  properties: {
+    message: string
+  }
+}
+
+export type EventLoopWorkflowUpdated = {
+  id: string
+  type: "loop.workflow.updated"
+  properties: {
+    workflowID: string
+    info: LoopWorkflow
+  }
+}
+
+export type EventLoopRunUpdated = {
+  id: string
+  type: "loop.run.updated"
+  properties: {
+    workflowID: string
+    run: LoopRun
+  }
+}
+
+export type EventLoopEventCreated = {
+  id: string
+  type: "loop.event.created"
+  properties: {
+    workflowID: string
+    event: LoopEvent
+  }
+}
+
+export type EventLoopThreadUpdated = {
+  id: string
+  type: "loop.thread.updated"
+  properties: {
+    workflowID: string
+    thread: LoopThread
   }
 }
 
@@ -2561,20 +3623,11 @@ export type EventWorkspaceStatus = {
   }
 }
 
-export type EventWorktreeReady = {
+export type EventVcsBranchUpdated = {
   id: string
-  type: "worktree.ready"
+  type: "vcs.branch.updated"
   properties: {
-    name: string
-    branch: string
-  }
-}
-
-export type EventWorktreeFailed = {
-  id: string
-  type: "worktree.failed"
-  properties: {
-    message: string
+    branch?: string
   }
 }
 
@@ -3293,6 +4346,31 @@ export type SessionMessage =
   | SessionMessageAssistant
   | SessionMessageCompaction
 
+export type EventSkillUpdated1 = {
+  id: string
+  type: "skill.updated"
+  properties: {
+    added: Array<string>
+    changed: Array<string>
+    removed: Array<string>
+    shadowed: Array<string>
+    invalid: Array<string>
+    count: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
+export type EventMemoryDream1 = {
+  id: string
+  type: "memory.dream"
+  properties: {
+    root: string
+    runID: string
+    status: "started" | "progress" | "running" | "completed" | "failed" | "canceled" | "missed"
+    message: string
+    proposalCount: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
 export type EventTuiToastShow1 = {
   id: string
   type: "tui.toast.show"
@@ -3302,14 +4380,6 @@ export type EventTuiToastShow1 = {
     variant: "info" | "success" | "warning" | "error"
     duration?: number
   }
-}
-
-export type BadRequestError = {
-  data: unknown
-  errors: Array<{
-    [key: string]: unknown
-  }>
-  success: false
 }
 
 export type AuthRemoveData = {
@@ -3424,10 +4494,36 @@ export type GlobalHealthResponses = {
   200: {
     healthy: true
     version: string
+    channel: string
   }
 }
 
 export type GlobalHealthResponse = GlobalHealthResponses[keyof GlobalHealthResponses]
+
+export type GlobalDiagnosticsMemoryData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/global/diagnostics/memory"
+}
+
+export type GlobalDiagnosticsMemoryResponses = {
+  /**
+   * Current process memory usage
+   */
+  200: {
+    pid: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    role: string
+    rss: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    heapTotal: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    heapUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    external: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    arrayBuffers: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    uptimeSeconds: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type GlobalDiagnosticsMemoryResponse = GlobalDiagnosticsMemoryResponses[keyof GlobalDiagnosticsMemoryResponses]
 
 export type GlobalEventData = {
   body?: never
@@ -3884,6 +4980,26 @@ export type ExperimentalSessionListResponses = {
 
 export type ExperimentalSessionListResponse = ExperimentalSessionListResponses[keyof ExperimentalSessionListResponses]
 
+export type ExperimentalUsageInsightsGetData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    start: number
+    limit?: number
+    messageLimit?: string
+  }
+  url: "/experimental/usage-insights"
+}
+
+export type ExperimentalUsageInsightsGetResponses = {
+  /**
+   * Aggregated usage insights
+   */
+  200: unknown
+}
+
 export type ExperimentalResourceListData = {
   body?: never
   path?: never
@@ -4178,6 +5294,10 @@ export type AppSkillsResponses = {
     description: string
     location: string
     content: string
+    source?: "mendcode" | "compat-opencode" | "agents" | "claude" | "config-path" | "remote"
+    scope?: "project" | "global" | "configured" | "remote"
+    status?: "active" | "shadowed" | "invalid"
+    updatedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   }>
 }
 
@@ -4220,6 +5340,68 @@ export type FormatterStatusResponses = {
 }
 
 export type FormatterStatusResponse = FormatterStatusResponses[keyof FormatterStatusResponses]
+
+export type MemorySideChatData = {
+  body?: {
+    root?: string
+    message: string
+    history?: Array<{
+      id: string
+      role: "user" | "assistant"
+      text: string
+      createdAt: string
+    }>
+    context?: {
+      selectedWorkspaceID?: string
+      selectedGroupID?: string
+      selectedCategoryID?: string
+      pageContext?: string
+    }
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/memory/side-chat"
+}
+
+export type MemorySideChatResponses = {
+  /**
+   * Memory side chat response
+   */
+  200: {
+    text: string
+    actions: Array<{
+      kind:
+        | "propose-memory"
+        | "propose-policy"
+        | "explain-state"
+        | "dream-dry-run"
+        | "dream-service-start"
+        | "create-memory"
+        | "edit-memory"
+        | "delete-memory"
+        | "move-memory"
+        | "graph-upsert"
+        | "graph-link"
+        | "create-category"
+        | "edit-category"
+        | "delete-category"
+      text: string
+      categoryIDs?: Array<string>
+      scope?: "project" | "global"
+      targetID?: string
+      targetScope?: "project" | "global"
+      categoryID?: string
+      fromFactID?: string
+      toFactID?: string
+      linkKind?: "related" | "conflicts" | "supersedes" | "supports"
+    }>
+  }
+}
+
+export type MemorySideChatResponse = MemorySideChatResponses[keyof MemorySideChatResponses]
 
 export type McpStatusData = {
   body?: never
@@ -5186,6 +6368,68 @@ export type SessionStatusResponses = {
 
 export type SessionStatusResponse = SessionStatusResponses[keyof SessionStatusResponses]
 
+export type SessionBackgroundListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/background"
+}
+
+export type SessionBackgroundListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type SessionBackgroundListError = SessionBackgroundListErrors[keyof SessionBackgroundListErrors]
+
+export type SessionBackgroundListResponses = {
+  /**
+   * List of background sessions
+   */
+  200: Array<BackgroundSessionEntry>
+}
+
+export type SessionBackgroundListResponse = SessionBackgroundListResponses[keyof SessionBackgroundListResponses]
+
+export type SessionAgentViewListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    scope?: "project"
+    path?: string
+    roots?: boolean | "true" | "false"
+    start?: number
+    search?: string
+    limit?: number
+  }
+  url: "/session/agent-view"
+}
+
+export type SessionAgentViewListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type SessionAgentViewListError = SessionAgentViewListErrors[keyof SessionAgentViewListErrors]
+
+export type SessionAgentViewListResponses = {
+  /**
+   * Aggregate Agent View session rows
+   */
+  200: Array<BackgroundSessionEntry>
+}
+
+export type SessionAgentViewListResponse = SessionAgentViewListResponses[keyof SessionAgentViewListResponses]
+
 export type SessionDeleteData = {
   body?: never
   path: {
@@ -5294,6 +6538,439 @@ export type SessionUpdateResponses = {
 
 export type SessionUpdateResponse = SessionUpdateResponses[keyof SessionUpdateResponses]
 
+export type SessionAgentViewMetadataListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/agent-view/metadata"
+}
+
+export type SessionAgentViewMetadataListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type SessionAgentViewMetadataListError =
+  SessionAgentViewMetadataListErrors[keyof SessionAgentViewMetadataListErrors]
+
+export type SessionAgentViewMetadataListResponses = {
+  /**
+   * Agent View metadata entries
+   */
+  200: Array<AgentViewMetadata>
+}
+
+export type SessionAgentViewMetadataListResponse =
+  SessionAgentViewMetadataListResponses[keyof SessionAgentViewMetadataListResponses]
+
+export type SessionAgentViewMetadataGetData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/agent-view/metadata"
+}
+
+export type SessionAgentViewMetadataGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionAgentViewMetadataGetError =
+  SessionAgentViewMetadataGetErrors[keyof SessionAgentViewMetadataGetErrors]
+
+export type SessionAgentViewMetadataGetResponses = {
+  /**
+   * Agent View metadata or null when unset
+   */
+  200: AgentViewMetadata
+}
+
+export type SessionAgentViewMetadataGetResponse =
+  SessionAgentViewMetadataGetResponses[keyof SessionAgentViewMetadataGetResponses]
+
+export type SessionAgentViewMetadataPatchData = {
+  body?: AgentViewMetadataPatch
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/agent-view/metadata"
+}
+
+export type SessionAgentViewMetadataPatchErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionAgentViewMetadataPatchError =
+  SessionAgentViewMetadataPatchErrors[keyof SessionAgentViewMetadataPatchErrors]
+
+export type SessionAgentViewMetadataPatchResponses = {
+  /**
+   * Updated Agent View metadata
+   */
+  200: AgentViewMetadata
+}
+
+export type SessionAgentViewMetadataPatchResponse =
+  SessionAgentViewMetadataPatchResponses[keyof SessionAgentViewMetadataPatchResponses]
+
+export type SessionAgentCommandListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    sourceSessionID?: string
+    targetSessionID?: string
+    state?: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
+  }
+  url: "/session/agent-command"
+}
+
+export type SessionAgentCommandListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionAgentCommandListError = SessionAgentCommandListErrors[keyof SessionAgentCommandListErrors]
+
+export type SessionAgentCommandListResponses = {
+  /**
+   * Agent Command entries
+   */
+  200: Array<AgentCommand>
+}
+
+export type SessionAgentCommandListResponse = SessionAgentCommandListResponses[keyof SessionAgentCommandListResponses]
+
+export type SessionAgentCommandPolicyData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/agent-command/policy"
+}
+
+export type SessionAgentCommandPolicyErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type SessionAgentCommandPolicyError = SessionAgentCommandPolicyErrors[keyof SessionAgentCommandPolicyErrors]
+
+export type SessionAgentCommandPolicyResponses = {
+  /**
+   * Agent Command policy matrix
+   */
+  200: Array<AgentCommandPolicyMatrixItem>
+}
+
+export type SessionAgentCommandPolicyResponse =
+  SessionAgentCommandPolicyResponses[keyof SessionAgentCommandPolicyResponses]
+
+export type SessionAgentCommandListBySessionData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    state?: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
+  }
+  url: "/session/{sessionID}/agent-command"
+}
+
+export type SessionAgentCommandListBySessionErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionAgentCommandListBySessionError =
+  SessionAgentCommandListBySessionErrors[keyof SessionAgentCommandListBySessionErrors]
+
+export type SessionAgentCommandListBySessionResponses = {
+  /**
+   * Agent Command entries targeting this session
+   */
+  200: Array<AgentCommand>
+}
+
+export type SessionAgentCommandListBySessionResponse =
+  SessionAgentCommandListBySessionResponses[keyof SessionAgentCommandListBySessionResponses]
+
+export type SessionAgentCommandCreateData = {
+  body?: AgentCommandCreate
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/agent-command"
+}
+
+export type SessionAgentCommandCreateErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionAgentCommandCreateError = SessionAgentCommandCreateErrors[keyof SessionAgentCommandCreateErrors]
+
+export type SessionAgentCommandCreateResponses = {
+  /**
+   * Created Agent Command
+   */
+  200: AgentCommand
+}
+
+export type SessionAgentCommandCreateResponse =
+  SessionAgentCommandCreateResponses[keyof SessionAgentCommandCreateResponses]
+
+export type SessionAgentCommandPatchData = {
+  body?: AgentCommandUpdate
+  path: {
+    sessionID: string
+    commandID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/agent-command/{commandID}"
+}
+
+export type SessionAgentCommandPatchErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionAgentCommandPatchError = SessionAgentCommandPatchErrors[keyof SessionAgentCommandPatchErrors]
+
+export type SessionAgentCommandPatchResponses = {
+  /**
+   * Updated Agent Command
+   */
+  200: AgentCommand
+}
+
+export type SessionAgentCommandPatchResponse =
+  SessionAgentCommandPatchResponses[keyof SessionAgentCommandPatchResponses]
+
+export type SessionBackgroundRemoveData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/background"
+}
+
+export type SessionBackgroundRemoveErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionBackgroundRemoveError = SessionBackgroundRemoveErrors[keyof SessionBackgroundRemoveErrors]
+
+export type SessionBackgroundRemoveResponses = {
+  /**
+   * Removed background session
+   */
+  200: boolean
+}
+
+export type SessionBackgroundRemoveResponse = SessionBackgroundRemoveResponses[keyof SessionBackgroundRemoveResponses]
+
+export type SessionBackgroundRegisterData = {
+  body?: {
+    state?: "queued" | "working" | "needs_input" | "completed" | "failed" | "stopped"
+    summary?: string
+    error?: string
+    pinned?: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/background"
+}
+
+export type SessionBackgroundRegisterErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionBackgroundRegisterError = SessionBackgroundRegisterErrors[keyof SessionBackgroundRegisterErrors]
+
+export type SessionBackgroundRegisterResponses = {
+  /**
+   * Background session metadata
+   */
+  200: BackgroundSession
+}
+
+export type SessionBackgroundRegisterResponse =
+  SessionBackgroundRegisterResponses[keyof SessionBackgroundRegisterResponses]
+
+export type SessionBackgroundWriterReleaseData = {
+  body?: {
+    clientID: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/background/writer"
+}
+
+export type SessionBackgroundWriterReleaseErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionBackgroundWriterReleaseError =
+  SessionBackgroundWriterReleaseErrors[keyof SessionBackgroundWriterReleaseErrors]
+
+export type SessionBackgroundWriterReleaseResponses = {
+  /**
+   * Released writer presence
+   */
+  200: BackgroundSession
+}
+
+export type SessionBackgroundWriterReleaseResponse =
+  SessionBackgroundWriterReleaseResponses[keyof SessionBackgroundWriterReleaseResponses]
+
+export type SessionBackgroundWriterAcquireData = {
+  body?: {
+    clientID: string
+    ttlMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/background/writer"
+}
+
+export type SessionBackgroundWriterAcquireErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionBackgroundWriterAcquireError =
+  SessionBackgroundWriterAcquireErrors[keyof SessionBackgroundWriterAcquireErrors]
+
+export type SessionBackgroundWriterAcquireResponses = {
+  /**
+   * Writer presence registration result
+   */
+  200:
+    | {
+        acquired: true
+        info: BackgroundSession
+      }
+    | {
+        acquired: false
+        info?: BackgroundSession
+      }
+}
+
+export type SessionBackgroundWriterAcquireResponse =
+  SessionBackgroundWriterAcquireResponses[keyof SessionBackgroundWriterAcquireResponses]
+
 export type SessionChildrenData = {
   body?: never
   path: {
@@ -5394,6 +7071,8 @@ export type SessionMessagesData = {
     workspace?: string
     limit?: number
     before?: string
+    after?: string
+    view?: "full" | "tui" | "tui-all"
   }
   url: "/session/{sessionID}/message"
 }
@@ -5426,6 +7105,7 @@ export type SessionMessagesResponse = SessionMessagesResponses[keyof SessionMess
 export type SessionPromptData = {
   body?: {
     messageID?: string
+    replaceExisting?: boolean
     model?: {
       providerID: string
       modelID: string
@@ -5614,6 +7294,40 @@ export type SessionAbortResponses = {
 
 export type SessionAbortResponse = SessionAbortResponses[keyof SessionAbortResponses]
 
+export type SessionInterruptData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/interrupt"
+}
+
+export type SessionInterruptErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SessionInterruptError = SessionInterruptErrors[keyof SessionInterruptErrors]
+
+export type SessionInterruptResponses = {
+  /**
+   * Interrupted active turn and promoted the next queued prompt
+   */
+  200: boolean
+}
+
+export type SessionInterruptResponse = SessionInterruptResponses[keyof SessionInterruptResponses]
+
 export type SessionInitData = {
   body?: {
     modelID: string
@@ -5762,6 +7476,7 @@ export type SessionSummarizeResponse = SessionSummarizeResponses[keyof SessionSu
 export type SessionPromptAsyncData = {
   body?: {
     messageID?: string
+    replaceExisting?: boolean
     model?: {
       providerID: string
       modelID: string

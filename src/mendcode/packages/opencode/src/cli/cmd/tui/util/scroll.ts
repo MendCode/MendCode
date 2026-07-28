@@ -32,3 +32,21 @@ export function isScrollboxAtBottom(scroll: ScrollboxPosition, tolerance = 1) {
   const maxScrollTop = Math.max(0, scroll.scrollHeight - scroll.viewport.height)
   return scroll.scrollTop >= maxScrollTop - tolerance
 }
+
+export function isScrollboxAtTop(scroll: Pick<ScrollboxPosition, "scrollTop">, tolerance = 0) {
+  return scroll.scrollTop <= tolerance
+}
+
+export type SessionScrollState = {
+  top: number
+  follow: boolean
+  anchor?: {
+    id: string
+    offset: number
+  }
+}
+
+export function sessionScrollTarget(state?: SessionScrollState) {
+  if (!state || state.follow) return "bottom" as const
+  return Math.max(0, state.top)
+}

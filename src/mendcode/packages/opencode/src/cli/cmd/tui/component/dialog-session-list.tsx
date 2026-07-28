@@ -17,11 +17,16 @@ import { Spinner } from "./spinner"
 import { errorMessage } from "@/util/error"
 import { DialogSessionDeleteFailed } from "./dialog-session-delete-failed"
 import { WorkspaceLabel } from "./workspace-label"
+import { agentViewLoopRootSessionIDs, filterAgentViewLoopSessions } from "../util/agent-view"
 
 function newestSessionFirst<T extends { id: string; time: { created: number; updated: number } }>(sessions: T[]) {
   return [...sessions].sort(
     (a, b) => b.time.updated - a.time.updated || b.time.created - a.time.created || b.id.localeCompare(a.id),
   )
+}
+
+type SessionLoopWorkflow = {
+  rootSessionID?: string | null
 }
 
 export function DialogSessionList() {
@@ -37,6 +42,26 @@ export function DialogSessionList() {
   const [search, setSearch] = createDebouncedSignal("", 150)
   const [openedSessions, setOpenedSessions] = createSignal(newestSessionFirst(sync.data.session))
   const [openedFilter] = createSignal(sync.session.query())
+  const [loopRootSessionIDs, setLoopRootSessionIDs] = createSignal<ReadonlySet<string>>(new Set())
+
+  async function refreshLoopRootSessionIDs() {
+    const headers = new Headers(sdk.headers)
+    headers.set("accept", "application/json")
+    if (sdk.directory) headers.set("x-mendcode-directory", encodeURIComponent(sdk.directory))
+    for (const path of ["/loop/global", "/loop"]) {
+      try {
+        const response = await sdk.fetch(new URL(path, sdk.url), { headers })
+        if (!response.ok) continue
+        const data = await response.json()
+        if (!Array.isArray(data)) continue
+        setLoopRootSessionIDs(agentViewLoopRootSessionIDs(data as SessionLoopWorkflow[]))
+        return
+      } catch {
+        // Loop data is auxiliary; the title fallback below still hides conventional loop roots.
+      }
+    }
+    setLoopRootSessionIDs(new Set<string>())
+  }
 
   const [searchResults, { refetch }] = createResource(
     () => ({ query: search(), filter: openedFilter() }),
@@ -48,7 +73,7 @@ export function DialogSessionList() {
   )
 
   const currentSessionID = createMemo(() => (route.data.type === "session" ? route.data.sessionID : undefined))
-  const sessions = createMemo(() => searchResults() ?? openedSessions())
+  const sessions = createMemo(() => filterAgentViewLoopSessions(searchResults() ?? openedSessions(), loopRootSessionIDs()))
 
   function recover(session: NonNullable<ReturnType<typeof sessions>[number]>) {
     const workspace = project.workspace.get(session.workspaceID!)
@@ -172,7 +197,7 @@ export function DialogSessionList() {
 
   onMount(() => {
     dialog.setSize("large")
-    void sync.session.refresh().then(() => {
+    void Promise.all([sync.session.refresh(), refreshLoopRootSessionIDs()]).then(() => {
       setOpenedSessions(newestSessionFirst(sync.data.session))
     })
   })

@@ -4,6 +4,8 @@ Plan Mode turns planning into an explicit review step before implementation. The
 
 ![MendCode Plan Mode review modal](assets/screenshots/plan-review-modal.png)
 
+![MendCode Markdown preview rendering](assets/screenshots/markdown-preview-showcase.png)
+
 The important behavior is simple:
 
 1. The plan is displayed in the terminal, not buried in normal assistant prose.

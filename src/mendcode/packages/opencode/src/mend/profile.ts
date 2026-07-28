@@ -7,7 +7,7 @@ import { defaultPromptChrome, normalizePromptChromePreset, type MendPromptChrome
 import { defaultPromptStatus, type MendPromptStatusConfig } from "./tui/prompt-status"
 import { defaultPresentationConfig, resolveTuiPresentation, type MendPresentationConfig } from "./tui/presentation"
 import { activeMendPackageProjection } from "./runtime/packages"
-import type { MendHomeLogoSize, MendLogoMode } from "./tui/mascot"
+import type { MendLogoMode } from "./tui/mascot"
 import type { MendWorkingIndicator } from "./tui/working-indicator"
 import { Global } from "@mendcode/core/global"
 
@@ -45,7 +45,7 @@ export type MendTuiProfile = {
     width?: number
     zones: {
       sidebar: { enabled: boolean; compact: boolean; width: number }
-      header: { enabled: boolean }
+      header: { enabled: boolean; title?: { visible?: boolean; align?: "left" | "center" | "right" } }
       footer: { enabled: boolean }
       session: Record<string, unknown>
       prompt: Record<string, unknown>
@@ -60,7 +60,7 @@ export type MendTuiProfile = {
     model: { visible: boolean; format: string }
     provider: { visible: boolean; format: string }
     status: { visible: boolean; mode: string }
-    homeLogo?: { text?: string; size?: MendHomeLogoSize }
+    homeLogo?: { text?: string }
     homeWelcome?: { mode?: "centered" | "split"; rightPanel?: MendHomeWelcomeRightPanel }
   }
   rollback: {
@@ -109,7 +109,7 @@ const fallbackProfile: MendTuiProfile = {
     width: 88,
     zones: {
       sidebar: { enabled: false, compact: false, width: 0 },
-      header: { enabled: true },
+      header: { enabled: true, title: { visible: false, align: "center" } },
       footer: { enabled: true },
       session: { transcript: "main", metadata: "footer", stickyUserHeader: true, submitScrollMode: "bottom" },
       prompt: { position: "bottom", rightSurface: false },
@@ -131,7 +131,7 @@ const fallbackProfile: MendTuiProfile = {
     model: { visible: true, format: "provider/model" },
     provider: { visible: true, format: "provider" },
     status: { visible: true, mode: "guarded-runtime" },
-    homeLogo: { size: "default" },
+    homeLogo: {},
     homeWelcome: { mode: "centered", rightPanel: "agentManager" },
   },
   rollback: {
@@ -288,6 +288,15 @@ export function mergeMendTuiProfile(input: unknown): MendTuiProfile {
           ...(isRecord(input.layout) && isRecord(input.layout.zones) && isRecord(input.layout.zones.header)
             ? input.layout.zones.header
             : {}),
+          title: {
+            ...fallbackProfile.layout.zones.header.title,
+            ...(isRecord(input.layout) &&
+            isRecord(input.layout.zones) &&
+            isRecord(input.layout.zones.header) &&
+            isRecord(input.layout.zones.header.title)
+              ? input.layout.zones.header.title
+              : {}),
+          },
         },
         footer: {
           ...fallbackProfile.layout.zones.footer,
@@ -342,7 +351,11 @@ export function mergeMendTuiProfile(input: unknown): MendTuiProfile {
       },
       homeLogo: {
         ...fallbackProfile.surfaces.homeLogo,
-        ...(isRecord(input.surfaces) && isRecord(input.surfaces.homeLogo) ? input.surfaces.homeLogo : {}),
+        ...(isRecord(input.surfaces) &&
+        isRecord(input.surfaces.homeLogo) &&
+        typeof input.surfaces.homeLogo.text === "string"
+          ? { text: input.surfaces.homeLogo.text }
+          : {}),
       },
       homeWelcome: {
         ...fallbackProfile.surfaces.homeWelcome,
@@ -390,10 +403,33 @@ export function validateMendTuiProfile(profile: MendTuiProfile) {
     failures.push("tui promptStatus.scripts must be an object")
   }
   if (!Array.isArray(profile.workingIndicator.messages)) failures.push("tui workingIndicator.messages must be an array")
+  const headerTitle = profile.layout.zones.header.title
+  if (headerTitle?.visible !== undefined && typeof headerTitle.visible !== "boolean") {
+    failures.push("tui layout.zones.header.title.visible must be a boolean")
+  }
+  if (headerTitle?.align !== undefined && !["left", "center", "right"].includes(headerTitle.align)) {
+    failures.push("tui layout.zones.header.title.align is invalid")
+  }
   if (!["raw", "minimal", "mendcode"].includes(profile.presentation.profile))
     failures.push("tui presentation.profile is invalid")
   if (!["plain", "markdown", "rich"].includes(profile.presentation.message.renderer)) {
     failures.push("tui presentation.message.renderer is invalid")
+  }
+  if (typeof profile.presentation.input.pasteSummary !== "boolean") {
+    failures.push("tui presentation.input.pasteSummary must be a boolean")
+  }
+  if (profile.presentation.input.pasteSummaryMinChars < 1) {
+    failures.push("tui presentation.input.pasteSummaryMinChars must be at least 1")
+  }
+  if (!profile.presentation.compaction || !["minimal", "cockpit", "arcade", "quiet"].includes(profile.presentation.compaction.style)) {
+    failures.push("tui presentation.compaction.style is invalid")
+  }
+  if (
+    !profile.presentation.compaction ||
+    typeof profile.presentation.compaction.arcade !== "string" ||
+    profile.presentation.compaction.arcade.trim().length === 0
+  ) {
+    failures.push("tui presentation.compaction.arcade is invalid")
   }
   if (!["visible", "collapsed", "hidden"].includes(profile.presentation.reasoning.defaultVisibility)) {
     failures.push("tui presentation.reasoning.defaultVisibility is invalid")
@@ -424,12 +460,6 @@ export function validateMendTuiProfile(profile: MendTuiProfile) {
     sessionZone.submitScrollMode !== "clear"
   ) {
     failures.push("tui layout.zones.session.submitScrollMode is invalid")
-  }
-  if (
-    profile.surfaces.homeLogo?.size !== undefined &&
-    !["compact", "default", "large"].includes(profile.surfaces.homeLogo.size)
-  ) {
-    failures.push("tui surfaces.homeLogo.size is invalid")
   }
   if (
     profile.surfaces.homeWelcome?.mode !== undefined &&
@@ -487,6 +517,8 @@ export async function loadMendTuiProfile(root = ownRootFromModule(), config?: un
       else delete presentation.reasoning
       if (isRecord(active.presentation.message)) presentation.message = active.presentation.message
       else delete presentation.message
+      if (isRecord(active.presentation.compaction)) presentation.compaction = active.presentation.compaction
+      else delete presentation.compaction
       configured.presentation = resolveTuiPresentation(presentation)
     }
   }
@@ -494,6 +526,10 @@ export async function loadMendTuiProfile(root = ownRootFromModule(), config?: un
   for (const pack of packageProjection?.runtimePacks || []) {
     if (!isRecord(pack.tui) || Object.keys(pack.tui).length === 0) continue
     configured = mergeMendTuiProfile({ ...configured, ...pack.tui })
+  }
+  for (const packageProfile of packageProjection?.tuiProfiles || []) {
+    if (!isRecord(packageProfile) || Object.keys(packageProfile).length === 0) continue
+    configured = mergeMendTuiProfile({ ...configured, ...packageProfile })
   }
   if (profileRoot !== requestedRoot) {
     absolutizeInheritedPromptStatusScripts(configured, profileRoot)
@@ -583,9 +619,6 @@ async function applyTuiConfigOverrides(
   if (!homeLogo) return next
 
   if (homeLogo.mode === "title" || homeLogo.mode === "mascot") next.identity.logoMode = homeLogo.mode
-  if (homeLogo.size === "compact" || homeLogo.size === "default" || homeLogo.size === "large") {
-    next.surfaces.homeLogo = { ...(next.surfaces.homeLogo || {}), size: homeLogo.size }
-  }
 
   const text = typeof homeLogo.text === "string" ? homeLogo.text : await readHomeLogoPath(homeLogo.path, root)
   if (text?.trim()) {
@@ -635,6 +668,32 @@ export function profileTheme(profile: MendTuiProfile) {
       diffAddedBg: { dark: "#052e16", light: "#052e16" },
       diffRemovedBg: { dark: "#450a0a", light: "#450a0a" },
       diffContextBg: { dark: t.background, light: t.background },
+      diffLineNumber: { dark: t.muted, light: t.muted },
+      diffAddedLineNumberBg: { dark: "#064e3b", light: "#064e3b" },
+      diffRemovedLineNumberBg: { dark: "#7f1d1d", light: "#7f1d1d" },
+      markdownText: { dark: t.foreground, light: t.foreground },
+      markdownHeading: { dark: t.accent, light: t.accent },
+      markdownLink: { dark: "#38bdf8", light: "#38bdf8" },
+      markdownLinkText: { dark: "#38bdf8", light: "#38bdf8" },
+      markdownCode: { dark: t.accent, light: t.accent },
+      markdownBlockQuote: { dark: t.muted, light: t.muted },
+      markdownEmph: { dark: t.foreground, light: t.foreground },
+      markdownStrong: { dark: t.foreground, light: t.foreground },
+      markdownHorizontalRule: { dark: t.border, light: t.border },
+      markdownListItem: { dark: t.foreground, light: t.foreground },
+      markdownListEnumeration: { dark: t.accent, light: t.accent },
+      markdownImage: { dark: t.muted, light: t.muted },
+      markdownImageText: { dark: t.muted, light: t.muted },
+      markdownCodeBlock: { dark: t.backgroundPanel || "#0b1f16", light: t.backgroundPanel || "#0b1f16" },
+      syntaxComment: { dark: t.muted, light: t.muted },
+      syntaxKeyword: { dark: t.accent, light: t.accent },
+      syntaxFunction: { dark: "#38bdf8", light: "#38bdf8" },
+      syntaxVariable: { dark: t.foreground, light: t.foreground },
+      syntaxString: { dark: "#22c55e", light: "#22c55e" },
+      syntaxNumber: { dark: "#f59e0b", light: "#f59e0b" },
+      syntaxType: { dark: "#a78bfa", light: "#a78bfa" },
+      syntaxOperator: { dark: t.muted, light: t.muted },
+      syntaxPunctuation: { dark: t.muted, light: t.muted },
     },
   }
 }

@@ -5,6 +5,7 @@ export type SessionBottomDockLayout = {
   dockHeight: number
   todoWidth: number
   remainingWidth: number
+  customDockWidth: number
   showNotes: boolean
   showSubagents: boolean
   showInfo: boolean
@@ -18,9 +19,9 @@ const DOCK_HEIGHT = 7
 const TODO_VISIBLE_ROWS = DOCK_HEIGHT - 3
 const MIN_DOCK_WIDTH = 20
 const MIN_NOTES_WIDGET_WIDTH = 28
-const MIN_SUBAGENTS_WIDGET_WIDTH = 28
+const MIN_SUBAGENTS_WIDGET_WIDTH = 32
 const MIN_INFO_WIDGET_WIDTH = 24
-const MAX_SUBAGENTS_WIDGET_WIDTH = 40
+const MAX_SUBAGENTS_WIDGET_WIDTH = 56
 const MAX_INFO_WIDGET_WIDTH = 36
 const SIDE_WIDGET_GAP = 1
 
@@ -62,68 +63,99 @@ type SideWidgetPlan = {
   minWidth: number
 }
 
-function sideWidgetPlans(): SideWidgetPlan[] {
-  const notesOnly = {
-    showNotes: true,
-    showSubagents: false,
-    showInfo: false,
-    minWidth: MIN_NOTES_WIDGET_WIDTH,
-  }
+function sideWidgetPlanWidth(input: Omit<SideWidgetPlan, "minWidth">) {
   return [
-    {
-      showNotes: true,
-      showSubagents: true,
-      showInfo: true,
-      minWidth:
-        MIN_NOTES_WIDGET_WIDTH +
-        SIDE_WIDGET_GAP +
-        MIN_SUBAGENTS_WIDGET_WIDTH +
-        SIDE_WIDGET_GAP +
-        MIN_INFO_WIDGET_WIDTH,
-    },
-    {
-      showNotes: true,
-      showSubagents: true,
-      showInfo: false,
-      minWidth: MIN_NOTES_WIDGET_WIDTH + SIDE_WIDGET_GAP + MIN_SUBAGENTS_WIDGET_WIDTH,
-    },
-    {
-      showNotes: true,
-      showSubagents: false,
-      showInfo: true,
-      minWidth: MIN_NOTES_WIDGET_WIDTH + SIDE_WIDGET_GAP + MIN_INFO_WIDGET_WIDTH,
-    },
-    notesOnly,
+    input.showNotes ? MIN_NOTES_WIDGET_WIDTH : 0,
+    input.showSubagents ? MIN_SUBAGENTS_WIDGET_WIDTH : 0,
+    input.showInfo ? MIN_INFO_WIDGET_WIDTH : 0,
   ]
+    .filter(Boolean)
+    .reduce((total, width, index) => total + width + (index > 0 ? SIDE_WIDGET_GAP : 0), 0)
+}
+
+function sideWidgetPlan(input: Omit<SideWidgetPlan, "minWidth">): SideWidgetPlan {
+  return {
+    ...input,
+    minWidth: sideWidgetPlanWidth(input),
+  }
+}
+
+function sideWidgetPlans(
+  enabled: { notes?: boolean; subagents?: boolean; info?: boolean } = {},
+  subagentCount = 0,
+): SideWidgetPlan[] {
+  const wantsNotes = enabled.notes !== false
+  const wantsSubagents = enabled.subagents !== false && subagentCount > 0
+  const wantsInfo = enabled.info !== false
+  const plans = wantsSubagents
+    ? [
+        sideWidgetPlan({ showNotes: wantsNotes, showSubagents: wantsSubagents, showInfo: wantsInfo }),
+        sideWidgetPlan({ showNotes: wantsNotes, showSubagents: wantsSubagents, showInfo: false }),
+        sideWidgetPlan({ showNotes: false, showSubagents: wantsSubagents, showInfo: wantsInfo }),
+        sideWidgetPlan({ showNotes: false, showSubagents: wantsSubagents, showInfo: false }),
+        sideWidgetPlan({ showNotes: wantsNotes, showSubagents: false, showInfo: wantsInfo }),
+        sideWidgetPlan({ showNotes: wantsNotes, showSubagents: false, showInfo: false }),
+        sideWidgetPlan({ showNotes: false, showSubagents: false, showInfo: wantsInfo }),
+      ].filter((item) => item.minWidth > 0)
+    : [
+        sideWidgetPlan({ showNotes: wantsNotes, showSubagents: wantsSubagents, showInfo: wantsInfo }),
+        sideWidgetPlan({ showNotes: wantsNotes, showSubagents: wantsSubagents, showInfo: false }),
+        sideWidgetPlan({ showNotes: wantsNotes, showSubagents: false, showInfo: wantsInfo }),
+        sideWidgetPlan({ showNotes: wantsNotes, showSubagents: false, showInfo: false }),
+        sideWidgetPlan({ showNotes: false, showSubagents: wantsSubagents, showInfo: wantsInfo }),
+        sideWidgetPlan({ showNotes: false, showSubagents: wantsSubagents, showInfo: false }),
+        sideWidgetPlan({ showNotes: false, showSubagents: false, showInfo: wantsInfo }),
+      ].filter((item) => item.minWidth > 0)
+
+  const seen = new Set<string>()
+  return plans.filter((item) => {
+    const key = `${item.showNotes}:${item.showSubagents}:${item.showInfo}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 export function sessionBottomDockLayout(input: {
   todos: SessionTodo[]
   width: number
   subagentCount?: number
+  customDockMinWidth?: number
+  enabled?: {
+    notes?: boolean
+    subagents?: boolean
+    info?: boolean
+  }
 }): SessionBottomDockLayout {
   const availableWidth = Math.max(MIN_DOCK_WIDTH, input.width)
   const canReserveMascot =
     availableWidth >= MIN_DOCK_WIDTH + SIDE_WIDGET_GAP + MIN_NOTES_WIDGET_WIDTH + MASCOT_CLEARANCE
   const dockWidth = canReserveMascot ? availableWidth - MASCOT_CLEARANCE : availableWidth
+  const customDockWidth = Math.max(0, Math.min(input.customDockMinWidth ?? 0, Math.max(0, dockWidth - MIN_DOCK_WIDTH)))
+  const builtinDockWidth = Math.max(
+    MIN_DOCK_WIDTH,
+    dockWidth - (customDockWidth > 0 ? customDockWidth + SIDE_WIDGET_GAP : 0),
+  )
   const naturalTodoWidth = sessionTodoPanelWidth({
     todos: input.todos,
-    maxWidth: dockWidth,
+    maxWidth: builtinDockWidth,
     expanded: false,
     collapsedLimit: TODO_VISIBLE_ROWS,
   })
-  const plan = sideWidgetPlans().find((item) => {
-    return dockWidth >= MIN_DOCK_WIDTH + SIDE_WIDGET_GAP + item.minWidth
+  const plan = sideWidgetPlans(input.enabled, input.subagentCount ?? 0).find((item) => {
+    return builtinDockWidth >= MIN_DOCK_WIDTH + SIDE_WIDGET_GAP + item.minWidth
   })
   const todoWidth = plan
-    ? Math.min(naturalTodoWidth, Math.max(MIN_DOCK_WIDTH, dockWidth - plan.minWidth - SIDE_WIDGET_GAP))
-    : dockWidth
-  const remainingWidth = plan ? Math.max(0, dockWidth - todoWidth - SIDE_WIDGET_GAP) : 0
+    ? Math.min(naturalTodoWidth, Math.max(MIN_DOCK_WIDTH, builtinDockWidth - plan.minWidth - SIDE_WIDGET_GAP))
+    : builtinDockWidth
+  const remainingWidth = plan ? Math.max(0, builtinDockWidth - todoWidth - SIDE_WIDGET_GAP) : 0
   const baseSideWidth = plan?.minWidth ?? 0
   const extraSideWidth = Math.max(0, remainingWidth - baseSideWidth)
-  const infoExtra = plan?.showInfo ? Math.min(extraSideWidth, MAX_INFO_WIDGET_WIDTH - MIN_INFO_WIDGET_WIDTH) : 0
   const subagentsExtra = plan?.showSubagents
-    ? Math.min(extraSideWidth - infoExtra, MAX_SUBAGENTS_WIDGET_WIDTH - MIN_SUBAGENTS_WIDGET_WIDTH)
+    ? Math.min(extraSideWidth, MAX_SUBAGENTS_WIDGET_WIDTH - MIN_SUBAGENTS_WIDGET_WIDTH)
+    : 0
+  const infoExtra = plan?.showInfo
+    ? Math.min(extraSideWidth - subagentsExtra, MAX_INFO_WIDGET_WIDTH - MIN_INFO_WIDGET_WIDTH)
     : 0
   const infoWidth = plan?.showInfo
     ? clampDockWidth(MIN_INFO_WIDGET_WIDTH + infoExtra, MIN_INFO_WIDGET_WIDTH, MAX_INFO_WIDGET_WIDTH)
@@ -149,6 +181,7 @@ export function sessionBottomDockLayout(input: {
     dockHeight: DOCK_HEIGHT,
     todoWidth,
     remainingWidth,
+    customDockWidth,
     showNotes: plan?.showNotes ?? false,
     showSubagents: plan?.showSubagents ?? false,
     showInfo: plan?.showInfo ?? false,

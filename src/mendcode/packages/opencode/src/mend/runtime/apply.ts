@@ -10,9 +10,12 @@ export type RuntimePackSubsystem =
   | "modes"
   | "skills"
   | "plugins"
+  | "tools"
   | "mcp"
   | "prompts"
   | "context"
+  | "pages"
+  | "widgets"
   | "extensions"
   | "budget"
   | "tui"
@@ -84,6 +87,12 @@ export function runtimePackAdapterPreview(pack: RuntimePack): RuntimePackAdapter
       reason: `Pack references ${pack.plugins.length} plugin files using runtime loader-compatible globs.`,
     },
     {
+      subsystem: "tools",
+      target: ".mendcode/tools",
+      action: "noop",
+      reason: `Pack references ${pack.tools?.length || 0} custom tool-call files.`,
+    },
+    {
       subsystem: "mcp",
       target: ".mendcode/mcp",
       action: count(pack.mcp.config) || pack.mcp.files.length ? "sync" : "noop",
@@ -102,8 +111,20 @@ export function runtimePackAdapterPreview(pack: RuntimePack): RuntimePackAdapter
       reason: `Pack references ${pack.context.include.length} context inputs.`,
     },
     {
+      subsystem: "pages",
+      target: ".mendcode/pages",
+      action: "noop",
+      reason: `Pack references ${pack.pages?.length || 0} custom TUI page files.`,
+    },
+    {
+      subsystem: "widgets",
+      target: ".mendcode/widgets",
+      action: "noop",
+      reason: `Pack references ${pack.widgets?.length || 0} custom TUI widget files.`,
+    },
+    {
       subsystem: "extensions",
-      target: ".mendcode/{widgets,components,scripts}",
+      target: ".mendcode/{widgets,components,scripts,tools,pages}",
       action: "noop",
       reason: `Pack references ${pack.extensions.length} extension support files.`,
     },

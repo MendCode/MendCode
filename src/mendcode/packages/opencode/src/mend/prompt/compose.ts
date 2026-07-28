@@ -3,7 +3,7 @@ import { readMendConfig } from "../config/project"
 import { readWorktreePolicy, tsmStatus } from "../config/worktree"
 import { readMflowConfig } from "../config/mflow"
 import type { MendPromptMode } from "./mode"
-import { focusNames, readPromptSource, resolvePromptSourceFile, sourceForFocus } from "./sources"
+import { focusNames, promptBehaviorForModel, promptBehaviorText, readPromptSource, resolvePromptSourceFile, sourceForFocus } from "./sources"
 import { composeCustomizationCapabilitySection } from "./capabilities"
 
 export type PromptBaseSource = "mendcode-harness-source" | "opencode-generic-provider-fallback" | "minimal-base"
@@ -99,10 +99,15 @@ function minimalBoundary() {
     "Use the available terminal coding tools accurately.",
     "For monitored loops or repeated autonomous iterations, use the `loop` tool; `/loop` creates/activates and `/loops` lists or shows existing workflows. Ask only for missing critical settings.",
     "Before creating another loop for the same goal, list/show existing workflows; if a loop shows completed 0/0 or no next wakeup unexpectedly, report the invalid zero-budget state instead of recreating loops.",
-    "Never set loop maxTurns to 0. Use a positive cap, or omit maxTurns for unlimited/unbounded monitoring.",
+    "Never set loop maxTurns to 0. Use a positive cap for bounded/fixed loops; omit maxTurns for an uncapped max-goal or unbounded monitor.",
+    "Loop cost/token budgets are opt-in: use the Setup budget policy as the source of truth, and omit maxCost and maxTokens when no budget is configured; do not infer a token cap from the selected provider or auth mode.",
     "If the user asks the loop to write, edit, fix, implement, code, or create files, use normal execution rather than report-only; report-only is for inspection/monitoring/reporting objectives.",
     "Do not claim tests, builds, provider calls, or file writes passed unless they actually ran.",
     "Do not expose secrets or raw auth tokens.",
+    "Background subagents:",
+    "- `task` with `background: true` returns a `task_id` immediately. Do not call `task_status` or `wait` repeatedly in the same turn.",
+    "- If no independent parent work remains, end the current turn and let the runtime completion notification/owner wake resume the parent; do not sleep, poll, or retry a timed-out `wait`.",
+    "- Use `task_status` later to inspect, cancel, or collect a result, and never claim background work is complete without its evidence.",
   ].join("\n")
 }
 
@@ -111,13 +116,37 @@ function loopWorkflowBrief() {
     "MendCode Loop Workflow:",
     "- Treat `/loop`, `turn this session into a loop`, `run this every N minutes`, or `run 5 monitored iterations` as Loop Workflow tool requests.",
     "- Use the `loop` tool; `/loop` creates or activates, `/loops` lists workflows unless a concrete loop id is provided for show.",
-    "- Ask with the `question` tool only when objective, iteration limit, cadence, model/provider, max runtime, permissions, or stop condition are missing.",
+    "- Ask with the `question` tool only when objective, cadence, model/provider, max runtime, permissions, or stop condition are missing; ask for an iteration limit only when bounded execution is intended.",
     "- Create a reviewable loop draft first, or activate directly when the objective, model, iteration limit, cadence, permissions, and stop condition are already clear.",
     "- Use report-only mode unless the user explicitly allows edits; do not write `Iteration 1/5` through `Iteration 5/5` manually in the current chat turn.",
     "- A user request to write, edit, fix, implement, code, or create files is explicit edit approval for that loop; create it with normal execution instead of report-only.",
-    "- Never use `maxTurns: 0`; fixed/max-goal loops need a positive cap, while unbounded-monitor loops should omit the cap.",
+    "- Never use `maxTurns: 0`; fixed loops need a positive cap, while max-goal may omit maxTurns for no iteration cap and unbounded-monitor loops should omit it.",
     "- If a loop appears completed without runs, `completed 0/0`, or missing an expected next wakeup, inspect it with list/show and report the invalid state instead of creating replacement loops repeatedly.",
     "- Report the loop id, current phase, next wakeup, and where the user can monitor it in the TUI.",
+  ].join("\n")
+}
+
+function focusMendCodeBasics() {
+  return [
+    "MendCode basics:",
+    "- For independent work that can run concurrently, call `task` with `background: true` and keep each returned `task_id`; do not poll with `task_status` or `wait` in the same turn.",
+    "- If no useful parent work remains, end the turn and let the runtime notification/owner wake resume it; use `task_status` later to inspect, cancel, or collect results.",
+    "- Keep `task` in foreground when the next step depends on its result. A foreground task blocks this session, so wait for it to finish before launching the next subagent and do not claim parallel execution.",
+    "- Report a subagent as started only after `task` returns its `task_id`; if a foreground call is still running, the next subagent has not started.",
+    "- Use `loop` for durable or repeated work after the current turn; do not emulate scheduled iterations inline.",
+  ].join("\n")
+}
+
+function backgroundSubagentFull() {
+  return [
+    "MendCode background subagents:",
+    "- For independent work that can run concurrently, call `task` with `background: true`, keep the returned task_id, and continue useful parent work immediately.",
+    "- After a background launch, do not call `task_status` or `wait` just to monitor it in the same turn. If no useful parent work remains, end the turn and let the runtime completion notification/owner wake resume the parent.",
+    "- Do not busy-poll, sleep, or retry a timed-out `wait` in the same turn. Use `task_status` later to inspect, rediscover, collect, or `cancel` a task.",
+    "- Keep `task` in foreground when the very next step depends on its result; if background work is already running, end the turn instead of waiting synchronously.",
+    "- A `wait` timeout releases only the waiter and does not cancel the child. Background completion, failure, cancellation, and needs-input notifications automatically deliver at most one coalesced internal runtime wake to an idle parent; it is not a user message. This is the default CLI behavior and can be disabled with `subagent_owner_wake: false`.",
+    "- Collect relevant background results before claiming completion; surface failed, waiting, or retrying tasks honestly.",
+    "- Background subagents are runtime-scoped concurrent jobs, not durable scheduled workflows. Use `loop` for monitored repetition or wakeups after MendCode exits.",
   ].join("\n")
 }
 
@@ -127,13 +156,13 @@ function loopWorkflowFull() {
     "- A loop is a durable workflow backed by MendCode storage, a root session, Agent View state, loop runs, and a scheduler/service wakeup path.",
     "- The normal user-facing flow is chat-first through the `loop` tool: when the user asks to convert the current session into a loop, create a Loop Workflow for that objective, activate it, and let the loop runner own future iterations.",
     "- Do not satisfy loop requests by performing all iterations inline in the current assistant turn. Inline iteration text is only a short preview when explicitly framed as a dry-run preview.",
-    "- Drafts should capture name, objective, prompt, cadence or manual run mode, iteration cap, max wall-clock runtime when useful, stop condition, permission mode, provider/model, agent profile, and whether report-only is required.",
+    "- Drafts should capture name, objective, prompt, cadence or manual run mode, an optional iteration cap, max wall-clock runtime when useful, stop condition, permission mode, provider/model, agent profile, and whether report-only is required.",
     "- When model/provider is unspecified and it matters for cost, speed, capability, or the user's request, ask the user to choose from the configured providers/models that are visible in the session. If no choice is needed, use the current session default.",
     "- Activation should create or reuse the loop root session, show it as Looping/background in Agent View, and ensure the project loop service when available.",
     "- For safe tests, prefer report-only execution: the agent may read and analyze, but edit/write/shell/subagent escalation remains denied unless the user explicitly opts into normal execution.",
     "- If the requested loop objective includes writing, editing, fixing, implementing, coding, or creating files, that is explicit normal-execution intent; do not downgrade it to report-only just because it is a loop.",
     "- For a bounded test loop such as five directory-inspection iterations, create a loop with a 5-run cap, report-only permissions, a concise per-run diff/new-findings report, and a final summary after the fifth run.",
-    "- Never use a zero iteration cap. Use positive maxTurns for bounded/fixed work; omit maxTurns for unbounded-monitor cadence so scheduled loops do not complete as 0/0 before their first run.",
+    "- Never use a zero iteration cap. Use positive maxTurns for bounded/fixed work; max-goal may omit maxTurns when no cap is configured, and unbounded-monitor cadence must omit it so scheduled loops do not complete as 0/0 before their first run.",
     "- Before recreating a loop, inspect existing workflows with list/show. A loop in completed 0/0, no-runs, or missing-next-wakeup state is an invalid workflow to report or fix, not a reason to create more loops blindly.",
     "- The loop service is responsible for durable wakeups after the TUI or chat session closes. SSE is a live refresh channel for open TUIs; storage is the source of truth when the TUI reopens.",
     "- Prefer the `loop` tool over shell commands. If the tool is unavailable, the CLI namespace is plural `mendcode loops`; never try `mendcode loop`.",
@@ -144,12 +173,13 @@ function loopWorkflowFull() {
   ].join("\n")
 }
 
-function focusFallback(focusID: string, reason: string) {
+function focusFallback(focusID: string, reason: string, behavior: string[] = []) {
   return [
     `Active focus: ${focusNames[focusID] || focusID} (${focusID}).`,
     `Harness prompt fallback: ${reason}.`,
     "Use a small MendCode coding baseline: inspect before editing, keep changes scoped, and verify with executable evidence.",
     "Preserve MendCode product identity. Do not claim to be an upstream CLI, company, or official harness.",
+    ...(behavior.length ? ["Focus behavior baseline:", ...behavior.map((item) => `- ${item}`)] : []),
   ].join("\n")
 }
 
@@ -159,6 +189,20 @@ function tuiMarkdownRendering() {
     "- Full text Markdown is supported in assistant responses: headings, bold/italic text, inline code, fenced code blocks, links, lists, checklists, blockquotes, and tables.",
     "- Mermaid fenced blocks are supported for flowcharts and other useful diagrams.",
     "- Embedded HTML and Markdown images are outside the terminal text rendering contract.",
+  ].join("\n")
+}
+
+function marketplaceExtensionContract() {
+  return [
+    "MendCode marketplace and extension contract:",
+    "- Marketplace packages are reusable .mendcode bundles, not npm runtime installs. Prefer `mendcode marketplace install <pack-id> [source-id]` and package registry sources over installing arbitrary npm packages.",
+    "- Packages may include commands, agents, modes, skills, prompts, MCP config, context files, TUI profiles, themes, plugins, widgets/components/scripts, custom pages, and assistant-facing custom tools under `.mendcode/tools`.",
+    "- Use the public TUI plugin API from `@mendcode/plugin/tui` for command palette entries, slash commands, routes/pages, dialogs, slots, footer/status entries, themes, KV state, lifecycle cleanup, and simple shell-backed widgets.",
+    "- Custom pages can build terminal-native ASCII/Solid UIs similar to built-in Usage, Memory Center, or Loop pages when the required state is available through the public API.",
+    "- Shell-backed widgets use `api.shell.spawn()` for bounded stdout/stderr streams. This is not a PTY; do not implement full-screen terminal apps, cursor-addressing programs, alternate-screen apps, Doom, or real cava by piping stdout into the main TUI.",
+    "- If a package needs private MendCode runtime data, add or request a public API first. Do not import private runtime internals from packages.",
+    "- Packages must not include provider tokens, OAuth state, `.env*`, `.mendcode/auth`, local databases, room secrets, cache files, or machine-local run state.",
+    "- Disabling a marketplace package should deselect it without deleting project config; removing a package deletes only the installed package copy and state entry.",
   ].join("\n")
 }
 
@@ -183,15 +227,16 @@ async function fullKnowledge(root: string) {
     "- Health/setup: `mendcode status`, `mendcode doctor`, `mendcode check`, `mendcode setup status|plan|doctor`.",
     "- Models/providers/auth: `mendcode models status|show|plan|presets|set-default|use-preset`, `mendcode providers status`, `mendcode auth status|login-plan|login`.",
     "- Prompt/runtime internals are debug-only and should not be presented as the normal user workflow.",
-    "- Memory inspection: `mendcode memory status|search|preview|list|index|config`.",
-    "- Project controls: `mendcode focus status|list|show|use`, `mendcode packages status|list|create|install|enable|disable|remove|search|show`.",
+    "- Memory inspection: use the `memory` tool for status, categories, list, search, context, add, update, and delete.",
+    "- Project controls: `mendcode focus status|list|show|use`, `mendcode marketplace status|list|create|install|enable|disable|remove|search|show`.",
     "- Collaboration: `mendcode worktree status|plan|create|open|adopt|remove|reset|doctor`, `mendcode mflow status|setup|activate|deactivate|remove|plan|doctor`, `mendcode tsm status|plan|setup|activate|deactivate|remove|doctor`.",
     "",
     "Memory operating contract:",
-    "- Do not call `mendcode memory add` or `mendcode memory propose` for implicit preferences, corrections, rules, or durable future-use candidates.",
-    "- Let the post-turn memory extractor create approval-gated pending proposals from normal chat content.",
-    "- Use direct memory mutation commands only when the user explicitly asks to save, remember, add, edit, delete, apply, or reject memory now, including equivalent explicit memory wording in the user's language.",
-    "- List/search before editing, deleting, applying, or rejecting memory IDs.",
+    "- Use `memory` when you detect a durable correction, user preference, project rule, or explicit memory-management request. Scope cross-project behavior as global and repo-specific behavior as project.",
+    "- Use `memory_graph` only when relationships matter, such as conflicts, supersedes, supports, related facts, or graph validation.",
+    "- Search/list/categories before update/delete unless the exact memory id was just returned by a memory tool.",
+    "- If `memory` or `memory_graph` is used in a turn, the automatic post-turn extractor is skipped; do not duplicate the same fact through proposals.",
+    "- Do not save transient task status, raw logs, secrets, or one-off debugging facts as durable memory.",
     "- Treat injected memories as soft context; current user instructions and repository evidence win.",
   ]
   const integration: string[] = []
@@ -201,14 +246,22 @@ async function fullKnowledge(root: string) {
       "- Runtime mflow coordination is enabled. File edit locks are enforced by MendCode hooks; do not call mflow manually unless the user asks.",
     )
   }
-  if (tsm.enabled || tsm.lifecycle === "active" || tsm.lifecycle === "degraded" || (tsm.policy?.mode && tsm.policy.mode !== "off")) {
+  if (
+    tsm.enabled ||
+    tsm.lifecycle === "active" ||
+    tsm.lifecycle === "degraded" ||
+    (tsm.policy?.mode && tsm.policy.mode !== "off")
+  ) {
     integration.push(
       "TSM context:",
       `- TSM lifecycle=${tsm.lifecycle}, enabled=${tsm.enabled}, worktreeCapable=${tsm.worktreeCapable}. Do not install, activate, run, remove, or delegate worktrees to TSM unless explicitly requested.`,
     )
   }
   if (policy.mode === "live-sync" && !mflow.enabled) {
-    integration.push("Worktree context:", "- Worktree policy mentions live-sync, but Mflow is not fully enabled; keep live operations blocked.")
+    integration.push(
+      "Worktree context:",
+      "- Worktree policy mentions live-sync, but Mflow is not fully enabled; keep live operations blocked.",
+    )
   }
   return { knowledge: lines.join("\n"), integration: integration.join("\n") }
 }
@@ -221,18 +274,21 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
   const source = sourceForFocus(focusID)
   const harness = await readPromptSource(source, sourceInput)
   const found = source ? resolvePromptSourceFile(source, sourceInput) : null
+  const modelBehavior = promptBehaviorForModel({ focusID, modelID: input.modelID })
   const sections: PromptSection[] = []
-  const includeProjectInstructions = true
-  const includeSkillsByDefault = mode !== "minimal"
-  const includeCustomInstructions = true
-  const includeMcpContext = true
+  const includeProjectInstructions = mode === "full"
+  const includeSkillsByDefault = mode === "full"
+  const includeCustomInstructions = mode === "full"
+  const includeMcpContext = mode === "full"
 
-  sections.push(section({
-    id: "mode-boundary",
-    label: "MendCode mode boundary",
-    source: "mode-boundary",
-    text: minimalBoundary(),
-  }))
+  sections.push(
+    section({
+      id: "mode-boundary",
+      label: "MendCode mode boundary",
+      source: "mode-boundary",
+      text: minimalBoundary(),
+    }),
+  )
 
   let basePrompt: string | null = null
   let basePromptSource: PromptBaseSource = "minimal-base"
@@ -242,12 +298,14 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
     if (harness) {
       basePrompt = harness.text
       basePromptSource = "mendcode-harness-source"
-      sections.push(section({
-        id: "harness",
-        label: `${source?.label || focusID} harness prompt`,
-        source: "mendcode-harness-source",
-        text: harness.text,
-      }))
+      sections.push(
+        section({
+          id: "harness",
+          label: `${source?.label || focusID} harness prompt`,
+          source: "mendcode-harness-source",
+          text: harness.text,
+        }),
+      )
     } else {
       fallbackReason = source
         ? source.sourcePolicy === "oss-source"
@@ -255,59 +313,112 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
           : `focus source policy is ${source.sourcePolicy}`
         : "unknown focus"
       basePromptSource = "opencode-generic-provider-fallback"
-      sections.push(section({
-        id: "fallback",
-        label: "MendCode focus fallback",
-        source: "opencode-generic-provider-fallback",
-        text: focusFallback(focusID, fallbackReason),
-      }))
+      sections.push(
+        section({
+          id: "fallback",
+          label: "MendCode focus fallback",
+          source: "opencode-generic-provider-fallback",
+          text: focusFallback(focusID, fallbackReason, source?.behavior),
+        }),
+      )
     }
   }
 
-  if (mode !== "minimal") {
-    sections.push(section({
-      id: "loop-workflow-brief",
-      label: "MendCode Loop Workflow",
-      source: "mendcode-context",
-      text: loopWorkflowBrief(),
-    }))
+  if (mode !== "minimal" && modelBehavior) {
+    sections.push(
+      section({
+        id: "model-behavior",
+        label: modelBehavior.label,
+        source: "mendcode-context",
+        text: promptBehaviorText(modelBehavior),
+      }),
+    )
+  }
 
-    sections.push(section({
-      id: "tui-markdown-rendering",
-      label: "MendCode TUI Markdown rendering",
-      source: "mendcode-context",
-      text: tuiMarkdownRendering(),
-    }))
+  if (mode === "focus") {
+    sections.push(
+      section({
+        id: "focus-mendcode-basics",
+        label: "MendCode basics",
+        source: "mendcode-context",
+        text: focusMendCodeBasics(),
+      }),
+    )
+  }
+
+  if (mode === "full") {
+    sections.push(
+      section({
+        id: "background-subagents",
+        label: "MendCode background subagents",
+        source: "mendcode-context",
+        text: backgroundSubagentFull(),
+      }),
+    )
+
+    sections.push(
+      section({
+        id: "loop-workflow-brief",
+        label: "MendCode Loop Workflow",
+        source: "mendcode-context",
+        text: loopWorkflowBrief(),
+      }),
+    )
+
+    sections.push(
+      section({
+        id: "tui-markdown-rendering",
+        label: "MendCode TUI Markdown rendering",
+        source: "mendcode-context",
+        text: tuiMarkdownRendering(),
+      }),
+    )
   }
 
   if (mode === "full") {
     const full = await fullKnowledge(root)
-    sections.push(section({
-      id: "loop-workflow-full",
-      label: "MendCode Loop Workflow full contract",
-      source: "mendcode-context",
-      text: loopWorkflowFull(),
-    }))
-    sections.push(section({
-      id: "mendcode-context",
-      label: "MendCode knowledge",
-      source: "mendcode-context",
-      text: full.knowledge,
-    }))
+    sections.push(
+      section({
+        id: "loop-workflow-full",
+        label: "MendCode Loop Workflow full contract",
+        source: "mendcode-context",
+        text: loopWorkflowFull(),
+      }),
+    )
+    sections.push(
+      section({
+        id: "mendcode-context",
+        label: "MendCode knowledge",
+        source: "mendcode-context",
+        text: full.knowledge,
+      }),
+    )
+    sections.push(
+      section({
+        id: "marketplace-extension-contract",
+        label: "MendCode marketplace and extension contract",
+        source: "mendcode-context",
+        text: marketplaceExtensionContract(),
+      }),
+    )
     if (full.integration) {
-      sections.push(section({
-        id: "integrations",
-        label: "Active integration knowledge",
-        source: "integration-context",
-        text: full.integration,
-      }))
+      sections.push(
+        section({
+          id: "integrations",
+          label: "Active integration knowledge",
+          source: "integration-context",
+          text: full.integration,
+        }),
+      )
     }
-    sections.push(section({
-      id: "customization-capabilities",
-      label: "MendCode customization capabilities",
-      source: "mendcode-context",
-      text: composeCustomizationCapabilitySection(),
-    }))
+    sections.push(
+      section({
+        id: "customization-capabilities",
+        label: "MendCode customization capabilities",
+        source: "mendcode-context",
+        text: composeCustomizationCapabilitySection(),
+      }),
+    )
   }
 
   const instructions = sections.map((item) => item.text).join("\n\n")

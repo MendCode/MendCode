@@ -10,7 +10,6 @@ import { EOL } from "os"
 import { Filesystem } from "@/util/filesystem"
 import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@mendcode/sdk/v2"
 import { Server } from "../../server/server"
-import { Provider } from "@/provider/provider"
 import { Agent } from "../../agent/agent"
 import { Permission } from "../../permission"
 import { Tool } from "@/tool/tool"
@@ -27,6 +26,11 @@ import { ShellTool } from "../../tool/shell"
 import { ShellID } from "../../tool/shell/id"
 import { TodoWriteTool } from "../../tool/todo"
 import { Locale } from "@/util/locale"
+import { Session } from "@/session/session"
+import { SessionID } from "@/session/schema"
+import { resolveRuntimeModel } from "../model-selection"
+import { writeAutomationEnvelope } from "../automation"
+import { AppRuntime } from "@/effect/app-runtime"
 
 type ToolProps<T> = {
   input: Tool.InferParameters<T>
@@ -305,6 +309,7 @@ export const RunCommand = effectCmd({
       }),
   handler: Effect.fn("Cli.run")(function* (args) {
     const agentSvc = yield* Agent.Service
+    const sessions = yield* Session.Service
     yield* Effect.promise(async () => {
       let message = [...args.message, ...(args["--"] || [])]
         .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
@@ -432,7 +437,7 @@ export const RunCommand = effectCmd({
 
         function emit(type: string, data: Record<string, unknown>) {
           if (args.format === "json") {
-            process.stdout.write(JSON.stringify({ type, timestamp: Date.now(), sessionID, ...data }) + EOL)
+            writeAutomationEnvelope({ kind: "event", event: type, sessionID, data })
             return true
           }
           return false
@@ -635,28 +640,54 @@ export const RunCommand = effectCmd({
         }
         await share(sdk, sessionID)
 
-        loop().catch((e) => {
-          console.error(e)
-          process.exit(1)
+        const sessionInfo = await Effect.runPromise(sessions.get(SessionID.make(sessionID)))
+        const resolved = await AppRuntime.runPromise(
+          resolveRuntimeModel({
+            session: sessionInfo,
+            explicitAgent: agent,
+            explicitModel: args.model,
+            explicitVariant: args.variant,
+          }),
+        )
+        emit("session.started", {
+          resolution: resolved,
         })
 
-        if (args.command) {
-          await sdk.session.command({
+        const eventLoop = loop()
+
+        try {
+          if (args.command) {
+            await sdk.session.command({
+              sessionID,
+              agent: resolved.agent,
+              model: resolved.model ? `${resolved.model.providerID}/${resolved.model.modelID}` : undefined,
+              command: args.command,
+              arguments: message,
+              variant: resolved.variant,
+            })
+          } else {
+            await sdk.session.prompt({
+              sessionID,
+              agent: resolved.agent,
+              model: resolved.model,
+              variant: resolved.variant,
+              parts: [...files, { type: "text", text: message }],
+            })
+          }
+        } finally {
+          await eventLoop
+        }
+
+        if (args.format === "json") {
+          writeAutomationEnvelope({
+            kind: "result",
+            event: "session.completed",
             sessionID,
-            agent,
-            model: args.model,
-            command: args.command,
-            arguments: message,
-            variant: args.variant,
-          })
-        } else {
-          const model = args.model ? Provider.parseModel(args.model) : undefined
-          await sdk.session.prompt({
-            sessionID,
-            agent,
-            model,
-            variant: args.variant,
-            parts: [...files, { type: "text", text: message }],
+            data: {
+              status: error ? "failed" : "completed",
+              resolution: resolved,
+              error: error ?? null,
+            },
           })
         }
       }

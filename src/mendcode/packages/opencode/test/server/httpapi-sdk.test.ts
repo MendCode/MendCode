@@ -581,6 +581,41 @@ describe("HttpApi SDK", () => {
     ),
   )
 
+  parity("aggregates usage insights without transcript request fan-out", (backend) =>
+    withStandardProject(backend, ({ sdk, directory }) =>
+      Effect.gen(function* () {
+        const session = yield* call(() => sdk.session.create({ title: "usage insights" }))
+        const sessionID = record(session.data).id
+        if (typeof sessionID !== "string") throw new Error("missing session id")
+        yield* seedMessage(directory, sessionID)
+        yield* seedMessage(directory, sessionID)
+
+        const url = new URL("http://localhost/experimental/usage-insights")
+        url.searchParams.set("start", String(Date.now() - 24 * 60 * 60 * 1000))
+        url.searchParams.set("limit", "10")
+        url.searchParams.set("messageLimit", "1")
+        const response = yield* call(() => serverFetch(backend)(url, {
+          headers: { "x-mendcode-directory": encodeURIComponent(directory) },
+        }))
+        const data = record(yield* call(() => response.json()))
+        const totals = record(data.totals)
+
+        expect(response.status).toBe(200)
+        expect(totals.sessions).toBe(1)
+        expect(totals.messages).toBe(1)
+        expect(totals.userMessages).toBe(1)
+        expect(totals.userWords).toBe(2)
+        return {
+          status: response.status,
+          sessions: totals.sessions,
+          messages: totals.messages,
+          userMessages: totals.userMessages,
+          userWords: totals.userWords,
+        }
+      }),
+    ),
+  )
+
   parity("matches generated SDK prompt no-reply routes across backends", (backend) =>
     withStandardProject(backend, ({ sdk }) =>
       Effect.gen(function* () {
@@ -613,6 +648,34 @@ describe("HttpApi SDK", () => {
             .map((part) => record(part).text)
             .filter((text): text is string => typeof text === "string")
             .sort(),
+        }
+      }),
+    ),
+  )
+
+  parity("persists async prompts before acknowledging them across backends", (backend) =>
+    withFakeLlm(backend, ({ sdk, llm }) =>
+      Effect.gen(function* () {
+        yield* llm.text("async response")
+        const session = yield* capture(() => sdk.session.create({ title: "async prompt" }))
+        const sessionID = String(record(session.data).id)
+        const asyncPrompt = yield* capture(() =>
+          sdk.session.promptAsync({
+            sessionID,
+            agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
+            parts: [{ type: "text", text: "persist before ack" }],
+          }),
+        )
+        const messages = yield* capture(() => sdk.session.messages({ sessionID }))
+
+        expect(asyncPrompt.status).toBe(204)
+        expect(JSON.stringify(messages.data)).toContain("persist before ack")
+        yield* llm.wait(1)
+        return {
+          status: asyncPrompt.status,
+          persisted: JSON.stringify(messages.data).includes("persist before ack"),
+          calls: yield* llm.calls,
         }
       }),
     ),

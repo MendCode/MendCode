@@ -7,6 +7,8 @@ export type MendMessageRenderer = "plain" | "markdown" | "rich"
 export type MendReasoningVisibility = "visible" | "collapsed" | "hidden"
 export type MendActivityPlacement = "current" | "left-docked" | "footer"
 export type MendActivityStyle = "raw" | "minimal" | "signal"
+export type MendCompactionStyle = "minimal" | "cockpit" | "arcade" | "quiet"
+export type MendCompactionArcade = "off" | "stars" | "snake" | "blocks" | (string & {})
 export type MendActivityPhase =
   | "sending"
   | "thinking"
@@ -20,8 +22,10 @@ export type MendActivityPhase =
   | "uploading"
   | "downloading"
   | "testing"
+  | "subagents"
   | "planning"
   | "memory"
+  | "compacting"
   | "retrying"
   | "blocked"
   | "done"
@@ -32,6 +36,10 @@ export type MendPresentationConfig = {
   profile: MendPresentationProfile
   message: {
     renderer: MendMessageRenderer
+  }
+  input: {
+    pasteSummary: boolean
+    pasteSummaryMinChars: number
   }
   reasoning: {
     defaultVisibility: MendReasoningVisibility
@@ -48,9 +56,22 @@ export type MendPresentationConfig = {
     messages: MendActivityMessages
     mascot: MendActivityMascotConfig
   }
+  compaction: {
+    style: MendCompactionStyle
+    showProgress: boolean
+    allowScratchpad: boolean
+    arcade: MendCompactionArcade
+  }
   symbols: {
     assistantDone: string
   }
+}
+
+const DEFAULT_PASTE_SUMMARY_MIN_CHARS = 3000
+
+const inputConfig: MendPresentationConfig["input"] = {
+  pasteSummary: true,
+  pasteSummaryMinChars: DEFAULT_PASTE_SUMMARY_MIN_CHARS,
 }
 
 const activityMessages: MendActivityMessages = {
@@ -66,8 +87,10 @@ const activityMessages: MendActivityMessages = {
   uploading: ["Uploading..."],
   downloading: ["Downloading..."],
   testing: ["Testing..."],
+  subagents: ["Waiting for subagents..."],
   planning: ["Planning..."],
   memory: ["Preparing memory..."],
+  compacting: ["Compacting..."],
   retrying: ["Retrying..."],
   blocked: ["Waiting..."],
   done: ["Done"],
@@ -86,15 +109,45 @@ const neutralActivityConfig: MendPresentationConfig["activity"] = {
   mascot: defaultActivityMascotConfig,
 }
 
+const cockpitCompactionConfig: MendPresentationConfig["compaction"] = {
+  style: "cockpit",
+  showProgress: true,
+  allowScratchpad: true,
+  arcade: "off",
+}
+
+const arcadeCompactionConfig: MendPresentationConfig["compaction"] = {
+  style: "arcade",
+  showProgress: true,
+  allowScratchpad: true,
+  arcade: "snake",
+}
+
+const minimalCompactionConfig: MendPresentationConfig["compaction"] = {
+  style: "minimal",
+  showProgress: false,
+  allowScratchpad: false,
+  arcade: "off",
+}
+
+const quietCompactionConfig: MendPresentationConfig["compaction"] = {
+  style: "quiet",
+  showProgress: false,
+  allowScratchpad: false,
+  arcade: "off",
+}
+
 export const defaultPresentationConfig: MendPresentationConfig = {
   profile: "mendcode",
   message: {
     renderer: "rich",
   },
+  input: inputConfig,
   reasoning: {
     defaultVisibility: "collapsed",
   },
   activity: neutralActivityConfig,
+  compaction: arcadeCompactionConfig,
   symbols: {
     assistantDone: "◈",
   },
@@ -105,10 +158,12 @@ const rawPresentationConfig: MendPresentationConfig = {
   message: {
     renderer: "plain",
   },
+  input: inputConfig,
   reasoning: {
     defaultVisibility: "visible",
   },
   activity: neutralActivityConfig,
+  compaction: quietCompactionConfig,
   symbols: {
     assistantDone: "▣",
   },
@@ -119,10 +174,12 @@ const minimalPresentationConfig: MendPresentationConfig = {
   message: {
     renderer: "markdown",
   },
+  input: inputConfig,
   reasoning: {
     defaultVisibility: "collapsed",
   },
   activity: neutralActivityConfig,
+  compaction: minimalCompactionConfig,
   symbols: {
     assistantDone: "◈",
   },
@@ -176,6 +233,17 @@ function asStyle(value: unknown, fallback: MendActivityStyle): MendActivityStyle
   return fallback
 }
 
+function asCompactionStyle(value: unknown, fallback: MendCompactionStyle): MendCompactionStyle {
+  if (value === "minimal" || value === "cockpit" || value === "arcade" || value === "quiet") return value
+  return fallback
+}
+
+function asCompactionArcade(value: unknown, fallback: MendCompactionArcade): MendCompactionArcade {
+  if (value === "off" || value === "stars" || value === "snake" || value === "blocks") return value
+  if (typeof value === "string" && value.trim().length > 0) return value.trim()
+  return fallback
+}
+
 function asMessages(value: unknown, fallback: MendActivityMessages): MendActivityMessages {
   if (!isRecord(value)) return fallback
   const next: MendActivityMessages = { ...fallback }
@@ -208,7 +276,9 @@ export function resolveTuiPresentation(input: unknown): MendPresentationConfig {
   const profile = asProfile(raw.profile)
   const defaults = profileDefaults[profile]
   const message = isRecord(raw.message) ? raw.message : {}
+  const inputConfig = isRecord(raw.input) ? raw.input : {}
   const activity = isRecord(raw.activity) ? raw.activity : {}
+  const compaction = isRecord(raw.compaction) ? raw.compaction : {}
   const reasoning = isRecord(raw.reasoning) ? raw.reasoning : {}
   const symbols = isRecord(raw.symbols) ? raw.symbols : {}
 
@@ -216,6 +286,10 @@ export function resolveTuiPresentation(input: unknown): MendPresentationConfig {
     profile,
     message: {
       renderer: asMessageRenderer(message.renderer ?? raw.messageRenderer, defaults.message.renderer),
+    },
+    input: {
+      pasteSummary: typeof inputConfig.pasteSummary === "boolean" ? inputConfig.pasteSummary : defaults.input.pasteSummary,
+      pasteSummaryMinChars: Math.max(1, Number(inputConfig.pasteSummaryMinChars) || defaults.input.pasteSummaryMinChars),
     },
     reasoning: {
       defaultVisibility: asReasoningVisibility(reasoning.defaultVisibility, defaults.reasoning.defaultVisibility),
@@ -233,6 +307,13 @@ export function resolveTuiPresentation(input: unknown): MendPresentationConfig {
         typeof activity.showInterruptHint === "boolean" ? activity.showInterruptHint : defaults.activity.showInterruptHint,
       messages: asMessages(activity.messages, defaults.activity.messages),
       mascot: asMascot(activity.mascot, defaults.activity.mascot),
+    },
+    compaction: {
+      style: asCompactionStyle(compaction.style, defaults.compaction.style),
+      showProgress: typeof compaction.showProgress === "boolean" ? compaction.showProgress : defaults.compaction.showProgress,
+      allowScratchpad:
+        typeof compaction.allowScratchpad === "boolean" ? compaction.allowScratchpad : defaults.compaction.allowScratchpad,
+      arcade: asCompactionArcade(compaction.arcade, defaults.compaction.arcade),
     },
     symbols: {
       assistantDone: typeof symbols.assistantDone === "string" && symbols.assistantDone ? symbols.assistantDone : defaults.symbols.assistantDone,
@@ -278,4 +359,75 @@ export function activityMessagesForPhase(profile: MendTuiProfile, phase: MendAct
   if (messages?.length) return [messages[0]]
   const fallback = profile.workingIndicator.messages
   return fallback?.length ? [fallback[0]] : ["Thinking..."]
+}
+
+export function compactPreviewLine(text: string | undefined, max = 88) {
+  if (!text) return
+  const normalized = text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[-*#>\s]+/, "").trim())
+    .find(Boolean)
+  if (!normalized) return
+  return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…` : normalized
+}
+
+function cleanPreviewLine(line: string) {
+  return line.replace(/^[-*#>\s]+/, "").trim()
+}
+
+function isOnlyCompactionHeading(line: string) {
+  const clean = cleanPreviewLine(line).replace(/[:.]+$/, "").trim().toLowerCase()
+  return [
+    "goal",
+    "summary",
+    "current user intent",
+    "resume anchor",
+    "active work",
+    "optional follow-ups",
+    "next steps",
+  ].includes(clean)
+}
+
+export function compactionSummaryPreview(text: string | undefined, max = 88) {
+  if (!text) return
+  const normalized = text
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !isOnlyCompactionHeading(line))
+    .map(cleanPreviewLine)
+    .find(Boolean)
+  if (!normalized) return
+  return normalized.length > max ? `${normalized.slice(0, Math.max(0, max - 1)).trimEnd()}…` : normalized
+}
+
+export function compactionStageStates(input: {
+  hasSummary?: boolean
+  resume?: boolean
+  include?: string
+  tailStartID?: string
+  postPrompt?: string
+}) {
+  const hasTail = Boolean(input.include || input.tailStartID)
+  const shouldContinue = Boolean(input.resume || input.postPrompt)
+  return [
+    { label: "Capture transcript", state: "done" as const },
+    { label: "Write memory", state: input.hasSummary ? ("done" as const) : ("active" as const) },
+    {
+      label: "Preserve tail",
+      state: input.hasSummary ? (hasTail ? ("done" as const) : ("pending" as const)) : ("pending" as const),
+    },
+    {
+      label: "Continue",
+      state: input.hasSummary ? (shouldContinue ? ("done" as const) : ("pending" as const)) : ("pending" as const),
+    },
+  ]
+}
+
+export function compactionArcadeFrames(mode: MendCompactionArcade) {
+  if (mode === "stars") return ["✦ · ˚ ✦ · ˚ ✦", "  ˚ ✦ ·  ✧ · ✦", "✧ · ✦ · ˚ · ✧"]
+  if (mode === "snake") return []
+  if (mode === "blocks") return ["blocks ▙▟  ▖  ▝", "blocks ▙▟ ▜▛   ", "blocks ▙▟ ▜▛ ▄ ", "blocks ▙▟ ▜▛ ▄▟"]
+  return []
 }

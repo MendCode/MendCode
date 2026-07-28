@@ -15,6 +15,16 @@ import { File } from "../file"
 import { Format } from "../format"
 import * as Bom from "@/util/bom"
 
+const MAX_PATCH_SOURCE_BYTES = 2 * 1024 * 1024
+
+function compactBinaryDiff(filePath: string, byteLength: number) {
+  return [
+    `Index: ${filePath}`,
+    "===================================================================",
+    `Binary files ${filePath} and /dev/null differ (${byteLength.toLocaleString()} bytes)`,
+  ].join("\n")
+}
+
 export const Parameters = Schema.Struct({
   patchText: Schema.String.annotate({
     description:
@@ -125,8 +135,25 @@ export const ApplyPatchTool = Tool.define(
               )
             }
 
-            const source = yield* Bom.readFile(afs, filePath)
+            const byteLength = Number(stats.size)
+            if (byteLength > MAX_PATCH_SOURCE_BYTES) {
+              return yield* Effect.fail(
+                new Error(
+                  `apply_patch verification failed: cannot update binary or oversized file (${byteLength.toLocaleString()} bytes): ${filePath}`,
+                ),
+              )
+            }
+
+            const bytes = yield* afs.readFile(filePath)
+            if (Bom.isBinary(bytes)) {
+              return yield* Effect.fail(
+                new Error(`apply_patch verification failed: cannot update binary file: ${filePath}`),
+              )
+            }
+
+            const source = Bom.decode(bytes)
             const oldContent = source.text
+
             let newContent = oldContent
             let bom = source.bom
 
@@ -168,18 +195,63 @@ export const ApplyPatchTool = Tool.define(
           }
 
           case "delete": {
-            const source = yield* Bom.readFile(afs, filePath).pipe(
-              Effect.catch((error) =>
-                Effect.fail(
-                  new Error(
-                    `apply_patch verification failed: ${error instanceof Error ? error.message : String(error)}`,
+            const stats = yield* afs
+              .stat(filePath)
+              .pipe(
+                Effect.catch((error) =>
+                  Effect.fail(
+                    new Error(
+                      `apply_patch verification failed: ${error instanceof Error ? error.message : String(error)}`,
+                    ),
                   ),
                 ),
-              ),
-            )
+              )
+            if (stats.type === "Directory") {
+              return yield* Effect.fail(
+                new Error(`apply_patch verification failed: cannot delete directory: ${filePath}`),
+              )
+            }
+
+            const byteLength = Number(stats.size)
+            const recordBinaryDelete = () => {
+              const deleteDiff = compactBinaryDiff(filePath, byteLength)
+              fileChanges.push({
+                filePath,
+                oldContent: "",
+                newContent: "",
+                type: "delete",
+                diff: deleteDiff,
+                additions: 0,
+                deletions: 0,
+                bom: false,
+              })
+              totalDiff += deleteDiff + "\n"
+            }
+
+            if (byteLength > MAX_PATCH_SOURCE_BYTES) {
+              recordBinaryDelete()
+              break
+            }
+
+            const bytes = yield* afs
+              .readFile(filePath)
+              .pipe(
+                Effect.catch((error) =>
+                  Effect.fail(
+                    new Error(
+                      `apply_patch verification failed: ${error instanceof Error ? error.message : String(error)}`,
+                    ),
+                  ),
+                ),
+              )
+            if (Bom.isBinary(bytes)) {
+              recordBinaryDelete()
+              break
+            }
+
+            const source = Bom.decode(bytes)
             const contentToDelete = source.text
             const deleteDiff = trimDiff(createTwoFilesPatch(filePath, filePath, contentToDelete, ""))
-
             const deletions = contentToDelete.split("\n").length
 
             fileChanges.push({

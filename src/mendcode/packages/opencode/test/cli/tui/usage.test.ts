@@ -97,20 +97,20 @@ describe("usage", () => {
       providers,
     )
 
-    expect(result?.contextPercent).toBe(37)
-    expect(result?.contextLimit).toBe(900)
-    expect(result?.contextLabel).toBe("ctx 330 37%")
+    expect(result?.contextPercent).toBe(33)
+    expect(result?.contextLimit).toBe(1000)
+    expect(result?.contextLabel).toBe("ctx 330 33%")
     expect(result?.contextLabel).not.toContain("(")
   })
 
-  test("uses input window minus reserve when provider exposes separate input and output limits", () => {
+  test("shows the real input window when provider exposes separate input and output limits", () => {
     const model = {
       id: "test-model",
       name: "Test Model",
       limit: { context: 400_000, input: 272_000, output: 128_000 },
     } as any
 
-    expect(usableContextLimit(model)).toBe(252_000)
+    expect(usableContextLimit(model)).toBe(272_000)
   })
 
   test("keeps compact context hover labels fixed width", () => {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   resolveActivePromptAgentName,
+  nextPromptVariant,
   resolveSelectedPromptModel,
   resolveSelectedPromptVariant,
 } from "../../../../src/cli/cmd/tui/component/prompt/agent"
@@ -165,5 +166,22 @@ describe("resolveSelectedPromptVariant", () => {
         hasLocalVariantOverride: false,
       }),
     ).toBe("medium")
+  })
+
+  test("first cycle advances once from the displayed session variant when local state is stale", () => {
+    const current = resolveSelectedPromptVariant({
+      hasSession: true,
+      localVariant: "medium",
+      hasLocalVariantOverride: true,
+      localVariantOverrideUpdatedAt: 100,
+      userModel: { variant: "low" },
+      userModelCreatedAt: 200,
+    })
+    expect(current).toBe("low")
+    expect(nextPromptVariant(["none", "low", "medium", "high", "xhigh", "max"], current)).toBe("medium")
+  })
+
+  test("variant cycle wraps the strongest effort back to default", () => {
+    expect(nextPromptVariant(["low", "medium", "high"], "high")).toBeUndefined()
   })
 })

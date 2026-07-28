@@ -6,6 +6,9 @@ export type MendPackageArtifactMap = {
   plugins?: string[]
   prompts?: string[]
   mcp?: string[]
+  tools?: string[]
+  pages?: string[]
+  widgets?: string[]
   tuiProfile?: string
   themes?: string[]
   context?: string[]

@@ -99,7 +99,7 @@ async function projectMemoryMtime(root: string) {
     path.join(root, ".mendcode", "memory", "index.json"),
   ]
   const stats = await Promise.all(files.map((file) => stat(file).catch(() => null)))
-  const present = stats.filter((item): item is Awaited<ReturnType<typeof stat>> => Boolean(item))
+  const present = stats.filter((item): item is NonNullable<(typeof stats)[number]> => item !== null)
   if (!present.length) return null
   return new Date(Math.max(...present.map((item) => item.mtimeMs))).toISOString()
 }

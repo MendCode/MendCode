@@ -63,6 +63,11 @@ export const SessionListQuery = Schema.Struct({
   limit: Schema.optional(Schema.NumberFromString),
   archived: Schema.optional(QueryBoolean),
 })
+export const UsageInsightsQuery = Schema.Struct({
+  start: Schema.NumberFromString,
+  limit: Schema.optional(Schema.NumberFromString),
+  messageLimit: Schema.optional(Schema.NumberFromString),
+})
 
 export const ExperimentalPaths = {
   console: "/experimental/console",
@@ -73,6 +78,7 @@ export const ExperimentalPaths = {
   worktree: "/experimental/worktree",
   worktreeReset: "/experimental/worktree/reset",
   session: "/experimental/session",
+  usageInsights: "/experimental/usage-insights",
   resource: "/experimental/resource",
 } as const
 
@@ -183,6 +189,16 @@ export const ExperimentalApi = HttpApi.make("experimental")
             summary: "List sessions",
             description:
               "Get a list of all MendCode sessions across projects, sorted by most recently updated. Archived sessions are excluded by default.",
+          }),
+        ),
+        HttpApiEndpoint.get("usageInsights", ExperimentalPaths.usageInsights, {
+          query: UsageInsightsQuery,
+          success: described(Schema.Unknown, "Aggregated usage insights"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "experimental.usageInsights.get",
+            summary: "Get aggregated usage insights",
+            description: "Aggregate recent session usage server-side without transferring every transcript to the TUI.",
           }),
         ),
         HttpApiEndpoint.get("resource", ExperimentalPaths.resource, {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   buildUsageInsights,
   formatInsightDuration,
+  formatInsightNumber,
   normalizeUsageInsights,
   type InsightMessage,
   type InsightSession,
@@ -72,6 +73,35 @@ describe("usage insights", () => {
     expect(insights.totals.changedFiles).toBe(2)
     expect(insights.topTools[0]).toEqual({ name: "bash", count: 1 })
     expect(insights.topModels[0]?.name).toBe("openai/gpt-test")
+  })
+
+  test("prefers the provider-reported total over reconstructed token components", () => {
+    const insights = buildUsageInsights(
+      [
+        item({
+          messages: [
+            {
+              info: {
+                id: "msg_total",
+                role: "assistant",
+                tokens: { total: 145, input: 100, output: 40, reasoning: 10, cache: { read: 5, write: 2 } },
+                time: { created: base },
+              },
+              parts: [],
+            },
+          ],
+        }),
+      ],
+      { start: base, end: base },
+    )
+
+    expect(insights.totals.tokens).toBe(145)
+    expect(
+      insights.totals.inputTokens +
+        insights.totals.outputTokens +
+        insights.totals.reasoningTokens +
+        insights.totals.cacheTokens,
+    ).toBe(157)
   })
 
   test("computes active-day streaks from user or token activity", () => {
@@ -150,5 +180,11 @@ describe("usage insights", () => {
 
   test("formats multi-day durations with normalized days and hours", () => {
     expect(formatInsightDuration(116 * 60 * 60 * 1000)).toBe("4d 20h")
+  })
+
+  test("formats large usage values with truncated compact units", () => {
+    expect(formatInsightNumber(4_873_200_000)).toBe("4.8B")
+    expect(formatInsightNumber(706_200_000)).toBe("706.2M")
+    expect(formatInsightNumber(1_199)).toBe("1.1K")
   })
 })

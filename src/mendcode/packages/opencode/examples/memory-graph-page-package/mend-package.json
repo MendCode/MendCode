@@ -1,0 +1,25 @@
+{
+  "version": 0,
+  "id": "memory-graph-page-example",
+  "packageVersion": "1.0.0",
+  "title": "Memory Graph Page Example",
+  "description": "Example MendCode package that adds a custom terminal-native graph page.",
+  "kind": "bundle",
+  "channel": "example",
+  "compatibility": {
+    "mendcode": ">=0.1.15 <1.0.0",
+    "runtimePack": "^0"
+  },
+  "artifacts": {
+    "pages": [".mendcode/pages/memory-graph.tsx"]
+  },
+  "distribution": {
+    "source": {
+      "type": "local",
+      "url": null
+    },
+    "trust": {
+      "signatureRequired": false
+    }
+  }
+}

@@ -2,6 +2,7 @@ import { Provider } from "@/provider/provider"
 import { NamedError } from "@mendcode/core/util/error"
 import { NotFoundError } from "@/storage/storage"
 import { Session } from "@/session/session"
+import { AgentCommand } from "@/session/agent-command"
 import type { ContentfulStatusCode } from "hono/utils/http-status"
 import type { ErrorHandler, MiddlewareHandler } from "hono"
 import { HTTPException } from "hono/http-exception"
@@ -30,7 +31,7 @@ export const ErrorMiddleware: ErrorHandler = (err, c) => {
     else status = 500
     return c.json(err.toObject(), { status })
   }
-  if (err instanceof Session.BusyError) {
+  if (err instanceof Session.BusyError || err instanceof AgentCommand.InvalidStateTransitionError) {
     return c.json(new NamedError.Unknown({ message: err.message }).toObject(), { status: 400 })
   }
   if (err instanceof HTTPException) return err.getResponse()

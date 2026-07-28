@@ -41,6 +41,27 @@ function providerErrorMessage(error: unknown) {
   return "Provider authorization failed."
 }
 
+type DialogProviderPostAuth = "model-picker" | "close"
+
+type DialogProviderProps = {
+  postAuth?: DialogProviderPostAuth
+  onAuthReady?: () => void
+}
+
+function completeProviderAuth(input: {
+  dialog: ReturnType<typeof useDialog>
+  providerID: string
+  postAuth?: DialogProviderPostAuth
+  onAuthReady?: () => void
+}) {
+  input.onAuthReady?.()
+  if (input.postAuth === "close") {
+    input.dialog.clear()
+    return
+  }
+  input.dialog.replace(() => <DialogModel providerID={input.providerID} />)
+}
+
 function ProviderKeyDescription(props: { providerID: string }) {
   const { theme } = useTheme()
   const isZen = props.providerID === "opencode"
@@ -63,7 +84,7 @@ function ProviderKeyDescription(props: { providerID: string }) {
   )
 }
 
-export function createDialogProviderOptions() {
+export function createDialogProviderOptions(props: DialogProviderProps = {}) {
   const sync = useSync()
   const dialog = useDialog()
   const sdk = useSDK()
@@ -151,6 +172,8 @@ export function createDialogProviderOptions() {
                     title={method.label}
                     index={index}
                     authorization={result.data!}
+                    postAuth={props.postAuth}
+                    onAuthReady={props.onAuthReady}
                   />
                 ))
               }
@@ -161,6 +184,8 @@ export function createDialogProviderOptions() {
                     title={method.label}
                     index={index}
                     authorization={result.data!}
+                    postAuth={props.postAuth}
+                    onAuthReady={props.onAuthReady}
                   />
                 ))
               }
@@ -173,7 +198,13 @@ export function createDialogProviderOptions() {
                 metadata = value
               }
               return dialog.replace(() => (
-                <ApiMethod providerID={provider.id} title={method.label} metadata={metadata} />
+                <ApiMethod
+                  providerID={provider.id}
+                  title={method.label}
+                  metadata={metadata}
+                  postAuth={props.postAuth}
+                  onAuthReady={props.onAuthReady}
+                />
               ))
             }
           },
@@ -184,12 +215,12 @@ export function createDialogProviderOptions() {
   return options
 }
 
-export function DialogProvider() {
+export function DialogProvider(props: DialogProviderProps = {}) {
   const sync = useSync()
   const dialog = useDialog()
   const sdk = useSDK()
   const toast = useToast()
-  const options = createDialogProviderOptions()
+  const options = createDialogProviderOptions(props)
   const [selectedProviderID, setSelectedProviderID] = createSignal<string>()
 
   function canDisconnect(providerID: string | undefined) {
@@ -231,18 +262,19 @@ export function DialogProvider() {
               variant: "error",
               message: providerErrorMessage(result.error),
             })
-            dialog.replace(() => <DialogProvider />)
+            dialog.replace(() => <DialogProvider {...props} />)
             return
           }
 
           await sdk.client.instance.dispose()
           await sync.bootstrap()
+          props.onAuthReady?.()
           const stillDetected = sync.data.provider_next.connected.includes(provider.id)
           toast.show({
             variant: "success",
             message: stillDetected ? "Saved auth removed. Provider still detected." : "Provider disconnected.",
           })
-          dialog.replace(() => <DialogProvider />)
+          dialog.replace(() => <DialogProvider {...props} />)
         },
       },
     ]
@@ -250,7 +282,7 @@ export function DialogProvider() {
 
   return (
     <DialogSelect
-      title="Connect a provider"
+      title="Provider Manager"
       options={options()}
       onMove={(option) => setSelectedProviderID(option.value)}
       keybind={disconnectKeybind()}
@@ -263,6 +295,8 @@ interface AutoMethodProps {
   providerID: string
   title: string
   authorization: ProviderAuthAuthorization
+  postAuth?: DialogProviderPostAuth
+  onAuthReady?: () => void
 }
 function AutoMethod(props: AutoMethodProps) {
   const { theme } = useTheme()
@@ -295,7 +329,7 @@ function AutoMethod(props: AutoMethodProps) {
     }
     await sdk.client.instance.dispose()
     await sync.bootstrap()
-    dialog.replace(() => <DialogModel providerID={props.providerID} />)
+    completeProviderAuth({ ...props, dialog })
   })
 
   return (
@@ -325,6 +359,8 @@ interface CodeMethodProps {
   title: string
   providerID: string
   authorization: ProviderAuthAuthorization
+  postAuth?: DialogProviderPostAuth
+  onAuthReady?: () => void
 }
 function CodeMethod(props: CodeMethodProps) {
   const { theme } = useTheme()
@@ -346,7 +382,7 @@ function CodeMethod(props: CodeMethodProps) {
         if (!error) {
           await sdk.client.instance.dispose()
           await sync.bootstrap()
-          dialog.replace(() => <DialogModel providerID={props.providerID} />)
+          completeProviderAuth({ ...props, dialog })
           return
         }
         setError(true)
@@ -368,6 +404,8 @@ interface ApiMethodProps {
   providerID: string
   title: string
   metadata?: Record<string, string>
+  postAuth?: DialogProviderPostAuth
+  onAuthReady?: () => void
 }
 function ApiMethod(props: ApiMethodProps) {
   const dialog = useDialog()
@@ -391,7 +429,7 @@ function ApiMethod(props: ApiMethodProps) {
         })
         await sdk.client.instance.dispose()
         await sync.bootstrap()
-        dialog.replace(() => <DialogModel providerID={props.providerID} />)
+        completeProviderAuth({ ...props, dialog })
       }}
     />
   )

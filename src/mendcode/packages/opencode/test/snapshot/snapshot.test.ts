@@ -1280,6 +1280,30 @@ test("diffFull with multiple line additions", async () => {
   })
 })
 
+test("diffFull omits giant patch text while keeping counts", async () => {
+  await using tmp = await bootstrap()
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const before = await run(tmp.path, (snapshot) => snapshot.track())
+      expect(before).toBeTruthy()
+
+      const content = Array.from({ length: 6001 }, (_, i) => `line-${i}`).join("\n")
+      await Filesystem.write(`${tmp.path}/giant.txt`, content)
+
+      const after = await run(tmp.path, (snapshot) => snapshot.track())
+      expect(after).toBeTruthy()
+
+      const diffs = await run(tmp.path, (snapshot) => snapshot.diffFull(before!, after!))
+      const giant = diffs.find((item) => item.file === "giant.txt")
+      expect(giant).toBeDefined()
+      expect(giant!.patch).toContain("Diff patch omitted for disk/RAM safety")
+      expect(giant!.additions).toBe(6001)
+      expect(giant!.deletions).toBe(0)
+    },
+  })
+})
+
 test("diffFull with addition and deletion", async () => {
   await using tmp = await bootstrap()
   await WithInstance.provide({

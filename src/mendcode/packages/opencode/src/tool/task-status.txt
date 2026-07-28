@@ -1,0 +1,1 @@
+Inspect and control subagents launched with the task tool. List tasks, get authoritative state and results, cancel a registered background task, or wait once for one task to finish without cancelling it on timeout. For background work, prefer ending the current turn and runtime completion notification over polling `task_status` or repeating `wait`.

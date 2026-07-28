@@ -86,6 +86,7 @@ export const PlanReviewTool = Tool.define<
             yield* switchToBuildAgent({
               session,
               provider,
+              agents,
               sessionID: ctx.sessionID,
               agent: planExitAgent,
               text: [

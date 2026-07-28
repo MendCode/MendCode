@@ -31,6 +31,7 @@ import { ProjectID } from "../../src/project/schema"
 import { Filesystem } from "@/util/filesystem"
 import { ConfigPlugin } from "@/config/plugin"
 import { Npm } from "@mendcode/core/npm"
+import { defaultMendConfig } from "../../src/mend/config/project"
 
 const emptyAccount = Layer.mock(Account.Service)({
   active: () => Effect.succeed(Option.none()),
@@ -148,6 +149,7 @@ test("loads JSON config file", async () => {
         $schema: "https://mendcode.ai/config.json",
         model: "test/model",
         username: "testuser",
+        experimental: { subagent_owner_wake: true },
       })
     },
   })
@@ -157,6 +159,7 @@ test("loads JSON config file", async () => {
       const config = await load()
       expect(config.model).toBe("test/model")
       expect(config.username).toBe("testuser")
+       expect(config.subagent_owner_wake).toBe(true)
     },
   })
 })
@@ -169,14 +172,7 @@ test("ignores MendCode-owned project config keys in .mendcode/mendcode.json", as
         path.join(dir, ".mendcode"),
         {
           $schema: "https://mendcode.ai/config.json",
-          version: 0,
-          engine: { name: "opencode" },
-          focus: { default: "codex" },
-          budgets: { warnUsd: 1 },
-          memory: { enabled: false },
-          package: { kind: "bundle" },
-          tui: { profile: "default" },
-          worktree: { mode: "off" },
+          ...defaultMendConfig,
           username: "setup-user",
         },
       )
@@ -189,8 +185,40 @@ test("ignores MendCode-owned project config keys in .mendcode/mendcode.json", as
       expect(config.username).toBe("setup-user")
       expect((config as any).memory).toBeUndefined()
       expect((config as any).package).toBeUndefined()
+      expect((config as any).loop).toBeUndefined()
     },
   })
+})
+
+test("loads runtime fields from global setup config while ignoring MendCode-owned keys", async () => {
+  await using globalTmp = await tmpdir({
+    init: async (dir) => {
+      await writeConfig(dir, {
+        $schema: "https://mendcode.ai/config.json",
+        ...defaultMendConfig,
+        username: "global-setup-user",
+      })
+    },
+  })
+  await using projectTmp = await tmpdir()
+
+  const prev = Global.Path.config
+  ;(Global.Path as { config: string }).config = globalTmp.path
+  await clear(true)
+
+  try {
+    await WithInstance.provide({
+      directory: projectTmp.path,
+      fn: async () => {
+        const config = await load()
+        expect(config.username).toBe("global-setup-user")
+        expect((config as any).loop).toBeUndefined()
+      },
+    })
+  } finally {
+    ;(Global.Path as { config: string }).config = prev
+    await clear(true)
+  }
 })
 
 test("loads subagent_model without changing main model", async () => {

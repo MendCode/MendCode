@@ -1,8 +1,42 @@
 import { describe, expect, test } from "bun:test"
+import { mkdir } from "fs/promises"
 import path from "path"
-import { loopServicePlan, loopServicePlist, loopServiceSystemdUnit, loopServiceWindowsCommand } from "../../src/mend/runtime/loop-service"
+import { tmpdir } from "../fixture/fixture"
+import { resolveMendProjectRoot } from "../../src/mend/config/paths"
+import { DEFAULT_LOOP_SERVICE_LIMIT, loopServiceArgsFromConfig, loopServicePlan, loopServicePlist, loopServiceSystemdUnit, loopServiceWindowsCommand } from "../../src/mend/runtime/loop-service"
 
 describe("loop service plans", () => {
+  test("does not let a stale runtime-root override steal the project cwd", () => {
+    expect(resolveMendProjectRoot("/work/project", "/runtime/mendcode", "/runtime/mendcode")).toBe("/work/project")
+    expect(resolveMendProjectRoot("/runtime/mendcode", "/work/project", "/runtime/mendcode")).toBe("/work/project")
+    expect(
+      resolveMendProjectRoot(
+        "/runtime/mendcode/src/mendcode/packages/opencode",
+        "/runtime/mendcode",
+        "/runtime/mendcode",
+      ),
+    ).toBe("/runtime/mendcode")
+  })
+
+  test("resolves configured service directories from the project root", async () => {
+    await using dir = await tmpdir()
+    await mkdir(path.join(dir.path, ".mendcode"), { recursive: true })
+    await Bun.write(
+      path.join(dir.path, ".mendcode", "mendcode.json"),
+      JSON.stringify({ loop: { serviceDir: "runtime/services", logDir: "runtime/logs" } }),
+    )
+
+    const args = loopServiceArgsFromConfig(dir.path)
+
+    expect(args.projectRoot).toBe(dir.path)
+    expect(args.serviceDir).toBe(path.join(dir.path, "runtime/services"))
+    expect(args.logDir).toBe(path.join(dir.path, "runtime/logs"))
+
+    const overridden = loopServiceArgsFromConfig(dir.path, { serviceDir: "override/services", logDir: "override/logs" })
+    expect(overridden.serviceDir).toBe(path.join(dir.path, "override/services"))
+    expect(overridden.logDir).toBe(path.join(dir.path, "override/logs"))
+  })
+
   test("builds a project-scoped report-only daemon by default", () => {
     const plan = loopServicePlan({
       projectRoot: "/tmp/acme repo",
@@ -31,6 +65,7 @@ describe("loop service plans", () => {
       "3",
       "--execute",
       "--report-only",
+      "--once",
       "--quiet",
     ])
   })
@@ -49,6 +84,14 @@ describe("loop service plans", () => {
     expect(plan.programArguments).not.toContain("--report-only")
   })
 
+  test("uses a batch limit that can wake several project loops per pass", () => {
+    const plan = loopServicePlan({ projectRoot: "/tmp/repo", execute: true, reportOnly: true, platform: "darwin" })
+
+    expect(DEFAULT_LOOP_SERVICE_LIMIT).toBeGreaterThan(1)
+    expect(plan.limit).toBe(DEFAULT_LOOP_SERVICE_LIMIT)
+    expect(plan.programArguments).toContain(String(DEFAULT_LOOP_SERVICE_LIMIT))
+  })
+
   test("renders XML-safe plist content", () => {
     const plan = loopServicePlan({
       projectRoot: '/tmp/acme & "repo"',
@@ -60,9 +103,32 @@ describe("loop service plans", () => {
     const plist = loopServicePlist(plan)
 
     expect(plist).toContain("<key>ProgramArguments</key>")
+    expect(plist).toContain("<key>EnvironmentVariables</key>")
+    expect(plist).toContain("<key>MENDCODE_SHELL_CWD</key>")
+    expect(plist).toContain("<key>MENDCODE_LOOP_SERVICE</key>")
+    expect(plist).toContain("<key>MENDCODE_DB</key>")
     expect(plist).toContain("<key>WorkingDirectory</key>")
     expect(plist).toContain("/tmp/acme &amp; &quot;repo&quot;")
-    expect(plist).toContain("<key>KeepAlive</key>")
+    expect(plist).toContain("<key>StartInterval</key>")
+    expect(plist).toContain("<integer>60</integer>")
+    expect(plist).toContain("<key>RunAtLoad</key>\n  <false/>")
+    expect(plist).not.toContain("<key>KeepAlive</key>")
+  })
+
+  test("gates macOS launches with native SQLite before starting Bun", () => {
+    const plan = loopServicePlan({
+      projectRoot: "/tmp/repo",
+      execute: true,
+      reportOnly: true,
+      command: "/opt/mendcode",
+      platform: "darwin",
+    })
+
+    expect(plan.serviceProgramArguments.slice(0, 2)).toEqual(["/bin/sh", "-c"])
+    expect(plan.serviceProgramArguments[2]).toContain("/usr/bin/sqlite3 -readonly")
+    expect(plan.serviceProgramArguments[2]).toContain("launchctl bootout")
+    expect(plan.serviceProgramArguments[2]).toContain("/opt/mendcode loops daemon")
+    expect(loopServicePlist(plan)).toContain("<string>/bin/sh</string>")
   })
 
   test("builds a Linux user systemd unit with configurable directories", () => {
@@ -84,6 +150,7 @@ describe("loop service plans", () => {
     expect(plan.startCommand).toEqual(["systemctl", "--user", "enable", "--now", `${plan.label}.service`])
     expect(unit).toContain("Restart=always")
     expect(unit).toContain("WorkingDirectory=/work/repo")
+    expect(unit).toContain('Environment=MENDCODE_SHELL_CWD="/work/repo"')
   })
 
   test("builds a Windows scheduled task command", () => {
@@ -101,7 +168,9 @@ describe("loop service plans", () => {
     expect(plan.definitionPath).toContain("com.mendcode.loops.")
     expect(plan.installCommand[0]).toBe("schtasks.exe")
     expect(loopServiceWindowsCommand(plan)).toContain("mendcode.exe loops daemon")
+    expect(loopServiceWindowsCommand(plan)).toContain(`MENDCODE_SHELL_CWD=${plan.projectRoot}`)
     expect(loopServiceWindowsCommand(plan)).toContain("--execute --report-only")
+    expect(loopServiceWindowsCommand(plan)).toContain("--once")
     expect(loopServiceWindowsCommand(plan)).toContain("--quiet")
   })
 })

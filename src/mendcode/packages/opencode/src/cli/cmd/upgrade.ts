@@ -6,6 +6,7 @@ import { InstallationVersion } from "@mendcode/core/installation/version"
 
 export const UpgradeCommand = {
   command: "upgrade [target]",
+  aliases: ["update"],
   describe: "upgrade MendCode runtime to the latest or a specific version",
   builder: (yargs: Argv) => {
     return yargs

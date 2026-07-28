@@ -5,7 +5,7 @@ import { Effect } from "effect"
 import z from "zod"
 import { BusEvent } from "@/bus/bus-event"
 import { SyncEvent } from "@/sync"
-import { GlobalBus } from "@/bus/global"
+import { GlobalBus, matchesGlobalEventDirectory } from "@/bus/global"
 import { Bus } from "@/bus"
 import { AppRuntime } from "@/effect/app-runtime"
 import { AsyncQueue } from "@/util/queue"
@@ -17,12 +17,20 @@ import { errors } from "../error"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "../global-lifecycle"
 import "@/mend/memory/dream-events"
 import "@/mend/memory/workspace-events"
+import { processMemoryUsage } from "@/util/process-memory"
 
 const log = Log.create({ service: "server" })
+const EVENT_QUEUE_MAX_ITEMS = 512
+const EVENT_QUEUE_MAX_BYTES = 8 * 1024 * 1024
 
 async function streamEvents(c: Context, subscribe: (q: AsyncQueue<string | null>) => () => void) {
   return streamSSE(c, async (stream) => {
-    const q = new AsyncQueue<string | null>()
+    const q = new AsyncQueue<string | null>({
+      maxItems: EVENT_QUEUE_MAX_ITEMS,
+      maxBytes: EVENT_QUEUE_MAX_BYTES,
+      sizeOf: (value) => (typeof value === "string" ? Buffer.byteLength(value) : 0),
+    })
+    let unsub: () => void = () => undefined
     let done = false
 
     q.push(
@@ -37,15 +45,18 @@ async function streamEvents(c: Context, subscribe: (q: AsyncQueue<string | null>
 
     // Send heartbeat every 10s to prevent stalled proxy streams.
     const heartbeat = setInterval(() => {
-      q.push(
-        JSON.stringify({
-          payload: {
-            id: Bus.createID(),
-            type: "server.heartbeat",
-            properties: {},
-          },
-        }),
+      if (
+        !q.push(
+          JSON.stringify({
+            payload: {
+              id: Bus.createID(),
+              type: "server.heartbeat",
+              properties: {},
+            },
+          }),
+        )
       )
+        stop()
     }, 10_000)
 
     const stop = () => {
@@ -53,11 +64,11 @@ async function streamEvents(c: Context, subscribe: (q: AsyncQueue<string | null>
       done = true
       clearInterval(heartbeat)
       unsub()
-      q.push(null)
+      q.close(null)
       log.info("global event disconnected")
     }
 
-    const unsub = subscribe(q)
+    unsub = subscribe(q)
 
     stream.onAbort(stop)
 
@@ -96,6 +107,38 @@ export const GlobalRoutes = lazy(() =>
       },
     )
     .get(
+      "/diagnostics/memory",
+      describeRoute({
+        summary: "Get process memory usage",
+        description: "Get a manually requested, read-only memory sample for the current server process.",
+        operationId: "global.diagnostics.memory",
+        responses: {
+          200: {
+            description: "Current process memory usage",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.object({
+                    pid: z.number(),
+                    role: z.string(),
+                    rss: z.number(),
+                    heapTotal: z.number(),
+                    heapUsed: z.number(),
+                    external: z.number(),
+                    arrayBuffers: z.number(),
+                    uptimeSeconds: z.number(),
+                  }),
+                ),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        return c.json(processMemoryUsage("server"))
+      },
+    )
+    .get(
       "/event",
       describeRoute({
         summary: "Get global events",
@@ -128,10 +171,12 @@ export const GlobalRoutes = lazy(() =>
         c.header("Cache-Control", "no-cache, no-transform")
         c.header("X-Accel-Buffering", "no")
         c.header("X-Content-Type-Options", "nosniff")
+        const directory = c.req.query("directory") || undefined
 
         return streamEvents(c, (q) => {
           async function handler(event: any) {
-            q.push(JSON.stringify(event))
+            if (!matchesGlobalEventDirectory(event, directory)) return
+            if (!q.push(JSON.stringify(event))) q.close(null)
           }
           GlobalBus.on("event", handler)
           return () => GlobalBus.off("event", handler)

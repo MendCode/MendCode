@@ -3,11 +3,11 @@ import { chmod, readFile, writeFile } from "fs/promises"
 import { spawnSync } from "child_process"
 import path from "path"
 import { mendPaths } from "../config/paths"
-import { providerAuthPreset, providerEnvRequirements } from "./readiness"
+import { providerAuthPreset, providerAuthStatus, providerEnvRequirements } from "./readiness"
 import { budgetEnforcementStatus } from "./budget"
 import { providerAuthStateFile, readProviderAuthState } from "./auth-state"
-
-const MEND_VERSION = "0.2.0-phase2"
+import { mendRuntimeVersion } from "./version"
+import { prepareCodexChatGPTOAuthRequest } from "@/plugin/codex"
 
 const genericAiSdkPackages: Record<string, { factory: string }> = {
   "@ai-sdk/anthropic": { factory: "createAnthropic" },
@@ -18,6 +18,12 @@ const genericAiSdkPackages: Record<string, { factory: string }> = {
   "@ai-sdk/cohere": { factory: "createCohere" },
   "@ai-sdk/perplexity": { factory: "createPerplexity" },
   "@openrouter/ai-sdk-provider": { factory: "createOpenRouter" },
+}
+
+type PricingPer1MTokens = {
+  inputUsd: number
+  cachedInputUsd?: number
+  outputUsd: number
 }
 
 async function readJsonIfExists(file: string, fallback: any) {
@@ -117,7 +123,7 @@ function normalizeUsage(rawUsage: any) {
 
 function estimateRunCost(input: { providerID?: string | null; modelID?: string | null; usage: any; authMode?: string | null }) {
   const preset = providerAuthPreset(input.providerID, input.modelID, input.authMode)
-  const pricing = preset?.pricingPer1MTokens || null
+  const pricing: PricingPer1MTokens | null = preset?.pricingPer1MTokens || null
   const resolvedAuthMode = preset?.authMode || input.authMode || "unknown"
   const normalized = normalizeUsage(input.usage)
   if (!normalized.available) {
@@ -239,15 +245,21 @@ async function runOpenAISubscriptionPrompt(root: string, input: any) {
   const auth = await ensureFreshOpenAIAuthState(root)
   if (!auth) throw new Error("OpenAI OAuth state missing. Run `mendcode auth login openai --method browser --execute` first.")
   const startedAt = Date.now()
-  const headers: Record<string, string> = {
+  const headers = new Headers({
     "Content-Type": "application/json",
     Authorization: `Bearer ${auth.access}`,
-    originator: "mendcode",
-    "User-Agent": `mendcode/${MEND_VERSION} (${process.platform}; ${process.arch})`,
     session_id: `mend-${Date.now()}`,
-  }
-  if (auth.accountId) headers["ChatGPT-Account-Id"] = auth.accountId
-  const response = await fetch(openaiCodexResponsesEndpoint(), { method: "POST", headers, body: JSON.stringify(responseRequestBody(input)) })
+  })
+  if (auth.accountId) headers.set("ChatGPT-Account-Id", auth.accountId)
+  const body = prepareCodexChatGPTOAuthRequest({
+    headers,
+    body: JSON.stringify(responseRequestBody(input)),
+  })
+  const response = await fetch(openaiCodexResponsesEndpoint(), {
+    method: "POST",
+    headers,
+    body,
+  })
   return parseResponsesResult({ ...input, authMode: "chatgpt-subscription-oauth", response, text: await response.text(), elapsedMs: Date.now() - startedAt })
 }
 
@@ -257,10 +269,37 @@ async function runOpenAIAPIKeyPrompt(input: any) {
   const startedAt = Date.now()
   const response = await fetch(openaiApiResponsesEndpoint(), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}`, "User-Agent": `mendcode/${MEND_VERSION} (${process.platform}; ${process.arch})` },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}`, "User-Agent": `mendcode/${mendRuntimeVersion()} (${process.platform}; ${process.arch})` },
     body: JSON.stringify(responseRequestBody(input)),
   })
   return parseResponsesResult({ ...input, authMode: "api-key", response, text: await response.text(), elapsedMs: Date.now() - startedAt })
+}
+
+export function selectOpenAIAuthMode(input: {
+  configuredAuthMode?: string | null
+  apiKeyAvailable: boolean
+  oauthAvailable: boolean
+}) {
+  const configured = input.configuredAuthMode?.trim() || null
+  if (configured === "api-key") return "api-key" as const
+  if (configured === "chatgpt-subscription-oauth") return "chatgpt-subscription-oauth" as const
+  if (input.oauthAvailable) return "chatgpt-subscription-oauth" as const
+  if (input.apiKeyAvailable) return "api-key" as const
+  return null
+}
+
+async function resolveOpenAIAuthMode(root: string, input: { modelID: string; authMode: string }) {
+  const configured = input.authMode.trim() || null
+  if (configured === "api-key" || configured === "chatgpt-subscription-oauth") return configured
+  const auth = await providerAuthStatus("openai", input.modelID, { authMode: configured, skipNext: true }, root)
+  const oauthAvailable = auth.mendAuth?.type === "oauth" && auth.mendAuth.accessTokenPresent && (!auth.oauthExpired || auth.oauthRefreshReady)
+  const resolved = selectOpenAIAuthMode({
+    configuredAuthMode: configured,
+    apiKeyAvailable: Boolean(process.env.OPENAI_API_KEY),
+    oauthAvailable,
+  })
+  if (resolved) return resolved
+  throw new Error(auth.blockers?.join("; ") || "No usable OpenAI OAuth or API-key credentials are configured.")
 }
 
 function genericAiSdkRunnerCode() {
@@ -317,7 +356,8 @@ export async function runSupportStatus(input: { providerID?: string | null; mode
 
 export async function runProviderAdapter(root: string, input: { providerID: string; modelID: string; authMode: string; prompt?: string; messages?: any[]; instructions?: string }) {
   if (input.providerID === "openai") {
-    if (input.authMode === "api-key") return runOpenAIAPIKeyPrompt(input)
+    const authMode = await resolveOpenAIAuthMode(root, input)
+    if (authMode === "api-key") return runOpenAIAPIKeyPrompt(input)
     return runOpenAISubscriptionPrompt(root, input)
   }
   return runGenericAiSdkPrompt(root, input)
@@ -418,7 +458,7 @@ export async function providerSmoke(args: string[], root?: string) {
     const result = await runProviderAdapter(paths.root, {
       providerID,
       authMode,
-      modelID,
+      modelID: modelID!,
       prompt: "respond only: ok",
       instructions: "You are MendCode provider smoke test. Respond with exactly: ok",
     })

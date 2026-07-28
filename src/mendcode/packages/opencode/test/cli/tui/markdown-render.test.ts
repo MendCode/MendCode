@@ -5,6 +5,7 @@ import path from "path"
 import {
   hasStyledHexColors,
   shouldColorizeHexMarkdownLine,
+  shouldRenderStableTextPlain,
   wrapMarkdownDisplayCodeBlocks,
   wrapPlainDisplayText,
 } from "../../../src/cli/cmd/tui/component/styled-plan-markdown"
@@ -16,7 +17,8 @@ import {
   renderPlanMarkdownStreaming,
   renderStreamingMarkdownTail,
   streamingMarkdownCommitIndex,
-} from "../../../src/cli/cmd/tui/util/plan-markdown"
+  visibleStreamingMarkdownPreview,
+} from "../../../src/cli/cmd/tui/util/markdown-render"
 import { styledPlanMarkdownSegments, visibleStyledPlanMarkdownLines } from "../../../src/cli/cmd/tui/util/styled-plan-lines"
 
 const originalTermaid = process.env.MENDCODE_TERMAID_BIN
@@ -37,10 +39,58 @@ test("renderPlanMarkdown renders simple mermaid flowcharts without termaid", asy
   expect(result).not.toContain("flowchart TD")
 })
 
+test("renderPlanMarkdown attaches single Mermaid edge labels to the vertical connector", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Approve?] -->|yes| B[Implement]",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 100)
+  expect(result).toContain("yes ──┤")
+  expect(result).not.toMatch(/\n\s+yes\s*\n/)
+})
+
+test("renderPlanMarkdown centers Mermaid TD branches around their parent", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Root] --> B[Left branch]",
+    "  A --> C[Right branch]",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 100)
+  const lines = result.split("\n")
+  const boxColumn = (label: string) => {
+    const contentColumn = lines.find((line) => line.includes(`│ ${label}`))?.indexOf(`│ ${label}`) ?? -1
+    return contentColumn < 0 ? -1 : contentColumn - 1
+  }
+  const rootColumn = boxColumn("Root")
+  const leftColumn = boxColumn("Left branch")
+  const rightColumn = boxColumn("Right branch")
+
+  expect(rootColumn).toBeGreaterThan(0)
+  expect(leftColumn).toBeLessThan(rootColumn)
+  expect(rightColumn).toBeGreaterThan(rootColumn)
+  expect(result).toContain("┌")
+  expect(result).toContain("▼")
+})
+
 test("planReviewInlineTitle removes redundant Plan prefix", () => {
   expect(planReviewInlineTitle("Plan: Theme System y Surface Cleanup")).toBe("Theme System y Surface Cleanup")
   expect(planReviewInlineTitle("Theme System y Surface Cleanup")).toBe("Theme System y Surface Cleanup")
   expect(planReviewInlineTitle("  ")).toBeUndefined()
+})
+
+test("stable text mode keeps markdown renderer for inline formatting", () => {
+  expect(shouldRenderStableTextPlain("plain streaming text", true)).toBe(true)
+  expect(shouldRenderStableTextPlain("**bold** and `inline-code`", true)).toBe(false)
+  expect(shouldRenderStableTextPlain("[docs](https://example.com)", true)).toBe(false)
+  expect(shouldRenderStableTextPlain("plain streaming text", false)).toBe(false)
 })
 
 test("renderPlanMarkdown aligns mermaid titles with diagram rows", async () => {
@@ -166,10 +216,12 @@ test("renderPlanMarkdown keeps mermaid edge labels attached to the right nodes",
 
   const result = await renderPlanMarkdown(markdown, 100)
   expect(result).toContain("│ Looks correct? │")
-  expect(result).toContain("├─ Yes")
+  expect(result).toContain("Yes")
+  expect(result).not.toContain("├─ Yes")
   expect(result).toContain("│ Accept change │")
-  expect(result).toContain("└─ No")
-  expect(result).toContain("↺ Add hello message")
+  expect(result).toContain("No")
+  expect(result).not.toContain("└─ No")
+  expect(result).not.toContain("↺ Add hello message")
   expect(result).not.toContain("┌ Yes ┐")
   expect(result).not.toContain("┌ No ┐")
 })
@@ -188,9 +240,9 @@ test("renderPlanMarkdown supports pipe-style mermaid edge labels", async () => {
   ].join("\n")
 
   const result = await renderPlanMarkdown(markdown, 100)
-  expect(result).toContain("├─ Yes")
+  expect(result).toContain("Yes")
   expect(result).toContain("│ Approve  │")
-  expect(result).toContain("└─ No")
+  expect(result).toContain("No")
   expect(result).toContain("│ Edit     │")
   expect(result).not.toContain("|Yes|")
 })
@@ -219,13 +271,143 @@ test("renderPlanMarkdown renders branch continuations as vertical boxes", async 
   ].join("\n")
 
   const result = await renderPlanMarkdown(markdown, 120)
-  expect(result).toContain("├─ Yes")
+  expect(result).toContain("Yes")
   expect(result).toContain("│ Create first workspace │")
   expect(result).toContain("│ Offer guided action │")
   expect(result).toContain("│ Track activation │")
-  expect(result).toContain("└─ No")
+  expect(result).toContain("No")
   expect(result).toContain("│ Show correction │")
-  expect(result).toContain("↺ Data valid?")
+  expect(result).not.toContain("↺ Data valid?")
+})
+
+test("renderPlanMarkdown keeps cyclic branches ranked without detached loop annotations", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Data valid?] -->|Yes| B[Create first workspace]",
+    "  B --> C[Offer guided action]",
+    "  C --> D[Track activation]",
+    "  A -->|No| E[Show correction]",
+    "  E --> A",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 120)
+  const branchRow = result
+    .split("\n")
+    .find((line) => line.includes("│ Create first workspace │") && line.includes("│ Show correction │"))
+
+  expect(branchRow).toBeDefined()
+  expect(branchRow?.indexOf("Create first workspace")).toBeLessThan(branchRow?.indexOf("Show correction") ?? -1)
+  expect(result).toContain("Yes")
+  expect(result).toContain("No")
+  expect(result).not.toContain("├─ Yes")
+  expect(result).not.toContain("└─ No")
+  expect(result).not.toContain("↺ Data valid?")
+})
+
+test("renderPlanMarkdown renders multiple Mermaid back-edges as literal return lines", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Draft plan] --> B[Render Markdown]",
+    "  B --> C[Review Mermaid]",
+    "  C --> D{Approve?}",
+    "  D -->|yes| E[Implement]",
+    "  D -->|no| F[Edit plan]",
+    "  D -->|comments| G[Add comments]",
+    "  D -->|reject| H[Reject plan]",
+    "  F --> B",
+    "  G --> C",
+    "  E --> I[Done]",
+    "  H --> I",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 100)
+  expect(result).toContain("yes")
+  expect(result).toContain("no")
+  expect(result).toContain("comments")
+  expect(result).toContain("reject")
+  expect(result).toContain("│ Edit plan │")
+  expect(result).toContain("│ Add comments │")
+  expect(result).toContain("│ Done     │")
+  const doneRow = result.split("\n").findIndex((line) => line.includes("│ Done     │"))
+  expect(doneRow).toBeGreaterThan(0)
+  expect(result.split("\n")[doneRow - 2]).toContain("▼")
+  expect(result.match(/▲/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
+  expect(result).not.toContain("↩ Render Markdown")
+  expect(result).not.toContain("↩ Review Mermaid")
+  expect(result).not.toContain("↺ Render Markdown")
+  expect(result).not.toContain("↺ Review Mermaid")
+})
+
+test("renderPlanMarkdown keeps constrained Mermaid return edges connected", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Draft plan] --> B[Render Markdown]",
+    "  B --> C[Review Mermaid]",
+    "  C --> D{Approve?}",
+    "  D -->|yes| E[Implement]",
+    "  D -->|no| F[Edit plan]",
+    "  D -->|comments| G[Add comments]",
+    "  D -->|reject| H[Reject plan]",
+    "  F --> B",
+    "  G --> C",
+    "  E --> I[Done]",
+    "  H --> I",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 48)
+  expect(result).toContain("└─ Render Markdown")
+  expect(result).toContain("└─ Review Mermaid")
+  expect(result).not.toContain("↩")
+  expect(result).not.toContain("↺")
+})
+
+test("renderPlanMarkdown keeps Mermaid edges that span multiple ranks", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Start] --> B[Middle]",
+    "  B --> C[Finish]",
+    "  A --> C",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 100)
+  expect(result).toContain("│ Start    │")
+  expect(result).toContain("│ Middle   │")
+  expect(result).toContain("│ Finish   │")
+  expect(result).not.toContain("flowchart TD")
+})
+
+test("renderPlanMarkdown keeps clean branch labels in a narrow flowchart layout", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart TD",
+    "  A[Data valid?] -->|Yes| B[Create first workspace]",
+    "  B --> C[Offer guided action]",
+    "  C --> D[Track activation]",
+    "  A -->|No| E[Show correction]",
+    "  E --> A",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 48)
+  expect(result).toContain("Yes")
+  expect(result).toContain("No")
+  expect(result).toContain("Data valid? ──┘")
+  expect(result).not.toContain("├─ Yes")
+  expect(result).not.toContain("└─ No")
+  expect(result).not.toContain("↺ Data valid?")
 })
 
 test("renderPlanMarkdown wraps long branch continuations into vertical boxes", async () => {
@@ -242,10 +424,10 @@ test("renderPlanMarkdown wraps long branch continuations into vertical boxes", a
   ].join("\n")
 
   const result = await renderPlanMarkdown(markdown, 120)
-  expect(result).toContain("├─ Yes")
+  expect(result).toContain("Yes")
   expect(result).toContain("│ Try product examples │")
   expect(result).toContain("│ Confirm onboarding complete │")
-  expect(result).toContain("└─ No")
+  expect(result).toContain("No")
   expect(result).toContain("│ Review troubleshooting │")
   expect(result).toContain("│ Fix missing runtime or port issue │")
   expect(result).not.toContain(
@@ -274,11 +456,13 @@ test("renderPlanMarkdown renders branched validation flows as boxes", async () =
   expect(result).toContain("│ Select Markdown file │")
   expect(result).toContain("│ Add hello message │")
   expect(result).toContain("Valid?")
-  expect(result).toContain("├─ Yes")
+  expect(result).toContain("Yes")
+  expect(result).not.toContain("├─ Yes")
   expect(result).toContain("│ Accept change │")
-  expect(result).toContain("└─ No")
+  expect(result).toContain("No")
+  expect(result).not.toContain("└─ No")
   expect(result).toContain("│ Fix placement or formatting │")
-  expect(result).toContain("↺ Check raw Markdown")
+  expect(result).not.toContain("↺ Check raw Markdown")
   expect(result).not.toContain("flowchart TD")
 })
 
@@ -556,6 +740,33 @@ test("streaming markdown tail renders stable headings after completion without r
   expect(rendered).not.toContain("## Historia breve")
 })
 
+test("streaming markdown tail preserves headings for markdown rendering", () => {
+  const rendered = renderStreamingMarkdownTail(
+    "## Historia breve\n\nTexto final",
+    96,
+    { tableMode: "grid", markdownMode: "tables-only" },
+    { output: "markdown" },
+  )
+
+  expect(rendered).toContain("## Historia breve")
+  expect(rendered).not.toContain("──────────────")
+})
+
+test("streaming markdown tail preserves live table grids for markdown rendering", () => {
+  const rendered = renderStreamingMarkdownTail(
+    ["## Cambios", "", "| Archivo | Acción | Cambio |", "| --- | --- | --- |", "| `src/main.cpp` | Modificado | Cambiando token"].join("\n"),
+    96,
+    { tableMode: "grid", markdownMode: "tables-only" },
+    { output: "markdown" },
+  )
+
+  expect(rendered).toContain("## Cambios")
+  expect(rendered).toContain("```text")
+  expect(rendered).toContain("┌")
+  expect(rendered).toContain("src/main.cpp")
+  expect(rendered).not.toContain("| Archivo | Acción | Cambio |")
+})
+
 test("streaming markdown tail renders finalized inline markdown and fences without remounting", () => {
   const rendered = renderStreamingMarkdownTail(
     [
@@ -610,6 +821,15 @@ test("streaming markdown tail renders closed inline markdown on the live final l
   expect(rendered).not.toContain("**")
 })
 
+test("streaming markdown keeps partial tokens visible without waiting for a newline", () => {
+  const options = { tableMode: "grid" as const, markdownMode: "tables-only" as const }
+  const first = renderStreamingMarkdownTail("Generando", 96, options, { output: "text" })
+  const second = renderStreamingMarkdownTail("Generando una respuesta", 96, options, { output: "text" })
+
+  expect(first).toContain("Generando")
+  expect(second).toContain("Generando una respuesta")
+})
+
 test("streaming markdown tail leaves the active final line unstyled while typing", () => {
   const rendered = renderStreamingMarkdownTail("## Historia breve\n\n## Still typing", 96, {
     tableMode: "grid",
@@ -650,6 +870,18 @@ test("streaming markdown reuses frozen rendered content while only the tail chan
   expect(second.content).toBe(first.content)
   expect(second.state).toBe(first.state)
   expect(second.tail).toBe("Tail dos")
+})
+
+test("streaming markdown commits only closed paragraphs or blocks", () => {
+  expect(streamingMarkdownCommitIndex("Linea uno\nLinea dos\n")).toBe("Linea uno\nLinea dos\n".length)
+  expect(streamingMarkdownCommitIndex("Linea uno\n\nLinea dos")).toBe("Linea uno\n\n".length)
+  expect(streamingMarkdownCommitIndex("```ts\nconst value = 1\n```\nTail")).toBe("```ts\nconst value = 1\n```\n".length)
+})
+
+test("streaming markdown preview hides the active partial line", () => {
+  expect(visibleStreamingMarkdownPreview("token token")).toBe("")
+  expect(visibleStreamingMarkdownPreview("Linea lista\npartial")).toBe("Linea lista\n")
+  expect(visibleStreamingMarkdownPreview("Linea lista\nOtra lista\n")).toBe("Linea lista\nOtra lista\n")
 })
 
 test("styled session markdown separates generated tables from adjacent headings", () => {
@@ -783,6 +1015,12 @@ test("styled plan markdown wraps fenced unicode lines by display width", () => {
 test("styled plan markdown does not colorize macro-style hashtags", () => {
   expect(hasStyledHexColors("#define TANK_USE_MOCK_SENSOR 1")).toBe(false)
   expect(hasStyledHexColors("Use #abc here")).toBe(true)
+})
+
+test("styled plan markdown leaves hex-like tokens inside inline code in markdown flow", () => {
+  expect(shouldColorizeHexMarkdownLine("React muestra `#130`.", false)).toBe(false)
+  expect(shouldColorizeHexMarkdownLine("Usa `background: #1E88E5`.", false)).toBe(false)
+  expect(shouldColorizeHexMarkdownLine("Color de marca: #1E88E5", false)).toBe(true)
 })
 
 test("styled plan markdown keeps markdown tables with hex values in markdown flow", () => {
@@ -1027,4 +1265,57 @@ test("renderPlanMarkdown keeps unsupported mermaid blocks as code", async () => 
   const markdown = ["Plan", "", "```mermaid", "unknownDiagram", "  A --> B", "```"].join("\n")
 
   expect(await renderPlanMarkdown(markdown, 80)).toBe(markdown)
+})
+
+test("Mermaid TUI smoke matrix keeps flow, sequence, and chart output visual", () => {
+  const flow = renderPlanMarkdownStatic(
+    [
+      "```mermaid",
+      "flowchart TD",
+      "  A[Request] --> B{Valid?}",
+      "  B -->|Yes| C[Process]",
+      "  B -->|No| D[Reject]",
+      "```",
+    ].join("\n"),
+    100,
+    { tableMode: "grid" },
+  )
+  const flowLines = flow.split("\n")
+  const labelsLine = flowLines.find((line) => line.includes("Yes") && line.includes("No"))
+  const arrowsLine = flowLines.find((line) => (line.match(/▼/g)?.length ?? 0) === 2)
+  expect(labelsLine).toBeDefined()
+  expect(labelsLine).toMatch(/Yes\s+──┤/)
+  expect(labelsLine).toMatch(/No\s+──┤/)
+  expect(arrowsLine).toBeDefined()
+  expect(arrowsLine?.match(/▼/g)?.length).toBe(2)
+  expect(flow).not.toContain("flowchart TD")
+
+  const sequence = renderPlanMarkdownStatic(
+    [
+      "```mermaid",
+      "sequenceDiagram",
+      "  participant U as User",
+      "  participant API as API",
+      "  U->>API: POST /items",
+      "  API-->>U: 201 Created",
+      "```",
+    ].join("\n"),
+    100,
+    { tableMode: "grid" },
+  )
+  expect(sequence).toContain("│ User")
+  expect(sequence).toContain("│ API")
+  expect(sequence).toContain("POST /items")
+  expect(sequence).toContain("▶")
+  expect(sequence).not.toContain("sequenceDiagram")
+
+  const chart = renderPlanMarkdownStatic(
+    ["```mermaid", "pie title Status", '  "Done" : 70', '  "Todo" : 30', "```"].join("\n"),
+    100,
+    { tableMode: "grid" },
+  )
+  expect(chart).toContain("Status")
+  expect(chart).toContain("████")
+  expect(chart).toContain("70 (70.0%)")
+  expect(chart).not.toContain("pie title")
 })

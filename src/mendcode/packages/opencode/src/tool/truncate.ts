@@ -11,14 +11,17 @@ import { ToolID } from "./schema"
 import { TRUNCATION_DIR } from "./truncation-dir"
 
 const log = Log.create({ service: "truncation" })
-const RETENTION = Duration.days(7)
+const RETENTION = Duration.days(1)
 
 export const MAX_LINES = 2000
 export const MAX_BYTES = 50 * 1024
+export const MAX_SAVED_BYTES = 8 * 1024 * 1024
+export const MAX_TOTAL_BYTES = 64 * 1024 * 1024
 export const DIR = TRUNCATION_DIR
 export const GLOB = path.join(TRUNCATION_DIR, "*")
 
 export type Result = { content: string; truncated: false } | { content: string; truncated: true; outputPath: string }
+export type SavedOutput = { path: string; complete: boolean }
 
 export interface Options {
   maxLines?: number
@@ -31,9 +34,24 @@ function hasTaskTool(agent?: Agent.Info) {
   return evaluate("task", "*", agent.permission).action !== "deny"
 }
 
+function savedExcerpt(text: string) {
+  const buffer = Buffer.from(text, "utf8")
+  if (buffer.byteLength <= MAX_SAVED_BYTES) return text
+
+  const marker = Buffer.from(
+    `\n\n[Saved output capped for disk safety: omitted ${buffer.byteLength - MAX_SAVED_BYTES} bytes]\n\n`,
+    "utf8",
+  )
+  const budget = Math.max(0, MAX_SAVED_BYTES - marker.byteLength)
+  const head = Math.floor(budget / 2)
+  const tail = budget - head
+  return Buffer.concat([buffer.subarray(0, head), marker, buffer.subarray(buffer.byteLength - tail)]).toString("utf8")
+}
+
 export interface Interface {
   readonly cleanup: () => Effect.Effect<void>
   readonly write: (text: string) => Effect.Effect<string>
+  readonly writeOutput: (text: string, options?: { complete?: boolean }) => Effect.Effect<SavedOutput>
   /**
    * Returns output unchanged when it fits within the limits, otherwise writes the full text
    * to the truncation directory and returns a preview plus a hint to inspect the saved file.
@@ -60,17 +78,39 @@ export const layer = Layer.effect(
         Effect.map((all) => all.filter((name) => name.startsWith("tool_"))),
         Effect.catch(() => Effect.succeed([])),
       )
+      const remaining: { file: string; size: number; time: number }[] = []
       for (const entry of entries) {
-        if (Identifier.timestamp(entry) >= cutoff) continue
-        yield* fs.remove(path.join(TRUNCATION_DIR, entry)).pipe(Effect.catch(() => Effect.void))
+        const file = path.join(TRUNCATION_DIR, entry)
+        const time = Identifier.timestamp(entry)
+        if (time < cutoff) {
+          yield* fs.remove(file).pipe(Effect.catch(() => Effect.void))
+          continue
+        }
+        const stat = yield* fs.stat(file).pipe(Effect.catch(() => Effect.void))
+        if (!stat || stat.type !== "File") continue
+        const size = typeof stat.size === "bigint" ? Number(stat.size) : stat.size
+        remaining.push({ file, size, time })
+      }
+
+      let total = remaining.reduce((sum, entry) => sum + entry.size, 0)
+      for (const entry of remaining.toSorted((a, b) => a.time - b.time)) {
+        if (total <= MAX_TOTAL_BYTES) break
+        yield* fs.remove(entry.file).pipe(Effect.catch(() => Effect.void))
+        total -= entry.size
       }
     })
 
-    const write = Effect.fn("Truncate.write")(function* (text: string) {
+    const writeOutput = Effect.fn("Truncate.writeOutput")(function* (text: string, options?: { complete?: boolean }) {
       const file = path.join(TRUNCATION_DIR, ToolID.ascending())
+      const complete = (options?.complete ?? true) && Buffer.byteLength(text, "utf8") <= MAX_SAVED_BYTES
       yield* fs.ensureDir(TRUNCATION_DIR).pipe(Effect.orDie)
-      yield* fs.writeFileString(file, text).pipe(Effect.orDie)
-      return file
+      yield* fs.writeFileString(file, complete ? text : savedExcerpt(text)).pipe(Effect.orDie)
+      yield* cleanup()
+      return { path: file, complete }
+    })
+
+    const write = Effect.fn("Truncate.write")(function* (text: string) {
+      return (yield* writeOutput(text)).path
     })
 
     const limits = Effect.fn("Truncate.limits")(function* () {
@@ -125,11 +165,14 @@ export const layer = Layer.effect(
       const removed = hitBytes ? totalBytes - bytes : lines.length - out.length
       const unit = hitBytes ? "bytes" : "lines"
       const preview = out.join("\n")
-      const file = yield* write(text)
+      const saved = yield* writeOutput(text)
+      const savedLine = saved.complete
+        ? `Full output saved to: ${saved.path}`
+        : `Output excerpt saved to: ${saved.path}`
 
       const hint = hasTaskTool(agent)
-        ? `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse the Task tool to have explore agent process this file with Grep and Read (with offset/limit). Do NOT read the full file yourself - delegate to save context.`
-        : `The tool call succeeded but the output was truncated. Full output saved to: ${file}\nUse Grep to search the full content or Read with offset/limit to view specific sections.`
+        ? `The tool call succeeded but the output was truncated. ${savedLine}\nUse the Task tool to have explore agent process this file with Grep and Read (with offset/limit). Do NOT read the full file yourself - delegate to save context.`
+        : `The tool call succeeded but the output was truncated. ${savedLine}\nUse Grep to search the saved content or Read with offset/limit to view specific sections.`
 
       return {
         content:
@@ -137,7 +180,7 @@ export const layer = Layer.effect(
             ? `${preview}\n\n...${removed} ${unit} truncated...\n\n${hint}`
             : `...${removed} ${unit} truncated...\n\n${hint}\n\n${preview}`,
         truncated: true,
-        outputPath: file,
+        outputPath: saved.path,
       } as const
     })
 
@@ -151,7 +194,7 @@ export const layer = Layer.effect(
       Effect.forkScoped,
     )
 
-    return Service.of({ cleanup, write, output, limits })
+    return Service.of({ cleanup, write, writeOutput, output, limits })
   }),
 )
 

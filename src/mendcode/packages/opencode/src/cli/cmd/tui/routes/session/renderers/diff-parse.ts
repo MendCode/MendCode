@@ -11,9 +11,20 @@ export type TimelineDiffRow = {
 
 export type TimelineDiffFileStatus = "added" | "removed" | undefined
 
-const MAX_RENDER_DIFF_CHARS = 120_000
-const MAX_RENDER_DIFF_ROWS = 1_200
-const NON_TEXT_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ufffd]/
+const MAX_RENDER_DIFF_CHARS = 2_000_000
+const MAX_RENDER_DIFF_ROWS = 20_000
+export const TIMELINE_DIFF_TRUNCATION_PREFIX = "Diff preview truncated:"
+const NON_TEXT_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\ufffd]/
+const BINARY_PATCH_PATTERN = /^Binary files .+ differ(?: \(([^)]+) bytes\))?$/m
+export const TIMELINE_BINARY_PATCH_PREFIX = "Binary/non-text patch omitted"
+
+export function timelineDiffHasPreviewMarker(diff: string) {
+  return diff.includes(TIMELINE_DIFF_TRUNCATION_PREFIX)
+}
+
+export function timelineDiffIsTruncationRow(row: TimelineDiffRow) {
+  return row.kind === "meta" && row.text.startsWith(TIMELINE_DIFF_TRUNCATION_PREFIX)
+}
 
 export function timelineDiffFileStatus(diff: string): TimelineDiffFileStatus {
   if (/^(?:new file mode|--- \/dev\/null)/m.test(diff)) return "added"
@@ -51,15 +62,23 @@ function cleanDiffPath(input: string) {
 }
 
 function nonTextDiffRows(diff: string): TimelineDiffRow[] | undefined {
-  if (!NON_TEXT_PATTERN.test(diff.slice(0, Math.min(diff.length, 32_000)))) return
+  const sample = diff.length <= 64_000 ? diff : `${diff.slice(0, 32_000)}\n${diff.slice(-32_000)}`
+  const binary = BINARY_PATCH_PATTERN.exec(sample)
+  if (!binary && !NON_TEXT_PATTERN.test(sample)) return
   const rows: TimelineDiffRow[] = []
   const file = diffFileLabel(diff)
   if (file) rows.push({ kind: "file", text: cleanDiffPath(file) })
   rows.push({
     kind: "meta",
-    text: `Binary/non-text patch omitted (${diff.length.toLocaleString()} chars)`,
+    text: binary?.[1]
+      ? `${TIMELINE_BINARY_PATCH_PREFIX} (${binary[1]} bytes)`
+      : `${TIMELINE_BINARY_PATCH_PREFIX} (${diff.length.toLocaleString()} chars)`,
   })
   return rows
+}
+
+export function timelineDiffIsNonText(diff: string) {
+  return nonTextDiffRows(diff) !== undefined
 }
 
 export function parseTimelineDiffRows(diff: string): TimelineDiffRow[] {
@@ -83,7 +102,10 @@ export function parseTimelineDiffRows(diff: string): TimelineDiffRow[] {
 
   for (const line of lines) {
     if (rows.length >= MAX_RENDER_DIFF_ROWS) {
-      rows.push({ kind: "meta", text: `Diff preview truncated (${diff.length.toLocaleString()} chars total)` })
+      rows.push({
+        kind: "meta",
+        text: `${TIMELINE_DIFF_TRUNCATION_PREFIX} too large to render safely (${diff.length.toLocaleString()} chars total). Show more from the full diff.`,
+      })
       return rows
     }
 
@@ -153,7 +175,10 @@ export function parseTimelineDiffRows(diff: string): TimelineDiffRow[] {
   }
 
   if (truncated) {
-    rows.push({ kind: "meta", text: `Diff preview truncated (${diff.length.toLocaleString()} chars total)` })
+    rows.push({
+      kind: "meta",
+      text: `${TIMELINE_DIFF_TRUNCATION_PREFIX} too large to render safely (${diff.length.toLocaleString()} chars total). Show more from the full diff.`,
+    })
   }
 
   return rows

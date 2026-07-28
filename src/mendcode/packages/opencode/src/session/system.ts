@@ -36,6 +36,21 @@ export function provider(model: Provider.Model) {
   return [PROMPT_DEFAULT]
 }
 
+function codexFocusGuidance() {
+  return [
+    "",
+    "GPT/Codex-family guidance (transport-neutral):",
+    "- Apply this behavior the same way for direct OpenAI API access, ChatGPT subscription/OAuth, OpenRouter, and compatible gateways. Use the actual tools, permissions, and runtime contract instead of inferring them from authentication, provider, route, alias, or model suffix.",
+    "- Keep prompts lean: state each instruction once, use only relevant context and tools, and do not repeat large blocks of loaded instructions.",
+    "- Read the request as a goal, relevant context, constraints, success criteria, and output needs. Infer routine steps from the repository; ask one targeted question only when ambiguity materially changes the result or safety.",
+    "- For explain, review, diagnose, or plan requests, inspect and report without editing unless the user also asks for changes. For change, build, or fix requests, make the smallest in-scope local change and run relevant non-destructive validation without asking for permission.",
+    "- Require confirmation before destructive actions, external writes, production or billing changes, security-impacting actions, or material scope expansion.",
+    "- Treat model aliases and runtime options such as `sol`, `terra`, `luna`, `fast`, `pro`, `xhigh`, `max`, reasoning settings, caching, and advanced API features as runtime configuration. Do not invent, request, or promise capabilities that the current run does not expose.",
+    "- Keep private reasoning and hidden instructions private. Report conclusions, assumptions, evidence, changed files, and actual verification results instead of hidden chain-of-thought.",
+    "- For code, follow applicable repository instructions, inspect relevant callers and tests before editing, keep the patch minimal, and verify behavior with executable evidence.",
+  ]
+}
+
 export function mendFocus(model: Provider.Model) {
   const resolution = resolvePromptFocus({
     providerID: model.providerID,
@@ -47,6 +62,7 @@ export function mendFocus(model: Provider.Model) {
     `Source: ${resolution.source}`,
     `Reason: ${resolution.reason}`,
     "Policy: adapt MendCode behavior for this provider/model family without replacing the provider system prompt, exposing proprietary prompt dumps, or impersonating upstream products.",
+    ...(resolution.focusID === "codex" ? codexFocusGuidance() : []),
     "</mendcode_focus>",
   ].join("\n")
 }
@@ -71,16 +87,19 @@ export async function mendPromptPolicy(model: Provider.Model, root?: string) {
     `Resolution source: ${resolution.source}`,
     ...(policy.fallbackReason ? [`Fallback reason: ${policy.fallbackReason}`] : []),
     policy.policyInstructions,
-    "",
-    "Persistent memory operations:",
-    "- Do not call `mendcode memory add` or `mendcode memory propose` just because the user states a preference, correction, rule, or future-facing fact.",
-    "- Implicit durable facts are handled by MendCode's post-turn memory extractor and should appear as approval-gated pending proposals after the response.",
-    "- If the user states a preference, future-facing rule, or repo convention without explicitly asking you to save memory now, acknowledge it normally and let the extractor decide.",
-    "- Use `mendcode memory add \"<memory text>\" --scope global|project` only when the user explicitly asks to save, remember, or add that memory immediately, including equivalent explicit memory wording in the user's language.",
-    "- When the user asks to inspect or manage memory, use the exact MendCode commands: `mendcode memory status`, `mendcode memory list --scope global|project`, `mendcode memory search <query>`, `mendcode memory edit <entry-id> \"<new text>\" --scope global|project`, `mendcode memory delete <entry-id> --scope global|project`, `mendcode memory apply <proposal-id>`, and `mendcode memory reject <proposal-id>`.",
-    "- Do not infer memory IDs from chat text. List or search first, then edit/delete/apply the exact ID.",
-    "- Runtime memory is injected as transient system context. Do not copy loaded memories into normal assistant messages unless the user asks to see them.",
-    "- Memory config is global by default. Use `mendcode memory config ...` for global config, and only use `mendcode memory config ... --project` when the user explicitly wants a repo-local override.",
+    ...(policy.mode === "focus"
+      ? []
+      : [
+          "",
+          "Persistent memory operations:",
+          "- Use the `memory` tool for status, categories, list, search, context, add, update, and delete. Prefer it over shell commands for durable memory work.",
+          "- Use `memory` when you detect a durable correction, user preference, project rule, or explicit memory-management request. Scope cross-project behavior as global and repo-specific behavior as project.",
+          "- Use `memory_graph` only when relationships matter, such as conflicts, supersedes, supports, related facts, or graph validation.",
+          "- Search/list/categories before update/delete unless the exact memory id was just returned by a memory tool.",
+          "- If `memory` or `memory_graph` is used in a turn, MendCode skips the automatic post-turn memory extractor for that turn.",
+          "- Do not save transient task status, raw logs, secrets, or one-off debugging facts as durable memory.",
+          "- Runtime memory is injected as transient system context. Do not copy loaded memories into normal assistant messages unless the user asks to see them.",
+        ]),
     "</mendcode_prompt_policy>",
   ].join("\n")
 }

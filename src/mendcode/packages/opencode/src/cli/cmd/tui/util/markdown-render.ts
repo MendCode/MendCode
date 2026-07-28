@@ -181,6 +181,12 @@ export function streamingMarkdownCommitIndex(input: string) {
   return safe
 }
 
+export function visibleStreamingMarkdownPreview(input: string) {
+  const end = input.lastIndexOf("\n")
+  if (end < 0) return ""
+  return input.slice(0, end + 1)
+}
+
 function splitMarkdownTableRow(line: string) {
   return line
     .trim()
@@ -658,6 +664,418 @@ function alignTextBlock(input: string, width: number) {
 
 type FlowDirection = "td" | "tb" | "lr" | "rl" | "bt"
 
+type FlowchartEdge = { from: string; to: string; label?: string }
+type FlowchartRoutedEdge = { edge: FlowchartEdge; backward: boolean }
+type FlowchartLayoutNode = {
+  rank: number
+  center: number
+}
+type ConnectorDirection = "up" | "down" | "left" | "right"
+
+const FLOWCHART_MAX_LAYOUT_NODES = 32
+const FLOWCHART_MAX_LAYOUT_RANKS = 10
+const FLOWCHART_MAX_CANVAS_WIDTH = 160
+const FLOWCHART_NODE_GAP = 5
+const FLOWCHART_CONNECTOR_GAP = 4
+
+function connectorGlyph(directions: Set<ConnectorDirection>) {
+  const up = directions.has("up")
+  const down = directions.has("down")
+  const left = directions.has("left")
+  const right = directions.has("right")
+
+  if (up && down && left && right) return "┼"
+  if (up && down && left) return "┤"
+  if (up && down && right) return "├"
+  if (down && left && right) return "┬"
+  if (up && left && right) return "┴"
+  if (down && right) return "┌"
+  if (down && left) return "┐"
+  if (up && right) return "└"
+  if (up && left) return "┘"
+  if (left || right) return "─"
+  if (up || down) return "│"
+  return " "
+}
+
+function addConnectorDirection(
+  cells: Set<ConnectorDirection>[][],
+  row: number,
+  column: number,
+  direction: ConnectorDirection,
+) {
+  const cell = cells[row]?.[column]
+  if (cell) cell.add(direction)
+}
+
+function drawVerticalConnector(
+  cells: Set<ConnectorDirection>[][],
+  column: number,
+  start: number,
+  end: number,
+) {
+  const low = Math.min(start, end)
+  const high = Math.max(start, end)
+  for (let row = low; row <= high; row++) {
+    if (row > low) addConnectorDirection(cells, row, column, "up")
+    if (row < high) addConnectorDirection(cells, row, column, "down")
+  }
+}
+
+function drawHorizontalConnector(
+  cells: Set<ConnectorDirection>[][],
+  row: number,
+  start: number,
+  end: number,
+) {
+  const low = Math.min(start, end)
+  const high = Math.max(start, end)
+  for (let column = low; column <= high; column++) {
+    if (column > low) addConnectorDirection(cells, row, column, "left")
+    if (column < high) addConnectorDirection(cells, row, column, "right")
+  }
+}
+
+function flowchartRanks(nodes: string[], edges: FlowchartEdge[]) {
+  const outgoing = new Map<string, FlowchartEdge[]>()
+  const incoming = new Map<string, number>()
+  for (const node of nodes) {
+    outgoing.set(node, [])
+    incoming.set(node, 0)
+  }
+  for (const edge of edges) {
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge])
+    incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1)
+  }
+
+  const ranks = new Map(nodes.map((node) => [node, 0]))
+  const queue = nodes.filter((node) => incoming.get(node) === 0)
+  const processed = new Set<string>()
+
+  for (let index = 0; index < queue.length; index++) {
+    const node = queue[index]
+    if (!node) continue
+    processed.add(node)
+    for (const edge of outgoing.get(node) ?? []) {
+      ranks.set(edge.to, Math.max(ranks.get(edge.to) ?? 0, (ranks.get(node) ?? 0) + 1))
+      const remaining = (incoming.get(edge.to) ?? 0) - 1
+      incoming.set(edge.to, remaining)
+      if (remaining === 0) queue.push(edge.to)
+    }
+  }
+
+  if (processed.size !== nodes.length) return undefined
+  return ranks
+}
+
+function flowchartLayoutEdges(nodes: string[], edges: FlowchartEdge[]) {
+  const outgoing = new Map<string, FlowchartEdge[]>()
+  for (const node of nodes) outgoing.set(node, [])
+  for (const edge of edges) outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge])
+
+  const state = new Map<string, "visiting" | "visited">()
+  const layoutEdges: FlowchartEdge[] = []
+  const deferredEdges: FlowchartEdge[] = []
+  const visit = (node: string) => {
+    state.set(node, "visiting")
+    for (const edge of outgoing.get(node) ?? []) {
+      if (state.get(edge.to) === "visiting") {
+        deferredEdges.push(edge)
+        continue
+      }
+
+      layoutEdges.push(edge)
+      if (!state.has(edge.to)) visit(edge.to)
+    }
+    state.set(node, "visited")
+  }
+
+  for (const node of nodes) {
+    if (!state.has(node)) visit(node)
+  }
+
+  return { layoutEdges, deferredEdges }
+}
+
+function putOverlay(canvas: Map<number, string>, width: number, row: number, start: number, text: string) {
+  for (const [index, character] of [...text].entries()) {
+    const column = start + index
+    if (column < 0 || column >= width || !character) continue
+    canvas.set(row * width + column, character)
+  }
+}
+
+function renderRankedVerticalFlowchart(input: {
+  edges: FlowchartEdge[]
+  labels: Map<string, string>
+  direction: "td" | "tb" | "bt"
+  width: number
+}) {
+  const orientedEdges =
+    input.direction === "bt"
+      ? input.edges.map((edge) => ({ from: edge.to, to: edge.from, label: edge.label }))
+      : input.edges
+  const nodes = [...new Set(orientedEdges.flatMap((edge) => [edge.from, edge.to]))]
+  if (nodes.length === 0 || nodes.length > FLOWCHART_MAX_LAYOUT_NODES) return undefined
+
+  const { layoutEdges, deferredEdges } = flowchartLayoutEdges(nodes, orientedEdges)
+  const ranks = flowchartRanks(nodes, layoutEdges)
+  if (!ranks) return undefined
+  const maxRank = Math.max(...nodes.map((node) => ranks.get(node) ?? 0))
+  if (maxRank >= FLOWCHART_MAX_LAYOUT_RANKS) return undefined
+
+  const byRank = new Map<number, string[]>()
+  for (const node of nodes) byRank.set(ranks.get(node) ?? 0, [...(byRank.get(ranks.get(node) ?? 0) ?? []), node])
+
+  const incoming = new Map<string, string[]>()
+  for (const edge of orientedEdges) incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge.from])
+
+  const orderByNode = new Map<string, number>()
+  for (let rank = 0; rank <= maxRank; rank++) {
+    const current = byRank.get(rank) ?? []
+    if (rank > 0) {
+      const previous = new Map((byRank.get(rank - 1) ?? []).map((node, index) => [node, index]))
+      current.sort((left, right) => {
+        const leftParents = incoming.get(left) ?? []
+        const rightParents = incoming.get(right) ?? []
+        const leftCenter = leftParents.length
+          ? leftParents.reduce((sum, parent) => sum + (previous.get(parent) ?? 0), 0) / leftParents.length
+          : Number.POSITIVE_INFINITY
+        const rightCenter = rightParents.length
+          ? rightParents.reduce((sum, parent) => sum + (previous.get(parent) ?? 0), 0) / rightParents.length
+          : Number.POSITIVE_INFINITY
+        return leftCenter - rightCenter || (orderByNode.get(left) ?? 0) - (orderByNode.get(right) ?? 0)
+      })
+    }
+    current.forEach((node, index) => orderByNode.set(node, index))
+  }
+
+  const layoutNodes = new Map<string, FlowchartLayoutNode>()
+  const boxes = new Map<string, string[]>()
+  let canvasWidth = 0
+  for (let rank = 0; rank <= maxRank; rank++) {
+    const rankNodes = byRank.get(rank) ?? []
+    const rankWidth = rankNodes.reduce((sum, node, index) => {
+      const box = renderBox(input.labels.get(node) ?? node)
+      boxes.set(node, box)
+      return sum + Math.max(...box.map((line) => Bun.stringWidth(line))) + (index === 0 ? 0 : FLOWCHART_NODE_GAP)
+    }, 0)
+    canvasWidth = Math.max(canvasWidth, rankWidth)
+  }
+
+  const availableWidth = Math.max(40, Math.min(FLOWCHART_MAX_CANVAS_WIDTH, input.width - 4))
+  canvasWidth = Math.max(40, canvasWidth)
+  const backEdges: FlowchartRoutedEdge[] = deferredEdges
+    .slice(0, 6)
+    .map((edge) => ({ edge, backward: true }))
+  const spanningEdges: FlowchartRoutedEdge[] = layoutEdges
+    .filter((edge) => (ranks.get(edge.to) ?? 0) !== (ranks.get(edge.from) ?? 0) + 1)
+    .slice(0, 6)
+    .map((edge) => ({ edge, backward: false }))
+  const allRoutedEdges = [...backEdges, ...spanningEdges]
+  const requestedLanePadding = allRoutedEdges.length ? 2 : 0
+  const requestedRouteWidth = canvasWidth + requestedLanePadding * 2
+  const canRouteEdges = requestedRouteWidth <= availableWidth
+  const compactEdges = canRouteEdges ? [] : allRoutedEdges
+  const routedEdges = canRouteEdges ? allRoutedEdges : []
+  const directEdges = layoutEdges.filter((edge) => !routedEdges.some((routed) => routed.edge === edge))
+  const cycleLanePadding = canRouteEdges ? requestedLanePadding : 0
+  canvasWidth += cycleLanePadding * 2
+
+  const rowStride = 3 + FLOWCHART_CONNECTOR_GAP
+  const compactEdgesByRank = new Map<number, FlowchartRoutedEdge[]>()
+  for (const routed of compactEdges) {
+    const rank = ranks.get(routed.edge.from) ?? 0
+    compactEdgesByRank.set(rank, [...(compactEdgesByRank.get(rank) ?? []), routed])
+  }
+  const routedRanks = new Set(routedEdges.map(({ edge }) => ranks.get(edge.from) ?? 0))
+  const extraRowsByRank = new Map<number, number>()
+  for (const [rank, edges] of compactEdgesByRank) {
+    extraRowsByRank.set(rank, edges.length + (routedRanks.has(rank) ? 2 : 0))
+  }
+  for (const rank of routedRanks) {
+    extraRowsByRank.set(rank, Math.max(extraRowsByRank.get(rank) ?? 0, 2))
+  }
+  const rankOffsets = new Map<number, number>()
+  let rankOffset = 0
+  for (let rank = 0; rank <= maxRank; rank++) {
+    rankOffsets.set(rank, rankOffset)
+    rankOffset += extraRowsByRank.get(rank) ?? 0
+  }
+  const rankTop = (rank: number) => rank * rowStride + (rankOffsets.get(rank) ?? 0)
+  const rowCount = (maxRank + 1) * rowStride + rankOffset + 2
+  const rows = Array.from({ length: rowCount }, () => Array.from({ length: canvasWidth }, () => " "))
+  const connectorCells = Array.from({ length: rowCount }, () =>
+    Array.from({ length: canvasWidth }, () => new Set<ConnectorDirection>()),
+  )
+  const overlays = new Map<number, string>()
+  const rankBounds = new Map<number, { left: number; right: number }>()
+
+  for (let rank = 0; rank <= maxRank; rank++) {
+    const rankNodes = byRank.get(rank) ?? []
+    const rankWidth = rankNodes.reduce(
+      (sum, node, index) => sum + (boxes.get(node)?.[0] ? Bun.stringWidth(boxes.get(node)![0]!) : 0) + (index === 0 ? 0 : FLOWCHART_NODE_GAP),
+      0,
+    )
+    let column =
+      rankNodes.length === 1
+        ? Math.floor(canvasWidth / 2) - Math.floor(rankWidth / 2)
+        : Math.floor((canvasWidth - rankWidth) / 2)
+    const top = rankTop(rank)
+    for (const node of rankNodes) {
+      const box = boxes.get(node) ?? renderBox(input.labels.get(node) ?? node)
+      const nodeWidth = Math.max(...box.map((line) => Bun.stringWidth(line)))
+      for (const [index, line] of box.entries()) writeVisual(rows[top + index]!, column, padVisual(line, nodeWidth))
+      layoutNodes.set(node, {
+        rank,
+        center: column + Math.floor(nodeWidth / 2),
+      })
+      const currentBounds = rankBounds.get(rank)
+      rankBounds.set(rank, {
+        left: Math.min(currentBounds?.left ?? column, column),
+        right: Math.max(currentBounds?.right ?? column + nodeWidth - 1, column + nodeWidth - 1),
+      })
+      column += nodeWidth + FLOWCHART_NODE_GAP
+    }
+  }
+
+  for (const edge of directEdges) {
+    const from = layoutNodes.get(edge.from)
+    const to = layoutNodes.get(edge.to)
+    if (!from || !to || to.rank !== from.rank + 1) return undefined
+
+    const connectorTop = rankTop(from.rank) + 3
+    const horizontalRow = connectorTop + 1
+    const labelRow = connectorTop + 2
+    const targetAnchorRow = rankTop(to.rank) - 1
+    drawVerticalConnector(connectorCells, from.center, connectorTop, horizontalRow)
+    drawHorizontalConnector(connectorCells, horizontalRow, from.center, to.center)
+    drawVerticalConnector(connectorCells, to.center, horizontalRow, targetAnchorRow)
+
+    const targetArrow = input.direction === "bt" ? "▲" : "▼"
+    const arrowRowForEdge = input.direction === "bt" ? connectorTop : targetAnchorRow
+    putOverlay(overlays, canvasWidth, arrowRowForEdge, input.direction === "bt" ? from.center : to.center, targetArrow)
+
+    const label = cleanConnectorLabel(edge.label)
+    if (!label) continue
+    const labelWidth = Bun.stringWidth(label)
+    const leftLabelStart = to.center - labelWidth - 3
+    const rightLabelStart = to.center + 3
+    const labelStart =
+      leftLabelStart >= 0
+        ? leftLabelStart
+        : Math.min(canvasWidth - labelWidth, Math.max(0, rightLabelStart))
+    const labelEnd = labelStart + labelWidth - 1
+    if (labelEnd < to.center) drawHorizontalConnector(connectorCells, labelRow, labelEnd + 2, to.center)
+    else if (labelStart > to.center) drawHorizontalConnector(connectorCells, labelRow, to.center, labelStart - 2)
+    putOverlay(overlays, canvasWidth, labelRow, labelStart, label)
+  }
+
+  const compactEdgeOffsets = new Map<number, number>()
+  for (const routed of compactEdges) {
+    const from = layoutNodes.get(routed.edge.from)
+    if (!from) continue
+
+    const rank = ranks.get(routed.edge.from) ?? from.rank
+    const compactIndex = compactEdgeOffsets.get(rank) ?? 0
+    compactEdgeOffsets.set(rank, compactIndex + 1)
+    const labelRow = rankTop(rank) + 3 + FLOWCHART_CONNECTOR_GAP + compactIndex
+    const edgeLabel = cleanConnectorLabel(routed.edge.label)
+    const targetLabel = cleanLabel(input.labels.get(routed.edge.to) ?? routed.edge.to)
+    const text = edgeLabel ? `${edgeLabel} ${targetLabel}` : targetLabel
+    const textWidth = Bun.stringWidth(text)
+    const rightStart = from.center + 3
+    const leftStart = from.center - textWidth - 3
+    const labelStart =
+      rightStart + textWidth <= canvasWidth
+        ? rightStart
+        : Math.max(0, Math.min(canvasWidth - textWidth, leftStart))
+    const labelEnd = labelStart + textWidth - 1
+    const sourceRow = rankTop(rank) + 3
+    drawVerticalConnector(connectorCells, from.center, sourceRow, labelRow)
+    if (labelStart > from.center) drawHorizontalConnector(connectorCells, labelRow, from.center, labelStart - 2)
+    else if (labelEnd < from.center) drawHorizontalConnector(connectorCells, labelRow, labelEnd + 2, from.center)
+    putOverlay(overlays, canvasWidth, labelRow, labelStart, text)
+  }
+
+  let leftLaneIndex = 0
+  let rightLaneIndex = 0
+  for (const [edgeIndex, routed] of routedEdges.entries()) {
+    const edge = routed.edge
+    const from = layoutNodes.get(edge.from)
+    const to = layoutNodes.get(edge.to)
+    const label = cleanConnectorLabel(edge.label)
+    if (!from || !to) continue
+
+    const goesLeft = from.center < to.center || (from.center === to.center && edgeIndex % 2 === 0)
+    const rankNodes = byRank.get(from.rank) ?? []
+    const sourceIndex = rankNodes.indexOf(edge.from)
+    const sourceWidth = Math.max(...(boxes.get(edge.from) ?? []).map((line) => Bun.stringWidth(line)), 10)
+    const sourceLeft = from.center - Math.floor(sourceWidth / 2)
+    const sourceRight = sourceLeft + sourceWidth - 1
+    const neighborNode =
+      goesLeft && sourceIndex > 0
+        ? rankNodes[sourceIndex - 1]
+        : !goesLeft && sourceIndex < rankNodes.length - 1
+          ? rankNodes[sourceIndex + 1]
+          : undefined
+    const neighbor = neighborNode ? layoutNodes.get(neighborNode) : undefined
+    const neighborWidth = neighborNode
+      ? Math.max(...(boxes.get(neighborNode) ?? []).map((line) => Bun.stringWidth(line)), 10)
+      : 0
+    const neighborLeft = neighbor ? neighbor.center - Math.floor(neighborWidth / 2) : 0
+    const neighborRight = neighborLeft + neighborWidth - 1
+    const gapLane = neighbor
+      ? goesLeft
+        ? Math.floor((neighborRight + sourceLeft) / 2)
+        : Math.floor((sourceRight + neighborLeft) / 2)
+      : undefined
+    const sourceBounds = rankBounds.get(from.rank)
+    const lane =
+      gapLane ??
+      (goesLeft
+        ? Math.max(1, (sourceBounds?.left ?? from.center) - 3 - leftLaneIndex++ * 3)
+        : Math.min(canvasWidth - 2, (sourceBounds?.right ?? from.center) + 3 + rightLaneIndex++ * 3))
+    const sourceAnchorRow = rankTop(from.rank) + 3
+    const sourceEscapeRow = rankTop(from.rank) + 3 + FLOWCHART_CONNECTOR_GAP
+    const targetAnchorRow = routed.backward ? rankTop(to.rank) + 3 : rankTop(to.rank) - 1
+
+    drawVerticalConnector(connectorCells, from.center, sourceAnchorRow, sourceEscapeRow)
+    drawHorizontalConnector(connectorCells, sourceEscapeRow, from.center, lane)
+    drawVerticalConnector(connectorCells, lane, sourceEscapeRow, targetAnchorRow)
+    drawHorizontalConnector(connectorCells, targetAnchorRow, lane, to.center)
+    putOverlay(
+      overlays,
+      canvasWidth,
+      targetAnchorRow,
+      to.center,
+      routed.backward || input.direction === "bt" ? "▲" : "▼",
+    )
+
+    if (label) {
+      const labelWidth = Bun.stringWidth(label)
+      const low = Math.min(from.center, lane)
+      const high = Math.max(from.center, lane)
+      const labelStart = Math.max(0, Math.min(canvasWidth - labelWidth, Math.floor((low + high - labelWidth) / 2)))
+      putOverlay(overlays, canvasWidth, sourceEscapeRow, labelStart, label)
+    }
+  }
+
+  const rendered = rows
+    .map((row, rowIndex) => {
+      const rendered = row.map((character, column) => {
+        const overlay = overlays.get(rowIndex * canvasWidth + column)
+        if (overlay) return overlay
+        const directions = connectorCells[rowIndex]?.[column]
+        return character === " " && directions?.size ? connectorGlyph(directions) : character
+      })
+      return rendered.join("").trimEnd()
+    })
+    .join("\n")
+
+  return rendered
+}
+
 function parseFlowchartEdgeLine(line: string, labels: Map<string, string>) {
   const nodePattern = /([A-Za-z][\w-]*)(?:\[([^\]]+)\]|\(([^)]+)\)|\{([^}]+)\})?/y
   const connectorPattern = /\s*(?:--\s*([^>|-]+?)\s*--!?>|--!?>\|([^|]+)\||==>\|([^|]+)\||--!?>|---|==>|-.->|[—–-]*→|→)\s*/y
@@ -858,6 +1276,10 @@ function renderSimpleFlowchart(input: string, width: number): string | undefined
   }
 
   if (parsedEdges.length === 0) return undefined
+  if (direction === "td" || direction === "tb" || direction === "bt") {
+    const ranked = renderRankedVerticalFlowchart({ edges: parsedEdges, labels, direction, width })
+    if (ranked) return ranked
+  }
   const edges =
     direction === "bt" ? parsedEdges.map((edge) => ({ from: edge.to, to: edge.from, label: edge.label })) : parsedEdges
 
@@ -889,27 +1311,26 @@ function renderSimpleFlowchart(input: string, width: number): string | undefined
 
       if (next.length === 1 && !next[0].label) {
         const target = next[0].to
-        lines.push(`${"  ".repeat(depth)}        │`)
-        lines.push(`${"  ".repeat(depth)}        ▼`)
         if (path.has(target)) {
-          lines.push(`${"  ".repeat(depth)}        ↺ ${labels.get(target) ?? target}`)
+          lines.push(`${"  ".repeat(depth)}        └──────── ${cleanLabel(labels.get(target) ?? target)}`)
           return lines
         }
+        lines.push(`${"  ".repeat(depth)}        │`)
+        lines.push(`${"  ".repeat(depth)}        ▼`)
         return [...lines, ...renderNode(target, new Set([...path, target]), depth)]
       }
 
       for (let index = 0; index < next.length; index++) {
         const edge = next[index]
         const isLast = index === next.length - 1
-        const branch = isLast ? "└" : "├"
         const label = edge.label || `path ${index + 1}`
         const branchIndent = "  ".repeat(depth)
         const childPrefix = `${branchIndent}${isLast ? "   " : "│  "}`
         if (index > 0) lines.push("")
-        lines.push(`${branchIndent}${branch}─ ${label}`)
+        lines.push(`${branchIndent}${label} ─▶`)
 
         if (path.has(edge.to)) {
-          lines.push(`${childPrefix}↺ ${labels.get(edge.to) ?? edge.to}`)
+          lines.push(`${childPrefix}└──── ${cleanLabel(labels.get(edge.to) ?? edge.to)}`)
           continue
         }
         lines.push(
@@ -2021,12 +2442,58 @@ function renderStableStreamingMarkdown(markdown: string, finalized: boolean, wid
   return `${wrapStreamingText(renderStreamingMarkdownText(stable), width)}${wrapStreamingText(renderLiveStreamingLine(live), width)}`
 }
 
+type StreamingMarkdownTailState = {
+  finalized?: boolean
+  output?: "text" | "markdown"
+}
+
+function renderStreamingMarkdownTailAsMarkdown(markdown: string, width: number, options: RenderPlanMarkdownOptions = {}) {
+  if (options.tableMode !== "grid") return markdown
+
+  const lines = markdown.split("\n")
+  const result: string[] = []
+  let inFence = false
+
+  for (let index = 0; index < lines.length; index++) {
+    const current = lines[index] ?? ""
+
+    if (isFenceLine(current)) {
+      inFence = !inFence
+      result.push(current)
+      continue
+    }
+
+    if (inFence) {
+      result.push(current)
+      continue
+    }
+
+    const next = lines[index + 1]
+    if (next && isMarkdownTableRow(current) && isMarkdownTableSeparator(next)) {
+      const table = [current, next]
+      index += 2
+      while (index < lines.length && isMarkdownTableRow(lines[index] ?? "")) {
+        table.push(lines[index] ?? "")
+        index++
+      }
+      result.push("```text", ...renderLiveMarkdownTableAsGrid(table, width), "```")
+      index--
+      continue
+    }
+
+    result.push(current)
+  }
+
+  return result.join("\n")
+}
+
 export function renderStreamingMarkdownTail(
   markdown: string,
   width: number,
   options: RenderPlanMarkdownOptions = {},
-  state: { finalized?: boolean } = {},
+  state: StreamingMarkdownTailState = {},
 ) {
+  if (state.output === "markdown") return renderStreamingMarkdownTailAsMarkdown(markdown, width, options)
   if (options.tableMode !== "grid") return renderStableStreamingMarkdown(markdown, state.finalized ?? false, width)
 
   const lines = markdown.split("\n")

@@ -25,6 +25,10 @@ import { PlanReview } from "@/plan-review"
 import { Permission } from "@/permission"
 import { Todo } from "@/session/todo"
 import { BackgroundSession } from "@/session/background"
+import { BackgroundTask } from "@/session/background-task"
+import { AgentViewMetadata } from "@/session/agent-view-metadata"
+import { AgentView } from "@/session/agent-view"
+import { AgentCommand } from "@/session/agent-command"
 import { LoopWorkflow } from "@/session/loop"
 import { LoopRunner } from "@/session/loop-runner"
 import { Session } from "@/session/session"
@@ -83,6 +87,10 @@ export const AppLayer = Layer.mergeAll(
   Permission.defaultLayer,
   Todo.defaultLayer,
   BackgroundSession.defaultLayer,
+  BackgroundTask.defaultLayer,
+  AgentViewMetadata.defaultLayer,
+  AgentView.defaultLayer,
+  AgentCommand.defaultLayer,
   LoopWorkflow.defaultLayer,
   LoopRunner.defaultLayer,
   Session.defaultLayer,

@@ -3,6 +3,7 @@ import { Server } from "../../server/server"
 import { effectCmd } from "../effect-cmd"
 import { withNetworkOptions, resolveNetworkOptions } from "../network"
 import { Flag } from "@mendcode/core/flag/flag"
+import { SharedServer } from "./tui/shared-server"
 
 export const ServeCommand = effectCmd({
   command: "serve",
@@ -17,8 +18,28 @@ export const ServeCommand = effectCmd({
     }
     const opts = yield* Effect.promise(() => resolveNetworkOptions(args))
     const server = yield* Effect.promise(() => Server.listen(opts))
+    if (process.env.MENDCODE_SHARED_SERVER_STATE_FILE) {
+      const credentials = SharedServer.credentials()
+      yield* Effect.promise(() =>
+        SharedServer.writeState({
+          version: 1,
+          pid: process.pid,
+          url: server.url.toString(),
+          username: credentials.username,
+          password: credentials.password,
+          startedAt: new Date().toISOString(),
+          runtimeID: process.env.MENDCODE_SHARED_SERVER_RUNTIME_ID || "unknown",
+        }),
+      )
+    }
     console.log(`MendCode runtime server listening on http://${server.hostname}:${server.port}`)
 
-    yield* Effect.never
+    if (!process.env.MENDCODE_SHARED_SERVER_STATE_FILE) yield* Effect.never
+    yield* Effect.promise(() =>
+      SharedServer.waitForClientLeases({
+        pid: process.pid,
+        stop: () => server.stop(true),
+      }),
+    )
   }),
 })
