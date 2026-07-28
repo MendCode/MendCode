@@ -359,8 +359,9 @@ export type SessionStatus =
     }
   | {
       type: "busy"
-      kind?: "mflow-wait" | "memory-extract" | "subagent-wait"
+      kind?: "mflow-wait" | "memory-extract" | "subagent-wait" | "compaction"
       message?: string
+
       until?: number
       startedAt?: number
     }

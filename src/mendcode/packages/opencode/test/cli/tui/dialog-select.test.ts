@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import {
+  compactDialogSelectOption,
+  dialogSelectOptionMaxWidth,
+  normalizeDialogSelectText,
   searchDialogOptions,
+  selectedDialogOptionIndex,
+  sameDialogSelectText,
   shouldHandleDialogSelectCustomKeybinds,
 } from "../../../src/cli/cmd/tui/ui/dialog-select"
 
@@ -60,5 +65,49 @@ describe("DialogSelect custom keybinds", () => {
   test("allows custom keybinds when the filter input is not focused", () => {
     expect(shouldHandleDialogSelectCustomKeybinds({ focused: false }, "clau")).toBe(true)
     expect(shouldHandleDialogSelectCustomKeybinds(undefined, "clau")).toBe(true)
+  })
+})
+
+describe("DialogSelect option layout", () => {
+  test("normalizes whitespace and drops duplicate title descriptions", () => {
+    expect(normalizeDialogSelectText("  Chat\n presentation  ")).toBe("Chat presentation")
+    expect(sameDialogSelectText("Chat presentation", " Chat\tpresentation ")).toBe(true)
+    expect(
+      compactDialogSelectOption({
+        title: "Chat presentation",
+        description: "Chat\n presentation",
+        maxWidth: 40,
+      }),
+    ).toEqual({ title: "Chat presentation", description: undefined })
+  })
+
+  test("truncates long descriptions to one predictable row budget", () => {
+    const option = compactDialogSelectOption({
+      title: "Full",
+      description: "Full rich messages with Markdown, lists, tables, and local Mermaid rendering.",
+      maxWidth: 24,
+    })
+
+    expect(option.title).toBe("Full")
+    expect(option.description).toHaveLength(19)
+    expect(option.description?.endsWith("…")).toBe(true)
+  })
+
+  test("reduces the display budget on narrow terminals without changing command caps", () => {
+    expect(dialogSelectOptionMaxWidth(80)).toBe(60)
+    expect(dialogSelectOptionMaxWidth(40)).toBe(20)
+    expect(dialogSelectOptionMaxWidth(40, true)).toBe(22)
+    expect(dialogSelectOptionMaxWidth(140, true)).toBe(96)
+  })
+
+  test("keeps the current option index stable for keyboard selection", () => {
+    const options = [
+      { title: "Raw", value: "raw" },
+      { title: "Minimal", value: "minimal" },
+      { title: "Full", value: "mendcode" },
+    ]
+
+    expect(selectedDialogOptionIndex(options, "mendcode")).toBe(2)
+    expect(selectedDialogOptionIndex(options, "missing")).toBe(-1)
   })
 })

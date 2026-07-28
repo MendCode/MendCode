@@ -243,6 +243,21 @@ describe("queued user turn", () => {
     ).toBe("msg_002")
   })
 
+  test("does not keep the activity indicator alive after a terminal finish arrives first", () => {
+    expect(
+      latestPendingAssistantID([
+        { id: "msg_001", role: "user", time: { created: 1 } },
+        { id: "msg_002", role: "assistant", time: { created: 2 }, finish: "stop" },
+      ]),
+    ).toBeUndefined()
+    expect(
+      latestPendingAssistantID([
+        { id: "msg_001", role: "user", time: { created: 1 } },
+        { id: "msg_002", role: "assistant", time: { created: 2 }, finish: "tool-calls" },
+      ]),
+    ).toBe("msg_002")
+  })
+
   test("stays visibly queued across later assistant tool iterations", () => {
     const activeUser = { id: "msg_001", role: "user" }
     const queuedUser = { id: "msg_003", role: "user" }

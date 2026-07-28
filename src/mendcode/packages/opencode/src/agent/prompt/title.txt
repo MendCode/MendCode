@@ -7,12 +7,15 @@ Follow all rules in <rules>
 Use the <examples> so you know what a good title looks like.
 Your output must be:
 - A single line
-- ≤50 characters
+- 3 to 5 words
+- Prefer fewer words when they remain clear
+- Keep it under 50 characters when possible
 - No explanations
 </task>
 
 <rules>
 - you MUST use the same language as the user message you are summarizing
+- Use 3 to 5 words that capture the dominant topic; never write a full sentence
 - Title must be grammatically correct and read naturally - no word salad
 - Never include tool names in the title (e.g. "read tool", "bash tool", "edit tool")
 - Focus on the main topic or question the user needs to retrieve

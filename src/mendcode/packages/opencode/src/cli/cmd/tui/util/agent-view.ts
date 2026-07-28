@@ -42,8 +42,76 @@ export type AgentViewSessionItem = {
   session?: Session
 }
 
+export function agentViewBusyActivity(status?: { type?: string | null; message?: string | null }) {
+  if (status?.type !== "busy") return undefined
+  const message = status.message?.trim()
+  return message || undefined
+}
+
+const agentViewActiveChildBackgroundStates = new Set(["queued", "working", "needs_input"])
+
+export function agentViewParentSessionIDsWithActiveChildren(input: {
+  sessions: readonly { id: string; parentID?: string | null }[]
+  statuses?: Readonly<Record<string, { type?: string | null } | undefined>>
+  backgrounds?: readonly { sessionID: string; state?: string | null }[]
+}) {
+  const parentBySessionID = new Map(input.sessions.map((session) => [session.id, session.parentID]))
+  const backgroundBySessionID = new Map((input.backgrounds ?? []).map((item) => [item.sessionID, item.state]))
+  const parents = new Set<string>()
+  for (const session of input.sessions) {
+    const status = input.statuses?.[session.id]
+    const backgroundState = backgroundBySessionID.get(session.id)?.trim().toLowerCase()
+    const active =
+      status?.type === "busy" ||
+      status?.type === "retry" ||
+      (backgroundState !== undefined && agentViewActiveChildBackgroundStates.has(backgroundState))
+    if (!active) continue
+    const visited = new Set<string>()
+    let parentID = session.parentID
+    while (parentID && !visited.has(parentID)) {
+      visited.add(parentID)
+      parents.add(parentID)
+      parentID = parentBySessionID.get(parentID)
+    }
+  }
+  return parents
+}
+
 export type AgentViewLoopWorkflowRef = {
   rootSessionID?: string | null
+}
+
+const agentViewActiveStates = new Set(["queued", "working", "needs_input"])
+
+export function isAgentViewActiveState(state: string | null | undefined) {
+  return agentViewActiveStates.has(state?.trim().toLowerCase() ?? "")
+}
+
+export function retainAgentViewActiveRows<T>(input: {
+  next: readonly T[]
+  cached: readonly { item: T; seenAt: number }[]
+  key: (item: T) => string
+  active: (item: T) => boolean
+  now: number
+  graceMs: number
+}) {
+  const nextIDs = new Set(input.next.map(input.key))
+  const retained = input.cached.flatMap((entry) => {
+    const id = input.key(entry.item)
+    if (nextIDs.has(id) || input.now - entry.seenAt > input.graceMs || !input.active(entry.item)) return []
+    return [entry.item]
+  })
+  return [...input.next, ...retained]
+}
+
+const agentViewLiveLoopWorkflowStates = new Set(["active", "sleeping", "working", "needs_input", "blocked"])
+
+export function isAgentViewLiveLoopWorkflow(input: { state?: string | null }) {
+  return agentViewLiveLoopWorkflowStates.has(input.state?.trim().toLowerCase() ?? "")
+}
+
+export function filterAgentViewLiveLoopWorkflows<T extends { state?: string | null }>(workflows: readonly T[]) {
+  return workflows.filter(isAgentViewLiveLoopWorkflow)
 }
 
 export type AgentViewCommand = {
@@ -97,8 +165,18 @@ export function isAgentViewLoopSession(input: {
 }
 
 export function isAgentViewCompletedLoop(input: { state?: string | null; summary?: string | null }) {
-  if (input.state === "completed") return true
+  if (input.state?.trim().toLowerCase() === "completed") return true
   return input.summary?.trim().toLowerCase().startsWith("loop completed") ?? false
+}
+
+export function isAgentViewCompletedLoopSession(input: {
+  sessionID: string
+  title?: string | null
+  summary?: string | null
+  state?: string | null
+  loopRootSessionIDs?: ReadonlySet<string>
+}) {
+  return isAgentViewLoopSession(input) && isAgentViewCompletedLoop(input)
 }
 
 export function filterAgentViewLoopSessions<T extends { id: string; title?: string | null }>(
@@ -161,6 +239,7 @@ export function isAgentViewSessionVisible(input: {
   pendingCommands?: number
   activeCommands?: number
   blockedCommands?: number
+  activeChild?: boolean
   now?: number
 }) {
   const { item, status } = input
@@ -171,6 +250,7 @@ export function isAgentViewSessionVisible(input: {
     (input.pendingCommands ?? 0) > 0 ||
     (input.activeCommands ?? 0) > 0 ||
     (input.blockedCommands ?? 0) > 0 ||
+    input.activeChild === true ||
     status?.type === "busy" ||
     status?.type === "retry" ||
     item.background.state === "queued" ||

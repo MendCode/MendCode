@@ -290,6 +290,45 @@ describe("Runner", () => {
     }),
   )
 
+  it.live(
+    "queued immediate work waits while the active run is not interruptible",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const queuedStarted = yield* Ref.make(false)
+      const runner = Runner.make<string>(s)
+      const active = yield* runner
+        .ensureRunning(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined)
+            yield* Deferred.await(release)
+            return "active"
+          }),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      yield* runner.setInterruptible(false)
+
+      const queued = yield* runner
+        .ensureRunning(
+          Effect.gen(function* () {
+            yield* Ref.set(queuedStarted, true)
+            return "queued"
+          }),
+          { queue: true, interrupt: {} },
+        )
+        .pipe(Effect.forkChild)
+      yield* Effect.sleep("10 millis")
+      expect(runner.state._tag).toBe("RunningThenRun")
+      expect(yield* Ref.get(queuedStarted)).toBe(false)
+
+      yield* Deferred.succeed(release, undefined)
+      expect(yield* Fiber.join(active)).toBe("active")
+      expect(yield* Fiber.join(queued)).toBe("queued")
+    }),
+  )
+
   // --- cancel semantics ---
 
   it.live(
@@ -391,6 +430,42 @@ describe("Runner", () => {
 
       expect(yield* Fiber.join(active)).toBe("fallback")
       expect(yield* Fiber.join(queued)).toBe("queued")
+      expect(runner.busy).toBe(false)
+    }),
+  )
+
+  it.live(
+    "duplicate interrupts remain idempotent after promotion",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const started = yield* Deferred.make<void>()
+      const calls = yield* Ref.make(0)
+      const runner = Runner.make<string>(s, {
+        onInterrupt: Effect.gen(function* () {
+          yield* Ref.update(calls, (count) => count + 1)
+          return "fallback"
+        }),
+      })
+      const active = yield* runner
+        .ensureRunning(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined)
+            return yield* Effect.never.pipe(Effect.as("active"))
+          }),
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      const queued = yield* runner.ensureRunning(Effect.succeed("queued"), { queue: true }).pipe(Effect.forkChild)
+      yield* Effect.gen(function* () {
+        while (runner.state._tag !== "RunningThenRun") yield* Effect.yieldNow
+      }).pipe(Effect.timeout("250 millis"))
+
+      yield* runner.interrupt
+
+      expect(yield* Fiber.join(active)).toBe("fallback")
+      expect(yield* Fiber.join(queued)).toBe("queued")
+      yield* runner.interrupt
+      expect(yield* Ref.get(calls)).toBe(1)
       expect(runner.busy).toBe(false)
     }),
   )

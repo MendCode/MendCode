@@ -199,6 +199,13 @@ describe("Home split welcome sizing", () => {
         [{ sessionID: "background" }, { sessionID: "foreground" }],
       ),
     ).toEqual([{ sessionID: "foreground" }, { sessionID: "background" }])
+
+    expect(
+      mergeAgentViewAggregateFallback(
+        [{ sessionID: "worker", state: "completed" }],
+        [{ sessionID: "worker", state: "working" }],
+      ),
+    ).toEqual([{ sessionID: "worker", state: "working" }])
   })
 
   test("stacks Agent View metadata before title and timestamps collide", () => {

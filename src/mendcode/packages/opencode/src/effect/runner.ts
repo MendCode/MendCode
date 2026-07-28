@@ -13,6 +13,7 @@ export interface Runner<A, E = never> {
   readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E>
   readonly interruptCurrent: (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => Effect.Effect<void>
   readonly cancelPending: (predicate: (key?: string) => boolean) => Effect.Effect<boolean>
+  readonly setInterruptible: (interruptible: boolean) => Effect.Effect<void>
   readonly interrupt: Effect.Effect<void>
   readonly cancel: Effect.Effect<void>
 }
@@ -33,6 +34,7 @@ interface RunHandle<A, E> {
   done: Deferred.Deferred<A, E | Cancelled>
   fiber: Fiber.Fiber<A, E>
   key?: string
+  interruptible: boolean
 }
 
 interface ShellHandle<A, E> {
@@ -130,11 +132,11 @@ export const make = <A, E = never>(
   ): Effect.Effect<RunHandle<A, E>> =>
     Effect.gen(function* () {
       const id = next()
-      const fiber = yield* work.pipe(
+      const fiber = yield* (Effect.yieldNow.pipe(Effect.andThen(work))).pipe(
         Effect.onExit((exit) => finishRun(id, done, exit)),
         Effect.forkIn(scope),
       )
-      return { id, done, fiber, key } satisfies RunHandle<A, E>
+      return { id, done, fiber, key, interruptible: true } satisfies RunHandle<A, E>
     }) as Effect.Effect<RunHandle<A, E>>
 
   const finishShell = (id: number): Effect.Effect<void> =>
@@ -201,7 +203,7 @@ export const make = <A, E = never>(
               }
               const next = yield* queueRun(work, options?.queueKey)
               return [
-                options.interrupt
+                st.run.interruptible && options.interrupt
                   ? interruptThenAwait(st.run.fiber, next.done, options.interrupt)
                   : awaitDone(next.done),
                 { _tag: "RunningThenRun", run: st.run, next: [next] },
@@ -217,7 +219,7 @@ export const make = <A, E = never>(
               }
               const next = yield* queueRun(work, options?.queueKey)
               return [
-                options.interrupt
+                st.run.interruptible && options.interrupt
                   ? interruptThenAwait(st.run.fiber, next.done, options.interrupt)
                   : awaitDone(next.done),
                 { ...st, next: [...st.next, next] },
@@ -351,6 +353,13 @@ export const make = <A, E = never>(
       }),
     )
 
+  const setInterruptible = (interruptible: boolean) =>
+    SynchronizedRef.update(ref, (st) => {
+      if (st._tag === "Running") return { ...st, run: { ...st.run, interruptible } }
+      if (st._tag === "RunningThenRun") return { ...st, run: { ...st.run, interruptible } }
+      return st
+    })
+
   const interruptCurrent = (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => SynchronizedRef.modify(ref, (st) => {
     const interruptRun = (run: RunHandle<A, E>) =>
       Effect.gen(function* () {
@@ -391,6 +400,7 @@ export const make = <A, E = never>(
     startShell,
     interruptCurrent,
     cancelPending,
+    setInterruptible,
     interrupt,
     cancel,
   }

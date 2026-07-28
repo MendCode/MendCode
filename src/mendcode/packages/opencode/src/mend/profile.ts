@@ -109,7 +109,7 @@ const fallbackProfile: MendTuiProfile = {
     width: 88,
     zones: {
       sidebar: { enabled: false, compact: false, width: 0 },
-      header: { enabled: true, title: { visible: false, align: "right" } },
+      header: { enabled: true, title: { visible: false, align: "center" } },
       footer: { enabled: true },
       session: { transcript: "main", metadata: "footer", stickyUserHeader: true, submitScrollMode: "bottom" },
       prompt: { position: "bottom", rightSurface: false },

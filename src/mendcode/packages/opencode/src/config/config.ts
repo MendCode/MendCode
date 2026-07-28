@@ -91,6 +91,17 @@ function normalizeLoadedConfig(data: unknown, source: string) {
     })
   }
 
+  const legacyExperimental = isRecord(copy.experimental) ? copy.experimental : undefined
+  if (legacyExperimental && "subagent_owner_wake" in legacyExperimental) {
+    mutated = true
+    if (!("subagent_owner_wake" in copy)) copy.subagent_owner_wake = legacyExperimental.subagent_owner_wake
+    const nextExperimental = { ...legacyExperimental }
+    delete nextExperimental.subagent_owner_wake
+    if (Object.keys(nextExperimental).length) copy.experimental = nextExperimental
+    else delete copy.experimental
+    log.warn("experimental.subagent_owner_wake is deprecated; move it to the top-level config", { path: source })
+  }
+
   if (!mutated) return data
   return copy
 }
@@ -176,6 +187,10 @@ export const Info = Schema.Struct({
   }),
   subagent_variant: Schema.optional(Schema.String).annotate({
     description: "Default model variant to use with subagent_model for subagents launched by the task tool",
+  }),
+  subagent_owner_wake: Schema.optional(Schema.Boolean).annotate({
+    description:
+      "Let completed background subagents wake an idle parent agent. Enabled by default; set false to disable.",
   }),
   default_agent: Schema.optional(Schema.String).annotate({
     description:
@@ -322,10 +337,6 @@ export const Info = Schema.Struct({
       }),
       subagent_max_descendants: Schema.optional(PositiveInt).annotate({
         description: "Maximum active subagent tasks per root session (default: 16)",
-      }),
-      subagent_owner_wake: Schema.optional(Schema.Boolean).annotate({
-        description:
-          "Let completed background subagents wake an idle parent agent. Disabled by default; applies to global and project config.",
       }),
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",

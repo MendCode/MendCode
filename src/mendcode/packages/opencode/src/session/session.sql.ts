@@ -131,7 +131,14 @@ export const SessionStatusTable = sqliteTable("session_status", {
   data: text({ mode: "json" })
     .notNull()
     .$type<
-      | { type: "busy"; kind?: "mflow-wait" | "memory-extract" | "subagent-wait"; message?: string; until?: number }
+       | {
+           type: "busy"
+           kind?: "mflow-wait" | "memory-extract" | "subagent-wait" | "compaction"
+           message?: string
+           until?: number
+           startedAt?: number
+         }
+
       | { type: "retry"; attempt: number; message: string; next: number }
     >(),
 })
