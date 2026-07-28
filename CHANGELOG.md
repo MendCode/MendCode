@@ -2,60 +2,59 @@
 
 ## Unreleased
 
-### Changed
+_No changes yet._
 
-- Add configurable context-pack presentation with arcade, cockpit, minimal, and quiet modes plus setup controls.
-- Improve TUI selection dialogs with large layouts, structured command search, readable wrapping, and a `?` help key.
-
-### Fixed
-
-- Keep TUI message state idempotent when duplicate `message.updated` events arrive in the same batch, preventing temporary assistant duplication or disappearance during queued and normal turns.
-- Preserve the latest real user turn and its visible assistant output across bounded refreshes, stale removals, and compaction-related updates.
-- Keep prompt/queue working state, compaction progress, background-task notifications, and session rendering synchronized during active turns.
-- Persist async prompts before acknowledging them with HTTP 204 and surface prompt failures through the existing session error event.
-- Harden legacy relay URL recognition, OAuth error pages, and cryptographic ID/PKCE generation against security scanner findings.
-
-### Tests
-
-- Add regressions for batched duplicate message updates, pinned user turns, sparse refreshes, bounded transcript retention, compaction pairing, and prompt working-state transitions.
-- Add command-search and async-prompt persistence regressions.
-
-## 0.1.20 - 2026-06-27
+## 0.1.20 - 2026-07-28
 
 ### Added
 
 - Add setup onboarding presets for subscription, balanced API, and budget API model roles.
 - Add a setup Health Check step that runs setup doctor/plan without printing secrets.
 - Add package setup actions for public GitHub package imports, local imports, package management, and safe runtime config snapshot export.
+- Add the Memory Center with project/global scopes, category graphs, reviewable proposals, a constrained memory side agent, and Dream maintenance workflows.
+- Add durable Loop Workflow execution with root/child sessions, journals, checkpoints, artifact ledgers, safety gates, evaluators, cost records, daily schedules, and self-paced triggers.
 - Add Loop Workflow `update_agent` support in the tool, API, and TUI so existing loops can be retargeted without recreation.
 - Add richer Loop Workflow show/list context with latest run checkpoint, changed files, recent events, and latest loop-session message.
 - Add self-paced Loop Workflow trigger support for max-goal work without hot-looping unbounded monitors.
+- Add the terminal-native `/changes` review surface, inline comments, bounded review context, and the `review` tool.
+- Add first-run onboarding, context-pack profiles (`arcade`, `cockpit`, `minimal`, and `quiet`), structured command search, larger dialogs, widgets, overlays, themes, and plugin slots.
+- Add background-task control, subagent/session metadata, Herdr state reporting, public/local package imports, package management, and the Memory Graph example package.
 - Add installer `--setup` and `--skip-setup` options plus an optional setup launch prompt after install.
 
 ### Changed
 
 - Refresh setup/provider copy around Provider Manager, connected providers, model role presets, package store actions, and responsive narrow-width layout.
 - Refresh installer presentation with the MendCode install deck banner, progress UI, and setup instructions.
+- Refresh session synchronization, prompt model/variant metadata, compaction panels, background-task notifications, and resumed subagent presentation.
+- Make `/memory`, `/loops`, `/stats`, `/changes`, setup, and session views responsive on narrow and mid-width terminals.
 - Keep resumed subagent calls attached to the original task card instead of rendering duplicate resume cards.
-- Improve `/changes` diff loading so large tracked patches are skipped per file with metadata instead of failing the whole review.
+- Improve `/changes` diff loading so large tracked and likely-binary patches are summarized per file with metadata instead of flooding or failing the whole review.
 - Make the `/loops` route responsive for compact and mid-width panes with shorter key hints, bounded stacked list height, and visible compact loop detail.
+- Expand public documentation, package/plugin guidance, memory and loop guides, screenshots, branding assets, and release automation.
 
 ### Fixed
 
 - Preserve useful subagent evidence in Task tool results when the child reply is generic but the child session recorded substantive output or changed orchestration files.
-- Mark externally interrupted subagent tasks as retained/continuable instead of failed, so parent sessions do not misread connection drops as subagent failure.
+- Mark externally interrupted subagent tasks as retained/continuable instead of failed, so parent sessions do not misread connection drops as failed.
+- Keep batched `message.updated` events idempotent and preserve the latest user turn, assistant output, queue state, and compaction progress across bounded refreshes.
+- Persist async prompts before acknowledging HTTP 204 responses and surface prompt failures through the normal session error event.
 - Keep unbounded interval monitors from completing when a checkpoint says `complete`; they now continue until an explicit stop condition.
 - Keep self-paced unbounded monitors from running continuously without a cadence.
 - Preserve loop receipt state for show/list and problem states instead of masking workflow state with generic completed-action copy.
 - Prevent setup and loops pages from clipping action footers, rails, and detail panels on narrow terminal panes.
 - Avoid stale setup package registry entries when GitHub or local package import fails.
+- Prevent binary or oversized `apply_patch` inputs from becoming giant diffs that block the server/TUI before `Generating` starts.
+- Harden legacy relay URL recognition, OAuth error pages, cryptographic ID/PKCE generation, and release dependency paths.
+- Update release dependencies to OSV-fixed versions: `@hono/node-server` 2.0.10, `brace-expansion` 5.0.8, and `tar` 7.5.21.
 
 ### Tests
 
 - Add Task tool regressions for retained external aborts and generic subagent replies with child-session evidence.
+- Add Memory Center/Dream, memory graph, session synchronization, prompt persistence, background-task, plugin, and HTTP API regressions.
 - Add Loop Workflow regressions for agent retargeting, self-paced scheduling, unbounded monitor checkpoints, show/list context metadata, and loop receipt copy.
 - Add setup/package regressions for public GitHub URL validation, memory dialog state, setup health step state, and compact setup/loops layout helpers.
 - Add `/changes` regressions for per-file large patch handling and binary/large file skip messaging.
+- Pass supply-chain preflight, OSV, frozen-lockfile, release asset, SBOM, CodeQL, dependency review, security scanner, checksum, and attestation gates for the published release.
 
 ## 0.1.19 - 2026-06-25
 
