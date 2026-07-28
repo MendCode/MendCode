@@ -30,6 +30,8 @@ export type TimelineGroupOptions = {
   showReasoningRows?: boolean
   completed?: boolean
   forceCompact?: boolean
+  latestTodoWritePartID?: string
+  currentTodos?: ReadonlyArray<{ content: string; status: string }>
 }
 
 const MAX_VISIBLE_COMPLETED_ROWS = 5
@@ -86,10 +88,14 @@ function rowNode(
   if (part.type !== "tool" || !part.tool || !part.state) return
   if (!options.forceCompact && !shouldRenderCompactTool(profile, part.tool)) return
 
+  const timelineInput =
+    part.tool === "todowrite" && part.id === options.latestTodoWritePartID && options.currentTodos !== undefined
+      ? { ...(part.state.input ?? {}), todos: options.currentTodos }
+      : part.state.input
   const event = normalizeToolEvent({
     tool: part.tool,
     state: part.state.status,
-    input: part.state.input,
+    input: timelineInput,
     metadata: part.state.metadata,
     output: part.state.output,
   })
@@ -99,7 +105,7 @@ function rowNode(
     tool: part.tool,
     class: event.class,
     state: event.state,
-    title: compactToolTitle(part.tool, part.state.input ?? {}, part.state.metadata, part.state.output) ?? event.title,
+    title: compactToolTitle(part.tool, timelineInput ?? {}, part.state.metadata, part.state.output) ?? event.title,
     ...(event.lines.length > 0 ? { lines: event.lines } : {}),
   }
 }
