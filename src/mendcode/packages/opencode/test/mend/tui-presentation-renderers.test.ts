@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
-import { parseTimelineDiffRows, timelineDiffFileStatus } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
+import { parseTimelineDiffRows, timelineDiffFileStatus, timelineDiffIsNonText } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
 import { diffStatsFromPatch, formatDiffStats, patchFileTitle } from "../../src/cli/cmd/tui/routes/session/renderers/diff-label"
 import { compactMemoryGraphRows, compactMemoryGraphSnapshot } from "../../src/cli/cmd/tui/util/memory-graph"
 import { compactionArcadeFrames, compactionStageStates, compactionSummaryPreview, rawReasoningDisplay, resolveTuiPresentation, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
@@ -540,6 +540,41 @@ describe("mend tui presentation renderers", () => {
     expect(labels.filter((label) => label.includes("more"))).toEqual(["◇ 8 tools more"])
   })
 
+  test("mendcode uses the live list for the latest grouped todo write", () => {
+    const nodes = groupTimelineParts("mendcode", [
+      {
+        id: "todo-live",
+        type: "tool",
+        tool: "todowrite",
+        state: {
+          status: "completed",
+          input: {
+            todos: [
+              { content: "Initial task", status: "in_progress" },
+              { content: "Second task", status: "pending" },
+            ],
+          },
+          output: "",
+        },
+      },
+    ], {
+      completed: true,
+      latestTodoWritePartID: "todo-live",
+      currentTodos: [
+        { content: "Task 1", status: "completed" },
+        { content: "Task 2", status: "in_progress" },
+        { content: "Task 3", status: "pending" },
+        { content: "Task 4", status: "pending" },
+        { content: "Task 5", status: "pending" },
+      ],
+    })
+
+    const row = nodes.find((node) => isTimelineRowWithTitle(node, "Todos"))
+    expect(row).toMatchObject({
+      lines: ["✓ Task 1", "→ Task 2", "○ Task 3", "○ Task 4", "○ Task 5"],
+    })
+  })
+
   test("empty parts do not split compact timeline stacks", () => {
     const parts = [
       ...Array.from({ length: 7 }, (_, index) => ({
@@ -873,6 +908,20 @@ describe("mend tui presentation renderers", () => {
       { kind: "meta", text: expect.stringContaining("Binary/non-text patch omitted") },
     ])
     expect(rows.map((row) => row.text).join("\n")).not.toContain("\ufffdPNG")
+  })
+
+  test("timeline diff parser treats compact binary summaries as non-text", () => {
+    const diff = [
+      "Index: /repo/.bun-build",
+      "===================================================================",
+      "Binary files /repo/.bun-build and /dev/null differ (476,227 bytes)",
+    ].join("\n")
+
+    expect(timelineDiffIsNonText(diff)).toBe(true)
+    expect(parseTimelineDiffRows(diff)).toEqual([
+      { kind: "file", text: "/repo/.bun-build" },
+      { kind: "meta", text: "Binary/non-text patch omitted (476,227 bytes)" },
+    ])
   })
 
   test("timeline diff parser caps only very large text diffs", () => {

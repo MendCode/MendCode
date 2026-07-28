@@ -5327,6 +5327,8 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           completed: !!props.message.time.completed,
           showReasoningRows: mend.profile.presentation.reasoning.defaultVisibility !== "hidden",
           forceCompact: largeToolBatch(),
+          latestTodoWritePartID: ctx.latestTodoWritePartID(),
+          currentTodos: sync.data.todo[props.message.sessionID],
         }),
   )
   const timelineNodes = createMemo(

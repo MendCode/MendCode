@@ -362,6 +362,28 @@ describe("tool.apply_patch freeform", () => {
     })
   })
 
+  test("deletes binary files without materializing their contents in the diff", async () => {
+    await using fixture = await tmpdir()
+    const { ctx, calls } = makeCtx()
+
+    await WithInstance.provide({
+      directory: fixture.path,
+      fn: async () => {
+        const target = path.join(fixture.path, ".bun-build")
+        await fs.writeFile(target, Buffer.concat([Buffer.from("BUN"), Buffer.alloc(476_224)]))
+
+        const patchText = "*** Begin Patch\n*** Delete File: .bun-build\n*** End Patch"
+        const result = await execute({ patchText }, ctx)
+        const permissionFile = calls[0]?.metadata.files[0]
+
+        expect(result.metadata.diff.length).toBeLessThan(500)
+        expect(result.metadata.diff).toContain("Binary files")
+        expect(permissionFile?.patch.length).toBeLessThan(500)
+        expect(await fs.readFile(target).catch(() => undefined)).toBeUndefined()
+      },
+    })
+  })
+
   test("rejects delete when target is a directory", async () => {
     await using fixture = await tmpdir()
     const { ctx } = makeCtx()

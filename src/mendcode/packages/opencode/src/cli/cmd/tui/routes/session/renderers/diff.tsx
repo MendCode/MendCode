@@ -6,6 +6,7 @@ import {
   parseTimelineDiffRows,
   timelineDiffFileStatus,
   timelineDiffHasPreviewMarker,
+  timelineDiffIsNonText,
   timelineDiffIsTruncationRow,
   type TimelineDiffFileStatus,
   type TimelineDiffRow,
@@ -92,9 +93,10 @@ export function TimelineDiff(props: {
       .filter((row) => !timelineDiffIsTruncationRow(row)),
   )
   const fileStatus = createMemo(() => timelineDiffFileStatus(source()))
+  const nonText = createMemo(() => timelineDiffIsNonText(source()))
   const renderTruncated = createMemo(() => parsedRows().some(timelineDiffIsTruncationRow))
   const needsMore = createMemo(
-    () => fullDiff() === undefined && (timelineDiffHasPreviewMarker(props.diff) || renderTruncated()),
+    () => fullDiff() === undefined && !nonText() && (timelineDiffHasPreviewMarker(props.diff) || renderTruncated()),
   )
   const wrapMode = createMemo(() => props.wrapMode ?? "word")
   const showMoreLabel = createMemo(() => {
@@ -114,6 +116,10 @@ export function TimelineDiff(props: {
       .then((value) => {
         if (value === undefined) {
           setLoadError("Full diff was not returned")
+          return
+        }
+        if (timelineDiffIsNonText(value)) {
+          setLoadError("Binary/non-text diff omitted; full render disabled")
           return
         }
         setFullDiff(value)
