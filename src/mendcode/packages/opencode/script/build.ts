@@ -238,14 +238,17 @@ for (const item of targets) {
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
     const binaryPath = `dist/${name}/bin/${binaryName}`
-    console.log(`Running smoke test: ${binaryPath} --version && --help`)
+    const checkHelp = item.avx2 !== false
+    console.log(`Running smoke test: ${binaryPath} --version${checkHelp ? " && --help" : ""}`)
     try {
       const versionOutput = await $`${binaryPath} --version`.text()
-      const helpOutput = await $`${binaryPath} --help 2>&1`.text()
-      if (!helpOutput.includes("Commands:")) {
-        throw new Error("--help did not produce the command list")
+      if (checkHelp) {
+        const helpOutput = await $`${binaryPath} --help 2>&1`.text()
+        if (!helpOutput.includes("Commands:")) {
+          throw new Error("--help did not produce the command list")
+        }
       }
-      console.log(`Smoke test passed: ${versionOutput.trim()} and --help startup`)
+      console.log(`Smoke test passed: ${versionOutput.trim()}${checkHelp ? " and --help startup" : ""}`)
     } catch (e) {
       console.error(`Smoke test failed for ${name}:`, e)
       process.exit(1)

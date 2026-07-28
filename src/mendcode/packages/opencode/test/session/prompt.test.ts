@@ -333,6 +333,50 @@ function promptAssistant(
   }
 }
 
+runStateIt.instance("cancels queued work with the active session", () =>
+  Effect.gen(function* () {
+    const state = yield* SessionRunState.Service
+    const sessionID = SessionID.make("ses-run-state-cancel-queue")
+    const started = yield* Deferred.make<void>()
+    const fallback = promptAssistant({
+      id: MessageID.ascending(),
+      finish: "stop",
+      summary: false,
+      parentID: MessageID.ascending(),
+    })
+    const queuedResult = promptAssistant({
+      id: MessageID.ascending(),
+      finish: "stop",
+      summary: false,
+      parentID: MessageID.ascending(),
+    })
+    const active = yield* state
+      .ensureRunning(
+        sessionID,
+        Effect.succeed(fallback),
+        Effect.gen(function* () {
+          yield* Deferred.succeed(started, undefined)
+          return yield* Effect.never
+        }),
+      )
+      .pipe(Effect.forkChild)
+    yield* Deferred.await(started).pipe(Effect.timeout("1 second"))
+
+    const queued = yield* state
+      .ensureRunning(sessionID, Effect.succeed(fallback), Effect.succeed(queuedResult), { queue: true })
+      .pipe(Effect.forkChild)
+    yield* Effect.sleep("10 millis")
+
+    yield* state.cancel(sessionID)
+
+    expect((yield* Fiber.join(active)).info.id).toBe(fallback.info.id)
+    const queuedValue = yield* Fiber.join(queued)
+    expect(queuedValue.info.id).toBe(fallback.info.id)
+    expect(queuedValue.info.id).not.toBe(queuedResult.info.id)
+    expect(yield* state.isBusy(sessionID)).toBe(false)
+  }),
+)
+
 runStateIt.instance("keeps the runner identity during idle cleanup", () =>
   Effect.gen(function* () {
     const state = yield* SessionRunState.Service
