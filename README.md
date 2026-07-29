@@ -305,8 +305,6 @@ editing files.
   <img src="docs/assets/screenshots/markdown-preview-showcase.png" alt="MendCode Markdown preview rendering" width="980">
 </p>
 
-![MendCode Markdown preview rendering](docs/assets/screenshots/markdown-preview-showcase.png)
-
 1. The planning agent researches and writes a Markdown plan.
 2. MendCode renders the plan in a TUI modal.
 3. The user can approve, edit, comment, reject, or close.
