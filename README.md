@@ -298,9 +298,13 @@ mendcode marketplace enable acme-standard
 Plan Mode is for users who want the agent to think first without silently
 editing files.
 
-![MendCode Plan Mode review modal](docs/assets/screenshots/plan-review-modal.png)
+<p align="center">
+  <img src="docs/assets/screenshots/plan-review-modal.png" alt="MendCode Plan Mode review modal" width="980">
+</p>
 
-![MendCode Markdown preview rendering](docs/assets/screenshots/markdown-preview-showcase.png)
+<p align="center">
+  <img src="docs/assets/screenshots/markdown-preview-showcase.png" alt="MendCode Markdown preview rendering" width="980">
+</p>
 
 1. The planning agent researches and writes a Markdown plan.
 2. MendCode renders the plan in a TUI modal.
