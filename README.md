@@ -37,7 +37,6 @@ cancellation.
 - [Documentation Map](#documentation-map)
 - [Development](#development)
 - [Community And Security](#community-and-security)
-- [Star History](#star-history)
 - [For Agents](#for-agents)
 - [Lineage](#lineage)
 
@@ -460,16 +459,6 @@ normal test entrypoint; run focused tests from the package that owns the change.
 - [Community docs](docs/community.md): issues, discussions, labels, and contribution guidance.
 - [Release process](docs/releasing.md): release assets, checksums, installer smoke tests, and public promotion.
 - [Supply chain security](docs/supply-chain-security.md): provenance, dependency review, scanners, and release hardening.
-
-## Star History
-
-<a href="https://www.star-history.com/#MendCode/MendCode&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=MendCode/MendCode&type=date&theme=dark&legend=top-left">
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=MendCode/MendCode&type=date&legend=top-left">
-    <img alt="MendCode Star History Chart" src="https://api.star-history.com/chart?repos=MendCode/MendCode&type=date&legend=top-left">
-  </picture>
-</a>
 
 ## For Agents
 
