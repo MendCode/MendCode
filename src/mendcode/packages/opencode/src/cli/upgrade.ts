@@ -5,6 +5,10 @@ import { Flag } from "@mendcode/core/flag/flag"
 import { Installation } from "@/installation"
 import { InstallationVersion } from "@mendcode/core/installation/version"
 
+export function shouldNotifyUpdate(autoupdate: boolean | "notify" | undefined, kind: Installation.ReleaseType) {
+  return autoupdate !== true || kind !== "patch"
+}
+
 export async function upgrade() {
   const config = await AppRuntime.runPromise(Config.Service.use((cfg) => cfg.getGlobal()))
   if (config.autoupdate === false || Flag.OPENCODE_DISABLE_AUTOUPDATE) return
@@ -22,7 +26,7 @@ export async function upgrade() {
 
   const kind = Installation.getReleaseType(InstallationVersion, latest)
 
-  if (config.autoupdate === "notify" || kind !== "patch") {
+  if (shouldNotifyUpdate(config.autoupdate, kind)) {
     await Bus.publish(Installation.Event.UpdateAvailable, { version: latest })
     return
   }
