@@ -47,6 +47,7 @@ export type MendPackageProjection = {
   skills: { paths: string[] }
   packages: InstalledMendPackage[]
   runtimePacks: RuntimePack[]
+  runtimePackRoots: string[]
   tuiProfiles: unknown[]
   warnings: string[]
 }
@@ -82,11 +83,7 @@ function normalizeRel(file: string) {
 
 function packFileAllowlist(pack: RuntimePack | null | undefined) {
   if (!pack) return null
-  const allowed = new Set<string>([
-    "mend-package.json",
-    ".mendcode/package.json",
-    ".mendcode/runtime-pack.json",
-  ])
+  const allowed = new Set<string>(["mend-package.json", ".mendcode/package.json", ".mendcode/runtime-pack.json"])
   const add = (file: string | undefined | null) => {
     if (!file) return
     allowed.add(normalizeRel(file))
@@ -259,6 +256,7 @@ export async function activeMendPackageProjection(root = mendPaths().root): Prom
     skills: { paths: [] },
     packages: [],
     runtimePacks: [],
+    runtimePackRoots: [],
     tuiProfiles: [],
     warnings: [],
   }
@@ -272,8 +270,11 @@ export async function activeMendPackageProjection(root = mendPaths().root): Prom
     if (existsSync(runtimePackFile)) {
       try {
         projection.runtimePacks.push(JSON.parse(await readFile(runtimePackFile, "utf8")) as RuntimePack)
+        projection.runtimePackRoots.push(packageRoot)
       } catch (error) {
-        projection.warnings.push(`${id}: invalid runtime-pack.json: ${error instanceof Error ? error.message : String(error)}`)
+        projection.warnings.push(
+          `${id}: invalid runtime-pack.json: ${error instanceof Error ? error.message : String(error)}`,
+        )
       }
     }
     if (!existsSync(packageMendDir)) {
@@ -281,17 +282,25 @@ export async function activeMendPackageProjection(root = mendPaths().root): Prom
       continue
     }
 
-    projection.command = mergeDeep(projection.command, await ConfigCommand.load(packageMendDir)) as typeof projection.command
+    projection.command = mergeDeep(
+      projection.command,
+      await ConfigCommand.load(packageMendDir),
+    ) as typeof projection.command
     projection.agent = mergeDeep(projection.agent, await ConfigAgent.load(packageMendDir)) as typeof projection.agent
-    projection.agent = mergeDeep(projection.agent, await ConfigAgent.loadMode(packageMendDir)) as typeof projection.agent
-    projection.plugin.push(...await ConfigPlugin.load(packageMendDir))
+    projection.agent = mergeDeep(
+      projection.agent,
+      await ConfigAgent.loadMode(packageMendDir),
+    ) as typeof projection.agent
+    projection.plugin.push(...(await ConfigPlugin.load(packageMendDir)))
     projection.skills.paths.push(packageMendDir)
     const tuiProfileFile = path.join(packageMendDir, "tui", "profile.json")
     if (existsSync(tuiProfileFile)) {
       try {
         projection.tuiProfiles.push(JSON.parse(await readFile(tuiProfileFile, "utf8")))
       } catch (error) {
-        projection.warnings.push(`${id}: invalid .mendcode/tui/profile.json: ${error instanceof Error ? error.message : String(error)}`)
+        projection.warnings.push(
+          `${id}: invalid .mendcode/tui/profile.json: ${error instanceof Error ? error.message : String(error)}`,
+        )
       }
     }
 

@@ -1,9 +1,18 @@
 import { Buffer } from "buffer"
 import { readMendConfig } from "../config/project"
+import { mendPaths } from "../config/paths"
 import { readWorktreePolicy, tsmStatus } from "../config/worktree"
 import { readMflowConfig } from "../config/mflow"
-import type { MendPromptMode } from "./mode"
-import { focusNames, promptBehaviorForModel, promptBehaviorText, readPromptSource, resolvePromptSourceFile, sourceForFocus } from "./sources"
+import { readPromptMode, type MendPromptMode } from "./mode"
+import { readCustomPrompt, type CustomPromptResolution } from "./custom"
+import {
+  focusNames,
+  promptBehaviorForModel,
+  promptBehaviorText,
+  readPromptSource,
+  resolvePromptSourceFile,
+  sourceForFocus,
+} from "./sources"
 import { composeCustomizationCapabilitySection } from "./capabilities"
 
 export type PromptBaseSource = "mendcode-harness-source" | "opencode-generic-provider-fallback" | "minimal-base"
@@ -11,15 +20,18 @@ export type PromptBaseSource = "mendcode-harness-source" | "opencode-generic-pro
 export type PromptSection = {
   id: string
   label: string
-  source: PromptBaseSource | "mendcode-context" | "integration-context" | "mode-boundary"
+  source: PromptBaseSource | "mendcode-context" | "integration-context" | "mode-boundary" | "project-custom"
   text: string
   bytes: number
   preview: string
 }
 
+export type PromptCustomStatus = Omit<CustomPromptResolution, "text">
+
 export type PromptComposition = {
   mode: MendPromptMode
   focusID: string
+  promptOrigin: "preset" | "project-custom"
   basePromptSource: PromptBaseSource
   includeProjectInstructions: boolean
   includeSkillsByDefault: boolean
@@ -28,6 +40,7 @@ export type PromptComposition = {
   usesOpenCodeGenericProviderPrompt: boolean
   usesMendCodeHarnessPrompt: boolean
   fallbackReason: string | null
+  customPrompt: PromptCustomStatus | null
   source: {
     label: string
     license: string
@@ -57,12 +70,13 @@ type ComposeInput = {
   modelID?: string | null
   role?: string | null
   workflow?: string | null
+  customFile?: string | null
 }
 
 function assertMode(mode: string): MendPromptMode {
-  if (mode === "minimal" || mode === "focus" || mode === "full") return mode
+  if (mode === "minimal" || mode === "focus" || mode === "full" || mode === "custom") return mode
   if (mode === "dev-js") return "full"
-  throw new Error("prompt mode must be one of: minimal, focus, full")
+  throw new Error("prompt mode must be one of: minimal, focus, full, custom")
 }
 
 function preview(text: string, limit = 240) {
@@ -267,7 +281,7 @@ async function fullKnowledge(root: string) {
 }
 
 export async function composePromptPolicy(input: ComposeInput = {}): Promise<PromptComposition> {
-  const root = process.env.MENDCODE_ROOT || input.root || process.cwd()
+  const root = input.root || process.env.MENDCODE_ROOT || mendPaths().root
   const mode = assertMode(input.mode || "focus")
   const focusID = input.focusID || "codex"
   const sourceInput = { ...input, root }
@@ -275,6 +289,11 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
   const harness = await readPromptSource(source, sourceInput)
   const found = source ? resolvePromptSourceFile(source, sourceInput) : null
   const modelBehavior = promptBehaviorForModel({ focusID, modelID: input.modelID })
+  const customFile =
+    mode === "custom" && input.customFile === undefined
+      ? (await readPromptMode(root)).customPrompt.path
+      : input.customFile
+  const customPrompt = mode === "custom" ? await readCustomPrompt(root, customFile) : null
   const sections: PromptSection[] = []
   const includeProjectInstructions = mode === "full"
   const includeSkillsByDefault = mode === "full"
@@ -294,7 +313,7 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
   let basePromptSource: PromptBaseSource = "minimal-base"
   let fallbackReason: string | null = null
 
-  if (mode !== "minimal") {
+  if (mode === "focus" || mode === "full") {
     if (harness) {
       basePrompt = harness.text
       basePromptSource = "mendcode-harness-source"
@@ -324,7 +343,20 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
     }
   }
 
-  if (mode !== "minimal" && modelBehavior) {
+  if (mode === "custom" && customPrompt?.available) {
+    sections.push(
+      section({
+        id: "project-custom",
+        label: customPrompt.name || "Project prompt",
+        source: "project-custom",
+        text: customPrompt.text,
+      }),
+    )
+  }
+
+  if (mode === "custom" && customPrompt && !customPrompt.available) fallbackReason = customPrompt.fallbackReason
+
+  if ((mode === "focus" || mode === "full") && modelBehavior) {
     sections.push(
       section({
         id: "model-behavior",
@@ -430,6 +462,7 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
   return {
     mode,
     focusID,
+    promptOrigin: mode === "custom" ? "project-custom" : "preset",
     basePromptSource,
     includeProjectInstructions,
     includeSkillsByDefault,
@@ -438,7 +471,19 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
     usesOpenCodeGenericProviderPrompt: basePromptSource === "opencode-generic-provider-fallback",
     usesMendCodeHarnessPrompt: basePromptSource === "mendcode-harness-source",
     fallbackReason,
-    source: source
+    customPrompt: customPrompt
+      ? {
+          name: customPrompt.name,
+          path: customPrompt.path,
+          bytes: customPrompt.bytes,
+          available: customPrompt.available,
+          fallbackReason: customPrompt.fallbackReason,
+        }
+      : null,
+    source:
+      mode === "custom"
+        ? null
+        : source
       ? {
           label: source.label,
           license: source.license,

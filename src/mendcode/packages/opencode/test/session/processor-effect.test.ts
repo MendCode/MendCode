@@ -1863,8 +1863,12 @@ it.live("session.processor effect tests retain pending tools on non-user cleanup
         if (call?.state.status === "completed") {
           expect(call.state.metadata.status).toBe("retained")
           expect(call.state.metadata.interrupted).toBe(false)
+          expect(call.state.metadata.connectionLost).toBe(true)
+          expect(call.state.metadata.resultUnknown).toBe(true)
+          expect(call.state.metadata.retryRecommended).toBe(true)
           expect(call.state.output).toContain("tool_status: retained")
-          expect(call.state.output).toContain("not treated as a user cancel or tool failure")
+          expect(call.state.output).toContain("result_status: unknown")
+          expect(call.state.output).toContain("retry the exact same command once")
         }
       }),
     { git: true, config: (url) => providerCfg(url) },

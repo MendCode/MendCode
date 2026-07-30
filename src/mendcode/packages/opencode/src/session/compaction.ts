@@ -54,6 +54,7 @@ const DEFAULT_TAIL_TURNS = 2
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
 const MAX_PRESERVE_RECENT_TOKENS = 8_000
 const IMAGE_ATTACHMENT_CONTEXT_MAX_ITEMS = 12
+const COMPACTION_RESUME_IMAGE_MAX_ITEMS = 10
 const SUMMARY_TEMPLATE = `Output exactly the Markdown structure shown inside <template> and keep the section order unchanged. Do not include the <template> tags in your response.
 <template>
 ## Goal
@@ -277,12 +278,18 @@ function formatBytes(bytes: number | undefined) {
   return `${bytes}B`
 }
 
-function imageAttachmentSummary(message: MessageV2.WithParts, part: MessageV2.FilePart) {
+function imageAttachmentSummary(
+  message: MessageV2.WithParts,
+  part: MessageV2.FilePart,
+  options?: { mediaIncluded?: boolean },
+) {
   const sourceText = part.source?.text.value.trim()
   const dimensions = pngDimensionsFromDataUrl(part.url)
   const size = formatBytes(dataUrlByteSize(part.url))
   const surroundingText = compactText(messageText(message), 600)
-  const visualSignal = surroundingText
+  const visualSignal = options?.mediaIncluded
+    ? "inspect the attached image and preserve relevant visual facts without inventing details."
+    : surroundingText
     ? "derive any available visual meaning from nearbyUserText; preserve screenshot/callout/error wording if present."
     : "exact visual content unavailable unless described elsewhere in the transcript."
   return [
@@ -299,13 +306,15 @@ function imageAttachmentSummary(message: MessageV2.WithParts, part: MessageV2.Fi
     part.source ? `  sourceRange: ${part.source.text.start}-${part.source.text.end}` : undefined,
     surroundingText ? `  nearbyUserText: ${surroundingText}` : "  nearbyUserText: (none)",
     `  visualContentPolicy: ${visualSignal}`,
-    "  visualContent: binary image omitted from compaction prompt; do not claim the image is irrelevant just because only a placeholder is visible.",
+    options?.mediaIncluded
+      ? "  visualContent: image binary is included in the compaction input; describe relevant visual details in the summary."
+      : "  visualContent: binary image omitted from compaction prompt; do not claim the image is irrelevant just because only a placeholder is visible.",
   ]
     .filter(Boolean)
     .join("\n")
 }
 
-function imageAttachmentContext(messages: MessageV2.WithParts[]) {
+function imageAttachmentContext(messages: MessageV2.WithParts[], options?: { mediaIncluded?: boolean }) {
   const images = messages.flatMap((message) =>
     message.parts
       .filter((part): part is MessageV2.FilePart => part.type === "file" && part.mime.startsWith("image/"))
@@ -317,14 +326,35 @@ function imageAttachmentContext(messages: MessageV2.WithParts[]) {
   return [
     [
       "Image Attachment Context:",
-      "- Compact summary must preserve these image references because media binaries are omitted from the compaction prompt.",
+      options?.mediaIncluded
+        ? "- Image binaries in the summarized history are included in the compaction input; inspect them and preserve relevant visual facts."
+        : "- Compact summary must preserve these image references because media binaries are omitted from the compaction prompt.",
       "- These are deterministic lightweight descriptions from attachment metadata and surrounding user text; they are not vision-generated captions.",
       omitted > 0 ? `- Older image attachments omitted from this context: ${omitted}` : undefined,
-      ...recent.map(({ message, part }) => imageAttachmentSummary(message, part)),
+      ...recent.map(({ message, part }) => imageAttachmentSummary(message, part, options)),
     ]
       .filter(Boolean)
       .join("\n"),
   ]
+}
+
+function resumeImageParts(messages: MessageV2.WithParts[], messageID: MessageID, sessionID: SessionID) {
+  return messages
+    .flatMap((message) =>
+      message.parts
+        .filter((part): part is MessageV2.FilePart => part.type === "file" && part.mime.startsWith("image/"))
+        .map((part) => ({ part })),
+    )
+    .slice(-COMPACTION_RESUME_IMAGE_MAX_ITEMS)
+    .map(({ part }) => ({
+      id: PartID.ascending(),
+      messageID,
+      sessionID,
+      type: "file" as const,
+      mime: part.mime,
+      ...(part.filename ? { filename: part.filename } : {}),
+      url: part.url,
+    }))
 }
 
 function completedCompactions(messages: MessageV2.WithParts[]) {
@@ -1489,6 +1519,7 @@ export const layer: Layer.Layer<
       const model = agent.model
         ? yield* provider.getModel(agent.model.providerID, agent.model.modelID)
         : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID)
+      const includeImageMedia = model.capabilities.input.image === true
       const cfg = yield* config.get()
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
       const prior = completedCompactions(history)
@@ -1529,7 +1560,7 @@ export const layer: Layer.Layer<
       const context = [
         ...latestUserRequestContext(visibleHistory),
         ...languageContinuityContext(visibleHistory),
-        ...imageAttachmentContext(visibleHistory),
+        ...imageAttachmentContext(visibleHistory, { mediaIncluded: includeImageMedia }),
         ...latestAssistantPhaseContext({ history, visibleHistory }),
         ...preservedTailSnapshotContext({ messages: visibleHistory, tailStartID: selected.tail_start_id }),
         ...transcriptReferenceContext(transcriptPath),
@@ -1545,7 +1576,7 @@ export const layer: Layer.Layer<
       const msgs = structuredClone(summaryHistory)
       yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
       const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
-        stripMedia: true,
+        stripMedia: !includeImageMedia,
         toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
       })
       const msg: MessageV2.Assistant = {
@@ -1677,6 +1708,11 @@ export const layer: Layer.Layer<
               end: Date.now(),
             },
           })
+          if (!includeImageMedia) {
+            for (const part of resumeImageParts(visibleHistory, postPromptMsg.id, input.sessionID)) {
+              yield* session.updatePart(part)
+            }
+          }
         }
         shouldResume = true
       }
@@ -1733,6 +1769,11 @@ export const layer: Layer.Layer<
               end: Date.now(),
             },
           })
+          if (!includeImageMedia) {
+            for (const part of resumeImageParts(visibleHistory, continueMsg.id, input.sessionID)) {
+              yield* session.updatePart(part)
+            }
+          }
         } else {
           shouldResume = false
         }

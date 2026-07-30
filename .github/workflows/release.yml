@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   build-release:
-    name: Build release assets
+    name: Build Linux and Windows release assets
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -99,11 +99,118 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bun run --cwd packages/opencode script/build.ts --release-assets --skip-embed-web-ui --skip-install
-          bash script/check-release-assets.sh
+          bun run --cwd packages/opencode script/build.ts --release-assets --skip-embed-web-ui --skip-install --exclude-os=darwin
+
+      - name: Upload release artifacts to workflow
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mendcode-release-${{ inputs.version }}-cross
+          path: |
+            src/mendcode/packages/opencode/dist/*.zip
+            src/mendcode/packages/opencode/dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  build-darwin:
+    name: Build Darwin ${{ matrix.arch }} release asset
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-13
+            arch: x64
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ inputs.version }}
+      MENDCODE_VERSION: ${{ inputs.version }}
+      OPENCODE_VERSION: ${{ inputs.version }}
+      BUN_INSTALL_CACHE_DIR: /tmp/mendcode-bun-cache
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: src/mendcode/package.json
+
+      - name: Install dependencies with frozen lockfile
+        working-directory: src/mendcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun install --frozen-lockfile --ignore-scripts --os="*" --cpu="*"
+          bun run --cwd packages/opencode fix-node-pty
+
+      - name: Build native Darwin release asset
+        working-directory: src/mendcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual_arch="$(uname -m)"
+          case "${{ matrix.arch }}:${actual_arch}" in
+            arm64:arm64|x64:x86_64) ;;
+            *) echo "unexpected Darwin runner architecture: expected ${{ matrix.arch }}, got ${actual_arch}" >&2; exit 1 ;;
+          esac
+          bun run --cwd packages/opencode script/build.ts --single --release-assets --skip-embed-web-ui --skip-install
+
+      - name: Upload Darwin release asset to workflow
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mendcode-release-${{ inputs.version }}-darwin-${{ matrix.arch }}
+          path: src/mendcode/packages/opencode/dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  assemble-release:
+    name: Assemble and attest release assets
+    if: ${{ always() && needs.build-release.result == 'success' && needs.build-darwin.result == 'success' }}
+    needs: [build-release, build-darwin]
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download platform release assets
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: mendcode-release-${{ inputs.version }}-*
+          path: dist
+          merge-multiple: true
+
+      - name: Rebuild release checksums
+        working-directory: dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          find . -maxdepth 1 \( -name '*.zip' -o -name '*.tar.gz' \) -print | sort | xargs shasum -a 256 > SHA256SUMS
+
+      - name: Check release assets
+        shell: bash
+        run: bash src/mendcode/script/check-release-assets.sh dist
 
       - name: Write release manifest
-        working-directory: src/mendcode/packages/opencode/dist
+        working-directory: dist
         shell: bash
         run: |
           set -euo pipefail
@@ -122,36 +229,31 @@ jobs:
         with:
           path: src/mendcode
           format: spdx-json
-          output-file: src/mendcode/packages/opencode/dist/mendcode.spdx.json
+          output-file: dist/mendcode.spdx.json
           upload-artifact: false
 
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661
         with:
           subject-path: |
-            src/mendcode/packages/opencode/dist/*.zip
-            src/mendcode/packages/opencode/dist/*.tar.gz
-            src/mendcode/packages/opencode/dist/SHA256SUMS
-            src/mendcode/packages/opencode/dist/RELEASE-MANIFEST.txt
-            src/mendcode/packages/opencode/dist/mendcode.spdx.json
+            dist/*.zip
+            dist/*.tar.gz
+            dist/SHA256SUMS
+            dist/RELEASE-MANIFEST.txt
+            dist/mendcode.spdx.json
 
-      - name: Upload release artifacts to workflow
+      - name: Upload assembled release artifacts to workflow
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: mendcode-release-${{ inputs.version }}
-          path: |
-            src/mendcode/packages/opencode/dist/*.zip
-            src/mendcode/packages/opencode/dist/*.tar.gz
-            src/mendcode/packages/opencode/dist/SHA256SUMS
-            src/mendcode/packages/opencode/dist/RELEASE-MANIFEST.txt
-            src/mendcode/packages/opencode/dist/mendcode.spdx.json
+          path: dist/*
           if-no-files-found: error
           retention-days: 7
 
   publish-release:
     name: Create draft GitHub Release
     if: ${{ inputs.dry_run == false }}
-    needs: build-release
+    needs: assemble-release
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: release

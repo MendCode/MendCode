@@ -11,20 +11,36 @@ import { listActiveCustomizations } from "../tui/customization-state"
 import { isLegacyPublicMflowRelay, mflowControlStatus } from "../config/mflow"
 
 async function readJson(file: string) {
-  try { return JSON.parse(await readFile(file, "utf8")) } catch { return null }
+  try {
+    return JSON.parse(await readFile(file, "utf8"))
+  } catch {
+    return null
+  }
 }
 
 export async function mendStatusSummary(root?: string) {
   const profile = await readActiveTuiProfile(root)
   const prompt = await readPromptMode(root)
+  const customPrompt = prompt.customPrompt
+  const customPromptState = customPrompt.available
+    ? `${customPrompt.bytes} bytes available`
+    : customPrompt.fallbackReason || "unavailable"
   return [
     `Profile: ${profile.profile}`,
     `Theme: ${profile.theme.palette}`,
     `Density: ${profile.layout.density}`,
     `Widgets: ${profile.widgets.enabled.join(", ") || "none"}`,
-    `Prompt mode: ${prompt.mode} (${prompt.live})`,
-    `Customization contract: v${mendTuiCapabilityVersion()} · ${visibleCustomizationCapabilities().map((item) => `${item.id}=${item.tier}`).join(", ")}`,
-    `Active customization surfaces: ${listActiveCustomizations().map((item) => `${item.surface}:${item.source}`).join(", ") || "none"}`,
+    `Prompt mode: ${prompt.mode} (${prompt.live}; ${prompt.customPrompt.name || "Project prompt"})`,
+    `Prompt origin: ${prompt.source}`,
+    `Custom prompt: ${customPrompt.name || "Project prompt"} · ${customPrompt.path || ".mendcode/prompts/custom.md"} (${customPromptState})`,
+    `Customization contract: v${mendTuiCapabilityVersion()} · ${visibleCustomizationCapabilities()
+      .map((item) => `${item.id}=${item.tier}`)
+      .join(", ")}`,
+    `Active customization surfaces: ${
+      listActiveCustomizations()
+        .map((item) => `${item.surface}:${item.source}`)
+        .join(", ") || "none"
+    }`,
     `Config: ${globalMendTuiProfilePath()}`,
   ].join("\n")
 }
@@ -40,7 +56,11 @@ async function countFiles(dir: string, suffix?: string) {
 
 export async function mendRuntimeConfigurationSummary(root?: string) {
   const paths = mendPaths(root)
-  const [profile, prompt, models] = await Promise.all([readActiveTuiProfile(root), readPromptMode(root), readModelsConfig(root)])
+  const [profile, prompt, models] = await Promise.all([
+    readActiveTuiProfile(root),
+    readPromptMode(root),
+    readModelsConfig(root),
+  ])
   const resolved = await resolveModelRoles(root)
   const defaultRole = models.roles.default
   const focusResolution = resolvePromptFocusForRole(defaultRole)
@@ -51,11 +71,16 @@ export async function mendRuntimeConfigurationSummary(root?: string) {
     ".mendcode/context/summary.md",
     ".mendcode/context/refresh.json",
   ].filter((file) => existsSync(`${paths.root}/${file}`))
+  const customPromptState = prompt.customPrompt.available
+    ? `${prompt.customPrompt.bytes} bytes available`
+    : prompt.customPrompt.fallbackReason || "unavailable"
 
   return [
     `Root: ${paths.root}`,
     `Runtime config: ${paths.mendConfig}`,
-    `Active prompt mode: ${prompt.mode}`,
+    `Active prompt mode: ${prompt.mode} (${prompt.customPrompt.name || "Project prompt"})`,
+    `Prompt origin: ${prompt.source}`,
+    `Custom prompt: ${prompt.customPrompt.name || "Project prompt"} · ${prompt.customPrompt.path || ".mendcode/prompts/custom.md"} (${customPromptState})`,
     `Default model policy: ${resolved.enabled ? resolved.defaultModel || "enabled but unset" : "runtime default"}`,
     `Focus resolver: ${focusResolution.focusID} (${focusResolution.source}; ${focusResolution.reason})`,
     `Focus profiles: ${focusCount} local .mendcode/focus/*.yaml`,
@@ -84,9 +109,11 @@ export async function mflowStatusSummary(root?: string) {
   const config = status.config
   const daemon = summarizeMflowDaemon(status.daemon.output)
   const locks = summarizeMflowLocks(status.locks.output)
-  const relayLabel = config.relayMode === "local"
+  const relayLabel =
+    config.relayMode === "local"
     ? "local"
-    : config.relayMode === "legacy-public" || (config.relayMode === "public" && isLegacyPublicMflowRelay(config.signaling))
+      : config.relayMode === "legacy-public" ||
+          (config.relayMode === "public" && isLegacyPublicMflowRelay(config.signaling))
       ? "legacy public"
       : "public"
   return [
@@ -110,7 +137,9 @@ export async function mflowStatusSummary(root?: string) {
     locks,
     "",
     "mflow is local-first: prefer a local/LAN relay; use public only for a user/team-controlled VPS or domain relay. Legacy public relay is demo-only.",
-  ].filter((line): line is string => typeof line === "string").join("\n")
+  ]
+    .filter((line): line is string => typeof line === "string")
+    .join("\n")
 }
 
 function pickLine(output: string | undefined, label: string) {

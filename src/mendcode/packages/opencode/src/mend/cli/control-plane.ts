@@ -4,38 +4,186 @@ import { mendPaths, resolveMendProjectRoot } from "../config/paths"
 import { readPromptMode, cyclePromptMode, writePromptMode } from "../prompt/mode"
 import { mendStatusSummary, integrationStatus } from "../commands/status"
 import { readActiveTuiProfile, applyTuiProposal, rollbackTuiPreset, applyTuiPreset } from "../tui/profile-actions"
-import { tuiPreviewPlan, tuiProbe, tuiRuntimePlan, writeTuiPreview, writeTuiProjection, writeTuiProposal, writeTuiRender } from "../tui/evidence"
+import {
+  tuiPreviewPlan,
+  tuiProbe,
+  tuiRuntimePlan,
+  writeTuiPreview,
+  writeTuiProjection,
+  writeTuiProposal,
+  writeTuiRender,
+} from "../tui/evidence"
 import { loadMendTuiProfile, validateMendTuiProfile } from "../profile"
-import { modelPresets, modelRoleProjection, readModelsConfig, refreshGeneratedRuntimeModelConfig, resolveModelRoles, validateProviderModelID, writeGlobalModelsConfig } from "../config/models"
+import {
+  modelPresets,
+  modelRoleProjection,
+  readModelsConfig,
+  refreshGeneratedRuntimeModelConfig,
+  resolveModelRoles,
+  validateProviderModelID,
+  writeGlobalModelsConfig,
+} from "../config/models"
 import { mendMcpStatus, writeMendMcpServer } from "../config/mcp"
-import { baselineUpstream, contextRefresh, contextShow, contextStatus, focusList, focusShow, focusStatus, focusUse, initProject, packageMetadata, packageMetadataSet, readMendConfig, syncGlobalPrimaryAgentModels, syncProject } from "../config/project"
-import { mflowDoctor, mflowPlan, mflowStatus, worktreeAdopt, worktreeCreate, worktreeDoctor, worktreeOpen, worktreePlan, worktreeRemove, worktreeReset, worktreeStatus } from "../config/worktree"
-import { activateTsm, deactivateTsm, removeTsm, setupTsm, tsmDoctor, tsmPlan, tsmStatus, type TsmState } from "../config/tsm"
-import { activateMflow, deactivateMflow, mflowControlStatus, MFLOW_LOCAL_RELAY, MFLOW_PUBLIC_RELAY, MFLOW_PUBLIC_RELAY_WARNING, mflowLocalRelayGuide, scanMflowRelays, removeMflowConfig, type MflowRelayMode } from "../config/mflow"
-import { applyRuntimePack, deleteLocalRuntimePack, formatRuntimePackPlan, rollbackRuntimePack, runtimePackArtifactCandidates, runtimePackPlan } from "../runtime/pack"
+import {
+  baselineUpstream,
+  contextRefresh,
+  contextShow,
+  contextStatus,
+  focusList,
+  focusShow,
+  focusStatus,
+  focusUse,
+  initProject,
+  packageMetadata,
+  packageMetadataSet,
+  readMendConfig,
+  syncGlobalPrimaryAgentModels,
+  syncProject,
+} from "../config/project"
+import {
+  mflowDoctor,
+  mflowPlan,
+  mflowStatus,
+  worktreeAdopt,
+  worktreeCreate,
+  worktreeDoctor,
+  worktreeOpen,
+  worktreePlan,
+  worktreeRemove,
+  worktreeReset,
+  worktreeStatus,
+} from "../config/worktree"
+import {
+  activateTsm,
+  deactivateTsm,
+  removeTsm,
+  setupTsm,
+  tsmDoctor,
+  tsmPlan,
+  tsmStatus,
+  type TsmState,
+} from "../config/tsm"
+import {
+  activateMflow,
+  deactivateMflow,
+  mflowControlStatus,
+  MFLOW_LOCAL_RELAY,
+  MFLOW_PUBLIC_RELAY,
+  MFLOW_PUBLIC_RELAY_WARNING,
+  mflowLocalRelayGuide,
+  scanMflowRelays,
+  removeMflowConfig,
+  type MflowRelayMode,
+} from "../config/mflow"
+import {
+  applyRuntimePack,
+  deleteLocalRuntimePack,
+  formatRuntimePackPlan,
+  rollbackRuntimePack,
+  runtimePackArtifactCandidates,
+  runtimePackPlan,
+} from "../runtime/pack"
 import { budgetDoctor, budgetStatus } from "../runtime/budget"
 import { promptSourcesStatus } from "../prompt/sources"
 import { composePromptPolicy } from "../prompt/compose"
-import { aiEnvStatus, aiStatus, providerAuthInventory, providerAuthStatus, providerLoginPlan, setupDoctor, setupPlan, setupReadiness } from "../runtime/readiness"
-import { accumulateSessionTelemetry, buildRunPlan, executeRunPlan, parseRunArgs, readChatSession, redactedRunPlanOutput, transcriptPrompt, writeChatSession } from "../runtime/run"
+import {
+  aiEnvStatus,
+  aiStatus,
+  providerAuthInventory,
+  providerAuthStatus,
+  providerLoginPlan,
+  setupDoctor,
+  setupPlan,
+  setupReadiness,
+} from "../runtime/readiness"
+import {
+  accumulateSessionTelemetry,
+  buildRunPlan,
+  executeRunPlan,
+  parseRunArgs,
+  readChatSession,
+  redactedRunPlanOutput,
+  transcriptPrompt,
+  writeChatSession,
+} from "../runtime/run"
 import { providerRunAdapterInventory, providerSmoke } from "../runtime/provider-adapters"
 import { providerLogin } from "../runtime/auth"
 import { exportPlan } from "../runtime/export"
-import { DEFAULT_LOOP_SERVICE_LIMIT, loopServiceArgsFromConfig, loopServiceInstall, loopServicePlan, loopServiceStart, loopServiceStatus, loopServiceStop, loopServiceUninstall, type LoopServicePlan, type LoopServiceStatus } from "../runtime/loop-service"
-import { dreamServiceInstall, dreamServicePlan, dreamServiceStart, dreamServiceStatus, dreamServiceStop, dreamServiceUninstall, type DreamServiceArgs, type DreamServicePlan, type DreamServiceStatus } from "../runtime/dream-service"
-import { adapterStatus, checkRuntime, collectStatus, doctorLines, donorConfigPathsReport, ownedRuntimeStatus, toolchainStatus, upstreamInspect, upstreamStatus } from "../runtime/system"
+import {
+  DEFAULT_LOOP_SERVICE_LIMIT,
+  loopServiceArgsFromConfig,
+  loopServiceInstall,
+  loopServicePlan,
+  loopServiceStart,
+  loopServiceStatus,
+  loopServiceStop,
+  loopServiceUninstall,
+  type LoopServicePlan,
+  type LoopServiceStatus,
+} from "../runtime/loop-service"
+import {
+  dreamServiceInstall,
+  dreamServicePlan,
+  dreamServiceStart,
+  dreamServiceStatus,
+  dreamServiceStop,
+  dreamServiceUninstall,
+  type DreamServiceArgs,
+  type DreamServicePlan,
+  type DreamServiceStatus,
+} from "../runtime/dream-service"
+import {
+  adapterStatus,
+  checkRuntime,
+  collectStatus,
+  doctorLines,
+  donorConfigPathsReport,
+  ownedRuntimeStatus,
+  toolchainStatus,
+  upstreamInspect,
+  upstreamStatus,
+} from "../runtime/system"
 import { adoptOwnedRuntime, ownedRuntimePlan } from "../runtime/adoption"
 import { runBenchmark } from "../runtime/bench"
-import { runtimeRegistryAdd, runtimeRegistryApply, runtimeRegistryApplySource, runtimeRegistryInstallPack, runtimeRegistryList, runtimeRegistryPreview, runtimeRegistryPublishPlan, runtimeRegistryRemove, runtimeRegistrySearch, runtimeRegistryShow, runtimeRegistrySign, runtimeRegistrySmoke, runtimeRegistryStatus } from "../runtime/registry"
+import {
+  runtimeRegistryAdd,
+  runtimeRegistryApply,
+  runtimeRegistryApplySource,
+  runtimeRegistryInstallPack,
+  runtimeRegistryList,
+  runtimeRegistryPreview,
+  runtimeRegistryPublishPlan,
+  runtimeRegistryRemove,
+  runtimeRegistrySearch,
+  runtimeRegistryShow,
+  runtimeRegistrySign,
+  runtimeRegistrySmoke,
+  runtimeRegistryStatus,
+} from "../runtime/registry"
 import { disableAllMendPackages, listMendPackages, removeMendPackage, setMendPackageEnabled } from "../runtime/packages"
-import { appendMemoryEntry, deleteMemoryEntry, memoryStatus, readMemoryEntries, refreshMemoryIndex, updateMemoryEntry } from "../memory/store"
+import {
+  appendMemoryEntry,
+  deleteMemoryEntry,
+  memoryStatus,
+  readMemoryEntries,
+  refreshMemoryIndex,
+  updateMemoryEntry,
+} from "../memory/store"
 import { formatMemoryBlock, retrieveMemory } from "../memory/retrieve"
 import { writeGlobalMemoryConfig, writeProjectMemoryConfig } from "../memory/config"
 import { readDreamRuns, runMemoryDream } from "../memory/dream"
 import { readDreamConsolidationRun } from "../memory/dream-consolidation"
 import { readDreamScheduleState, runGlobalDreamSchedulerTick } from "../memory/dream-scheduler"
 import { writeMemorySessionDigestFromSession } from "../memory/session-digests"
-import { applyMemoryProposal, autoProposeMemoriesFromSession, importCodexMemories, listMemoryProposals, proposeMemoriesWithExtractor, proposeMemory, rejectMemoryProposal } from "../memory/proposals"
+import {
+  applyMemoryProposal,
+  autoProposeMemoriesFromSession,
+  importCodexMemories,
+  listMemoryProposals,
+  proposeMemoriesWithExtractor,
+  proposeMemory,
+  rejectMemoryProposal,
+} from "../memory/proposals"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "../config/permissions"
 import { Effect } from "effect"
 import { AppRuntime } from "@/effect/app-runtime"
@@ -75,17 +223,15 @@ function closest(value: string, candidates: string[]) {
     for (let i = 1; i <= a.length; i++) {
       curr[0] = i
       for (let j = 1; j <= b.length; j++) {
-        curr[j] = Math.min(
-          prev[j]! + 1,
-          curr[j - 1]! + 1,
-          prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
-        )
+        curr[j] = Math.min(prev[j]! + 1, curr[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1))
       }
       for (let j = 0; j <= b.length; j++) prev[j] = curr[j]!
     }
     return prev[b.length]!
   }
-  const match = candidates.map((candidate) => ({ candidate, score: distance(value, candidate) })).sort((a, b) => a.score - b.score)[0]
+  const match = candidates
+    .map((candidate) => ({ candidate, score: distance(value, candidate) }))
+    .sort((a, b) => a.score - b.score)[0]
   return match && match.score <= Math.max(2, Math.floor(value.length / 3)) ? match.candidate : undefined
 }
 
@@ -198,7 +344,8 @@ async function loopServiceLogs(args: string[]) {
 function dreamServiceOptions(args: string[]): DreamServiceArgs {
   const interval = optionValue(args, "--interval-ms")
   const intervalMs = interval ? Number(interval) : undefined
-  if (intervalMs !== undefined && (!Number.isFinite(intervalMs) || intervalMs <= 0)) throw new Error("--interval-ms must be a positive number")
+  if (intervalMs !== undefined && (!Number.isFinite(intervalMs) || intervalMs <= 0))
+    throw new Error("--interval-ms must be a positive number")
   const serviceDir = optionValue(args, "--service-dir") ?? undefined
   const logDir = optionValue(args, "--log-dir") ?? undefined
   return {
@@ -275,7 +422,9 @@ function formatLoopSnapshot(snapshot: LoopWorkflow.Snapshot) {
     "",
     "Journal",
     ...(snapshot.events.length
-      ? snapshot.events.map((event) => `  ${new Date(event.time.created).toLocaleTimeString()} ${event.type.padEnd(10)} ${event.title}`)
+      ? snapshot.events.map(
+          (event) => `  ${new Date(event.time.created).toLocaleTimeString()} ${event.type.padEnd(10)} ${event.title}`,
+        )
       : ["  none"]),
   ].join("\n")
 }
@@ -285,10 +434,17 @@ function loopIDArg(value?: string) {
   return LoopID.make(value)
 }
 
-async function withLoopService<T>(fn: (loop: LoopWorkflow.Interface) => Promise<T>, options: { disposeRuntime?: boolean } = {}) {
+async function withLoopService<T>(
+  fn: (loop: LoopWorkflow.Interface) => Promise<T>,
+  options: { disposeRuntime?: boolean } = {},
+) {
   try {
     return await bootstrap(shellProjectRoot(), async () =>
-      Effect.runPromise(LoopWorkflow.Service.use((loop) => Effect.promise(() => fn(loop))).pipe(Effect.provide(LoopWorkflow.defaultLayer))),
+      Effect.runPromise(
+        LoopWorkflow.Service.use((loop) => Effect.promise(() => fn(loop))).pipe(
+          Effect.provide(LoopWorkflow.defaultLayer),
+        ),
+      ),
     )
   } finally {
     if (options.disposeRuntime !== false) await AppRuntime.dispose().catch(() => undefined)
@@ -300,7 +456,9 @@ async function withLoopRunner<T>(
   options: { disposeRuntime?: boolean } = {},
 ) {
   try {
-    return await bootstrap(shellProjectRoot(), async () =>
+    return await bootstrap(
+      shellProjectRoot(),
+      async () =>
       AppRuntime.runPromise(LoopRunner.Service.use(fn) as Parameters<typeof AppRuntime.runPromise>[0]) as Promise<T>,
     )
   } finally {
@@ -318,14 +476,25 @@ async function loops(args: string[]) {
     return
   }
   if (sub === "examples" || sub === "templates") {
-    printResult(args, LoopTemplates.templates, (value: LoopTemplates.LoopTemplate[]) => value.map(LoopTemplates.format).join("\n"))
+    printResult(args, LoopTemplates.templates, (value: LoopTemplates.LoopTemplate[]) =>
+      value.map(LoopTemplates.format).join("\n"),
+    )
     return
   }
   if (sub === "draft") {
     const template = LoopTemplates.get(optionValue(args, "--template"))
     const name = optionValue(args, "--name") ?? template?.name ?? args[1]
-    const objective = optionValue(args, "--objective") ?? template?.objective ?? args.slice(name ? 2 : 1).filter((item) => !item.startsWith("--")).join(" ")
-    if (!name || !objective) throw new Error("Usage: mendcode loops draft --name <name> --objective <objective> [--interval-ms N | --daily-at HH:mm --timezone Area/City]")
+    const objective =
+      optionValue(args, "--objective") ??
+      template?.objective ??
+      args
+        .slice(name ? 2 : 1)
+        .filter((item) => !item.startsWith("--"))
+        .join(" ")
+    if (!name || !objective)
+      throw new Error(
+        "Usage: mendcode loops draft --name <name> --objective <objective> [--interval-ms N | --daily-at HH:mm --timezone Area/City]",
+      )
     const interval = optionValue(args, "--interval-ms")
     const dailyAt = optionValue(args, "--daily-at")
     const timezone = optionValue(args, "--timezone")
@@ -335,7 +504,8 @@ async function loops(args: string[]) {
           name,
           objective,
           templateID: template?.id,
-          trigger: dailyAt || timezone
+          trigger:
+            dailyAt || timezone
             ? { mode: "daily", dailyAt: dailyAt ?? undefined, timezone: timezone ?? undefined }
             : interval
               ? { mode: "interval", intervalMs: Number(interval) }
@@ -357,11 +527,19 @@ async function loops(args: string[]) {
   }
   if (sub === "tail") {
     const id = loopIDArg(args[1])
-    const events = await withLoopService((loop) => Effect.runPromise(loop.events(id, Number(optionValue(args, "--limit") ?? 50))))
+    const events = await withLoopService((loop) =>
+      Effect.runPromise(loop.events(id, Number(optionValue(args, "--limit") ?? 50))),
+    )
     if (args.includes("--json")) {
       for (const event of events) console.log(JSON.stringify(event))
     } else {
-      console.log(events.map((event) => `${new Date(event.time.created).toLocaleTimeString()} ${event.type.padEnd(10)} ${event.title}`).join("\n") || "No loop events.")
+      console.log(
+        events
+          .map(
+            (event) => `${new Date(event.time.created).toLocaleTimeString()} ${event.type.padEnd(10)} ${event.title}`,
+          )
+          .join("\n") || "No loop events.",
+      )
     }
     return
   }
@@ -391,7 +569,9 @@ async function loops(args: string[]) {
     printResult(args, result, (value: LoopRunner.TickResult | LoopRunner.TickResult[]) => {
       const items = Array.isArray(value) ? value : [value]
       if (!items.length) return "No loop workflows due."
-      return items.map((item) => `${item.workflowID} ${item.state}${item.runID ? ` run=${item.runID}` : ""} ${item.summary}`).join("\n")
+      return items
+        .map((item) => `${item.workflowID} ${item.state}${item.runID ? ` run=${item.runID}` : ""} ${item.summary}`)
+        .join("\n")
     })
     return
   }
@@ -404,16 +584,23 @@ async function loops(args: string[]) {
     const once = args.includes("--once")
     const runTick = async (disposeRuntime: boolean) => {
       const started = new Date().toLocaleTimeString()
-      const results = await withLoopRunner((runner) => runner.runDue({ limit, execute, reportOnly }), { disposeRuntime })
+      const results = await withLoopRunner((runner) => runner.runDue({ limit, execute, reportOnly }), {
+        disposeRuntime,
+      })
       if (results.length) {
         for (const item of results) {
-          console.log(`${started} ${item.workflowID} ${item.state}${item.runID ? ` run=${item.runID}` : ""} ${item.summary}`)
+          console.log(
+            `${started} ${item.workflowID} ${item.state}${item.runID ? ` run=${item.runID}` : ""} ${item.summary}`,
+          )
         }
       } else if (!quiet) {
         console.log(`${started} no loops due`)
       }
     }
-    if (!quiet) console.log(`Loop daemon started. interval=${interval}ms limit=${limit} mode=${execute ? (reportOnly ? "report-only" : "execute") : "dry-run"}${once ? " once=true" : ""}`)
+    if (!quiet)
+      console.log(
+        `Loop daemon started. interval=${interval}ms limit=${limit} mode=${execute ? (reportOnly ? "report-only" : "execute") : "dry-run"}${once ? " once=true" : ""}`,
+      )
     if (once) {
       await runTick(true)
       return
@@ -468,7 +655,9 @@ async function loops(args: string[]) {
       console.log(logs)
       return
     }
-    throw new Error("Usage: mendcode loops service <plan|install|start|stop|restart|status|logs|uninstall> [--interval-ms N] [--limit N] [--dry-run|--allow-edits]")
+    throw new Error(
+      "Usage: mendcode loops service <plan|install|start|stop|restart|status|logs|uninstall> [--interval-ms N] [--limit N] [--dry-run|--allow-edits]",
+    )
   }
   if (sub === "run") {
     const id = loopIDArg(args[1])
@@ -489,13 +678,17 @@ async function loops(args: string[]) {
     })
     if (sub === "activate" && !args.includes("--no-service")) {
       await loopServiceStart(loopServiceOptions(args.slice(2))).catch((error) => {
-        console.error(`WARN: loop service did not start automatically: ${error instanceof Error ? error.message : String(error)}`)
+        console.error(
+          `WARN: loop service did not start automatically: ${error instanceof Error ? error.message : String(error)}`,
+        )
       })
     }
     printResult(args, result, (value: LoopWorkflow.Info) => `Loop updated: ${formatLoopSummary(value)}`)
     return
   }
-  throw new Error("Usage: mendcode loops <status|list|examples|draft|show|tail|monitor|tick|daemon|service|activate|run|pause|resume|stop>")
+  throw new Error(
+    "Usage: mendcode loops <status|list|examples|draft|show|tail|monitor|tick|daemon|service|activate|run|pause|resume|stop>",
+  )
 }
 
 function formatTsmResult(result: any): string {
@@ -536,13 +729,18 @@ function formatTsmResult(result: any): string {
     `Policy: ${result.policy?.mode || "unknown"}${result.policy?.liveSync ? " live-sync" : ""}`,
     formatList("Warnings", warnings),
     formatList("Failures", failures),
-  ].filter(Boolean).join("\n")
+  ]
+    .filter(Boolean)
+    .join("\n")
 }
 
 function formatMflowResult(result: any): string {
   if (Array.isArray(result)) {
     if (!result.length) return "mflow scan: no relays found."
-    return ["mflow relays:", ...result.map((relay) => `  - ${relay.url} ${relay.scope || ""} ${relay.health || ""}`.trim())].join("\n")
+    return [
+      "mflow relays:",
+      ...result.map((relay) => `  - ${relay.url} ${relay.scope || ""} ${relay.health || ""}`.trim()),
+    ].join("\n")
   }
   if (result.commands && result.mcpCommand) {
     return [
@@ -550,7 +748,9 @@ function formatMflowResult(result: any): string {
       ...(result.commands || []).map((command: string) => `  - ${command}`),
       `MCP command: ${result.mcpCommand.join(" ")}`,
       result.note,
-    ].filter(Boolean).join("\n")
+    ]
+      .filter(Boolean)
+      .join("\n")
   }
   if (result.status === "dry-run" && result.install) {
     return [
@@ -579,7 +779,9 @@ function formatMflowResult(result: any): string {
     locks.checked !== undefined ? `Locks: ${locks.checked ? "checked" : "not checked"}` : undefined,
     formatList("Warnings", warnings),
     formatList("Failures", failures),
-  ].filter((line): line is string => Boolean(line)).join("\n")
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join("\n")
 }
 
 function formatWorktreeResult(result: any): string {
@@ -591,8 +793,17 @@ function formatWorktreeResult(result: any): string {
       `Repo: ${result.workspace.repoRoot}`,
       `Current: ${result.workspace.currentPath}${result.workspace.currentBranch ? ` (${result.workspace.currentBranch})` : ""}`,
       `Registry: ${result.registry.path}`,
-      formatList("Managed", records.map((item: any) => `${item.id || item.branch || item.path}: ${item.path}${item.branch ? ` (${item.branch})` : ""}`)),
-      formatList("External", external.map((item: any) => `${item.path}${item.branch ? ` (${item.branch})` : ""}`)),
+      formatList(
+        "Managed",
+        records.map(
+          (item: any) =>
+            `${item.id || item.branch || item.path}: ${item.path}${item.branch ? ` (${item.branch})` : ""}`,
+        ),
+      ),
+      formatList(
+        "External",
+        external.map((item: any) => `${item.path}${item.branch ? ` (${item.branch})` : ""}`),
+      ),
     ].join("\n")
   }
   if (result.previewText) return result.previewText
@@ -604,7 +815,9 @@ function formatWorktreeResult(result: any): string {
       `Executes git: ${yes(result.executesGit === true)}`,
       `Executes TSM: ${yes(result.executesTsm === true)}`,
       result.note,
-    ].filter(Boolean).join("\n")
+    ]
+      .filter(Boolean)
+      .join("\n")
   }
   if (result.action === "adopt") {
     return [
@@ -622,7 +835,9 @@ function formatWorktreeResult(result: any): string {
       `Focus: ${result.focus}`,
       result.previewText,
       result.note,
-    ].filter(Boolean).join("\n")
+    ]
+      .filter(Boolean)
+      .join("\n")
   }
   return JSON.stringify(result, null, 2)
 }
@@ -631,18 +846,46 @@ async function tui(args: string[]) {
   const root = shellProjectRoot()
   const sub = args[0] || "status"
   const publicSubs = ["status", "preview", "apply-preset", "rollback"]
-  const internalSubs = ["schema", "profile", "apply", "propose", "project", "render", "preview-plan", "runtime-plan", "probe"]
+  const internalSubs = [
+    "schema",
+    "profile",
+    "apply",
+    "propose",
+    "project",
+    "render",
+    "preview-plan",
+    "runtime-plan",
+    "probe",
+  ]
   const tuiSubs = [...publicSubs, ...internalSubs]
   if (!tuiSubs.includes(sub)) {
     const suggestion = closest(sub, tuiSubs)
     const hint = suggestion ? `\nDid you mean \`mendcode tui ${suggestion}\`?` : ""
-    throw new Error(`Unknown mendcode tui command: ${sub}${hint}\nUsage: mendcode tui <status|preview|apply-preset|rollback>`)
+    throw new Error(
+      `Unknown mendcode tui command: ${sub}${hint}\nUsage: mendcode tui <status|preview|apply-preset|rollback>`,
+    )
   }
   const loadedProfile = await loadMendTuiProfile(root)
   const profile = loadedProfile.profile
   const validation = validateMendTuiProfile(profile)
   if (sub === "status") {
-    console.log(JSON.stringify({ ok: validation.ok, path: relative(root, loadedProfile.activePath), profile, runtimeProof: { status: "runtime-owned-profile-control-plane", readsProfileJson: true, touchesProtectedDonorHotPaths: false }, failures: validation.failures }, null, 2))
+    console.log(
+      JSON.stringify(
+        {
+          ok: validation.ok,
+          path: relative(root, loadedProfile.activePath),
+          profile,
+          runtimeProof: {
+            status: "runtime-owned-profile-control-plane",
+            readsProfileJson: true,
+            touchesProtectedDonorHotPaths: false,
+          },
+          failures: validation.failures,
+        },
+        null,
+        2,
+      ),
+    )
     if (!validation.ok) process.exitCode = 1
     return
   }
@@ -657,19 +900,53 @@ async function tui(args: string[]) {
   }
   if (sub === "apply") {
     const result = await applyTuiProposal(args[1] || "", root)
-    console.log(JSON.stringify({ ok: true, proposalID: result.proposalID, backupPath: relative(root, result.backupPath), profilePath: relative(root, result.profilePath) }, null, 2))
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          proposalID: result.proposalID,
+          backupPath: relative(root, result.backupPath),
+          profilePath: relative(root, result.profilePath),
+        },
+        null,
+        2,
+      ),
+    )
     return
   }
   if (sub === "apply-preset") {
     const preset = args[1]
-    if (preset !== "compact" && preset !== "comfortable" && preset !== "spacious" && preset !== "toggle-worktree") throw new Error("Usage: mendcode tui apply-preset <compact|comfortable|spacious|toggle-worktree>")
+    if (preset !== "compact" && preset !== "comfortable" && preset !== "spacious" && preset !== "toggle-worktree")
+      throw new Error("Usage: mendcode tui apply-preset <compact|comfortable|spacious|toggle-worktree>")
     const result = await applyTuiPreset(preset, root)
-    console.log(JSON.stringify({ ok: true, preset, backupPath: relative(root, result.backupPath), profilePath: relative(root, result.profilePath), profile: result.profile.profile }, null, 2))
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          preset,
+          backupPath: relative(root, result.backupPath),
+          profilePath: relative(root, result.profilePath),
+          profile: result.profile.profile,
+        },
+        null,
+        2,
+      ),
+    )
     return
   }
   if (sub === "rollback") {
     const result = await rollbackTuiPreset(root)
-    console.log(JSON.stringify({ ok: true, restoredFrom: relative(root, result.restoredFrom), profilePath: relative(root, result.profilePath) }, null, 2))
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          restoredFrom: relative(root, result.restoredFrom),
+          profilePath: relative(root, result.profilePath),
+        },
+        null,
+        2,
+      ),
+    )
     return
   }
   if (sub === "preview") {
@@ -683,10 +960,25 @@ async function tui(args: string[]) {
   }
   if (sub === "propose") {
     const dryRun = args.includes("--dry-run")
-    const preference = args.slice(1).filter((arg) => arg !== "--dry-run").join(" ").trim()
+    const preference = args
+      .slice(1)
+      .filter((arg) => arg !== "--dry-run")
+      .join(" ")
+      .trim()
     if (!dryRun) throw new Error('TUI propose is gated: use `mendcode tui propose "<preference>" --dry-run`')
     const { proposal, proposalPath, proposalDir } = await writeTuiProposal(preference, root)
-    console.log(JSON.stringify({ ...proposal, proposalPath: relative(root, proposalPath), previewDir: relative(root, proposalDir), profile: undefined }, null, 2))
+    console.log(
+      JSON.stringify(
+        {
+          ...proposal,
+          proposalPath: relative(root, proposalPath),
+          previewDir: relative(root, proposalDir),
+          profile: undefined,
+        },
+        null,
+        2,
+      ),
+    )
     if (!proposal.validation.ok) process.exitCode = 1
     return
   }
@@ -723,9 +1015,10 @@ async function tui(args: string[]) {
 }
 
 async function prompt(args: string[]) {
+  const root = shellProjectRoot()
   const sub = args[0] || "mode"
   if (sub === "sources") {
-    console.log(JSON.stringify(await promptSourcesStatus(), null, 2))
+    console.log(JSON.stringify(await promptSourcesStatus(root), null, 2))
     return
   }
   if (sub === "build") {
@@ -742,12 +1035,19 @@ async function prompt(args: string[]) {
       else if (args[i] === "--role") role = args[++i]!
       else if (args[i] === "--workflow") workflow = args[++i]!
       else if (args[i] === "--show-full") showFull = true
-      else throw new Error("Usage: mend-control-plane prompt build [--mode minimal|focus|full] [--focus <id>] [--model <modelID>] [--role <role>] [--workflow <workflow>] [--show-full]")
+      else if (args[i] === "--json") continue
+      else
+        throw new Error(
+          "Usage: mend-control-plane prompt build [--mode minimal|focus|full|custom] [--focus <id>] [--model <modelID>] [--role <role>] [--workflow <workflow>] [--show-full] [--json]",
+        )
     }
-    const policy = await composePromptPolicy({ mode, focusID, modelID, role, workflow })
-    console.log(JSON.stringify({
+    const policy = await composePromptPolicy({ root, mode, focusID, modelID, role, workflow })
+    console.log(
+      JSON.stringify(
+        {
       mode: policy.mode,
       focusID: policy.focusID,
+          promptOrigin: policy.promptOrigin,
       modelID,
       role,
       workflow,
@@ -755,6 +1055,7 @@ async function prompt(args: string[]) {
       usesMendCodeHarnessPrompt: policy.usesMendCodeHarnessPrompt,
       usesOpenCodeGenericProviderPrompt: policy.usesOpenCodeGenericProviderPrompt,
       fallbackReason: policy.fallbackReason,
+          customPrompt: policy.customPrompt,
       includeProjectInstructions: policy.includeProjectInstructions,
       includeSkillsByDefault: policy.includeSkillsByDefault,
       includeCustomInstructions: policy.includeCustomInstructions,
@@ -775,42 +1076,62 @@ async function prompt(args: string[]) {
       ...(showFull ? { instructions: policy.instructions } : {}),
       printsFullPrompt: showFull,
       note: "Use run/chat --prompt-mode to execute with this policy. This command does not call providers.",
-    }, null, 2))
+        },
+        null,
+        2,
+      ),
+    )
     return
   }
   if (sub === "mode") {
     const requested = args[1]
-    console.log(JSON.stringify(requested ? await writePromptMode(requested) : await readPromptMode(), null, 2))
+    console.log(
+      JSON.stringify(requested ? await writePromptMode(requested, root) : await readPromptMode(root), null, 2),
+    )
     return
   }
   if (sub === "cycle-mode") {
-    console.log(JSON.stringify(await cyclePromptMode(), null, 2))
+    console.log(JSON.stringify(await cyclePromptMode(root), null, 2))
     return
   }
   throw new Error("Usage: mendcode prompt <sources|build|mode|cycle-mode>")
 }
 
 async function run(args: string[]) {
+  const root = shellProjectRoot()
   const parsed = parseRunArgs(args, "run")
   if (!parsed.prompt) throw new Error("Usage: mendcode run [--json] [--dry-run] <prompt>")
-  const plan = await buildRunPlan({ prompt: parsed.prompt, dryRun: parsed.dryRun, promptMode: parsed.promptMode, focusID: parsed.focusID })
+  const plan = await buildRunPlan({
+    root,
+    prompt: parsed.prompt,
+    dryRun: parsed.dryRun,
+    promptMode: parsed.promptMode,
+    focusID: parsed.focusID,
+  })
   if (parsed.dryRun || plan.blockers.length) {
     console.log(JSON.stringify(redactedRunPlanOutput(plan), null, 2))
     if (!parsed.dryRun) process.exitCode = 1
     return
   }
-  const { result, record } = await executeRunPlan({ plan, prompt: parsed.prompt })
+  const { result, record } = await executeRunPlan({ plan, prompt: parsed.prompt, root })
   const output = {
     mode: "run",
     selected: plan.selected,
     ok: result.ok,
     status: result.status,
     outputText: result.outputText || null,
-    response: result.ok ? { id: result.id, model: result.model, rawShape: result.rawShape } : { statusText: result.statusText, errorPreview: result.errorPreview },
+    response: result.ok
+      ? { id: result.id, model: result.model, rawShape: result.rawShape }
+      : { statusText: result.statusText, errorPreview: result.errorPreview },
     telemetry: result.telemetry || null,
     budgetGate: plan.budgetGate,
     promptPolicy: plan.promptPolicy,
-    runRecord: { id: record.id, path: path.relative(mendPaths().root, mendPaths().runHistory), storedFullPrompt: false, storedFullOutput: false },
+    runRecord: {
+      id: record.id,
+      path: path.relative(root, mendPaths(root).runHistory),
+      storedFullPrompt: false,
+      storedFullOutput: false,
+    },
     wouldRunDonorRuntime: false,
     secretsPrinted: false,
   }
@@ -820,17 +1141,26 @@ async function run(args: string[]) {
 }
 
 async function chat(args: string[]) {
+  const root = shellProjectRoot()
   const parsed = parseRunArgs(args, "chat")
   if (!parsed.prompt) throw new Error("Usage: mendcode chat [--json] [--dry-run] [--session <id>] <message>")
-  const session = await readChatSession(parsed.sessionID)
+  const session = await readChatSession(parsed.sessionID, root)
   const messages = [...(session.messages || []), { role: "user", content: parsed.prompt }]
   const transcript = transcriptPrompt(messages)
   const plan = {
-    ...(await buildRunPlan({ prompt: transcript, dryRun: parsed.dryRun, promptMode: parsed.promptMode, focusID: parsed.focusID })),
+    ...(await buildRunPlan({
+      root,
+      prompt: transcript,
+      dryRun: parsed.dryRun,
+      promptMode: parsed.promptMode,
+      focusID: parsed.focusID,
+    })),
     mode: parsed.dryRun ? "chat-dry-run" : "chat",
     session: {
       id: session.id,
-      path: session.storage?.path || path.relative(mendPaths().root, path.join(mendPaths().runHistory, "..", "chat", `${session.id}.json`)),
+      path:
+        session.storage?.path ||
+        path.relative(root, path.join(mendPaths(root).runHistory, "..", "chat", `${session.id}.json`)),
       previousMessages: session.messages?.length || 0,
       nextMessages: messages.length,
       ignoredByGit: true,
@@ -842,17 +1172,30 @@ async function chat(args: string[]) {
     if (!parsed.dryRun) process.exitCode = 1
     return
   }
-  const { result, record } = await executeRunPlan({ plan, prompt: transcript, messages })
+  const { result, record } = await executeRunPlan({ plan, prompt: transcript, messages, root })
   session.messages = messages
-  session.messages.push({ role: "assistant", content: result.outputText || "", ok: result.ok, runRecordID: record.id, at: new Date().toISOString() })
+  session.messages.push({
+    role: "assistant",
+    content: result.outputText || "",
+    ok: result.ok,
+    runRecordID: record.id,
+    at: new Date().toISOString(),
+  })
   session.updatedAt = new Date().toISOString()
   accumulateSessionTelemetry(session, result.telemetry)
-  await writeChatSession(session)
+  await writeChatSession(session, root)
   const memory = result.ok
-    ? { skipped: false, queued: true, reason: "memory extraction queued", proposals: [], callsProviders: false, writesMemory: false }
+    ? {
+        skipped: false,
+        queued: true,
+        reason: "memory extraction queued",
+        proposals: [],
+        callsProviders: false,
+        writesMemory: false,
+      }
     : { skipped: true, reason: "run failed", proposals: [], callsProviders: false, writesMemory: false }
   if (result.ok) {
-    void writeMemorySessionDigestFromSession(structuredClone(session), mendPaths().root).catch(() => {})
+    void writeMemorySessionDigestFromSession(structuredClone(session), root).catch(() => {})
     void autoProposeMemoriesFromSession(structuredClone(session)).catch(() => {})
   }
   const output = {
@@ -867,7 +1210,12 @@ async function chat(args: string[]) {
     promptPolicy: plan.promptPolicy,
     memory,
     sessionTelemetry: session.telemetry,
-    runRecord: { id: record.id, path: path.relative(mendPaths().root, mendPaths().runHistory), storedFullPrompt: false, storedFullOutput: false },
+    runRecord: {
+      id: record.id,
+      path: path.relative(root, mendPaths(root).runHistory),
+      storedFullPrompt: false,
+      storedFullOutput: false,
+    },
     wouldRunDonorRuntime: false,
     secretsPrinted: false,
   }
@@ -882,7 +1230,25 @@ async function models(args: string[]) {
   const sub = args[0] || "status"
   const resolved = await resolveModelRoles(root)
   if (sub === "status") {
-    console.log(JSON.stringify({ enabled: resolved.enabled, focus: resolved.focus, generatedRuntimeModel: resolved.defaultModel, generatedRuntimeSmallModel: resolved.smallModel, configuredRoles: Object.fromEntries(Object.entries(resolved.roles).map(([name, role]: any) => [name, role.configured ? role.runtimeModel : null])), warnings: resolved.warnings }, null, 2))
+    console.log(
+      JSON.stringify(
+        {
+          enabled: resolved.enabled,
+          focus: resolved.focus,
+          generatedRuntimeModel: resolved.defaultModel,
+          generatedRuntimeSmallModel: resolved.smallModel,
+          configuredRoles: Object.fromEntries(
+            Object.entries(resolved.roles).map(([name, role]: any) => [
+              name,
+              role.configured ? role.runtimeModel : null,
+            ]),
+          ),
+          warnings: resolved.warnings,
+        },
+        null,
+        2,
+      ),
+    )
     return
   }
   if (sub === "show") {
@@ -896,7 +1262,13 @@ async function models(args: string[]) {
     return
   }
   if (sub === "presets") {
-    console.log(JSON.stringify({ presets: modelPresets, secretsIncluded: false, pricingSource: "official OpenAI docs captured 2026-05-06" }, null, 2))
+    console.log(
+      JSON.stringify(
+        { presets: modelPresets, secretsIncluded: false, pricingSource: "official OpenAI docs captured 2026-05-06" },
+        null,
+        2,
+      ),
+    )
     return
   }
   if (sub === "set-default") {
@@ -907,19 +1279,52 @@ async function models(args: string[]) {
     const failures = validateProviderModelID(providerID, modelID)
     if (failures.length) throw new Error(`Invalid model mapping:\n${failures.map((x) => `- ${x}`).join("\n")}`)
     const config = await readModelsConfig(root)
-    config.roles.default = { ...(config.roles.default || {}), providerID: providerID!, modelID: modelID!, ...(authMode ? { authMode } : {}), reason: "Explicit default model configured by mendcode models set-default." }
+    config.roles.default = {
+      ...(config.roles.default || {}),
+      providerID: providerID!,
+      modelID: modelID!,
+      ...(authMode ? { authMode } : {}),
+      reason: "Explicit default model configured by mendcode models set-default.",
+    }
     if (args.includes("--enable")) config.enabled = true
     const refresh = !dryRun
-      ? (await writeGlobalModelsConfig(config), await syncGlobalPrimaryAgentModels(root), await refreshGeneratedRuntimeModelConfig(root))
+      ? (await writeGlobalModelsConfig(config),
+        await syncGlobalPrimaryAgentModels(root),
+        await refreshGeneratedRuntimeModelConfig(root))
       : null
-    console.log(JSON.stringify({ mode: dryRun ? "dry-run" : "write", path: relative(root, paths.modelsConfig), enabled: config.enabled === true, defaultModel: config.enabled === true ? `${providerID}/${modelID}` : null, authMode: authMode || "unknown-or-api-key", writesSecrets: false, writesConfig: !dryRun, refresh, note: "Runtime control-plane writes models.yaml and refreshes generated runtime model compatibility config on real writes." }, null, 2))
+    console.log(
+      JSON.stringify(
+        {
+          mode: dryRun ? "dry-run" : "write",
+          path: relative(root, paths.modelsConfig),
+          enabled: config.enabled === true,
+          defaultModel: config.enabled === true ? `${providerID}/${modelID}` : null,
+          authMode: authMode || "unknown-or-api-key",
+          writesSecrets: false,
+          writesConfig: !dryRun,
+          refresh,
+          note: "Runtime control-plane writes models.yaml and refreshes generated runtime model compatibility config on real writes.",
+        },
+        null,
+        2,
+      ),
+    )
     return
   }
   if (sub === "use-preset") {
     const presetID = args[1] as keyof typeof modelPresets
     const preset = modelPresets[presetID]
-    if (!preset) throw new Error(`Unknown preset: ${presetID || "missing"}\nAvailable: ${Object.keys(modelPresets).join(", ")}`)
-    return models(["set-default", preset.providerID, preset.modelID, "--auth-mode", preset.authMode, ...(args.includes("--enable") ? ["--enable"] : []), ...(args.includes("--dry-run") ? ["--dry-run"] : [])])
+    if (!preset)
+      throw new Error(`Unknown preset: ${presetID || "missing"}\nAvailable: ${Object.keys(modelPresets).join(", ")}`)
+    return models([
+      "set-default",
+      preset.providerID,
+      preset.modelID,
+      "--auth-mode",
+      preset.authMode,
+      ...(args.includes("--enable") ? ["--enable"] : []),
+      ...(args.includes("--dry-run") ? ["--dry-run"] : []),
+    ])
   }
   throw new Error("Usage: mend-control-plane models <status|show|plan|presets|set-default|use-preset>")
 }
@@ -938,7 +1343,8 @@ async function mflow(args: string[]) {
     const secret = optionValue(args, "--secret") || undefined
     const hookPriorityRaw = optionValue(args, "--priority")
     const hookPriority = hookPriorityRaw === null ? undefined : Number(hookPriorityRaw)
-    const result = await activateMflow({
+    const result = await activateMflow(
+      {
       relayMode: relay,
       signaling,
       room,
@@ -947,7 +1353,9 @@ async function mflow(args: string[]) {
       storeSecret: args.includes("--store-secret"),
       hookPriority,
       publicRelayNoticeAccepted: args.includes("--accept-public-relay-limits") || relay !== "legacy-public",
-    }, root)
+      },
+      root,
+    )
     printResult(args, result, formatMflowResult)
     return
   }
@@ -976,8 +1384,14 @@ async function mflow(args: string[]) {
         const detected = await scanMflowRelays()
         if (detected.length) {
           console.log("Detected local/LAN relays:")
-          detected.forEach((relay, index) => console.log(`${index + 1}) ${relay.url} ${relay.scope} ${relay.health} rooms=${relay.roomCount ?? "unknown"} peers=${relay.peerCount ?? "unknown"}`))
-          const picked = Number((await rl.question(`Use detected relay [1-${detected.length}] or Enter for localhost:8787: `)).trim())
+          detected.forEach((relay, index) =>
+            console.log(
+              `${index + 1}) ${relay.url} ${relay.scope} ${relay.health} rooms=${relay.roomCount ?? "unknown"} peers=${relay.peerCount ?? "unknown"}`,
+            ),
+          )
+          const picked = Number(
+            (await rl.question(`Use detected relay [1-${detected.length}] or Enter for localhost:8787: `)).trim(),
+          )
           signaling = detected[picked - 1]?.url || MFLOW_LOCAL_RELAY
         } else {
           printResult(args, mflowLocalRelayGuide(root), formatMflowResult)
@@ -996,8 +1410,10 @@ async function mflow(args: string[]) {
       const room = (await rl.question(`Room [${root.split("/").pop() || "mendcode"}/mflow]: `)).trim() || undefined
       const generate = ((await rl.question("Generate room secret? [Y/n]: ")).trim().toLowerCase() || "y") !== "n"
       const secret = generate ? undefined : (await rl.question("Room secret: ")).trim()
-      const storeSecret = (await rl.question("Store secret in .mflow/config.toml? [y/N]: ")).trim().toLowerCase() === "y"
-      const result = await activateMflow({
+      const storeSecret =
+        (await rl.question("Store secret in .mflow/config.toml? [y/N]: ")).trim().toLowerCase() === "y"
+      const result = await activateMflow(
+        {
         relayMode,
         signaling,
         room,
@@ -1005,15 +1421,31 @@ async function mflow(args: string[]) {
         generateSecret: generate,
         storeSecret,
         publicRelayNoticeAccepted,
-      }, root)
+        },
+        root,
+      )
       printResult(args, result, formatMflowResult)
     } finally {
       rl.close()
     }
     return
   }
-  const result = sub === "scan" ? await scanMflowRelays() : sub === "relay-guide" ? mflowLocalRelayGuide(root) : sub === "plan" ? await mflowPlan(root) : sub === "doctor" ? await mflowDoctor(root) : sub === "legacy-status" ? await mflowStatus(root) : null
-  if (!result) throw new Error("Usage: mend-control-plane mflow <status|setup|activate|deactivate|remove|scan|relay-guide|plan|doctor>")
+  const result =
+    sub === "scan"
+      ? await scanMflowRelays()
+      : sub === "relay-guide"
+        ? mflowLocalRelayGuide(root)
+        : sub === "plan"
+          ? await mflowPlan(root)
+          : sub === "doctor"
+            ? await mflowDoctor(root)
+            : sub === "legacy-status"
+              ? await mflowStatus(root)
+              : null
+  if (!result)
+    throw new Error(
+      "Usage: mend-control-plane mflow <status|setup|activate|deactivate|remove|scan|relay-guide|plan|doctor>",
+    )
   printResult(args, result, formatMflowResult)
   if ("ok" in result && result.ok === false) process.exitCode = 1
 }
@@ -1022,7 +1454,8 @@ async function tsm(args: string[]) {
   const root = shellProjectRoot()
   const sub = args[0] || "status"
   const muxBackend = optionValue(args, "--mux") as TsmState["defaultMuxBackend"] | null
-  const result = sub === "status"
+  const result =
+    sub === "status"
     ? await tsmStatus(root)
     : sub === "plan" || sub === "install"
       ? await tsmPlan(root)
@@ -1037,7 +1470,8 @@ async function tsm(args: string[]) {
               : sub === "doctor"
                 ? await tsmDoctor(root)
                 : null
-  if (!result) throw new Error("Usage: mend-control-plane tsm <status|plan|setup|install|activate|deactivate|remove|doctor>")
+  if (!result)
+    throw new Error("Usage: mend-control-plane tsm <status|plan|setup|install|activate|deactivate|remove|doctor>")
   printResult(args, result, formatTsmResult)
   if ("ok" in result && result.ok === false) process.exitCode = 1
 }
@@ -1046,7 +1480,8 @@ async function worktree(args: string[]) {
   const root = shellProjectRoot()
   const sub = args[0] || "status"
   const rest = args.slice(1)
-  const result = sub === "status"
+  const result =
+    sub === "status"
     ? await worktreeStatus(root)
     : sub === "plan"
       ? await worktreePlan(rest, root)
@@ -1110,17 +1545,30 @@ async function runtimeCommand(args: string[]) {
     else if (action === "list") console.log(JSON.stringify(await runtimeRegistryList(root), null, 2))
     else if (action === "add") console.log(JSON.stringify(await runtimeRegistryAdd(args.slice(2), root), null, 2))
     else if (action === "remove") console.log(JSON.stringify(await runtimeRegistryRemove(args[2], root), null, 2))
-    else if (action === "preview") console.log(JSON.stringify(await runtimeRegistryPreview(args[2] || "local", root), null, 2))
+    else if (action === "preview")
+      console.log(JSON.stringify(await runtimeRegistryPreview(args[2] || "local", root), null, 2))
     else if (action === "apply") console.log(JSON.stringify(await runtimeRegistryApplySource(args[2], root), null, 2))
-    else if (action === "search") console.log(JSON.stringify(await runtimeRegistrySearch(args[2] || "", args[3] || "local", root), null, 2))
-    else if (action === "show") console.log(JSON.stringify(await runtimeRegistryShow(args[2], args[3] || "local", root), null, 2))
-    else if (action === "publish-plan") console.log(JSON.stringify(await runtimeRegistryPublishPlan(args[2] || "local", root), null, 2))
-    else if (action === "sign") console.log(JSON.stringify(await runtimeRegistrySign(args[2] || "local", root), null, 2))
-    else if (action === "smoke") console.log(JSON.stringify(await runtimeRegistrySmoke(args[2] || "local", args.includes("--execute"), root), null, 2))
-    else throw new Error("Usage: mend-control-plane runtime registry <status|list|add|remove|preview|apply|search|show|publish-plan|sign|smoke>")
+    else if (action === "search")
+      console.log(JSON.stringify(await runtimeRegistrySearch(args[2] || "", args[3] || "local", root), null, 2))
+    else if (action === "show")
+      console.log(JSON.stringify(await runtimeRegistryShow(args[2], args[3] || "local", root), null, 2))
+    else if (action === "publish-plan")
+      console.log(JSON.stringify(await runtimeRegistryPublishPlan(args[2] || "local", root), null, 2))
+    else if (action === "sign")
+      console.log(JSON.stringify(await runtimeRegistrySign(args[2] || "local", root), null, 2))
+    else if (action === "smoke")
+      console.log(
+        JSON.stringify(await runtimeRegistrySmoke(args[2] || "local", args.includes("--execute"), root), null, 2),
+      )
+    else
+      throw new Error(
+        "Usage: mend-control-plane runtime registry <status|list|add|remove|preview|apply|search|show|publish-plan|sign|smoke>",
+      )
     return
   }
-  throw new Error("Usage: mend-control-plane runtime <status|configure [status|preview|apply|rollback]|plan|adopt|registry>")
+  throw new Error(
+    "Usage: mend-control-plane runtime <status|configure [status|preview|apply|rollback]|plan|adopt|registry>",
+  )
 }
 
 async function bench() {
@@ -1150,7 +1598,8 @@ async function providers(args: string[]) {
   if (sub === "smoke") {
     const summary = await providerSmoke(args.slice(1))
     console.log(JSON.stringify(summary, null, 2))
-    if (summary.mode === "execute" && summary.executedCount > 0 && summary.okCount !== summary.executedCount) process.exitCode = 1
+    if (summary.mode === "execute" && summary.executedCount > 0 && summary.okCount !== summary.executedCount)
+      process.exitCode = 1
     return
   }
   throw new Error("Usage: mend-control-plane providers <status|auth|adapters|smoke>")
@@ -1181,21 +1630,38 @@ async function memoryDream(args: string[], root: string) {
     const [schedule, runs, service] = await Promise.all([
       readDreamScheduleState(root),
       readDreamRuns(root).then((items) => items.slice(0, 5)),
-      dreamServiceStatus(dreamServiceOptions(args.slice(1))).catch((error) => ({ error: error instanceof Error ? error.message : String(error) })),
+      dreamServiceStatus(dreamServiceOptions(args.slice(1))).catch((error) => ({
+        error: error instanceof Error ? error.message : String(error),
+      })),
     ])
     console.log(JSON.stringify({ schedule, runs, service }, null, 2))
     return
   }
   if (sub === "tick") {
     const result = await runGlobalDreamSchedulerTick()
-    printResult(args, result, (value) => `${value.status}: ${value.reason}${value.runs?.length ? ` (${value.runs.length} run${value.runs.length === 1 ? "" : "s"})` : ""}`)
+    printResult(
+      args,
+      result,
+      (value) =>
+        `${value.status}: ${value.reason}${value.runs?.length ? ` (${value.runs.length} run${value.runs.length === 1 ? "" : "s"})` : ""}`,
+    )
     return
   }
   if (sub === "run" || sub === "consolidate") {
-    const consolidationPolicy = args.includes("--preview") ? "preview" as const : args.includes("--auto") ? "auto-consolidate" as const : undefined
+    const consolidationPolicy = args.includes("--preview")
+      ? ("preview" as const)
+      : args.includes("--auto")
+        ? ("auto-consolidate" as const)
+        : undefined
     const run = await runMemoryDream({ root, source: "manual", consolidationPolicy })
     const consolidation = await readDreamConsolidationRun(root, run.id)
-    console.log(JSON.stringify({ run, consolidation, callsProviders: consolidation?.policy !== "disabled", readsSecrets: false }, null, 2))
+    console.log(
+      JSON.stringify(
+        { run, consolidation, callsProviders: consolidation?.policy !== "disabled", readsSecrets: false },
+        null,
+        2,
+      ),
+    )
     if (run.status === "failed") process.exitCode = 1
     return
   }
@@ -1252,7 +1718,11 @@ async function memoryDream(args: string[], root: string) {
     }
     if (action === "uninstall" || action === "remove") {
       const plan = await dreamServiceUninstall(options)
-      printResult(args, plan, (value: DreamServicePlan) => `Dream service uninstalled.\n${formatDreamServicePlan(value)}`)
+      printResult(
+        args,
+        plan,
+        (value: DreamServicePlan) => `Dream service uninstalled.\n${formatDreamServicePlan(value)}`,
+      )
       return
     }
     if (action === "status") {
@@ -1264,7 +1734,9 @@ async function memoryDream(args: string[], root: string) {
       console.log(await dreamServiceLogs(serviceArgs))
       return
     }
-    throw new Error("Usage: mendcode memory dream service <plan|install|start|stop|restart|status|logs|uninstall> [--interval-ms N] [--service-dir <path>] [--log-dir <path>]")
+    throw new Error(
+      "Usage: mendcode memory dream service <plan|install|start|stop|restart|status|logs|uninstall> [--interval-ms N] [--service-dir <path>] [--log-dir <path>]",
+    )
   }
   throw new Error("Usage: mendcode memory dream <status|run|consolidate|tick|daemon|service> [--preview|--auto]")
 }
@@ -1279,12 +1751,18 @@ async function memory(args: string[]) {
   }
   if (sub === "search") {
     const mode = memoryModeValue(args)
-    const query = args.slice(1).filter((arg, index, all) => {
+    const query = args
+      .slice(1)
+      .filter((arg, index, all) => {
       const prev = all[index - 1]
       return !arg.startsWith("--") && prev !== "--mode"
-    }).join(" ").trim()
+      })
+      .join(" ")
+      .trim()
     const result = await retrieveMemory({ root, query, cwd: root, mode })
-    console.log(JSON.stringify({
+    console.log(
+      JSON.stringify(
+        {
       query,
       mode,
       enabled: result.enabled,
@@ -1293,20 +1771,30 @@ async function memory(args: string[]) {
       summaries: result.summaries,
       entries: result.entries,
       lines: result.lines,
-    }, null, 2))
+        },
+        null,
+        2,
+      ),
+    )
     return
   }
   if (sub === "preview") {
     const mode = memoryModeValue(args)
-    const query = args.slice(1).filter((arg, index, all) => {
+    const query = args
+      .slice(1)
+      .filter((arg, index, all) => {
       const prev = all[index - 1]
       return !arg.startsWith("--") && prev !== "--provider" && prev !== "--model" && prev !== "--mode"
-    }).join(" ").trim()
+      })
+      .join(" ")
+      .trim()
     const providerID = optionValue(args, "--provider") || "generic"
     const modelID = optionValue(args, "--model") || "memory-preview"
     const result = await retrieveMemory({ root, query, cwd: root, providerID, modelID, mode })
     const model = { id: modelID, providerID, api: { id: modelID } } as any
-    console.log(JSON.stringify({
+    console.log(
+      JSON.stringify(
+        {
       query,
       mode,
       providerID,
@@ -1316,16 +1804,27 @@ async function memory(args: string[]) {
       callsProviders: false,
       entries: result.entries,
       promptBlock: result.lines?.length ? formatMemoryBlock({ model, lines: result.lines }) : "",
-    }, null, 2))
+        },
+        null,
+        2,
+      ),
+    )
     return
   }
   if (sub === "add") {
     const scope = optionValue(args, "--scope") === "global" ? "global" : "project"
-    const tags = (optionValue(args, "--tags") || "").split(",").map((item) => item.trim()).filter(Boolean)
-    const text = args.slice(1).filter((arg, index, all) => {
+    const tags = (optionValue(args, "--tags") || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
+    const text = args
+      .slice(1)
+      .filter((arg, index, all) => {
       const prev = all[index - 1]
       return !arg.startsWith("--") && prev !== "--scope" && prev !== "--tags"
-    }).join(" ").trim()
+      })
+      .join(" ")
+      .trim()
     if (!text) throw new Error("Usage: mendcode memory add <text> [--scope global|project] [--tags a,b]")
     const entry = await appendMemoryEntry({ scope, text, tags, cwd: root, source: "manual-cli" }, root)
     console.log(JSON.stringify({ ok: true, entry, callsProviders: false, readsSecrets: false }, null, 2))
@@ -1334,10 +1833,14 @@ async function memory(args: string[]) {
   if (sub === "edit") {
     const scope = optionValue(args, "--scope") === "global" ? "global" : "project"
     const id = args[1]
-    const text = args.slice(2).filter((arg, index, all) => {
+    const text = args
+      .slice(2)
+      .filter((arg, index, all) => {
       const prev = all[index - 1]
       return !arg.startsWith("--") && prev !== "--scope"
-    }).join(" ").trim()
+      })
+      .join(" ")
+      .trim()
     if (!id || !text) throw new Error("Usage: mendcode memory edit <entry-id> <text> [--scope global|project]")
     const entry = await updateMemoryEntry(scope, id, { text }, root)
     console.log(JSON.stringify({ ok: true, entry, callsProviders: false, readsSecrets: false }, null, 2))
@@ -1347,28 +1850,63 @@ async function memory(args: string[]) {
     const scope = optionValue(args, "--scope") === "global" ? "global" : "project"
     const id = args[1]
     if (!id) throw new Error("Usage: mendcode memory delete <entry-id> [--scope global|project]")
-    console.log(JSON.stringify({ ...(await deleteMemoryEntry(scope, id, root)), callsProviders: false, readsSecrets: false }, null, 2))
+    console.log(
+      JSON.stringify(
+        { ...(await deleteMemoryEntry(scope, id, root)), callsProviders: false, readsSecrets: false },
+        null,
+        2,
+      ),
+    )
     return
   }
   if (sub === "propose") {
     const scope = optionValue(args, "--scope") === "global" ? "global" : "project"
-    const tags = (optionValue(args, "--tags") || "").split(",").map((item) => item.trim()).filter(Boolean)
+    const tags = (optionValue(args, "--tags") || "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
     const fromFile = optionValue(args, "--from-file")
     const maxProposals = optionValue(args, "--max-proposals")
-    const text = args.slice(1).filter((arg, index, all) => {
+    const text = args
+      .slice(1)
+      .filter((arg, index, all) => {
       const prev = all[index - 1]
-      return !arg.startsWith("--") && prev !== "--scope" && prev !== "--tags" && prev !== "--from-file" && prev !== "--max-proposals"
-    }).join(" ").trim()
+        return (
+          !arg.startsWith("--") &&
+          prev !== "--scope" &&
+          prev !== "--tags" &&
+          prev !== "--from-file" &&
+          prev !== "--max-proposals"
+        )
+      })
+      .join(" ")
+      .trim()
     if (fromFile) {
       const file = path.resolve(root, fromFile)
       const fileText = await readFile(file, "utf8")
-      const result = await proposeMemoriesWithExtractor({ scope, text: fileText, tags, cwd: root, source: "model-file-extract", evidence: path.relative(root, file), maxProposals: maxProposals ? Number(maxProposals) : undefined }, root)
+      const result = await proposeMemoriesWithExtractor(
+        {
+          scope,
+          text: fileText,
+          tags,
+          cwd: root,
+          source: "model-file-extract",
+          evidence: path.relative(root, file),
+          maxProposals: maxProposals ? Number(maxProposals) : undefined,
+        },
+        root,
+      )
       console.log(JSON.stringify(result, null, 2))
       return
     }
-    if (!text) throw new Error("Usage: mendcode memory propose <text> [--scope global|project] [--tags a,b] OR mendcode memory propose --from-file <path> [--max-proposals n]")
+    if (!text)
+      throw new Error(
+        "Usage: mendcode memory propose <text> [--scope global|project] [--tags a,b] OR mendcode memory propose --from-file <path> [--max-proposals n]",
+      )
     const proposal = await proposeMemory({ scope, text, tags, cwd: root, source: "manual-cli-proposal" }, root)
-    console.log(JSON.stringify({ ok: true, proposal, callsProviders: false, readsSecrets: false, writesMemory: false }, null, 2))
+    console.log(
+      JSON.stringify({ ok: true, proposal, callsProviders: false, readsSecrets: false, writesMemory: false }, null, 2),
+    )
     return
   }
   if (sub === "list") {
@@ -1380,26 +1918,47 @@ async function memory(args: string[]) {
     }
     const status = optionValue(args, "--status") as any
     const proposals = await listMemoryProposals(root, status || "pending")
-    console.log(JSON.stringify({ status: status || "pending", proposals, callsProviders: false, readsSecrets: false }, null, 2))
+    console.log(
+      JSON.stringify({ status: status || "pending", proposals, callsProviders: false, readsSecrets: false }, null, 2),
+    )
     return
   }
   if (sub === "import-codex") {
-    const result = await importCodexMemories({
+    const result = await importCodexMemories(
+      {
       codexMemoryDir: optionValue(args, "--from") || undefined,
       apply: args.includes("--apply"),
       maxProposals: optionValue(args, "--max-proposals") ? Number(optionValue(args, "--max-proposals")) : undefined,
-    }, root)
+      },
+      root,
+    )
     console.log(JSON.stringify(result, null, 2))
     return
   }
   if (sub === "apply") {
     const result = await applyMemoryProposal(args[1] || "", root)
-    console.log(JSON.stringify({ ok: true, proposal: result.proposal, entry: result.entry, dreamSchedule: result.dreamSchedule, dreamService: result.dreamService, callsProviders: false, readsSecrets: false }, null, 2))
+    console.log(
+      JSON.stringify(
+        {
+          ok: true,
+          proposal: result.proposal,
+          entry: result.entry,
+          dreamSchedule: result.dreamSchedule,
+          dreamService: result.dreamService,
+          callsProviders: false,
+          readsSecrets: false,
+        },
+        null,
+        2,
+      ),
+    )
     return
   }
   if (sub === "reject") {
     const proposal = await rejectMemoryProposal(args[1] || "", root)
-    console.log(JSON.stringify({ ok: true, proposal, callsProviders: false, readsSecrets: false, writesMemory: false }, null, 2))
+    console.log(
+      JSON.stringify({ ok: true, proposal, callsProviders: false, readsSecrets: false, writesMemory: false }, null, 2),
+    )
     return
   }
   if (sub === "index") {
@@ -1431,14 +1990,21 @@ async function memory(args: string[]) {
     const globalCompactionMaxEntries = optionValue(args, "--global-compaction-max-entries")
     if (globalCompactionMaxEntries) updates.globalCompactionMaxEntries = Number(globalCompactionMaxEntries)
     const dreamConsolidationPolicy = optionValue(args, "--dream-consolidation-policy")
-    if (dreamConsolidationPolicy === "disabled" || dreamConsolidationPolicy === "preview" || dreamConsolidationPolicy === "auto-consolidate") updates.dreamConsolidationPolicy = dreamConsolidationPolicy
+    if (
+      dreamConsolidationPolicy === "disabled" ||
+      dreamConsolidationPolicy === "preview" ||
+      dreamConsolidationPolicy === "auto-consolidate"
+    )
+      updates.dreamConsolidationPolicy = dreamConsolidationPolicy
     const result = args.includes("--project")
       ? await writeProjectMemoryConfig(updates, root)
       : await writeGlobalMemoryConfig(updates, root)
     console.log(JSON.stringify({ ...result, callsProviders: false, readsSecrets: false }, null, 2))
     return
   }
-  throw new Error("Usage: mend-control-plane memory <status|dream <status|run|consolidate|tick|daemon|service>|search <query>|preview <query>|add <text>|edit <entry-id> <text>|delete <entry-id>|propose <text|--from-file path>|list [--status pending|applied|rejected|all]|apply <proposal-id>|reject <proposal-id>|import-codex [--from path] [--apply]|index|config [--enable|--disable|--input|--no-input|--output|--no-output|--use|--no-use|--generate|--no-generate|--max-prompt-tokens n|--max-entries n|--project-max-entries n|--global-compaction-max-entries n|--dream-consolidation-policy disabled|preview|auto-consolidate|--project]>")
+  throw new Error(
+    "Usage: mend-control-plane memory <status|dream <status|run|consolidate|tick|daemon|service>|search <query>|preview <query>|add <text>|edit <entry-id> <text>|delete <entry-id>|propose <text|--from-file path>|list [--status pending|applied|rejected|all]|apply <proposal-id>|reject <proposal-id>|import-codex [--from path] [--apply]|index|config [--enable|--disable|--input|--no-input|--output|--no-output|--use|--no-use|--generate|--no-generate|--max-prompt-tokens n|--max-entries n|--project-max-entries n|--global-compaction-max-entries n|--dream-consolidation-policy disabled|preview|auto-consolidate|--project]>",
+  )
 }
 
 async function auth(args: string[]) {
@@ -1454,22 +2020,58 @@ async function auth(args: string[]) {
   if (sub === "login") {
     const providerID = args[1]!
     const method = optionValue(args, "--method")
-    console.log(JSON.stringify(await providerLogin(providerID, method, { execute: args.includes("--execute"), open: args.includes("--open") }), null, 2))
+    console.log(
+      JSON.stringify(
+        await providerLogin(providerID, method, { execute: args.includes("--execute"), open: args.includes("--open") }),
+        null,
+        2,
+      ),
+    )
     return
   }
-  throw new Error("Usage: mend-control-plane auth <status [providerID]|login-plan <providerID> [--method browser|headless|api-key]|login openai --method browser|headless --execute [--open]>")
+  throw new Error(
+    "Usage: mend-control-plane auth <status [providerID]|login-plan <providerID> [--method browser|headless|api-key]|login openai --method browser|headless --execute [--open]>",
+  )
 }
 
 async function setup(args: string[]) {
   const sub = args[0] || "status"
-  const result = sub === "status" ? await setupReadiness() : sub === "plan" ? await setupPlan() : sub === "doctor" ? await setupDoctor() : null
+  const result =
+    sub === "status"
+      ? await setupReadiness()
+      : sub === "plan"
+        ? await setupPlan()
+        : sub === "doctor"
+          ? await setupDoctor()
+          : null
   if (!result) throw new Error("Usage: mend-control-plane setup <status|plan|doctor>")
   console.log(JSON.stringify(result, null, 2))
   if ("ok" in result && result.ok === false) process.exitCode = 1
 }
 
-const selectablePackageArtifacts = ["commands", "agents", "modes", "skills", "plugins", "tools", "prompts", "mcp", "context", "pages", "widgets", "extensions"] as const
-const selectablePackageSettings = ["models", "focus", "budget", "memory", "permissions", "tuiProfile", "worktreePolicy"] as const
+const selectablePackageArtifacts = [
+  "commands",
+  "agents",
+  "modes",
+  "skills",
+  "plugins",
+  "tools",
+  "prompts",
+  "mcp",
+  "context",
+  "pages",
+  "widgets",
+  "extensions",
+] as const
+const selectablePackageSettings = [
+  "models",
+  "focus",
+  "budget",
+  "memory",
+  "permissions",
+  "tuiProfile",
+  "worktreePolicy",
+] as const
 
 function packageOptionValue(args: string[], name: string) {
   const index = args.indexOf(name)
@@ -1485,7 +2087,12 @@ function packageOptionList(args: string[], name: string) {
     if (args[i] !== name) continue
     const value = args[i + 1]
     if (!value || value.startsWith("--")) throw new Error(`Missing value for ${name}`)
-    values.push(...value.split(",").map((item) => item.trim()).filter(Boolean))
+    values.push(
+      ...value
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean),
+    )
     i++
   }
   return values
@@ -1498,7 +2105,12 @@ async function packageSelectionFromArgs(args: string[], root: string) {
   const candidates = await runtimePackArtifactCandidates(root)
   const includeAll = includes.length === 0 || includes.includes("all")
   const wanted = new Set(includeAll ? [...selectablePackageArtifacts, ...selectablePackageSettings] : includes)
-  const unknown = [...wanted, ...excludes].filter((item) => item !== "all" && !selectablePackageArtifacts.includes(item as any) && !selectablePackageSettings.includes(item as any))
+  const unknown = [...wanted, ...excludes].filter(
+    (item) =>
+      item !== "all" &&
+      !selectablePackageArtifacts.includes(item as any) &&
+      !selectablePackageSettings.includes(item as any),
+  )
   if (unknown.length) throw new Error(`Unknown package include/exclude target: ${unknown.join(", ")}`)
 
   const selection: Record<string, unknown> = {}
@@ -1604,7 +2216,9 @@ async function packages(args: string[]) {
     console.log(JSON.stringify(await runtimeRegistryRemove(args[1], root), null, 2))
     return
   }
-  throw new Error("Usage: mend-control-plane marketplace <status|list|create [--id id] [--title name] [--description text] [--include all|skills,modes,tools,pages,widgets,...] [--exclude models,budget,...] [--version x.y.z]|update ...|delete-local|install <pack-id> [source-id]|install-source <source-id>|enable <id>|disable <id>|disable-all|remove <id>|search [query] [source-id]|show <pack-id> [source-id]|sources|add-source ...|remove-source <source-id>>")
+  throw new Error(
+    "Usage: mend-control-plane marketplace <status|list|create [--id id] [--title name] [--description text] [--include all|skills,modes,tools,pages,widgets,...] [--exclude models,budget,...] [--version x.y.z]|update ...|delete-local|install <pack-id> [source-id]|install-source <source-id>|enable <id>|disable <id>|disable-all|remove <id>|search [query] [source-id]|show <pack-id> [source-id]|sources|add-source ...|remove-source <source-id>>",
+  )
 }
 
 function parsePermissionMode(value: string | null): PermissionMode {
@@ -1629,7 +2243,9 @@ async function permissions(args: string[]) {
     console.log(JSON.stringify(await writePermissionsConfig({ reviewerRole }), null, 2))
     return
   }
-  throw new Error("Usage: mend-control-plane permissions <status|set-default approval|smart|full_access|set-reviewer-role <role>>")
+  throw new Error(
+    "Usage: mend-control-plane permissions <status|set-default approval|smart|full_access|set-reviewer-role <role>>",
+  )
 }
 
 async function ai(args: string[]) {
@@ -1674,7 +2290,9 @@ async function system(args: string[]) {
       process.exitCode = 1
       return
     }
-    console.log("ok: MendCode owned-runtime boundary is valid, donor identity guard is active, and donor reference paths are untouched")
+    console.log(
+      "ok: MendCode owned-runtime boundary is valid, donor identity guard is active, and donor reference paths are untouched",
+    )
     return
   }
   if (sub === "toolchain") {
@@ -1701,7 +2319,9 @@ async function system(args: string[]) {
     console.log(JSON.stringify(await upstreamInspect(args[1], root), null, 2))
     return
   }
-  throw new Error("Usage: mend-control-plane system <status|doctor|check|toolchain|config-paths|adapter-status|upstream-status|upstream-inspect>")
+  throw new Error(
+    "Usage: mend-control-plane system <status|doctor|check|toolchain|config-paths|adapter-status|upstream-status|upstream-inspect>",
+  )
 }
 
 async function project(args: string[]) {
@@ -1762,7 +2382,8 @@ async function project(args: string[]) {
   }
   if (sub === "package-set") {
     const value = (name: string) => optionValue(args, name)
-    const result = await packageMetadataSet({
+    const result = await packageMetadataSet(
+      {
       id: value("--id"),
       title: value("--title"),
       description: value("--description"),
@@ -1773,11 +2394,15 @@ async function project(args: string[]) {
       sourceURL: value("--source-url"),
       compatMendcode: value("--compat-mendcode"),
       compatRuntimePack: value("--compat-runtime-pack"),
-    }, root)
+      },
+      root,
+    )
     console.log(JSON.stringify(result, null, 2))
     return
   }
-  throw new Error("Usage: mend-control-plane project <init|sync|config-show|context-status|context-refresh|context-show|focus-status|focus-list|focus-show|focus-use|upstream-baseline|package-show|package-set>")
+  throw new Error(
+    "Usage: mend-control-plane project <init|sync|config-show|context-status|context-refresh|context-show|focus-status|focus-list|focus-show|focus-use|upstream-baseline|package-show|package-set>",
+  )
 }
 
 async function main() {
@@ -1824,7 +2449,9 @@ async function main() {
     console.log(await integrationStatus("tsm"))
     return
   }
-  throw new Error("Usage: mend-control-plane <status|runtime|runtime-config|bench|tui|prompt|models|budget|providers|mcp|memory|permissions|auth|setup|marketplace|packages|loops|ai|export|system|project|worktree|mflow|tsm|mflow-status|tsm-status>")
+  throw new Error(
+    "Usage: mend-control-plane <status|runtime|runtime-config|bench|tui|prompt|models|budget|providers|mcp|memory|permissions|auth|setup|marketplace|packages|loops|ai|export|system|project|worktree|mflow|tsm|mflow-status|tsm-status>",
+  )
 }
 
 main().catch((error) => {

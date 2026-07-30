@@ -18,7 +18,6 @@ export type TimelineDiffWrapMode = "word" | "none"
 
 const MAX_RENDER_CODE_CHARS = 2_000_000
 const MAX_RENDER_CODE_ROWS = 20_000
-const LEGACY_CODE_PREVIEW_CHARS = 2 * 1024
 const CODE_PREVIEW_MARKER = " preview truncated:"
 
 function TimelineDiffRows(props: {
@@ -28,7 +27,7 @@ function TimelineDiffRows(props: {
 }) {
   const { theme } = useTheme()
   const lineNumber = (row: TimelineDiffRow) => {
-    const value = row.kind === "removed" ? row.oldLine : row.newLine ?? row.oldLine
+    const value = row.kind === "removed" ? row.oldLine : (row.newLine ?? row.oldLine)
     return value === undefined ? "" : String(value)
   }
   const bg = (kind: TimelineDiffRowKind) => {
@@ -185,11 +184,7 @@ export function TimelineCode(props: {
       capped,
     }
   })
-  const previewTruncated = createMemo(
-    () =>
-      fullContent() === undefined &&
-      (props.content.includes(CODE_PREVIEW_MARKER) || props.content.length >= LEGACY_CODE_PREVIEW_CHARS),
-  )
+  const previewTruncated = createMemo(() => fullContent() === undefined && props.content.includes(CODE_PREVIEW_MARKER))
   const needsMore = createMemo(() => fullContent() === undefined && (previewTruncated() || rendered().capped))
   const showMoreLabel = createMemo(() => {
     if (loading()) return "Loading full file..."
@@ -240,7 +235,9 @@ export function TimelineCode(props: {
       {code()}
       <Show when={needsMore() || rendered().capped || loadError()}>
         <text
-          fg={loadError() ? theme.error : props.loadFull && fullContent() === undefined ? theme.primary : theme.textMuted}
+          fg={
+            loadError() ? theme.error : props.loadFull && fullContent() === undefined ? theme.primary : theme.textMuted
+          }
           wrapMode="none"
           onMouseUp={props.loadFull && fullContent() === undefined ? handleShowMore : undefined}
         >

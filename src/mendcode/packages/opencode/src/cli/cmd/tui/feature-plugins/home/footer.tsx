@@ -69,7 +69,7 @@ function MendFooterWidgets(props: { api: TuiPluginApi }) {
   const model = createMemo(() => local.model.current()?.modelID || null)
   const valueFor = (item: { id: string; value?: string }) => {
     if (item.id === "models") return model() ? `${provider()}/${model()}` : provider()
-    if (item.id === "prompt-mode") return mend.promptMode
+    if (item.id === "prompt-mode") return mend.promptModeLabel
     return item.value || "configured"
   }
   const widgets = createMemo(() =>
@@ -83,8 +83,7 @@ function MendFooterWidgets(props: { api: TuiPluginApi }) {
     <For each={widgets()}>
       {(item) => (
         <text fg={theme().textMuted}>
-          <span style={{ fg: mend.profile.theme.tokens.accent }}>{item.label || item.id}</span>{" "}
-          {valueFor(item)}
+          <span style={{ fg: mend.profile.theme.tokens.accent }}>{item.label || item.id}</span> {valueFor(item)}
         </text>
       )}
     </For>

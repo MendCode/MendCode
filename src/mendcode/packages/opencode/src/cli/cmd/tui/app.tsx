@@ -119,7 +119,13 @@ import {
   type RuntimePackSelection,
 } from "@/mend/runtime/pack"
 import { packageMetadata, packageMetadataSet, syncProject } from "@/mend/config/project"
-import { cyclePromptMode, writePromptMode, type MendPromptMode } from "@/mend/prompt/mode"
+import {
+  availablePromptModes,
+  cyclePromptMode,
+  promptModeLabel,
+  writePromptMode,
+  type MendPromptMode,
+} from "@/mend/prompt/mode"
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import {
   DEFAULT_MEND_TUI_CUSTOMIZATION,
@@ -1072,12 +1078,14 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       .then(([state, readiness]) => {
         if (isSetupComplete(state)) return
         if (readiness.aiReady) return
-        if (shouldShowFirstRunIntro({
+        if (
+          shouldShowFirstRunIntro({
           interactive: true,
           setupComplete: isSetupComplete(state),
           dismissed: Boolean(state.dismissedAt),
           seen: kv.get(FIRST_RUN_INTRO_SEEN_KEY, false) === true,
-        })) {
+          })
+        ) {
           dialog.clear()
           setFirstRunIntroRun((value) => value + 1)
           setFirstRunIntroVisible(true)
@@ -1451,8 +1459,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
   }
   const configureAndActivateMflowFromTui = async () => {
     const current = (await mflowControlStatus(mend.root)).config
-    const currentIsLegacyPublic =
-      current.relayMode === "legacy-public" || isLegacyPublicMflowRelay(current.signaling)
+    const currentIsLegacyPublic = current.relayMode === "legacy-public" || isLegacyPublicMflowRelay(current.signaling)
     const showLocalRelayPicker = async (): Promise<string | null> => {
       const scan = await scanMflowRelays()
       return new Promise((resolve) => {
@@ -1770,27 +1777,32 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     toast.show({ variant: "success", message, duration: 4000 })
     await showMemoryManager(tab)
   }
-  const showPromptModes = () => {
-    const modes: Array<{ mode: MendPromptMode; title: string; description: string }> = [
-      { mode: "minimal", title: "Minimal", description: "Small MendCode boundary only." },
-      { mode: "focus", title: "Focus", description: "Provider-aware harness behavior." },
-      { mode: "full", title: "Full", description: "Focus plus MendCode runtime context." },
-    ]
+  const showPromptModes = async () => {
+    const available = await availablePromptModes(mend.root)
+    const details: Record<MendPromptMode, { title: string; description: string }> = {
+      minimal: { title: "Minimal", description: "Small MendCode boundary only." },
+      focus: { title: "Focus", description: "Provider-aware harness behavior." },
+      full: { title: "Full", description: "Focus plus MendCode runtime context." },
+      custom: {
+        title: mend.customPromptName || "Project prompt",
+        description: "Project-defined instructions from .mendcode/prompts/custom.md.",
+      },
+    }
     dialog.replace(() => (
       <DialogSelect
         title="MendCode Prompt Context"
         current={mend.promptMode as MendPromptMode}
-        options={modes.map((item) => ({
-          title: item.title,
-          value: item.mode,
-          description: item.description,
+        options={available.map((mode) => ({
+          title: details[mode].title,
+          value: mode,
+          description: details[mode].description,
           category: "Prompt Context",
           onSelect: async () => {
-            const result = await writePromptMode(item.mode, mend.root)
+            const result = await writePromptMode(mode, mend.root)
             await mend.reload()
             toast.show({
               variant: "info",
-              message: `Prompt mode is now ${result.mode}.`,
+              message: `Prompt context is now ${promptModeLabel(result)}.`,
               duration: 4000,
             })
             dialog.clear()
@@ -4255,7 +4267,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       onSelect: async () => {
         const result = await cyclePromptMode(mend.root)
         await mend.reload()
-        toast.show({ variant: "info", message: `Prompt mode is now ${result.mode}.`, duration: 4000 })
+        toast.show({ variant: "info", message: `Prompt context is now ${promptModeLabel(result)}.`, duration: 4000 })
       },
     },
     {

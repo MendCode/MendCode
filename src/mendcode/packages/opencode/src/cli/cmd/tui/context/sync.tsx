@@ -43,7 +43,12 @@ import {
   tuiFastBootEnabled,
 } from "../util/fast-boot"
 import { pickTuiSessionCacheEvictions, TUI_SESSION_CACHE_LIMIT } from "../util/session-cache"
-import { compareSessionMessages, isSessionMessageAfter, isSessionMessageBefore, sortSessionMessages } from "../util/session-message-order"
+import {
+  compareSessionMessages,
+  isSessionMessageAfter,
+  isSessionMessageBefore,
+  sortSessionMessages,
+} from "../util/session-message-order"
 
 type ShellOutputEvent = {
   type: "session.next.shell.output"
@@ -94,7 +99,13 @@ function previewDiff(input: string) {
   return `${input.slice(0, head)}${marker}${input.slice(input.length - (budget - head))}`
 }
 
-function previewUnknown(input: unknown, maxChars: number, label: string, depth = 0, preserveCurrentArray = false): unknown {
+function previewUnknown(
+  input: unknown,
+  maxChars: number,
+  label: string,
+  depth = 0,
+  preserveCurrentArray = false,
+): unknown {
   if (typeof input === "string") return previewString(input, maxChars, label)
   if (!input || typeof input !== "object") return input
   if (depth >= 4) return "[nested value omitted]"
@@ -214,10 +225,7 @@ function preserveLivePart(current: Part, incoming: Part) {
 function trimStoredParts(parts: Part[]) {
   if (parts.length <= TUI_SESSION_MESSAGE_PART_STORE_LIMIT) return parts
   const head = Math.min(32, Math.floor(TUI_SESSION_MESSAGE_PART_STORE_LIMIT / 4))
-  return [
-    ...parts.slice(0, head),
-    ...parts.slice(parts.length - (TUI_SESSION_MESSAGE_PART_STORE_LIMIT - head)),
-  ]
+  return [...parts.slice(0, head), ...parts.slice(parts.length - (TUI_SESSION_MESSAGE_PART_STORE_LIMIT - head))]
 }
 
 function mergeFetchedParts(current: Part[] | undefined, incoming: Part[]) {
@@ -1527,11 +1535,11 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             setStore("part", event.properties.part.messageID, result.index, reconcile(next))
             break
           }
-          setStore("part", event.properties.part.messageID, reconcile(trimStoredParts([
-            ...parts.slice(0, result.index),
-            incomingPart,
-            ...parts.slice(result.index),
-          ])))
+          setStore(
+            "part",
+            event.properties.part.messageID,
+            reconcile(trimStoredParts([...parts.slice(0, result.index), incomingPart, ...parts.slice(result.index)])),
+          )
           break
         }
 
@@ -1914,7 +1922,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 olderCursor: messages.cursor,
                 hasMoreOlder: messages.items.length > 0 && advancedOlderCursor,
                 newerCursor: newest ? messageCursor(newest) : page.newerCursor,
-                hasMoreNewer: page.hasMoreNewer || merged.removed.some((message) => newest && isSessionMessageAfter(message, newest)),
+                hasMoreNewer:
+                  page.hasMoreNewer ||
+                  merged.removed.some((message) => newest && isSessionMessageAfter(message, newest)),
                 loadingOlder: page.loadingOlder,
                 loadingNewer: page.loadingNewer,
               })
@@ -1952,7 +1962,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               const advancedNewerCursor = Boolean(messages.cursor && messages.cursor !== after)
               sessionMessagePaging.set(sessionID, {
                 olderCursor: oldest ? messageCursor(oldest) : page.olderCursor,
-                hasMoreOlder: page.hasMoreOlder || merged.removed.some((message) => oldest && isSessionMessageBefore(message, oldest)),
+                hasMoreOlder:
+                  page.hasMoreOlder ||
+                  merged.removed.some((message) => oldest && isSessionMessageBefore(message, oldest)),
 
                 newerCursor: latest ? messageCursor(latest) : messages.cursor,
                 hasMoreNewer: messages.items.length > 0 && advancedNewerCursor,
@@ -2044,7 +2056,12 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     }
 
     const unsubscribeConnection = sdk.event.on("event", (event) => {
-      if (event.payload.type !== "server.connected" || !sdk.connection.recoveringSince) return
+      if (event.payload.type !== "server.connected") return
+      // A transport can reconnect without a reliable connection-state edge
+      // (for example a worker-backed event source after system sleep). Once
+      // the initial bootstrap completed, every connected handshake is safe to
+      // use as a reconciliation point for missed prompts and session events.
+      if (!sdk.connection.recoveringSince && store.status !== "complete") return
       const sessionID = activeSessionID
       void bootstrap({ fatal: false })
         .then(() => (sessionID ? result.session.sync(sessionID, { force: true }) : undefined))

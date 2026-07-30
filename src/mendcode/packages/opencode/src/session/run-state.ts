@@ -97,6 +97,7 @@ export const layer = Layer.effect(
         yield* status.set(sessionID, { type: "idle" })
         return
       }
+      if (existing.state._tag === "RunningThenRun") yield* existing.cancelPending(() => true)
       yield* existing.cancel
     })
 

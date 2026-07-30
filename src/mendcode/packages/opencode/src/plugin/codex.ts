@@ -50,17 +50,13 @@ const CODEX_CHATGPT_FAST_MODE_MODELS = new Set([
   "gpt-5.6-luna",
 ])
 
-const CODEX_CHATGPT_PRO_MODE_MODELS = new Set([
-  "gpt-5.6",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-])
+const CODEX_CHATGPT_PRO_MODE_MODELS = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
 
 export function normalizeCodexChatGPTModel(modelID: string) {
   const fastBase = modelID.endsWith("-fast") ? modelID.slice(0, -"-fast".length) : undefined
   const proBase = modelID.endsWith("-pro") ? modelID.slice(0, -"-pro".length) : undefined
-  const mode = fastBase && CODEX_CHATGPT_FAST_MODE_MODELS.has(fastBase)
+  const mode =
+    fastBase && CODEX_CHATGPT_FAST_MODE_MODELS.has(fastBase)
     ? "fast"
     : proBase && CODEX_CHATGPT_PRO_MODE_MODELS.has(proBase)
       ? "pro"
@@ -104,6 +100,7 @@ function prepareResponsesLiteRequest(input: {
   body: BodyInit | null | undefined
   headers: Headers
   sessionIDs: Map<string, string>
+  sessionPromptFingerprints: Map<string, string>
 }) {
   const body = normalizeCodexChatGPTRequestBody(input.body)
   if (typeof body !== "string") return body
@@ -123,6 +120,13 @@ function prepareResponsesLiteRequest(input: {
   }
 
   const sourceSessionID = input.headers.get("session-id") ?? input.headers.get("session_id")
+  if (sourceSessionID && typeof parsed.instructions === "string") {
+    const fingerprint = Bun.hash(parsed.instructions).toString()
+    if (input.sessionPromptFingerprints.get(sourceSessionID) !== fingerprint) {
+      input.sessionIDs.delete(sourceSessionID)
+      input.sessionPromptFingerprints.set(sourceSessionID, fingerprint)
+    }
+  }
   const sessionID = (sourceSessionID ? input.sessionIDs.get(sourceSessionID) : undefined) ?? Bun.randomUUIDv7()
   if (sourceSessionID) input.sessionIDs.set(sourceSessionID, sessionID)
   parsed.input = [
@@ -162,16 +166,20 @@ export function prepareCodexChatGPTOAuthRequest(input: {
   body: BodyInit | null | undefined
   headers: Headers
   sessionIDs?: Map<string, string>
+  sessionPromptFingerprints?: Map<string, string>
   responsesLite?: boolean
 }) {
   input.headers.set("originator", CODEX_ORIGINATOR)
   input.headers.set("User-Agent", CODEX_USER_AGENT)
   input.headers.set("Origin", "https://chatgpt.com")
   if (input.responsesLite === false) return normalizeCodexChatGPTRequestBody(input.body)
+  const sessionIDs = input.sessionIDs ?? new Map<string, string>()
+  const sessionPromptFingerprints = input.sessionPromptFingerprints ?? new Map<string, string>()
   return prepareResponsesLiteRequest({
     body: input.body,
     headers: input.headers,
-    sessionIDs: input.sessionIDs ?? new Map(),
+    sessionIDs,
+    sessionPromptFingerprints,
   })
 }
 
@@ -546,10 +554,12 @@ function waitForOAuthCallback(pkce: PkceCodes, state: string): Promise<TokenResp
 export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPluginOptions = {}): Promise<Hooks> {
   const codexApiEndpoint = options.codexApiEndpoint ?? CODEX_API_ENDPOINT
   const codexSessionIDs = new Map<string, string>()
+  const codexSessionPromptFingerprints = new Map<string, string>()
   return {
     async event(input) {
       if (input.event.type !== "session.deleted") return
       codexSessionIDs.delete(input.event.properties.info.id)
+      codexSessionPromptFingerprints.delete(input.event.properties.info.id)
     },
     provider: {
       id: "openai",
@@ -642,6 +652,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                   body: requestBody,
                   headers,
                   sessionIDs: codexSessionIDs,
+                  sessionPromptFingerprints: codexSessionPromptFingerprints,
                   responsesLite: parsed.pathname.includes("/v1/responses"),
                 })
               } catch (error) {
