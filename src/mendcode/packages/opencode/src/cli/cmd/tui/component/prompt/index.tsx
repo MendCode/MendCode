@@ -1,4 +1,12 @@
-import { BoxRenderable, RGBA, TextareaRenderable, MouseEvent, PasteEvent, decodePasteBytes, type ParsedKey } from "@opentui/core"
+import {
+  BoxRenderable,
+  RGBA,
+  TextareaRenderable,
+  MouseEvent,
+  PasteEvent,
+  decodePasteBytes,
+  type ParsedKey,
+} from "@opentui/core"
 import {
   createEffect,
   createMemo,
@@ -189,18 +197,22 @@ export function optimisticUserParts(input: {
   messageID: string
   parts: OptimisticPromptPart[]
 }): Part[] {
-  return input.parts.map((part) => ({
+  return input.parts.map(
+    (part) =>
+      ({
     ...part,
     sessionID: input.sessionID,
     messageID: input.messageID,
-  }) as Part)
+      }) as Part,
+  )
 }
 
 export function mergeOptimisticUserParts(input: { current?: Part[]; optimistic: Part[] }) {
   if (!input.current?.length) return input.optimistic
-  return [...input.current, ...input.optimistic.filter((part) => !input.current?.some((current) => current.id === part.id))].toSorted((a, b) =>
-    a.id.localeCompare(b.id),
-  )
+  return [
+    ...input.current,
+    ...input.optimistic.filter((part) => !input.current?.some((current) => current.id === part.id)),
+  ].toSorted((a, b) => a.id.localeCompare(b.id))
 }
 
 export function supplementalSlashPromptParts<T extends { type: string; synthetic?: boolean }>(parts: readonly T[]) {
@@ -320,7 +332,12 @@ export function promptDeliveryRetryDelay(_attempt: number) {
 export function isRetryablePromptDelivery(input: { error?: unknown; response?: Response }) {
   if (!input.error) return false
   if (!input.response) return true
-  return input.response.status === 408 || input.response.status === 425 || input.response.status === 429 || input.response.status >= 500
+  return (
+    input.response.status === 408 ||
+    input.response.status === 425 ||
+    input.response.status === 429 ||
+    input.response.status >= 500
+  )
 }
 
 export function promptDeliveryErrorMessage(error: unknown) {
@@ -378,7 +395,8 @@ function acceptPendingPromptDelivery(request: PromptAsyncInput) {
 function settlePendingPromptDelivery(request: PromptAsyncInput) {
   const key = pendingPromptDeliveryKey(request)
   if (!pendingPromptDeliveries.delete(key)) return
-  if (latestPromptDeliveryKeyBySession.get(request.sessionID) === key) latestPromptDeliveryKeyBySession.delete(request.sessionID)
+  if (latestPromptDeliveryKeyBySession.get(request.sessionID) === key)
+    latestPromptDeliveryKeyBySession.delete(request.sessionID)
   notifyPendingPromptDeliveryListeners()
 }
 
@@ -401,7 +419,10 @@ function pendingPromptDeliveriesForSession(sessionID: string) {
 }
 
 export function pendingPromptDeliveryIsActive(sessionID: string) {
-  return (pendingPromptDeliveryInFlightBySession.get(sessionID)?.size ?? 0) > 0 || pendingPromptDeliveriesForSession(sessionID).length > 0
+  return (
+    (pendingPromptDeliveryInFlightBySession.get(sessionID)?.size ?? 0) > 0 ||
+    pendingPromptDeliveriesForSession(sessionID).length > 0
+  )
 }
 
 function beginPendingPromptDelivery(request: PromptAsyncInput) {
@@ -421,12 +442,12 @@ function endPendingPromptDelivery(request: PromptAsyncInput) {
 
 function cancelPendingPromptDeliveriesForInterrupt(sessionID: string, activeAssistantParentID?: string) {
   const keys = new Set<string>()
-  if (activeAssistantParentID) keys.add(`${sessionID}:${activeAssistantParentID}`)
-  else {
     for (const key of pendingPromptDeliveryInFlightBySession.get(sessionID) ?? []) keys.add(key)
+  for (const delivery of pendingPromptDeliveriesForSession(sessionID))
+    keys.add(pendingPromptDeliveryKey(delivery.request))
     const latestKey = latestPromptDeliveryKeyBySession.get(sessionID)
     if (latestKey) keys.add(latestKey)
-  }
+  if (activeAssistantParentID) keys.add(`${sessionID}:${activeAssistantParentID}`)
   for (const key of keys) cancelPendingPromptDeliveryKey(sessionID, key)
 }
 
@@ -485,7 +506,11 @@ export function shouldInterruptImmediately(input: {
   return input.statusType !== "idle" || Boolean(input.hasActiveWorkingAssistant || input.hasPendingPromptDelivery)
 }
 
-export function shouldAcceptPromptInterruptFocus(input: { inputFocused: boolean; currentFocusedRenderable?: unknown; promptInput?: unknown }) {
+export function shouldAcceptPromptInterruptFocus(input: {
+  inputFocused: boolean
+  currentFocusedRenderable?: unknown
+  promptInput?: unknown
+}) {
   return input.inputFocused && input.currentFocusedRenderable === input.promptInput
 }
 
@@ -540,13 +565,13 @@ export function promptHistoryMatchesCurrent(input: {
   if (!input.historyPrompt) return false
   if (input.currentPrompt.input !== input.historyPrompt.input) return false
   if (input.currentMode !== (input.historyPrompt.mode ?? "normal")) return false
-  return JSON.stringify(input.currentPrompt.parts.map(stablePromptPartForHistory)) === JSON.stringify(input.historyPrompt.parts.map(stablePromptPartForHistory))
+  return (
+    JSON.stringify(input.currentPrompt.parts.map(stablePromptPartForHistory)) ===
+    JSON.stringify(input.historyPrompt.parts.map(stablePromptPartForHistory))
+  )
 }
 
-export function shouldPreferMessagePromptHistory(input: {
-  direction?: 1 | -1
-  currentPromptMatchesHistory: boolean
-}) {
+export function shouldPreferMessagePromptHistory(input: { direction?: 1 | -1; currentPromptMatchesHistory: boolean }) {
   if (input.direction === undefined) return false
   return input.currentPromptMatchesHistory
 }
@@ -598,12 +623,7 @@ export function shouldHandlePromptCursorArrow(input: Pick<ParsedKey, "name" | "c
   return input.name === "left" || input.name === "right"
 }
 
-export function promptDraftHistoryAction(input: {
-  undo: boolean
-  redo: boolean
-  canUndo: boolean
-  canRedo: boolean
-}) {
+export function promptDraftHistoryAction(input: { undo: boolean; redo: boolean; canUndo: boolean; canRedo: boolean }) {
   if (input.undo && input.canUndo) return "undo" as const
   if (input.redo && input.canRedo) return "redo" as const
 
@@ -646,9 +666,8 @@ export function promptCursorOffsetFromMouse(input: { visualOffset: number; text:
 }
 
 function removeVisibleResolvingText(value: string) {
-  return value.replace(
-    /(?:^|\s)(?:[^\w\s]\s*)*Resolving\s+\[\d+\/\d+\]\s*/giu,
-    (match) => (match.startsWith(" ") ? " " : ""),
+  return value.replace(/(?:^|\s)(?:[^\w\s]\s*)*Resolving\s+\[\d+\/\d+\]\s*/giu, (match) =>
+    match.startsWith(" ") ? " " : "",
   )
 }
 
@@ -664,6 +683,8 @@ export function Prompt(props: PromptProps) {
   let pendingPromptRetryTimer: ReturnType<typeof setTimeout> | undefined
   let pendingPromptRetryInFlight = false
   let promptDisposed = false
+  let interruptRequest: Promise<unknown> | undefined
+  let interruptResetTimer: ReturnType<typeof setTimeout> | undefined
   let autocomplete: AutocompleteRef
   let lastPastedContentClick: { time: number; offset: number } | undefined
 
@@ -719,7 +740,11 @@ export function Prompt(props: PromptProps) {
       () => setMessageHistoryIndex(0),
     ),
   )
-  function applyPromptHistoryItem(item: PromptInfo, direction: 1 | -1, event: ParsedKey & { preventDefault: () => void }) {
+  function applyPromptHistoryItem(
+    item: PromptInfo,
+    direction: 1 | -1,
+    event: ParsedKey & { preventDefault: () => void },
+  ) {
     const cleanInput = cleanPromptInputText(item.input)
     // Keep the draft that was replaced by ↑/↓ recoverable through the
     // editor's temporary undo history.
@@ -788,21 +813,25 @@ export function Prompt(props: PromptProps) {
           if (started) setWorkingStartedAt(started)
           return
         }
-        if (!shouldClearWorkingStartedAt({
+        if (
+          !shouldClearWorkingStartedAt({
           statusType,
           hasActiveWorkingAssistant: hasActiveAssistant,
           permissionPending,
-        })) {
+          })
+        ) {
           return
         }
         setWorkingStartedAt(undefined)
         if (!sessionID) return
         clearWorkingStartTimer = setTimeout(() => {
-          if (shouldClearWorkingStartedAt({
+          if (
+            shouldClearWorkingStartedAt({
             statusType: status().type,
             hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
             permissionPending: Boolean(props.permissionPending),
-          })) {
+            })
+          ) {
             workingStartedAtBySession.delete(sessionID)
           }
           clearWorkingStartTimer = undefined
@@ -1166,7 +1195,8 @@ export function Prompt(props: PromptProps) {
     if (!last) return
 
     const tokens = assistantTokenTotals(last).context
-    const model = selectedModelInfo ?? sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
+    const model =
+      selectedModelInfo ?? sync.data.provider.find((item) => item.id === last.providerID)?.models[last.modelID]
     const contextLimit = usableContextLimit(model)
     const cost = msg.reduce((sum, item) => sum + (item.role === "assistant" ? item.cost : 0), 0)
     return formatPromptUsage(tokens, contextLimit, cost)
@@ -1197,7 +1227,12 @@ export function Prompt(props: PromptProps) {
     const experimental = sync.data.config.experimental as
       | (typeof sync.data.config.experimental & { paste_summary_min_chars?: number })
       | undefined
-    return Math.max(1, experimental?.paste_summary_min_chars ?? mend.profile.presentation.input.pasteSummaryMinChars ?? DEFAULT_PASTE_SUMMARY_MIN_CHARS)
+    return Math.max(
+      1,
+      experimental?.paste_summary_min_chars ??
+        mend.profile.presentation.input.pasteSummaryMinChars ??
+        DEFAULT_PASTE_SUMMARY_MIN_CHARS,
+    )
   })
   const [store, setStore] = createStore<{
     prompt: PromptInfo
@@ -1342,7 +1377,14 @@ export function Prompt(props: PromptProps) {
               hasPendingPromptDelivery: Boolean(props.sessionID && pendingPromptDeliveryIsActive(props.sessionID)),
             })
             if (autocomplete?.visible && !immediateInterrupt) return
-            if (!shouldAcceptPromptInterruptFocus({ inputFocused: input.focused, currentFocusedRenderable: renderer.currentFocusedRenderable, promptInput: input })) return
+          if (
+            !shouldAcceptPromptInterruptFocus({
+              inputFocused: input.focused,
+              currentFocusedRenderable: renderer.currentFocusedRenderable,
+              promptInput: input,
+            })
+          )
+            return
             // TODO: this should be its own command
             if (store.mode === "shell") {
               setStore("mode", "normal")
@@ -1351,26 +1393,26 @@ export function Prompt(props: PromptProps) {
             if (!props.sessionID) return
             if (immediateInterrupt) {
               cancelPendingPromptDeliveriesForInterrupt(props.sessionID, findActiveWorkingAssistant()?.parentID)
-              void sdk.client.session.abort({
-                sessionID: props.sessionID,
-              })
+            abortSession(props.sessionID)
               setStore("interrupt", 0)
               dialog.clear()
               return
             }
 
-            setStore("interrupt", store.interrupt + 1)
-
-            setTimeout(() => {
+            const nextInterrupt = store.interrupt + 1
+            setStore("interrupt", nextInterrupt)
+            if (interruptResetTimer) clearTimeout(interruptResetTimer)
+            interruptResetTimer = setTimeout(() => {
               setStore("interrupt", 0)
+              interruptResetTimer = undefined
             }, 5000)
 
-            if (store.interrupt >= 2) {
+            if (nextInterrupt >= 2) {
               cancelPendingPromptDeliveriesForInterrupt(props.sessionID, findActiveWorkingAssistant()?.parentID)
-              void sdk.client.session.abort({
-                sessionID: props.sessionID,
-              })
+              abortSession(props.sessionID)
               setStore("interrupt", 0)
+              clearTimeout(interruptResetTimer)
+              interruptResetTimer = undefined
             }
             dialog.clear()
           },
@@ -1557,6 +1599,7 @@ export function Prompt(props: PromptProps) {
     promptDisposed = true
     if (input.focused) input.blur()
     if (pendingPromptRetryTimer) clearTimeout(pendingPromptRetryTimer)
+    if (interruptResetTimer) clearTimeout(interruptResetTimer)
     if (store.prompt.input) {
       const prompt = unwrap(store.prompt)
       const cleanInput = cleanPromptInputText(prompt.input)
@@ -1796,7 +1839,11 @@ export function Prompt(props: PromptProps) {
         )
       }
 
-      sync.set("part", input.messageID, mergeOptimisticUserParts({ current: sync.data.part[input.messageID], optimistic: parts }))
+      sync.set(
+        "part",
+        input.messageID,
+        mergeOptimisticUserParts({ current: sync.data.part[input.messageID], optimistic: parts }),
+      )
     })
   }
 
@@ -1844,6 +1891,16 @@ export function Prompt(props: PromptProps) {
     input.gotoBufferEnd()
   }
 
+  function abortSession(sessionID: string) {
+    if (interruptRequest) return
+    interruptRequest = sdk.client.session
+      .abort({ sessionID })
+      .catch(() => undefined)
+      .finally(() => {
+        interruptRequest = undefined
+      })
+  }
+
   function schedulePendingPromptRetry() {
     if (promptDisposed || pendingPromptRetryTimer || !props.sessionID) return
     const nextAttemptAt = pendingPromptDeliveriesForSession(props.sessionID)
@@ -1851,10 +1908,13 @@ export function Prompt(props: PromptProps) {
       .map((delivery) => delivery.nextAttemptAt)
       .sort((a, b) => a - b)[0]
     if (nextAttemptAt === undefined) return
-    pendingPromptRetryTimer = setTimeout(() => {
+    pendingPromptRetryTimer = setTimeout(
+      () => {
       pendingPromptRetryTimer = undefined
       void retryPendingPromptDeliveries()
-    }, Math.max(0, nextAttemptAt - Date.now()))
+      },
+      Math.max(0, nextAttemptAt - Date.now()),
+    )
   }
 
   function wakePendingPromptRetry(forceAccepted = false) {
@@ -1906,7 +1966,8 @@ export function Prompt(props: PromptProps) {
       if (input.notify) {
         toast.show({
           title: "Prompt queued",
-          message: "Connection lost. The prompt remains in this session and will be sent automatically after reconnecting.",
+          message:
+            "Connection lost. The prompt remains in this session and will be sent automatically after reconnecting.",
           variant: "warning",
           duration: 5000,
         })
@@ -2029,7 +2090,12 @@ export function Prompt(props: PromptProps) {
     for (const delivery of pendingPromptDeliveriesForSession(sessionID)) {
       const messageID = delivery.request.messageID
       if (!messageID) continue
-      if (messages.some((message) => message.role === "assistant" && message.parentID === messageID && message.time.completed !== undefined)) {
+      if (
+        messages.some(
+          (message) =>
+            message.role === "assistant" && message.parentID === messageID && message.time.completed !== undefined,
+        )
+      ) {
         settlePendingPromptDelivery(delivery.request)
       }
     }
@@ -2086,7 +2152,11 @@ export function Prompt(props: PromptProps) {
         .slashes()
         .some((item) => item.display === `/${name}` || item.aliases?.some((alias) => alias === `/${name}`))
     })
-    if (store.mode !== "shell" && uiSlashInvocation && command.triggerSlash(uiSlashInvocation.name, uiSlashInvocation.arguments)) {
+    if (
+      store.mode !== "shell" &&
+      uiSlashInvocation &&
+      command.triggerSlash(uiSlashInvocation.name, uiSlashInvocation.arguments)
+    ) {
       input.replaceText("")
       input.extmarks.clear()
       setStore("prompt", { input: "", parts: [] })
@@ -2242,9 +2312,7 @@ export function Prompt(props: PromptProps) {
     let skillInvocation: Awaited<ReturnType<typeof findSkill>>
     try {
       skillInvocation =
-        slashInvocation &&
-        !NATIVE_COMPACTION_SLASHES.has(slashInvocation.name) &&
-        !slashServerCommand
+        slashInvocation && !NATIVE_COMPACTION_SLASHES.has(slashInvocation.name) && !slashServerCommand
           ? await findSkill(slashInvocation.name)
           : undefined
     } catch (error) {
@@ -2505,11 +2573,7 @@ export function Prompt(props: PromptProps) {
       }),
     )
     // Native clipboard reads can leave the renderer without a focused target; do not steal focus from another control.
-    if (
-      dialog.stack.length === 0 &&
-      !input.isDestroyed &&
-      renderer.currentFocusedRenderable === null
-    ) {
+    if (dialog.stack.length === 0 && !input.isDestroyed && renderer.currentFocusedRenderable === null) {
       input.focus()
     }
     return
@@ -2590,7 +2654,7 @@ export function Prompt(props: PromptProps) {
     if (store.mode === "shell") return "Shell"
     const agent = activeAgent()
     if (agent?.name) return Locale.titlecase(agent.name)
-    return mend.promptMode
+    return Locale.titlecase(local.agent.current()?.name || "build")
   })
   const currentModelLabel = createMemo(() => {
     const selectedModel = selectedPromptModel()
@@ -2696,9 +2760,7 @@ export function Prompt(props: PromptProps) {
     switch (value) {
       case "mode":
         if (store.mode === "shell") return { text: "Shell", fg: theme.primary }
-        return activeAgent()
-          ? { text: Locale.titlecase(activeAgent()!.name), fg: highlight() }
-          : undefined
+        return currentAgentLabel() ? { text: currentAgentLabel(), fg: highlight() } : undefined
       case "model":
         return store.mode === "normal" && currentModelLabel()
           ? { text: currentModelLabel()!, fg: keybind.leader ? theme.textMuted : theme.text }
@@ -2792,7 +2854,7 @@ export function Prompt(props: PromptProps) {
       sessionID: props.sessionID,
       workspaceID: props.workspaceID,
       promptMode: mend.promptMode,
-      promptModeLabel: currentAgentLabel(),
+      promptModeLabel: mend.promptModeLabel,
       agentLabel: currentAgentLabel(),
       model: currentModelLabel() ?? "",
       modelLabel: currentModelLabel(),
@@ -2898,7 +2960,8 @@ export function Prompt(props: PromptProps) {
     const latestScript = (
       side === "left" ? promptStatusLeftScriptResult.latest : promptStatusRightScriptResult.latest
     ) as MendPromptStatusScriptResult | undefined
-    const currentIdentity = side === "left" ? promptStatusLeftScriptSource()?.identity : promptStatusRightScriptSource()?.identity
+    const currentIdentity =
+      side === "left" ? promptStatusLeftScriptSource()?.identity : promptStatusRightScriptSource()?.identity
     const scriptOutput = pickPromptStatusScriptOutput({
       currentIdentity,
       current: currentScript,
@@ -3010,7 +3073,9 @@ export function Prompt(props: PromptProps) {
         permissionPending: Boolean(props.permissionPending),
       }),
   )
-  const activityStatusType = createMemo(() => (workingStatusActive() && status().type === "idle" ? "busy" : status().type))
+  const activityStatusType = createMemo(() =>
+    workingStatusActive() && status().type === "idle" ? "busy" : status().type,
+  )
   const workingLiveUsage = createMemo(() => {
     const active = activeWorkingAssistant()
     if (!active) return
@@ -3062,8 +3127,7 @@ export function Prompt(props: PromptProps) {
     const type = activityStatusType()
     return resolveActivityPhase({
       status: type,
-      statusKind:
-        compactionActive()
+      statusKind: compactionActive()
           ? "compaction"
           : type === "busy" && "kind" in currentStatus && typeof currentStatus.kind === "string"
             ? currentStatus.kind
@@ -3198,7 +3262,11 @@ export function Prompt(props: PromptProps) {
           .join("  "),
     )
     const color =
-      effectiveConnectionStatus() === "failed" ? theme.error : connectionMessage || mflowMessage ? theme.warning : theme.text
+      effectiveConnectionStatus() === "failed"
+        ? theme.error
+        : connectionMessage || mflowMessage
+          ? theme.warning
+          : theme.text
     return <Spinner color={color}>{message}</Spinner>
   }
   const MascotLines = (props: { text: string; hoverText?: string; paddingTop?: number }) => (
@@ -3227,8 +3295,13 @@ export function Prompt(props: PromptProps) {
     </box>
   )
   const statusEntries = createMemo(() => listMendStatusEntries())
-  const bottomDockWidgetTitles = createMemo(() =>
-    new Set(listMendWidgets("sessionBottomDock").map((item) => item.title).filter((item): item is string => Boolean(item))),
+  const bottomDockWidgetTitles = createMemo(
+    () =>
+      new Set(
+        listMendWidgets("sessionBottomDock")
+          .map((item) => item.title)
+          .filter((item): item is string => Boolean(item)),
+      ),
   )
   const visibleStatusEntries = createMemo(() =>
     statusEntries().filter((item) => {
@@ -3661,7 +3734,9 @@ export function Prompt(props: PromptProps) {
                     } catch {}
                   }
 
-                  const portableImageTokens = isPortableImageClipboard ? parsePortableImageClipboard(pastedContent) : undefined
+                  const portableImageTokens = isPortableImageClipboard
+                    ? parsePortableImageClipboard(pastedContent)
+                    : undefined
                   if (portableImageTokens) {
                     for (const token of portableImageTokens) {
                       if (token.type === "text") {
@@ -3887,9 +3962,7 @@ export function Prompt(props: PromptProps) {
                 when={customFooter()}
                 fallback={
                   <box gap={2} flexDirection="row">
-                    <Show when={loopStatusText()}>
-                      {(label) => <text fg={theme.secondary}>{label()}</text>}
-                    </Show>
+                    <Show when={loopStatusText()}>{(label) => <text fg={theme.secondary}>{label()}</text>}</Show>
                     <For each={visibleStatusEntries()}>{(item) => <text fg={theme.textMuted}>{item.value}</text>}</For>
                     <Show when={editorContextLabelState() !== "none" ? editorFileLabelDisplay() : undefined}>
                       {(file) => (

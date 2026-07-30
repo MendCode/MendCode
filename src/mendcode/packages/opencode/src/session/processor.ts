@@ -156,16 +156,14 @@ function modelContentText(content: unknown): string {
 
 function messagePartsText(parts: MessageV2.Part[]) {
   return parts
-    .map((part) => part.type === "text" && !part.synthetic ? part.text : "")
+    .map((part) => (part.type === "text" && !part.synthetic ? part.text : ""))
     .filter(Boolean)
     .join("\n")
 }
 
 function hasPersistedToolResult(parts: MessageV2.Part[]) {
   return parts.some(
-    (part) =>
-      part.type === "tool" &&
-      (part.state.status === "completed" || part.state.status === "error"),
+    (part) => part.type === "tool" && (part.state.status === "completed" || part.state.status === "error"),
   )
 }
 
@@ -174,7 +172,14 @@ function hasToolAttempt(parts: MessageV2.Part[], basePartIDs: Set<PartID>) {
 }
 
 function estimateStreamInputTokens(input: LLM.StreamInput) {
-  const system = [input.agent.prompt ?? "", ...input.system, input.user.system ?? ""].join("\n")
+  const system = [
+    ...(input.agent.prompt ? [input.agent.prompt] : input.mendPrompt?.baseProvider || []),
+    input.mendPrompt?.focus ?? "",
+    input.mendPrompt?.policy ?? "",
+    input.mendPrompt?.memory ?? "",
+    ...input.system,
+    input.user.system ?? "",
+  ].join("\n")
   const messages = input.messages
     .map((message: any) => [message.role, modelContentText(message.content)].filter(Boolean).join("\n"))
     .join("\n")
@@ -282,7 +287,7 @@ function normalizeProviderUsage(
 
   return {
     source: "provider",
-    phase: output + reasoning > 0 ? "output" : previous?.phase ?? "input",
+    phase: output + reasoning > 0 ? "output" : (previous?.phase ?? "input"),
     input: mergedInput,
     output: mergedOutput,
     reasoning: mergedReasoning,
@@ -494,7 +499,8 @@ export const layer: Layer.Layer<
             }
           : { type: "busy" as const, message: SessionStatus.SESSION_ACTIVITY_WAITING }
 
-      const isExplicitAbort = () => aborted || (input.isManualAbort ? input.isManualAbort() : input.abort?.aborted === true)
+      const isExplicitAbort = () =>
+        aborted || (input.isManualAbort ? input.isManualAbort() : input.abort?.aborted === true)
 
       const parse = (e: unknown) =>
         MessageV2.fromError(e, {
@@ -552,7 +558,8 @@ export const layer: Layer.Layer<
           const match = yield* readToolCall(toolCallID)
           if (match?.part.tool !== "task") continue
           if (match.part.state.status !== "running" && match.part.state.status !== "pending") continue
-          const metadata = "metadata" in match.part.state && isRecord(match.part.state.metadata) ? match.part.state.metadata : {}
+          const metadata =
+            "metadata" in match.part.state && isRecord(match.part.state.metadata) ? match.part.state.metadata : {}
           if (typeof metadata.sessionId === "string") result.add(SessionID.make(metadata.sessionId))
         }
         return result
@@ -604,14 +611,12 @@ export const layer: Layer.Layer<
         return yield* hasPendingShellTool()
       })
 
-      const proposeAutomaticMemories = Effect.fn("SessionProcessor.proposeAutomaticMemories")(function* (
-        input: {
+      const proposeAutomaticMemories = Effect.fn("SessionProcessor.proposeAutomaticMemories")(function* (input: {
           user: MessageV2.User
           cwd: string
           root: string
           proposal: ProposeMemoriesFromTextInput
-        },
-      ) {
+      }) {
         const role = yield* Effect.promise(() => resolveMemoryExtractorRole(input.root))
         if (!role.ok) {
           return {
@@ -636,10 +641,12 @@ export const layer: Layer.Layer<
             cwd: input.cwd,
             root: input.root,
             retries: 2,
-            messages: [{
+            messages: [
+              {
               role: "user",
               content: memoryExtractorCandidateMessage(input.proposal, extractorContext.existing),
-            }],
+              },
+            ],
           })
           .pipe(
             Stream.filter((event): event is Extract<LLM.Event, { type: "text-delta" }> => event.type === "text-delta"),
@@ -647,7 +654,12 @@ export const layer: Layer.Layer<
             Stream.mkString,
           )
         return yield* Effect.promise(() =>
-          proposeMemoriesFromExtractorText(input.proposal, outputText, input.root, extractorContext.existingFingerprints),
+          proposeMemoriesFromExtractorText(
+            input.proposal,
+            outputText,
+            input.root,
+            extractorContext.existingFingerprints,
+          ),
         )
       })
 
@@ -1024,7 +1036,9 @@ export const layer: Layer.Layer<
               recentContext ? `<recent_context>\n${recentContext}\n</recent_context>` : "",
               memoryUserText ? `USER:\n${memoryUserText}` : "",
               ctx.assistantText.trim() ? `ASSISTANT:\n${ctx.assistantText.trim()}` : "",
-            ].filter(Boolean).join("\n\n")
+            ]
+              .filter(Boolean)
+              .join("\n\n")
             const memoryMetadata = yield* Effect.promise(async () => {
               if (ctx.assistantMessage.summary) return undefined
               if (!memoryRoot) return undefined
@@ -1037,7 +1051,8 @@ export const layer: Layer.Layer<
                 input: {
                   enabled: used.enabled,
                   use: used.use,
-                  references: used.entries?.map((entry: any) => ({
+                  references:
+                    used.entries?.map((entry: any) => ({
                     id: entry.id,
                     scope: entry.scope,
                     source: entry.source,
@@ -1087,9 +1102,7 @@ export const layer: Layer.Layer<
                     ...memoryMetadata.output,
                     queued: shouldQueueMemory,
                     skipped: ctx.usedExplicitMemoryTool,
-                    reason: ctx.usedExplicitMemoryTool
-                      ? "explicit memory tool used"
-                      : null,
+                    reason: ctx.usedExplicitMemoryTool ? "explicit memory tool used" : null,
                   },
                 }
               : undefined
@@ -1321,12 +1334,23 @@ export const layer: Layer.Layer<
                 status: "completed",
                 input: "input" in part.state ? part.state.input : {},
                 title: "title" in part.state && part.state.title ? part.state.title : `${part.tool} retained`,
-                metadata: { ...metadata, interrupted: false, status: "retained" },
+                metadata: {
+                  ...metadata,
+                  interrupted: false,
+                  connectionLost: true,
+                  resultUnknown: true,
+                  retryRecommended: true,
+                  status: "retained",
+                },
                 output: [
                   "tool_status: retained",
+                  "result_status: unknown",
+                  "connection_status: lost",
                   "",
                   "Tool execution stopped because the parent run lost its connection before collecting the result.",
-                  "This was not treated as a user cancel or tool failure.",
+                  "This was not treated as a user cancel or tool failure; the tool may have completed after the connection was lost.",
+                  "If this was a read-only or idempotent command, retry the exact same command once before choosing another approach.",
+                  "If it may have changed state, inspect the current state first and do not repeat destructive actions blindly.",
                 ].join("\n"),
                 time: { start: "time" in part.state ? part.state.time.start : end, end },
               },
@@ -1414,10 +1438,15 @@ export const layer: Layer.Layer<
             }
             yield* session.updateMessage(ctx.assistantMessage)
             const lastUser = [...streamInput.messages].reverse().find((message) => message.role === "user")
-            ctx.memoryQuery = typeof lastUser?.content === "string"
+            ctx.memoryQuery =
+              typeof lastUser?.content === "string"
               ? lastUser.content
               : Array.isArray(lastUser?.content)
-                ? (lastUser.content.find((part: any) => part?.type === "text" && typeof part.text === "string") as any)?.text ?? null
+                  ? ((
+                      lastUser.content.find(
+                        (part: any) => part?.type === "text" && typeof part.text === "string",
+                      ) as any
+                    )?.text ?? null)
                 : null
             const idleTimeoutMs = llmStreamIdleTimeoutMs()
             const stream = llm.stream(streamInput)
@@ -1501,12 +1530,16 @@ export const layer: Layer.Layer<
                       timestamp: DateTime.makeUnsafe(now),
                     })
                   }
-                  return status.set(ctx.sessionID, {
+                  return status.set(
+                    ctx.sessionID,
+                    {
                     type: "retry",
                     attempt: info.attempt,
                     message: info.message,
                     next: info.next,
-                  }, { notify })
+                    },
+                    { notify },
+                  )
                 },
               }),
             ),
@@ -1531,7 +1564,9 @@ export const layer: Layer.Layer<
         })
         const sessionID = ctx.sessionID
         const messageID = ctx.assistantMessage.id
-        yield* Effect.promise(() => writeMemorySessionDigest({
+        yield* Effect.promise(() =>
+          writeMemorySessionDigest(
+            {
           sessionID: String(sessionID),
           projectRoot: pending.memoryRoot,
           title: null,
@@ -1541,7 +1576,10 @@ export const layer: Layer.Layer<
           validations: [],
           files: [],
           evidenceRefs: [`session:${sessionID}:message:${messageID}`],
-        }, pending.memoryRoot).catch(() => null))
+            },
+            pending.memoryRoot,
+          ).catch(() => null),
+        )
         const created = yield* proposeAutomaticMemories({
           user: pending.user,
           cwd: pending.messagePath.cwd,

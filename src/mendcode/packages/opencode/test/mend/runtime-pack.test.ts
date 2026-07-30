@@ -4,14 +4,34 @@ import path from "path"
 import { Global } from "@mendcode/core/global"
 import { tmpdir } from "../fixture/fixture"
 import { ConfigPlugin } from "../../src/config/plugin"
-import { generatedConfigNeedsSync, packageMetadata, packageMetadataSet, syncProject } from "../../src/mend/config/project"
+import {
+  generatedConfigNeedsSync,
+  packageMetadata,
+  packageMetadataSet,
+  syncProject,
+} from "../../src/mend/config/project"
 import { mendMcpStatus } from "../../src/mend/config/mcp"
 import { readModelsConfig } from "../../src/mend/config/models"
 import { readPromptMode, writePromptMode } from "../../src/mend/prompt/mode"
+import { composePromptPolicy } from "../../src/mend/prompt/compose"
 import { loadMendTuiProfile } from "../../src/mend/profile"
-import { applyRuntimePack, buildLocalMendPackageManifest, buildLocalRuntimePack, deleteLocalRuntimePack, prepareGlobalRuntimePackAuthorRoot, rollbackRuntimePack, runtimePackArtifactCandidates, runtimePackPlan } from "../../src/mend/runtime/pack"
+import {
+  applyRuntimePack,
+  buildLocalMendPackageManifest,
+  buildLocalRuntimePack,
+  deleteLocalRuntimePack,
+  prepareGlobalRuntimePackAuthorRoot,
+  rollbackRuntimePack,
+  runtimePackArtifactCandidates,
+  runtimePackPlan,
+} from "../../src/mend/runtime/pack"
 import { activeMendPackageProjection, disableAllMendPackages, listMendPackages } from "../../src/mend/runtime/packages"
-import { runtimeRegistryAdd, runtimeRegistryApply, runtimeRegistryPreview, runtimeRegistryRemove } from "../../src/mend/runtime/registry"
+import {
+  runtimeRegistryAdd,
+  runtimeRegistryApply,
+  runtimeRegistryPreview,
+  runtimeRegistryRemove,
+} from "../../src/mend/runtime/registry"
 import type { RuntimeRegistryLocalState } from "../../src/mend/runtime/registry/types"
 import type { MendPackageManifest } from "../../src/mend/sdk/package"
 
@@ -54,11 +74,26 @@ describe("runtime pack", () => {
     })
     await writePromptMode("full", dir.path)
     await writeText(path.join(dir.path, ".mendcode", "commands", "release.md"), "# release\n")
-    await writeText(path.join(dir.path, ".mendcode", "agents", "reviewer.md"), "---\nmode: subagent\n---\nReview carefully.\n")
-    await writeText(path.join(dir.path, ".mendcode", "modes", "build.md"), "---\nmode: primary\n---\nBuild carefully.\n")
-    await writeText(path.join(dir.path, ".mendcode", "skills", "deploy", "SKILL.md"), "---\nname: deploy\ndescription: Deploy safely\n---\nUse deployment flow.\n")
-    await writeText(path.join(dir.path, ".mendcode", "skills", "local-only", "SKILL.md"), "---\nname: local-only\ndescription: Internal project workflow\nexport: false\n---\nUse only inside this project.\n")
-    await writeText(path.join(dir.path, ".mendcode", "skills", "package-disabled", "SKILL.md"), "---\nname: package-disabled\ndescription: Internal package workflow\npackage: false\n---\nUse only inside this project.\n")
+    await writeText(
+      path.join(dir.path, ".mendcode", "agents", "reviewer.md"),
+      "---\nmode: subagent\n---\nReview carefully.\n",
+    )
+    await writeText(
+      path.join(dir.path, ".mendcode", "modes", "build.md"),
+      "---\nmode: primary\n---\nBuild carefully.\n",
+    )
+    await writeText(
+      path.join(dir.path, ".mendcode", "skills", "deploy", "SKILL.md"),
+      "---\nname: deploy\ndescription: Deploy safely\n---\nUse deployment flow.\n",
+    )
+    await writeText(
+      path.join(dir.path, ".mendcode", "skills", "local-only", "SKILL.md"),
+      "---\nname: local-only\ndescription: Internal project workflow\nexport: false\n---\nUse only inside this project.\n",
+    )
+    await writeText(
+      path.join(dir.path, ".mendcode", "skills", "package-disabled", "SKILL.md"),
+      "---\nname: package-disabled\ndescription: Internal package workflow\npackage: false\n---\nUse only inside this project.\n",
+    )
     await writeText(path.join(dir.path, ".mendcode", "plugins", "status.ts"), "export const plugin = {}\n")
     await writeText(path.join(dir.path, ".mendcode", "tools", "memory-inspect.ts"), "export const tool = {}\n")
     await writeText(path.join(dir.path, ".mendcode", "prompts", "incident.md"), "Incident prompt template.\n")
@@ -66,7 +101,10 @@ describe("runtime pack", () => {
       localstdio: { type: "local", command: ["node", "server.js"] },
     })
     await writeText(path.join(dir.path, ".mendcode", "context", "project.md"), "Project context.\n")
-    await writeText(path.join(dir.path, ".mendcode", "pages", "memory-dashboard.tsx"), "export default function Page() { return null }\n")
+    await writeText(
+      path.join(dir.path, ".mendcode", "pages", "memory-dashboard.tsx"),
+      "export default function Page() { return null }\n",
+    )
     await writeText(path.join(dir.path, ".mendcode", "widgets", "panel.ts"), "export const panel = {}\n")
 
     const pack = await buildLocalRuntimePack(dir.path)
@@ -123,10 +161,22 @@ describe("runtime pack", () => {
     const previousHome = process.env.OPENCODE_TEST_HOME
     process.env.OPENCODE_TEST_HOME = home.path
     try {
-      await writeText(path.join(dir.path, ".mendcode", "skills", "project-skill", "SKILL.md"), "---\nname: project-skill\ndescription: Project skill\n---\n")
-      await writeText(path.join(dir.path, ".mendcode", "skills", "local-only", "SKILL.md"), "---\nname: local-only\ndescription: Local-only skill\nexport: false\n---\n")
-      await writeText(path.join(home.path, ".agents", "skills", "global-skill", "SKILL.md"), "---\nname: global-skill\ndescription: Global skill\n---\n")
-      await writeText(path.join(home.path, ".agents", "skills", "global-local-only", "SKILL.md"), "---\nname: global-local-only\ndescription: Hidden global skill\nexport: false\n---\n")
+      await writeText(
+        path.join(dir.path, ".mendcode", "skills", "project-skill", "SKILL.md"),
+        "---\nname: project-skill\ndescription: Project skill\n---\n",
+      )
+      await writeText(
+        path.join(dir.path, ".mendcode", "skills", "local-only", "SKILL.md"),
+        "---\nname: local-only\ndescription: Local-only skill\nexport: false\n---\n",
+      )
+      await writeText(
+        path.join(home.path, ".agents", "skills", "global-skill", "SKILL.md"),
+        "---\nname: global-skill\ndescription: Global skill\n---\n",
+      )
+      await writeText(
+        path.join(home.path, ".agents", "skills", "global-local-only", "SKILL.md"),
+        "---\nname: global-local-only\ndescription: Hidden global skill\nexport: false\n---\n",
+      )
 
       const candidates = await runtimePackArtifactCandidates(dir.path)
 
@@ -154,9 +204,18 @@ describe("runtime pack", () => {
       },
       worktree: { mode: "off" },
     })
-    await writeText(path.join(dir.path, ".mendcode", "skills", "exported", "SKILL.md"), "---\nname: exported\ndescription: Exported skill\n---\n")
-    await writeText(path.join(dir.path, ".mendcode", "skills", "local-only", "SKILL.md"), "---\nname: local-only\ndescription: Local-only skill\nexport: false\n---\n")
-    await writeText(path.join(dir.path, ".mendcode", "skills", "package-only", "SKILL.md"), "---\nname: package-only\ndescription: Package-local skill\npackage:\n  export: false\n---\n")
+    await writeText(
+      path.join(dir.path, ".mendcode", "skills", "exported", "SKILL.md"),
+      "---\nname: exported\ndescription: Exported skill\n---\n",
+    )
+    await writeText(
+      path.join(dir.path, ".mendcode", "skills", "local-only", "SKILL.md"),
+      "---\nname: local-only\ndescription: Local-only skill\nexport: false\n---\n",
+    )
+    await writeText(
+      path.join(dir.path, ".mendcode", "skills", "package-only", "SKILL.md"),
+      "---\nname: package-only\ndescription: Package-local skill\npackage:\n  export: false\n---\n",
+    )
 
     const pack = await buildLocalRuntimePack(dir.path)
     const manifest = await buildLocalMendPackageManifest(dir.path, pack)
@@ -181,9 +240,18 @@ describe("runtime pack", () => {
           globalstdio: { type: "local", command: ["node", "server.js"] },
         },
       })
-      await writeText(path.join(config.path, "agents", "global-reviewer.md"), "---\nmode: subagent\n---\nReview globally.\n")
-      await writeText(path.join(home.path, ".agents", "skills", "global-skill", "SKILL.md"), "---\nname: global-skill\ndescription: Global skill\n---\n")
-      await writeText(path.join(home.path, ".agents", "skills", "global-local-only", "SKILL.md"), "---\nname: global-local-only\ndescription: Hidden global skill\nexport: false\n---\n")
+      await writeText(
+        path.join(config.path, "agents", "global-reviewer.md"),
+        "---\nmode: subagent\n---\nReview globally.\n",
+      )
+      await writeText(
+        path.join(home.path, ".agents", "skills", "global-skill", "SKILL.md"),
+        "---\nname: global-skill\ndescription: Global skill\n---\n",
+      )
+      await writeText(
+        path.join(home.path, ".agents", "skills", "global-local-only", "SKILL.md"),
+        "---\nname: global-local-only\ndescription: Hidden global skill\nexport: false\n---\n",
+      )
 
       const authorRoot = await prepareGlobalRuntimePackAuthorRoot()
       await packageMetadataSet({ title: "Global Pack", id: "global-pack", version: "9.9.9" }, authorRoot)
@@ -196,7 +264,9 @@ describe("runtime pack", () => {
       expect(candidates.skills).toEqual([".mendcode/skills/agents-global-skill/SKILL.md"])
       expect(pack.agents).toEqual([".mendcode/agents/global-reviewer.md"])
       expect(pack.skills).toEqual([".mendcode/skills/agents-global-skill/SKILL.md"])
-      await expect(readFile(path.join(authorRoot, ".mendcode", "skills", "agents-global-local-only", "SKILL.md"), "utf8")).rejects.toThrow()
+      await expect(
+        readFile(path.join(authorRoot, ".mendcode", "skills", "agents-global-local-only", "SKILL.md"), "utf8"),
+      ).rejects.toThrow()
       expect(pack.mcp.config).toHaveProperty("globalstdio")
       expect(await runtimePackArtifactCandidates(dir.path)).toMatchObject({ agents: [], skills: [] })
     } finally {
@@ -237,9 +307,9 @@ describe("runtime pack", () => {
     expect(runFiles.filter((file) => file.startsWith("runtime-pack-apply-")).length).toBe(2)
     expect(runFiles.filter((file) => file.startsWith("runtime-pack-rollback-")).length).toBe(1)
 
-    const rollbackManifest = JSON.parse(
-      await readFile(path.join(dir.path, rollback.manifestPath!), "utf8"),
-    ) as { restoredFrom?: string }
+    const rollbackManifest = JSON.parse(await readFile(path.join(dir.path, rollback.manifestPath!), "utf8")) as {
+      restoredFrom?: string
+    }
     expect(rollback.backupPath).not.toBeNull()
     expect(rollbackManifest.restoredFrom).toBe(rollback.backupPath!)
   })
@@ -388,7 +458,9 @@ describe("runtime pack", () => {
     await writeText(path.join(source.path, ".mendcode", "widgets", "unused.ts"), "export const unused = {}\n")
 
     const snapshot = await applyRuntimePack(source.path)
-    const manifest = JSON.parse(await readFile(path.join(source.path, snapshot.packageManifestPath), "utf8")) as MendPackageManifest
+    const manifest = JSON.parse(
+      await readFile(path.join(source.path, snapshot.packageManifestPath), "utf8"),
+    ) as MendPackageManifest
     expect(snapshot.pack.skills).toEqual([".mendcode/skills/included/SKILL.md"])
     expect(snapshot.pack.modes).toEqual([".mendcode/modes/build.md"])
     expect(snapshot.pack.plugins).toEqual([".mendcode/plugins/status.ts"])
@@ -415,13 +487,33 @@ describe("runtime pack", () => {
     await expect(readFile(path.join(dir.path, ".mendcode", "skills", "included", "SKILL.md"), "utf8")).rejects.toThrow()
     expect(
       await readFile(
-        path.join(dir.path, ".mendcode", "packages", "installed", "skill-switch", ".mendcode", "skills", "included", "SKILL.md"),
+        path.join(
+          dir.path,
+          ".mendcode",
+          "packages",
+          "installed",
+          "skill-switch",
+          ".mendcode",
+          "skills",
+          "included",
+          "SKILL.md",
+        ),
         "utf8",
       ),
     ).toContain("Included test skill")
     await expect(
       readFile(
-        path.join(dir.path, ".mendcode", "packages", "installed", "skill-switch", ".mendcode", "skills", "excluded", "SKILL.md"),
+        path.join(
+          dir.path,
+          ".mendcode",
+          "packages",
+          "installed",
+          "skill-switch",
+          ".mendcode",
+          "skills",
+          "excluded",
+          "SKILL.md",
+        ),
         "utf8",
       ),
     ).rejects.toThrow()
@@ -447,7 +539,9 @@ describe("runtime pack", () => {
     const generated = JSON.parse(
       await readFile(path.join(dir.path, ".mendcode", "generated", "opencode.json"), "utf8"),
     ) as { skills?: { paths?: string[] } }
-    expect(generated.skills?.paths?.some((item) => item.includes(".mendcode/packages/installed/skill-switch/.mendcode"))).toBe(true)
+    expect(
+      generated.skills?.paths?.some((item) => item.includes(".mendcode/packages/installed/skill-switch/.mendcode")),
+    ).toBe(true)
 
     await disableAllMendPackages(dir.path)
     await syncProject(dir.path)
@@ -494,7 +588,7 @@ describe("runtime pack", () => {
     expect(packageMetadata(dir.path).selection).toEqual({})
   })
 
-  test("projects active package runtime settings for next prompts without local config writes", async () => {
+  test("projects active package runtime settings and preserves a later local prompt-mode override", async () => {
     await using dir = await tmpdir()
     await using source = await tmpdir()
     const previousXdg = process.env.XDG_CONFIG_HOME
@@ -521,7 +615,9 @@ describe("runtime pack", () => {
         worktree: { mode: "off" },
       })
       await writePromptMode("full", source.path)
-      await writeText(path.join(source.path, ".mendcode", "models.yaml"), [
+      await writeText(
+        path.join(source.path, ".mendcode", "models.yaml"),
+        [
         "version: 0",
         "enabled: true",
         "roles:",
@@ -529,7 +625,8 @@ describe("runtime pack", () => {
         "    providerID: openai",
         "    modelID: gpt-5.2",
         "    authMode: chatgpt-subscription-oauth",
-      ].join("\n"))
+        ].join("\n"),
+      )
       await writeJson(path.join(source.path, ".mendcode", "tui", "profile.json"), {
         version: 0,
         profile: "package-profile",
@@ -552,6 +649,9 @@ describe("runtime pack", () => {
       await expect(readFile(path.join(dir.path, ".mendcode", "prompt-mode.json"), "utf8")).rejects.toThrow()
       await expect(readFile(path.join(dir.path, ".mendcode", "models.yaml"), "utf8")).rejects.toThrow()
       await expect(readFile(path.join(dir.path, ".mendcode", "tui", "profile.json"), "utf8")).rejects.toThrow()
+      await writePromptMode("custom", dir.path)
+      expect((await readPromptMode(dir.path)).mode).toBe("custom")
+      await writePromptMode("focus", dir.path)
 
       await disableAllMendPackages(dir.path)
       expect((await readPromptMode(dir.path)).mode).toBe("focus")
@@ -559,6 +659,42 @@ describe("runtime pack", () => {
       if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME
       else process.env.XDG_CONFIG_HOME = previousXdg
     }
+  })
+
+  test("resolves a custom prompt from the active installed package root", async () => {
+    await using dir = await tmpdir()
+    await using source = await tmpdir()
+    const customFile = path.join(source.path, ".mendcode/prompts/custom.md")
+    await writeText(customFile, "Installed package project rules.\n")
+    await writePromptMode("custom", source.path)
+    await applyRuntimePack(source.path)
+
+    await runtimeRegistryAdd(["custom-prompt", "--type", "local", "--url", source.path], dir.path)
+    await runtimeRegistryApply("custom-prompt", dir.path)
+
+    const prompt = await readPromptMode(dir.path)
+    const policy = await composePromptPolicy({ root: dir.path, mode: "custom" })
+    expect(prompt.mode).toBe("custom")
+    expect(prompt.customPrompt.available).toBe(true)
+    expect(prompt.customPrompt.path).toContain(".mendcode/packages/installed/")
+    expect(policy.instructions).toContain("Installed package project rules.")
+  })
+
+  test("does not reuse a local custom file when an active package lacks its reserved template", async () => {
+    await using dir = await tmpdir()
+    await using source = await tmpdir()
+    await writeText(path.join(dir.path, ".mendcode/prompts/custom.md"), "Unrelated local rules.\n")
+    await writePromptMode("custom", source.path)
+    await applyRuntimePack(source.path)
+
+    await runtimeRegistryAdd(["custom-missing", "--type", "local", "--url", source.path], dir.path)
+    await runtimeRegistryApply("custom-missing", dir.path)
+
+    const prompt = await readPromptMode(dir.path)
+    const policy = await composePromptPolicy({ root: dir.path, mode: "custom" })
+    expect(prompt.mode).toBe("custom")
+    expect(prompt.customPrompt.available).toBe(false)
+    expect(policy.instructions).not.toContain("Unrelated local rules.")
   })
 
   test("projects first-class .mendcode/mcp definitions into generated config", async () => {
@@ -662,7 +798,10 @@ describe("runtime pack", () => {
       worktree: { mode: "off" },
     })
     await writeText(path.join(source.path, ".mendcode", "commands", "from-registry.md"), "registry command\n")
-    await writeText(path.join(source.path, ".mendcode", "plugins", "from-registry.ts"), "export default { id: 'from-registry', async tui() {} }\n")
+    await writeText(
+      path.join(source.path, ".mendcode", "plugins", "from-registry.ts"),
+      "export default { id: 'from-registry', async tui() {} }\n",
+    )
     await writeJson(path.join(source.path, ".mendcode", "auth", "mcp", "token.json"), { token: "never-copy" })
 
     await runtimeRegistryAdd(["external", "--type", "local", "--url", source.path], dir.path)
@@ -673,7 +812,21 @@ describe("runtime pack", () => {
     expect(applied.copied).toContain(".mendcode/plugins/from-registry.ts")
     expect(applied.skipped).toContain(".mendcode/auth/mcp/token.json")
     await expect(readFile(path.join(dir.path, ".mendcode", "commands", "from-registry.md"), "utf8")).rejects.toThrow()
-    expect(await readFile(path.join(dir.path, ".mendcode", "packages", "installed", "external", ".mendcode", "commands", "from-registry.md"), "utf8")).toBe("registry command\n")
+    expect(
+      await readFile(
+        path.join(
+          dir.path,
+          ".mendcode",
+          "packages",
+          "installed",
+          "external",
+          ".mendcode",
+          "commands",
+          "from-registry.md",
+        ),
+        "utf8",
+      ),
+    ).toBe("registry command\n")
     expect(applied.package).toMatchObject({ id: "external", enabled: true })
 
     const packages = await listMendPackages(dir.path)
@@ -710,10 +863,34 @@ describe("runtime pack", () => {
     const preview = await runtimeRegistryPreview("signed", dir.path)
     expect(preview.digest.value).toMatch(/^[a-f0-9]{64}$/)
 
-    await runtimeRegistryAdd(["signed", "--type", "local", "--url", source.path, "--signature", `sha256:${"0".repeat(64)}`, "--require-signature"], dir.path)
+    await runtimeRegistryAdd(
+      [
+        "signed",
+        "--type",
+        "local",
+        "--url",
+        source.path,
+        "--signature",
+        `sha256:${"0".repeat(64)}`,
+        "--require-signature",
+      ],
+      dir.path,
+    )
     await expect(runtimeRegistryApply("signed", dir.path)).rejects.toThrow("signature mismatch")
 
-    await runtimeRegistryAdd(["signed", "--type", "local", "--url", source.path, "--signature", `sha256:${preview.digest.value}`, "--require-signature"], dir.path)
+    await runtimeRegistryAdd(
+      [
+        "signed",
+        "--type",
+        "local",
+        "--url",
+        source.path,
+        "--signature",
+        `sha256:${preview.digest.value}`,
+        "--require-signature",
+      ],
+      dir.path,
+    )
     const applied = await runtimeRegistryApply("signed", dir.path)
     expect(applied.trust).toMatchObject({ signed: true, verified: true })
   })
@@ -742,11 +919,24 @@ describe("runtime pack", () => {
 
     const applied = await runtimeRegistryApply("opencode", dir.path)
     expect(applied.normalized?.writes).toContain(".mendcode/commands")
-    expect(await readFile(path.join(dir.path, ".mendcode", "packages", "installed", "opencode", ".mendcode", "commands", "hello.md"), "utf8")).toBe("hello command\n")
-    const models = await readFile(path.join(dir.path, ".mendcode", "packages", "installed", "opencode", ".mendcode", "models.yaml"), "utf8")
+    expect(
+      await readFile(
+        path.join(dir.path, ".mendcode", "packages", "installed", "opencode", ".mendcode", "commands", "hello.md"),
+        "utf8",
+      ),
+    ).toBe("hello command\n")
+    const models = await readFile(
+      path.join(dir.path, ".mendcode", "packages", "installed", "opencode", ".mendcode", "models.yaml"),
+      "utf8",
+    )
     expect(models).toContain('modelID: "gpt-5.4"')
     expect(models).toContain('modelID: "gpt-5.5"')
-    const mcp = JSON.parse(await readFile(path.join(dir.path, ".mendcode", "packages", "installed", "opencode", ".mendcode", "mcp", "imported.json"), "utf8")) as Record<string, unknown>
+    const mcp = JSON.parse(
+      await readFile(
+        path.join(dir.path, ".mendcode", "packages", "installed", "opencode", ".mendcode", "mcp", "imported.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>
     expect(mcp).toHaveProperty("localstdio")
   })
 
@@ -760,15 +950,35 @@ describe("runtime pack", () => {
       worktree: { mode: "off" },
     })
 
-    await runtimeRegistryAdd(["team-core", "--type", "team", "--url", source.path, "--team", "core", "--channel", "beta", "--scope", "commands,mcp"], dir.path)
+    await runtimeRegistryAdd(
+      [
+        "team-core",
+        "--type",
+        "team",
+        "--url",
+        source.path,
+        "--team",
+        "core",
+        "--channel",
+        "beta",
+        "--scope",
+        "commands,mcp",
+      ],
+      dir.path,
+    )
     const applied = await runtimeRegistryApply("team-core", dir.path)
     expect(applied.team).toMatchObject({ id: "core", channel: "beta", subsystemScope: ["commands", "mcp"] })
-    const state = JSON.parse(await readFile(path.join(dir.path, ".mendcode", "registry-state.json"), "utf8")) as RuntimeRegistryLocalState
+    const state = JSON.parse(
+      await readFile(path.join(dir.path, ".mendcode", "registry-state.json"), "utf8"),
+    ) as RuntimeRegistryLocalState
     expect(state.teamChannels["core:beta"].source).toBe("team-core")
     expect(state.lastApply).not.toBeNull()
     expect(state.lastApply?.digest.value).toMatch(/^[a-f0-9]{64}$/)
 
-    await runtimeRegistryAdd(["private", "--type", "private-git", "--url", source.path, "--credential-env", "MENDCODE_TEST_REGISTRY_TOKEN"], dir.path)
+    await runtimeRegistryAdd(
+      ["private", "--type", "private-git", "--url", source.path, "--credential-env", "MENDCODE_TEST_REGISTRY_TOKEN"],
+      dir.path,
+    )
     const privatePreview = await runtimeRegistryPreview("private", dir.path)
     expect(privatePreview.privateGit).toMatchObject({
       credentialMode: "env-token",

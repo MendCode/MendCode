@@ -19,7 +19,14 @@ type RunArgs = {
 }
 
 export function parseRunArgs(args: string[], commandName: "run" | "chat"): RunArgs {
-  const flags: RunArgs = { dryRun: false, json: false, sessionID: "default", promptMode: null, focusID: null, prompt: "" }
+  const flags: RunArgs = {
+    dryRun: false,
+    json: false,
+    sessionID: "default",
+    promptMode: null,
+    focusID: null,
+    prompt: "",
+  }
   const rest: string[] = []
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -31,7 +38,7 @@ export function parseRunArgs(args: string[], commandName: "run" | "chat"): RunAr
       flags.sessionID = value
     } else if (arg === "--prompt-mode") {
       const value = args[++i]
-      if (!value) throw new Error(`Usage: mendcode ${commandName} [--prompt-mode minimal|focus|full] <message>`)
+      if (!value) throw new Error(`Usage: mendcode ${commandName} [--prompt-mode minimal|focus|full|custom] <message>`)
       flags.promptMode = value
     } else if (arg === "--focus") {
       const value = args[++i]
@@ -50,7 +57,13 @@ function redactedTextInfo(text: string, limit = 120) {
   }
 }
 
-export async function buildRunPlan(input: { prompt: string; dryRun: boolean; promptMode?: string | null; focusID?: string | null; root?: string }) {
+export async function buildRunPlan(input: {
+  prompt: string
+  dryRun: boolean
+  promptMode?: string | null
+  focusID?: string | null
+  root?: string
+}) {
   const paths = mendPaths(input.root)
   const resolved = await resolveModelRoles(paths.root)
   const envStatus = await aiEnvStatus(paths.root)
@@ -62,9 +75,20 @@ export async function buildRunPlan(input: { prompt: string; dryRun: boolean; pro
     budgetEnforcementStatus({ providerID, modelID, authMode }, paths.root),
     readPromptMode(paths.root),
   ])
-  const support = await runSupportStatus({ providerID, modelID, authMode: authStatus.authMode || authMode, root: paths.root })
+  const support = await runSupportStatus({
+    providerID,
+    modelID,
+    authMode: authStatus.authMode || authMode,
+    root: paths.root,
+  })
   const promptMode = input.promptMode || persistedPromptMode.mode
-  const promptPolicy = await composePromptPolicy({ root: paths.root, mode: promptMode, focusID: input.focusID || resolved.focus || "codex", modelID })
+  const promptPolicy = await composePromptPolicy({
+    root: paths.root,
+    mode: promptMode,
+    customFile: promptMode === "custom" ? persistedPromptMode.customPrompt.path : undefined,
+    focusID: input.focusID || resolved.focus || "codex",
+    modelID,
+  })
   return {
     mode: input.dryRun ? "dry-run" : "blocked-real-run",
     promptPreview: redactedTextInfo(input.prompt).preview,
@@ -79,7 +103,12 @@ export async function buildRunPlan(input: { prompt: string; dryRun: boolean; pro
       ...(resolved.enabled ? [] : [".mendcode/models.yaml enabled=false"]),
       ...(resolved.defaultModel ? [] : ["roles.default providerID/modelID is not configured"]),
       ...(((envStatus.roles as any).default?.missingEnv || []) as string[]).map((key) => `missing env:${key}`),
-      ...((authStatus.blockers || []) as string[]).filter((blocker) => !(((envStatus.roles as any).default?.missingEnv || []) as string[]).some((key) => blocker === `missing env:${key}`)),
+      ...((authStatus.blockers || []) as string[]).filter(
+        (blocker) =>
+          !(((envStatus.roles as any).default?.missingEnv || []) as string[]).some(
+            (key) => blocker === `missing env:${key}`,
+          ),
+      ),
       ...(support.supported ? [] : [support.reason]),
       ...(budgetGate.blockers || []),
     ],
@@ -90,6 +119,7 @@ export async function buildRunPlan(input: { prompt: string; dryRun: boolean; pro
     promptPolicy: {
       mode: promptPolicy.mode,
       focusID: promptPolicy.focusID,
+      promptOrigin: promptPolicy.promptOrigin,
       instructionsBytes: promptPolicy.instructionsBytes,
       instructionsPreview: promptPolicy.instructionsPreview,
       policyInstructionsBytes: promptPolicy.policyInstructionsBytes,
@@ -98,6 +128,7 @@ export async function buildRunPlan(input: { prompt: string; dryRun: boolean; pro
       usesOpenCodeGenericProviderPrompt: promptPolicy.usesOpenCodeGenericProviderPrompt,
       usesMendCodeHarnessPrompt: promptPolicy.usesMendCodeHarnessPrompt,
       fallbackReason: promptPolicy.fallbackReason,
+      customPrompt: promptPolicy.customPrompt,
       includeProjectInstructions: promptPolicy.includeProjectInstructions,
       includeSkillsByDefault: promptPolicy.includeSkillsByDefault,
       includeCustomInstructions: promptPolicy.includeCustomInstructions,
@@ -131,7 +162,8 @@ export function redactedRunPlanOutput(plan: any) {
 
 function chatSessionID(raw: string) {
   const value = String(raw || "default").trim()
-  if (!/^[a-zA-Z0-9_.-]+$/.test(value)) throw new Error("Chat session id may contain only letters, numbers, dot, underscore, and dash.")
+  if (!/^[a-zA-Z0-9_.-]+$/.test(value))
+    throw new Error("Chat session id may contain only letters, numbers, dot, underscore, and dash.")
   return value
 }
 
@@ -203,7 +235,8 @@ export function safeRunRecord({ plan, result, prompt }: { plan: any; result: any
     },
     output: {
       bytes: Buffer.byteLength(result.outputText || ""),
-      preview: (result.outputText || "").length > 240 ? `${result.outputText.slice(0, 237)}...` : result.outputText || "",
+      preview:
+        (result.outputText || "").length > 240 ? `${result.outputText.slice(0, 237)}...` : result.outputText || "",
       storedFullText: false,
     },
     telemetry: result.telemetry || null,

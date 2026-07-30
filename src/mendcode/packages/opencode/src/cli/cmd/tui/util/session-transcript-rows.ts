@@ -11,10 +11,18 @@ export function sessionTranscriptRows<T extends SessionTranscriptMessage>(
 ) {
   const unique = [...new Map(messages.map((message) => [message.id, message] as const)).values()]
   const positions = new Map(unique.map((message, index) => [message.id, index] as const))
-  const boundaryPrefix = unique.reduce<number[]>((prefix, message, index) => {
+  const boundaryPrefix = unique.reduce<number[]>(
+    (prefix, message, index) => {
     prefix.push(prefix[index] + (options.boundaryIDs?.has(message.id) ? 1 : 0))
     return prefix
-  }, [0])
+    },
+    [0],
+  )
+  const firstAssistantIndex = new Map<string, number>()
+  for (const [index, message] of unique.entries()) {
+    if (message.role !== "assistant" || !message.parentID || firstAssistantIndex.has(message.parentID)) continue
+    firstAssistantIndex.set(message.parentID, index)
+  }
   const childrenByParent = new Map<string, T[]>()
   const groupedChildIDs = new Set<string>()
 
@@ -28,6 +36,13 @@ export function sessionTranscriptRows<T extends SessionTranscriptMessage>(
     // transcript boundary: follow-up assistants may still retain the old parent,
     // but must remain after the compaction summary.
     if (boundaryPrefix[index] !== boundaryPrefix[parentIndex + 1]) continue
+    const interveningTurnStarted = unique
+      .slice(parentIndex + 1, index)
+      .some(
+        (candidate) =>
+          candidate.role === "user" && (firstAssistantIndex.get(candidate.id) ?? Number.POSITIVE_INFINITY) < index,
+      )
+    if (interveningTurnStarted) continue
     const children = childrenByParent.get(message.parentID) ?? []
     children.push(message)
     childrenByParent.set(message.parentID, children)

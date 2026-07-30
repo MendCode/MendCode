@@ -9,6 +9,7 @@ import { NamedError } from "@mendcode/core/util/error"
 import { Skill } from "../../src/skill"
 import { Permission } from "../../src/permission"
 import { SystemPrompt } from "../../src/session/system"
+import { composePromptPolicy } from "../../src/mend/prompt/compose"
 import { ProviderID, ModelID } from "../../src/provider/schema"
 import { testEffect } from "../lib/effect"
 import { tmpdir } from "../fixture/fixture"
@@ -167,12 +168,67 @@ describe("session.system", () => {
     expect(output).not.toContain("MendCode marketplace and extension contract")
   })
 
+  test("loads custom prompt context from the active project root", async () => {
+    await using tmp = await tmpdir()
+    const customFile = path.join(tmp.path, ".mendcode/prompts/custom.md")
+    await mkdir(path.dirname(customFile), { recursive: true })
+    await writeFile(customFile, "Keep the project rules visible once.\n")
+    await writeFile(path.join(tmp.path, ".mendcode/prompt-mode.json"), JSON.stringify({ version: 1, mode: "custom" }))
+
+    const composition = await composePromptPolicy({ root: tmp.path, mode: "custom", focusID: "codex" })
+    const snapshot = await SystemPrompt.mendPromptSnapshot(fakeModel("openai", "gpt-5.2"), tmp.path, {
+      policy: composition,
+      memory: "",
+    })
+
+    expect(snapshot.policy.match(/Keep the project rules visible once\./g)).toHaveLength(1)
+    expect(snapshot.baseProvider.length).toBeGreaterThan(0)
+    expect(snapshot.focus).toContain("Focus: codex")
+  })
+
+  test("does not reuse custom prompt content across project roots", async () => {
+    await using first = await tmpdir()
+    await using second = await tmpdir()
+    const customFile = path.join(first.path, ".mendcode/prompts/custom.md")
+    await mkdir(path.dirname(customFile), { recursive: true })
+    await writeFile(customFile, "Only the first project may see this.\n")
+    await writeFile(path.join(first.path, ".mendcode/prompt-mode.json"), JSON.stringify({ version: 1, mode: "custom" }))
+    await mkdir(path.join(second.path, ".mendcode"), { recursive: true })
+    await writeFile(
+      path.join(second.path, ".mendcode/prompt-mode.json"),
+      JSON.stringify({ version: 1, mode: "custom" }),
+    )
+
+    const firstOutput = await SystemPrompt.mendPromptPolicy(fakeModel("openai", "gpt-5.2"), first.path)
+    const secondOutput = await SystemPrompt.mendPromptPolicy(fakeModel("openai", "gpt-5.2"), second.path)
+
+    expect(firstOutput).toContain("Only the first project may see this.")
+    expect(secondOutput).not.toContain("Only the first project may see this.")
+  })
+
   test("formats persistent memory as soft context when enabled", async () => {
     await using tmp = await tmpdir()
     await mkdir(path.join(tmp.path, ".mendcode", "memory"), { recursive: true })
-    await writeFile(path.join(tmp.path, ".mendcode", "memory", "config.json"), JSON.stringify({ version: 0, configScope: "project", enabled: true, use: true, scopes: ["global", "project"], maxEntries: 3, maxPromptTokens: 200 }))
-    await writeFile(path.join(process.env.MENDCODE_MEMORY_DIR!, "entries.jsonl"), JSON.stringify({ text: "Global preference follows the user across repos.", scope: "global" }) + "\n")
-    await writeFile(path.join(tmp.path, ".mendcode", "memory", "memory_summary.md"), "User wants local-only MendCode work.\n")
+    await writeFile(
+      path.join(tmp.path, ".mendcode", "memory", "config.json"),
+      JSON.stringify({
+        version: 0,
+        configScope: "project",
+        enabled: true,
+        use: true,
+        scopes: ["global", "project"],
+        maxEntries: 3,
+        maxPromptTokens: 200,
+      }),
+    )
+    await writeFile(
+      path.join(process.env.MENDCODE_MEMORY_DIR!, "entries.jsonl"),
+      JSON.stringify({ text: "Global preference follows the user across repos.", scope: "global" }) + "\n",
+    )
+    await writeFile(
+      path.join(tmp.path, ".mendcode", "memory", "memory_summary.md"),
+      "User wants local-only MendCode work.\n",
+    )
 
     const output = await SystemPrompt.mendMemory(fakeModel("openai", "gpt-5.2"), tmp.path, "MendCode memory")
 
@@ -185,7 +241,18 @@ describe("session.system", () => {
   test("omits memory context when no relevant memories exist", async () => {
     await using tmp = await tmpdir()
     await mkdir(path.join(tmp.path, ".mendcode", "memory"), { recursive: true })
-    await writeFile(path.join(tmp.path, ".mendcode", "memory", "config.json"), JSON.stringify({ version: 0, configScope: "project", enabled: true, use: true, scopes: ["project"], maxEntries: 3, maxPromptTokens: 200 }))
+    await writeFile(
+      path.join(tmp.path, ".mendcode", "memory", "config.json"),
+      JSON.stringify({
+        version: 0,
+        configScope: "project",
+        enabled: true,
+        use: true,
+        scopes: ["project"],
+        maxEntries: 3,
+        maxPromptTokens: 200,
+      }),
+    )
 
     const output = await SystemPrompt.mendMemory(fakeModel("openai", "gpt-5.2"), tmp.path, "add this to project memory")
 
@@ -195,9 +262,26 @@ describe("session.system", () => {
   test("keeps persistent memory independent from minimal prompt mode", async () => {
     await using tmp = await tmpdir()
     await mkdir(path.join(tmp.path, ".mendcode", "memory"), { recursive: true })
-    await writeFile(path.join(tmp.path, ".mendcode", "prompt-mode.json"), JSON.stringify({ version: 0, mode: "minimal", live: "runtime-run-chat" }))
-    await writeFile(path.join(tmp.path, ".mendcode", "memory", "config.json"), JSON.stringify({ version: 0, configScope: "project", enabled: true, use: true, scopes: ["project"], maxEntries: 3, maxPromptTokens: 200 }))
-    await writeFile(path.join(tmp.path, ".mendcode", "memory", "memory_summary.md"), "Memory survives minimal mode when input is enabled.\n")
+    await writeFile(
+      path.join(tmp.path, ".mendcode", "prompt-mode.json"),
+      JSON.stringify({ version: 0, mode: "minimal", live: "runtime-run-chat" }),
+    )
+    await writeFile(
+      path.join(tmp.path, ".mendcode", "memory", "config.json"),
+      JSON.stringify({
+        version: 0,
+        configScope: "project",
+        enabled: true,
+        use: true,
+        scopes: ["project"],
+        maxEntries: 3,
+        maxPromptTokens: 200,
+      }),
+    )
+    await writeFile(
+      path.join(tmp.path, ".mendcode", "memory", "memory_summary.md"),
+      "Memory survives minimal mode when input is enabled.\n",
+    )
 
     const policy = await SystemPrompt.mendPromptPolicy(fakeModel("openai", "gpt-5.2"), tmp.path)
     const memory = await SystemPrompt.mendMemory(fakeModel("openai", "gpt-5.2"), tmp.path, "minimal mode")

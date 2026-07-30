@@ -195,6 +195,32 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       flush()
     }
 
+    const recoverEventSource = (reason: string) => {
+      const now = Date.now()
+      setConnection({
+        status: "reconnecting",
+        attempt: Math.max(connection.attempt, 1),
+        nextRetryAt: undefined,
+        error: reason,
+        lastEventAt: connection.lastEventAt,
+        lastApplicationEventAt: connection.lastApplicationEventAt,
+        recoveringSince: connection.recoveringSince ?? now,
+      })
+
+      const controlEvent = (type: "server.connected" | "server.heartbeat") =>
+        ({
+          id: `mendcode-recovery-${type}-${now}`,
+          directory: "global",
+          payload: { id: `mendcode-recovery-${type}-${now}`, type, properties: {} },
+        }) as GlobalEvent
+
+      // Worker-backed transports do not have an SSE reconnect handshake. Emit
+      // the same control events so SyncProvider refreshes data missed while
+      // the machine was asleep, including pending questions and permissions.
+      handleEvent(controlEvent("server.connected"))
+      handleEvent(controlEvent("server.heartbeat"))
+    }
+
     const startWatchdog = () => {
       if (watchdog) clearInterval(watchdog)
       watchdogLastTick = Date.now()
@@ -204,6 +230,11 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
         const drift = now - watchdogLastTick
         watchdogLastTick = now
         const resumed = drift > Math.max(staleDelay, watchdogInterval + 5_000)
+        if (props.events) {
+          if (!resumed || connection.status === "disconnected") return
+          recoverEventSource("System resumed; refreshing event state")
+          return
+        }
         const lastSeen = connection.lastEventAt
         const stalled = connection.status === "connected" && (!lastSeen || now - lastSeen > staleDelay)
         const reconnectStalled =
@@ -314,16 +345,18 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
           recoveringSince: undefined,
         })
         onCleanup(unsub)
+        startWatchdog()
 
         if (Flag.OPENCODE_EXPERIMENTAL_WORKSPACES) {
           // Start syncing workspaces, it's important to do this after
           // we've started listening to events
           await sdk.sync.start().catch(() => {})
         }
-      } else {
+        return
+      }
+
         startSSE()
         startWatchdog()
-      }
     })
 
     onCleanup(() => {

@@ -20,13 +20,15 @@ describe("session transcript virtual window", () => {
   })
 
   test("virtualizes very large sessions by default to keep reopen memory bounded", () => {
-    expect(sessionMessageVirtualWindow({ total: 1_000, scrollTop: 0, viewportHeight: 30, followOutput: true })).toEqual({
+    expect(sessionMessageVirtualWindow({ total: 1_000, scrollTop: 0, viewportHeight: 30, followOutput: true })).toEqual(
+      {
       start: 946,
       end: 1_000,
       topSpacer: 5_676,
       bottomSpacer: 0,
       virtualized: true,
-    })
+      },
+    )
   })
 
   test("renders the tail when explicit virtualization is enabled while following session output", () => {
@@ -86,7 +88,6 @@ describe("session transcript virtual window", () => {
 
     expect(sticky).toBeUndefined()
   })
-
 
   test("mounted anchor wins over logical fallback", () => {
     const sticky = stickyUserIDFromVirtualWindow({
@@ -159,6 +160,26 @@ describe("session transcript virtual window", () => {
     ])
   })
 
+  test("keeps a later continuation after an intervening turn has started", () => {
+    const messages = [
+      { id: "user-1", role: "user" },
+      { id: "assistant-1", role: "assistant", parentID: "user-1" },
+      { id: "user-2", role: "user" },
+      { id: "assistant-2", role: "assistant", parentID: "user-2" },
+      { id: "assistant-3", role: "assistant", parentID: "user-2" },
+      { id: "assistant-4", role: "assistant", parentID: "user-1" },
+    ]
+
+    expect(sessionTranscriptRows(messages, new Set()).map((message) => message.id)).toEqual([
+      "user-1",
+      "assistant-1",
+      "user-2",
+      "assistant-2",
+      "assistant-3",
+      "assistant-4",
+    ])
+  })
+
   test("keeps post-compaction assistant output after the compaction summary", () => {
     const messages = [
       { id: "user-1", role: "user" },
@@ -169,14 +190,10 @@ describe("session transcript virtual window", () => {
     ]
 
     expect(
-      sessionTranscriptRows(messages, new Set(), { boundaryIDs: new Set(["compaction-user"]) }).map((message) => message.id),
-    ).toEqual([
-      "user-1",
-      "assistant-before",
-      "compaction-user",
-      "compaction-summary",
-      "assistant-after",
-    ])
+      sessionTranscriptRows(messages, new Set(), { boundaryIDs: new Set(["compaction-user"]) }).map(
+        (message) => message.id,
+      ),
+    ).toEqual(["user-1", "assistant-before", "compaction-user", "compaction-summary", "assistant-after"])
   })
 
   test("deduplicates transcript rows before moving queued messages", () => {

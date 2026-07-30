@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.1.21 - 2026-07-29
+
+MendCode v0.1.21 is a focused reliability and customization release. It adds project-owned prompt context, improves prompt/runtime boundaries, protects active sessions during cancellation and reconnects, preserves useful media through compaction, and refreshes the public setup and customization documentation.
+
+### Added
+
+- Add a project-local `custom` Prompt Context mode backed by `.mendcode/prompts/custom.md`, with optional frontmatter names, bounded loading, root-safe path checks, UTF-8 normalization, and safe fallback diagnostics.
+- Add package-shared custom prompt support through runtime packs without leaking a local project prompt into another project.
+- Add `mendcode prompt` inspection/build/mode commands plus setup, status, TUI selector, footer, and runtime-plan visibility for custom prompt origin, name, path, byte count, and fallback state.
+- Add public documentation for project-local and package-shared custom tool calls, including typed arguments, execution context, metadata, permission checks, and package distribution.
+- Add regression coverage for custom prompt loading, package resolution, session recovery, cancellation, compaction media, Codex OAuth affinity, transcript ordering, and prompt diagnostics.
+
+### Changed
+
+- Compose prompt context from the active project root and carry one resolved MendCode prompt snapshot through streaming and token estimation instead of resolving inconsistent prompt state in separate paths.
+- Keep custom prompt metadata out of provider instructions while exposing a readable project-defined label in setup and the TUI.
+- Rotate Codex ChatGPT OAuth Responses Lite session affinity when the effective prompt instructions change, while preserving affinity for identical instructions.
+- Preserve images for vision-capable compaction models and retain a bounded set of recent image attachments for text-only compaction resumes.
+- Keep session scroll position and anchors stable across transcript growth, paging, compaction, and route remounts; keep later assistant continuations after intervening turns.
+- Refresh the local shared-server fingerprint from source metadata so local TypeScript changes cannot reuse stale runtime processes.
+- Run prompt-status scripts through a Bash-compatible shell and expose the public prompt route from the installed CLI.
+- Bound shell cancellation and timeout cleanup, force-kill cancelled processes after a short grace period, and expose explicit retry guidance when command completion is unknown.
+- Bump package, lockfile, and Zed extension metadata to `0.1.21` and refresh setup/customization documentation and screenshots.
+
+### Fixed
+
+- Prevent manual `Esc` cancellation from being undone by late background-task owner-wake notifications or stale prompt deliveries.
+- Cancel all pending prompt deliveries during interruption and coalesce concurrent abort requests so a cancelled turn cannot restart from a stale request.
+- Prevent hidden prompt input state from remaining mounted while a question or permission prompt owns the session input.
+- Reconcile session state, pending questions, and permissions after a worker-backed terminal transport recovers from system sleep or a reconnect.
+- Keep queued session work from restarting after an explicit cancellation.
+- Mark commands interrupted by connection loss or timeout as having an unknown result, retain incomplete output safely, and avoid encouraging blind repetition of potentially destructive commands.
+- Stop legacy diff preview heuristics from treating any long source block as a truncated preview when no truncation marker exists.
+
+### Tests
+
+- Add focused regressions for custom prompt parsing and security boundaries, prompt mode cycling, runtime-pack projection, prompt snapshot propagation, cancellation/owner-wake behavior, reconnect synchronization, session virtual-window ordering, scroll persistence, image-aware compaction, Codex OAuth request affinity, Bash-compatible prompt status scripts, and unknown shell-result retry metadata.
+
 ## 0.1.20 - 2026-07-28
 
 ### Added

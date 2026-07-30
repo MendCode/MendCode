@@ -4,10 +4,15 @@ import { promptChromeUsesFullSessionWidth, resolvePromptChrome } from "../../src
 import {
   pickPromptStatusScriptOutput,
   promptStatusScriptIdentityKey,
+  readPromptStatusScript,
   resolvePromptStatus,
 } from "../../src/mend/tui/prompt-status"
 import { resolveActivityPhase } from "../../src/cli/cmd/tui/util/activity-signal"
-import { activityMessagesForPhase, resolveTuiPresentation, shouldDisplayReasoning } from "../../src/mend/tui/presentation"
+import {
+  activityMessagesForPhase,
+  resolveTuiPresentation,
+  shouldDisplayReasoning,
+} from "../../src/mend/tui/presentation"
 import { activityMascotText } from "../../src/mend/tui/mascot"
 import { ConfigKeybinds } from "../../src/config/keybinds"
 
@@ -103,9 +108,7 @@ describe("mend tui prompt chrome", () => {
       },
     })
 
-    expect(validateMendTuiProfile(invalid).failures).toContain(
-      "tui layout.zones.session.submitScrollMode is invalid",
-    )
+    expect(validateMendTuiProfile(invalid).failures).toContain("tui layout.zones.session.submitScrollMode is invalid")
   })
 
   test("merge preserves prompt chrome overrides", () => {
@@ -331,6 +334,22 @@ describe("mend tui prompt chrome", () => {
     expect(keybinds.variant_cycle).toBe("f3")
     expect(keybinds.variant_list).toBe("shift+f3")
     expect(keybinds.help).toBe("?")
+  })
+
+  test("runs prompt status scripts with Bash-compatible shell features", async () => {
+    const result = await readPromptStatusScript({
+      command: `read -r value < <(printf "Build\\n") && printf "%s" "$value"`,
+      root: process.cwd(),
+      promptMode: "custom",
+      model: "",
+      provider: "",
+      preset: "top-bottom",
+      side: "left",
+      prepend: false,
+      timeoutMs: 1000,
+    })
+
+    expect(result.text).toBe("Build")
   })
 
   test("prompt status supports per-side scripts and preserves legacy left script fallback", () => {

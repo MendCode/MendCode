@@ -1,11 +1,13 @@
 import type { MendTuiProfile } from "@/mend/profile"
 import { loadMendTuiProfile } from "@/mend/profile"
-import { readPromptMode, type MendPromptMode } from "@/mend/prompt/mode"
+import { promptModeLabel, readPromptMode, type MendPromptMode } from "@/mend/prompt/mode"
 import { createContext, createSignal, onCleanup, useContext, type ParentProps } from "solid-js"
 
 type MendTuiProfileContext = {
   profile: MendTuiProfile
   promptMode: MendPromptMode
+  promptModeLabel: string
+  customPromptName: string | null
   root: string
   defaultPath: string
   activePath: string
@@ -31,7 +33,14 @@ export function MendTuiProfileProvider(
 ) {
   const [profile, setProfile] = createSignal(props.profile)
   const [promptMode, setPromptMode] = createSignal<MendPromptMode>("focus")
-  const refreshPromptMode = () => void readPromptMode(props.root).then((state) => setPromptMode(state.mode))
+  const [promptLabel, setPromptLabel] = createSignal("Focus")
+  const [customPromptName, setCustomPromptName] = createSignal<string | null>(null)
+  const applyPromptMode = (state: Awaited<ReturnType<typeof readPromptMode>>) => {
+    setPromptMode(state.mode)
+    setPromptLabel(promptModeLabel(state))
+    setCustomPromptName(state.customPrompt.name)
+  }
+  const refreshPromptMode = () => void readPromptMode(props.root).then(applyPromptMode)
   refreshPromptMode()
   const promptModeRefresh = setInterval(refreshPromptMode, 1000)
   onCleanup(() => clearInterval(promptModeRefresh))
@@ -42,13 +51,22 @@ export function MendTuiProfileProvider(
     get promptMode() {
       return promptMode()
     },
+    get promptModeLabel() {
+      return promptLabel()
+    },
+    get customPromptName() {
+      return customPromptName()
+    },
     root: props.root,
     defaultPath: props.defaultPath,
     activePath: props.activePath,
     reload: async () => {
-      const [next, prompt] = await Promise.all([loadMendTuiProfile(props.root, props.config), readPromptMode(props.root)])
+      const [next, prompt] = await Promise.all([
+        loadMendTuiProfile(props.root, props.config),
+        readPromptMode(props.root),
+      ])
       setProfile(next.profile)
-      setPromptMode(prompt.mode)
+      applyPromptMode(prompt)
       return next.profile
     },
   }

@@ -63,13 +63,10 @@ import { AgentAttachment, FileAttachment, Source } from "@/v2/session-prompt"
 import * as DateTime from "effect/DateTime"
 import { readPromptMode } from "@/mend/prompt/mode"
 import { composePromptPolicy } from "@/mend/prompt/compose"
+import { resolvePromptFocus } from "@/mend/prompt/focus-resolver"
 import { enforceMflowBeforeEdit, releaseMflowLocks, waitMflowBeforeRead } from "@/mend/config/mflow"
 import { reviewContextForAssistant } from "@/cli/cmd/tui/routes/changes/review-actions"
-import {
-  createShellOutputDeltaBuffer,
-  SHELL_OUTPUT_UPDATE_INTERVAL,
-  shellLiveOutput,
-} from "@/tool/shell-output"
+import { createShellOutputDeltaBuffer, SHELL_OUTPUT_UPDATE_INTERVAL, shellLiveOutput } from "@/tool/shell-output"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -82,6 +79,7 @@ const OWNER_WAKE_PART_KIND = "background_task_owner_wake"
 const OWNER_WAKE_BATCH_DELAY_MS = 200
 const OWNER_WAKE_MAX_EVENTS = 16
 const OWNER_WAKE_PREVIEW_CHARS = 320
+const SHELL_ABORT_FORCE_KILL_AFTER = "1 second"
 
 export type OwnerWakeNotification = {
   eventID: string
@@ -122,6 +120,29 @@ export function ownerWakePromptText(events: readonly OwnerWakeNotification[]) {
     }),
     "",
     "Decide the next useful action. Do not poll or wait for other active tasks from this wake; each background task will emit its own completion notification. Use `task_status` only when a task's terminal result is required now, and do not claim completion without collecting the relevant task evidence. If no action is needed, keep the acknowledgement concise.",
+    "</mendcode_runtime_event>",
+  ].join("\n")
+}
+
+export function interruptedToolPromptText(messages: readonly MessageV2.WithParts[]) {
+  const latestAssistant = messages.findLast((message) => message.info.role === "assistant")
+  if (!latestAssistant) return
+
+  const interrupted = latestAssistant.parts.some(
+    (part) =>
+      part.type === "tool" &&
+      part.state.status === "completed" &&
+      (part.state.metadata?.connectionLost === true || part.state.metadata?.retryRecommended === true),
+  )
+  if (!interrupted) return
+
+  return [
+    '<mendcode_runtime_event type="interrupted_tool">',
+    "A previous tool execution ended before its final result was collected because the connection was lost or execution was interrupted.",
+    "Treat that result as unknown; do not infer success or failure from partial output.",
+    "The original tool input is preserved in the preceding tool call.",
+    "If it was a read-only or idempotent shell command, retry that exact command once before choosing a different approach.",
+    "If it may have changed state, inspect the current state first and do not repeat destructive actions blindly.",
     "</mendcode_runtime_event>",
   ].join("\n")
 }
@@ -237,6 +258,17 @@ function hasRunnableToolCalls(parts: MessageV2.Part[]) {
   return parts.some((part) => part.type === "tool" && !part.metadata?.providerExecuted)
 }
 
+function isCompactionResumeMessage(message: MessageV2.WithParts) {
+  return (
+    message.info.role === "user" &&
+    message.parts.some(
+      (part) =>
+        part.type === "text" &&
+        (part.metadata?.compaction_continue === true || part.metadata?.compaction_post_prompt === true),
+    )
+  )
+}
+
 function isInternalUserMessage(message: MessageV2.WithParts) {
   if (message.info.role !== "user") return false
   if (message.parts.some((part) => part.type === "compaction" || part.type === "subtask")) return true
@@ -266,8 +298,10 @@ export function autoRescueCompactionCount(messages: MessageV2.WithParts[]) {
 }
 
 export function shouldResumeAfterAutoRescueCompaction(messages: MessageV2.WithParts[]) {
-  const latestRescueIndex = messages.findLastIndex((message) =>
-    message.info.role === "user" && message.parts.some((part) => part.type === "compaction" && part.discard_tail === true),
+  const latestRescueIndex = messages.findLastIndex(
+    (message) =>
+      message.info.role === "user" &&
+      message.parts.some((part) => part.type === "compaction" && part.discard_tail === true),
   )
   if (latestRescueIndex < 0) return true
 
@@ -341,9 +375,7 @@ export function promptRunMessages(input: {
       isCompletedCompactionFollowup &&
       input.messages.some(
         (candidate) =>
-          candidate.info.role === "assistant" &&
-          candidate.info.parentID === message.info.id &&
-          candidate.info.finish,
+          candidate.info.role === "assistant" && candidate.info.parentID === message.info.id && candidate.info.finish,
       )
     ) {
       continue
@@ -421,6 +453,12 @@ export const layer = Layer.effect(
       return yield* sessions.findMessage(sessionID, (msg) => msg.info.role === "assistant" && !msg.info.time.completed)
     })
 
+    const cancelOwnerWakeSession = Effect.fn("SessionPrompt.cancelOwnerWakeSession")(function* (sessionID: SessionID) {
+      const wake = yield* InstanceState.get(ownerWakeState)
+      wake.sessions.delete(sessionID)
+      wake.pending.delete(sessionID)
+    })
+
     const finishOrphanedAssistantOnCancel = Effect.fn("SessionPrompt.finishOrphanedAssistantOnCancel")(function* (
       sessionID: SessionID,
       messageID: MessageID,
@@ -437,6 +475,9 @@ export const layer = Layer.effect(
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* elog.info("cancel", { sessionID })
+      // A background task can finish after the parent run is cancelled. Do not
+      // let its late notification start a fresh assistant turn.
+      yield* cancelOwnerWakeSession(sessionID)
       promptAbortReasons.set(sessionID, "user")
       promptAbortControllers.get(sessionID)?.abort()
       const orphanedAssistant = yield* findOrphanedAssistantOnCancel(sessionID)
@@ -1006,9 +1047,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
                   { args },
                 )
-                const result = yield* item
-                  .execute(args, ctx)
-                  .pipe(
+                const result = yield* item.execute(args, ctx).pipe(
                     Effect.ensuring(
                       Effect.promise(() =>
                         releaseMflowLocks({
@@ -1134,7 +1173,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           )
         tools[key] = item
       }
-
 
       return tools
     })
@@ -1467,6 +1505,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     aborted === "user"
                       ? "User aborted the command"
                       : "Command execution stopped before completion because the parent run lost its connection; no explicit user cancel was recorded",
+                    ...(aborted === "external"
+                      ? [
+                          "The command result is unknown. If this command is read-only or idempotent, retry the exact same command once before choosing a different approach.",
+                          "If it may have changed state, inspect the current state first and do not repeat destructive actions blindly.",
+                        ]
+                      : []),
                     "</metadata>",
                   ].join("\n")
               }
@@ -1497,6 +1541,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     description: "",
                     truncated: truncated.truncated,
                     ...(truncated.truncated ? { outputPath: truncated.outputPath } : {}),
+                    ...(aborted === "external"
+                      ? { interrupted: true, connectionLost: true, resultUnknown: true, retryRecommended: true }
+                      : {}),
                   },
                   output: truncated.content,
                 }
@@ -1517,7 +1564,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 extendEnv: true,
                 env: { ...shellEnv.env, TERM: "dumb" },
                 stdin: "ignore",
-                forceKillAfter: "3 seconds",
+                forceKillAfter: SHELL_ABORT_FORCE_KILL_AFTER,
               })
               const handle = yield* spawner.spawn(cmd)
               const pendingDelta = createShellOutputDeltaBuffer()
@@ -2074,7 +2121,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         yield* revert.cleanup(session)
 
         if (input.messageID) {
-          const existing = yield* sessions.findMessage(input.sessionID, (message) => message.info.id === input.messageID)
+          const existing = yield* sessions.findMessage(
+            input.sessionID,
+            (message) => message.info.id === input.messageID,
+          )
           if (Option.isSome(existing)) {
             if (existing.value.info.role !== "user") {
               throw new NamedError.Unknown({ message: `Message ${input.messageID} is not a user prompt.` })
@@ -2148,7 +2198,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       })
 
       while (true) {
-
         yield* status.set(sessionID, { type: "busy", message: SessionStatus.SESSION_ACTIVITY_WAITING })
         yield* slog.info("loop", { step })
 
@@ -2336,10 +2385,18 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
           yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-          const promptMode = yield* Effect.promise(() => readPromptMode())
+          const projectRoot = ctx.worktree || ctx.directory
+          const promptMode = yield* Effect.promise(() => readPromptMode(projectRoot))
+          const focus = resolvePromptFocus({
+            providerID: model.providerID,
+            modelID: model.api.id || model.id,
+          })
           const promptPolicy = yield* Effect.promise(() =>
             composePromptPolicy({
+              root: projectRoot,
               mode: promptMode.mode,
+              customFile: promptMode.customPrompt.path,
+              focusID: focus.focusID,
               modelID: model.api.id || model.id,
             }),
           )
@@ -2348,27 +2405,51 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             promptPolicy.includeSkillsByDefault ? sys.skills(agent) : Effect.succeed(undefined),
             sys.environment(model),
             promptPolicy.includeProjectInstructions ? instruction.system().pipe(Effect.orDie) : Effect.succeed([]),
-            MessageV2.toModelMessagesEffect(msgs, model, { stripMedia: stripMediaForResume }),
+            MessageV2.toModelMessagesEffect(msgs, model, {
+              stripMedia: stripMediaForResume,
+              preserveMedia: (message, part) =>
+                model.capabilities.input.image === true &&
+                isCompactionResumeMessage(message) &&
+                part.mime.startsWith("image/"),
+            }),
           ])
           const system = [...env, ...instructions, ...(skills ? [skills] : [])]
           const memoryMode = promptMemoryMode(msgs, lastUser)
+          const lastUserMessage = msgs.find((message) => message.info.id === lastUser.id)
+          const memoryQuery = (lastUserMessage?.parts || [])
+            .flatMap((part) => (part.type === "text" && !part.ignored && !part.synthetic ? [part.text] : []))
+            .join("\n")
+          const mendMemory = yield* Effect.promise(() =>
+            SystemPrompt.mendMemory(model, projectRoot, memoryQuery, memoryMode),
+          )
+          const mendPrompt = yield* Effect.promise(() =>
+            SystemPrompt.mendPromptSnapshot(model, projectRoot, { policy: promptPolicy, memory: mendMemory }),
+          )
           const latestPlanReview =
             memoryMode === "after-compaction" && !hasAcceptedPlanReview(msgs)
               ? latestAcceptedPlanReviewContext(yield* sessions.messages({ sessionID }))
               : undefined
           if (latestPlanReview) system.push(latestPlanReview)
-          const reviewContext = reviewContextForAssistant(ctx.worktree || ctx.directory)
-          if (reviewContext) {
-            system.push(`<mendcode_review_context>\n${reviewContext}\n</mendcode_review_context>`)
-          }
-          const format = lastUser.format ?? { type: "text" as const }
+           const reviewContext = reviewContextForAssistant(ctx.worktree || ctx.directory)
+           if (reviewContext) {
+             system.push(`<mendcode_review_context>\n${reviewContext}\n</mendcode_review_context>`)
+           }
+           const interruptedToolPrompt = interruptedToolPromptText(msgs)
+           if (interruptedToolPrompt) system.push(interruptedToolPrompt)
+           const format = lastUser.format ?? { type: "text" as const }
           if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
           const streamMessages = [
             ...modelMsgs,
             ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : []),
           ]
            const promptTokens = Token.estimatePayload({
-             system,
+            system: [
+              ...(agent.prompt ? [agent.prompt] : mendPrompt.baseProvider),
+              mendPrompt.focus,
+              mendPrompt.policy,
+              mendPrompt.memory,
+              ...system,
+            ],
              messages: streamMessages,
              tools: Object.fromEntries(
                Object.entries(tools).map(([name, item]) => {
@@ -2447,10 +2528,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             sessionID,
             parentSessionID: session.parentID,
             cwd: ctx.directory,
-            root: ctx.worktree,
+            root: projectRoot,
             system,
             messages: streamMessages,
             memoryMode,
+            mendPrompt,
             tools,
             model,
             toolChoice: format.type === "json_schema" ? "required" : undefined,
@@ -2866,15 +2948,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           scheduled: new Set(),
           running: new Set(),
         }
-        yield* bus
-          .subscribe(BackgroundTask.Event.Notification)
-          .pipe(
+        yield* bus.subscribe(BackgroundTask.Event.Notification).pipe(
             Stream.runForEach((event) => queueOwnerWake({ state: value, ...event })),
             Effect.forkScoped({ startImmediately: true }),
           )
-        yield* bus
-          .subscribe(SessionStatus.Event.Status)
-          .pipe(
+        yield* bus.subscribe(SessionStatus.Event.Status).pipe(
             Stream.filter((event) => event.properties.status.type === "idle"),
             Stream.runForEach((event) => scheduleOwnerWake(event.properties.sessionID)),
             Effect.forkScoped({ startImmediately: true }),

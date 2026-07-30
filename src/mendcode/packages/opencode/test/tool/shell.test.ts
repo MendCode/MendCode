@@ -1130,7 +1130,7 @@ describe("tool.shell abort", () => {
     })
   }, 15_000)
 
-  test("does not label non-user aborts as interrupted or user aborted", async () => {
+  test("explains non-user aborts as unknown and safe to retry", async () => {
     await WithInstance.provide({
       directory: projectRoot,
       fn: async () => {
@@ -1159,7 +1159,14 @@ describe("tool.shell abort", () => {
         expect(res.output).toContain("before")
         expect(res.output).toContain("Command execution stopped before completion")
         expect(res.output).toContain("no explicit user cancel was recorded")
-        expect(res.output).not.toContain("Command output interrupted before completion")
+        expect(res.output).toContain("The command result is unknown")
+        expect(res.output).toContain("retry the exact same command once")
+        expect(res.metadata).toMatchObject({
+          interrupted: true,
+          connectionLost: true,
+          resultUnknown: true,
+          retryRecommended: true,
+        })
         expect(res.output).not.toContain("User aborted the command")
       },
     })
@@ -1183,6 +1190,13 @@ describe("tool.shell abort", () => {
         expect(result.output).toContain("started")
         expect(result.output).toContain("shell tool terminated command after exceeding timeout")
         expect(result.output).toContain("retry with a larger timeout value in milliseconds")
+        expect(result.output).toContain("The command result is unknown because it was stopped by the timeout")
+        expect(result.metadata).toMatchObject({
+          interrupted: true,
+          resultUnknown: true,
+          retryRecommended: true,
+          timeout: true,
+        })
       },
     })
   }, 15_000)

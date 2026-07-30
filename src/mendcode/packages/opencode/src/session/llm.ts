@@ -11,7 +11,7 @@ import { InstanceState } from "@/effect/instance-state"
 import type { Agent } from "@/agent/agent"
 import type { MessageV2 } from "./message-v2"
 import { Plugin } from "@/plugin"
-import { SystemPrompt } from "./system"
+import { SystemPrompt, type MendPromptSnapshot } from "./system"
 import { Flag } from "@mendcode/core/flag/flag"
 import { Permission } from "@/permission"
 import { PermissionID } from "@/permission/schema"
@@ -58,8 +58,8 @@ function lastUserText(messages: ModelMessage[]) {
 function memoryMode(messages: ModelMessage[]) {
   const text = lastUserText(messages) || ""
   return text.includes("The conversation was compacted automatically while the current request was running.")
-    ? "after-compaction" as const
-    : "request" as const
+    ? ("after-compaction" as const)
+    : ("request" as const)
 }
 
 export type StreamInput = {
@@ -74,6 +74,7 @@ export type StreamInput = {
   system: string[]
   messages: ModelMessage[]
   memoryMode?: "request" | "after-compaction"
+  mendPrompt?: MendPromptSnapshot
   small?: boolean
   tools: Record<string, Tool>
   retries?: number
@@ -209,13 +210,24 @@ const live: Layer.Layer<
       // TODO: move this to a proper hook
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
       const mendProjectRoot = input.root || input.cwd
-      const mendFocus = SystemPrompt.mendFocus(input.model)
-      const mendPromptPolicy = yield* Effect.promise(() => SystemPrompt.mendPromptPolicy(input.model, mendProjectRoot))
-      const mendBaseProvider = yield* Effect.promise(() => SystemPrompt.mendBaseProvider(input.model, mendProjectRoot))
+      const mendFocus = input.mendPrompt?.focus ?? SystemPrompt.mendFocus(input.model)
+      const mendPromptPolicy =
+        input.mendPrompt?.policy ??
+        (yield* Effect.promise(() => SystemPrompt.mendPromptPolicy(input.model, mendProjectRoot)))
+      const mendBaseProvider =
+        input.mendPrompt?.baseProvider ??
+        (yield* Effect.promise(() => SystemPrompt.mendBaseProvider(input.model, mendProjectRoot)))
       const memoryQuery = lastUserText(input.messages)
-      const mendMemory = yield* Effect.promise(() =>
-        SystemPrompt.mendMemory(input.model, mendProjectRoot, memoryQuery, input.memoryMode ?? memoryMode(input.messages)),
-      )
+      const mendMemory =
+        input.mendPrompt?.memory ??
+        (yield* Effect.promise(() =>
+          SystemPrompt.mendMemory(
+            input.model,
+            mendProjectRoot,
+            memoryQuery,
+            input.memoryMode ?? memoryMode(input.messages),
+          ),
+        ))
 
       const system: string[] = []
       system.push(

@@ -7,15 +7,16 @@ If you are deciding what to show on GitHub or the website, start with [Feature M
 ## Start Here
 
 1. [Feature Map](features.md): the full product inventory for README, website, screenshots, and demos.
-2. [CLI, setup, and configuration](cli-setup-configuration.md): install/open commands, setup state, config paths, focus profiles, model roles, prompt modes, budget posture, permissions, and memory.
+2. [CLI, setup, and configuration](cli-setup-configuration.md): install/open commands, setup state, config paths, focus profiles, model roles, prompt modes (including named project-local `custom.md` context), budget posture, permissions, and memory.
 3. [Customization](customization.md): prompt input, input marker, prompt status, home centered/split modes, Agent View, ASCII title/mascot, activity states, and team profile examples.
-4. [Plan Mode](plan-mode.md): interactive plan review modal, approve/edit/comment/reject flow, Mermaid support, and post-approval implementation handoff.
-5. [Changes Review](changes-review.md): `/changes` diff workspace, keybinds, comments, responsive layout, and agent-visible review context.
-6. [Loop Workflows](loop-workflows.md): durable loop sessions, Agent View loop roots, `/loop` creation, `/loops` supervision, dry-run/report-only/full execution modes, terminal monitor, and OS background service.
-7. [Memory Center](memory-center.md): saved memories, proposals, categories, Dream status, project grouping, and the constrained memory side agent for questions, explanations, and draft proposals.
-8. [Usage Insights](usage-insights.md): global/project activity dashboard, token heatmap, AI time, top tools/agents/models, cache behavior, and weather.
-9. [Packages and team sharing](packages-and-team-sharing.md): package commands, agents, modes, skills, prompts, MCP files, widgets, TUI profiles, model policy, permissions, memory, and worktree policy for teams.
-10. [Automation runtime](automation-runtime.md): session automation commands, versioned JSON envelopes, shared model selection, progress inspection, events, waiting, and cancellation.
+4. [Custom tool calls](custom-tool-calls.md): project-local and package-shared assistant tools with typed arguments, execution context, metadata, and permission checks.
+5. [Plan Mode](plan-mode.md): interactive plan review modal, approve/edit/comment/reject flow, Mermaid support, and post-approval implementation handoff.
+6. [Changes Review](changes-review.md): `/changes` diff workspace, keybinds, comments, responsive layout, and agent-visible review context.
+7. [Loop Workflows](loop-workflows.md): durable loop sessions, Agent View loop roots, `/loop` creation, `/loops` supervision, dry-run/report-only/full execution modes, terminal monitor, and OS background service.
+8. [Memory Center](memory-center.md): saved memories, proposals, categories, Dream status, project grouping, and the constrained memory side agent for questions, explanations, and draft proposals.
+9. [Usage Insights](usage-insights.md): global/project activity dashboard, token heatmap, AI time, top tools/agents/models, cache behavior, and weather.
+10. [Packages and team sharing](packages-and-team-sharing.md): package commands, agents, modes, skills, prompts, MCP files, widgets, TUI profiles, model policy, permissions, memory, and worktree policy for teams.
+11. [Automation runtime](automation-runtime.md): session automation commands, versioned JSON envelopes, shared model selection, progress inspection, events, waiting, and cancellation.
 
 ## Configure The Harness
 
@@ -89,6 +90,7 @@ Ctrl+P -> Home mascot ASCII
 Ctrl+P -> Home welcome mode
 Ctrl+P -> Home split panel
 Ctrl+P -> Prompt chrome
+Ctrl+P -> Prompt context (`minimal`, `focus`, `full`, or project `custom`)
 Ctrl+P -> Prompt lead string
 Ctrl+P -> Prompt status placement
 Ctrl+P -> Chat presentation
@@ -116,7 +118,8 @@ CLI profile inspection exists for compatibility/debugging, but it is not the nor
 - `src/mendcode/packages/opencode/src/cli/cmd/session.ts` and `src/mendcode/packages/opencode/src/cli/automation.ts`: session automation commands and the `mendcode.cli.v1` JSON envelope.
 - `src/mendcode/packages/opencode/src/cli/cmd/run.ts` and `src/mendcode/packages/opencode/src/cli/model-selection.ts`: headless streaming and runtime model/agent resolution.
 - `src/mendcode/packages/opencode/src/mend/config/permissions.ts`: global permission mode and smart-reviewer role config.
-- `src/mendcode/packages/opencode/src/mend/prompt/mode.ts`: prompt modes: `minimal`, `focus`, `full`.
+- `src/mendcode/packages/opencode/src/mend/prompt/mode.ts`: prompt modes: `minimal`, `focus`, `full`, and project-local `custom`.
+- `src/mendcode/packages/opencode/src/mend/prompt/custom.ts`: bounded, root-safe loader for `.mendcode/prompts/custom.md`.
 - `src/mendcode/packages/opencode/src/mend/memory/`: approval-gated memory storage, proposals, retrieval, graph, Dream, side chat, workspaces, and category policy.
 - `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/memory/index.tsx`: Memory Center route, category policy, Dream panel, inspector, and constrained memory side agent.
 - `src/mendcode/packages/opencode/src/mend/config/mflow.ts`: local-first mflow setup, relay config, edit-lock enforcement.

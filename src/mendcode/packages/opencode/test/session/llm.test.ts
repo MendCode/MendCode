@@ -369,6 +369,13 @@ describe("session.llm.stream", () => {
           agent,
           system: ["You are a helpful assistant."],
           messages: [{ role: "user", content: "Hello" }],
+          mendPrompt: {
+            baseProvider: [],
+            focus:
+              "<mendcode_focus>gemini</mendcode_focus>\nFocus: gemini\nwithout replacing the provider system prompt",
+            policy: "always say first Hello World!",
+            memory: "",
+          },
           tools: {},
         })
 
@@ -388,6 +395,7 @@ describe("session.llm.stream", () => {
         expect(JSON.stringify(body)).toContain("<mendcode_focus>")
         expect(JSON.stringify(body)).toContain("Focus: gemini")
         expect(JSON.stringify(body)).toContain("without replacing the provider system prompt")
+        expect(JSON.stringify(body)).toContain("always say first Hello World!")
 
         const maxTokens = (body.max_tokens as number | undefined) ?? (body.max_output_tokens as number | undefined)
         const expectedMaxTokens = ProviderTransform.maxOutputTokens(resolved)
