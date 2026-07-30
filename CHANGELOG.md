@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.22 - 2026-07-29
+
+### Fixed
+
+- Show the startup update modal for patch releases by default instead of silently attempting an automatic update; explicit `autoupdate: true` keeps silent patch upgrades available.
+- Add regression coverage for the `0.1.20` to `0.1.21` update path.
+
 ## 0.1.21 - 2026-07-29
 
 MendCode v0.1.21 is a focused reliability and customization release. It adds project-owned prompt context, improves prompt/runtime boundaries, protects active sessions during cancellation and reconnects, preserves useful media through compaction, and refreshes the public setup and customization documentation.
