@@ -133,8 +133,9 @@ test("interrupted tool prompts require a safe exact retry", () => {
   expect(text).toContain('<mendcode_runtime_event type="interrupted_tool">')
   expect(text).toContain("Treat that result as unknown")
   expect(text).toContain("retry that exact command once")
-  expect(text).toContain("do not repeat destructive actions blindly")
+   expect(text).toContain("do not repeat destructive actions blindly")
 })
+
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -1138,12 +1139,10 @@ it.live("wakes an async parent by default for a background task", () =>
       expect(yield* llm.calls).toBe(2)
       const messages = yield* sessions.messages({ sessionID: parent.id })
       expect(
-        messages.some(
-          (message) =>
+        messages.some((message) =>
           message.info.role === "user" &&
           message.parts.some(
-              (part) =>
-                part.type === "text" && part.synthetic === true && part.metadata?.kind === "background_task_owner_wake",
+            (part) => part.type === "text" && part.synthetic === true && part.metadata?.kind === "background_task_owner_wake",
           ),
         ),
       ).toBe(true)
@@ -1491,11 +1490,7 @@ it.live("runs a prompt queued during compaction after the resumed turn", () =>
       yield* llm.wait(1)
       const compactionStatus = yield* status.get(chat.id)
       expect(compactionStatus).toEqual(
-        expect.objectContaining({
-          type: "busy",
-          kind: "compaction",
-          message: SessionStatus.SESSION_ACTIVITY_COMPACTION,
-        }),
+        expect.objectContaining({ type: "busy", kind: "compaction", message: SessionStatus.SESSION_ACTIVITY_COMPACTION }),
       )
 
       const queued = yield* prompt

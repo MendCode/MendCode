@@ -710,8 +710,7 @@ export function Session() {
       const parts = sync.data.part[message.id] ?? []
       latest ??= parts.findLast((candidate) => candidate.type === "tool" && candidate.tool === "todowrite")?.id
       latestCompleted ??= parts.findLast(
-        (candidate) =>
-          candidate.type === "tool" && candidate.tool === "todowrite" && candidate.state.status === "completed",
+        (candidate) => candidate.type === "tool" && candidate.tool === "todowrite" && candidate.state.status === "completed",
       )?.id
       if (latest && latestCompleted) break
     }
@@ -4086,12 +4085,10 @@ function SessionTopNav(props: { mode: "subagent" | "loop"; canCycle?: boolean; h
   const keybind = useKeybind()
   const command = useCommandDialog()
   const [hover, setHover] = createSignal<"parent" | "prev" | "next" | null>(null)
-  const items = createMemo<
-    (SessionTopbarNavItem & {
+  const items = createMemo<(SessionTopbarNavItem & {
     id: "parent" | "prev" | "next"
     commandID: "session.parent" | "session.child.previous" | "session.child.next"
-    })[]
-  >(() => {
+  })[]>(() => {
     const all = [
       {
         id: "parent" as const,

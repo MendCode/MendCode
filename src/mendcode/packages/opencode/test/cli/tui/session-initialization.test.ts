@@ -37,6 +37,7 @@ describe("session route initialization", () => {
      expect(source).toContain("return navigateRoute(...args)")
      expect(source).toContain("if (activeSessionID !== sessionID) rememberSessionScroll(activeSessionID)")
 
+
     expect(source).toContain("onMouseUp={handleOpenTarget}")
     expect(sessionV2).toContain("const handleOpenFirstLoop = () =>")
     expect(sessionV2).toContain("onMouseUp={handleOpenFirstLoop}")

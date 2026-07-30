@@ -813,13 +813,11 @@ export function Prompt(props: PromptProps) {
           if (started) setWorkingStartedAt(started)
           return
         }
-        if (
-          !shouldClearWorkingStartedAt({
+        if (!shouldClearWorkingStartedAt({
           statusType,
           hasActiveWorkingAssistant: hasActiveAssistant,
           permissionPending,
-          })
-        ) {
+        })) {
           return
         }
         setWorkingStartedAt(undefined)

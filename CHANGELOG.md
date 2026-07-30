@@ -87,6 +87,7 @@ MendCode v0.1.21 is a focused reliability and customization release. It adds pro
 - Keep prompt/queue working state, compaction progress, background-task notifications, and session rendering synchronized during active turns.
 - Persist async prompts before acknowledging them with HTTP 204 and surface prompt failures through the existing session error event.
 - Harden legacy relay URL recognition, OAuth error pages, and cryptographic ID/PKCE generation against security scanner findings.
+- Unmount the hidden session prompt while a question or permission prompt owns input, preventing stale prompt rows and focus state from leaking into the transcript.
 
 ### Tests
 
@@ -99,6 +100,7 @@ MendCode v0.1.21 is a focused reliability and customization release. It adds pro
 - Add regressions for batched duplicate message updates, pinned user turns, sparse refreshes, bounded transcript retention, compaction pairing, and prompt working-state transitions.
 - Add command-search and async-prompt persistence regressions.
 - Align title-generation fixtures and session transcript assertions with the current prompt and compaction-boundary behavior.
+- Validate prompt visibility and TUI startup after question/permission interactions.
 
 ## 0.1.19 - 2026-06-25
 
