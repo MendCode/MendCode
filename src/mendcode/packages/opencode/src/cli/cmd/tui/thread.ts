@@ -3,7 +3,8 @@ import { tui } from "./app"
 import { Rpc } from "@/util/rpc"
 import { type rpc } from "./worker"
 import { spawn, type ChildProcess } from "child_process"
-import { stat } from "fs/promises"
+import { readdir, stat } from "fs/promises"
+import { createHash } from "crypto"
 import path from "path"
 import { existsSync } from "fs"
 import { fileURLToPath } from "url"
@@ -208,7 +209,29 @@ async function sharedServerRuntimeID(runtimeCwd: string) {
   const entry = runtimeEntrypoint(runtimeCwd)
   const executable = entry || process.execPath
   const metadata = await stat(executable).catch(() => undefined)
-  return [executable, metadata?.size ?? "unknown", metadata?.mtimeMs ?? "unknown"].join(":")
+  if (!entry) return [executable, metadata?.size ?? "unknown", metadata?.mtimeMs ?? "unknown"].join(":")
+
+  // Bun executes imported TypeScript directly in local builds, so the entrypoint
+  // mtime alone cannot detect stale code in a shared server.
+  const packageRoot = path.dirname(path.dirname(entry))
+  const sourceRoot = path.join(packageRoot, "src")
+  const sourceFiles: string[] = []
+  const visit = async (directory: string): Promise<void> => {
+    const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
+    await Promise.all(
+      entries.map(async (item) => {
+        const file = path.join(directory, item.name)
+        if (item.isDirectory()) return visit(file)
+        if (!item.isFile()) return
+        const fileMetadata = await stat(file).catch(() => undefined)
+        if (!fileMetadata) return
+        sourceFiles.push(`${path.relative(packageRoot, file)}:${fileMetadata.size}:${fileMetadata.mtimeMs}`)
+      }),
+    )
+  }
+  await visit(sourceRoot)
+  const sourceHash = createHash("sha256").update(sourceFiles.sort().join("\n")).digest("hex")
+  return [executable, metadata?.size ?? "unknown", metadata?.mtimeMs ?? "unknown", sourceHash].join(":")
 }
 
 async function ensureLocalSharedServer(input: {

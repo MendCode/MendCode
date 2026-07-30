@@ -839,9 +839,7 @@ function previewUnknown(input: unknown, maxChars: number, label: string, depth =
   if (Array.isArray(input)) {
     const itemLimit = Math.min(TUI_PREVIEW_ARRAY_LIMIT, Math.max(1, Math.floor(maxChars / 1024)))
     const itemMaxChars = Math.max(256, Math.floor(maxChars / itemLimit))
-    return input
-      .slice(0, itemLimit)
-      .map((item) => previewUnknown(item, itemMaxChars, label, depth + 1))
+    return input.slice(0, itemLimit).map((item) => previewUnknown(item, itemMaxChars, label, depth + 1))
   }
 
   const result: Record<string, unknown> = {}
@@ -1169,7 +1167,11 @@ function dataUrlMediaType(url: string) {
 export const toModelMessagesEffect = Effect.fnUntraced(function* (
   input: WithParts[],
   model: Provider.Model,
-  options?: { stripMedia?: boolean; toolOutputMaxChars?: number },
+  options?: {
+    stripMedia?: boolean
+    toolOutputMaxChars?: number
+    preserveMedia?: (message: WithParts, part: FilePart) => boolean
+  },
 ) {
   const result: UIMessage[] = []
   const toolNames = new Set<string>()
@@ -1239,7 +1241,8 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
           })
         // text/plain and directory files are converted into text parts, ignore them
         if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory") {
-          if (options?.stripMedia && isMedia(part.mime)) {
+          const preserveMedia = options?.preserveMedia?.(msg, part) === true
+          if (options?.stripMedia && isMedia(part.mime) && !preserveMedia) {
             userMessage.parts.push({
               type: "text",
               text: `[Attached ${part.mime}: ${part.filename ?? "file"}]`,
@@ -1429,7 +1432,11 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
 export function toModelMessages(
   input: WithParts[],
   model: Provider.Model,
-  options?: { stripMedia?: boolean; toolOutputMaxChars?: number },
+  options?: {
+    stripMedia?: boolean
+    toolOutputMaxChars?: number
+    preserveMedia?: (message: WithParts, part: FilePart) => boolean
+  },
 ): Promise<ModelMessage[]> {
   return Effect.runPromise(toModelMessagesEffect(input, model, options).pipe(Effect.provide(EffectLogger.layer)))
 }
@@ -1883,7 +1890,11 @@ export type RevertScan = {
  * Full message payloads can contain large tool outputs and summaries, so the
  * normal transcript hydration path is intentionally not used here.
  */
-export function revertScan(input: { sessionID: SessionID; messageID: MessageID; partID?: PartID }): RevertScan | undefined {
+export function revertScan(input: {
+  sessionID: SessionID
+  messageID: MessageID
+  partID?: PartID
+}): RevertScan | undefined {
   const timeline = revertTimeline(input.sessionID)
   const partID = input.partID
   const targetMessageID = partID

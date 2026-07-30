@@ -108,7 +108,9 @@ function assistantInfo(
 
 function zlibFetchError(url: string, options?: { path?: string }): FetchDecompressionErrorFixture {
   return Object.assign(
-    new Error(`ZlibError fetching "${url}". For more information, pass \`verbose: true\` in the second argument to fetch()`),
+    new Error(
+      `ZlibError fetching "${url}". For more information, pass \`verbose: true\` in the second argument to fetch()`,
+    ),
     {
       code: "ZlibError" as const,
       errno: 0,
@@ -280,6 +282,68 @@ describe("session.message-v2.toModelMessage", () => {
           },
           { type: "text", text: MessageV2.COMPACTION_CONTEXT_MARKER },
           { type: "text", text: "The following tool was executed by the user" },
+        ],
+      },
+    ])
+  })
+
+  test("preserves marked compaction resume images while stripping other media", async () => {
+    const input: MessageV2.WithParts[] = [
+      {
+        info: userInfo("m-old"),
+        parts: [
+          {
+            ...basePart("m-old", "old-image"),
+            type: "file",
+            mime: "image/png",
+            filename: "old.png",
+            url: "https://example.com/old.png",
+          },
+        ] as MessageV2.Part[],
+      },
+      {
+        info: userInfo("m-resume"),
+        parts: [
+          {
+            ...basePart("m-resume", "resume-text"),
+            type: "text",
+            text: "Continue from the summary.",
+            metadata: { compaction_continue: true },
+          },
+          {
+            ...basePart("m-resume", "resume-image"),
+            type: "file",
+            mime: "image/png",
+            filename: "resume.png",
+            url: "https://example.com/resume.png",
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    expect(
+      await MessageV2.toModelMessages(input, model, {
+        stripMedia: true,
+        preserveMedia: (message, part) =>
+          message.info.role === "user" &&
+          message.parts.some((item) => item.type === "text" && item.metadata?.compaction_continue === true) &&
+          part.mime.startsWith("image/"),
+      }),
+    ).toStrictEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "[Attached image/png: old.png]" }],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Continue from the summary." },
+          {
+            type: "file",
+            mediaType: "image/png",
+            filename: "resume.png",
+            data: "https://example.com/resume.png",
+          },
         ],
       },
     ])
@@ -694,7 +758,10 @@ describe("session.message-v2.toModelMessage", () => {
               type: "content",
               value: [
                 { type: "text", text: "ok" },
-                { type: "text", text: "ERROR: Attached image/png file is empty or corrupted. Ask the user to re-attach it." },
+                {
+                  type: "text",
+                  text: "ERROR: Attached image/png file is empty or corrupted. Ask the user to re-attach it.",
+                },
               ],
             },
           },

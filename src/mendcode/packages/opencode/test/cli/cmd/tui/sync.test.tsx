@@ -146,9 +146,7 @@ async function mount(
   return { app, kv, sync, session: calls.session }
 }
 
-async function mountSSE(
-  overrides: Record<string, Response | unknown | ((url: URL) => Response | unknown)> = {},
-) {
+async function mountSSE(overrides: Record<string, Response | unknown | ((url: URL) => Response | unknown)> = {}) {
   const calls = createFetch(overrides)
   const controllers: ReadableStreamDefaultController<Uint8Array>[] = []
   const fetch = Object.assign(
@@ -663,7 +661,10 @@ describe("tui sync", () => {
       page = [user]
       await sync.session.sync(sessionID, { force: true })
 
-      expect(sync.data.message[sessionID]?.map((message) => message.id)).toEqual([user.info.id, activeAssistant.info.id])
+      expect(sync.data.message[sessionID]?.map((message) => message.id)).toEqual([
+        user.info.id,
+        activeAssistant.info.id,
+      ])
 
       emit({
         directory,
@@ -2022,7 +2023,8 @@ describe("tui sync", () => {
     try {
       await sync.session.sync(sessionID, { force: true })
       const loaded = await sync.session.loadFullToolPart(sessionID, messageID, partID)
-      const storedInput = (sync.data.part[messageID]?.[0] as { state?: { input?: { content?: string } } } | undefined)?.state?.input
+      const storedInput = (sync.data.part[messageID]?.[0] as { state?: { input?: { content?: string } } } | undefined)
+        ?.state?.input
 
       expect(fullRequests).toBe(1)
       expect(loaded?.type).toBe("tool")
@@ -2030,9 +2032,10 @@ describe("tui sync", () => {
       expect(storedInput?.content).toContain("tool input.content preview truncated")
       expect(storedInput?.content?.length).toBeLessThanOrEqual(512 * 1024)
       expect(loaded?.state.status === "completed" ? loaded.state.metadata?.diff : undefined).toContain("+last")
-      expect((sync.data.part[messageID]?.[0] as { state?: { metadata?: { diff?: string } } } | undefined)?.state?.metadata?.diff).toContain(
-        "Diff preview truncated",
-      )
+      expect(
+        (sync.data.part[messageID]?.[0] as { state?: { metadata?: { diff?: string } } } | undefined)?.state?.metadata
+          ?.diff,
+      ).toContain("Diff preview truncated")
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous
@@ -2096,7 +2099,9 @@ describe("tui sync", () => {
       await sync.session.sync(sessionID, { force: true })
       const stored = sync.data.part[messageID]?.[0]
       expect(stored?.type).toBe("tool")
-      expect(stored?.type === "tool" && stored.state.status === "completed" ? stored.state.input.todos : undefined).toHaveLength(12)
+      expect(
+        stored?.type === "tool" && stored.state.status === "completed" ? stored.state.input.todos : undefined,
+      ).toHaveLength(12)
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous
@@ -2431,10 +2436,7 @@ describe("tui sync", () => {
     )
 
     try {
-      sync.set("message", sessionID, [
-        ...initialMessages,
-        previousAssistant,
-      ] as any)
+      sync.set("message", sessionID, [...initialMessages, previousAssistant] as any)
       sync.set("session_latest_assistant", sessionID, previousAssistant as any)
       sync.session.pinMessage(sessionID, optimisticUser.id)
       const userEvent = {
@@ -2463,7 +2465,6 @@ describe("tui sync", () => {
       emit(userEvent)
        await wait(() => sync.data.message[sessionID]?.some((message) => message.id === optimisticUser.id) === true)
        emit(assistantEvent)
-
 
        await wait(() => sync.data.message[sessionID]?.some((message) => message.id === nextAssistant.id) === true)
        const messages = sync.data.message[sessionID] ?? []
@@ -3478,6 +3479,65 @@ describe("tui sync", () => {
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous
+    }
+  })
+
+  test("legacy sync refreshes pending questions after a worker transport reconnect", async () => {
+    let emit!: (event: GlobalEvent) => void
+    const sessionID = "ses_question_reconnect"
+    const request = {
+      id: "que_question_reconnect",
+      sessionID,
+      questions: [
+        {
+          header: "Migration",
+          question: "Which tasks should be migrated?",
+          options: [{ label: "Recent", description: "Only recent tasks" }],
+        },
+      ],
+    }
+    let pending: unknown[] = []
+    const { app, sync } = await mount(
+      {
+        "/question": () => pending,
+      },
+      {
+        events: eventSource({
+          onSubscribe: (handler) => {
+            emit = handler
+          },
+        }),
+      },
+    )
+
+    try {
+      pending = [request]
+      emit({
+        directory: "global",
+        project: "proj_test",
+        payload: {
+          id: "evt_question_reconnected",
+          type: "server.connected",
+          properties: {},
+        },
+      } as GlobalEvent)
+      emit({
+        directory: "global",
+        project: "proj_test",
+        payload: {
+          id: "evt_question_reconnected_heartbeat",
+          type: "server.heartbeat",
+          properties: {},
+        },
+      } as GlobalEvent)
+
+      await wait(() => sync.data.question[sessionID]?.[0]?.id === request.id)
+      const actual = sync.data.question[sessionID]?.[0]
+      expect(actual?.id).toBe(request.id)
+      expect(actual?.sessionID).toBe(request.sessionID)
+      expect(actual?.questions[0]?.question).toBe(request.questions[0]?.question)
+    } finally {
+      app.renderer.destroy()
     }
   })
 

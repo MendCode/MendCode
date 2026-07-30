@@ -107,7 +107,10 @@ export type MendPromptStatusScriptResult = {
   output: MendPromptStatusScriptOutput
 }
 
-const scriptCache = new Map<string, { value: MendPromptStatusScriptOutput; expiresAt: number; inflight?: Promise<MendPromptStatusScriptOutput> }>()
+const scriptCache = new Map<
+  string,
+  { value: MendPromptStatusScriptOutput; expiresAt: number; inflight?: Promise<MendPromptStatusScriptOutput> }
+>()
 const scriptWarmCache = new Map<string, { value: MendPromptStatusScriptOutput; expiresAt: number }>()
 
 function warmCacheKey(input: MendPromptStatusScriptInput) {
@@ -226,7 +229,10 @@ export function defaultPromptStatus(): MendPromptStatusConfig {
   }
 }
 
-export function resolvePromptStatus(config: MendPromptStatusConfig | null | undefined, preset: MendPromptChromePreset): MendPromptStatusResolved {
+export function resolvePromptStatus(
+  config: MendPromptStatusConfig | null | undefined,
+  preset: MendPromptChromePreset,
+): MendPromptStatusResolved {
   const defaults = defaultPromptStatus()
   const merged = {
     ...defaults,
@@ -339,11 +345,13 @@ function parseScriptOutput(text: string): MendPromptStatusScriptOutput {
       if (rawSegments) {
         const segments = rawSegments
           .filter((item: unknown): item is Record<string, unknown> => typeof item === "object" && item !== null)
-          .map((item: Record<string, unknown>): MendPromptStatusScriptSegment => ({
+          .map(
+            (item: Record<string, unknown>): MendPromptStatusScriptSegment => ({
             text: typeof item.text === "string" ? item.text : "",
             fg: typeof item.fg === "string" ? item.fg : undefined,
             bold: item.bold === true,
-          }))
+            }),
+          )
           .filter((item: MendPromptStatusScriptSegment) => item.text.trim())
         if (segments.length) {
           return {
@@ -377,7 +385,7 @@ export async function readPromptStatusScript(input: MendPromptStatusScriptInput)
   if (cached && cached.expiresAt > now && !cached.inflight) return cached.value
   if (cached?.inflight) return cached.inflight
 
-  const inflight = run(["sh", "-lc", input.command], {
+  const inflight = run(["bash", "-lc", input.command], {
     cwd: input.root,
     timeout: input.timeoutMs,
     nothrow: true,
@@ -419,13 +427,10 @@ export async function readPromptStatusScript(input: MendPromptStatusScriptInput)
       return value
     })
 
-  scriptCache.set(
-    key,
-    {
+  scriptCache.set(key, {
       value: cached?.value || (warmed && warmed.expiresAt > now ? warmed.value : { text: "" }),
       expiresAt: now + 1000,
       inflight,
-    },
-  )
+  })
   return inflight
 }

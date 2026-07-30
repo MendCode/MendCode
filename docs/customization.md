@@ -957,7 +957,7 @@ Use plugins when customization needs live logic instead of static profile data.
 
 The `@mendcode/plugin` package supports:
 
-- custom tools
+- custom tools (see [Custom Tool Calls](custom-tool-calls.md))
 - TUI routes
 - commands
 - dialogs

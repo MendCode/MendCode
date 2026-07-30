@@ -43,6 +43,7 @@ import {
   shouldPreflightPromptOverflow,
   shouldSkipAutoCompaction,
   ownerWakePromptText,
+  interruptedToolPromptText,
 } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
@@ -98,6 +99,43 @@ test("owner wake prompts are internal runtime context", () => {
   expect(text).toContain("task_status")
   expect(text).toContain("Do not poll or wait")
 })
+
+test("interrupted tool prompts require a safe exact retry", () => {
+  const user = promptUser([{ type: "text", id: PartID.ascending(), text: "run the checks" }])
+  const assistant = promptAssistant(
+    {
+      id: MessageID.ascending(),
+      finish: "tool-calls",
+      summary: false,
+      parentID: user.info.id,
+    },
+    [
+      {
+        id: PartID.ascending(),
+        sessionID: user.info.sessionID,
+        messageID: MessageID.ascending(),
+        type: "tool",
+        callID: "call-interrupted",
+        tool: "shell",
+        state: {
+          status: "completed",
+          input: { command: "bun typecheck" },
+          output: "connection lost",
+          title: "Run checks",
+          metadata: { connectionLost: true, resultUnknown: true, retryRecommended: true },
+          time: { start: Date.now(), end: Date.now() },
+        },
+      },
+    ],
+  )
+
+  const text = interruptedToolPromptText([user, assistant])
+  expect(text).toContain('<mendcode_runtime_event type="interrupted_tool">')
+  expect(text).toContain("Treat that result as unknown")
+  expect(text).toContain("retry that exact command once")
+   expect(text).toContain("do not repeat destructive actions blindly")
+})
+
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -333,6 +371,50 @@ function promptAssistant(
   }
 }
 
+runStateIt.instance("cancels queued work with the active session", () =>
+  Effect.gen(function* () {
+    const state = yield* SessionRunState.Service
+    const sessionID = SessionID.make("ses-run-state-cancel-queue")
+    const started = yield* Deferred.make<void>()
+    const fallback = promptAssistant({
+      id: MessageID.ascending(),
+      finish: "stop",
+      summary: false,
+      parentID: MessageID.ascending(),
+    })
+    const queuedResult = promptAssistant({
+      id: MessageID.ascending(),
+      finish: "stop",
+      summary: false,
+      parentID: MessageID.ascending(),
+    })
+    const active = yield* state
+      .ensureRunning(
+        sessionID,
+        Effect.succeed(fallback),
+        Effect.gen(function* () {
+          yield* Deferred.succeed(started, undefined)
+          return yield* Effect.never
+        }),
+      )
+      .pipe(Effect.forkChild)
+    yield* Deferred.await(started).pipe(Effect.timeout("1 second"))
+
+    const queued = yield* state
+      .ensureRunning(sessionID, Effect.succeed(fallback), Effect.succeed(queuedResult), { queue: true })
+      .pipe(Effect.forkChild)
+    yield* Effect.sleep("10 millis")
+
+    yield* state.cancel(sessionID)
+
+    expect((yield* Fiber.join(active)).info.id).toBe(fallback.info.id)
+    const queuedValue = yield* Fiber.join(queued)
+    expect(queuedValue.info.id).toBe(fallback.info.id)
+    expect(queuedValue.info.id).not.toBe(queuedResult.info.id)
+    expect(yield* state.isBusy(sessionID)).toBe(false)
+  }),
+)
+
 runStateIt.instance("keeps the runner identity during idle cleanup", () =>
   Effect.gen(function* () {
     const state = yield* SessionRunState.Service
@@ -465,11 +547,26 @@ test("auto rescue compaction stops only after repeated rescues without progress"
   const realUser = promptUser([{ type: "text", id: PartID.ascending(), text: "finish the request" }])
   const normalCompaction = compactionUser(false)
   const firstRescue = compactionUser(true, 1)
-  const firstWork = promptAssistant({ id: MessageID.ascending(), finish: "tool-calls", summary: false, parentID: realUser.info.id })
+  const firstWork = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "tool-calls",
+    summary: false,
+    parentID: realUser.info.id,
+  })
   const secondRescue = compactionUser(true, 2)
-  const secondWork = promptAssistant({ id: MessageID.ascending(), finish: "tool-calls", summary: false, parentID: realUser.info.id })
+  const secondWork = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "tool-calls",
+    summary: false,
+    parentID: realUser.info.id,
+  })
   const thirdRescue = compactionUser(true, 3)
-  const thirdWork = promptAssistant({ id: MessageID.ascending(), finish: "tool-calls", summary: false, parentID: realUser.info.id })
+  const thirdWork = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "tool-calls",
+    summary: false,
+    parentID: realUser.info.id,
+  })
 
   expect(autoRescueCompactionCount([realUser, normalCompaction])).toBe(0)
   expect(autoRescueCompactionCount([realUser, firstRescue])).toBe(1)
@@ -973,19 +1070,19 @@ it.live("wakes an idle parent by default for a background task", () =>
         background: true,
         result: { summary: "Cache is healthy." },
       })
-      const events = Database.use((db) =>
-        db.select().from(BackgroundTaskEventTable).all(),
-      )
+      const events = Database.use((db) => db.select().from(BackgroundTaskEventTable).all())
       expect(events.at(-1)?.payload).toMatchObject({ background: true })
       yield* Effect.sleep(500)
 
       expect(yield* llm.calls).toBe(1)
       const messages = yield* sessions.messages({ sessionID: parent.id })
       expect(
-        messages.some((message) =>
+        messages.some(
+          (message) =>
           message.info.role === "user" &&
           message.parts.some(
-            (part) => part.type === "text" && part.synthetic === true && part.metadata?.kind === "background_task_owner_wake",
+              (part) =>
+                part.type === "text" && part.synthetic === true && part.metadata?.kind === "background_task_owner_wake",
           ),
         ),
       ).toBe(true)
@@ -1049,6 +1146,61 @@ it.live("wakes an async parent by default for a background task", () =>
           ),
         ),
       ).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url: string) => ({
+        ...providerCfg(url),
+      }),
+    },
+  ),
+)
+
+it.live("does not wake a parent after manual cancellation", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const tasks = yield* BackgroundTask.Service
+      const parent = yield* sessions.create({ title: "Cancelled owner wake parent" })
+      yield* llm.text("parent ready")
+      yield* prompt.prompt({
+        sessionID: parent.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "start" }],
+      })
+
+      const child = yield* sessions.create({ parentID: parent.id, title: "Inspect cache", agent: "general" })
+      const run = yield* tasks.start({
+        taskID: child.id,
+        parentSessionID: parent.id,
+        title: "Inspect cache",
+        agent: "general",
+        startRunning: true,
+      })
+      yield* prompt.cancel(parent.id)
+      yield* tasks.finish({
+        taskID: child.id,
+        generation: run.generation,
+        state: "completed",
+        background: true,
+        result: { summary: "Cache is healthy." },
+      })
+      yield* Effect.sleep(500)
+
+      const messages = yield* sessions.messages({ sessionID: parent.id })
+      expect(
+        messages.some(
+          (message) =>
+            message.info.role === "user" &&
+            message.parts.some(
+              (part) =>
+                part.type === "text" && part.synthetic === true && part.metadata?.kind === "background_task_owner_wake",
+            ),
+        ),
+      ).toBe(false)
+      expect(yield* llm.calls).toBe(1)
     }),
     {
       git: true,
@@ -1629,7 +1781,6 @@ it.live("publishes bounded tool activity until the prompt returns to idle", () =
   ),
 )
 
-
 it.live("runs distinct queued prompts in FIFO order", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {
@@ -1774,9 +1925,9 @@ it.live("removes an edited queued prompt before sending its replacement", () =>
         Fiber.join(replacement),
       ])
       expect(cancelledResult.info.role).toBe("assistant")
-      expect(
-        activeResult.parts.some((part) => part.type === "text" && part.text === "active response complete"),
-      ).toBe(true)
+      expect(activeResult.parts.some((part) => part.type === "text" && part.text === "active response complete")).toBe(
+        true,
+      )
       expect(
         replacementResult.parts.some((part) => part.type === "text" && part.text === "edited queued response"),
       ).toBe(true)
@@ -1849,9 +2000,7 @@ it.live("keeps direct in-place queued prompt replacement compatible", () =>
         parts: [{ type: "text", text: "queued request after edit" }],
       })
       expect(edited.info.id).toBe(queuedID)
-      expect(edited.parts.some((part) => part.type === "text" && part.text === "queued request after edit")).toBe(
-        true,
-      )
+      expect(edited.parts.some((part) => part.type === "text" && part.text === "queued request after edit")).toBe(true)
       expect(edited.parts.some((part) => part.type === "text" && part.text === "queued request before edit")).toBe(
         false,
       )
@@ -1868,12 +2017,12 @@ it.live("keeps direct in-place queued prompt replacement compatible", () =>
 
       gate.resolve()
       const [activeResult, queuedResult] = yield* Effect.all([Fiber.join(active), Fiber.join(queued)])
-      expect(
-        activeResult.parts.some((part) => part.type === "text" && part.text === "active response complete"),
-      ).toBe(true)
-      expect(
-        queuedResult.parts.some((part) => part.type === "text" && part.text === "edited queued response"),
-      ).toBe(true)
+      expect(activeResult.parts.some((part) => part.type === "text" && part.text === "active response complete")).toBe(
+        true,
+      )
+      expect(queuedResult.parts.some((part) => part.type === "text" && part.text === "edited queued response")).toBe(
+        true,
+      )
       expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("queued request after edit"))).toBe(
         true,
       )
