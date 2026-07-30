@@ -16,7 +16,7 @@ import type { Agent } from "@/agent/agent"
 import { Permission } from "@/permission"
 import { Skill } from "@/skill"
 import { resolvePromptFocus } from "@/mend/prompt/focus-resolver"
-import { composePromptPolicy } from "@/mend/prompt/compose"
+import { composePromptPolicy, type PromptComposition } from "@/mend/prompt/compose"
 import { readPromptMode } from "@/mend/prompt/mode"
 import { mendMemoryContext } from "@/mend/memory/retrieve"
 
@@ -67,18 +67,43 @@ export function mendFocus(model: Provider.Model) {
   ].join("\n")
 }
 
-export async function mendPromptPolicy(model: Provider.Model, root?: string) {
+type PromptPolicyOptions = { policy?: PromptComposition }
+
+export type MendPromptSnapshot = {
+  baseProvider: string[]
+  focus: string
+  policy: string
+  memory: string
+}
+
+async function resolvePromptPolicy(model: Provider.Model, root?: string, options: PromptPolicyOptions = {}) {
+  if (options.policy) {
+    return {
+      policy: options.policy,
+      resolution: resolvePromptFocus({
+        providerID: model.providerID,
+        modelID: model.api.id || model.id,
+      }),
+    }
+  }
   const mode = await readPromptMode(root)
   const resolution = resolvePromptFocus({
     providerID: model.providerID,
     modelID: model.api.id || model.id,
   })
-  const policy = await composePromptPolicy({
+  return {
+    policy: await composePromptPolicy({
     mode: mode.mode,
+      customFile: mode.customPrompt.path,
     focusID: resolution.focusID,
     modelID: model.api.id || model.id,
     root,
-  })
+    }),
+    resolution,
+  }
+}
+
+function formatMendPromptPolicy(policy: PromptComposition, resolution: ReturnType<typeof resolvePromptFocus>) {
   return [
     "<mendcode_prompt_policy>",
     `Mode: ${policy.mode}`,
@@ -104,20 +129,36 @@ export async function mendPromptPolicy(model: Provider.Model, root?: string) {
   ].join("\n")
 }
 
-export async function mendBaseProvider(model: Provider.Model, root?: string) {
-  const mode = await readPromptMode(root)
-  const resolution = resolvePromptFocus({
-    providerID: model.providerID,
-    modelID: model.api.id || model.id,
-  })
-  const policy = await composePromptPolicy({
-    mode: mode.mode,
-    focusID: resolution.focusID,
-    modelID: model.api.id || model.id,
-    root,
-  })
+export async function mendPromptPolicy(model: Provider.Model, root?: string, options: PromptPolicyOptions = {}) {
+  const resolved = await resolvePromptPolicy(model, root, options)
+  return formatMendPromptPolicy(resolved.policy, resolved.resolution)
+}
+
+export async function mendBaseProvider(model: Provider.Model, root?: string, options: PromptPolicyOptions = {}) {
+  const { policy } = await resolvePromptPolicy(model, root, options)
   if (policy.basePromptSource === "mendcode-harness-source" && policy.basePrompt) return [policy.basePrompt]
   return provider(model)
+}
+
+export async function mendPromptSnapshot(
+  model: Provider.Model,
+  root?: string,
+  input: { policy?: PromptComposition; memory?: string } = {},
+): Promise<MendPromptSnapshot> {
+  const [promptPolicy, baseProvider] = await Promise.all([
+    mendPromptPolicyForSnapshot(model, root, input.policy),
+    mendBaseProvider(model, root, { policy: input.policy }),
+  ])
+  return {
+    baseProvider,
+    focus: mendFocus(model),
+    policy: promptPolicy,
+    memory: input.memory || "",
+  }
+}
+
+async function mendPromptPolicyForSnapshot(model: Provider.Model, root?: string, policy?: PromptComposition) {
+  return mendPromptPolicy(model, root, { policy })
 }
 
 export async function mendMemory(

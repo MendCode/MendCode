@@ -145,6 +145,7 @@ Common MendCode config paths:
 - `.mendcode/mendcode.json`: project config, focus defaults, package metadata, budget/worktree policy, loop service settings, and integration settings.
 - `.mendcode/generated/opencode.json`: generated compatibility config for the adapted runtime.
 - `.mendcode/prompt-mode.json`: persisted prompt mode consumed by `mendcode run`, `mendcode chat`, and the TUI footer.
+- `.mendcode/prompts/custom.md`: optional project-local Markdown instructions for the `custom` Prompt Context mode.
 - `.mendcode/models.yaml`: project model-role config.
 - `~/.config/mendcode/models.yaml`: global model-role config.
 - `~/.config/mendcode/mendcode.json`: global MendCode config.
@@ -214,15 +215,45 @@ Prompt mode controls how much MendCode harness context is added to runtime reque
 | `minimal` | Uses a small MendCode boundary and avoids the full harness prompt. Persistent memory remains independent and can still be retrieved when enabled. | Low-noise experiments, debugging prompt influence, narrow one-off tasks. |
 | `focus` | Default mode. Uses the selected focus profile and provider-family policy. | Normal daily coding. |
 | `full` | Adds the focus behavior plus MendCode product/runtime policy and integration context. Legacy `dev-js` config is normalized to `full`. | Work that needs package, memory, workflow, or product policy context. |
+| `custom` | Uses the safe MendCode boundary plus `.mendcode/prompts/custom.md`; it does not inherit the extra `focus` or `full` sections. The file is capped at 32 KiB. | Project-specific instructions that should be versioned with the checkout. |
 
 Current public setup/status surfaces should be used to inspect prompt readiness:
 
 ```bash
 mendcode setup status
 mendcode status
+mendcode prompt build --mode custom --json
+mendcode prompt mode custom
 ```
 
-For team rollout, packages can include prompt mode state as part of the runtime pack. For manual local experiments, edit `.mendcode/prompt-mode.json` with one of `minimal`, `focus`, or `full`, then verify through setup/status and the TUI footer.
+When `.mendcode/prompts/custom.md` is valid, its configured name appears in setup
+and in the Ctrl+P **MendCode Prompt Context** selector. The internal mode remains
+`custom`, but the visible label can be chosen per project with frontmatter:
+
+```markdown
+---
+name: Hello World Demo
+---
+
+always say first Hello World!
+```
+
+The `name` is metadata and is not sent to the provider; only the Markdown body is
+added to the custom prompt. If no `name` is provided, MendCode derives a readable
+label from the first heading or filename.
+
+The loader accepts only a non-empty regular file inside the active project root,
+normalizes UTF-8 line endings, and reads at most 32 KiB. Missing, empty, oversized,
+unreadable, or escaped-symlink files leave the selected mode visible in diagnostics
+but use a safe fallback without inventing prompt text. Remove the file to make the
+`custom` option disappear from selectors; use `mendcode prompt mode` or
+`mendcode status` to inspect the relative path, byte count, origin, and fallback
+reason without printing the file body.
+
+For team rollout, packages can include the reserved
+`.mendcode/prompts/custom.md` file and prompt mode state as part of the runtime
+pack. For manual local experiments, edit `.mendcode/prompt-mode.json` with one of
+`minimal`, `focus`, `full`, or `custom`, then verify through setup/status and the TUI footer.
 
 ## Models
 

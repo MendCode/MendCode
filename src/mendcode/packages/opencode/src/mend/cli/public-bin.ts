@@ -24,15 +24,7 @@ const primaryCommands = [
   "tsm",
 ]
 
-const advancedCommands = [
-  "check",
-  "models",
-  "providers",
-  "auth",
-  "permissions",
-  "memory",
-  "focus",
-]
+const advancedCommands = ["check", "models", "providers", "auth", "permissions", "memory", "focus"]
 
 const internalCommands = [
   "adapter",
@@ -56,7 +48,8 @@ const deprecationMessages: Record<string, string> = {
   init: "Deprecated alias: `mendcode init` is kept for compatibility. Use `mendcode setup status` for setup checks; project init remains internal.",
   sync: "Deprecated alias: `mendcode sync` is kept for compatibility. Use `mendcode setup status` or `mendcode status` for normal workflows.",
   package: "Deprecated alias: `mendcode package` is kept for compatibility. Use `mendcode marketplace`.",
-  prompts: "Deprecated alias: `mendcode prompts` is kept for compatibility. Prompt internals are not part of the public workflow.",
+  prompts:
+    "Deprecated alias: `mendcode prompts` is kept for compatibility. Prompt internals are not part of the public workflow.",
 }
 const internalCommandWarning =
   "Internal/debug command: this is hidden from normal `mendcode --help` and is not part of the primary terminal coding workflow."
@@ -97,6 +90,7 @@ const controlPlaneRoutes: Record<string, (args: string[]) => string[]> = {
     if (sub === "configure") return ["runtime-config", ...args.slice(1)]
     return ["runtime", ...args]
   },
+  prompt: (args) => ["prompt", args[0] || "mode", ...args.slice(1)],
   prompts: (args) => ["prompt", args[0] || "sources", ...args.slice(1)],
   chat: (args) => ["chat", ...args],
   export: (args) => ["export", ...args],
@@ -128,7 +122,8 @@ const controlPlaneRoutes: Record<string, (args: string[]) => string[]> = {
   },
   worktree: (args) => {
     const sub = args[0] || "status"
-    if (["status", "plan", "create", "open", "adopt", "remove", "reset", "doctor"].includes(sub)) return ["worktree", ...args]
+    if (["status", "plan", "create", "open", "adopt", "remove", "reset", "doctor"].includes(sub))
+      return ["worktree", ...args]
     throw new Error("Usage: mendcode worktree <status|plan|create|open|adopt|remove|reset|doctor>")
   },
 }
@@ -256,18 +251,17 @@ function levenshtein(a: string, b: string) {
   for (let i = 1; i <= a.length; i++) {
     curr[0] = i
     for (let j = 1; j <= b.length; j++) {
-      curr[j] = Math.min(
-        prev[j]! + 1,
-        curr[j - 1]! + 1,
-        prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
-      )
+      curr[j] = Math.min(prev[j]! + 1, curr[j - 1]! + 1, prev[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1))
     }
     for (let j = 0; j <= b.length; j++) prev[j] = curr[j]!
   }
   return prev[b.length]!
 }
 
-function suggestCommand(value: string, candidates = [...primaryCommands, ...advancedCommands, ...internalCommands, ...deprecatedAliases]) {
+function suggestCommand(
+  value: string,
+  candidates = [...primaryCommands, ...advancedCommands, ...internalCommands, ...deprecatedAliases],
+) {
   const match = candidates
     .map((candidate) => ({ candidate, score: levenshtein(value, candidate) }))
     .sort((a, b) => a.score - b.score)[0]
@@ -289,7 +283,18 @@ function shellCwd() {
 
 function controlPlaneEnv(root: string) {
   const originalEnv: Record<string, string> = {}
-  for (const key of ["MENDCODE_CONFIG_DIR", "OPENCODE_CONFIG_DIR", "MENDCODE_TUI_CONFIG", "OPENCODE_TUI_CONFIG", "MENDCODE_CONFIG", "OPENCODE_CONFIG", "MENDCODE_DB", "OPENCODE_DB", "MENDCODE_GLOBAL_LAYOUT", "OPENCODE_GLOBAL_LAYOUT"]) {
+  for (const key of [
+    "MENDCODE_CONFIG_DIR",
+    "OPENCODE_CONFIG_DIR",
+    "MENDCODE_TUI_CONFIG",
+    "OPENCODE_TUI_CONFIG",
+    "MENDCODE_CONFIG",
+    "OPENCODE_CONFIG",
+    "MENDCODE_DB",
+    "OPENCODE_DB",
+    "MENDCODE_GLOBAL_LAYOUT",
+    "OPENCODE_GLOBAL_LAYOUT",
+  ]) {
     if (process.env[key] !== undefined) originalEnv[key] = process.env[key]!
   }
   return {
@@ -317,14 +322,14 @@ export function runtimeEnv(root: string, baseEnv: Record<string, string | undefi
 }
 
 function runControlPlane(args: string[], root = mendPaths().root) {
-  const paths = mendPaths(root)
+  const runtimePaths = mendPaths()
   const bunBin = process.env.MENDCODE_BUN_BIN || "bun"
   const backgroundDaemon =
     (args[0] === "loops" && args[1] === "daemon") ||
     (args[0] === "memory" && args[1] === "dream" && args[2] === "daemon")
-  const entrypoint = backgroundDaemon ? paths.runtimeBackgroundDaemon : paths.runtimeControlPlane
+  const entrypoint = backgroundDaemon ? runtimePaths.runtimeBackgroundDaemon : runtimePaths.runtimeControlPlane
   const result = spawnSync(bunBin, [entrypoint, ...args], {
-    cwd: paths.ownedRuntimePackage,
+    cwd: runtimePaths.ownedRuntimePackage,
     env: controlPlaneEnv(root),
     stdio: "inherit",
   })
@@ -334,7 +339,8 @@ function runControlPlane(args: string[], root = mendPaths().root) {
 async function ensureReady(root = mendPaths().root) {
   const paths = mendPaths(root)
   if (!existsSync(paths.donorRuntimeRoot)) throw new Error(`donor checkout missing: ${paths.donorRuntimeRoot}`)
-  if (!existsSync(paths.donorRuntimePackage)) throw new Error(`donor runtime package missing: ${paths.donorRuntimePackage}`)
+  if (!existsSync(paths.donorRuntimePackage))
+    throw new Error(`donor runtime package missing: ${paths.donorRuntimePackage}`)
   if (!existsSync(paths.generatedOpencodeConfig)) await initProject(root)
   else if (generatedConfigNeedsSync(root)) await syncProject(root)
 }
@@ -342,27 +348,33 @@ async function ensureReady(root = mendPaths().root) {
 function enforceDonorIdentityGuard(args: string[]) {
   const status = donorIdentityGuardStatus()
   if (!status.active) {
-    console.error(`WARN: internal donor override enabled via ${status.overrideEnv}; do not use this as public MendCode UX.`)
+    console.error(
+      `WARN: internal donor override enabled via ${status.overrideEnv}; do not use this as public MendCode UX.`,
+    )
     return
   }
   const sessionFlagIndex = args.findIndex((arg) => arg === "--session" || arg === "-s")
   const legacySessionID = sessionFlagIndex >= 0 ? args[sessionFlagIndex + 1] : undefined
   if (legacySessionID && looksLikeSessionID(legacySessionID)) {
-    throw new Error([
+    throw new Error(
+      [
       `Blocked legacy session restore command for: ${legacySessionID}`,
       "MendCode owns session restore through its public CLI; the donor runtime is internal compatibility only.",
       `Use: mendcode -s ${legacySessionID}`,
       "If this came from Herdr/tmux restore, replace the saved command with the MendCode command above.",
       `Temporary internal override: ${status.overrideEnv}=1 mendcode opencode -- ${args.join(" ") || "--help"}`,
-    ].join("\n"))
+      ].join("\n"),
+    )
   }
   const token = args.find((arg) => arg && arg !== "--" && !arg.startsWith("-")) || "help"
-  throw new Error([
+  throw new Error(
+    [
     `Blocked internal donor runtime command: ${token}`,
     status.reason,
     "Use MendCode-owned commands from `mendcode --help`; support/debug commands are listed in `mendcode help advanced`.",
     `Temporary internal override: ${status.overrideEnv}=1 mendcode opencode -- ${args.join(" ") || "--help"}`,
-  ].join("\n"))
+    ].join("\n"),
+  )
 }
 
 async function runRuntime(args: string[], root = mendPaths().root) {
@@ -397,17 +409,22 @@ export function resolveWorktreeShortcutTarget(
 ): ShortcutWorktreeTarget {
   if (target) {
     const normalizedTarget = target === "." ? status.workspace.currentPath : target
-    const absoluteTarget = normalizedTarget.startsWith(".") || normalizedTarget.includes(path.sep)
+    const absoluteTarget =
+      normalizedTarget.startsWith(".") || normalizedTarget.includes(path.sep)
       ? path.resolve(status.workspace.currentPath, normalizedTarget)
       : normalizedTarget
-    const hit = worktreeShortcutCandidates(status).find((item) =>
+    const hit = worktreeShortcutCandidates(status).find(
+      (item) =>
       item.path === normalizedTarget ||
       item.path === absoluteTarget ||
       item.branch === normalizedTarget ||
       item.label === normalizedTarget ||
-      path.basename(item.path) === normalizedTarget
+        path.basename(item.path) === normalizedTarget,
     )
-    if (!hit) throw new Error(`Unknown worktree target: ${target}. Run \`mendcode worktree status\` to inspect available targets.`)
+    if (!hit)
+      throw new Error(
+        `Unknown worktree target: ${target}. Run \`mendcode worktree status\` to inspect available targets.`,
+    )
     return hit
   }
 
@@ -446,7 +463,9 @@ async function runWorktreeShortcut(args: string[]) {
   if (args.length > 1) throw new Error("Usage: mendcode --worktree [branch|path|id]")
   const status = await worktreeStatus(shellCwd())
   if (!status.git.ok) {
-    throw new Error(`Worktree shortcut requires a git repository. Current path is not inside git: ${status.workspace.currentPath}`)
+    throw new Error(
+      `Worktree shortcut requires a git repository. Current path is not inside git: ${status.workspace.currentPath}`,
+    )
   }
   const resolved = resolveWorktreeShortcutTarget(status, target, "worktree")
   return runRuntime([resolved.path])
@@ -460,19 +479,29 @@ async function runTsmShortcut(args: string[]) {
   const status = await worktreeStatus(cwd)
   const tsm = await tsmStatus(cwd)
   if (tsm.lifecycle !== "active" || !tsm.worktreeCapable) {
-    throw new Error(`TSM is not active for this repo (${tsm.lifecycle}). Run \`mendcode tsm status\` and \`mendcode tsm activate\`.`)
+    throw new Error(
+      `TSM is not active for this repo (${tsm.lifecycle}). Run \`mendcode tsm status\` and \`mendcode tsm activate\`.`,
+    )
   }
   if (!status.git.ok) {
-    throw new Error(`TSM worktree shortcut requires a git repository. Current path is not inside git: ${status.workspace.currentPath}`)
+    throw new Error(
+      `TSM worktree shortcut requires a git repository. Current path is not inside git: ${status.workspace.currentPath}`,
+    )
   }
   if (!tsm.gitHead) {
-    throw new Error("TSM worktree shortcut requires an initial git commit before creating or opening worktrees. Commit once and retry.")
+    throw new Error(
+      "TSM worktree shortcut requires an initial git commit before creating or opening worktrees. Commit once and retry.",
+    )
   }
   const binary = tsm.binaryPath || "tsm"
   let shouldCreate = false
-  const branches = all ? [] : (() => {
+  const branches = all
+    ? []
+    : (() => {
     try {
-      return [resolveWorktreeShortcutTarget(status, target, "tsm").branch].filter((branch): branch is string => Boolean(branch))
+          return [resolveWorktreeShortcutTarget(status, target, "tsm").branch].filter((branch): branch is string =>
+            Boolean(branch),
+          )
     } catch (error) {
       if (!target) throw error
       const checked = spawnSync("git", ["check-ref-format", "--branch", target], {
@@ -533,7 +562,8 @@ function runTuiWithMessage(args: string[]) {
       const value = args[++i]
       if (!value) throw new Error(`Missing value for ${arg}`)
       passthrough.push(arg, value)
-    } else if (arg.startsWith("-")) throw new Error(`mendcode run opens the interactive TUI; unsupported headless flag: ${arg}`)
+    } else if (arg.startsWith("-"))
+      throw new Error(`mendcode run opens the interactive TUI; unsupported headless flag: ${arg}`)
     else message.push(arg)
   }
   if (!message.length) throw new Error("Usage: mendcode run [message..]")
@@ -541,7 +571,9 @@ function runTuiWithMessage(args: string[]) {
 }
 
 function runSession(args: string[]) {
-  const forwarded = args.some((arg) => arg === "--dir" || arg.startsWith("--dir=")) ? args : ["--dir", shellCwd(), ...args]
+  const forwarded = args.some((arg) => arg === "--dir" || arg.startsWith("--dir="))
+    ? args
+    : ["--dir", shellCwd(), ...args]
   return runRuntime(["session", ...forwarded])
 }
 
@@ -580,11 +612,13 @@ export async function main(argv = process.argv.slice(2)) {
       const deprecation = deprecationMessages[cmd]
       if (deprecation) console.error(deprecation)
       else if (internalCommands.includes(cmd)) console.error(internalCommandWarning)
-      return runControlPlane(route(args))
+      return runControlPlane(route(args), shellCwd())
     }
     const suggestion = suggestCommand(cmd)
     if (suggestion) {
-      throw new Error(`Unknown mendcode command: ${cmd}\nDid you mean \`mendcode ${suggestion}\`?\nRun \`mendcode --help\` for public workflows or \`mendcode help advanced\` for support commands.`)
+      throw new Error(
+        `Unknown mendcode command: ${cmd}\nDid you mean \`mendcode ${suggestion}\`?\nRun \`mendcode --help\` for public workflows or \`mendcode help advanced\` for support commands.`,
+      )
     }
     enforceDonorIdentityGuard([cmd, ...args])
     return runRuntime([cmd, ...args])

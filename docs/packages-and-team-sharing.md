@@ -74,7 +74,7 @@ Marketplace packages run against the public MendCode API:
 - `api.session`, `api.ai`, and `api.metadata` for session lifecycle, AI-backed pages/modals, Agent View metadata, and control-plane actions.
 - `api.memory` for graph snapshots, explicit fact/link mutations, and Memory side chat.
 - `api.client` for the generated SDK surface when a package needs an endpoint without a convenience wrapper.
-- `.mendcode/tools` for assistant-facing custom tool calls.
+- `.mendcode/tools` for assistant-facing custom tool calls; see [Custom Tool Calls](custom-tool-calls.md) for schemas, context, and package examples.
 - `.mendcode/pages` for package-owned TUI pages.
 - `.mendcode/tui/profile.json` for profile and status customization.
 

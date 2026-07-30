@@ -33,6 +33,11 @@ const ABORT_GRACE_PERIOD_MS = 250
 const MAX_TERMINAL_PREVIEW_CHARS = MAX_METADATA_LENGTH * 2
 const MAX_TERMINAL_PREVIEW_LINES = 2_000
 const DEFAULT_TIMEOUT = Flag.OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS || 2 * 60 * 1000
+const ABORT_FORCE_KILL_AFTER = "1 second"
+const SAFE_RETRY_GUIDANCE =
+  "The command result is unknown. If this command is read-only or idempotent, retry the exact same command once before choosing a different approach. If it may have changed state, inspect the current state first and do not repeat destructive actions blindly."
+const TIMEOUT_RETRY_GUIDANCE =
+  "The command result is unknown because it was stopped by the timeout. If it is safe and idempotent, retry the exact same command with a larger timeout before choosing a different approach. If it may have changed state, inspect the current state first and do not repeat destructive actions blindly."
 const CWD = new Set(["cd", "chdir", "popd", "pushd", "push-location", "set-location"])
 const FILES = new Set([
   ...CWD,
@@ -680,7 +685,7 @@ export const ShellTool = Tool.define(
             handle.exitCode.pipe(Effect.as("exited" as const)),
             Effect.sleep(ABORT_GRACE_PERIOD_MS).pipe(Effect.as("grace-expired" as const)),
           )
-          if (grace === "grace-expired") yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+          if (grace === "grace-expired") yield* handle.kill({ forceKillAfter: ABORT_FORCE_KILL_AFTER }).pipe(Effect.orDie)
         }
         if (exit.kind === "timeout") {
           yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
@@ -707,6 +712,7 @@ export const ShellTool = Tool.define(
         meta.push(
           `shell tool terminated command after exceeding timeout ${input.timeout} ms. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value in milliseconds.`,
         )
+        meta.push(TIMEOUT_RETRY_GUIDANCE)
       }
       if (aborted) {
         meta.push(
@@ -714,6 +720,7 @@ export const ShellTool = Tool.define(
             ? "User aborted the command"
             : "Command execution stopped before completion because the parent run lost its connection; no explicit user cancel was recorded",
         )
+        if (aborted === "external") meta.push(SAFE_RETRY_GUIDANCE)
       }
       const raw = list.map((item) => item.text).join("")
       const end = tail(raw, limits.maxLines, limits.maxBytes)
@@ -744,6 +751,10 @@ export const ShellTool = Tool.define(
           description: input.description,
           truncated: cut,
           ...(cut && file ? { outputPath: file } : {}),
+          ...(aborted === "external"
+            ? { interrupted: true, connectionLost: true, resultUnknown: true, retryRecommended: true }
+            : {}),
+          ...(expired ? { interrupted: true, resultUnknown: true, retryRecommended: true, timeout: true } : {}),
         },
         output,
       }

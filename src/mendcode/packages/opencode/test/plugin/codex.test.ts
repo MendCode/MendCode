@@ -33,42 +33,28 @@ describe("plugin.codex", () => {
 
     test("routes the legacy GPT-5.3 Codex ID to a ChatGPT-supported model", () => {
       expect(
-        JSON.parse(
-          normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.3-codex" })) as string,
-        ),
+        JSON.parse(normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.3-codex" })) as string),
       ).toEqual({ model: "gpt-5.5" })
     })
 
     test("lowers generated fast model IDs used by subagents and hidden roles", () => {
+      expect(JSON.parse(normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.6-fast" })) as string)).toEqual(
+        { model: "gpt-5.6-sol", service_tier: "priority" },
+      )
       expect(
-        JSON.parse(
-          normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.6-fast" })) as string,
-        ),
+        JSON.parse(normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.6-sol-fast" })) as string),
       ).toEqual({ model: "gpt-5.6-sol", service_tier: "priority" })
       expect(
-        JSON.parse(
-          normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.6-sol-fast" })) as string,
-        ),
-      ).toEqual({ model: "gpt-5.6-sol", service_tier: "priority" })
-      expect(
-        JSON.parse(
-          normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.6-terra-fast" })) as string,
-        ),
+        JSON.parse(normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.6-terra-fast" })) as string),
       ).toEqual({ model: "gpt-5.6-terra", service_tier: "priority" })
       expect(
-        JSON.parse(
-          normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.6-luna-fast" })) as string,
-        ),
+        JSON.parse(normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.6-luna-fast" })) as string),
       ).toEqual({ model: "gpt-5.6-luna", service_tier: "priority" })
+      expect(JSON.parse(normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.4-fast" })) as string)).toEqual(
+        { model: "gpt-5.4", service_tier: "priority" },
+      )
       expect(
-        JSON.parse(
-          normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.4-fast" })) as string,
-        ),
-      ).toEqual({ model: "gpt-5.4", service_tier: "priority" })
-      expect(
-        JSON.parse(
-          normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.4-mini-fast" })) as string,
-        ),
+        JSON.parse(normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-5.4-mini-fast" })) as string),
       ).toEqual({ model: "gpt-5.4-mini", service_tier: "priority" })
     })
 
@@ -155,7 +141,7 @@ describe("plugin.codex", () => {
           content: [{ type: "input_image", image_url: "data:image/png;base64,test", detail: "high" }],
         },
       ],
-      instructions: "Be concise.",
+      instructions: "always say first Hello World!",
       tools: [{ type: "function", name: "noop", parameters: { type: "object", properties: {} } }],
       reasoning: { effort: "high", summary: "auto" },
       parallel_tool_calls: true,
@@ -204,7 +190,7 @@ describe("plugin.codex", () => {
       {
         type: "message",
         role: "developer",
-        content: [{ type: "input_text", text: "Be concise." }],
+        content: [{ type: "input_text", text: "always say first Hello World!" }],
       },
       {
         role: "user",
@@ -225,6 +211,42 @@ describe("plugin.codex", () => {
     expect(typeof body).toBe("string")
     expect(headers.get("session-id")).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     expect(sessionIDs.size).toBe(0)
+  })
+
+  test("rotates Responses Lite affinity when instructions change", () => {
+    const sessionIDs = new Map<string, string>()
+    const sessionPromptFingerprints = new Map<string, string>()
+
+    const request = (instructions: string) => {
+      const headers = new Headers({ "session-id": "ses_prompt_context" })
+      const body = prepareCodexChatGPTOAuthRequest({
+        headers,
+        sessionIDs,
+        sessionPromptFingerprints,
+        body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+          instructions,
+        }),
+      })
+      return { headers, body: JSON.parse(body as string) as Record<string, unknown> }
+    }
+
+    const first = request("always say first Hello World!")
+    const same = request("always say first Hello World!")
+    const changed = request("always say first Goodbye World!")
+
+    expect(same.headers.get("session-id")).toBe(first.headers.get("session-id"))
+    expect(changed.headers.get("session-id")).not.toBe(first.headers.get("session-id"))
+    expect(changed.body.input).toEqual([
+      { type: "additional_tools", role: "developer", tools: [] },
+      {
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: "always say first Goodbye World!" }],
+      },
+      { role: "user", content: [{ type: "input_text", text: "hello" }] },
+    ])
   })
 
   test("keeps the API-key transport independent from the ChatGPT OAuth adapter", async () => {

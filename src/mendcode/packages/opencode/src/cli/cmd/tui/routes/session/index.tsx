@@ -196,7 +196,12 @@ import {
   webSearchUrlLines,
   wrapTimelineLine,
 } from "@/mend/tui/timeline/normalize"
-import { groupTimelineParts, isTimelineStackStart, timelineCollapseLabel, timelineNodeKeys } from "@/mend/tui/timeline/group"
+import {
+  groupTimelineParts,
+  isTimelineStackStart,
+  timelineCollapseLabel,
+  timelineNodeKeys,
+} from "@/mend/tui/timeline/group"
 import type { TimelineCollapse, TimelineRow } from "@/mend/tui/timeline/types"
 import { TimelineCode, TimelineDiff } from "./renderers/diff"
 import { diffStatsFromFile, diffStatsFromPatch, patchFilePath, type TimelineDiffStats } from "./renderers/diff-label"
@@ -290,10 +295,7 @@ export function sessionUserMessageQueued(input: {
   return !input.messages.some((message) => message.role === "assistant" && message.parentID === input.messageID)
 }
 
-function assistantTurnNeedsContinuation(message: {
-  time?: { completed?: number }
-  finish?: string
-}) {
+function assistantTurnNeedsContinuation(message: { time?: { completed?: number }; finish?: string }) {
   if (message.time?.completed === undefined) return true
   return message.finish === "tool-calls" || message.finish === "unknown"
 }
@@ -323,9 +325,7 @@ export function sessionQueuedUserMessageIDs(input: {
   const activeParentIndex = input.messages.findIndex((message) => message.id === activeParentID)
   if (activeParentIndex < 0) return []
   const assistantParentIDs = new Set(
-    input.messages.flatMap((message) =>
-      message.role === "assistant" && message.parentID ? [message.parentID] : [],
-    ),
+    input.messages.flatMap((message) => (message.role === "assistant" && message.parentID ? [message.parentID] : [])),
   )
   return input.messages
     .slice(activeParentIndex + 1)
@@ -656,8 +656,7 @@ export function Session() {
     if (status !== "busy" && status !== "retry") return
     return messages().findLast((message) => message.role === "assistant")?.id
   })
-  const queuedMessageIDs = createMemo(
-    () => {
+  const queuedMessageIDs = createMemo(() => {
       pendingPromptRevision()
       const queued = new Set(
         sessionQueuedUserMessageIDs({
@@ -669,8 +668,7 @@ export function Session() {
       for (const messageID of pendingPromptDeliveryMessageIDs(route.sessionID, { includeAccepted: sessionCompacting() }))
         queued.add(messageID)
       return queued
-    },
-  )
+  })
   const queuedMessages = createMemo(() => {
     const queuedIDs = queuedMessageIDs()
     return messages().filter((message): message is UserMessage => message.role === "user" && queuedIDs.has(message.id))
@@ -1274,7 +1272,11 @@ export function Session() {
         const decision = await reviewPermissionRequestWithModel(request, mend.root)
         if (!decision.triggered || decision.decision === "ask") {
           setSmartPermissionStatus(`Smart needs approval`)
-          toast.show({ message: "Smart Approval needs manual input for this command.", variant: "info", duration: 5000 })
+          toast.show({
+            message: "Smart Approval needs manual input for this command.",
+            variant: "info",
+            duration: 5000,
+          })
           continue
         }
         reviewed++
@@ -1901,10 +1903,7 @@ export function Session() {
     cancelPendingPromptDelivery(route.sessionID, messageID)
     sync.session.removeMessage(route.sessionID, messageID)
     try {
-      await sdk.client.session.deleteMessage(
-        { sessionID: route.sessionID, messageID },
-        { throwOnError: true },
-      )
+      await sdk.client.session.deleteMessage({ sessionID: route.sessionID, messageID }, { throwOnError: true })
     } catch (error) {
       await sync.session.restoreMessage(route.sessionID, messageID).catch(() => undefined)
       sync.session.pinMessage(route.sessionID, messageID)
@@ -1959,6 +1958,15 @@ export function Session() {
     return scrollAnchor
   }
 
+  const persistSessionScroll = (sessionID: string) => {
+    if (route.sessionID !== sessionID || !scroll || scroll.isDestroyed) return
+    sessionScrollStates.set(sessionID, {
+      top: scroll.scrollTop,
+      follow: followSessionOutput(),
+      anchor: scrollAnchor,
+    })
+  }
+
   const restoreScrollAnchor = (options?: { preserveMissing?: boolean }) => {
     if (!scroll || scroll.isDestroyed || !scrollAnchor) return false
     const child = scroll.getChildren().find((item) => item.id === scrollAnchor?.id)
@@ -1986,7 +1994,7 @@ export function Session() {
       lastObservedScrollHeight = scroll.scrollHeight
       lastObservedViewportHeight = scroll.viewport.height
       setSessionScrollTop(scroll.scrollTop)
-
+      persistSessionScroll(sessionID)
     }, 0)
   }
 
@@ -2005,10 +2013,13 @@ export function Session() {
     const viewportHeight = scroll.viewport.height
     const currentSessionID = route.sessionID
     if (restoringSessionScroll && currentSessionID === activeSessionID) return
-    if (shouldHoldSessionSubmitScroll({ sessionID: currentSessionID, submitSessionID: submitBottomScrollSessionID })) return
+    if (shouldHoldSessionSubmitScroll({ sessionID: currentSessionID, submitSessionID: submitBottomScrollSessionID }))
+      return
     // Keep the active session's snapshot live while its keyed transcript still owns
-    // the scrollbox. The route effect may run after that box has been remounted.
-    rememberSessionScroll(currentSessionID)
+    // the scrollbox. Do not recapture the anchor here: transcript growth has already
+    // happened by the time this interval runs, so replacing it would lose the point
+    // that must be held steady.
+    persistSessionScroll(currentSessionID)
     setSessionScrollTop(scrollTop)
     const history = sync.session.history(currentSessionID)
     const atTop = isScrollboxAtTop(scroll)
@@ -2041,11 +2052,13 @@ export function Session() {
     if (!followSessionOutput() && atTop && history.hasMoreOlder && !history.loadingOlder && !scrollPagingInFlight) {
       if (suppressedPagingBoundary) {
         setFollowSessionOutput(false)
+        persistSessionScroll(currentSessionID)
         return
       }
       const pagingToken = scrollPagingToken
       const pagingAnchor = captureScrollAnchor()
       setFollowSessionOutput(false)
+      persistSessionScroll(currentSessionID)
       scrollPagingInFlight = true
       void sync.session
         .loadOlder(currentSessionID)
@@ -2074,10 +2087,12 @@ export function Session() {
       if (history.hasMoreNewer && !history.loadingNewer && !scrollPagingInFlight) {
         if (suppressedPagingBoundary) {
           setFollowSessionOutput(false)
+          persistSessionScroll(currentSessionID)
           return
         }
         const pagingToken = scrollPagingToken
         setFollowSessionOutput(false)
+        persistSessionScroll(currentSessionID)
         scrollPagingInFlight = true
         void sync.session
           .loadNewer(currentSessionID)
@@ -2095,19 +2110,23 @@ export function Session() {
       }
       if (suppressedPagingBoundary) {
         setFollowSessionOutput(false)
+        persistSessionScroll(currentSessionID)
         return
       }
       setFollowSessionOutput(true)
+      persistSessionScroll(currentSessionID)
       return
     }
 
     if (isCompactionArcadeFocused()) {
       cancelBottomScrollTimers()
+      persistSessionScroll(currentSessionID)
       return
     }
 
     if (followSessionOutput() && (contentHeightChanged || viewportHeightChanged) && !userMovedViewport) {
       scheduleFollowBottomScroll(currentSessionID)
+      persistSessionScroll(currentSessionID)
       return
     }
 
@@ -2123,6 +2142,8 @@ export function Session() {
       restoreScrollAnchor()
     }
     captureScrollAnchor()
+    setSessionScrollTop(scroll.scrollTop)
+    persistSessionScroll(currentSessionID)
 
     lastObservedScrollTop = scroll.scrollTop
     lastObservedScrollHeight = scroll.scrollHeight
@@ -2505,9 +2526,7 @@ export function Session() {
       mountedChildCount: mountedChildren.length,
       mountedFirstID: mountedIDs[0],
       mountedLastID: mountedIDs.at(-1),
-      duplicateMountedIDs: [...mountedIDCounts]
-        .filter(([, count]) => count > 1)
-        .map(([id]) => id),
+      duplicateMountedIDs: [...mountedIDCounts].filter(([, count]) => count > 1).map(([id]) => id),
     }
   }
 
@@ -2533,7 +2552,8 @@ export function Session() {
 
   createEffect(
     on(
-      () => [
+      () =>
+        [
         route.sessionID,
         sessionScrollTop(),
         followSessionOutput(),
@@ -3776,10 +3796,12 @@ export function Session() {
                                     paddingLeft={2}
                                     backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
                                   >
-                                    <text fg={theme.textMuted}>{revert()!.reverted.length} message reverted</text>
                                     <text fg={theme.textMuted}>
-                                      <span style={{ fg: theme.text }}>{keybind.print("messages_redo")}</span> or /redo
-                                      to restore
+                                              {revert()!.reverted.length} message reverted
+                                            </text>
+                                            <text fg={theme.textMuted}>
+                                              <span style={{ fg: theme.text }}>{keybind.print("messages_redo")}</span>{" "}
+                                              or /redo to restore
                                     </text>
                                     <Show when={revert()!.diffFiles?.length}>
                                       <box marginTop={1}>
@@ -3791,7 +3813,10 @@ export function Session() {
                                                 <span style={{ fg: theme.diffAdded }}> +{file.additions}</span>
                                               </Show>
                                               <Show when={file.deletions > 0}>
-                                                <span style={{ fg: theme.diffRemoved }}> -{file.deletions}</span>
+                                                        <span style={{ fg: theme.diffRemoved }}>
+                                                          {" "}
+                                                          -{file.deletions}
+                                                        </span>
                                               </Show>
                                             </text>
                                           )}
@@ -3950,46 +3975,46 @@ export function Session() {
               {/* Do not keep the hidden prompt subtree mounted while a question/permission owns input. */}
               <Show when={visible()}>
                 <box position="relative" zIndex={2500} overflow="visible" width="100%">
-                  <TuiPluginRuntime.Slot
-                    name="session_prompt"
-                    mode="replace"
-                    session_id={route.sessionID}
-                    visible={visible()}
-                    disabled={promptDisabled()}
-                    on_submit={handlePromptSubmit}
-                    ref={bind}
-                  >
-                    {
-                      renderMendEditor({
-                        sessionID: route.sessionID,
-                        permissionMode: permissionMode(),
-                        permissionModeLabel: permissionModeLabel(),
-                        permissionPending: permissionPendingCount(),
-                        visible: visible(),
-                        disabled: promptDisabled(),
-                        ref: bind,
-                        onSubmit: handlePromptSubmit,
-                        right: <TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />,
-                        defaultEditor: () => (
-                          <Prompt
-                            visible={visible()}
-                            ref={bind}
-                            disabled={promptDisabled()}
-                            historyScope={`session:${route.sessionID}`}
-                            historyItems={sessionPromptHistory}
-                            workspaceID={project.workspace.current()}
-                            sessionID={route.sessionID}
-                            permissionMode={permissionMode()}
-                            permissionModeLabel={permissionModeLabel()}
-                            permissionPending={permissionPendingCount()}
-                            onSubmit={handlePromptSubmit}
-                            right={<TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
-                          />
-                        ),
-                      }) as any
-                    }
-                  </TuiPluginRuntime.Slot>
-                </box>
+                <TuiPluginRuntime.Slot
+                  name="session_prompt"
+                  mode="replace"
+                  session_id={route.sessionID}
+                  visible={visible()}
+                  disabled={promptDisabled()}
+                  on_submit={handlePromptSubmit}
+                  ref={bind}
+                >
+                  {
+                    renderMendEditor({
+                      sessionID: route.sessionID,
+                      permissionMode: permissionMode(),
+                      permissionModeLabel: permissionModeLabel(),
+                      permissionPending: permissionPendingCount(),
+                      visible: visible(),
+                      disabled: promptDisabled(),
+                      ref: bind,
+                      onSubmit: handlePromptSubmit,
+                      right: <TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />,
+                      defaultEditor: () => (
+                        <Prompt
+                          visible={visible()}
+                          ref={bind}
+                          disabled={promptDisabled()}
+                          historyScope={`session:${route.sessionID}`}
+                          historyItems={sessionPromptHistory}
+                          workspaceID={project.workspace.current()}
+                          sessionID={route.sessionID}
+                          permissionMode={permissionMode()}
+                          permissionModeLabel={permissionModeLabel()}
+                          permissionPending={permissionPendingCount()}
+                          onSubmit={handlePromptSubmit}
+                          right={<TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
+                        />
+                      ),
+                    }) as any
+                  }
+                </TuiPluginRuntime.Slot>
+              </box>
               </Show>
               <For each={listMendWidgets("belowEditor")}>{(item) => <RenderMendWidget item={item} />}</For>
             </box>
@@ -4892,7 +4917,8 @@ function CompactionCard(props: {
       hasSummaryBody={Boolean(summaryPreview())}
       summaryPreview={summaryPreview()}
       transcriptPreview={transcriptPreview()}
-      summaryContent={summaryContent() ? (
+      summaryContent={
+        summaryContent() ? (
         <box paddingTop={1}>
           <StyledPlanMarkdown
             syntaxStyle={syntax()}
@@ -4906,7 +4932,8 @@ function CompactionCard(props: {
             colorizeHex={true}
           />
         </box>
-      ) : undefined}
+        ) : undefined
+      }
       scratchpad={
         scratchpadAllowed()
           ? {
@@ -5086,7 +5113,8 @@ function UserMessage(props: {
   const compaction = createMemo(() =>
     props.parts.find((x): x is Extract<Part, { type: "compaction" }> => x.type === "compaction"),
   )
-  const latestCompactionMessageID = createMemo(() =>
+  const latestCompactionMessageID = createMemo(
+    () =>
     (sync.data.message[props.message.sessionID] ?? [])
       .filter((message) => message.role === "user")
       .findLast((message) => (sync.data.part[message.id] ?? []).some((part) => part.type === "compaction"))?.id,
@@ -6284,7 +6312,8 @@ function fullToolMetadataString(part: ToolPart, key: string) {
 }
 
 function fullToolInputString(part: ToolPart | undefined, key: string) {
-  if (!part || part.state.status !== "completed" || !part.state.input || typeof part.state.input !== "object") return undefined
+  if (!part || part.state.status !== "completed" || !part.state.input || typeof part.state.input !== "object")
+    return undefined
   const value = (part.state.input as Record<string, unknown>)[key]
   return typeof value === "string" ? value : undefined
 }
@@ -7264,11 +7293,7 @@ function ApplyPatch(props: ToolProps<typeof ApplyPatchTool>) {
               contentGap={0}
               paddingBottom={0}
             >
-              <Diff
-                diff={file.patch}
-                filePath={file.filePath}
-                loadFull={() => loadFullPatch(file.filePath)}
-              />
+              <Diff diff={file.patch} filePath={file.filePath} loadFull={() => loadFullPatch(file.filePath)} />
               <Diagnostics diagnostics={props.metadata.diagnostics} filePath={file.movePath ?? file.filePath} />
             </BlockTool>
           )}
@@ -7329,7 +7354,9 @@ function TodoWrite(props: ToolProps<typeof TodoWriteTool>) {
     if (ctx.latestCompletedTodoWritePartID() !== props.part.id) return undefined
     return ctx.sync.data.todo[props.part.sessionID]
   })
-  const todos = createMemo(() => currentTodos() ?? props.input.todos ?? props.metadata.todos ?? parseTodoOutput(props.output))
+  const todos = createMemo(
+    () => currentTodos() ?? props.input.todos ?? props.metadata.todos ?? parseTodoOutput(props.output),
+  )
   const content = createMemo(() =>
     todos()
       .map((todo) => todoMarkdown(todo.status, todo.content))
@@ -7456,7 +7483,8 @@ function MemoryGraph(props: ToolProps<any>) {
     const data = snapshot()
     return data ? compactMemoryGraphRows(data, panelWidth() - 2) : []
   })
-  const openGraph = () => route.navigate({
+  const openGraph = () =>
+    route.navigate({
     type: "memory",
     view: "graph",
     returnTo: route.data.type === "session" ? { type: "session", sessionID: route.data.sessionID } : { type: "home" },
@@ -7480,11 +7508,19 @@ function MemoryGraph(props: ToolProps<any>) {
               <MemoryGraphCanvasRows cells={graph()!.cells} categories={snapshot()!.categories} />
             </box>
           </Show>
-          <text fg={healthTone()} wrapMode="none">{short(footer(), panelWidth() - 2)}</text>
+          <text fg={healthTone()} wrapMode="none">
+            {short(footer(), panelWidth() - 2)}
+          </text>
           <For each={detailRows()}>
-            {(row) => <text fg={theme.textMuted} wrapMode="none">{row}</text>}
+            {(row) => (
+              <text fg={theme.textMuted} wrapMode="none">
+                {row}
+              </text>
+            )}
           </For>
-          <text fg={theme.primary} wrapMode="none">Open /memory-graph for the full view</text>
+          <text fg={theme.primary} wrapMode="none">
+            Open /memory-graph for the full view
+          </text>
         </box>
       </BlockTool>
     </Show>

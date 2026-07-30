@@ -1,7 +1,61 @@
 import { describe, expect, test } from "bun:test"
+import { mkdir, writeFile } from "fs/promises"
+import path from "path"
 import { composePromptPolicy } from "../../../src/mend/prompt/compose"
+import { MAX_CUSTOM_PROMPT_BYTES } from "../../../src/mend/prompt/custom"
+import { tmpdir } from "../../fixture/fixture"
 
 describe("mend prompt composition", () => {
+  test("composes a valid project custom prompt without preset sections", async () => {
+    await using tmp = await tmpdir()
+    const file = path.join(tmp.path, ".mendcode/prompts/custom.md")
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, "# Project rules\nUse the repository conventions.\n")
+
+    const policy = await composePromptPolicy({ root: tmp.path, mode: "custom", focusID: "codex" })
+
+    expect(policy.mode).toBe("custom")
+    expect(policy.promptOrigin).toBe("project-custom")
+    expect(policy.sections.map((item) => item.id)).toEqual(["mode-boundary", "project-custom"])
+    expect(policy.sections[1]?.text).toContain("Use the repository conventions")
+    expect(policy.customPrompt).toMatchObject({
+      path: ".mendcode/prompts/custom.md",
+      available: true,
+    })
+    expect(policy.source).toBeNull()
+    expect(policy.basePrompt).toBeNull()
+    expect(policy.instructions).not.toContain("MendCode basics:")
+    expect(policy.instructions).not.toContain("MendCode knowledge:")
+  })
+
+  test("exposes the custom context name while composing only its body", async () => {
+    await using tmp = await tmpdir()
+    const file = path.join(tmp.path, ".mendcode/prompts/custom.md")
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, "---\nname: Hello World Demo\n---\nalways say first Hello World!\n")
+
+    const policy = await composePromptPolicy({ root: tmp.path, mode: "custom", focusID: "codex" })
+
+    expect(policy.customPrompt).toMatchObject({ name: "Hello World Demo", available: true })
+    expect(policy.sections.find((item) => item.id === "project-custom")?.label).toBe("Hello World Demo")
+    expect(policy.sections.find((item) => item.id === "project-custom")?.text).toBe("always say first Hello World!")
+    expect(policy.instructions).not.toContain("name: Hello World Demo")
+  })
+
+  test("falls back without including oversized custom prompt content", async () => {
+    await using tmp = await tmpdir()
+    const file = path.join(tmp.path, ".mendcode/prompts/custom.md")
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeFile(file, "x".repeat(MAX_CUSTOM_PROMPT_BYTES + 1))
+
+    const policy = await composePromptPolicy({ root: tmp.path, mode: "custom", focusID: "codex" })
+
+    expect(policy.customPrompt?.available).toBe(false)
+    expect(policy.customPrompt?.fallbackReason).toContain("exceeds")
+    expect(policy.sections.find((item) => item.id === "project-custom")).toBeUndefined()
+    expect(policy.instructions).not.toContain("x".repeat(256))
+  })
+
   test("full mode advertises TUI markdown and Mermaid rendering", async () => {
     const focus = await composePromptPolicy({ mode: "focus", focusID: "codex" })
     const full = await composePromptPolicy({ mode: "full", focusID: "codex" })
@@ -60,7 +114,9 @@ describe("mend prompt composition", () => {
 
     expect(policy.source?.label).toBe("GLM-family")
     expect(policy.source?.sourcePolicy).toBe("behavior-only")
-    expect(policy.sections.find((item) => item.id === "model-behavior")?.text).toContain("GLM-5.2 public behavior guidance")
+    expect(policy.sections.find((item) => item.id === "model-behavior")?.text).toContain(
+      "GLM-5.2 public behavior guidance",
+    )
     expect(policy.instructions).toContain("long-horizon work as iterative")
     expect(policy.instructions).not.toContain("You are GLM")
   })
@@ -75,7 +131,9 @@ describe("mend prompt composition", () => {
     const policy = await composePromptPolicy({ mode: "focus", focusID, modelID })
 
     expect(policy.sections.find((item) => item.id === "model-behavior")?.text).toContain(label)
-    expect(policy.sections.find((item) => item.id === "model-behavior")?.text).toContain("not an upstream hidden prompt")
+    expect(policy.sections.find((item) => item.id === "model-behavior")?.text).toContain(
+      "not an upstream hidden prompt",
+    )
   })
 
   test("all prompt modes teach notification-driven background subagents", async () => {

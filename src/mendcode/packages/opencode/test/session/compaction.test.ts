@@ -106,6 +106,7 @@ function createModel(opts: {
   context: number
   output: number
   input?: number
+  image?: boolean
   cost?: Provider.Model["cost"]
   npm?: string
 }): Provider.Model {
@@ -124,7 +125,7 @@ function createModel(opts: {
       attachment: false,
       reasoning: false,
       temperature: true,
-      input: { text: true, image: false, audio: false, video: false },
+      input: { text: true, image: opts.image ?? false, audio: false, video: false },
       output: { text: true, image: false, audio: false, video: false },
     },
     api: { npm: opts.npm ?? "@ai-sdk/anthropic" },
@@ -321,7 +322,7 @@ function liveRuntime(layer: Layer.Layer<LLM.Service>, provider = ProviderTest.fa
   const question = Question.layer.pipe(Layer.provide(bus))
   const processor = SessionProcessorModule.SessionProcessor.layer.pipe(Layer.provide(summary))
   return ManagedRuntime.make(
-    (Layer.mergeAll(
+    Layer.mergeAll(
       SessionCompaction.layer.pipe(Layer.provide(processor), Layer.provide(BackgroundTask.defaultLayer)),
       processor,
       bus,
@@ -341,7 +342,7 @@ function liveRuntime(layer: Layer.Layer<LLM.Service>, provider = ProviderTest.fa
       Layer.provide(bus),
       Layer.provide(config),
       Layer.provide(Todo.defaultLayer),
-    ) as unknown as Layer.Layer<SessionCompaction.Service | BackgroundTask.Service | Bus.Service, never, never>),
+    ) as unknown as Layer.Layer<SessionCompaction.Service | BackgroundTask.Service | Bus.Service, never, never>,
   )
 }
 
@@ -460,7 +461,9 @@ function planReviewMessage(input: { markdown: string; title: string; stateTitle?
 describe("session.compaction.latestAcceptedPlanReviewContext", () => {
   test("preserves only the latest approved plan review verbatim", () => {
     const oldPlan = "# Old plan\n\n- do old thing"
-    const latestPlan = ["# Latest approved plan", "", "1. Keep this exact checklist", "2. Do not summarize it"].join("\n")
+    const latestPlan = ["# Latest approved plan", "", "1. Keep this exact checklist", "2. Do not summarize it"].join(
+      "\n",
+    )
 
     const context = latestAcceptedPlanReviewContext([
       planReviewMessage({ title: "Old", markdown: oldPlan }),
@@ -1213,7 +1216,9 @@ describe("session.compaction.process", () => {
             expect(summary.info.finish).toBe("stop")
             expect(summary.info.error).toBeUndefined()
             expect(summary.parts.some((part) => part.type === "text" && part.text.includes("## Goal"))).toBe(true)
-            expect(summary.parts.some((part) => part.type === "text" && part.text.includes("local rescue summary"))).toBe(true)
+            expect(
+              summary.parts.some((part) => part.type === "text" && part.text.includes("local rescue summary")),
+            ).toBe(true)
           }
         } finally {
           await rt.dispose()
@@ -1251,8 +1256,7 @@ describe("session.compaction.process", () => {
               (msg) =>
                 msg.info.role === "user" &&
                 msg.parts.some(
-                  (part) =>
-                    part.type === "text" && part.synthetic && part.metadata?.compaction_continue === true,
+                  (part) => part.type === "text" && part.synthetic && part.metadata?.compaction_continue === true,
                 ),
             ),
           ).toBe(false)
@@ -1333,7 +1337,9 @@ describe("session.compaction.process", () => {
           })
           const createdMessages = await svc.messages({ sessionID: session.id })
           const parent = createdMessages.at(-1)
-          const compactionPart = parent?.parts.find((part): part is MessageV2.CompactionPart => part.type === "compaction")
+          const compactionPart = parent?.parts.find(
+            (part): part is MessageV2.CompactionPart => part.type === "compaction",
+          )
           if (!parent || !compactionPart) throw new Error("missing compaction task")
           await svc.updatePart({ ...compactionPart, post_prompt: postPrompt })
           const msgs = await svc.messages({ sessionID: session.id })
@@ -1354,9 +1360,7 @@ describe("session.compaction.process", () => {
           const visiblePostPrompts = all.filter(
             (item) =>
               item.info.role === "user" &&
-              item.parts.some(
-                (part) => part.type === "text" && part.text === postPrompt && part.synthetic !== true,
-              ),
+              item.parts.some((part) => part.type === "text" && part.text === postPrompt && part.synthetic !== true),
           )
 
           expect(result).toBe("continue")
@@ -1397,7 +1401,9 @@ describe("session.compaction.process", () => {
           })
           const createdMessages = await svc.messages({ sessionID: session.id })
           const parent = createdMessages.at(-1)
-          const compactionPart = parent?.parts.find((part): part is MessageV2.CompactionPart => part.type === "compaction")
+          const compactionPart = parent?.parts.find(
+            (part): part is MessageV2.CompactionPart => part.type === "compaction",
+          )
           if (!parent || !compactionPart) throw new Error("missing compaction task")
           await svc.updatePart({ ...compactionPart, post_prompt: postPrompt })
           const runCompaction = async () => {
@@ -1423,9 +1429,7 @@ describe("session.compaction.process", () => {
           const visiblePostPrompts = all.filter(
             (item) =>
               item.info.role === "user" &&
-              item.parts.some(
-                (part) => part.type === "text" && part.text === postPrompt && part.synthetic !== true,
-              ),
+              item.parts.some((part) => part.type === "text" && part.text === postPrompt && part.synthetic !== true),
           )
 
           expect(visiblePostPrompts).toHaveLength(1)
@@ -1490,8 +1494,7 @@ describe("session.compaction.process", () => {
               (msg) =>
                 msg.info.role === "user" &&
                 msg.parts.some(
-                  (part) =>
-                    part.type === "text" && part.synthetic && part.metadata?.compaction_continue === true,
+                  (part) => part.type === "text" && part.synthetic && part.metadata?.compaction_continue === true,
                 ),
             ),
           ).toBe(false)
@@ -1530,8 +1533,7 @@ describe("session.compaction.process", () => {
               (msg) =>
                 msg.info.role === "user" &&
                 msg.parts.some(
-                  (part) =>
-                    part.type === "text" && part.synthetic && part.metadata?.compaction_continue === true,
+                  (part) => part.type === "text" && part.synthetic && part.metadata?.compaction_continue === true,
                 ),
             ),
           ).toBe(false)
@@ -1607,7 +1609,6 @@ describe("session.compaction.process", () => {
            resume: true,
            discardTail: true,
            rescueAttempt: 1,
-
         })
 
         const rt = runtime(
@@ -1817,6 +1818,131 @@ describe("session.compaction.process", () => {
     })
   })
 
+  test("passes images to a vision-capable compaction model", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const stub = llm()
+    let captured = ""
+    stub.push(
+      reply("summary", (input) => {
+        captured = JSON.stringify(input.messages)
+      }),
+    )
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        const imageMessage = await user(session.id, "describe this screenshot")
+        await svc.updatePart({
+          id: PartID.ascending(),
+          messageID: imageMessage.id,
+          sessionID: session.id,
+          type: "file",
+          mime: "image/png",
+          filename: "cat.png",
+          url: "https://example.com/cat.png",
+        })
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: false,
+        })
+
+        const vision = ProviderTest.fake({ model: createModel({ context: 100_000, output: 32_000, image: true }) })
+        const rt = liveRuntime(stub.layer, vision)
+        try {
+          const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: false,
+              }),
+            ),
+          )
+
+          expect(captured).toContain('"mediaType":"image/png"')
+          expect(captured).toContain("https://example.com/cat.png")
+          expect(captured).toContain("Image binaries in the summarized history are included")
+          expect(captured).not.toContain("[Attached image/png: cat.png]")
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
+  test("preserves at most ten images on a text-only compaction resume", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const stub = llm()
+    stub.push(reply("summary"))
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        for (let index = 0; index < 12; index++) {
+          const imageMessage = await user(session.id, `image ${index}`)
+          await svc.updatePart({
+            id: PartID.ascending(),
+            messageID: imageMessage.id,
+            sessionID: session.id,
+            type: "file",
+            mime: "image/png",
+            filename: `image-${index}.png`,
+            url: `https://example.com/image-${index}.png`,
+          })
+        }
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: true,
+          overflow: true,
+          resume: true,
+        })
+
+        const rt = liveRuntime(stub.layer, wide())
+        try {
+          const msgs = await svc.messages({ sessionID: session.id })
+          const parent = msgs.at(-1)?.info.id
+          expect(parent).toBeTruthy()
+          await rt.runPromise(
+            SessionCompaction.Service.use((svc) =>
+              svc.process({
+                parentID: parent!,
+                messages: msgs,
+                sessionID: session.id,
+                auto: true,
+                overflow: true,
+                resume: true,
+              }),
+            ),
+          )
+
+          const continuation = (await svc.messages({ sessionID: session.id })).find(
+            (message) =>
+              message.info.role === "user" &&
+              message.parts.some((part) => part.type === "text" && part.metadata?.compaction_continue === true),
+          )
+          const images = continuation?.parts.filter(
+            (part): part is MessageV2.FilePart => part.type === "file" && part.mime.startsWith("image/"),
+          )
+
+          expect(images).toHaveLength(10)
+          expect(images?.map((part) => part.filename)).toEqual(
+            Array.from({ length: 10 }, (_, index) => `image-${index + 2}.png`),
+          )
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
+  })
+
   test("retains a split turn suffix when a later message fits the preserve token budget", async () => {
     await using tmp = await tmpdir({ git: true })
     const stub = llm()
@@ -1924,8 +2050,7 @@ describe("session.compaction.process", () => {
               (msg) =>
                 msg.info.role === "user" &&
                 msg.parts.some(
-                  (part) =>
-                    part.type === "text" && part.synthetic && part.text.includes("Resume using this priority"),
+                  (part) => part.type === "text" && part.synthetic && part.text.includes("Resume using this priority"),
                 ),
             ),
           ).toBe(false)
@@ -2391,7 +2516,9 @@ describe("session.compaction.process", () => {
           expect(captured).toContain("Next required action")
           expect(captured).toContain("## Confirmed Done")
           expect(captured).toContain("## Optional Follow-ups")
-          expect(captured).toContain("Treat Optional Follow-ups, possible next steps, polish, cleanup, and ideas as non-instructions")
+          expect(captured).toContain(
+            "Treat Optional Follow-ups, possible next steps, polish, cleanup, and ideas as non-instructions",
+          )
           expect(captured).not.toContain("## Next Steps")
         } finally {
           await rt.dispose()
@@ -2454,7 +2581,9 @@ describe("session.compaction.process", () => {
       expect(prompt).toContain("## Current User Intent")
       expect(prompt).toContain("## Resume Anchor")
       expect(prompt).toContain("## Optional Follow-ups")
-      expect(prompt).toContain("Optional Follow-ups, possible next steps, polish, cleanup, and ideas as non-instructions")
+      expect(prompt).toContain(
+        "Optional Follow-ups, possible next steps, polish, cleanup, and ideas as non-instructions",
+      )
       expect(prompt).not.toContain("## Next Steps")
       expect(prompt).not.toContain("Continue if you have next steps")
     }
@@ -2834,7 +2963,9 @@ describe("session.compaction.process", () => {
           expect(captured).toContain("lastTool: bash (completed)")
           expect(captured).toContain("realUserInputAfterAssistant: no")
           expect(captured).toContain("Do not mark Progress Against Latest Request complete")
-          expect(captured).toContain("Put any pending handoff, pending response, pending verification, or continue-tools work under Still required")
+          expect(captured).toContain(
+            "Put any pending handoff, pending response, pending verification, or continue-tools work under Still required",
+          )
           expect(captured).toContain("If it shows finish: tool-calls")
           expect(captured).toContain("Auto-Compaction Trigger")
           expect(captured).toContain("interrupted a non-final assistant turn")
@@ -3382,7 +3513,9 @@ describe("session.compaction.process", () => {
 
           expect(captured).toContain("Latest Real User Request Evidence")
           expect(captured).toMatch(
-            new RegExp(`Latest Real User Request Evidence:[\\s\\S]*?- text:\\n\\s+${request.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`),
+            new RegExp(
+              `Latest Real User Request Evidence:[\\s\\S]*?- text:\\n\\s+${request.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}`,
+            ),
           )
         } finally {
           await rt.dispose()
