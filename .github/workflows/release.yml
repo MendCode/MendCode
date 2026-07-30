@@ -120,7 +120,7 @@ jobs:
         include:
           - runner: macos-14
             arch: arm64
-          - runner: macos-13
+          - runner: macos-15-intel
             arch: x64
     permissions:
       contents: read
@@ -161,7 +161,16 @@ jobs:
             arm64:arm64|x64:x86_64) ;;
             *) echo "unexpected Darwin runner architecture: expected ${{ matrix.arch }}, got ${actual_arch}" >&2; exit 1 ;;
           esac
-          bun run --cwd packages/opencode script/build.ts --single --release-assets --skip-embed-web-ui --skip-install
+           if [ "${{ matrix.arch }}" = "x64" ]; then
+             # The release contract includes both AVX2 and baseline Intel archives.
+             bun run --cwd packages/opencode script/build.ts --single --release-assets --skip-embed-web-ui --skip-install
+             mv packages/opencode/dist/mendcode-darwin-x64.zip /tmp/mendcode-darwin-x64.zip
+             bun run --cwd packages/opencode script/build.ts --single --baseline --release-assets --skip-embed-web-ui --skip-install
+             mv /tmp/mendcode-darwin-x64.zip packages/opencode/dist/mendcode-darwin-x64.zip
+           else
+             bun run --cwd packages/opencode script/build.ts --single --release-assets --skip-embed-web-ui --skip-install
+           fi
+
 
       - name: Upload Darwin release asset to workflow
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
