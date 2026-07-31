@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test"
 import {
   shouldAcceptCompactionArcadeFocus,
   shouldBlurCompactionArcadeWhenOffscreen,
+  shouldRestoreCompactionPromptFocus,
   shouldRenderCompactionArcade,
+  compactionTranscriptToggleLabel,
 } from "@/cli/cmd/tui/component/compaction-panel"
 import {
   promptCursorEndOffset,
@@ -537,6 +539,28 @@ describe("resolveWorkingStartedAt", () => {
     ).toBe(false)
   })
 
+  test("restores prompt focus when compaction arcade focus is released", () => {
+    expect(
+      shouldRestoreCompactionPromptFocus({
+        arcadeOwnsFocus: true,
+        previousFocusAvailable: false,
+        promptAvailable: true,
+      }),
+    ).toBe(true)
+    expect(
+      shouldRestoreCompactionPromptFocus({
+        arcadeOwnsFocus: false,
+        previousFocusAvailable: false,
+        promptAvailable: true,
+      }),
+    ).toBe(false)
+  })
+
+  test("keeps the compacted transcript collapsed until toggled", () => {
+    expect(compactionTranscriptToggleLabel(false)).toBe("▸ show compacted transcript")
+    expect(compactionTranscriptToggleLabel(true)).toBe("▾ hide compacted transcript")
+  })
+
   test("only blurs focused compaction arcade after it leaves the visible screen", () => {
     expect(shouldBlurCompactionArcadeWhenOffscreen({ focused: true, screenY: 5, height: 10, viewportHeight: 20 })).toBe(
       false,
@@ -680,13 +704,44 @@ describe("resolveWorkingStartedAt", () => {
     ).toBe(true)
     expect(shouldAttemptPromptHistoryNavigation({ direction: 1, cursorOffset: 5, text: "line 1\nline 2" })).toBe(false)
     expect(
-      shouldSnapPromptCursorToEnd({ direction: 1, cursorOffset: 5, text: "line 1\nline 2", visualRow: 0, height: 2 }),
+      shouldSnapPromptCursorToEnd({
+        direction: 1,
+        cursorOffset: 5,
+        text: "line 1\nline 2",
+        visualRow: 0,
+        totalVisualRows: 2,
+        scrollY: 0,
+      }),
     ).toBe(false)
     expect(
-      shouldSnapPromptCursorToEnd({ direction: 1, cursorOffset: 5, text: "line 1\nline 2", visualRow: 1, height: 2 }),
+      shouldSnapPromptCursorToEnd({
+        direction: 1,
+        cursorOffset: 5,
+        text: "line 1\nline 2",
+        visualRow: 1,
+        totalVisualRows: 2,
+        scrollY: 0,
+      }),
     ).toBe(true)
     expect(
-      shouldSnapPromptCursorToEnd({ direction: 1, cursorOffset: 5, text: "line 1\nline 2", visualRow: 1, height: 6 }),
+      shouldSnapPromptCursorToEnd({
+        direction: 1,
+        cursorOffset: 5,
+        text: "a very long first line\nsecond line",
+        visualRow: 2,
+        totalVisualRows: 8,
+        scrollY: 0,
+      }),
+    ).toBe(false)
+    expect(
+      shouldSnapPromptCursorToEnd({
+        direction: 1,
+        cursorOffset: 5,
+        text: "a very long first line\nsecond line",
+        visualRow: 5,
+        totalVisualRows: 8,
+        scrollY: 2,
+      }),
     ).toBe(true)
     expect(
       shouldAttemptPromptHistoryNavigation({

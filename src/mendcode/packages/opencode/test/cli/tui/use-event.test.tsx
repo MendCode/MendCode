@@ -413,6 +413,62 @@ describe("useEvent", () => {
     }
   })
 
+  test("does not reset the retry budget when a handshake-only stream drops", async () => {
+    const { app, sdk, controllers } = await mountSSE({
+      reconnect: {
+        maxAttempts: 2,
+        retryDelay: 1,
+        maxRetryDelay: 1,
+      },
+    })
+
+    try {
+      controllers[0].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
+      controllers[0].close()
+
+      await wait(() => controllers.length === 2)
+      controllers[1].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
+      controllers[1].close()
+
+      await wait(() => controllers.length === 3)
+      controllers[2].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
+      controllers[2].close()
+
+      await wait(() => sdk.connection.status === "failed")
+      expect(sdk.connection.attempt).toBe(2)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("stops a reconnect loop when the user interrupts it", async () => {
+    const { app, sdk, controllers } = await mountSSE({
+      reconnect: {
+        maxAttempts: Number.POSITIVE_INFINITY,
+        retryDelay: 1,
+        maxRetryDelay: 1,
+      },
+    })
+
+    try {
+      controllers[0].close()
+      await wait(() => sdk.connection.status === "reconnecting")
+
+      sdk.reconnect.stop()
+      const controllerCount = controllers.length
+      expect(sdk.connection.status).toBe("failed")
+      expect(sdk.connection.error).toBe("Reconnect stopped by user")
+
+      await Bun.sleep(30)
+      expect(controllers).toHaveLength(controllerCount)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   test("SDK event stream refreshes a shared connection after repeated server restarts", async () => {
     let refreshes = 0
     const { app, sdk, controllers } = await mountSSE({
@@ -463,6 +519,39 @@ describe("useEvent", () => {
       controllers[1].enqueue(sseEvent(sessionStatusEvent()))
       await wait(() => sdk.connection.recoveringSince === undefined)
     } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("SDK event stream reconciles after a resume gap when the stream stays open", async () => {
+    const { app, sdk, controllers } = await mountSSE({
+      reconnect: {
+        staleDelay: 500,
+      },
+    })
+    const originalNow = Date.now
+    let nowOffset = 0
+
+    try {
+      controllers[0].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
+
+      const seen: string[] = []
+      const unsubscribe = sdk.event.on("event", (event) => seen.push(event.payload.type))
+      Date.now = () => originalNow() + nowOffset
+      nowOffset = 1_000
+      controllers[0].enqueue(sseEvent(heartbeatEvent()))
+
+      await wait(() => seen.length >= 2)
+      expect(seen.slice(0, 2)).toEqual(["server.connected", "server.heartbeat"])
+      expect(sdk.connection.recoveringSince).toBeNumber()
+
+      Date.now = originalNow
+      controllers[0].enqueue(sseEvent(heartbeatEvent()))
+      await wait(() => sdk.connection.recoveringSince === undefined)
+      unsubscribe()
+    } finally {
+      Date.now = originalNow
       app.renderer.destroy()
     }
   })

@@ -116,7 +116,8 @@ describe("plugin.codex", () => {
 
     expect(Object.keys(models)).toEqual(ids)
     for (const id of ids) {
-      expect(models[id]?.limit).toEqual({ context: 272_000, input: 272_000, output: 128_000 })
+      expect(models[id]?.limit).toEqual({ context: 256_000, input: 256_000, output: 128_000 })
+      expect(models[id]?.options).toMatchObject({ compaction: { threshold: 90 } })
     }
   })
 
@@ -144,6 +145,7 @@ describe("plugin.codex", () => {
       instructions: "always say first Hello World!",
       tools: [{ type: "function", name: "noop", parameters: { type: "object", properties: {} } }],
       reasoning: { effort: "high", summary: "auto" },
+      store: false,
       parallel_tool_calls: true,
       stream: true,
     })
@@ -158,7 +160,13 @@ describe("plugin.codex", () => {
       new Request("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json", session_id: "ses_luna", "x-custom": "retained" },
-        body: JSON.stringify({ model: "gpt-5.6-luna", input: [], stream: true }),
+        body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          input: [],
+          instructions: "always say first Hello World!",
+          store: false,
+          stream: true,
+        }),
       }),
     )
 
@@ -174,6 +182,7 @@ describe("plugin.codex", () => {
     expect(requests[1]?.headers.get("session-id")).toBe(sessionID)
     expect(requests[1]?.headers.get("x-custom")).toBe("retained")
     expect(requests[0]?.body.model).toBe("gpt-5.6-luna")
+    expect(requests[0]?.body.store).toBe(false)
     expect(requests[0]?.body.service_tier).toBe("priority")
     expect(requests[0]?.body.prompt_cache_key).toBe(sessionID)
     expect(requests[0]?.body.tool_choice).toBe("auto")

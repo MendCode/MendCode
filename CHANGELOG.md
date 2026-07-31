@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.23 - 2026-07-31
+
+MendCode v0.1.23 hardens long-running sessions and Loop Workflows while making
+provider-aware compaction and TUI state easier to inspect.
+
+### Added
+
+- Add scheduler health, wake attempts, retry/backoff state, and failure metadata to durable Loop Workflows and their CLI/API views.
+- Add regression coverage for session synchronization, virtual transcript windows, loop lifecycle state, smart permissions, and provider-aware compaction.
+
+### Changed
+
+- Set GPT-5.6 ChatGPT OAuth models to a 256K effective input/context limit with a provider-specific 90% compaction threshold.
+- Improve loop runner recovery, scheduler error reporting, run leases, completion state, and persisted run metadata.
+- Improve transcript rendering, compaction summaries, Changes Review rendering, setup copy, and permission-review presentation across narrow and live TUI states.
+
+### Fixed
+
+- Prevent stale or duplicate session rows and user-message rendering during reconnects, transcript growth, compaction, and resumed work.
+- Preserve safe session and tool state when scheduled loop execution or a permission-review path fails.
+
 ## 0.1.22 - 2026-07-29
 
 ### Fixed

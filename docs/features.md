@@ -404,6 +404,16 @@ surface used by hosted providers. The Claude Code bridge validates the local
 and keeps credentials in the Claude Code CLI's own local state instead of
 placing secrets in MendCode packages or repository files.
 
+## Provider-Aware Context Continuity
+
+Provider adapters keep transport details aligned with the model contract instead of
+making the rest of the runtime provider-specific. For ChatGPT OAuth Responses Lite,
+MendCode normalizes supported model aliases, preserves session affinity while the
+effective instructions stay the same, and rotates that affinity when instructions
+change. GPT-5.6 OAuth models expose a 256K effective input/context limit and a
+provider-aware compaction threshold so long sessions compact before the provider
+rejects the request.
+
 ## Model Roles
 
 MendCode avoids hardcoding one model for every task. Model config can route different jobs through different roles:

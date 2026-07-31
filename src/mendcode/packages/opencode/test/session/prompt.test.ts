@@ -44,6 +44,7 @@ import {
   shouldSkipAutoCompaction,
   ownerWakePromptText,
   interruptedToolPromptText,
+  shouldContinueAfterCompactionStop,
 } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
@@ -53,6 +54,7 @@ import { BackgroundTask } from "../../src/session/background-task"
 import { SessionV2 } from "../../src/v2/session"
 import { Skill } from "../../src/skill"
 import { LoopWorkflow } from "../../src/session/loop"
+import { LoopRunner } from "../../src/session/loop-runner"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
 import { Snapshot } from "../../src/snapshot"
@@ -272,6 +274,7 @@ function makeHttp() {
     Layer.provide(Ripgrep.defaultLayer),
     Layer.provide(Format.defaultLayer),
     Layer.provide(LoopWorkflow.defaultLayer),
+    Layer.provide(LoopRunner.defaultLayer),
     Layer.provideMerge(todo),
     Layer.provideMerge(question),
     Layer.provideMerge(planReview),
@@ -787,6 +790,26 @@ test("queued prompt keeps its internal compaction chain instead of the latest in
     compactionUser.info.id,
     compactionAssistant.info.id,
   ])
+})
+
+test("a queued target continues after an older interrupted compaction stops", () => {
+  const compactionUser = promptUser([{ type: "text", id: PartID.ascending(), text: "compact" }])
+  const queuedUser = promptUser([{ type: "text", id: PartID.ascending(), text: "queued" }])
+
+  expect(
+    shouldContinueAfterCompactionStop({
+      messages: [compactionUser, queuedUser],
+      targetMessageID: queuedUser.info.id,
+      compactionParentID: compactionUser.info.id,
+    }),
+  ).toBe(true)
+  expect(
+    shouldContinueAfterCompactionStop({
+      messages: [compactionUser, queuedUser],
+      targetMessageID: compactionUser.info.id,
+      compactionParentID: compactionUser.info.id,
+    }),
+  ).toBe(false)
 })
 
 test("queued prompts wait for the active response unless after-tools is configured", () => {
@@ -1714,6 +1737,89 @@ it.live("promptAsync promotes an accepted queued prompt into its own turn", () =
         true,
       )
       expect(yield* llm.calls).toBe(2)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        agent: { build: { model: "test/test-model" } },
+      }),
+    },
+  ),
+)
+
+it.live("queued prompt runs after an interrupted manual compaction", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const compaction = yield* SessionCompaction.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Interrupted compaction queue",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.text("seed response")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "seed request" }],
+      })
+
+      const gate = defer<void>()
+      yield* llm.hold("partial summary", gate.promise)
+      yield* llm.text("completed summary")
+      yield* llm.text("queued response")
+      yield* compaction.create({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        auto: false,
+      })
+      const compacting = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(2)
+
+      const cancelling = yield* prompt.cancel(chat.id).pipe(Effect.forkChild)
+      yield* Effect.sleep("5 millis")
+      const queued = yield* prompt.promptAsync({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "queued request" }],
+      })
+      yield* Effect.sleep("20 millis")
+      gate.resolve()
+      yield* Fiber.join(cancelling).pipe(Effect.timeout("1 second"))
+      yield* Fiber.join(compacting)
+
+      yield* Effect.gen(function* () {
+        while (true) {
+          const messages = yield* sessions.messages({ sessionID: chat.id })
+          if (
+            messages.some(
+              (message) =>
+                message.info.role === "assistant" &&
+                message.info.summary !== true &&
+                message.info.parentID === queued.info.id &&
+                message.info.time.completed !== undefined,
+            )
+          )
+            return
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(Effect.timeout("2 seconds"))
+
+      const messages = yield* sessions.messages({ sessionID: chat.id })
+      expect(
+        messages.some(
+          (message) =>
+            message.info.role === "assistant" &&
+            message.info.summary !== true &&
+            message.info.parentID === queued.info.id &&
+            message.parts.some((part) => part.type === "text" && part.text === "queued response"),
+        ),
+      ).toBe(true)
+      expect(yield* llm.calls).toBe(4)
     }),
     {
       git: true,

@@ -271,7 +271,15 @@ function formatLoopTime(value?: number) {
 }
 
 function formatLoopSummary(loop: LoopWorkflow.Info) {
-  return `${loop.id}  ${loop.state.padEnd(10)}  ${loop.name}  phase=${loop.phase}  next=${formatLoopTime(loop.nextWakeup)}`
+  return `${loop.id}  ${loop.state.padEnd(10)}  ${loop.name}  phase=${loop.phase}  next=${formatLoopTime(loop.nextWakeup)}  scheduler=${formatLoopScheduler(loop)}`
+}
+
+function formatLoopScheduler(loop: Pick<LoopWorkflow.Info, "scheduler">) {
+  const scheduler = loop.scheduler
+  if (!scheduler) return "unknown"
+  const result = scheduler.lastResult ? ` result=${scheduler.lastResult}` : ""
+  const error = scheduler.lastError ? ` error=${scheduler.lastError}` : ""
+  return `${scheduler.degraded ? "degraded" : "healthy"} wake=${formatLoopTime(scheduler.lastWakeAttempt)} next=${formatLoopTime(scheduler.nextWakeup)}${result}${error}`
 }
 
 function loopServiceOptions(args: string[]) {
@@ -409,6 +417,7 @@ function formatLoopSnapshot(snapshot: LoopWorkflow.Snapshot) {
     `Loop Workflow: ${loop.name}`,
     `ID: ${loop.id}`,
     `State: ${loop.state}    Phase: ${loop.phase}    Next: ${formatLoopTime(loop.nextWakeup)}`,
+    `Scheduler: ${formatLoopScheduler(loop)}`,
     `Budget: ${loop.metrics.turns ?? 0}/${loop.policy.maxTurns ?? "?"} turns    Children: ${snapshot.threads.length}`,
     `Root session: ${loop.rootSessionID ?? "none"}`,
     "",
@@ -459,7 +468,12 @@ async function withLoopRunner<T>(
     return await bootstrap(
       shellProjectRoot(),
       async () =>
-      AppRuntime.runPromise(LoopRunner.Service.use(fn) as Parameters<typeof AppRuntime.runPromise>[0]) as Promise<T>,
+        AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const runner = yield* LoopRunner.Service
+            return yield* fn(runner)
+          }) as Parameters<typeof AppRuntime.runPromise>[0],
+        ) as Promise<T>,
     )
   } finally {
     if (options.disposeRuntime !== false) await AppRuntime.dispose().catch(() => undefined)
@@ -584,9 +598,15 @@ async function loops(args: string[]) {
     const once = args.includes("--once")
     const runTick = async (disposeRuntime: boolean) => {
       const started = new Date().toLocaleTimeString()
-      const results = await withLoopRunner((runner) => runner.runDue({ limit, execute, reportOnly }), {
-        disposeRuntime,
-      })
+      let results: LoopRunner.TickResult[]
+      try {
+        results = await withLoopRunner((runner) => runner.runDue({ limit, execute, reportOnly }), {
+          disposeRuntime,
+        })
+      } catch (error) {
+        console.error(`${started} loop scheduler error: ${error instanceof Error ? error.message : String(error)}`)
+        return
+      }
       if (results.length) {
         for (const item of results) {
           console.log(

@@ -137,10 +137,9 @@ export function sessionTopbarLayout(input: {
     : 0
 
   const metricsWidth = requestedMetricsWidth
-  const titleLeftBias = metricsWidth > 0 ? Math.min(3, Math.floor(metricsWidth / 4)) : 0
   let titleWidth = requestedTitleWidth
   while (titleWidth > 0) {
-    const titleStart = Math.max(0, Math.floor((contentWidth - titleWidth) / 2) - titleLeftBias)
+    const titleStart = Math.max(0, Math.floor((contentWidth - titleWidth) / 2))
     const titleGapWidth = titleStart > 0 ? 1 : 0
     const leftWidth = Math.max(0, titleStart - titleGapWidth)
     const metricsGapWidth = metricsWidth > 0 && (leftWidth > 0 || titleWidth > 0) ? 1 : 0
@@ -148,7 +147,7 @@ export function sessionTopbarLayout(input: {
     if (regions <= contentWidth) break
     titleWidth -= 1
   }
-  const titleStart = titleWidth > 0 ? Math.max(0, Math.floor((contentWidth - titleWidth) / 2) - titleLeftBias) : 0
+  const titleStart = titleWidth > 0 ? Math.max(0, Math.floor((contentWidth - titleWidth) / 2)) : 0
   const titleGapWidth = titleWidth > 0 && titleStart > 0 ? 1 : 0
   const leftWidth = titleWidth > 0
     ? Math.max(0, titleStart - titleGapWidth)

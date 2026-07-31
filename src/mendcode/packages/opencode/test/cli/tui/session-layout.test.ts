@@ -116,15 +116,22 @@ describe("session layout", () => {
 
   test("sizes the header title from terminal width instead of leftover spacing", () => {
     expect(sessionTopbarLayout({ contentWidth: 240, metricsWidth: 24, titleVisible: true })).toMatchObject({
-      leftWidth: 74,
+      leftWidth: 77,
       titleWidth: 83,
       metricsWidth: 24,
     })
     expect(sessionTopbarLayout({ contentWidth: 240, metricsWidth: 24, navWidth: 80, titleVisible: true })).toMatchObject({
-      leftWidth: 74,
+      leftWidth: 77,
       titleWidth: 83,
       metricsWidth: 24,
     })
+  })
+
+  test("keeps the title centered when the side widgets change", () => {
+    const layout = sessionTopbarLayout({ contentWidth: 240, metricsWidth: 24, titleVisible: true })
+    const titleStart = layout.leftWidth + layout.titleGapWidth
+
+    expect(Math.abs(2 * titleStart + layout.titleWidth - 240)).toBeLessThanOrEqual(1)
   })
 
   test("caps nav and metrics so the proportional title keeps room on small terminals", () => {
@@ -132,7 +139,7 @@ describe("session layout", () => {
 
     expect(layout.metricsWidth).toBe(18)
     expect(layout.titleWidth).toBe(22)
-    expect(layout.leftWidth).toBe(15)
+    expect(layout.leftWidth).toBe(18)
     expect(layout.navWidth).toBeLessThanOrEqual(Math.floor(layout.leftWidth * 0.6))
     if (layout.navWidth > 0) expect(layout.pathWidth + layout.navWidth + 1).toBe(layout.leftWidth)
     else expect(layout.pathWidth).toBe(layout.leftWidth)

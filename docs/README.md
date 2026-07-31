@@ -23,6 +23,7 @@ If you are deciding what to show on GitHub or the website, start with [Feature M
 - [CLI, setup, and configuration](cli-setup-configuration.md): required setup steps, optional setup steps, config files, provider/model roles, prompt modes, permissions, and memory.
 - [Package index](package-index.md): source package map and the distinction between npm workspace packages and runtime `.mendcode` packages.
 - [Architecture and packages](architecture.md): repo layout, MendCode-owned runtime layer, public command router, package map, and safety model.
+- [Provider-aware context continuity](features.md#provider-aware-context-continuity): OAuth Responses Lite continuity, local compaction, and provider-aware limits.
 
 ## Shape The Terminal
 

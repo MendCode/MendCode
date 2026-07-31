@@ -10,6 +10,21 @@ export type UserMessageDisplay = {
   hiddenChars: number
 }
 
+export const USER_MESSAGE_ATTACHMENT_COLLAPSE_THRESHOLD = 3
+
+export function shouldCollapseUserMessageAttachments(count: number) {
+  return count > USER_MESSAGE_ATTACHMENT_COLLAPSE_THRESHOLD
+}
+
+export function hiddenUserMessageAttachmentCount(count: number) {
+  return Math.max(0, count - USER_MESSAGE_ATTACHMENT_COLLAPSE_THRESHOLD)
+}
+
+export function visibleUserMessageAttachments<T>(files: readonly T[], expanded: boolean) {
+  if (expanded || !shouldCollapseUserMessageAttachments(files.length)) return files
+  return files.slice(0, USER_MESSAGE_ATTACHMENT_COLLAPSE_THRESHOLD)
+}
+
 export type PastedContentDisplayPart = {
   text: string
   metadata?: {

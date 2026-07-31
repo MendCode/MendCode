@@ -1,6 +1,7 @@
 import { InstanceState } from "@/effect/instance-state"
 import { loopServiceArgsFromConfig, loopServiceStart } from "@/mend/runtime/loop-service"
 import { externalSignalRateLimit, LoopID, LoopWorkflow } from "@/session/loop"
+import { LoopRunner } from "@/session/loop-runner"
 import { SessionID } from "@/session/schema"
 import { lazy } from "@/util/lazy"
 import { Effect } from "effect"
@@ -194,8 +195,8 @@ export const LoopRoutes = lazy(() =>
     .post("/:loopID/run-once", async (c) => {
       const body = await readJson(c, ReasonBody)
       return jsonRequest("LoopRoutes.runOnce", c, function* () {
-        const loop = yield* LoopWorkflow.Service
-        return yield* loop.runOnce({ id: loopID(c.req.param("loopID")), reason: body.reason })
+        const runner = yield* LoopRunner.Service
+        return yield* runner.runOne({ id: loopID(c.req.param("loopID")), execute: true, reason: body.reason, trigger: "run-once" })
       })
     })
     .post("/:loopID/override", async (c) => {

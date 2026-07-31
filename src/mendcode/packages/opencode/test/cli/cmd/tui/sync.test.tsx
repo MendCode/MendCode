@@ -3482,6 +3482,63 @@ describe("tui sync", () => {
     }
   })
 
+  test("legacy sync refreshes pending questions after a sleep gap on an open SSE stream", async () => {
+    const sessionID = "ses_question_sleep_gap"
+    const request = {
+      id: "que_question_sleep_gap",
+      sessionID,
+      questions: [
+        {
+          header: "Resume",
+          question: "Continue after wake?",
+          options: [{ label: "Continue", description: "Resume the session" }],
+        },
+      ],
+    }
+    let pending: unknown[] = []
+    let questionCalls = 0
+    const { app, sync, controllers } = await mountSSE({
+      "/question": () => {
+        questionCalls++
+        return pending
+      },
+    })
+    const originalNow = Date.now
+    let nowOffset = 0
+
+    try {
+      controllers[0].enqueue(
+        new TextEncoder().encode(
+          `data: ${JSON.stringify({
+            directory,
+            project: "proj_test",
+            payload: { id: "evt_question_sleep_connected", type: "server.connected", properties: {} },
+          })}\n\n`,
+        ),
+      )
+      await wait(() => questionCalls >= 2)
+
+      pending = [request]
+      Date.now = () => originalNow() + nowOffset
+      nowOffset = 30_000
+      controllers[0].enqueue(
+        new TextEncoder().encode(
+          `data: ${JSON.stringify({
+            directory,
+            project: "proj_test",
+            payload: { id: "evt_question_sleep_heartbeat", type: "server.heartbeat", properties: {} },
+          })}\n\n`,
+        ),
+      )
+
+      await wait(() => sync.data.question[sessionID]?.[0]?.id === request.id)
+      expect(sync.data.question[sessionID]?.[0]?.questions[0]?.question).toBe(request.questions[0]?.question)
+    } finally {
+      Date.now = originalNow
+      app.renderer.destroy()
+    }
+  })
+
   test("legacy sync refreshes pending questions after a worker transport reconnect", async () => {
     let emit!: (event: GlobalEvent) => void
     const sessionID = "ses_question_reconnect"

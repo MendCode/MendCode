@@ -317,6 +317,16 @@ type LoopMetricsData = {
   cacheWriteTokens?: number
 }
 
+type LoopSchedulerData = {
+  lastWakeAttempt?: number
+  nextWakeup?: number
+  lastError?: string
+  lastRunID?: string
+  lastRunState?: "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+  lastResult?: string
+  degraded?: boolean
+}
+
 type LoopUsageData = {
   providerID?: string
   modelID?: string
@@ -388,10 +398,12 @@ export const LoopWorkflowTable = sqliteTable(
       .$type<{
         spec: LoopSpecData
         policy: LoopPolicyData
-        metrics: LoopMetricsData
-        memory?: LoopMemoryData
-        evaluatorReason?: string
-        failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+         metrics: LoopMetricsData
+         memory?: LoopMemoryData
+         scheduler?: LoopSchedulerData
+         evaluatorReason?: string
+         failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+
       }>(),
   },
   (table) => [

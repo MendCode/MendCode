@@ -12,9 +12,11 @@ export interface Runner<A, E = never> {
   ) => Effect.Effect<A, E>
   readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E>
   readonly interruptCurrent: (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => Effect.Effect<void>
+  readonly interruptQueued: (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => Effect.Effect<boolean>
   readonly cancelPending: (predicate: (key?: string) => boolean) => Effect.Effect<boolean>
   readonly setInterruptible: (interruptible: boolean) => Effect.Effect<void>
   readonly interrupt: Effect.Effect<void>
+  readonly cancelCurrent: (options?: { before?: Effect.Effect<void>; cancelPending?: boolean }) => Effect.Effect<void>
   readonly cancel: Effect.Effect<void>
 }
 
@@ -285,13 +287,14 @@ export const make = <A, E = never>(
       }),
     ).pipe(Effect.flatten) as Effect.Effect<A, E>
 
-  const cancel = SynchronizedRef.modify(ref, (st) => {
+  const cancelCurrent = (options?: { before?: Effect.Effect<void>; cancelPending?: boolean }) => SynchronizedRef.modify(ref, (st) => {
     switch (st._tag) {
       case "Idle":
         return [Effect.void, st] as const
       case "Running":
         return [
           Effect.gen(function* () {
+            yield* options?.before ?? Effect.void
             yield* Fiber.interrupt(st.run.fiber)
             yield* Deferred.await(st.run.done).pipe(Effect.exit, Effect.asVoid)
             yield* idleIfCurrent()
@@ -301,14 +304,17 @@ export const make = <A, E = never>(
       case "RunningThenRun":
         return [
           Effect.gen(function* () {
+            if (options?.cancelPending) yield* cancelPendingHandles(st.next)
+            yield* options?.before ?? Effect.void
             yield* Fiber.interrupt(st.run.fiber)
             yield* Deferred.await(st.run.done).pipe(Effect.exit, Effect.asVoid)
           }),
-          st,
+          options?.cancelPending ? { _tag: "Running", run: st.run } as const : st,
         ] as const
       case "Shell":
         return [
           Effect.gen(function* () {
+            yield* options?.before ?? Effect.void
             yield* stopShell(st.shell)
             yield* idleIfCurrent()
           }),
@@ -317,6 +323,7 @@ export const make = <A, E = never>(
       case "ShellThenRun":
         return [
           Effect.gen(function* () {
+            yield* options?.before ?? Effect.void
             yield* stopShell(st.shell)
             yield* cancelPendingHandles(st.run)
             yield* idleIfCurrent()
@@ -325,6 +332,8 @@ export const make = <A, E = never>(
         ] as const
     }
   }).pipe(Effect.flatten)
+
+  const cancel = cancelCurrent()
 
   const cancelPending = (predicate: (key?: string) => boolean) =>
     SynchronizedRef.modifyEffect(ref, (st) =>
@@ -360,34 +369,41 @@ export const make = <A, E = never>(
       return st
     })
 
-  const interruptCurrent = (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => SynchronizedRef.modify(ref, (st) => {
-    const interruptRun = (run: RunHandle<A, E>) =>
+  const interruptRun = (run: RunHandle<A, E>, options?: NonNullable<EnsureRunningOptions["interrupt"]>) =>
       Effect.gen(function* () {
         yield* options?.before ?? Effect.void
         yield* Fiber.interrupt(run.fiber).pipe(Effect.ensuring(options?.after ?? Effect.void))
         yield* Deferred.await(run.done).pipe(Effect.exit, Effect.asVoid)
       })
-    const interruptShell = (shell: ShellHandle<A, E>) =>
+  const interruptShell = (shell: ShellHandle<A, E>, options?: NonNullable<EnsureRunningOptions["interrupt"]>) =>
       Effect.gen(function* () {
         yield* options?.before ?? Effect.void
         yield* stopShell(shell).pipe(Effect.ensuring(options?.after ?? Effect.void))
       })
 
+  const interruptCurrent = (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => SynchronizedRef.modify(ref, (st) => {
     switch (st._tag) {
       case "Idle":
         return [Effect.void, st] as const
       case "Running":
-        return [interruptRun(st.run), st] as const
+        return [interruptRun(st.run, options), st] as const
       case "RunningThenRun":
-        return [interruptRun(st.run), st] as const
+        return [interruptRun(st.run, options), st] as const
       case "Shell":
-        return [interruptShell(st.shell), st] as const
+        return [interruptShell(st.shell, options), st] as const
       case "ShellThenRun":
-        return [interruptShell(st.shell), st] as const
+        return [interruptShell(st.shell, options), st] as const
     }
   }).pipe(Effect.flatten)
 
-  const interrupt = interruptCurrent()
+  const interruptQueued = (options?: NonNullable<EnsureRunningOptions["interrupt"]>) =>
+    SynchronizedRef.modify(ref, (st) => {
+      if (st._tag === "RunningThenRun") return [interruptRun(st.run, options).pipe(Effect.as(true)), st] as const
+      if (st._tag === "ShellThenRun") return [interruptShell(st.shell, options).pipe(Effect.as(true)), st] as const
+      return [Effect.succeed(false), st] as const
+    }).pipe(Effect.flatten)
+
+  const interrupt = interruptQueued().pipe(Effect.asVoid)
 
   return {
     get state() {
@@ -399,9 +415,11 @@ export const make = <A, E = never>(
     ensureRunning,
     startShell,
     interruptCurrent,
+    interruptQueued,
     cancelPending,
     setInterruptible,
     interrupt,
+    cancelCurrent,
     cancel,
   }
 }

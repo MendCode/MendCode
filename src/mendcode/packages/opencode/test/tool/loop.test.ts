@@ -497,6 +497,7 @@ describe("tool.loop", () => {
               triggerMode: "interval",
               intervalMs: 3_600_000,
               maxTurns: 1,
+              maxTokens: 0,
               permissionMode: "report-only",
               reportOnly: true,
               budgetMode: "unbounded-monitor",
@@ -511,6 +512,7 @@ describe("tool.loop", () => {
 
           expect(activated.metadata.state).toBe("sleeping")
           expect(activated.metadata.workflows?.[0]?.maxTurns).toBeUndefined()
+          expect(activated.metadata.costBudget).toBeUndefined()
           expect(activated.metadata.budgetMode).toBe("unbounded-monitor")
           expect(activated.output).toContain("max_turns: unlimited")
 

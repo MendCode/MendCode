@@ -10,7 +10,7 @@ import { InstanceState } from "@/effect/instance-state"
 export const TickResult = Schema.Struct({
   workflowID: LoopWorkflow.LoopID,
   runID: Schema.optional(LoopWorkflow.RunID),
-  state: Schema.Literals(["completed", "failed", "skipped"]),
+  state: Schema.Literals(["completed", "failed", "blocked", "needs_input", "stopped", "skipped"]),
   summary: Schema.String,
 })
 export type TickResult = Types.DeepMutable<Schema.Schema.Type<typeof TickResult>>
@@ -31,6 +31,9 @@ export type RunOneInput = {
   id: LoopWorkflow.LoopID
   execute?: boolean
   reportOnly?: boolean
+  reason?: string
+  trigger?: LoopWorkflow.RunTrigger
+  now?: number
 }
 
 type LoopCheckpoint = {
@@ -128,7 +131,7 @@ function workspacePolicyPrompt(workflow: LoopWorkflow.Info) {
   return "Workspace policy: in-place. Work in the current project workspace and keep changes minimal and auditable."
 }
 
-function iterationPrompt(workflow: LoopWorkflow.Info) {
+function iterationPrompt(workflow: LoopWorkflow.Info, reason?: string) {
   const turn = (workflow.metrics.turns ?? 0) + 1
   const maxTurns = workflow.policy.maxTurns ?? "unlimited"
   const next = workflow.nextWakeup ? new Date(workflow.nextWakeup).toISOString() : "now"
@@ -146,6 +149,7 @@ function iterationPrompt(workflow: LoopWorkflow.Info) {
     `Loop workflow iteration ${turn}/${maxTurns}: ${workflow.name}`,
     "",
     `Objective: ${workflow.objective}`,
+    reason?.trim() ? `Operator-requested run reason: ${reason.trim()}` : undefined,
     workspacePolicyPrompt(workflow),
     `Budget mode: ${budgetSemantics(workflow)}`,
     `Remaining iteration budget after this run starts: ${remaining}`,
@@ -189,9 +193,9 @@ function iterationPrompt(workflow: LoopWorkflow.Info) {
     .join("\n")
 }
 
-function reportOnlyPrompt(workflow: LoopWorkflow.Info) {
+function reportOnlyPrompt(workflow: LoopWorkflow.Info, reason?: string) {
   return [
-    iterationPrompt(workflow),
+    iterationPrompt(workflow, reason),
     "",
     "REPORT-ONLY MODE:",
     "- Do not edit files.",
@@ -656,22 +660,20 @@ function runValidationCommand(command: string, cwd: string, timeoutMs: number, e
   )
 }
 
-function executeValidationChecks(workflow: LoopWorkflow.Info, run: LoopWorkflow.RunInfo, checkpoint: LoopCheckpoint) {
+function executeValidationChecks(workflowService: LoopWorkflow.Interface, workflow: LoopWorkflow.Info, run: LoopWorkflow.RunInfo, checkpoint: LoopCheckpoint, directory: string) {
   const checks = workflow.spec.validationChecks ?? []
   if (!checks.length || (checkpoint.status !== "complete" && checkpoint.status !== "blocked")) return Effect.succeed([] as LoopGateResult[])
   return Effect.gen(function* () {
-    const service = yield* LoopWorkflow.Service
-    const instance = yield* InstanceState.context
     return yield* Effect.forEach(checks, (check) =>
       Effect.gen(function* () {
         const command = check.command.trim()
         const result: ValidationExecution = yield* runValidationCommand(
           command,
-          run.workspaceLease?.state === "active" ? run.workspaceLease.path : instance.directory,
+          run.workspaceLease?.state === "active" ? run.workspaceLease.path : directory,
           Math.max(1_000, Math.min(check.timeoutMs ?? 120_000, 10 * 60_000)),
           !workflowIsReportOnly(workflow),
         )
-        const artifact = yield* service.recordValidation({
+        const artifact = yield* workflowService.recordValidation({
           id: workflow.id,
           runID: run.id,
           checkID: check.id,
@@ -924,6 +926,9 @@ export const layer = Layer.effect(
   Effect.sync(() => {
     const runOne = Effect.fn("LoopRunner.runOne")(function* (input: RunOneInput) {
       const workflow = yield* LoopWorkflow.Service
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const instance = yield* InstanceState.context
       const id = input.id
       const before = yield* workflow.get(id)
       if (typeof before.policy.maxTurns === "number" && (before.metrics.turns ?? 0) >= before.policy.maxTurns) {
@@ -947,6 +952,7 @@ export const layer = Layer.effect(
           summary: `Dry-run: would run loop "${before.name}" in phase ${before.phase}. Pass --execute to run.`,
         } satisfies TickResult
       }
+      const now = input.now ?? Date.now()
       const readiness = readinessDecision(before)
       if (!readiness.ready) {
         const skipped = yield* workflow.recordReadinessSkip({
@@ -954,6 +960,7 @@ export const layer = Layer.effect(
           trigger: runTriggerFor(before),
           reason: readiness.reason,
           nextWakeup: readiness.nextWakeup,
+          now,
         })
         return {
           workflowID: id,
@@ -961,10 +968,8 @@ export const layer = Layer.effect(
           summary: skipped.evaluatorReason ?? readiness.reason,
         } satisfies TickResult
       }
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
       const leaseHolder = `loop-runner:${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2)}`
-      const run = yield* workflow.startRun({ id, trigger: runTriggerFor(before), leaseHolder })
+      const run = yield* workflow.startRun({ id, trigger: input.trigger ?? runTriggerFor(before), leaseHolder, now })
       if (run.lease?.holder !== leaseHolder) {
         return {
           workflowID: id,
@@ -975,7 +980,7 @@ export const layer = Layer.effect(
       }
       const current = yield* workflow.get(id)
       if (!current.rootSessionID) {
-        return yield* workflow.failRun({ id, runID: run.id, error: "Loop has no root session after activation." }).pipe(
+        return yield* workflow.failRun({ id, runID: run.id, error: "Loop has no root session after activation.", now }).pipe(
           Effect.map((failed) => ({
             workflowID: id,
             runID: failed.id,
@@ -993,12 +998,12 @@ export const layer = Layer.effect(
           model: promptModel(current),
           variant: current.spec.model?.variant,
           tools: loopIterationTools(reportOnly),
-          parts: [{ type: "text", text: reportOnly ? reportOnlyPrompt(current) : iterationPrompt(current) }],
+          parts: [{ type: "text", text: reportOnly ? reportOnlyPrompt(current, input.reason) : iterationPrompt(current, input.reason) }],
         })
         .pipe(Effect.exit)
       if (result._tag === "Failure") {
         const message = errorMessage(Cause.squash(result.cause))
-        const failed = yield* workflow.failRun({ id, runID: run.id, error: message })
+        const failed = yield* workflow.failRun({ id, runID: run.id, error: message, now })
         const after = yield* workflow.get(id)
         return {
           workflowID: id,
@@ -1010,7 +1015,7 @@ export const layer = Layer.effect(
         } satisfies TickResult
       }
       const checkpoint = parseCheckpoint(assistantText(result.value))
-      const validationGates = yield* executeValidationChecks(current, run, checkpoint)
+      const validationGates = yield* executeValidationChecks(workflow, current, run, checkpoint, instance.directory)
       const preJudgeGates = [checkpointGate(checkpoint), approvalGate(current, checkpoint), ...validationGates].filter(
         (item): item is LoopGateResult => Boolean(item),
       )
@@ -1062,6 +1067,7 @@ export const layer = Layer.effect(
         id,
         runID: run.id,
         reason: judgment?.summary ?? checkpoint.summary ?? "Iteration completed by session runner.",
+        now,
         goalStatus: checkpoint.status,
         checkpoint,
         judgment,
@@ -1096,7 +1102,7 @@ export const layer = Layer.effect(
       return {
         workflowID: id,
         runID: completed.id,
-        state: "completed",
+        state: completed.state === "queued" || completed.state === "working" ? "completed" : completed.state,
         summary,
       } satisfies TickResult
     })
@@ -1108,8 +1114,41 @@ export const layer = Layer.effect(
       reportOnly?: boolean
     }) {
       const workflow = yield* LoopWorkflow.Service
-      const due = yield* workflow.due(input)
-      return yield* Effect.forEach(due, (item) => runOne({ id: item.id, execute: input?.execute, reportOnly: input?.reportOnly }), { concurrency: 1 })
+      const now = input?.now ?? Date.now()
+      const due = yield* workflow.due({ now, limit: input?.limit })
+      return yield* Effect.forEach(
+        due,
+        (item) =>
+          runOne({ id: item.id, execute: input?.execute, reportOnly: input?.reportOnly, now }).pipe(
+            Effect.catchCause((cause) => {
+              const error = errorMessage(Cause.squash(cause))
+              return workflow.recordSchedulerFailure({ id: item.id, error, now }).pipe(
+                Effect.map((failed) => ({
+                  workflowID: item.id,
+                  runID: failed.id,
+                  state: failed.state === "blocked"
+                    ? "blocked"
+                    : failed.state === "needs_input"
+                      ? "needs_input"
+                      : failed.state === "stopped"
+                        ? "stopped"
+                        : failed.state === "completed"
+                          ? "completed"
+                          : "failed",
+                  summary: failed.evaluatorReason ?? `Loop scheduler failed: ${error}`,
+                }) satisfies TickResult),
+                Effect.catchCause(() =>
+                  Effect.succeed({
+                    workflowID: item.id,
+                    state: "failed" as const,
+                    summary: `Loop scheduler failed: ${error}`,
+                  } satisfies TickResult),
+                ),
+              )
+            }),
+          ),
+        { concurrency: 1 },
+      )
     })
 
     return Service.of({ runOne, runDue })

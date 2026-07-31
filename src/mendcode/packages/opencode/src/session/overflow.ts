@@ -27,15 +27,17 @@ function compactionTokenLimit(value: unknown) {
 
 export function compactionThresholdPercent(input: {
   cfg?: unknown
-  model?: { id?: string; providerID?: string }
+  model?: { id?: string; providerID?: string; options?: unknown }
 }) {
   const cfg = record(input.cfg)
   const providerConfig = input.model?.providerID ? record(record(cfg?.provider)?.[input.model.providerID]) : undefined
   const modelConfig = input.model?.id ? record(record(providerConfig?.models)?.[input.model.id]) : undefined
+  const modelOptions = input.model?.options ? record(input.model.options) : undefined
   return (
     compactionThreshold(modelConfig) ??
     compactionThreshold(providerConfig) ??
     compactionThreshold(cfg) ??
+    compactionThreshold(modelOptions) ??
     DEFAULT_COMPACTION_THRESHOLD_PERCENT
   )
 }
