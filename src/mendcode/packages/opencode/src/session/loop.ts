@@ -360,6 +360,17 @@ export const Usage = Schema.Struct({
 })
 export type Usage = Types.DeepMutable<Schema.Schema.Type<typeof Usage>>
 
+export const SchedulerInfo = Schema.Struct({
+  lastWakeAttempt: Schema.optional(NonNegativeInt),
+  nextWakeup: Schema.optional(NonNegativeInt),
+  lastError: Schema.optional(Schema.String),
+  lastRunID: Schema.optional(RunID),
+  lastRunState: Schema.optional(RunState),
+  lastResult: Schema.optional(Schema.String),
+  degraded: Schema.optional(Schema.Boolean),
+})
+export type SchedulerInfo = Types.DeepMutable<Schema.Schema.Type<typeof SchedulerInfo>>
+
 export const Info = Schema.Struct({
   id: LoopID,
   projectID: Schema.String,
@@ -377,6 +388,7 @@ export const Info = Schema.Struct({
   policy: Policy,
   metrics: Metrics,
   memory: Schema.optional(RuntimeMemory),
+  scheduler: Schema.optional(SchedulerInfo),
   evaluatorReason: Schema.optional(Schema.String),
   failureClass: Schema.optional(FailureClass),
   time: Time,
@@ -629,6 +641,7 @@ export type CreateDraftInput = {
 export type UpdateStateInput = {
   id: LoopID
   reason?: string
+  now?: number
 }
 
 export type UpdateAgentInput = {
@@ -640,6 +653,7 @@ export type UpdateAgentInput = {
 export type RunOnceInput = {
   id: LoopID
   reason?: string
+  now?: number
 }
 
 export type DueInput = {
@@ -652,6 +666,7 @@ export type StartRunInput = {
   trigger?: RunTrigger
   reason?: string
   leaseHolder?: string
+  now?: number
 }
 
 export type ReadinessSkipInput = {
@@ -659,6 +674,7 @@ export type ReadinessSkipInput = {
   trigger?: RunTrigger
   reason: string
   nextWakeup?: number
+  now?: number
 }
 
 export type IngestSignalInput = {
@@ -668,6 +684,7 @@ export type IngestSignalInput = {
   dedupeKey?: string
   payloadSummary?: string
   links?: string[]
+  now?: number
   rateLimit?: {
     maxEvents: number
     windowMs: number
@@ -708,6 +725,7 @@ export type CompleteRunInput = {
   runID: RunID
   reason?: string
   nextWakeup?: number
+  now?: number
   goalStatus?: GoalStatus
   checkpoint?: {
     status?: GoalStatus
@@ -741,6 +759,14 @@ export type FailRunInput = {
   runID: RunID
   error: string
   failureClass?: FailureClass
+  now?: number
+}
+
+export type SchedulerFailureInput = {
+  id: LoopID
+  error: string
+  failureClass?: FailureClass
+  now?: number
 }
 
 export interface Interface {
@@ -755,6 +781,7 @@ export interface Interface {
   readonly activate: (input: UpdateStateInput) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
   readonly startRun: (input: StartRunInput) => Effect.Effect<RunInfo, InstanceType<typeof NotFoundError>>
   readonly recordReadinessSkip: (input: ReadinessSkipInput) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
+  readonly recordSchedulerFailure: (input: SchedulerFailureInput) => Effect.Effect<RunInfo, InstanceType<typeof NotFoundError>>
   readonly ingestSignal: (input: IngestSignalInput) => Effect.Effect<IngestSignalResult, InstanceType<typeof NotFoundError>>
   readonly recordValidation: (input: RecordValidationInput) => Effect.Effect<ArtifactInfo, InstanceType<typeof NotFoundError>>
   readonly completeRun: (input: CompleteRunInput) => Effect.Effect<RunInfo, InstanceType<typeof NotFoundError>>
@@ -803,6 +830,20 @@ const riskyDefaults = [
 function positiveInt(value: number | undefined) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined
   return Math.floor(value)
+}
+
+function normalizeCostBudget(value: Spec["costBudget"]) {
+  if (!value) return undefined
+  const maxCost = typeof value.maxCost === "number" && Number.isFinite(value.maxCost) && value.maxCost >= 0 ? value.maxCost : undefined
+  const maxTokens = positiveInt(value.maxTokens)
+  if (maxCost === undefined && maxTokens === undefined) return undefined
+  return { maxCost, maxTokens }
+}
+
+function normalizeSpec(spec: Spec) {
+  const costBudget = normalizeCostBudget(spec.costBudget)
+  if (spec.costBudget?.maxCost === costBudget?.maxCost && spec.costBudget?.maxTokens === costBudget?.maxTokens) return spec
+  return { ...spec, costBudget }
 }
 
 type DailyDateParts = {
@@ -1045,6 +1086,38 @@ function scheduledMonitor(info: { trigger?: { mode?: TriggerMode; intervalMs?: n
   return mode === "interval" || mode === "daily" || mode === "adaptive"
 }
 
+function scheduledTrigger(info: { trigger?: { mode?: TriggerMode; intervalMs?: number; dailyAt?: string; timezone?: string } }) {
+  const mode = info.trigger?.mode
+  return mode === "interval" || mode === "daily" || mode === "adaptive" || mode === "self-paced"
+}
+
+function scheduledRunTrigger(info: Info): RunTrigger {
+  const mode = info.spec.trigger?.mode
+  if (mode === "interval" || mode === "daily" || mode === "adaptive" || mode === "external-signal" || mode === "self-paced") return mode
+  return "adaptive"
+}
+
+function schedulerRetryWakeupFor(info: Info, now: number) {
+  const scheduled = nextWakeupFor(info.spec, now)
+  if (typeof scheduled === "number" && scheduled > now) return scheduled
+  if (info.spec.trigger?.mode === "external-signal" && typeof info.nextWakeup === "number" && info.nextWakeup > now) return info.nextWakeup
+  if (scheduledTrigger(info.spec) || info.spec.trigger?.mode === "external-signal") return now + minFailureBackoffMs
+  return undefined
+}
+
+function nextWakeupAfterRun(info: Info, requested: number | undefined, now: number, pendingExternalSignal: boolean) {
+  if (pendingExternalSignal) return info.nextWakeup
+  if (typeof requested === "number" && requested > now) return requested
+  return nextWakeupFor(info.spec, now)
+}
+
+function schedulerFor(info: Info, patch: Partial<SchedulerInfo>) {
+  return {
+    ...info.scheduler,
+    ...patch,
+  }
+}
+
 function recoveryWakeupFor(info: { trigger?: { mode?: TriggerMode } }, now: number) {
   const mode = info.trigger?.mode
   if (!mode || mode === "manual" || mode === "external-signal") return undefined
@@ -1081,6 +1154,12 @@ function completionGateFailureSummary(gates: CompleteRunInput["gateResults"] | u
   const failed = gates?.find((gate) => gate.status === "fail" || gate.status === "blocked" || gate.status === "awaiting_approval")
   if (!failed) return
   return `${failed.id} ${failed.status}: ${failed.summary ?? "completion gate did not pass"}`
+}
+
+function workflowBlockingGate(gate: { id: string; status: string; failureClass?: FailureClass }) {
+  if (gate.status !== "fail" && gate.status !== "blocked" && gate.status !== "awaiting_approval") return false
+  if (gate.id === "cost-budget" || gate.id === "approval-policy") return true
+  return gate.failureClass === "budget" || gate.failureClass === "policy" || gate.failureClass === "user_input" || gate.failureClass === "terminal"
 }
 
 const defaultMemorySections: MemorySection[] = ["tried", "verified", "open", "decisions", "rejected"]
@@ -1839,9 +1918,30 @@ function reconcileTerminalWorkflow(row: WorkflowRow): WorkflowRow {
   })
 }
 
+function reconcileInvalidCostBudget(row: WorkflowRow): WorkflowRow {
+  const spec = normalizeSpec(row.data.spec)
+  if (spec === row.data.spec) return row
+  return Database.transaction((db) => {
+    const current = db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, row.id)).get()
+    if (!current) return row
+    const nextSpec = normalizeSpec(current.data.spec)
+    if (nextSpec === current.data.spec) return current
+    const now = Date.now()
+    db.update(LoopWorkflowTable)
+      .set({
+        time_updated: now,
+        data: { ...current.data, spec: nextSpec },
+      })
+      .where(eq(LoopWorkflowTable.id, current.id))
+      .run()
+    return db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, current.id)).get() ?? current
+  })
+}
+
 function fromWorkflowRow(row: WorkflowRow): Info {
   const metrics = row.data.metrics
   const policy = row.data.policy
+  const spec = normalizeSpec(row.data.spec)
   return {
     id: LoopID.make(row.id),
     projectID: row.project_id,
@@ -1855,7 +1955,7 @@ function fromWorkflowRow(row: WorkflowRow): Info {
     templateID: row.template_id ?? undefined,
     phase: row.phase,
     nextWakeup: row.next_wakeup ?? undefined,
-    spec: row.data.spec,
+    spec,
     policy,
     metrics,
     memory: row.data.memory
@@ -1864,6 +1964,12 @@ function fromWorkflowRow(row: WorkflowRow): Info {
             ...entry,
             runID: entry.runID ? RunID.make(entry.runID) : undefined,
           })),
+        }
+      : undefined,
+    scheduler: row.data.scheduler
+      ? {
+          ...row.data.scheduler,
+          lastRunID: row.data.scheduler.lastRunID ? RunID.make(row.data.scheduler.lastRunID) : undefined,
         }
       : undefined,
     evaluatorReason: row.data.evaluatorReason,
@@ -2146,6 +2252,16 @@ function reconcileStaleWorkingRun(row: WorkflowRow): WorkflowRow {
           policy: row.data.policy,
           metrics: { ...row.data.metrics, failures: (row.data.metrics.failures ?? 0) + 1 },
           memory: row.data.memory,
+          scheduler: {
+            ...row.data.scheduler,
+            lastWakeAttempt: now,
+            nextWakeup,
+            lastRunID: staleRun ? RunID.make(staleRun.id) : row.data.scheduler?.lastRunID,
+            lastRunState: staleRun ? "failed" : row.data.scheduler?.lastRunState,
+            lastResult: reason,
+            lastError: reason,
+            degraded: true,
+          },
           evaluatorReason: reason,
         },
       })
@@ -2219,7 +2335,9 @@ function reconcileBlockedScheduledMonitor(row: WorkflowRow): WorkflowRow {
       .get(),
   )
   if (latestRun?.state !== "blocked" || latestRun.data.checkpoint?.status !== "blocked") return row
-  if (latestRun.data.gateResults?.some((gate) => gate.status === "fail" || gate.status === "blocked" || gate.status === "awaiting_approval")) return row
+  if (latestRun.data.gateResults?.some((gate) =>
+    workflowBlockingGate(gate) && !(gate.id === "cost-budget" && !row.data.spec.costBudget),
+  )) return row
   const now = Date.now()
   const nextWakeup = nextWakeupFor(row.data.spec, now)
   if (!nextWakeup) return row
@@ -2235,7 +2353,9 @@ function reconcileBlockedScheduledMonitor(row: WorkflowRow): WorkflowRow {
       .limit(1)
       .get()
     if (currentRun?.state !== "blocked" || currentRun.data.checkpoint?.status !== "blocked") return current
-    if (currentRun.data.gateResults?.some((gate) => gate.status === "fail" || gate.status === "blocked" || gate.status === "awaiting_approval")) return current
+    if (currentRun.data.gateResults?.some((gate) =>
+      workflowBlockingGate(gate) && !(gate.id === "cost-budget" && !current.data.spec.costBudget),
+    )) return current
     db.update(LoopWorkflowTable)
       .set({
         state: "sleeping",
@@ -2258,6 +2378,50 @@ function reconcileBlockedScheduledMonitor(row: WorkflowRow): WorkflowRow {
     }, now)
     return db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, current.id)).get() ?? current
   })
+}
+
+function repairOverdueScheduledWakeup(id: LoopID, now: number) {
+  return Database.transaction((db) => {
+    const current = db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, id)).get()
+    if (!current || (current.state !== "active" && current.state !== "sleeping")) return current
+    if (!scheduledTrigger(current.data.spec) || typeof current.next_wakeup !== "number" || current.next_wakeup >= now) return current
+
+    const alreadyMarked = current.phase === "catch_up" && current.data.scheduler?.nextWakeup === current.next_wakeup
+    const previousWakeup = current.next_wakeup
+    const nextScheduler = {
+      ...current.data.scheduler,
+      lastWakeAttempt: now,
+      nextWakeup: now,
+    }
+    db.update(LoopWorkflowTable)
+      .set({
+        phase: "catch_up",
+        next_wakeup: now,
+        time_updated: now,
+        data: {
+          ...current.data,
+          scheduler: nextScheduler,
+        },
+      })
+      .where(eq(LoopWorkflowTable.id, current.id))
+      .run()
+    if (!alreadyMarked) {
+      appendEventInDb(
+        db,
+        {
+          workflowID: LoopID.make(current.id),
+          sessionID: current.root_session_id ?? undefined,
+          level: "warning",
+          type: "wake",
+          title: "Scheduled wakeup repaired",
+          summary: `Repaired overdue ${current.data.spec.trigger?.mode ?? "scheduled"} wakeup and queued a catch-up run.`,
+          data: { previousWakeup, nextWakeup: now },
+        },
+        now,
+      )
+    }
+    return db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, current.id)).get() ?? current
+  }, { behavior: "immediate" })
 }
 
 function sessionPath(worktree: string, cwd: string) {
@@ -2388,7 +2552,8 @@ export const layer = Layer.effect(
       }).pipe(Effect.asVoid)
     }
     const hydrateWorkflow = Effect.fn("LoopWorkflow.hydrate")(function* (row: WorkflowRow) {
-      const reconciled = reconcileBlockedScheduledMonitor(reconcileStaleWorkingRun(reconcileTerminalWorkflow(row)))
+      const normalized = reconcileInvalidCostBudget(row)
+      const reconciled = reconcileBlockedScheduledMonitor(reconcileStaleWorkingRun(reconcileTerminalWorkflow(normalized)))
       const info = fromWorkflowRow(reconciled)
       if (reconciled !== row) yield* publishBackgroundForWorkflow(info)
       return info
@@ -2559,7 +2724,7 @@ export const layer = Layer.effect(
       const now = input?.now ?? Date.now()
       const limit = input?.limit ?? 10
       const items = yield* list()
-      return items
+      const dueItems = items
         .filter((item) => {
           if (item.state !== "active" && item.state !== "sleeping") return false
           const mode = item.spec.trigger?.mode
@@ -2567,6 +2732,10 @@ export const layer = Layer.effect(
           return typeof item.nextWakeup === "number" && item.nextWakeup <= now
         })
         .slice(0, limit)
+      return dueItems.map((item) => {
+        const repaired = repairOverdueScheduledWakeup(item.id, now)
+        return repaired ? fromWorkflowRow(repaired) : item
+      })
     })
 
     const get = Effect.fn("LoopWorkflow.get")(function* (id: LoopID) {
@@ -2670,7 +2839,7 @@ export const layer = Layer.effect(
         evaluation: input.evaluation,
         rubric: input.rubric,
         workspace: input.workspace,
-        costBudget: usageMode === "subscription" ? undefined : input.costBudget,
+         costBudget: usageMode === "subscription" ? undefined : normalizeCostBudget(input.costBudget),
         approvalPolicy: input.approvalPolicy,
         memory: input.memory,
         retention: input.retention
@@ -2861,7 +3030,7 @@ export const layer = Layer.effect(
           directory: ctx.directory,
           worktree: ctx.worktree,
         })
-      const now = Date.now()
+      const now = input.now ?? Date.now()
       const nextWakeup = nextWakeupFor(current.spec, now, { immediate: true })
       const state: WorkflowState = nextWakeup ? "sleeping" : "active"
       const row = Database.transaction((db) => {
@@ -2879,6 +3048,7 @@ export const layer = Layer.effect(
               policy: current.policy,
               metrics: current.metrics,
               memory: current.memory,
+              scheduler: schedulerFor(current, { nextWakeup, lastError: undefined, degraded: false }),
               evaluatorReason: input.reason ?? "Activated loop workflow.",
             },
           })
@@ -2908,7 +3078,7 @@ export const layer = Layer.effect(
       const current = yield* get(input.id)
       if (input.state === "paused" && (current.state === "draft" || terminalWorkflowStates.has(current.state))) return current
       if (input.state === "stopped" && (current.state === "completed" || current.state === "failed" || current.state === "stopped")) return current
-      const now = Date.now()
+      const now = input.now ?? Date.now()
       const pendingSignalWakeup = input.state === "paused" && current.spec.trigger?.mode === "external-signal" ? current.nextWakeup : undefined
       const row = Database.transaction((db) => {
         db.update(LoopWorkflowTable)
@@ -2922,6 +3092,11 @@ export const layer = Layer.effect(
               policy: current.policy,
               metrics: current.metrics,
               memory: current.memory,
+              scheduler: schedulerFor(current, {
+                nextWakeup: pendingSignalWakeup,
+                lastError: input.state === "stopped" ? undefined : current.scheduler?.lastError,
+                degraded: input.state === "stopped" ? false : current.scheduler?.degraded,
+              }),
               evaluatorReason: input.reason,
             },
           })
@@ -2967,9 +3142,9 @@ export const layer = Layer.effect(
       if (current.state !== "paused") return current
       const preservedWakeup = typeof current.nextWakeup === "number"
       const pendingSignal = current.spec.trigger?.mode === "external-signal" && preservedWakeup
-      const nextWakeup = preservedWakeup ? current.nextWakeup : nextWakeupFor(current.spec)
+      const now = input.now ?? Date.now()
+      const nextWakeup = preservedWakeup ? current.nextWakeup : nextWakeupFor(current.spec, now)
       const state: WorkflowState = nextWakeup ? "sleeping" : "active"
-      const now = Date.now()
       const row = Database.transaction((db) => {
         db.update(LoopWorkflowTable)
           .set({
@@ -2982,6 +3157,7 @@ export const layer = Layer.effect(
               policy: current.policy,
               metrics: current.metrics,
               memory: current.memory,
+              scheduler: schedulerFor(current, { nextWakeup, lastError: undefined, degraded: false }),
               evaluatorReason: input.reason ?? "Resumed loop workflow.",
             },
           })
@@ -3018,6 +3194,7 @@ export const layer = Layer.effect(
               policy: current.policy,
               metrics: current.metrics,
               memory: current.memory,
+              scheduler: current.scheduler,
               evaluatorReason: input.reason ?? `Agent set to ${nextSpec.agent ?? "default"}.`,
             },
           })
@@ -3130,6 +3307,11 @@ export const layer = Layer.effect(
               policy: current.policy,
               metrics: current.metrics,
               memory: current.memory,
+              scheduler: schedulerFor(current, {
+                nextWakeup: undefined,
+                lastError: input.action === "retry" || input.action === "accept" ? undefined : current.scheduler?.lastError,
+                degraded: input.action === "retry" || input.action === "accept" ? false : current.scheduler?.degraded,
+              }),
               evaluatorReason: summary,
             },
           })
@@ -3193,7 +3375,7 @@ export const layer = Layer.effect(
     }
 
     const ingestSignal = Effect.fn("LoopWorkflow.ingestSignal")(function* (input: IngestSignalInput) {
-      const now = Date.now()
+      const now = input.now ?? Date.now()
       const receivedAt = now
       const source = sanitizeArtifactString(input.source.trim(), maxArtifactConfidenceChars) || "unknown"
       const type = sanitizeArtifactString(input.type.trim(), maxArtifactConfidenceChars) || "event"
@@ -3261,6 +3443,7 @@ export const layer = Layer.effect(
                     policy: current.policy,
                     metrics: current.metrics,
                     memory: current.memory,
+                    scheduler: schedulerFor(current, { lastWakeAttempt: receivedAt, nextWakeup: receivedAt, lastError: undefined, degraded: false }),
                     evaluatorReason: `External signal ${source}/${type}: ${payloadSummary}`,
                     failureClass: current.failureClass,
                   },
@@ -3343,9 +3526,9 @@ export const layer = Layer.effect(
 
     const recordReadinessSkip = Effect.fn("LoopWorkflow.recordReadinessSkip")(function* (input: ReadinessSkipInput) {
       const current = yield* get(input.id)
-      const now = Date.now()
+      const now = input.now ?? Date.now()
       const pendingExternalSignal = current.spec.trigger?.mode === "external-signal" && typeof current.nextWakeup === "number"
-      const nextWakeup = input.nextWakeup ?? (pendingExternalSignal ? current.nextWakeup : nextWakeupFor(current.spec, now))
+      const nextWakeup = nextWakeupAfterRun(current, input.nextWakeup, now, pendingExternalSignal)
       const row = Database.transaction((db) => {
         db.update(LoopWorkflowTable)
           .set({
@@ -3358,6 +3541,13 @@ export const layer = Layer.effect(
               policy: current.policy,
               metrics: current.metrics,
               memory: current.memory,
+              scheduler: schedulerFor(current, {
+                lastWakeAttempt: now,
+                nextWakeup,
+                lastResult: input.reason,
+                lastError: undefined,
+                degraded: false,
+              }),
               evaluatorReason: input.reason,
               failureClass: current.failureClass,
             },
@@ -3394,14 +3584,140 @@ export const layer = Layer.effect(
       return info
     })
 
+    const recordSchedulerFailure = Effect.fn("LoopWorkflow.recordSchedulerFailure")(function* (input: SchedulerFailureInput) {
+      const current = yield* get(input.id)
+      if (terminalWorkflowStates.has(current.state)) {
+        const latest = Database.use((db) =>
+          db
+            .select()
+            .from(LoopRunTable)
+            .where(eq(LoopRunTable.workflow_id, current.id))
+            .orderBy(desc(LoopRunTable.time_created))
+            .limit(1)
+            .get(),
+        )
+        if (!latest) return yield* Effect.fail(notFound(current.id))
+        return fromRunRow(latest)
+      }
+      const now = input.now ?? Date.now()
+      const failureClass = input.failureClass ?? classifyFailure(input.error)
+      const nextWakeup = schedulerRetryWakeupFor(current, now)
+      const nextState: WorkflowState = nextWakeup ? "sleeping" : "blocked"
+      const nextPhase = nextWakeup ? "scheduler_degraded" : "scheduler_blocked"
+      const evaluatorReason = `Loop scheduler degraded: ${input.error}`
+      const runID = RunID.make()
+      const runRow: RunRow = {
+        id: runID,
+        workflow_id: current.id,
+        root_session_id: current.rootSessionID ?? null,
+        state: "failed",
+        trigger: scheduledRunTrigger(current),
+        phase: nextPhase,
+        next_wakeup: nextWakeup ?? null,
+        time_created: now,
+        time_updated: now,
+        time_started: now,
+        time_ended: now,
+        data: {
+          evaluatorReason,
+          failureClass,
+          budget: current.metrics,
+          retry: nextWakeup
+            ? {
+                attempt: 1,
+                backoffMs: Math.max(0, nextWakeup - now),
+                nextWakeup,
+              }
+            : undefined,
+        },
+      }
+      const result = Database.transaction((db) => {
+        const persisted = db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, current.id)).get()
+        if (!persisted) return undefined
+        const persistedInfo = fromWorkflowRow(persisted)
+        if (terminalWorkflowStates.has(persistedInfo.state)) return undefined
+        db.insert(LoopRunTable).values(runRow).run()
+        db.update(LoopWorkflowTable)
+          .set({
+            state: nextState,
+            phase: nextPhase,
+            next_wakeup: nextWakeup ?? null,
+            time_updated: now,
+            data: {
+              spec: persistedInfo.spec,
+              policy: persistedInfo.policy,
+              metrics: persistedInfo.metrics,
+              memory: persistedInfo.memory,
+              scheduler: schedulerFor(persistedInfo, {
+                lastWakeAttempt: now,
+                nextWakeup,
+                lastRunID: runID,
+                lastRunState: "failed",
+                lastResult: undefined,
+                lastError: input.error,
+                degraded: true,
+              }),
+              evaluatorReason,
+              failureClass,
+            },
+          })
+          .where(eq(LoopWorkflowTable.id, current.id))
+          .run()
+        appendArtifactsInDb(db, [
+          {
+            workflowID: current.id,
+            runID,
+            sessionID: current.rootSessionID,
+            kind: "evidence",
+            title: "Loop scheduler failure",
+            summary: input.error,
+            source: "loop-scheduler",
+            status: nextState,
+            metadata: { failureClass, nextWakeup: nextWakeup ?? null },
+          },
+        ])
+        const event = appendEventInDb(
+          db,
+          {
+            workflowID: current.id,
+            runID,
+            sessionID: current.rootSessionID,
+            level: "error",
+            type: "failed",
+            title: "Loop scheduler degraded",
+            summary: input.error,
+            data: { failureClass, nextWakeup: nextWakeup ?? null },
+          },
+          now,
+        )
+        return {
+          workflow: db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, current.id)).get()!,
+          run: db.select().from(LoopRunTable).where(eq(LoopRunTable.id, runID)).get()!,
+          event,
+        }
+      }, { behavior: "immediate" })
+      if (!result) return yield* Effect.fail(notFound(current.id))
+      const workflow = fromWorkflowRow(result.workflow)
+      const run = fromRunRow(result.run)
+      yield* publishBackgroundForWorkflow(workflow, {
+        summary: workflowSummary(workflow.state, workflow.phase),
+        error: input.error,
+      })
+      yield* upsertRootThread(workflow, run.id)
+      yield* publishRun(run)
+      yield* publishWorkflow(workflow)
+      yield* publishEvent(result.event)
+      return run
+    })
+
     const startRun = Effect.fn("LoopWorkflow.startRun")(function* (input: StartRunInput) {
       let current = yield* get(input.id)
       if (terminalWorkflowStates.has(current.state)) return yield* Effect.fail(notFound(current.id))
       if (current.state === "blocked" || current.state === "needs_input") {
         return yield* Effect.fail(new NotFoundError({ message: `Loop "${current.name}" is ${current.state}; resolve the blocking condition before starting another run.` }))
       }
-      if (!current.rootSessionID) current = yield* activate({ id: current.id, reason: input.reason ?? "Activated for loop run." })
-      const now = Date.now()
+      if (!current.rootSessionID) current = yield* activate({ id: current.id, reason: input.reason ?? "Activated for loop run.", now: input.now })
+      const now = input.now ?? Date.now()
       if (!canStartScheduledRun(current, now)) {
         return yield* Effect.fail(new NotFoundError({ message: `Loop \"${current.name}\" is sleeping until ${new Date(current.nextWakeup!).toISOString()}.` }))
       }
@@ -3469,6 +3785,12 @@ export const layer = Layer.effect(
                 policy: current.policy,
                 metrics: current.metrics,
                 memory: current.memory,
+                scheduler: schedulerFor(current, {
+                  lastWakeAttempt: now,
+                  nextWakeup: undefined,
+                  lastError: undefined,
+                  degraded: false,
+                }),
                 evaluatorReason: runRow.data.evaluatorReason,
               },
             })
@@ -3532,14 +3854,14 @@ export const layer = Layer.effect(
         if (!row) return yield* Effect.fail(notFound(input.runID))
         return fromRunRow(row)
       }
-      const now = Date.now()
+      const now = input.now ?? Date.now()
       const sanitizedCheckpoint = sanitizeCheckpoint(input.checkpoint)
       const sanitizedJudgment = sanitizeJudgment(input.judgment)
       const sanitizedRubricResult = sanitizeRubricResult(input.rubricResult)
       const usage = sanitizeUsage(input.usage)
       const sanitizedReason = sanitizeArtifactString(input.reason, maxArtifactSummaryChars)
       const pendingExternalSignal = current.spec.trigger?.mode === "external-signal" && typeof current.nextWakeup === "number"
-      const nextWakeup = input.nextWakeup ?? (pendingExternalSignal ? current.nextWakeup : nextWakeupFor(current.spec, now))
+      const nextWakeup = nextWakeupAfterRun(current, input.nextWakeup, now, pendingExternalSignal)
       const metrics = addUsageToMetrics({ ...current.metrics, turns: (current.metrics.turns ?? 0) + 1 }, usage)
       const checkpointStatus = input.goalStatus ?? sanitizedCheckpoint?.status
       const completionProposed = checkpointStatus === "complete" || (checkpointStatus === "blocked" && judgmentPassed(sanitizedJudgment))
@@ -3556,13 +3878,9 @@ export const layer = Layer.effect(
       const completionJudged = !independentRequired || judgmentPassed(sanitizedJudgment)
       const gateFailure = completionGateFailureSummary(sanitizedGateResults)
       const gatesPassed = completionGatesPassed(sanitizedGateResults)
-      const blockingGate = sanitizedGateResults.find(
-        (gate) =>
-          (gate.status === "blocked" && (gate.failureClass === "budget" || gate.failureClass === "policy")) ||
-          (gate.status === "awaiting_approval" && (gate.failureClass === "policy" || gate.failureClass === "user_input")),
-        )
+       const blockingGate = sanitizedGateResults.find(workflowBlockingGate)
       const gateBlocked = Boolean(blockingGate)
-      const scheduledBlocked = checkpointStatus === "blocked" && scheduledMonitor(current.spec) && !gateFailure && typeof nextWakeup === "number"
+       const scheduledBlocked = checkpointStatus === "blocked" && scheduledMonitor(current.spec) && !gateBlocked && typeof nextWakeup === "number"
       const goalComplete = (checkpointStatus === "complete" || judgeCompletedGoal) && completionJudged && gatesPassed && budgetMode !== "fixed" && budgetMode !== "unbounded-monitor"
       const explicitStop = checkpointStatus === "stop"
       const budgetExhaustedBeforeGoal = budgetMode === "max-goal" && reachedMaxTurns && !goalComplete
@@ -3684,6 +4002,15 @@ export const layer = Layer.effect(
               policy: current.policy,
               metrics,
               memory,
+              scheduler: schedulerFor(current, {
+                lastWakeAttempt: current.scheduler?.lastWakeAttempt ?? now,
+                nextWakeup: appliedNext.nextWakeup,
+                lastRunID: input.runID,
+                lastRunState: appliedRunState,
+                lastResult: evaluatorReason,
+                lastError: undefined,
+                degraded: false,
+              }),
               evaluatorReason,
             },
           })
@@ -3757,7 +4084,7 @@ export const layer = Layer.effect(
         if (!row) return yield* Effect.fail(notFound(input.runID))
         return fromRunRow(row)
       }
-      const now = Date.now()
+      const now = input.now ?? Date.now()
       const metrics = { ...current.metrics, failures: (current.metrics.failures ?? 0) + 1 }
       const failureClass = input.failureClass ?? classifyFailure(input.error)
       const transition = failureTransition({ metrics, failureClass, now })
@@ -3794,9 +4121,10 @@ export const layer = Layer.effect(
                 retry: next.retry ? { ...next.retry, nextWakeup: persistedWorkflow.next_wakeup! } : undefined,
               }
             : next
+        const appliedRunState = appliedNext.state === "blocked" ? "blocked" as const : appliedNext.state === "needs_input" ? "needs_input" as const : "failed" as const
         db.update(LoopRunTable)
           .set({
-            state: appliedNext.state === "blocked" ? "blocked" : appliedNext.state === "needs_input" ? "needs_input" : "failed",
+            state: appliedRunState,
             phase: appliedNext.phase,
             next_wakeup: appliedNext.nextWakeup ?? null,
             time_updated: now,
@@ -3822,6 +4150,15 @@ export const layer = Layer.effect(
               policy: current.policy,
               metrics,
               memory: current.memory,
+              scheduler: schedulerFor(current, {
+                lastWakeAttempt: current.scheduler?.lastWakeAttempt ?? now,
+                nextWakeup: appliedNext.nextWakeup,
+                lastRunID: input.runID,
+                lastRunState: appliedRunState,
+                lastResult: input.error,
+                lastError: undefined,
+                degraded: false,
+              }),
               failureClass,
               evaluatorReason: input.error,
             },
@@ -3869,12 +4206,12 @@ export const layer = Layer.effect(
     const runOnce = Effect.fn("LoopWorkflow.runOnce")(function* (input: RunOnceInput) {
       let current = yield* get(input.id)
       if (terminalWorkflowStates.has(current.state)) return yield* Effect.fail(notFound(current.id))
-      if (!current.rootSessionID) current = yield* activate({ id: current.id, reason: "Activated for run once." })
+      if (!current.rootSessionID) current = yield* activate({ id: current.id, reason: "Activated for run once.", now: input.now })
       if (current.state === "working") return yield* Effect.fail(new NotFoundError({ message: `Loop ${current.id} already has an active run.` }))
       if (current.state !== "active" && current.state !== "sleeping") {
         return yield* Effect.fail(new NotFoundError({ message: `Loop ${current.id} is ${current.state}; run-once is available only while active or sleeping.` }))
       }
-      const now = Date.now()
+      const now = input.now ?? Date.now()
       const result = Database.transaction((db) => {
         const persistedRow = db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, current.id)).get()
         if (!persistedRow) return { status: "missing" as const }
@@ -3888,59 +4225,66 @@ export const layer = Layer.effect(
           .find((run) => activeRunStates.has(run.state))
         if (persisted.state === "working" || activeRun) return { status: "busy" as const, workflow: persisted }
         if (persisted.state !== "active" && persisted.state !== "sleeping") return { status: "unavailable" as const, workflow: persisted }
-        const metrics = { ...persisted.metrics, turns: (persisted.metrics.turns ?? 0) + 1 }
-        const nextWakeup = nextWakeupFor(persisted.spec, now)
-        const budgetExhausted = persisted.spec.budgetMode === "max-goal" && typeof persisted.policy.maxTurns === "number" && (metrics.turns ?? 0) >= persisted.policy.maxTurns
-        const next = budgetExhausted
-          ? { state: "blocked" as const, phase: "budget_exhausted", completed: false, nextWakeup: undefined }
-          : completionState({ metrics, policy: persisted.policy, nextWakeup })
-        const evaluatorReason = budgetExhausted
-          ? `Loop reached its maximum iteration budget (${metrics.turns}/${persisted.policy.maxTurns}) without validated goal completion.`
-          : input.reason ?? "Recorded a manual loop iteration."
+        const evaluatorReason = `Loop run was not dispatched because the loop runner service is unavailable.${input.reason ? ` ${input.reason}` : ""}`
+        const runID = RunID.make()
         const runRow: RunRow = {
-          id: RunID.make(),
+          id: runID,
           workflow_id: persisted.id,
           root_session_id: persisted.rootSessionID ?? null,
-          state: budgetExhausted ? "blocked" : "completed",
+          state: "blocked",
           trigger: "run-once",
-          phase: budgetExhausted ? "budget_exhausted" : "monitor",
-          next_wakeup: next.nextWakeup ?? null,
+          phase: "dispatcher_unavailable",
+          next_wakeup: null,
           time_created: now,
           time_updated: now,
           time_started: now,
           time_ended: now,
           data: {
             evaluatorReason,
-            budget: metrics,
+            failureClass: "environment",
+            budget: persisted.metrics,
           },
         }
         db.insert(LoopRunTable).values(runRow).run()
         db.update(LoopWorkflowTable)
           .set({
-            state: next.state,
-            phase: next.phase,
-            next_wakeup: runRow.next_wakeup,
+            state: "blocked",
+            phase: "dispatcher_unavailable",
+            next_wakeup: null,
             time_updated: now,
             data: {
               spec: persisted.spec,
               policy: persisted.policy,
-              metrics: runRow.data.budget ?? persisted.metrics,
-              memory: appendRuntimeMemory(persisted.memory, persisted.spec, [
-                memoryEntry({
-                  section: "tried",
-                  summary: runRow.data.evaluatorReason,
-                  source: "run-once",
-                  runID: RunID.make(runRow.id),
-                  now,
-                }),
-              ].filter((entry): entry is MemoryEntry => Boolean(entry))),
-              evaluatorReason: runRow.data.evaluatorReason,
+              metrics: persisted.metrics,
+              memory: persisted.memory,
+              scheduler: schedulerFor(persisted, {
+                lastWakeAttempt: now,
+                nextWakeup: undefined,
+                lastRunID: runID,
+                lastRunState: "blocked",
+                lastResult: undefined,
+                lastError: evaluatorReason,
+                degraded: true,
+              }),
+              evaluatorReason,
+              failureClass: "environment",
             },
           })
           .where(eq(LoopWorkflowTable.id, persisted.id))
           .run()
+        appendArtifactsInDb(db, [{
+          workflowID: persisted.id,
+          runID,
+          sessionID: persisted.rootSessionID,
+          kind: "evidence",
+          title: "Loop execution blocked",
+          summary: evaluatorReason,
+          source: "loop-dispatcher",
+          status: "blocked",
+          metadata: { failureClass: "environment", reason: input.reason },
+        }])
         return {
-          status: "recorded" as const,
+          status: "blocked" as const,
           workflowRow: db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, persisted.id)).get()!,
           runRow,
         }
@@ -3953,19 +4297,20 @@ export const layer = Layer.effect(
       const workflow = fromWorkflowRow(result.workflowRow)
       const run = fromRunRow(result.runRow)
       yield* publishBackgroundForWorkflow(workflow)
-      const wake = appendEvent({
+      const blocked = appendEvent({
         workflowID: workflow.id,
         runID: run.id,
         sessionID: workflow.rootSessionID,
-        type: "wake",
-        title: "Manual loop iteration",
-        summary: input.reason ?? "Run-once completed as a monitorable loop checkpoint.",
-        data: { nextWakeup: run.nextWakeup },
+        level: "error",
+        type: "failed",
+        title: "Loop execution blocked",
+        summary: run.evaluatorReason ?? "Loop runner service is unavailable.",
+        data: { failureClass: run.failureClass, nextWakeup: run.nextWakeup },
       })
       yield* upsertRootThread(workflow, run.id)
       yield* publishRun(run)
       yield* publishWorkflow(workflow)
-      yield* publishEvent(wake)
+      yield* publishEvent(blocked)
       return run
     })
 
@@ -3981,6 +4326,7 @@ export const layer = Layer.effect(
       activate,
       startRun,
       recordReadinessSkip,
+      recordSchedulerFailure,
       ingestSignal,
       recordValidation,
       completeRun,

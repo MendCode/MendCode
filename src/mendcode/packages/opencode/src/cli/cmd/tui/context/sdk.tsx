@@ -98,11 +98,20 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     let watchdog: Timer | undefined
     let watchdogLastTick = Date.now()
     let sseAttemptStartedAt = Date.now()
-    const maxReconnectAttempts = props.reconnect?.maxAttempts ?? Number.POSITIVE_INFINITY
+    const configuredMaxReconnectAttempts = props.reconnect?.maxAttempts
+    const maxReconnectAttempts =
+      configuredMaxReconnectAttempts === undefined
+        ? 8
+        : configuredMaxReconnectAttempts === Number.POSITIVE_INFINITY
+          ? Number.POSITIVE_INFINITY
+          : Number.isFinite(configuredMaxReconnectAttempts)
+            ? Math.max(1, Math.floor(configuredMaxReconnectAttempts))
+            : 8
     const retryDelay = props.reconnect?.retryDelay ?? 1000
     const maxRetryDelay = props.reconnect?.maxRetryDelay ?? 30_000
     const staleDelay = Math.max(500, props.reconnect?.staleDelay ?? 25_000)
     const watchdogInterval = Math.max(1_000, Math.min(5_000, Math.floor(staleDelay / 2)))
+    let reconnectStopped = false
 
     const sleep = (ms: number, signal: AbortSignal) =>
       new Promise<void>((resolve) => {
@@ -137,6 +146,13 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
     const isControlEvent = (type: string) => type === "server.connected" || type === "server.heartbeat"
 
+    const recoveryControlEvent = (type: "server.connected" | "server.heartbeat", now = Date.now()) =>
+      ({
+        id: `mendcode-recovery-${type}-${now}`,
+        directory: "global",
+        payload: { id: `mendcode-recovery-${type}-${now}`, type, properties: {} },
+      }) as GlobalEvent
+
     const handleEvent = (event: GlobalEvent) => {
       const type = event.payload.type as string
       if (!isControlEvent(type)) {
@@ -152,9 +168,16 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
         }
       }
       const now = Date.now()
-      const wasReconnecting = connection.status === "reconnecting" || connection.status === "failed"
+      const resumedWithOpenStream =
+        type !== "server.connected" &&
+        connection.status === "connected" &&
+        connection.lastEventAt !== undefined &&
+        now - connection.lastEventAt > staleDelay
+      const wasReconnecting =
+        connection.status === "reconnecting" || connection.status === "failed" || resumedWithOpenStream
       const recoveringSince = wasReconnecting ? (connection.recoveringSince ?? now) : connection.recoveringSince
-      const recoveryConfirmed = type === "server.heartbeat" && recoveringSince !== undefined
+      const recoveryConfirmed =
+        type === "server.heartbeat" && recoveringSince !== undefined && !resumedWithOpenStream
       const applicationEventAt = isControlEvent(type) ? connection.lastApplicationEventAt : now
 
       if (type === "server.connected" || type === "server.heartbeat") {
@@ -182,6 +205,10 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
         })
       }
 
+      // A stream may remain open across system sleep and resume with heartbeats,
+      // even though application events emitted during the gap were lost. Treat
+      // the first event after a stale gap as a reconnect reconciliation point.
+      if (resumedWithOpenStream) queue.push(recoveryControlEvent("server.connected", now))
       queue.push(event)
       const elapsed = Date.now() - last
 
@@ -207,25 +234,47 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
         recoveringSince: connection.recoveringSince ?? now,
       })
 
-      const controlEvent = (type: "server.connected" | "server.heartbeat") =>
-        ({
-          id: `mendcode-recovery-${type}-${now}`,
-          directory: "global",
-          payload: { id: `mendcode-recovery-${type}-${now}`, type, properties: {} },
-        }) as GlobalEvent
-
       // Worker-backed transports do not have an SSE reconnect handshake. Emit
       // the same control events so SyncProvider refreshes data missed while
       // the machine was asleep, including pending questions and permissions.
-      handleEvent(controlEvent("server.connected"))
-      handleEvent(controlEvent("server.heartbeat"))
+      handleEvent(recoveryControlEvent("server.connected", now))
+      handleEvent(recoveryControlEvent("server.heartbeat", now))
+    }
+
+    const stopReconnect = (reason = "Reconnect stopped by user") => {
+      reconnectStopped = true
+      sse?.abort()
+      sse = undefined
+      if (timer) {
+        clearTimeout(timer)
+        timer = undefined
+      }
+      setConnection({
+        status: "failed",
+        attempt: Math.max(connection.attempt, 1),
+        nextRetryAt: undefined,
+        error: reason,
+        lastEventAt: connection.lastEventAt,
+        lastApplicationEventAt: connection.lastApplicationEventAt,
+        recoveringSince: undefined,
+      })
+    }
+
+    const retryConnection = () => {
+      if (abort.signal.aborted) return
+      reconnectStopped = false
+      if (props.events) {
+        recoverEventSource("Retrying local connection")
+        return
+      }
+      startSSE({ reconnecting: true, reason: "Retrying connection" })
     }
 
     const startWatchdog = () => {
       if (watchdog) clearInterval(watchdog)
       watchdogLastTick = Date.now()
       watchdog = setInterval(() => {
-        if (abort.signal.aborted) return
+        if (abort.signal.aborted || reconnectStopped) return
         const now = Date.now()
         const drift = now - watchdogLastTick
         watchdogLastTick = now
@@ -271,11 +320,11 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
             : connection.recoveringSince,
         })
         while (true) {
-          if (abort.signal.aborted || ctrl.signal.aborted) break
+          if (abort.signal.aborted || ctrl.signal.aborted || reconnectStopped) break
           sseAttemptStartedAt = Date.now()
 
           let error: unknown
-          let connectedThisAttempt = false
+          let healthyThisAttempt = false
           try {
             if (props.reconnect?.refresh) {
               sdk = createSDK(await props.reconnect.refresh())
@@ -293,7 +342,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
             for await (const event of events.stream) {
               if (ctrl.signal.aborted) break
-              if (event.payload.type === "server.connected") connectedThisAttempt = true
+              if (event.payload.type === "server.heartbeat" || !isControlEvent(event.payload.type as string)) {
+                healthyThisAttempt = true
+              }
               handleEvent(event)
             }
           } catch (e) {
@@ -302,9 +353,9 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
 
           if (timer) clearTimeout(timer)
           if (queue.length > 0) flush()
-          if (connectedThisAttempt) attempt = 0
+          if (healthyThisAttempt) attempt = 0
           attempt += 1
-          if (abort.signal.aborted || ctrl.signal.aborted) break
+          if (abort.signal.aborted || ctrl.signal.aborted || reconnectStopped) break
 
           if (attempt > maxReconnectAttempts) {
             setConnection({
@@ -383,6 +434,10 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
         return activeURL
       },
       connection,
+      reconnect: {
+        stop: stopReconnect,
+        retry: retryConnection,
+      },
     }
   },
 })

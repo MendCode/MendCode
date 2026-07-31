@@ -211,6 +211,129 @@ describe("loop workflow service", () => {
     })
   })
 
+  test("rearms an interval wakeup from the injected scheduler clock", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const base = Date.parse("2026-07-31T12:00:00Z")
+        const intervalMs = 60_000
+        const draft = await svc.createDraft({
+          name: "Fake clock monitor",
+          objective: "Keep interval scheduling deterministic.",
+          trigger: { mode: "interval", intervalMs },
+          budgetMode: "unbounded-monitor",
+        })
+        const active = await run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "fake clock", now: base })))
+        expect(active.nextWakeup).toBe(base)
+
+        const started = await run(LoopWorkflowService.use((loop) => loop.startRun({
+          id: draft.id,
+          trigger: "interval",
+          reason: "fake clock run",
+          now: base,
+        })))
+        const completedAt = base + 1_000
+        await run(LoopWorkflowService.use((loop) => loop.completeRun({
+          id: draft.id,
+          runID: started.id,
+          reason: "healthy checkpoint",
+          now: completedAt,
+          checkpoint: { status: "continue", summary: "Healthy checkpoint." },
+        })))
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow).toMatchObject({
+          state: "sleeping",
+          phase: "waiting",
+          nextWakeup: completedAt + intervalMs,
+          scheduler: {
+            lastWakeAttempt: base,
+            nextWakeup: completedAt + intervalMs,
+            lastRunID: started.id,
+            lastRunState: "completed",
+            degraded: false,
+          },
+        })
+      },
+    })
+  })
+
+  test("repairs an overdue interval wakeup and queues a catch-up run", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const base = Date.parse("2026-07-31T12:00:00Z")
+        const draft = await svc.createDraft({
+          name: "Overdue monitor",
+          objective: "Recover an interval wake after a restart.",
+          trigger: { mode: "interval", intervalMs: 60_000 },
+          budgetMode: "unbounded-monitor",
+        })
+        await run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "fake clock", now: base })))
+        Database.use((db) => db.update(LoopWorkflowTable).set({
+          state: "sleeping",
+          phase: "waiting",
+          next_wakeup: base - 1,
+        }).where(eq(LoopWorkflowTable.id, draft.id)).run())
+
+        const due = await run(LoopWorkflowService.use((loop) => loop.due({ now: base })))
+        expect(due[0]).toMatchObject({ id: draft.id, state: "sleeping", phase: "catch_up", nextWakeup: base })
+        expect((await svc.snapshot(draft.id)).events.at(-1)).toMatchObject({
+          type: "wake",
+          title: "Scheduled wakeup repaired",
+        })
+        const started = await run(LoopWorkflowService.use((loop) => loop.startRun({
+          id: draft.id,
+          trigger: "interval",
+          reason: "catch up overdue wake",
+          now: base,
+        })))
+        expect(started.state).toBe("working")
+      },
+    })
+  })
+
+  test("records scheduler failures as degraded state without losing interval cadence", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const base = Date.parse("2026-07-31T12:00:00Z")
+        const intervalMs = 60_000
+        const draft = await svc.createDraft({
+          name: "Degraded monitor",
+          objective: "Keep the next wake visible after a scheduler failure.",
+          trigger: { mode: "interval", intervalMs },
+          budgetMode: "unbounded-monitor",
+        })
+        await run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "fake clock", now: base })))
+
+        const failed = await run(LoopWorkflowService.use((loop) => loop.recordSchedulerFailure({
+          id: draft.id,
+          error: "daemon dispatch failed",
+          failureClass: "environment",
+          now: base,
+        })))
+        const snapshot = await svc.snapshot(draft.id)
+        expect(failed).toMatchObject({ state: "failed", phase: "scheduler_degraded", retry: { nextWakeup: base + intervalMs } })
+        expect(snapshot.workflow).toMatchObject({
+          state: "sleeping",
+          phase: "scheduler_degraded",
+          nextWakeup: base + intervalMs,
+          scheduler: {
+            lastRunID: failed.id,
+            lastRunState: "failed",
+            lastError: "daemon dispatch failed",
+            degraded: true,
+          },
+        })
+        expect(snapshot.events.at(-1)).toMatchObject({ title: "Loop scheduler degraded", level: "error" })
+      },
+    })
+  })
+
   test("keeps execution lists project-scoped while exposing global dashboard entries", async () => {
     await using first = await tmpdir({ git: true })
     await using second = await tmpdir({ git: true })
@@ -352,7 +475,7 @@ describe("loop workflow service", () => {
       fn: async () => {
         const first = await svc.createDraft({ name: "Same time first", objective: "Older ID at identical timestamp." })
         const second = await svc.createDraft({ name: "Same time second", objective: "Newer ID at identical timestamp." })
-        const updatedAt = Date.now() + 60_000
+        const updatedAt = Date.parse("2100-01-01T00:00:00Z")
         Database.use((db) => {
           db.update(LoopWorkflowTable).set({ time_updated: updatedAt }).where(eq(LoopWorkflowTable.id, first.id)).run()
           db.update(LoopWorkflowTable).set({ time_updated: updatedAt }).where(eq(LoopWorkflowTable.id, second.id)).run()
@@ -432,7 +555,8 @@ describe("loop workflow service", () => {
         expect(active.nextWakeup).toBeLessThanOrEqual(Date.now())
 
         const run = await svc.runOnce(active.id)
-        expect(run.state).toBe("completed")
+        expect(run.state).toBe("blocked")
+        expect(run.phase).toBe("dispatcher_unavailable")
         expect(run.trigger).toBe("run-once")
 
         Database.use((db) =>
@@ -444,11 +568,11 @@ describe("loop workflow service", () => {
         )
 
         const snapshot = await svc.snapshot(active.id)
-        expect(snapshot.workflow.metrics.turns).toBe(1)
+        expect(snapshot.workflow.metrics.turns).toBe(0)
         expect(snapshot.rootSession?.model).toEqual({ providerID: "openai", modelID: "gpt-test-loop", variant: "medium" })
         expect(snapshot.threads).toHaveLength(1)
         expect(snapshot.threads[0]).toMatchObject({ role: "root", sessionID: active.rootSessionID })
-        expect(snapshot.events.map((event) => event.type)).toEqual(["created", "activated", "wake"])
+        expect(snapshot.events.map((event) => event.type)).toEqual(["created", "activated", "failed"])
       },
     })
   })
@@ -468,9 +592,9 @@ describe("loop workflow service", () => {
 
         const recorded = await svc.runOnce(draft.id)
         const snapshot = await svc.snapshot(draft.id)
-        expect(recorded).toMatchObject({ state: "blocked", phase: "budget_exhausted" })
-        expect(snapshot.workflow).toMatchObject({ state: "blocked", phase: "budget_exhausted" })
-        expect(snapshot.workflow.evaluatorReason).toContain("without validated goal completion")
+        expect(recorded).toMatchObject({ state: "blocked", phase: "dispatcher_unavailable" })
+        expect(snapshot.workflow).toMatchObject({ state: "blocked", phase: "dispatcher_unavailable" })
+        expect(snapshot.workflow.evaluatorReason).toContain("loop runner service is unavailable")
       },
     })
   })
@@ -787,7 +911,7 @@ describe("loop workflow service", () => {
           ].join("\n"),
         )
 
-        expect(result.value.state).toBe("completed")
+        expect(result.value.state).toBe("blocked")
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.state).toBe("blocked")
         expect(snapshot.workflow.phase).toBe("approval_required")
@@ -1161,6 +1285,38 @@ describe("loop workflow service", () => {
     })
   })
 
+  test("zero token caps do not block unbounded monitors and informational gates keep cadence", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Safe monitor budget",
+          objective: "Keep monitoring without an accidental zero token cap.",
+          trigger: { mode: "interval", intervalMs: 3_600_000 },
+          budgetMode: "unbounded-monitor",
+          costBudget: { maxTokens: 0 },
+        })
+        const active = await svc.activate(draft.id)
+        expect(active.spec.costBudget).toBeUndefined()
+
+        const started = await svc.startRun(draft.id)
+        await run(LoopWorkflowService.use((loop) => loop.completeRun({
+          id: draft.id,
+          runID: started.id,
+          reason: "Snapshots are stale; report blocked_stale_data.",
+          checkpoint: { status: "blocked", summary: "Snapshots are stale; report blocked_stale_data." },
+          gateResults: [{ id: "snapshot-freshness", status: "blocked", summary: "Inputs are stale.", failureClass: "quality" }],
+        })))
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow).toMatchObject({ state: "sleeping", phase: "waiting" })
+        expect(snapshot.runs[0]?.state).toBe("completed")
+        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "snapshot-freshness")?.status).toBe("blocked")
+      },
+    })
+  })
+
   test("unbounded scheduled monitors keep cadence when a checkpoint reports an informational blocker", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
@@ -1227,6 +1383,59 @@ describe("loop workflow service", () => {
         expect(snapshot.workflow.state).toBe("sleeping")
         expect(snapshot.workflow.phase).toBe("waiting")
         expect(snapshot.workflow.nextWakeup).toBeDefined()
+        expect(snapshot.events.at(-1)?.title).toBe("Scheduled monitor resumed")
+      },
+    })
+  })
+
+  test("rehydrates legacy zero token budget blocks as scheduled monitors", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Legacy zero token monitor",
+          objective: "Recover a monitor that was blocked by an invalid zero cap.",
+          trigger: { mode: "interval", intervalMs: 3_600_000 },
+          budgetMode: "unbounded-monitor",
+        })
+        await svc.activate(draft.id)
+        const started = await svc.startRun(draft.id)
+        await svc.completeRun(draft.id, started.id, { status: "blocked", summary: "Stale data was reported." })
+
+        Database.use((db) => {
+          const now = Date.now()
+          const run = db.select().from(LoopRunTable).where(eq(LoopRunTable.id, started.id)).get()!
+          const workflow = db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, draft.id)).get()!
+          db.update(LoopRunTable)
+            .set({
+              state: "blocked",
+              phase: "blocked",
+              next_wakeup: null,
+              time_updated: now,
+              time_ended: now,
+              data: {
+                ...run.data,
+                gateResults: [{ id: "cost-budget", status: "blocked", summary: "Token budget exceeded (1/0).", failureClass: "budget" }],
+              },
+            })
+            .where(eq(LoopRunTable.id, run.id))
+            .run()
+          db.update(LoopWorkflowTable)
+            .set({
+              state: "blocked",
+              phase: "budget_exhausted",
+              next_wakeup: null,
+              time_updated: now,
+              data: { ...workflow.data, spec: { ...workflow.data.spec, costBudget: { maxTokens: 0 } } },
+            })
+            .where(eq(LoopWorkflowTable.id, draft.id))
+            .run()
+        })
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow).toMatchObject({ state: "sleeping", phase: "waiting" })
+        expect(snapshot.workflow.spec.costBudget).toBeUndefined()
         expect(snapshot.events.at(-1)?.title).toBe("Scheduled monitor resumed")
       },
     })
@@ -1782,6 +1991,45 @@ describe("loop workflow service", () => {
         expect(executed.promptCalls[0]?.tools).toEqual({ loop: false })
         expect(promptInputText(executed.promptCalls[0])).toContain("Do not call the loop tool from inside a loop iteration")
         expect((await svc.snapshot(draft.id)).workflow.metrics.turns).toBe(1)
+      },
+    })
+  })
+
+  test("loop runner passes the scheduler clock through due dispatch", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const base = Date.parse("2026-07-31T12:00:00Z")
+        const draft = await svc.createDraft({
+          name: "Runner fake clock",
+          objective: "Rearm the interval from the scheduler clock.",
+          trigger: { mode: "interval", intervalMs: 60_000 },
+          budgetMode: "unbounded-monitor",
+        })
+        await run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "fake clock", now: base })))
+
+        const result = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runDue({ now: base, limit: 1, execute: true })),
+          [
+            "LOOP_CHECKPOINT:",
+            "status: continue",
+            "summary: Healthy interval check.",
+            "evidence:",
+            "- scheduler check completed",
+            "next_action: sleep_until_next_interval",
+            "confidence: high",
+          ].join("\n"),
+        )
+
+        expect(result.prompts).toBe(1)
+        expect(result.value[0]).toMatchObject({ workflowID: draft.id, state: "completed" })
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow).toMatchObject({
+          state: "sleeping",
+          nextWakeup: base + 60_000,
+          scheduler: { lastRunID: result.value[0]?.runID, lastRunState: "completed", degraded: false },
+        })
       },
     })
   })

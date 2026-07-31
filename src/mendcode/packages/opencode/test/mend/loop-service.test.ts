@@ -126,8 +126,9 @@ describe("loop service plans", () => {
 
     expect(plan.serviceProgramArguments.slice(0, 2)).toEqual(["/bin/sh", "-c"])
     expect(plan.serviceProgramArguments[2]).toContain("/usr/bin/sqlite3 -readonly")
-    expect(plan.serviceProgramArguments[2]).toContain("launchctl bootout")
     expect(plan.serviceProgramArguments[2]).toContain("/opt/mendcode loops daemon")
+    expect(plan.serviceProgramArguments[2]).toContain('if [ "$state" = "0" ]; then exit 0; fi')
+    expect(plan.serviceProgramArguments[2]).not.toContain("launchctl bootout")
     expect(loopServicePlist(plan)).toContain("<string>/bin/sh</string>")
   })
 

@@ -196,6 +196,45 @@ describe("session transcript virtual window", () => {
     ).toEqual(["user-1", "assistant-before", "compaction-user", "compaction-summary", "assistant-after"])
   })
 
+  test("keeps a prompt queued during compaction after the resumed turn", () => {
+    const waiting = [
+      { id: "user-1", role: "user" },
+      { id: "compaction-user", role: "user" },
+      { id: "queued-user", role: "user" },
+      { id: "compaction-summary", role: "assistant", parentID: "compaction-user" },
+      { id: "compaction-continue", role: "user" },
+      { id: "assistant-continue", role: "assistant", parentID: "compaction-continue" },
+    ]
+    const options = {
+      boundaryIDs: new Set(["compaction-user"]),
+      tailIDs: new Set(["queued-user"]),
+    }
+
+    expect(sessionTranscriptRows(waiting, new Set(), options).map((message) => message.id)).toEqual([
+      "user-1",
+      "compaction-user",
+      "compaction-summary",
+      "compaction-continue",
+      "assistant-continue",
+      "queued-user",
+    ])
+
+    const dispatched = [...waiting, { id: "assistant-queued", role: "assistant", parentID: "queued-user" }]
+    expect(
+      sessionTranscriptRows(dispatched, new Set(), {
+        boundaryIDs: options.boundaryIDs,
+      }).map((message) => message.id),
+    ).toEqual([
+      "user-1",
+      "compaction-user",
+      "compaction-summary",
+      "compaction-continue",
+      "assistant-continue",
+      "queued-user",
+      "assistant-queued",
+    ])
+  })
+
   test("deduplicates transcript rows before moving queued messages", () => {
     const messages = [
       { id: "old", version: 1 },

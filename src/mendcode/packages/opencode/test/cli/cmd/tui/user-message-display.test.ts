@@ -4,8 +4,12 @@ import {
   expandedUserMessageOffset,
   expandedUserMessagePageOffset,
   expandPastedContentPlaceholders,
+  hiddenUserMessageAttachmentCount,
   isPastedContentPart,
+  shouldCollapseUserMessageAttachments,
+  USER_MESSAGE_ATTACHMENT_COLLAPSE_THRESHOLD,
   userMessageDisplayText,
+  visibleUserMessageAttachments,
   visibleUserMessageText,
 } from "../../../../src/cli/cmd/tui/routes/session/user-message-display"
 
@@ -28,6 +32,17 @@ describe("user message display text", () => {
       hiddenLines: 0,
       hiddenChars: 0,
     })
+  })
+
+  test("keeps three attachment badges visible before the show-more row", () => {
+    const files = Array.from({ length: 15 }, (_, index) => ({ id: index + 1 }))
+
+    expect(USER_MESSAGE_ATTACHMENT_COLLAPSE_THRESHOLD).toBe(3)
+    expect(shouldCollapseUserMessageAttachments(3)).toBe(false)
+    expect(shouldCollapseUserMessageAttachments(4)).toBe(true)
+    expect(hiddenUserMessageAttachmentCount(files.length)).toBe(12)
+    expect(visibleUserMessageAttachments(files, false)).toEqual(files.slice(0, 3))
+    expect(visibleUserMessageAttachments(files, true)).toBe(files)
   })
 
   test("compacts long historical messages without losing the full backing text", () => {

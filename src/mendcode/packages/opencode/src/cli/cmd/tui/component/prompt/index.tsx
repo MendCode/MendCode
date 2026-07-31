@@ -84,6 +84,7 @@ import { readModelsConfig } from "@/mend/config/models"
 import { budgetEnforcementStatus } from "@/mend/runtime/budget"
 import { useMendTuiProfile } from "@tui/context/mend"
 import { compareSessionMessages } from "../../util/session-message-order"
+import { withTimeout } from "@/util/timeout"
 import { listMendStatusEntries } from "@/mend/tui/status"
 import { listMendWidgets } from "@/mend/tui/widgets"
 import { getMendFooter, listMendFooterEntries } from "@/mend/tui/footer"
@@ -608,12 +609,16 @@ export function shouldSnapPromptCursorToEnd(input: {
   cursorOffset: number
   text: string
   visualRow: number
-  height: number
+  totalVisualRows: number
+  scrollY: number
 }) {
   if (input.direction !== 1) return false
-  const lastExplicitRow = input.text.includes("\n") ? input.text.split("\n").length - 1 : undefined
+  // OpenTUI reports visualRow relative to the viewport. Use the total wrapped
+  // row count instead of logical newline count so long lines do not look like
+  // the end of the prompt while ArrowDown is still scrolling through them.
+  const absoluteVisualRow = input.visualRow + input.scrollY
   return (
-    (input.visualRow === input.height - 1 || input.visualRow === lastExplicitRow) &&
+    absoluteVisualRow >= input.totalVisualRows - 1 &&
     input.cursorOffset < promptCursorEndOffset(input.text)
   )
 }
@@ -1890,9 +1895,12 @@ export function Prompt(props: PromptProps) {
   }
 
   function abortSession(sessionID: string) {
+    if (sdk.connection.status !== "connected" || sdk.connection.recoveringSince !== undefined) {
+      sdk.reconnect.stop("Session interrupt requested while MendCode was reconnecting")
+      return
+    }
     if (interruptRequest) return
-    interruptRequest = sdk.client.session
-      .abort({ sessionID })
+    interruptRequest = withTimeout(sdk.client.session.abort({ sessionID }), 2000, "Session interrupt timed out")
       .catch(() => undefined)
       .finally(() => {
         interruptRequest = undefined
@@ -3592,7 +3600,8 @@ export function Prompt(props: PromptProps) {
                         cursorOffset: input.cursorOffset,
                         text: input.plainText,
                         visualRow: input.visualCursor.visualRow,
-                        height: input.height,
+                        totalVisualRows: input.editorView.getTotalVirtualLineCount(),
+                        scrollY: input.scrollY,
                       })
                     ) {
                       setTimeout(() => {
@@ -3630,12 +3639,6 @@ export function Prompt(props: PromptProps) {
                       setTimeout(() => {
                         if (!input || input.isDestroyed) return
                         input.cursorOffset = 0
-                      }, 0)
-                    }
-                    if (keybind.match("history_next", e) && input.visualCursor.visualRow === input.height - 1) {
-                      setTimeout(() => {
-                        if (!input || input.isDestroyed) return
-                        input.cursorOffset = promptCursorEndOffset(input.plainText)
                       }, 0)
                     }
                   }

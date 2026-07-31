@@ -1,7 +1,10 @@
 import { describe, expect, test } from "bun:test"
+import path from "path"
+import { Global } from "@mendcode/core/global"
 import { loadWorkspaceDiffWithGit, normalizeNoIndexPatch, parseGitPathList } from "../../src/cli/cmd/tui/routes/changes/load-diff"
 import { changesKeybindLabel } from "../../src/cli/cmd/tui/routes/changes/keybinds"
 import { fileNavScrollOffset } from "../../src/cli/cmd/tui/routes/changes/file-nav"
+import { formatChangesFilePath, formatChangesPath } from "../../src/cli/cmd/tui/routes/changes/renderer-adapter"
 import { routeReturnTarget } from "../../src/cli/cmd/tui/context/route-return"
 import { createReviewState } from "../../src/cli/cmd/tui/routes/changes/review-state"
 
@@ -81,6 +84,18 @@ describe("changes route", () => {
     expect(changesKeybindLabel(120)).not.toContain("Enter")
     expect(changesKeybindLabel(120)).toContain("←/→ or n/p files")
     expect(changesKeybindLabel(120)).toContain("esc/q back")
+  })
+
+  test("shortens workspace paths inside the home directory", () => {
+    const root = path.join(Global.Path.home, "Code", "MendCode")
+
+    expect(formatChangesPath(root)).toBe(path.join("~", "Code", "MendCode"))
+    expect(formatChangesFilePath(root, "src/plugin/codex.ts")).toBe(
+      path.join("~", "Code", "MendCode", "src", "plugin", "codex.ts"),
+    )
+    expect(formatChangesPath(path.join(path.parse(Global.Path.home).root, "tmp", "MendCode"))).toBe(
+      path.join(path.parse(Global.Path.home).root, "tmp", "MendCode"),
+    )
   })
 
   test("keeps file navigation near the scroll edge for the active direction", () => {

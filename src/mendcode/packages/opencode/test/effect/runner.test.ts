@@ -439,6 +439,8 @@ describe("Runner", () => {
     Effect.gen(function* () {
       const s = yield* Scope.Scope
       const started = yield* Deferred.make<void>()
+      const queuedStarted = yield* Deferred.make<void>()
+      const queuedDone = yield* Deferred.make<void>()
       const calls = yield* Ref.make(0)
       const runner = Runner.make<string>(s, {
         onInterrupt: Effect.gen(function* () {
@@ -455,7 +457,16 @@ describe("Runner", () => {
         )
         .pipe(Effect.forkChild)
       yield* Deferred.await(started)
-      const queued = yield* runner.ensureRunning(Effect.succeed("queued"), { queue: true }).pipe(Effect.forkChild)
+      const queued = yield* runner
+        .ensureRunning(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(queuedStarted, undefined)
+            yield* Deferred.await(queuedDone)
+            return "queued"
+          }),
+          { queue: true },
+        )
+        .pipe(Effect.forkChild)
       yield* Effect.gen(function* () {
         while (runner.state._tag !== "RunningThenRun") yield* Effect.yieldNow
       }).pipe(Effect.timeout("250 millis"))
@@ -463,9 +474,12 @@ describe("Runner", () => {
       yield* runner.interrupt
 
       expect(yield* Fiber.join(active)).toBe("fallback")
-      expect(yield* Fiber.join(queued)).toBe("queued")
+      yield* Deferred.await(queuedStarted)
       yield* runner.interrupt
       expect(yield* Ref.get(calls)).toBe(1)
+      expect(runner.busy).toBe(true)
+      yield* Deferred.succeed(queuedDone, undefined)
+      expect(yield* Fiber.join(queued)).toBe("queued")
       expect(runner.busy).toBe(false)
     }),
   )
@@ -524,6 +538,43 @@ describe("Runner", () => {
 
       expect(yield* Fiber.join(active)).toBe("fallback")
       expect(yield* Fiber.join(queued).pipe(Effect.timeout("250 millis"))).toBe("queued")
+      expect(runner.busy).toBe(false)
+    }),
+  )
+
+  it.live(
+    "cancel does not interrupt queued work promoted by its abort hook",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const activeDone = yield* Deferred.make<void>()
+      const queuedDone = yield* Deferred.make<void>()
+      const queuedStarted = yield* Deferred.make<void>()
+      const runner = Runner.make<string>(s)
+      const active = yield* runner
+        .ensureRunning(Deferred.await(activeDone).pipe(Effect.as("active")))
+        .pipe(Effect.forkChild)
+      yield* Effect.sleep("10 millis")
+      const queued = yield* runner
+        .ensureRunning(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(queuedStarted, undefined)
+            yield* Deferred.await(queuedDone)
+            return "queued"
+          }),
+          { queue: true },
+        )
+        .pipe(Effect.forkChild)
+      yield* Effect.gen(function* () {
+        while (runner.state._tag !== "RunningThenRun") yield* Effect.yieldNow
+      }).pipe(Effect.timeout("250 millis"))
+
+      yield* runner.cancelCurrent({ before: Deferred.succeed(activeDone, undefined).pipe(Effect.asVoid) })
+      yield* Deferred.await(queuedStarted).pipe(Effect.timeout("250 millis"))
+      expect(yield* Fiber.join(active)).toBe("active")
+      expect(runner.busy).toBe(true)
+
+      yield* Deferred.succeed(queuedDone, undefined)
+      expect(yield* Fiber.join(queued)).toBe("queued")
       expect(runner.busy).toBe(false)
     }),
   )

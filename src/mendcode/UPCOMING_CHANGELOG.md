@@ -1,17 +1,16 @@
-Last release: v0.1.21
-Target ref: v0.1.22
+Last release: v0.1.22
+Target ref: v0.1.23
 
-## Updates
+## Loop Workflows
 
-- Show the startup update modal for patch releases by default instead of silently attempting an automatic update; explicit `autoupdate: true` keeps silent patch upgrades available.
-- Add regression coverage for the `0.1.20` to `0.1.21` update path.
+- Added scheduler health and wake metadata, retry/backoff state, run leases, completion state, and safer CLI/API reporting for durable loops.
 
-## Extensibility
+## Context and compaction
 
-- Added public documentation for project-local and package-shared custom tool calls, including typed arguments, execution context, metadata, permission checks, and package distribution.
+- Set GPT-5.6 ChatGPT OAuth models to a 256K effective input/context limit and a provider-aware 90% compaction threshold.
+- Improved compaction summaries and local transcript continuity across live updates, reconnects, and resumed work.
 
-## Interruption and recovery
+## TUI reliability
 
-- Fixed manual `Esc` cancellation restarting after late background-task notifications or stale prompt deliveries.
-- Refresh session state and pending questions after terminal transport recovery from system sleep or reconnect.
-- Mark shell commands interrupted by connection loss or timeout as unknown-result operations with safe retry guidance and bounded force-kill cleanup.
+- Improved session synchronization, virtual transcript windows, Changes Review rendering, setup copy, and smart permission review state.
+- Added focused regressions for loop lifecycle, session layout, compaction, provider adapters, and permission paths.

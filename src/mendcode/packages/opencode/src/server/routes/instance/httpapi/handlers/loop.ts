@@ -1,4 +1,5 @@
 import { externalSignalRateLimit, LoopID, LoopWorkflow } from "@/session/loop"
+import { LoopRunner } from "@/session/loop-runner"
 import { ServerAuth } from "@/server/auth"
 import { Effect, Schema } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
@@ -90,6 +91,7 @@ function operatorAuthorized(request: HttpServerRequest.HttpServerRequest) {
 export const loopRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const loop = yield* LoopWorkflow.Service
+    const runner = yield* LoopRunner.Service
 
     yield* router.add(
       "GET",
@@ -191,7 +193,9 @@ export const loopRoute = HttpRouter.use((router) =>
         const reason = yield* readReasonBody(request)
         if (action === "pause") return HttpServerResponse.jsonUnsafe(yield* loop.pause({ id: params.loopID, reason }))
         if (action === "resume") return HttpServerResponse.jsonUnsafe(yield* loop.resume({ id: params.loopID, reason }))
-        if (action === "run-once") return HttpServerResponse.jsonUnsafe(yield* loop.runOnce({ id: params.loopID, reason }))
+        if (action === "run-once") {
+          return HttpServerResponse.jsonUnsafe(yield* runner.runOne({ id: params.loopID, execute: true, reason, trigger: "run-once" }))
+        }
         return HttpServerResponse.jsonUnsafe(yield* loop.stop({ id: params.loopID, reason }))
       })
 

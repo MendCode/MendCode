@@ -57,6 +57,15 @@ export type LoopWorkflow = {
     cacheWriteTokens?: number
   }
   memory?: { entries?: { section?: string; summary?: string }[] }
+  scheduler?: {
+    lastWakeAttempt?: number
+    nextWakeup?: number
+    lastError?: string
+    lastRunID?: string
+    lastRunState?: string
+    lastResult?: string
+    degraded?: boolean
+  }
   evaluatorReason?: string
   time?: { created?: number; updated?: number; activated?: number }
 }
@@ -255,10 +264,10 @@ export function loopRouteStackedListHeight(itemCount: number, compact: boolean, 
 }
 
 export function loopRouteKeyHint(input: { width: number; narrow: boolean; compact: boolean }) {
-  if (input.width < 48) return "c/g · a/h · o · q"
-  if (input.compact) return "c project · g all · a/h view · pgup/dn page · o chat · q back"
-  if (input.narrow) return "c project · g all · a active · h history · pgup/dn page · e agent · o open · q back"
-  return "c project · g all · a active · h history · pgup/dn page · r refresh · j/k select · o open chat · e edit agent · p pause · u resume · s stop · q back"
+  if (input.width < 48) return "↑ parent · c/g · a/h · i · o · q"
+  if (input.compact) return "↑ parent · c project · g all · a/h view · i inspect · pgup/dn page · o chat · q back"
+  if (input.narrow) return "↑ parent · c project · g all · a active · h history · i inspect · pgup/dn page · e agent · o open · q back"
+  return "↑ parent · c project · g all · a active · h history · i inspect · pgup/dn page · r refresh · j/k select · o open chat · e edit agent · p pause · u resume · s stop · q back"
 }
 
 export function loopRouteHeaderLayout(narrow: boolean) {
@@ -563,6 +572,29 @@ export function loopSupervisionRows(input: {
   ]
 }
 
+export function loopSummaryRows(input: {
+  detail?: LoopWorkflow
+  summary?: LoopSummary
+  runs?: readonly LoopRun[]
+}) {
+  if (!input.detail) return []
+  const run = input.runs?.[0]
+  const verdict = input.summary?.verdict ?? input.summary?.judgmentStatus ?? run?.judgment?.status ?? run?.checkpoint?.status ?? "pending"
+  const verdictSummary = input.summary?.verdictSummary ?? run?.judgment?.summary ?? run?.checkpoint?.summary
+  const tokens = input.summary?.costSummary?.tokens ?? tokenTotal(input.detail.metrics, run?.usage)
+  const cost = input.summary?.costSummary?.cost ?? input.detail.metrics?.cost ?? run?.usage?.cost
+  return [
+    ["state", stateLabel(input.detail)],
+    ["iteration", progressLabel(input.detail)],
+    ["next", loopWakeupLabel(input.detail)],
+    ["cadence", cadenceLabel(input.detail)],
+    ["run", run ? `${run.state} · ${run.trigger || "run"} · ${run.phase || "ready"}` : "none yet"],
+    ["verdict", verdictSummary ? `${verdict} · ${verdictSummary}` : verdict],
+    ["next action", input.summary?.nextAction ?? run?.judgment?.recommendedNextAction ?? run?.checkpoint?.nextAction ?? input.detail.evaluatorReason ?? "monitor"],
+    ["usage", `${tokens} tokens${currency(cost) ? ` · ${currency(cost)}` : ""}`],
+  ]
+}
+
 export function compactLoopDetailLines(input: {
   detail?: LoopWorkflow
   rows?: readonly string[][]
@@ -597,6 +629,22 @@ export function compactLoopDetailLines(input: {
     supervisionValue("memory") ? `memory · ${supervisionValue("memory")}` : undefined,
     supervisionValue("cost") ? `cost · ${supervisionValue("cost")}` : undefined,
     supervisionValue("next action") ? `next · ${supervisionValue("next action")}` : undefined,
+  ].filter((line): line is string => Boolean(line))
+}
+
+export function compactLoopSummaryLines(input: {
+  detail?: LoopWorkflow
+  summaryRows?: readonly string[][]
+}) {
+  if (!input.detail) return []
+  const value = (label: string) => input.summaryRows?.find((row) => row[0] === label)?.[1]
+  return [
+    `${stateLabel(input.detail)} · ${progressLabel(input.detail)} · ${value("next") ?? "on demand"}`,
+    value("cadence") ? `cadence · ${value("cadence")}` : undefined,
+    value("run") ? `run · ${value("run")}` : undefined,
+    value("verdict") ? `verdict · ${value("verdict")}` : undefined,
+    value("next action") ? `next · ${value("next action")}` : undefined,
+    value("usage") ? `usage · ${value("usage")}` : undefined,
   ].filter((line): line is string => Boolean(line))
 }
 
@@ -660,6 +708,7 @@ export function Loops() {
   const [selectedID, setSelectedID] = createSignal(data.selectedID)
   const [historyPage, setHistoryPage] = createSignal(0)
   const [routeSelectedID, setRouteSelectedID] = createSignal(data.selectedID)
+  const [inspect, setInspect] = createSignal(false)
   const [now, setNow] = createSignal(Date.now())
   const [listError, setListError] = createSignal<string>()
   const listRequests = new Map<string, Promise<{ cacheKey?: string; requestKey?: string; page: LoopGlobalPage }>>()
@@ -827,6 +876,14 @@ export function Loops() {
     if (item && item.id !== selectedID()) setSelectedID(item.id)
   })
 
+  let inspectedID: string | undefined
+  createEffect(() => {
+    const id = selected()?.id
+    if (id === inspectedID) return
+    inspectedID = id
+    setInspect(false)
+  })
+
   onMount(() => {
     const clock = setInterval(() => setNow(Date.now()), 1_000)
     const fallback = setInterval(requestRefresh, 10_000)
@@ -933,6 +990,20 @@ export function Loops() {
     route.navigate({ type: "session", sessionID: root })
   }
 
+  async function openOwnerChat() {
+    const owner = detail()?.ownerSessionID
+    if (!owner) {
+      toast.show({ variant: "info", message: "This loop has no parent chat session.", duration: 2500 })
+      return
+    }
+    const result = await sdk.client.session.get({ sessionID: owner }).catch(() => undefined)
+    if (!result?.data) {
+      toast.show({ variant: "warning", message: `Parent chat session not found: ${owner}.`, duration: 3500 })
+      return
+    }
+    route.navigate({ type: "session", sessionID: owner })
+  }
+
   useKeyboard((evt) => {
     if (dialog.stack.length > 0 || evt.defaultPrevented) return
     const consume = () => {
@@ -964,6 +1035,11 @@ export function Loops() {
       switchView("history")
       return
     }
+    if (evt.name === "i") {
+      consume()
+      setInspect((value) => !value)
+      return
+    }
     if (evt.name === "pageup" && view() === "history") {
       consume()
       selectHistoryPage(-1)
@@ -974,12 +1050,17 @@ export function Loops() {
       selectHistoryPage(1)
       return
     }
+    if (evt.name === "up") {
+      consume()
+      void openOwnerChat().catch((error) => toast.error(error))
+      return
+    }
     if (evt.name === "j" || evt.name === "down") {
       consume()
       selectOffset(1)
       return
     }
-    if (evt.name === "k" || evt.name === "up") {
+    if (evt.name === "k") {
       consume()
       selectOffset(-1)
       return
@@ -1020,6 +1101,7 @@ export function Loops() {
     events: events(),
     artifacts: artifacts(),
   }))
+  const summaryRows = createMemo(() => loopSummaryRows({ detail: detail(), summary: currentSummary(), runs: runs() }))
   const contractRows = createMemo(() => loopContractPreviewRows(detail()))
 
   const detailRows = createMemo<string[][]>(() => {
@@ -1034,6 +1116,8 @@ export function Loops() {
       ["iteration", progressLabel(item)],
       ["budget", hasInvalidZeroBudget(item) ? "invalid maxTurns=0; recreate with positive cap or unlimited" : `${item.spec?.budgetMode ?? "budget"} · ${progressLabel(item)}`],
       ["next", loopWakeupLabel(item)],
+      ["scheduler", item.scheduler ? `${item.scheduler.degraded ? "degraded" : "healthy"} · wake ${typeof item.scheduler.lastWakeAttempt === "number" ? new Date(item.scheduler.lastWakeAttempt).toLocaleTimeString() : "none"}` : "unknown"],
+      ["last result", item.scheduler?.lastResult ?? item.scheduler?.lastError ?? "none"],
       ["cadence", cadenceLabel(item)],
       ["evaluation", item.spec?.evaluation?.mode ?? "legacy"],
       ["workspace", item.spec?.workspace?.mode ?? "in-place"],
@@ -1058,14 +1142,14 @@ export function Loops() {
         >
           <Show
             when={!stacked()}
-            fallback={<StackedView scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} detail={detail()} detailRows={detailRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={width()} compact={frame().compact} />}
+            fallback={<StackedView scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} detail={detail()} detailRows={detailRows()} summaryRows={summaryRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} inspect={inspect()} width={width()} compact={frame().compact} />}
           >
             <box flexDirection="row" flexGrow={1} minHeight={0} gap={1}>
               <box width={listWidth()} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
                 <LoopList scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} width={listWidth() - 4} compact={frame().compact} />
               </box>
               <box flexGrow={1} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-                <LoopDetail detail={detail()} rows={detailRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={detailWidth() - 4} />
+                <LoopDetail detail={detail()} rows={detailRows()} summaryRows={summaryRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} inspect={inspect()} width={detailWidth() - 4} />
               </box>
             </box>
           </Show>
@@ -1077,7 +1161,7 @@ export function Loops() {
         subtitle={() => `${scope() === "project" ? "current project" : "all projects"} · ${view() === "active" ? "scheduled + blocked" : "history · newest first"}`}
         status={() => listError() ? "ERROR" : loops.loading ? "LOADING" : "LIVE"}
          summary={() => `active ${activeCounts().scheduled} · blocked ${activeCounts().blocked} · history ${historyCount()}`}
-        footer="↑↓ Select   Enter Open   h History   r Refresh   / Find   ? Help   q Back"
+        footer="↑↓ Select   Enter Open   i Inspect   h History   r Refresh   / Find   ? Help   q Back"
          rail={
           <LoopList
             scope={scope()}
@@ -1097,13 +1181,16 @@ export function Loops() {
               ["state", detail() ? stateLabel(detail()!) : "none"],
               ["phase", detail()?.phase ?? "none"],
               ["next", detail() ? loopWakeupLabel(detail()!) : "none"],
-              ["model", detail() ? modelLabel(sync.data.provider, detail()!, currentSnapshot()?.rootSession) : "none"],
-              ["agent", detail()?.spec?.agent ?? "default"],
-              ["runs", String(runs().length)],
+               ["scheduler", detail()?.scheduler ? `${detail()!.scheduler!.degraded ? "degraded" : "healthy"} · ${detail()!.scheduler!.lastRunState ?? "idle"}` : "unknown"],
+               ["model", detail() ? modelLabel(sync.data.provider, detail()!, currentSnapshot()?.rootSession) : "none"],
+               ["agent", detail()?.spec?.agent ?? "default"],
+               ["runs", String(runs().length)],
+               ["view", inspect() ? "inspect" : "summary"],
             ]}
           >
             <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column" gap={1}>
               <text fg={theme.textMuted} wrapMode="none">ACTIONS</text>
+              <text fg={theme.text} wrapMode="none">i {inspect() ? "Summary" : "Inspect"}</text>
               <text fg={theme.text} wrapMode="none">o Open chat</text>
               <text fg={theme.text} wrapMode="none">p Pause · u Resume</text>
               <text fg={theme.text} wrapMode="none">s Stop (confirm)</text>
@@ -1116,7 +1203,7 @@ export function Loops() {
           fallback={<EmptyState loading={loops.loading} error={listError()} historyCount={historyCount()} view={view()} />}
         >
           <box flexDirection="column" minHeight={0} flexGrow={1} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-            <LoopDetail detail={detail()} rows={detailRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} width={Math.max(30, deck().contentWidth - 4)} />
+            <LoopDetail detail={detail()} rows={detailRows()} summaryRows={summaryRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} inspect={inspect()} width={Math.max(30, deck().contentWidth - 4)} />
           </box>
         </Show>
       </CommandDeck>
@@ -1240,6 +1327,7 @@ function LoopRow(props: {
 function LoopDetail(props: {
   detail?: LoopWorkflow
   rows: string[][]
+  summaryRows: string[][]
   contractRows: string[][]
   supervisionRows: string[][]
   summary?: LoopSummary
@@ -1247,6 +1335,7 @@ function LoopDetail(props: {
   runs: LoopRun[]
   error?: string
   loading?: boolean
+  inspect: boolean
   width: number
 }) {
   const { theme } = useTheme()
@@ -1286,19 +1375,27 @@ function LoopDetail(props: {
                 <Show when={props.error}>
                   {(error) => <text fg={theme.warning} wrapMode="none" selectable={false}>snapshot unavailable · {compact(error(), Math.max(12, props.width - 23))}</text>}
                 </Show>
-                <For each={props.rows}>
-                  {(row) => <DetailRow label={row[0]} value={row[1]} width={props.width} emphasize={row[0] === "chat"} />}
+                <For each={props.summaryRows}>
+                  {(row) => <DetailRow label={row[0]} value={row[1]} width={props.width} emphasize={row[0] === "state" || row[0] === "verdict" || row[0] === "next action"} />}
                 </For>
+                <text fg={theme.textMuted} wrapMode="none" selectable={false}>{props.inspect ? "i summary" : "i inspect contract, gates, runs, and events"}</text>
+                <Show when={props.inspect}>
+                  <For each={props.rows}>
+                    {(row) => <DetailRow label={row[0]} value={row[1]} width={props.width} emphasize={row[0] === "chat"} />}
+                  </For>
+                </Show>
               </box>
 
-              <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
+              <Show when={props.inspect}>
+                <box flexDirection="column" gap={1}>
+                  <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
                 <text fg={theme.textMuted} wrapMode="none" selectable={false}>contract preview</text>
                 <For each={props.contractRows}>
                   {(row) => <DetailRow label={row[0]} value={row[1]} width={props.width} emphasize={row[0] === "approval" || row[0] === "verify"} />}
                 </For>
-              </box>
+                  </box>
 
-              <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
+                  <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
                 <text fg={theme.textMuted} wrapMode="none" selectable={false}>supervision</text>
                 <For each={props.supervisionRows}>
                   {(row) => <DetailRow label={row[0]} value={row[1]} width={props.width} emphasize={row[0] === "verdict" || row[0] === "next action"} />}
@@ -1317,9 +1414,9 @@ function LoopDetail(props: {
                     </For>
                   )}
                 </Show>
-              </box>
+                  </box>
 
-              <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
+                  <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
                 <text fg={theme.textMuted} wrapMode="none" selectable={false}>recent runs</text>
                 <Show when={props.runs.length} fallback={<text fg={theme.textMuted} wrapMode="none" selectable={false}>no runs yet</text>}>
                   <For each={props.runs}>
@@ -1330,9 +1427,9 @@ function LoopDetail(props: {
                     )}
                   </For>
                 </Show>
-              </box>
+                  </box>
 
-              <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
+                  <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column">
                 <box flexDirection="row" height={1} overflow="hidden">
                   <text fg={theme.textMuted} wrapMode="none" selectable={false}>events</text>
                   <box flexGrow={1} />
@@ -1362,9 +1459,11 @@ function LoopDetail(props: {
                         {(event, index) => <TimelineEvent event={event} width={props.width - 2} last={index() === props.events.length - 1} />}
                       </For>
                     </scrollbox>
+                    </Show>
                   </Show>
-                </Show>
-              </box>
+                  </box>
+                </box>
+              </Show>
             </box>
           </scrollbox>
         )}
@@ -1421,6 +1520,7 @@ function StackedView(props: {
   select: (id: string) => void
   detail?: LoopWorkflow
   detailRows: string[][]
+  summaryRows: string[][]
   contractRows: string[][]
   supervisionRows: string[][]
   summary?: LoopSummary
@@ -1428,6 +1528,7 @@ function StackedView(props: {
   runs: LoopRun[]
   error?: string
   loading?: boolean
+  inspect: boolean
   width: number
   compact?: boolean
 }) {
@@ -1459,11 +1560,11 @@ function StackedView(props: {
         <Show
           when={!props.compact}
           fallback={
-            <CompactLoopDetail detail={props.detail} rows={props.detailRows} contractRows={props.contractRows} supervisionRows={props.supervisionRows} events={props.events} runs={props.runs} error={props.error} loading={props.loading} width={Math.max(20, props.width - 2)} />
+            <CompactLoopDetail detail={props.detail} rows={props.detailRows} summaryRows={props.summaryRows} contractRows={props.contractRows} supervisionRows={props.supervisionRows} events={props.events} runs={props.runs} error={props.error} loading={props.loading} inspect={props.inspect} width={Math.max(20, props.width - 2)} />
           }
         >
           <box borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-            <LoopDetail detail={props.detail} rows={props.detailRows} contractRows={props.contractRows} supervisionRows={props.supervisionRows} summary={props.summary} events={props.events} runs={props.runs} error={props.error} loading={props.loading} width={props.width - 4} />
+            <LoopDetail detail={props.detail} rows={props.detailRows} summaryRows={props.summaryRows} contractRows={props.contractRows} supervisionRows={props.supervisionRows} summary={props.summary} events={props.events} runs={props.runs} error={props.error} loading={props.loading} inspect={props.inspect} width={props.width - 4} />
           </box>
         </Show>
       </box>
@@ -1474,21 +1575,25 @@ function StackedView(props: {
 function CompactLoopDetail(props: {
   detail?: LoopWorkflow
   rows: string[][]
+  summaryRows: string[][]
   contractRows: string[][]
   supervisionRows: string[][]
   events: LoopEvent[]
   runs: LoopRun[]
   error?: string
   loading?: boolean
+  inspect: boolean
   width: number
 }) {
   const { theme } = useTheme()
-  const lines = createMemo(() => compactLoopDetailLines({
-    detail: props.detail,
-    rows: props.rows,
-    contractRows: props.contractRows,
-    supervisionRows: props.supervisionRows,
-  }))
+  const lines = createMemo(() => props.inspect
+    ? compactLoopDetailLines({
+        detail: props.detail,
+        rows: props.rows,
+        contractRows: props.contractRows,
+        supervisionRows: props.supervisionRows,
+      })
+    : compactLoopSummaryLines({ detail: props.detail, summaryRows: props.summaryRows }))
   return (
     <box borderStyle="single" borderColor={theme.border} paddingLeft={0} paddingRight={0} flexDirection="column">
       <Show when={props.detail} fallback={<text fg={theme.textMuted} wrapMode="none">Select a loop.</text>}>
@@ -1503,6 +1608,7 @@ function CompactLoopDetail(props: {
             <Show when={props.loading && !props.error}>
               <text fg={theme.textMuted} wrapMode="none" selectable={false}>loading latest snapshot…</text>
             </Show>
+            <text fg={theme.textMuted} wrapMode="none" selectable={false}>{props.inspect ? "i summary" : "i inspect details"}</text>
             <For each={lines()}>
               {(line, index) => (
                 <text fg={index() === 0 ? theme.text : theme.textMuted} wrapMode="none" selectable={false}>
