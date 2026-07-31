@@ -244,8 +244,8 @@ for (const item of targets) {
       const versionOutput = await $`${binaryPath} --version`.text()
       if (checkHelp) {
         const helpOutput = await $`${binaryPath} --help 2>&1`.text()
-        if (!helpOutput.includes("Commands:")) {
-          throw new Error("--help did not produce the command list")
+        if (!helpOutput.includes("Usage:")) {
+          throw new Error("--help did not produce usage output")
         }
       }
       console.log(`Smoke test passed: ${versionOutput.trim()}${checkHelp ? " and --help startup" : ""}`)

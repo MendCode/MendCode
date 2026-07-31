@@ -14,3 +14,4 @@ Target ref: v0.1.23
 
 - Improved session synchronization, virtual transcript windows, Changes Review rendering, setup copy, and smart permission review state.
 - Added focused regressions for loop lifecycle, session layout, compaction, provider adapters, and permission paths.
+- Fixed cross-platform release smoke tests to validate the public `Usage:` help header.
