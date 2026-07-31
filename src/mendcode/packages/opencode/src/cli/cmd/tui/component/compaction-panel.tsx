@@ -5,6 +5,7 @@ import { SplitBorder } from "./border"
 import { useTheme } from "../context/theme"
 import { useMendTuiProfile } from "../context/mend"
 import { useKV } from "../context/kv"
+import { usePromptRef } from "../context/prompt"
 import { useTextareaKeybindings } from "./textarea-keybindings"
 import { Locale } from "@/util/locale"
 import { errorMessage } from "@/util/error"
@@ -64,6 +65,19 @@ export function shouldAcceptCompactionArcadeFocus(input: {
   arcadeInput?: unknown
 }) {
   return input.arcadeFocused && input.currentFocusedRenderable === input.arcadeInput
+}
+
+export function shouldRestoreCompactionPromptFocus(input: {
+  arcadeOwnsFocus: boolean
+  previousFocusAvailable: boolean
+  promptAvailable: boolean
+}) {
+  if (!input.arcadeOwnsFocus) return false
+  return input.previousFocusAvailable || input.promptAvailable
+}
+
+export function compactionTranscriptToggleLabel(expanded: boolean) {
+  return expanded ? "▾ hide compacted transcript" : "▸ show compacted transcript"
 }
 
 let focusedCompactionArcade: BoxRenderable | undefined
@@ -311,6 +325,7 @@ export function CompactionPanel(props: {
   const renderer = useRenderer()
   const mend = useMendTuiProfile()
   const kv = useKV()
+  const promptRef = usePromptRef()
   const textareaKeybindings = useTextareaKeybindings()
   const config = createMemo(() => mend.profile.presentation.compaction)
   const stages = createMemo(() =>
@@ -334,6 +349,7 @@ export function CompactionPanel(props: {
   const [arcadeTick, setArcadeTick] = createSignal(0)
   const [arcadeFocused, setArcadeFocused] = createSignal(false)
   const [arcadeState, setArcadeState] = createSignal<unknown>(snakeArcadeGame.initialState())
+  const [summaryExpanded, setSummaryExpanded] = createSignal(false)
   const activeArcadeGame = createMemo(() =>
     shouldRenderCompactionArcade(config()) ? registeredCompactionArcadeGame(config().arcade) : undefined,
   )
@@ -344,6 +360,9 @@ export function CompactionPanel(props: {
     const frame = frames[arcadeTick() % Math.max(1, frames.length)]
     return frame ? [frame] : []
   })
+  const summaryAvailable = createMemo(() =>
+    Boolean(props.summaryContent || props.summaryPreview?.trim() || props.transcriptPreview?.trim()),
+  )
 
   const scratchpadEnabled = createMemo(() => config().allowScratchpad && Boolean(props.scratchpad))
   const scratchpadReadOnly = createMemo(() => Boolean(props.scratchpad?.readOnly))
@@ -405,9 +424,19 @@ export function CompactionPanel(props: {
     })
   }
 
+  function isArcadeEventTarget(target: Renderable | null | undefined) {
+    let current = target
+    while (current) {
+      if (current === arcadeBox) return true
+      current = current.parent
+    }
+    return false
+  }
+
   function focusArcade() {
     if (!activeArcadeGame() || !arcadeBox || arcadeBox.isDestroyed) return
-    arcadePreviousFocus = renderer.currentFocusedRenderable
+    const currentFocus = renderer.currentFocusedRenderable
+    arcadePreviousFocus = currentFocus === arcadeBox ? null : currentFocus
     arcadeBox.focus()
     if (renderer.currentFocusedRenderable !== arcadeBox) {
       arcadePreviousFocus = null
@@ -419,12 +448,24 @@ export function CompactionPanel(props: {
 
   function blurArcade(event?: { preventDefault?: () => void; stopPropagation?: () => void }, input?: { consume?: boolean }) {
     const ownsFocus = arcadeOwnsFocus()
+    const wasFocused = arcadeFocused() || focusedCompactionArcade === arcadeBox
     const previousFocus = arcadePreviousFocus
+    const prompt = promptRef.current
+    const previousFocusAvailable = Boolean(previousFocus && !previousFocus.isDestroyed && previousFocus !== arcadeBox)
     arcadePreviousFocus = null
     if (focusedCompactionArcade === arcadeBox) focusedCompactionArcade = undefined
     setArcadeFocused(false)
     if (arcadeBox && !arcadeBox.isDestroyed) arcadeBox.blur()
-    if (ownsFocus && previousFocus && !previousFocus.isDestroyed && previousFocus !== arcadeBox) previousFocus.focus()
+    if (
+      shouldRestoreCompactionPromptFocus({
+        arcadeOwnsFocus: ownsFocus || wasFocused,
+        previousFocusAvailable,
+        promptAvailable: Boolean(prompt),
+      })
+    ) {
+      if (previousFocusAvailable && previousFocus) previousFocus.focus()
+      else prompt?.focus()
+    }
     if (input?.consume === false) return
     event?.preventDefault?.()
     event?.stopPropagation?.()
@@ -447,6 +488,12 @@ export function CompactionPanel(props: {
   function consumeMouseEvent(event?: { preventDefault?: () => void; stopPropagation?: () => void }) {
     event?.preventDefault?.()
     event?.stopPropagation?.()
+  }
+
+  function toggleCompactionTranscript(event?: { preventDefault?: () => void; stopPropagation?: () => void }) {
+    blurArcade(event, { consume: false })
+    consumeMouseEvent(event)
+    setSummaryExpanded((value) => !value)
   }
 
   function arcadeCellColor(tone: CompactionArcadeCellTone | undefined) {
@@ -645,6 +692,9 @@ export function CompactionPanel(props: {
       borderColor={theme.borderActive}
       backgroundColor={theme.backgroundPanel}
       flexShrink={0}
+      onMouseDown={(event) => {
+        if (arcadeOwnsFocus() && !isArcadeEventTarget(event.target)) blurArcade(event, { consume: false })
+      }}
     >
       <box width="100%">
         <text fg={theme.text} wrapMode="none">
@@ -740,19 +790,48 @@ export function CompactionPanel(props: {
         </box>
       </Show>
       <box paddingTop={1} flexDirection="column" border={["top"]} borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-        <text fg={theme.textMuted} wrapMode="none">
-          Compacted memory · {props.hasSummaryBody ? "packed" : "packing"}
-        </text>
-        <Show
-          when={props.hasSummaryBody}
-          fallback={<text fg={theme.textMuted} wrapMode="none">Writing summary…</text>}
-        >
-          <Show when={props.summaryContent} fallback={<text fg={theme.text} wrapMode="word">{props.summaryPreview ? Locale.truncate(props.summaryPreview ?? "", 220) : "Summary output is not available yet."}</text>}>
-            {props.summaryContent}
+        <box flexDirection="row" justifyContent="space-between" width="100%" gap={1}>
+          <text fg={theme.textMuted} wrapMode="none">
+            Compacted memory · {props.hasSummaryBody ? "packed" : "packing"}
+          </text>
+          <Show when={summaryAvailable()}>
+            <text
+              fg={theme.textMuted}
+              wrapMode="none"
+              onMouseDown={(event) => toggleCompactionTranscript(event)}
+              onMouseUp={consumeMouseEvent}
+            >
+              {compactionTranscriptToggleLabel(summaryExpanded())}
+            </text>
           </Show>
-        </Show>
-        <Show when={!props.hasSummaryBody && props.transcriptPreview}>
-          <text fg={theme.textMuted} wrapMode="word">Focus: {Locale.truncate(props.transcriptPreview ?? "", 120)}</text>
+        </box>
+        <Show when={summaryExpanded() && summaryAvailable()}>
+          <Show
+            when={props.hasSummaryBody}
+            fallback={
+              <text fg={theme.textMuted} wrapMode="none">
+                Writing summary…
+              </text>
+            }
+          >
+            <Show
+              when={props.summaryContent}
+              fallback={
+                <text fg={theme.text} wrapMode="word">
+                  {props.summaryPreview
+                    ? Locale.truncate(props.summaryPreview ?? "", 220)
+                    : "Summary output is not available yet."}
+                </text>
+              }
+            >
+              {props.summaryContent}
+            </Show>
+          </Show>
+          <Show when={!props.hasSummaryBody && props.transcriptPreview}>
+            <text fg={theme.textMuted} wrapMode="word">
+              Focus: {Locale.truncate(props.transcriptPreview ?? "", 120)}
+            </text>
+          </Show>
         </Show>
       </box>
       <Show when={scratchpadEnabled() && props.scratchpad && (!scratchpadReadOnly() || followUpText())}>
@@ -781,7 +860,10 @@ export function CompactionPanel(props: {
               focusedTextColor={theme.text}
               cursorColor={theme.text}
               keyBindings={textareaKeybindings()}
-              onMouseDown={(_event: MouseEvent) => scratchpadInput?.focus()}
+              onMouseDown={(event: MouseEvent) => {
+                blurArcade(event, { consume: false })
+                scratchpadInput?.focus()
+              }}
               onContentChange={() => {
                 if (!scratchpadInput || scratchpadInput.isDestroyed) return
                 setDraft(scratchpadInput.plainText)

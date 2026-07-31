@@ -2571,16 +2571,16 @@ export function Setup() {
                         : "Require approval"}
                   </text>
                     <text>
-                      Smart policy: safe read-only commands pass; risky shell/script/delete prompts stay gated
+                      Smart policy: safe reads and bounded local mkdir pass; risky shell/script/delete prompts stay gated
                     </text>
                   <text>
                     Permission reviewer model:{" "}
                     {modelLabel(modelRole(setupSummary()?.permissions.reviewerRole || "permissionReviewer"))}
                   </text>
                   <text fg={theme.textMuted}>
-                      Smart Approval auto-approves only bounded read-only shell requests. Risky or ambiguous requests
-                      stay gated and can be reviewed by the configured model; a model response can never auto-approve a
-                      command that is not provably read-only.
+                      Smart Approval auto-approves bounded read-only shell requests and local directory creation. Risky
+                      or ambiguous requests stay gated and can be reviewed by the configured model; a model response can
+                      never broaden the deterministic safe policy.
                   </text>
                   <text fg={theme.textMuted}>
                       Full Access is the renamed auto-accept mode for the TUI session. It does not change OS sandboxing

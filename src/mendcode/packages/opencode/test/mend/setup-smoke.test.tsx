@@ -19,6 +19,7 @@ import {
 import { setupRailStepStatus } from "../../src/cli/cmd/tui/routes/setup/setup-rail"
 import {
   compactLoopDetailLines,
+  compactLoopSummaryLines,
   latestLoopWakeReason,
   loopContractPreviewRows,
   loopDetailRowLayout,
@@ -27,6 +28,7 @@ import {
   loopRouteHeaderLayout,
   loopRouteKeyHint,
   loopRouteStackedListHeight,
+  loopSummaryRows,
   loopSupervisionRows,
 } from "../../src/cli/cmd/tui/routes/loops"
 import {
@@ -304,8 +306,8 @@ describe("setup route smoke", () => {
     expect(loopRouteStackedListHeight(12, true, 14)).toBe(6)
     expect(loopRouteStackedListHeight(12, true, 12)).toBe(4)
     expect(loopRouteStackedListHeight(12, false, 20)).toBe(8)
-    expect(loopRouteKeyHint({ width: 46, narrow: true, compact: true })).toBe("c/g · a/h · o · q")
-    expect(loopRouteKeyHint({ width: 88, narrow: true, compact: true })).toBe("c project · g all · a/h view · pgup/dn page · o chat · q back")
+    expect(loopRouteKeyHint({ width: 46, narrow: true, compact: true })).toBe("↑ parent · c/g · a/h · i · o · q")
+    expect(loopRouteKeyHint({ width: 88, narrow: true, compact: true })).toBe("↑ parent · c project · g all · a/h view · i inspect · pgup/dn page · o chat · q back")
   })
 
   test("loops route reserves non-shrinking responsive header rows", () => {
@@ -479,6 +481,37 @@ describe("setup route smoke", () => {
     })
 
     expect(rows.find((row) => row[0] === "verify")?.[1]).toContain("browser smoke passed; git diff --check")
+  })
+
+  test("loops default detail stays bounded and keeps full inspection behind the summary toggle", () => {
+    const detail = {
+      id: "loop_summary",
+      state: "sleeping",
+      phase: "waiting",
+      objective: "Watch a project without flooding the dashboard.",
+      rootSessionID: "ses_loop_summary",
+      nextWakeup: Date.now() + 60_000,
+      spec: { trigger: { mode: "interval", intervalMs: 60_000 }, budgetMode: "unbounded-monitor" },
+      metrics: { turns: 3, inputTokens: 10, outputTokens: 5 },
+    } as const
+    const summaryRows = loopSummaryRows({
+      detail,
+      summary: {
+        workflowID: detail.id,
+        state: detail.state,
+        phase: detail.phase,
+        verdict: "continue",
+        verdictSummary: "Waiting for the next check.",
+        nextAction: "sleep_until_next_interval",
+        costSummary: { tokens: 15 },
+      },
+      runs: [{ id: "run_summary", state: "completed", trigger: "interval", phase: "monitor" }],
+    })
+    const lines = compactLoopSummaryLines({ detail, summaryRows })
+
+    expect(summaryRows.map((row) => row[0])).toEqual(["state", "iteration", "next", "cadence", "run", "verdict", "next action", "usage"])
+    expect(lines.join("\n")).toContain("verdict · continue · Waiting for the next check.")
+    expect(lines.join("\n")).not.toContain("contract")
   })
 
   test("loops route preserves legacy report-only contract previews without explicit read-only workspace metadata", () => {

@@ -1,7 +1,11 @@
-import { For, Show } from "solid-js"
+import { createEffect, createSignal, For, on, onCleanup, onMount, Show } from "solid-js"
 import { TextAttributes } from "@opentui/core"
 import { useTheme } from "@tui/context/theme"
+import { useKV } from "@tui/context/kv"
+import path from "path"
+import { Global } from "@mendcode/core/global"
 import { Locale } from "@/util/locale"
+import { sessionHeaderTitleDisplay } from "../../util/session-layout"
 import { commentsForBlock, commentsForLine } from "./review-comments"
 import type { ReviewFile, ReviewBlock, ReviewLine, ReviewState } from "./review-state"
 import { activeReviewFile, activeReviewBlock, reviewStats } from "./review-state"
@@ -45,10 +49,23 @@ function StatsText(props: { additions: number; deletions: number }) {
   )
 }
 
+export function formatChangesPath(value: string) {
+  const home = Global.Path.home
+  if (!home) return value
+  if (value === home) return "~"
+  if (value.startsWith(home + path.sep)) return `~${value.slice(home.length)}`
+  return value
+}
+
+export function formatChangesFilePath(workspaceRoot: string, filePath: string) {
+  const absolutePath = path.isAbsolute(filePath) ? filePath : path.join(workspaceRoot, filePath)
+  return formatChangesPath(absolutePath)
+}
+
 export function ChangesKeybindBar(props: { root: string; comments: number; width: number }) {
   const { theme } = useTheme()
   const label = () => changesKeybindLabel(props.width)
-  const status = () => `${props.root}  ${props.comments} comments`
+  const status = () => `${formatChangesPath(props.root)}  ${props.comments} comments`
   return (
     <box flexDirection="row" justifyContent="space-between" height={1} overflow="hidden">
       <text fg={theme.textMuted} wrapMode="none">
@@ -63,7 +80,34 @@ export function ChangesKeybindBar(props: { root: string; comments: number; width
 
 export function ChangesFileNav(props: { state: ReviewState; width: number; onSelect: (file: ReviewFile) => void }) {
   const { theme } = useTheme()
+  const kv = useKV()
+  const [animationsEnabled] = kv.signal("animations_enabled", true)
+  const [pathOffset, setPathOffset] = createSignal(0)
   const selected = () => activeReviewFile(props.state)?.path
+  const selectedDisplayPath = () => {
+    const file = activeReviewFile(props.state)
+    return file ? formatChangesFilePath(props.state.workspaceRoot, file.path) : ""
+  }
+  const pathWidth = () => Math.max(1, props.width - 4)
+
+  createEffect(
+    on([selected, () => props.width, animationsEnabled], () => {
+      setPathOffset(0)
+    }),
+  )
+
+  onMount(() => {
+    const timer = setInterval(() => {
+      const value = selectedDisplayPath()
+      if (!animationsEnabled() || !value || Bun.stringWidth(value) <= pathWidth()) {
+        if (pathOffset() !== 0) setPathOffset(0)
+        return
+      }
+      setPathOffset((offset) => offset + 1)
+    }, 350)
+    onCleanup(() => clearInterval(timer))
+  })
+
   return (
     <box flexDirection="column" gap={1} overflow="hidden">
       <text fg={theme.textMuted} wrapMode="none">
@@ -73,12 +117,28 @@ export function ChangesFileNav(props: { state: ReviewState; width: number; onSel
         <For each={props.state.files}>
           {(file) => {
             const active = () => selected() === file.path
-            const label = () => `${active() ? ">" : " "} ${statusGlyph(file.changeType)} ${file.path}`
+            const displayPath = () => formatChangesFilePath(props.state.workspaceRoot, file.path)
+            const label = () =>
+              active()
+                ? sessionHeaderTitleDisplay({
+                    value: displayPath(),
+                    maxWidth: pathWidth(),
+                    animated: animationsEnabled(),
+                    offset: pathOffset(),
+                  })
+                : Locale.truncate(displayPath(), pathWidth())
             return (
-              <box height={1} overflow="hidden" onMouseUp={() => props.onSelect(file)}>
-                <text fg={active() ? theme.primary : theme.text} wrapMode="none">
-                  {Locale.truncate(label(), props.width)}
-                </text>
+              <box height={1} flexDirection="row" overflow="hidden" onMouseUp={() => props.onSelect(file)}>
+                <box width={4} flexShrink={0} overflow="hidden">
+                  <text fg={active() ? theme.primary : theme.text} wrapMode="none">
+                    {`${active() ? ">" : " "} ${statusGlyph(file.changeType)} `}
+                  </text>
+                </box>
+                <box flexGrow={1} minWidth={0} overflow="hidden">
+                  <text fg={active() ? theme.primary : theme.text} wrapMode="none">
+                    {label()}
+                  </text>
+                </box>
               </box>
             )
           }}

@@ -300,7 +300,7 @@ function controlPlaneEnv(root: string) {
   return {
     ...runtimeEnv(root),
     MENDCODE_SHELL_CWD: shellCwd(),
-    MENDCODE_PUBLIC_BIN: path.resolve(process.argv[1] || "mendcode"),
+    MENDCODE_PUBLIC_BIN: process.env.MENDCODE_PUBLIC_BIN || path.resolve(process.argv[1] || "mendcode"),
     MENDCODE_ORIGINAL_ENV_JSON: JSON.stringify(originalEnv),
   }
 }

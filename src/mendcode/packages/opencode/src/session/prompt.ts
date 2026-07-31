@@ -391,6 +391,17 @@ export function promptRunMessages(input: {
   })
 }
 
+export function shouldContinueAfterCompactionStop(input: {
+  messages: ReadonlyArray<{ info: { id: string } }>
+  targetMessageID?: string
+  compactionParentID: string
+}) {
+  if (!input.targetMessageID) return false
+  const compactionIndex = input.messages.findIndex((message) => message.info.id === input.compactionParentID)
+  const targetIndex = input.messages.findIndex((message) => message.info.id === input.targetMessageID)
+  return compactionIndex >= 0 && targetIndex > compactionIndex
+}
+
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly cancelQueued: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<boolean>
@@ -479,16 +490,22 @@ export const layer = Layer.effect(
       // let its late notification start a fresh assistant turn.
       yield* cancelOwnerWakeSession(sessionID)
       promptAbortReasons.set(sessionID, "user")
-      promptAbortControllers.get(sessionID)?.abort()
-      const orphanedAssistant = yield* findOrphanedAssistantOnCancel(sessionID)
+      const controller = promptAbortControllers.get(sessionID)
+      let interruptedAssistantID: MessageID | undefined
       yield* state
-        .cancel(sessionID)
+        .cancel(sessionID, {
+          before: Effect.gen(function* () {
+            const orphanedAssistant = yield* findOrphanedAssistantOnCancel(sessionID)
+            if (Option.isSome(orphanedAssistant)) interruptedAssistantID = orphanedAssistant.value.info.id
+            controller?.abort()
+          }),
+        })
         .pipe(
           Effect.ensuring(Effect.sync(() => promptAbortReasons.delete(sessionID))),
           Effect.andThen(
-            Option.isSome(orphanedAssistant)
-              ? finishOrphanedAssistantOnCancel(sessionID, orphanedAssistant.value.info.id)
-              : Effect.void,
+            Effect.suspend(() =>
+              interruptedAssistantID ? finishOrphanedAssistantOnCancel(sessionID, interruptedAssistantID) : Effect.void,
+            ),
           ),
         )
     })
@@ -1618,7 +1635,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       yield* elog.info("interrupt", { sessionID })
       let interruptedAssistantID: MessageID | undefined
       yield* state
-        .interrupt(sessionID, {
+        .interruptQueued(sessionID, {
           before: Effect.gen(function* () {
             promptAbortReasons.set(sessionID, "user")
             const orphanedAssistant = yield* findOrphanedAssistantOnCancel(sessionID)
@@ -2215,7 +2232,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         let lastUser: MessageV2.User | undefined
         let lastAssistant: MessageV2.Assistant | undefined
         let lastFinished: MessageV2.Assistant | undefined
-        let tasks: (MessageV2.CompactionPart | MessageV2.SubtaskPart)[] = []
+        let tasks: Array<{
+          part: MessageV2.CompactionPart | MessageV2.SubtaskPart
+          user: MessageV2.User
+        }> = []
         for (let i = msgs.length - 1; i >= 0; i--) {
           const msg = msgs[i]
           if (!lastUser && msg.info.role === "user") lastUser = msg.info
@@ -2223,7 +2243,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           if (!lastFinished && msg.info.role === "assistant" && msg.info.finish) lastFinished = msg.info
           if (lastUser && lastFinished) break
           const task = msg.parts.filter((part) => part.type === "compaction" || part.type === "subtask")
-          if (task && !lastFinished) tasks.push(...task)
+          if (task.length > 0 && !lastFinished && msg.info.role === "user") {
+            const user = msg.info
+            tasks.push(...task.map((part) => ({ part, user })))
+          }
         }
 
         if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
@@ -2236,11 +2259,19 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         // Skip provider-executed tool parts — those were fully handled within the
         // provider's stream (e.g. DWS Agent Platform) and don't need a re-loop.
         const hasToolCalls = lastAssistantMsg ? hasRunnableToolCalls(lastAssistantMsg.parts) : false
+        const summaryHasLaterTarget =
+          lastAssistant?.summary === true &&
+          shouldContinueAfterCompactionStop({
+            messages: msgs,
+            targetMessageID,
+            compactionParentID: lastAssistant.parentID,
+          })
 
         if (
           lastAssistant?.finish &&
           !["tool-calls"].includes(lastAssistant.finish) &&
           !hasToolCalls &&
+          !summaryHasLaterTarget &&
           lastUser.id < lastAssistant.id
         ) {
           yield* slog.info("exiting loop")
@@ -2256,11 +2287,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             history: msgs,
           }).pipe(Effect.ignore, Effect.forkIn(scope))
 
-        const model = yield* getModel(lastUser.model.providerID, lastUser.model.modelID, sessionID)
-        const task = tasks.pop()
+        const pendingTask = tasks.pop()
+        const task = pendingTask?.part
+        const taskUser = pendingTask?.user ?? lastUser
+        const model = yield* getModel(taskUser.model.providerID, taskUser.model.modelID, sessionID)
 
         if (task?.type === "subtask") {
-          yield* handleSubtask({ task, model, lastUser, sessionID, session, msgs, abort })
+          yield* handleSubtask({ task, model, lastUser: taskUser, sessionID, session, msgs, abort })
           continue
         }
 
@@ -2269,7 +2302,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           const result = yield* compaction
             .process({
               messages: msgs,
-              parentID: lastUser.id,
+              parentID: taskUser.id,
               sessionID,
               auto: task.auto,
               overflow: task.overflow,
@@ -2277,7 +2310,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             })
             .pipe(Effect.ensuring(state.setInterruptible(sessionID, true)))
 
-          if (result === "stop") break
+          if (
+            result === "stop" &&
+            !shouldContinueAfterCompactionStop({
+              messages: msgs,
+              targetMessageID,
+              compactionParentID: taskUser.id,
+            })
+          )
+            break
           continue
         }
 

@@ -136,7 +136,6 @@ import {
   sessionPendingInputSessionIDs,
   sessionPromptVisible,
   sessionLoopReceipt,
-  sessionHeaderTitleAlign,
   sessionHeaderTitleJustify,
   sessionHeaderTitleDisplay,
   sessionTopMetricsWidth,
@@ -210,8 +209,11 @@ import { compactMemoryGraphRows, compactMemoryGraphSnapshot } from "../../util/m
 import {
   expandedUserMessageOffset,
   expandPastedContentPlaceholders,
+  hiddenUserMessageAttachmentCount,
   isPastedContentPart,
+  shouldCollapseUserMessageAttachments,
   userMessageDisplayText,
+  visibleUserMessageAttachments,
   visibleUserMessageText,
   type PastedContentDisplayPart,
 } from "./user-message-display"
@@ -569,13 +571,6 @@ function loopWorkflowSignature(items: readonly SessionLoopWorkflow[]) {
     .join("\n")
 }
 
-function sessionMatchesLoopWorkflow(
-  workflow: Pick<SessionLoopWorkflow, "rootSessionID" | "ownerSessionID">,
-  sessionID: string,
-) {
-  return workflow.rootSessionID === sessionID || workflow.ownerSessionID === sessionID
-}
-
 export function Session() {
   const route = useRouteData("session")
   const { navigate: navigateRoute } = useRoute()
@@ -673,6 +668,17 @@ export function Session() {
     const queuedIDs = queuedMessageIDs()
     return messages().filter((message): message is UserMessage => message.role === "user" && queuedIDs.has(message.id))
   })
+  const pendingDeliveryTailIDs = createMemo(() => {
+    pendingPromptRevision()
+    const assistantParentIDs = new Set(
+      messages().flatMap((message) => (message.role === "assistant" ? [message.parentID] : [])),
+    )
+    return new Set(
+      [...pendingPromptDeliveryMessageIDs(route.sessionID, { includeAccepted: true })].filter(
+        (messageID) => !assistantParentIDs.has(messageID),
+      ),
+    )
+  })
   const transcriptRows = createMemo(() => {
     const compactionBoundaryIDs = new Set(
       messages().flatMap((message) =>
@@ -681,7 +687,10 @@ export function Session() {
           : [],
       ),
     )
-    return sessionTranscriptRows(messages(), queuedMessageIDs(), { boundaryIDs: compactionBoundaryIDs })
+    return sessionTranscriptRows(messages(), queuedMessageIDs(), {
+      boundaryIDs: compactionBoundaryIDs,
+      tailIDs: pendingDeliveryTailIDs(),
+    })
   })
   const messageByID = createMemo(() => new Map(messages().map((message) => [message.id, message] as const)))
   const pinnedTurnUserMessageID = createMemo(() =>
@@ -883,29 +892,18 @@ export function Session() {
   const currentLoopWorkflow = createMemo(() =>
     loopSessionWorkflows().find((workflow) => workflow.rootSessionID === route.sessionID),
   )
-  const loopRootWorkflows = createMemo(() =>
-    loopSessionWorkflows()
-      .filter((workflow) => workflow.rootSessionID)
-      .toSorted((a, b) => (b.time?.updated ?? 0) - (a.time?.updated ?? 0) || a.id.localeCompare(b.id)),
-  )
   const sessionTopNavLabel = createMemo(() => {
     if (session()?.parentID) {
       return `↖ Parent ${keybind.print("session_parent")} ← Prev ${keybind.print("session_child_cycle_reverse")} → Next ${keybind.print("session_child_cycle")}`
     }
     if (!currentLoopWorkflow()) return ""
     const parent = currentLoopWorkflow()?.ownerSessionID ? "Parent" : "Agent View"
-    if (loopRootWorkflows().length <= 1) return `↖ ${parent} ${keybind.print("session_parent")}`
-    return `↖ ${parent} ${keybind.print("session_parent")} ← Prev loop ${keybind.print("session_child_cycle_reverse")} → Next loop ${keybind.print("session_child_cycle")}`
+    return `↖ ${parent} ${keybind.print("session_parent")}`
   })
   const topbarNavVisible = createMemo(() => Boolean(session()?.parentID || currentLoopWorkflow()))
   const topbarNavWidth = createMemo(() => (topbarNavVisible() ? Bun.stringWidth(sessionTopNavLabel()) : 0))
-  const headerTitleConfig = createMemo(() => {
-    const header = mend.profile.layout.zones.header as { title?: { visible?: unknown; align?: unknown } }
-    return header.title ?? {}
-  })
   const headerTitleVisible = createMemo(() => tuiCustomization().sessionTitle)
-  const headerTitleAlign = createMemo(() => sessionHeaderTitleAlign(headerTitleConfig().align))
-  const headerTitleJustify = createMemo(() => sessionHeaderTitleJustify(headerTitleAlign()))
+  const headerTitleJustify = createMemo(() => sessionHeaderTitleJustify("center"))
   const headerTitleText = createMemo(() => session()?.title || route.sessionID)
   const topbarLayout = createMemo(() =>
     sessionTopbarLayout({
@@ -2655,21 +2653,6 @@ export function Session() {
     }
   }
 
-  function moveLoop(direction: number) {
-    const workflows = loopRootWorkflows()
-    if (workflows.length <= 1) return
-    let next = workflows.findIndex((workflow) => workflow.rootSessionID === route.sessionID) - direction
-    if (next >= workflows.length) next = 0
-    if (next < 0) next = workflows.length - 1
-    const sessionID = workflows[next]?.rootSessionID
-    if (sessionID) {
-      navigate({
-        type: "session",
-        sessionID,
-      })
-    }
-  }
-
   function navigateToLoopOwner(dialog: DialogContext) {
     const ownerSessionID = currentLoopWorkflow()?.ownerSessionID
     if (ownerSessionID) navigate({ type: "session", sessionID: ownerSessionID })
@@ -2686,6 +2669,7 @@ export function Session() {
 
   const backgroundJSON = async <T,>(path: string, init?: RequestInit) => {
     const headers = new Headers(sdk.headers)
+    if (sdk.directory) headers.set("x-mendcode-directory", encodeURIComponent(sdk.directory))
     if (init?.body) headers.set("content-type", "application/json")
     const response = await sdk.fetch(`${sdk.url}${path}`, {
       ...init,
@@ -3484,13 +3468,8 @@ export function Session() {
       keybind: "session_child_cycle",
       category: "Session",
       hidden: true,
-      enabled: !!session()?.parentID || loopRootWorkflows().length > 1,
+      enabled: !!session()?.parentID,
       onSelect: (dialog) => {
-        if (!session()?.parentID && currentLoopWorkflow()) {
-          moveLoop(1)
-          dialog.clear()
-          return
-        }
         if (!session()?.parentID || dialog.stack.length > 0) return
         moveChild(1)
         dialog.clear()
@@ -3502,13 +3481,8 @@ export function Session() {
       keybind: "session_child_cycle_reverse",
       category: "Session",
       hidden: true,
-      enabled: !!session()?.parentID || loopRootWorkflows().length > 1,
+      enabled: !!session()?.parentID,
       onSelect: (dialog) => {
-        if (!session()?.parentID && currentLoopWorkflow()) {
-          moveLoop(-1)
-          dialog.clear()
-          return
-        }
         if (!session()?.parentID || dialog.stack.length > 0) return
         moveChild(-1)
         dialog.clear()
@@ -3672,7 +3646,7 @@ export function Session() {
                   <box width={topbarLayout().navWidth} overflow="hidden" flexShrink={0}>
                     <SessionTopNav
                       mode={session()?.parentID ? "subagent" : "loop"}
-                      canCycle={session()?.parentID ? true : loopRootWorkflows().length > 1}
+                      canCycle={!!session()?.parentID}
                       hasParent={!!currentLoopWorkflow()?.ownerSessionID}
                       width={topbarLayout().navWidth}
                     />
@@ -3687,6 +3661,7 @@ export function Session() {
                   width={topbarLayout().titleWidth}
                   flexShrink={0}
                   overflow="hidden"
+                  flexDirection="row"
                   justifyContent={headerTitleJustify()}
                 >
                   <text fg={sessionAccent()} wrapMode="none">
@@ -4982,6 +4957,7 @@ function UserMessage(props: {
   const [expandedText, setExpandedText] = createSignal(false)
   const [expandedOffset, setExpandedOffset] = createSignal(0)
   const [expandedPaste, setExpandedPaste] = createSignal(false)
+  const [expandedFiles, setExpandedFiles] = createSignal(false)
   const text = createMemo(() => {
     const texts = props.parts
       .map((x) => {
@@ -5002,6 +4978,9 @@ function UserMessage(props: {
   })
   const files = createMemo(() => props.parts.flatMap((x) => (x.type === "file" ? [x] : [])))
   const { theme } = useTheme()
+  const compactFiles = createMemo(() => shouldCollapseUserMessageAttachments(files().length))
+  const visibleFiles = createMemo(() => visibleUserMessageAttachments(files(), expandedFiles()))
+  const hiddenFileCount = createMemo(() => hiddenUserMessageAttachmentCount(files().length))
   const dimensions = useTerminalDimensions()
   const tuiConfig = useTuiConfig()
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
@@ -5074,6 +5053,10 @@ function UserMessage(props: {
   const togglePastedContent = (event: unknown) => {
     consumeMouseEvent(event)
     setExpandedPaste((value) => !value)
+  }
+  const toggleFiles = (event: unknown) => {
+    consumeMouseEvent(event)
+    setExpandedFiles((value) => !value)
   }
   let expandedScroll: ScrollBoxRenderable | undefined
   const toggleExpandedText = (event?: unknown) => {
@@ -5323,7 +5306,7 @@ function UserMessage(props: {
             </Show>
             <Show when={!props.simpleHistory && files().length}>
               <box flexDirection="row" paddingTop={1} gap={1} flexWrap="wrap">
-                <For each={files()}>
+                <For each={visibleFiles()}>
                   {(file) => {
                     const bg = createMemo(() => {
                       if (file.mime.startsWith("image/")) return theme.accent
@@ -5339,6 +5322,15 @@ function UserMessage(props: {
                   }}
                 </For>
               </box>
+              <Show when={compactFiles()}>
+                <box onMouseDown={consumeMouseEvent} onMouseUp={toggleFiles}>
+                  <text fg={theme.textMuted}>
+                    {expandedFiles()
+                      ? `▾ hide ${Locale.number(hiddenFileCount())} extra attachment${hiddenFileCount() === 1 ? "" : "s"}`
+                      : `▸ show ${Locale.number(hiddenFileCount())} more`}
+                  </text>
+                </box>
+              </Show>
             </Show>
           </box>
         </box>

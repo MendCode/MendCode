@@ -29,6 +29,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { Permission } from "@/permission"
 import { LoopWorkflow } from "@/session/loop"
+import { LoopRunner } from "@/session/loop-runner"
 import type { Agent as AgentTypes } from "@/agent/agent"
 
 const buildAgent: AgentTypes.Info = {
@@ -49,7 +50,7 @@ const registryLayer = ToolRegistry.layer.pipe(
   Layer.provide(Question.defaultLayer),
   Layer.provide(PlanReview.defaultLayer),
   Layer.provide(LoopWorkflow.defaultLayer),
-  Layer.provide(Todo.defaultLayer),
+  Layer.provide([LoopRunner.defaultLayer, Todo.defaultLayer]),
   Layer.provide(Skill.defaultLayer),
   Layer.provide(Agent.defaultLayer),
   Layer.provide(Session.defaultLayer),

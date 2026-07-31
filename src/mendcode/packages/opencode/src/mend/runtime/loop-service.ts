@@ -168,8 +168,6 @@ function loopServicePreflightCommand(input: {
   daemonArguments: string[]
   databasePath: string
   projectRoot: string
-  definitionPath: string
-  label: string
 }) {
   const project = sqlLiteral(input.projectRoot)
   const scope = `(p.worktree = ${project} OR EXISTS (SELECT 1 FROM workspace AS ws WHERE ws.project_id = w.project_id AND ws.directory = ${project}))`
@@ -184,12 +182,10 @@ function loopServicePreflightCommand(input: {
   ].join(" ")
   const fallback = shellQuote(input.daemonArguments)
   const database = shellQuote([input.databasePath])
-  const definition = shellQuote([input.definitionPath])
-  const service = shellQuote([`${launchctlDomain()}/${input.label}`])
   return [
     `state=$(/usr/bin/sqlite3 -readonly ${database} ${shellQuote([query])} 2>/dev/null) || exec ${fallback}`,
     `if [ "$state" = "1" ]; then exec ${fallback}; fi`,
-    `if [ "$state" = "0" ]; then /bin/rm -f ${definition}; /bin/launchctl bootout ${service} 2>/dev/null || true; fi`,
+    `if [ "$state" = "0" ]; then exit 0; fi`,
   ].join("\n")
 }
 
@@ -243,7 +239,7 @@ export function loopServicePlan(args: LoopServiceArgs): LoopServicePlan {
     ? [
         "/bin/sh",
         "-c",
-        loopServicePreflightCommand({ daemonArguments: programArguments, databasePath, projectRoot, definitionPath, label }),
+         loopServicePreflightCommand({ daemonArguments: programArguments, databasePath, projectRoot }),
       ]
     : programArguments
   const programLine = shellQuote(programArguments)

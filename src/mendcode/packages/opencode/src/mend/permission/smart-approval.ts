@@ -297,6 +297,22 @@ function isSafeSed(tokens: string[]) {
   return args.slice(2).every((arg) => arg === "--" || (!arg.startsWith("-") && !UNSAFE_SPECIAL_PATH_RE.test(arg)))
 }
 
+function isSafeMkdir(tokens: string[]) {
+  let operands = 0
+  let options = true
+  for (const arg of tokens.slice(1)) {
+    if (options && arg === "--") {
+      options = false
+      continue
+    }
+    if (options && (/^-[pv]+$/i.test(arg) || /^(?:--parents|--verbose)$/i.test(arg))) continue
+    if (options && arg.startsWith("-")) return false
+    if (["*", "?", "[", "]"].some((character) => arg.includes(character))) return false
+    operands++
+  }
+  return operands > 0
+}
+
 function isSafeValidationCommand(tokens: string[]) {
   const name = commandName(tokens[0] || "")
   const args = tokens.slice(1)
@@ -310,7 +326,7 @@ function isSafeValidationCommand(tokens: string[]) {
   return args.some((arg) => READ_ONLY_VALIDATION_FLAG_RE.test(arg))
 }
 
-function isSafeSegment(tokens: string[]) {
+function isSafeSegment(tokens: string[], allowBenignWrites: boolean) {
   const first = tokens[0]
   if (!first || first.includes("/") || first.includes("\\") || first.startsWith(".") || first.startsWith("~"))
     return false
@@ -319,6 +335,7 @@ function isSafeSegment(tokens: string[]) {
   if (tokens.slice(1).some((token) => UNSAFE_SPECIAL_PATH_RE.test(token))) return false
 
   const name = commandName(first)
+  if (allowBenignWrites && (name === "mkdir" || name === "md")) return isSafeMkdir(tokens)
   if (name === "sed") return isSafeSed(tokens)
   if (name === "bun") return isSafeBunValidation(tokens)
   if (name === "git") return isSafeGit(tokens)
@@ -330,15 +347,15 @@ function isSafeSegment(tokens: string[]) {
   return true
 }
 
-function isSafeShellCommand(command: string) {
+function isSafeShellCommand(command: string, allowBenignWrites = false) {
   if (hasSuspiciousText(command)) return false
   const segments = splitCommand(stripSafeStderrMerges(command))
   // Chains and pipelines are safe only when every segment is independently
-  // bounded and read-only; one unsafe segment keeps the whole request manual.
+  // covered by the selected deterministic policy.
   if (!segments || segments.length === 0) return false
   return segments.every((segment) => {
     const tokens = tokenize(segment)
-    return Boolean(tokens && tokens.length > 0 && isSafeSegment(tokens))
+    return Boolean(tokens && tokens.length > 0 && isSafeSegment(tokens, allowBenignWrites))
   })
 }
 
@@ -379,7 +396,7 @@ export function normalizeSmartPermissionDecision(
     return {
       ...decision,
       decision: "ask",
-      reason: "Smart Approval will not auto-allow a command that is not provably read-only.",
+      reason: "Smart Approval will not auto-allow a command outside its deterministic safe policy.",
     }
   }
 
@@ -398,7 +415,11 @@ export function normalizeSmartPermissionDecision(
 
 function isSafeShellRequest(request: PermissionRequest) {
   const commands = requestCommands(request)
-  return !requestHasSuspiciousText(request) && commands.length > 0 && commands.every(isSafeShellCommand)
+  return (
+    !requestHasSuspiciousText(request) &&
+    commands.length > 0 &&
+    commands.every((command) => isSafeShellCommand(command, true))
+  )
 }
 
 export function shouldTriggerSmartApproval(request: PermissionRequest) {
@@ -419,6 +440,8 @@ export function isSafeSmartPermissionRequest(request: PermissionRequest) {
   if (request.metadata?.source !== "shell") return false
   if (requestHasSuspiciousText(request)) return false
   const command = request.metadata?.command
+  // Benign local writes such as mkdir are allowed for the shell request, but
+  // writes outside the project still require the external-directory gate.
   return typeof command === "string" && isSafeShellCommand(command.trim())
 }
 
@@ -527,7 +550,7 @@ export async function reviewPermissionRequestWithModel(
     return {
       triggered: true,
       decision: "ask",
-      reason: "Smart Approval will not auto-allow a command that is not provably read-only.",
+      reason: "Smart Approval will not auto-allow a command outside its deterministic safe policy.",
     }
   }
   return decision

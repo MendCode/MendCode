@@ -125,6 +125,22 @@ describe("smart permission approval trigger", () => {
     expect(isSafeSmartPermissionRequest(request("npm test"))).toBe(false)
   })
 
+  test("auto-approves bounded local directory creation without a reviewer", () => {
+    const command =
+      'ls ".agents/specs/product-consistency-redesign" && mkdir ".agents/specs/product-consistency-redesign/checklists"'
+
+    expect(isSafeSmartPermissionRequest(request(command))).toBe(true)
+    expect(shouldReviewSmartApproval(request(command))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("mkdir -pv .agents/specs/new/checklists"))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("md .agents\\specs\\new\\checklists"))).toBe(true)
+    expect(isSafeSmartPermissionRequest(request("mkdir"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("mkdir -m 777 private"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("mkdir generated-*"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request('mkdir "$(touch marker)"'))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("mkdir safe && rm -rf safe"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(externalRequest("mkdir /tmp/outside-project"))).toBe(false)
+  })
+
   test("does not trust unknown commands, prompt-like text, or invisible Unicode", () => {
     const unknown = request("command_X file.tal")
     const hidden = request("git diff -- file\u200b.tal")

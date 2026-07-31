@@ -34,8 +34,20 @@ import { testEffect } from "../lib/effect"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { TestConfig } from "../fixture/config"
 import { Question } from "../../src/question"
+import { compactionThresholdPercent } from "../../src/session/overflow"
 
 void Log.init({ print: false })
+
+test("honors a provider model compaction hint without overriding explicit config", () => {
+  const model = {
+    id: "gpt-5.6-luna",
+    providerID: "openai",
+    options: { compaction: { threshold: 90 } },
+  }
+
+  expect(compactionThresholdPercent({ cfg: {}, model })).toBe(90)
+  expect(compactionThresholdPercent({ cfg: { compaction: { threshold: 95 } }, model })).toBe(95)
+})
 
 function run<A, E>(fx: Effect.Effect<A, E, SessionNs.Service>) {
   return Effect.runPromise(fx.pipe(Effect.provide(SessionNs.defaultLayer)))

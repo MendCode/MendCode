@@ -35,8 +35,8 @@ const CODEX_CHATGPT_MODEL_ALIASES: Record<string, string> = {
 }
 
 const CODEX_CHATGPT_5_6_LIMIT = {
-  context: 272_000,
-  input: 272_000,
+  context: 256_000,
+  input: 256_000,
   output: 128_000,
 }
 
@@ -573,26 +573,38 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
               const match = model.api.id.match(/^gpt-(\d+\.\d+)/)
               return match ? parseFloat(match[1]) > 5.4 : false
             })
-            .map(([modelID, model]) => [
-              modelID,
-              {
-                ...model,
-                cost: {
-                  input: 0,
-                  output: 0,
-                  cache: { read: 0, write: 0 },
-                },
-                limit: model.api.id.startsWith("gpt-5.6")
-                  ? CODEX_CHATGPT_5_6_LIMIT
-                  : model.id.includes("gpt-5.5")
+            .map(([modelID, model]) => {
+              const modelOptions = isRecord(model.options) ? model.options : {}
+              return [
+                modelID,
+                {
+                  ...model,
+                  cost: {
+                    input: 0,
+                    output: 0,
+                    cache: { read: 0, write: 0 },
+                  },
+                  limit: model.api.id.startsWith("gpt-5.6")
+                    ? CODEX_CHATGPT_5_6_LIMIT
+                    : model.id.includes("gpt-5.5")
+                      ? {
+                          context: 400_000,
+                          input: 272_000,
+                          output: 128_000,
+                        }
+                      : model.limit,
+                  options: model.api.id.startsWith("gpt-5.6")
                     ? {
-                        context: 400_000,
-                        input: 272_000,
-                        output: 128_000,
+                        ...modelOptions,
+                        compaction: {
+                          ...(isRecord(modelOptions.compaction) ? modelOptions.compaction : {}),
+                          threshold: 90,
+                        },
                       }
-                    : model.limit,
-              },
-            ]),
+                    : model.options,
+                },
+              ]
+            }),
         )
       },
     },

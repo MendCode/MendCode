@@ -2,7 +2,9 @@ import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import DESCRIPTION from "./loop.txt"
 import { LoopWorkflow } from "@/session/loop"
+import { LoopRunner } from "@/session/loop-runner"
 import { Session } from "@/session/session"
+import { SessionPrompt } from "@/session/prompt"
 import { MessageV2 } from "@/session/message-v2"
 import { InstanceState } from "@/effect/instance-state"
 import { loopServiceArgsFromConfig, loopServiceStart } from "@/mend/runtime/loop-service"
@@ -455,6 +457,11 @@ function positiveMaxTurns(value: number | undefined) {
   return Math.floor(value)
 }
 
+function nonNegativeMaxCost(value: number | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined
+  return value
+}
+
 function maxTurnsFor(params: Schema.Schema.Type<typeof Parameters>, budgetMode: "fixed" | "max-goal" | "unbounded-monitor") {
   const maxTurns = positiveMaxTurns(params.maxTurns)
   if (budgetMode === "unbounded-monitor") return undefined
@@ -489,6 +496,8 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
     (params.permissionMode === undefined && params.reportOnly !== false && !allowEditsFromObjective)
   const budgetMode = inferBudgetMode(params)
   const maxTurns = maxTurnsFor(params, budgetMode)
+  const maxCost = nonNegativeMaxCost(params.maxCost)
+  const maxTokens = positiveMaxTurns(params.maxTokens)
   const evaluationMode = params.evaluationMode ?? (budgetMode === "max-goal" ? "independent" : "legacy")
   const triggerMode = params.triggerMode ?? (params.dailyAt !== undefined || params.timezone !== undefined ? "daily" : params.intervalMs !== undefined ? "interval" : "manual")
   const trigger =
@@ -573,10 +582,10 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
         }
       : undefined,
     workspace: { mode: reportOnly ? "read-only" : params.workspaceMode ?? "in-place" },
-    costBudget: params.maxCost !== undefined || params.maxTokens !== undefined
+    costBudget: maxCost !== undefined || maxTokens !== undefined
       ? {
-          maxCost: params.maxCost,
-          maxTokens: params.maxTokens === undefined ? undefined : Math.max(0, Math.floor(params.maxTokens)),
+          maxCost,
+          maxTokens,
         }
       : undefined,
     approvalPolicy: params.approvalRequiredFor || params.approvedActions
@@ -1030,10 +1039,11 @@ function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean, rootSes
   }
 }
 
-export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Service | Session.Service>(
+export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Service | LoopRunner.Service | Session.Service>(
   "loop",
   Effect.gen(function* () {
     const workflows = yield* LoopWorkflow.Service
+    const runner = yield* LoopRunner.Service
     const sessions = yield* Session.Service
 
     const contextualWorkflow = Effect.fn("LoopTool.contextualWorkflow")(function* (
@@ -1314,11 +1324,17 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
           if (action === "resume") workflow = yield* workflows.resume({ id: workflow.id, reason: params.reason })
           if (action === "stop") workflow = yield* workflows.stop({ id: workflow.id, reason: params.reason })
           if (action === "run_once") {
-            const run = yield* workflows.runOnce({ id: workflow.id, reason: params.reason })
+            const promptOps = ctx.extra?.promptOps as Pick<SessionPrompt.Interface, "prompt"> | undefined
+            if (!promptOps) throw new Error("Loop run_once requires prompt operations from the active session.")
+            const result = yield* runner.runOne({ id: workflow.id, execute: true, reason: params.reason, trigger: "run-once" }).pipe(
+              Effect.provideService(LoopWorkflow.Service, workflows),
+              Effect.provideService(SessionPrompt.Service, promptOps as SessionPrompt.Interface),
+              Effect.provideService(Session.Service, sessions),
+            )
             const updated = yield* workflows.get(workflow.id)
             return {
-              title: `Recorded loop run ${run.id}`,
-              output: [formatWorkflow(updated), "", `run_id: ${run.id}`, `run_state: ${run.state}`].join("\n"),
+              title: `Executed loop ${workflow.id}`,
+              output: [formatWorkflow(updated), "", `run_id: ${result.runID ?? "none"}`, `run_state: ${result.state}`, `run_summary: ${result.summary}`].join("\n"),
               metadata: metadata(updated),
             }
           }

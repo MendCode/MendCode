@@ -56,6 +56,7 @@ import { Permission } from "@/permission"
 import { PlanReview } from "@/plan-review"
 import { readPromptMode } from "@/mend/prompt/mode"
 import { LoopWorkflow } from "@/session/loop"
+import { LoopRunner } from "@/session/loop-runner"
 import { BackgroundTask } from "@/session/background-task"
 
 const log = Log.create({ service: "tool.registry" })
@@ -87,6 +88,7 @@ export const layer: Layer.Layer<
   | Question.Service
   | PlanReview.Service
   | LoopWorkflow.Service
+  | LoopRunner.Service
   | Todo.Service
   | Agent.Service
   | Skill.Service
@@ -390,7 +392,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Question.defaultLayer),
     Layer.provide(PlanReview.defaultLayer),
     Layer.provide(LoopWorkflow.defaultLayer),
-    Layer.provide(Todo.defaultLayer),
+    Layer.provide([LoopRunner.defaultLayer, Todo.defaultLayer]),
     Layer.provide(Skill.defaultLayer),
     Layer.provide(Agent.defaultLayer),
     Layer.provide(Session.defaultLayer),

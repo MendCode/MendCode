@@ -15,7 +15,7 @@
 MendCode is a terminal-first coding-agent harness you can make your own: a
 public `mendcode` CLI, configurable model roles, review gates, Changes Review,
 Memory Center, Plan Mode Markdown, Agent View, reusable team packages, project MCP config,
-Herdr/mflow/worktree coordination, Usage Insights, release/security gates, and a
+mflow/worktree coordination, Usage Insights, release/security gates, and a
 customizable TUI for home identity, prompt chrome, widgets, panels, dialogs, and
 themes without patching runtime internals. Local agents can also control the
 same session runtime through versioned JSON commands for progress, waiting, and
@@ -87,11 +87,8 @@ mendcode
 
 On first launch, MendCode opens the setup screen. Use it to configure the
 harness once: provider/auth, model roles, budget posture, package state, TUI
-profile, prompt mode, memory, and permissions. After that, daily use is just:
-
-```bash
-mendcode
-```
+profile, prompt mode, memory, and permissions. Once setup is complete, use the
+commands below for everyday work:
 
 Useful commands after setup:
 
@@ -373,7 +370,9 @@ See [Loop Workflows](docs/loop-workflows.md).
 MendCode memory is approval-first by design. It can retrieve useful project
 context without turning every session into permanent state.
 
-![MendCode Memory Center overview](docs/assets/screenshots/memory-center-overview.png)
+<p align="center">
+  <img src="https://www.mendcode.dev/screenshots/memory-graph-overview.png" alt="MendCode Memory Graph with connected nodes" width="980">
+</p>
 
 - global and project scopes
 - explicit `mendcode memory add`
@@ -462,13 +461,22 @@ normal test entrypoint; run focused tests from the package that owns the change.
 
 ## For Agents
 
-<details>
-<summary><strong>Open MendCode repo context for coding agents</strong></summary>
+If you are an agent working in this repository, use this short path first:
 
-This block is intentionally visible only when expanded in GitHub Markdown. It
-exists so coding agents that read the README get MendCode context before editing
-docs, website copy, CLI help, screenshots, or public claims. Treat this as
-context, then verify live code before changing behavior.
+1. Read the [source-level contributor contract](src/mendcode/AGENTS.md).
+2. Use the public `mendcode` CLI and verify live source before documenting behavior.
+3. Run focused checks from the package that owns the change; do not run tests from
+   the repository root.
+4. Keep changes minimal and never include provider tokens, auth state, or local
+   runtime data in packages, screenshots, or docs.
+
+<details>
+<summary><strong>Open the full MendCode repo context for coding agents</strong></summary>
+
+This block is intentionally collapsed so the README stays readable while still
+giving coding agents MendCode context before editing docs, website copy, CLI help,
+screenshots, or public claims. Treat it as context, then verify live code before
+changing behavior.
 
 ### Public identity
 

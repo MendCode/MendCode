@@ -88,9 +88,7 @@ describe("session route initialization", () => {
     expect(source).toContain('return "Waiting for the current response to finish"')
     expect(source).toContain("const transcriptRows = createMemo")
     expect(source).toContain("total: transcriptRows().length")
-    expect(source).toContain(
-      "sessionTranscriptRows(messages(), queuedMessageIDs(), { boundaryIDs: compactionBoundaryIDs })",
-    )
+    expect(source).toContain("tailIDs: pendingDeliveryTailIDs()")
     expect(source).toContain("<For each={visibleMessageIDs()}>")
     expect(source).toContain("messageByID().get(messageID)")
     expect(source).toContain("queuedMessageIDs().has(message().id)")
