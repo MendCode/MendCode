@@ -20,6 +20,7 @@ provider-aware compaction and TUI state easier to inspect.
 
 - Prevent stale or duplicate session rows and user-message rendering during reconnects, transcript growth, compaction, and resumed work.
 - Preserve safe session and tool state when scheduled loop execution or a permission-review path fails.
+- Make cross-platform release smoke tests accept the public `Usage:` help header.
 
 ## 0.1.22 - 2026-07-29
 
