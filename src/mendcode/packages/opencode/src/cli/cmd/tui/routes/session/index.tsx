@@ -154,6 +154,7 @@ import {
 import { renderSessionExitSummary } from "../../util/session-exit-summary"
 import { sessionMessageVirtualWindow, stickyUserIDFromVirtualWindow } from "../../util/session-virtual-window"
 import { sessionTranscriptRows } from "../../util/session-transcript-rows"
+import { latestCompletedCompactionSummaryID } from "../../util/session-message-order"
 import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { appendPromptInfo, restorePromptFromSubmittedParts } from "../../component/prompt/submit-parts"
@@ -4281,10 +4282,12 @@ export function latestFullSessionHistoryStartID(
     time: { created?: number; completed?: number }
   }>,
 ) {
-  const latestCompactionSummary = messages.findLast(
-    (message) => message.role === "assistant" && message.summary === true && message.time.completed !== undefined,
+  return latestCompletedCompactionSummaryID(
+    messages.map((message) => ({
+      ...message,
+      time: { created: message.time.created ?? 0, completed: message.time.completed },
+    })),
   )
-  return latestCompactionSummary?.id
 }
 
 export function sessionTranscriptRenderKey(sessionID: string) {
