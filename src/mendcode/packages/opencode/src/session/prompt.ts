@@ -478,9 +478,30 @@ export const layer = Layer.effect(
       if (Option.isNone(match)) return
       const message = match.value.info
       if (message.role !== "assistant" || message.time.completed) return
+      const now = Date.now()
+      yield* Effect.forEach(
+        match.value.parts.filter(
+          (part): part is MessageV2.ToolPart =>
+            part.type === "tool" && (part.state.status === "pending" || part.state.status === "running"),
+        ),
+        (part) =>
+          sessions.updatePart({
+            ...part,
+            state: {
+              status: "error",
+              error: "Cancelled",
+              input: part.state.input,
+              metadata: part.state.status === "running" ? part.state.metadata : undefined,
+              time: {
+                start: part.state.status === "running" ? part.state.time.start : now,
+                end: now,
+              },
+            },
+          } satisfies MessageV2.ToolPart),
+      )
       message.error = new MessageV2.AbortedError({ message: "Cancelled" }).toObject()
       message.finish = "error"
-      message.time.completed = Date.now()
+      message.time.completed = now
       yield* sessions.updateMessage(message)
     })
 

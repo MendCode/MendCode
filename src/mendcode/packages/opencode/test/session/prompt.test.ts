@@ -965,16 +965,38 @@ it.live("cancel finalizes an orphaned unfinished assistant message", () =>
         providerID: ref.providerID,
         time: { created: Date.now() },
       } satisfies MessageV2.Assistant)
+      const tool = yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: assistant.id,
+        sessionID: chat.id,
+        type: "tool",
+        callID: "orphaned-tool",
+        tool: "bash",
+        state: {
+          status: "running",
+          input: { command: "sleep 60" },
+          title: "Run command",
+          time: { start: Date.now() },
+        },
+      } satisfies MessageV2.ToolPart)
 
       yield* prompt.cancel(chat.id)
 
       const messages = yield* sessions.messages({ sessionID: chat.id })
-      const repaired = messages.find((item) => item.info.id === assistant.id)?.info
+      const repairedMessage = messages.find((item) => item.info.id === assistant.id)
+      const repaired = repairedMessage?.info
       expect(repaired?.role).toBe("assistant")
       if (repaired?.role !== "assistant") return
       expect(repaired.time.completed).toBeNumber()
       expect(repaired.finish).toBe("error")
       expect(repaired.error?.name).toBe("MessageAbortedError")
+      const repairedTool = repairedMessage?.parts.find((part) => part.id === tool.id)
+      expect(repairedTool?.type).toBe("tool")
+      if (repairedTool?.type !== "tool") return
+      expect(repairedTool.state.status).toBe("error")
+      if (repairedTool.state.status !== "error") return
+      expect(repairedTool.state.error).toBe("Cancelled")
+      expect(repairedTool.state.time.end).toBeNumber()
     }),
     { git: true, config: providerCfg },
   ),
