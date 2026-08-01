@@ -50,6 +50,10 @@ import {
   UpdatePayload,
 } from "../groups/session"
 import * as SessionError from "./session-errors"
+import * as Log from "@mendcode/core/util/log"
+
+const log = Log.create({ service: "server" })
+const UNBOUNDED_MESSAGES_WARNING_BYTES = 8 * 1024 * 1024
 
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
@@ -262,6 +266,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       }
       yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID))
       if (ctx.query.limit === undefined || ctx.query.limit === 0) {
+        const storedBytes = MessageV2.sessionPayloadBytes(ctx.params.sessionID)
+        if (storedBytes > UNBOUNDED_MESSAGES_WARNING_BYTES) {
+          log.warn("serving unbounded session message history", { sessionID: ctx.params.sessionID, storedBytes })
+        }
         return yield* session.messages({ sessionID: ctx.params.sessionID, view: ctx.query.view })
       }
 
@@ -415,9 +423,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof SummarizePayload.Type
     }) {
       yield* revertSvc.cleanup(yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID)))
-      const messages = yield* session.messages({ sessionID: ctx.params.sessionID })
       const defaultAgent = yield* agentSvc.defaultAgent()
-      const currentAgent = messages.findLast((message) => message.info.role === "user")?.info.agent ?? defaultAgent
+      const currentAgent = MessageV2.latestUserInfo(ctx.params.sessionID)?.agent ?? defaultAgent
 
       yield* compactSvc.create({
         sessionID: ctx.params.sessionID,

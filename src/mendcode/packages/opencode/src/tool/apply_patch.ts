@@ -14,8 +14,11 @@ import DESCRIPTION from "./apply_patch.txt"
 import { File } from "../file"
 import { Format } from "../format"
 import * as Bom from "@/util/bom"
+import { Truncate } from "./truncate"
+import { APPLY_PATCH_DIFF_BYTES, APPLY_PATCH_FILES_BYTES, previewDiff } from "./diff-metadata"
 
 const MAX_PATCH_SOURCE_BYTES = 2 * 1024 * 1024
+const MAX_PATCH_TEXT_BYTES = 8 * 1024 * 1024
 
 function compactBinaryDiff(filePath: string, byteLength: number) {
   return [
@@ -49,6 +52,7 @@ export const ApplyPatchTool = Tool.define(
     const afs = yield* AppFileSystem.Service
     const format = yield* Format.Service
     const bus = yield* Bus.Service
+    const truncate = yield* Truncate.Service
 
     const run = Effect.fn("ApplyPatchTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -56,6 +60,12 @@ export const ApplyPatchTool = Tool.define(
     ) {
       if (!params.patchText) {
         return yield* Effect.fail(new Error("patchText is required"))
+      }
+      const patchTextBytes = Buffer.byteLength(params.patchText, "utf8")
+      if (patchTextBytes > MAX_PATCH_TEXT_BYTES) {
+        return yield* Effect.fail(
+          new Error(`patch rejected: patch text exceeds ${MAX_PATCH_TEXT_BYTES.toLocaleString()} bytes`),
+        )
       }
 
       // Parse the patch to get hunks
@@ -101,6 +111,14 @@ export const ApplyPatchTool = Tool.define(
             const oldContent = ""
             const newContent =
               hunk.contents.length === 0 || hunk.contents.endsWith("\n") ? hunk.contents : `${hunk.contents}\n`
+            const byteLength = Buffer.byteLength(newContent, "utf8")
+            if (byteLength > MAX_PATCH_SOURCE_BYTES) {
+              return yield* Effect.fail(
+                new Error(
+                  `apply_patch verification failed: cannot add oversized file (${byteLength.toLocaleString()} bytes): ${filePath}`,
+                ),
+              )
+            }
             const next = Bom.split(newContent)
             const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, next.text))
 
@@ -164,6 +182,14 @@ export const ApplyPatchTool = Tool.define(
               bom = fileUpdate.bom
             } catch (error) {
               return yield* Effect.fail(verificationError(error))
+            }
+            const nextByteLength = Buffer.byteLength(newContent, "utf8")
+            if (nextByteLength > MAX_PATCH_SOURCE_BYTES) {
+              return yield* Effect.fail(
+                new Error(
+                  `apply_patch verification failed: updated file would exceed ${MAX_PATCH_SOURCE_BYTES.toLocaleString()} bytes: ${filePath}`,
+                ),
+              )
             }
 
             const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, newContent))
@@ -351,6 +377,21 @@ export const ApplyPatchTool = Tool.define(
       }
       const diagnostics = yield* lsp.diagnostics()
 
+      const persistedDiff = previewDiff(totalDiff, APPLY_PATCH_DIFF_BYTES)
+      let filesBudget = APPLY_PATCH_FILES_BYTES
+      const persistedFiles = files.map((file, index) => {
+        const patch = previewDiff(file.patch, Math.floor(filesBudget / (files.length - index)))
+        filesBudget -= Buffer.byteLength(patch.content, "utf8")
+        return {
+          ...file,
+          patch: patch.content,
+          patchTruncated: patch.truncated,
+          patchOriginalBytes: patch.originalBytes,
+        }
+      })
+      const diffTruncated = persistedDiff.truncated || persistedFiles.some((file) => file.patchTruncated)
+      const savedDiff = diffTruncated ? yield* truncate.writeOutput(totalDiff) : undefined
+
       // Generate output summary
       const summaryLines = fileChanges.map((change) => {
         if (change.type === "add") {
@@ -376,8 +417,11 @@ export const ApplyPatchTool = Tool.define(
       return {
         title: output,
         metadata: {
-          diff: totalDiff,
-          files,
+          diff: persistedDiff.content,
+          files: persistedFiles,
+          diffTruncated,
+          diffOriginalBytes: persistedDiff.originalBytes,
+          ...(savedDiff ? { diffPath: savedDiff.path, diffArtifactComplete: savedDiff.complete } : {}),
           diagnostics,
         },
         output,

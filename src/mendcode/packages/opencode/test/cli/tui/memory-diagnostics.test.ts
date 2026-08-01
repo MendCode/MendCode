@@ -21,7 +21,14 @@ describe("process diagnostics", () => {
   test("formats process memory without starting a sampler", () => {
     const output = formatDiagnostics({
       tui: { ...sample, role: "tui" },
-      server: sample,
+      server: {
+        ...sample,
+        sharedServer: {
+          runtimeID: "runtime-test",
+          stateOwner: true,
+          activeClientLeases: 2,
+        },
+      },
       ui: {
         sessionCount: 12,
         cachedSessionCount: 3,
@@ -36,6 +43,8 @@ describe("process diagnostics", () => {
     expect(output).toContain("Connected runtime (pid 123, server)")
     expect(output).toContain("RSS (RAM): 1.00 GiB")
     expect(output).toContain("Uptime: 1h 1m")
+    expect(output).toContain("Shared server: 2 client lease(s) · state owner")
+    expect(output).toContain("Runtime: runtime-test")
     expect(output).toContain("TUI counters: 12 loaded sessions · route session")
     expect(output).toContain("TUI cache: 3 sessions · 24 messages · 48 parts")
   })
@@ -53,6 +62,7 @@ describe("process diagnostics", () => {
   test("validates remote samples before displaying them", () => {
     expect(isProcessMemoryUsage(sample)).toBe(true)
     expect(isProcessMemoryUsage({ ...sample, rss: "large" })).toBe(false)
+    expect(isProcessMemoryUsage({ ...sample, sharedServer: { runtimeID: "test" } })).toBe(false)
     expect(isProcessMemoryUsage({ pid: 123 })).toBe(false)
   })
 

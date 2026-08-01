@@ -1,5 +1,7 @@
 const startsWith = (bytes: Uint8Array, prefix: number[]) => prefix.every((value, index) => bytes[index] === value)
 
+export const MAX_INLINE_ATTACHMENT_BYTES = 5 * 1024 * 1024
+
 export function isPdfAttachment(mime: string) {
   return mime === "application/pdf"
 }

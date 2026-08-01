@@ -97,6 +97,60 @@ describe("tool.edit", () => {
       })
     })
 
+    test("bounds persisted diff metadata for large edits", async () => {
+      await using tmp = await tmpdir()
+      const filepath = path.join(tmp.path, "large.txt")
+
+      await WithInstance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const edit = await resolve()
+          const result = await Effect.runPromise(
+            edit.execute(
+              {
+                filePath: filepath,
+                oldString: "",
+                newString: "x".repeat(300 * 1024),
+              },
+              ctx,
+            ),
+          )
+
+          expect(result.metadata.diffTruncated).toBe(true)
+          expect(result.metadata.diffOriginalBytes).toBeGreaterThan(300 * 1024)
+          expect(result.metadata.diffPath).toBeString()
+          expect(
+            Buffer.byteLength(result.metadata.diff, "utf8") + Buffer.byteLength(result.metadata.filediff.patch, "utf8"),
+          ).toBeLessThanOrEqual(512 * 1024)
+        },
+      })
+    })
+
+    test("rejects oversized edit input", async () => {
+      await using tmp = await tmpdir()
+      const filepath = path.join(tmp.path, "oversized.txt")
+
+      await WithInstance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const edit = await resolve()
+          await expect(
+            Effect.runPromise(
+              edit.execute(
+                {
+                  filePath: filepath,
+                  oldString: "",
+                  newString: "x".repeat(2 * 1024 * 1024 + 1),
+                },
+                ctx,
+              ),
+            ),
+          ).rejects.toThrow("Edit rejected: input exceeds")
+          expect(await Bun.file(filepath).exists()).toBe(false)
+        },
+      })
+    })
+
     test("preserves BOM when oldString is empty on existing files", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "existing.cs")

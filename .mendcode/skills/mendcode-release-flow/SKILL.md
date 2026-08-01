@@ -17,6 +17,7 @@ Follow this workflow for MendCode changes that may ship.
 - Do not publish a release, merge to `main`, or overwrite a user worktree without explicit user intent.
 - Never leave open public PRs/issues as noise. Close, merge, or explain exactly why they must remain open.
 - Never hide security/release failures. If a supply-chain, secret, CodeQL, release, or installer check fails, keep the issue open until fixed or document the exact reason it is accepted.
+- For user-visible TUI/session changes, stop after focused validation and the manual smoke gate. Do not dispatch or publish a release until the user explicitly confirms the smoke scenario works.
 
 ## Branch Policy
 
@@ -39,14 +40,19 @@ Follow this workflow for MendCode changes that may ship.
 3. Ask the user before choosing a new version unless the version is already clearly bumped by another agent.
 4. Implement the change on local `dev` unless the Branch Policy says a separate branch/worktree is required.
 5. Run focused tests/scripts for the touched area. Use existing repo scripts and generated-client/build checks when relevant.
-6. Stop and let the user test locally when the change is user-visible. Do not bump/changelog/merge until the user says it works, unless they explicitly ask for fully autonomous shipping.
-7. After the user confirms it works:
+6. For user-visible queue, transcript, or compaction changes, run the local no-token smoke gate in `src/mendcode/packages/opencode`:
+   ```bash
+   bun run test:queue-compaction:manual
+   ```
+   It uses an isolated temporary project, a local mock OpenAI-compatible server, a 50,000-token model context, and a 40,000-token compaction trigger. It must not read or modify the user's global config, database, credentials, or token budget.
+7. Stop and let the user test locally when the change is user-visible. Do not bump/changelog/merge until the user says it works, unless they explicitly ask for fully autonomous shipping.
+8. After the user confirms it works:
    - Bump version if needed.
    - Add or update `CHANGELOG.md`.
    - Open a PR to `dev`, wait for CI, and merge.
    - Promote `dev` to `main` with a direct PR whenever possible, resolving conflicts deliberately.
    - Sync `main` back to `dev` if needed so both branches have the same tree.
-8. If releasing:
+9. If releasing:
    - Use the Release workflow from `main`.
    - Verify SHA256SUMS.
    - Publish with real release notes/changelog, not only a SHA.
@@ -55,6 +61,7 @@ Follow this workflow for MendCode changes that may ship.
 ## Required Checks
 
 - For code: run the narrow test file or command covering the changed path.
+- For user-visible TUI/session changes: run `bun run test:queue-compaction:manual` and record the user's confirmation before release promotion.
 - For release: verify `mendcode --version` prints the release version.
 - For installer: test `curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash -s -- --no-modify-path` in a temporary `HOME`.
 - For supply chain: verify secret scan, dependency review/vulnerability checks, CodeQL/Semgrep, and release artifact checksums before publishing.

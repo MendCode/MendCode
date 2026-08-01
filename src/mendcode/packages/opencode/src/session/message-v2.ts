@@ -857,7 +857,7 @@ function previewUnknown(input: unknown, maxChars: number, label: string, depth =
         ? previewDiff(value)
         : key === "content" && typeof value === "string"
           ? previewContent(value, `${label}.${key}`)
-        : previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
+          : previewUnknown(value, nextMax, `${label}.${key}`, depth + 1)
   }
   return result
 }
@@ -1855,6 +1855,57 @@ export function get(input: {
     partsLimit,
     partsAfter: input.partsAfter,
   })[0]
+}
+
+export function latestUserInfo(sessionID: SessionID) {
+  const row = Database.use((db) =>
+    db
+      .select()
+      .from(MessageTable)
+      .where(and(eq(MessageTable.session_id, sessionID), sql`json_extract(${MessageTable.data}, '$.role') = 'user'`))
+      .orderBy(desc(MessageTable.time_created), desc(MessageTable.id))
+      .limit(1)
+      .get(),
+  )
+  return row ? info(row) : undefined
+}
+
+export function hasCompactionPostPrompt(sessionID: SessionID, parentID: MessageID) {
+  return Boolean(
+    Database.use((db) =>
+      db
+        .select({ id: PartTable.id })
+        .from(PartTable)
+        .where(
+          and(
+            eq(PartTable.session_id, sessionID),
+            sql`json_extract(${PartTable.data}, '$.type') = 'text'`,
+            sql`json_extract(${PartTable.data}, '$.metadata.compaction_post_prompt') = 1`,
+            sql`json_extract(${PartTable.data}, '$.metadata.compaction_parent_id') = ${parentID}`,
+          ),
+        )
+        .limit(1)
+        .get(),
+    ),
+  )
+}
+
+export function sessionPayloadBytes(sessionID: SessionID) {
+  const messages = Database.use((db) =>
+    db
+      .select({ bytes: sql<number>`coalesce(sum(length(${MessageTable.data})), 0)` })
+      .from(MessageTable)
+      .where(eq(MessageTable.session_id, sessionID))
+      .get(),
+  )
+  const parts = Database.use((db) =>
+    db
+      .select({ bytes: sql<number>`coalesce(sum(length(${PartTable.data})), 0)` })
+      .from(PartTable)
+      .where(eq(PartTable.session_id, sessionID))
+      .get(),
+  )
+  return Number(messages?.bytes ?? 0) + Number(parts?.bytes ?? 0)
 }
 
 type RevertTimelineRow = {

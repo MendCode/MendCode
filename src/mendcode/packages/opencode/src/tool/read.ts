@@ -10,7 +10,7 @@ import DESCRIPTION from "./read.txt"
 import { InstanceState } from "@/effect/instance-state"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
-import { isPdfAttachment, sniffAttachmentMime } from "@/util/media"
+import { isPdfAttachment, MAX_INLINE_ATTACHMENT_BYTES, sniffAttachmentMime } from "@/util/media"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -220,6 +220,13 @@ export const ReadTool = Tool.define(
       const isImage = SUPPORTED_IMAGE_MIMES.has(mime)
 
       if (isImage || isPdfAttachment(mime)) {
+        if (Number(stat.size) > MAX_INLINE_ATTACHMENT_BYTES) {
+          return yield* Effect.fail(
+            new Error(
+              `Cannot attach image or PDF larger than ${MAX_INLINE_ATTACHMENT_BYTES.toLocaleString()} bytes: ${filepath}`,
+            ),
+          )
+        }
         const bytes = yield* fs.readFile(filepath)
         const msg = isPdfAttachment(mime) ? "PDF read successfully" : "Image read successfully"
         return {
