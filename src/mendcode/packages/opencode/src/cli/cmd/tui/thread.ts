@@ -31,6 +31,12 @@ import { ServerAuth } from "@/server/auth"
 import { SharedServer, type SharedServerClientLease, type SharedServerState } from "./shared-server"
 import { isProcessMemoryUsage, processMemoryUsage, type DiagnosticsSnapshot } from "@/util/process-memory"
 
+const SHARED_SERVER_PROBE_TIMEOUT_MS = 2_000
+const SHARED_SERVER_WAIT_TIMEOUT_MS = 8_000
+const SHARED_SERVER_RECONNECT_RETRY_DELAY_MS = 250
+const SHARED_SERVER_RECONNECT_MAX_DELAY_MS = 3_000
+const SHARED_SERVER_RECONNECT_STALE_DELAY_MS = 15_000
+
 declare global {
   const OPENCODE_WORKER_PATH: string
 }
@@ -69,14 +75,14 @@ async function probeSharedServer(input: { url: string; directory: string; header
     baseUrl: input.url,
     directory: input.directory,
     headers: input.headers,
-    signal: AbortSignal.timeout(5_000),
+    signal: AbortSignal.timeout(SHARED_SERVER_PROBE_TIMEOUT_MS),
   })
   await client.global.health({ throwOnError: true })
-  await client.session.list({ limit: 1 }, { throwOnError: true })
 }
 
 function sharedServerConnection(state: SharedServerState) {
   return {
+    pid: state.pid,
     url: state.url,
     headers: ServerAuth.headers({ username: state.username, password: state.password }),
   }
@@ -92,9 +98,11 @@ async function connectToLocalSharedServer(directory: string, runtimeID: string, 
   const connection = sharedServerConnection(state)
   try {
     await probeSharedServer({ ...connection, directory })
+    const nextLease = lease?.serverPID === state.pid ? lease : await SharedServer.acquireClientLease(state.pid)
+    if (lease && lease !== nextLease) await lease.release()
     return {
       ...connection,
-      lease: lease ?? (await SharedServer.acquireClientLease()),
+      lease: nextLease,
     }
   } catch {
     return
@@ -105,7 +113,7 @@ async function waitForLocalSharedServer(
   directory: string,
   runtimeID: string,
   lease?: SharedServerClientLease,
-  timeoutMs = 12_000,
+  timeoutMs = SHARED_SERVER_WAIT_TIMEOUT_MS,
 ) {
   const started = Date.now()
   while (Date.now() - started < timeoutMs) {
@@ -116,20 +124,26 @@ async function waitForLocalSharedServer(
   return
 }
 
-async function stopLocalSharedServer(pid: number) {
-  if (pid === process.pid || !SharedServer.isProcessAlive(pid)) return true
+async function stopLocalSharedServer(state: SharedServerState) {
+  if (state.pid === process.pid || !SharedServer.isProcessAlive(state.pid)) return true
+  const connection = sharedServerConnection(state)
+  await fetch(new URL("/global/dispose", connection.url), {
+    method: "POST",
+    headers: connection.headers,
+    signal: AbortSignal.timeout(3_000),
+  }).catch(() => undefined)
   try {
-    process.kill(pid, "SIGTERM")
+    process.kill(state.pid, "SIGTERM")
   } catch {
-    return !SharedServer.isProcessAlive(pid)
+    return !SharedServer.isProcessAlive(state.pid)
   }
 
-  const deadline = Date.now() + 2_000
+  const deadline = Date.now() + 5_000
   while (Date.now() < deadline) {
-    if (!SharedServer.isProcessAlive(pid)) return true
+    if (!SharedServer.isProcessAlive(state.pid)) return true
     await new Promise((resolve) => setTimeout(resolve, 50))
   }
-  return !SharedServer.isProcessAlive(pid)
+  return !SharedServer.isProcessAlive(state.pid)
 }
 
 export function resolveRuntimeEntrypoint(entry: string | undefined, runtimeCwd: string) {
@@ -257,26 +271,23 @@ async function ensureLocalSharedServer(input: {
 
     const state = await SharedServer.readState()
     if (state) {
-      const activeClients = await SharedServer.activeClientLeaseCount()
-      const effectiveClients = activeClients + (input.lease ? 0 : 1)
+      const activeClients = await SharedServer.activeClientLeaseCountForServer(state.pid)
       const live = SharedServer.isProcessAlive(state.pid)
       const runtimeMatches = state.runtimeID === runtimeID
 
-      if (!runtimeMatches && live && activeClients > 0) {
+      const canReplace = SharedServer.shouldReplaceSharedServer({ live, runtimeMatches, activeClients })
+      if (!canReplace && live && !runtimeMatches && activeClients > 0) {
         // Keep clients on the old runtime, but let this client start a fresh
         // server instead of silently inheriting stale code.
         await SharedServer.clearState()
-      } else {
-        const canReplace =
-          !live ||
-          SharedServer.shouldReplaceLiveServer({
-            pid: state.pid,
-            currentPid: process.pid,
-            activeClients: effectiveClients,
-          })
-        if (!canReplace) return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
-        if (!(await stopLocalSharedServer(state.pid))) return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
+      } else if (canReplace) {
+        if (!(await stopLocalSharedServer(state)))
+          return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
         await SharedServer.clearStateIfOwned(state.pid)
+      } else {
+        // A live server with the same runtime may be briefly unreachable during
+        // sleep, GC, or a provider request. Never dispose it from reconnect.
+        return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
       }
     }
 
@@ -663,7 +674,14 @@ export const TuiThreadCommand = cmd({
             : {}),
           config,
           mendProfile,
-          reconnect: reconnect ? { refresh: reconnect } : undefined,
+          reconnect: reconnect
+            ? {
+                refresh: reconnect,
+                retryDelay: SHARED_SERVER_RECONNECT_RETRY_DELAY_MS,
+                maxRetryDelay: SHARED_SERVER_RECONNECT_MAX_DELAY_MS,
+                staleDelay: SHARED_SERVER_RECONNECT_STALE_DELAY_MS,
+              }
+            : undefined,
           directory: cwd,
           fetch: transport.fetch,
           headers: transport.headers,

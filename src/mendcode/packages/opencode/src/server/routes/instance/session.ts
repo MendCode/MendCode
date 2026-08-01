@@ -36,6 +36,7 @@ import { NamedError } from "@mendcode/core/util/error"
 import { jsonRequest, runRequest } from "./trace"
 
 const log = Log.create({ service: "server" })
+const UNBOUNDED_MESSAGES_WARNING_BYTES = 8 * 1024 * 1024
 
 const QueryBoolean = z.union([
   z.preprocess((value) => (value === "true" ? true : value === "false" ? false : value), z.boolean()),
@@ -1165,16 +1166,8 @@ export const SessionRoutes = lazy(() =>
           const agent = yield* Agent.Service
 
           yield* revert.cleanup(yield* session.get(sessionID))
-          const msgs = yield* session.messages({ sessionID })
           const defaultAgent = yield* agent.defaultAgent()
-          let currentAgent = defaultAgent
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            const info = msgs[i].info
-            if (info.role === "user") {
-              currentAgent = info.agent || defaultAgent
-              break
-            }
-          }
+          const currentAgent = MessageV2.latestUserInfo(sessionID)?.agent || defaultAgent
 
           yield* compact.create({
             sessionID,
@@ -1278,6 +1271,10 @@ export const SessionRoutes = lazy(() =>
             Effect.gen(function* () {
               const session = yield* Session.Service
               yield* session.get(sessionID)
+              const storedBytes = MessageV2.sessionPayloadBytes(sessionID)
+              if (storedBytes > UNBOUNDED_MESSAGES_WARNING_BYTES) {
+                log.warn("serving unbounded session message history", { sessionID, storedBytes })
+              }
               return yield* session.messages({ sessionID, view: query.view })
             }),
           )

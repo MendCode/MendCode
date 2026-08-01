@@ -18,6 +18,7 @@ import { disposeAllInstancesAndEmitGlobalDisposed } from "../global-lifecycle"
 import "@/mend/memory/dream-events"
 import "@/mend/memory/workspace-events"
 import { processMemoryUsage } from "@/util/process-memory"
+import { SharedServer } from "@/cli/cmd/tui/shared-server"
 
 const log = Log.create({ service: "server" })
 const EVENT_QUEUE_MAX_ITEMS = 512
@@ -135,7 +136,11 @@ export const GlobalRoutes = lazy(() =>
         },
       }),
       async (c) => {
-        return c.json(processMemoryUsage("server"))
+        const sharedServer = await SharedServer.diagnostics()
+        return c.json({
+          ...processMemoryUsage("server"),
+          ...(sharedServer ? { sharedServer } : {}),
+        })
       },
     )
     .get(

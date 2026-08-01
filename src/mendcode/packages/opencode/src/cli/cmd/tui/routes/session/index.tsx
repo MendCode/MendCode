@@ -674,7 +674,7 @@ export function Session() {
       messages().flatMap((message) => (message.role === "assistant" ? [message.parentID] : [])),
     )
     return new Set(
-      [...pendingPromptDeliveryMessageIDs(route.sessionID, { includeAccepted: true })].filter(
+      [...pendingPromptDeliveryMessageIDs(route.sessionID, { includeAccepted: sessionCompacting() })].filter(
         (messageID) => !assistantParentIDs.has(messageID),
       ),
     )

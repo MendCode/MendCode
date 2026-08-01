@@ -21,6 +21,13 @@ const ProcessMemory = Schema.Struct({
   external: Schema.Number,
   arrayBuffers: Schema.Number,
   uptimeSeconds: Schema.Number,
+  sharedServer: Schema.optional(
+    Schema.Struct({
+      runtimeID: Schema.String,
+      stateOwner: Schema.Boolean,
+      activeClientLeases: Schema.Number,
+    }),
+  ),
 })
 
 const GlobalEventSchema = Schema.Struct({

@@ -94,6 +94,20 @@ describe("tool.apply_patch freeform", () => {
     await expect(execute({ patchText: emptyPatch }, ctx)).rejects.toThrow("patch rejected: empty patch")
   })
 
+  test("rejects oversized added files", async () => {
+    await using fixture = await tmpdir()
+    const { ctx } = makeCtx()
+
+    await WithInstance.provide({
+      directory: fixture.path,
+      fn: async () => {
+        const patchText = `*** Begin Patch\n*** Add File: oversized.txt\n+${"x".repeat(2 * 1024 * 1024 + 1)}\n*** End Patch`
+        await expect(execute({ patchText }, ctx)).rejects.toThrow("cannot add oversized file")
+        expect(await Bun.file(path.join(fixture.path, "oversized.txt")).exists()).toBe(false)
+      },
+    })
+  })
+
   test("applies add/update/delete in one patch", async () => {
     await using fixture = await tmpdir({ git: true })
     const { ctx, calls } = makeCtx()
@@ -142,6 +156,34 @@ describe("tool.apply_patch freeform", () => {
         expect(added).toBe("created\n")
         expect(await fs.readFile(modifyPath, "utf-8")).toBe("line1\nchanged\n")
         await expect(fs.readFile(deletePath, "utf-8")).rejects.toThrow()
+      },
+    })
+  })
+
+  test("bounds persisted diff metadata while preserving permission context", async () => {
+    await using fixture = await tmpdir()
+    const { ctx, calls } = makeCtx()
+
+    await WithInstance.provide({
+      directory: fixture.path,
+      fn: async () => {
+        const content = "x".repeat(300 * 1024)
+        const result = await execute(
+          {
+            patchText: `*** Begin Patch\n*** Add File: large.txt\n+${content}\n*** End Patch`,
+          },
+          ctx,
+        )
+
+        const persistedBytes =
+          Buffer.byteLength(result.metadata.diff, "utf8") +
+          result.metadata.files.reduce((total, file) => total + Buffer.byteLength(file.patch, "utf8"), 0)
+        expect(persistedBytes).toBeLessThanOrEqual(512 * 1024)
+        expect(result.metadata.diffTruncated).toBe(true)
+        expect(result.metadata.diffOriginalBytes).toBeGreaterThan(300 * 1024)
+        expect(result.metadata.diffPath).toBeString()
+        expect(calls[0].metadata.diff.length).toBeGreaterThan(result.metadata.diff.length)
+        expect(await Bun.file(result.metadata.diffPath!).exists()).toBe(true)
       },
     })
   })

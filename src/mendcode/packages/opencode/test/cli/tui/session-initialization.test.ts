@@ -89,6 +89,9 @@ describe("session route initialization", () => {
     expect(source).toContain("const transcriptRows = createMemo")
     expect(source).toContain("total: transcriptRows().length")
     expect(source).toContain("tailIDs: pendingDeliveryTailIDs()")
+    expect(source).toContain(
+      "pendingPromptDeliveryMessageIDs(route.sessionID, { includeAccepted: sessionCompacting() })",
+    )
     expect(source).toContain("<For each={visibleMessageIDs()}>")
     expect(source).toContain("messageByID().get(messageID)")
     expect(source).toContain("queuedMessageIDs().has(message().id)")

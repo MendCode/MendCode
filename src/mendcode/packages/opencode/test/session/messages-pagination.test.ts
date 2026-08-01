@@ -1532,3 +1532,36 @@ describe("MessageV2 consistency", () => {
     })
   })
 })
+
+describe("MessageV2 targeted session queries", () => {
+  test("finds the latest user and compaction marker without hydrating the session", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const first = await addUser(session.id, "first")
+        await addAssistant(session.id, first)
+        const latest = await addUser(session.id, "latest payload")
+
+        await svc.updatePart({
+          id: PartID.ascending(),
+          sessionID: session.id,
+          messageID: latest,
+          type: "text",
+          text: "continue",
+          metadata: {
+            compaction_post_prompt: true,
+            compaction_parent_id: first,
+          },
+        })
+
+        expect(MessageV2.latestUserInfo(session.id)?.id).toBe(latest)
+        expect(MessageV2.hasCompactionPostPrompt(session.id, first)).toBe(true)
+        expect(MessageV2.hasCompactionPostPrompt(session.id, latest)).toBe(false)
+        expect(MessageV2.sessionPayloadBytes(session.id)).toBeGreaterThan("latest payload".length)
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+})

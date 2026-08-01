@@ -7,6 +7,11 @@ export type ProcessMemoryUsage = {
   external: number
   arrayBuffers: number
   uptimeSeconds: number
+  sharedServer?: {
+    runtimeID: string
+    stateOwner: boolean
+    activeClientLeases: number
+  }
 }
 
 export type DiagnosticsSnapshot = {
@@ -42,6 +47,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function isProcessMemoryUsage(value: unknown): value is ProcessMemoryUsage {
   if (!isRecord(value)) return false
+  if (
+    value.sharedServer !== undefined &&
+    (!isRecord(value.sharedServer) ||
+      typeof value.sharedServer.runtimeID !== "string" ||
+      typeof value.sharedServer.stateOwner !== "boolean" ||
+      typeof value.sharedServer.activeClientLeases !== "number")
+  ) {
+    return false
+  }
   return (
     typeof value.pid === "number" &&
     typeof value.role === "string" &&
@@ -71,7 +85,7 @@ function formatUptime(seconds: number) {
 }
 
 export function formatProcessMemory(label: string, memory: ProcessMemoryUsage) {
-  return [
+  const lines = [
     `${label} (pid ${memory.pid}, ${memory.role})`,
     `  RSS (RAM): ${formatBytes(memory.rss)}`,
     `  JS heap: ${formatBytes(memory.heapUsed)} used / ${formatBytes(memory.heapTotal)} reported`,
@@ -79,6 +93,13 @@ export function formatProcessMemory(label: string, memory: ProcessMemoryUsage) {
     `  Array buffers: ${formatBytes(memory.arrayBuffers)}`,
     `  Uptime: ${formatUptime(memory.uptimeSeconds)}`,
   ]
+  if (memory.sharedServer) {
+    lines.push(
+      `  Shared server: ${memory.sharedServer.activeClientLeases} client lease(s) · ${memory.sharedServer.stateOwner ? "state owner" : "not state owner"}`,
+      `  Runtime: ${memory.sharedServer.runtimeID}`,
+    )
+  }
+  return lines
 }
 
 export function formatDiagnostics(input: DiagnosticsSnapshot) {

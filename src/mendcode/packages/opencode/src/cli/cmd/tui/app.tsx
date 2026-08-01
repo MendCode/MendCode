@@ -600,9 +600,7 @@ export function tui(input: {
   fetch?: typeof fetch
   headers?: RequestInit["headers"]
   events?: EventSource
-  reconnect?: {
-    refresh?: SDKConnectionRefresh
-  }
+  reconnect?: Parameters<typeof SDKProvider>[0]["reconnect"]
 }) {
   // promise to prevent immediate exit
   // oxlint-disable-next-line no-async-promise-executor -- intentional: async executor used for sequential setup before resolve

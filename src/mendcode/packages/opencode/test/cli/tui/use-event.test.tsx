@@ -556,6 +556,23 @@ describe("useEvent", () => {
     }
   })
 
+  test("SDK event stream records heartbeat-only recovery for reconciliation", async () => {
+    const { app, sdk, controllers } = await mountSSE({ reconnect: { staleDelay: 500 } })
+
+    try {
+      controllers[0].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
+      await wait(() => sdk.connection.status === "reconnecting", 2000)
+      await wait(() => controllers.length === 2)
+
+      controllers[1].enqueue(sseEvent(heartbeatEvent()))
+      await wait(() => sdk.connection.status === "connected")
+      expect(sdk.connection.recoveredAt).toBeNumber()
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   test("SDK event stream restarts a hung reconnect attempt", async () => {
     const { app, sdk, controllers } = await mountSSE({
       reconnect: {

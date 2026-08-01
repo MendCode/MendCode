@@ -30,6 +30,7 @@ import {
   shouldHandlePromptCursorArrow,
   shouldInterruptImmediately,
   shouldPreferMessagePromptHistory,
+  storedAssistantDeliveryState,
   shouldSnapPromptCursorToEnd,
   shouldUseStoredPromptHistoryFallback,
 } from "@/cli/cmd/tui/component/prompt"
@@ -151,6 +152,23 @@ describe("prompt delivery recovery", () => {
     expect(promptDeliveryIsQueued("pending")).toBe(true)
     expect(promptDeliveryIsQueued("accepted")).toBe(false)
   })
+
+  test("retries accepted deliveries whose assistant was aborted or failed transiently", () => {
+    expect(storedAssistantDeliveryState({ time: {} })).toBe("accepted")
+    expect(
+      storedAssistantDeliveryState({
+        time: { completed: 10 },
+        error: { name: "MessageAbortedError", data: { message: "Aborted" } },
+      }),
+    ).toBe("accepted")
+    expect(
+      storedAssistantDeliveryState({
+        time: { completed: 10 },
+        error: { name: "APIError", data: { isRetryable: true } },
+      }),
+    ).toBe("accepted")
+    expect(storedAssistantDeliveryState({ time: { completed: 10 } })).toBe("completed")
+  })
 })
 
 describe("optimistic user turn", () => {
@@ -258,6 +276,20 @@ describe("queued user turn", () => {
         { id: "msg_002", role: "assistant", time: { created: 2 }, finish: "tool-calls" },
       ]),
     ).toBe("msg_002")
+  })
+
+  test("does not keep the activity indicator alive after an assistant error", () => {
+    expect(
+      latestPendingAssistantID([
+        { id: "msg_001", role: "user", time: { created: 1 } },
+        {
+          id: "msg_002",
+          role: "assistant",
+          time: { created: 2 },
+          error: { name: "MessageAbortedError" },
+        },
+      ]),
+    ).toBeUndefined()
   })
 
   test("stays visibly queued across later assistant tool iterations", () => {

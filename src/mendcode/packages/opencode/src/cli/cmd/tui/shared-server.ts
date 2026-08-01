@@ -31,8 +31,12 @@ function lockPath() {
   return path.join(rootPath(), "server.lock")
 }
 
-export function clientLeaseDirectoryPath() {
+export function legacyClientLeaseDirectoryPath() {
   return path.join(rootPath(), "clients")
+}
+
+export function clientLeaseDirectoryPath(serverPID: number) {
+  return path.join(legacyClientLeaseDirectoryPath(), String(serverPID))
 }
 
 function errorCode(error: unknown) {
@@ -63,6 +67,16 @@ export function shouldReplaceLiveServer(input: {
     input.pid !== (input.currentPid ?? process.pid) &&
     input.activeClients <= 1
   )
+}
+
+export function shouldReplaceSharedServer(input: {
+  live: boolean
+  runtimeMatches: boolean
+  activeClients: number
+}) {
+  if (!input.live) return true
+  if (input.runtimeMatches) return false
+  return input.activeClients === 0
 }
 
 export function shouldUseSharedServer(input: {
@@ -131,16 +145,19 @@ export async function clearStateIfOwned(pid = process.pid) {
 }
 
 export type SharedServerClientLease = {
+  serverPID: number
   release: () => Promise<void>
 }
 
 export async function acquireClientLease(
-  directory = clientLeaseDirectoryPath(),
+  serverPID: number,
+  directory = clientLeaseDirectoryPath(serverPID),
   heartbeatMs = CLIENT_LEASE_HEARTBEAT_MS,
 ): Promise<SharedServerClientLease> {
   await fs.mkdir(directory, { recursive: true, mode: 0o700 })
   const leasePath = path.join(directory, `${process.pid}-${crypto.randomUUID()}.lease`)
-  const writeLease = () => fs.writeFile(leasePath, String(process.pid), { encoding: "utf8", mode: 0o600 })
+  const writeLease = () =>
+    fs.writeFile(leasePath, JSON.stringify({ clientPID: process.pid, serverPID }), { encoding: "utf8", mode: 0o600 })
   await writeLease()
 
   let released = false
@@ -158,19 +175,31 @@ export async function acquireClientLease(
   heartbeat.unref?.()
 
   return {
+    serverPID,
     async release() {
       if (released) return
       released = true
       clearInterval(heartbeat)
       await fs.rm(leasePath, { force: true }).catch(() => undefined)
+      await fs.rmdir(directory).catch(() => undefined)
     },
   }
 }
 
-export async function activeClientLeaseCount(
-  directory = clientLeaseDirectoryPath(),
-  staleAfterMs = CLIENT_LEASE_STALE_AFTER_MS,
-) {
+function leaseClientPID(value: string) {
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (parsed && typeof parsed === "object" && "clientPID" in parsed && typeof parsed.clientPID === "number") {
+      return parsed.clientPID
+    }
+  } catch {
+    // Legacy leases contain only the client PID.
+  }
+  const pid = Number.parseInt(value, 10)
+  return Number.isInteger(pid) && pid > 0 ? pid : undefined
+}
+
+export async function activeClientLeaseCount(directory: string, staleAfterMs = CLIENT_LEASE_STALE_AFTER_MS) {
   const entries = await fs.readdir(directory, { withFileTypes: true, encoding: "utf8" }).catch(() => undefined)
   if (!entries) return 0
 
@@ -182,8 +211,8 @@ export async function activeClientLeaseCount(
       try {
         const stat = await fs.stat(leasePath)
         if (Date.now() - stat.mtimeMs > staleAfterMs) {
-          const pid = Number.parseInt(await fs.readFile(leasePath, "utf8"), 10)
-          if (Number.isInteger(pid) && pid > 0 && isProcessAlive(pid)) {
+          const pid = leaseClientPID(await fs.readFile(leasePath, "utf8"))
+          if (pid && isProcessAlive(pid)) {
             active++
             return
           }
@@ -199,20 +228,37 @@ export async function activeClientLeaseCount(
   return active
 }
 
+export async function activeClientLeaseCountForServer(
+  serverPID: number,
+  staleAfterMs = CLIENT_LEASE_STALE_AFTER_MS,
+  legacyDirectory = legacyClientLeaseDirectoryPath(),
+) {
+  const [scoped, legacy] = await Promise.all([
+    activeClientLeaseCount(clientLeaseDirectoryPath(serverPID), staleAfterMs),
+    activeClientLeaseCount(legacyDirectory, staleAfterMs),
+  ])
+  return scoped + legacy
+}
+
 export async function waitForClientLeases(input: {
   stop: () => Promise<void>
   pid?: number
   directory?: string
   pollMs?: number
   idleGraceMs?: number
+  signal?: AbortSignal
 }) {
-  const directory = input.directory ?? clientLeaseDirectoryPath()
+  const serverPID = input.pid ?? process.pid
+  const directory = input.directory ?? clientLeaseDirectoryPath(serverPID)
   const pollMs = input.pollMs ?? SHARED_SERVER_LEASE_POLL_MS
   const idleGraceMs = input.idleGraceMs ?? SHARED_SERVER_IDLE_GRACE_MS
   let lastLiveAt = Date.now()
 
-  for (;;) {
-    if ((await activeClientLeaseCount(directory)) > 0) {
+  while (!input.signal?.aborted) {
+    const activeClients = input.directory
+      ? await activeClientLeaseCount(directory)
+      : await activeClientLeaseCountForServer(serverPID)
+    if (activeClients > 0) {
       lastLiveAt = Date.now()
     } else if (Date.now() - lastLiveAt >= idleGraceMs) {
       try {
@@ -222,7 +268,26 @@ export async function waitForClientLeases(input: {
       }
       return
     }
-    await new Promise((resolve) => setTimeout(resolve, pollMs))
+    if (input.signal?.aborted) return
+    await new Promise<void>((resolve) => {
+      const done = () => {
+        clearTimeout(timer)
+        input.signal?.removeEventListener("abort", done)
+        resolve()
+      }
+      const timer = setTimeout(done, pollMs)
+      input.signal?.addEventListener("abort", done, { once: true })
+    })
+  }
+}
+
+export async function diagnostics(pid = process.pid) {
+  if (!process.env.MENDCODE_SHARED_SERVER_STATE_FILE) return
+  const state = await readState()
+  return {
+    runtimeID: process.env.MENDCODE_SHARED_SERVER_RUNTIME_ID || state?.runtimeID || "unknown",
+    stateOwner: state?.pid === pid,
+    activeClientLeases: await activeClientLeaseCount(clientLeaseDirectoryPath(pid)),
   }
 }
 

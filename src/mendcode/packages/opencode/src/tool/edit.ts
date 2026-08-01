@@ -18,6 +18,10 @@ import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { AppFileSystem } from "@mendcode/core/filesystem"
 import * as Bom from "@/util/bom"
+import { Truncate } from "./truncate"
+import { PERSISTED_DIFF_COPY_BYTES, previewDiff } from "./diff-metadata"
+
+const MAX_EDIT_SOURCE_BYTES = 2 * 1024 * 1024
 
 function normalizeLineEndings(text: string): string {
   return text.replaceAll("\r\n", "\n")
@@ -66,6 +70,7 @@ export const EditTool = Tool.define(
     const afs = yield* AppFileSystem.Service
     const format = yield* Format.Service
     const bus = yield* Bus.Service
+    const truncate = yield* Truncate.Service
 
     return {
       description: DESCRIPTION,
@@ -85,6 +90,17 @@ export const EditTool = Tool.define(
             ? params.filePath
             : path.join(instance.directory, params.filePath)
           yield* assertExternalDirectoryEffect(ctx, filePath)
+          if (
+            Buffer.byteLength(params.oldString, "utf8") > MAX_EDIT_SOURCE_BYTES ||
+            Buffer.byteLength(params.newString, "utf8") > MAX_EDIT_SOURCE_BYTES
+          ) {
+            throw new Error(`Edit rejected: input exceeds ${MAX_EDIT_SOURCE_BYTES.toLocaleString()} bytes.`)
+          }
+          const fileInfo = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
+          if (fileInfo?.type === "Directory") throw new Error(`Path is a directory, not a file: ${filePath}`)
+          if (fileInfo && Number(fileInfo.size) > MAX_EDIT_SOURCE_BYTES) {
+            throw new Error(`Edit rejected: file exceeds ${MAX_EDIT_SOURCE_BYTES.toLocaleString()} bytes: ${filePath}`)
+          }
 
           let diff = ""
           let contentOld = ""
@@ -98,6 +114,9 @@ export const EditTool = Tool.define(
                 const desiredBom = source.bom || next.bom
                 contentOld = source.text
                 contentNew = next.text
+                if (Buffer.byteLength(contentNew, "utf8") > MAX_EDIT_SOURCE_BYTES) {
+                  throw new Error(`Edit rejected: result exceeds ${MAX_EDIT_SOURCE_BYTES.toLocaleString()} bytes.`)
+                }
                 diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
                 yield* ctx.ask({
                   permission: "edit",
@@ -120,9 +139,7 @@ export const EditTool = Tool.define(
                 return
               }
 
-              const info = yield* afs.stat(filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))
-              if (!info) throw new Error(`File ${filePath} not found`)
-              if (info.type === "Directory") throw new Error(`Path is a directory, not a file: ${filePath}`)
+              if (!fileInfo) throw new Error(`File ${filePath} not found`)
               const source = yield* Bom.readFile(afs, filePath)
               contentOld = source.text
 
@@ -133,6 +150,9 @@ export const EditTool = Tool.define(
               const next = Bom.split(replace(contentOld, old, replacement, params.replaceAll))
               const desiredBom = source.bom || next.bom
               contentNew = next.text
+              if (Buffer.byteLength(contentNew, "utf8") > MAX_EDIT_SOURCE_BYTES) {
+                throw new Error(`Edit rejected: result exceeds ${MAX_EDIT_SOURCE_BYTES.toLocaleString()} bytes.`)
+              }
 
               diff = trimDiff(
                 createTwoFilesPatch(
@@ -178,17 +198,25 @@ export const EditTool = Tool.define(
             if (change.added) additions += change.count || 0
             if (change.removed) deletions += change.count || 0
           }
+          const persistedDiff = previewDiff(diff, PERSISTED_DIFF_COPY_BYTES)
+          const savedDiff = persistedDiff.truncated ? yield* truncate.writeOutput(diff) : undefined
           const filediff: Snapshot.FileDiff = {
             file: filePath,
-            patch: diff,
+            patch: persistedDiff.content,
             additions,
             deletions,
+          }
+          const persistedMetadata = {
+            diff: persistedDiff.content,
+            filediff,
+            diffTruncated: persistedDiff.truncated,
+            diffOriginalBytes: persistedDiff.originalBytes,
+            ...(savedDiff ? { diffPath: savedDiff.path, diffArtifactComplete: savedDiff.complete } : {}),
           }
 
           yield* ctx.metadata({
             metadata: {
-              diff,
-              filediff,
+              ...persistedMetadata,
               diagnostics: {},
             },
           })
@@ -202,9 +230,8 @@ export const EditTool = Tool.define(
 
           return {
             metadata: {
+              ...persistedMetadata,
               diagnostics,
-              diff,
-              filediff,
             },
             title: `${path.relative(instance.worktree, filePath)}`,
             output,

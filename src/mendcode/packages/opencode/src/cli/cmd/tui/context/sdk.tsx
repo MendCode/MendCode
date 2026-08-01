@@ -25,6 +25,7 @@ type SDKConnection = {
   lastEventAt?: number
   lastApplicationEventAt?: number
   recoveringSince?: number
+  recoveredAt?: number
 }
 
 function errorMessage(error: unknown) {
@@ -189,6 +190,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
           lastEventAt: now,
           lastApplicationEventAt: applicationEventAt,
           recoveringSince: recoveryConfirmed ? undefined : recoveringSince,
+          recoveredAt: recoveryConfirmed ? now : connection.recoveredAt,
         })
       } else {
         setConnection({
