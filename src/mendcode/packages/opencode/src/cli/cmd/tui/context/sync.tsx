@@ -47,6 +47,7 @@ import {
   compareSessionMessages,
   isSessionMessageAfter,
   isSessionMessageBefore,
+  latestCompletedCompactionSummaryID,
   sortSessionMessages,
 } from "../util/session-message-order"
 
@@ -975,7 +976,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         items.map((item) => [item.info.id, mergeFetchedParts(store.part[item.info.id], item.parts)]),
       )
       const sessionIsWorking = ["busy", "retry"].includes(store.session_status[input.sessionID]?.type ?? "")
-      const preserveIDs =
+      const preserveIDs = new Set(
         input.drop === "oldest"
           ? preserveSessionTailIDs(
               sortSessionMessages([...(current ?? []), ...incoming]),
@@ -983,7 +984,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               (messageID) => incomingParts.get(messageID) ?? store.part[messageID],
               sessionIsWorking,
             )
-          : pinnedSessionMessages.get(input.sessionID)
+          : pinnedSessionMessages.get(input.sessionID),
+      )
+      const compactionBoundaryID = latestCompletedCompactionSummaryID([...(current ?? []), ...incoming])
+      if (compactionBoundaryID) preserveIDs.add(compactionBoundaryID)
       const preserveVisibleAssistantIDs = new Set(preserveIDs)
 
       const currentUserIDs = new Set(
