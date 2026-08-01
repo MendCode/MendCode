@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.25 - 2026-08-01
+
+MendCode v0.1.25 repairs cancellation and compacted-history state after interrupted or long-running TUI sessions.
+
+### Fixed
+
+- Finalize orphaned pending or running tool calls as cancelled when an unfinished assistant turn is explicitly stopped, preventing commands that no longer exist from remaining visibly active.
+- Preserve the latest completed compaction boundary while the bounded TUI message cache pages through long transcripts, so tool calls before compaction remain hidden unless explicitly revealed.
+- Add focused regression coverage for cancelling unfinished assistant turns with active tools.
+
+## 0.1.24 - 2026-08-01
+
+- Published from the same source tree as v0.1.23; it contained no additional source changes.
+
 ## 0.1.23 - 2026-07-31
 
 MendCode v0.1.23 hardens long-running sessions and Loop Workflows while making
