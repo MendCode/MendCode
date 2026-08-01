@@ -420,6 +420,19 @@ describe("tool.read truncation", () => {
     }),
   )
 
+  it.live("rejects inline image attachments larger than five MiB", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const image = Buffer.alloc(5 * 1024 * 1024 + 1)
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(image)
+      const file = path.join(dir, "oversized.png")
+      yield* put(file, image)
+
+      const error = yield* fail(dir, { filePath: file })
+      expect(error.message).toContain("Cannot attach image or PDF larger than 5,242,880 bytes")
+    }),
+  )
+
   it.live(".fbs files (FlatBuffers schema) are read as text, not images", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped()

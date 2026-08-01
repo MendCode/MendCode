@@ -41,6 +41,7 @@ import { zod } from "@/util/effect-zod"
 import { NonNegativeInt, optionalOmitUndefined, withStatics } from "@/util/schema"
 
 const log = Log.create({ service: "session" })
+const PERSISTED_PART_WARNING_BYTES = 1024 * 1024
 
 const parentTitlePrefix = "New session - "
 const childTitlePrefix = "Child session - "
@@ -726,6 +727,19 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
 
     const updatePart = <T extends MessageV2.Part>(part: T): Effect.Effect<T> =>
       Effect.gen(function* () {
+        if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
+          const serializedBytes = Buffer.byteLength(JSON.stringify(part), "utf8")
+          if (serializedBytes > PERSISTED_PART_WARNING_BYTES) {
+            log.warn("persisting oversized session part", {
+              bytes: serializedBytes,
+              sessionID: part.sessionID,
+              messageID: part.messageID,
+              partID: part.id,
+              type: part.type,
+              tool: part.tool,
+            })
+          }
+        }
         yield* clearPendingPartDelta(part)
         yield* sync.run(MessageV2.Event.PartUpdated, {
           sessionID: part.sessionID,

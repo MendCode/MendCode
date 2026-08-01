@@ -231,20 +231,6 @@ function messageText(message: MessageV2.WithParts) {
     .trim()
 }
 
-function isCompactionPostPromptPart(part: MessageV2.Part, parentID: MessageID) {
-  if (part.type !== "text") return false
-  const metadata = part.metadata
-  if (!metadata || typeof metadata !== "object") return false
-  return metadata.compaction_post_prompt === true && metadata.compaction_parent_id === parentID
-}
-
-function hasCompactionPostPromptMessage(messages: MessageV2.WithParts[], parentID: MessageID) {
-  return messages.some(
-    (message) =>
-      message.info.role === "user" && message.parts.some((part) => isCompactionPostPromptPart(part, parentID)),
-  )
-}
-
 function dataUrlByteSize(url: string) {
   const marker = ";base64,"
   const index = url.indexOf(marker)
@@ -290,8 +276,8 @@ function imageAttachmentSummary(
   const visualSignal = options?.mediaIncluded
     ? "inspect the attached image and preserve relevant visual facts without inventing details."
     : surroundingText
-    ? "derive any available visual meaning from nearbyUserText; preserve screenshot/callout/error wording if present."
-    : "exact visual content unavailable unless described elsewhere in the transcript."
+      ? "derive any available visual meaning from nearbyUserText; preserve screenshot/callout/error wording if present."
+      : "exact visual content unavailable unless described elsewhere in the transcript."
   return [
     `- messageID: ${message.info.id}`,
     `  partID: ${part.id}`,
@@ -1660,9 +1646,10 @@ export const layer: Layer.Layer<
         yield* session.updateMessage(processor.message)
       }
 
-      const currentMessages = yield* session.messages({ sessionID: input.sessionID })
       const currentBackgroundTaskSnapshots = yield* Effect.sync(() => BackgroundTask.listSnapshots(input.sessionID))
-      const currentParent = currentMessages.find((message) => message.info.id === input.parentID)
+      const currentParent = yield* Effect.sync(() =>
+        MessageV2.get({ sessionID: input.sessionID, messageID: input.parentID }),
+      )
       const latestCompactionPart =
         currentParent?.parts.find(
           (part): part is MessageV2.CompactionPart => part.type === "compaction" && part.id === compactionPart?.id,
@@ -1684,7 +1671,7 @@ export const layer: Layer.Layer<
       let shouldResume = (result === "continue" || result === "compact") && resumeRequested === true
 
       if (!processor.message.error && postPrompt && (result === "continue" || result === "compact")) {
-        if (!hasCompactionPostPromptMessage(currentMessages, input.parentID)) {
+        if (!MessageV2.hasCompactionPostPrompt(input.sessionID, input.parentID)) {
           const postPromptMsg = yield* session.updateMessage({
             id: MessageID.ascending(),
             role: "user",
@@ -1782,10 +1769,7 @@ export const layer: Layer.Layer<
       if (processor.message.error) return "stop"
       if (result === "continue" || result === "compact") {
         const summary = summaryText(
-          (yield* session.messages({ sessionID: input.sessionID })).find((item) => item.info.id === msg.id) ?? {
-            info: msg,
-            parts: [],
-          },
+          yield* Effect.sync(() => MessageV2.get({ sessionID: input.sessionID, messageID: msg.id })),
         )
         EventV2.run(SessionEvent.Compaction.Ended.Sync, {
           sessionID: input.sessionID,

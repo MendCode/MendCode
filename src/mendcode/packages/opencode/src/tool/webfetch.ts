@@ -3,9 +3,9 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import * as Tool from "./tool"
 import TurndownService from "turndown"
 import DESCRIPTION from "./webfetch.txt"
-import { isImageAttachment } from "@/util/media"
+import { isImageAttachment, MAX_INLINE_ATTACHMENT_BYTES } from "@/util/media"
 
-const MAX_RESPONSE_SIZE = 5 * 1024 * 1024 // 5MB
+const MAX_RESPONSE_SIZE = MAX_INLINE_ATTACHMENT_BYTES
 const DEFAULT_TIMEOUT = 30 * 1000 // 30 seconds
 const MAX_TIMEOUT = 120 * 1000 // 2 minutes
 

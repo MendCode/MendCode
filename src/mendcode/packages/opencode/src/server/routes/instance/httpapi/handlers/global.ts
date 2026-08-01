@@ -17,6 +17,7 @@ import * as Sse from "effect/unstable/encoding/Sse"
 import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
 import { processMemoryUsage } from "@/util/process-memory"
+import { SharedServer } from "@/cli/cmd/tui/shared-server"
 
 const log = Log.create({ service: "server" })
 
@@ -83,7 +84,11 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     const memory = Effect.fn("GlobalHttpApi.memory")(function* () {
-      return processMemoryUsage("server")
+      const sharedServer = yield* Effect.promise(() => SharedServer.diagnostics())
+      return {
+        ...processMemoryUsage("server"),
+        ...(sharedServer ? { sharedServer } : {}),
+      }
     })
 
     const event = Effect.fn("GlobalHttpApi.event")(function* () {

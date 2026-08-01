@@ -352,6 +352,18 @@ export function promptDeliveryErrorMessage(error: unknown) {
   return "The server rejected this prompt."
 }
 
+export function storedAssistantDeliveryState(info: { time: { completed?: number }; error?: unknown }) {
+  if (info.time.completed === undefined) return "accepted" as const
+  if (!info.error || typeof info.error !== "object") return "completed" as const
+
+  const error = info.error as { name?: unknown; data?: unknown }
+  if (error.name === "MessageAbortedError") return "accepted" as const
+  if (error.data && typeof error.data === "object" && "isRetryable" in error.data) {
+    if (error.data.isRetryable === true) return "accepted" as const
+  }
+  return "completed" as const
+}
+
 function queuePendingPromptDelivery(request: PromptAsyncInput) {
   const key = pendingPromptDeliveryKey(request)
   const delivery = pendingPromptDeliveries.get(key)
@@ -457,11 +469,12 @@ export function latestPendingAssistantID(
     id: string
     role: string
     time: { created?: number; completed?: number }
+    error?: { name?: string }
     finish?: string
   }>,
 ) {
   const latestAssistant = messages.findLast((message) => message.role === "assistant")
-  if (!latestAssistant || latestAssistant.time.completed) return
+  if (!latestAssistant || latestAssistant.time.completed || latestAssistant.error) return
   if (latestAssistant.finish && !["tool-calls", "unknown"].includes(latestAssistant.finish)) return
   return latestAssistant.id
 }
@@ -1944,18 +1957,14 @@ export function Prompt(props: PromptProps) {
         limit: 100,
         view: "tui",
       })
-      if (
-        !messages.error &&
-        messages.data?.some(
-          (message) =>
-            message.info.role === "assistant" &&
-            message.info.parentID === request.messageID &&
-            message.info.time.completed !== undefined,
-        )
-      ) {
-        return "completed" as const
-      }
-      return "accepted" as const
+      const assistant =
+        !messages.error
+          ? messages.data?.find(
+              (message) => message.info.role === "assistant" && message.info.parentID === request.messageID,
+            )
+          : undefined
+      if (!assistant || assistant.info.role !== "assistant") return "accepted" as const
+      return storedAssistantDeliveryState(assistant.info)
     }
     if (result.response?.status === 404) return "missing" as const
     return "unknown" as const

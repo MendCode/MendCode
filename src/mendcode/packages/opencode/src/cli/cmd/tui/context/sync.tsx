@@ -2055,8 +2055,14 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       bootstrap,
     }
 
+    let consumedRecoveryAt: number | undefined
     const unsubscribeConnection = sdk.event.on("event", (event) => {
-      if (event.payload.type !== "server.connected") return
+      const recoveredHeartbeat =
+        event.payload.type === "server.heartbeat" &&
+        sdk.connection.recoveredAt !== undefined &&
+        sdk.connection.recoveredAt !== consumedRecoveryAt
+      if (event.payload.type !== "server.connected" && !recoveredHeartbeat) return
+      if (recoveredHeartbeat) consumedRecoveryAt = sdk.connection.recoveredAt
       // A transport can reconnect without a reliable connection-state edge
       // (for example a worker-backed event source after system sleep). Once
       // the initial bootstrap completed, every connected handshake is safe to
