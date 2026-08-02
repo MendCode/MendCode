@@ -191,6 +191,49 @@ test("renderPlanMarkdown renders branched LR flowcharts as boxed rows", async ()
   expect(result).not.toContain("flowchart LR")
 })
 
+test("renderPlanMarkdown rotates long flowcharts into a centered compact layout", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart LR",
+    "  MW[MultiWorkspace] --> RM{RootMode}",
+    "  RM -->|AgentView| AV[AgentViewRoot]",
+    "  RM -->|Editor| WS[Workspace existente]",
+    "  AV --> AP[AgentPanel compartido]",
+    "  AP --> CV[ConversationView / ThreadView]",
+    "  CV --> NR[Wright Native Agent]",
+    "  CV --> AR[Agentes ACP]",
+    "  NR --> LMR[LanguageModelRegistry]",
+    "  AR --> ACR[ACP Agent Registry]",
+    "  LMR --> CS[Codex Subscription]",
+    "  LMR --> OG[OpenCode Go]",
+    "  LMR --> OR[OpenRouter y BYOK]",
+    "  ACR --> CA[Claude Code]",
+    "  ACR --> CX[Codex CLI]",
+    "  ACR --> CU[Cursor Agent]",
+    "  ACR --> OA[OpenCode Agent]",
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 100)
+  const lines = result.split("\n")
+  const rootLine = lines.find((line) => line.includes("│ MultiWorkspace │"))
+
+  expect(rootLine?.indexOf("│ MultiWorkspace │")).toBeGreaterThan(0)
+  expect(Math.max(...lines.map((line) => Bun.stringWidth(line)))).toBeLessThanOrEqual(100)
+  expect(result).toContain("│ AgentPanel compartido │")
+  expect(result).toContain("│ OpenCode Agent │")
+  expect(result).not.toContain("path 1")
+  expect(result).not.toContain("flowchart LR")
+
+  const tdResult = await renderPlanMarkdown(markdown.replace("flowchart LR", "flowchart TD"), 100)
+  const tdLines = tdResult.split("\n")
+  const tdRootLine = tdLines.find((line) => line.includes("│ MultiWorkspace │"))
+  expect(tdRootLine?.indexOf("│ MultiWorkspace │")).toBeGreaterThan(0)
+  expect(Math.max(...tdLines.map((line) => Bun.stringWidth(line)))).toBeLessThanOrEqual(100)
+  expect(tdResult).not.toContain("path 1")
+})
+
 test("renderPlanMarkdown renders RL flowcharts right-to-left", async () => {
   process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
   const markdown = ["```mermaid", "flowchart RL", "  A[Start] --> B[Middle] --> C[Done]", "```"].join("\n")

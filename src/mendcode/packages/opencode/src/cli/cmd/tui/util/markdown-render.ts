@@ -1076,6 +1076,126 @@ function renderRankedVerticalFlowchart(input: {
   return rendered
 }
 
+function flowchartOutputFits(input: string, width: number) {
+  return Math.max(...input.split("\n").map((line) => Bun.stringWidth(line)), 0) <= Math.max(40, width)
+}
+
+function renderCompactRankedVerticalFlowchart(input: {
+  edges: FlowchartEdge[]
+  labels: Map<string, string>
+  direction: "td" | "tb" | "bt"
+  width: number
+}) {
+  const orientedEdges =
+    input.direction === "bt"
+      ? input.edges.map((edge) => ({ from: edge.to, to: edge.from, label: edge.label }))
+      : input.edges
+  const nodes = [...new Set(orientedEdges.flatMap((edge) => [edge.from, edge.to]))]
+  if (nodes.length === 0 || nodes.length > FLOWCHART_MAX_LAYOUT_NODES) return undefined
+
+  const { layoutEdges, deferredEdges } = flowchartLayoutEdges(nodes, orientedEdges)
+  const ranks = flowchartRanks(nodes, layoutEdges)
+  if (!ranks) return undefined
+  const maxRank = Math.max(...nodes.map((node) => ranks.get(node) ?? 0))
+  if (maxRank >= FLOWCHART_MAX_LAYOUT_RANKS) return undefined
+
+  const byRank = new Map<number, string[]>()
+  for (const node of nodes) {
+    const rank = ranks.get(node) ?? 0
+    byRank.set(rank, [...(byRank.get(rank) ?? []), node])
+  }
+
+  const incoming = new Map<string, FlowchartEdge[]>()
+  for (const edge of orientedEdges) incoming.set(edge.to, [...(incoming.get(edge.to) ?? []), edge])
+
+  const orderByNode = new Map<string, number>()
+  for (let rank = 0; rank <= maxRank; rank++) {
+    const current = byRank.get(rank) ?? []
+    if (rank > 0) {
+      const previous = new Map((byRank.get(rank - 1) ?? []).map((node, index) => [node, index]))
+      current.sort((left, right) => {
+        const leftParents = incoming.get(left) ?? []
+        const rightParents = incoming.get(right) ?? []
+        const leftCenter = leftParents.length
+          ? leftParents.reduce((sum, edge) => sum + (previous.get(edge.from) ?? 0), 0) / leftParents.length
+          : Number.POSITIVE_INFINITY
+        const rightCenter = rightParents.length
+          ? rightParents.reduce((sum, edge) => sum + (previous.get(edge.from) ?? 0), 0) / rightParents.length
+          : Number.POSITIVE_INFINITY
+        return leftCenter - rightCenter || (orderByNode.get(left) ?? 0) - (orderByNode.get(right) ?? 0)
+      })
+    }
+    current.forEach((node, index) => orderByNode.set(node, index))
+  }
+
+  const availableWidth = Math.max(40, Math.min(FLOWCHART_MAX_CANVAS_WIDTH, input.width - 4))
+  const boxes = new Map<string, string[]>()
+  const boxWidths = new Map<string, number>()
+  for (const node of nodes) {
+    const box = renderBox(input.labels.get(node) ?? node)
+    const boxWidth = Math.max(...box.map((line) => Bun.stringWidth(line)))
+    if (boxWidth > availableWidth) return undefined
+    boxes.set(node, box)
+    boxWidths.set(node, boxWidth)
+  }
+
+  const groups: Array<{ rank: number; nodes: string[]; width: number }> = []
+  for (let rank = 0; rank <= maxRank; rank++) {
+    let current: string[] = []
+    let currentWidth = 0
+    for (const node of byRank.get(rank) ?? []) {
+      const nodeWidth = boxWidths.get(node) ?? 0
+      const nextWidth = current.length ? currentWidth + FLOWCHART_NODE_GAP + nodeWidth : nodeWidth
+      if (current.length > 0 && nextWidth > availableWidth) {
+        groups.push({ rank, nodes: current, width: currentWidth })
+        current = []
+        currentWidth = 0
+      }
+      current.push(node)
+      currentWidth = current.length === 1 ? nodeWidth : currentWidth + FLOWCHART_NODE_GAP + nodeWidth
+    }
+    if (current.length > 0) groups.push({ rank, nodes: current, width: currentWidth })
+  }
+
+  if (groups.length === 0) return undefined
+  const output: string[] = []
+  let previousRank = -1
+  for (const group of groups) {
+    if (previousRank >= 0) {
+      if (group.rank !== previousRank) output.push("│", input.direction === "bt" ? "▲" : "▼")
+      else output.push("")
+    }
+    previousRank = group.rank
+
+    for (const node of group.nodes) {
+      for (const edge of (incoming.get(node) ?? []).slice(0, 4)) {
+        const label = cleanConnectorLabel(edge.label)
+        if (label) output.push(`${label} ─▶`)
+      }
+    }
+
+    const rows = Array.from({ length: 3 }, () => blankRow(group.width))
+    let column = 0
+    for (const node of group.nodes) {
+      const box = boxes.get(node) ?? renderBox(input.labels.get(node) ?? node)
+      const nodeWidth = boxWidths.get(node) ?? group.width
+      for (const [index, line] of box.entries()) writeVisual(rows[index]!, column, padVisual(line, nodeWidth))
+      column += nodeWidth + FLOWCHART_NODE_GAP
+    }
+    output.push(...rows.map((row) => row.join("").trimEnd()))
+  }
+
+  const deferred = deferredEdges.slice(0, 6).flatMap((edge) => {
+    const label = cleanConnectorLabel(edge.label)
+    const to = cleanLabel(input.labels.get(edge.to) ?? edge.to)
+    const span = (ranks.get(edge.from) ?? 0) - (ranks.get(edge.to) ?? 0)
+    const text = span > 1 ? `└─ ${label ? `${label} ` : ""}${to}` : `${label ? `${label} ` : ""}${to} ──┘`
+    return wrapTextLine("", text, availableWidth)
+  })
+  if (deferred.length > 0) output.push("", ...deferred)
+  return output.join("\n")
+}
+
 function parseFlowchartEdgeLine(line: string, labels: Map<string, string>) {
   const nodePattern = /([A-Za-z][\w-]*)(?:\[([^\]]+)\]|\(([^)]+)\)|\{([^}]+)\})?/y
   const connectorPattern = /\s*(?:--\s*([^>|-]+?)\s*--!?>|--!?>\|([^|]+)\||==>\|([^|]+)\||--!?>|---|==>|-.->|[—–-]*→|→)\s*/y
@@ -1278,6 +1398,10 @@ function renderSimpleFlowchart(input: string, width: number): string | undefined
   if (parsedEdges.length === 0) return undefined
   if (direction === "td" || direction === "tb" || direction === "bt") {
     const ranked = renderRankedVerticalFlowchart({ edges: parsedEdges, labels, direction, width })
+    if (ranked && flowchartOutputFits(ranked, width)) return ranked
+
+    const compact = renderCompactRankedVerticalFlowchart({ edges: parsedEdges, labels, direction, width })
+    if (compact) return compact
     if (ranked) return ranked
   }
   const edges =
@@ -1292,15 +1416,26 @@ function renderSimpleFlowchart(input: string, width: number): string | undefined
   const starts = [...outgoing.keys()].filter((node) => !incoming.has(node))
   const start = starts[0] ?? edges[0]?.from
 
-  if ((direction === "lr" || direction === "rl") && edges.length <= 24) {
-    const horizontal = renderLayeredHorizontalFlowchart({
-      starts: starts.length > 0 ? starts : start ? [start] : [],
-      edges,
-      labels,
-      direction,
-      width,
-    })
-    if (horizontal) return horizontal
+  if (direction === "lr" || direction === "rl") {
+    if (edges.length <= 24) {
+      const horizontal = renderLayeredHorizontalFlowchart({
+        starts: starts.length > 0 ? starts : start ? [start] : [],
+        edges,
+        labels,
+        direction,
+        width,
+      })
+      if (horizontal) return horizontal
+    }
+
+    // Keep long horizontal diagrams readable: rotate them into the ranked
+    // layout instead of falling back to the indented tree renderer.
+    const vertical = renderRankedVerticalFlowchart({ edges: parsedEdges, labels, direction: "td", width })
+    if (vertical && flowchartOutputFits(vertical, width)) return vertical
+
+    const compact = renderCompactRankedVerticalFlowchart({ edges: parsedEdges, labels, direction: "td", width })
+    if (compact) return compact
+    if (vertical) return vertical
   }
 
   if (start && edges.length <= 16) {

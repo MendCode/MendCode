@@ -97,6 +97,7 @@ import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
 import parsers from "../../../../../../parsers-config.ts"
 import * as Clipboard from "../../util/clipboard"
 import { errorMessage } from "@/util/error"
+import { isTransientPermissionSyncError, syncPermissionModeWithRetry } from "../../util/permission-sync"
 import { Toast, useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv.tsx"
 import * as Editor from "../../util/editor"
@@ -1171,6 +1172,8 @@ export function Session() {
   const sessionPermissionModesKey = "session_permission_modes"
   const permissionSessionID = createMemo(() => session()?.parentID ?? route.sessionID)
   let syncedSessionPermissionMode: string | undefined
+  const permissionSyncAbort = new AbortController()
+  const permissionSyncInFlight = new Map<string, Promise<boolean>>()
 
   function normalizePermissionModeValue(value: unknown): PermissionMode | undefined {
     if (value === "approval" || value === "smart" || value === "full_access") return value
@@ -1196,23 +1199,64 @@ export function Session() {
     const sessionID = permissionSessionID()
     const syncKey = `${sessionID}:${mode}`
     if (syncedSessionPermissionMode === syncKey) return
-    await sdk.client.session.update(
-      {
-        sessionID,
-        permission: [Permission.sessionModeRule(mode)],
-      },
-      { throwOnError: true },
-    )
-    syncedSessionPermissionMode = syncKey
+    const inFlight = permissionSyncInFlight.get(syncKey)
+    if (inFlight) return inFlight
+
+    const request = Promise.resolve()
+      .then(() =>
+        syncPermissionModeWithRetry({
+          mode,
+          permissionName: Permission.SESSION_MODE_PERMISSION,
+          signal: permissionSyncAbort.signal,
+          read: async () => {
+            const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
+            return result.data?.permission
+          },
+          write: async () => {
+            await sdk.client.session.update(
+              {
+                sessionID,
+                permission: [Permission.sessionModeRule(mode)],
+              },
+              { throwOnError: true },
+            )
+          },
+        }),
+      )
+      .then((synced) => {
+        if (synced) syncedSessionPermissionMode = syncKey
+        return synced
+      })
+
+    const tracked = request.finally(() => {
+      if (permissionSyncInFlight.get(syncKey) === tracked) permissionSyncInFlight.delete(syncKey)
+    })
+    permissionSyncInFlight.set(syncKey, tracked)
+    return tracked
   }
+
+  onCleanup(() => {
+    permissionSyncAbort.abort()
+    permissionSyncInFlight.clear()
+  })
 
   createEffect(() => {
     const config = permissionsConfig()
     const sessionMode = sessionPermissionModeOverride()
     const mode = sessionMode || config?.mode
-    if (!mode || !sync.ready || !session()) return
+    const connectionStatus = sdk.connection.status
+    if (!mode || !sync.ready || !session() || connectionStatus !== "connected") return
     setPermissionModeSetting(mode)
     void syncSessionPermissionMode(mode).catch((error) => {
+      if (permissionSyncAbort.signal.aborted) return
+      if (isTransientPermissionSyncError(error)) {
+        toast.show({
+          message: "Permission mode sync deferred until the local server reconnects.",
+          variant: "warning",
+          duration: 5000,
+        })
+        return
+      }
       toast.show({
         message: `Could not sync permission mode: ${errorMessage(error)}`,
         variant: "error",
