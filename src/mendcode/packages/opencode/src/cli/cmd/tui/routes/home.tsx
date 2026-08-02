@@ -260,6 +260,15 @@ export function homeAgentViewElapsedLabel(input: { now: number; startedAt?: numb
   return `${Math.floor(days / 365)}y`
 }
 
+export function sortAgentViewItemsByStartedAt<T extends { background: { sessionID: string } }>(
+  items: readonly T[],
+  startedAt: (item: T) => number,
+) {
+  return items.toSorted(
+    (a, b) => startedAt(b) - startedAt(a) || b.background.sessionID.localeCompare(a.background.sessionID),
+  )
+}
+
 export function homeAgentViewRecentlyActive(input: { now: number; lastSeenAt?: number; graceMs: number }) {
   return input.lastSeenAt !== undefined && input.now - input.lastSeenAt <= input.graceMs
 }
@@ -1042,7 +1051,12 @@ export function HomeSurface(props: {
       else if (activity === "working") working.push(item)
       else completed.push(item)
     }
-    return { needsInput, looping, working, completed }
+    return {
+      needsInput,
+      looping,
+      working: sortAgentViewItemsByStartedAt(working, (item) => agentViewStartedAt(item)),
+      completed,
+    }
   })
   const agentViewSummaryVisible = createMemo(() => {
     const state = agentViewState()

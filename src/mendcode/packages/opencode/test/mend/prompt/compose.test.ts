@@ -66,8 +66,30 @@ describe("mend prompt composition", () => {
     expect(section?.text).toContain("tables")
     expect(section?.text).toContain("Mermaid fenced blocks")
     expect(section?.text).toContain("flowcharts")
+    expect(section?.text).toContain("sequence")
+    expect(section?.text).toContain("#RRGGBB")
+    expect(section?.text).toContain("ordinary rendered text")
     expect(section?.text).toContain("Embedded HTML and Markdown images are outside")
     expect(section?.text).not.toMatch(/\b(you may|do not|prefer|use)\b/i)
+  })
+
+  test("full mode documents TODO discipline, async consent, and cost-aware routing", async () => {
+    const focus = await composePromptPolicy({ mode: "focus", focusID: "codex" })
+    const full = await composePromptPolicy({ mode: "full", focusID: "codex" })
+
+    expect(focus.sections.find((item) => item.id === "task-lifecycle")).toBeUndefined()
+
+    const lifecycle = full.sections.find((item) => item.id === "task-lifecycle")
+    expect(lifecycle?.text).toContain("`todowrite`")
+    expect(lifecycle?.text).toContain("at most one item `in_progress`")
+    expect(lifecycle?.text).toContain("configured `small`/`subagent` role")
+    expect(lifecycle?.text).toContain("Never invent model IDs")
+
+    const background = full.sections.find((item) => item.id === "background-subagents")
+    expect(background?.text).toContain("`background: true`")
+    expect(background?.text).toContain("explicit user choice")
+    expect(background?.text).toContain("`question`")
+    expect(background?.text).toContain("Do not silently turn ordinary work into background work")
   })
 
   test("minimal mode keeps the TUI rendering guidance out of the prompt", async () => {
@@ -237,6 +259,10 @@ describe("mend prompt composition", () => {
     expect(section?.text).toContain("@mendcode/plugin/tui")
     expect(section?.text).toContain("custom pages")
     expect(section?.text).toContain(".mendcode/tools")
+    expect(section?.text).toContain(".mendcode/prompts/custom.md")
+    expect(section?.text).toContain("Custom AI tools")
+    expect(section?.text).toContain("sessionBottomDock")
+    expect(section?.text).toContain("Ctrl+T toggles")
     expect(section?.text).toContain("api.shell.spawn()")
     expect(section?.text).toContain("This is not a PTY")
     expect(section?.text).toContain("Do not import private runtime internals")
@@ -262,5 +288,17 @@ describe("mend prompt composition", () => {
     expect(full.includeMcpContext).toBe(true)
     expect(full.policyInstructions).toContain("MendCode CLI map")
     expect(full.policyInstructions).toContain("MendCode TUI customization capabilities")
+  })
+
+  test("full mode retains the focused provider harness and appends MendCode context", async () => {
+    const focus = await composePromptPolicy({ mode: "focus", focusID: "codex" })
+    const full = await composePromptPolicy({ mode: "full", focusID: "codex" })
+
+    expect(focus.basePrompt).toBeTruthy()
+    expect(full.basePrompt).toBe(focus.basePrompt)
+    expect(full.sections.find((item) => item.id === "harness")?.text).toBe(
+      focus.sections.find((item) => item.id === "harness")?.text,
+    )
+    expect(full.policyInstructions).toContain("MendCode knowledge:")
   })
 })

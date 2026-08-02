@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.27 - 2026-08-02
+
+MendCode v0.1.27 improves TUI reliability and narrow-terminal rendering while making prompt behavior, customization, and release metadata more explicit.
+
+### Added
+
+- Add compact, width-bounded Mermaid flowchart layouts for long vertical and horizontal diagrams, including automatic rotation when a horizontal diagram cannot fit.
+- Add explicit MendCode prompt guidance for task lifecycle discipline, cost-aware model routing, loop activation consent, background-subagent consent, custom tools/pages/widgets, and the supported TUI rendering surface.
+- Add regression coverage for interrupted prompt state, reconnecting permission synchronization, Agent View ordering, compact flowcharts, and the expanded prompt contract.
+
+### Changed
+
+- Expand the full prompt mode description with TODO, Loop Workflow, cost, TUI, and extension context while preserving the provider-focused harness contract.
+- Make loop activation and background delegation require explicit user intent when the request does not already provide it.
+- Bound normal and advanced Usage Insights fetch sizes separately and adapt heatmap cell widths and labels for narrow terminals.
+- Retry and reconcile session permission-mode synchronization across transient local-server reconnects instead of surfacing avoidable errors.
+
+### Fixed
+
+- Clear the TUI working indicator immediately after a user interrupts a running command, even when a stale unfinished assistant message remains in the frontend cache.
+- Order active Agent View rows by turn start time instead of later tool-update timestamps.
+- Keep long Mermaid flowcharts within the terminal width and avoid the unreadable fallback layout when the preferred orientation is too wide.
+
+### Tests
+
+- Add focused TUI, prompt-composition, permission-sync, and Markdown-rendering regressions for the release changes.
+
 ## 0.1.26 - 2026-08-01
 
 MendCode v0.1.26 restores reliable in-app update discovery and installation across TUI transport modes.
