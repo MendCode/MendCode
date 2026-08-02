@@ -312,7 +312,7 @@ export const GlobalRoutes = lazy(() =>
                   Effect.succeed({
                     success: false as const,
                     status: 500 as const,
-                    error: err instanceof Error ? err.message : String(err),
+                    error: err.stderr || "Update failed",
                   }),
               )
               if (!result.success) return result

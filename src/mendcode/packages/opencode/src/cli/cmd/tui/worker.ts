@@ -2,9 +2,7 @@ import { Installation } from "@/installation"
 import { Server } from "@/server/server"
 import * as Log from "@mendcode/core/util/log"
 import { InstanceRuntime } from "@/project/instance-runtime"
-import { WithInstance } from "@/project/with-instance"
 import { Rpc } from "@/util/rpc"
-import { upgrade } from "@/cli/upgrade"
 import { Config } from "@/config/config"
 import { GlobalBus } from "@/bus/global"
 import { ServerAuth } from "@/server/auth"
@@ -75,14 +73,6 @@ export const rpc = {
     if (server) await server.stop(true)
     server = await Server.listen(input)
     return { url: server.url.toString() }
-  },
-  async checkUpgrade(input: { directory: string }) {
-    await WithInstance.provide({
-      directory: input.directory,
-      fn: async () => {
-        await upgrade().catch(() => {})
-      },
-    })
   },
   async reload() {
     await AppRuntime.runPromise(
