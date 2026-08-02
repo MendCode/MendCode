@@ -14,6 +14,7 @@ import {
   homeAgentViewSectionGapVisible,
   homeAgentViewSummaryLines,
   homeAgentViewSummaryVisible,
+  sortAgentViewItemsByStartedAt,
   homePromptPlaceholderText,
   homeRightPanelContainerWidth,
   homeSurfaceTextLayout,
@@ -171,6 +172,17 @@ describe("Home split welcome sizing", () => {
     expect(homeAgentViewRecentlyActive({ now, lastSeenAt: now - 5_999, graceMs: 6_000 })).toBe(true)
     expect(homeAgentViewRecentlyActive({ now, lastSeenAt: now - 6_001, graceMs: 6_000 })).toBe(false)
     expect(homeAgentViewRecentlyActive({ now, graceMs: 6_000 })).toBe(false)
+  })
+
+  test("orders active Agent View rows by activity start instead of tool-update order", () => {
+    const older = { background: { sessionID: "older", time: { updated: 200 } } }
+    const newer = { background: { sessionID: "newer", time: { updated: 100 } } }
+    const startedAt = new Map([
+      [older, 100],
+      [newer, 200],
+    ])
+
+    expect(sortAgentViewItemsByStartedAt([older, newer], (item) => startedAt.get(item)!)).toEqual([newer, older])
   })
 
   test("only shows the Agent View headline when waiting, looping, or working is active", () => {

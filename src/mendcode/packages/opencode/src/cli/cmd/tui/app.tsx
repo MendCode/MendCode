@@ -1782,7 +1782,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     const details: Record<MendPromptMode, { title: string; description: string }> = {
       minimal: { title: "Minimal", description: "Small MendCode boundary only." },
       focus: { title: "Focus", description: "Provider-aware harness behavior." },
-      full: { title: "Full", description: "Focus plus MendCode runtime context." },
+      full: {
+        title: "Full",
+        description: "Focus plus MendCode TODO, loop, cost, TUI, and extension context.",
+      },
       custom: {
         title: mend.customPromptName || "Project prompt",
         description: "Project-defined instructions from .mendcode/prompts/custom.md.",

@@ -494,7 +494,9 @@ export function shouldClearWorkingStartedAt(input: {
   statusType: string
   hasActiveWorkingAssistant?: boolean
   permissionPending?: boolean
+  interrupted?: boolean
 }) {
+  if (input.interrupted) return true
   return input.statusType === "idle" && !input.hasActiveWorkingAssistant && !input.permissionPending
 }
 
@@ -734,6 +736,7 @@ export function Prompt(props: PromptProps) {
   const [promptStatusTick, setPromptStatusTick] = createSignal(Date.now())
   const [workingTick, setWorkingTick] = createSignal(Date.now())
   const [workingStartedAt, setWorkingStartedAt] = createSignal<number>()
+  const [interruptRequested, setInterruptRequested] = createSignal(false)
   const [compactionActive, setCompactionActive] = createSignal(false)
   const [mascotHover, setMascotHover] = createSignal(false)
   let clearWorkingStartTimer: Timer | undefined
@@ -756,6 +759,13 @@ export function Prompt(props: PromptProps) {
     on(
       () => [props.historyScope, messageHistoryItems()] as const,
       () => setMessageHistoryIndex(0),
+    ),
+  )
+  createEffect(
+    on(
+      () => props.sessionID,
+      () => setInterruptRequested(false),
+      { defer: true },
     ),
   )
   function applyPromptHistoryItem(
@@ -813,14 +823,15 @@ export function Prompt(props: PromptProps) {
           status().type,
           hasActiveWorkingAssistant(),
           Boolean(props.permissionPending),
+          interruptRequested(),
         ] as const,
-      ([active, statusType, hasActiveAssistant, permissionPending]) => {
+      ([active, statusType, hasActiveAssistant, permissionPending, interrupted]) => {
         const sessionID = props.sessionID
         if (clearWorkingStartTimer) {
           clearTimeout(clearWorkingStartTimer)
           clearWorkingStartTimer = undefined
         }
-        if (active) {
+        if (active && !interrupted) {
           const started = resolveWorkingStartedAt({
             stored: sessionID ? workingStartedAtBySession.get(sessionID) : undefined,
             activeAssistantCreated: findActiveWorkingAssistant()?.time.created,
@@ -835,6 +846,7 @@ export function Prompt(props: PromptProps) {
           statusType,
           hasActiveWorkingAssistant: hasActiveAssistant,
           permissionPending,
+          interrupted,
         })) {
           return
         }
@@ -843,9 +855,10 @@ export function Prompt(props: PromptProps) {
         clearWorkingStartTimer = setTimeout(() => {
           if (
             shouldClearWorkingStartedAt({
-            statusType: status().type,
-            hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
-            permissionPending: Boolean(props.permissionPending),
+              statusType: status().type,
+              hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+              permissionPending: Boolean(props.permissionPending),
+              interrupted: interruptRequested(),
             })
           ) {
             workingStartedAtBySession.delete(sessionID)
@@ -1913,6 +1926,7 @@ export function Prompt(props: PromptProps) {
       return
     }
     if (interruptRequest) return
+    setInterruptRequested(true)
     interruptRequest = withTimeout(sdk.client.session.abort({ sessionID }), 2000, "Session interrupt timed out")
       .catch(() => undefined)
       .finally(() => {
@@ -2285,6 +2299,7 @@ export function Prompt(props: PromptProps) {
     local.model.set(selectedModel)
     local.model.variant.set(variant, { model: selectedModel })
 
+    setInterruptRequested(false)
     workingStartedAtBySession.set(sessionID, Date.now())
     setWorkingStartedAt(workingStartedAtBySession.get(sessionID))
     const inputText = submittedPrompt.inputText
@@ -3081,12 +3096,13 @@ export function Prompt(props: PromptProps) {
   const activeWorkingAssistant = createMemo(findActiveWorkingAssistant)
   const workingStatusActive = createMemo(
     () =>
-      compactionActive() ||
-      !shouldClearWorkingStartedAt({
-        statusType: status().type,
-        hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
-        permissionPending: Boolean(props.permissionPending),
-      }),
+      !interruptRequested() &&
+      (compactionActive() ||
+        !shouldClearWorkingStartedAt({
+          statusType: status().type,
+          hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+          permissionPending: Boolean(props.permissionPending),
+        })),
   )
   const activityStatusType = createMemo(() =>
     workingStatusActive() && status().type === "idle" ? "busy" : status().type,
