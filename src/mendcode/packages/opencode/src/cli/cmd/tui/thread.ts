@@ -640,12 +640,6 @@ export const TuiThreadCommand = cmd({
           return
         }
 
-        if (client) {
-          setTimeout(() => {
-            client.call("checkUpgrade", { directory: cwd }).catch(() => {})
-          }, 1000).unref?.()
-        }
-
         await tui({
           url: transport.url,
           ...(args.diagnostics
