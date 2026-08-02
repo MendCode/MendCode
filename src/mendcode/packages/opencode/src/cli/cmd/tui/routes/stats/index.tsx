@@ -43,10 +43,13 @@ export const STATS_CACHE_KEY = "stats_insights_v2"
 const STATS_CACHE_STALE_MS = 5 * 60 * 1000
 const STATS_TODAY_CACHE_STALE_MS = 5 * 60 * 1000
 const STATS_REQUEST_TIMEOUT_MS = 10 * 1000
-const STATS_AGGREGATE_MESSAGE_LIMIT = 200
 const STATS_FALLBACK_SESSION_LIMIT = 100
 const STATS_FALLBACK_MESSAGE_LIMIT = 100
 const STATS_MESSAGE_FETCH_CONCURRENCY = 12
+const STATS_NORMAL_SESSION_LIMIT = 100
+const STATS_NORMAL_MESSAGE_LIMIT = 50
+const STATS_ADVANCED_SESSION_LIMIT = 250
+const STATS_ADVANCED_MESSAGE_LIMIT = 100
 const HEATMAP_ROWS = 7
 const HEATMAP_COLUMNS = Math.ceil(DEFAULT_DAYS / HEATMAP_ROWS)
 const HEAT_MODES: HeatMode[] = ["daily", "weekly", "cumulative"]
@@ -538,6 +541,7 @@ function CompactStats(props: {
   insights: UsageInsights
   mode: HeatMode
   columns: number
+  cellWidth: number
   contentWidth: number
   selectedDay?: DailyUsage
   selectedDayIndex?: number
@@ -552,12 +556,12 @@ function CompactStats(props: {
       <Panel title="Activity" height={8}>
         <MetricRows items={props.headline.slice(0, 4)} maxWidth={props.contentWidth} />
       </Panel>
-       <Panel title={`Token activity · ${props.mode} · 365 days`} titlePaddingTop={0} grow>
+      <Panel title={`Token activity · ${props.mode} · 365 days`} titlePaddingTop={0} grow>
         <TokenActivityView
           insights={props.insights}
           mode={props.mode}
           columns={props.columns}
-          cellWidth={2}
+          cellWidth={props.cellWidth}
           rows={7}
           labels={true}
           selectedIndex={props.selectedDayIndex}
@@ -623,7 +627,7 @@ function MainDashboard(props: {
               mode={props.mode}
               columns={props.heatColumns}
               cellWidth={props.heatCellWidth}
-              labels={props.roomy}
+              labels={true}
               selectedIndex={props.selectedDayIndex}
               loading={props.activityLoading}
             />
@@ -1032,7 +1036,7 @@ async function loadInsights(
   const signal = timeout.signal
   const query: SessionListQuery = {
     start,
-    limit: options.advanced ? 1000 : 250,
+    limit: options.advanced ? STATS_ADVANCED_SESSION_LIMIT : STATS_NORMAL_SESSION_LIMIT,
     ...options.query,
   }
   try {
@@ -1043,7 +1047,7 @@ async function loadInsights(
           {
             start,
             limit: STATS_FALLBACK_SESSION_LIMIT,
-            messageLimit: STATS_FALLBACK_MESSAGE_LIMIT,
+            messageLimit: options.advanced ? STATS_ADVANCED_MESSAGE_LIMIT : STATS_NORMAL_MESSAGE_LIMIT,
           },
           signal,
         ).catch(() => undefined)
@@ -1055,7 +1059,7 @@ async function loadInsights(
         {
           start,
           limit: query.limit,
-          messageLimit: STATS_AGGREGATE_MESSAGE_LIMIT,
+          messageLimit: options.advanced ? STATS_ADVANCED_MESSAGE_LIMIT : STATS_NORMAL_MESSAGE_LIMIT,
         },
         signal,
       ).catch((error) => {
@@ -1172,7 +1176,7 @@ export function Stats() {
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   const deck = createMemo(() => commandDeckLayout({ ...dimensions(), hasRail: false, hasContext: false }))
-  const [advanced, setAdvanced] = createSignal(true)
+  const [advanced, setAdvanced] = createSignal(false)
   const [scope] = createSignal<StatsScope>(route.data.type === "stats" ? (route.data.scope ?? "global") : "global")
   const [mode, setMode] = createSignal<HeatMode>("daily")
   const [weatherConfig, setWeatherConfig] = createSignal<StatsWeatherConfig>({ enabled: false })
@@ -1200,10 +1204,11 @@ export function Stats() {
     return HEATMAP_COLUMNS
   })
   const heatCellWidth = createMemo(() => {
+    if (!roomy()) return 1
     const sideColumn = wide() ? 46 : 0
     const panelChrome = 8
     const available = Math.max(HEATMAP_COLUMNS, dimensions().width - sideColumn - panelChrome)
-    return Math.max(2, Math.min(4, Math.floor(available / HEATMAP_COLUMNS)))
+    return Math.max(1, Math.min(4, Math.floor(available / HEATMAP_COLUMNS)))
   })
   const scopeQuery = createMemo<SessionScopeQuery>(() => {
     if (scope() === "global") return {}
@@ -1631,6 +1636,7 @@ export function Stats() {
                       insights={data()}
                       mode={mode()}
                       columns={heatColumns()}
+                      cellWidth={heatCellWidth()}
                       contentWidth={deck().contentWidth}
                       selectedDay={selectedDay()}
                       selectedDayIndex={selectedDayIndex()}

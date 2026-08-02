@@ -131,7 +131,7 @@ function loopWorkflowBrief() {
     "- Treat `/loop`, `turn this session into a loop`, `run this every N minutes`, or `run 5 monitored iterations` as Loop Workflow tool requests.",
     "- Use the `loop` tool; `/loop` creates or activates, `/loops` lists workflows unless a concrete loop id is provided for show.",
     "- Ask with the `question` tool only when objective, cadence, model/provider, max runtime, permissions, or stop condition are missing; ask for an iteration limit only when bounded execution is intended.",
-    "- Create a reviewable loop draft first, or activate directly when the objective, model, iteration limit, cadence, permissions, and stop condition are already clear.",
+    "- Create a reviewable loop draft first; activate only after explicit user confirmation. A current request that explicitly asks to activate that exact loop counts as confirmation; otherwise ask with `question`.",
     "- Use report-only mode unless the user explicitly allows edits; do not write `Iteration 1/5` through `Iteration 5/5` manually in the current chat turn.",
     "- A user request to write, edit, fix, implement, code, or create files is explicit edit approval for that loop; create it with normal execution instead of report-only.",
     "- Never use `maxTurns: 0`; fixed loops need a positive cap, while max-goal may omit maxTurns for no iteration cap and unbounded-monitor loops should omit it.",
@@ -154,6 +154,8 @@ function focusMendCodeBasics() {
 function backgroundSubagentFull() {
   return [
     "MendCode background subagents:",
+    "- Before launching any `task` subagent or deliberately waiting/awaiting one, always obtain an explicit user choice (use `question` when it is not already answered): no delegation, foreground/await, or background/notify.",
+    "- State the purpose, model/cost tier, edit scope, and completion behavior. Do not silently turn ordinary work into background work or infer consent from task complexity.",
     "- For independent work that can run concurrently, call `task` with `background: true`, keep the returned task_id, and continue useful parent work immediately.",
     "- After a background launch, do not call `task_status` or `wait` just to monitor it in the same turn. If no useful parent work remains, end the turn and let the runtime completion notification/owner wake resume the parent.",
     "- Do not busy-poll, sleep, or retry a timed-out `wait` in the same turn. Use `task_status` later to inspect, rediscover, collect, or `cancel` a task.",
@@ -168,7 +170,7 @@ function loopWorkflowFull() {
   return [
     "MendCode Loop Workflow full contract:",
     "- A loop is a durable workflow backed by MendCode storage, a root session, Agent View state, loop runs, and a scheduler/service wakeup path.",
-    "- The normal user-facing flow is chat-first through the `loop` tool: when the user asks to convert the current session into a loop, create a Loop Workflow for that objective, activate it, and let the loop runner own future iterations.",
+    "- The normal user-facing flow is chat-first through the `loop` tool: when the user asks to convert the current session into a loop, create a Loop Workflow for that objective, obtain confirmation when activation is not already explicit, activate it, and let the loop runner own future iterations.",
     "- Do not satisfy loop requests by performing all iterations inline in the current assistant turn. Inline iteration text is only a short preview when explicitly framed as a dry-run preview.",
     "- Drafts should capture name, objective, prompt, cadence or manual run mode, an optional iteration cap, max wall-clock runtime when useful, stop condition, permission mode, provider/model, agent profile, and whether report-only is required.",
     "- When model/provider is unspecified and it matters for cost, speed, capability, or the user's request, ask the user to choose from the configured providers/models that are visible in the session. If no choice is needed, use the current session default.",
@@ -201,8 +203,21 @@ function tuiMarkdownRendering() {
   return [
     "MendCode TUI rendering:",
     "- Full text Markdown is supported in assistant responses: headings, bold/italic text, inline code, fenced code blocks, links, lists, checklists, blockquotes, and tables.",
-    "- Mermaid fenced blocks are supported for flowcharts and other useful diagrams.",
+    "- Mermaid fenced blocks are supported for flowcharts and other useful diagrams. Built-in local families include flowchart/graph, sequence, ER, class, state, pie, gantt, quadrant, GitGraph, requirement, C4, XY, Sankey, block, packet, architecture, mindmap, timeline, journey, and kanban; other families remain fenced code unless optional `termaid` renders them.",
+    "- Valid `#RGB` and `#RRGGBB` values are colorized in ordinary rendered text; code fences, Markdown tables, and inline code stay uncolored.",
     "- Embedded HTML and Markdown images are outside the terminal text rendering contract.",
+  ].join("\n")
+}
+
+function taskLifecycleContract() {
+  return [
+    "MendCode task lifecycle and cost policy:",
+    "- Use `todowrite` for non-trivial, multi-step, or explicitly requested task lists; skip it for trivial single-step or informational replies.",
+    "- Keep TODO items concrete and actionable. Use `pending`, `in_progress`, `completed`, or `cancelled`; keep at most one item `in_progress`, update statuses immediately, and leave blocked work pending while awaiting a focused user answer.",
+    "- If progress is blocked on a user choice, ask with `question`, leave the related TODO `pending`, and resume only after the answer; never mark it `completed` while awaiting.",
+    "- TODO state is the source of progress; do not manufacture progress or repeat a large checklist in every response.",
+    "- For low-risk planning, summaries, monitoring, and repetitive loop iterations, prefer the configured `small`/`subagent` role or another available lower-cost model. Keep edits, security, architecture, and final verification on the stronger configured model unless the user chooses otherwise.",
+    "- Never invent model IDs, prices, provider capabilities, or billing behavior. Use only models exposed by the current MendCode session; ask before a model switch when cost, quality, capability, or auth/billing changes matter.",
   ].join("\n")
 }
 
@@ -212,6 +227,10 @@ function marketplaceExtensionContract() {
     "- Marketplace packages are reusable .mendcode bundles, not npm runtime installs. Prefer `mendcode marketplace install <pack-id> [source-id]` and package registry sources over installing arbitrary npm packages.",
     "- Packages may include commands, agents, modes, skills, prompts, MCP config, context files, TUI profiles, themes, plugins, widgets/components/scripts, custom pages, and assistant-facing custom tools under `.mendcode/tools`.",
     "- Use the public TUI plugin API from `@mendcode/plugin/tui` for command palette entries, slash commands, routes/pages, dialogs, slots, footer/status entries, themes, KV state, lifecycle cleanup, and simple shell-backed widgets.",
+    "- Custom Prompt Mode is one of `minimal`, `focus`, `full`, or `custom`; `custom` reads the bounded project prompt at `.mendcode/prompts/custom.md` while preserving the MendCode boundary. It is project instruction text, not an upstream hidden prompt.",
+    "- Custom AI tools live in `.mendcode/tools/*.{ts,js}` and can invoke bounded scripts; expose only the smallest safe interface and keep secrets out of tools and packages.",
+    "- Custom pages/routes render through the public plugin route/slot API. Custom widgets use `api.ui.runtime.setWidget` with `aboveEditor`, `belowEditor`, or `sessionBottomDock` placement and clean up with the plugin lifecycle.",
+    "- Ctrl+T toggles the current session's TODO view. Ctrl+P -> Customize TUI or `/customize` opens live customization; these controls do not replace the public plugin API.",
     "- Custom pages can build terminal-native ASCII/Solid UIs similar to built-in Usage, Memory Center, or Loop pages when the required state is available through the public API.",
     "- Shell-backed widgets use `api.shell.spawn()` for bounded stdout/stderr streams. This is not a PTY; do not implement full-screen terminal apps, cursor-addressing programs, alternate-screen apps, Doom, or real cava by piping stdout into the main TUI.",
     "- If a package needs private MendCode runtime data, add or request a public API first. Do not import private runtime internals from packages.",
@@ -385,6 +404,15 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
         label: "MendCode background subagents",
         source: "mendcode-context",
         text: backgroundSubagentFull(),
+      }),
+    )
+
+    sections.push(
+      section({
+        id: "task-lifecycle",
+        label: "MendCode task lifecycle and cost policy",
+        source: "mendcode-context",
+        text: taskLifecycleContract(),
       }),
     )
 

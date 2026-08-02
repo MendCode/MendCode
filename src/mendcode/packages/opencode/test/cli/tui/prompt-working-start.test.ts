@@ -497,6 +497,7 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldClearWorkingStartedAt({ statusType: "idle", hasActiveWorkingAssistant: true })).toBe(false)
     expect(shouldClearWorkingStartedAt({ statusType: "idle", permissionPending: true })).toBe(false)
     expect(shouldClearWorkingStartedAt({ statusType: "busy" })).toBe(false)
+    expect(shouldClearWorkingStartedAt({ statusType: "busy", interrupted: true })).toBe(true)
   })
 
   test("keeps interrupt enabled for orphaned unfinished assistant messages", () => {
