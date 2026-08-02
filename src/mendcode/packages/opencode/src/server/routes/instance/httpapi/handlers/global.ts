@@ -128,7 +128,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
             status: 500,
             body: {
               success: false as const,
-              error: err instanceof Error ? err.message : String(err),
+              error: err.stderr || "Update failed",
             },
           }),
         ),

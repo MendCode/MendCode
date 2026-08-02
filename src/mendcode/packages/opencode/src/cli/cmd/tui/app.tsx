@@ -79,6 +79,7 @@ import type { RouteMap } from "@/cli/cmd/tui/plugin/api"
 import { FormatError, FormatUnknownError } from "@/cli/error"
 import { Locale } from "@/util/locale"
 import { backgroundTaskToast } from "@tui/util/background-task-notification"
+import { checkUpgrade, skippedUpdateVersion, SKIPPED_UPDATE_VERSION_KEY } from "@/cli/upgrade"
 
 import type { EventSource, SDKConnectionRefresh } from "./context/sdk"
 import { DialogVariant } from "./component/dialog-variant"
@@ -246,10 +247,11 @@ function errorMessage(error: unknown) {
     "data" in error &&
     typeof error.data === "object" &&
     error.data !== null &&
-    "message" in error.data &&
-    typeof error.data.message === "string"
+    (("message" in error.data && typeof error.data.message === "string") ||
+      ("error" in error.data && typeof error.data.error === "string"))
   ) {
-    return error.data.message
+    if ("message" in error.data && typeof error.data.message === "string") return error.data.message
+    if ("error" in error.data && typeof error.data.error === "string") return error.data.error
   }
   return FormatUnknownError(error)
 }
@@ -5062,10 +5064,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     })
   })
 
-  event.on("installation.update-available", async (evt) => {
-    const version = evt.properties.version
-
-    const skipped = kv.get("skipped_version")
+  const showUpdateAvailable = async (version: string) => {
+    const skipped = skippedUpdateVersion(kv.store)
     if (skipped && !semver.gt(version, skipped)) return
 
     const choice = await DialogConfirm.show(
@@ -5076,7 +5076,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     )
 
     if (choice === false) {
-      kv.set("skipped_version", version)
+      kv.set(SKIPPED_UPDATE_VERSION_KEY, version)
       return
     }
 
@@ -5094,7 +5094,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       toast.show({
         variant: "error",
         title: "Update Failed",
-        message: "Update failed",
+        message:
+          result.error !== undefined
+            ? errorMessage(result.error)
+            : result.data?.success === false
+              ? result.data.error
+              : "Update failed",
         duration: 10000,
       })
       return
@@ -5107,6 +5112,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     )
 
     void exit()
+  }
+
+  event.on("installation.update-available", async (evt) => {
+    await showUpdateAvailable(evt.properties.version)
   })
 
   const plugin = createMemo(() => {
@@ -5129,6 +5138,17 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
   const startupMessage = createMemo(() =>
     startupLoadingText({ pluginsReady: pluginsReady(), syncLoading: sync.status === "loading" }),
   )
+  let startupUpdateChecked = false
+  createEffect(() => {
+    if (startupUpdateChecked || !startupReady() || !kv.ready) return
+    startupUpdateChecked = true
+    void checkUpgrade(sync.data.config.autoupdate)
+      .then((result) => {
+        if (result?.type !== "notify") return
+        return showUpdateAvailable(result.version)
+      })
+      .catch(() => {})
+  })
 
   return (
     <box
