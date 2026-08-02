@@ -93,6 +93,26 @@ describe("installation", () => {
   })
 
   describe("upgrade", () => {
+    test("runs curl upgrades without opening setup inside the active TUI", async () => {
+      const calls: Array<{ cmd: string; args: readonly string[] }> = []
+      const layer = testLayer(
+        () => new Response("#!/usr/bin/env bash\n"),
+        (cmd, args) => {
+          calls.push({ cmd, args })
+          return ""
+        },
+      )
+
+      await Effect.runPromise(
+        Installation.Service.use((svc) => svc.upgrade("curl", "0.1.25")).pipe(Effect.provide(layer)),
+      )
+
+      expect(calls[0]).toEqual({
+        cmd: "bash",
+        args: ["-s", "--", "--version", "0.1.25", "--no-modify-path", "--skip-setup"],
+      })
+    })
+
     test("blocks registry upgrades until MendCode-owned registries exist", async () => {
       const calls: string[] = []
       const layer = testLayer((request) => {

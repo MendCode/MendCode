@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.26 - 2026-08-01
+
+MendCode v0.1.26 restores reliable in-app update discovery and installation across TUI transport modes.
+
+### Fixed
+
+- Check for updates after the TUI is ready regardless of whether it uses the shared server, an external server, or a private worker.
+- Namespace the skipped-update preference so legacy upstream version state cannot suppress MendCode releases.
+- Run in-app installer upgrades without opening setup or modifying PATH, and surface the installer error when an upgrade fails.
+
 ## 0.1.25 - 2026-08-01
 
 MendCode v0.1.25 repairs cancellation and compacted-history state after interrupted or long-running TUI sessions.

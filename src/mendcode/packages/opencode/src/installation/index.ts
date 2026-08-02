@@ -157,11 +157,14 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
           const response = yield* httpOk.execute(HttpClientRequest.get(GITHUB_RAW_INSTALL_URL))
           const body = yield* response.text
           const bodyBytes = new TextEncoder().encode(body)
-          const proc = ChildProcess.make("bash", [], {
-            stdin: Stream.make(bodyBytes),
-            env: { VERSION: target },
-            extendEnv: true,
-          })
+          const proc = ChildProcess.make(
+            "bash",
+            ["-s", "--", "--version", target, "--no-modify-path", "--skip-setup"],
+            {
+              stdin: Stream.make(bodyBytes),
+              extendEnv: true,
+            },
+          )
           const handle = yield* spawner.spawn(proc)
           const [stdout, stderr] = yield* Effect.all(
             [Stream.mkString(Stream.decodeText(handle.stdout)), Stream.mkString(Stream.decodeText(handle.stderr))],
