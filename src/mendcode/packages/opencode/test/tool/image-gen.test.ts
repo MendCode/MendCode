@@ -107,7 +107,7 @@ afterEach(async () => {
 })
 
 describe("tool.image_gen", () => {
-  test("generates with Codex subscription defaults, persists the PNG, and returns an attachment", async () => {
+  test("treats a zero recent-image count as generation, persists the PNG, and returns an attachment", async () => {
     let received: { url: string; headers: Headers; body: Record<string, unknown> } | undefined
     using server = Bun.serve({
       port: 0,
@@ -127,7 +127,10 @@ describe("tool.image_gen", () => {
     })
     process.env.MENDCODE_OPENAI_CODEX_IMAGES_ENDPOINT = new URL("/backend-api/codex/images", server.url).toString()
 
-    const result = await execute({ prompt: "Create a polished square product illustration" })
+    const result = await execute({
+      prompt: "Create a polished square product illustration",
+      num_last_images_to_include: 0,
+    })
     const outputPath = generatedImageArtifactPath(imagesRoot, sessionID, "call/test")
 
     expect(received?.url).toEndWith("/backend-api/codex/images/generations")

@@ -26,7 +26,7 @@ Use this tool when the user explicitly asks to create or edit a bitmap image suc
 
 The built-in subscription path uses gpt-image-2 with the best compatible automatic defaults for quality, background, and size. Put required orientation, aspect ratio, target resolution, exact text, and visual constraints in the prompt; do not invent unsupported raw API parameters.
 
-For a new image, omit both reference fields. For an edit, provide either absolute local paths in referenced_image_paths or num_last_images_to_include for recent conversation images, never both. Include only the images required for the edit, up to five.
+For a new image, omit both reference fields; num_last_images_to_include: 0 is also accepted as an explicit "no reference images" sentinel. For an edit, provide either absolute local paths in referenced_image_paths or num_last_images_to_include from 1 to 5 for recent conversation images, never both. Include only the images required for the edit, up to five.
 
 Generated PNGs are saved in MendCode's persistent generated_images directory, not an OS temp directory, and the result is displayed inline. Preview-only images may remain there. If the image will be consumed by the current project, copy the selected artifact into the workspace using a stable descriptive filename and do not overwrite an existing asset unless the user explicitly requested replacement.`
 
@@ -38,9 +38,11 @@ export const ImageGenParameters = Schema.Struct({
   referenced_image_paths: Schema.optional(Schema.Array(Schema.String)).annotate({
     description: "Up to five absolute local image paths to edit. Do not combine with num_last_images_to_include.",
   }),
-  num_last_images_to_include: Schema.optional(Schema.Number).annotate({
+  num_last_images_to_include: Schema.optional(
+    Schema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(MAX_EDIT_IMAGES)),
+  ).annotate({
     description:
-      "Number of recent conversation images to include for an edit, from 1 to 5. Use only when target images have no stable local path.",
+      "Set 0 or omit this field when generating a new image. Set an integer from 1 to 5 only when editing recent conversation images that have no stable local path.",
   }),
 })
 
@@ -115,7 +117,7 @@ function imageUrlsFromMessages(messages: MessageV2.WithParts[], count: number) {
 
 function validateEditSelection(params: ImageGenArgs) {
   const paths = params.referenced_image_paths ?? []
-  const recentCount = params.num_last_images_to_include
+  const recentCount = params.num_last_images_to_include === 0 ? undefined : params.num_last_images_to_include
   if (paths.length > 0 && recentCount !== undefined) {
     throw new Error("Provide only one of referenced_image_paths or num_last_images_to_include.")
   }
