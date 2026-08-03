@@ -6,6 +6,7 @@ import path from "path"
 import { fileURLToPath } from "url"
 import { NamedError } from "@mendcode/core/util/error"
 import { Agent as AgentSvc } from "../../src/agent/agent"
+import { Auth } from "@/auth"
 import { Bus } from "../../src/bus"
 import { Command } from "../../src/command"
 import { Config } from "@/config/config"
@@ -268,6 +269,7 @@ function makeHttp() {
   const planReview = PlanReview.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
   const registry = ToolRegistry.layer.pipe(
+    Layer.provide(Auth.defaultLayer),
     Layer.provide(Skill.defaultLayer),
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),

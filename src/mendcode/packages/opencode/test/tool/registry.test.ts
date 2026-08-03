@@ -31,6 +31,7 @@ import { Permission } from "@/permission"
 import { LoopWorkflow } from "@/session/loop"
 import { LoopRunner } from "@/session/loop-runner"
 import type { Agent as AgentTypes } from "@/agent/agent"
+import { Auth } from "@/auth"
 
 const buildAgent: AgentTypes.Info = {
   name: "build",
@@ -44,30 +45,59 @@ const configLayer = TestConfig.layer({
   directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".mendcode")])),
 })
 
-const registryLayer = ToolRegistry.layer.pipe(
-  Layer.provide(configLayer),
-  Layer.provide(Plugin.defaultLayer),
-  Layer.provide(Question.defaultLayer),
-  Layer.provide(PlanReview.defaultLayer),
-  Layer.provide(LoopWorkflow.defaultLayer),
-  Layer.provide([LoopRunner.defaultLayer, Todo.defaultLayer]),
-  Layer.provide(Skill.defaultLayer),
-  Layer.provide(Agent.defaultLayer),
-  Layer.provide(Session.defaultLayer),
-  Layer.provide([SessionStatus.defaultLayer, BackgroundTask.defaultLayer]),
-  Layer.provide(Provider.defaultLayer),
-  Layer.provide(LSP.defaultLayer),
-  Layer.provide(Instruction.defaultLayer),
-  Layer.provide(AppFileSystem.defaultLayer),
-  Layer.provide(Bus.layer),
-  Layer.provide(FetchHttpClient.layer),
-  Layer.provide(Format.defaultLayer),
-  Layer.provide(node),
-  Layer.provide(Ripgrep.defaultLayer),
-  Layer.provide(Truncate.defaultLayer),
-)
+const authLayer = (info?: Auth.Info) =>
+  Layer.succeed(
+    Auth.Service,
+    Auth.Service.of({
+      get: (providerID) => Effect.succeed(providerID === "openai" ? info : undefined),
+      all: () => Effect.succeed<Record<string, Auth.Info>>(info ? { openai: info } : {}),
+      set: () => Effect.void,
+      remove: () => Effect.void,
+    }),
+  )
 
-const it = testEffect(Layer.mergeAll(registryLayer, node))
+const registryLayer = (info?: Auth.Info) => {
+  const base = ToolRegistry.layer.pipe(
+    Layer.provide(configLayer),
+    Layer.provide(authLayer(info)),
+    Layer.provide(Plugin.defaultLayer),
+    Layer.provide(Question.defaultLayer),
+    Layer.provide(PlanReview.defaultLayer),
+    Layer.provide(LoopWorkflow.defaultLayer),
+    Layer.provide([LoopRunner.defaultLayer, Todo.defaultLayer]),
+    Layer.provide(Skill.defaultLayer),
+    Layer.provide(Agent.defaultLayer),
+    Layer.provide(Session.defaultLayer),
+    Layer.provide([SessionStatus.defaultLayer, BackgroundTask.defaultLayer]),
+    Layer.provide(Provider.defaultLayer),
+    Layer.provide(LSP.defaultLayer),
+    Layer.provide(Instruction.defaultLayer),
+    Layer.provide(AppFileSystem.defaultLayer),
+    Layer.provide(Bus.layer),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(Format.defaultLayer),
+    Layer.provide(node),
+    Layer.provide(Ripgrep.defaultLayer),
+  )
+  return base.pipe(Layer.provide(Truncate.defaultLayer))
+}
+
+const it = testEffect(Layer.mergeAll(registryLayer(), node))
+const oauthIt = testEffect(
+  Layer.mergeAll(
+    registryLayer(
+      new Auth.Oauth({
+        type: "oauth",
+        access: "access",
+        refresh: "refresh",
+        expires: Date.now() + 60_000,
+        accountId: "account",
+      }),
+    ),
+    node,
+  ),
+)
+const apiKeyIt = testEffect(Layer.mergeAll(registryLayer(new Auth.Api({ type: "api", key: "test-api-key" })), node))
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -91,6 +121,33 @@ describe("tool.registry", () => {
       expect(ids).toContain("review")
       expect(ids).toContain("task_status")
       expect(ids).toContain("write")
+      expect(ids).not.toContain("image_gen")
+    }),
+  )
+
+  oauthIt.instance("exposes image_gen only for OpenAI Codex subscription OAuth", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderID.make("openai"),
+        modelID: ModelID.make("gpt-5.6-sol"),
+        agent: buildAgent,
+      })
+
+      expect(tools.map((tool) => tool.id)).toContain("image_gen")
+    }),
+  )
+
+  apiKeyIt.instance("does not expose image_gen for OpenAI API-key auth", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderID.make("openai"),
+        modelID: ModelID.make("gpt-5.6-sol"),
+        agent: buildAgent,
+      })
+
+      expect(tools.map((tool) => tool.id)).not.toContain("image_gen")
     }),
   )
 

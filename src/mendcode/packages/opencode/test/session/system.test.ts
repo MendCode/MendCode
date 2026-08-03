@@ -117,6 +117,23 @@ describe("session.system", () => {
     }
   })
 
+  test("keeps conditional image generation guidance in focused and full prompt snapshots", async () => {
+    await using tmp = await tmpdir()
+    const promptModePath = path.join(tmp.path, ".mendcode", "prompt-mode.json")
+    await mkdir(path.dirname(promptModePath), { recursive: true })
+
+    for (const mode of ["focus", "full"] as const) {
+      await writeFile(promptModePath, JSON.stringify({ version: 0, mode, live: "runtime-run-chat" }))
+      const snapshot = await SystemPrompt.mendPromptSnapshot(fakeModel("openai", "gpt-5.6-sol"), tmp.path)
+
+      expect(snapshot.policy).toContain(`Mode: ${mode}`)
+      expect(snapshot.focus).toContain("When the `image_gen` tool is present")
+      expect(snapshot.focus).toContain("active Codex subscription")
+      expect(snapshot.focus).toContain("managed generated_images directory")
+      expect(snapshot.focus).not.toContain("image_gen is always available")
+    }
+  })
+
   test("adds model guidance after resolving the real model behind a compatible transport", async () => {
     await using tmp = await tmpdir()
     const promptModePath = path.join(tmp.path, ".mendcode", "prompt-mode.json")
