@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.29 - 2026-08-04
+
+MendCode v0.1.29 fixes Windows installation, packaging, and release presentation so the corrected assets are available through the standard download paths.
+
+### Added
+
+- Add a Windows CMD installer that uses the built-in `curl.exe` and `tar.exe` tools without requiring PowerShell.
+- Document direct Windows ZIP downloads and the no-PowerShell installation path.
+
+### Changed
+
+- Give published GitHub releases the explicit `MendCode v<version>` display name.
+- Make Windows release bundles deterministic and include MendCode icon and metadata.
+
+### Fixed
+
+- Detect x64 and ARM64 correctly from PowerShell, including 32-bit PowerShell on 64-bit Windows.
+- Avoid Bun Windows linker failures caused by split bundles.
+
+### Tests
+
+- Run the focused installation test suite.
+- Build Windows x64, ARM64, and baseline release assets and smoke-test `--version` and `--help`.
+
 ## 0.1.28 - 2026-08-04
 
 MendCode v0.1.28 adds durable Loop Workflows and provider-aware image generation, strengthens detached background-task delivery, and improves workflow and session recovery across the TUI and server transports.
