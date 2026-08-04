@@ -80,9 +80,10 @@ const createEmbeddedWebUIBundle = async () => {
     `// Import all files as file_$i with type: "file"`,
     ...imports,
     `// Export with original mappings`,
-    `export default {`,
+    `const embeddedFiles = {`,
     ...entries,
     `}`,
+    `export default embeddedFiles`,
   ].join("\n")
 }
 
@@ -212,7 +213,9 @@ for (const item of targets) {
     format: "esm",
     minify: true,
     sourcemap: sourcemapsFlag ? "linked" : "none",
-    splitting: true,
+    // Bun's Windows linker can emit orphaned minified exports when splitting
+    // is enabled. Keep Windows releases as one deterministic bundle.
+    splitting: item.os !== "win32",
     compile: {
       autoloadBunfig: false,
       autoloadDotenv: false,
@@ -221,7 +224,15 @@ for (const item of targets) {
       target: name.replace(pkg.name, "bun") as any,
       outfile: `dist/${name}/bin/${binaryName}`,
       execArgv: [`--user-agent=mendcode/${Script.version}`, "--use-system-ca", "--"],
-      windows: {},
+      windows:
+        item.os === "win32"
+          ? {
+              icon: path.resolve(dir, "../ui/src/assets/favicon/favicon.ico"),
+              title: "MendCode",
+              publisher: "MendCode",
+              description: "MendCode AI coding terminal",
+            }
+          : undefined,
     },
     files: embeddedFileMap ? { "opencode-web-ui.gen.ts": embeddedFileMap } : {},
     entrypoints: ["./src/index.ts", parserWorker, workerPath, ...(embeddedFileMap ? ["opencode-web-ui.gen.ts"] : [])],

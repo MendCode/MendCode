@@ -69,6 +69,8 @@ Choose the row for your shell:
 | --- | --- |
 | macOS / Linux | `curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install \| bash && mendcode` |
 | Windows PowerShell | `irm https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install.ps1 \| iex; mendcode` |
+| Windows CMD (no PowerShell) | `curl.exe -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install.cmd -o "%TEMP%\mendcode-install.cmd" && call "%TEMP%\mendcode-install.cmd"` |
+| Windows direct ZIP | [Download the x64 ZIP](https://github.com/MendCode/MendCode/releases/latest/download/mendcode-windows-x64.zip) and run `mendcode.exe` after extracting. |
 | Windows Git Bash / MSYS2 / Cygwin / WSL | `curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install \| bash && mendcode` |
 | Pin a release | `curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install \| bash -s -- --version <version>` |
 | No shell startup edits | `curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install \| bash -s -- --no-modify-path && ~/.mendcode/bin/mendcode` |

@@ -103,18 +103,38 @@ function Maybe-LaunchSetup {
 }
 
 function Get-MendCodeTarget {
-  $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+  # PROCESSOR_ARCHITEW6432 exposes the host architecture when a 32-bit
+  # PowerShell process runs on 64-bit Windows. Prefer it so x64/ARM64 hosts do
+  # not get misidentified as x86.
+  $rawArchitecture = if ($env:PROCESSOR_ARCHITEW6432) {
+    $env:PROCESSOR_ARCHITEW6432
+  } elseif ($env:PROCESSOR_ARCHITECTURE) {
+    $env:PROCESSOR_ARCHITECTURE
+  } else {
+    [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+  }
+  $architecture = $rawArchitecture.ToUpperInvariant()
 
-  if ($arch -eq [System.Runtime.InteropServices.Architecture]::Arm64) {
+  if ($architecture -eq "ARM64") {
     return "windows-arm64"
   }
 
-  if ($arch -ne [System.Runtime.InteropServices.Architecture]::X64) {
-    throw "Unsupported Windows architecture: $arch"
+  if ($architecture -eq "X64" -or ($architecture -eq "X86" -and [Environment]::Is64BitOperatingSystem)) {
+    $architecture = "AMD64"
   }
 
-  $kernel32 = Add-Type -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(int ProcessorFeature);' -Name Kernel32 -Namespace Win32 -PassThru
-  if (-not $kernel32::IsProcessorFeaturePresent(40)) {
+  if ($architecture -ne "AMD64") {
+    throw "Unsupported Windows architecture: $rawArchitecture"
+  }
+
+  try {
+    $kernel32 = Add-Type -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(int ProcessorFeature);' -Name MendCodeKernel32 -Namespace MendCode -PassThru
+    if (-not $kernel32::IsProcessorFeaturePresent(40)) {
+      return "windows-x64-baseline"
+    }
+  } catch {
+    # A restricted PowerShell/.NET host may reject the probe. The baseline
+    # binary is the compatible fallback and does not require AVX2.
     return "windows-x64-baseline"
   }
 
