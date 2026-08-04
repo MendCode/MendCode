@@ -25,6 +25,7 @@ MendCode v0.1.28 adds durable Loop Workflows and provider-aware image generation
 - Preserve queued prompt state through compaction and reconnects, restore prompt focus after compaction, and clear stale working or disconnected indicators when execution settles.
 - Require workflow artifact consumers to depend on their producers, reject direct starts with unresolved gates, and improve recovery and cleanup of interrupted workflow runs.
 - Keep long-running non-shell tools alive across stream-idle periods and handle unknown image-generation results without crashing the session.
+- Update release dependency overrides to patched versions of `brace-expansion`, `fast-uri`, `hono`, `ip-address`, `postcss`, `socket.io-parser`, and `undici`.
 
 ### Tests
 
