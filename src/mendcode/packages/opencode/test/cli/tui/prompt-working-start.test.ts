@@ -14,6 +14,7 @@ import {
   isRetryablePromptDelivery,
   promptDeliveryErrorMessage,
   promptDeliveryIsQueued,
+  promptDeliveryRetryAction,
   promptDeliveryRetryDelay,
   promptDraftHistoryAction,
   mergeOptimisticUserParts,
@@ -151,6 +152,18 @@ describe("prompt delivery recovery", () => {
   test("does not render an accepted delivery as queued", () => {
     expect(promptDeliveryIsQueued("pending")).toBe(true)
     expect(promptDeliveryIsQueued("accepted")).toBe(false)
+  })
+
+  test("settles completed deliveries before a forced reconnect recovery", () => {
+    expect(promptDeliveryRetryAction({ state: "completed", forceAccepted: true, replaceExisting: false })).toBe(
+      "settle",
+    )
+    expect(promptDeliveryRetryAction({ state: "accepted", forceAccepted: false, replaceExisting: false })).toBe(
+      "accept",
+    )
+    expect(promptDeliveryRetryAction({ state: "accepted", forceAccepted: true, replaceExisting: false })).toBe(
+      "dispatch",
+    )
   })
 
   test("retries accepted deliveries whose assistant was aborted or failed transiently", () => {
@@ -594,6 +607,14 @@ describe("resolveWorkingStartedAt", () => {
         promptAvailable: true,
       }),
     ).toBe(false)
+    expect(
+      shouldRestoreCompactionPromptFocus({
+        arcadeOwnsFocus: false,
+        arcadeWasFocused: true,
+        previousFocusAvailable: false,
+        promptAvailable: true,
+      }),
+    ).toBe(true)
   })
 
   test("keeps the compacted transcript collapsed until toggled", () => {

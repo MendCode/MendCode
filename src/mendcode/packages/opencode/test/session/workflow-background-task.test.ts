@@ -2,6 +2,7 @@ import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 
 import { BackgroundTask } from "@/session/background-task"
+import { AgentView } from "@/session/agent-view"
 import { Session } from "@/session/session"
 import { Workflow } from "@/session/workflow"
 import { WorkflowPlan } from "@/session/workflow-plan"
@@ -33,12 +34,13 @@ const backgroundLayer = WorkflowBackgroundTask.layer.pipe(
   Layer.provideMerge(BackgroundTask.defaultLayer),
   Layer.provideMerge(Session.defaultLayer),
 )
-const it = testEffect(Layer.mergeAll(backgroundLayer, WorkflowService.defaultLayer))
+const it = testEffect(Layer.mergeAll(backgroundLayer, WorkflowService.defaultLayer, AgentView.defaultLayer))
 
 describe("workflow background task adapter", () => {
   it.instance("keeps the root independent from the origin and links child attempts to BackgroundTask", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
+      const agentView = yield* AgentView.Service
       const workflow = yield* WorkflowService.Service
       const adapter = yield* WorkflowBackgroundTask.Service
       const origin = yield* sessions.create({ title: "Origin" })
@@ -47,6 +49,9 @@ describe("workflow background task adapter", () => {
 
       expect((yield* sessions.get(root.sessionID)).parentID).toBeUndefined()
       expect((yield* workflow.show(started.run.id)).run.rootSessionID).toBe(root.sessionID)
+      const visibleAgentSessions = yield* agentView.list({ roots: true })
+      expect(visibleAgentSessions.map((entry) => entry.sessionID)).toContain(origin.id)
+      expect(visibleAgentSessions.map((entry) => entry.sessionID)).not.toContain(root.sessionID)
 
       const attempt = yield* adapter.startAttempt({
         runID: started.run.id,

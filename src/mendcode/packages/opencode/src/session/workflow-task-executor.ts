@@ -81,6 +81,13 @@ const textOutput = (message: PromptMessage) =>
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
+const unknownToolName = (message: PromptMessage) =>
+  message.parts.flatMap((part) => {
+    if (part.type !== "tool" || part.state.status !== "completed") return []
+    const metadata = part.state.metadata
+    return isRecord(metadata) && metadata.connectionLost === true && metadata.resultUnknown === true ? [part.tool] : []
+  })[0]
+
 const jsonEqual = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right)
 
 const jsonTypeMatches = (value: unknown, type: string) => {
@@ -236,7 +243,7 @@ export const layer = Layer.effect(
       const message = yield* prompt.prompt({
         sessionID: input.sessionID,
         agent: input.task.agentProfile,
-          tools: allowedTools(input.task, policy.tools, policy.policy),
+        tools: allowedTools(input.task, policy.tools, policy.policy),
         format: outputFormat(input.task),
         parts,
         ...modelInput(input.task, input.workflowModel),
@@ -252,6 +259,31 @@ export const layer = Layer.effect(
           state: "failed" as const,
           failureClass: "environment" as const,
           error,
+          ...(text ? { summary: text } : {}),
+          usage: usageOutput(message),
+        }
+      }
+      const unknownTool = unknownToolName(message)
+      if (unknownTool) {
+        return {
+          state: "failed" as const,
+          failureClass: "environment" as const,
+          error: `The ${unknownTool} result is unknown because the session connection was lost before it could be collected.`,
+          ...(text ? { summary: text } : {}),
+          usage: usageOutput(message),
+        }
+      }
+      const terminalError =
+        message.info.role !== "assistant"
+          ? "Workflow task response ended without an assistant result"
+          : !message.info.finish
+            ? "Workflow task response ended without a terminal finish"
+            : undefined
+      if (terminalError) {
+        return {
+          state: "failed" as const,
+          failureClass: "environment" as const,
+          error: terminalError,
           ...(text ? { summary: text } : {}),
           usage: usageOutput(message),
         }

@@ -98,6 +98,9 @@ describe("workflow routes", () => {
         expect(listResponse.status).toBe(200)
         expect((await listResponse.json() as Array<{ run: { id: string } }>)).toHaveLength(1)
 
+        const activeDeleteResponse = await app.request(`/workflow/${started.run.id}`, { method: "DELETE" })
+        expect(activeDeleteResponse.status).toBe(400)
+
         const eventsResponse = await app.request(`/workflow/${started.run.id}/events?limit=1`)
         expect(eventsResponse.status).toBe(200)
         expect(await eventsResponse.json()).toHaveLength(1)
@@ -117,6 +120,19 @@ describe("workflow routes", () => {
         })
         expect(resumeResponse.status).toBe(200)
         expect((await resumeResponse.json() as { run: { state: string } }).run.state).toBe("queued")
+
+        const stopResponse = await app.request(`/workflow/${started.run.id}/stop`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ reason: "delete test" }),
+        })
+        expect(stopResponse.status).toBe(200)
+
+        const deleteResponse = await app.request(`/workflow/${started.run.id}`, { method: "DELETE" })
+        expect(deleteResponse.status).toBe(200)
+        expect(await deleteResponse.json()).toBe(true)
+        expect((await (await app.request("/workflow")).json() as unknown[])).toHaveLength(0)
+        expect((await app.request(`/workflow/${started.run.id}`)).status).toBe(404)
       },
     })
   })
@@ -152,6 +168,15 @@ describe("workflow routes", () => {
         const showResponse = await request(`/workflow/${snapshot.run.id}`)
         expect(showResponse.status).toBe(200)
         expect((await showResponse.json() as { run: { id: string } }).run.id).toBe(snapshot.run.id)
+
+        const stopResponse = await request(`/workflow/${snapshot.run.id}/stop`, {
+          method: "POST",
+          body: JSON.stringify({ reason: "delete test" }),
+        })
+        expect(stopResponse.status).toBe(200)
+        const deleteResponse = await request(`/workflow/${snapshot.run.id}`, { method: "DELETE" })
+        expect(deleteResponse.status).toBe(200)
+        expect(await deleteResponse.json()).toBe(true)
       },
     })
   })

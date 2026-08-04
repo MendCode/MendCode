@@ -4,10 +4,18 @@ import {
   workflowReceiptElapsed,
   workflowReceiptNextAction,
   workflowReceiptProgress,
+  workflowReceiptStateIsAnimated,
+  workflowReceiptStateIsTerminal,
+  workflowReceiptStateMarker,
   workflowReceiptUsage,
   type WorkflowReceiptSnapshot,
 } from "../../../src/cli/cmd/tui/util/workflow-receipt"
-import { workflowMonitorFooter, workflowMonitorLayout, workflowMonitorRows } from "../../../src/cli/cmd/tui/util/workflow-view"
+import {
+  workflowMonitorFooter,
+  workflowMonitorLayout,
+  workflowMonitorRows,
+  workflowMonitorSessionID,
+} from "../../../src/cli/cmd/tui/util/workflow-view"
 
 const snapshot = (overrides: Partial<WorkflowReceiptSnapshot> = {}): WorkflowReceiptSnapshot => ({
   definition: { name: "Release pipeline", description: "Build and verify" },
@@ -31,12 +39,34 @@ describe("workflow monitor helpers", () => {
   test("uses compact and stacked layouts at bounded terminal sizes", () => {
     expect(workflowMonitorLayout({ width: 80, height: 30 })).toMatchObject({ compact: true, stacked: true })
     expect(workflowMonitorLayout({ width: 140, height: 30 })).toMatchObject({ compact: false, stacked: false })
+    expect(workflowMonitorLayout({ width: 140, height: 20 })).toMatchObject({ compact: true, stacked: true })
   })
 
   test("advertises the controls implemented by the monitor", () => {
     expect(workflowMonitorFooter(false)).toContain("t task · f phase")
     expect(workflowMonitorFooter(true)).toContain("t/f retry")
+    expect(workflowMonitorFooter(false)).toContain("d delete")
+    expect(workflowMonitorFooter(false)).toContain("c creator")
     expect(workflowMonitorFooter(false)).toContain("q/Esc back")
+  })
+
+  test("opens the active task transcript before the workflow root", () => {
+    const value = snapshot({
+      run: {
+        id: "wf_run_1",
+        state: "working",
+        originSessionID: "ses_creator",
+        rootSessionID: "ses_root",
+        createdAt: 1_000,
+        updatedAt: 2_000,
+      },
+      tasks: [
+        { id: "task_1", state: "completed", sessionID: "ses_old", startedAt: 1_000 },
+        { id: "task_2", state: "working", sessionID: "ses_active", startedAt: 2_000 },
+      ],
+    })
+    expect(workflowMonitorSessionID(value)).toBe("ses_active")
+    expect(workflowMonitorSessionID(snapshot({ tasks: [], run: { ...value.run, rootSessionID: "ses_root" } }))).toBe("ses_root")
   })
 
   test("summarizes task progress and phase counts", () => {
@@ -63,5 +93,19 @@ describe("workflow monitor helpers", () => {
     })
     expect(workflowReceiptElapsed(value, 9_000)).toBe(3_500)
     expect(workflowReceiptUsage(value)).toBe("150 tokens · $0.1234")
+  })
+
+  test("renders stable ASCII state markers with animated working frames", () => {
+    expect([0, 1, 2, 3].map((frame) => workflowReceiptStateMarker("working", frame))).toEqual([
+      "[|]",
+      "[/]",
+      "[-]",
+      "[\\]",
+    ])
+    expect(workflowReceiptStateMarker("completed")).toBe("[x]")
+    expect(workflowReceiptStateMarker("needs_input")).toBe("[?]")
+    expect(workflowReceiptStateIsAnimated("working")).toBe(true)
+    expect(workflowReceiptStateIsTerminal("failed")).toBe(true)
+    expect(workflowReceiptStateIsTerminal("paused")).toBe(false)
   })
 })

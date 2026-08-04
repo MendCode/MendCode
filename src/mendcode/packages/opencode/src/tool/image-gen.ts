@@ -20,7 +20,7 @@ import * as Tool from "./tool"
 const MAX_EDIT_IMAGES = 5
 const MAX_INPUT_IMAGE_BYTES = 50 * 1024 * 1024
 const MAX_OUTPUT_IMAGE_BYTES = 50 * 1024 * 1024
-const DEFAULT_TIMEOUT_MS = 120_000
+const DEFAULT_TIMEOUT_MS = 10 * 60_000
 const MAX_CAPTION_CHARS = 10_000
 const DEFAULT_CODEX_IMAGES_ENDPOINT = "https://chatgpt.com/backend-api/codex/images"
 const DEFAULT_OPENROUTER_IMAGES_ENDPOINT = "https://openrouter.ai/api/v1/images"

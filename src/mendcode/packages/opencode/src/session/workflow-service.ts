@@ -2,6 +2,7 @@ import { createHash } from "crypto"
 import { Context, Effect, Layer } from "effect"
 
 import { InstanceState } from "@/effect/instance-state"
+import { SessionID } from "@/session/schema"
 import { Database, and, desc, eq, max } from "@/storage/db"
 import {
   WorkflowArtifactTable,
@@ -96,6 +97,7 @@ export interface WorkflowUsageSnapshot {
 export type WorkflowTaskSnapshot = WorkflowTask & {
   readonly state: WorkflowTaskState
   readonly attempt: number
+  readonly sessionID?: SessionID
   readonly startedAt?: number
   readonly completedAt?: number
   readonly blocker?: string
@@ -196,6 +198,7 @@ export interface Interface {
   readonly pause: (input: WorkflowControlInput) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
   readonly resume: (input: WorkflowControlInput) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
   readonly stop: (input: WorkflowControlInput) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
+  readonly remove: (runID: WorkflowRunID) => Effect.Effect<boolean, WorkflowNotFoundError | WorkflowStateError>
   readonly retryTask: (input: WorkflowTaskRetryInput) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
   readonly retryPhase: (input: WorkflowPhaseRetryInput) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
 }
@@ -287,7 +290,10 @@ const phaseFromRow = (row: typeof WorkflowPhaseTable.$inferSelect): WorkflowPhas
   ...(usageFromData(row.data) ? { usage: usageFromData(row.data) } : {}),
 })
 
-const taskFromRow = (row: typeof WorkflowTaskTable.$inferSelect): WorkflowTaskSnapshot => ({
+const taskFromRow = (
+  row: typeof WorkflowTaskTable.$inferSelect,
+  attempt?: typeof WorkflowTaskAttemptTable.$inferSelect,
+): WorkflowTaskSnapshot => ({
   id: WorkflowTaskID.make(row.id),
   phaseID: WorkflowPhaseID.make(row.phase_id),
   name: row.name,
@@ -306,6 +312,7 @@ const taskFromRow = (row: typeof WorkflowTaskTable.$inferSelect): WorkflowTaskSn
   ...(row.map ? { map: row.map } : {}),
   state: row.state,
   attempt: row.attempt,
+  ...(attempt?.background_task_id ? { sessionID: SessionID.make(attempt.background_task_id) } : {}),
   ...(row.time_started === null ? {} : { startedAt: row.time_started ?? undefined }),
   ...(row.time_ended === null ? {} : { completedAt: row.time_ended ?? undefined }),
   ...(typeof row.data?.blocker === "string" ? { blocker: row.data.blocker } : {}),
@@ -357,21 +364,25 @@ const snapshotFromRows = (input: {
   revision: typeof WorkflowRevisionTable.$inferSelect
   phases: readonly (typeof WorkflowPhaseTable.$inferSelect)[]
   tasks: readonly (typeof WorkflowTaskTable.$inferSelect)[]
+  attempts: readonly (typeof WorkflowTaskAttemptTable.$inferSelect)[]
   artifacts: readonly (typeof WorkflowArtifactTable.$inferSelect)[]
   events: readonly (typeof WorkflowEventTable.$inferSelect)[]
   gates: readonly (typeof WorkflowGateTable.$inferSelect)[]
-}): WorkflowSnapshot => ({
-  definition: definitionFromRow(input.definition),
-  revision: revisionFromRow(input.revision),
-  run: runFromRow(input.run),
-  preview: assertValidWorkflowPlan(input.revision.plan),
-  phases: input.phases.map(phaseFromRow),
-  tasks: input.tasks.map(taskFromRow),
-  artifacts: input.artifacts.map(artifactFromRow),
-  events: input.events.map(eventFromRow),
-  gates: input.gates.map(gateFromRow),
-  ...(usageFromData(input.run.data) ? { usage: usageFromData(input.run.data) } : {}),
-})
+}): WorkflowSnapshot => {
+  const attempts = new Map(input.attempts.map((attempt) => [attempt.task_id, attempt]))
+  return {
+    definition: definitionFromRow(input.definition),
+    revision: revisionFromRow(input.revision),
+    run: runFromRow(input.run),
+    preview: assertValidWorkflowPlan(input.revision.plan),
+    phases: input.phases.map(phaseFromRow),
+    tasks: input.tasks.map((task) => taskFromRow(task, attempts.get(task.id))),
+    artifacts: input.artifacts.map(artifactFromRow),
+    events: input.events.map(eventFromRow),
+    gates: input.gates.map(gateFromRow),
+    ...(usageFromData(input.run.data) ? { usage: usageFromData(input.run.data) } : {}),
+  }
+}
 
 const runSnapshot = (db: Parameters<typeof Database.use>[0] extends (db: infer D) => unknown ? D : never, runID: WorkflowRunID, projectID: string) => {
   const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, runID)).get()
@@ -390,6 +401,12 @@ const runSnapshot = (db: Parameters<typeof Database.use>[0] extends (db: infer D
     revision,
     phases: db.select().from(WorkflowPhaseTable).where(eq(WorkflowPhaseTable.run_id, run.id)).orderBy(WorkflowPhaseTable.ordinal).all(),
     tasks: db.select().from(WorkflowTaskTable).where(eq(WorkflowTaskTable.run_id, run.id)).orderBy(WorkflowTaskTable.id).all(),
+    attempts: db
+      .select()
+      .from(WorkflowTaskAttemptTable)
+      .where(eq(WorkflowTaskAttemptTable.run_id, run.id))
+      .orderBy(WorkflowTaskAttemptTable.attempt)
+      .all(),
     artifacts: db
       .select()
       .from(WorkflowArtifactTable)
@@ -700,6 +717,15 @@ export const layer = Layer.effect(
     const resume = (input: WorkflowControlInput) => updateState(input, "queued")
     const stop = (input: WorkflowControlInput) => updateState(input, "stopped")
 
+    const remove = Effect.fn("WorkflowService.remove")(function* (runID: WorkflowRunID) {
+      const current = yield* show(runID)
+      if (!terminalStates.has(current.run.state)) {
+        return yield* Effect.fail(new WorkflowStateError(runID, "Stop the workflow before deleting it"))
+      }
+      Database.use((db) => db.delete(WorkflowRunTable).where(eq(WorkflowRunTable.id, runID)).run())
+      return true
+    })
+
     const retryTask = Effect.fn("WorkflowService.retryTask")(function* (input: WorkflowTaskRetryInput) {
       const current = yield* show(input.runID)
       if (terminalStates.has(current.run.state) && current.run.state !== "failed") return yield* Effect.fail(new WorkflowStateError(input.runID, "Only failed workflows may retry a task"))
@@ -741,7 +767,7 @@ export const layer = Layer.effect(
       return yield* show(input.runID)
     })
 
-    return { preview, save, start, list, show, setWorkspaceLease, events, artifacts, pause, resume, stop, retryTask, retryPhase }
+    return { preview, save, start, list, show, setWorkspaceLease, events, artifacts, pause, resume, stop, remove, retryTask, retryPhase }
   }),
 )
 

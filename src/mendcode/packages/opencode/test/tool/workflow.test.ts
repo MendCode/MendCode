@@ -86,12 +86,20 @@ describe("tool.workflow", () => {
             agent,
           })).find((item) => item.id === "workflow")
           if (!tool) throw new Error("Workflow tool not found")
+          expect(tool.description).toContain("Do not poll")
 
           const context = { ...baseContext, sessionID: parent.id, ask: () => Effect.void }
           const preview = yield* tool.execute({ action: "preview", plan }, context)
           expect(preview.metadata.phaseCount).toBe(1)
           expect(preview.metadata.taskCount).toBe(1)
           expect(preview.output).toContain("max_concurrency")
+          expect(preview.output).toContain("preview_only: true")
+
+          const gated = yield* Effect.exit(
+            tool.execute({ action: "start", plan: { ...plan, requiredGates: ["manual-approval"] } }, context),
+          )
+          expect(gated._tag).toBe("Failure")
+          expect((yield* tool.execute({ action: "list" }, context)).metadata.count).toBe(0)
 
           const saved = yield* tool.execute({ action: "save", plan }, context)
           expect(saved.title).toContain("Saved workflow revision")
@@ -102,10 +110,20 @@ describe("tool.workflow", () => {
           expect(started.title).toContain("Started workflow")
           expect(started.metadata.state).toBe("queued")
           expect(started.output).toContain("run_id:")
+          expect(started.output).toContain("execution_mode: detached")
+          expect(started.output).toContain("do not poll")
 
           const listed = yield* tool.execute({ action: "list" }, context)
           expect(listed.metadata.count).toBe(1)
           expect(listed.output).toContain(started.metadata.runID)
+
+          if (!started.metadata.runID) throw new Error("Workflow run was not returned")
+          const stopped = yield* tool.execute({ action: "stop", runID: started.metadata.runID }, context)
+          expect(stopped.metadata.state).toBe("stopped")
+          const deleted = yield* tool.execute({ action: "delete", runID: started.metadata.runID }, context)
+          expect(deleted.title).toContain("Deleted workflow")
+          const empty = yield* tool.execute({ action: "list" }, context)
+          expect(empty.metadata.count).toBe(0)
         }),
       { git: true },
     ),

@@ -64,6 +64,10 @@ export const workflowHandlers = HttpApiBuilder.group(InstanceHttpApi, "workflow"
       return yield* mapWorkflowError(workflow.show(ctx.params.runID))
     })
 
+    const remove = Effect.fn("WorkflowHttpApi.remove")(function* (ctx: { params: { runID: Workflow.WorkflowRunID } }) {
+      return yield* mapWorkflowError(workflow.remove(ctx.params.runID))
+    })
+
     const events = Effect.fn("WorkflowHttpApi.events")(function* (ctx: {
       params: { runID: Workflow.WorkflowRunID }
       query: typeof WorkflowListQuery.Type
@@ -127,6 +131,7 @@ export const workflowHandlers = HttpApiBuilder.group(InstanceHttpApi, "workflow"
       .handle("start", start)
       .handle("list", list)
       .handle("show", show)
+      .handle("remove", remove)
       .handle("events", events)
       .handle("artifacts", artifacts)
       .handle("pause", pause)

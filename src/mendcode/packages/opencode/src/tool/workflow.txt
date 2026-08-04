@@ -1,5 +1,13 @@
-Create, preview, save, start, inspect, pause, resume, stop, or retry a first-class MendCode Workflow.
+Create, preview, save, start, inspect, pause, resume, stop, delete, or retry a first-class MendCode Workflow.
 
 Use this tool for one-shot declarative workflows that run independently from a loop. A loop may reference a saved workflow, but do not create a loop when the user only asked for one workflow run.
 
 Prefer preview before start when the plan is new. Use a saved revision or definition when available. Workflow snapshots are bounded; inspect artifacts and events explicitly instead of requesting unbounded child transcripts.
+
+For immediate execution, follow a successful preview immediately with exactly one start using the same validated plan. Preview never creates a run. Keep requiredGates empty for immediate execution; direct plan starts reject unresolved gates because this tool has no approval action. Every task that consumes another task's artifact must depend on that producer, directly or transitively.
+
+Use concise, action-oriented display names. Phase names describe the stage and task names describe the action; never reuse the exact same name for a phase and one of its tasks.
+
+Starting a workflow is detached and durable. After start succeeds, return control to the user immediately. Do not poll with repeated show calls, shell sleep commands, tool waits, or status-check loops. The workflow runner, session receipt, and /workflows monitor deliver progress independently. Inspect with show only when the user explicitly asks for a fresh status.
+
+Delete only when the user explicitly asks. A workflow must be completed, failed, or stopped before it can be deleted.

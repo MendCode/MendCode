@@ -1,23 +1,35 @@
 # Changelog
 
-## 0.1.28 - 2026-08-03
+## 0.1.28 - 2026-08-04
 
-MendCode v0.1.28 adds durable Loop Workflows and provider-aware image generation while improving live workflow and session visibility.
+MendCode v0.1.28 adds durable Loop Workflows and provider-aware image generation, strengthens detached background-task delivery, and improves workflow and session recovery across the TUI and server transports.
 
 ### Added
 
-- Add durable Loop Workflows with plans, policy checks, background execution, scheduling, persistence, CLI/API routes, and TUI views.
+- Add durable Loop Workflows with validated plans, policy gates, background execution, scheduling, persistence, recovery, CLI/API routes, and a dedicated TUI monitor.
 - Add the `image_gen` tool with Codex OAuth, OpenRouter, and OpenAI-compatible adapters, persisted artifacts, optional captions, and safe edit inputs.
-- Add focused workflow, image-generation, registry, persistence, scheduler, and TUI regression coverage.
+- Add workflow-run deletion and richer workflow progress, receipt, artifact, and recovery metadata to the server API and generated JavaScript SDK.
+- Add focused workflow, image-generation, background-task, queue/compaction, server-route, scheduler, and TUI regression coverage.
 
 ### Changed
 
-- Expose workflow receipts, progress, queued work, and recovery state consistently across the TUI and server transports.
+- Keep first-class workflows in the dedicated Workflows view instead of mixing workflow coordinators into Agent View.
+- Expose workflow receipts, progress, queued work, terminal outcomes, and recovery state consistently across the TUI and server transports.
 - Keep image generation independently configured from the active chat model and expose it only when the provider contract and permissions support it.
+- Improve compaction, reconnect, long-session, error, and workflow-monitor presentation while keeping the prompt focused during active work.
+
+### Fixed
+
+- Persist, replay, acknowledge, and instance-scope detached background-task completion notifications so idle owners resume reliably without duplicate or cross-project terminal deliveries.
+- Keep the shared server alive while detached work is active and classify missing terminal outcomes as interrupted instead of leaving tasks indefinitely active.
+- Preserve queued prompt state through compaction and reconnects, restore prompt focus after compaction, and clear stale working or disconnected indicators when execution settles.
+- Require workflow artifact consumers to depend on their producers, reject direct starts with unresolved gates, and improve recovery and cleanup of interrupted workflow runs.
+- Keep long-running non-shell tools alive across stream-idle periods and handle unknown image-generation results without crashing the session.
 
 ### Tests
 
 - Confirm the local queue/compaction smoke with a local-only provider; no external provider was contacted.
+- Add targeted regressions for workflow plan validation, scheduler recovery, detached task wakeups, server lifetime, transcript state, prompt initialization, and dedicated workflow rendering.
 
 ## 0.1.27 - 2026-08-02
 

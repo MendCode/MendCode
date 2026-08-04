@@ -248,6 +248,8 @@ import type {
   VcsGetResponses,
   WorkflowArtifactsErrors,
   WorkflowArtifactsResponses,
+  WorkflowDeleteErrors,
+  WorkflowDeleteResponses,
   WorkflowEventsErrors,
   WorkflowEventsResponses,
   WorkflowListErrors,
@@ -6335,6 +6337,38 @@ export class Workflow extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<WorkflowListResponses, WorkflowListErrors, ThrowOnError>({
       url: "/workflow",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Delete a workflow run
+   *
+   * Permanently delete a terminal workflow run and its persisted phases, tasks, attempts, artifacts, events, and gates.
+   */
+  public delete<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<WorkflowDeleteResponses, WorkflowDeleteErrors, ThrowOnError>({
+      url: "/workflow/{runID}",
       ...options,
       ...params,
     })

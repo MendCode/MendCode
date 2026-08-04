@@ -108,6 +108,12 @@ export const WorkflowRoutes = () =>
         return yield* workflow.show(Workflow.WorkflowRunID.make(c.req.param("runID")))
       })),
     )
+    .delete("/:runID", async (c) =>
+      request("WorkflowRoutes.remove", c, Effect.gen(function* () {
+        const workflow = yield* WorkflowService
+        return yield* workflow.remove(Workflow.WorkflowRunID.make(c.req.param("runID")))
+      })),
+    )
     .get("/:runID/events", async (c) =>
       request("WorkflowRoutes.events", c, Effect.gen(function* () {
         const workflow = yield* WorkflowService

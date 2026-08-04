@@ -62,6 +62,7 @@ export type WorkflowPlanValidationCode =
   | "invalid-identifier"
   | "duplicate-identifier"
   | "missing-reference"
+  | "missing-artifact-dependency"
   | "dependency-cycle"
   | "invalid-phase"
   | "invalid-phase-dependency"
@@ -278,6 +279,29 @@ export const validateWorkflowPlan = (plan: WorkflowPlan): WorkflowPlanValidation
     visited.add(taskID)
   }
   for (const task of plan.tasks) visit(task.id, [])
+
+  for (const [index, task] of plan.tasks.entries()) {
+    const dependencies = new Set<string>()
+    const pending = [...task.dependsOn]
+    while (pending.length) {
+      const dependencyID = pending.pop()!
+      if (dependencies.has(dependencyID)) continue
+      dependencies.add(dependencyID)
+      const dependency = tasks.get(dependencyID)
+      if (dependency) pending.push(...dependency.dependsOn)
+    }
+    const selectors = [...(task.inputs ?? []), ...(task.map ? [task.map.source] : [])]
+    for (const selector of selectors) {
+      if (!tasks.has(selector.taskID) || dependencies.has(selector.taskID)) continue
+      issues.push(
+        issue(
+          "missing-artifact-dependency",
+          `Task ${task.id} references artifacts from ${selector.taskID} without depending on that producer`,
+          ["tasks", String(index), "dependsOn"],
+        ),
+      )
+    }
+  }
 
   for (const task of plan.tasks) {
     const phase = phases.get(task.phaseID)

@@ -24,7 +24,7 @@ import { PlanReview } from "../../src/plan-review"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
 import { SessionMessageTable } from "../../src/session/session.sql"
-import { BackgroundTaskEventTable } from "../../src/session/background-task.sql"
+import { BackgroundTaskEventTable, BackgroundTaskTable } from "../../src/session/background-task.sql"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { AppFileSystem } from "@mendcode/core/filesystem"
@@ -137,9 +137,8 @@ test("interrupted tool prompts require a safe exact retry", () => {
   expect(text).toContain('<mendcode_runtime_event type="interrupted_tool">')
   expect(text).toContain("Treat that result as unknown")
   expect(text).toContain("retry that exact command once")
-   expect(text).toContain("do not repeat destructive actions blindly")
+  expect(text).toContain("do not repeat destructive actions blindly")
 })
-
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -1093,8 +1092,8 @@ it.live("wakes an idle parent by default for a background task", () =>
     Effect.fnUntraced(function* ({ llm }) {
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
-       const tasks = yield* BackgroundTask.Service
-       const parent = yield* sessions.create({ title: "Owner wake parent" })
+      const tasks = yield* BackgroundTask.Service
+      const parent = yield* sessions.create({ title: "Owner wake parent" })
       yield* llm.text("parent ready")
       yield* prompt.prompt({
         sessionID: parent.id,
@@ -1128,13 +1127,22 @@ it.live("wakes an idle parent by default for a background task", () =>
       expect(
         messages.some(
           (message) =>
-          message.info.role === "user" &&
-          message.parts.some(
+            message.info.role === "user" &&
+            message.parts.some(
               (part) =>
                 part.type === "text" && part.synthetic === true && part.metadata?.kind === "background_task_owner_wake",
-          ),
+            ),
         ),
       ).toBe(true)
+      expect(
+        Database.use((db) =>
+          db
+            .select()
+            .from(BackgroundTaskEventTable)
+            .where(Database.eq(BackgroundTaskEventTable.id, events.at(-1)!.id))
+            .get(),
+        )?.time_acknowledged,
+      ).toBeNumber()
     }),
     {
       git: true,
@@ -1188,11 +1196,13 @@ it.live("wakes an async parent by default for a background task", () =>
       expect(yield* llm.calls).toBe(2)
       const messages = yield* sessions.messages({ sessionID: parent.id })
       expect(
-        messages.some((message) =>
-          message.info.role === "user" &&
-          message.parts.some(
-            (part) => part.type === "text" && part.synthetic === true && part.metadata?.kind === "background_task_owner_wake",
-          ),
+        messages.some(
+          (message) =>
+            message.info.role === "user" &&
+            message.parts.some(
+              (part) =>
+                part.type === "text" && part.synthetic === true && part.metadata?.kind === "background_task_owner_wake",
+            ),
         ),
       ).toBe(true)
     }),
@@ -1250,6 +1260,12 @@ it.live("does not wake a parent after manual cancellation", () =>
         ),
       ).toBe(false)
       expect(yield* llm.calls).toBe(1)
+      expect(yield* tasks.pendingNotifications(parent.id)).toEqual([])
+      expect(
+        Database.use((db) =>
+          db.select().from(BackgroundTaskTable).where(Database.eq(BackgroundTaskTable.task_id, child.id)).get(),
+        )?.time_dismissed,
+      ).toBeNumber()
     }),
     {
       git: true,
@@ -1539,7 +1555,11 @@ it.live("runs a prompt queued during compaction after the resumed turn", () =>
       yield* llm.wait(1)
       const compactionStatus = yield* status.get(chat.id)
       expect(compactionStatus).toEqual(
-        expect.objectContaining({ type: "busy", kind: "compaction", message: SessionStatus.SESSION_ACTIVITY_COMPACTION }),
+        expect.objectContaining({
+          type: "busy",
+          kind: "compaction",
+          message: SessionStatus.SESSION_ACTIVITY_COMPACTION,
+        }),
       )
 
       const queued = yield* prompt
@@ -1574,11 +1594,11 @@ it.live("runs a prompt queued during compaction after the resumed turn", () =>
       git: true,
       config: (url) => {
         const next = providerCfg(url)
-         return {
-           ...next,
-           compaction: { auto: false },
-           queue: { mode: "immediate" },
-           agent: {
+        return {
+          ...next,
+          compaction: { auto: false },
+          queue: { mode: "immediate" },
+          agent: {
             build: { model: "test/test-model" },
             compaction: { model: "test/test-model" },
           },
@@ -1633,8 +1653,8 @@ it.live("does not re-dispatch a completed response after active compaction", () 
       expect(queuedResult.info.agent).toBe("build")
       expect(queuedResult.info.summary).not.toBe(true)
       expect(queuedResult.info.role === "assistant" ? queuedResult.info.parentID : undefined).toBe(queuedUser?.info.id)
-       expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("queued after response"))).toBe(true)
-       expect(yield* llm.calls).toBe(3)
+      expect((yield* llm.inputs).some((input) => JSON.stringify(input).includes("queued after response"))).toBe(true)
+      expect(yield* llm.calls).toBe(3)
     }),
     {
       git: true,

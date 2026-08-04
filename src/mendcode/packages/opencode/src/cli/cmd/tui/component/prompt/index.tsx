@@ -109,7 +109,7 @@ import {
   type MendPromptStatusScriptOutput,
   type MendPromptStatusScriptResult,
 } from "@/mend/tui/prompt-status"
-import { isAssistantWorking, SESSION_STOPPED_CONNECTION_MESSAGE } from "../../util/session-working"
+import { isAssistantWorking, SESSION_STOPPED_CONNECTION_MESSAGE, shouldShowSessionStoppedConnection } from "../../util/session-working"
 
 const NATIVE_COMPACTION_SLASHES = new Set(["compact", "summarize"])
 const ACTIVE_LOOP_STATES = new Set(["active", "sleeping", "working", "needs_input", "blocked"])
@@ -325,7 +325,6 @@ export function pendingPromptDeliveryMessageIDs(sessionID: string, options?: { i
 }
 
 const PROMPT_DELIVERY_RETRY_INTERVAL = 1000
-const ACCEPTED_PROMPT_RETRY_INTERVAL = 5000
 
 export function promptDeliveryRetryDelay(_attempt: number) {
   return PROMPT_DELIVERY_RETRY_INTERVAL
@@ -365,6 +364,17 @@ export function storedAssistantDeliveryState(info: { time: { completed?: number 
   return "completed" as const
 }
 
+export function promptDeliveryRetryAction(input: {
+  state: "completed" | "accepted" | "missing" | "unknown"
+  forceAccepted: boolean
+  replaceExisting: boolean
+}) {
+  if (input.state === "completed") return "settle" as const
+  if (input.replaceExisting || input.state === "missing") return "dispatch" as const
+  if (input.state === "accepted") return input.forceAccepted ? ("dispatch" as const) : ("accept" as const)
+  return "queue" as const
+}
+
 function queuePendingPromptDelivery(request: PromptAsyncInput) {
   const key = pendingPromptDeliveryKey(request)
   const delivery = pendingPromptDeliveries.get(key)
@@ -393,12 +403,12 @@ function acceptPendingPromptDelivery(request: PromptAsyncInput) {
     delivery.request = request
     delivery.state = "accepted"
     delivery.inFlight = false
-    delivery.nextAttemptAt = Date.now() + ACCEPTED_PROMPT_RETRY_INTERVAL
+    delivery.nextAttemptAt = Number.POSITIVE_INFINITY
   } else {
     pendingPromptDeliveries.set(key, {
       request,
       attempt: 0,
-      nextAttemptAt: Date.now() + ACCEPTED_PROMPT_RETRY_INTERVAL,
+      nextAttemptAt: Number.POSITIVE_INFINITY,
       inFlight: false,
       state: "accepted",
     })
@@ -839,7 +849,12 @@ export function Prompt(props: PromptProps) {
   }
   const hasActiveWorkingAssistant = createMemo(() => Boolean(findActiveWorkingAssistant()))
   const agentStoppedMessage = createMemo(() =>
-    findOrphanedAssistant() ? SESSION_STOPPED_CONNECTION_MESSAGE : undefined,
+    shouldShowSessionStoppedConnection({
+      connectionStatus: sdk.connection.status,
+      hasOrphanedAssistant: Boolean(findOrphanedAssistant()),
+    })
+      ? SESSION_STOPPED_CONNECTION_MESSAGE
+      : undefined,
   )
   onCleanup(() => {
     if (clearWorkingStartTimer) clearTimeout(clearWorkingStartTimer)
@@ -1974,7 +1989,7 @@ export function Prompt(props: PromptProps) {
   function schedulePendingPromptRetry() {
     if (promptDisposed || pendingPromptRetryTimer || !props.sessionID) return
     const nextAttemptAt = pendingPromptDeliveriesForSession(props.sessionID)
-      .filter((delivery) => !delivery.inFlight)
+      .filter((delivery) => !delivery.inFlight && delivery.state === "pending")
       .map((delivery) => delivery.nextAttemptAt)
       .sort((a, b) => a - b)[0]
     if (nextAttemptAt === undefined) return
@@ -2065,21 +2080,23 @@ export function Prompt(props: PromptProps) {
     beginPendingPromptDelivery(request)
     try {
       if (cancelledPromptDeliveryKeys.has(deliveryKey)) return
-      if (retry && !forceAccepted) {
-        const delivery = pendingPromptDeliveries.get(pendingPromptDeliveryKey(request))
-        if (delivery?.state === "accepted" && !request.replaceExisting) return
+      if (retry) {
         const state = await storedPromptDeliveryState(request).catch(() => "unknown" as const)
         if (cancelledPromptDeliveryKeys.has(deliveryKey)) return
-        if (state === "completed") {
+        const action = promptDeliveryRetryAction({
+          state,
+          forceAccepted,
+          replaceExisting: request.replaceExisting === true,
+        })
+        if (action === "settle") {
           settlePendingPromptDelivery(request)
           return
         }
-        if (state === "accepted" && !request.replaceExisting) {
+        if (action === "accept") {
           acceptPendingPromptDelivery(request)
-          schedulePendingPromptRetry()
           return
         }
-        if (state !== "missing" && !request.replaceExisting) {
+        if (action === "queue") {
           queuePendingPromptDelivery(request)
           return
         }
@@ -2128,12 +2145,13 @@ export function Prompt(props: PromptProps) {
       const forceAccepted = input?.forceAccepted === true
       for (const delivery of pendingPromptDeliveriesForSession(props.sessionID)) {
         if (delivery.inFlight) continue
+        if (!forceAccepted && delivery.state === "accepted") continue
         if (!forceAccepted && delivery.nextAttemptAt > now) continue
         delivery.inFlight = true
         try {
           await deliverPrompt(delivery.request, {
             retry: true,
-            forceAccepted: forceAccepted || delivery.state === "accepted",
+            forceAccepted: forceAccepted && delivery.state === "accepted",
           })
         } finally {
           delivery.inFlight = false
@@ -2159,7 +2177,9 @@ export function Prompt(props: PromptProps) {
       if (
         messages.some(
           (message) =>
-            message.role === "assistant" && message.parentID === messageID && message.time.completed !== undefined,
+            message.role === "assistant" &&
+            message.parentID === messageID &&
+            storedAssistantDeliveryState(message) === "completed",
         )
       ) {
         settlePendingPromptDelivery(delivery.request)

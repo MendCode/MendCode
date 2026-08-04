@@ -9,11 +9,11 @@ import type { WorkflowPlan as WorkflowPlanInput } from "@/session/workflow-plan"
 import { WorkflowRunner } from "@/session/workflow-runner"
 import { WorkflowService } from "@/session/workflow-service"
 
-const Action = Schema.Literals(["preview", "save", "start", "list", "show", "pause", "resume", "stop", "retry_task", "retry_phase"])
+const Action = Schema.Literals(["preview", "save", "start", "list", "show", "pause", "resume", "stop", "delete", "retry_task", "retry_phase"])
 
 export const Parameters = Schema.Struct({
   action: Action.annotate({
-    description: "Workflow action. Preview or save a plan before starting it; use show/list for bounded inspection and controls for an existing run.",
+    description: "Workflow action. Preview or save a plan before starting it; use show/list for bounded inspection and controls or delete for an existing run.",
   }),
   runID: Schema.optional(Schema.String).annotate({ description: "Workflow run ID for show, controls, or retry actions." }),
   revisionID: Schema.optional(Schema.String).annotate({ description: "Saved immutable workflow revision to start." }),
@@ -153,6 +153,8 @@ export const WorkflowTool = Tool.define<typeof Parameters, Metadata, WorkflowSer
                 `max_concurrency: ${preview.maxConcurrency}`,
                 `max_fan_out: ${preview.maxFanOut}`,
                 `side_effect_classes: ${preview.sideEffectClasses.join(", ") || "none"}`,
+                "preview_only: true",
+                "No workflow run was created. For immediate execution, keep requiredGates empty and call start once with this exact plan now.",
               ].join("\n"),
               metadata: {
                 action: params.action,
@@ -187,6 +189,13 @@ export const WorkflowTool = Tool.define<typeof Parameters, Metadata, WorkflowSer
           }
 
           if (params.action === "start") {
+            if (params.plan?.requiredGates.length) {
+              return yield* Effect.fail(
+                new Error(
+                  "Direct workflow start cannot use unresolved requiredGates. Remove gates for immediate execution or start a saved approval workflow explicitly.",
+                ),
+              )
+            }
             const scheduler = yield* requireRunner()
             const started = yield* workflows.start({
               plan: params.plan === undefined ? undefined : mutablePlan(params.plan),
@@ -201,7 +210,12 @@ export const WorkflowTool = Tool.define<typeof Parameters, Metadata, WorkflowSer
             yield* scheduler.start(started.run.id)
             return {
               title: `Started workflow ${started.run.id}`,
-              output: snapshotOutput(started),
+              output: [
+                snapshotOutput(started),
+                "",
+                "execution_mode: detached",
+                "The durable runner continues independently. Return control to the user now; do not poll, sleep, wait, or call show unless the user asks for status.",
+              ].join("\n"),
               metadata: { ...snapshotMetadata(started), action: params.action },
             }
           }
@@ -233,6 +247,15 @@ export const WorkflowTool = Tool.define<typeof Parameters, Metadata, WorkflowSer
             const snapshot = yield* workflows.stop({ runID: id, reason: params.reason, actor: "tool" })
             yield* scheduler.stop(snapshot.run.id)
             return { title: `Stopped workflow ${snapshot.run.id}`, output: snapshotOutput(snapshot), metadata: { ...snapshotMetadata(snapshot), action: params.action } }
+          }
+
+          if (params.action === "delete") {
+            yield* workflows.remove(id)
+            return {
+              title: `Deleted workflow ${id}`,
+              output: `Deleted workflow run ${id}.`,
+              metadata: { action: params.action, runID: id },
+            }
           }
 
           if (params.action === "retry_task") {

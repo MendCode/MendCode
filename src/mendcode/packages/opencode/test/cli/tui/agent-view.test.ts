@@ -6,10 +6,7 @@ import {
   formatAgentViewSessionTime,
   countAgentViewCommands,
   formatAgentViewOrchestrationSummary,
-  formatAgentViewWorkflowDetail,
   agentViewCommandTouchesSession,
-  agentViewWorkflowActivity,
-  agentViewWorkflowBackgroundState,
   agentViewLoopRootSessionIDs,
   filterAgentViewLiveLoopWorkflows,
   filterAgentViewLoopSessions,
@@ -18,7 +15,6 @@ import {
   isAgentViewCompletedLoopSession,
   isAgentViewLiveLoopWorkflow,
   isAgentViewLoopSession,
-  isAgentViewWorkflowActiveState,
   isAgentViewCommandActionable,
   isAgentViewSessionFallbackVisible,
   isAgentViewSessionVisible,
@@ -29,7 +25,6 @@ import {
   summarizeAgentViewOrchestration,
   type AgentViewCommand,
   type AgentViewBackgroundSession,
-  type AgentViewWorkflowSummary,
 } from "../../../src/cli/cmd/tui/util/agent-view"
 
 const now = 1_800_000_000_000
@@ -166,27 +161,6 @@ describe("Agent View visibility", () => {
     for (const state of ["draft", "paused", "completed", "failed", "stopped", "deleted", "cancelled", undefined]) {
       expect(isAgentViewLiveLoopWorkflow({ state })).toBe(false)
     }
-  })
-
-  test("keeps workflow roots distinct and visible without a linked session", () => {
-    const workflow: AgentViewWorkflowSummary = {
-      runID: "wf_run_1",
-      name: "Repository analysis",
-      state: "awaiting_approval",
-      phase: "Review",
-      completedTasks: 3,
-      totalTasks: 8,
-      activeTasks: 2,
-      blockedTasks: 1,
-    }
-
-    expect(agentViewWorkflowBackgroundState("awaiting_approval")).toBe("needs_input")
-    expect(agentViewWorkflowBackgroundState("paused")).toBe("stopped")
-    expect(isAgentViewWorkflowActiveState(" WORKING ")).toBe(true)
-    expect(agentViewWorkflowActivity("blocked")).toBe("needsInput")
-    expect(agentViewWorkflowActivity("completed")).toBe("completed")
-    expect(formatAgentViewWorkflowDetail(workflow)).toBe("Workflow · awaiting approval · Review · 3/8 tasks · 2 active · 1 blocked")
-    expect(isAgentViewSessionVisible({ item: item({ session: null, pinned: true, workflow }), now })).toBe(true)
   })
 
   test("filters terminal and non-live loop workflows before Agent View maps roots", () => {
@@ -357,7 +331,6 @@ function item(
     pinned: input.pinned,
     process: input.process,
     metadata: input.metadata,
-    workflow: input.workflow,
     time: {
       created: input.time?.created ?? now - 2_000,
       updated: input.updated ?? input.time?.updated ?? now - 1_000,

@@ -4,6 +4,7 @@ import {
   isRecentWorkingAssistant,
   isStaleBusySession,
   sessionStatusExpiryDelay,
+  shouldShowSessionStoppedConnection,
   STALE_BUSY_SESSION_WINDOW_MS,
 } from "@/cli/cmd/tui/util/session-working"
 
@@ -93,5 +94,12 @@ describe("isAssistantWorking", () => {
     expect(isAssistantWorking({ statusType: "busy", now: 100_000, assistantCreated: 1_000, statusUntil: 101_000 })).toBe(
       true,
     )
+  })
+})
+
+describe("shouldShowSessionStoppedConnection", () => {
+  test("hides an orphaned assistant warning after reconnect", () => {
+    expect(shouldShowSessionStoppedConnection({ connectionStatus: "connected", hasOrphanedAssistant: true })).toBe(false)
+    expect(shouldShowSessionStoppedConnection({ connectionStatus: "disconnected", hasOrphanedAssistant: true })).toBe(true)
   })
 })

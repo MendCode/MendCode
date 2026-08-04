@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test"
 
 describe("session route initialization", () => {
+  test("declares keybind before top navigation memos read it", async () => {
+    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
+    const declaration = "const keybind = useKeybind()"
+    const firstDeclarationIndex = source.indexOf(declaration)
+
+    expect(firstDeclarationIndex).toBeGreaterThan(-1)
+    expect(source.indexOf(declaration, firstDeclarationIndex + declaration.length)).toBeGreaterThan(firstDeclarationIndex)
+    expect(firstDeclarationIndex).toBeLessThan(source.indexOf('keybind.print("session_parent")'))
+  })
+
   test("declares followSessionOutput before effects and memos read it", async () => {
     const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
     const declaration = "const [followSessionOutput, setFollowSessionOutput] = createSignal(true)"

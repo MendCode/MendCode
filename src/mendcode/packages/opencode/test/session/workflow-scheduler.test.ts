@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 
 import { Session } from "@/session/session"
+import { SessionID } from "@/session/schema"
 import { Workflow } from "@/session/workflow"
 import { WorkflowPlan } from "@/session/workflow-plan"
 import * as WorkflowScheduler from "@/session/workflow-scheduler"
@@ -177,6 +178,9 @@ describe("workflow scheduler persistence", () => {
         backgroundTaskID: `ses_${claim.taskID}`,
         backgroundGeneration: 1,
       })
+      expect((yield* workflow.show(started.run.id)).tasks.find((candidate) => candidate.id === claim.taskID)?.sessionID).toBe(
+        SessionID.make(`ses_${claim.taskID}`),
+      )
       yield* scheduler.finish({
         runID: claim.runID,
         taskID: claim.taskID,

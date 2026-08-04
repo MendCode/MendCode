@@ -24,6 +24,7 @@ function promptMessage(text: string): MessageV2.WithParts {
       path: { cwd: "/tmp", root: "/tmp" },
       cost: 0,
       tokens: { input: 2, output: 3, reasoning: 0, cache: { read: 0, write: 0 } },
+      finish: "stop",
     },
     parts: [
       {
@@ -57,6 +58,7 @@ function runExecutor(input: {
   workflowModel?: WorkflowModelRoute
   promptText: string
   calls: PromptInput[]
+  message?: MessageV2.WithParts
 }) {
   const promptLayer = Layer.succeed(
     SessionPrompt.Service,
@@ -67,7 +69,7 @@ function runExecutor(input: {
       prompt: (prompt: PromptInput) =>
         Effect.sync(() => {
           input.calls.push(prompt)
-          return promptMessage(input.promptText)
+          return input.message ?? promptMessage(input.promptText)
         }),
       promptAsync: () => Effect.succeed(promptMessage(input.promptText)),
       loop: () => Effect.succeed(promptMessage(input.promptText)),
@@ -117,6 +119,44 @@ describe("workflow task executor", () => {
 
     expect(result).toMatchObject({ state: "failed", failureClass: "quality" })
     expect(result.error).toContain("valid JSON")
+  })
+
+  test("classifies an uncollected tool result as an environment failure", async () => {
+    const message = promptMessage("")
+    message.parts = [
+      {
+        id: "part_executor_tool" as MessageV2.ToolPart["id"],
+        sessionID: message.info.sessionID,
+        messageID: message.info.id,
+        type: "tool",
+        callID: "call_executor_tool",
+        tool: "image_gen",
+        state: {
+          status: "completed",
+          input: { prompt: "A cinematic orbital station" },
+          title: "image_gen retained",
+          output: "result_status: unknown\nconnection_status: lost",
+          metadata: { connectionLost: true, resultUnknown: true, status: "retained" },
+          time: { start: Date.now(), end: Date.now() },
+        },
+      },
+    ]
+
+    const result = await runExecutor({ task: task(), promptText: "", calls: [], message })
+
+    expect(result).toMatchObject({ state: "failed", failureClass: "environment" })
+    expect(result.error).toContain("connection was lost")
+    expect(result.error).not.toContain("JSON")
+  })
+
+  test("fails when the assistant response lacks a terminal finish", async () => {
+    const message = promptMessage('{"answer":"partial"}')
+    if (message.info.role === "assistant") message.info.finish = undefined
+
+    const result = await runExecutor({ task: task(), promptText: "", calls: [], message })
+
+    expect(result).toMatchObject({ state: "failed", failureClass: "environment" })
+    expect(result.error).toContain("without a terminal finish")
   })
 
   test("fails when structured output violates its declared schema", async () => {

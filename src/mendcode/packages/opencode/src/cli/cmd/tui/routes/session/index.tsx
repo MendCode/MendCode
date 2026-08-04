@@ -124,7 +124,7 @@ import { QuestionPrompt } from "./question"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import * as Model from "../../util/model"
 import { formatAssistantLiveUsage, formatAssistantUsage, formatLatestAssistantContextUsage } from "../../util/usage"
-import { isAssistantWorking, SESSION_STOPPED_CONNECTION_MESSAGE } from "../../util/session-working"
+import { isAssistantWorking, SESSION_STOPPED_CONNECTION_MESSAGE, shouldShowSessionStoppedConnection } from "../../util/session-working"
 import { formatTranscript } from "../../util/transcript"
 import { useTuiConfig } from "../../context/tui-config"
 import {
@@ -132,7 +132,10 @@ import {
   workflowReceiptElapsed,
   workflowReceiptNextAction,
   workflowReceiptProgress,
+  workflowReceiptStateIsAnimated,
+  workflowReceiptStateIsTerminal,
   workflowReceiptStateLabel,
+  workflowReceiptStateMarker,
   workflowReceiptUsage,
 } from "@tui/util/workflow-receipt"
 import {
@@ -182,7 +185,7 @@ import {
   shouldDisplayReasoning,
   unavailableReasoningLabel,
 } from "@/mend/tui/presentation"
-import { CompactionPanel, isCompactionArcadeFocused } from "../../component/compaction-panel"
+import { blurCompactionArcade, CompactionPanel, isCompactionArcadeFocused } from "../../component/compaction-panel"
 import {
   agentViewCommandStateRank,
   agentViewCommandTouchesSession,
@@ -601,6 +604,7 @@ export function Session() {
   const kv = useKV()
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
+  const keybind = useKeybind()
   const [now, setNow] = createSignal(Date.now())
   const promptEdgeToEdge = createMemo(() => {
     return promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)
@@ -978,6 +982,7 @@ export function Session() {
     })
   })
   const todos = createMemo(() => sync.data.todo[route.sessionID] ?? [])
+  const sdk = useSDK()
   const taskSubagentBySession = createMemo(() => {
     const result = new Map<string, { description?: string; subagentType?: string }>()
     const fullStartID = rootFullHistoryStartID()
@@ -1027,6 +1032,7 @@ export function Session() {
             (sync.data.question[child.id]?.length ?? 0) +
             (sync.data.plan_review[child.id]?.length ?? 0),
           now: now(),
+          connectionStatus: sdk.connection.status,
         })
         const usage = latestAssistant
           ? (formatAssistantLiveUsage(latestAssistant, providers(), { config: sync.data.config }) ??
@@ -1058,7 +1064,6 @@ export function Session() {
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const toast = useToast()
-  const sdk = useSDK()
   const [sendNowMessageID, setSendNowMessageID] = createSignal<string>()
   const sendQueuedNow = async (messageID: string) => {
     if (sendNowMessageID()) return
@@ -1992,7 +1997,6 @@ export function Session() {
     prompt.focus()
     return true
   }
-  const keybind = useKeybind()
   const dialog = useDialog()
   const renderer = useRenderer()
 
@@ -2108,7 +2112,10 @@ export function Session() {
     const contentHeightChanged = Math.abs(scrollHeight - lastObservedScrollHeight) > 1
     const viewportHeightChanged = Math.abs(viewportHeight - lastObservedViewportHeight) > 1
 
-    if (userMovedViewport) cancelBottomScrollTimers()
+    if (userMovedViewport) {
+      blurCompactionArcade()
+      cancelBottomScrollTimers()
+    }
 
     if (
       suppressedPagingBoundary &&
@@ -2224,6 +2231,7 @@ export function Session() {
   }
 
   const markScrollDetached = () => {
+    blurCompactionArcade()
     restoringSessionScroll = false
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
@@ -2363,6 +2371,7 @@ export function Session() {
   )
 
   const scrollBySession = (delta: number) => {
+    blurCompactionArcade()
     restoringSessionScroll = false
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
@@ -2371,6 +2380,7 @@ export function Session() {
     setTimeout(syncScrollFollowMode, 0)
   }
   const scrollToSession = (position: number) => {
+    blurCompactionArcade()
     restoringSessionScroll = false
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
@@ -4279,6 +4289,7 @@ function sessionLiveStateLabel(input: {
   messages: Message[]
   pendingInputCount: number
   now?: number
+  connectionStatus?: string
 }) {
   if (input.pendingInputCount > 0) return "needs input"
   if (
@@ -4304,7 +4315,12 @@ function sessionLiveStateLabel(input: {
     isAssistantWorking({ now: input.now, assistantCreated: lastAssistant.time.created })
   )
     return "working"
-  if (lastAssistant && !lastAssistant.time.completed) return SESSION_STOPPED_CONNECTION_MESSAGE
+  if (
+    shouldShowSessionStoppedConnection({
+      connectionStatus: input.connectionStatus ?? "disconnected",
+      hasOrphanedAssistant: Boolean(lastAssistant && !lastAssistant.time.completed),
+    })
+  ) return SESSION_STOPPED_CONNECTION_MESSAGE
   if (lastUser && (!lastAssistant || lastAssistant.time.created < lastUser.time.created)) return "waiting"
   if (lastAssistant) return "responded"
   return "ready"
@@ -7373,6 +7389,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
       messages: messages(),
       pendingInputCount: childPendingInputCount(),
       now: ctx.now(),
+      connectionStatus: sdk.connection.status,
     })
   })
   const backgroundTask = createMemo(() => props.metadata.status === "started")
@@ -7904,6 +7921,7 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
   const { theme } = useTheme()
   const { navigate } = useRoute()
   const [refresh, setRefresh] = createSignal(0)
+  const [activityFrame, setActivityFrame] = createSignal(0)
   const [hover, setHover] = createSignal(false)
   const runID = createMemo(() => (typeof props.metadata.runID === "string" ? props.metadata.runID : undefined))
   const [snapshot] = createResource(() => `${runID() ?? ""}:${refresh()}`, async () => {
@@ -7947,11 +7965,21 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
   const nextAction = createMemo(() => receipt() ? workflowReceiptNextAction(receipt()!) : "Open the workflow monitor for the latest snapshot.")
 
   onMount(() => {
+    const animation = setInterval(() => {
+      if (workflowReceiptStateIsAnimated(state())) setActivityFrame((value) => value + 1)
+    }, 180)
+    const fallback = setInterval(() => {
+      if (runID() && !workflowReceiptStateIsTerminal(state())) setRefresh((value) => value + 1)
+    }, 5_000)
     const unsubscribe = sdk.event.on("event", (event) => {
       const type = event.payload?.type as string | undefined
       if (type?.startsWith("workflow.")) setRefresh((value) => value + 1)
     })
-    onCleanup(unsubscribe)
+    onCleanup(() => {
+      clearInterval(animation)
+      clearInterval(fallback)
+      unsubscribe()
+    })
   })
 
   async function control(action: "pause" | "resume" | "stop") {
@@ -7976,14 +8004,6 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
   async function openTarget() {
     const id = runID()
     if (!id) return
-    const root = live()?.run.rootSessionID ?? props.metadata.rootSessionID
-    if (root) {
-      const result = await sdk.client.session.get({ sessionID: root }).catch(() => undefined)
-      if (result?.data) {
-        navigate({ type: "session", sessionID: root })
-        return
-      }
-    }
     navigate({ type: "workflows", selectedID: id, returnTo: { type: "session", sessionID: session.sessionID } })
   }
 
@@ -8018,7 +8038,7 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
           <box flexDirection="row">
             <text fg={theme.secondary} attributes={TextAttributes.BOLD}>{toolPresentationIcon("workflow")} {Locale.truncateMiddle(title(), Math.max(18, panelWidth() - 24))}</text>
             <box flexGrow={1} />
-            <text fg={theme.secondary}>{workflowReceiptStateLabel(state())}</text>
+            <text fg={theme.secondary}>{workflowReceiptStateMarker(state(), activityFrame())} {workflowReceiptStateLabel(state())}</text>
           </box>
           <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
             <For each={rows()}>
@@ -8032,6 +8052,40 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
             <text fg={theme.textMuted} wrapMode="word">{Locale.truncate(objective(), Math.max(24, panelWidth() - 8))}</text>
             <text fg={theme.warning} wrapMode="word">next: {Locale.truncate(nextAction(), Math.max(24, panelWidth() - 14))}</text>
           </box>
+          <Show when={receipt()?.phases.length}>
+            <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
+              <text fg={theme.primary} attributes={TextAttributes.BOLD}>EXECUTION PLAN</text>
+              <For each={receipt()!.phases.slice(0, 8)}>
+                {(phase) => (
+                  <box flexDirection="row">
+                    <text
+                      width={5}
+                      fg={
+                        phase.state === "completed"
+                          ? theme.success
+                          : phase.state === "failed" || phase.state === "blocked"
+                            ? theme.error
+                            : phase.state === "working"
+                              ? theme.secondary
+                              : theme.textMuted
+                      }
+                      wrapMode="none"
+                    >
+                      {workflowReceiptStateMarker(phase.state, activityFrame())}
+                    </text>
+                    <text fg={theme.text} wrapMode="none">
+                      {Locale.truncateMiddle(phase.name || phase.id || "phase", Math.max(16, panelWidth() - 32))}
+                    </text>
+                    <box flexGrow={1} />
+                    <text fg={theme.textMuted} wrapMode="none">{phase.counts.completed}/{phase.counts.total}</text>
+                  </box>
+                )}
+              </For>
+              <Show when={(receipt()?.phases.length ?? 0) > 8}>
+                <text fg={theme.textMuted}>... {(receipt()?.phases.length ?? 0) - 8} more phases</text>
+              </Show>
+            </box>
+          </Show>
           <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="row">
             <text fg={hover() ? theme.secondary : theme.textMuted} onMouseUp={handleOpenTarget}>open monitor</text>
             <box flexGrow={1} />

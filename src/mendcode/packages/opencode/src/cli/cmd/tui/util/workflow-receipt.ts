@@ -37,7 +37,17 @@ export type WorkflowReceiptSnapshot = {
     state: string
     counts: { total: number; queued: number; working: number; completed: number; failed: number; blocked: number }
   }[]
-  tasks: readonly { id?: string; name?: string; phaseID?: string; state: string; blocker?: string; attempt?: number }[]
+  tasks: readonly {
+    id?: string
+    name?: string
+    phaseID?: string
+    state: string
+    blocker?: string
+    attempt?: number
+    sessionID?: string
+    startedAt?: number
+    completedAt?: number
+  }[]
   events?: readonly { summary: string; type: string; createdAt: number }[]
   usage?: { inputTokens?: number; outputTokens?: number; cost?: number }
 }
@@ -80,6 +90,29 @@ export function workflowReceiptProgress(snapshot: Pick<WorkflowReceiptSnapshot, 
 
 export function workflowReceiptStateLabel(state: WorkflowReceiptState) {
   return state.replaceAll("_", " ")
+}
+
+const WORKFLOW_ACTIVITY_FRAMES = ["|", "/", "-", "\\"] as const
+
+export function workflowReceiptStateIsAnimated(state: WorkflowReceiptState) {
+  return state === "planning" || state === "working"
+}
+
+export function workflowReceiptStateIsTerminal(state: WorkflowReceiptState) {
+  return state === "completed" || state === "failed" || state === "stopped"
+}
+
+export function workflowReceiptStateMarker(state: WorkflowReceiptState, frame = 0) {
+  if (workflowReceiptStateIsAnimated(state)) {
+    return `[${WORKFLOW_ACTIVITY_FRAMES[Math.abs(frame) % WORKFLOW_ACTIVITY_FRAMES.length]}]`
+  }
+  if (state === "completed") return "[x]"
+  if (state === "failed") return "[!]"
+  if (state === "needs_input" || state === "awaiting_approval") return "[?]"
+  if (state === "paused") return "[=]"
+  if (state === "blocked" || state === "stopped") return "[-]"
+  if (state === "queued") return "[ ]"
+  return "[~]"
 }
 
 export function workflowReceiptElapsed(snapshot: Pick<WorkflowReceiptSnapshot, "run">, now = Date.now()) {

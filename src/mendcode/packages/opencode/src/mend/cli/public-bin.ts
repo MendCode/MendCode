@@ -176,7 +176,7 @@ Workflows:
                                 inspect or monitor one Loop Workflow journal
   mendcode loops service status|start|stop
                                  manage the per-project background Loop service
-   mendcode workflows list|show|preview|save|start|pause|resume|stop|retry-task|retry-phase
+   mend workflows list|show|preview|save|start|pause|resume|stop|delete|retry-task|retry-phase
                                  inspect and control independent workflow runs; use --plan-file for preview/save/start
   mendcode memory dream service status|start|stop
                                 manage the global background Dream service
@@ -220,7 +220,7 @@ Primary public surface:
    mendcode loops tick <id> --execute [--report-only]
    mendcode loops service install|start|stop|restart|status|logs|uninstall [--service-dir <path>] [--log-dir <path>]
    mendcode loops daemon --once --quiet  run one due-loop pass for scheduled background services
-   mendcode workflows list|show|preview|save|start|pause|resume|stop|retry-task|retry-phase
+   mend workflows list|show|preview|save|start|pause|resume|stop|delete|retry-task|retry-phase
   mendcode memory dream run|consolidate|tick|daemon|service
   mendcode memory dream run --preview|--auto  run a manual consolidation pass
   mendcode memory dream daemon --once   run one scheduled Dream pass and exit

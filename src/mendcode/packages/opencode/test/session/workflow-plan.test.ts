@@ -114,6 +114,20 @@ describe("WorkflowPlan", () => {
     expect(result.issues.map((entry) => entry.code)).toEqual(expect.arrayContaining(["dependency-cycle"]))
   })
 
+  test("requires artifact consumers to depend on their producer", () => {
+    const plan = basePlan()
+    plan.tasks[1] = { ...plan.tasks[1], dependsOn: [] }
+    const result = validateWorkflowPlan(plan)
+
+    expect(result.valid).toBe(false)
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: "missing-artifact-dependency",
+        message: expect.stringContaining(taskResearch),
+      }),
+    )
+  })
+
   test("rejects invalid phase barriers and unsupported outputs", () => {
     const plan = basePlan()
     plan.phases[0] = { ...plan.phases[0], barrier: { kind: "quorum", quorum: 2 } }

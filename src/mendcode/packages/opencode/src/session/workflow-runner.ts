@@ -83,6 +83,7 @@ export const layer = Layer.effect(
     const instances = Option.getOrUndefined(yield* Effect.serviceOption(InstanceStore.Service))
     const worktrees = Option.getOrUndefined(yield* Effect.serviceOption(Worktree.Service))
     const scope = yield* Scope.Scope
+    const activeRuns = new Set<string>()
 
     const executionWorkspace = Effect.fn("WorkflowRunner.executionWorkspace")(function* (snapshot: WorkflowService.WorkflowSnapshot) {
       const current = yield* InstanceState.context
@@ -384,7 +385,12 @@ export const layer = Layer.effect(
       }).pipe(Effect.mapError(() => new WorkflowService.WorkflowNotFoundError(runID)))
 
     const start = Effect.fn("WorkflowRunner.start")(function* (runID: string) {
-      yield* Effect.forkIn(run(runID), scope)
+      if (activeRuns.has(runID)) return
+      activeRuns.add(runID)
+      yield* Effect.forkIn(
+        run(runID).pipe(Effect.ensuring(Effect.sync(() => activeRuns.delete(runID)))),
+        scope,
+      )
     })
 
     return Service.of({ start, run, stop })

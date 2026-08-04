@@ -54,6 +54,7 @@ const WorkflowTaskSnapshot = Schema.Struct({
   map: Schema.optional(Workflow.WorkflowMapSpec),
   state: Workflow.WorkflowTaskState,
   attempt: Schema.Int,
+  sessionID: Schema.optional(SessionID),
   startedAt: Schema.optional(Schema.Number),
   completedAt: Schema.optional(Schema.Number),
   blocker: Schema.optional(Schema.String),
@@ -149,6 +150,7 @@ export const WorkflowPaths = {
   save: `${root}/save`,
   start: `${root}/start`,
   show: `${root}/:runID`,
+  remove: `${root}/:runID`,
   events: `${root}/:runID/events`,
   artifacts: `${root}/:runID/artifacts`,
   pause: `${root}/:runID/pause`,
@@ -215,6 +217,17 @@ export const WorkflowApi = HttpApi.make("workflow")
             identifier: "workflow.show",
             summary: "Inspect a workflow run",
             description: "Read the canonical durable workflow snapshot used for monitor rehydration.",
+          }),
+        ),
+        HttpApiEndpoint.delete("remove", WorkflowPaths.remove, {
+          params: { runID: Workflow.WorkflowRunID },
+          success: described(Schema.Boolean, "Successfully deleted workflow run"),
+          error: [ApiBadRequestError, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "workflow.delete",
+            summary: "Delete a workflow run",
+            description: "Permanently delete a terminal workflow run and its persisted phases, tasks, attempts, artifacts, events, and gates.",
           }),
         ),
         HttpApiEndpoint.get("events", WorkflowPaths.events, {

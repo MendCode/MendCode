@@ -2,6 +2,13 @@ export const RECENT_WORKING_ASSISTANT_WINDOW_MS = 30_000
 export const STALE_BUSY_SESSION_WINDOW_MS = 60_000
 export const SESSION_STOPPED_CONNECTION_MESSAGE = "agent stopped: local server connection lost"
 
+export function shouldShowSessionStoppedConnection(input: {
+  connectionStatus: string
+  hasOrphanedAssistant: boolean
+}) {
+  return input.connectionStatus !== "connected" && input.hasOrphanedAssistant
+}
+
 type TuiSessionStatus =
   | { type: "idle" }
   | { type: "busy"; until?: number }

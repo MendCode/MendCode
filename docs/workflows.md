@@ -34,7 +34,7 @@ Set `budget.maxFanOut` and `budget.maxConcurrency` to the intended limits, requi
 Preview a new plan before starting it:
 
 ```bash
-mendcode workflows preview --plan-file ./plan.json
+mend workflows preview --plan-file ./plan.json
 ```
 
 The preview validates the graph and reports phase count, task count, bounded fan-out, concurrency, estimated budgets, and side-effect classes. Preview does not create a run.
@@ -44,33 +44,34 @@ The preview validates the graph and reports phase count, task count, bounded fan
 Save an immutable revision:
 
 ```bash
-mendcode workflows save --plan-file ./plan.json --name "Repository review"
+mend workflows save --plan-file ./plan.json --name "Repository review"
 ```
 
 Start a one-shot run from a plan or saved revision:
 
 ```bash
-mendcode workflows start --plan-file ./plan.json
-mendcode workflows start --revision-id <revision-id>
+mend workflows start --plan-file ./plan.json
+mend workflows start --revision-id <revision-id>
 ```
 
 Inspect and list runs:
 
 ```bash
-mendcode workflows list
-mendcode workflows show <run-id>
-mendcode workflows events <run-id> --limit 50
-mendcode workflows artifacts <run-id> --limit 50
+mend workflows list
+mend workflows show <run-id>
+mend workflows events <run-id> --limit 50
+mend workflows artifacts <run-id> --limit 50
 ```
 
 Control a run through the durable backend contract:
 
 ```bash
-mendcode workflows pause <run-id> --reason "Waiting for review"
-mendcode workflows resume <run-id>
-mendcode workflows stop <run-id> --reason "No longer needed"
-mendcode workflows retry-task <run-id> --task-id <task-id>
-mendcode workflows retry-phase <run-id> --phase-id <phase-id>
+mend workflows pause <run-id> --reason "Waiting for review"
+mend workflows resume <run-id>
+mend workflows stop <run-id> --reason "No longer needed"
+mend workflows delete <run-id>
+mend workflows retry-task <run-id> --task-id <task-id>
+mend workflows retry-phase <run-id> --phase-id <phase-id>
 ```
 
 Control actions rehydrate the canonical snapshot and start or stop the runner as appropriate. A retry does not mutate the saved definition revision.
@@ -99,6 +100,7 @@ Keyboard controls are:
 | `p` | Pause |
 | `u` | Resume |
 | `x` | Stop after confirmation |
+| `d` | Delete a terminal run after confirmation |
 | `t` | Retry the selected eligible task |
 | `f` | Retry the selected eligible phase |
 | `r` | Rehydrate the canonical snapshot |
@@ -116,6 +118,7 @@ POST   /workflow/save
 POST   /workflow/start
 GET    /workflow
 GET    /workflow/:runID
+DELETE /workflow/:runID
 GET    /workflow/:runID/events
 GET    /workflow/:runID/artifacts
 POST   /workflow/:runID/pause

@@ -623,6 +623,11 @@ export type LoopWorkflow = {
       dailyAt?: string
       timezone?: string
     }
+    workflow?: {
+      revisionID?: string
+      definitionID?: string
+      overlapKey?: string
+    }
     budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
     usageMode?: "subscription" | "api-usage"
     completionCriteria?: Array<string>
@@ -1755,6 +1760,23 @@ export type Config = {
   provider?: {
     [key: string]: ProviderConfig
   }
+  image_generation?: {
+    enabled?: boolean
+    model?: string
+    adapter?: "auto" | "codex-oauth" | "openrouter" | "openai-compatible"
+    base_url?: string
+    timeout_ms?: number
+    options?: {
+      [key: string]: unknown
+    }
+    caption?: {
+      enabled?: boolean
+      model?: string
+      required?: boolean
+      prompt?: string
+      max_chars?: number
+    }
+  }
   mcp?: {
     [key: string]:
       | McpLocalConfig
@@ -2502,6 +2524,11 @@ export type LoopWorkflow1 = {
       intervalMs?: number
       dailyAt?: string
       timezone?: string
+    }
+    workflow?: {
+      revisionID?: string
+      definitionID?: string
+      overlapKey?: string
     }
     budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
     usageMode?: "subscription" | "api-usage"
@@ -9807,6 +9834,16 @@ export type WorkflowStartResponses = {
       rootSessionID?: string
       loopID?: string
       loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -10012,6 +10049,7 @@ export type WorkflowStartResponses = {
       }
       state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
       attempt: number
+      sessionID?: string
       startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       blocker?: string
@@ -10322,6 +10360,16 @@ export type WorkflowListResponses = {
       rootSessionID?: string
       loopID?: string
       loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -10527,6 +10575,7 @@ export type WorkflowListResponses = {
       }
       state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
       attempt: number
+      sessionID?: string
       startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       blocker?: string
@@ -10580,6 +10629,40 @@ export type WorkflowListResponses = {
 }
 
 export type WorkflowListResponse = WorkflowListResponses[keyof WorkflowListResponses]
+
+export type WorkflowDeleteData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/{runID}"
+}
+
+export type WorkflowDeleteErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowDeleteError = WorkflowDeleteErrors[keyof WorkflowDeleteErrors]
+
+export type WorkflowDeleteResponses = {
+  /**
+   * Successfully deleted workflow run
+   */
+  200: boolean
+}
+
+export type WorkflowDeleteResponse = WorkflowDeleteResponses[keyof WorkflowDeleteResponses]
 
 export type WorkflowShowData = {
   body?: never
@@ -10842,6 +10925,16 @@ export type WorkflowShowResponses = {
       rootSessionID?: string
       loopID?: string
       loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -11047,6 +11140,7 @@ export type WorkflowShowResponses = {
       }
       state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
       attempt: number
+      sessionID?: string
       startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       blocker?: string
@@ -11458,6 +11552,16 @@ export type WorkflowPauseResponses = {
       rootSessionID?: string
       loopID?: string
       loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -11663,6 +11767,7 @@ export type WorkflowPauseResponses = {
       }
       state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
       attempt: number
+      sessionID?: string
       startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       blocker?: string
@@ -11980,6 +12085,16 @@ export type WorkflowResumeResponses = {
       rootSessionID?: string
       loopID?: string
       loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -12185,6 +12300,7 @@ export type WorkflowResumeResponses = {
       }
       state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
       attempt: number
+      sessionID?: string
       startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       blocker?: string
@@ -12502,6 +12618,16 @@ export type WorkflowStopResponses = {
       rootSessionID?: string
       loopID?: string
       loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -12707,6 +12833,7 @@ export type WorkflowStopResponses = {
       }
       state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
       attempt: number
+      sessionID?: string
       startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       blocker?: string
@@ -13025,6 +13152,16 @@ export type WorkflowRetryTaskResponses = {
       rootSessionID?: string
       loopID?: string
       loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -13230,6 +13367,7 @@ export type WorkflowRetryTaskResponses = {
       }
       state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
       attempt: number
+      sessionID?: string
       startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       blocker?: string
@@ -13548,6 +13686,16 @@ export type WorkflowRetryPhaseResponses = {
       rootSessionID?: string
       loopID?: string
       loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -13753,6 +13901,7 @@ export type WorkflowRetryPhaseResponses = {
       }
       state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
       attempt: number
+      sessionID?: string
       startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       blocker?: string

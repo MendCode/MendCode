@@ -131,6 +131,7 @@ function adapterLayers(input: {
         start: input.start,
         list: unused,
         show: input.show,
+        remove: unused,
         setWorkspaceLease: unused,
         events: unused,
         artifacts: unused,

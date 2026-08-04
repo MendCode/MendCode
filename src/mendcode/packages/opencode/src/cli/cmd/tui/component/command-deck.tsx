@@ -64,7 +64,7 @@ export function commandDeckLayout(input: { width: number; height: number; hasRai
   const hasContext = input.hasContext ?? true
   const wide = width >= 120 && height >= 24
   const railWidth = Math.min(28, Math.max(22, Math.floor(width * 0.18)))
-  const contextWidth = Math.min(36, Math.max(28, Math.floor(width * 0.24)))
+  const contextWidth = Math.min(42, Math.max(30, Math.floor(width * 0.24)))
   const sideWidth = (hasRail ? railWidth : 0) + (hasContext ? contextWidth : 0)
   const sideChrome = sideWidth === 0 ? 2 : sideWidth + (hasRail && hasContext ? 4 : 3)
   return {
@@ -112,11 +112,11 @@ export function CommandDeckContext(props: CommandDeckContextProps) {
       </text>
       <For each={props.rows ?? []}>
         {(row) => (
-          <box flexDirection="row" height={1} overflow="hidden" gap={1}>
-            <text fg={theme.textMuted} width={12} wrapMode="none">
+          <box flexDirection="row" minHeight={1} overflow="hidden" gap={1}>
+            <text fg={theme.textMuted} width={9} flexShrink={0} wrapMode="none">
               {row[0]}
             </text>
-            <text fg={theme.text} wrapMode="none">
+            <text fg={theme.text} flexGrow={1} minWidth={0} wrapMode="word">
               {row[1]}
             </text>
           </box>

@@ -533,13 +533,13 @@ async function withWorkflowRuntime<T>(
 }
 
 function workflowRunID(value?: string) {
-  if (!value) throw new Error("Usage: mendcode workflows <show|events|artifacts|pause|resume|stop|retry-task|retry-phase> <run-id>")
+  if (!value) throw new Error("Usage: mend workflows <show|events|artifacts|pause|resume|stop|delete|retry-task|retry-phase> <run-id>")
   return Workflow.WorkflowRunID.make(value)
 }
 
 async function workflowPlan(args: string[]) {
   const file = optionValue(args, "--plan-file")
-  if (!file) throw new Error("Usage: mendcode workflows <preview|save|start> --plan-file <path>")
+  if (!file) throw new Error("Usage: mend workflows <preview|save|start> --plan-file <path>")
   return (await readJson(path.resolve(shellProjectRoot(), file))) as WorkflowPlan
 }
 
@@ -639,6 +639,12 @@ async function workflows(args: string[]) {
     printResult(args, snapshot, formatWorkflowSnapshot)
     return
   }
+  if (sub === "delete") {
+    const runID = workflowRunID(args[1])
+    const removed = await withWorkflowService((workflow) => workflow.remove(runID))
+    printResult(args, removed, () => `Deleted workflow run ${runID}`)
+    return
+  }
   if (sub === "events" || sub === "artifacts") {
     const runID = workflowRunID(args[1])
     if (sub === "events") {
@@ -666,12 +672,12 @@ async function workflows(args: string[]) {
           yield* runner.stop(snapshot.run.id)
         } else if (sub === "retry-task") {
           const taskID = optionValue(args, "--task-id")
-          if (!taskID) throw new Error("Usage: mendcode workflows retry-task <run-id> --task-id <task-id>")
+          if (!taskID) throw new Error("Usage: mend workflows retry-task <run-id> --task-id <task-id>")
           snapshot = yield* workflow.retryTask({ runID, taskID: Workflow.WorkflowTaskID.make(taskID), reason: optionValue(args, "--reason") ?? undefined, actor: "cli" })
           yield* runner.start(snapshot.run.id)
         } else {
           const phaseID = optionValue(args, "--phase-id")
-          if (!phaseID) throw new Error("Usage: mendcode workflows retry-phase <run-id> --phase-id <phase-id>")
+          if (!phaseID) throw new Error("Usage: mend workflows retry-phase <run-id> --phase-id <phase-id>")
           snapshot = yield* workflow.retryPhase({ runID, phaseID: Workflow.WorkflowPhaseID.make(phaseID), reason: optionValue(args, "--reason") ?? undefined, actor: "cli" })
           yield* runner.start(snapshot.run.id)
         }
@@ -681,7 +687,7 @@ async function workflows(args: string[]) {
     printResult(args, result, formatWorkflowSnapshot)
     return
   }
-  throw new Error("Usage: mendcode workflows <list|preview|save|start|show|events|artifacts|pause|resume|stop|retry-task|retry-phase>")
+  throw new Error("Usage: mend workflows <list|preview|save|start|show|events|artifacts|pause|resume|stop|delete|retry-task|retry-phase>")
 }
 
 async function loops(args: string[]) {

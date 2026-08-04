@@ -4,6 +4,8 @@ import { BackgroundSession } from "./background"
 import { AgentViewMetadata } from "./agent-view-metadata"
 import { Session } from "./session"
 import { SessionStatus } from "./status"
+import { WorkflowRunTable } from "./session.sql"
+import { Database } from "@/storage/db"
 
 export type ListInput = Session.ListInput
 
@@ -73,7 +75,16 @@ export const layer = Layer.effect(
     const status = yield* SessionStatus.Service
 
     const list = Effect.fn("AgentView.list")(function* (input?: ListInput) {
-      const sessions = yield* session.list({ ...input, limit: undefined })
+      const workflowRootSessionIDs = new Set(
+        Database.use((db) =>
+          db.select({ sessionID: WorkflowRunTable.root_session_id })
+            .from(WorkflowRunTable)
+            .all()
+            .flatMap((row) => row.sessionID ? [row.sessionID] : []),
+        ),
+      )
+      const sessions = (yield* session.list({ ...input, limit: undefined }))
+        .filter((info) => !workflowRootSessionIDs.has(info.id))
       const sessionsByID = new Map(sessions.map((info) => [info.id, info]))
       const statuses = yield* status.list()
       const metadataBySessionID = new Map((yield* metadata.list()).map((info) => [info.sessionID, info]))
