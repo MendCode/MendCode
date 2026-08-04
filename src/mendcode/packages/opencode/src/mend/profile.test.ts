@@ -280,4 +280,31 @@ describe("Mend TUI profile config overrides", () => {
 
     expect(validateMendTuiProfile(invalid).failures).toContain("tui surfaces.homeWelcome.rightPanel is invalid")
   })
+
+  test("image generation wait art accepts responsive custom ASCII settings", () => {
+    const result = mergeMendTuiProfile({
+      imageGeneration: {
+        wait: {
+          mode: "static",
+          textColor: "accent",
+          canvas: {
+            minWidth: 20,
+            maxWidth: 40,
+            heightRatio: 0.5,
+          },
+          ascii: {
+            static: [" /\\_/\\", "( o.o )", " > ^ <"],
+            fit: "contain",
+            align: "center",
+          },
+        },
+      },
+    })
+
+    expect(result.imageGeneration.wait.mode).toBe("static")
+    expect(result.imageGeneration.wait.textColor).toBe("accent")
+    expect(result.imageGeneration.wait.canvas.maxWidth).toBe(40)
+    expect(result.imageGeneration.wait.ascii.static).toEqual([" /\\_/\\", "( o.o )", " > ^ <"])
+    expect(validateMendTuiProfile(result).ok).toBe(true)
+  })
 })

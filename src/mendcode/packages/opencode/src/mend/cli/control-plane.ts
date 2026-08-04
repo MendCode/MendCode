@@ -118,6 +118,7 @@ import {
   loopServiceStatus,
   loopServiceStop,
   loopServiceUninstall,
+  writeLoopServiceHealth,
   type LoopServicePlan,
   type LoopServiceStatus,
 } from "../runtime/loop-service"
@@ -191,6 +192,11 @@ import { bootstrap } from "@/cli/bootstrap"
 import { LoopID, LoopWorkflow } from "@/session/loop"
 import { LoopRunner } from "@/session/loop-runner"
 import { LoopTemplates } from "@/session/loop-templates"
+import * as Workflow from "@/session/workflow"
+import * as WorkflowRunner from "@/session/workflow-runner"
+import * as WorkflowService from "@/session/workflow-service"
+import type { WorkflowPlan } from "@/session/workflow-plan"
+import { SessionID } from "@/session/schema"
 
 async function readJson(file: string) {
   return JSON.parse(await readFile(file, "utf8"))
@@ -319,12 +325,21 @@ function formatLoopServiceStatus(status: LoopServiceStatus) {
   return [
     `Loop service: ${status.label}`,
     `Backend: ${status.backend} (${status.platform})`,
+    `Project: ${status.projectRoot}`,
+    `Database: ${status.databasePath}`,
     `Installed: ${yes(status.installed)}`,
     `Loaded: ${yes(status.loaded)}`,
     `Mode: ${status.mode}`,
     `Definition: ${status.definitionPath}`,
     `Logs: ${status.stdoutPath}`,
     `Errors: ${status.stderrPath}`,
+    `Health: ${status.degraded ? "degraded" : "healthy"}${status.drift.length ? ` drift=${status.drift.join(",")}` : ""}`,
+    `Executable: ${status.executablePath ?? status.executable}`,
+    `Version: ${status.executableVersion ?? "unknown"}`,
+    `Executable fingerprint: ${status.executableFingerprint ?? "unknown"}`,
+    `Definition fingerprint: ${status.definitionFingerprint ?? "missing"} (expected ${status.expectedDefinitionFingerprint})`,
+    `Last wake: ${formatLoopTime(status.lastWakeAttempt)}`,
+    `Last error: ${status.lastError ?? "none"}`,
   ].join("\n")
 }
 
@@ -480,6 +495,201 @@ async function withLoopRunner<T>(
   }
 }
 
+async function withWorkflowService<T>(fn: (workflow: WorkflowService.Interface) => Effect.Effect<T, unknown, unknown>) {
+  try {
+    return await bootstrap(
+      shellProjectRoot(),
+      async () =>
+        AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const workflow = yield* WorkflowService.Service
+            return yield* fn(workflow)
+          }) as Parameters<typeof AppRuntime.runPromise>[0],
+        ) as Promise<T>,
+    )
+  } finally {
+    await AppRuntime.dispose().catch(() => undefined)
+  }
+}
+
+async function withWorkflowRuntime<T>(
+  fn: (workflow: WorkflowService.Interface, runner: WorkflowRunner.Interface) => Effect.Effect<T, unknown, unknown>,
+) {
+  try {
+    return await bootstrap(
+      shellProjectRoot(),
+      async () =>
+        AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const workflow = yield* WorkflowService.Service
+            const runner = yield* WorkflowRunner.Service
+            return yield* fn(workflow, runner)
+          }) as Parameters<typeof AppRuntime.runPromise>[0],
+        ) as Promise<T>,
+    )
+  } finally {
+    await AppRuntime.dispose().catch(() => undefined)
+  }
+}
+
+function workflowRunID(value?: string) {
+  if (!value) throw new Error("Usage: mend workflows <show|events|artifacts|pause|resume|stop|delete|retry-task|retry-phase> <run-id>")
+  return Workflow.WorkflowRunID.make(value)
+}
+
+async function workflowPlan(args: string[]) {
+  const file = optionValue(args, "--plan-file")
+  if (!file) throw new Error("Usage: mend workflows <preview|save|start> --plan-file <path>")
+  return (await readJson(path.resolve(shellProjectRoot(), file))) as WorkflowPlan
+}
+
+function formatWorkflowSummary(snapshot: WorkflowService.WorkflowSnapshot) {
+  const completed = snapshot.tasks.filter((task) => task.state === "completed").length
+  const working = snapshot.tasks.filter((task) => task.state === "working").length
+  const blocked = snapshot.tasks.filter((task) => task.state === "blocked").length
+  return `${snapshot.run.id}  ${snapshot.run.state.padEnd(10)}  ${snapshot.definition.name}  tasks=${completed}/${snapshot.tasks.length} working=${working} blocked=${blocked}`
+}
+
+function formatWorkflowSnapshot(snapshot: WorkflowService.WorkflowSnapshot) {
+  return [
+    `Workflow: ${snapshot.definition.name}`,
+    `ID: ${snapshot.run.id}`,
+    `State: ${snapshot.run.state}`,
+    `Revision: ${snapshot.revision.id} (#${snapshot.revision.revision})`,
+    `Origin session: ${snapshot.run.originSessionID ?? "none"}`,
+    `Root session: ${snapshot.run.rootSessionID ?? "pending"}`,
+    `Tasks: ${snapshot.tasks.filter((task) => task.state === "completed").length}/${snapshot.tasks.length} completed`,
+    `Artifacts: ${snapshot.artifacts.length}    Events: ${snapshot.events.length}    Gates: ${snapshot.gates.length}`,
+    "",
+    "Phases",
+    ...(snapshot.phases.length
+      ? snapshot.phases.map((phase) => `  ${phase.ordinal}. ${phase.name.padEnd(18)} ${phase.state} ${phase.counts.completed}/${phase.counts.total}`)
+      : ["  none"]),
+    "",
+    "Tasks",
+    ...(snapshot.tasks.length
+      ? snapshot.tasks.slice(0, 40).map((task) => `  ${task.state.padEnd(10)} ${task.id} ${task.name}${task.blocker ? ` — ${task.blocker}` : ""}`)
+      : ["  none"]),
+  ].join("\n")
+}
+
+async function workflows(args: string[]) {
+  const sub = args[0] || "list"
+  if (sub === "status" || sub === "list") {
+    const items = await withWorkflowService((workflow) => workflow.list())
+    printResult(args, items, (value: readonly WorkflowService.WorkflowSnapshot[]) =>
+      value.length ? value.map(formatWorkflowSummary).join("\n") : "Workflows: none",
+    )
+    return
+  }
+  if (sub === "preview") {
+    const plan = await workflowPlan(args)
+    const preview = await withWorkflowService((workflow) => workflow.preview(plan))
+    printResult(args, preview, (value: WorkflowService.WorkflowSnapshot["preview"]) =>
+      [
+        `Plan: ${plan.name}`,
+        `Phases: ${value.phaseCount}`,
+        `Tasks: ${value.taskCount}`,
+        `Max concurrency: ${value.maxConcurrency}`,
+        `Max fan-out: ${value.maxFanOut}`,
+        `Side effects: ${value.sideEffectClasses.join(", ") || "none"}`,
+      ].join("\n"),
+    )
+    return
+  }
+  if (sub === "save") {
+    const plan = await workflowPlan(args)
+    const receipt = await withWorkflowService((workflow) =>
+      workflow.save({
+        plan,
+        definitionID: optionValue(args, "--definition-id") ? Workflow.WorkflowDefinitionID.make(optionValue(args, "--definition-id")!) : undefined,
+        name: optionValue(args, "--name") ?? undefined,
+        description: optionValue(args, "--description") ?? undefined,
+        source: (optionValue(args, "--source") as Workflow.WorkflowDefinition["source"] | null) ?? undefined,
+        saved: true,
+      }),
+    )
+    printResult(args, receipt, (value: WorkflowService.WorkflowRevisionReceipt) =>
+      `Saved workflow ${value.definitionID} revision ${value.revisionID} (#${value.revision})`,
+    )
+    return
+  }
+  if (sub === "start") {
+    const planFile = optionValue(args, "--plan-file")
+    const started = await withWorkflowRuntime((workflow, runner) =>
+      Effect.gen(function* () {
+        const snapshot = yield* workflow.start({
+          plan: planFile ? ((yield* Effect.promise(() => workflowPlan(args))) as WorkflowPlan) : undefined,
+          revisionID: optionValue(args, "--revision-id") ? Workflow.WorkflowRevisionID.make(optionValue(args, "--revision-id")!) : undefined,
+          definitionID: optionValue(args, "--definition-id") ? Workflow.WorkflowDefinitionID.make(optionValue(args, "--definition-id")!) : undefined,
+          name: optionValue(args, "--name") ?? undefined,
+          description: optionValue(args, "--description") ?? undefined,
+          source: (optionValue(args, "--source") as Workflow.WorkflowDefinition["source"] | null) ?? undefined,
+          originSessionID: optionValue(args, "--origin-session") ? (SessionID.make(optionValue(args, "--origin-session")!) as SessionID) : undefined,
+        })
+        yield* runner.start(snapshot.run.id)
+        return snapshot
+      }),
+    )
+    printResult(args, started, formatWorkflowSnapshot)
+    return
+  }
+  if (sub === "show") {
+    const snapshot = await withWorkflowService((workflow) => workflow.show(workflowRunID(args[1])))
+    printResult(args, snapshot, formatWorkflowSnapshot)
+    return
+  }
+  if (sub === "delete") {
+    const runID = workflowRunID(args[1])
+    const removed = await withWorkflowService((workflow) => workflow.remove(runID))
+    printResult(args, removed, () => `Deleted workflow run ${runID}`)
+    return
+  }
+  if (sub === "events" || sub === "artifacts") {
+    const runID = workflowRunID(args[1])
+    if (sub === "events") {
+      const items = await withWorkflowService((workflow) => workflow.events(runID, Number(optionValue(args, "--limit") ?? 50)))
+      printResult(args, items, (value: readonly unknown[]) => value.length ? value.map((item) => JSON.stringify(item)).join("\n") : "No workflow events.")
+      return
+    }
+    const items = await withWorkflowService((workflow) => workflow.artifacts(runID, Number(optionValue(args, "--limit") ?? 50)))
+    printResult(args, items, (value: readonly unknown[]) => value.length ? value.map((item) => JSON.stringify(item)).join("\n") : "No workflow artifacts.")
+    return
+  }
+  if (["pause", "resume", "stop", "retry-task", "retry-phase"].includes(sub)) {
+    const runID = workflowRunID(args[1])
+    const result = await withWorkflowRuntime((workflow, runner) =>
+      Effect.gen(function* () {
+        let snapshot: WorkflowService.WorkflowSnapshot
+        if (sub === "pause") {
+          snapshot = yield* workflow.pause({ runID, reason: optionValue(args, "--reason") ?? undefined, actor: "cli" })
+          yield* runner.stop(snapshot.run.id)
+        } else if (sub === "resume") {
+          snapshot = yield* workflow.resume({ runID, reason: optionValue(args, "--reason") ?? undefined, actor: "cli" })
+          yield* runner.start(snapshot.run.id)
+        } else if (sub === "stop") {
+          snapshot = yield* workflow.stop({ runID, reason: optionValue(args, "--reason") ?? undefined, actor: "cli" })
+          yield* runner.stop(snapshot.run.id)
+        } else if (sub === "retry-task") {
+          const taskID = optionValue(args, "--task-id")
+          if (!taskID) throw new Error("Usage: mend workflows retry-task <run-id> --task-id <task-id>")
+          snapshot = yield* workflow.retryTask({ runID, taskID: Workflow.WorkflowTaskID.make(taskID), reason: optionValue(args, "--reason") ?? undefined, actor: "cli" })
+          yield* runner.start(snapshot.run.id)
+        } else {
+          const phaseID = optionValue(args, "--phase-id")
+          if (!phaseID) throw new Error("Usage: mend workflows retry-phase <run-id> --phase-id <phase-id>")
+          snapshot = yield* workflow.retryPhase({ runID, phaseID: Workflow.WorkflowPhaseID.make(phaseID), reason: optionValue(args, "--reason") ?? undefined, actor: "cli" })
+          yield* runner.start(snapshot.run.id)
+        }
+        return snapshot
+      }),
+    )
+    printResult(args, result, formatWorkflowSnapshot)
+    return
+  }
+  throw new Error("Usage: mend workflows <list|preview|save|start|show|events|artifacts|pause|resume|stop|delete|retry-task|retry-phase>")
+}
+
 async function loops(args: string[]) {
   const sub = args[0] || "status"
   if (sub === "status" || sub === "list") {
@@ -596,17 +806,34 @@ async function loops(args: string[]) {
     const reportOnly = args.includes("--report-only")
     const quiet = args.includes("--quiet")
     const once = args.includes("--once")
+    const servicePlan = loopServicePlan({
+      projectRoot: shellProjectRoot(),
+      intervalMs: interval,
+      limit,
+      execute,
+      reportOnly,
+      quiet,
+    })
+    const recordHealth = (input: { lastWakeAttempt?: number; lastError?: string; degraded: boolean }) =>
+      writeLoopServiceHealth(servicePlan, input).catch((error) => {
+        if (!quiet) console.error(`WARN: loop service health write failed: ${error instanceof Error ? error.message : String(error)}`)
+      })
     const runTick = async (disposeRuntime: boolean) => {
-      const started = new Date().toLocaleTimeString()
+      const startedAt = Date.now()
+      const started = new Date(startedAt).toLocaleTimeString()
       let results: LoopRunner.TickResult[]
       try {
         results = await withLoopRunner((runner) => runner.runDue({ limit, execute, reportOnly }), {
           disposeRuntime,
         })
       } catch (error) {
-        console.error(`${started} loop scheduler error: ${error instanceof Error ? error.message : String(error)}`)
+        const message = error instanceof Error ? error.message : String(error)
+        await recordHealth({ lastWakeAttempt: startedAt, lastError: message, degraded: true })
+        console.error(`${started} loop scheduler error: ${message}`)
         return
       }
+      const schedulerFailure = results.find((item) => item.summary.startsWith("Loop scheduler failed"))
+      await recordHealth({ lastWakeAttempt: startedAt, lastError: schedulerFailure?.summary, degraded: Boolean(schedulerFailure) })
       if (results.length) {
         for (const item of results) {
           console.log(
@@ -2452,6 +2679,12 @@ async function main() {
     const sub = args[0] || "status"
     // One-shot launchd/Task Scheduler runs must exit after runtime disposal; native watchers can keep the event loop alive.
     if (sub !== "monitor" && (sub !== "daemon" || args.includes("--once"))) process.exit(process.exitCode ?? 0)
+    return
+  }
+  if (cmd === "workflows") {
+    await workflows(args)
+    // Workflow commands are one-shot CLI operations; force exit after runtime disposal in case a native watcher remains alive.
+    process.exit(process.exitCode ?? 0)
     return
   }
   if (cmd === "ai") return ai(args)

@@ -1,6 +1,6 @@
 import { spawnSync } from "child_process"
 import { createHash } from "crypto"
-import { mkdir, readFile, rm, writeFile } from "fs/promises"
+import { mkdir, readFile, rename, rm, writeFile } from "fs/promises"
 import os from "os"
 import path from "path"
 import { computeGlobalRoots, resolveActiveAppSegment } from "@mendcode/core/global-layout"
@@ -19,6 +19,8 @@ export type LoopServicePlan = {
   definitionPath: string
   stdoutPath: string
   stderrPath: string
+  healthPath: string
+  executable: string
   programArguments: string[]
   serviceProgramArguments: string[]
   databasePath: string
@@ -38,11 +40,48 @@ export type LoopServiceStatus = {
   label: string
   backend: LoopServiceBackend
   platform: LoopServicePlatform
+  projectRoot: string
+  databasePath: string
   definitionPath: string
   stdoutPath: string
   stderrPath: string
+  healthPath: string
+  executable: string
+  executablePath?: string
+  executableVersion?: string
+  executableFingerprint?: string
+  definitionFingerprint?: string
+  expectedDefinitionFingerprint: string
+  lastWakeAttempt?: number
+  lastError?: string
+  healthUpdatedAt?: number
+  drift: string[]
+  degraded: boolean
   mode: LoopServiceMode
   detail?: string
+}
+
+export type LoopServiceHealthRecord = {
+  schema: 1
+  projectRoot: string
+  databasePath: string
+  definitionPath: string
+  executable: string
+  executablePath?: string
+  executableVersion?: string
+  executableFingerprint?: string
+  definitionFingerprint: string
+  lastWakeAttempt?: number
+  lastError?: string
+  degraded: boolean
+  updatedAt: number
+}
+
+export type LoopServiceHealthUpdate = {
+  lastWakeAttempt?: number
+  lastError?: string
+  degraded: boolean
+  updatedAt?: number
 }
 
 export type LoopServiceArgs = {
@@ -59,6 +98,8 @@ export type LoopServiceArgs = {
 }
 
 export const DEFAULT_LOOP_SERVICE_LIMIT = 10
+const maxHealthErrorChars = 1_000
+const maxHealthDriftItems = 12
 
 function stableProjectID(projectRoot: string) {
   return createHash("sha256").update(path.resolve(projectRoot)).digest("hex").slice(0, 12)
@@ -251,6 +292,8 @@ export function loopServicePlan(args: LoopServiceArgs): LoopServicePlan {
     definitionPath,
     stdoutPath: path.join(logDir, `${label}.log`),
     stderrPath: path.join(logDir, `${label}.err.log`),
+    healthPath: path.join(logDir, `${label}.health.json`),
+    executable: command,
     programArguments,
     serviceProgramArguments,
     databasePath,
@@ -290,6 +333,101 @@ export function loopServicePlan(args: LoopServiceArgs): LoopServicePlan {
   }
 }
 
+function fingerprint(value: string | Buffer) {
+  return createHash("sha256").update(value).digest("hex")
+}
+
+function boundedHealthText(value: string | undefined) {
+  if (!value) return undefined
+  const text = value.trim()
+  if (text.length <= maxHealthErrorChars) return text
+  return `${text.slice(0, maxHealthErrorChars - 32)} [health truncated]`
+}
+
+function executableLocation(command: string) {
+  if (path.isAbsolute(command) || /[\\/]/.test(command)) return path.resolve(command)
+  const lookup = process.platform === "win32" ? "where.exe" : "which"
+  const result = spawnSync(lookup, [command], { encoding: "utf8" })
+  if (result.status !== 0) return undefined
+  return result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean)
+}
+
+async function executableIdentity(command: string) {
+  const executablePath = executableLocation(command)
+  if (!executablePath) return { executablePath: undefined, executableVersion: undefined, executableFingerprint: undefined }
+  const [executableFingerprint, executableVersion] = await Promise.all([
+    readFile(executablePath).then(fingerprint).catch(() => undefined),
+    Promise.resolve().then(() => {
+      const result = spawnSync(executablePath, ["--version"], { encoding: "utf8", timeout: 5_000 })
+      const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim()
+      return output.split(/\r?\n/).map((line) => line.trim()).find(Boolean)?.slice(0, 200)
+    }).catch(() => undefined),
+  ])
+  return { executablePath, executableVersion, executableFingerprint }
+}
+
+function parseHealthRecord(value: unknown): LoopServiceHealthRecord | undefined {
+  if (!value || typeof value !== "object") return undefined
+  const record = value as Record<string, unknown>
+  if (
+    record.schema !== 1 ||
+    typeof record.projectRoot !== "string" ||
+    typeof record.databasePath !== "string" ||
+    typeof record.definitionPath !== "string" ||
+    typeof record.executable !== "string" ||
+    typeof record.definitionFingerprint !== "string" ||
+    typeof record.degraded !== "boolean" ||
+    typeof record.updatedAt !== "number" ||
+    !Number.isFinite(record.updatedAt)
+  ) return undefined
+  return {
+    schema: 1,
+    projectRoot: record.projectRoot,
+    databasePath: record.databasePath,
+    definitionPath: record.definitionPath,
+    executable: record.executable,
+    executablePath: typeof record.executablePath === "string" ? record.executablePath : undefined,
+    executableVersion: typeof record.executableVersion === "string" ? record.executableVersion : undefined,
+    executableFingerprint: typeof record.executableFingerprint === "string" ? record.executableFingerprint : undefined,
+    definitionFingerprint: record.definitionFingerprint,
+    lastWakeAttempt: typeof record.lastWakeAttempt === "number" && Number.isFinite(record.lastWakeAttempt) ? record.lastWakeAttempt : undefined,
+    lastError: typeof record.lastError === "string" ? boundedHealthText(record.lastError) : undefined,
+    degraded: record.degraded,
+    updatedAt: record.updatedAt,
+  }
+}
+
+async function readHealthRecord(file: string) {
+  try {
+    return parseHealthRecord(JSON.parse(await readFile(file, "utf8")))
+  } catch {
+    return undefined
+  }
+}
+
+export async function writeLoopServiceHealth(plan: LoopServicePlan, update: LoopServiceHealthUpdate) {
+  const identity = await executableIdentity(plan.executable)
+  const record: LoopServiceHealthRecord = {
+    schema: 1,
+    projectRoot: plan.projectRoot,
+    databasePath: plan.databasePath,
+    definitionPath: plan.definitionPath,
+    executable: plan.executable,
+    executablePath: identity.executablePath,
+    executableVersion: identity.executableVersion,
+    executableFingerprint: identity.executableFingerprint,
+    definitionFingerprint: fingerprint(loopServiceDefinition(plan)),
+    lastWakeAttempt: update.lastWakeAttempt,
+    lastError: boundedHealthText(update.lastError),
+    degraded: update.degraded,
+    updatedAt: update.updatedAt ?? Date.now(),
+  }
+  await mkdir(path.dirname(plan.healthPath), { recursive: true })
+  const temporaryPath = `${plan.healthPath}.${process.pid}.tmp`
+  await writeFile(temporaryPath, JSON.stringify(record))
+  await rename(temporaryPath, plan.healthPath)
+}
+
 function shellQuote(args: string[]) {
   return args.map((arg) => {
     if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(arg)) return arg
@@ -314,9 +452,13 @@ export function loopServicePlist(plan: LoopServicePlan) {
     ${stringNode(plan.projectRoot)}
   <key>MENDCODE_LOOP_SERVICE</key>
   <string>1</string>
-  <key>MENDCODE_DB</key>
-  ${stringNode(plan.databasePath)}
-  </dict>
+   <key>MENDCODE_DB</key>
+   ${stringNode(plan.databasePath)}
+   <key>MENDCODE_LOOP_SERVICE_DIR</key>
+   ${stringNode(path.dirname(plan.definitionPath))}
+   <key>MENDCODE_LOOP_LOG_DIR</key>
+   ${stringNode(path.dirname(plan.healthPath))}
+   </dict>
   <key>WorkingDirectory</key>
   ${stringNode(plan.projectRoot)}
   <key>RunAtLoad</key>
@@ -346,6 +488,8 @@ Type=simple
 WorkingDirectory=${plan.projectRoot}
 Environment=MENDCODE_SHELL_CWD=${systemdString(plan.projectRoot)}
 Environment=MENDCODE_LOOP_SERVICE=1
+Environment=MENDCODE_LOOP_SERVICE_DIR=${systemdString(path.dirname(plan.definitionPath))}
+Environment=MENDCODE_LOOP_LOG_DIR=${systemdString(path.dirname(plan.healthPath))}
 ExecStart=${shellQuote(plan.programArguments)}
 Restart=always
 RestartSec=5
@@ -359,7 +503,9 @@ WantedBy=default.target
 
 export function loopServiceWindowsCommand(plan: LoopServicePlan) {
   const projectRoot = plan.projectRoot.replaceAll('"', '""')
-  return `set "MENDCODE_SHELL_CWD=${projectRoot}" && set "MENDCODE_LOOP_SERVICE=1" && ${shellQuote(plan.programArguments)} >> "${plan.stdoutPath}" 2>> "${plan.stderrPath}"`
+  const serviceDir = path.dirname(plan.definitionPath).replaceAll('"', '""')
+  const logDir = path.dirname(plan.healthPath).replaceAll('"', '""')
+  return `set "MENDCODE_SHELL_CWD=${projectRoot}" && set "MENDCODE_LOOP_SERVICE=1" && set "MENDCODE_LOOP_SERVICE_DIR=${serviceDir}" && set "MENDCODE_LOOP_LOG_DIR=${logDir}" && ${shellQuote(plan.programArguments)} >> "${plan.stdoutPath}" 2>> "${plan.stderrPath}"`
 }
 
 export function loopServiceDefinition(plan: LoopServicePlan) {
@@ -384,6 +530,12 @@ function serviceLoaded(plan: LoopServicePlan) {
     loaded: result.status === 0,
     detail: [result.stdout, result.stderr].filter(Boolean).join("\n").trim() || undefined,
   }
+}
+
+function kickstartService(plan: LoopServicePlan) {
+  if (plan.platform !== "darwin") return
+  const result = runServiceCommand(plan, ["launchctl", "kickstart", `${launchctlDomain()}/${plan.label}`])
+  if (result.status !== 0) throw new Error(result.stderr || result.stdout || `${plan.backend} kickstart failed`)
 }
 
 export async function loopServiceInstall(args: LoopServiceArgs) {
@@ -415,7 +567,10 @@ export async function loopServiceStart(args: LoopServiceArgs) {
   const previousDefinition = await readFile(plan.definitionPath, "utf8").catch(() => undefined)
   const existing = serviceLoaded(plan)
   const installed = await loopServiceInstall(args)
-  if (existing.loaded && previousDefinition === loopServiceDefinition(installed)) return installed
+  if (existing.loaded && previousDefinition === loopServiceDefinition(installed)) {
+    kickstartService(installed)
+    return installed
+  }
   if (existing.loaded) {
     const stopped = runServiceCommand(installed, installed.stopCommand)
     if (stopped.status !== 0 && serviceLoaded(installed).loaded) {
@@ -426,6 +581,7 @@ export async function loopServiceStart(args: LoopServiceArgs) {
   if (result.status !== 0) throw new Error(result.stderr || result.stdout || `${installed.backend} start failed`)
   const loaded = serviceLoaded(installed)
   if (!loaded.loaded) throw new Error(loaded.detail || `${installed.backend} started but is not loaded`)
+  kickstartService(installed)
   return installed
 }
 
@@ -447,15 +603,56 @@ export async function loopServiceStatus(args: LoopServiceArgs): Promise<LoopServ
     installed = false
   }
   const loaded = serviceLoaded(plan)
+  const expectedDefinition = loopServiceDefinition(plan)
+  const [definition, identity, health] = await Promise.all([
+    readFile(plan.definitionPath, "utf8").catch(() => undefined),
+    executableIdentity(plan.executable),
+    readHealthRecord(plan.healthPath),
+  ])
+  const expectedDefinitionFingerprint = fingerprint(expectedDefinition)
+  const definitionFingerprint = definition ? fingerprint(definition) : undefined
+  const drift: string[] = []
+  if (platform() !== plan.platform) drift.push("platform-mismatch")
+  if (!installed) drift.push("definition-missing")
+  else if (definition !== expectedDefinition) drift.push("definition-drift")
+  if (!loaded.loaded) drift.push("service-not-loaded")
+  if (!identity.executablePath || !identity.executableFingerprint) drift.push("executable-missing")
+  if (!health) drift.push("health-missing")
+  if (health) {
+    if (health.projectRoot !== plan.projectRoot) drift.push("project-drift")
+    if (health.databasePath !== plan.databasePath) drift.push("database-drift")
+    if (health.definitionPath !== plan.definitionPath) drift.push("definition-path-drift")
+    if (health.executable !== plan.executable) drift.push("executable-drift")
+    if (health.executablePath !== identity.executablePath) drift.push("executable-path-drift")
+    if (health.executableFingerprint !== identity.executableFingerprint) drift.push("executable-fingerprint-drift")
+    if (health.definitionFingerprint !== definitionFingerprint) drift.push("definition-fingerprint-drift")
+    if (Date.now() - health.updatedAt > Math.max(5 * 60_000, plan.intervalMs * 3)) drift.push("health-stale")
+    if (health.degraded) drift.push("scheduler-degraded")
+  }
+  const uniqueDrift = [...new Set(drift)].slice(0, maxHealthDriftItems)
   return {
     installed,
     loaded: loaded.loaded,
     label: plan.label,
     backend: plan.backend,
     platform: plan.platform,
+    projectRoot: plan.projectRoot,
+    databasePath: plan.databasePath,
     definitionPath: plan.definitionPath,
     stdoutPath: plan.stdoutPath,
     stderrPath: plan.stderrPath,
+    healthPath: plan.healthPath,
+    executable: plan.executable,
+    executablePath: identity.executablePath,
+    executableVersion: identity.executableVersion,
+    executableFingerprint: identity.executableFingerprint,
+    definitionFingerprint,
+    expectedDefinitionFingerprint,
+    lastWakeAttempt: health?.lastWakeAttempt,
+    lastError: health?.lastError,
+    healthUpdatedAt: health?.updatedAt,
+    drift: uniqueDrift,
+    degraded: uniqueDrift.length > 0,
     mode: plan.mode,
     detail: loaded.detail,
   }

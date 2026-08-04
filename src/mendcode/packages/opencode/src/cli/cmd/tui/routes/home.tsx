@@ -778,12 +778,6 @@ export function HomeSurface(props: {
        backgrounds: globalBackgroundSessions(),
      }),
    )
-   const activeForegroundState = (sessionID: string): BackgroundSessionInfo["state"] | undefined => {
-     const status = globalStatuses()[sessionID] ?? sync.data.session_status[sessionID]
-     if (pendingInputCount(sessionID) > 0 || status?.type === "retry") return "needs_input"
-     if (status?.type === "busy" || agentViewActiveChildParentSessionIDs().has(sessionID)) return "working"
-     return undefined
-   }
 
   const statusStartedAt = (status: SessionStatus | undefined) =>
     status?.type === "busy" ? status.startedAt : undefined
@@ -877,10 +871,10 @@ export function HomeSurface(props: {
   const rawAgentViewActivity = (item: AgentViewSessionItem): AgentViewActivity => {
     const sessionID = item.background.sessionID
     const status = globalStatuses()[sessionID] ?? sync.data.session_status[sessionID]
-     if (isLoopSession(item)) return "looping"
-     if (item.background.state === "failed" || item.background.state === "stopped") return "completed"
-     if (pendingInputCount(sessionID) > 0 || status?.type === "retry" || item.background.state === "needs_input") return "needsInput"
-     if (agentViewActiveChildParentSessionIDs().has(sessionID)) return "working"
+    if (isLoopSession(item)) return "looping"
+    if (item.background.state === "failed" || item.background.state === "stopped") return "completed"
+    if (pendingInputCount(sessionID) > 0 || status?.type === "retry" || item.background.state === "needs_input") return "needsInput"
+    if (agentViewActiveChildParentSessionIDs().has(sessionID)) return "working"
 
     if (status?.type === "busy" || item.background.state === "queued" || item.background.state === "working") return "working"
     return "completed"
@@ -916,19 +910,19 @@ export function HomeSurface(props: {
     for (const session of sync.data.session) byID.set(session.id, session)
     const backgroundItems = globalBackgroundSessions()
       .map((background) => {
-        const workflow = loopWorkflowForSession(background.sessionID)
+        const loopWorkflow = loopWorkflowForSession(background.sessionID)
         const session = byID.get(background.sessionID)
         const metadata = background.metadata ?? globalAgentViewMetadata()[background.sessionID]
         return {
-          background: workflow
+          background: loopWorkflow
             ? {
                 ...background,
                 metadata,
-                state: backgroundStateForLoopWorkflow(workflow),
-                summary: `Loop ${workflow.state}: ${workflow.phase ?? "ready"}`,
+                state: backgroundStateForLoopWorkflow(loopWorkflow),
+                summary: `Loop ${loopWorkflow.state}: ${loopWorkflow.phase ?? "ready"}`,
                 time: {
                   ...background.time,
-                  updated: Math.max(background.time.updated, workflow.time?.updated ?? 0),
+                  updated: Math.max(background.time.updated, loopWorkflow.time?.updated ?? 0),
                 },
                 session: background.session ?? session,
               }
@@ -940,47 +934,7 @@ export function HomeSurface(props: {
         }
       })
       .filter(isInAgentViewScope)
-    const backgroundIDs = new Set(backgroundItems.map((item) => item.background.sessionID))
-    const foregroundItems = Array.from(byID.values())
-      .filter((session) => agentViewGlobalScope() || !agentViewDirectory() || isDirectoryInAgentViewScope(session.directory, agentViewDirectory()))
-      .filter((session) => !backgroundIDs.has(session.id))
-      .filter((session) => !(session as { parentID?: string | null }).parentID)
-      .map((session): AgentViewSessionItem => {
-        const workflow = loopWorkflowForSession(session.id)
-        const state = activeForegroundState(session.id) ?? "completed"
-        const status = globalStatuses()[session.id] ?? sync.data.session_status[session.id]
-        const background: AgentViewBackgroundSession = {
-          sessionID: session.id,
-          state,
-          summary: status?.type === "retry" ? status.message : session.path || session.directory || state,
-          metadata: globalAgentViewMetadata()[session.id],
-          time: session.time,
-          session: {
-            id: session.id,
-            title: session.title,
-            directory: session.directory,
-            path: session.path,
-            agent: session.agent,
-            time: session.time,
-          },
-        }
-        return {
-          session,
-          background: workflow
-            ? {
-                ...background,
-                pinned: true,
-                state: backgroundStateForLoopWorkflow(workflow),
-                summary: `Loop ${workflow.state}: ${workflow.phase ?? "ready"}`,
-                time: {
-                  ...background.time,
-                  updated: Math.max(background.time.updated, workflow.time?.updated ?? 0),
-                },
-              }
-            : background,
-        }
-      })
-    const freshItems = [...backgroundItems, ...foregroundItems].filter((item) => !isNonLiveLoopSession(item))
+    const freshItems = backgroundItems.filter((item) => !isNonLiveLoopSession(item))
     const now = Date.now()
     for (const item of freshItems) {
       agentViewSessionCache.set(item.background.sessionID, { item, seenAt: now })
@@ -1162,11 +1116,11 @@ export function HomeSurface(props: {
     if (pendingCommands > 0) return `${pendingCommands} command${pendingCommands === 1 ? "" : "s"} pending`
     const activeCommands = countAgentViewCommands({ commands: globalAgentCommands(), sessionID: item.background.sessionID, states: ["accepted", "running"] })
     if (activeCommands > 0) return `${activeCommands} command${activeCommands === 1 ? "" : "s"} active`
-    const failedCommands = countAgentViewCommands({ commands: globalAgentCommands(), sessionID: item.background.sessionID, states: ["rejected", "failed", "expired"] })
-    if (failedCommands > 0) return `${failedCommands} command${failedCommands === 1 ? "" : "s"} blocked`
-     const pending = pendingInputCount(item.background.sessionID)
-     if (pending > 0) return `${pending} input request${pending === 1 ? "" : "s"}`
-     if (item.background.error) return Locale.truncateMiddle(item.background.error, Math.max(12, rightPanelWidth() - 22))
+      const failedCommands = countAgentViewCommands({ commands: globalAgentCommands(), sessionID: item.background.sessionID, states: ["rejected", "failed", "expired"] })
+      if (failedCommands > 0) return `${failedCommands} command${failedCommands === 1 ? "" : "s"} blocked`
+      const pending = pendingInputCount(item.background.sessionID)
+      if (pending > 0) return `${pending} input request${pending === 1 ? "" : "s"}`
+      if (item.background.error) return Locale.truncateMiddle(item.background.error, Math.max(12, rightPanelWidth() - 22))
      const status = globalStatuses()[item.background.sessionID] ?? sync.data.session_status[item.background.sessionID]
      if (status?.type === "retry") return Locale.truncateMiddle(status.message, Math.max(12, rightPanelWidth() - 22))
      const activity = agentViewBusyActivity(status)
@@ -1218,9 +1172,10 @@ export function HomeSurface(props: {
     item.background.sessionID
   const homeIdentityDetail = createMemo(() => productVersionLabel())
   const openAgentViewSession = (item: AgentViewSessionItem) => {
+    const sessionID = item.background.session?.id || item.session?.id
     route.navigate({
       type: "session",
-      sessionID: item.background.session?.id || item.session?.id || item.background.sessionID,
+      sessionID: sessionID || item.background.sessionID,
     })
   }
   const promptPlaceholders = createMemo(() => {

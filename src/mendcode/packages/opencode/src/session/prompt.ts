@@ -81,18 +81,7 @@ const OWNER_WAKE_MAX_EVENTS = 16
 const OWNER_WAKE_PREVIEW_CHARS = 320
 const SHELL_ABORT_FORCE_KILL_AFTER = "1 second"
 
-export type OwnerWakeNotification = {
-  eventID: string
-  taskID: SessionID
-  parentSessionID: SessionID
-  generation: number
-  revision: number
-  state: BackgroundTask.State
-  title: string
-  summary?: string
-  error?: string
-  background?: boolean
-}
+export type OwnerWakeNotification = BackgroundTask.Notification
 
 type OwnerWakeState = {
   sessions: Set<SessionID>
@@ -422,6 +411,7 @@ export const layer = Layer.effect(
     const bus = yield* Bus.Service
     const status = yield* SessionStatus.Service
     const sessions = yield* Session.Service
+    const backgroundTasks = yield* BackgroundTask.Service
     const agents = yield* Agent.Service
     const provider = yield* Provider.Service
     const processor = yield* SessionProcessor.Service
@@ -468,6 +458,7 @@ export const layer = Layer.effect(
       const wake = yield* InstanceState.get(ownerWakeState)
       wake.sessions.delete(sessionID)
       wake.pending.delete(sessionID)
+      yield* backgroundTasks.dismissNotifications(sessionID)
     })
 
     const finishOrphanedAssistantOnCancel = Effect.fn("SessionPrompt.finishOrphanedAssistantOnCancel")(function* (
@@ -2150,13 +2141,22 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           queue: true,
         })
         const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-        const ownerWakePrompt = input.parts.some(
-          (part) => part.type === "text" && part.synthetic === true && part.metadata?.kind === OWNER_WAKE_PART_KIND,
-        )
+        const ownerWakeEventIDs = input.parts.flatMap((part) => {
+          if (part.type !== "text" || part.synthetic !== true || part.metadata?.kind !== OWNER_WAKE_PART_KIND) return []
+          return Array.isArray(part.metadata.eventIDs)
+            ? part.metadata.eventIDs.filter((eventID): eventID is string => typeof eventID === "string")
+            : []
+        })
+        const ownerWakePrompt = ownerWakeEventIDs.length > 0
+        const supersededOwnerWakeEventIDs: string[] = []
         if (input.noReply !== true) {
           const wake = yield* registerOwnerWakeSession(input.sessionID)
-          if (!ownerWakePrompt) wake.pending.delete(input.sessionID)
+          if (!ownerWakePrompt) {
+            supersededOwnerWakeEventIDs.push(...(wake.pending.get(input.sessionID)?.keys() ?? []))
+            wake.pending.delete(input.sessionID)
+          }
         }
+        const ownerWakeAcknowledgementIDs = ownerWakePrompt ? ownerWakeEventIDs : supersededOwnerWakeEventIDs
         yield* revert.cleanup(session)
 
         if (input.messageID) {
@@ -2174,9 +2174,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 parts: existing.value.parts,
               })
               yield* sessions.touch(input.sessionID)
+              if (ownerWakeAcknowledgementIDs.length > 0)
+                yield* backgroundTasks.acknowledgeNotifications(ownerWakeAcknowledgementIDs)
               return message
             }
             yield* sessions.touch(input.sessionID)
+            if (ownerWakeAcknowledgementIDs.length > 0)
+              yield* backgroundTasks.acknowledgeNotifications(ownerWakeAcknowledgementIDs)
             if (input.noReply === true) return existing.value
             log.trace("prompt-resume-existing", { sessionID: input.sessionID, messageID: input.messageID })
             if (yield* state.isBusy(input.sessionID)) return existing.value
@@ -2186,6 +2190,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
         const message = yield* createUserMessage(input)
         yield* sessions.touch(input.sessionID)
+        if (ownerWakeAcknowledgementIDs.length > 0)
+          yield* backgroundTasks.acknowledgeNotifications(ownerWakeAcknowledgementIDs)
 
         const permissions: Permission.Ruleset = []
         for (const [t, enabled] of Object.entries(input.tools ?? {})) {
@@ -2903,9 +2909,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       return result
     })
 
-    const drainOwnerWake: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn("SessionPrompt.drainOwnerWake")(
-      function* (sessionID: SessionID) {
-        const wakeState = yield* InstanceState.get(ownerWakeState)
+    const drainOwnerWake: (sessionID: SessionID, current?: OwnerWakeState) => Effect.Effect<void> = Effect.fn(
+      "SessionPrompt.drainOwnerWake",
+    )(
+      function* (sessionID: SessionID, current?: OwnerWakeState) {
+        const wakeState = current ?? (yield* InstanceState.get(ownerWakeState))
         const cfg = yield* config.get()
         if (cfg.subagent_owner_wake === false) {
           wakeState.pending.delete(sessionID)
@@ -2916,12 +2924,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
         const pending = wakeState.pending.get(sessionID)
         if (!pending || pending.size === 0) return
+        const session = yield* sessions.get(sessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        if (!session) return
+
         const events = Array.from(pending.values()).slice(0, OWNER_WAKE_MAX_EVENTS)
         events.forEach((event) => pending.delete(event.eventID))
         if (pending.size === 0) wakeState.pending.delete(sessionID)
-
-        const session = yield* sessions.get(sessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-        if (!session) return
 
         const wakeID = Bus.createID()
         const model = session.model
@@ -2951,6 +2959,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           Effect.ensuring(Effect.sync(() => wakeState.running.delete(sessionID))),
           Effect.catchCause((cause) =>
             Effect.sync(() => {
+              const retry = wakeState.pending.get(sessionID) ?? new Map()
+              events.forEach((event) => retry.set(event.eventID, event))
+              wakeState.pending.set(sessionID, retry)
               log.error("owner wake failed", {
                 sessionID,
                 error: Cause.squash(cause),
@@ -2974,16 +2985,16 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       },
     )
 
-    const scheduleOwnerWake: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn(
+    const scheduleOwnerWake: (sessionID: SessionID, current?: OwnerWakeState) => Effect.Effect<void> = Effect.fn(
       "SessionPrompt.scheduleOwnerWake",
-    )(function* (sessionID: SessionID) {
-      const wakeState = yield* InstanceState.get(ownerWakeState)
+    )(function* (sessionID: SessionID, current?: OwnerWakeState) {
+      const wakeState = current ?? (yield* InstanceState.get(ownerWakeState))
       if (wakeState.scheduled.has(sessionID)) return
       wakeState.scheduled.add(sessionID)
       yield* Effect.gen(function* () {
         yield* Effect.sleep(OWNER_WAKE_BATCH_DELAY_MS)
         wakeState.scheduled.delete(sessionID)
-        yield* drainOwnerWake(sessionID)
+        yield* drainOwnerWake(sessionID, wakeState)
       }).pipe(Effect.forkIn(scope))
     })
 
@@ -3000,7 +3011,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         const pending = event.state.pending.get(notification.parentSessionID) ?? new Map()
         pending.set(notification.eventID, notification)
         event.state.pending.set(notification.parentSessionID, pending)
-        yield* scheduleOwnerWake(notification.parentSessionID)
+        yield* scheduleOwnerWake(notification.parentSessionID, event.state)
       })
 
     ownerWakeState = yield* InstanceState.make<OwnerWakeState>(
@@ -3012,14 +3023,26 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           running: new Set(),
         }
         yield* bus.subscribe(BackgroundTask.Event.Notification).pipe(
-            Stream.runForEach((event) => queueOwnerWake({ state: value, ...event })),
-            Effect.forkScoped({ startImmediately: true }),
-          )
+          Stream.runForEach((event) => queueOwnerWake({ state: value, ...event })),
+          Effect.forkScoped({ startImmediately: true }),
+        )
         yield* bus.subscribe(SessionStatus.Event.Status).pipe(
-            Stream.filter((event) => event.properties.status.type === "idle"),
-            Stream.runForEach((event) => scheduleOwnerWake(event.properties.sessionID)),
-            Effect.forkScoped({ startImmediately: true }),
-          )
+          Stream.filter((event) => event.properties.status.type === "idle"),
+          Stream.runForEach((event) => scheduleOwnerWake(event.properties.sessionID, value)),
+          Effect.forkScoped({ startImmediately: true }),
+        )
+        const replay = yield* backgroundTasks.pendingNotifications()
+        for (const notification of replay) {
+          value.sessions.add(notification.parentSessionID)
+          const pending = value.pending.get(notification.parentSessionID) ?? new Map()
+          pending.set(notification.eventID, notification)
+          value.pending.set(notification.parentSessionID, pending)
+        }
+        yield* Effect.forEach(
+          new Set(replay.map((event) => event.parentSessionID)),
+          (sessionID) => scheduleOwnerWake(sessionID, value),
+          { discard: true },
+        )
         return value
       }),
     )
@@ -3058,6 +3081,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Session.defaultLayer),
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(SessionSummary.defaultLayer),
+    Layer.provide(BackgroundTask.defaultLayer),
     Layer.provide(
       Layer.mergeAll(
         Agent.defaultLayer,

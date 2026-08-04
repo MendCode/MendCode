@@ -502,13 +502,22 @@ export const TaskTool = Tool.define(
           parts,
         })
       })
+      const childError = (message: MessageV2.WithParts) => {
+        if (message.info.role !== "assistant") {
+          return new DOMException("Subagent response ended without an assistant result", "AbortError")
+        }
+        if (message.info.error) return message.info.error
+        if (!message.info.finish) {
+          return new DOMException("Subagent response ended without a terminal finish", "AbortError")
+        }
+      }
 
       // Keep the durable registry in sync for both foreground joins and
       // background runs. A foreground parent may disconnect while this fiber
       // continues, so completion must be attached to the child work itself.
       const runPrompt = prompt.pipe(
         Effect.tap((message) => {
-          const error = message.info.role === "assistant" ? message.info.error : undefined
+          const error = childError(message)
           return backgroundTasks.get(nextSession.id, task.generation).pipe(
             Effect.flatMap((current) =>
               finishTask({
@@ -609,7 +618,7 @@ export const TaskTool = Tool.define(
                   })
                 }
                 const childMessage = outcome.exit.value
-                const error = childMessage.info.role === "assistant" ? childMessage.info.error : undefined
+                const error = childError(childMessage)
                 if (error)
                   return errorOutput({ error, interrupted: isAbortError(error), extraParts: childMessage.parts })
                 return sessions.messages({ sessionID: nextSession.id }).pipe(

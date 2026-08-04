@@ -135,3 +135,7 @@ const cb = Instance.bind((err, evts) => {
 })
 nativeAddon.subscribe(dir, cb)
 ```
+
+# Project context
+
+- 2026-08-04: Background subagent completion is a durable lifecycle contract. Persist terminal notifications and acknowledge them only after the owner-wake or superseding user prompt is stored; replay unacknowledged events after instance/server restart, keep the shared server alive while tasks are active, and classify assistant results without a terminal `finish` as `interrupted`, not `completed`.

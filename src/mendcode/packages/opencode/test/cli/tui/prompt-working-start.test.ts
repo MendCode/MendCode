@@ -14,6 +14,7 @@ import {
   isRetryablePromptDelivery,
   promptDeliveryErrorMessage,
   promptDeliveryIsQueued,
+  promptDeliveryRetryAction,
   promptDeliveryRetryDelay,
   promptDraftHistoryAction,
   mergeOptimisticUserParts,
@@ -153,6 +154,18 @@ describe("prompt delivery recovery", () => {
     expect(promptDeliveryIsQueued("accepted")).toBe(false)
   })
 
+  test("settles completed deliveries before a forced reconnect recovery", () => {
+    expect(promptDeliveryRetryAction({ state: "completed", forceAccepted: true, replaceExisting: false })).toBe(
+      "settle",
+    )
+    expect(promptDeliveryRetryAction({ state: "accepted", forceAccepted: false, replaceExisting: false })).toBe(
+      "accept",
+    )
+    expect(promptDeliveryRetryAction({ state: "accepted", forceAccepted: true, replaceExisting: false })).toBe(
+      "dispatch",
+    )
+  })
+
   test("retries accepted deliveries whose assistant was aborted or failed transiently", () => {
     expect(storedAssistantDeliveryState({ time: {} })).toBe("accepted")
     expect(
@@ -290,6 +303,13 @@ describe("queued user turn", () => {
         },
       ]),
     ).toBeUndefined()
+  })
+
+  test("expires an unfinished assistant when the session has no live status", () => {
+    const messages = [{ id: "msg_001", role: "assistant", time: { created: 1_000 } }]
+    expect(latestPendingAssistantID(messages, { now: 100_000 })).toBeUndefined()
+    expect(latestPendingAssistantID(messages, { statusType: "busy", now: 100_000 })).toBeUndefined()
+    expect(latestPendingAssistantID(messages, { statusType: "busy", now: 100_000, statusUntil: 101_000 })).toBe("msg_001")
   })
 
   test("stays visibly queued across later assistant tool iterations", () => {
@@ -587,6 +607,14 @@ describe("resolveWorkingStartedAt", () => {
         promptAvailable: true,
       }),
     ).toBe(false)
+    expect(
+      shouldRestoreCompactionPromptFocus({
+        arcadeOwnsFocus: false,
+        arcadeWasFocused: true,
+        previousFocusAvailable: false,
+        promptAvailable: true,
+      }),
+    ).toBe(true)
   })
 
   test("keeps the compacted transcript collapsed until toggled", () => {

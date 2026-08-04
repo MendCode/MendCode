@@ -468,7 +468,7 @@ describe("session.message-v2.fromError", () => {
   })
 
   test("retries processor idle stream watchdog timeouts", () => {
-    const msg = "LLM stream timed out after 180000ms without events"
+    const msg = "LLM stream timed out after 60000ms without events"
     expect(SessionRetry.retryable(wrap(msg))).toBe(msg)
   })
 

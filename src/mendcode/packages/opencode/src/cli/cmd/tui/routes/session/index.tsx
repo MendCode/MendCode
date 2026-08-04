@@ -16,6 +16,7 @@ import {
 } from "solid-js"
 import { Dynamic } from "solid-js/web"
 import path from "path"
+import open from "open"
 import { useRoute, useRouteData } from "@tui/context/route"
 import { useProject } from "@tui/context/project"
 import { COMPACTED_TOOL_CALLS_KV_KEY, useSync } from "@tui/context/sync"
@@ -53,6 +54,7 @@ import type {
   TextPart,
   ReasoningPart,
 } from "@mendcode/sdk/v2"
+import type { OpencodeClient } from "@mendcode/sdk/v2"
 import { useLocal } from "@tui/context/local"
 import * as Log from "@mendcode/core/util/log"
 import { Locale } from "@/util/locale"
@@ -74,6 +76,7 @@ import type { TaskTool } from "@/tool/task"
 import type { QuestionTool } from "@/tool/question"
 import type { SkillTool } from "@/tool/skill"
 import type { LoopTool } from "@/tool/loop"
+import type { WorkflowTool } from "@/tool/workflow"
 import { useKeyboard, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "@tui/context/sdk"
 import { useEditorContext } from "@tui/context/editor"
@@ -121,8 +124,20 @@ import { QuestionPrompt } from "./question"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import * as Model from "../../util/model"
 import { formatAssistantLiveUsage, formatAssistantUsage, formatLatestAssistantContextUsage } from "../../util/usage"
+import { isAssistantWorking, SESSION_STOPPED_CONNECTION_MESSAGE, shouldShowSessionStoppedConnection } from "../../util/session-working"
 import { formatTranscript } from "../../util/transcript"
 import { useTuiConfig } from "../../context/tui-config"
+import {
+  workflowReceiptCounts,
+  workflowReceiptElapsed,
+  workflowReceiptNextAction,
+  workflowReceiptProgress,
+  workflowReceiptStateIsAnimated,
+  workflowReceiptStateIsTerminal,
+  workflowReceiptStateLabel,
+  workflowReceiptStateMarker,
+  workflowReceiptUsage,
+} from "@tui/util/workflow-receipt"
 import {
   getScrollAcceleration,
   isScrollboxAtBottom,
@@ -170,7 +185,7 @@ import {
   shouldDisplayReasoning,
   unavailableReasoningLabel,
 } from "@/mend/tui/presentation"
-import { CompactionPanel, isCompactionArcadeFocused } from "../../component/compaction-panel"
+import { blurCompactionArcade, CompactionPanel, isCompactionArcadeFocused } from "../../component/compaction-panel"
 import {
   agentViewCommandStateRank,
   agentViewCommandTouchesSession,
@@ -180,6 +195,11 @@ import {
   type AgentViewCommand,
 } from "../../util/agent-view"
 import { promptChromeUsesFullSessionWidth } from "@/mend/tui/prompt-chrome"
+import {
+  imageGenerationCanvasSize,
+  imageGenerationWaitFrame,
+  imageGenerationWaitFrameCount,
+} from "@/mend/tui/image-generation-wait"
 import { readMendTuiCustomization, resolveMendSessionAccent } from "@/mend/tui/customization"
 import { formatDuration } from "@/util/format"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
@@ -434,6 +454,7 @@ const context = createContext<{
   refreshLoopWorkflows: () => Promise<readonly SessionLoopWorkflow[]>
   latestTodoWritePartID: () => string | undefined
   latestCompletedTodoWritePartID: () => string | undefined
+  now: () => number
   sync: ReturnType<typeof useSync>
   tui: ReturnType<typeof useTuiConfig>
 }>()
@@ -583,6 +604,8 @@ export function Session() {
   const kv = useKV()
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
+  const keybind = useKeybind()
+  const [now, setNow] = createSignal(Date.now())
   const promptEdgeToEdge = createMemo(() => {
     return promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)
   })
@@ -599,7 +622,9 @@ export function Session() {
   const [pendingPromptRevision, setPendingPromptRevision] = createSignal(0)
   onMount(() => {
     const unsubscribe = subscribePendingPromptDeliveries(() => setPendingPromptRevision((value) => value + 1))
+    const timer = setInterval(() => setNow(Date.now()), 1000)
     onCleanup(unsubscribe)
+    onCleanup(() => clearInterval(timer))
   })
   const sessionPromptHistory = createMemo(() =>
     sessionUserPromptHistory({ messages: messages(), partsByMessage: sync.data.part }),
@@ -637,7 +662,15 @@ export function Session() {
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0 || planReviews().length > 0)
 
   const [submittedUserMessageID, setSubmittedUserMessageID] = createSignal<string>()
-  const pending = createMemo(() => latestPendingAssistantID(messages()))
+  const pending = createMemo(() => {
+    const currentStatus = sync.data.session_status?.[route.sessionID]
+    return latestPendingAssistantID(messages(), {
+      statusType: currentStatus?.type,
+      now: now(),
+      statusUntil: currentStatus?.type === "busy" ? currentStatus.until : undefined,
+      statusNext: currentStatus?.type === "retry" ? currentStatus.next : undefined,
+    })
+  })
   const sessionWorking = createMemo(() => {
     const status = sync.data.session_status?.[route.sessionID]?.type
     return status === "busy" || status === "retry"
@@ -949,6 +982,7 @@ export function Session() {
     })
   })
   const todos = createMemo(() => sync.data.todo[route.sessionID] ?? [])
+  const sdk = useSDK()
   const taskSubagentBySession = createMemo(() => {
     const result = new Map<string, { description?: string; subagentType?: string }>()
     const fullStartID = rootFullHistoryStartID()
@@ -997,6 +1031,8 @@ export function Session() {
             (sync.data.permission[child.id]?.length ?? 0) +
             (sync.data.question[child.id]?.length ?? 0) +
             (sync.data.plan_review[child.id]?.length ?? 0),
+          now: now(),
+          connectionStatus: sdk.connection.status,
         })
         const usage = latestAssistant
           ? (formatAssistantLiveUsage(latestAssistant, providers(), { config: sync.data.config }) ??
@@ -1028,7 +1064,6 @@ export function Session() {
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const toast = useToast()
-  const sdk = useSDK()
   const [sendNowMessageID, setSendNowMessageID] = createSignal<string>()
   const sendQueuedNow = async (messageID: string) => {
     if (sendNowMessageID()) return
@@ -1962,7 +1997,6 @@ export function Session() {
     prompt.focus()
     return true
   }
-  const keybind = useKeybind()
   const dialog = useDialog()
   const renderer = useRenderer()
 
@@ -2078,7 +2112,10 @@ export function Session() {
     const contentHeightChanged = Math.abs(scrollHeight - lastObservedScrollHeight) > 1
     const viewportHeightChanged = Math.abs(viewportHeight - lastObservedViewportHeight) > 1
 
-    if (userMovedViewport) cancelBottomScrollTimers()
+    if (userMovedViewport) {
+      blurCompactionArcade()
+      cancelBottomScrollTimers()
+    }
 
     if (
       suppressedPagingBoundary &&
@@ -2194,6 +2231,7 @@ export function Session() {
   }
 
   const markScrollDetached = () => {
+    blurCompactionArcade()
     restoringSessionScroll = false
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
@@ -2333,6 +2371,7 @@ export function Session() {
   )
 
   const scrollBySession = (delta: number) => {
+    blurCompactionArcade()
     restoringSessionScroll = false
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
@@ -2341,6 +2380,7 @@ export function Session() {
     setTimeout(syncScrollFollowMode, 0)
   }
   const scrollToSession = (position: number) => {
+    blurCompactionArcade()
     restoringSessionScroll = false
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
@@ -3662,6 +3702,7 @@ export function Session() {
         refreshLoopWorkflows,
         latestTodoWritePartID,
         latestCompletedTodoWritePartID,
+        now,
         sync,
         tui: tuiConfig,
       }}
@@ -4244,17 +4285,42 @@ type SessionSubagentInfo = {
 }
 
 function sessionLiveStateLabel(input: {
-  status?: { type: string; attempt?: number; message?: string }
+  status?: { type: string; attempt?: number; message?: string; next?: number }
   messages: Message[]
   pendingInputCount: number
+  now?: number
+  connectionStatus?: string
 }) {
   if (input.pendingInputCount > 0) return "needs input"
-  if (input.status?.type === "retry")
+  if (
+    input.status?.type === "retry" &&
+    isAssistantWorking({ statusType: input.status.type, now: input.now, statusNext: input.status.next })
+  )
     return input.status.attempt && input.status.attempt > 1 ? `retry #${input.status.attempt}` : "retrying"
-  if (input.status?.type === "busy") return "working"
   const lastUser = input.messages.findLast((message) => message.role === "user")
   const lastAssistant = input.messages.findLast((message) => message.role === "assistant")
-  if (lastAssistant && !lastAssistant.time.completed) return "working"
+  if (
+    input.status?.type === "busy" &&
+    isAssistantWorking({
+      statusType: input.status.type,
+      now: input.now,
+      assistantCreated: lastAssistant?.time.created,
+      statusUntil: (input.status as { until?: number }).until,
+    })
+  )
+    return "working"
+  if (
+    lastAssistant &&
+    !lastAssistant.time.completed &&
+    isAssistantWorking({ now: input.now, assistantCreated: lastAssistant.time.created })
+  )
+    return "working"
+  if (
+    shouldShowSessionStoppedConnection({
+      connectionStatus: input.connectionStatus ?? "disconnected",
+      hasOrphanedAssistant: Boolean(lastAssistant && !lastAssistant.time.completed),
+    })
+  ) return SESSION_STOPPED_CONNECTION_MESSAGE
   if (lastUser && (!lastAssistant || lastAssistant.time.created < lastUser.time.created)) return "waiting"
   if (lastAssistant) return "responded"
   return "ready"
@@ -6033,9 +6099,11 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
   const mend = useMendTuiProfile()
   const rowOnly = createMemo(() => {
     const profile = mend.profile.presentation.profile
+    if (props.part.tool === "image_gen" && profile === "mendcode") return false
     if (props.part.tool === ShellID.ToolID) return false
     if (props.part.tool === "plan_review") return false
     if (props.part.tool === "loop") return false
+    if (props.part.tool === "workflow") return false
     if (props.part.tool === "memory_graph") return false
     return shouldRenderCompactTool(profile, props.part.tool)
   })
@@ -6043,7 +6111,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
   // Hide tool if showDetails is false and tool completed successfully
   const shouldHide = createMemo(() => {
     if (ctx.showDetails()) return false
+    if (props.part.tool === "image_gen") return false
     if (props.part.tool === "loop") return false
+    if (props.part.tool === "workflow") return false
     if (props.part.state.status !== "completed") return false
     return true
   })
@@ -6085,6 +6155,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
             metadata={toolprops.metadata}
             output={toolprops.output}
           />
+        </Match>
+        <Match when={props.part.tool === "image_gen" && mend.profile.presentation.profile === "mendcode"}>
+          <ImageGen {...toolprops} />
         </Match>
         <Match when={props.part.tool === ShellID.ToolID}>
           <Shell {...toolprops} />
@@ -6128,6 +6201,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={props.part.tool === "loop"}>
           <Loop {...toolprops} />
         </Match>
+        <Match when={props.part.tool === "workflow"}>
+          <Workflow {...toolprops} />
+        </Match>
         <Match when={props.part.tool === "memory_graph"}>
           <MemoryGraph {...toolprops} />
         </Match>
@@ -6136,6 +6212,235 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         </Match>
       </Switch>
     </Show>
+  )
+}
+
+function imageGenMetadataString(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key]
+  return typeof value === "string" && value.trim() ? value : undefined
+}
+
+function imageGenMetadataNumber(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key]
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function formatImageArtifactBytes(value: number | undefined) {
+  if (value === undefined) return
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${Math.round(value / 102.4) / 10} KB`
+  return `${Math.round(value / (1024 * 102.4)) / 10} MB`
+}
+
+function ImageGenToolAction(props: { label: string; onPress: () => void }) {
+  const { theme } = useTheme()
+  const renderer = useRenderer()
+  const [hover, setHover] = createSignal(false)
+  return (
+    <box
+      onMouseOver={() => setHover(true)}
+      onMouseOut={() => setHover(false)}
+      onMouseUp={() => {
+        if (renderer.getSelection()?.getSelectedText()) return
+        props.onPress()
+      }}
+    >
+      <text fg={hover() ? theme.text : theme.primary}>[{props.label}]</text>
+    </box>
+  )
+}
+
+function ImageGen(props: ToolProps<any>) {
+  const { theme } = useTheme()
+  const mend = useMendTuiProfile()
+  const dimensions = useTerminalDimensions()
+  const toast = useToast()
+  const [frame, setFrame] = createSignal(0)
+  const running = createMemo(() => props.part.state.status === "pending" || props.part.state.status === "running")
+  const completed = createMemo(() => props.part.state.status === "completed")
+  const metadata = createMemo(() => props.metadata as Record<string, unknown>)
+  const artifactPath = createMemo(() => imageGenMetadataString(metadata(), "path"))
+  const generationModel = createMemo(() => {
+    const provider = imageGenMetadataString(metadata(), "provider")
+    const model = imageGenMetadataString(metadata(), "model")
+    return provider && model ? `${provider}/${model}` : model
+  })
+  const visualCaption = createMemo(() => {
+    const caption = metadata().caption
+    if (!caption || typeof caption !== "object") return undefined
+    const record = caption as Record<string, unknown>
+    return record.status === "completed" && typeof record.caption === "string" ? record.caption : undefined
+  })
+  const captionError = createMemo(() => {
+    const caption = metadata().caption
+    if (!caption || typeof caption !== "object") return undefined
+    const record = caption as Record<string, unknown>
+    return record.status === "error" && typeof record.error === "string" ? record.error : undefined
+  })
+  const imageWait = createMemo(() => mend.profile.imageGeneration.wait)
+  const activityCanvas = createMemo(() => {
+    const available = sessionContentWidth(
+      dimensions().width,
+      promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset),
+    )
+    return imageGenerationCanvasSize(available, imageWait())
+  })
+  const activityFieldWidth = createMemo(() =>
+    Math.max(8, activityCanvas().width - 2 - imageWait().canvas.paddingX * 2),
+  )
+  const activityFieldHeight = createMemo(() =>
+    Math.max(
+      4,
+      activityCanvas().height -
+        2 -
+        imageWait().canvas.paddingY * 2 -
+        (imageWait().showMetadata ? 2 : 0),
+    ),
+  )
+  const activityFrameCount = createMemo(() => imageGenerationWaitFrameCount(imageWait()))
+  const activityLines = createMemo(() =>
+    imageGenerationWaitFrame(imageWait(), frame(), activityFieldWidth(), activityFieldHeight()),
+  )
+  const summary = createMemo(() =>
+    [
+      imageGenMetadataString(metadata(), "format") ?? "PNG",
+      imageGenMetadataString(metadata(), "size"),
+      formatImageArtifactBytes(imageGenMetadataNumber(metadata(), "bytes")),
+      imageGenMetadataString(metadata(), "quality"),
+      generationModel(),
+      typeof metadata().cost === "number" ? `$${(metadata().cost as number).toFixed(4)}` : "cost unknown",
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join(" · "),
+  )
+
+  createEffect(() => {
+    const wait = imageWait()
+    const count = activityFrameCount()
+    setFrame((value) => value % count)
+    if (!running() || mend.profile.workingIndicator.visible === false || wait.mode === "static" || count <= 1) return
+    const timer = setInterval(() => setFrame((value) => (value + 1) % count), wait.intervalMs)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  const activityLineColor = (line: string) => {
+    const color = imageWait().textColor
+    if (color === "accent") return theme.primary
+    if (color === "muted") return theme.textMuted
+    return line.includes("*") || line.includes("+") || line.includes("@") || line.includes("#") || line.includes("o")
+      ? theme.primary
+      : theme.textMuted
+  }
+
+  const openArtifact = async (target: string, label: string) => {
+    try {
+      await open(target)
+      toast.show({ message: `${label}: ${target}`, variant: "success", duration: 2500 })
+    } catch (error) {
+      toast.show({ message: `${label} failed: ${errorMessage(error)}`, variant: "error", duration: 5000 })
+    }
+  }
+
+  const copyArtifactPath = async (target: string) => {
+    try {
+      await Clipboard.copy(target)
+      toast.show({ message: "Image path copied", variant: "success", duration: 2500 })
+    } catch (error) {
+      toast.show({ message: `Copy failed: ${errorMessage(error)}`, variant: "error", duration: 5000 })
+    }
+  }
+
+  return (
+    <Switch>
+      <Match when={props.part.state.status === "error"}>
+        <InlineTool
+          icon={toolPresentationIcon("image_gen")}
+          iconColor={theme.error}
+          pending="Generating image..."
+          complete={true}
+          part={props.part}
+        >
+          Image generation failed
+        </InlineTool>
+      </Match>
+      <Match when={running()}>
+        <BlockTool
+          title="Generating image..."
+          icon={toolPresentationIcon("image_gen")}
+          iconColor={theme.primary}
+          titleColor={theme.text}
+          part={props.part}
+          paddingBottom={1}
+        >
+          <box width="100%" alignItems="center">
+            <box
+              border={["top", "bottom", "left", "right"]}
+              borderColor={theme.border}
+              paddingLeft={imageWait().canvas.paddingX}
+              paddingRight={imageWait().canvas.paddingX}
+              paddingTop={imageWait().canvas.paddingY}
+              paddingBottom={imageWait().canvas.paddingY}
+              flexDirection="column"
+              justifyContent="center"
+              alignItems="center"
+              width={activityCanvas().width}
+              height={activityCanvas().height}
+              flexShrink={0}
+            >
+              <For each={activityLines()}>{(line) => <text fg={activityLineColor(line)}>{line}</text>}</For>
+              <Show when={imageWait().showMetadata}>
+                <text fg={theme.textMuted}>{generationModel() ?? "configured image model"}</text>
+                <text fg={theme.textMuted}>
+                  size {imageGenMetadataString(metadata(), "requestedSize") ?? "auto"}
+                </text>
+              </Show>
+            </box>
+          </box>
+        </BlockTool>
+      </Match>
+      <Match when={completed()}>
+        <BlockTool
+          title={props.part.state.status === "completed" ? props.part.state.title : "Generated image"}
+          icon={toolPresentationIcon("image_gen")}
+          iconColor={theme.primary}
+          titleColor={theme.text}
+          part={props.part}
+          paddingBottom={1}
+        >
+          <box
+            border={["top", "bottom", "left", "right"]}
+            borderColor={theme.border}
+            paddingLeft={2}
+            paddingRight={2}
+            paddingTop={1}
+            paddingBottom={1}
+            flexDirection="column"
+            gap={1}
+          >
+            <text fg={theme.text}>{summary()}</text>
+            <Show when={visualCaption()}>{(value) => <text fg={theme.textMuted}>Caption: {value()}</text>}</Show>
+            <Show when={captionError()}>{(value) => <text fg={theme.warning}>Caption unavailable: {value()}</text>}</Show>
+            <Show when={artifactPath()}>
+              {(value) => (
+                <>
+                  <text fg={theme.textMuted} wrapMode="char">
+                    {value()}
+                  </text>
+                  <box flexDirection="row" gap={2}>
+                    <ImageGenToolAction label="Open Preview" onPress={() => void openArtifact(value(), "Opened preview")} />
+                    <ImageGenToolAction
+                      label="Reveal Folder"
+                      onPress={() => void openArtifact(path.dirname(value()), "Opened folder")}
+                    />
+                    <ImageGenToolAction label="Copy Path" onPress={() => void copyArtifactPath(value())} />
+                  </box>
+                </>
+              )}
+            </Show>
+          </box>
+        </BlockTool>
+      </Match>
+    </Switch>
   )
 }
 
@@ -7083,6 +7388,8 @@ function Task(props: ToolProps<typeof TaskTool>) {
       status: childStatus(),
       messages: messages(),
       pendingInputCount: childPendingInputCount(),
+      now: ctx.now(),
+      connectionStatus: sdk.connection.status,
     })
   })
   const backgroundTask = createMemo(() => props.metadata.status === "started")
@@ -7112,7 +7419,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
     return "↳ disconnected: waiting for local connection"
   })
   const contentColor = (line: string) => {
-    if (line.startsWith("↳ connection lost:")) return theme.error
+    if (line.startsWith("↳ connection lost:") || line.includes("agent stopped:")) return theme.error
     return theme.textMuted
   }
   const childErrorLabel = createMemo(() => {
@@ -7563,6 +7870,232 @@ function MemoryGraph(props: ToolProps<any>) {
         </box>
       </BlockTool>
     </Show>
+  )
+}
+
+type WorkflowSnapshot = NonNullable<Awaited<ReturnType<OpencodeClient["workflow"]["show"]>>["data"]>
+
+function workflowToolNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0
+}
+
+function workflowToolReceipt(snapshot: WorkflowSnapshot) {
+  return {
+    definition: { name: snapshot.definition.name, description: snapshot.definition.description },
+    revision: { plan: { objective: snapshot.revision.plan.objective, model: snapshot.revision.plan.model } },
+    run: {
+      id: snapshot.run.id,
+      state: snapshot.run.state,
+      originSessionID: snapshot.run.originSessionID,
+      rootSessionID: snapshot.run.rootSessionID,
+      createdAt: workflowToolNumber(snapshot.run.createdAt),
+      updatedAt: workflowToolNumber(snapshot.run.updatedAt),
+    },
+    phases: snapshot.phases.map((phase) => ({ state: phase.state, counts: phase.counts, id: phase.id, name: phase.name })),
+    tasks: snapshot.tasks.map((task) => ({
+      id: task.id,
+      name: task.name,
+      phaseID: task.phaseID,
+      state: task.state,
+      blocker: task.blocker,
+      attempt: task.attempt,
+    })),
+    events: snapshot.events.map((event) => ({ type: event.type, summary: event.summary, createdAt: workflowToolNumber(event.createdAt) })),
+    usage: snapshot.usage
+      ? {
+          inputTokens: workflowToolNumber(snapshot.usage.inputTokens),
+          outputTokens: workflowToolNumber(snapshot.usage.outputTokens),
+          cost: workflowToolNumber(snapshot.usage.cost),
+        }
+      : undefined,
+  }
+}
+
+function Workflow(props: ToolProps<typeof WorkflowTool>) {
+  const session = use()
+  const sdk = useSDK()
+  const toast = useToast()
+  const dialog = useDialog()
+  const dimensions = useTerminalDimensions()
+  const renderer = useRenderer()
+  const { theme } = useTheme()
+  const { navigate } = useRoute()
+  const [refresh, setRefresh] = createSignal(0)
+  const [activityFrame, setActivityFrame] = createSignal(0)
+  const [hover, setHover] = createSignal(false)
+  const runID = createMemo(() => (typeof props.metadata.runID === "string" ? props.metadata.runID : undefined))
+  const [snapshot] = createResource(() => `${runID() ?? ""}:${refresh()}`, async () => {
+    const id = runID()
+    if (!id) return undefined
+    const response = await sdk.client.workflow.show({ runID: id }).catch(() => undefined)
+    return response?.data
+  })
+  const live = createMemo(() => snapshot.latest ?? snapshot())
+  const receipt = createMemo(() => {
+    const current = live()
+    return current ? workflowToolReceipt(current) : undefined
+  })
+  const state = createMemo(() => live()?.run.state ?? props.metadata.state ?? (props.part.state.status === "running" ? "working" : props.part.state.status))
+  const title = createMemo(() => live()?.definition.name || (typeof props.input.name === "string" ? props.input.name : "Workflow"))
+  const objective = createMemo(() => live()?.revision.plan.objective || props.metadata.objective || "Declarative workflow execution")
+  const panelWidth = createMemo(() => Math.max(52, Math.min(92, dimensions().width - 12)))
+  const rows = createMemo(() => {
+    const current = receipt()
+    if (!current) {
+      return [
+        ["workflow", runID() ?? "pending"],
+        ["state", workflowReceiptStateLabel(state())],
+        ["tasks", props.metadata.taskCount === undefined ? "pending" : String(props.metadata.taskCount)],
+        ["phases", props.metadata.phaseCount === undefined ? "pending" : String(props.metadata.phaseCount)],
+      ] as Array<[string, string]>
+    }
+    const counts = workflowReceiptCounts(current)
+    const model = current.revision.plan.model
+    return [
+      ["workflow", current.run.id],
+      ["state", workflowReceiptStateLabel(current.run.state)],
+      ["phases", `${current.phases.filter((phase) => phase.state === "completed").length}/${current.phases.length}`],
+      ["tasks", workflowReceiptProgress(current)],
+      ["active", `${counts.working} working · ${counts.queued} queued`],
+      ["elapsed", `${Math.round(workflowReceiptElapsed(current) / 1000)}s`],
+      ["model", model ? `${model.providerID}/${model.modelID}${model.variant ? `#${model.variant}` : ""}` : "task route"],
+      ["usage", workflowReceiptUsage(current)],
+    ] as Array<[string, string]>
+  })
+  const nextAction = createMemo(() => receipt() ? workflowReceiptNextAction(receipt()!) : "Open the workflow monitor for the latest snapshot.")
+
+  onMount(() => {
+    const animation = setInterval(() => {
+      if (workflowReceiptStateIsAnimated(state())) setActivityFrame((value) => value + 1)
+    }, 180)
+    const fallback = setInterval(() => {
+      if (runID() && !workflowReceiptStateIsTerminal(state())) setRefresh((value) => value + 1)
+    }, 5_000)
+    const unsubscribe = sdk.event.on("event", (event) => {
+      const type = event.payload?.type as string | undefined
+      if (type?.startsWith("workflow.")) setRefresh((value) => value + 1)
+    })
+    onCleanup(() => {
+      clearInterval(animation)
+      clearInterval(fallback)
+      unsubscribe()
+    })
+  })
+
+  async function control(action: "pause" | "resume" | "stop") {
+    const id = runID()
+    if (!id) return
+    if (action === "stop") {
+      const confirmed = await DialogConfirm.show(dialog, "Stop workflow", `Stop ${title()}?`)
+      dialog.clear()
+      if (!confirmed) return
+    }
+    const response =
+      action === "pause"
+        ? await sdk.client.workflow.pause({ runID: id, reason: "Session card pause" })
+        : action === "resume"
+          ? await sdk.client.workflow.resume({ runID: id, reason: "Session card resume" })
+          : await sdk.client.workflow.stop({ runID: id, reason: "Session card stop" })
+    if (response.error) throw new Error(String(response.error))
+    setRefresh((value) => value + 1)
+    toast.show({ variant: "success", message: `Workflow ${action} requested.`, duration: 2500 })
+  }
+
+  async function openTarget() {
+    const id = runID()
+    if (!id) return
+    navigate({ type: "workflows", selectedID: id, returnTo: { type: "session", sessionID: session.sessionID } })
+  }
+
+  const handleOpenTarget = () => {
+    if (renderer.getSelection()?.getSelectedText()) return
+    void openTarget().catch((error) => toast.error(error))
+  }
+
+  return (
+    <BlockTool
+      title="Workflow"
+      icon={toolPresentationIcon("workflow")}
+      titleColor={state() === "completed" ? theme.success : state() === "failed" || state() === "blocked" ? theme.error : theme.secondary}
+      contentGap={0}
+      part={props.part}
+      spinner={props.part.state.status === "running" && !runID()}
+    >
+      <box width="100%" alignItems="center">
+        <box
+          flexDirection="column"
+          width={panelWidth()}
+          flexShrink={0}
+          borderStyle="single"
+          borderColor={hover() ? theme.secondary : theme.border}
+          paddingLeft={2}
+          paddingRight={2}
+          paddingTop={1}
+          paddingBottom={1}
+          onMouseOver={() => setHover(true)}
+          onMouseOut={() => setHover(false)}
+        >
+          <box flexDirection="row">
+            <text fg={theme.secondary} attributes={TextAttributes.BOLD}>{toolPresentationIcon("workflow")} {Locale.truncateMiddle(title(), Math.max(18, panelWidth() - 24))}</text>
+            <box flexGrow={1} />
+            <text fg={theme.secondary}>{workflowReceiptStateMarker(state(), activityFrame())} {workflowReceiptStateLabel(state())}</text>
+          </box>
+          <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
+            <For each={rows()}>
+              {(row) => (
+                <box flexDirection="row">
+                  <text fg={theme.textMuted} wrapMode="none">{row[0].padEnd(10)}</text>
+                  <text fg={theme.text} wrapMode="none">{Locale.truncateMiddle(row[1], Math.max(18, panelWidth() - 24))}</text>
+                </box>
+              )}
+            </For>
+            <text fg={theme.textMuted} wrapMode="word">{Locale.truncate(objective(), Math.max(24, panelWidth() - 8))}</text>
+            <text fg={theme.warning} wrapMode="word">next: {Locale.truncate(nextAction(), Math.max(24, panelWidth() - 14))}</text>
+          </box>
+          <Show when={receipt()?.phases.length}>
+            <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
+              <text fg={theme.primary} attributes={TextAttributes.BOLD}>EXECUTION PLAN</text>
+              <For each={receipt()!.phases.slice(0, 8)}>
+                {(phase) => (
+                  <box flexDirection="row">
+                    <text
+                      width={5}
+                      fg={
+                        phase.state === "completed"
+                          ? theme.success
+                          : phase.state === "failed" || phase.state === "blocked"
+                            ? theme.error
+                            : phase.state === "working"
+                              ? theme.secondary
+                              : theme.textMuted
+                      }
+                      wrapMode="none"
+                    >
+                      {workflowReceiptStateMarker(phase.state, activityFrame())}
+                    </text>
+                    <text fg={theme.text} wrapMode="none">
+                      {Locale.truncateMiddle(phase.name || phase.id || "phase", Math.max(16, panelWidth() - 32))}
+                    </text>
+                    <box flexGrow={1} />
+                    <text fg={theme.textMuted} wrapMode="none">{phase.counts.completed}/{phase.counts.total}</text>
+                  </box>
+                )}
+              </For>
+              <Show when={(receipt()?.phases.length ?? 0) > 8}>
+                <text fg={theme.textMuted}>... {(receipt()?.phases.length ?? 0) - 8} more phases</text>
+              </Show>
+            </box>
+          </Show>
+          <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="row">
+            <text fg={hover() ? theme.secondary : theme.textMuted} onMouseUp={handleOpenTarget}>open monitor</text>
+            <box flexGrow={1} />
+            <text fg={theme.textMuted} onMouseUp={() => void control("pause").catch((error) => toast.error(error))}>[pause]</text>
+            <text fg={theme.textMuted} onMouseUp={() => void control("resume").catch((error) => toast.error(error))}> [resume]</text>
+            <text fg={theme.textMuted} onMouseUp={() => void control("stop").catch((error) => toast.error(error))}> [stop]</text>
+          </box>
+        </box>
+      </box>
+    </BlockTool>
   )
 }
 

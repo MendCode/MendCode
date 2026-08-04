@@ -1018,14 +1018,14 @@ it.live("session.processor effect tests keep permission toolcalls pending across
   ),
 )
 
-it.live("session.processor effect tests keep shell tools pending across idle stream timeout", () =>
+it.live("session.processor effect tests keep long-running tools active across idle stream timeout", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>
       Effect.gen(function* () {
         process.env.MENDCODE_LLM_STREAM_IDLE_TIMEOUT_MS = "25"
         const { processors, session, provider } = yield* boot()
 
-        yield* llm.tool("bash", { command: "sleep 1" })
+        yield* llm.tool("image_gen", { prompt: "A cinematic orbital station" })
 
         const chat = yield* session.create({})
         const parent = yield* user(chat.id, "run a slow command")
@@ -1052,7 +1052,7 @@ it.live("session.processor effect tests keep shell tools pending across idle str
             agent: agent(),
             system: [],
             messages: [{ role: "user", content: "run a slow command" }],
-            tools: { bash: neverTool("Run a shell command") },
+            tools: { image_gen: neverTool("Generate an image") },
           })
           .pipe(Effect.forkChild)
 
@@ -1068,7 +1068,7 @@ it.live("session.processor effect tests keep shell tools pending across idle str
 
         const call = MessageV2.parts(msg.id).find((part): part is MessageV2.ToolPart => part.type === "tool")
         expect(yield* llm.calls).toBe(1)
-        expect(call?.tool).toBe("bash")
+        expect(call?.tool).toBe("image_gen")
         expect(call?.state.status).toBe("running")
 
         const exit = yield* Fiber.await(run).pipe(Effect.timeout("100 millis"), Effect.exit)

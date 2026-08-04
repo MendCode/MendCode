@@ -23,6 +23,7 @@ describe("tui route helpers", () => {
 
   test("command deck only activates its three-column layout on wide terminals", () => {
     expect(commandDeckLayout({ width: 140, height: 40 })).toMatchObject({ wide: true, railWidth: 25, contextWidth: 33 })
+    expect(commandDeckLayout({ width: 180, height: 40 }).contextWidth).toBe(42)
     expect(commandDeckLayout({ width: 100, height: 30 }).wide).toBe(false)
   })
 

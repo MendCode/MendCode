@@ -298,7 +298,7 @@ function buildAuthorizeUrl(redirectUri: string, pkce: PkceCodes, state: string):
   return `${ISSUER}/oauth/authorize?${params.toString()}`
 }
 
-interface TokenResponse {
+export interface TokenResponse {
   id_token: string
   access_token: string
   refresh_token: string
@@ -323,7 +323,7 @@ async function exchangeCodeForTokens(code: string, redirectUri: string, pkce: Pk
   return response.json()
 }
 
-async function refreshAccessToken(refreshToken: string): Promise<TokenResponse> {
+export async function refreshCodexAccessToken(refreshToken: string): Promise<TokenResponse> {
   const response = await fetch(`${ISSUER}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -627,7 +627,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
             // Check if token needs refresh
             if (!currentAuth.access || currentAuth.expires < Date.now()) {
               log.info("refreshing codex access token")
-              const tokens = await refreshAccessToken(currentAuth.refresh)
+              const tokens = await refreshCodexAccessToken(currentAuth.refresh)
               const newAccountId = extractAccountId(tokens) || authWithAccount.accountId
               await input.client.auth.set({
                 path: { id: "openai" },

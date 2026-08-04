@@ -53,6 +53,7 @@ import { Stats } from "@tui/routes/stats"
 import { Memory } from "@tui/routes/memory"
 import { Changes } from "@tui/routes/changes"
 import { Loops } from "@tui/routes/loops"
+import { Workflows } from "@tui/routes/workflows"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -965,7 +966,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
                   ? "Changes"
                   : route.data.type === "loops"
                     ? "Loops"
-                    : route.data.type
+                    : route.data.type === "workflows"
+                      ? "Workflows"
+                     : route.data.type
     const sessionLabel = session && !SessionApi.isDefaultTitle(session.title) ? session.title : routeLabel
     if (
       route.data.type === "home" &&
@@ -1117,6 +1120,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
   const loopsRoute = (selectedID?: string) => {
     const returnTo = currentSessionReturn()
     return returnTo ? { type: "loops" as const, selectedID, returnTo } : { type: "loops" as const, selectedID }
+  }
+  const workflowsRoute = (selectedID?: string) => {
+    const returnTo = currentSessionReturn()
+    return returnTo ? { type: "workflows" as const, selectedID, returnTo } : { type: "workflows" as const, selectedID }
   }
   const showMendStatus = async (title = "MendCode Status") => {
     await DialogAlert.show(dialog, title, await mendStatusSummary(mend.root))
@@ -4443,6 +4450,17 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       },
     },
     {
+      title: "Workflow Runs",
+      value: "mendcode.workflows.dashboard",
+      category: mendCategory,
+      suggested: true,
+      slash: { name: "workflows", aliases: ["workflow-dashboard", "workflow-center"] },
+      onSelect: (dialog) => {
+        route.navigate(workflowsRoute())
+        dialog.clear()
+      },
+    },
+    {
       title: "Create Loop Workflow",
       value: "mendcode.loop.create",
       category: mendCategory,
@@ -4779,7 +4797,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     {
       title: "Help",
       value: "help.show",
-      keybind: ["setup", "stats", "memory", "changes", "loops"].includes(route.data.type) ? "help" : undefined,
+      keybind: ["setup", "stats", "memory", "changes", "loops", "workflows"].includes(route.data.type) ? "help" : undefined,
       slash: {
         name: "help",
       },
@@ -5193,6 +5211,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
           </Match>
           <Match when={route.data.type === "loops"}>
             <Loops />
+          </Match>
+          <Match when={route.data.type === "workflows"}>
+            <Workflows />
           </Match>
         </Switch>
       </Show>

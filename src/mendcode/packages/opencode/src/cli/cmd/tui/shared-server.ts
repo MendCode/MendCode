@@ -247,6 +247,7 @@ export async function waitForClientLeases(input: {
   pollMs?: number
   idleGraceMs?: number
   signal?: AbortSignal
+  hasActiveWork?: () => Promise<boolean>
 }) {
   const serverPID = input.pid ?? process.pid
   const directory = input.directory ?? clientLeaseDirectoryPath(serverPID)
@@ -258,7 +259,8 @@ export async function waitForClientLeases(input: {
     const activeClients = input.directory
       ? await activeClientLeaseCount(directory)
       : await activeClientLeaseCountForServer(serverPID)
-    if (activeClients > 0) {
+    const activeWork = input.hasActiveWork ? await input.hasActiveWork().catch(() => true) : false
+    if (activeClients > 0 || activeWork) {
       lastLiveAt = Date.now()
     } else if (Date.now() - lastLiveAt >= idleGraceMs) {
       try {

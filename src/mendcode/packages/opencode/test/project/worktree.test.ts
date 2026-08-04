@@ -151,6 +151,28 @@ describe("Worktree", () => {
       ),
     )
 
+    it.live("createReady waits for the target instance bootstrap", () =>
+      provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const svc = yield* Worktree.Service
+            const info = yield* svc.createReady({ name: "ready-workspace" })
+
+            const text = yield* Effect.promise(() => $`git worktree list --porcelain`.cwd(dir).quiet().text())
+            expect(normalize(text)).toContain(normalize(info.directory))
+
+            yield* Effect.promise(() =>
+              WithInstance.provide({
+                directory: info.directory,
+                fn: () => InstanceRuntime.disposeInstance(Instance.current),
+              }),
+            )
+            yield* svc.remove({ directory: info.directory })
+          }),
+        { git: true },
+      ),
+    )
+
     it.live("create with custom name", () =>
       provideTmpdirInstance(
         () =>

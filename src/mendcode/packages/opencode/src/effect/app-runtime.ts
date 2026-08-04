@@ -31,6 +31,8 @@ import { AgentView } from "@/session/agent-view"
 import { AgentCommand } from "@/session/agent-command"
 import { LoopWorkflow } from "@/session/loop"
 import { LoopRunner } from "@/session/loop-runner"
+import { WorkflowService } from "@/session/workflow-service"
+import { WorkflowRunner } from "@/session/workflow-runner"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { SessionRunState } from "@/session/run-state"
@@ -93,6 +95,8 @@ export const AppLayer = Layer.mergeAll(
   AgentCommand.defaultLayer,
   LoopWorkflow.defaultLayer,
   LoopRunner.defaultLayer,
+  WorkflowService.defaultLayer,
+  WorkflowRunner.defaultLayer,
   Session.defaultLayer,
   SessionStatus.defaultLayer,
   SessionRunState.defaultLayer,
