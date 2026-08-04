@@ -1,6 +1,19 @@
 import type { Session, SessionStatus } from "@mendcode/sdk/v2"
 import { Locale } from "@/util/locale"
 
+export type AgentViewWorkflowSummary = {
+  runID: string
+  name: string
+  state: string
+  phase?: string
+  rootSessionID?: string
+  originSessionID?: string
+  completedTasks: number
+  totalTasks: number
+  activeTasks: number
+  blockedTasks: number
+}
+
 export type AgentViewBackgroundSession = {
   sessionID: string
   state: "queued" | "working" | "needs_input" | "completed" | "failed" | "stopped"
@@ -35,6 +48,7 @@ export type AgentViewBackgroundSession = {
     pinned?: boolean | null
     archived?: boolean | null
   } | null
+  workflow?: AgentViewWorkflowSummary
 }
 
 export type AgentViewSessionItem = {
@@ -82,6 +96,37 @@ export type AgentViewLoopWorkflowRef = {
 }
 
 const agentViewActiveStates = new Set(["queued", "working", "needs_input"])
+
+const agentViewWorkflowActiveStates = new Set(["planning", "awaiting_approval", "queued", "working", "needs_input", "blocked"])
+
+export function agentViewWorkflowBackgroundState(state: string | null | undefined): AgentViewBackgroundSession["state"] {
+  const normalized = state?.trim().toLowerCase()
+  if (normalized === "working") return "working"
+  if (normalized === "needs_input" || normalized === "blocked" || normalized === "awaiting_approval") return "needs_input"
+  if (normalized === "failed") return "failed"
+  if (normalized === "completed") return "completed"
+  if (normalized === "stopped" || normalized === "paused") return "stopped"
+  return "queued"
+}
+
+export function isAgentViewWorkflowActiveState(state: string | null | undefined) {
+  return agentViewWorkflowActiveStates.has(state?.trim().toLowerCase() ?? "")
+}
+
+export function agentViewWorkflowActivity(state: string | null | undefined): "needsInput" | "working" | "completed" {
+  const normalized = state?.trim().toLowerCase()
+  if (normalized === "needs_input" || normalized === "blocked" || normalized === "awaiting_approval") return "needsInput"
+  if (isAgentViewWorkflowActiveState(normalized)) return "working"
+  return "completed"
+}
+
+export function formatAgentViewWorkflowDetail(workflow: AgentViewWorkflowSummary) {
+  const state = workflow.state.trim().replaceAll("_", " ") || "unknown"
+  const progress = workflow.totalTasks > 0 ? `${workflow.completedTasks}/${workflow.totalTasks} tasks` : "no tasks"
+  const active = workflow.activeTasks > 0 ? `${workflow.activeTasks} active` : undefined
+  const blocked = workflow.blockedTasks > 0 ? `${workflow.blockedTasks} blocked` : undefined
+  return ["Workflow", state, workflow.phase?.trim(), progress, active, blocked].filter(Boolean).join(" · ")
+}
 
 export function isAgentViewActiveState(state: string | null | undefined) {
   return agentViewActiveStates.has(state?.trim().toLowerCase() ?? "")

@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+source "$SCRIPT_DIR/release-temp-cleanup.sh"
+mendcode_release_temp_cleanup_install_trap
+mendcode_release_temp_cleanup_arm
 
 BUMP_TYPE=${1:-patch}
 

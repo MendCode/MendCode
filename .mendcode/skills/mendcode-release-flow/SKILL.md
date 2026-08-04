@@ -26,6 +26,7 @@ Follow this workflow for MendCode changes that may ship.
 - `main` is the public release branch. Only promote `dev` to `main` after CI passes, the user-visible change has been tested, version/changelog state is correct, and the user intends to ship.
 - For internal promotion, prefer a direct `dev` -> `main` PR. Do not create `codex/*` promotion branches unless GitHub cannot represent the intended merge directly or a conflict must be resolved outside the user's local checkout.
 - If an emergency promotion branch/worktree is unavoidable, delete the remote branch, local branch, and temporary worktree immediately after merge or close.
+- Local release or promotion workspaces under `$TMPDIR/mendcode` must be run through `src/mendcode/script/release` or its sourced cleanup helper so the current workspace's `src/mendcode/node_modules` is removed on success or failure. Do not run broad age-based temp cleaners or delete unowned/active temp workspaces.
 - Do not merge random branches directly into `main`. Bring useful branches back through PRs to `dev`, then delete stale branches after merge.
 - Before starting, check whether another PR/agent already contains the same work. Prefer continuing the existing local `dev` work over creating a duplicate branch.
 

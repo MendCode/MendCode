@@ -17,6 +17,8 @@ import { Format } from "@/format"
 import { LSP } from "@/lsp/lsp"
 import { LoopWorkflow } from "@/session/loop"
 import { LoopRunner } from "@/session/loop-runner"
+import { WorkflowService } from "@/session/workflow-service"
+import { WorkflowRunner } from "@/session/workflow-runner"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
 import { Installation } from "@/installation"
@@ -78,6 +80,7 @@ import { syncHandlers } from "./handlers/sync"
 import { tuiHandlers } from "./handlers/tui"
 import { v2Handlers } from "./handlers/v2"
 import { workspaceHandlers } from "./handlers/workspace"
+import { workflowHandlers } from "./handlers/workflow"
 import { instanceContextLayer, instanceRouterMiddleware } from "./middleware/instance-context"
 import { workspaceRouterMiddleware, workspaceRoutingLayer } from "./middleware/workspace-routing"
 import { disposeMiddleware } from "./lifecycle"
@@ -134,6 +137,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     v2Handlers,
     tuiHandlers,
     workspaceHandlers,
+    workflowHandlers,
   ]),
 )
 
@@ -170,8 +174,10 @@ export function createRoutes(corsOptions?: CorsOptions) {
       Format.defaultLayer,
       LSP.defaultLayer,
       LoopWorkflow.defaultLayer,
-      LoopRunner.defaultLayer,
-      Installation.defaultLayer,
+       LoopRunner.defaultLayer,
+       WorkflowService.defaultLayer,
+       WorkflowRunner.defaultLayer,
+       Installation.defaultLayer,
       MCP.defaultLayer,
       ModelsDev.defaultLayer,
       Permission.defaultLayer,

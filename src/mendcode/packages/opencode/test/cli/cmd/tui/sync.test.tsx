@@ -1901,6 +1901,86 @@ describe("tui sync", () => {
     }
   })
 
+  test("session sync keeps a newer completed tool diff over a stale fetched snapshot", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    const sessionID = "ses_tool_diff_race"
+    const messageID = "msg_tool_diff_race"
+    const partID = "prt_tool_diff_race"
+    const callID = "call_tool_diff_race"
+    const info = {
+      id: sessionID,
+      projectID: "proj_test",
+      directory,
+      title: "Tool diff race",
+      version: "test",
+      time: { created: 1, updated: 3 },
+    }
+    const message = {
+      id: messageID,
+      sessionID,
+      role: "assistant",
+      agent: "build",
+      model: { providerID: "openai", modelID: "gpt-test" },
+      tokens: {},
+      time: { created: 1, completed: 3 },
+    }
+    const completedPart = {
+      id: partID,
+      messageID,
+      sessionID,
+      type: "tool",
+      tool: "edit",
+      callID,
+      state: {
+        status: "completed",
+        input: { filePath: "large.ts" },
+        output: "Edit applied successfully.",
+        title: "large.ts",
+        metadata: { diff: "+++ large.ts\n@@ -1,1 +1,2 @@\n+new line" },
+        time: { start: 1, end: 3 },
+      },
+    }
+    const stalePart = {
+      ...completedPart,
+      state: {
+        status: "running",
+        input: completedPart.state.input,
+        metadata: undefined,
+        time: { start: 1 },
+      },
+    }
+    const { app, sync } = await mount({
+      [`/session/${sessionID}`]: info,
+      [`/session/${sessionID}/message`]: [{ info: message, parts: [stalePart] }],
+      [`/session/${sessionID}/todo`]: [],
+      [`/session/${sessionID}/diff`]: [],
+    })
+
+    try {
+      sync.set("session", [info as any])
+      sync.set("message", sessionID, [message as any])
+      sync.set("part", messageID, [completedPart as any])
+
+      await sync.session.sync(sessionID, { force: true })
+
+      expect(sync.data.part[messageID]?.[0]).toMatchObject({
+        id: partID,
+        type: "tool",
+        state: {
+          status: "completed",
+          metadata: { diff: completedPart.state.metadata.diff },
+        },
+      })
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
   test("session sync previews long live text with latest tail", async () => {
     const previous = Global.Path.state
     await using tmp = await tmpdir()

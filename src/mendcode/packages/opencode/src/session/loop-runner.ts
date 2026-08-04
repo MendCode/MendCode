@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Layer, Schema, Types } from "effect"
+import { Cause, Context, Effect, Layer, Option, Schema, Types } from "effect"
 import { errorMessage } from "@/util/error"
 import { SessionPrompt } from "@/session/prompt"
 import { LoopWorkflow } from "@/session/loop"
@@ -6,6 +6,8 @@ import * as MessageV2 from "@/session/message-v2"
 import { Session } from "@/session/session"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { InstanceState } from "@/effect/instance-state"
+import { WorkflowRunner } from "@/session/workflow-runner"
+import { WorkflowService } from "@/session/workflow-service"
 
 export const TickResult = Schema.Struct({
   workflowID: LoopWorkflow.LoopID,
@@ -930,7 +932,7 @@ export const layer = Layer.effect(
       const sessions = yield* Session.Service
       const instance = yield* InstanceState.context
       const id = input.id
-      const before = yield* workflow.get(id)
+      const before = yield* workflow.get(id, input.now)
       if (typeof before.policy.maxTurns === "number" && (before.metrics.turns ?? 0) >= before.policy.maxTurns) {
         return {
           workflowID: before.id,
@@ -978,7 +980,7 @@ export const layer = Layer.effect(
           summary: `Loop already has an active run (${run.id}); skipping duplicate execution.`,
         } satisfies TickResult
       }
-      const current = yield* workflow.get(id)
+      const current = yield* workflow.get(id, now)
       if (!current.rootSessionID) {
         return yield* workflow.failRun({ id, runID: run.id, error: "Loop has no root session after activation.", now }).pipe(
           Effect.map((failed) => ({
@@ -988,6 +990,121 @@ export const layer = Layer.effect(
             summary: failed.evaluatorReason ?? "Loop run failed.",
           })),
         )
+      }
+      if (current.spec.workflow) {
+        const workflowService = Option.getOrUndefined(yield* Effect.serviceOption(WorkflowService.Service))
+        const workflowRunner = Option.getOrUndefined(yield* Effect.serviceOption(WorkflowRunner.Service))
+        if (!workflowService || !workflowRunner) {
+          const error = "Loop workflow adapter services are unavailable."
+          const failed = yield* workflow.failRun({ id, runID: run.id, error, failureClass: "environment", now })
+          return {
+            workflowID: id,
+            runID: failed.id,
+            state: failed.state === "blocked" ? "blocked" : failed.state === "needs_input" ? "needs_input" : failed.state === "stopped" ? "stopped" : "failed",
+            summary: failed.evaluatorReason ?? error,
+          } satisfies TickResult
+        }
+        const reference = current.spec.workflow
+        const startedExit = yield* Effect.exit(
+          workflowService.start({
+            ...(reference.revisionID === undefined ? {} : { revisionID: reference.revisionID as never }),
+            ...(reference.definitionID === undefined ? {} : { definitionID: reference.definitionID as never }),
+            originSessionID: current.rootSessionID,
+            loopID: current.id,
+            loopRunID: run.id,
+            overlapKey: reference.overlapKey ?? `${current.id}:${run.id}`,
+          } as never),
+        )
+        if (startedExit._tag === "Failure") {
+          const error = errorMessage(Cause.squash(startedExit.cause))
+          const failed = yield* workflow.failRun({ id, runID: run.id, error, failureClass: "policy", now })
+          return {
+            workflowID: id,
+            runID: failed.id,
+            state: failed.state === "blocked" ? "blocked" : failed.state === "needs_input" ? "needs_input" : failed.state === "stopped" ? "stopped" : "failed",
+            summary: failed.evaluatorReason ?? error,
+          } satisfies TickResult
+        }
+        const startedWorkflow = startedExit.value
+        if (startedWorkflow.run.loopRunID !== run.id) {
+          const skipped = yield* workflow.completeRun({
+            id,
+            runID: run.id,
+            reason: `Workflow overlap is already owned by loop run ${startedWorkflow.run.loopRunID ?? "another run"}.`,
+            now,
+            goalStatus: "continue",
+            checkpoint: {
+              status: "continue",
+              summary: "Skipped overlapping workflow execution.",
+              nextAction: "Wait for the existing workflow run to finish.",
+            },
+          })
+          return {
+            workflowID: id,
+            runID: skipped.id,
+            state: "skipped",
+            summary: skipped.evaluatorReason ?? "Skipped overlapping workflow execution.",
+          } satisfies TickResult
+        }
+        const workflowExit = yield* Effect.exit(workflowRunner.run(startedWorkflow.run.id))
+        if (workflowExit._tag === "Failure") {
+          const error = errorMessage(Cause.squash(workflowExit.cause))
+          yield* workflowService.stop({ runID: startedWorkflow.run.id, reason: error, actor: "loop-adapter" }).pipe(Effect.catchCause(() => Effect.void))
+          const failed = yield* workflow.failRun({ id, runID: run.id, error, failureClass: "environment", now })
+          return {
+            workflowID: id,
+            runID: failed.id,
+            state: failed.state === "blocked" ? "blocked" : failed.state === "needs_input" ? "needs_input" : failed.state === "stopped" ? "stopped" : "failed",
+            summary: failed.evaluatorReason ?? error,
+          } satisfies TickResult
+        }
+        const finishedWorkflow = yield* workflowService.show(startedWorkflow.run.id)
+        if (finishedWorkflow.run.state === "failed") {
+          const error = finishedWorkflow.tasks.find((task) => task.blocker)?.blocker ?? "Referenced workflow failed."
+          const failed = yield* workflow.failRun({ id, runID: run.id, error, failureClass: "terminal", now })
+          return {
+            workflowID: id,
+            runID: failed.id,
+            state: failed.state === "blocked" ? "blocked" : failed.state === "needs_input" ? "needs_input" : failed.state === "stopped" ? "stopped" : "failed",
+            summary: failed.evaluatorReason ?? error,
+          } satisfies TickResult
+        }
+        const goalStatus = finishedWorkflow.run.state === "completed"
+          ? "complete" as const
+          : finishedWorkflow.run.state === "stopped"
+            ? "stop" as const
+            : finishedWorkflow.run.state === "needs_input"
+              ? "needs_input" as const
+              : "blocked" as const
+        const usage = finishedWorkflow.usage
+          ? {
+              cost: finishedWorkflow.usage.cost,
+              tokens: {
+                input: finishedWorkflow.usage.inputTokens,
+                output: finishedWorkflow.usage.outputTokens,
+              },
+            }
+          : undefined
+        const completed = yield* workflow.completeRun({
+          id,
+          runID: run.id,
+          reason: finishedWorkflow.run.state === "completed" ? "Referenced workflow completed." : `Referenced workflow is ${finishedWorkflow.run.state}.`,
+          now,
+          goalStatus,
+          checkpoint: {
+            status: goalStatus,
+            summary: finishedWorkflow.run.state === "completed" ? "Referenced workflow completed." : `Referenced workflow is ${finishedWorkflow.run.state}.`,
+            evidence: finishedWorkflow.artifacts.slice(0, 8).map((artifact) => artifact.summary),
+          },
+          usage,
+        })
+        const after = yield* workflow.get(id)
+        return {
+          workflowID: id,
+          runID: completed.id,
+          state: after.state === "blocked" || after.state === "needs_input" || after.state === "stopped" || after.state === "failed" ? after.state : "completed",
+          summary: after.evaluatorReason ?? completed.evaluatorReason ?? "Referenced workflow run completed.",
+        } satisfies TickResult
       }
       const reportOnly = workflowIsReportOnly(current) || (input.reportOnly === true && !workflowExplicitlyAllowsEdits(current))
       const runStarted = Date.now()

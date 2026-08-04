@@ -16,9 +16,11 @@ import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
 import { LoopTool } from "./loop"
+import { WorkflowTool } from "./workflow"
 import { ReviewTool } from "./review"
 import { MemoryTool } from "./memory"
 import { MemoryGraphTool } from "./memory_graph"
+import { ImageGenTool, resolveImageGenerationModel, usesCodexImageAdapter } from "./image-gen"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@mendcode/plugin"
@@ -57,7 +59,9 @@ import { PlanReview } from "@/plan-review"
 import { readPromptMode } from "@/mend/prompt/mode"
 import { LoopWorkflow } from "@/session/loop"
 import { LoopRunner } from "@/session/loop-runner"
+import { WorkflowService } from "@/session/workflow-service"
 import { BackgroundTask } from "@/session/background-task"
+import { Auth } from "@/auth"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -84,11 +88,13 @@ export const layer: Layer.Layer<
   Service,
   never,
   | Config.Service
+  | Auth.Service
   | Plugin.Service
   | Question.Service
   | PlanReview.Service
   | LoopWorkflow.Service
   | LoopRunner.Service
+  | WorkflowService.Service
   | Todo.Service
   | Agent.Service
   | Skill.Service
@@ -109,6 +115,7 @@ export const layer: Layer.Layer<
   Service,
   Effect.gen(function* () {
     const config = yield* Config.Service
+    const auth = yield* Auth.Service
     const plugin = yield* Plugin.Service
     const provider = yield* Provider.Service
     const agents = yield* Agent.Service
@@ -134,9 +141,12 @@ export const layer: Layer.Layer<
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
     const looptool = yield* LoopTool
+    const workflowtool = yield* WorkflowTool
     const reviewtool = yield* ReviewTool
+
     const memorytool = yield* MemoryTool
     const memorygraphtool = yield* MemoryGraphTool
+    const imagegentool = yield* ImageGenTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -232,9 +242,11 @@ export const layer: Layer.Layer<
           search: Tool.init(websearch),
           skill: Tool.init(skilltool),
           loop: Tool.init(looptool),
+          workflow: Tool.init(workflowtool),
           review: Tool.init(reviewtool),
           memory: Tool.init(memorytool),
           memoryGraph: Tool.init(memorygraphtool),
+          imageGen: Tool.init(imagegentool),
           patch: Tool.init(patchtool),
           question: Tool.init(question),
           planReview: Tool.init(planReview),
@@ -260,9 +272,11 @@ export const layer: Layer.Layer<
             tool.search,
             tool.skill,
             tool.loop,
+            tool.workflow,
             tool.review,
             tool.memory,
             tool.memoryGraph,
+            tool.imageGen,
             tool.patch,
             tool.planReview,
             ...(Flag.OPENCODE_EXPERIMENTAL_LSP_TOOL ? [tool.lsp] : []),
@@ -333,6 +347,24 @@ export const layer: Layer.Layer<
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
       const promptMode = yield* Effect.promise(() => readPromptMode())
+      const cfg = yield* config.get()
+      const openAIAuth =
+        input.providerID === "openai"
+          ? yield* auth.get("openai").pipe(Effect.catch(() => Effect.succeed(undefined)))
+          : undefined
+      const imageModelRef =
+        cfg.tools?.image_gen !== false ? resolveImageGenerationModel(cfg.image_generation, openAIAuth) : undefined
+      const codexImageAdapter = usesCodexImageAdapter(cfg.image_generation, openAIAuth, imageModelRef)
+      const configuredImageModel =
+        imageModelRef && !codexImageAdapter
+          ? yield* Effect.gen(function* () {
+              const ref = Provider.parseModel(imageModelRef)
+              return yield* provider.getModel(ref.providerID, ref.modelID)
+            }).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+          : undefined
+      const imageGenEnabled =
+        (codexImageAdapter || configuredImageModel?.capabilities.output.image === true) &&
+        !Permission.disabled([ImageGenTool.id], input.agent.permission).has(ImageGenTool.id)
       const filtered = (yield* all()).filter((tool) => {
         if (tool.id === PlanReviewTool.id) {
           return input.agent.name === "plan" || promptMode.mode === "full"
@@ -341,6 +373,8 @@ export const layer: Layer.Layer<
         if (tool.id === WebSearchTool.id) {
           return input.providerID === ProviderID.opencode || Flag.OPENCODE_ENABLE_EXA
         }
+
+        if (tool.id === ImageGenTool.id) return imageGenEnabled
 
         const usePatch =
           input.modelID.includes("gpt-") && !input.modelID.includes("oss") && !input.modelID.includes("gpt-4")
@@ -387,12 +421,12 @@ export const layer: Layer.Layer<
 
 export const defaultLayer = Layer.suspend(() =>
   layer.pipe(
-    Layer.provide(Config.defaultLayer),
+    Layer.provide([Config.defaultLayer, Auth.defaultLayer]),
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(Question.defaultLayer),
     Layer.provide(PlanReview.defaultLayer),
     Layer.provide(LoopWorkflow.defaultLayer),
-    Layer.provide([LoopRunner.defaultLayer, Todo.defaultLayer]),
+    Layer.provide([LoopRunner.defaultLayer, Todo.defaultLayer, WorkflowService.defaultLayer]),
     Layer.provide(Skill.defaultLayer),
     Layer.provide(Agent.defaultLayer),
     Layer.provide(Session.defaultLayer),

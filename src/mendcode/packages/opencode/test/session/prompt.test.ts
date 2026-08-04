@@ -55,11 +55,13 @@ import { SessionV2 } from "../../src/v2/session"
 import { Skill } from "../../src/skill"
 import { LoopWorkflow } from "../../src/session/loop"
 import { LoopRunner } from "../../src/session/loop-runner"
+import { WorkflowService } from "../../src/session/workflow-service"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
+import { Auth } from "@/auth"
 import * as Log from "@mendcode/core/util/log"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import * as Database from "../../src/storage/db"
@@ -275,6 +277,8 @@ function makeHttp() {
     Layer.provide(Format.defaultLayer),
     Layer.provide(LoopWorkflow.defaultLayer),
     Layer.provide(LoopRunner.defaultLayer),
+    Layer.provide(WorkflowService.defaultLayer),
+    Layer.provide(Auth.defaultLayer),
     Layer.provideMerge(todo),
     Layer.provideMerge(question),
     Layer.provideMerge(planReview),

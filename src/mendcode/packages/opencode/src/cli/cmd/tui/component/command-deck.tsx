@@ -4,7 +4,7 @@ import { For, Show, createMemo, type JSX } from "solid-js"
 import type { Route } from "@tui/context/route"
 import { useTheme } from "@tui/context/theme"
 
-export type CommandDeckPage = "loops" | "stats" | "memory" | "changes" | "setup"
+export type CommandDeckPage = "loops" | "workflows" | "stats" | "memory" | "changes" | "setup"
 
 type CommandDeckText = string | (() => string)
 
@@ -27,6 +27,7 @@ type CommandDeckContextProps = {
 
 const PAGE_LABELS: Record<CommandDeckPage, string> = {
   loops: "LOOPS",
+  workflows: "WORKFLOWS",
   stats: "STATS",
   memory: "MEMORY",
   changes: "CHANGES",
@@ -88,6 +89,7 @@ export function commandDeckRouteTarget(route: Route, page: CommandDeckPage): Rou
   }
   if (page === "memory") return { type: "memory", ...returnProps }
   if (page === "changes") return { type: "changes", ...returnProps }
+  if (page === "workflows") return { type: "workflows", ...returnProps }
   return { type: "loops", ...returnProps }
 }
 

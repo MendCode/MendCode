@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { isRecentWorkingAssistant, isStaleBusySession, sessionStatusExpiryDelay, STALE_BUSY_SESSION_WINDOW_MS } from "@/cli/cmd/tui/util/session-working"
+import {
+  isAssistantWorking,
+  isRecentWorkingAssistant,
+  isStaleBusySession,
+  sessionStatusExpiryDelay,
+  STALE_BUSY_SESSION_WINDOW_MS,
+} from "@/cli/cmd/tui/util/session-working"
 
 describe("isRecentWorkingAssistant", () => {
   test("rejects stale unfinished assistant history", () => {
@@ -69,5 +75,23 @@ describe("isStaleBusySession", () => {
     expect(sessionStatusExpiryDelay({ type: "busy", until: 101_000 }, 100_000)).toBe(1_001)
     expect(sessionStatusExpiryDelay({ type: "retry", attempt: 1, message: "wait", next: 101_000 }, 100_000)).toBe(1_001)
     expect(sessionStatusExpiryDelay({ type: "idle" }, 100_000)).toBeUndefined()
+  })
+})
+
+describe("isAssistantWorking", () => {
+  test("does not revive an old unfinished assistant after reconnect", () => {
+    expect(
+      isAssistantWorking({
+        now: 100_000,
+        assistantCreated: 1_000,
+      }),
+    ).toBe(false)
+  })
+
+  test("trusts a fresh busy status while allowing stale status to expire", () => {
+    expect(isAssistantWorking({ statusType: "busy", now: 100_000, assistantCreated: 1_000 })).toBe(false)
+    expect(isAssistantWorking({ statusType: "busy", now: 100_000, assistantCreated: 1_000, statusUntil: 101_000 })).toBe(
+      true,
+    )
   })
 })

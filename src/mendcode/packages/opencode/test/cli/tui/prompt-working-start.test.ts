@@ -292,6 +292,13 @@ describe("queued user turn", () => {
     ).toBeUndefined()
   })
 
+  test("expires an unfinished assistant when the session has no live status", () => {
+    const messages = [{ id: "msg_001", role: "assistant", time: { created: 1_000 } }]
+    expect(latestPendingAssistantID(messages, { now: 100_000 })).toBeUndefined()
+    expect(latestPendingAssistantID(messages, { statusType: "busy", now: 100_000 })).toBeUndefined()
+    expect(latestPendingAssistantID(messages, { statusType: "busy", now: 100_000, statusUntil: 101_000 })).toBe("msg_001")
+  })
+
   test("stays visibly queued across later assistant tool iterations", () => {
     const activeUser = { id: "msg_001", role: "user" }
     const queuedUser = { id: "msg_003", role: "user" }

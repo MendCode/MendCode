@@ -123,6 +123,11 @@ function routeNavigate(route: ReturnType<typeof useRoute>, name: string, params?
     return
   }
 
+  if (name === "workflows") {
+    route.navigate({ type: "workflows", selectedID: typeof params?.selectedID === "string" ? params.selectedID : undefined })
+    return
+  }
+
   route.navigate({ type: "plugin", id: name, data: params })
 }
 
@@ -168,6 +173,14 @@ function routeCurrent(route: ReturnType<typeof useRoute>): TuiPluginApi["route"]
   if (route.data.type === "loops") {
     return {
       name: "loops",
+      params: {
+        selectedID: route.data.selectedID,
+      },
+    }
+  }
+  if (route.data.type === "workflows") {
+    return {
+      name: "workflows",
       params: {
         selectedID: route.data.selectedID,
       },

@@ -295,6 +295,142 @@ describe("loop workflow service", () => {
     })
   })
 
+  test("deduplicates repeated overdue ticks and re-arms the future cadence after catch-up", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const base = Date.parse("2026-07-31T12:00:00Z")
+        const intervalMs = 60_000
+        const draft = await svc.createDraft({
+          name: "Deduplicated overdue monitor",
+          objective: "Recover one catch-up run after duplicate scheduler ticks.",
+          trigger: { mode: "interval", intervalMs },
+          budgetMode: "unbounded-monitor",
+        })
+        await run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "fake clock", now: base })))
+        Database.use((db) => db.update(LoopWorkflowTable).set({
+          state: "sleeping",
+          phase: "waiting",
+          next_wakeup: base - 1,
+        }).where(eq(LoopWorkflowTable.id, draft.id)).run())
+
+        const firstDue = await run(LoopWorkflowService.use((loop) => loop.due({ now: base })))
+        const secondDue = await run(LoopWorkflowService.use((loop) => loop.due({ now: base })))
+        expect(firstDue).toHaveLength(1)
+        expect(secondDue).toHaveLength(1)
+        expect((await svc.snapshot(draft.id)).events.filter((event) => event.title === "Scheduled wakeup repaired")).toHaveLength(1)
+
+        const firstRun = await run(LoopWorkflowService.use((loop) => loop.startRun({
+          id: draft.id,
+          trigger: "interval",
+          reason: "first catch-up tick",
+          now: base,
+        })))
+        const duplicateRun = await run(LoopWorkflowService.use((loop) => loop.startRun({
+          id: draft.id,
+          trigger: "interval",
+          reason: "duplicate catch-up tick",
+          now: base,
+        })))
+        expect(duplicateRun.id).toBe(firstRun.id)
+
+        await run(LoopWorkflowService.use((loop) => loop.completeRun({
+          id: draft.id,
+          runID: firstRun.id,
+          reason: "catch-up completed",
+          now: base + 1_000,
+          checkpoint: { status: "continue", summary: "Catch-up completed." },
+        })))
+        expect((await svc.snapshot(draft.id)).workflow).toMatchObject({
+          state: "sleeping",
+          nextWakeup: base + 1_000 + intervalMs,
+          scheduler: { degraded: false, nextWakeup: base + 1_000 + intervalMs },
+        })
+      },
+    })
+  })
+
+  test("survives 48 half-hour boundaries and one service restart without duplicate runs", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const base = Date.parse("2026-07-31T00:00:00Z")
+    const intervalMs = 30 * 60 * 1000
+    let workflowID: LoopID | undefined
+    let nextScheduled = base
+    const runIDs = new Set<string>()
+
+    const runIntervals = async (start: number, end: number) => {
+      await WithInstance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          let scheduled = nextScheduled
+          for (let tick = start; tick < end; tick++) {
+            const now = scheduled + 1
+            const due = await svc.due(now)
+            const duplicateDue = await svc.due(now)
+            expect(due.map((item) => item.id)).toEqual([workflowID!])
+            expect(duplicateDue.map((item) => item.id)).toEqual([workflowID!])
+
+            const first = await run(LoopWorkflowService.use((loop) => loop.startRun({
+              id: workflowID!,
+              trigger: "interval",
+              reason: `endurance tick ${tick}`,
+              now,
+            })))
+            const duplicate = await run(LoopWorkflowService.use((loop) => loop.startRun({
+              id: workflowID!,
+              trigger: "interval",
+              reason: `duplicate endurance tick ${tick}`,
+              now,
+            })))
+            expect(duplicate.id).toBe(first.id)
+            runIDs.add(first.id)
+
+            const completedAt = now + 1_000
+            await run(LoopWorkflowService.use((loop) => loop.completeRun({
+              id: workflowID!,
+              runID: first.id,
+              reason: `completed endurance tick ${tick}`,
+              now: completedAt,
+              checkpoint: { status: "continue", summary: "Endurance checkpoint completed." },
+            })))
+            scheduled = completedAt + intervalMs
+          }
+          nextScheduled = scheduled
+        },
+      })
+    }
+
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Scheduler endurance",
+          objective: "Cross half-hour boundaries without duplicate scheduled runs.",
+          trigger: { mode: "interval", intervalMs },
+          budgetMode: "unbounded-monitor",
+        })
+        workflowID = draft.id
+        await run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "endurance start", now: base })))
+      },
+    })
+
+    await runIntervals(0, 24)
+    await disposeAllInstances()
+    await runIntervals(24, 48)
+
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const snapshot = await svc.snapshot(workflowID!)
+        expect(runIDs).toHaveLength(48)
+        expect(snapshot.runs).toHaveLength(10)
+        expect(snapshot.workflow).toMatchObject({ state: "sleeping", phase: "waiting", scheduler: { degraded: false } })
+        expect(snapshot.workflow.nextWakeup).toBeGreaterThan(Date.parse("2026-08-01T00:00:00Z"))
+      },
+    })
+  })
+
   test("records scheduler failures as degraded state without losing interval cadence", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({

@@ -1,0 +1,5 @@
+Create, preview, save, start, inspect, pause, resume, stop, or retry a first-class MendCode Workflow.
+
+Use this tool for one-shot declarative workflows that run independently from a loop. A loop may reference a saved workflow, but do not create a loop when the user only asked for one workflow run.
+
+Prefer preview before start when the plan is new. Use a saved revision or definition when available. Workflow snapshots are bounded; inspect artifacts and events explicitly instead of requesting unbounded child transcripts.

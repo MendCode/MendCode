@@ -1,0 +1,108 @@
+export type WorkflowReceiptState =
+  | "planning"
+  | "awaiting_approval"
+  | "queued"
+  | "working"
+  | "needs_input"
+  | "blocked"
+  | "paused"
+  | "completed"
+  | "failed"
+  | "stopped"
+  | string
+
+export type WorkflowReceiptSnapshot = {
+  definition: {
+    name: string
+    description?: string
+  }
+  revision: {
+    plan: {
+      objective: string
+      model?: { providerID: string; modelID: string; variant?: string }
+    }
+  }
+  run: {
+    id: string
+    state: WorkflowReceiptState
+    originSessionID?: string
+    rootSessionID?: string
+    createdAt: number
+    updatedAt: number
+  }
+  phases: readonly {
+    id?: string
+    name?: string
+    taskIDs?: readonly string[]
+    state: string
+    counts: { total: number; queued: number; working: number; completed: number; failed: number; blocked: number }
+  }[]
+  tasks: readonly { id?: string; name?: string; phaseID?: string; state: string; blocker?: string; attempt?: number }[]
+  events?: readonly { summary: string; type: string; createdAt: number }[]
+  usage?: { inputTokens?: number; outputTokens?: number; cost?: number }
+}
+
+export function workflowReceiptLayout(width: number) {
+  const available = Math.max(24, Math.floor(width))
+  return {
+    compact: available < 72,
+    width: Math.min(96, Math.max(32, available - 2)),
+    valueWidth: Math.max(12, available - 18),
+  }
+}
+
+export function workflowReceiptCounts(snapshot: Pick<WorkflowReceiptSnapshot, "tasks" | "phases">) {
+  const counts = snapshot.tasks.reduce(
+    (result, task) => {
+      result.total += 1
+      if (task.state === "completed") result.completed += 1
+      if (task.state === "working") result.working += 1
+      if (task.state === "queued") result.queued += 1
+      if (task.state === "blocked" || task.state === "stopped") result.blocked += 1
+      if (task.state === "failed") result.failed += 1
+      if (task.state === "needs_input") result.needsInput += 1
+      return result
+    },
+    { total: 0, queued: 0, working: 0, completed: 0, failed: 0, blocked: 0, needsInput: 0 },
+  )
+  return {
+    ...counts,
+    phases: snapshot.phases.length,
+    completedPhases: snapshot.phases.filter((phase) => phase.state === "completed").length,
+  }
+}
+
+export function workflowReceiptProgress(snapshot: Pick<WorkflowReceiptSnapshot, "tasks">) {
+  const counts = workflowReceiptCounts({ tasks: snapshot.tasks, phases: [] })
+  if (counts.total === 0) return "0/0 tasks"
+  return `${counts.completed}/${counts.total} tasks`
+}
+
+export function workflowReceiptStateLabel(state: WorkflowReceiptState) {
+  return state.replaceAll("_", " ")
+}
+
+export function workflowReceiptElapsed(snapshot: Pick<WorkflowReceiptSnapshot, "run">, now = Date.now()) {
+  const end = ["completed", "failed", "stopped"].includes(snapshot.run.state) ? snapshot.run.updatedAt : now
+  return Math.max(0, end - snapshot.run.createdAt)
+}
+
+export function workflowReceiptNextAction(snapshot: WorkflowReceiptSnapshot) {
+  const blocker = snapshot.tasks.find((task) => task.blocker)?.blocker
+  if (blocker) return blocker
+  if (snapshot.run.state === "needs_input" || snapshot.run.state === "awaiting_approval") return "Operator input or approval required."
+  if (snapshot.run.state === "blocked") return "Inspect the blocker before resuming."
+  if (snapshot.run.state === "paused") return "Resume when the workflow is ready to continue."
+  if (snapshot.run.state === "completed") return "Review the final artifact."
+  if (snapshot.run.state === "failed") return "Retry the failed task or phase."
+  if (snapshot.run.state === "stopped") return "Restart the workflow if more work is needed."
+  return snapshot.events?.[0]?.summary ?? "Workflow execution is in progress."
+}
+
+export function workflowReceiptUsage(snapshot: Pick<WorkflowReceiptSnapshot, "usage">) {
+  const usage = snapshot.usage
+  if (!usage) return "usage pending"
+  const tokens = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)
+  const cost = usage.cost === undefined ? undefined : `$${usage.cost.toFixed(4)}`
+  return [tokens ? `${tokens} tokens` : undefined, cost].filter(Boolean).join(" · ") || "usage pending"
+}

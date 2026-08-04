@@ -4,6 +4,8 @@ Loop Workflows are durable, monitorable agent loops for work that should keep mo
 
 The design goal is simple: a user can turn an objective into a loop, see it in Agent View, inspect every wakeup, and choose how much execution power the loop gets.
 
+For one-shot runs without recurring cadence, use the independent Workflow contract documented in [`docs/workflows.md`](workflows.md). A loop may still trigger a saved Workflow revision, but cadence, wakeups, and loop gates remain owned by the loop while `/workflows` owns the phase/task graph.
+
 ![MendCode Loop Workflow receipt in chat](assets/screenshots/loop-workflow-created.png)
 
 ![MendCode Loop Workflows dashboard](assets/screenshots/loop-workflows-dashboard.png)

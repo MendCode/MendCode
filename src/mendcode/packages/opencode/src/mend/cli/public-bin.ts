@@ -19,6 +19,7 @@ const primaryCommands = [
   "marketplace",
   "packages",
   "loops",
+  "workflows",
   "mflow",
   "worktree",
   "tsm",
@@ -82,6 +83,8 @@ const controlPlaneRoutes: Record<string, (args: string[]) => string[]> = {
   marketplace: (args) => ["marketplace", args[0] || "status", ...args.slice(1)],
   packages: (args) => ["marketplace", args[0] || "status", ...args.slice(1)],
   loops: (args) => ["loops", args[0] || "status", ...args.slice(1)],
+  workflows: (args) => ["workflows", args[0] || "list", ...args.slice(1)],
+  workflow: (args) => ["workflows", args[0] || "list", ...args.slice(1)],
   package: (args) => ["marketplace", args[0] || "status", ...args.slice(1)],
   ai: (args) => ["ai", ...args],
   runtime: (args) => {
@@ -172,7 +175,9 @@ Workflows:
   mendcode loops tick [id]        preview one due loop iteration
                                 inspect or monitor one Loop Workflow journal
   mendcode loops service status|start|stop
-                                manage the per-project background Loop service
+                                 manage the per-project background Loop service
+   mendcode workflows list|show|preview|save|start|pause|resume|stop|retry-task|retry-phase
+                                 inspect and control independent workflow runs; use --plan-file for preview/save/start
   mendcode memory dream service status|start|stop
                                 manage the global background Dream service
   mendcode mflow status            inspect mflow activation, daemon, and locks
@@ -211,10 +216,11 @@ Primary public surface:
   mendcode marketplace status|list|create|install|install-source|enable|disable|remove
   mendcode packages status|list|create|install|install-source|enable|disable|remove  compatibility alias
   mendcode loops status|list|examples|show|tail|monitor|tick|daemon|service|draft|activate|run|pause|resume|stop
-  mendcode loops activate <id> [--no-service]
-  mendcode loops tick <id> --execute [--report-only]
-  mendcode loops service install|start|stop|restart|status|logs|uninstall [--service-dir <path>] [--log-dir <path>]
-  mendcode loops daemon --once --quiet  run one due-loop pass for scheduled background services
+   mendcode loops activate <id> [--no-service]
+   mendcode loops tick <id> --execute [--report-only]
+   mendcode loops service install|start|stop|restart|status|logs|uninstall [--service-dir <path>] [--log-dir <path>]
+   mendcode loops daemon --once --quiet  run one due-loop pass for scheduled background services
+   mendcode workflows list|show|preview|save|start|pause|resume|stop|retry-task|retry-phase
   mendcode memory dream run|consolidate|tick|daemon|service
   mendcode memory dream run --preview|--auto  run a manual consolidation pass
   mendcode memory dream daemon --once   run one scheduled Dream pass and exit

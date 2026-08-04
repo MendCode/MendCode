@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.28 - 2026-08-03
+
+MendCode v0.1.28 adds durable Loop Workflows and provider-aware image generation while improving live workflow and session visibility.
+
+### Added
+
+- Add durable Loop Workflows with plans, policy checks, background execution, scheduling, persistence, CLI/API routes, and TUI views.
+- Add the `image_gen` tool with Codex OAuth, OpenRouter, and OpenAI-compatible adapters, persisted artifacts, optional captions, and safe edit inputs.
+- Add focused workflow, image-generation, registry, persistence, scheduler, and TUI regression coverage.
+
+### Changed
+
+- Expose workflow receipts, progress, queued work, and recovery state consistently across the TUI and server transports.
+- Keep image generation independently configured from the active chat model and expose it only when the provider contract and permissions support it.
+
+### Tests
+
+- Confirm the local queue/compaction smoke with a local-only provider; no external provider was contacted.
+
 ## 0.1.27 - 2026-08-02
 
 MendCode v0.1.27 improves TUI reliability and narrow-terminal rendering while making prompt behavior, customization, and release metadata more explicit.

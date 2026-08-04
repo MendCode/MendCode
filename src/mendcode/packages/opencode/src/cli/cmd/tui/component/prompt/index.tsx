@@ -109,6 +109,7 @@ import {
   type MendPromptStatusScriptOutput,
   type MendPromptStatusScriptResult,
 } from "@/mend/tui/prompt-status"
+import { isAssistantWorking, SESSION_STOPPED_CONNECTION_MESSAGE } from "../../util/session-working"
 
 const NATIVE_COMPACTION_SLASHES = new Set(["compact", "summarize"])
 const ACTIVE_LOOP_STATES = new Set(["active", "sleeping", "working", "needs_input", "blocked"])
@@ -472,10 +473,27 @@ export function latestPendingAssistantID(
     error?: { name?: string }
     finish?: string
   }>,
+  input?: {
+    statusType?: string
+    now?: number
+    statusUntil?: number
+    statusNext?: number
+  },
 ) {
   const latestAssistant = messages.findLast((message) => message.role === "assistant")
   if (!latestAssistant || latestAssistant.time.completed || latestAssistant.error) return
   if (latestAssistant.finish && !["tool-calls", "unknown"].includes(latestAssistant.finish)) return
+  if (
+    input &&
+    !isAssistantWorking({
+      statusType: input.statusType,
+      now: input.now,
+      assistantCreated: latestAssistant.time.created,
+      statusUntil: input.statusUntil,
+      statusNext: input.statusNext,
+    })
+  )
+    return
   return latestAssistant.id
 }
 
@@ -800,10 +818,29 @@ export function Prompt(props: PromptProps) {
     const sessionID = props.sessionID
     if (!sessionID) return
     const messages = sync.data.message[sessionID] ?? []
-    const activeID = latestPendingAssistantID(messages)
+    const currentStatus = status()
+    const activeID = latestPendingAssistantID(messages, {
+      statusType: currentStatus.type,
+      now: promptStatusTick(),
+      statusUntil: currentStatus.type === "busy" ? currentStatus.until : undefined,
+      statusNext: currentStatus.type === "retry" ? currentStatus.next : undefined,
+    })
     return messages.findLast((item): item is AssistantMessage => item.role === "assistant" && item.id === activeID)
   }
+  function findOrphanedAssistant() {
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    const messages = sync.data.message[sessionID] ?? []
+    const latestAssistant = messages.findLast((item): item is AssistantMessage => item.role === "assistant")
+    if (!latestAssistant || latestAssistant.time.completed || latestAssistant.error) return
+    if (latestAssistant.finish && !["tool-calls", "unknown"].includes(latestAssistant.finish)) return
+    if (findActiveWorkingAssistant()?.id === latestAssistant.id) return
+    return latestAssistant
+  }
   const hasActiveWorkingAssistant = createMemo(() => Boolean(findActiveWorkingAssistant()))
+  const agentStoppedMessage = createMemo(() =>
+    findOrphanedAssistant() ? SESSION_STOPPED_CONNECTION_MESSAGE : undefined,
+  )
   onCleanup(() => {
     if (clearWorkingStartTimer) clearTimeout(clearWorkingStartTimer)
   })
@@ -3390,7 +3427,7 @@ export function Prompt(props: PromptProps) {
         zIndex={1000}
         overflow="visible"
       >
-        <Show when={workingIndicatorVisible()}>
+        <Show when={workingIndicatorVisible() || Boolean(agentStoppedMessage())}>
           <box
             width="100%"
             height={1}
@@ -3400,7 +3437,14 @@ export function Prompt(props: PromptProps) {
             paddingRight={promptFooterPadRight()}
           >
             <box flexDirection="row" gap={1} flexShrink={1}>
-              <Show when={workingStatusActive()}>
+              <Show when={agentStoppedMessage()}>
+                {(message) => (
+                  <text fg={theme.error} wrapMode="none">
+                    {message()}
+                  </text>
+                )}
+              </Show>
+              <Show when={!agentStoppedMessage() && workingStatusActive()}>
                 {(() => {
                   const retry = createMemo(() => {
                     const s = status()
