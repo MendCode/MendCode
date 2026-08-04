@@ -581,7 +581,7 @@ maybe_launch_setup() {
         return 0
     fi
 
-    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ]; then
+    if [ ! -r /dev/tty ] || [ ! -w /dev/tty ] || ! { : < /dev/tty > /dev/tty; } 2>/dev/null; then
         print_setup_command
         return 0
     fi
