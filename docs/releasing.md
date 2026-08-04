@@ -16,6 +16,10 @@ For a versioned install, it downloads from:
 https://github.com/MendCode/MendCode/releases/download/v<version>/<asset>
 ```
 
+Windows users who cannot run PowerShell can use `src/mendcode/install.cmd`.
+It uses the Windows-provided `curl.exe` and `tar.exe` tools and installs the
+baseline x64 asset (or the ARM64 asset) without requiring a PowerShell command.
+
 The release must include these assets:
 
 ```text
