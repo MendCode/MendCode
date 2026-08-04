@@ -1,7 +1,7 @@
 [install]
 exact = true
 minimumReleaseAge = 604800
-minimumReleaseAgeExcludes = ["dompurify", "undici"]
+minimumReleaseAgeExcludes = ["brace-expansion", "dompurify", "fast-uri", "hono", "undici"]
 
 [test]
 root = "./do-not-run-tests-from-root"
