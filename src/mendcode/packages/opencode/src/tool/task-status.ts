@@ -24,7 +24,7 @@ export const Parameters = Schema.Struct({
   }),
 })
 
-export type State = "ready" | "waiting" | "running" | "retrying" | "completed" | "failed"
+export type State = "ready" | "waiting" | "running" | "retrying" | "completed" | "failed" | "interrupted"
 
 export function taskState(input: { status: SessionStatus.Info; messages: readonly MessageV2.WithParts[] }): State {
   if (input.status.type === "retry") return "retrying"
@@ -33,8 +33,8 @@ export function taskState(input: { status: SessionStatus.Info; messages: readonl
   const assistant = input.messages.findLast((message) => message.info.role === "assistant")
   if (assistant?.info.role === "assistant" && assistant.info.error) return "failed"
   if (user && (!assistant || assistant.info.time.created < user.info.time.created)) return "waiting"
-  if (assistant?.info.role === "assistant" && (assistant.info.time.completed || assistant.info.finish))
-    return "completed"
+  if (assistant?.info.role === "assistant" && assistant.info.finish) return "completed"
+  if (assistant?.info.role === "assistant" && assistant.info.time.completed) return "interrupted"
   if (assistant) return "running"
   return "ready"
 }
@@ -175,17 +175,25 @@ export const TaskStatusTool = Tool.define(
                     (message) => message.info.time.created >= stored.time.queued,
                   )
                   const state = taskState({ status: observed.status, messages: currentMessages })
-                  if (state !== "completed" && state !== "failed") return stored
+                  if (state !== "completed" && state !== "failed" && state !== "interrupted") return stored
                   const assistant = currentMessages.findLast((message) => message.info.role === "assistant")
                   const failure = assistant?.info.role === "assistant" ? assistant.info.error : undefined
+                  const terminalState =
+                    state === "completed" ? "completed" : stored.controlIntent === "cancel" ? "cancelled" : state
                   return yield* backgroundTasks.finish({
                     taskID: stored.taskID,
                     generation: stored.generation,
-                    state:
-                      state === "completed" ? "completed" : stored.controlIntent === "cancel" ? "cancelled" : "failed",
+                    state: terminalState,
                     result: {
                       summary: yield* subagentEvidenceText(currentMessages),
-                      error: state === "failed" ? errorMessage(failure ?? "Background task failed") : undefined,
+                      error:
+                        terminalState === "failed"
+                          ? errorMessage(failure ?? "Background task failed")
+                          : terminalState === "interrupted"
+                            ? "Subagent response ended without a terminal finish"
+                            : terminalState === "cancelled"
+                              ? "Cancelled by parent session"
+                              : undefined,
                     },
                   })
                 })

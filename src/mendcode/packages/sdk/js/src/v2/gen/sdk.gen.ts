@@ -22,6 +22,7 @@ import type {
   ConfigProvidersResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  EventSubscribeResponse,
   EventSubscribeResponses,
   EventTuiCommandExecute2,
   EventTuiPromptAppend2,
@@ -56,6 +57,7 @@ import type {
   GlobalConfigUpdateResponses,
   GlobalDiagnosticsMemoryResponses,
   GlobalDisposeResponses,
+  GlobalEventResponse,
   GlobalEventResponses,
   GlobalHealthResponses,
   GlobalUpgradeErrors,
@@ -244,6 +246,32 @@ import type {
   V2SessionWaitResponses,
   VcsDiffResponses,
   VcsGetResponses,
+  WorkflowArtifactsErrors,
+  WorkflowArtifactsResponses,
+  WorkflowDeleteErrors,
+  WorkflowDeleteResponses,
+  WorkflowEventsErrors,
+  WorkflowEventsResponses,
+  WorkflowListErrors,
+  WorkflowListResponses,
+  WorkflowPauseErrors,
+  WorkflowPauseResponses,
+  WorkflowPreviewErrors,
+  WorkflowPreviewResponses,
+  WorkflowResumeErrors,
+  WorkflowResumeResponses,
+  WorkflowRetryPhaseErrors,
+  WorkflowRetryPhaseResponses,
+  WorkflowRetryTaskErrors,
+  WorkflowRetryTaskResponses,
+  WorkflowSaveErrors,
+  WorkflowSaveResponses,
+  WorkflowShowErrors,
+  WorkflowShowResponses,
+  WorkflowStartErrors,
+  WorkflowStartResponses,
+  WorkflowStopErrors,
+  WorkflowStopResponses,
   WorktreeCreateErrors,
   WorktreeCreateInput,
   WorktreeCreateResponses,
@@ -256,10 +284,11 @@ import type {
   WorktreeResetResponses,
 } from "./types.gen.js"
 
-export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean> = Options2<
-  TData,
-  ThrowOnError
-> & {
+export type Options<
+  TData extends TDataShape = TDataShape,
+  ThrowOnError extends boolean = boolean,
+  TResponse = unknown,
+> = Options2<TData, ThrowOnError, TResponse> & {
   /**
    * You can provide a client instance returned by `createClient()` instead of
    * individual options. This might be also useful if you want to implement a
@@ -362,12 +391,12 @@ export class App extends HeyApiClient {
    * Write a log entry to the server logs with specified level and metadata.
    */
   public log<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      service?: string
-      level?: "debug" | "info" | "error" | "warn"
-      message?: string
+      service: string
+      level: "debug" | "info" | "error" | "warn"
+      message: string
       extra?: {
         [key: string]: unknown
       }
@@ -532,7 +561,7 @@ export class Global extends HeyApiClient {
    *
    * Subscribe to global events from the MendCode system using server-sent events.
    */
-  public event<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+  public event<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError, GlobalEventResponse>) {
     return (options?.client ?? this.client).sse.get<GlobalEventResponses, unknown, ThrowOnError>({
       url: "/global/event",
       ...options,
@@ -586,7 +615,7 @@ export class Global extends HeyApiClient {
   }
 }
 
-export class Event extends HeyApiClient {
+export class Event_ extends HeyApiClient {
   /**
    * Subscribe to events
    *
@@ -597,7 +626,7 @@ export class Event extends HeyApiClient {
       directory?: string
       workspace?: string
     },
-    options?: Options<never, ThrowOnError>,
+    options?: Options<never, ThrowOnError, EventSubscribeResponse>,
   ) {
     const params = buildClientParams(
       [parameters],
@@ -784,11 +813,11 @@ export class Console extends HeyApiClient {
    * Persist a new active Console account/org selection for the current local MendCode state.
    */
   public switchOrg<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      accountID?: string
-      orgID?: string
+      accountID: string
+      orgID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1001,12 +1030,12 @@ export class Workspace extends HeyApiClient {
    * Create a workspace for the current project.
    */
   public create<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
       id?: string
-      type?: string
-      branch?: string | null
+      type: string
+      branch: string | null
       extra?: unknown | null
     },
     options?: Options<never, ThrowOnError>,
@@ -1114,11 +1143,11 @@ export class Workspace extends HeyApiClient {
    * Move a session's sync history into the target workspace, or detach it to the local project.
    */
   public warp<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      id?: string | null
-      sessionID?: string
+      id: string | null
+      sessionID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1497,7 +1526,7 @@ export class Find extends HeyApiClient {
   }
 }
 
-export class File extends HeyApiClient {
+export class File_ extends HeyApiClient {
   /**
    * List files
    *
@@ -1824,11 +1853,11 @@ export class Memory extends HeyApiClient {
    * Run the Memory page side chat through the instance provider runtime.
    */
   public sideChat<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
       root?: string
-      message?: string
+      message: string
       history?: Array<{
         id: string
         role: "user" | "assistant"
@@ -1947,7 +1976,7 @@ export class Auth2 extends HeyApiClient {
       name: string
       directory?: string
       workspace?: string
-      code?: string
+      code: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2048,11 +2077,11 @@ export class Mcp extends HeyApiClient {
    * Dynamically add a new Model Context Protocol (MCP) server to the system.
    */
   public add<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      name?: string
-      config?: McpLocalConfig | McpRemoteConfig
+      name: string
+      config: McpLocalConfig | McpRemoteConfig
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2613,7 +2642,7 @@ export class Question extends HeyApiClient {
       requestID: string
       directory?: string
       workspace?: string
-      answers?: Array<QuestionAnswer>
+      answers: Array<QuestionAnswer>
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2716,7 +2745,7 @@ export class Permission extends HeyApiClient {
       requestID: string
       directory?: string
       workspace?: string
-      reply?: "once" | "always" | "reject"
+      reply: "once" | "always" | "reject"
       message?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -2760,7 +2789,7 @@ export class Permission extends HeyApiClient {
       permissionID: string
       directory?: string
       workspace?: string
-      response?: "once" | "always" | "reject"
+      response: "once" | "always" | "reject"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2873,7 +2902,7 @@ export class Oauth extends HeyApiClient {
       providerID: string
       directory?: string
       workspace?: string
-      method?: number
+      method: number
       inputs?: {
         [key: string]: string
       }
@@ -2920,7 +2949,7 @@ export class Oauth extends HeyApiClient {
       providerID: string
       directory?: string
       workspace?: string
-      method?: number
+      method: number
       code?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -3034,7 +3063,7 @@ export class Writer extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
-      clientID?: string
+      clientID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3077,7 +3106,7 @@ export class Writer extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
-      clientID?: string
+      clientID: string
       ttlMs?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     },
     options?: Options<never, ThrowOnError>,
@@ -3954,6 +3983,7 @@ export class Session2 extends HeyApiClient {
       before?: string
       after?: string
       view?: "full" | "tui" | "tui-all"
+      partsLimit?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3969,6 +3999,7 @@ export class Session2 extends HeyApiClient {
             { in: "query", key: "before" },
             { in: "query", key: "after" },
             { in: "query", key: "view" },
+            { in: "query", key: "partsLimit" },
           ],
         },
       ],
@@ -4004,7 +4035,7 @@ export class Session2 extends HeyApiClient {
       format?: OutputFormat
       system?: string
       variant?: string
-      parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+      parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4091,6 +4122,9 @@ export class Session2 extends HeyApiClient {
       messageID: string
       directory?: string
       workspace?: string
+      view?: "full" | "tui" | "tui-all"
+      partsLimit?: string
+      partsAfter?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4103,6 +4137,9 @@ export class Session2 extends HeyApiClient {
             { in: "path", key: "messageID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "query", key: "view" },
+            { in: "query", key: "partsLimit" },
+            { in: "query", key: "partsAfter" },
           ],
         },
       ],
@@ -4227,9 +4264,9 @@ export class Session2 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
-      modelID?: string
-      providerID?: string
-      messageID?: string
+      modelID: string
+      providerID: string
+      messageID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4334,8 +4371,8 @@ export class Session2 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
-      providerID?: string
-      modelID?: string
+      providerID: string
+      modelID: string
       auto?: boolean
       instructions?: string
     },
@@ -4393,7 +4430,7 @@ export class Session2 extends HeyApiClient {
       format?: OutputFormat
       system?: string
       variant?: string
-      parts?: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
+      parts: Array<TextPartInput | FilePartInput | AgentPartInput | SubtaskPartInput>
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4444,8 +4481,8 @@ export class Session2 extends HeyApiClient {
       messageID?: string
       agent?: string
       model?: string
-      arguments?: string
-      command?: string
+      arguments: string
+      command: string
       variant?: string
       parts?: Array<{
         id?: string
@@ -4500,12 +4537,12 @@ export class Session2 extends HeyApiClient {
       directory?: string
       workspace?: string
       messageID?: string
-      agent?: string
+      agent: string
       model?: {
         providerID: string
         modelID: string
       }
-      command?: string
+      command: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4547,7 +4584,7 @@ export class Session2 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
-      messageID?: string
+      messageID: string
       partID?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -4781,11 +4818,11 @@ export class Sync extends HeyApiClient {
    * Validate and replay a complete sync event history.
    */
   public replay<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       query_directory?: string
       workspace?: string
-      body_directory?: string
-      events?: Array<{
+      body_directory: string
+      events: Array<{
         id: string
         aggregateID: string
         seq: number
@@ -4836,10 +4873,10 @@ export class Sync extends HeyApiClient {
    * Update a session to belong to the current workspace through the sync event system.
    */
   public steal<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      sessionID?: string
+      sessionID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4914,7 +4951,7 @@ export class Session3 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
-      prompt?: Prompt
+      prompt: Prompt
       delivery?: SessionDelivery
     },
     options?: Options<never, ThrowOnError>,
@@ -5157,10 +5194,10 @@ export class Tui extends HeyApiClient {
    * Append prompt to the TUI.
    */
   public appendPrompt<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      text?: string
+      text: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5374,10 +5411,10 @@ export class Tui extends HeyApiClient {
    * Execute a TUI command.
    */
   public executeCommand<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      command?: string
+      command: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5411,12 +5448,12 @@ export class Tui extends HeyApiClient {
    * Show a toast notification in the TUI.
    */
   public showToast<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
       title?: string
-      message?: string
-      variant?: "info" | "success" | "warning" | "error"
+      message: string
+      variant: "info" | "success" | "warning" | "error"
       duration?: number
     },
     options?: Options<never, ThrowOnError>,
@@ -5491,10 +5528,10 @@ export class Tui extends HeyApiClient {
    * Navigate the TUI to display the specified session.
    */
   public selectSession<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
       directory?: string
       workspace?: string
-      sessionID?: string
+      sessionID: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5528,6 +5565,1090 @@ export class Tui extends HeyApiClient {
   }
 }
 
+export class Workflow extends HeyApiClient {
+  /**
+   * Preview a workflow plan
+   *
+   * Validate a declarative workflow plan and return bounded execution estimates without starting it.
+   */
+  public preview<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      plan: {
+        formatVersion: number
+        name: string
+        description: string
+        objective: string
+        phases: Array<{
+          id: string
+          ordinal: number
+          name: string
+          description?: string
+          barrier:
+            | {
+                kind: "all"
+              }
+            | {
+                kind: "quorum"
+                quorum: number
+              }
+            | {
+                kind: "best-effort"
+              }
+            | {
+                kind: "condition"
+                expression: string
+              }
+          taskIDs: Array<string>
+        }>
+        tasks: Array<{
+          id: string
+          phaseID: string
+          name: string
+          kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+          prompt: string
+          dependsOn: Array<string>
+          inputs?: Array<{
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }>
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+          map?: {
+            source: {
+              taskID: string
+              path?: string
+              projection?: string
+              required?: boolean
+            }
+            maxItems: number
+            taskTemplate: {
+              kind: "agent" | "synthesize" | "verify" | "validate"
+              prompt: string
+              output:
+                | {
+                    kind: "text"
+                    maxChars?: number
+                  }
+                | {
+                    kind: "json"
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "artifact"
+                    artifactKind?: string
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "none"
+                  }
+              model?: {
+                providerID: string
+                modelID: string
+                variant?: string
+                reasoning?: string
+              }
+              agentProfile?: string
+              allowedTools?: Array<string>
+              workspace?: {
+                mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+              }
+              permissions?: {
+                mode: "report-only" | "normal" | "custom"
+                allowedTools?: Array<string>
+                approvalRequiredFor?: Array<string>
+                approvedActions?: Array<string>
+                allowEdits?: boolean
+                allowMutatingCommands?: boolean
+                allowExternalSend?: boolean
+              }
+              retry?: {
+                maxAttempts?: number
+                backoffMs?: number
+                retryOn?: Array<
+                  "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+                >
+              }
+              budget?: {
+                maxTurns?: number
+                maxRuntimeMs?: number
+                maxTokens?: number
+                maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                maxChildren?: number
+                maxDepth?: number
+              }
+            }
+          }
+        }>
+        finalTaskID: string
+        completionCriteria: Array<string>
+        requiredGates: Array<string>
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        budget?: {
+          maxConcurrency?: number
+          maxFanOut?: number
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+          retention?: {
+            maxArtifacts?: number
+            maxAgeMs?: number
+            maxBytes?: number
+          }
+        }
+        overlapPolicy?: "skip" | "queue" | "replace"
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "plan" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowPreviewResponses, WorkflowPreviewErrors, ThrowOnError>({
+      url: "/workflow/preview",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Save a workflow revision
+   *
+   * Validate and persist an immutable project-scoped workflow plan revision.
+   */
+  public save<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      plan: {
+        formatVersion: number
+        name: string
+        description: string
+        objective: string
+        phases: Array<{
+          id: string
+          ordinal: number
+          name: string
+          description?: string
+          barrier:
+            | {
+                kind: "all"
+              }
+            | {
+                kind: "quorum"
+                quorum: number
+              }
+            | {
+                kind: "best-effort"
+              }
+            | {
+                kind: "condition"
+                expression: string
+              }
+          taskIDs: Array<string>
+        }>
+        tasks: Array<{
+          id: string
+          phaseID: string
+          name: string
+          kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+          prompt: string
+          dependsOn: Array<string>
+          inputs?: Array<{
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }>
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+          map?: {
+            source: {
+              taskID: string
+              path?: string
+              projection?: string
+              required?: boolean
+            }
+            maxItems: number
+            taskTemplate: {
+              kind: "agent" | "synthesize" | "verify" | "validate"
+              prompt: string
+              output:
+                | {
+                    kind: "text"
+                    maxChars?: number
+                  }
+                | {
+                    kind: "json"
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "artifact"
+                    artifactKind?: string
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "none"
+                  }
+              model?: {
+                providerID: string
+                modelID: string
+                variant?: string
+                reasoning?: string
+              }
+              agentProfile?: string
+              allowedTools?: Array<string>
+              workspace?: {
+                mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+              }
+              permissions?: {
+                mode: "report-only" | "normal" | "custom"
+                allowedTools?: Array<string>
+                approvalRequiredFor?: Array<string>
+                approvedActions?: Array<string>
+                allowEdits?: boolean
+                allowMutatingCommands?: boolean
+                allowExternalSend?: boolean
+              }
+              retry?: {
+                maxAttempts?: number
+                backoffMs?: number
+                retryOn?: Array<
+                  "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+                >
+              }
+              budget?: {
+                maxTurns?: number
+                maxRuntimeMs?: number
+                maxTokens?: number
+                maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                maxChildren?: number
+                maxDepth?: number
+              }
+            }
+          }
+        }>
+        finalTaskID: string
+        completionCriteria: Array<string>
+        requiredGates: Array<string>
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        budget?: {
+          maxConcurrency?: number
+          maxFanOut?: number
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+          retention?: {
+            maxArtifacts?: number
+            maxAgeMs?: number
+            maxBytes?: number
+          }
+        }
+        overlapPolicy?: "skip" | "queue" | "replace"
+      }
+      definitionID?: string
+      name?: string
+      description?: string
+      source?: "session-generated" | "saved" | "template" | "package" | "manual"
+      ownerSessionID?: string
+      saved?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "plan" },
+            { in: "body", key: "definitionID" },
+            { in: "body", key: "name" },
+            { in: "body", key: "description" },
+            { in: "body", key: "source" },
+            { in: "body", key: "ownerSessionID" },
+            { in: "body", key: "saved" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowSaveResponses, WorkflowSaveErrors, ThrowOnError>({
+      url: "/workflow/save",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Start a workflow
+   *
+   * Queue an independent workflow run from a validated plan or saved revision.
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      plan?: {
+        formatVersion: number
+        name: string
+        description: string
+        objective: string
+        phases: Array<{
+          id: string
+          ordinal: number
+          name: string
+          description?: string
+          barrier:
+            | {
+                kind: "all"
+              }
+            | {
+                kind: "quorum"
+                quorum: number
+              }
+            | {
+                kind: "best-effort"
+              }
+            | {
+                kind: "condition"
+                expression: string
+              }
+          taskIDs: Array<string>
+        }>
+        tasks: Array<{
+          id: string
+          phaseID: string
+          name: string
+          kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+          prompt: string
+          dependsOn: Array<string>
+          inputs?: Array<{
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }>
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+          map?: {
+            source: {
+              taskID: string
+              path?: string
+              projection?: string
+              required?: boolean
+            }
+            maxItems: number
+            taskTemplate: {
+              kind: "agent" | "synthesize" | "verify" | "validate"
+              prompt: string
+              output:
+                | {
+                    kind: "text"
+                    maxChars?: number
+                  }
+                | {
+                    kind: "json"
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "artifact"
+                    artifactKind?: string
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "none"
+                  }
+              model?: {
+                providerID: string
+                modelID: string
+                variant?: string
+                reasoning?: string
+              }
+              agentProfile?: string
+              allowedTools?: Array<string>
+              workspace?: {
+                mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+              }
+              permissions?: {
+                mode: "report-only" | "normal" | "custom"
+                allowedTools?: Array<string>
+                approvalRequiredFor?: Array<string>
+                approvedActions?: Array<string>
+                allowEdits?: boolean
+                allowMutatingCommands?: boolean
+                allowExternalSend?: boolean
+              }
+              retry?: {
+                maxAttempts?: number
+                backoffMs?: number
+                retryOn?: Array<
+                  "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+                >
+              }
+              budget?: {
+                maxTurns?: number
+                maxRuntimeMs?: number
+                maxTokens?: number
+                maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                maxChildren?: number
+                maxDepth?: number
+              }
+            }
+          }
+        }>
+        finalTaskID: string
+        completionCriteria: Array<string>
+        requiredGates: Array<string>
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        budget?: {
+          maxConcurrency?: number
+          maxFanOut?: number
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+          retention?: {
+            maxArtifacts?: number
+            maxAgeMs?: number
+            maxBytes?: number
+          }
+        }
+        overlapPolicy?: "skip" | "queue" | "replace"
+      }
+      revisionID?: string
+      definitionID?: string
+      name?: string
+      description?: string
+      source?: "session-generated" | "saved" | "template" | "package" | "manual"
+      originSessionID?: string
+      loopID?: string
+      loopRunID?: string
+      overlapKey?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "plan" },
+            { in: "body", key: "revisionID" },
+            { in: "body", key: "definitionID" },
+            { in: "body", key: "name" },
+            { in: "body", key: "description" },
+            { in: "body", key: "source" },
+            { in: "body", key: "originSessionID" },
+            { in: "body", key: "loopID" },
+            { in: "body", key: "loopRunID" },
+            { in: "body", key: "overlapKey" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowStartResponses, WorkflowStartErrors, ThrowOnError>({
+      url: "/workflow/start",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * List workflow runs
+   *
+   * List bounded workflow snapshots for the current project.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowListResponses, WorkflowListErrors, ThrowOnError>({
+      url: "/workflow",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Delete a workflow run
+   *
+   * Permanently delete a terminal workflow run and its persisted phases, tasks, attempts, artifacts, events, and gates.
+   */
+  public delete<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<WorkflowDeleteResponses, WorkflowDeleteErrors, ThrowOnError>({
+      url: "/workflow/{runID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Inspect a workflow run
+   *
+   * Read the canonical durable workflow snapshot used for monitor rehydration.
+   */
+  public show<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowShowResponses, WorkflowShowErrors, ThrowOnError>({
+      url: "/workflow/{runID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List workflow events
+   *
+   * Read bounded workflow events for TUI and API rehydration.
+   */
+  public events<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowEventsResponses, WorkflowEventsErrors, ThrowOnError>({
+      url: "/workflow/{runID}/events",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List workflow artifacts
+   *
+   * Read bounded structured outputs and evidence references for a workflow run.
+   */
+  public artifacts<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<WorkflowArtifactsResponses, WorkflowArtifactsErrors, ThrowOnError>({
+      url: "/workflow/{runID}/artifacts",
+      ...options,
+      ...params,
+    })
+  }
+
+  public pause<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowPauseResponses, WorkflowPauseErrors, ThrowOnError>({
+      url: "/workflow/{runID}/pause",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public resume<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowResumeResponses, WorkflowResumeErrors, ThrowOnError>({
+      url: "/workflow/{runID}/resume",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public stop<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowStopResponses, WorkflowStopErrors, ThrowOnError>({
+      url: "/workflow/{runID}/stop",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public retryTask<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      taskID: string
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "taskID" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowRetryTaskResponses, WorkflowRetryTaskErrors, ThrowOnError>({
+      url: "/workflow/{runID}/retry-task",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public retryPhase<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      phaseID: string
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "phaseID" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<WorkflowRetryPhaseResponses, WorkflowRetryPhaseErrors, ThrowOnError>({
+      url: "/workflow/{runID}/retry-phase",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class OpencodeClient extends HeyApiClient {
   public static readonly __registry = new HeyApiRegistry<OpencodeClient>()
 
@@ -5551,9 +6672,9 @@ export class OpencodeClient extends HeyApiClient {
     return (this._global ??= new Global({ client: this.client }))
   }
 
-  private _event?: Event
-  get event(): Event {
-    return (this._event ??= new Event({ client: this.client }))
+  private _event?: Event_
+  get event(): Event_ {
+    return (this._event ??= new Event_({ client: this.client }))
   }
 
   private _config?: Config2
@@ -5581,9 +6702,9 @@ export class OpencodeClient extends HeyApiClient {
     return (this._find ??= new Find({ client: this.client }))
   }
 
-  private _file?: File
-  get file(): File {
-    return (this._file ??= new File({ client: this.client }))
+  private _file?: File_
+  get file(): File_ {
+    return (this._file ??= new File_({ client: this.client }))
   }
 
   private _instance?: Instance
@@ -5679,5 +6800,10 @@ export class OpencodeClient extends HeyApiClient {
   private _tui?: Tui
   get tui(): Tui {
     return (this._tui ??= new Tui({ client: this.client }))
+  }
+
+  private _workflow?: Workflow
+  get workflow(): Workflow {
+    return (this._workflow ??= new Workflow({ client: this.client }))
   }
 }

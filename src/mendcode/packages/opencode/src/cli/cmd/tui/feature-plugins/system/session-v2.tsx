@@ -13,6 +13,15 @@ import { RGBA, TextAttributes, type BoxRenderable, type ScrollBoxRenderable, typ
 import { Locale } from "@/util/locale"
 import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
 import path from "path"
+import open from "open"
+import * as Clipboard from "@tui/util/clipboard"
+import { errorMessage } from "@/util/error"
+import { useToast } from "@tui/ui/toast"
+import {
+  imageGenerationCanvasSize,
+  imageGenerationWaitFrame,
+  imageGenerationWaitFrameCount,
+} from "@/mend/tui/image-generation-wait"
 import type {
   SessionMessage,
   SessionMessageAgentSwitched,
@@ -713,6 +722,7 @@ function AssistantTool(props: { sessionID: string; messageID: string; part: Sess
   const input = createMemo(() => toolInputRecord(props.part.state.input))
   const rowOnly = createMemo(() => {
     const profile = mend.profile.presentation.profile
+    if (props.part.name === "image_gen" && profile === "mendcode") return false
     if (props.part.name === "bash" || props.part.name === "shell") return false
     if (props.part.name === "loop") return false
     if (props.part.name === "memory_graph") return false
@@ -723,7 +733,8 @@ function AssistantTool(props: { sessionID: string; messageID: string; part: Sess
       return input()
     },
     get metadata() {
-      return props.part.provider?.metadata ?? {}
+      const structured = props.part.state.status === "pending" ? undefined : props.part.state.structured
+      return isRecord(structured) ? structured : (props.part.provider?.metadata ?? {})
     },
     get output() {
       return props.part.state.status === "pending" ? undefined : toolOutput(props.part.state.content)
@@ -742,6 +753,9 @@ function AssistantTool(props: { sessionID: string; messageID: string; part: Sess
           metadata={toolprops.metadata}
           output={toolprops.output}
         />
+      </Match>
+      <Match when={props.part.name === "image_gen" && mend.profile.presentation.profile === "mendcode"}>
+        <ImageGen {...toolprops} />
       </Match>
       <Match when={props.part.name === "bash"}>
         <Bash {...toolprops} />
@@ -935,6 +949,197 @@ function fullToolMetadataPatch(part: unknown, filePath: string) {
     return [item.filePath, item.movePath, item.relativePath].some((value) => value === filePath)
   })
   return isRecord(file) && typeof file.patch === "string" ? file.patch : undefined
+}
+
+function imageGenMetadataString(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key]
+  return typeof value === "string" && value.trim() ? value : undefined
+}
+
+function imageGenMetadataNumber(metadata: Record<string, unknown>, key: string) {
+  const value = metadata[key]
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
+}
+
+function formatImageArtifactBytes(value: number | undefined) {
+  if (value === undefined) return
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${Math.round(value / 102.4) / 10} KB`
+  return `${Math.round(value / (1024 * 102.4)) / 10} MB`
+}
+
+function ImageGenToolAction(props: { label: string; onPress: () => void }) {
+  const { theme } = useTheme()
+  const renderer = useRenderer()
+  const [hover, setHover] = createSignal(false)
+  return (
+    <box
+      onMouseOver={() => setHover(true)}
+      onMouseOut={() => setHover(false)}
+      onMouseUp={() => {
+        if (renderer.getSelection()?.getSelectedText()) return
+        props.onPress()
+      }}
+    >
+      <text fg={hover() ? theme.text : theme.primary}>[{props.label}]</text>
+    </box>
+  )
+}
+
+function ImageGen(props: ToolProps) {
+  const { theme } = useTheme()
+  const mend = useMendTuiProfile()
+  const dimensions = useTerminalDimensions()
+  const toast = useToast()
+  const [frame, setFrame] = createSignal(0)
+  const running = createMemo(() => props.part.state.status === "pending" || props.part.state.status === "running")
+  const completed = createMemo(() => props.part.state.status === "completed")
+  const metadata = createMemo(() => props.metadata)
+  const artifactPath = createMemo(() => imageGenMetadataString(metadata(), "path"))
+  const generationModel = createMemo(() => {
+    const provider = imageGenMetadataString(metadata(), "provider")
+    const model = imageGenMetadataString(metadata(), "model")
+    return provider && model ? `${provider}/${model}` : model
+  })
+  const visualCaption = createMemo(() => {
+    const caption = metadata().caption
+    if (!caption || typeof caption !== "object") return undefined
+    const record = caption as Record<string, unknown>
+    return record.status === "completed" && typeof record.caption === "string" ? record.caption : undefined
+  })
+  const captionError = createMemo(() => {
+    const caption = metadata().caption
+    if (!caption || typeof caption !== "object") return undefined
+    const record = caption as Record<string, unknown>
+    return record.status === "error" && typeof record.error === "string" ? record.error : undefined
+  })
+  const imageWait = createMemo(() => mend.profile.imageGeneration.wait)
+  const canvas = createMemo(() => imageGenerationCanvasSize(sessionContentWidth(dimensions().width, false), imageWait()))
+  const fieldWidth = createMemo(() => Math.max(8, canvas().width - 2 - imageWait().canvas.paddingX * 2))
+  const fieldHeight = createMemo(() =>
+    Math.max(4, canvas().height - 2 - imageWait().canvas.paddingY * 2 - (imageWait().showMetadata ? 2 : 0)),
+  )
+  const frameCount = createMemo(() => imageGenerationWaitFrameCount(imageWait()))
+  const lines = createMemo(() => imageGenerationWaitFrame(imageWait(), frame(), fieldWidth(), fieldHeight()))
+  const summary = createMemo(() =>
+    [
+      imageGenMetadataString(metadata(), "format") ?? "PNG",
+      imageGenMetadataString(metadata(), "size"),
+      formatImageArtifactBytes(imageGenMetadataNumber(metadata(), "bytes")),
+      imageGenMetadataString(metadata(), "quality"),
+      generationModel(),
+      typeof metadata().cost === "number" ? `$${(metadata().cost as number).toFixed(4)}` : "cost unknown",
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join(" · "),
+  )
+
+  createEffect(() => {
+    const wait = imageWait()
+    const count = frameCount()
+    setFrame((value) => value % count)
+    if (!running() || mend.profile.workingIndicator.visible === false || wait.mode === "static" || count <= 1) return
+    const timer = setInterval(() => setFrame((value) => (value + 1) % count), wait.intervalMs)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  const activityLineColor = (line: string) => {
+    const color = imageWait().textColor
+    if (color === "accent") return theme.primary
+    if (color === "muted") return theme.textMuted
+    return line.includes("*") || line.includes("+") || line.includes("@") || line.includes("#") || line.includes("o")
+      ? theme.primary
+      : theme.textMuted
+  }
+
+  const openArtifact = async (target: string, label: string) => {
+    try {
+      await open(target)
+      toast.show({ message: `${label}: ${target}`, variant: "success", duration: 2500 })
+    } catch (error) {
+      toast.show({ message: `${label} failed: ${errorMessage(error)}`, variant: "error", duration: 5000 })
+    }
+  }
+
+  const copyArtifactPath = async (target: string) => {
+    try {
+      await Clipboard.copy(target)
+      toast.show({ message: "Image path copied", variant: "success", duration: 2500 })
+    } catch (error) {
+      toast.show({ message: `Copy failed: ${errorMessage(error)}`, variant: "error", duration: 5000 })
+    }
+  }
+
+  return (
+    <Switch>
+      <Match when={props.part.state.status === "error"}>
+        <InlineTool icon={toolPresentationIcon("image_gen")} pending="Generating image..." complete={true} part={props.part}>
+          Image generation failed
+        </InlineTool>
+      </Match>
+      <Match when={running()}>
+        <BlockTool title="Generating image..." titleColor={theme.text} part={props.part} paddingBottom={1}>
+          <box width="100%" alignItems="center">
+            <box
+              border={["top", "bottom", "left", "right"]}
+              borderColor={theme.border}
+              paddingLeft={imageWait().canvas.paddingX}
+              paddingRight={imageWait().canvas.paddingX}
+              paddingTop={imageWait().canvas.paddingY}
+              paddingBottom={imageWait().canvas.paddingY}
+              flexDirection="column"
+              justifyContent="center"
+              alignItems="center"
+              width={canvas().width}
+              height={canvas().height}
+              flexShrink={0}
+            >
+              <For each={lines()}>{(line) => <text fg={activityLineColor(line)}>{line}</text>}</For>
+              <Show when={imageWait().showMetadata}>
+                <text fg={theme.textMuted}>{generationModel() ?? "configured image model"}</text>
+                <text fg={theme.textMuted}>
+                  size {imageGenMetadataString(metadata(), "requestedSize") ?? "auto"}
+                </text>
+              </Show>
+            </box>
+          </box>
+        </BlockTool>
+      </Match>
+      <Match when={completed()}>
+        <BlockTool title="Generated image" part={props.part} paddingBottom={1}>
+          <box
+            border={["top", "bottom", "left", "right"]}
+            borderColor={theme.border}
+            paddingLeft={2}
+            paddingRight={2}
+            paddingTop={1}
+            paddingBottom={1}
+            flexDirection="column"
+            gap={1}
+          >
+            <text fg={theme.text}>{summary()}</text>
+            <Show when={visualCaption()}>{(value) => <text fg={theme.textMuted}>Caption: {value()}</text>}</Show>
+            <Show when={captionError()}>{(value) => <text fg={theme.warning}>Caption unavailable: {value()}</text>}</Show>
+            <Show when={artifactPath()}>
+              {(value) => (
+                <>
+                  <text fg={theme.textMuted} wrapMode="char">{value()}</text>
+                  <box flexDirection="row" gap={2}>
+                    <ImageGenToolAction label="Open Preview" onPress={() => void openArtifact(value(), "Opened preview")} />
+                    <ImageGenToolAction
+                      label="Reveal Folder"
+                      onPress={() => void openArtifact(path.dirname(value()), "Opened folder")}
+                    />
+                    <ImageGenToolAction label="Copy Path" onPress={() => void copyArtifactPath(value())} />
+                  </box>
+                </>
+              )}
+            </Show>
+          </box>
+        </BlockTool>
+      </Match>
+    </Switch>
+  )
 }
 
 function GenericTool(props: ToolProps) {

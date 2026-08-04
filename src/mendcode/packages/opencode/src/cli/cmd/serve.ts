@@ -5,6 +5,7 @@ import { withNetworkOptions, resolveNetworkOptions } from "../network"
 import { Flag } from "@mendcode/core/flag/flag"
 import { SharedServer } from "./tui/shared-server"
 import { InstanceStore } from "@/project/instance-store"
+import { BackgroundTask } from "@/session/background-task"
 import * as Log from "@mendcode/core/util/log"
 
 const log = Log.create({ service: "cli.serve" })
@@ -97,7 +98,25 @@ export const ServeCommand = effectCmd({
 
     try {
       const idle = shared
-        ? SharedServer.waitForClientLeases({ pid: process.pid, stop, signal: controller.signal })
+        ? SharedServer.waitForClientLeases({
+            pid: process.pid,
+            stop,
+            signal: controller.signal,
+            hasActiveWork: () =>
+              Effect.runPromise(
+                store.loaded().pipe(
+                  Effect.flatMap((instances) =>
+                    Effect.forEach(
+                      instances,
+                      (instance) =>
+                        store.provide(instance, Effect.sync(() => BackgroundTask.hasActiveTasks())),
+                      { concurrency: "unbounded" },
+                    ),
+                  ),
+                  Effect.map((active) => active.some(Boolean)),
+                ),
+              ),
+          })
         : new Promise<void>(() => undefined)
       yield* Effect.raceFirst(
         Effect.promise(() => idle),

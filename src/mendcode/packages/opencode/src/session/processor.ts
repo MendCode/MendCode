@@ -39,7 +39,9 @@ import * as DateTime from "effect/DateTime"
 
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
-const DEFAULT_LLM_STREAM_IDLE_TIMEOUT_MS = 180_000
+// Abort silent provider streams quickly after sleep/network changes.
+// Slow providers can override this with the environment variable.
+const DEFAULT_LLM_STREAM_IDLE_TIMEOUT_MS = 60_000
 const RETRY_STATUS_EVENT_INTERVAL_MS = 5_000
 
 function llmStreamIdleTimeoutMs() {
@@ -597,18 +599,17 @@ export const layer: Layer.Layer<
         return false
       })
 
-      const hasPendingShellTool = Effect.fn("SessionProcessor.hasPendingShellTool")(function* () {
+      const hasActiveToolExecution = Effect.fn("SessionProcessor.hasActiveToolExecution")(function* () {
         for (const toolCallID of Object.keys(ctx.toolcalls)) {
           const match = yield* readToolCall(toolCallID)
-          if (match?.part.tool !== ShellID.ToolID) continue
-          if (match.part.state.status === "pending" || match.part.state.status === "running") return true
+          if (match?.part.state.status === "running") return true
         }
         return false
       })
 
       const keepStreamAlive = Effect.fn("SessionProcessor.keepStreamAlive")(function* () {
         if (yield* hasPendingHumanInteraction()) return true
-        return yield* hasPendingShellTool()
+        return yield* hasActiveToolExecution()
       })
 
       const proposeAutomaticMemories = Effect.fn("SessionProcessor.proposeAutomaticMemories")(function* (input: {

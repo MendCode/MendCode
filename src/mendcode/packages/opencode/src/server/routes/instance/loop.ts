@@ -55,6 +55,13 @@ const DraftBody = z.object({
       timezone: z.string().optional(),
     })
     .optional(),
+  workflow: z
+    .object({
+      revisionID: z.string().trim().min(1).optional(),
+      definitionID: z.string().trim().min(1).optional(),
+      overlapKey: z.string().trim().min(1).optional(),
+    })
+    .optional(),
   stopWhen: z.array(z.string()).optional(),
   gates: z.array(z.string()).optional(),
   policy: z

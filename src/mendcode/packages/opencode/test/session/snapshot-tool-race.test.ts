@@ -31,6 +31,7 @@ import { TestLLMServer } from "../lib/llm-server"
 // Same layer setup as prompt-effect.test.ts
 import { NodeFileSystem } from "@effect/platform-node"
 import { Agent as AgentSvc } from "../../src/agent/agent"
+import { Auth } from "../../src/auth"
 import { Bus } from "../../src/bus"
 import { Command } from "../../src/command"
 import { Config } from "@/config/config"
@@ -57,6 +58,10 @@ import { AppFileSystem } from "@mendcode/core/filesystem"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { Ripgrep } from "../../src/file/ripgrep"
 import { Format } from "../../src/format"
+import { BackgroundTask } from "../../src/session/background-task"
+import { LoopWorkflow } from "../../src/session/loop"
+import { LoopRunner } from "../../src/session/loop-runner"
+import { WorkflowService } from "../../src/session/workflow-service"
 
 void Log.init({ print: false })
 
@@ -114,6 +119,7 @@ function makeHttp() {
     LLM.defaultLayer,
     Env.defaultLayer,
     AgentSvc.defaultLayer,
+    Auth.defaultLayer,
     Command.defaultLayer,
     Permission.defaultLayer,
     Plugin.defaultLayer,
@@ -123,6 +129,7 @@ function makeHttp() {
     mcp,
     AppFileSystem.defaultLayer,
     status,
+    BackgroundTask.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const planReview = PlanReview.layer.pipe(Layer.provideMerge(deps))
@@ -133,6 +140,9 @@ function makeHttp() {
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(Ripgrep.defaultLayer),
     Layer.provide(Format.defaultLayer),
+    Layer.provide(LoopWorkflow.defaultLayer),
+    Layer.provide(LoopRunner.defaultLayer),
+    Layer.provide(WorkflowService.defaultLayer),
     Layer.provideMerge(todo),
     Layer.provideMerge(question),
     Layer.provideMerge(planReview),

@@ -20,6 +20,7 @@ import { PermissionRoutes } from "./permission"
 import { ProjectRoutes } from "./project"
 import { SessionRoutes } from "./session"
 import { LoopRoutes } from "./loop"
+import { WorkflowRoutes } from "./workflow"
 import { PtyRoutes } from "./pty"
 import { McpRoutes } from "./mcp"
 import { MflowRoutes } from "./mflow"
@@ -44,6 +45,7 @@ import { SessionPaths } from "./httpapi/groups/session"
 import { SyncPaths } from "./httpapi/groups/sync"
 import { TuiPaths } from "./httpapi/groups/tui"
 import { WorkspacePaths } from "./httpapi/groups/workspace"
+import { WorkflowPaths } from "./httpapi/groups/workflow"
 import type { CorsOptions } from "@/server/cors"
 
 export const InstanceRoutes = (upgrade: UpgradeWebSocket, opts?: CorsOptions): Hono => {
@@ -53,6 +55,7 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket, opts?: CorsOptions): H
 
   app.all("/api/*", (c) => handler(c.req.raw, context))
   app.route("/loop", LoopRoutes())
+  app.route("/workflow", WorkflowRoutes())
 
   if (Flag.OPENCODE_EXPERIMENTAL_HTTPAPI) {
     app.get(EventPaths.event, (c) => handler(c.req.raw, context))
@@ -170,6 +173,18 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket, opts?: CorsOptions): H
     app.get(WorkspacePaths.status, (c) => handler(c.req.raw, context))
     app.delete(WorkspacePaths.remove, (c) => handler(c.req.raw, context))
     app.post(WorkspacePaths.warp, (c) => handler(c.req.raw, context))
+    app.post(WorkflowPaths.preview, (c) => handler(c.req.raw, context))
+    app.post(WorkflowPaths.save, (c) => handler(c.req.raw, context))
+    app.post(WorkflowPaths.start, (c) => handler(c.req.raw, context))
+    app.get(WorkflowPaths.list, (c) => handler(c.req.raw, context))
+    app.get(WorkflowPaths.show, (c) => handler(c.req.raw, context))
+    app.get(WorkflowPaths.events, (c) => handler(c.req.raw, context))
+    app.get(WorkflowPaths.artifacts, (c) => handler(c.req.raw, context))
+    app.post(WorkflowPaths.pause, (c) => handler(c.req.raw, context))
+    app.post(WorkflowPaths.resume, (c) => handler(c.req.raw, context))
+    app.post(WorkflowPaths.stop, (c) => handler(c.req.raw, context))
+    app.post(WorkflowPaths.retryTask, (c) => handler(c.req.raw, context))
+    app.post(WorkflowPaths.retryPhase, (c) => handler(c.req.raw, context))
   }
 
   return app

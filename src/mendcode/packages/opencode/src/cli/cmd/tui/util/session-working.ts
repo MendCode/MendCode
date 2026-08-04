@@ -1,5 +1,13 @@
 export const RECENT_WORKING_ASSISTANT_WINDOW_MS = 30_000
 export const STALE_BUSY_SESSION_WINDOW_MS = 60_000
+export const SESSION_STOPPED_CONNECTION_MESSAGE = "agent stopped: local server connection lost"
+
+export function shouldShowSessionStoppedConnection(input: {
+  connectionStatus: string
+  hasOrphanedAssistant: boolean
+}) {
+  return input.connectionStatus !== "connected" && input.hasOrphanedAssistant
+}
 
 type TuiSessionStatus =
   | { type: "idle" }
@@ -23,6 +31,26 @@ export function isRecentWorkingAssistant(input: {
   const lastAssistantActivity = lastActivityTime(input.assistantCreated)
   if (!lastAssistantActivity) return false
   return now - lastAssistantActivity <= windowMs
+}
+
+export function isAssistantWorking(input: {
+  statusType?: string
+  now?: number
+  assistantCreated?: number
+  statusUntil?: number
+  statusNext?: number
+}) {
+  const now = input.now ?? Date.now()
+  if (input.statusType === "busy") {
+    return !isStaleBusySession({
+      statusType: input.statusType,
+      now,
+      assistantCreated: input.assistantCreated,
+      statusUntil: input.statusUntil,
+    })
+  }
+  if (input.statusType === "retry") return typeof input.statusNext !== "number" || input.statusNext > now
+  return isRecentWorkingAssistant({ now, assistantCreated: input.assistantCreated })
 }
 
 export function isStaleBusySession(input: {
