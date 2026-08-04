@@ -30,7 +30,9 @@ import { ModelID, ProviderID } from "@/provider/schema"
 import { Permission } from "@/permission"
 import { LoopWorkflow } from "@/session/loop"
 import { LoopRunner } from "@/session/loop-runner"
+import { WorkflowService } from "@/session/workflow-service"
 import type { Agent as AgentTypes } from "@/agent/agent"
+import { Auth } from "@/auth"
 
 const buildAgent: AgentTypes.Info = {
   name: "build",
@@ -40,34 +42,129 @@ const buildAgent: AgentTypes.Info = {
 }
 
 const node = CrossSpawnSpawner.defaultLayer
-const configLayer = TestConfig.layer({
-  directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".mendcode")])),
-})
+const configLayer = (config: Record<string, unknown> = {}) =>
+  TestConfig.layer({
+    get: () => Effect.succeed(config),
+    directories: () => InstanceState.directory.pipe(Effect.map((dir) => [path.join(dir, ".mendcode")])),
+  })
 
-const registryLayer = ToolRegistry.layer.pipe(
-  Layer.provide(configLayer),
-  Layer.provide(Plugin.defaultLayer),
-  Layer.provide(Question.defaultLayer),
-  Layer.provide(PlanReview.defaultLayer),
-  Layer.provide(LoopWorkflow.defaultLayer),
-  Layer.provide([LoopRunner.defaultLayer, Todo.defaultLayer]),
-  Layer.provide(Skill.defaultLayer),
-  Layer.provide(Agent.defaultLayer),
-  Layer.provide(Session.defaultLayer),
-  Layer.provide([SessionStatus.defaultLayer, BackgroundTask.defaultLayer]),
-  Layer.provide(Provider.defaultLayer),
-  Layer.provide(LSP.defaultLayer),
-  Layer.provide(Instruction.defaultLayer),
-  Layer.provide(AppFileSystem.defaultLayer),
-  Layer.provide(Bus.layer),
-  Layer.provide(FetchHttpClient.layer),
-  Layer.provide(Format.defaultLayer),
-  Layer.provide(node),
-  Layer.provide(Ripgrep.defaultLayer),
-  Layer.provide(Truncate.defaultLayer),
+const authLayer = (info?: Auth.Info) =>
+  Layer.succeed(
+    Auth.Service,
+    Auth.Service.of({
+      get: (providerID) => Effect.succeed(providerID === "openai" ? info : undefined),
+      all: () => Effect.succeed<Record<string, Auth.Info>>(info ? { openai: info } : {}),
+      set: () => Effect.void,
+      remove: () => Effect.void,
+    }),
+  )
+
+const imageProviderLayer = Layer.succeed(
+  Provider.Service,
+  Provider.Service.of({
+    list: () => Effect.succeed({}),
+    getProvider: () => Effect.die("provider info is not used by registry image tests"),
+    getModel: (providerID, modelID) =>
+      modelID === "gpt-image-2"
+        ? Effect.die("gpt-image-2 is intentionally absent from the conversational provider catalog")
+        : Effect.succeed({
+            id: modelID,
+            providerID,
+            capabilities: {
+              output: { image: modelID === "test-image-model" },
+            },
+          } as any),
+    getLanguage: () => Effect.die("language models are not used by registry tests"),
+    closest: () => Effect.succeed(undefined),
+    getSmallModel: () => Effect.succeed(undefined),
+    defaultModel: () => Effect.die("default model is not used by registry tests"),
+  }),
 )
 
-const it = testEffect(Layer.mergeAll(registryLayer, node))
+const registryLayer = (
+  info?: Auth.Info,
+  config: Record<string, unknown> = {},
+  providerLayer: Layer.Layer<Provider.Service, never, never> = Provider.defaultLayer as Layer.Layer<
+    Provider.Service,
+    never,
+    never
+  >,
+) => {
+  const base = ToolRegistry.layer.pipe(
+    Layer.provide(configLayer(config)),
+    Layer.provide(authLayer(info)),
+    Layer.provide(Plugin.defaultLayer),
+    Layer.provide(Question.defaultLayer),
+    Layer.provide(PlanReview.defaultLayer),
+    Layer.provide(LoopWorkflow.defaultLayer),
+    Layer.provide([LoopRunner.defaultLayer, Todo.defaultLayer, WorkflowService.defaultLayer]),
+    Layer.provide(Skill.defaultLayer),
+    Layer.provide(Agent.defaultLayer),
+    Layer.provide(Session.defaultLayer),
+    Layer.provide([SessionStatus.defaultLayer, BackgroundTask.defaultLayer]),
+    Layer.provide(providerLayer),
+    Layer.provide(LSP.defaultLayer),
+    Layer.provide(Instruction.defaultLayer),
+    Layer.provide(AppFileSystem.defaultLayer),
+    Layer.provide(Bus.layer),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(Format.defaultLayer),
+    Layer.provide(node),
+    Layer.provide(Ripgrep.defaultLayer),
+  )
+  return base.pipe(Layer.provide(Truncate.defaultLayer))
+}
+
+const it = testEffect(Layer.mergeAll(registryLayer(), node))
+const imageConfig = {
+  image_generation: { enabled: true, model: "openai/test-image-model" },
+  provider: {
+    openai: {
+      name: "OpenAI test provider",
+      npm: "@ai-sdk/openai",
+      models: {
+        "test-image-model": {
+          name: "Test image model",
+          modalities: { input: ["text"], output: ["image"] },
+        },
+      },
+    },
+  },
+}
+const oauthInfo = new Auth.Oauth({
+  type: "oauth",
+  access: "access",
+  refresh: "refresh",
+  expires: Date.now() + 60_000,
+  accountId: "account",
+})
+const oauthIt = testEffect(Layer.mergeAll(registryLayer(oauthInfo, imageConfig, imageProviderLayer), node))
+const oauthDefaultIt = testEffect(Layer.mergeAll(registryLayer(oauthInfo, {}, imageProviderLayer), node))
+const oauthDefaultDisabledIt = testEffect(
+  Layer.mergeAll(registryLayer(oauthInfo, { image_generation: { enabled: false } }, imageProviderLayer), node),
+)
+const apiKeyInfo = new Auth.Api({ type: "api", key: "test-api-key" })
+const apiKeyIt = testEffect(Layer.mergeAll(registryLayer(apiKeyInfo, imageConfig, imageProviderLayer), node))
+const apiKeyDefaultIt = testEffect(Layer.mergeAll(registryLayer(apiKeyInfo, {}, imageProviderLayer), node))
+const disabledImageIt = testEffect(
+  Layer.mergeAll(
+    registryLayer(undefined, {
+      ...imageConfig,
+      image_generation: { enabled: false, model: "openai/test-image-model" },
+    }, imageProviderLayer),
+    node,
+  ),
+)
+const nonImageModelIt = testEffect(
+  Layer.mergeAll(
+    registryLayer(
+      undefined,
+      { image_generation: { enabled: true, model: "openai/text-only-model" } },
+      imageProviderLayer,
+    ),
+    node,
+  ),
+)
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -91,6 +188,111 @@ describe("tool.registry", () => {
       expect(ids).toContain("review")
       expect(ids).toContain("task_status")
       expect(ids).toContain("write")
+      expect(ids).not.toContain("image_gen")
+    }),
+  )
+
+  oauthDefaultIt.instance("exposes image_gen with the default gpt-image-2 model for OpenAI subscription OAuth", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderID.make("openai"),
+        modelID: ModelID.make("gpt-5.6-sol"),
+        agent: buildAgent,
+      })
+
+      expect(tools.map((tool) => tool.id)).toContain("image_gen")
+    }),
+  )
+
+  oauthDefaultDisabledIt.instance("does not apply the subscription default when image generation is disabled", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderID.make("openai"),
+        modelID: ModelID.make("gpt-5.6-sol"),
+        agent: buildAgent,
+      })
+
+      expect(tools.map((tool) => tool.id)).not.toContain("image_gen")
+    }),
+  )
+
+  apiKeyDefaultIt.instance("does not infer a default image model from an OpenAI API key", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderID.make("openai"),
+        modelID: ModelID.make("gpt-5.6-sol"),
+        agent: buildAgent,
+      })
+
+      expect(tools.map((tool) => tool.id)).not.toContain("image_gen")
+    }),
+  )
+
+  oauthIt.instance("exposes image_gen for a configured output-image model", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderID.make("openai"),
+        modelID: ModelID.make("gpt-5.6-sol"),
+        agent: buildAgent,
+      })
+
+      expect(tools.map((tool) => tool.id)).toContain("image_gen")
+    }),
+  )
+
+  apiKeyIt.instance("keeps image_gen independent from the active chat auth mode", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderID.make("openai"),
+        modelID: ModelID.make("gpt-5.6-sol"),
+        agent: buildAgent,
+      })
+
+      expect(tools.map((tool) => tool.id)).toContain("image_gen")
+    }),
+  )
+
+  disabledImageIt.instance("does not expose image_gen when image generation is disabled", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderID.make("openai"),
+        modelID: ModelID.make("gpt-5.6-sol"),
+        agent: buildAgent,
+      })
+
+      expect(tools.map((tool) => tool.id)).not.toContain("image_gen")
+    }),
+  )
+
+  oauthIt.instance("does not expose image_gen when the agent permission denies it", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderID.make("openai"),
+        modelID: ModelID.make("gpt-5.6-sol"),
+        agent: { ...buildAgent, permission: Permission.fromConfig({ "*": "allow", image_gen: "deny" }) },
+      })
+
+      expect(tools.map((tool) => tool.id)).not.toContain("image_gen")
+    }),
+  )
+
+  nonImageModelIt.instance("does not expose image_gen for a model without image output capability", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const tools = yield* registry.tools({
+        providerID: ProviderID.make("openai"),
+        modelID: ModelID.make("gpt-5.6-sol"),
+        agent: buildAgent,
+      })
+
+      expect(tools.map((tool) => tool.id)).not.toContain("image_gen")
     }),
   )
 

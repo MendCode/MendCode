@@ -207,6 +207,13 @@ const Spec = Schema.Struct({
       timezone: Schema.optional(Schema.String),
     }),
   ),
+  workflow: Schema.optional(
+    Schema.Struct({
+      revisionID: Schema.optional(Schema.String),
+      definitionID: Schema.optional(Schema.String),
+      overlapKey: Schema.optional(Schema.String),
+    }),
+  ),
   budgetMode: Schema.optional(BudgetMode),
   usageMode: Schema.optional(UsageMode),
   completionCriteria: Schema.optional(Schema.Array(Schema.String)),
@@ -611,6 +618,11 @@ export type CreateDraftInput = {
   ownerSessionID?: SessionID
   templateID?: string
   trigger?: { mode?: TriggerMode; intervalMs?: number; dailyAt?: string; timezone?: string }
+  workflow?: {
+    revisionID?: string
+    definitionID?: string
+    overlapKey?: string
+  }
   budgetMode?: BudgetMode
   completionCriteria?: string[]
   successChecks?: string[]
@@ -774,7 +786,7 @@ export interface Interface {
   readonly listGlobal: () => Effect.Effect<GlobalInfo[]>
   readonly listGlobalPage: (input?: ListGlobalPageInput) => Effect.Effect<GlobalPage>
   readonly due: (input?: DueInput) => Effect.Effect<Info[]>
-  readonly get: (id: LoopID) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
+  readonly get: (id: LoopID, now?: number) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
   readonly snapshot: (id: LoopID, limit?: number) => Effect.Effect<Snapshot, InstanceType<typeof NotFoundError>>
   readonly events: (id: LoopID, limit?: number) => Effect.Effect<JournalEvent[]>
   readonly createDraft: (input: CreateDraftInput) => Effect.Effect<Info>
@@ -887,6 +899,20 @@ function normalizeTrigger(input: CreateDraftInput["trigger"]): Spec["trigger"] {
     }
   }
   return { mode, intervalMs: input.intervalMs }
+}
+
+function normalizeWorkflowReference(input: CreateDraftInput["workflow"]): Spec["workflow"] {
+  if (!input) return undefined
+  const revisionID = input.revisionID?.trim() || undefined
+  const definitionID = input.definitionID?.trim() || undefined
+  if (revisionID === undefined && definitionID === undefined) throw new Error("workflow reference requires revisionID or definitionID")
+  if (revisionID !== undefined && definitionID !== undefined) throw new Error("workflow reference cannot include both revisionID and definitionID")
+  const overlapKey = input.overlapKey?.trim() || undefined
+  return {
+    ...(revisionID === undefined ? {} : { revisionID }),
+    ...(definitionID === undefined ? {} : { definitionID }),
+    ...(overlapKey === undefined ? {} : { overlapKey }),
+  }
 }
 
 function zonedDateParts(timestamp: number, timezone: string): DailyDateParts {
@@ -1019,6 +1045,7 @@ function runLeaseStale(input: { run: RunRow; policy: Policy; now: number }) {
 const maxFailureRetries = 3
 const minFailureBackoffMs = 30_000
 const maxFailureBackoffMs = 10 * 60_000
+const maxSchedulerErrorChars = 1_000
 export const externalSignalRateLimit = { maxEvents: 30, windowMs: 60_000 } as const
 
 function classifyFailure(error: string): FailureClass {
@@ -2201,9 +2228,8 @@ function appendArtifacts(inputs: ArtifactInput[]) {
   return Database.transaction((db) => appendArtifactsInDb(db, inputs))
 }
 
-function reconcileStaleWorkingRun(row: WorkflowRow): WorkflowRow {
+function reconcileStaleWorkingRun(row: WorkflowRow, now = Date.now()): WorkflowRow {
   if (row.state !== "working" && row.state !== "paused") return row
-  const now = Date.now()
   const activeRuns = Database.use((db) =>
     db
       .select()
@@ -2323,7 +2349,7 @@ function reconcileStaleWorkingRun(row: WorkflowRow): WorkflowRow {
   return recovered
 }
 
-function reconcileBlockedScheduledMonitor(row: WorkflowRow): WorkflowRow {
+function reconcileBlockedScheduledMonitor(row: WorkflowRow, now = Date.now()): WorkflowRow {
   if (row.state !== "blocked" || !scheduledMonitor(row.data.spec)) return row
   const latestRun = Database.use((db) =>
     db
@@ -2338,7 +2364,6 @@ function reconcileBlockedScheduledMonitor(row: WorkflowRow): WorkflowRow {
   if (latestRun.data.gateResults?.some((gate) =>
     workflowBlockingGate(gate) && !(gate.id === "cost-budget" && !row.data.spec.costBudget),
   )) return row
-  const now = Date.now()
   const nextWakeup = nextWakeupFor(row.data.spec, now)
   if (!nextWakeup) return row
   const reason = `Scheduled ${row.data.spec.trigger?.mode} monitor kept its cadence after a non-gate blocked checkpoint.`
@@ -2392,6 +2417,9 @@ function repairOverdueScheduledWakeup(id: LoopID, now: number) {
       ...current.data.scheduler,
       lastWakeAttempt: now,
       nextWakeup: now,
+      lastError: undefined,
+      lastResult: "Scheduled wakeup repaired; catch-up run queued.",
+      degraded: true,
     }
     db.update(LoopWorkflowTable)
       .set({
@@ -2420,7 +2448,8 @@ function repairOverdueScheduledWakeup(id: LoopID, now: number) {
         now,
       )
     }
-    return db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, current.id)).get() ?? current
+    const repaired = db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, current.id)).get() ?? current
+    return repaired
   }, { behavior: "immediate" })
 }
 
@@ -2551,9 +2580,9 @@ export const layer = Layer.effect(
         pinned: true,
       }).pipe(Effect.asVoid)
     }
-    const hydrateWorkflow = Effect.fn("LoopWorkflow.hydrate")(function* (row: WorkflowRow) {
+    const hydrateWorkflow = Effect.fn("LoopWorkflow.hydrate")(function* (row: WorkflowRow, now = Date.now()) {
       const normalized = reconcileInvalidCostBudget(row)
-      const reconciled = reconcileBlockedScheduledMonitor(reconcileStaleWorkingRun(reconcileTerminalWorkflow(normalized)))
+      const reconciled = reconcileBlockedScheduledMonitor(reconcileStaleWorkingRun(reconcileTerminalWorkflow(normalized), now), now)
       const info = fromWorkflowRow(reconciled)
       if (reconciled !== row) yield* publishBackgroundForWorkflow(info)
       return info
@@ -2734,14 +2763,16 @@ export const layer = Layer.effect(
         .slice(0, limit)
       return dueItems.map((item) => {
         const repaired = repairOverdueScheduledWakeup(item.id, now)
-        return repaired ? fromWorkflowRow(repaired) : item
-      })
+        if (!repaired || (repaired.state !== "active" && repaired.state !== "sleeping")) return
+        if (typeof repaired.next_wakeup !== "number" || (repaired.next_wakeup > now && repaired.phase !== "catch_up")) return
+        return fromWorkflowRow(repaired)
+      }).filter((item): item is Info => Boolean(item))
     })
 
-    const get = Effect.fn("LoopWorkflow.get")(function* (id: LoopID) {
+    const get = Effect.fn("LoopWorkflow.get")(function* (id: LoopID, now?: number) {
       const row = Database.use((db) => db.select().from(LoopWorkflowTable).where(eq(LoopWorkflowTable.id, id)).get())
       if (!row) return yield* Effect.fail(notFound(id))
-      return yield* hydrateWorkflow(row)
+      return yield* hydrateWorkflow(row, now)
     })
 
     const events = Effect.fn("LoopWorkflow.events")(function* (id: LoopID, limit = 50) {
@@ -2826,6 +2857,7 @@ export const layer = Layer.effect(
       const policy = defaultPolicy(input.policy, input.budgetMode)
       const spec = {
         trigger: normalizeTrigger(input.trigger),
+        workflow: normalizeWorkflowReference(input.workflow),
         budgetMode: input.budgetMode,
         usageMode,
         completionCriteria: input.completionCriteria,
@@ -3017,7 +3049,7 @@ export const layer = Layer.effect(
     }
 
     const activate = Effect.fn("LoopWorkflow.activate")(function* (input: UpdateStateInput) {
-      const current = yield* get(input.id)
+      const current = yield* get(input.id, input.now)
       if (current.state !== "draft") return current
       const ctx = yield* InstanceState.context
       const workspaceID = (current.workspaceID as WorkspaceID | undefined) ?? (yield* InstanceState.workspaceID)
@@ -3075,7 +3107,7 @@ export const layer = Layer.effect(
     const setWorkflowState = Effect.fn("LoopWorkflow.setWorkflowState")(function* (
       input: UpdateStateInput & { state: WorkflowState; phase: string; type: EventType; title: string },
     ) {
-      const current = yield* get(input.id)
+      const current = yield* get(input.id, input.now)
       if (input.state === "paused" && (current.state === "draft" || terminalWorkflowStates.has(current.state))) return current
       if (input.state === "stopped" && (current.state === "completed" || current.state === "failed" || current.state === "stopped")) return current
       const now = input.now ?? Date.now()
@@ -3138,7 +3170,7 @@ export const layer = Layer.effect(
       setWorkflowState({ ...input, state: "paused", phase: "paused", type: "paused", title: "Loop paused" })
 
     const resume = Effect.fn("LoopWorkflow.resume")(function* (input: UpdateStateInput) {
-      const current = yield* get(input.id)
+      const current = yield* get(input.id, input.now)
       if (current.state !== "paused") return current
       const preservedWakeup = typeof current.nextWakeup === "number"
       const pendingSignal = current.spec.trigger?.mode === "external-signal" && preservedWakeup
@@ -3525,7 +3557,7 @@ export const layer = Layer.effect(
     })
 
     const recordReadinessSkip = Effect.fn("LoopWorkflow.recordReadinessSkip")(function* (input: ReadinessSkipInput) {
-      const current = yield* get(input.id)
+      const current = yield* get(input.id, input.now)
       const now = input.now ?? Date.now()
       const pendingExternalSignal = current.spec.trigger?.mode === "external-signal" && typeof current.nextWakeup === "number"
       const nextWakeup = nextWakeupAfterRun(current, input.nextWakeup, now, pendingExternalSignal)
@@ -3585,7 +3617,7 @@ export const layer = Layer.effect(
     })
 
     const recordSchedulerFailure = Effect.fn("LoopWorkflow.recordSchedulerFailure")(function* (input: SchedulerFailureInput) {
-      const current = yield* get(input.id)
+      const current = yield* get(input.id, input.now)
       if (terminalWorkflowStates.has(current.state)) {
         const latest = Database.use((db) =>
           db
@@ -3604,7 +3636,8 @@ export const layer = Layer.effect(
       const nextWakeup = schedulerRetryWakeupFor(current, now)
       const nextState: WorkflowState = nextWakeup ? "sleeping" : "blocked"
       const nextPhase = nextWakeup ? "scheduler_degraded" : "scheduler_blocked"
-      const evaluatorReason = `Loop scheduler degraded: ${input.error}`
+      const error = sanitizeArtifactString(input.error, maxSchedulerErrorChars) ?? "Unknown scheduler error."
+      const evaluatorReason = `Loop scheduler degraded: ${error}`
       const runID = RunID.make()
       const runRow: RunRow = {
         id: runID,
@@ -3654,7 +3687,7 @@ export const layer = Layer.effect(
                 lastRunID: runID,
                 lastRunState: "failed",
                 lastResult: undefined,
-                lastError: input.error,
+                lastError: error,
                 degraded: true,
               }),
               evaluatorReason,
@@ -3670,7 +3703,7 @@ export const layer = Layer.effect(
             sessionID: current.rootSessionID,
             kind: "evidence",
             title: "Loop scheduler failure",
-            summary: input.error,
+            summary: error,
             source: "loop-scheduler",
             status: nextState,
             metadata: { failureClass, nextWakeup: nextWakeup ?? null },
@@ -3685,7 +3718,7 @@ export const layer = Layer.effect(
             level: "error",
             type: "failed",
             title: "Loop scheduler degraded",
-            summary: input.error,
+            summary: error,
             data: { failureClass, nextWakeup: nextWakeup ?? null },
           },
           now,
@@ -3701,7 +3734,8 @@ export const layer = Layer.effect(
       const run = fromRunRow(result.run)
       yield* publishBackgroundForWorkflow(workflow, {
         summary: workflowSummary(workflow.state, workflow.phase),
-        error: input.error,
+        error,
+
       })
       yield* upsertRootThread(workflow, run.id)
       yield* publishRun(run)
@@ -3711,7 +3745,7 @@ export const layer = Layer.effect(
     })
 
     const startRun = Effect.fn("LoopWorkflow.startRun")(function* (input: StartRunInput) {
-      let current = yield* get(input.id)
+      let current = yield* get(input.id, input.now)
       if (terminalWorkflowStates.has(current.state)) return yield* Effect.fail(notFound(current.id))
       if (current.state === "blocked" || current.state === "needs_input") {
         return yield* Effect.fail(new NotFoundError({ message: `Loop "${current.name}" is ${current.state}; resolve the blocking condition before starting another run.` }))
@@ -3842,7 +3876,7 @@ export const layer = Layer.effect(
     })
 
     const completeRun = Effect.fn("LoopWorkflow.completeRun")(function* (input: CompleteRunInput) {
-      const current = yield* get(input.id)
+      const current = yield* get(input.id, input.now)
       const ctx = yield* InstanceState.context
       const usageMode = current.spec.usageMode ?? (yield* Effect.promise(() => readBudgetUsageMode(ctx.directory, "api-usage")))
       if (current.state === "completed" || current.state === "stopped" || current.state === "failed") {
@@ -4074,7 +4108,7 @@ export const layer = Layer.effect(
     })
 
     const failRun = Effect.fn("LoopWorkflow.failRun")(function* (input: FailRunInput) {
-      const current = yield* get(input.id)
+      const current = yield* get(input.id, input.now)
       if (current.state === "completed" || current.state === "stopped" || current.state === "failed") {
         const row = reconcileRunAfterTerminalWorkflow({
           workflow: current,
@@ -4204,7 +4238,7 @@ export const layer = Layer.effect(
     })
 
     const runOnce = Effect.fn("LoopWorkflow.runOnce")(function* (input: RunOnceInput) {
-      let current = yield* get(input.id)
+      let current = yield* get(input.id, input.now)
       if (terminalWorkflowStates.has(current.state)) return yield* Effect.fail(notFound(current.id))
       if (!current.rootSessionID) current = yield* activate({ id: current.id, reason: "Activated for run once.", now: input.now })
       if (current.state === "working") return yield* Effect.fail(new NotFoundError({ message: `Loop ${current.id} already has an active run.` }))

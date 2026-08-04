@@ -232,6 +232,45 @@ export const Info = Schema.Struct({
   provider: Schema.optional(Schema.Record(Schema.String, ConfigProvider.Info)).annotate({
     description: "Custom provider configurations and model overrides",
   }),
+  image_generation: Schema.optional(
+    Schema.Struct({
+      enabled: Schema.optional(Schema.Boolean).annotate({
+        description: "Expose the image_gen tool independently from the active chat model",
+      }),
+      model: Schema.optional(ConfigModelID).annotate({
+        description: "Image generation model in provider/model format",
+      }),
+      adapter: Schema.optional(
+        Schema.Literals(["auto", "codex-oauth", "openrouter", "openai-compatible"]),
+      ).annotate({
+        description: "Image API adapter. Auto selects only verified provider contracts.",
+      }),
+      base_url: Schema.optional(Schema.String).annotate({
+        description: "Optional Image API base URL for an explicitly configured compatible provider",
+      }),
+      timeout_ms: Schema.optional(PositiveInt).annotate({
+        description: "Image generation request timeout in milliseconds",
+      }),
+      options: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)).annotate({
+        description: "Provider-supported image request parameters such as size, aspect_ratio, quality, or routing",
+      }),
+      caption: Schema.optional(
+        Schema.Struct({
+          enabled: Schema.optional(Schema.Boolean),
+          model: Schema.optional(ConfigModelID).annotate({
+            description: "Vision model in provider/model format used to persist a textual image description",
+          }),
+          required: Schema.optional(Schema.Boolean).annotate({
+            description: "Fail the tool when caption generation fails after the image artifact is saved",
+          }),
+          prompt: Schema.optional(Schema.String),
+          max_chars: Schema.optional(PositiveInt),
+        }),
+      ),
+    }),
+  ).annotate({
+    description: "Provider-independent image generation, caption, persistence, and privacy controls",
+  }),
   mcp: Schema.optional(
     Schema.Record(
       Schema.String,

@@ -149,6 +149,7 @@ export interface Interface {
   readonly makeWorktreeInfo: (name?: string) => Effect.Effect<Info>
   readonly createFromInfo: (info: Info, startCommand?: string) => Effect.Effect<void>
   readonly create: (input?: CreateInput) => Effect.Effect<Info>
+  readonly createReady: (input?: CreateInput) => Effect.Effect<Info>
   readonly remove: (input: RemoveInput) => Effect.Effect<boolean>
   readonly reset: (input: ResetInput) => Effect.Effect<boolean>
 }
@@ -239,7 +240,7 @@ export const layer: Layer.Layer<
       yield* project.addSandbox(ctx.project.id, info.directory).pipe(Effect.catch(() => Effect.void))
     })
 
-    const boot = Effect.fnUntraced(function* (info: Info, startCommand?: string) {
+    const boot = Effect.fnUntraced(function* (info: Info, startCommand?: string, waitForStartCommand = false) {
       const ctx = yield* InstanceState.context
       const workspaceID = yield* InstanceState.workspaceID
       const projectID = ctx.project.id
@@ -286,7 +287,13 @@ export const layer: Layer.Layer<
         },
       })
 
-      yield* runStartScripts(info.directory, { projectID, extra })
+      const scripts = runStartScripts(info.directory, { projectID, extra })
+      if (waitForStartCommand) {
+        yield* scripts
+        return true
+      }
+      yield* scripts.pipe(Effect.forkIn(scope))
+      return true
     })
 
     const createFromInfo = Effect.fn("Worktree.createFromInfo")(function* (info: Info, startCommand?: string) {
@@ -300,6 +307,14 @@ export const layer: Layer.Layer<
     const create = Effect.fn("Worktree.create")(function* (input?: CreateInput) {
       const info = yield* makeWorktreeInfo(input?.name)
       yield* createFromInfo(info, input?.startCommand)
+      return info
+    })
+
+    const createReady = Effect.fn("Worktree.createReady")(function* (input?: CreateInput) {
+      const info = yield* makeWorktreeInfo(input?.name)
+      yield* setup(info)
+      const booted = yield* boot(info, input?.startCommand, true)
+      if (!booted) throw new CreateFailedError({ message: `Failed to bootstrap worktree ${info.directory}` })
       return info
     })
 
@@ -579,7 +594,7 @@ export const layer: Layer.Layer<
       return true
     })
 
-    return Service.of({ makeWorktreeInfo, createFromInfo, create, remove, reset })
+    return Service.of({ makeWorktreeInfo, createFromInfo, create, createReady, remove, reset })
   }),
 )
 

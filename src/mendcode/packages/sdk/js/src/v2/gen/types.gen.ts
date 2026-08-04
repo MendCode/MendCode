@@ -23,6 +23,9 @@ export type Event =
   | EventSessionIdle
   | EventFileWatcherUpdated
   | EventSkillUpdated1
+  | EventBackgroundTaskUpdated
+  | EventBackgroundTaskNotification
+  | EventBackgroundTaskOwnerWake
   | EventPlanReviewAsked
   | EventPlanReviewReplied
   | EventQuestionAsked
@@ -361,10 +364,43 @@ export type SessionStatus =
       type: "busy"
       kind?: "mflow-wait" | "memory-extract" | "subagent-wait" | "compaction"
       message?: string
-
       until?: number
       startedAt?: number
     }
+
+export type BackgroundTaskSnapshot = {
+  taskID: string
+  parentSessionID: string
+  rootSessionID: string
+  depth: number
+  generation: number
+  revision: number
+  state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "interrupted"
+  controlIntent: "none" | "pause_after_turn" | "cancel"
+  title: string
+  agent?: string
+  model?: {
+    providerID: string
+    modelID: string
+    variant?: string
+  }
+  result?: {
+    summary?: string
+    error?: string
+    changedFiles: Array<string>
+    truncated?: boolean
+    transcriptSessionID: string
+  }
+  ownerRuntimeID?: string
+  leaseExpiresAt?: number
+  time: {
+    created: number
+    queued: number
+    started?: number
+    updated: number
+    finished?: number
+  }
+}
 
 export type PlanReviewTool = {
   messageID: string
@@ -582,10 +618,18 @@ export type LoopWorkflow = {
   nextWakeup?: number
   spec: {
     trigger?: {
-      mode?: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced"
+      mode?: "manual" | "interval" | "daily" | "adaptive" | "external-signal" | "self-paced"
       intervalMs?: number
+      dailyAt?: string
+      timezone?: string
+    }
+    workflow?: {
+      revisionID?: string
+      definitionID?: string
+      overlapKey?: string
     }
     budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
+    usageMode?: "subscription" | "api-usage"
     completionCriteria?: Array<string>
     successChecks?: Array<string>
     validationChecks?: Array<{
@@ -677,6 +721,15 @@ export type LoopWorkflow = {
       }
     }>
   }
+  scheduler?: {
+    lastWakeAttempt?: number
+    nextWakeup?: number
+    lastError?: string
+    lastRunID?: string
+    lastRunState?: "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+    lastResult?: string
+    degraded?: boolean
+  }
   evaluatorReason?: string
   failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
   time: {
@@ -692,7 +745,7 @@ export type LoopRun = {
   workflowID: string
   rootSessionID?: string
   state: "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
-  trigger: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced" | "resume" | "run-once"
+  trigger: "manual" | "interval" | "daily" | "adaptive" | "external-signal" | "self-paced" | "resume" | "run-once"
   phase: string
   nextWakeup?: number
   evaluatorReason?: string
@@ -1220,6 +1273,8 @@ export type CompactionPart = {
   auto: boolean
   overflow?: boolean
   resume?: boolean
+  discard_tail?: boolean
+  rescue_attempt?: number
   post_prompt?: string
   instructions?: string
   tail_start_id?: string
@@ -1318,6 +1373,9 @@ export type GlobalEvent = {
     | EventSessionIdle
     | EventFileWatcherUpdated
     | EventSkillUpdated
+    | EventBackgroundTaskUpdated
+    | EventBackgroundTaskNotification
+    | EventBackgroundTaskOwnerWake
     | EventPlanReviewAsked
     | EventPlanReviewReplied
     | EventQuestionAsked
@@ -1492,31 +1550,7 @@ export type AgentConfig = {
   steps?: number
   maxSteps?: number
   permission?: PermissionConfig
-  [key: string]:
-    | unknown
-    | string
-    | number
-    | {
-        [key: string]: boolean
-      }
-    | boolean
-    | "subagent"
-    | "primary"
-    | "all"
-    | {
-        [key: string]: unknown
-      }
-    | string
-    | "primary"
-    | "secondary"
-    | "accent"
-    | "success"
-    | "warning"
-    | "error"
-    | "info"
-    | number
-    | PermissionConfig
-    | undefined
+  [key: string]: unknown
 }
 
 export type ProviderConfig = {
@@ -1540,7 +1574,7 @@ export type ProviderConfig = {
      * Timeout in milliseconds between streamed SSE chunks for this provider. Default is 60000 (1 minute). Set to false to disable chunk timeout.
      */
     chunkTimeout?: number | false
-    [key: string]: unknown | string | boolean | number | false | number | false | undefined
+    [key: string]: unknown
   }
   compaction?: {
     token_limit?: number
@@ -1604,7 +1638,7 @@ export type ProviderConfig = {
       variants?: {
         [key: string]: {
           disabled?: boolean
-          [key: string]: unknown | boolean | undefined
+          [key: string]: unknown
         }
       }
     }
@@ -1695,7 +1729,7 @@ export type Config = {
   share?: "manual" | "auto" | "disabled"
   autoshare?: boolean
   /**
-   * Automatically update to the latest version. Set to true to auto-update, false to disable, or 'notify' to show update notifications
+   * Update notifications are shown by default. Set to true to silently auto-update patch releases, false to disable updates, or 'notify' to always show notifications
    */
   autoupdate?: boolean | "notify"
   disabled_providers?: Array<string>
@@ -1704,6 +1738,7 @@ export type Config = {
   small_model?: string
   subagent_model?: string
   subagent_variant?: string
+  subagent_owner_wake?: boolean
   default_agent?: string
   plan_exit_agent?: string
   username?: string
@@ -1724,6 +1759,23 @@ export type Config = {
   }
   provider?: {
     [key: string]: ProviderConfig
+  }
+  image_generation?: {
+    enabled?: boolean
+    model?: string
+    adapter?: "auto" | "codex-oauth" | "openrouter" | "openai-compatible"
+    base_url?: string
+    timeout_ms?: number
+    options?: {
+      [key: string]: unknown
+    }
+    caption?: {
+      enabled?: boolean
+      model?: string
+      required?: boolean
+      prompt?: string
+      max_chars?: number
+    }
   }
   mcp?: {
     [key: string]:
@@ -1805,6 +1857,9 @@ export type Config = {
     openTelemetry?: boolean
     primary_tools?: Array<string>
     continue_loop_on_deny?: boolean
+    subagent_depth?: number
+    subagent_max_children?: number
+    subagent_max_descendants?: number
     mcp_timeout?: number
   }
 }
@@ -2465,10 +2520,18 @@ export type LoopWorkflow1 = {
   nextWakeup?: number
   spec: {
     trigger?: {
-      mode?: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced"
+      mode?: "manual" | "interval" | "daily" | "adaptive" | "external-signal" | "self-paced"
       intervalMs?: number
+      dailyAt?: string
+      timezone?: string
+    }
+    workflow?: {
+      revisionID?: string
+      definitionID?: string
+      overlapKey?: string
     }
     budgetMode?: "fixed" | "max-goal" | "unbounded-monitor"
+    usageMode?: "subscription" | "api-usage"
     completionCriteria?: Array<string>
     successChecks?: Array<string>
     validationChecks?: Array<{
@@ -2560,6 +2623,15 @@ export type LoopWorkflow1 = {
       }
     }>
   }
+  scheduler?: {
+    lastWakeAttempt?: number
+    nextWakeup?: number
+    lastError?: string
+    lastRunID?: string
+    lastRunState?: "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+    lastResult?: string
+    degraded?: boolean
+  }
   evaluatorReason?: string
   failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
   time: {
@@ -2575,7 +2647,7 @@ export type LoopRun1 = {
   workflowID: string
   rootSessionID?: string
   state: "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
-  trigger: "manual" | "interval" | "adaptive" | "external-signal" | "self-paced" | "resume" | "run-once"
+  trigger: "manual" | "interval" | "daily" | "adaptive" | "external-signal" | "self-paced" | "resume" | "run-once"
   phase: string
   nextWakeup?: number
   evaluatorReason?: string
@@ -2732,6 +2804,7 @@ export type SyncEventMessageRemoved = {
   data: {
     sessionID: string
     messageID: string
+    reason?: "revert"
   }
 }
 
@@ -3405,6 +3478,42 @@ export type EventSkillUpdated = {
   }
 }
 
+export type EventBackgroundTaskUpdated = {
+  id: string
+  type: "background_task.updated"
+  properties: {
+    snapshot: BackgroundTaskSnapshot
+  }
+}
+
+export type EventBackgroundTaskNotification = {
+  id: string
+  type: "background_task.notification"
+  properties: {
+    eventID: string
+    taskID: string
+    parentSessionID: string
+    generation: number
+    revision: number
+    state: "queued" | "running" | "needs_input" | "paused" | "completed" | "failed" | "cancelled" | "interrupted"
+    title: string
+    summary?: string
+    error?: string
+    background?: boolean
+  }
+}
+
+export type EventBackgroundTaskOwnerWake = {
+  id: string
+  type: "background_task.owner_wake"
+  properties: {
+    wakeID: string
+    parentSessionID: string
+    taskIDs: Array<string>
+    taskTitles: Array<string>
+  }
+}
+
 export type EventPlanReviewAsked = {
   id: string
   type: "plan_review.asked"
@@ -3679,6 +3788,7 @@ export type EventMessageRemoved = {
   properties: {
     sessionID: string
     messageID: string
+    reason?: "revert"
   }
 }
 
@@ -4520,6 +4630,11 @@ export type GlobalDiagnosticsMemoryResponses = {
     external: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     arrayBuffers: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     uptimeSeconds: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    sharedServer?: {
+      runtimeID: string
+      stateOwner: boolean
+      activeClientLeases: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
   }
 }
 
@@ -7073,6 +7188,7 @@ export type SessionMessagesData = {
     before?: string
     after?: string
     view?: "full" | "tui" | "tui-all"
+    partsLimit?: string
   }
   url: "/session/{sessionID}/message"
 }
@@ -7097,6 +7213,8 @@ export type SessionMessagesResponses = {
   200: Array<{
     info: Message
     parts: Array<Part>
+    partsMore?: boolean
+    partsCursor?: string
   }>
 }
 
@@ -7199,6 +7317,9 @@ export type SessionMessageData = {
   query?: {
     directory?: string
     workspace?: string
+    view?: "full" | "tui" | "tui-all"
+    partsLimit?: string
+    partsAfter?: string
   }
   url: "/session/{sessionID}/message/{messageID}"
 }
@@ -7223,6 +7344,8 @@ export type SessionMessageResponses = {
   200: {
     info: Message
     parts: Array<Part>
+    partsMore?: boolean
+    partsCursor?: string
   }
 }
 
@@ -7615,6 +7738,8 @@ export type SessionShellResponses = {
   200: {
     info: Message
     parts: Array<Part>
+    partsMore?: boolean
+    partsCursor?: string
   }
 }
 
@@ -8544,6 +8669,5292 @@ export type ExperimentalWorkspaceWarpResponses = {
 
 export type ExperimentalWorkspaceWarpResponse =
   ExperimentalWorkspaceWarpResponses[keyof ExperimentalWorkspaceWarpResponses]
+
+export type WorkflowPreviewData = {
+  body?: {
+    plan: {
+      formatVersion: number
+      name: string
+      description: string
+      objective: string
+      phases: Array<{
+        id: string
+        ordinal: number
+        name: string
+        description?: string
+        barrier:
+          | {
+              kind: "all"
+            }
+          | {
+              kind: "quorum"
+              quorum: number
+            }
+          | {
+              kind: "best-effort"
+            }
+          | {
+              kind: "condition"
+              expression: string
+            }
+        taskIDs: Array<string>
+      }>
+      tasks: Array<{
+        id: string
+        phaseID: string
+        name: string
+        kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+        prompt: string
+        dependsOn: Array<string>
+        inputs?: Array<{
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }>
+        output:
+          | {
+              kind: "text"
+              maxChars?: number
+            }
+          | {
+              kind: "json"
+              schema?: {
+                [key: string]: unknown
+              }
+            }
+          | {
+              kind: "artifact"
+              artifactKind?: string
+              schema?: {
+                [key: string]: unknown
+              }
+            }
+          | {
+              kind: "none"
+            }
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        agentProfile?: string
+        allowedTools?: Array<string>
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        retry?: {
+          maxAttempts?: number
+          backoffMs?: number
+          retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+        }
+        budget?: {
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+        }
+        map?: {
+          source: {
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }
+          maxItems: number
+          taskTemplate: {
+            kind: "agent" | "synthesize" | "verify" | "validate"
+            prompt: string
+            output:
+              | {
+                  kind: "text"
+                  maxChars?: number
+                }
+              | {
+                  kind: "json"
+                  schema?: {
+                    [key: string]: unknown
+                  }
+                }
+              | {
+                  kind: "artifact"
+                  artifactKind?: string
+                  schema?: {
+                    [key: string]: unknown
+                  }
+                }
+              | {
+                  kind: "none"
+                }
+            model?: {
+              providerID: string
+              modelID: string
+              variant?: string
+              reasoning?: string
+            }
+            agentProfile?: string
+            allowedTools?: Array<string>
+            workspace?: {
+              mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+            }
+            permissions?: {
+              mode: "report-only" | "normal" | "custom"
+              allowedTools?: Array<string>
+              approvalRequiredFor?: Array<string>
+              approvedActions?: Array<string>
+              allowEdits?: boolean
+              allowMutatingCommands?: boolean
+              allowExternalSend?: boolean
+            }
+            retry?: {
+              maxAttempts?: number
+              backoffMs?: number
+              retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+            }
+            budget?: {
+              maxTurns?: number
+              maxRuntimeMs?: number
+              maxTokens?: number
+              maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              maxChildren?: number
+              maxDepth?: number
+            }
+          }
+        }
+      }>
+      finalTaskID: string
+      completionCriteria: Array<string>
+      requiredGates: Array<string>
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      budget?: {
+        maxConcurrency?: number
+        maxFanOut?: number
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+        retention?: {
+          maxArtifacts?: number
+          maxAgeMs?: number
+          maxBytes?: number
+        }
+      }
+      overlapPolicy?: "skip" | "queue" | "replace"
+    }
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/preview"
+}
+
+export type WorkflowPreviewErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowPreviewError = WorkflowPreviewErrors[keyof WorkflowPreviewErrors]
+
+export type WorkflowPreviewResponses = {
+  /**
+   * Validated workflow plan preview
+   */
+  200: {
+    phaseCount: number
+    taskCount: number
+    taskUpperBound: number
+    maxConcurrency: number
+    maxFanOut: number
+    sideEffectClasses: Array<string>
+    estimatedTokenLimit?: number
+    estimatedCostLimit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type WorkflowPreviewResponse = WorkflowPreviewResponses[keyof WorkflowPreviewResponses]
+
+export type WorkflowSaveData = {
+  body?: {
+    plan: {
+      formatVersion: number
+      name: string
+      description: string
+      objective: string
+      phases: Array<{
+        id: string
+        ordinal: number
+        name: string
+        description?: string
+        barrier:
+          | {
+              kind: "all"
+            }
+          | {
+              kind: "quorum"
+              quorum: number
+            }
+          | {
+              kind: "best-effort"
+            }
+          | {
+              kind: "condition"
+              expression: string
+            }
+        taskIDs: Array<string>
+      }>
+      tasks: Array<{
+        id: string
+        phaseID: string
+        name: string
+        kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+        prompt: string
+        dependsOn: Array<string>
+        inputs?: Array<{
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }>
+        output:
+          | {
+              kind: "text"
+              maxChars?: number
+            }
+          | {
+              kind: "json"
+              schema?: {
+                [key: string]: unknown
+              }
+            }
+          | {
+              kind: "artifact"
+              artifactKind?: string
+              schema?: {
+                [key: string]: unknown
+              }
+            }
+          | {
+              kind: "none"
+            }
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        agentProfile?: string
+        allowedTools?: Array<string>
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        retry?: {
+          maxAttempts?: number
+          backoffMs?: number
+          retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+        }
+        budget?: {
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+        }
+        map?: {
+          source: {
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }
+          maxItems: number
+          taskTemplate: {
+            kind: "agent" | "synthesize" | "verify" | "validate"
+            prompt: string
+            output:
+              | {
+                  kind: "text"
+                  maxChars?: number
+                }
+              | {
+                  kind: "json"
+                  schema?: {
+                    [key: string]: unknown
+                  }
+                }
+              | {
+                  kind: "artifact"
+                  artifactKind?: string
+                  schema?: {
+                    [key: string]: unknown
+                  }
+                }
+              | {
+                  kind: "none"
+                }
+            model?: {
+              providerID: string
+              modelID: string
+              variant?: string
+              reasoning?: string
+            }
+            agentProfile?: string
+            allowedTools?: Array<string>
+            workspace?: {
+              mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+            }
+            permissions?: {
+              mode: "report-only" | "normal" | "custom"
+              allowedTools?: Array<string>
+              approvalRequiredFor?: Array<string>
+              approvedActions?: Array<string>
+              allowEdits?: boolean
+              allowMutatingCommands?: boolean
+              allowExternalSend?: boolean
+            }
+            retry?: {
+              maxAttempts?: number
+              backoffMs?: number
+              retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+            }
+            budget?: {
+              maxTurns?: number
+              maxRuntimeMs?: number
+              maxTokens?: number
+              maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              maxChildren?: number
+              maxDepth?: number
+            }
+          }
+        }
+      }>
+      finalTaskID: string
+      completionCriteria: Array<string>
+      requiredGates: Array<string>
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      budget?: {
+        maxConcurrency?: number
+        maxFanOut?: number
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+        retention?: {
+          maxArtifacts?: number
+          maxAgeMs?: number
+          maxBytes?: number
+        }
+      }
+      overlapPolicy?: "skip" | "queue" | "replace"
+    }
+    definitionID?: string
+    name?: string
+    description?: string
+    source?: "session-generated" | "saved" | "template" | "package" | "manual"
+    ownerSessionID?: string
+    saved?: boolean
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/save"
+}
+
+export type WorkflowSaveErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowSaveError = WorkflowSaveErrors[keyof WorkflowSaveErrors]
+
+export type WorkflowSaveResponses = {
+  /**
+   * Saved immutable workflow revision
+   */
+  200: {
+    definitionID: string
+    revisionID: string
+    revision: number
+    plan: {
+      formatVersion: number
+      name: string
+      description: string
+      objective: string
+      phases: Array<{
+        id: string
+        ordinal: number
+        name: string
+        description?: string
+        barrier:
+          | {
+              kind: "all"
+            }
+          | {
+              kind: "quorum"
+              quorum: number
+            }
+          | {
+              kind: "best-effort"
+            }
+          | {
+              kind: "condition"
+              expression: string
+            }
+        taskIDs: Array<string>
+      }>
+      tasks: Array<{
+        id: string
+        phaseID: string
+        name: string
+        kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+        prompt: string
+        dependsOn: Array<string>
+        inputs?: Array<{
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }>
+        output:
+          | {
+              kind: "text"
+              maxChars?: number
+            }
+          | {
+              kind: "json"
+              schema?: {
+                [key: string]: unknown
+              }
+            }
+          | {
+              kind: "artifact"
+              artifactKind?: string
+              schema?: {
+                [key: string]: unknown
+              }
+            }
+          | {
+              kind: "none"
+            }
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        agentProfile?: string
+        allowedTools?: Array<string>
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        retry?: {
+          maxAttempts?: number
+          backoffMs?: number
+          retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+        }
+        budget?: {
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+        }
+        map?: {
+          source: {
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }
+          maxItems: number
+          taskTemplate: {
+            kind: "agent" | "synthesize" | "verify" | "validate"
+            prompt: string
+            output:
+              | {
+                  kind: "text"
+                  maxChars?: number
+                }
+              | {
+                  kind: "json"
+                  schema?: {
+                    [key: string]: unknown
+                  }
+                }
+              | {
+                  kind: "artifact"
+                  artifactKind?: string
+                  schema?: {
+                    [key: string]: unknown
+                  }
+                }
+              | {
+                  kind: "none"
+                }
+            model?: {
+              providerID: string
+              modelID: string
+              variant?: string
+              reasoning?: string
+            }
+            agentProfile?: string
+            allowedTools?: Array<string>
+            workspace?: {
+              mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+            }
+            permissions?: {
+              mode: "report-only" | "normal" | "custom"
+              allowedTools?: Array<string>
+              approvalRequiredFor?: Array<string>
+              approvedActions?: Array<string>
+              allowEdits?: boolean
+              allowMutatingCommands?: boolean
+              allowExternalSend?: boolean
+            }
+            retry?: {
+              maxAttempts?: number
+              backoffMs?: number
+              retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+            }
+            budget?: {
+              maxTurns?: number
+              maxRuntimeMs?: number
+              maxTokens?: number
+              maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              maxChildren?: number
+              maxDepth?: number
+            }
+          }
+        }
+      }>
+      finalTaskID: string
+      completionCriteria: Array<string>
+      requiredGates: Array<string>
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      budget?: {
+        maxConcurrency?: number
+        maxFanOut?: number
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+        retention?: {
+          maxArtifacts?: number
+          maxAgeMs?: number
+          maxBytes?: number
+        }
+      }
+      overlapPolicy?: "skip" | "queue" | "replace"
+    }
+    preview: {
+      phaseCount: number
+      taskCount: number
+      taskUpperBound: number
+      maxConcurrency: number
+      maxFanOut: number
+      sideEffectClasses: Array<string>
+      estimatedTokenLimit?: number
+      estimatedCostLimit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type WorkflowSaveResponse = WorkflowSaveResponses[keyof WorkflowSaveResponses]
+
+export type WorkflowStartData = {
+  body?: {
+    plan?: {
+      formatVersion: number
+      name: string
+      description: string
+      objective: string
+      phases: Array<{
+        id: string
+        ordinal: number
+        name: string
+        description?: string
+        barrier:
+          | {
+              kind: "all"
+            }
+          | {
+              kind: "quorum"
+              quorum: number
+            }
+          | {
+              kind: "best-effort"
+            }
+          | {
+              kind: "condition"
+              expression: string
+            }
+        taskIDs: Array<string>
+      }>
+      tasks: Array<{
+        id: string
+        phaseID: string
+        name: string
+        kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+        prompt: string
+        dependsOn: Array<string>
+        inputs?: Array<{
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }>
+        output:
+          | {
+              kind: "text"
+              maxChars?: number
+            }
+          | {
+              kind: "json"
+              schema?: {
+                [key: string]: unknown
+              }
+            }
+          | {
+              kind: "artifact"
+              artifactKind?: string
+              schema?: {
+                [key: string]: unknown
+              }
+            }
+          | {
+              kind: "none"
+            }
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        agentProfile?: string
+        allowedTools?: Array<string>
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        retry?: {
+          maxAttempts?: number
+          backoffMs?: number
+          retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+        }
+        budget?: {
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+        }
+        map?: {
+          source: {
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }
+          maxItems: number
+          taskTemplate: {
+            kind: "agent" | "synthesize" | "verify" | "validate"
+            prompt: string
+            output:
+              | {
+                  kind: "text"
+                  maxChars?: number
+                }
+              | {
+                  kind: "json"
+                  schema?: {
+                    [key: string]: unknown
+                  }
+                }
+              | {
+                  kind: "artifact"
+                  artifactKind?: string
+                  schema?: {
+                    [key: string]: unknown
+                  }
+                }
+              | {
+                  kind: "none"
+                }
+            model?: {
+              providerID: string
+              modelID: string
+              variant?: string
+              reasoning?: string
+            }
+            agentProfile?: string
+            allowedTools?: Array<string>
+            workspace?: {
+              mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+            }
+            permissions?: {
+              mode: "report-only" | "normal" | "custom"
+              allowedTools?: Array<string>
+              approvalRequiredFor?: Array<string>
+              approvedActions?: Array<string>
+              allowEdits?: boolean
+              allowMutatingCommands?: boolean
+              allowExternalSend?: boolean
+            }
+            retry?: {
+              maxAttempts?: number
+              backoffMs?: number
+              retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+            }
+            budget?: {
+              maxTurns?: number
+              maxRuntimeMs?: number
+              maxTokens?: number
+              maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              maxChildren?: number
+              maxDepth?: number
+            }
+          }
+        }
+      }>
+      finalTaskID: string
+      completionCriteria: Array<string>
+      requiredGates: Array<string>
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      budget?: {
+        maxConcurrency?: number
+        maxFanOut?: number
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+        retention?: {
+          maxArtifacts?: number
+          maxAgeMs?: number
+          maxBytes?: number
+        }
+      }
+      overlapPolicy?: "skip" | "queue" | "replace"
+    }
+    revisionID?: string
+    definitionID?: string
+    name?: string
+    description?: string
+    source?: "session-generated" | "saved" | "template" | "package" | "manual"
+    originSessionID?: string
+    loopID?: string
+    loopRunID?: string
+    overlapKey?: string
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/start"
+}
+
+export type WorkflowStartErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowStartError = WorkflowStartErrors[keyof WorkflowStartErrors]
+
+export type WorkflowStartResponses = {
+  /**
+   * Started workflow snapshot
+   */
+  200: {
+    definition: {
+      id: string
+      projectID: string
+      name: string
+      description: string
+      source: "session-generated" | "saved" | "template" | "package" | "manual"
+      ownerSessionID?: string
+      currentRevision?: number
+      saved: boolean
+      createdAt: number
+      updatedAt: number
+    }
+    revision: {
+      id: string
+      definitionID: string
+      revision: number
+      plan: {
+        formatVersion: number
+        name: string
+        description: string
+        objective: string
+        phases: Array<{
+          id: string
+          ordinal: number
+          name: string
+          description?: string
+          barrier:
+            | {
+                kind: "all"
+              }
+            | {
+                kind: "quorum"
+                quorum: number
+              }
+            | {
+                kind: "best-effort"
+              }
+            | {
+                kind: "condition"
+                expression: string
+              }
+          taskIDs: Array<string>
+        }>
+        tasks: Array<{
+          id: string
+          phaseID: string
+          name: string
+          kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+          prompt: string
+          dependsOn: Array<string>
+          inputs?: Array<{
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }>
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+          map?: {
+            source: {
+              taskID: string
+              path?: string
+              projection?: string
+              required?: boolean
+            }
+            maxItems: number
+            taskTemplate: {
+              kind: "agent" | "synthesize" | "verify" | "validate"
+              prompt: string
+              output:
+                | {
+                    kind: "text"
+                    maxChars?: number
+                  }
+                | {
+                    kind: "json"
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "artifact"
+                    artifactKind?: string
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "none"
+                  }
+              model?: {
+                providerID: string
+                modelID: string
+                variant?: string
+                reasoning?: string
+              }
+              agentProfile?: string
+              allowedTools?: Array<string>
+              workspace?: {
+                mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+              }
+              permissions?: {
+                mode: "report-only" | "normal" | "custom"
+                allowedTools?: Array<string>
+                approvalRequiredFor?: Array<string>
+                approvedActions?: Array<string>
+                allowEdits?: boolean
+                allowMutatingCommands?: boolean
+                allowExternalSend?: boolean
+              }
+              retry?: {
+                maxAttempts?: number
+                backoffMs?: number
+                retryOn?: Array<
+                  "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+                >
+              }
+              budget?: {
+                maxTurns?: number
+                maxRuntimeMs?: number
+                maxTokens?: number
+                maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                maxChildren?: number
+                maxDepth?: number
+              }
+            }
+          }
+        }>
+        finalTaskID: string
+        completionCriteria: Array<string>
+        requiredGates: Array<string>
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        budget?: {
+          maxConcurrency?: number
+          maxFanOut?: number
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+          retention?: {
+            maxArtifacts?: number
+            maxAgeMs?: number
+            maxBytes?: number
+          }
+        }
+        overlapPolicy?: "skip" | "queue" | "replace"
+      }
+      planHash: string
+      immutable: boolean
+      createdAt: number
+    }
+    run: {
+      id: string
+      definitionID: string
+      revisionID: string
+      revision: number
+      originSessionID?: string
+      rootSessionID?: string
+      loopID?: string
+      loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
+      state:
+        | "planning"
+        | "awaiting_approval"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      currentPhaseID?: string
+      createdAt: number
+      updatedAt: number
+    }
+    preview: {
+      phaseCount: number
+      taskCount: number
+      taskUpperBound: number
+      maxConcurrency: number
+      maxFanOut: number
+      sideEffectClasses: Array<string>
+      estimatedTokenLimit?: number
+      estimatedCostLimit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    phases: Array<{
+      id: string
+      ordinal: number
+      name: string
+      description?: string
+      state:
+        | "pending"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      barrier:
+        | {
+            kind: "all"
+          }
+        | {
+            kind: "quorum"
+            quorum: number
+          }
+        | {
+            kind: "best-effort"
+          }
+        | {
+            kind: "condition"
+            expression: string
+          }
+      counts: {
+        total: number
+        queued: number
+        working: number
+        completed: number
+        failed: number
+        blocked: number
+      }
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    tasks: Array<{
+      id: string
+      phaseID: string
+      name: string
+      kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+      prompt: string
+      dependsOn: Array<string>
+      inputs?: Array<{
+        taskID: string
+        path?: string
+        projection?: string
+        required?: boolean
+      }>
+      output:
+        | {
+            kind: "text"
+            maxChars?: number
+          }
+        | {
+            kind: "json"
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "artifact"
+            artifactKind?: string
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "none"
+          }
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      agentProfile?: string
+      allowedTools?: Array<string>
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      retry?: {
+        maxAttempts?: number
+        backoffMs?: number
+        retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+      }
+      budget?: {
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+      }
+      map?: {
+        source: {
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }
+        maxItems: number
+        taskTemplate: {
+          kind: "agent" | "synthesize" | "verify" | "validate"
+          prompt: string
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+        }
+      }
+      state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+      attempt: number
+      sessionID?: string
+      startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      blocker?: string
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    artifacts: Array<{
+      id: string
+      runID: string
+      taskID?: string
+      kind: string
+      summary: string
+      status: "pending" | "valid" | "invalid"
+      schemaValidated: boolean
+      outputRefs: Array<string>
+      evidence: Array<string>
+      sessionID?: string
+      attempt?: number
+      createdAt: number
+    }>
+    events: Array<{
+      id: string
+      sequence: number
+      level: "debug" | "info" | "warning" | "error" | "decision"
+      type: string
+      title: string
+      summary: string
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      data?: {
+        [key: string]: unknown
+      }
+    }>
+    gates: Array<{
+      id: string
+      phaseID?: string
+      taskID?: string
+      state: "pending" | "pass" | "fail" | "blocked" | "awaiting_approval" | "waived"
+      required: boolean
+      actor?: string
+      reason?: string
+    }>
+    usage?: {
+      inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type WorkflowStartResponse = WorkflowStartResponses[keyof WorkflowStartResponses]
+
+export type WorkflowListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    limit?: number
+  }
+  url: "/workflow"
+}
+
+export type WorkflowListErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+}
+
+export type WorkflowListError = WorkflowListErrors[keyof WorkflowListErrors]
+
+export type WorkflowListResponses = {
+  /**
+   * Workflow run snapshots
+   */
+  200: Array<{
+    definition: {
+      id: string
+      projectID: string
+      name: string
+      description: string
+      source: "session-generated" | "saved" | "template" | "package" | "manual"
+      ownerSessionID?: string
+      currentRevision?: number
+      saved: boolean
+      createdAt: number
+      updatedAt: number
+    }
+    revision: {
+      id: string
+      definitionID: string
+      revision: number
+      plan: {
+        formatVersion: number
+        name: string
+        description: string
+        objective: string
+        phases: Array<{
+          id: string
+          ordinal: number
+          name: string
+          description?: string
+          barrier:
+            | {
+                kind: "all"
+              }
+            | {
+                kind: "quorum"
+                quorum: number
+              }
+            | {
+                kind: "best-effort"
+              }
+            | {
+                kind: "condition"
+                expression: string
+              }
+          taskIDs: Array<string>
+        }>
+        tasks: Array<{
+          id: string
+          phaseID: string
+          name: string
+          kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+          prompt: string
+          dependsOn: Array<string>
+          inputs?: Array<{
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }>
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+          map?: {
+            source: {
+              taskID: string
+              path?: string
+              projection?: string
+              required?: boolean
+            }
+            maxItems: number
+            taskTemplate: {
+              kind: "agent" | "synthesize" | "verify" | "validate"
+              prompt: string
+              output:
+                | {
+                    kind: "text"
+                    maxChars?: number
+                  }
+                | {
+                    kind: "json"
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "artifact"
+                    artifactKind?: string
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "none"
+                  }
+              model?: {
+                providerID: string
+                modelID: string
+                variant?: string
+                reasoning?: string
+              }
+              agentProfile?: string
+              allowedTools?: Array<string>
+              workspace?: {
+                mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+              }
+              permissions?: {
+                mode: "report-only" | "normal" | "custom"
+                allowedTools?: Array<string>
+                approvalRequiredFor?: Array<string>
+                approvedActions?: Array<string>
+                allowEdits?: boolean
+                allowMutatingCommands?: boolean
+                allowExternalSend?: boolean
+              }
+              retry?: {
+                maxAttempts?: number
+                backoffMs?: number
+                retryOn?: Array<
+                  "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+                >
+              }
+              budget?: {
+                maxTurns?: number
+                maxRuntimeMs?: number
+                maxTokens?: number
+                maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                maxChildren?: number
+                maxDepth?: number
+              }
+            }
+          }
+        }>
+        finalTaskID: string
+        completionCriteria: Array<string>
+        requiredGates: Array<string>
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        budget?: {
+          maxConcurrency?: number
+          maxFanOut?: number
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+          retention?: {
+            maxArtifacts?: number
+            maxAgeMs?: number
+            maxBytes?: number
+          }
+        }
+        overlapPolicy?: "skip" | "queue" | "replace"
+      }
+      planHash: string
+      immutable: boolean
+      createdAt: number
+    }
+    run: {
+      id: string
+      definitionID: string
+      revisionID: string
+      revision: number
+      originSessionID?: string
+      rootSessionID?: string
+      loopID?: string
+      loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
+      state:
+        | "planning"
+        | "awaiting_approval"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      currentPhaseID?: string
+      createdAt: number
+      updatedAt: number
+    }
+    preview: {
+      phaseCount: number
+      taskCount: number
+      taskUpperBound: number
+      maxConcurrency: number
+      maxFanOut: number
+      sideEffectClasses: Array<string>
+      estimatedTokenLimit?: number
+      estimatedCostLimit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    phases: Array<{
+      id: string
+      ordinal: number
+      name: string
+      description?: string
+      state:
+        | "pending"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      barrier:
+        | {
+            kind: "all"
+          }
+        | {
+            kind: "quorum"
+            quorum: number
+          }
+        | {
+            kind: "best-effort"
+          }
+        | {
+            kind: "condition"
+            expression: string
+          }
+      counts: {
+        total: number
+        queued: number
+        working: number
+        completed: number
+        failed: number
+        blocked: number
+      }
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    tasks: Array<{
+      id: string
+      phaseID: string
+      name: string
+      kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+      prompt: string
+      dependsOn: Array<string>
+      inputs?: Array<{
+        taskID: string
+        path?: string
+        projection?: string
+        required?: boolean
+      }>
+      output:
+        | {
+            kind: "text"
+            maxChars?: number
+          }
+        | {
+            kind: "json"
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "artifact"
+            artifactKind?: string
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "none"
+          }
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      agentProfile?: string
+      allowedTools?: Array<string>
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      retry?: {
+        maxAttempts?: number
+        backoffMs?: number
+        retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+      }
+      budget?: {
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+      }
+      map?: {
+        source: {
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }
+        maxItems: number
+        taskTemplate: {
+          kind: "agent" | "synthesize" | "verify" | "validate"
+          prompt: string
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+        }
+      }
+      state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+      attempt: number
+      sessionID?: string
+      startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      blocker?: string
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    artifacts: Array<{
+      id: string
+      runID: string
+      taskID?: string
+      kind: string
+      summary: string
+      status: "pending" | "valid" | "invalid"
+      schemaValidated: boolean
+      outputRefs: Array<string>
+      evidence: Array<string>
+      sessionID?: string
+      attempt?: number
+      createdAt: number
+    }>
+    events: Array<{
+      id: string
+      sequence: number
+      level: "debug" | "info" | "warning" | "error" | "decision"
+      type: string
+      title: string
+      summary: string
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      data?: {
+        [key: string]: unknown
+      }
+    }>
+    gates: Array<{
+      id: string
+      phaseID?: string
+      taskID?: string
+      state: "pending" | "pass" | "fail" | "blocked" | "awaiting_approval" | "waived"
+      required: boolean
+      actor?: string
+      reason?: string
+    }>
+    usage?: {
+      inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }>
+}
+
+export type WorkflowListResponse = WorkflowListResponses[keyof WorkflowListResponses]
+
+export type WorkflowDeleteData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/{runID}"
+}
+
+export type WorkflowDeleteErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowDeleteError = WorkflowDeleteErrors[keyof WorkflowDeleteErrors]
+
+export type WorkflowDeleteResponses = {
+  /**
+   * Successfully deleted workflow run
+   */
+  200: boolean
+}
+
+export type WorkflowDeleteResponse = WorkflowDeleteResponses[keyof WorkflowDeleteResponses]
+
+export type WorkflowShowData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/{runID}"
+}
+
+export type WorkflowShowErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowShowError = WorkflowShowErrors[keyof WorkflowShowErrors]
+
+export type WorkflowShowResponses = {
+  /**
+   * Workflow run snapshot
+   */
+  200: {
+    definition: {
+      id: string
+      projectID: string
+      name: string
+      description: string
+      source: "session-generated" | "saved" | "template" | "package" | "manual"
+      ownerSessionID?: string
+      currentRevision?: number
+      saved: boolean
+      createdAt: number
+      updatedAt: number
+    }
+    revision: {
+      id: string
+      definitionID: string
+      revision: number
+      plan: {
+        formatVersion: number
+        name: string
+        description: string
+        objective: string
+        phases: Array<{
+          id: string
+          ordinal: number
+          name: string
+          description?: string
+          barrier:
+            | {
+                kind: "all"
+              }
+            | {
+                kind: "quorum"
+                quorum: number
+              }
+            | {
+                kind: "best-effort"
+              }
+            | {
+                kind: "condition"
+                expression: string
+              }
+          taskIDs: Array<string>
+        }>
+        tasks: Array<{
+          id: string
+          phaseID: string
+          name: string
+          kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+          prompt: string
+          dependsOn: Array<string>
+          inputs?: Array<{
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }>
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+          map?: {
+            source: {
+              taskID: string
+              path?: string
+              projection?: string
+              required?: boolean
+            }
+            maxItems: number
+            taskTemplate: {
+              kind: "agent" | "synthesize" | "verify" | "validate"
+              prompt: string
+              output:
+                | {
+                    kind: "text"
+                    maxChars?: number
+                  }
+                | {
+                    kind: "json"
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "artifact"
+                    artifactKind?: string
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "none"
+                  }
+              model?: {
+                providerID: string
+                modelID: string
+                variant?: string
+                reasoning?: string
+              }
+              agentProfile?: string
+              allowedTools?: Array<string>
+              workspace?: {
+                mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+              }
+              permissions?: {
+                mode: "report-only" | "normal" | "custom"
+                allowedTools?: Array<string>
+                approvalRequiredFor?: Array<string>
+                approvedActions?: Array<string>
+                allowEdits?: boolean
+                allowMutatingCommands?: boolean
+                allowExternalSend?: boolean
+              }
+              retry?: {
+                maxAttempts?: number
+                backoffMs?: number
+                retryOn?: Array<
+                  "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+                >
+              }
+              budget?: {
+                maxTurns?: number
+                maxRuntimeMs?: number
+                maxTokens?: number
+                maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                maxChildren?: number
+                maxDepth?: number
+              }
+            }
+          }
+        }>
+        finalTaskID: string
+        completionCriteria: Array<string>
+        requiredGates: Array<string>
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        budget?: {
+          maxConcurrency?: number
+          maxFanOut?: number
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+          retention?: {
+            maxArtifacts?: number
+            maxAgeMs?: number
+            maxBytes?: number
+          }
+        }
+        overlapPolicy?: "skip" | "queue" | "replace"
+      }
+      planHash: string
+      immutable: boolean
+      createdAt: number
+    }
+    run: {
+      id: string
+      definitionID: string
+      revisionID: string
+      revision: number
+      originSessionID?: string
+      rootSessionID?: string
+      loopID?: string
+      loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
+      state:
+        | "planning"
+        | "awaiting_approval"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      currentPhaseID?: string
+      createdAt: number
+      updatedAt: number
+    }
+    preview: {
+      phaseCount: number
+      taskCount: number
+      taskUpperBound: number
+      maxConcurrency: number
+      maxFanOut: number
+      sideEffectClasses: Array<string>
+      estimatedTokenLimit?: number
+      estimatedCostLimit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    phases: Array<{
+      id: string
+      ordinal: number
+      name: string
+      description?: string
+      state:
+        | "pending"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      barrier:
+        | {
+            kind: "all"
+          }
+        | {
+            kind: "quorum"
+            quorum: number
+          }
+        | {
+            kind: "best-effort"
+          }
+        | {
+            kind: "condition"
+            expression: string
+          }
+      counts: {
+        total: number
+        queued: number
+        working: number
+        completed: number
+        failed: number
+        blocked: number
+      }
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    tasks: Array<{
+      id: string
+      phaseID: string
+      name: string
+      kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+      prompt: string
+      dependsOn: Array<string>
+      inputs?: Array<{
+        taskID: string
+        path?: string
+        projection?: string
+        required?: boolean
+      }>
+      output:
+        | {
+            kind: "text"
+            maxChars?: number
+          }
+        | {
+            kind: "json"
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "artifact"
+            artifactKind?: string
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "none"
+          }
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      agentProfile?: string
+      allowedTools?: Array<string>
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      retry?: {
+        maxAttempts?: number
+        backoffMs?: number
+        retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+      }
+      budget?: {
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+      }
+      map?: {
+        source: {
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }
+        maxItems: number
+        taskTemplate: {
+          kind: "agent" | "synthesize" | "verify" | "validate"
+          prompt: string
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+        }
+      }
+      state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+      attempt: number
+      sessionID?: string
+      startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      blocker?: string
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    artifacts: Array<{
+      id: string
+      runID: string
+      taskID?: string
+      kind: string
+      summary: string
+      status: "pending" | "valid" | "invalid"
+      schemaValidated: boolean
+      outputRefs: Array<string>
+      evidence: Array<string>
+      sessionID?: string
+      attempt?: number
+      createdAt: number
+    }>
+    events: Array<{
+      id: string
+      sequence: number
+      level: "debug" | "info" | "warning" | "error" | "decision"
+      type: string
+      title: string
+      summary: string
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      data?: {
+        [key: string]: unknown
+      }
+    }>
+    gates: Array<{
+      id: string
+      phaseID?: string
+      taskID?: string
+      state: "pending" | "pass" | "fail" | "blocked" | "awaiting_approval" | "waived"
+      required: boolean
+      actor?: string
+      reason?: string
+    }>
+    usage?: {
+      inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type WorkflowShowResponse = WorkflowShowResponses[keyof WorkflowShowResponses]
+
+export type WorkflowEventsData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    limit?: number
+  }
+  url: "/workflow/{runID}/events"
+}
+
+export type WorkflowEventsErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowEventsError = WorkflowEventsErrors[keyof WorkflowEventsErrors]
+
+export type WorkflowEventsResponses = {
+  /**
+   * Workflow events
+   */
+  200: Array<{
+    id: string
+    sequence: number
+    level: "debug" | "info" | "warning" | "error" | "decision"
+    type: string
+    title: string
+    summary: string
+    createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    data?: {
+      [key: string]: unknown
+    }
+  }>
+}
+
+export type WorkflowEventsResponse = WorkflowEventsResponses[keyof WorkflowEventsResponses]
+
+export type WorkflowArtifactsData = {
+  body?: never
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    limit?: number
+  }
+  url: "/workflow/{runID}/artifacts"
+}
+
+export type WorkflowArtifactsErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowArtifactsError = WorkflowArtifactsErrors[keyof WorkflowArtifactsErrors]
+
+export type WorkflowArtifactsResponses = {
+  /**
+   * Workflow artifacts
+   */
+  200: Array<{
+    id: string
+    runID: string
+    taskID?: string
+    kind: string
+    summary: string
+    status: "pending" | "valid" | "invalid"
+    schemaValidated: boolean
+    outputRefs: Array<string>
+    evidence: Array<string>
+    sessionID?: string
+    attempt?: number
+    createdAt: number
+  }>
+}
+
+export type WorkflowArtifactsResponse = WorkflowArtifactsResponses[keyof WorkflowArtifactsResponses]
+
+export type WorkflowPauseData = {
+  body?: {
+    reason?: string
+  }
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/{runID}/pause"
+}
+
+export type WorkflowPauseErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowPauseError = WorkflowPauseErrors[keyof WorkflowPauseErrors]
+
+export type WorkflowPauseResponses = {
+  /**
+   * Paused workflow snapshot
+   */
+  200: {
+    definition: {
+      id: string
+      projectID: string
+      name: string
+      description: string
+      source: "session-generated" | "saved" | "template" | "package" | "manual"
+      ownerSessionID?: string
+      currentRevision?: number
+      saved: boolean
+      createdAt: number
+      updatedAt: number
+    }
+    revision: {
+      id: string
+      definitionID: string
+      revision: number
+      plan: {
+        formatVersion: number
+        name: string
+        description: string
+        objective: string
+        phases: Array<{
+          id: string
+          ordinal: number
+          name: string
+          description?: string
+          barrier:
+            | {
+                kind: "all"
+              }
+            | {
+                kind: "quorum"
+                quorum: number
+              }
+            | {
+                kind: "best-effort"
+              }
+            | {
+                kind: "condition"
+                expression: string
+              }
+          taskIDs: Array<string>
+        }>
+        tasks: Array<{
+          id: string
+          phaseID: string
+          name: string
+          kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+          prompt: string
+          dependsOn: Array<string>
+          inputs?: Array<{
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }>
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+          map?: {
+            source: {
+              taskID: string
+              path?: string
+              projection?: string
+              required?: boolean
+            }
+            maxItems: number
+            taskTemplate: {
+              kind: "agent" | "synthesize" | "verify" | "validate"
+              prompt: string
+              output:
+                | {
+                    kind: "text"
+                    maxChars?: number
+                  }
+                | {
+                    kind: "json"
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "artifact"
+                    artifactKind?: string
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "none"
+                  }
+              model?: {
+                providerID: string
+                modelID: string
+                variant?: string
+                reasoning?: string
+              }
+              agentProfile?: string
+              allowedTools?: Array<string>
+              workspace?: {
+                mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+              }
+              permissions?: {
+                mode: "report-only" | "normal" | "custom"
+                allowedTools?: Array<string>
+                approvalRequiredFor?: Array<string>
+                approvedActions?: Array<string>
+                allowEdits?: boolean
+                allowMutatingCommands?: boolean
+                allowExternalSend?: boolean
+              }
+              retry?: {
+                maxAttempts?: number
+                backoffMs?: number
+                retryOn?: Array<
+                  "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+                >
+              }
+              budget?: {
+                maxTurns?: number
+                maxRuntimeMs?: number
+                maxTokens?: number
+                maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                maxChildren?: number
+                maxDepth?: number
+              }
+            }
+          }
+        }>
+        finalTaskID: string
+        completionCriteria: Array<string>
+        requiredGates: Array<string>
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        budget?: {
+          maxConcurrency?: number
+          maxFanOut?: number
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+          retention?: {
+            maxArtifacts?: number
+            maxAgeMs?: number
+            maxBytes?: number
+          }
+        }
+        overlapPolicy?: "skip" | "queue" | "replace"
+      }
+      planHash: string
+      immutable: boolean
+      createdAt: number
+    }
+    run: {
+      id: string
+      definitionID: string
+      revisionID: string
+      revision: number
+      originSessionID?: string
+      rootSessionID?: string
+      loopID?: string
+      loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
+      state:
+        | "planning"
+        | "awaiting_approval"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      currentPhaseID?: string
+      createdAt: number
+      updatedAt: number
+    }
+    preview: {
+      phaseCount: number
+      taskCount: number
+      taskUpperBound: number
+      maxConcurrency: number
+      maxFanOut: number
+      sideEffectClasses: Array<string>
+      estimatedTokenLimit?: number
+      estimatedCostLimit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    phases: Array<{
+      id: string
+      ordinal: number
+      name: string
+      description?: string
+      state:
+        | "pending"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      barrier:
+        | {
+            kind: "all"
+          }
+        | {
+            kind: "quorum"
+            quorum: number
+          }
+        | {
+            kind: "best-effort"
+          }
+        | {
+            kind: "condition"
+            expression: string
+          }
+      counts: {
+        total: number
+        queued: number
+        working: number
+        completed: number
+        failed: number
+        blocked: number
+      }
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    tasks: Array<{
+      id: string
+      phaseID: string
+      name: string
+      kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+      prompt: string
+      dependsOn: Array<string>
+      inputs?: Array<{
+        taskID: string
+        path?: string
+        projection?: string
+        required?: boolean
+      }>
+      output:
+        | {
+            kind: "text"
+            maxChars?: number
+          }
+        | {
+            kind: "json"
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "artifact"
+            artifactKind?: string
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "none"
+          }
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      agentProfile?: string
+      allowedTools?: Array<string>
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      retry?: {
+        maxAttempts?: number
+        backoffMs?: number
+        retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+      }
+      budget?: {
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+      }
+      map?: {
+        source: {
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }
+        maxItems: number
+        taskTemplate: {
+          kind: "agent" | "synthesize" | "verify" | "validate"
+          prompt: string
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+        }
+      }
+      state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+      attempt: number
+      sessionID?: string
+      startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      blocker?: string
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    artifacts: Array<{
+      id: string
+      runID: string
+      taskID?: string
+      kind: string
+      summary: string
+      status: "pending" | "valid" | "invalid"
+      schemaValidated: boolean
+      outputRefs: Array<string>
+      evidence: Array<string>
+      sessionID?: string
+      attempt?: number
+      createdAt: number
+    }>
+    events: Array<{
+      id: string
+      sequence: number
+      level: "debug" | "info" | "warning" | "error" | "decision"
+      type: string
+      title: string
+      summary: string
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      data?: {
+        [key: string]: unknown
+      }
+    }>
+    gates: Array<{
+      id: string
+      phaseID?: string
+      taskID?: string
+      state: "pending" | "pass" | "fail" | "blocked" | "awaiting_approval" | "waived"
+      required: boolean
+      actor?: string
+      reason?: string
+    }>
+    usage?: {
+      inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type WorkflowPauseResponse = WorkflowPauseResponses[keyof WorkflowPauseResponses]
+
+export type WorkflowResumeData = {
+  body?: {
+    reason?: string
+  }
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/{runID}/resume"
+}
+
+export type WorkflowResumeErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowResumeError = WorkflowResumeErrors[keyof WorkflowResumeErrors]
+
+export type WorkflowResumeResponses = {
+  /**
+   * Resumed workflow snapshot
+   */
+  200: {
+    definition: {
+      id: string
+      projectID: string
+      name: string
+      description: string
+      source: "session-generated" | "saved" | "template" | "package" | "manual"
+      ownerSessionID?: string
+      currentRevision?: number
+      saved: boolean
+      createdAt: number
+      updatedAt: number
+    }
+    revision: {
+      id: string
+      definitionID: string
+      revision: number
+      plan: {
+        formatVersion: number
+        name: string
+        description: string
+        objective: string
+        phases: Array<{
+          id: string
+          ordinal: number
+          name: string
+          description?: string
+          barrier:
+            | {
+                kind: "all"
+              }
+            | {
+                kind: "quorum"
+                quorum: number
+              }
+            | {
+                kind: "best-effort"
+              }
+            | {
+                kind: "condition"
+                expression: string
+              }
+          taskIDs: Array<string>
+        }>
+        tasks: Array<{
+          id: string
+          phaseID: string
+          name: string
+          kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+          prompt: string
+          dependsOn: Array<string>
+          inputs?: Array<{
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }>
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+          map?: {
+            source: {
+              taskID: string
+              path?: string
+              projection?: string
+              required?: boolean
+            }
+            maxItems: number
+            taskTemplate: {
+              kind: "agent" | "synthesize" | "verify" | "validate"
+              prompt: string
+              output:
+                | {
+                    kind: "text"
+                    maxChars?: number
+                  }
+                | {
+                    kind: "json"
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "artifact"
+                    artifactKind?: string
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "none"
+                  }
+              model?: {
+                providerID: string
+                modelID: string
+                variant?: string
+                reasoning?: string
+              }
+              agentProfile?: string
+              allowedTools?: Array<string>
+              workspace?: {
+                mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+              }
+              permissions?: {
+                mode: "report-only" | "normal" | "custom"
+                allowedTools?: Array<string>
+                approvalRequiredFor?: Array<string>
+                approvedActions?: Array<string>
+                allowEdits?: boolean
+                allowMutatingCommands?: boolean
+                allowExternalSend?: boolean
+              }
+              retry?: {
+                maxAttempts?: number
+                backoffMs?: number
+                retryOn?: Array<
+                  "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+                >
+              }
+              budget?: {
+                maxTurns?: number
+                maxRuntimeMs?: number
+                maxTokens?: number
+                maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                maxChildren?: number
+                maxDepth?: number
+              }
+            }
+          }
+        }>
+        finalTaskID: string
+        completionCriteria: Array<string>
+        requiredGates: Array<string>
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        budget?: {
+          maxConcurrency?: number
+          maxFanOut?: number
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+          retention?: {
+            maxArtifacts?: number
+            maxAgeMs?: number
+            maxBytes?: number
+          }
+        }
+        overlapPolicy?: "skip" | "queue" | "replace"
+      }
+      planHash: string
+      immutable: boolean
+      createdAt: number
+    }
+    run: {
+      id: string
+      definitionID: string
+      revisionID: string
+      revision: number
+      originSessionID?: string
+      rootSessionID?: string
+      loopID?: string
+      loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
+      state:
+        | "planning"
+        | "awaiting_approval"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      currentPhaseID?: string
+      createdAt: number
+      updatedAt: number
+    }
+    preview: {
+      phaseCount: number
+      taskCount: number
+      taskUpperBound: number
+      maxConcurrency: number
+      maxFanOut: number
+      sideEffectClasses: Array<string>
+      estimatedTokenLimit?: number
+      estimatedCostLimit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    phases: Array<{
+      id: string
+      ordinal: number
+      name: string
+      description?: string
+      state:
+        | "pending"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      barrier:
+        | {
+            kind: "all"
+          }
+        | {
+            kind: "quorum"
+            quorum: number
+          }
+        | {
+            kind: "best-effort"
+          }
+        | {
+            kind: "condition"
+            expression: string
+          }
+      counts: {
+        total: number
+        queued: number
+        working: number
+        completed: number
+        failed: number
+        blocked: number
+      }
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    tasks: Array<{
+      id: string
+      phaseID: string
+      name: string
+      kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+      prompt: string
+      dependsOn: Array<string>
+      inputs?: Array<{
+        taskID: string
+        path?: string
+        projection?: string
+        required?: boolean
+      }>
+      output:
+        | {
+            kind: "text"
+            maxChars?: number
+          }
+        | {
+            kind: "json"
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "artifact"
+            artifactKind?: string
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "none"
+          }
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      agentProfile?: string
+      allowedTools?: Array<string>
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      retry?: {
+        maxAttempts?: number
+        backoffMs?: number
+        retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+      }
+      budget?: {
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+      }
+      map?: {
+        source: {
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }
+        maxItems: number
+        taskTemplate: {
+          kind: "agent" | "synthesize" | "verify" | "validate"
+          prompt: string
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+        }
+      }
+      state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+      attempt: number
+      sessionID?: string
+      startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      blocker?: string
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    artifacts: Array<{
+      id: string
+      runID: string
+      taskID?: string
+      kind: string
+      summary: string
+      status: "pending" | "valid" | "invalid"
+      schemaValidated: boolean
+      outputRefs: Array<string>
+      evidence: Array<string>
+      sessionID?: string
+      attempt?: number
+      createdAt: number
+    }>
+    events: Array<{
+      id: string
+      sequence: number
+      level: "debug" | "info" | "warning" | "error" | "decision"
+      type: string
+      title: string
+      summary: string
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      data?: {
+        [key: string]: unknown
+      }
+    }>
+    gates: Array<{
+      id: string
+      phaseID?: string
+      taskID?: string
+      state: "pending" | "pass" | "fail" | "blocked" | "awaiting_approval" | "waived"
+      required: boolean
+      actor?: string
+      reason?: string
+    }>
+    usage?: {
+      inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type WorkflowResumeResponse = WorkflowResumeResponses[keyof WorkflowResumeResponses]
+
+export type WorkflowStopData = {
+  body?: {
+    reason?: string
+  }
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/{runID}/stop"
+}
+
+export type WorkflowStopErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowStopError = WorkflowStopErrors[keyof WorkflowStopErrors]
+
+export type WorkflowStopResponses = {
+  /**
+   * Stopped workflow snapshot
+   */
+  200: {
+    definition: {
+      id: string
+      projectID: string
+      name: string
+      description: string
+      source: "session-generated" | "saved" | "template" | "package" | "manual"
+      ownerSessionID?: string
+      currentRevision?: number
+      saved: boolean
+      createdAt: number
+      updatedAt: number
+    }
+    revision: {
+      id: string
+      definitionID: string
+      revision: number
+      plan: {
+        formatVersion: number
+        name: string
+        description: string
+        objective: string
+        phases: Array<{
+          id: string
+          ordinal: number
+          name: string
+          description?: string
+          barrier:
+            | {
+                kind: "all"
+              }
+            | {
+                kind: "quorum"
+                quorum: number
+              }
+            | {
+                kind: "best-effort"
+              }
+            | {
+                kind: "condition"
+                expression: string
+              }
+          taskIDs: Array<string>
+        }>
+        tasks: Array<{
+          id: string
+          phaseID: string
+          name: string
+          kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+          prompt: string
+          dependsOn: Array<string>
+          inputs?: Array<{
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }>
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+          map?: {
+            source: {
+              taskID: string
+              path?: string
+              projection?: string
+              required?: boolean
+            }
+            maxItems: number
+            taskTemplate: {
+              kind: "agent" | "synthesize" | "verify" | "validate"
+              prompt: string
+              output:
+                | {
+                    kind: "text"
+                    maxChars?: number
+                  }
+                | {
+                    kind: "json"
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "artifact"
+                    artifactKind?: string
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "none"
+                  }
+              model?: {
+                providerID: string
+                modelID: string
+                variant?: string
+                reasoning?: string
+              }
+              agentProfile?: string
+              allowedTools?: Array<string>
+              workspace?: {
+                mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+              }
+              permissions?: {
+                mode: "report-only" | "normal" | "custom"
+                allowedTools?: Array<string>
+                approvalRequiredFor?: Array<string>
+                approvedActions?: Array<string>
+                allowEdits?: boolean
+                allowMutatingCommands?: boolean
+                allowExternalSend?: boolean
+              }
+              retry?: {
+                maxAttempts?: number
+                backoffMs?: number
+                retryOn?: Array<
+                  "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+                >
+              }
+              budget?: {
+                maxTurns?: number
+                maxRuntimeMs?: number
+                maxTokens?: number
+                maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                maxChildren?: number
+                maxDepth?: number
+              }
+            }
+          }
+        }>
+        finalTaskID: string
+        completionCriteria: Array<string>
+        requiredGates: Array<string>
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        budget?: {
+          maxConcurrency?: number
+          maxFanOut?: number
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+          retention?: {
+            maxArtifacts?: number
+            maxAgeMs?: number
+            maxBytes?: number
+          }
+        }
+        overlapPolicy?: "skip" | "queue" | "replace"
+      }
+      planHash: string
+      immutable: boolean
+      createdAt: number
+    }
+    run: {
+      id: string
+      definitionID: string
+      revisionID: string
+      revision: number
+      originSessionID?: string
+      rootSessionID?: string
+      loopID?: string
+      loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
+      state:
+        | "planning"
+        | "awaiting_approval"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      currentPhaseID?: string
+      createdAt: number
+      updatedAt: number
+    }
+    preview: {
+      phaseCount: number
+      taskCount: number
+      taskUpperBound: number
+      maxConcurrency: number
+      maxFanOut: number
+      sideEffectClasses: Array<string>
+      estimatedTokenLimit?: number
+      estimatedCostLimit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    phases: Array<{
+      id: string
+      ordinal: number
+      name: string
+      description?: string
+      state:
+        | "pending"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      barrier:
+        | {
+            kind: "all"
+          }
+        | {
+            kind: "quorum"
+            quorum: number
+          }
+        | {
+            kind: "best-effort"
+          }
+        | {
+            kind: "condition"
+            expression: string
+          }
+      counts: {
+        total: number
+        queued: number
+        working: number
+        completed: number
+        failed: number
+        blocked: number
+      }
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    tasks: Array<{
+      id: string
+      phaseID: string
+      name: string
+      kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+      prompt: string
+      dependsOn: Array<string>
+      inputs?: Array<{
+        taskID: string
+        path?: string
+        projection?: string
+        required?: boolean
+      }>
+      output:
+        | {
+            kind: "text"
+            maxChars?: number
+          }
+        | {
+            kind: "json"
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "artifact"
+            artifactKind?: string
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "none"
+          }
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      agentProfile?: string
+      allowedTools?: Array<string>
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      retry?: {
+        maxAttempts?: number
+        backoffMs?: number
+        retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+      }
+      budget?: {
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+      }
+      map?: {
+        source: {
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }
+        maxItems: number
+        taskTemplate: {
+          kind: "agent" | "synthesize" | "verify" | "validate"
+          prompt: string
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+        }
+      }
+      state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+      attempt: number
+      sessionID?: string
+      startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      blocker?: string
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    artifacts: Array<{
+      id: string
+      runID: string
+      taskID?: string
+      kind: string
+      summary: string
+      status: "pending" | "valid" | "invalid"
+      schemaValidated: boolean
+      outputRefs: Array<string>
+      evidence: Array<string>
+      sessionID?: string
+      attempt?: number
+      createdAt: number
+    }>
+    events: Array<{
+      id: string
+      sequence: number
+      level: "debug" | "info" | "warning" | "error" | "decision"
+      type: string
+      title: string
+      summary: string
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      data?: {
+        [key: string]: unknown
+      }
+    }>
+    gates: Array<{
+      id: string
+      phaseID?: string
+      taskID?: string
+      state: "pending" | "pass" | "fail" | "blocked" | "awaiting_approval" | "waived"
+      required: boolean
+      actor?: string
+      reason?: string
+    }>
+    usage?: {
+      inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type WorkflowStopResponse = WorkflowStopResponses[keyof WorkflowStopResponses]
+
+export type WorkflowRetryTaskData = {
+  body?: {
+    taskID: string
+    reason?: string
+  }
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/{runID}/retry-task"
+}
+
+export type WorkflowRetryTaskErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowRetryTaskError = WorkflowRetryTaskErrors[keyof WorkflowRetryTaskErrors]
+
+export type WorkflowRetryTaskResponses = {
+  /**
+   * Workflow snapshot with task retry queued
+   */
+  200: {
+    definition: {
+      id: string
+      projectID: string
+      name: string
+      description: string
+      source: "session-generated" | "saved" | "template" | "package" | "manual"
+      ownerSessionID?: string
+      currentRevision?: number
+      saved: boolean
+      createdAt: number
+      updatedAt: number
+    }
+    revision: {
+      id: string
+      definitionID: string
+      revision: number
+      plan: {
+        formatVersion: number
+        name: string
+        description: string
+        objective: string
+        phases: Array<{
+          id: string
+          ordinal: number
+          name: string
+          description?: string
+          barrier:
+            | {
+                kind: "all"
+              }
+            | {
+                kind: "quorum"
+                quorum: number
+              }
+            | {
+                kind: "best-effort"
+              }
+            | {
+                kind: "condition"
+                expression: string
+              }
+          taskIDs: Array<string>
+        }>
+        tasks: Array<{
+          id: string
+          phaseID: string
+          name: string
+          kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+          prompt: string
+          dependsOn: Array<string>
+          inputs?: Array<{
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }>
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+          map?: {
+            source: {
+              taskID: string
+              path?: string
+              projection?: string
+              required?: boolean
+            }
+            maxItems: number
+            taskTemplate: {
+              kind: "agent" | "synthesize" | "verify" | "validate"
+              prompt: string
+              output:
+                | {
+                    kind: "text"
+                    maxChars?: number
+                  }
+                | {
+                    kind: "json"
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "artifact"
+                    artifactKind?: string
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "none"
+                  }
+              model?: {
+                providerID: string
+                modelID: string
+                variant?: string
+                reasoning?: string
+              }
+              agentProfile?: string
+              allowedTools?: Array<string>
+              workspace?: {
+                mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+              }
+              permissions?: {
+                mode: "report-only" | "normal" | "custom"
+                allowedTools?: Array<string>
+                approvalRequiredFor?: Array<string>
+                approvedActions?: Array<string>
+                allowEdits?: boolean
+                allowMutatingCommands?: boolean
+                allowExternalSend?: boolean
+              }
+              retry?: {
+                maxAttempts?: number
+                backoffMs?: number
+                retryOn?: Array<
+                  "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+                >
+              }
+              budget?: {
+                maxTurns?: number
+                maxRuntimeMs?: number
+                maxTokens?: number
+                maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                maxChildren?: number
+                maxDepth?: number
+              }
+            }
+          }
+        }>
+        finalTaskID: string
+        completionCriteria: Array<string>
+        requiredGates: Array<string>
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        budget?: {
+          maxConcurrency?: number
+          maxFanOut?: number
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+          retention?: {
+            maxArtifacts?: number
+            maxAgeMs?: number
+            maxBytes?: number
+          }
+        }
+        overlapPolicy?: "skip" | "queue" | "replace"
+      }
+      planHash: string
+      immutable: boolean
+      createdAt: number
+    }
+    run: {
+      id: string
+      definitionID: string
+      revisionID: string
+      revision: number
+      originSessionID?: string
+      rootSessionID?: string
+      loopID?: string
+      loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
+      state:
+        | "planning"
+        | "awaiting_approval"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      currentPhaseID?: string
+      createdAt: number
+      updatedAt: number
+    }
+    preview: {
+      phaseCount: number
+      taskCount: number
+      taskUpperBound: number
+      maxConcurrency: number
+      maxFanOut: number
+      sideEffectClasses: Array<string>
+      estimatedTokenLimit?: number
+      estimatedCostLimit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    phases: Array<{
+      id: string
+      ordinal: number
+      name: string
+      description?: string
+      state:
+        | "pending"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      barrier:
+        | {
+            kind: "all"
+          }
+        | {
+            kind: "quorum"
+            quorum: number
+          }
+        | {
+            kind: "best-effort"
+          }
+        | {
+            kind: "condition"
+            expression: string
+          }
+      counts: {
+        total: number
+        queued: number
+        working: number
+        completed: number
+        failed: number
+        blocked: number
+      }
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    tasks: Array<{
+      id: string
+      phaseID: string
+      name: string
+      kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+      prompt: string
+      dependsOn: Array<string>
+      inputs?: Array<{
+        taskID: string
+        path?: string
+        projection?: string
+        required?: boolean
+      }>
+      output:
+        | {
+            kind: "text"
+            maxChars?: number
+          }
+        | {
+            kind: "json"
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "artifact"
+            artifactKind?: string
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "none"
+          }
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      agentProfile?: string
+      allowedTools?: Array<string>
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      retry?: {
+        maxAttempts?: number
+        backoffMs?: number
+        retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+      }
+      budget?: {
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+      }
+      map?: {
+        source: {
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }
+        maxItems: number
+        taskTemplate: {
+          kind: "agent" | "synthesize" | "verify" | "validate"
+          prompt: string
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+        }
+      }
+      state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+      attempt: number
+      sessionID?: string
+      startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      blocker?: string
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    artifacts: Array<{
+      id: string
+      runID: string
+      taskID?: string
+      kind: string
+      summary: string
+      status: "pending" | "valid" | "invalid"
+      schemaValidated: boolean
+      outputRefs: Array<string>
+      evidence: Array<string>
+      sessionID?: string
+      attempt?: number
+      createdAt: number
+    }>
+    events: Array<{
+      id: string
+      sequence: number
+      level: "debug" | "info" | "warning" | "error" | "decision"
+      type: string
+      title: string
+      summary: string
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      data?: {
+        [key: string]: unknown
+      }
+    }>
+    gates: Array<{
+      id: string
+      phaseID?: string
+      taskID?: string
+      state: "pending" | "pass" | "fail" | "blocked" | "awaiting_approval" | "waived"
+      required: boolean
+      actor?: string
+      reason?: string
+    }>
+    usage?: {
+      inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type WorkflowRetryTaskResponse = WorkflowRetryTaskResponses[keyof WorkflowRetryTaskResponses]
+
+export type WorkflowRetryPhaseData = {
+  body?: {
+    phaseID: string
+    reason?: string
+  }
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/{runID}/retry-phase"
+}
+
+export type WorkflowRetryPhaseErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowRetryPhaseError = WorkflowRetryPhaseErrors[keyof WorkflowRetryPhaseErrors]
+
+export type WorkflowRetryPhaseResponses = {
+  /**
+   * Workflow snapshot with phase retry queued
+   */
+  200: {
+    definition: {
+      id: string
+      projectID: string
+      name: string
+      description: string
+      source: "session-generated" | "saved" | "template" | "package" | "manual"
+      ownerSessionID?: string
+      currentRevision?: number
+      saved: boolean
+      createdAt: number
+      updatedAt: number
+    }
+    revision: {
+      id: string
+      definitionID: string
+      revision: number
+      plan: {
+        formatVersion: number
+        name: string
+        description: string
+        objective: string
+        phases: Array<{
+          id: string
+          ordinal: number
+          name: string
+          description?: string
+          barrier:
+            | {
+                kind: "all"
+              }
+            | {
+                kind: "quorum"
+                quorum: number
+              }
+            | {
+                kind: "best-effort"
+              }
+            | {
+                kind: "condition"
+                expression: string
+              }
+          taskIDs: Array<string>
+        }>
+        tasks: Array<{
+          id: string
+          phaseID: string
+          name: string
+          kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+          prompt: string
+          dependsOn: Array<string>
+          inputs?: Array<{
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }>
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+          map?: {
+            source: {
+              taskID: string
+              path?: string
+              projection?: string
+              required?: boolean
+            }
+            maxItems: number
+            taskTemplate: {
+              kind: "agent" | "synthesize" | "verify" | "validate"
+              prompt: string
+              output:
+                | {
+                    kind: "text"
+                    maxChars?: number
+                  }
+                | {
+                    kind: "json"
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "artifact"
+                    artifactKind?: string
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "none"
+                  }
+              model?: {
+                providerID: string
+                modelID: string
+                variant?: string
+                reasoning?: string
+              }
+              agentProfile?: string
+              allowedTools?: Array<string>
+              workspace?: {
+                mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+              }
+              permissions?: {
+                mode: "report-only" | "normal" | "custom"
+                allowedTools?: Array<string>
+                approvalRequiredFor?: Array<string>
+                approvedActions?: Array<string>
+                allowEdits?: boolean
+                allowMutatingCommands?: boolean
+                allowExternalSend?: boolean
+              }
+              retry?: {
+                maxAttempts?: number
+                backoffMs?: number
+                retryOn?: Array<
+                  "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+                >
+              }
+              budget?: {
+                maxTurns?: number
+                maxRuntimeMs?: number
+                maxTokens?: number
+                maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                maxChildren?: number
+                maxDepth?: number
+              }
+            }
+          }
+        }>
+        finalTaskID: string
+        completionCriteria: Array<string>
+        requiredGates: Array<string>
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        budget?: {
+          maxConcurrency?: number
+          maxFanOut?: number
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+          retention?: {
+            maxArtifacts?: number
+            maxAgeMs?: number
+            maxBytes?: number
+          }
+        }
+        overlapPolicy?: "skip" | "queue" | "replace"
+      }
+      planHash: string
+      immutable: boolean
+      createdAt: number
+    }
+    run: {
+      id: string
+      definitionID: string
+      revisionID: string
+      revision: number
+      originSessionID?: string
+      rootSessionID?: string
+      loopID?: string
+      loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
+      state:
+        | "planning"
+        | "awaiting_approval"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      currentPhaseID?: string
+      createdAt: number
+      updatedAt: number
+    }
+    preview: {
+      phaseCount: number
+      taskCount: number
+      taskUpperBound: number
+      maxConcurrency: number
+      maxFanOut: number
+      sideEffectClasses: Array<string>
+      estimatedTokenLimit?: number
+      estimatedCostLimit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    phases: Array<{
+      id: string
+      ordinal: number
+      name: string
+      description?: string
+      state:
+        | "pending"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      barrier:
+        | {
+            kind: "all"
+          }
+        | {
+            kind: "quorum"
+            quorum: number
+          }
+        | {
+            kind: "best-effort"
+          }
+        | {
+            kind: "condition"
+            expression: string
+          }
+      counts: {
+        total: number
+        queued: number
+        working: number
+        completed: number
+        failed: number
+        blocked: number
+      }
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    tasks: Array<{
+      id: string
+      phaseID: string
+      name: string
+      kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+      prompt: string
+      dependsOn: Array<string>
+      inputs?: Array<{
+        taskID: string
+        path?: string
+        projection?: string
+        required?: boolean
+      }>
+      output:
+        | {
+            kind: "text"
+            maxChars?: number
+          }
+        | {
+            kind: "json"
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "artifact"
+            artifactKind?: string
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "none"
+          }
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      agentProfile?: string
+      allowedTools?: Array<string>
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      retry?: {
+        maxAttempts?: number
+        backoffMs?: number
+        retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+      }
+      budget?: {
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+      }
+      map?: {
+        source: {
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }
+        maxItems: number
+        taskTemplate: {
+          kind: "agent" | "synthesize" | "verify" | "validate"
+          prompt: string
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+        }
+      }
+      state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+      attempt: number
+      sessionID?: string
+      startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      blocker?: string
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    artifacts: Array<{
+      id: string
+      runID: string
+      taskID?: string
+      kind: string
+      summary: string
+      status: "pending" | "valid" | "invalid"
+      schemaValidated: boolean
+      outputRefs: Array<string>
+      evidence: Array<string>
+      sessionID?: string
+      attempt?: number
+      createdAt: number
+    }>
+    events: Array<{
+      id: string
+      sequence: number
+      level: "debug" | "info" | "warning" | "error" | "decision"
+      type: string
+      title: string
+      summary: string
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      data?: {
+        [key: string]: unknown
+      }
+    }>
+    gates: Array<{
+      id: string
+      phaseID?: string
+      taskID?: string
+      state: "pending" | "pass" | "fail" | "blocked" | "awaiting_approval" | "waived"
+      required: boolean
+      actor?: string
+      reason?: string
+    }>
+    usage?: {
+      inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type WorkflowRetryPhaseResponse = WorkflowRetryPhaseResponses[keyof WorkflowRetryPhaseResponses]
 
 export type PtyConnectData = {
   body?: never

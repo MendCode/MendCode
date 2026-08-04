@@ -136,7 +136,7 @@ describe("session transcript virtual window", () => {
     ])
   })
 
-  test("keeps a queued turn at the tail when its assistant starts", () => {
+  test("stops tail-moving a queued turn once its own assistant starts", () => {
     const waiting = [
       { id: "user-1", role: "user" },
       { id: "assistant-1", role: "assistant", parentID: "user-1" },
@@ -151,7 +151,7 @@ describe("session transcript virtual window", () => {
     ])
 
     const dispatched = [...waiting, { id: "assistant-3", role: "assistant", parentID: "user-2" }]
-    expect(sessionTranscriptRows(dispatched, new Set()).map((message) => message.id)).toEqual([
+    expect(sessionTranscriptRows(dispatched, new Set(["user-2"])).map((message) => message.id)).toEqual([
       "user-1",
       "assistant-1",
       "assistant-2",
@@ -223,6 +223,7 @@ describe("session transcript virtual window", () => {
     expect(
       sessionTranscriptRows(dispatched, new Set(), {
         boundaryIDs: options.boundaryIDs,
+        tailIDs: options.tailIDs,
       }).map((message) => message.id),
     ).toEqual([
       "user-1",

@@ -14,6 +14,7 @@ import {
   type BackgroundTaskResultData,
   type BackgroundTaskState,
 } from "./background-task.sql"
+import { SessionTable } from "./session.sql"
 
 export const State = Schema.Literals([
   "queued",
@@ -71,6 +72,19 @@ export const Snapshot = Schema.Struct({
   .annotate({ identifier: "BackgroundTaskSnapshot" })
   .pipe(withStatics((schema) => ({ zod: zod(schema) })))
 export type Snapshot = Schema.Schema.Type<typeof Snapshot>
+
+export type Notification = {
+  eventID: string
+  taskID: SessionID
+  parentSessionID: SessionID
+  generation: number
+  revision: number
+  state: State
+  title: string
+  summary?: string
+  error?: string
+  background?: boolean
+}
 
 export const Event = {
   Updated: BusEvent.define(
@@ -169,6 +183,19 @@ const RESULT_MAX_CHARS = 24_000
 const RESULT_MAX_FILES = 200
 const OWNER_LEASE_MS = 6 * 60 * 60 * 1000
 const runtimeID = `${process.pid}:${crypto.randomUUID()}`
+
+function ownerRuntimeIsAlive(ownerRuntimeID: string | null) {
+  if (ownerRuntimeID === runtimeID) return true
+  if (!ownerRuntimeID) return false
+  const pid = Number(ownerRuntimeID.split(":", 1)[0])
+  if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
 
 export function isTerminal(state: State): boolean {
   return terminalStates.has(state)
@@ -322,6 +349,16 @@ export function listSnapshots(parentSessionID: SessionID) {
   )
 }
 
+export function hasActiveTasks() {
+  return Database.use((db) =>
+    db
+      .select({ state: BackgroundTaskRunTable.state })
+      .from(BackgroundTaskRunTable)
+      .all()
+      .some((run) => activeStates.has(run.state)),
+  )
+}
+
 export interface Interface {
   readonly start: (input: StartInput) => Effect.Effect<Snapshot>
   readonly markRunning: (input: { taskID: SessionID; generation: number }) => Effect.Effect<Snapshot>
@@ -330,6 +367,9 @@ export interface Interface {
   readonly requestCancel: (input: { taskID: SessionID; generation?: number }) => Effect.Effect<Snapshot | undefined>
   readonly get: (taskID: SessionID, generation?: number) => Effect.Effect<Snapshot | undefined>
   readonly list: (parentSessionID: SessionID) => Effect.Effect<Snapshot[]>
+  readonly pendingNotifications: (parentSessionID?: SessionID) => Effect.Effect<Notification[]>
+  readonly acknowledgeNotifications: (eventIDs: readonly string[]) => Effect.Effect<void>
+  readonly dismissNotifications: (parentSessionID: SessionID) => Effect.Effect<void>
   readonly wait: (input: {
     taskID: SessionID
     generation?: number
@@ -379,9 +419,7 @@ export const layer = Layer.effect(
             title: input.snapshot.title,
             summary: input.snapshot.result?.summary,
             error: input.snapshot.result?.error,
-            ...(input.event.payload?.background !== undefined
-              ? { background: input.event.payload.background }
-              : {}),
+            ...(input.event.payload?.background !== undefined ? { background: input.event.payload.background } : {}),
           },
           { id: input.event.id },
         )
@@ -461,8 +499,8 @@ export const layer = Layer.effect(
           const maxDescendants = input.limits?.maxDescendants
           if (
             maxDescendants !== undefined &&
-            activeTasks.filter(({ task }) => (task.root_session_id ?? task.parent_session_id) === rootSessionID).length >=
-              maxDescendants
+            activeTasks.filter(({ task }) => (task.root_session_id ?? task.parent_session_id) === rootSessionID)
+              .length >= maxDescendants
           ) {
             throw new Error(`Subagent descendant limit reached for root session ${rootSessionID}`)
           }
@@ -657,8 +695,8 @@ export const layer = Layer.effect(
           .filter(
             (run) =>
               run.state === "running" &&
-              run.lease_expires_at !== null &&
-              run.lease_expires_at <= now,
+              ((run.lease_expires_at !== null && run.lease_expires_at <= now) ||
+                !ownerRuntimeIsAlive(run.owner_runtime_id)),
           ),
       )
       const results = yield* Effect.forEach(
@@ -670,6 +708,7 @@ export const layer = Layer.effect(
             action: {
               type: "finish",
               state: "interrupted",
+              background: true,
               result: {
                 summary: `Runtime lease expired before the subagent completed. Resume with task_id ${run.task_id}.`,
                 error: "Runtime lease expired",
@@ -698,6 +737,78 @@ export const layer = Layer.effect(
 
     const list = Effect.fn("BackgroundTask.list")((parentSessionID: SessionID) =>
       Effect.sync(() => listSnapshots(parentSessionID)),
+    )
+
+    const pendingNotifications = Effect.fn("BackgroundTask.pendingNotifications")(function* (
+      parentSessionID?: SessionID,
+    ) {
+      const context = yield* InstanceState.context
+      return Database.use((db) =>
+        db
+          .select()
+          .from(BackgroundTaskEventTable)
+          .all()
+          .flatMap((event): Notification[] => {
+            if (event.time_acknowledged !== null || event.payload?.background !== true) return []
+            if (parentSessionID !== undefined && event.payload.parentSessionID !== parentSessionID) return []
+            const task = db
+              .select()
+              .from(BackgroundTaskTable)
+              .where(eq(BackgroundTaskTable.task_id, event.task_id))
+              .get()
+            if (!task || task.time_dismissed !== null) return []
+            const parent = db
+              .select({ directory: SessionTable.directory })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, task.parent_session_id))
+              .get()
+            if (!parent || parent.directory !== context.directory) return []
+            return [
+              {
+                eventID: event.id,
+                taskID: event.task_id,
+                parentSessionID: event.payload.parentSessionID,
+                generation: event.generation,
+                revision: event.revision,
+                state: event.type,
+                title: event.payload.title ?? task.title,
+                summary: event.payload.summary,
+                error: event.payload.error,
+                background: true,
+              },
+            ]
+          })
+          .toSorted((a, b) => a.eventID.localeCompare(b.eventID)),
+      )
+    })
+
+    const acknowledgeNotifications = Effect.fn("BackgroundTask.acknowledgeNotifications")(
+      (eventIDs: readonly string[]) =>
+        Effect.sync(() => {
+          if (eventIDs.length === 0) return
+          const now = Date.now()
+          Database.transaction((db) => {
+            for (const eventID of new Set(eventIDs)) {
+              db.update(BackgroundTaskEventTable)
+                .set({ time_acknowledged: now, time_updated: now })
+                .where(eq(BackgroundTaskEventTable.id, eventID))
+                .run()
+            }
+          })
+        }),
+    )
+
+    const dismissNotifications = Effect.fn("BackgroundTask.dismissNotifications")((parentSessionID: SessionID) =>
+      Effect.sync(() => {
+        const now = Date.now()
+        Database.use((db) =>
+          db
+            .update(BackgroundTaskTable)
+            .set({ time_dismissed: now, time_updated: now })
+            .where(eq(BackgroundTaskTable.parent_session_id, parentSessionID))
+            .run(),
+        )
+      }),
     )
 
     const wait = Effect.fn("BackgroundTask.wait")(function* (input: {
@@ -740,7 +851,19 @@ export const layer = Layer.effect(
 
     yield* reclaimExpired()
 
-    return Service.of({ start, markRunning, reclaimExpired, finish, requestCancel, get, list, wait })
+    return Service.of({
+      start,
+      markRunning,
+      reclaimExpired,
+      finish,
+      requestCancel,
+      get,
+      list,
+      pendingNotifications,
+      acknowledgeNotifications,
+      dismissNotifications,
+      wait,
+    })
   }),
 )
 

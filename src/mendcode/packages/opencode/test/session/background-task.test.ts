@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Fiber, Layer, Scope } from "effect"
 import { BackgroundTask, reduceRun, type RunValue } from "@/session/background-task"
-import { BackgroundTaskEventTable, BackgroundTaskRunTable } from "@/session/background-task.sql"
+import { BackgroundTaskEventTable, BackgroundTaskRunTable, BackgroundTaskTable } from "@/session/background-task.sql"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
+import { SessionTable } from "@/session/session.sql"
 import { Database, eq } from "@/storage/db"
 import { testEffect } from "../lib/effect"
 
@@ -91,6 +92,16 @@ describe("background task service", () => {
       expect(events).toHaveLength(1)
       expect(events[0]?.time_delivered).toBeNumber()
       expect(events[0]?.payload).toMatchObject({ background: true })
+      expect(yield* tasks.pendingNotifications(parent.id)).toMatchObject([
+        { eventID: events[0]?.id, taskID: child.id, parentSessionID: parent.id, state: "completed" },
+      ])
+      yield* tasks.acknowledgeNotifications([events[0]!.id])
+      expect(yield* tasks.pendingNotifications(parent.id)).toEqual([])
+      expect(
+        Database.use((db) =>
+          db.select().from(BackgroundTaskEventTable).where(eq(BackgroundTaskEventTable.id, events[0]!.id)).get(),
+        )?.time_acknowledged,
+      ).toBeNumber()
 
       const second = yield* tasks.start({
         taskID: child.id,
@@ -99,6 +110,68 @@ describe("background task service", () => {
         agent: "general",
       })
       expect(second).toMatchObject({ generation: 2, revision: 1, state: "queued" })
+    }),
+  )
+
+  it.instance("persists owner-wake dismissal across task event replay", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const tasks = yield* BackgroundTask.Service
+      const parent = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({ parentID: parent.id, title: "Child" })
+      const run = yield* tasks.start({
+        taskID: child.id,
+        parentSessionID: parent.id,
+        startRunning: true,
+        title: "Dismissed child",
+      })
+      yield* tasks.finish({
+        taskID: child.id,
+        generation: run.generation,
+        state: "completed",
+        background: true,
+        result: { summary: "Done" },
+      })
+      expect(yield* tasks.pendingNotifications(parent.id)).toHaveLength(1)
+
+      yield* tasks.dismissNotifications(parent.id)
+
+      expect(yield* tasks.pendingNotifications(parent.id)).toEqual([])
+      expect(
+        Database.use((db) =>
+          db.select().from(BackgroundTaskTable).where(eq(BackgroundTaskTable.task_id, child.id)).get(),
+        )?.time_dismissed,
+      ).toBeNumber()
+    }),
+  )
+
+  it.instance("scopes replayable notifications to the current instance", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const tasks = yield* BackgroundTask.Service
+      const parent = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({ parentID: parent.id, title: "Child" })
+      const run = yield* tasks.start({
+        taskID: child.id,
+        parentSessionID: parent.id,
+        startRunning: true,
+        title: "Foreign instance child",
+      })
+      yield* tasks.finish({
+        taskID: child.id,
+        generation: run.generation,
+        state: "completed",
+        background: true,
+        result: { summary: "Done" },
+      })
+      expect(yield* tasks.pendingNotifications()).toHaveLength(1)
+
+      Database.use((db) =>
+        db.update(SessionTable).set({ directory: "/other-instance" }).where(eq(SessionTable.id, parent.id)).run(),
+      )
+
+      expect(yield* tasks.pendingNotifications()).toEqual([])
+      expect(yield* tasks.pendingNotifications(parent.id)).toEqual([])
     }),
   )
 
@@ -211,6 +284,9 @@ describe("background task service", () => {
         state: "interrupted",
         result: { error: "Runtime lease expired" },
       })
+      expect(yield* tasks.pendingNotifications(parent.id)).toMatchObject([
+        { taskID: child.id, parentSessionID: parent.id, state: "interrupted", background: true },
+      ])
     }),
   )
 })

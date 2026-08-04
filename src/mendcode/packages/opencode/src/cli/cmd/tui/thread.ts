@@ -35,7 +35,8 @@ const SHARED_SERVER_PROBE_TIMEOUT_MS = 2_000
 const SHARED_SERVER_WAIT_TIMEOUT_MS = 8_000
 const SHARED_SERVER_RECONNECT_RETRY_DELAY_MS = 250
 const SHARED_SERVER_RECONNECT_MAX_DELAY_MS = 3_000
-const SHARED_SERVER_RECONNECT_STALE_DELAY_MS = 15_000
+// Allow three missed 10s heartbeats before replacing a healthy local stream under timer throttling.
+const SHARED_SERVER_RECONNECT_STALE_DELAY_MS = 35_000
 
 declare global {
   const OPENCODE_WORKER_PATH: string

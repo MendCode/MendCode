@@ -69,10 +69,11 @@ export function shouldAcceptCompactionArcadeFocus(input: {
 
 export function shouldRestoreCompactionPromptFocus(input: {
   arcadeOwnsFocus: boolean
+  arcadeWasFocused?: boolean
   previousFocusAvailable: boolean
   promptAvailable: boolean
 }) {
-  if (!input.arcadeOwnsFocus) return false
+  if (!input.arcadeOwnsFocus && !input.arcadeWasFocused) return false
   return input.previousFocusAvailable || input.promptAvailable
 }
 
@@ -81,6 +82,14 @@ export function compactionTranscriptToggleLabel(expanded: boolean) {
 }
 
 let focusedCompactionArcade: BoxRenderable | undefined
+let focusedCompactionArcadeBlur: (() => void) | undefined
+
+export function blurCompactionArcade() {
+  const blur = focusedCompactionArcadeBlur
+  if (!blur) return false
+  blur()
+  return true
+}
 
 export function isCompactionArcadeFocused() {
   const arcade = focusedCompactionArcade
@@ -399,6 +408,7 @@ export function CompactionPanel(props: {
   let lastArcadeGameID: string | undefined
   let saveTimer: ReturnType<typeof setTimeout> | undefined
   let saveTicket = 0
+  let focusRestoreToken = 0
 
   function globalSnakeHighScore() {
     return normalizedSnakeHighScore(kv.get(snakeGlobalHighScoreKey, 0))
@@ -424,6 +434,19 @@ export function CompactionPanel(props: {
     })
   }
 
+  function restoreFocusAfterArcadeBlur(previousFocus?: Renderable | null) {
+    const token = ++focusRestoreToken
+    setTimeout(() => {
+      if (token !== focusRestoreToken) return
+      if (renderer.currentFocusedRenderable && renderer.currentFocusedRenderable !== arcadeBox) return
+      if (previousFocus && !previousFocus.isDestroyed && previousFocus !== arcadeBox) {
+        previousFocus.focus()
+        return
+      }
+      promptRef.current?.focus()
+    }, 0)
+  }
+
   function isArcadeEventTarget(target: Renderable | null | undefined) {
     let current = target
     while (current) {
@@ -435,6 +458,7 @@ export function CompactionPanel(props: {
 
   function focusArcade() {
     if (!activeArcadeGame() || !arcadeBox || arcadeBox.isDestroyed) return
+    focusRestoreToken += 1
     const currentFocus = renderer.currentFocusedRenderable
     arcadePreviousFocus = currentFocus === arcadeBox ? null : currentFocus
     arcadeBox.focus()
@@ -443,6 +467,7 @@ export function CompactionPanel(props: {
       return
     }
     focusedCompactionArcade = arcadeBox
+    focusedCompactionArcadeBlur = () => blurArcade(undefined, { consume: false })
     setArcadeFocused(true)
   }
 
@@ -453,18 +478,21 @@ export function CompactionPanel(props: {
     const prompt = promptRef.current
     const previousFocusAvailable = Boolean(previousFocus && !previousFocus.isDestroyed && previousFocus !== arcadeBox)
     arcadePreviousFocus = null
-    if (focusedCompactionArcade === arcadeBox) focusedCompactionArcade = undefined
+    if (focusedCompactionArcade === arcadeBox) {
+      focusedCompactionArcade = undefined
+      focusedCompactionArcadeBlur = undefined
+    }
     setArcadeFocused(false)
     if (arcadeBox && !arcadeBox.isDestroyed) arcadeBox.blur()
     if (
       shouldRestoreCompactionPromptFocus({
-        arcadeOwnsFocus: ownsFocus || wasFocused,
+        arcadeOwnsFocus: ownsFocus,
+        arcadeWasFocused: wasFocused,
         previousFocusAvailable,
         promptAvailable: Boolean(prompt),
       })
     ) {
-      if (previousFocusAvailable && previousFocus) previousFocus.focus()
-      else prompt?.focus()
+      restoreFocusAfterArcadeBlur(previousFocusAvailable ? previousFocus : undefined)
     }
     if (input?.consume === false) return
     event?.preventDefault?.()
@@ -483,7 +511,10 @@ export function CompactionPanel(props: {
     return true
   }
 
-  onCleanup(() => blurArcade(undefined, { consume: false }))
+  onCleanup(() => {
+    focusRestoreToken += 1
+    blurArcade(undefined, { consume: false })
+  })
 
   function consumeMouseEvent(event?: { preventDefault?: () => void; stopPropagation?: () => void }) {
     event?.preventDefault?.()
@@ -569,7 +600,10 @@ export function CompactionPanel(props: {
     if (!arcadeOwnsFocus()) {
       if (arcadeFocused()) {
         arcadePreviousFocus = null
-        if (focusedCompactionArcade === arcadeBox) focusedCompactionArcade = undefined
+        if (focusedCompactionArcade === arcadeBox) {
+          focusedCompactionArcade = undefined
+          focusedCompactionArcadeBlur = undefined
+        }
         setArcadeFocused(false)
       }
       return

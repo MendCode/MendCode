@@ -135,6 +135,25 @@ describe("shared server state", () => {
     await secondLease.release()
   })
 
+  test("keeps the backend alive while background work remains active", async () => {
+    await using tmp = await tmpdir()
+    let activeChecks = 0
+    let stopped = 0
+
+    await waitForClientLeases({
+      directory: tmp.path,
+      pollMs: 1,
+      idleGraceMs: 4,
+      hasActiveWork: async () => ++activeChecks < 4,
+      stop: async () => {
+        stopped++
+      },
+    })
+
+    expect(activeChecks).toBeGreaterThanOrEqual(4)
+    expect(stopped).toBe(1)
+  })
+
   test("stops after the lease directory stays idle", async () => {
     await using tmp = await tmpdir()
     let stopped = 0

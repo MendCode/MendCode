@@ -78,7 +78,9 @@ export function sessionTranscriptRows<T extends SessionTranscriptMessage>(
     if (message.role === "user") transcript.push(...(childrenByParent.get(message.id) ?? []))
   }
 
-  const tailIDs = new Set([...queuedIDs, ...(options.tailIDs ?? [])])
+  const tailIDs = new Set(
+    [...queuedIDs, ...(options.tailIDs ?? [])].filter((messageID) => !firstAssistantIndex.has(messageID)),
+  )
   const visible = transcript.filter((message) => !tailIDs.has(message.id))
   const queued = transcript.filter((message) => tailIDs.has(message.id))
   return [...visible, ...queued]

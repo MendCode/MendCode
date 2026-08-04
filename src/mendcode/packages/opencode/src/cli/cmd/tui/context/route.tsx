@@ -46,6 +46,12 @@ export type LoopsRoute = {
   returnTo?: HomeRoute | SessionRoute
 }
 
+export type WorkflowsRoute = {
+  type: "workflows"
+  selectedID?: string
+  returnTo?: HomeRoute | SessionRoute
+}
+
 export type PluginRoute = {
   type: "plugin"
   id: string
@@ -60,6 +66,7 @@ export type Route =
   | MemoryRoute
   | ChangesRoute
   | LoopsRoute
+  | WorkflowsRoute
   | PluginRoute
 
 export const { use: useRoute, provider: RouteProvider } = createSimpleContext({

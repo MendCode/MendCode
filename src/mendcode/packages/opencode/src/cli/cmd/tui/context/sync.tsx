@@ -219,8 +219,40 @@ function preserveRunningShellOutput(current: Part, incoming: Part): Part {
   }
 }
 
+function toolStateRank(status: string) {
+  if (status === "pending") return 0
+  if (status === "running") return 1
+  return 2
+}
+
+function preserveNewerToolState(current: Part, incoming: Part): Part {
+  if (current.type !== "tool" || incoming.type !== "tool") return incoming
+  if (current.callID !== incoming.callID || current.tool !== incoming.tool) return incoming
+
+  const currentRank = toolStateRank(current.state.status)
+  const incomingRank = toolStateRank(incoming.state.status)
+  if (currentRank > incomingRank) return current
+  if (currentRank < incomingRank) return incoming
+
+  if (current.state.status === "completed" && incoming.state.status === "completed") {
+    if (current.state.time.end >= incoming.state.time.end) return current
+  }
+  if (current.state.status === "error" && incoming.state.status === "error") {
+    if (current.state.time.end >= incoming.state.time.end) return current
+  }
+  if (current.state.status === "running" && incoming.state.status === "running") {
+    if (current.state.time.start > incoming.state.time.start) return current
+    const currentDiff = current.state.metadata?.diff
+    const incomingDiff = incoming.state.metadata?.diff
+    if (typeof currentDiff === "string" && typeof incomingDiff !== "string") return current
+  }
+
+  return incoming
+}
+
 function preserveLivePart(current: Part, incoming: Part) {
-  return preserveRunningShellOutput(current, preserveAppendOnlyPartText(current, incoming))
+  const live = preserveRunningShellOutput(current, preserveAppendOnlyPartText(current, incoming))
+  return preserveNewerToolState(current, live)
 }
 
 function trimStoredParts(parts: Part[]) {

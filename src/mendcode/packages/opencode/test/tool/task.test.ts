@@ -14,7 +14,7 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Provider } from "@/provider/provider"
 import { normalizeSubagentType, TaskTool, type TaskPromptOps } from "../../src/tool/task"
-import { TaskStatusTool } from "../../src/tool/task-status"
+import { taskState, TaskStatusTool } from "../../src/tool/task-status"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { disposeAllInstances } from "../fixture/fixture"
@@ -1063,6 +1063,84 @@ describe("tool.task", () => {
       expect(result.metadata.status).toBe("interrupted")
     }),
   )
+
+  it.instance("execute interrupts a child response without a terminal finish", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const tasks = yield* BackgroundTask.Service
+      const def = yield* tool.init()
+      const promptOps: TaskPromptOps = {
+        cancel: () => Effect.void,
+        resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
+        prompt: (input) => {
+          const messageID = MessageID.ascending()
+          return Effect.succeed({
+            info: {
+              id: messageID,
+              role: "assistant",
+              parentID: input.messageID ?? MessageID.ascending(),
+              sessionID: input.sessionID,
+              mode: input.agent ?? "general",
+              agent: input.agent ?? "general",
+              cost: 0,
+              path: { cwd: "/tmp", root: "/tmp" },
+              tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+              modelID: input.model?.modelID ?? ref.modelID,
+              providerID: input.model?.providerID ?? ref.providerID,
+              time: { created: Date.now(), completed: Date.now() },
+            },
+            parts: [
+              {
+                id: PartID.ascending(),
+                messageID,
+                sessionID: input.sessionID,
+                type: "text" as const,
+                text: "partial result without a finish marker",
+              },
+            ],
+          })
+        },
+      }
+
+      const result = yield* def.execute(
+        {
+          description: "inspect bug",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(result.output).toContain("task_status: interrupted")
+      expect(result.output).toContain("Subagent response ended without a terminal finish")
+      expect(result.output).toContain("partial result without a finish marker")
+      expect(result.metadata.status).toBe("interrupted")
+      expect((yield* tasks.get(SessionID.make(result.metadata.sessionId)))?.state).toBe("interrupted")
+    }),
+  )
+
+  test("task status treats a completed assistant without finish as interrupted", () => {
+    const message = reply(
+      { sessionID: SessionID.make("ses_task_status_partial"), parts: [], agent: "general" },
+      "partial result",
+    )
+    if (message.info.role === "assistant") {
+      message.info.finish = undefined
+      message.info.time.completed = Date.now()
+    }
+
+    expect(taskState({ status: { type: "idle" }, messages: [message] })).toBe("interrupted")
+  })
 
   it.instance("execute includes returned child parts when child message ends with error", () =>
     Effect.gen(function* () {

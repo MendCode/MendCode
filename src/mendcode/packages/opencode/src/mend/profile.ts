@@ -9,6 +9,12 @@ import { defaultPresentationConfig, resolveTuiPresentation, type MendPresentatio
 import { activeMendPackageProjection } from "./runtime/packages"
 import type { MendLogoMode } from "./tui/mascot"
 import type { MendWorkingIndicator } from "./tui/working-indicator"
+import {
+  defaultImageGenerationWait,
+  normalizeImageGenerationWait,
+  validateImageGenerationWait,
+  type MendImageGenerationWaitConfig,
+} from "./tui/image-generation-wait"
 import { Global } from "@mendcode/core/global"
 
 export type MendHomeWelcomeRightPanel = "actions" | "agentManager"
@@ -19,6 +25,9 @@ export type MendTuiProfile = {
   promptChrome: MendPromptChromeConfig
   promptStatus: MendPromptStatusConfig
   workingIndicator: Omit<MendWorkingIndicator, "trust">
+  imageGeneration: {
+    wait: MendImageGenerationWaitConfig
+  }
   presentation: MendPresentationConfig
   identity: {
     productName: string
@@ -82,6 +91,9 @@ const fallbackProfile: MendTuiProfile = {
     visible: true,
     showElapsed: true,
     showTokenUsage: true,
+  },
+  imageGeneration: {
+    wait: defaultImageGenerationWait(),
   },
   presentation: defaultPresentationConfig,
   identity: {
@@ -255,6 +267,14 @@ export function mergeMendTuiProfile(input: unknown): MendTuiProfile {
             )
           : fallbackProfile.workingIndicator.messages,
     },
+    imageGeneration: {
+      ...fallbackProfile.imageGeneration,
+      ...(isRecord(input.imageGeneration) ? input.imageGeneration : {}),
+      wait: normalizeImageGenerationWait(
+        isRecord(input.imageGeneration) ? input.imageGeneration.wait : undefined,
+        fallbackProfile.imageGeneration.wait,
+      ),
+    },
     presentation: resolveTuiPresentation(
       isRecord(input.presentation) ? input.presentation : fallbackProfile.presentation,
     ),
@@ -403,6 +423,7 @@ export function validateMendTuiProfile(profile: MendTuiProfile) {
     failures.push("tui promptStatus.scripts must be an object")
   }
   if (!Array.isArray(profile.workingIndicator.messages)) failures.push("tui workingIndicator.messages must be an array")
+  failures.push(...validateImageGenerationWait(profile.imageGeneration.wait))
   const headerTitle = profile.layout.zones.header.title
   if (headerTitle?.visible !== undefined && typeof headerTitle.visible !== "boolean") {
     failures.push("tui layout.zones.header.title.visible must be a boolean")
@@ -600,6 +621,16 @@ async function applyTuiConfigOverrides(
         ...config.presentation,
       },
     }).presentation
+  }
+
+  if (isRecord(config.imageGeneration)) {
+    next.imageGeneration = mergeMendTuiProfile({
+      ...next,
+      imageGeneration: {
+        ...next.imageGeneration,
+        ...config.imageGeneration,
+      },
+    }).imageGeneration
   }
 
   const homeLogo = isRecord(config.home) && isRecord(config.home.logo) ? config.home.logo : undefined
