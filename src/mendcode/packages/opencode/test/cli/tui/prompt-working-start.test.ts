@@ -16,6 +16,7 @@ import {
   promptDeliveryIsQueued,
   promptDeliveryRetryAction,
   promptDeliveryRetryDelay,
+  shouldRetryConnectionForPrompt,
   promptDraftHistoryAction,
   mergeOptimisticUserParts,
   optimisticUserMessage,
@@ -142,6 +143,14 @@ describe("prompt delivery recovery", () => {
     expect(promptDeliveryRetryDelay(1)).toBe(1000)
     expect(promptDeliveryRetryDelay(5)).toBe(1000)
     expect(promptDeliveryRetryDelay(99)).toBe(1000)
+  })
+
+  test("restarts a stopped connection when the user submits a prompt", () => {
+    expect(shouldRetryConnectionForPrompt("failed")).toBe(true)
+    expect(shouldRetryConnectionForPrompt("disconnected")).toBe(true)
+    expect(shouldRetryConnectionForPrompt("connecting")).toBe(false)
+    expect(shouldRetryConnectionForPrompt("reconnecting")).toBe(false)
+    expect(shouldRetryConnectionForPrompt("connected")).toBe(false)
   })
 
   test("extracts structured server error messages", () => {

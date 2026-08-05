@@ -34,6 +34,7 @@ import { isProcessMemoryUsage, processMemoryUsage, type DiagnosticsSnapshot } fr
 const SHARED_SERVER_PROBE_TIMEOUT_MS = 2_000
 const SHARED_SERVER_WAIT_TIMEOUT_MS = 8_000
 const SHARED_SERVER_RECONNECT_RETRY_DELAY_MS = 250
+export const SHARED_SERVER_RECONNECT_MAX_ATTEMPTS = Number.POSITIVE_INFINITY
 const SHARED_SERVER_RECONNECT_MAX_DELAY_MS = 3_000
 // Allow three missed 10s heartbeats before replacing a healthy local stream under timer throttling.
 const SHARED_SERVER_RECONNECT_STALE_DELAY_MS = 35_000
@@ -672,6 +673,7 @@ export const TuiThreadCommand = cmd({
           reconnect: reconnect
             ? {
                 refresh: reconnect,
+                maxAttempts: SHARED_SERVER_RECONNECT_MAX_ATTEMPTS,
                 retryDelay: SHARED_SERVER_RECONNECT_RETRY_DELAY_MS,
                 maxRetryDelay: SHARED_SERVER_RECONNECT_MAX_DELAY_MS,
                 staleDelay: SHARED_SERVER_RECONNECT_STALE_DELAY_MS,
