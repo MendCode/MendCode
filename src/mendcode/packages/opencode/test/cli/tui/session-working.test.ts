@@ -3,6 +3,7 @@ import {
   isAssistantWorking,
   isRecentWorkingAssistant,
   isStaleBusySession,
+  isToolActivityActive,
   sessionStatusExpiryDelay,
   shouldShowSessionStoppedConnection,
   STALE_BUSY_SESSION_WINDOW_MS,
@@ -71,11 +72,26 @@ describe("isStaleBusySession", () => {
     ).toBe(false)
   })
 
-  test("returns live session-status pruning delays", () => {
+  test("distinguishes snapshot staleness from live busy activity", () => {
     expect(sessionStatusExpiryDelay({ type: "busy" }, 100_000)).toBe(STALE_BUSY_SESSION_WINDOW_MS + 1)
+    expect(sessionStatusExpiryDelay({ type: "busy" }, 100_000, "live")).toBeUndefined()
     expect(sessionStatusExpiryDelay({ type: "busy", until: 101_000 }, 100_000)).toBe(1_001)
+    expect(sessionStatusExpiryDelay({ type: "busy", until: 101_000 }, 100_000, "live")).toBe(1_001)
     expect(sessionStatusExpiryDelay({ type: "retry", attempt: 1, message: "wait", next: 101_000 }, 100_000)).toBe(1_001)
     expect(sessionStatusExpiryDelay({ type: "idle" }, 100_000)).toBeUndefined()
+  })
+})
+
+describe("isToolActivityActive", () => {
+  test("keeps long-running tools active while the live session remains busy", () => {
+    expect(isToolActivityActive({ toolStatus: "running", sessionStatusType: "busy" })).toBe(true)
+    expect(isToolActivityActive({ toolStatus: "pending", sessionStatusType: "retry" })).toBe(true)
+  })
+
+  test("stops tool animation after an idle status or local interrupt", () => {
+    expect(isToolActivityActive({ toolStatus: "running", sessionStatusType: "idle" })).toBe(false)
+    expect(isToolActivityActive({ toolStatus: "running", sessionStatusType: "busy", interrupted: true })).toBe(false)
+    expect(isToolActivityActive({ toolStatus: "completed", sessionStatusType: "busy" })).toBe(false)
   })
 })
 

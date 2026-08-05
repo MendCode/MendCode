@@ -71,6 +71,7 @@ import { CompactionPanel } from "@/cli/cmd/tui/component/compaction-panel"
 import { visibleUserMessageText } from "@/cli/cmd/tui/routes/session/user-message-display"
 import { MemoryGraphCanvasRows, memoryGraphMiniMap } from "@/cli/cmd/tui/routes/memory"
 import { compactMemoryGraphRows, compactMemoryGraphSnapshot } from "@/cli/cmd/tui/util/memory-graph"
+import { isToolActivityActive } from "@/cli/cmd/tui/util/session-working"
 
 const id = "internal:session-v2-debug"
 const route = "session.v2.messages"
@@ -80,6 +81,16 @@ function currentSessionID(api: TuiPluginApi) {
   if (current.name !== "session") return
   const sessionID = current.params?.sessionID
   return typeof sessionID === "string" ? sessionID : undefined
+}
+
+function useSessionStatusType() {
+  const route = useRoute()
+  const sync = useSync()
+  return createMemo(() => {
+    const current = route.data
+    if (current.type !== "session") return undefined
+    return sync.data.session_status[current.sessionID]?.type
+  })
 }
 
 function View(props: { api: TuiPluginApi; sessionID: string }) {
@@ -988,11 +999,17 @@ function ImageGenToolAction(props: { label: string; onPress: () => void }) {
 
 function ImageGen(props: ToolProps) {
   const { theme } = useTheme()
+  const sessionStatusType = useSessionStatusType()
   const mend = useMendTuiProfile()
   const dimensions = useTerminalDimensions()
   const toast = useToast()
   const [frame, setFrame] = createSignal(0)
-  const running = createMemo(() => props.part.state.status === "pending" || props.part.state.status === "running")
+  const running = createMemo(() =>
+    isToolActivityActive({
+      toolStatus: props.part.state.status,
+      sessionStatusType: sessionStatusType(),
+    }),
+  )
   const completed = createMemo(() => props.part.state.status === "completed")
   const metadata = createMemo(() => props.metadata)
   const artifactPath = createMemo(() => imageGenMetadataString(metadata(), "path"))
@@ -1185,6 +1202,7 @@ function InlineTool(props: {
   part: SessionMessageAssistantTool
 }) {
   const { theme } = useTheme()
+  const sessionStatusType = useSessionStatusType()
   const mend = useMendTuiProfile()
   const renderer = useRenderer()
   const [margin, setMargin] = createSignal(0)
@@ -1210,6 +1228,14 @@ function InlineTool(props: {
   const attributes = createMemo(() => (denied() ? TextAttributes.STRIKETHROUGH : undefined))
   const shouldRender = createMemo(() => Boolean(complete() || error()))
   const showIcon = createMemo(() => mend.profile.presentation.profile !== "minimal")
+  const spinner = createMemo(
+    () =>
+      props.spinner === true &&
+      isToolActivityActive({
+        toolStatus: props.part.state.status,
+        sessionStatusType: sessionStatusType(),
+      }),
+  )
   return (
     <Show when={shouldRender()}>
       <box
@@ -1245,7 +1271,7 @@ function InlineTool(props: {
         <Show when={showIcon()}>
           <box flexShrink={0}>
             <Switch>
-              <Match when={props.spinner}>
+              <Match when={spinner()}>
                 <Spinner color={theme.text} />
               </Match>
               <Match when={complete()}>
@@ -1298,8 +1324,17 @@ function BlockTool(props: {
   paddingBottom?: number
 }) {
   const { theme } = useTheme()
+  const sessionStatusType = useSessionStatusType()
   const renderer = useRenderer()
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error.message : undefined))
+  const spinner = createMemo(() => {
+    if (props.spinner !== true) return false
+    if (!props.part) return true
+    return isToolActivityActive({
+      toolStatus: props.part.state.status,
+      sessionStatusType: sessionStatusType(),
+    })
+  })
   return (
     <box
       paddingBottom={props.paddingBottom ?? 1}
@@ -1313,7 +1348,7 @@ function BlockTool(props: {
       flexShrink={0}
     >
       <Show
-        when={props.spinner}
+        when={spinner()}
         fallback={
           <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
             {props.title}
@@ -1379,7 +1414,13 @@ function CommandOutput(props: {
 
 function Bash(props: ToolProps) {
   const { theme } = useTheme()
-  const isRunning = createMemo(() => props.part.state.status === "running")
+  const sessionStatusType = useSessionStatusType()
+  const isRunning = createMemo(() =>
+    isToolActivityActive({
+      toolStatus: props.part.state.status,
+      sessionStatusType: sessionStatusType(),
+    }),
+  )
   const liveOutput = createMemo(() => stringValue(props.metadata.output))
   const output = createMemo(() =>
     renderTerminalOutput(selectShellOutput({ running: isRunning(), live: liveOutput(), final: props.output })),
@@ -1396,7 +1437,7 @@ function Bash(props: ToolProps) {
         <BlockTool
           title={title()}
           part={props.part}
-          spinner={props.part.state.status === "running"}
+          spinner={isRunning()}
           titleColor={theme.primary}
           titleAttributes={TextAttributes.BOLD}
           contentGap={0}
@@ -1408,7 +1449,7 @@ function Bash(props: ToolProps) {
             output={limited()}
             overflow={overflow()}
             expanded={expanded()}
-            running={props.part.state.status === "running"}
+            running={isRunning()}
           />
         </BlockTool>
       </Match>

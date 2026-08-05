@@ -69,11 +69,26 @@ export function isStaleBusySession(input: {
   return now - lastAssistantActivity > (input.staleMs ?? STALE_BUSY_SESSION_WINDOW_MS)
 }
 
-export function sessionStatusExpiryDelay(status: TuiSessionStatus, now = Date.now()) {
+export function sessionStatusExpiryDelay(
+  status: TuiSessionStatus,
+  now = Date.now(),
+  source: "snapshot" | "live" = "snapshot",
+) {
   if (status.type === "busy") {
+    if (source === "live" && status.until === undefined) return undefined
     const expiry = typeof status.until === "number" && status.until > now ? status.until : now + STALE_BUSY_SESSION_WINDOW_MS
     return Math.max(1, expiry - now + 1)
   }
   if (status.type === "retry" && status.next > now) return Math.max(1, status.next - now + 1)
   return undefined
+}
+
+export function isToolActivityActive(input: {
+  toolStatus?: string
+  sessionStatusType?: string
+  interrupted?: boolean
+}) {
+  if (input.interrupted) return false
+  if (input.toolStatus !== "pending" && input.toolStatus !== "running") return false
+  return input.sessionStatusType === "busy" || input.sessionStatusType === "retry"
 }

@@ -1144,9 +1144,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       if (pinned.size === 0) pinnedSessionMessages.delete(sessionID)
     }
 
-    function scheduleSessionStatusExpiry(sessionID: string, status: SessionStatus) {
+    function scheduleSessionStatusExpiry(sessionID: string, status: SessionStatus, source: "snapshot" | "live") {
       clearSessionStatusTimer(sessionID)
-      const delay = sessionStatusExpiryDelay(status)
+      const delay = sessionStatusExpiryDelay(status, Date.now(), source)
       if (!delay) return
       sessionStatusTimers.set(
         sessionID,
@@ -1170,7 +1170,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       if (status.type === "idle") {
         clearSessionStatusTimer(sessionID)
         releaseCompletedPinnedMessages(sessionID)
-      } else scheduleSessionStatusExpiry(sessionID, status)
+      } else scheduleSessionStatusExpiry(sessionID, status, "live")
     }
 
     function replaceSessionStatuses(statuses: Record<string, SessionStatus>) {
@@ -1180,7 +1180,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       setStore("session_status", reconcile(statuses))
       for (const [sessionID, status] of Object.entries(statuses)) {
         if (status.type === "idle") releaseCompletedPinnedMessages(sessionID)
-        else scheduleSessionStatusExpiry(sessionID, status)
+        else scheduleSessionStatusExpiry(sessionID, status, "snapshot")
       }
     }
 

@@ -124,7 +124,12 @@ import { QuestionPrompt } from "./question"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import * as Model from "../../util/model"
 import { formatAssistantLiveUsage, formatAssistantUsage, formatLatestAssistantContextUsage } from "../../util/usage"
-import { isAssistantWorking, SESSION_STOPPED_CONNECTION_MESSAGE, shouldShowSessionStoppedConnection } from "../../util/session-working"
+import {
+  isAssistantWorking,
+  isToolActivityActive,
+  SESSION_STOPPED_CONNECTION_MESSAGE,
+  shouldShowSessionStoppedConnection,
+} from "../../util/session-working"
 import { formatTranscript } from "../../util/transcript"
 import { useTuiConfig } from "../../context/tui-config"
 import {
@@ -454,6 +459,7 @@ const context = createContext<{
   refreshLoopWorkflows: () => Promise<readonly SessionLoopWorkflow[]>
   latestTodoWritePartID: () => string | undefined
   latestCompletedTodoWritePartID: () => string | undefined
+  interrupted: () => boolean
   now: () => number
   sync: ReturnType<typeof useSync>
   tui: ReturnType<typeof useTuiConfig>
@@ -606,6 +612,14 @@ export function Session() {
   const mend = useMendTuiProfile()
   const keybind = useKeybind()
   const [now, setNow] = createSignal(Date.now())
+  const [sessionInterruptRequested, setSessionInterruptRequested] = createSignal(false)
+  createEffect(
+    on(
+      () => route.sessionID,
+      () => setSessionInterruptRequested(false),
+      { defer: true },
+    ),
+  )
   const promptEdgeToEdge = createMemo(() => {
     return promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)
   })
@@ -3702,6 +3716,7 @@ export function Session() {
         refreshLoopWorkflows,
         latestTodoWritePartID,
         latestCompletedTodoWritePartID,
+        interrupted: sessionInterruptRequested,
         now,
         sync,
         tui: tuiConfig,
@@ -4068,6 +4083,7 @@ export function Session() {
                           permissionMode={permissionMode()}
                           permissionModeLabel={permissionModeLabel()}
                           permissionPending={permissionPendingCount()}
+                          onInterruptChange={setSessionInterruptRequested}
                           onSubmit={handlePromptSubmit}
                           right={<TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
                         />
@@ -6252,11 +6268,18 @@ function ImageGenToolAction(props: { label: string; onPress: () => void }) {
 
 function ImageGen(props: ToolProps<any>) {
   const { theme } = useTheme()
+  const ctx = use()
   const mend = useMendTuiProfile()
   const dimensions = useTerminalDimensions()
   const toast = useToast()
   const [frame, setFrame] = createSignal(0)
-  const running = createMemo(() => props.part.state.status === "pending" || props.part.state.status === "running")
+  const running = createMemo(() =>
+    isToolActivityActive({
+      toolStatus: props.part.state.status,
+      sessionStatusType: ctx.sync.data.session_status[ctx.sessionID]?.type,
+      interrupted: ctx.interrupted(),
+    }),
+  )
   const completed = createMemo(() => props.part.state.status === "completed")
   const metadata = createMemo(() => props.metadata as Record<string, unknown>)
   const artifactPath = createMemo(() => imageGenMetadataString(metadata(), "path"))
@@ -6733,6 +6756,15 @@ function InlineTool(props: {
   const mend = useMendTuiProfile()
   const [hover, setHover] = createSignal(false)
   const showIcon = createMemo(() => mend.profile.presentation.profile !== "minimal")
+  const spinner = createMemo(
+    () =>
+      props.spinner === true &&
+      isToolActivityActive({
+        toolStatus: props.part.state.status,
+        sessionStatusType: sync.data.session_status[ctx.sessionID]?.type,
+        interrupted: ctx.interrupted(),
+      }),
+  )
 
   const permission = createMemo(() => {
     const callID = sync.data.permission[ctx.sessionID]?.at(0)?.tool?.callID
@@ -6775,7 +6807,7 @@ function InlineTool(props: {
         }}
       >
         <Switch>
-          <Match when={props.spinner}>
+          <Match when={spinner()}>
             <Spinner color={fg()} children={props.children} />
           </Match>
           <Match when={true}>
@@ -6826,15 +6858,25 @@ function BlockTool(props: {
   paddingBottom?: number
 }) {
   const { theme } = useTheme()
+  const ctx = use()
   const mend = useMendTuiProfile()
   const renderer = useRenderer()
   const [margin, setMargin] = createSignal(0)
   const error = createMemo(() => (props.part?.state.status === "error" ? props.part.state.error : undefined))
   const showIcon = createMemo(() => Boolean(props.icon && mend.profile.presentation.profile === "mendcode"))
   const titleText = createMemo(() => (typeof props.title === "string" ? props.title.replace(/^# /, "") : props.title))
+  const spinner = createMemo(() => {
+    if (props.spinner !== true) return false
+    if (!props.part) return true
+    return isToolActivityActive({
+      toolStatus: props.part.state.status,
+      sessionStatusType: ctx.sync.data.session_status[ctx.sessionID]?.type,
+      interrupted: ctx.interrupted(),
+    })
+  })
   const title = () => (
     <Show
-      when={props.spinner}
+      when={spinner()}
       fallback={
         <text fg={props.titleColor ?? theme.textMuted} attributes={props.titleAttributes}>
           <Show when={showIcon()}>
@@ -6964,9 +7006,16 @@ function PatchTitle(props: {
 
 function Shell(props: ToolProps<typeof ShellTool>) {
   const { theme } = useTheme()
+  const ctx = use()
   const sync = useSync()
   const [now, setNow] = createSignal(Date.now())
-  const isRunning = createMemo(() => props.part.state.status === "running")
+  const isRunning = createMemo(() =>
+    isToolActivityActive({
+      toolStatus: props.part.state.status,
+      sessionStatusType: sync.data.session_status[ctx.sessionID]?.type,
+      interrupted: ctx.interrupted(),
+    }),
+  )
   const liveOutput = createMemo(() => (typeof props.metadata.output === "string" ? props.metadata.output : undefined))
   const output = createMemo(() =>
     renderTerminalOutput(selectShellOutput({ running: isRunning(), live: liveOutput(), final: props.output })),
