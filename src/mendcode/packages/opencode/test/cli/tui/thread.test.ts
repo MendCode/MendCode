@@ -2,7 +2,12 @@ import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "../../fixture/fixture"
-import { resolveRuntimeEntrypoint, resolveSharedServerURL, resolveThreadDirectory } from "../../../src/cli/cmd/tui/thread"
+import {
+  resolveRuntimeEntrypoint,
+  resolveSharedServerURL,
+  resolveThreadDirectory,
+  SHARED_SERVER_RECONNECT_MAX_ATTEMPTS,
+} from "../../../src/cli/cmd/tui/thread"
 
 describe("tui thread", () => {
   async function check(project?: string) {
@@ -43,5 +48,9 @@ describe("tui thread", () => {
     expect(resolveRuntimeEntrypoint("/$bunfs/root/src/index.js", process.cwd())).toBeUndefined()
     expect(resolveRuntimeEntrypoint("B:/~BUN/root/src/index.js", process.cwd())).toBeUndefined()
     expect(resolveRuntimeEntrypoint("src/index.ts", process.cwd())).toBe(path.resolve(process.cwd(), "src/index.ts"))
+  })
+
+  test("keeps retrying a managed local server until it recovers", () => {
+    expect(SHARED_SERVER_RECONNECT_MAX_ATTEMPTS).toBe(Number.POSITIVE_INFINITY)
   })
 })

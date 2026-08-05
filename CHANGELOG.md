@@ -2,7 +2,7 @@
 
 ## 0.1.30 - 2026-08-05
 
-MendCode v0.1.30 expands Full Prompt Context product awareness, makes Setup model presets provider-wide, and hardens memory extraction, Usage Insights, manual compaction testing, long-running TUI activity, and Windows release builds.
+MendCode v0.1.30 expands Full Prompt Context product awareness, makes Setup model presets provider-wide, and hardens memory extraction, Usage Insights, manual compaction testing, reconnecting TUI activity, release presentation, and Windows builds.
 
 ### Added
 
@@ -15,16 +15,19 @@ MendCode v0.1.30 expands Full Prompt Context product awareness, makes Setup mode
 - Disable the memory side-chat role by default and remove it from Setup while preserving the bounded memory extractor and Dream proposal roles.
 - Switch Setup mouse actions to activate on release and use the scrollable Usage Insights layout before low-height terminals clip panels.
 - Build optimized Windows x64 and ARM64 release assets on native Windows runners, cross-build the baseline x64 asset on Linux, verify executable metadata, and assemble them with the Linux and Darwin artifacts.
+- Use version tags as GitHub release display names and populate draft release notes from the matching changelog section.
 
 ### Fixed
 
 - Bound automatic memory extraction to 45 seconds by default so a stalled extractor cannot keep a completed session busy indefinitely.
 - Make the manual queue/compaction smoke single-instance, recover stale locks, terminate child processes on interruption, and clean its isolated fixture and lock on exit.
 - Keep live long-running session activity authoritative beyond the stale snapshot timeout and stop tool animations immediately when `Esc` interrupts a run.
+- Keep managed local-server reconnection alive with bounded backoff, resume accepted prompts when the stream recovers, and restart a stopped connection when the user submits again.
+- Keep `Editing...` and `Patching...` authoritative during transient reconnects and while a large completed edit remains the latest assistant event, then transition when newer output begins.
 
 ### Tests
 
-- Add focused coverage for Full Prompt Context isolation, real CLI-family projection, provider-wide presets, free OpenCode model ordering, compact Usage Insights layouts, memory-extraction timeout recovery, queue-smoke lock cleanup, and long-running TUI activity/interruption state.
+- Add focused coverage for Full Prompt Context isolation, real CLI-family projection, provider-wide presets, free OpenCode model ordering, compact Usage Insights layouts, memory-extraction timeout recovery, queue-smoke lock cleanup, reconnect recovery, and ordered TUI activity phases.
 - Confirm the local-only queue/compaction smoke manually with three mock requests and no external provider contact.
 
 ## 0.1.29 - 2026-08-04
@@ -38,7 +41,6 @@ MendCode v0.1.29 fixes Windows installation, packaging, and release presentation
 
 ### Changed
 
-- Give published GitHub releases the explicit `MendCode v<version>` display name.
 - Make Windows release bundles deterministic and include MendCode icon and metadata.
 
 ### Fixed

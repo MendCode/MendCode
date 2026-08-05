@@ -353,6 +353,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ inputs.version }}
     steps:
+      - name: Checkout release source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          persist-credentials: false
+
       - name: Download release artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -366,12 +371,31 @@ jobs:
           set -euo pipefail
           tag="v${VERSION}"
           notes="${RUNNER_TEMP}/mendcode-release-notes.md"
-          cat > "$notes" <<EOF
-          # MendCode ${tag}
-
-          Built from ${GITHUB_SHA}.
+          section_found=false
+          {
+            printf '# %s\n' "$tag"
+            while IFS= read -r line; do
+              if [[ "$line" == "## ${VERSION} - "* ]]; then
+                section_found=true
+                continue
+              fi
+              if [[ "$section_found" == true && "$line" == "## "* ]]; then
+                break
+              fi
+              if [[ "$section_found" == true ]]; then
+                printf '%s\n' "$line"
+              fi
+            done < "${GITHUB_WORKSPACE}/CHANGELOG.md"
+          } > "$notes"
+          if [[ "$section_found" != true ]]; then
+            echo "Missing CHANGELOG.md section for ${VERSION}" >&2
+            exit 1
+          fi
+          cat >> "$notes" <<EOF
 
           ## Verify
+
+          Built from \`${GITHUB_SHA}\`.
 
           \`\`\`bash
           gh release download ${tag} --repo ${GITHUB_REPOSITORY}
@@ -387,7 +411,7 @@ jobs:
             mendcode.spdx.json \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
-            --title "MendCode ${tag}" \
+            --title "$tag" \
             --notes-file "$notes" \
             --draft \
             ${{ inputs.prerelease && '--prerelease' || '' }}
