@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.30 - 2026-08-05
+
+MendCode v0.1.30 expands Full Prompt Context product awareness, makes Setup model presets provider-wide, and hardens memory extraction, Usage Insights, manual compaction testing, and native Windows release builds.
+
+### Added
+
+- Add a Full Prompt Context capability catalog backed by the real CLI command families, covering TUI and slash-command discovery, native tools, custom tools, MCP, packages, workflows, memory, browser automation, and collaboration surfaces without leaking it into Minimal or Focus modes.
+- Add public agent-facing product, image-generation, custom-tool, screenshot, automation, and extension contracts to the README.
+
+### Changed
+
+- Apply provider presets to every built-in model role, show connected providers first, expose OpenAI-specific presets only when OpenAI is connected, and prioritize free DeepSeek, GLM, and Qwen options in the OpenCode catalog.
+- Disable the memory side-chat role by default and remove it from Setup while preserving the bounded memory extractor and Dream proposal roles.
+- Switch Setup mouse actions to activate on release and use the scrollable Usage Insights layout before low-height terminals clip panels.
+- Build Windows release assets on native Windows runners, verify executable metadata, and assemble them with the Linux and Darwin artifacts.
+
+### Fixed
+
+- Bound automatic memory extraction to 45 seconds by default so a stalled extractor cannot keep a completed session busy indefinitely.
+- Make the manual queue/compaction smoke single-instance, recover stale locks, terminate child processes on interruption, and clean its isolated fixture and lock on exit.
+
+### Tests
+
+- Add focused coverage for Full Prompt Context isolation, real CLI-family projection, provider-wide presets, free OpenCode model ordering, compact Usage Insights layouts, memory-extraction timeout recovery, and queue-smoke lock cleanup.
+- Confirm the local-only queue/compaction smoke manually with three mock requests and no external provider contact.
+
 ## 0.1.29 - 2026-08-04
 
 MendCode v0.1.29 fixes Windows installation, packaging, and release presentation so the corrected assets are available through the standard download paths.

@@ -14,6 +14,7 @@ import {
   sourceForFocus,
 } from "./sources"
 import { composeCustomizationCapabilitySection } from "./capabilities"
+import { advancedCommands, deprecatedAliases, internalCommands, primaryCommands } from "../cli/public-bin"
 
 export type PromptBaseSource = "mendcode-harness-source" | "opencode-generic-provider-fallback" | "minimal-base"
 
@@ -225,7 +226,9 @@ function marketplaceExtensionContract() {
   return [
     "MendCode marketplace and extension contract:",
     "- Marketplace packages are reusable .mendcode bundles, not npm runtime installs. Prefer `mendcode marketplace install <pack-id> [source-id]` and package registry sources over installing arbitrary npm packages.",
-    "- Packages may include commands, agents, modes, skills, prompts, MCP config, context files, TUI profiles, themes, plugins, widgets/components/scripts, custom pages, and assistant-facing custom tools under `.mendcode/tools`.",
+    "- Package commands include status/list, create/update/delete-local, install/install-source, enable/disable/disable-all/remove, search/show, and sources/add-source/remove-source; `mendcode packages` is a compatibility alias for `mendcode marketplace`.",
+    "- Packages may include commands, agents, modes, skills, plugins, tools, prompts, MCP config, context files, custom pages, widgets, extensions, TUI profiles, themes, and worktree policy. Selectable settings also include models, focus, budget, memory, and permissions.",
+    "- Package manifests use `mend-package.json` or `.mendcode/package.json`; installed, enabled, and currently active are distinct states, and compatibility/trust checks may block activation.",
     "- Use the public TUI plugin API from `@mendcode/plugin/tui` for command palette entries, slash commands, routes/pages, dialogs, slots, footer/status entries, themes, KV state, lifecycle cleanup, and simple shell-backed widgets.",
     "- Custom Prompt Mode is one of `minimal`, `focus`, `full`, or `custom`; `custom` reads the bounded project prompt at `.mendcode/prompts/custom.md` while preserving the MendCode boundary. It is project instruction text, not an upstream hidden prompt.",
     "- Custom AI tools live in `.mendcode/tools/*.{ts,js}` and can invoke bounded scripts; expose only the smallest safe interface and keep secrets out of tools and packages.",
@@ -236,6 +239,62 @@ function marketplaceExtensionContract() {
     "- If a package needs private MendCode runtime data, add or request a public API first. Do not import private runtime internals from packages.",
     "- Packages must not include provider tokens, OAuth state, `.env*`, `.mendcode/auth`, local databases, room secrets, cache files, or machine-local run state.",
     "- Disabling a marketplace package should deselect it without deleting project config; removing a package deletes only the installed package copy and state entry.",
+  ].join("\n")
+}
+
+function fullProductCapabilityCatalog() {
+  return [
+    "MendCode complete product capability catalog:",
+    "",
+    "Availability and discovery:",
+    "- Distinguish built-in capability, installed configuration, enabled state, connected runtime, and permission to act. A documented surface is not proof that it is active in the current session.",
+    "- The actual tool schemas attached to the current model are authoritative. Use only tools present in the session and their declared arguments; provider, model, client, feature flags, package selection, agent permissions, and MCP connection state can change the list.",
+    "- Use `mendcode --help` for public workflows, `mendcode help advanced` for support/debug families, Ctrl+P for the live command palette, and `/commands` for the current slash-command inventory. Packages, plugins, skills, project commands, and MCP prompts can extend that inventory at runtime.",
+    "",
+    "MendCode CLI map:",
+    `- Primary public families: ${primaryCommands.map((item) => `\`mendcode ${item}\``).join(", ")}.`,
+    `- Advanced/support families: ${advancedCommands.map((item) => `\`mendcode ${item}\``).join(", ")}.`,
+    `- Internal/debug families hidden from normal help: ${internalCommands.map((item) => `\`mendcode ${item}\``).join(", ")}. Treat these as diagnostics, not the normal user workflow.`,
+    `- Deprecated compatibility aliases: ${deprecatedAliases.map((item) => `\`mendcode ${item}\``).join(", ")}. Prefer the replacement shown by the CLI warning.`,
+    "- `mendcode` opens the TUI; `mendcode run [message..]` opens it with a queued message; `mendcode -s <session_id>` restores a session; `mendcode session <operation>` provides automation output; `mendcode chat [message..]` performs a control-plane turn.",
+    "- Primary management includes setup/status/doctor, marketplace/packages, Loop Workflows, first-class workflows, memory Dream service, mflow, worktrees, and optional TSM. Mutating, destructive, external, or background-service subcommands remain subject to their confirmation and permission gates.",
+    "- Setup/model support: `status`, `doctor`, `check`, `setup status|plan|doctor`, `models status|show|plan|presets|set-default|use-preset`, `providers status|auth|adapters|smoke`, `auth status|login-plan|login`, `permissions status|set-default|set-reviewer-role`, and `focus status|list|show|use`.",
+    "- Memory support: `memory status|search|preview|add|edit|delete|propose|list|apply|reject|import-codex|index|config`; Dream adds `status|run|consolidate|tick|daemon|service`.",
+    "- Package support: `marketplace status|list|create|update|delete-local|install|install-source|enable|disable|disable-all|remove|search|show|sources|add-source|remove-source`; `install`, `packages`, and deprecated `package` provide narrower or compatibility aliases.",
+    "- Automation support: `loops status|list|examples|draft|show|tail|monitor|tick|daemon|service|activate|run|pause|resume|stop` and `workflows list|preview|save|start|show|events|artifacts|pause|resume|stop|delete|retry-task|retry-phase`; singular `workflow` is an accepted compatibility route.",
+    "- Collaboration support: `worktree status|plan|create|open|adopt|remove|reset|doctor`, `mflow status|setup|activate|deactivate|remove|scan|relay-guide|plan|doctor`, and `tsm status|plan|setup|install|activate|deactivate|remove|doctor`.",
+    "",
+    "TUI, command palette, and slash surfaces:",
+    "- The TUI provides Home/Agent View, chat sessions, Setup, Usage Insights, Memory Center/Graph/Dream, Loop and Workflow dashboards, Changes review, package/marketplace managers, worktree/TSM/mflow managers, themes, diagnostics, and plugin-defined routes or slots.",
+    "- Core navigation/configuration slashes include `/commands`, `/setup`, `/permission`, `/prompt-mode`, `/customize`, `/packages`, `/marketplace`, `/memory-manager`, `/memory-center`, `/memory-graph`, `/stats`, `/loops`, `/workflows`, `/changes`, `/worktrees`, `/tsm`, `/mflow`, `/models`, `/agents`, `/mcps`, `/variants`, `/connect`, `/provider`, `/budget`, `/skills`, `/editor`, `/warp`, `/status`, `/themes`, `/docs`, `/help`, `/diagnostics`, and `/exit`.",
+    "- Session slashes include `/new`, `/sessions`, `/rename`, `/loop`, `/bg`, `/timeline`, `/fork`, `/context`, `/compact`, `/undo`, `/redo`, `/timestamps`, `/thinking`, `/copy`, and `/export`. Aliases and plugin-added commands are discoverable through `/commands` rather than assumed from this summary.",
+    "- Slash commands may be UI actions, project command templates, skills, or MCP prompts. Do not imitate a slash action with shell commands when the matching native tool or TUI surface exists.",
+    "",
+    "Native assistant tool families:",
+    "- Interaction and state: `question`, `todowrite`, plan review/exit tools when enabled, and the changed-files `review` workspace.",
+    "- Local code and files: `bash`, `read`, `glob`, `grep`, `edit`, `write`, `apply_patch`, and optional LSP support. Follow read-before-edit, workspace, permission, and destructive-action boundaries.",
+    "- Web and media: `webfetch`, provider-gated web search, and `image_gen` only when a compatible configured image model and permission are present.",
+    "- Agent automation: `task`/`task_status` for bounded subagents, `skill` for injected workflows, `loop` for durable repeated or scheduled work, and `workflow` for independent declarative phase/task runs.",
+    "- Durable context: `memory` for entries and categories and `memory_graph` for relationship-aware facts. Runtime memory injection remains transient context.",
+    "- Browser automation, mflow controls, payment/domain integrations, and other namespaced tools may arrive from MCP servers or custom/plugin tool providers. Their presence and schema, not this catalog, establish availability.",
+    "",
+    "Custom commands, agents, skills, tools, and plugins:",
+    "- MendCode merges global and project configuration directories, with `.mendcode` as the owned project surface and compatible legacy `.opencode` directories when enabled. Project `mendcode.json/jsonc`, instructions, command files, agents/modes, skills, plugins, and tools are discovered through the runtime config loader.",
+    "- Custom command templates become slash commands. Skills are discoverable slash entries and load richer instructions through `skill`. Agent definitions can select prompts, models, variants, tools, permissions, and primary/subagent behavior.",
+    "- Custom AI tools are loaded from `{tool,tools}/*.{ts,js}` in active config directories and from plugin `tool` exports. A module may expose a default tool or multiple named exports; definitions supply a description, typed argument schema, execution result, and optional metadata.",
+    "- Plugin hooks may adjust tool definitions and observe before/after execution. Custom tools still pass through agent permissions, output truncation, session status, and runtime safety boundaries.",
+    "",
+    "MCP (Model Context Protocol):",
+    "- MCP supports configured local process servers (`type: local`, command/args, optional cwd/environment) and remote servers (`type: remote`, URL, optional headers and OAuth). Servers can be enabled, disabled, connected, failed, or waiting for authentication; configuration alone does not mean connected.",
+    "- Tools from connected servers are paginated, schema-converted, permission-checked, and exposed as sanitized `<server>_<tool>` names. The exact connected tool schemas are supplied directly to the model.",
+    "- Connected MCP prompts are projected into the command/slash catalog; MCP resources are available through the runtime resource APIs and may also be returned by tool calls. Tools, prompts, and resources depend on each server's advertised capabilities.",
+    "- Use `/mcps` for the configured TUI toggle surface and `mendcode mcp status|preview|add-local` for the public support route. OAuth credentials, headers, tokens, and server environment values are secrets and must not be printed or packaged.",
+    "",
+    "Packages, workflows, and runtime features:",
+    "- Marketplace bundles can project commands, agents, modes, skills, plugins, tools, prompts, MCP, context, pages, widgets, extensions, themes, TUI profile, worktree policy, and selected model/focus/budget/memory/permission settings. Installation, enablement, compatibility, trust, and active projection are separate checks.",
+    "- Loop Workflows own durable cadence and monitored repetition. The first-class `workflow` surface owns one-shot declarative plans with phases, dependencies, artifacts, verification tasks, retries, permissions, budgets, pause/resume/stop, and bounded inspection.",
+    "- Setup coordinates providers/auth, model roles and variants, budgets, default approval mode, prompt context, and TUI profile. Current configured values must be read from Setup/runtime status rather than guessed.",
+    "- Changes review, persistent memory, usage statistics, session export/import/sharing where enabled, local server/API/SDK clients, worktrees, mflow synchronization, TSM integration, themes, and TUI plugins are product surfaces with their own runtime and permission state.",
   ].join("\n")
 }
 
@@ -255,14 +314,8 @@ async function fullKnowledge(root: string) {
     "- Model roles are managed from ~/.mendcode/models.yaml and projected into each checkout generated runtime compatibility config.",
     "- Budget behavior is local policy; dry-run/status commands must not call providers.",
     "",
-    "MendCode CLI map:",
-    "- `mendcode` opens the interactive terminal coding TUI. `mendcode run <message>` opens the TUI with a message queued. `mendcode chat <message>` runs a control-plane chat turn.",
-    "- Health/setup: `mendcode status`, `mendcode doctor`, `mendcode check`, `mendcode setup status|plan|doctor`.",
-    "- Models/providers/auth: `mendcode models status|show|plan|presets|set-default|use-preset`, `mendcode providers status`, `mendcode auth status|login-plan|login`.",
-    "- Prompt/runtime internals are debug-only and should not be presented as the normal user workflow.",
-    "- Memory inspection: use the `memory` tool for status, categories, list, search, context, add, update, and delete.",
-    "- Project controls: `mendcode focus status|list|show|use`, `mendcode marketplace status|list|create|install|enable|disable|remove|search|show`.",
-    "- Collaboration: `mendcode worktree status|plan|create|open|adopt|remove|reset|doctor`, `mendcode mflow status|setup|activate|deactivate|remove|plan|doctor`, `mendcode tsm status|plan|setup|activate|deactivate|remove|doctor`.",
+    "Current project/runtime context:",
+    "- Memory inspection and updates should use the `memory` tool; project collaboration may use worktrees, mflow, or optional TSM only when their current status and the user request permit it.",
     "",
     "Memory operating contract:",
     "- Use `memory` when you detect a durable correction, user preference, project rule, or explicit memory-management request. Scope cross-project behavior as global and repo-specific behavior as project.",
@@ -451,6 +504,14 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
         label: "MendCode knowledge",
         source: "mendcode-context",
         text: full.knowledge,
+      }),
+    )
+    sections.push(
+      section({
+        id: "product-capability-catalog",
+        label: "MendCode complete product capability catalog",
+        source: "mendcode-context",
+        text: fullProductCapabilityCatalog(),
       }),
     )
     sections.push(

@@ -54,6 +54,10 @@ const HEATMAP_ROWS = 7
 const HEATMAP_COLUMNS = Math.ceil(DEFAULT_DAYS / HEATMAP_ROWS)
 const HEAT_MODES: HeatMode[] = ["daily", "weekly", "cumulative"]
 
+export function statsUsesScrollableLayout(width: number, height: number) {
+  return width < 92 || height < 42
+}
+
 type HeatMode = "daily" | "weekly" | "cumulative"
 type StatsScope = "global" | "project" | "directory"
 type SessionScopeQuery = { scope?: "project"; path?: string; directory?: string }
@@ -1195,7 +1199,7 @@ export function Stats() {
   let activeInsightRequest: AbortController | undefined
   let selectedDayTimer: ReturnType<typeof setTimeout> | undefined
   let pendingSelectedDay: { index: number; key: string | undefined } | undefined
-  const tiny = createMemo(() => dimensions().width < 92 || dimensions().height < 26)
+  const tiny = createMemo(() => statsUsesScrollableLayout(dimensions().width, dimensions().height))
   const narrow = createMemo(() => !tiny() && dimensions().width < 124)
   const wide = createMemo(() => dimensions().width >= 142 && dimensions().height >= 34)
   const roomy = createMemo(() => dimensions().width >= 170 && dimensions().height >= 38)
