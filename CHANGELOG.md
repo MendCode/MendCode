@@ -2,7 +2,7 @@
 
 ## 0.1.30 - 2026-08-05
 
-MendCode v0.1.30 expands Full Prompt Context product awareness, makes Setup model presets provider-wide, and hardens memory extraction, Usage Insights, manual compaction testing, and native Windows release builds.
+MendCode v0.1.30 expands Full Prompt Context product awareness, makes Setup model presets provider-wide, and hardens memory extraction, Usage Insights, manual compaction testing, long-running TUI activity, and Windows release builds.
 
 ### Added
 
@@ -14,16 +14,17 @@ MendCode v0.1.30 expands Full Prompt Context product awareness, makes Setup mode
 - Apply provider presets to every built-in model role, show connected providers first, expose OpenAI-specific presets only when OpenAI is connected, and prioritize free DeepSeek, GLM, and Qwen options in the OpenCode catalog.
 - Disable the memory side-chat role by default and remove it from Setup while preserving the bounded memory extractor and Dream proposal roles.
 - Switch Setup mouse actions to activate on release and use the scrollable Usage Insights layout before low-height terminals clip panels.
-- Build Windows release assets on native Windows runners, verify executable metadata, and assemble them with the Linux and Darwin artifacts.
+- Build optimized Windows x64 and ARM64 release assets on native Windows runners, cross-build the baseline x64 asset on Linux, verify executable metadata, and assemble them with the Linux and Darwin artifacts.
 
 ### Fixed
 
 - Bound automatic memory extraction to 45 seconds by default so a stalled extractor cannot keep a completed session busy indefinitely.
 - Make the manual queue/compaction smoke single-instance, recover stale locks, terminate child processes on interruption, and clean its isolated fixture and lock on exit.
+- Keep live long-running session activity authoritative beyond the stale snapshot timeout and stop tool animations immediately when `Esc` interrupts a run.
 
 ### Tests
 
-- Add focused coverage for Full Prompt Context isolation, real CLI-family projection, provider-wide presets, free OpenCode model ordering, compact Usage Insights layouts, memory-extraction timeout recovery, and queue-smoke lock cleanup.
+- Add focused coverage for Full Prompt Context isolation, real CLI-family projection, provider-wide presets, free OpenCode model ordering, compact Usage Insights layouts, memory-extraction timeout recovery, queue-smoke lock cleanup, and long-running TUI activity/interruption state.
 - Confirm the local-only queue/compaction smoke manually with three mock requests and no external provider contact.
 
 ## 0.1.29 - 2026-08-04
