@@ -154,6 +154,7 @@ export type PromptProps = {
   visible?: boolean
   disabled?: boolean
   onSubmit?: (info: PromptSubmitInfo) => void
+  onInterruptChange?: (interrupted: boolean) => void
   ref?: (ref: PromptRef | undefined) => void
   hint?: JSX.Element
   right?: JSX.Element
@@ -765,6 +766,10 @@ export function Prompt(props: PromptProps) {
   const [workingTick, setWorkingTick] = createSignal(Date.now())
   const [workingStartedAt, setWorkingStartedAt] = createSignal<number>()
   const [interruptRequested, setInterruptRequested] = createSignal(false)
+  const updateInterruptRequested = (interrupted: boolean) => {
+    setInterruptRequested(interrupted)
+    props.onInterruptChange?.(interrupted)
+  }
   const [compactionActive, setCompactionActive] = createSignal(false)
   const [mascotHover, setMascotHover] = createSignal(false)
   let clearWorkingStartTimer: Timer | undefined
@@ -792,7 +797,7 @@ export function Prompt(props: PromptProps) {
   createEffect(
     on(
       () => props.sessionID,
-      () => setInterruptRequested(false),
+      () => updateInterruptRequested(false),
       { defer: true },
     ),
   )
@@ -1978,7 +1983,7 @@ export function Prompt(props: PromptProps) {
       return
     }
     if (interruptRequest) return
-    setInterruptRequested(true)
+    updateInterruptRequested(true)
     interruptRequest = withTimeout(sdk.client.session.abort({ sessionID }), 2000, "Session interrupt timed out")
       .catch(() => undefined)
       .finally(() => {
@@ -2356,7 +2361,7 @@ export function Prompt(props: PromptProps) {
     local.model.set(selectedModel)
     local.model.variant.set(variant, { model: selectedModel })
 
-    setInterruptRequested(false)
+    updateInterruptRequested(false)
     workingStartedAtBySession.set(sessionID, Date.now())
     setWorkingStartedAt(workingStartedAtBySession.get(sessionID))
     const inputText = submittedPrompt.inputText
