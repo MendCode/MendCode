@@ -16,7 +16,7 @@ export function SetupActionBar(props: { actions: SetupAction[] }) {
         {(action) => (
           <text
             fg={action.disabled ? theme.textMuted : action.active ? theme.primary : theme.text}
-            onMouseDown={() => {
+            onMouseUp={() => {
               if (action.disabled) return
               action.onPress()
             }}

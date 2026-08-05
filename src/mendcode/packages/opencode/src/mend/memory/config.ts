@@ -70,7 +70,7 @@ export const defaultMemoryConfig: MemoryConfig = {
   extractorRole: "memoryExtractor",
   consolidatorRole: "none",
   memoryDreamRole: "memoryDream",
-  memoryAssistantRole: "memoryAssistant",
+  memoryAssistantRole: "none",
   dreamWindow: null,
   memoryWritePolicy: "pending",
   memoryAutoApplyMinConfidence: 0.9,

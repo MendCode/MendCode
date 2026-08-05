@@ -74,11 +74,24 @@ const baseModelRoleOrder = [
   "summary",
   "memoryExtractor",
   "memoryDream",
-  "memoryAssistant",
   "permissionReviewer",
 ] as const
 type SetupModelRole = string
 const primaryModelRoles = ["default", "build", "plan"] as const
+export const providerPresetRoles = [
+  "default",
+  "build",
+  "code",
+  "plan",
+  "subagent",
+  "small",
+  "title",
+  "compaction",
+  "summary",
+  "memoryExtractor",
+  "memoryDream",
+  "permissionReviewer",
+] as const
 const internalModelRoles = [
   "subagent",
   "small",
@@ -87,7 +100,6 @@ const internalModelRoles = [
   "summary",
   "memoryExtractor",
   "memoryDream",
-  "memoryAssistant",
   "permissionReviewer",
 ] as const
 const promptModes: MendPromptMode[] = ["minimal", "focus", "full"]
@@ -163,8 +175,6 @@ const roleDescriptions: Record<string, string> = {
   summary: "Hidden runtime summary agent for session summary metadata.",
   memoryExtractor: "Background model that reviews completed turns and proposes only durable memories worth approval.",
   memoryDream: "Background model for manual/scheduled memory maintenance that writes reviewable proposals only.",
-  memoryAssistant:
-    "Memory assistant for supported integrations that answers memory questions and drafts reviewable proposals only.",
   permissionReviewer:
     "Hidden permission reviewer model that quickly checks risky shell permission prompts in Smart Approval.",
 }
@@ -179,7 +189,6 @@ const roleLabels: Record<string, string> = {
   summary: "Session summaries",
   memoryExtractor: "Memory extractor",
   memoryDream: "Memory Dream",
-  memoryAssistant: "Memory side chat",
   permissionReviewer: "Permission reviewer",
 }
 
@@ -202,6 +211,26 @@ function modelLabel(role?: ModelRole) {
   if (!role?.providerID || !role.modelID) return "not set"
   const base = `${role.providerID}/${role.modelID}`
   return role.variant ? `${base} · ${role.variant}` : base
+}
+
+export function providerBaselineModelEntries(
+  providerID: string,
+  models: Record<string, { name?: string; status?: string }>,
+) {
+  const preferredFamilies = ["deepseek", "glm", "qwen"]
+  const score = (modelID: string, name?: string) => {
+    if (providerID !== "opencode") return 0
+    const value = `${modelID} ${name || ""}`.toLowerCase()
+    const free = value.includes("free") ? 0 : 100
+    const family = preferredFamilies.findIndex((item) => value.includes(item))
+    return free + (family === -1 ? preferredFamilies.length + 1 : family)
+  }
+  return Object.entries(models)
+    .filter(([, model]) => model.status !== "deprecated")
+    .toSorted(([leftID, left], [rightID, right]) => {
+      const preference = score(leftID, left.name) - score(rightID, right.name)
+      return preference || leftID.localeCompare(rightID)
+    })
 }
 
 function approxPromptTokens(bytes?: number) {
@@ -601,7 +630,7 @@ export function Setup() {
         ...defaults.presentation,
         activity: {
           ...defaults.presentation.activity,
-          showModel: true,
+          showModel: false,
           showTokens: true,
           showElapsed: true,
           showInterruptHint: true,
@@ -838,23 +867,20 @@ export function Setup() {
     const config = await readModelsConfig(mend.root)
     const role = { providerID, modelID, authMode: inferAuthMode(providerID, modelID) }
     config.enabled = true
-    for (const name of ["default", "build", "code", "plan", "subagent"]) config.roles[name] = { ...role }
-    if (!config.roles.small?.providerID || !config.roles.small.modelID) config.roles.small = { ...role }
+    for (const name of providerPresetRoles) config.roles[name] = { ...role }
     await writeGlobalModelsConfig(config)
     await syncGlobalPrimaryAgentModels(mend.root)
     await refreshGeneratedRuntimeModelConfig(mend.root)
     await mark("models")
     reload()
     dialog.clear()
-    toast.show({ variant: "success", message: `Primary model preset applied from ${providerID}.`, duration: 4000 })
+    toast.show({ variant: "success", message: `All built-in model roles now use ${providerID}/${modelID}.`, duration: 4000 })
   }
 
   const chooseProviderModelPreset = (providerID: string) => {
     const provider = sync.data.provider.find((item) => item.id === providerID)
     if (!provider) return
-    const options = Object.entries(provider.models)
-      .filter(([, model]) => model.status !== "deprecated")
-      .sort(([left], [right]) => left.localeCompare(right))
+    const options = providerBaselineModelEntries(provider.id, provider.models)
       .map(([modelID, model]) => ({
         title: model.name || modelID,
         value: modelID,
@@ -870,7 +896,7 @@ export function Setup() {
       })
       return
     }
-    dialog.replace(() => <DialogSelect title={`${providerDisplayName(provider)} baseline model`} options={options} />)
+    dialog.replace(() => <DialogSelect title={`${providerDisplayName(provider)} all-role model`} options={options} />)
   }
 
   const applyModelOnboardingPreset = async (preset: "subscription" | "api-balanced" | "api-budget") => {
@@ -905,7 +931,6 @@ export function Setup() {
     config.roles.summary = helper
     config.roles.memoryExtractor = helper
     config.roles.memoryDream = helper
-    config.roles.memoryAssistant = helper
     config.roles.permissionReviewer = helper
     await writeGlobalModelsConfig(config)
     await syncGlobalPrimaryAgentModels(mend.root)
@@ -923,41 +948,55 @@ export function Setup() {
   }
 
   const chooseModelRoleMenu = () => {
-    dialog.replace(() => (
-      <DialogSelect
-        title="Model Roles"
-        options={[
+    const providerPresets = sync.data.provider
+      .filter((provider) => Object.keys(provider.models).length > 0)
+      .toSorted((left, right) => {
+        const leftConnected = connectedProviderIDs().includes(left.id) ? 0 : 1
+        const rightConnected = connectedProviderIDs().includes(right.id) ? 0 : 1
+        return leftConnected - rightConnected || providerDisplayName(left).localeCompare(providerDisplayName(right))
+      })
+      .map((provider) => ({
+        title: `${providerDisplayName(provider)} all-role preset`,
+        value: `provider:${provider.id}`,
+        category: "Provider presets",
+        description:
+          provider.id === "opencode"
+            ? "Use one OpenCode Zen model for every built-in role; free DeepSeek, GLM, and Qwen models are listed first."
+            : "Pick one model from this provider and use it for every built-in MendCode role.",
+        onSelect: () => chooseProviderModelPreset(provider.id),
+      }))
+    const openAIPresets = connectedProviderIDs().includes("openai")
+      ? [
           {
             title: "ChatGPT subscription preset",
             value: "subscription",
-            category: "Onboarding presets",
+            category: "OpenAI presets",
             description: "Use Codex OAuth defaults; no API-key billing contract is written.",
             onSelect: async () => applyModelOnboardingPreset("subscription"),
           },
           {
             title: "OpenAI API balanced preset",
             value: "api-balanced",
-            category: "Onboarding presets",
+            category: "OpenAI presets",
             description: "Use stronger primary roles and cheaper helper roles; requires OPENAI_API_KEY.",
             onSelect: async () => applyModelOnboardingPreset("api-balanced"),
           },
-           {
-             title: "OpenAI API budget preset",
+          {
+            title: "OpenAI API budget preset",
             value: "api-budget",
-            category: "Onboarding presets",
+            category: "OpenAI presets",
             description: "Use mini/nano API presets for lower-cost onboarding and smoke tests.",
-             onSelect: async () => applyModelOnboardingPreset("api-budget"),
-           },
-           ...sync.data.provider
-             .filter((provider) => Object.keys(provider.models).length > 0)
-             .map((provider) => ({
-               title: `${providerDisplayName(provider)} baseline preset`,
-               value: `provider:${provider.id}`,
-               category: "Connected provider",
-               description: "Pick one model from this provider and use it for the primary MendCode roles.",
-               onSelect: () => chooseProviderModelPreset(provider.id),
-             })),
-           ...setupModelRoles().map((role) => ({
+            onSelect: async () => applyModelOnboardingPreset("api-budget"),
+          },
+        ]
+      : []
+    dialog.replace(() => (
+      <DialogSelect
+        title="Model Roles"
+        options={[
+          ...providerPresets,
+          ...openAIPresets,
+          ...setupModelRoles().map((role) => ({
             title: roleLabel(role),
             value: role,
             category: roleCategory(role),
@@ -2235,7 +2274,7 @@ export function Setup() {
                       </text>
                       <For each={setupPresetList}>
                         {(preset) => (
-                          <box flexDirection="column" gap={0} onMouseDown={() => void applySetupPreset(preset.id)}>
+                          <box flexDirection="column" gap={0} onMouseUp={() => void applySetupPreset(preset.id)}>
                             <text fg={preset.id === "default" ? theme.primary : theme.text}>{preset.title}</text>
                             <text fg={theme.textMuted}>{truncateSetupText(preset.summary, promptPanelWidth())}</text>
                               <text fg={theme.textMuted}>
@@ -2308,19 +2347,19 @@ export function Setup() {
                    </text>
                    <text fg={theme.primary}>MODEL PRESETS</text>
                     <text fg={theme.textMuted}>
-                      ChatGPT subscription uses OAuth; OpenAI API uses an API key; connected provider presets use that
-                      provider's model catalog.
+                      Provider presets apply one selected model to every built-in role. OpenAI-specific presets appear
+                      only when OpenAI is connected.
                     </text>
                     <text fg={theme.textMuted}>
-                      OpenRouter, Anthropic, and other providers appear here only after their runtime auth/catalog is
-                      available.
+                      OpenCode Zen, OpenRouter, Anthropic, Claude Code, and other providers appear when their runtime
+                      model catalog is available.
                     </text>
                   <For each={primaryModelRoles}>
                     {(role) => (
                         <box
                           flexDirection="row"
                           justifyContent="space-between"
-                          onMouseDown={() => chooseModelRole(role)}
+                          onMouseUp={() => chooseModelRole(role)}
                         >
                         <text>{roleLabel(role)}</text>
                         <text fg={role === "default" && !modelRole(role)?.modelID ? theme.warning : theme.textMuted}>
@@ -2336,7 +2375,7 @@ export function Setup() {
                         <box
                           flexDirection="row"
                           justifyContent="space-between"
-                          onMouseDown={() => chooseModelRole(role)}
+                          onMouseUp={() => chooseModelRole(role)}
                         >
                         <text>{roleLabel(role)}</text>
                         <text fg={theme.textMuted}>{modelLabel(modelRole(role))}</text>
@@ -2352,7 +2391,7 @@ export function Setup() {
                   </Show>
                    <box flexGrow={1} />
                     <text fg={theme.textMuted}>
-                      Enter opens onboarding presets plus all model roles. Click any visible row to edit it.
+                      Enter opens provider presets plus all model roles. Click any visible row to edit it.
                     </text>
                     <SetupActionBar
                       actions={[{ label: "Open model presets", active: true, onPress: chooseModelRoleMenu }]}
@@ -2540,10 +2579,6 @@ export function Setup() {
                       Dream model: {setupSummary()?.memory.memoryDreamRole || "memoryDream"} · manual/scheduled runs
                       write proposals only
                   </text>
-                  <text>
-                      Side chat model: {setupSummary()?.memory.memoryAssistantRole || "memoryAssistant"} · no
-                      shell/git/source edits
-                  </text>
                   <text>Scopes: {setupSummary()?.memory.scopes.join(", ")}</text>
                   <text>
                     Stored entries: global {setupSummary()?.memory.entries.global.count}, project{" "}
@@ -2601,7 +2636,7 @@ export function Setup() {
                 ? truncateSetupText("Required: provider, models, budget, prompt", promptPanelWidth())
                 : "Required: provider, models, budget, prompt · optional: start, tui, memory, permissions, package"}
             </text>
-            <text fg={complete() ? theme.success : theme.textMuted} wrapMode="none" onMouseDown={() => void finish()}>
+            <text fg={complete() ? theme.success : theme.textMuted} wrapMode="none" onMouseUp={() => void finish()}>
               {complete() ? "Finish setup" : "Setup incomplete"}
             </text>
           </box>

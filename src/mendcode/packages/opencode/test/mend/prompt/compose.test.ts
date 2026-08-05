@@ -3,6 +3,12 @@ import { mkdir, writeFile } from "fs/promises"
 import path from "path"
 import { composePromptPolicy } from "../../../src/mend/prompt/compose"
 import { MAX_CUSTOM_PROMPT_BYTES } from "../../../src/mend/prompt/custom"
+import {
+  advancedCommands,
+  deprecatedAliases,
+  internalCommands,
+  primaryCommands,
+} from "../../../src/mend/cli/public-bin"
 import { tmpdir } from "../../fixture/fixture"
 
 describe("mend prompt composition", () => {
@@ -236,6 +242,28 @@ describe("mend prompt composition", () => {
     expect(focus.includeMcpContext).toBe(false)
     expect(focus.instructions).not.toContain("MendCode knowledge:")
     expect(focus.instructions).not.toContain("MendCode marketplace and extension contract")
+  })
+
+  test("full mode includes the complete MendCode capability catalog and real CLI families", async () => {
+    const minimal = await composePromptPolicy({ mode: "minimal", focusID: "codex" })
+    const focus = await composePromptPolicy({ mode: "focus", focusID: "codex" })
+    const full = await composePromptPolicy({ mode: "full", focusID: "codex" })
+    const catalog = full.sections.find((item) => item.id === "product-capability-catalog")
+
+    expect(minimal.sections.find((item) => item.id === "product-capability-catalog")).toBeUndefined()
+    expect(focus.sections.find((item) => item.id === "product-capability-catalog")).toBeUndefined()
+    expect(catalog?.text).toContain("MendCode complete product capability catalog")
+    for (const command of [...primaryCommands, ...advancedCommands, ...internalCommands, ...deprecatedAliases]) {
+      expect(catalog?.text).toContain(`mendcode ${command}`)
+    }
+    expect(catalog?.text).toContain("`/commands`")
+    expect(catalog?.text).toContain("`task`/`task_status`")
+    expect(catalog?.text).toContain("Custom AI tools are loaded from `{tool,tools}/*.{ts,js}`")
+    expect(catalog?.text).toContain("sanitized `<server>_<tool>` names")
+    expect(catalog?.text).toContain("MCP prompts are projected into the command/slash catalog")
+    expect(catalog?.text).toContain("first-class `workflow` surface")
+    expect(catalog?.text).toContain("Installation, enablement, compatibility, trust, and active projection")
+    expect(full.policyInstructions).toContain("The actual tool schemas attached to the current model are authoritative")
   })
 
   test("full mode documents the live TUI customization contract", async () => {

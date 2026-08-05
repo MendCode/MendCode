@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
+import { readFileSync, rmSync } from "node:fs"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -13,6 +15,9 @@ const PAYLOAD_CHARS = 90_000
 const HOLD_MS = Number(process.env.MENDCODE_QUEUE_SMOKE_HOLD_MS ?? 20_000)
 const packageRoot = path.resolve(import.meta.dir, "..")
 const entrypoint = path.join(packageRoot, "src", "index.ts")
+const lockIdentity =
+  os.userInfo().uid >= 0 ? os.userInfo().uid : os.userInfo().username.replace(/[^a-zA-Z0-9_-]/g, "_")
+const defaultLockPath = path.join(os.tmpdir(), `mendcode-queue-compaction-smoke-${lockIdentity}.lock`)
 
 const sensitiveEnvironmentKeys = [
   "ANTHROPIC_API_KEY",
@@ -54,7 +59,83 @@ type ChildResult = {
   stderr: string
 }
 
+type SmokeLockOwner = {
+  pid: number
+  token: string
+  startedAt: string
+}
+
 const activeChildren = new Set<ChildProcess>()
+let activeFixtureRoot: string | undefined
+let activeSmokeLock: Awaited<ReturnType<typeof acquireQueueCompactionSmokeLock>> | undefined
+let shutdownExitCode: number | undefined
+
+function errorHasCode(error: unknown, code: string): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error && error.code === code
+}
+
+function smokeLockOwner(lockPath: string) {
+  return readFile(lockPath, "utf8")
+    .then((value) => JSON.parse(value) as unknown)
+    .then((value): SmokeLockOwner | undefined => {
+      if (!value || typeof value !== "object") return
+      if (
+        !("pid" in value) ||
+        typeof value.pid !== "number" ||
+        !Number.isSafeInteger(value.pid) ||
+        value.pid <= 0
+      ) return
+      if (!("token" in value) || typeof value.token !== "string") return
+      if (!("startedAt" in value) || typeof value.startedAt !== "string") return
+      return { pid: value.pid, token: value.token, startedAt: value.startedAt }
+    })
+    .catch(() => undefined)
+}
+
+function processIsRunning(pid: number) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return errorHasCode(error, "EPERM")
+  }
+}
+
+export async function acquireQueueCompactionSmokeLock(lockPath = defaultLockPath, attempt = 0) {
+  const owner = { pid: process.pid, token: randomUUID(), startedAt: new Date().toISOString() }
+  try {
+    await writeFile(lockPath, JSON.stringify(owner) + "\n", { flag: "wx" })
+  } catch (error) {
+    if (!errorHasCode(error, "EEXIST")) throw error
+    const current = await smokeLockOwner(lockPath)
+    if (current && processIsRunning(current.pid)) {
+      throw new Error(
+        `the queue/compaction smoke is already running (PID ${current.pid}); use that terminal or stop it before starting another`,
+      )
+    }
+    if (!current && attempt < 2) {
+      await sleep(50)
+      return acquireQueueCompactionSmokeLock(lockPath, attempt + 1)
+    }
+    if (attempt >= 4) throw new Error("could not acquire the queue/compaction smoke single-instance lock")
+    await rm(lockPath, { force: true })
+    return acquireQueueCompactionSmokeLock(lockPath, attempt + 1)
+  }
+
+  const release = async () => {
+    if ((await smokeLockOwner(lockPath))?.token !== owner.token) return
+    await rm(lockPath, { force: true })
+  }
+  const releaseSync = () => {
+    try {
+      const current = JSON.parse(readFileSync(lockPath, "utf8")) as Partial<SmokeLockOwner>
+      if (current.token === owner.token) rmSync(lockPath, { force: true })
+    } catch {
+      return
+    }
+  }
+  return { release, releaseSync }
+}
 
 function trackChild(child: ChildProcess) {
   activeChildren.add(child)
@@ -64,22 +145,31 @@ function trackChild(child: ChildProcess) {
   return cleanup
 }
 
-function terminateActiveChildren() {
+function terminateActiveChildren(signal: NodeJS.Signals = "SIGTERM") {
   for (const child of activeChildren) {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM")
+    if (child.exitCode === null && child.signalCode === null) child.kill(signal)
   }
 }
 
 function installChildCleanup() {
-  process.once("exit", terminateActiveChildren)
+  process.once("exit", () => {
+    terminateActiveChildren("SIGKILL")
+    activeSmokeLock?.releaseSync()
+    if (activeFixtureRoot) rmSync(activeFixtureRoot, { recursive: true, force: true })
+  })
   for (const [signal, exitCode] of [
     ["SIGINT", 130],
     ["SIGTERM", 143],
     ["SIGHUP", 129],
   ] as const) {
     process.once(signal, () => {
+      shutdownExitCode = exitCode
       terminateActiveChildren()
       process.exitCode = exitCode
+      setTimeout(() => {
+        terminateActiveChildren("SIGKILL")
+        process.exit(exitCode)
+      }, 1_000)
     })
   }
 }
@@ -215,83 +305,99 @@ async function main() {
     throw new Error("the queue/compaction smoke requires an interactive terminal")
   }
 
-  const test = await fixture()
-  process.env = test.environment
-
-  const program = Effect.gen(function* () {
-    const llm = yield* TestLLMServer
-    yield* Effect.promise(() =>
-      writeFile(path.join(test.project, "mendcode.json"), JSON.stringify(config(llm.url), null, 2) + "\n"),
-    )
-
-    yield* llm.text("local seed response", { usage: { input: 25_000, output: 20 } })
-    const seed = yield* Effect.promise(() =>
-      runCLI(
-        [
-          "--pure",
-          "run",
-          "--format",
-          "json",
-          "--model",
-          MODEL,
-          "--title",
-          "Queue compaction smoke",
-          "--dir",
-          test.project,
-          "--dangerously-skip-permissions",
-        ],
-        test.environment,
-        { input: syntheticPrompt("seed") },
-      ),
-    )
-    requireSuccess(seed, "seed session")
-    const id = sessionID(seed.stdout)
-
-    const previousCalls = yield* llm.calls
-    const release = Effect.runPromise(llm.wait(previousCalls + 1)).then(() => sleep(HOLD_MS))
-    yield* llm.hold("local compaction summary", release)
-    process.stderr.write(
-      [
-        "",
-        "MendCode queue/compaction smoke is ready (the provider is local and never calls an API).",
-        `Model context limit: ${CONTEXT_LIMIT.toLocaleString()} tokens; auto-compaction: ${COMPACTION_LIMIT.toLocaleString()} tokens.`,
-        "The TUI opens with a synthetic trigger prompt already loaded.",
-        "Press Enter to submit it, then submit two short prompts while compaction is active.",
-        `The local model holds that request for ${Math.round(HOLD_MS / 1_000)} seconds so the queued state is visible.`,
-        "Expected result: queued messages remain paired with their queued/send state after compaction, not ordinary transcript rows.",
-        "",
-      ].join("\n"),
-    )
-
-    const tui = yield* Effect.promise(() =>
-      runCLI(
-        [
-          "--pure",
-          "--isolated",
-          "--model",
-          MODEL,
-          "--session",
-          id,
-          "--initial-message",
-          syntheticPrompt("trigger"),
-          test.project,
-        ],
-        test.environment,
-        { inherit: true },
-      ),
-    )
-    requireSuccess(tui, "TUI")
-
-    const inputs = yield* llm.inputs
-    process.stderr.write(`\nLocal mock requests observed: ${inputs.length}. No external provider was contacted.\n`)
-  })
-
+  const lock = await acquireQueueCompactionSmokeLock()
+  activeSmokeLock = lock
   try {
-    await Effect.runPromise(program.pipe(Effect.provide(TestLLMServer.layer), Effect.scoped))
+    const test = await fixture()
+    activeFixtureRoot = test.root
+    process.env = test.environment
+
+    const program = Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      yield* Effect.promise(() =>
+        writeFile(path.join(test.project, "mendcode.json"), JSON.stringify(config(llm.url), null, 2) + "\n"),
+      )
+
+      yield* llm.text("local seed response", { usage: { input: 25_000, output: 20 } })
+      const seed = yield* Effect.promise(() =>
+        runCLI(
+          [
+            "--pure",
+            "run",
+            "--format",
+            "json",
+            "--model",
+            MODEL,
+            "--title",
+            "Queue compaction smoke",
+            "--dir",
+            test.project,
+            "--dangerously-skip-permissions",
+          ],
+          test.environment,
+          { input: syntheticPrompt("seed") },
+        ),
+      )
+      requireSuccess(seed, "seed session")
+      const id = sessionID(seed.stdout)
+
+      const previousCalls = yield* llm.calls
+      const release = Effect.runPromise(llm.wait(previousCalls + 1)).then(() => sleep(HOLD_MS))
+      yield* llm.hold("local compaction summary", release)
+      process.stderr.write(
+        [
+          "",
+          "MendCode queue/compaction smoke is ready (the provider is local and never calls an API).",
+          `Model context limit: ${CONTEXT_LIMIT.toLocaleString()} tokens; auto-compaction: ${COMPACTION_LIMIT.toLocaleString()} tokens.`,
+          "The TUI opens with a synthetic trigger prompt already loaded.",
+          "Press Enter to submit it, then submit two short prompts while compaction is active.",
+          `The local model holds that request for ${Math.round(HOLD_MS / 1_000)} seconds so the queued state is visible.`,
+          "Only one smoke can run at a time. Exit with /exit or Ctrl+C; child processes and the lock are cleaned automatically.",
+          "Expected result: queued messages remain paired with their queued/send state after compaction, not ordinary transcript rows.",
+          "",
+        ].join("\n"),
+      )
+
+      const tui = yield* Effect.promise(() =>
+        runCLI(
+          [
+            "--pure",
+            "--isolated",
+            "--model",
+            MODEL,
+            "--session",
+            id,
+            "--initial-message",
+            syntheticPrompt("trigger"),
+            test.project,
+          ],
+          test.environment,
+          { inherit: true },
+        ),
+      )
+      requireSuccess(tui, "TUI")
+
+      const inputs = yield* llm.inputs
+      process.stderr.write(`\nLocal mock requests observed: ${inputs.length}. No external provider was contacted.\n`)
+    })
+
+    try {
+      await Effect.runPromise(program.pipe(Effect.provide(TestLLMServer.layer), Effect.scoped))
+    } finally {
+      await rm(test.root, { recursive: true, force: true })
+      activeFixtureRoot = undefined
+    }
   } finally {
-    await rm(test.root, { recursive: true, force: true })
+    await lock.release()
+    if (activeSmokeLock === lock) activeSmokeLock = undefined
   }
 }
 
-installChildCleanup()
-await main()
+if (import.meta.main) {
+  installChildCleanup()
+  await main().catch((error) => {
+    if (shutdownExitCode !== undefined) return
+    process.stderr.write(`\n${error instanceof Error ? error.message : String(error)}\n`)
+    process.exitCode = 1
+  })
+}

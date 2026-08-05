@@ -27,7 +27,7 @@ concurrency:
 
 jobs:
   build-release:
-    name: Build Linux and Windows release assets
+    name: Build Linux release assets
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -99,15 +99,84 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bun run --cwd packages/opencode script/build.ts --release-assets --skip-embed-web-ui --skip-install --exclude-os=darwin
+          bun run --cwd packages/opencode script/build.ts --release-assets --skip-embed-web-ui --skip-install --exclude-os=darwin,win32
 
       - name: Upload release artifacts to workflow
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: mendcode-release-${{ inputs.version }}-cross
+          name: mendcode-release-${{ inputs.version }}-linux
           path: |
             src/mendcode/packages/opencode/dist/*.zip
             src/mendcode/packages/opencode/dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  build-windows:
+    name: Build Windows release assets
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      VERSION: ${{ inputs.version }}
+      MENDCODE_VERSION: ${{ inputs.version }}
+      OPENCODE_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: src/mendcode/package.json
+
+      - name: Install dependencies with frozen lockfile
+        working-directory: src/mendcode
+        shell: pwsh
+        run: |
+          bun install --frozen-lockfile --ignore-scripts --os="*" --cpu="*"
+          bun run --cwd packages/opencode fix-node-pty
+
+      - name: Build native Windows release assets
+        working-directory: src/mendcode
+        shell: pwsh
+        run: bun run --cwd packages/opencode script/build.ts --skip-embed-web-ui --skip-install --exclude-os=darwin,linux
+
+      - name: Verify Windows executable metadata
+        working-directory: src/mendcode
+        shell: pwsh
+        run: |
+          $executables = @(Get-ChildItem packages/opencode/dist/mendcode-windows-*/bin/mendcode.exe)
+          if ($executables.Count -ne 3) {
+            throw "expected 3 Windows executables, found $($executables.Count)"
+          }
+          foreach ($executable in $executables) {
+            if ($executable.VersionInfo.ProductName -ne "MendCode") {
+              throw "$($executable.FullName) retained the Bun product metadata"
+            }
+            if ($executable.VersionInfo.FileDescription -ne "MendCode AI coding terminal") {
+              throw "$($executable.FullName) has unexpected file description: $($executable.VersionInfo.FileDescription)"
+            }
+          }
+
+      - name: Package Windows release assets
+        working-directory: src/mendcode
+        shell: pwsh
+        run: |
+          Get-ChildItem packages/opencode/dist/mendcode-windows-* -Directory | ForEach-Object {
+            Compress-Archive -Path "$($_.FullName)/bin/*" -DestinationPath "packages/opencode/dist/$($_.Name).zip" -Force
+          }
+
+      - name: Upload Windows release artifacts to workflow
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: mendcode-release-${{ inputs.version }}-windows
+          path: src/mendcode/packages/opencode/dist/*.zip
           if-no-files-found: error
           retention-days: 7
 
@@ -182,8 +251,8 @@ jobs:
 
   assemble-release:
     name: Assemble and attest release assets
-    if: ${{ always() && needs.build-release.result == 'success' && needs.build-darwin.result == 'success' }}
-    needs: [build-release, build-darwin]
+    if: ${{ always() && needs.build-release.result == 'success' && needs.build-windows.result == 'success' && needs.build-darwin.result == 'success' }}
+    needs: [build-release, build-windows, build-darwin]
     runs-on: ubuntu-latest
     permissions:
       attestations: write
