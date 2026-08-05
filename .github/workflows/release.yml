@@ -112,9 +112,21 @@ jobs:
           retention-days: 7
 
   build-windows:
-    name: Build Windows release assets
-    runs-on: windows-latest
+    name: Build Windows ${{ matrix.arch }} release assets
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x64
+            build_args: --single --baseline
+            expected_executables: 2
+          - runner: windows-11-arm
+            arch: arm64
+            build_args: --single
+            expected_executables: 1
     permissions:
       contents: read
     env:
@@ -145,15 +157,15 @@ jobs:
       - name: Build native Windows release assets
         working-directory: src/mendcode
         shell: pwsh
-        run: bun run --cwd packages/opencode script/build.ts --skip-embed-web-ui --skip-install --exclude-os=darwin,linux
+        run: bun run --cwd packages/opencode script/build.ts --skip-embed-web-ui --skip-install ${{ matrix.build_args }}
 
       - name: Verify Windows executable metadata
         working-directory: src/mendcode
         shell: pwsh
         run: |
-          $executables = @(Get-ChildItem packages/opencode/dist/mendcode-windows-*/bin/mendcode.exe)
-          if ($executables.Count -ne 3) {
-            throw "expected 3 Windows executables, found $($executables.Count)"
+          $executables = @(Get-ChildItem packages/opencode/dist/mendcode-windows-${{ matrix.arch }}*/bin/mendcode.exe)
+          if ($executables.Count -ne ${{ matrix.expected_executables }}) {
+            throw "expected ${{ matrix.expected_executables }} Windows ${{ matrix.arch }} executable(s), found $($executables.Count)"
           }
           foreach ($executable in $executables) {
             if ($executable.VersionInfo.ProductName -ne "MendCode") {
@@ -175,7 +187,7 @@ jobs:
       - name: Upload Windows release artifacts to workflow
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: mendcode-release-${{ inputs.version }}-windows
+          name: mendcode-release-${{ inputs.version }}-windows-${{ matrix.arch }}
           path: src/mendcode/packages/opencode/dist/*.zip
           if-no-files-found: error
           retention-days: 7
