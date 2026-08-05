@@ -31,7 +31,7 @@ export function SetupPreviewPane(props: {
     <box flexDirection="column" flexGrow={1} minWidth={0} minHeight={0} borderColor={theme.border} borderStyle="single" paddingLeft={1} paddingRight={1} paddingTop={1}>
       <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
         <text fg={theme.primary}>Preview</text>
-        <text fg={theme.textMuted} onMouseDown={props.onFullscreen}>
+        <text fg={theme.textMuted} onMouseUp={props.onFullscreen}>
           fullscreen
         </text>
       </box>
@@ -40,7 +40,7 @@ export function SetupPreviewPane(props: {
           {(item) => (
             <text
               fg={props.target === item.id ? theme.primary : theme.textMuted}
-              onMouseDown={() => props.onTargetChange(item.id)}
+              onMouseUp={() => props.onTargetChange(item.id)}
             >
               {props.target === item.id ? `[${item.label}]` : item.label}
             </text>

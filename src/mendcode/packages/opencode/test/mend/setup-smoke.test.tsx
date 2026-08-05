@@ -5,6 +5,8 @@ import { routeReturnTarget } from "../../src/cli/cmd/tui/context/route"
 import {
   inferModelPresetAuthMode,
   isPublicGitHubURL,
+  providerBaselineModelEntries,
+  providerPresetRoles,
   setupExtractorAuthMessage,
   setupLabelValueLine,
   setupMemoryDialogCurrentValue,
@@ -16,6 +18,7 @@ import {
   setupShouldShowExtractorAuthBlocker,
   truncateSetupText,
 } from "../../src/cli/cmd/tui/routes/setup"
+import { statsUsesScrollableLayout } from "../../src/cli/cmd/tui/routes/stats"
 import { setupRailStepStatus } from "../../src/cli/cmd/tui/routes/setup/setup-rail"
 import {
   compactLoopDetailLines,
@@ -147,6 +150,37 @@ describe("setup route smoke", () => {
     expect(inferModelPresetAuthMode("openai", "gpt-5.6")).toBe("api-key")
     expect(inferModelPresetAuthMode("openai", "gpt-5.6-sol")).toBe("chatgpt-subscription-oauth")
     expect(inferModelPresetAuthMode("openai", "gpt-5.2-codex")).toBeNull()
+  })
+
+  test("provider presets configure every built-in role and prefer free OpenCode coding models", () => {
+    expect(providerPresetRoles).toEqual([
+      "default",
+      "build",
+      "code",
+      "plan",
+      "subagent",
+      "small",
+      "title",
+      "compaction",
+      "summary",
+      "memoryExtractor",
+      "memoryDream",
+      "permissionReviewer",
+    ])
+    expect(
+      providerBaselineModelEntries("opencode", {
+        "mimo-v2.5-free": { name: "MiMo V2.5 Free" },
+        "qwen-coder-free": { name: "Qwen Coder Free" },
+        "glm-5-paid": { name: "GLM 5" },
+        "deepseek-v4-flash-free": { name: "DeepSeek V4 Flash Free" },
+      }).map(([modelID]) => modelID),
+    ).toEqual(["deepseek-v4-flash-free", "qwen-coder-free", "mimo-v2.5-free", "glm-5-paid"])
+  })
+
+  test("usage insights uses its scrollable layout before low-height terminals clip panels", () => {
+    expect(statsUsesScrollableLayout(180, 36)).toBe(true)
+    expect(statsUsesScrollableLayout(90, 60)).toBe(true)
+    expect(statsUsesScrollableLayout(180, 50)).toBe(false)
   })
 
   test("memory dialog highlights generated proposals when learning is enabled", () => {

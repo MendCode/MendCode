@@ -518,6 +518,108 @@ changing behavior.
   prompt chrome, status rows, model roles, memory policy, marketplace packages,
   workflow coordination, review gates, and local observability.
 
+### Agent product context
+
+When an agent needs to explain what MendCode is to a reader, start with this
+accurate description:
+
+This inventory was checked against the 20 latest changelog entries, `0.1.9`
+through `0.1.28`. Use the changelog for release-specific fixes; keep this block
+focused on stable product capabilities and agent-facing contracts.
+
+> MendCode is a terminal-first AI coding terminal and developer harness. It
+> gives a local agent a configurable CLI/TUI, model roles, review gates,
+> permissions, memory, reusable team packages, session automation, and optional
+> multi-agent/worktree coordination.
+
+Classify follow-up details by the product surface they change, and use the
+linked documentation as the source for details:
+
+| Category | Explain it as | Primary references |
+| --- | --- | --- |
+| Core terminal | The public `mendcode` CLI, TUI, setup/onboarding flow, provider/package setup, diagnostics, and session runtime. | [Feature map](docs/features.md), [CLI and setup](docs/cli-setup-configuration.md) |
+| Prompt and model control | Prompt Context modes (`minimal`, `focus`, `full`, and project/package `custom`), `.mendcode/prompts/custom.md`, `mendcode prompt` inspection/build commands, model roles and variants, prompt status, provider-aware context continuity, image-aware compaction, and cost-aware routing. | [Feature map](docs/features.md), [CLI and setup](docs/cli-setup-configuration.md) |
+| Workflow and review | Plan Mode, Changes Review, and durable Loop Workflows with validated plans, gates, schedules, receipts, artifacts, evaluators, and recovery. | [Plan Mode](docs/plan-mode.md), [Changes Review](docs/changes-review.md), [Loop Workflows](docs/loop-workflows.md) |
+| Media generation | The provider-aware `image_gen` tool, configured independently from the active chat model, with persisted artifacts, optional captions, and safe edit inputs when the provider contract and permissions allow. | [Changelog](CHANGELOG.md) |
+| Control and safety | Model roles, smart permissions, budgets, approval-first Memory Center, Memory Graph, and Dream flows, local provider bridges, and explicit destructive-action gates. | [CLI and setup](docs/cli-setup-configuration.md), [Memory Center](docs/memory-center.md), [TSM and worktrees](docs/tsm-and-worktrees.md) |
+| Team and extensibility | Runtime packages, project MCP configuration, package-shared prompts/custom tool calls, TUI profiles, plugins, widgets, pages, and themes. | [Packages and team sharing](docs/packages-and-team-sharing.md), [Custom Tool Calls](docs/custom-tool-calls.md), [TUI plugins and widgets](docs/tui-plugins-and-widgets.md) |
+| Agent and background execution | Agent View, subagents, detached background tasks, queued prompts, reconnect/compaction recovery, and Herdr state reporting. | [Automation runtime](docs/automation-runtime.md), [Loop Workflows](docs/loop-workflows.md), [Feature map](docs/features.md) |
+| Coordination and operations | Optional mflow locks, TSM/worktree orchestration, automation commands, local Usage Insights, update discovery, and in-app upgrades. | [mflow](docs/mflow.md), [TSM and worktrees](docs/tsm-and-worktrees.md), [Automation runtime](docs/automation-runtime.md), [Usage Insights](docs/usage-insights.md) |
+
+### Image generation contract
+
+The implementation source is `src/mendcode/packages/opencode/src/tool/image-gen.ts`.
+Agents must keep these rules intact:
+
+- `image_gen` is independently configured through `image_generation`; it is not
+  inferred from the active chat model. Configuration supports `enabled`, a
+  `provider/model` reference, `adapter` (`auto`, `codex-oauth`, `openrouter`, or
+  `openai-compatible`), `base_url`, timeout, provider options, and optional
+  captions. `enabled: false` must hide the tool.
+- With an active OpenAI ChatGPT subscription OAuth login and no explicit image
+  model, the verified Codex adapter defaults to `openai/gpt-image-2`. API-key
+  sessions do not receive that OAuth fallback automatically. Auto adapter
+  selection is limited to verified provider contracts; unknown image-capable
+  providers require an explicit adapter.
+- Use it only for an explicit request to create or edit a bitmap image. Include
+  orientation, aspect ratio, target resolution, exact text, visual constraints,
+  and avoid-items in the prompt. For a new image, omit both reference fields
+  (`num_last_images_to_include: 0` is also valid). For edits, provide either up
+  to five absolute local image paths or one to five recent conversation images,
+  never both.
+- The `image_gen` permission is checked before the request; referenced local
+  images also require read permission and must stay within the allowed project
+  boundaries. Enforce the 50 MB input/output bounds, request timeout, safe image
+  URLs, and cancellation.
+- Generated artifacts are persisted under MendCode's managed `generated_images`
+  directory and returned with metadata, format, dimensions, size, provider,
+  adapter, model, path, and cost when available. The full TUI shows the saved
+  path and external-open actions instead of rendering the image inline.
+- Captions are optional and use an independently configured vision model. A
+  missing or failed optional caption must not discard the saved artifact; a
+  required caption may fail the tool after the artifact has been persisted.
+- For project-bound work, copy the selected artifact into the workspace with a
+  stable descriptive filename and never overwrite an existing asset unless the
+  user explicitly requests replacement. Do not expose tokens, auth state, or
+  sensitive source images in prompts, captions, artifacts, or docs.
+
+### Agent operating contract
+
+- Activate a Loop Workflow or delegate background work only when the user asks
+  for it or the request clearly includes that intent. Inspect existing loops
+  before creating another one; never use `maxTurns: 0` or recreate an invalid
+  `completed 0/0` workflow.
+- Use report-only/read-only execution for inspection and monitoring. An explicit
+  request to write, edit, fix, implement, code, or create files permits normal
+  execution for that workflow; keep destructive worktree actions preview-first.
+- Route work through the configured model roles and variants with cost-aware,
+  provider-neutral language. Do not present internal debug surfaces as normal
+  user workflows.
+- Treat `memoryAssistant` as a constrained memory-stewardship agent and Dream
+  as a proposal-producing maintenance loop, not as silent source editing or a
+  general coding agent. Generated memory changes remain reviewable proposals
+  until the user applies them.
+- Treat `image_gen` availability as provider- and permission-gated. It is an
+  independently configured media tool, not an assumption about the active chat
+  model; preserve artifacts and redact sensitive inputs.
+
+The short explanation is not “another chat box” or a cloud analytics product.
+It is a local-first control surface for shaping how coding agents work.
+
+### Screenshots and demos
+
+- Use [the feature map](docs/features.md) as the source contract for README,
+  website, screenshot, and demo claims.
+- README screenshots live in `docs/assets/screenshots/`. Website copies live in
+  the MendCode-Web repository under `public/screenshots/` and
+  `public/tui-showcase/`.
+- There is currently no checked-in capture script or `mendcode screenshot`
+  command. Existing images are committed static assets; do not describe an
+  automated or canonical capture flow unless one is added and verified.
+- For future captures, validate the public `mendcode` behavior first, use a
+  clean demo state, redact provider tokens/auth state/local runtime data, and
+  update the image alt text or caption with the exact product surface shown.
+
 ### TUI customization
 
 - Main user-facing docs: [Customization](docs/customization.md) and
@@ -527,6 +629,9 @@ changing behavior.
   mascot mode, centered home, split home, Agent View, chat presentation,
   activity states, widgets, slots, custom routes, dialogs, footer entries,
   themes, density, and package-distributed UI behavior.
+- Chat presentation includes Plain/Markdown/Rich rendering, streaming Markdown,
+  wrapped tables and code fences, checklists, callouts, local Mermaid diagrams,
+  and terminal-safe color swatches.
 - Good demo profile: mascot identity, split home, `agentManager` right panel,
   `top-bottom` prompt chrome, `mendcode>` lead text, and outside prompt status.
 
@@ -540,14 +645,31 @@ changing behavior.
 - Packages must not include provider tokens, OAuth state, `.env*`, auth state,
   local databases, room secrets, or machine-local run/cache state.
 
+### Custom tool calls
+
+- Custom tool calls are assistant-facing project or package actions loaded from
+  `.mendcode/tools` (the singular `.mendcode/tool` path is also supported). They
+  are local TypeScript/JavaScript code with a description and validated argument
+  schema; they are not MCP tools.
+- `execute(args, context)` receives the current `sessionID`, `messageID`,
+  `agent`, `directory`, `worktree`, cancellation via `abort`, visible-call
+  updates through `metadata()`, and permission requests through `ask()`.
+- `tool.schema` defines the validation and JSON schema exposed to the model.
+  Tools may return concise output plus metadata, and should honor cancellation
+  and avoid silent writes outside the current project/worktree.
+- Packages share tools through an `artifacts.tools` manifest entry or a
+  project-local `.mendcode/package.json`. Custom tools are trusted local code:
+  review them before enabling a package and never distribute credentials,
+  `.env*`, auth state, or machine-local data.
+
 ### Review, memory, and safety
 
 - Plan Mode is an explicit review gate before implementation.
 - Memory is approval-first: global/project scopes, explicit add/search/preview
   flows, generated proposals, and apply/reject/edit review.
 - Memory Center is the user-facing memory workspace: saved global/project
-  memories, pending proposals, project grouping, category graph, category
-  policy, Dream status/logs, inspector, and constrained memory side chat.
+  memories, pending proposals, project grouping, the Memory Graph/category graph,
+  category policy, Dream status/logs, inspector, and constrained memory side chat.
 - The memory side agent can answer memory-specific questions, inspect saved
   entries/categories/policies, explain why context is being retrieved, and draft
   reviewable proposals for memory/category/policy changes. It should be
@@ -579,11 +701,16 @@ changing behavior.
   customization.
 - [TUI plugins and widgets](docs/tui-plugins-and-widgets.md): dynamic TUI
   extension points.
+- [Custom Tool Calls](docs/custom-tool-calls.md): project/package assistant
+  tools, typed arguments, execution context, metadata, cancellation, and
+  permission checks.
 - [Plan Mode](docs/plan-mode.md): plan review flow.
 - [Changes Review](docs/changes-review.md): responsive diff review, comments,
   keybinds, and agent-visible review context.
 - [Loop Workflows](docs/loop-workflows.md): durable loop sessions, root
   session/evaluator boundaries, `/loop`, `/loops`, and service controls.
+- [Automation runtime](docs/automation-runtime.md): machine-readable session
+  control, progress events, waiting, cancellation, and shared model selection.
 - [Memory Center](docs/memory-center.md): saved/pending memories, categories,
   Dream maintenance, and the constrained memory side agent.
 - [Usage Insights](docs/usage-insights.md): local activity dashboard.

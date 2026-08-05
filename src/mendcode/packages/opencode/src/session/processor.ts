@@ -42,12 +42,19 @@ const log = Log.create({ service: "session.processor" })
 // Abort silent provider streams quickly after sleep/network changes.
 // Slow providers can override this with the environment variable.
 const DEFAULT_LLM_STREAM_IDLE_TIMEOUT_MS = 60_000
+const DEFAULT_MEMORY_EXTRACTION_TIMEOUT_MS = 45_000
 const RETRY_STATUS_EVENT_INTERVAL_MS = 5_000
 
 function llmStreamIdleTimeoutMs() {
   const value = Number(process.env.MENDCODE_LLM_STREAM_IDLE_TIMEOUT_MS)
   if (Number.isFinite(value) && value > 0) return value
   return DEFAULT_LLM_STREAM_IDLE_TIMEOUT_MS
+}
+
+function memoryExtractionTimeoutMs() {
+  const value = Number(process.env.MENDCODE_MEMORY_EXTRACTION_TIMEOUT_MS)
+  if (Number.isFinite(value) && value > 0) return value
+  return DEFAULT_MEMORY_EXTRACTION_TIMEOUT_MS
 }
 
 function normalizeToolInput(input: unknown): Record<string, any> {
@@ -653,6 +660,7 @@ export const layer: Layer.Layer<
             Stream.filter((event): event is Extract<LLM.Event, { type: "text-delta" }> => event.type === "text-delta"),
             Stream.map((event) => event.text),
             Stream.mkString,
+            Effect.timeout(memoryExtractionTimeoutMs()),
           )
         return yield* Effect.promise(() =>
           proposeMemoriesFromExtractorText(

@@ -2778,6 +2778,81 @@ it.live("loop flushes automatic memory extraction after a normal assistant stop"
   ),
 )
 
+it.live("loop returns to idle when automatic memory extraction times out", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const root = path.resolve(dir)
+        const previousXdgConfigHome = process.env.XDG_CONFIG_HOME
+        const previousTimeout = process.env.MENDCODE_MEMORY_EXTRACTION_TIMEOUT_MS
+        process.env.XDG_CONFIG_HOME = path.join(root, ".xdg")
+        process.env.MENDCODE_MEMORY_EXTRACTION_TIMEOUT_MS = "100"
+        try {
+          yield* Effect.promise(() =>
+            writeProjectMemoryConfig(
+              {
+                enabled: true,
+                use: false,
+                generate: true,
+                extractorRole: "memoryExtractor",
+              },
+              root,
+            ),
+          )
+          yield* Effect.promise(() =>
+            writeModelsConfig(
+              {
+                ...defaultModelsConfig,
+                enabled: true,
+                roles: {
+                  ...defaultModelsConfig.roles,
+                  default: { providerID: "test", modelID: "test-model" },
+                  memoryExtractor: { providerID: "test", modelID: "test-model" },
+                },
+              },
+              root,
+            ),
+          )
+
+          const prompt = yield* SessionPrompt.Service
+          const sessions = yield* Session.Service
+          const status = yield* SessionStatus.Service
+          const session = yield* sessions.create({
+            title: "Memory timeout",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          })
+          yield* prompt.prompt({
+            sessionID: session.id,
+            agent: "build",
+            noReply: true,
+            parts: [{ type: "text", text: "Remember that stalled memory extraction must never keep the session busy." }],
+          })
+
+          yield* llm.text("understood")
+          yield* llm.hang
+
+          const result = yield* prompt.loop({ sessionID: session.id })
+          const finish = [...result.parts]
+            .reverse()
+            .find((part): part is MessageV2.StepFinishPart => part.type === "step-finish")
+          const memory = finish?.metadata?.mendMemory as any
+
+          expect(result.info.role).toBe("assistant")
+          expect(yield* llm.calls).toBe(2)
+          expect(memory?.output?.skipped).toBe(true)
+          expect(memory?.output?.reason).toBeTruthy()
+          expect(yield* status.get(session.id)).toEqual({ type: "idle" })
+        } finally {
+          if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
+          else process.env.XDG_CONFIG_HOME = previousXdgConfigHome
+          if (previousTimeout === undefined) delete process.env.MENDCODE_MEMORY_EXTRACTION_TIMEOUT_MS
+          else process.env.MENDCODE_MEMORY_EXTRACTION_TIMEOUT_MS = previousTimeout
+        }
+      }),
+    { git: true, config: providerCfg },
+  ),
+)
+
 it.live("static loop consumes queued replies across turns", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {

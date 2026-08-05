@@ -85,7 +85,7 @@ export function SetupRail(props: {
           {(step, index) => {
             const status = () => setupRailStepStatus(step, props.state, props.summary)
             return (
-              <box flexDirection="row" width="100%" gap={1} onMouseDown={() => props.onSelect(step)}>
+              <box flexDirection="row" width="100%" gap={1} onMouseUp={() => props.onSelect(step)}>
                 <text flexGrow={1} minWidth={0} overflow="hidden" wrapMode="none" fg={props.active === step ? theme.primary : theme.text}>
                   {index() + 1}. {labels[step]}
                 </text>

@@ -8,7 +8,7 @@ import { donorIdentityGuardStatus, runtimeAdapterCommand } from "../runtime/syst
 import { worktreeStatus } from "../config/worktree"
 import { tsmStatus } from "../config/tsm"
 
-const primaryCommands = [
+export const primaryCommands = [
   "run",
   "session",
   "chat",
@@ -25,9 +25,9 @@ const primaryCommands = [
   "tsm",
 ]
 
-const advancedCommands = ["check", "models", "providers", "auth", "permissions", "memory", "focus"]
+export const advancedCommands = ["check", "models", "providers", "auth", "permissions", "memory", "focus"]
 
-const internalCommands = [
+export const internalCommands = [
   "adapter",
   "ai",
   "bench",
@@ -44,7 +44,7 @@ const internalCommands = [
   "upstream",
 ]
 
-const deprecatedAliases = ["init", "sync", "package", "prompts"]
+export const deprecatedAliases = ["init", "sync", "package", "prompts"]
 const deprecationMessages: Record<string, string> = {
   init: "Deprecated alias: `mendcode init` is kept for compatibility. Use `mendcode setup status` for setup checks; project init remains internal.",
   sync: "Deprecated alias: `mendcode sync` is kept for compatibility. Use `mendcode setup status` or `mendcode status` for normal workflows.",
