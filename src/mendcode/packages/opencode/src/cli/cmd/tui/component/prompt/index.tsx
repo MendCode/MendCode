@@ -28,7 +28,7 @@ import { useLocal } from "@tui/context/local"
 import { tint, useTheme } from "@tui/context/theme"
 import { EmptyBorder, SplitBorder } from "@tui/component/border"
 import { Spinner } from "@tui/component/spinner"
-import { useSDK } from "@tui/context/sdk"
+import { useSDK, type SDKConnectionStatus } from "@tui/context/sdk"
 import { useRoute } from "@tui/context/route"
 import { useProject } from "@tui/context/project"
 import { useSync } from "@tui/context/sync"
@@ -92,7 +92,7 @@ import { readMendWorkingIndicator } from "@/mend/tui/working-indicator"
 import { readMendEditorVisual } from "@/mend/tui/editor-host"
 import { promptChromeUsesFullSessionWidth, resolvePromptChrome } from "@/mend/tui/prompt-chrome"
 import { activityMascotHoverText, activityMascotText, mascotLineHitboxes, mascotTextWidth } from "@/mend/tui/mascot"
-import { activityMessage, resolveActivityPhase } from "../../util/activity-signal"
+import { activityMessage, resolveActivityPhase, trailingActivityToolNames } from "../../util/activity-signal"
 import {
   assistantTokenTotals,
   compactContextTokenLabel,
@@ -329,6 +329,10 @@ const PROMPT_DELIVERY_RETRY_INTERVAL = 1000
 
 export function promptDeliveryRetryDelay(_attempt: number) {
   return PROMPT_DELIVERY_RETRY_INTERVAL
+}
+
+export function shouldRetryConnectionForPrompt(status: SDKConnectionStatus) {
+  return status === "failed" || status === "disconnected"
 }
 
 export function isRetryablePromptDelivery(input: { error?: unknown; response?: Response }) {
@@ -2169,7 +2173,7 @@ export function Prompt(props: PromptProps) {
   }
 
   createEffect(() => {
-    if (sdk.connection.status === "connected") wakePendingPromptRetry()
+    if (sdk.connection.status === "connected") wakePendingPromptRetry(true)
   })
 
   createEffect(() => {
@@ -2259,6 +2263,7 @@ export function Prompt(props: PromptProps) {
       void promptModelWarning()
       return false
     }
+    if (shouldRetryConnectionForPrompt(sdk.connection.status)) sdk.reconnect.retry()
     const submittedPrompt = promptSubmitParts(promptSnapshot)
     submitPending = true
     clearPromptForSubmit()
@@ -3198,6 +3203,11 @@ export function Prompt(props: PromptProps) {
       })
       .filter((item): item is string => typeof item === "string")
   })
+  const latestActivityToolNames = createMemo(() => {
+    const active = activeWorkingAssistant()
+    if (!active) return []
+    return trailingActivityToolNames(sync.data.part[active.id] ?? [])
+  })
   const activityHasReasoning = createMemo(() => {
     const active = activeWorkingAssistant()
     if (!active) return false
@@ -3229,6 +3239,7 @@ export function Prompt(props: PromptProps) {
       connection: effectiveConnectionStatus(),
       toolNames: activityToolNames(),
       activeToolNames: activeActivityToolNames(),
+      latestToolNames: latestActivityToolNames(),
       hasReasoning: activityHasReasoning(),
       hasAnswerText: activityHasAnswerText(),
       livePhase: workingLiveUsage()?.phase,

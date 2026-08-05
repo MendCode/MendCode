@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { resolveActivityPhase } from "./activity-signal"
+import { resolveActivityPhase, trailingActivityToolNames } from "./activity-signal"
 
 describe("resolveActivityPhase", () => {
   test("keeps reconnecting transport out of generating phases", () => {
@@ -11,6 +11,61 @@ describe("resolveActivityPhase", () => {
         liveOutputTokens: 42,
       }),
     ).toBe("blocked")
+  })
+
+  test("keeps active editing phases visible while the transport reconnects", () => {
+    expect(
+      resolveActivityPhase({
+        status: "busy",
+        connection: "reconnecting",
+        activeToolNames: ["apply_patch"],
+      }),
+    ).toBe("patching")
+    expect(
+      resolveActivityPhase({
+        status: "busy",
+        connection: "connecting",
+        activeToolNames: ["edit"],
+      }),
+    ).toBe("editing")
+  })
+
+  test("keeps a terminally disconnected transport blocked over stale tool state", () => {
+    expect(
+      resolveActivityPhase({
+        status: "busy",
+        connection: "disconnected",
+        activeToolNames: ["apply_patch"],
+      }),
+    ).toBe("blocked")
+  })
+
+  test("keeps the latest completed edit visible until new assistant output starts", () => {
+    const parts = [
+      { type: "reasoning", text: "Planning the change" },
+      { type: "text", text: "I will update the file." },
+      { type: "tool", tool: "edit", state: { status: "completed" } },
+      { type: "step-finish" },
+    ]
+    expect(trailingActivityToolNames(parts)).toEqual(["edit"])
+    expect(
+      resolveActivityPhase({
+        status: "busy",
+        latestToolNames: trailingActivityToolNames(parts),
+        hasAnswerText: true,
+        livePhase: "output",
+        liveOutputTokens: 200,
+      }),
+    ).toBe("editing")
+  })
+
+  test("drops a completed edit once newer assistant output appears", () => {
+    expect(
+      trailingActivityToolNames([
+        { type: "tool", tool: "edit", state: { status: "completed" } },
+        { type: "text", text: "The edit is complete." },
+      ]),
+    ).toEqual([])
   })
 
   test("labels busy request without assistant evidence as sending", () => {

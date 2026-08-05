@@ -8,6 +8,7 @@ export type ActivitySignalInput = {
   connection?: "connecting" | "connected" | "reconnecting" | "disconnected" | "failed"
   toolNames?: string[]
   activeToolNames?: string[]
+  latestToolNames?: string[]
   hasReasoning?: boolean
   hasAnswerText?: boolean
   livePhase?: "input" | "output"
@@ -16,16 +17,21 @@ export type ActivitySignalInput = {
 }
 
 export function resolveActivityPhase(input: ActivitySignalInput): MendActivityPhase {
+  const activeNames = (input.activeToolNames ?? []).map((item) => item.toLowerCase())
+  const activeToolPhase = phaseForToolNames(activeNames)
+  const latestToolPhase = phaseForToolNames((input.latestToolNames ?? []).map((item) => item.toLowerCase()))
+  const currentToolPhase = activeToolPhase ?? latestToolPhase
+  if (currentToolPhase && (input.connection === "connecting" || input.connection === "reconnecting")) {
+    return currentToolPhase
+  }
   if (input.connection && input.connection !== "connected") return "blocked"
   if (input.retry || input.status === "retry") return "retrying"
   if (input.status === "idle") return "done"
   if (input.status === "busy" && input.statusKind === "subagent-wait") return "subagents"
   if (input.status === "busy" && input.statusKind === "memory-extract") return "memory"
   if (input.status === "busy" && input.statusKind === "compaction") return "compacting"
-
-  const activeNames = (input.activeToolNames ?? []).map((item) => item.toLowerCase())
-  const activeToolPhase = phaseForToolNames(activeNames)
   if (activeToolPhase) return activeToolPhase
+  if (latestToolPhase) return latestToolPhase
 
   const liveOutput = input.liveOutputTokens ?? 0
   const liveReasoning = input.liveReasoningTokens ?? 0
@@ -41,6 +47,25 @@ export function resolveActivityPhase(input: ActivitySignalInput): MendActivityPh
   if (input.hasReasoning) return "thinking"
   if (input.livePhase === "output" && liveReasoning <= 0) return "sending"
   return input.status === "busy" ? "thinking" : "sending"
+}
+
+export function trailingActivityToolNames(parts: readonly unknown[]) {
+  for (let index = parts.length - 1; index >= 0; index--) {
+    const part = parts[index]
+    if (!part || typeof part !== "object") continue
+    const raw = part as Record<string, unknown>
+    if (
+      (raw.type === "text" || raw.type === "reasoning") &&
+      typeof raw.text === "string" &&
+      raw.text.trim().length > 0
+    ) {
+      return []
+    }
+    if (raw.type !== "tool") continue
+    const name = [raw.tool, raw.toolID, raw.title, raw.name].find((item): item is string => typeof item === "string")
+    return name ? [name] : []
+  }
+  return []
 }
 
 function phaseForToolNames(names: string[]): MendActivityPhase | undefined {
