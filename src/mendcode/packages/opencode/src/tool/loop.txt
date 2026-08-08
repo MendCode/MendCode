@@ -16,6 +16,7 @@ Before creating a loop, use the question tool when important parameters are miss
 Common patterns:
 - Use `action: "draft"` to create a reviewable loop without starting it.
 - Use `action: "activate"` to start an existing draft, or provide name/objective fields to create and activate in one call.
+- Keep `name` to 2-4 words and at most 24 characters. Name only the job; omit project, model, cadence, and permission details.
 - Use `action: "list"` when the user asks to see loops and did not provide a loop id.
 - Use `action: "show"` with a concrete `workflowID` for details. If no `workflowID` is available, prefer `list`; the tool will fall back to the contextual active loop or list.
 - Use `action: "update_agent"` with `workflowID` and `agent` to retarget an existing loop to another MendCode agent. Pass an empty `agent` string to return to the default agent.

@@ -81,7 +81,7 @@ describe("workflow routes", () => {
           body: JSON.stringify({ plan, name: "Saved route workflow" }),
         })
         expect(saveResponse.status).toBe(200)
-        const receipt = await saveResponse.json() as { definitionID: string; revisionID: string; revision: number }
+        const receipt = (await saveResponse.json()) as { definitionID: string; revisionID: string; revision: number }
         expect(receipt.revision).toBe(1)
 
         const startResponse = await app.request("/workflow/start", {
@@ -90,13 +90,21 @@ describe("workflow routes", () => {
           body: JSON.stringify({ revisionID: receipt.revisionID }),
         })
         expect(startResponse.status).toBe(200)
-        const started = await startResponse.json() as { run: { id: string; state: string }; events: unknown[] }
+        const started = (await startResponse.json()) as { run: { id: string; state: string }; events: unknown[] }
         expect(started.run.state).toBe("queued")
         expect(started.events).toHaveLength(1)
 
+        const modeResponse = await app.request(`/workflow/${started.run.id}/permission-mode`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ mode: "normal" }),
+        })
+        expect(modeResponse.status).toBe(200)
+        expect(((await modeResponse.json()) as { run: { permissionMode: string } }).run.permissionMode).toBe("normal")
+
         const listResponse = await app.request("/workflow")
         expect(listResponse.status).toBe(200)
-        expect((await listResponse.json() as Array<{ run: { id: string } }>)).toHaveLength(1)
+        expect((await listResponse.json()) as Array<{ run: { id: string } }>).toHaveLength(1)
 
         const activeDeleteResponse = await app.request(`/workflow/${started.run.id}`, { method: "DELETE" })
         expect(activeDeleteResponse.status).toBe(400)
@@ -111,7 +119,7 @@ describe("workflow routes", () => {
           body: JSON.stringify({ reason: "operator pause" }),
         })
         expect(pauseResponse.status).toBe(200)
-        expect((await pauseResponse.json() as { run: { state: string } }).run.state).toBe("paused")
+        expect(((await pauseResponse.json()) as { run: { state: string } }).run.state).toBe("paused")
 
         const resumeResponse = await app.request(`/workflow/${started.run.id}/resume`, {
           method: "POST",
@@ -119,7 +127,7 @@ describe("workflow routes", () => {
           body: JSON.stringify({ reason: "operator resume" }),
         })
         expect(resumeResponse.status).toBe(200)
-        expect((await resumeResponse.json() as { run: { state: string } }).run.state).toBe("queued")
+        expect(((await resumeResponse.json()) as { run: { state: string } }).run.state).toBe("queued")
 
         const stopResponse = await app.request(`/workflow/${started.run.id}/stop`, {
           method: "POST",
@@ -131,7 +139,7 @@ describe("workflow routes", () => {
         const deleteResponse = await app.request(`/workflow/${started.run.id}`, { method: "DELETE" })
         expect(deleteResponse.status).toBe(200)
         expect(await deleteResponse.json()).toBe(true)
-        expect((await (await app.request("/workflow")).json() as unknown[])).toHaveLength(0)
+        expect((await (await app.request("/workflow")).json()) as unknown[]).toHaveLength(0)
         expect((await app.request(`/workflow/${started.run.id}`)).status).toBe(404)
       },
     })
@@ -145,10 +153,11 @@ describe("workflow routes", () => {
       fn: async () => {
         const handler = HttpRouter.toWebHandler(ExperimentalHttpApiServer.routes, { disableLogger: true }).handler
         const headers = { "x-opencode-directory": tmp.path, "content-type": "application/json" }
-        const request = (path: string, init?: RequestInit) => handler(
-          new Request(new URL(path, "http://localhost"), { ...init, headers: { ...headers, ...init?.headers } }),
-          ExperimentalHttpApiServer.context,
-        )
+        const request = (path: string, init?: RequestInit) =>
+          handler(
+            new Request(new URL(path, "http://localhost"), { ...init, headers: { ...headers, ...init?.headers } }),
+            ExperimentalHttpApiServer.context,
+          )
 
         const response = await request("/workflow/preview", {
           method: "POST",
@@ -162,12 +171,21 @@ describe("workflow routes", () => {
           body: JSON.stringify({ plan }),
         })
         expect(startResponse.status).toBe(200)
-        const snapshot = await startResponse.json() as { run: { id: string }; definition: { name: string } }
+        const snapshot = (await startResponse.json()) as { run: { id: string }; definition: { name: string } }
         expect(snapshot.definition.name).toBe("Route workflow")
 
         const showResponse = await request(`/workflow/${snapshot.run.id}`)
         expect(showResponse.status).toBe(200)
-        expect((await showResponse.json() as { run: { id: string } }).run.id).toBe(snapshot.run.id)
+        expect(((await showResponse.json()) as { run: { id: string } }).run.id).toBe(snapshot.run.id)
+
+        const modeResponse = await request(`/workflow/${snapshot.run.id}/permission-mode`, {
+          method: "POST",
+          body: JSON.stringify({ mode: "report-only" }),
+        })
+        expect(modeResponse.status).toBe(200)
+        expect(((await modeResponse.json()) as { run: { permissionMode: string } }).run.permissionMode).toBe(
+          "report-only",
+        )
 
         const stopResponse = await request(`/workflow/${snapshot.run.id}/stop`, {
           method: "POST",

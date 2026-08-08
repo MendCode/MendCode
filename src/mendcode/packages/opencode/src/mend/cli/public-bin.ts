@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "fs"
 import path from "path"
 import { generatedConfigNeedsSync, initProject, syncProject } from "../config/project"
 import { mendPaths, resolveMendProjectRoot } from "../config/paths"
-import { donorIdentityGuardStatus, runtimeAdapterCommand } from "../runtime/system"
+import { donorIdentityGuardStatus, ownedRuntimeStatus, runtimeAdapterCommand } from "../runtime/system"
 import { worktreeStatus } from "../config/worktree"
 import { tsmStatus } from "../config/tsm"
 
@@ -287,6 +287,13 @@ function shellCwd() {
   return resolveMendProjectRoot()
 }
 
+export function resolvePublicBinCommand(root: string, configured = process.env.MENDCODE_PUBLIC_BIN, invoked = process.argv[1]) {
+  if (configured?.trim()) return configured
+  const entrypoint = invoked ? path.resolve(invoked) : undefined
+  if (entrypoint && !/\.(?:[cm]?[jt]s|[jt]sx)$/i.test(entrypoint)) return entrypoint
+  return path.join(root, "bin", "mend")
+}
+
 function controlPlaneEnv(root: string) {
   const originalEnv: Record<string, string> = {}
   for (const key of [
@@ -306,7 +313,7 @@ function controlPlaneEnv(root: string) {
   return {
     ...runtimeEnv(root),
     MENDCODE_SHELL_CWD: shellCwd(),
-    MENDCODE_PUBLIC_BIN: process.env.MENDCODE_PUBLIC_BIN || path.resolve(process.argv[1] || "mendcode"),
+    MENDCODE_PUBLIC_BIN: resolvePublicBinCommand(mendPaths().root),
     MENDCODE_ORIGINAL_ENV_JSON: JSON.stringify(originalEnv),
   }
 }
@@ -344,9 +351,11 @@ function runControlPlane(args: string[], root = mendPaths().root) {
 
 async function ensureReady(root = mendPaths().root) {
   const paths = mendPaths(root)
-  if (!existsSync(paths.donorRuntimeRoot)) throw new Error(`donor checkout missing: ${paths.donorRuntimeRoot}`)
-  if (!existsSync(paths.donorRuntimePackage))
-    throw new Error(`donor runtime package missing: ${paths.donorRuntimePackage}`)
+  if (!ownedRuntimeStatus(root).adopted) {
+    if (!existsSync(paths.donorRuntimeRoot)) throw new Error(`donor checkout missing: ${paths.donorRuntimeRoot}`)
+    if (!existsSync(paths.donorRuntimePackage))
+      throw new Error(`donor runtime package missing: ${paths.donorRuntimePackage}`)
+  }
   if (!existsSync(paths.generatedOpencodeConfig)) await initProject(root)
   else if (generatedConfigNeedsSync(root)) await syncProject(root)
 }

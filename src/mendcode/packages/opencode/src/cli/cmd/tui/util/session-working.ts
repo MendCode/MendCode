@@ -35,6 +35,7 @@ export function isRecentWorkingAssistant(input: {
 
 export function isAssistantWorking(input: {
   statusType?: string
+  statusKind?: string
   now?: number
   assistantCreated?: number
   statusUntil?: number
@@ -42,6 +43,7 @@ export function isAssistantWorking(input: {
 }) {
   const now = input.now ?? Date.now()
   if (input.statusType === "busy") {
+    if (input.statusKind === "compaction") return true
     return !isStaleBusySession({
       statusType: input.statusType,
       now,
@@ -51,6 +53,27 @@ export function isAssistantWorking(input: {
   }
   if (input.statusType === "retry") return typeof input.statusNext !== "number" || input.statusNext > now
   return isRecentWorkingAssistant({ now, assistantCreated: input.assistantCreated })
+}
+
+export function isBusyStatusSupersededByTerminalAssistant(input: {
+  statusType?: string
+  statusKind?: string
+  statusStartedAt?: number
+  latestMessage?: {
+    role: string
+    finish?: string
+    error?: unknown
+    time: { created?: number; completed?: number }
+  }
+}) {
+  if (input.statusType !== "busy" || input.statusKind === "compaction") return false
+  const message = input.latestMessage
+  if (!message || message.role !== "assistant") return false
+  const terminalFinish = Boolean(message.finish && !["tool-calls", "unknown"].includes(message.finish))
+  if (!terminalFinish && !message.error) return false
+  const terminalAt = message.time.completed ?? message.time.created
+  if (typeof input.statusStartedAt !== "number" || typeof terminalAt !== "number") return false
+  return input.statusStartedAt <= terminalAt
 }
 
 export function isStaleBusySession(input: {
@@ -87,8 +110,18 @@ export function isToolActivityActive(input: {
   toolStatus?: string
   sessionStatusType?: string
   interrupted?: boolean
+  activityOverride?: boolean
 }) {
+  if (input.activityOverride) return true
   if (input.interrupted) return false
   if (input.toolStatus !== "pending" && input.toolStatus !== "running") return false
   return input.sessionStatusType === "busy" || input.sessionStatusType === "retry"
+}
+
+export function isSubagentStatusActive(status: string) {
+  return status === "working" || status === "waiting" || status === "needs input" || status.startsWith("retry")
+}
+
+export function shouldKeepCompactedSubagent(input: { compacted?: boolean; status: string }) {
+  return !input.compacted || isSubagentStatusActive(input.status)
 }

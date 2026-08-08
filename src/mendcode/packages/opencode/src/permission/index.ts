@@ -15,6 +15,7 @@ import { Deferred, Effect, Layer, Schema, Context } from "effect"
 import os from "os"
 import { evaluate as evalRule } from "./evaluate"
 import { PermissionID } from "./schema"
+import { markPermissionAbandoned, markPermissionPending, markPermissionResolved } from "@/session/pending-input"
 
 const log = Log.create({ service: "permission" })
 
@@ -42,6 +43,13 @@ export type SessionPermissionMode = "approval" | "smart" | "full_access"
 
 export function sessionModeRule(mode: SessionPermissionMode): Rule {
   return { permission: SESSION_MODE_PERMISSION, pattern: mode, action: "allow" }
+}
+
+function isShellPermissionRequest(request: Pick<Request, "permission" | "metadata">) {
+  return (
+    request.permission === "bash" ||
+    (request.permission === "external_directory" && request.metadata.source === "shell")
+  )
 }
 
 export class Request extends Schema.Class<Request>("PermissionRequest")({
@@ -134,9 +142,28 @@ export const ReplyInput = Schema.Struct({
   .pipe(withStatics((s) => ({ zod: zod(s) })))
 export type ReplyInput = Schema.Schema.Type<typeof ReplyInput>
 
+export type StoredRequest = {
+  info: Request
+  ownerRuntimeID: string
+  directory: string
+  reply?: Reply
+  message?: string
+  timeCreated: number
+  timeUpdated: number
+}
+
+export type StoreData =
+  | Ruleset
+  | {
+      version: 2
+      approved: Ruleset
+      requests: StoredRequest[]
+    }
+
 export interface Interface {
   readonly ask: (input: AskInput) => Effect.Effect<void, Error>
   readonly reply: (input: ReplyInput) => Effect.Effect<void>
+  readonly replyForSessions: (input: { sessionIDs: readonly SessionID[]; reply: Reply }) => Effect.Effect<void>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
 }
 
@@ -148,6 +175,66 @@ interface PendingEntry {
 interface State {
   pending: Map<PermissionID, PendingEntry>
   approved: Ruleset
+}
+
+type Store = Exclude<StoreData, Ruleset>
+const runtimeID = `permission:${process.pid}:${crypto.randomUUID()}`
+
+function normalizeStore(data: StoreData | undefined): Store {
+  if (Array.isArray(data)) return { version: 2, approved: [...data], requests: [] }
+  return {
+    version: 2,
+    approved: [...(data?.approved ?? [])],
+    requests: [...(data?.requests ?? [])],
+  }
+}
+
+function ownerProcessAlive(ownerRuntimeID: string) {
+  const match = ownerRuntimeID.match(/^permission:(\d+):/)
+  if (!match) return false
+  const pid = Number(match[1])
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return (
+      typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "EPERM"
+    )
+  }
+}
+
+function updateStore<T>(projectID: ProjectID, update: (store: Store) => T): T {
+  return Database.transaction(
+    (db) => {
+      const current = db.select().from(PermissionTable).where(eq(PermissionTable.project_id, projectID)).get()
+      const store = normalizeStore(current?.data)
+      const result = update(store)
+      const now = Date.now()
+      db.insert(PermissionTable)
+        .values({ project_id: projectID, time_created: current?.time_created ?? now, time_updated: now, data: store })
+        .onConflictDoUpdate({ target: PermissionTable.project_id, set: { time_updated: now, data: store } })
+        .run()
+      return { result }
+    },
+    { behavior: "immediate" },
+  ).result
+}
+
+function cleanDeadRequests(store: Store) {
+  const abandoned = store.requests.filter((request) => !ownerProcessAlive(request.ownerRuntimeID))
+  if (abandoned.length) {
+    const ids = new Set(abandoned.map((request) => request.info.id))
+    store.requests = store.requests.filter((request) => !ids.has(request.info.id))
+  }
+  return abandoned
+}
+
+function readRequest(projectID: ProjectID, requestID: PermissionID) {
+  const row = Database.use((db) =>
+    db.select().from(PermissionTable).where(eq(PermissionTable.project_id, projectID)).get(),
+  )
+  return normalizeStore(row?.data).requests.find((request) => request.info.id === requestID)
 }
 
 export function evaluate(permission: string, pattern: string, ...rulesets: Ruleset[]): Rule {
@@ -167,11 +254,20 @@ export const layer = Layer.effect(
         )
         const state = {
           pending: new Map<PermissionID, PendingEntry>(),
-          approved: row?.data ?? [],
+          approved: normalizeStore(row?.data).approved,
         }
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
+            const abandoned = updateStore(ctx.project.id, (store) => {
+              const owned = store.requests.filter(
+                (request) => request.ownerRuntimeID === runtimeID && request.directory === ctx.directory,
+              )
+              const ids = new Set(owned.map((request) => request.info.id))
+              store.requests = store.requests.filter((request) => !ids.has(request.info.id))
+              return owned
+            })
+            for (const request of abandoned) markPermissionAbandoned(request.info.sessionID)
             for (const item of state.pending.values()) {
               yield* Deferred.fail(item.deferred, new RejectedError())
             }
@@ -184,23 +280,34 @@ export const layer = Layer.effect(
     )
 
     const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
-      const { approved, pending } = yield* InstanceState.get(state)
+      const local = yield* InstanceState.get(state)
+      const pending = local.pending
+      const context = yield* InstanceState.context
+      const loaded = yield* Effect.sync(() =>
+        updateStore(context.project.id, (store) => ({
+          approved: [...store.approved],
+          abandoned: cleanDeadRequests(store),
+        })),
+      )
+      for (const request of loaded.abandoned) markPermissionAbandoned(request.info.sessionID)
       const { ruleset, ...request } = input
       const modeRule = ruleset.findLast((rule) => rule.permission === SESSION_MODE_PERMISSION)
       const mode = modeRule?.pattern
-      const evaluationRuleset = modeRule ? ruleset.filter((rule) => rule.permission !== SESSION_MODE_PERMISSION) : ruleset
+      const evaluationRuleset = modeRule
+        ? ruleset.filter((rule) => rule.permission !== SESSION_MODE_PERMISSION)
+        : ruleset
       let needsAsk = false
 
       for (const pattern of request.patterns) {
-        const rule = evaluate(request.permission, pattern, evaluationRuleset, approved)
+        const rule = evaluate(request.permission, pattern, evaluationRuleset, loaded.approved, local.approved)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
-          return yield* new DeniedError({ ruleset: evaluationRuleset.filter((rule) => Wildcard.match(request.permission, rule.permission)) })
+          return yield* new DeniedError({
+            ruleset: evaluationRuleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
+          })
         }
-        if (
-          request.permission === "bash" &&
-          (mode === "approval" || mode === "smart")
-        ) {
+        if (mode === "full_access") continue
+        if (isShellPermissionRequest(request) && (mode === "approval" || mode === "smart")) {
           needsAsk = true
           continue
         }
@@ -219,79 +326,145 @@ export const layer = Layer.effect(
 
       const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
       pending.set(id, { info, deferred })
+      yield* Effect.sync(() => {
+        updateStore(context.project.id, (store) => {
+          store.requests = store.requests.filter((item) => item.info.id !== id)
+          store.requests.push({
+            info,
+            ownerRuntimeID: runtimeID,
+            directory: context.directory,
+            timeCreated: Date.now(),
+            timeUpdated: Date.now(),
+          })
+        })
+        markPermissionPending(info)
+      })
       yield* bus.publish(Event.Asked, info)
-      return yield* Effect.ensuring(
-        Deferred.await(deferred),
-        Effect.sync(() => {
-          pending.delete(id)
-        }),
+      return yield* Effect.gen(function* () {
+        const persistedReply = Effect.gen(function* () {
+          while (!readRequest(context.project.id, id)?.reply) yield* Effect.sleep("200 millis")
+        })
+        yield* Deferred.await(deferred).pipe(Effect.raceFirst(persistedReply))
+        const decision = readRequest(context.project.id, id)
+        if (decision?.reply === "always") {
+          local.approved.push(
+            ...decision.info.always.map((pattern) => ({
+              permission: decision.info.permission,
+              pattern,
+              action: "allow" as const,
+            })),
+          )
+        }
+        if (decision?.reply !== "reject") return
+        if (decision.message) return yield* new CorrectedError({ feedback: decision.message })
+        return yield* new RejectedError()
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            pending.delete(id)
+            const removed = updateStore(context.project.id, (store) => {
+              const existing = store.requests.find((item) => item.info.id === id)
+              store.requests = store.requests.filter((item) => item.info.id !== id)
+              return existing
+                ? !store.requests.some((item) => item.info.sessionID === info.sessionID && item.reply === undefined)
+                : false
+            })
+            if (removed) markPermissionResolved(info.sessionID)
+          }),
+        ),
       )
     })
 
     const reply = Effect.fn("Permission.reply")(function* (input: ReplyInput) {
-      const { approved, pending } = yield* InstanceState.get(state)
-      const existing = pending.get(input.requestID)
-      if (!existing) return
-
-      pending.delete(input.requestID)
-      yield* bus.publish(Event.Replied, {
-        sessionID: existing.info.sessionID,
-        requestID: existing.info.id,
-        reply: input.reply,
-      })
-
-      if (input.reply === "reject") {
-        yield* Deferred.fail(
-          existing.deferred,
-          input.message ? new CorrectedError({ feedback: input.message }) : new RejectedError(),
-        )
-
-        for (const [id, item] of pending.entries()) {
-          if (item.info.sessionID !== existing.info.sessionID) continue
-          pending.delete(id)
-          yield* bus.publish(Event.Replied, {
-            sessionID: item.info.sessionID,
-            requestID: item.info.id,
-            reply: "reject",
-          })
-          yield* Deferred.fail(item.deferred, new RejectedError())
-        }
-        return
-      }
-
-      yield* Deferred.succeed(existing.deferred, undefined)
-      if (input.reply === "once") return
-
-      for (const pattern of existing.info.always) {
-        approved.push({
-          permission: existing.info.permission,
-          pattern,
-          action: "allow",
-        })
-      }
-
-      for (const [id, item] of pending.entries()) {
-        if (item.info.sessionID !== existing.info.sessionID) continue
-        const ok = item.info.patterns.every(
-          (pattern) => evaluate(item.info.permission, pattern, approved).action === "allow",
-        )
-        if (!ok) continue
-        pending.delete(id)
+      const pending = (yield* InstanceState.get(state)).pending
+      const context = yield* InstanceState.context
+      const released = yield* Effect.sync(() =>
+        updateStore(context.project.id, (store) => {
+          const existing = store.requests.find(
+            (request) => request.info.id === input.requestID && request.reply === undefined,
+          )
+          if (!existing) return []
+          const approvals =
+            input.reply === "always"
+              ? existing.info.always.map((pattern) => ({
+                  permission: existing.info.permission,
+                  pattern,
+                  action: "allow" as const,
+                }))
+              : []
+          const released: StoredRequest[] = []
+          for (const request of store.requests) {
+            if (request.info.sessionID !== existing.info.sessionID || request.reply !== undefined) continue
+            const reply =
+              request.info.id === existing.info.id
+                ? input.reply
+                : input.reply === "reject"
+                  ? "reject"
+                  : input.reply === "always" &&
+                      request.info.patterns.every(
+                        (pattern) =>
+                          evaluate(request.info.permission, pattern, store.approved, approvals).action === "allow",
+                      )
+                    ? "always"
+                    : undefined
+            if (!reply) continue
+            request.reply = reply
+            request.message = request.info.id === existing.info.id ? input.message : undefined
+            request.timeUpdated = Date.now()
+            released.push(request)
+          }
+          return released
+        }),
+      )
+      for (const request of released) {
         yield* bus.publish(Event.Replied, {
-          sessionID: item.info.sessionID,
-          requestID: item.info.id,
-          reply: "always",
+          sessionID: request.info.sessionID,
+          requestID: request.info.id,
+          reply: request.reply!,
         })
-        yield* Deferred.succeed(item.deferred, undefined)
+        const local = pending.get(request.info.id)
+        if (local) yield* Deferred.succeed(local.deferred, undefined)
+      }
+    })
+
+    const replyForSessions = Effect.fn("Permission.replyForSessions")(function* (input: {
+      sessionIDs: readonly SessionID[]
+      reply: Reply
+    }) {
+      const context = yield* InstanceState.context
+      const sessionIDs = new Set(input.sessionIDs)
+      const result = yield* Effect.sync(() =>
+        updateStore(context.project.id, (store) => {
+          const abandoned = cleanDeadRequests(store)
+          return {
+            requests: store.requests
+              .filter((request) => request.reply === undefined && sessionIDs.has(request.info.sessionID))
+              .map((request) => Schema.decodeUnknownSync(Request)(request.info)),
+            abandoned,
+          }
+        }),
+      )
+      for (const request of result.abandoned) markPermissionAbandoned(request.info.sessionID)
+      for (const request of result.requests) {
+        yield* reply({ requestID: request.id, reply: input.reply })
       }
     })
 
     const list = Effect.fn("Permission.list")(function* () {
-      const pending = (yield* InstanceState.get(state)).pending
-      return Array.from(pending.values(), (item) => item.info)
+      const context = yield* InstanceState.context
+      const result = yield* Effect.sync(() =>
+        updateStore(context.project.id, (store) => ({
+          requests: store.requests
+            .filter((request) => request.reply === undefined && request.directory === context.directory)
+            .map((request) => Schema.decodeUnknownSync(Request)(request.info)),
+          abandoned: cleanDeadRequests(store),
+        })),
+      )
+      for (const request of result.abandoned) markPermissionAbandoned(request.info.sessionID)
+      return result.requests.filter((request) => !result.abandoned.some((item) => item.info.id === request.id))
     })
 
-    return Service.of({ ask, reply, list })
+    return Service.of({ ask, reply, replyForSessions, list })
   }),
 )
 

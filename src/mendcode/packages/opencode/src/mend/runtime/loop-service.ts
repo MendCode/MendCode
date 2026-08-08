@@ -126,7 +126,7 @@ function loopServiceMode(args: Pick<LoopServiceArgs, "execute" | "reportOnly">):
 }
 
 function defaultCommand() {
-  return process.env.MENDCODE_PUBLIC_BIN || "mendcode"
+  return process.env.MENDCODE_PUBLIC_BIN || "mend"
 }
 
 function servicePath() {
@@ -181,10 +181,6 @@ function stringNode(value: string) {
   return `<string>${escapedXML(value)}</string>`
 }
 
-function serviceRunsOneShot(platformValue: LoopServicePlatform) {
-  return platformValue === "darwin" || platformValue === "win32"
-}
-
 function serviceIntervalSeconds(intervalMs: number) {
   return Math.max(60, Math.ceil(intervalMs / 1000))
 }
@@ -215,9 +211,9 @@ function loopServicePreflightCommand(input: {
   const scheduledMode = "(json_valid(w.data) = 0 OR json_extract(w.data, '$.spec.trigger.mode') IS NULL OR json_extract(w.data, '$.spec.trigger.mode') IN ('interval', 'daily', 'adaptive', 'external-signal', 'self-paced'))"
   const query = [
     "WITH scheduled AS (",
-    `SELECT w.state, w.next_wakeup FROM loop_workflow AS w JOIN project AS p ON p.id = w.project_id WHERE ${scope} AND w.state IN ('working', 'active', 'sleeping') AND ${scheduledMode}`,
+    `SELECT w.state, w.next_wakeup FROM loop_workflow AS w JOIN project AS p ON p.id = w.project_id WHERE ${scope} AND w.state IN ('working', 'needs_input', 'active', 'sleeping') AND ${scheduledMode}`,
     ") SELECT CASE",
-    "WHEN EXISTS (SELECT 1 FROM scheduled WHERE state = 'working' OR (state IN ('active', 'sleeping') AND next_wakeup IS NOT NULL AND next_wakeup <= strftime('%s', 'now') * 1000)) THEN 1",
+    "WHEN EXISTS (SELECT 1 FROM scheduled WHERE state IN ('working', 'needs_input') OR (state IN ('active', 'sleeping') AND next_wakeup IS NOT NULL AND next_wakeup <= strftime('%s', 'now') * 1000)) THEN 1",
     "WHEN EXISTS (SELECT 1 FROM scheduled) THEN 2",
     "ELSE 0 END;",
   ].join(" ")
@@ -262,12 +258,11 @@ export function loopServicePlan(args: LoopServiceArgs): LoopServicePlan {
   const command = args.command ?? defaultCommand()
   const serviceDir = path.resolve(args.serviceDir || defaultServiceDir(platformValue))
   const logDir = path.resolve(args.logDir || defaultLogDir(platformValue))
-  const oneShot = serviceRunsOneShot(platformValue)
   const programArguments = [
     "/usr/bin/env",
     `PATH=${servicePath()}`,
     command,
-    ...loopDaemonArgs({ intervalMs, limit, execute: args.execute, reportOnly: args.reportOnly, quiet: args.quiet }, { once: oneShot }),
+    ...loopDaemonArgs({ intervalMs, limit, execute: args.execute, reportOnly: args.reportOnly, quiet: args.quiet }),
   ]
   const definitionPath =
     platformValue === "darwin"
@@ -423,7 +418,7 @@ export async function writeLoopServiceHealth(plan: LoopServicePlan, update: Loop
     updatedAt: update.updatedAt ?? Date.now(),
   }
   await mkdir(path.dirname(plan.healthPath), { recursive: true })
-  const temporaryPath = `${plan.healthPath}.${process.pid}.tmp`
+  const temporaryPath = `${plan.healthPath}.${process.pid}.${crypto.randomUUID()}.tmp`
   await writeFile(temporaryPath, JSON.stringify(record))
   await rename(temporaryPath, plan.healthPath)
 }

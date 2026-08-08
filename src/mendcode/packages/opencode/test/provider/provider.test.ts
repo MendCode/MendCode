@@ -144,6 +144,31 @@ test("disabled_providers excludes provider", async () => {
   })
 })
 
+test("disabled_models excludes exact model and keeps provider", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "mendcode.json"),
+        JSON.stringify({
+          $schema: "https://mendcode.ai/config.json",
+          disabled_models: ["anthropic/claude-sonnet-4-20250514"],
+        }),
+      )
+    },
+  })
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      set("ANTHROPIC_API_KEY", "test-api-key")
+      const providers = await list()
+      expect(providers[ProviderID.anthropic]).toBeDefined()
+      expect(providers[ProviderID.anthropic].models["claude-sonnet-4-20250514"]).toBeUndefined()
+      expect(Object.keys(providers[ProviderID.anthropic].models).length).toBeGreaterThan(0)
+      await expect(getModel(ProviderID.anthropic, ModelID.make("claude-sonnet-4-20250514"))).rejects.toThrow()
+    },
+  })
+})
+
 test("enabled_providers restricts to only listed providers", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

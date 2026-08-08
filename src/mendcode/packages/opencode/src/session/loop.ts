@@ -1037,9 +1037,9 @@ function runLeaseProcessAlive(pid: number) {
 }
 
 function runLeaseStale(input: { run: RunRow; policy: Policy; now: number }) {
-  if (runLeaseExpired(input)) return true
   const pid = runLeaseProcessID(input.run.data.lease?.holder)
-  return pid !== undefined && !runLeaseProcessAlive(pid)
+  if (pid !== undefined) return !runLeaseProcessAlive(pid)
+  return runLeaseExpired(input)
 }
 
 const maxFailureRetries = 3
@@ -2229,7 +2229,7 @@ function appendArtifacts(inputs: ArtifactInput[]) {
 }
 
 function reconcileStaleWorkingRun(row: WorkflowRow, now = Date.now()): WorkflowRow {
-  if (row.state !== "working" && row.state !== "paused") return row
+  if (row.state !== "working" && row.state !== "needs_input" && row.state !== "paused") return row
   const activeRuns = Database.use((db) =>
     db
       .select()

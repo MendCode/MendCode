@@ -163,6 +163,7 @@ export interface TaskResultInput {
 
 export interface Interface {
   readonly tick: (runID: WorkflowRunID) => Effect.Effect<SchedulerTick, WorkflowNotFoundError>
+  readonly heartbeat: (runID: WorkflowRunID) => Effect.Effect<boolean, WorkflowNotFoundError>
   readonly markStarted: (input: {
     readonly runID: WorkflowRunID
     readonly taskID: WorkflowTaskID
@@ -339,6 +340,14 @@ const reconcile = (db: DB, runID: WorkflowRunID, now: number) => {
     })
     .where(eq(WorkflowRunTable.id, runID))
     .run()
+  if (run.state !== state && (state === "completed" || state === "failed")) {
+    const title = state === "completed" ? "Workflow completed" : "Workflow failed"
+    appendEvent(db, runID, state === "completed" ? "workflow.run.completed" : "workflow.run.failed", title, title, {
+      terminal: true,
+      background: true,
+      state,
+    })
+  }
 }
 
 export const layer = Layer.effect(
@@ -464,6 +473,20 @@ export const layer = Layer.effect(
       return result
     })
 
+    const heartbeat = Effect.fn("WorkflowScheduler.heartbeat")(function* (runID: WorkflowRunID) {
+      const now = Date.now()
+      return Database.transaction((db) => {
+        const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, runID)).get()
+        if (!run) throw new WorkflowNotFoundError(runID)
+        if (run.lease_holder !== runtimeID) return false
+        db.update(WorkflowRunTable)
+          .set({ lease_heartbeat_at: now, lease_expires_at: now + RUN_LEASE_MS, time_updated: now })
+          .where(and(eq(WorkflowRunTable.id, runID), eq(WorkflowRunTable.lease_holder, runtimeID)))
+          .run()
+        return true
+      }, { behavior: "immediate" })
+    })
+
     const markStarted = Effect.fn("WorkflowScheduler.markStarted")(function* (input: {
       readonly runID: WorkflowRunID
       readonly taskID: WorkflowTaskID
@@ -477,8 +500,11 @@ export const layer = Layer.effect(
         const task = db.select().from(WorkflowTaskTable).where(and(eq(WorkflowTaskTable.run_id, input.runID), eq(WorkflowTaskTable.id, input.taskID))).get()
         const attempt = db.select().from(WorkflowTaskAttemptTable).where(eq(WorkflowTaskAttemptTable.id, input.attemptID)).get()
         if (!task || !attempt) throw new WorkflowStateError(input.runID, `Task attempt ${input.attemptID} no longer exists`)
+        if (attempt.run_id !== input.runID || attempt.task_id !== input.taskID || attempt.attempt !== task.attempt) {
+          throw new WorkflowStateError(input.runID, `Task ${input.taskID} attempt is stale`)
+        }
         if (attempt.state !== "queued") return false
-        db.update(WorkflowTaskTable).set({ state: "working", time_started: task.time_started ?? now, time_updated: now }).where(eq(WorkflowTaskTable.id, input.taskID)).run()
+        db.update(WorkflowTaskTable).set({ state: "working", time_started: task.time_started ?? now, time_updated: now }).where(and(eq(WorkflowTaskTable.run_id, input.runID), eq(WorkflowTaskTable.id, input.taskID), eq(WorkflowTaskTable.attempt, attempt.attempt))).run()
         db.update(WorkflowTaskAttemptTable).set({
           state: "working",
           background_task_id: SessionID.make(input.backgroundTaskID),
@@ -516,7 +542,9 @@ export const layer = Layer.effect(
         const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, input.runID)).get()
         if (!task || !attempt) throw new WorkflowStateError(input.runID, `Task attempt ${input.attemptID} no longer exists`)
         if (!run) throw new WorkflowNotFoundError(input.runID)
-        if (attempt.attempt !== input.attempt) throw new WorkflowStateError(input.runID, `Task ${input.taskID} attempt is stale`)
+        if (attempt.run_id !== input.runID || attempt.task_id !== input.taskID || attempt.attempt !== input.attempt || task.attempt !== input.attempt) {
+          throw new WorkflowStateError(input.runID, `Task ${input.taskID} attempt is stale`)
+        }
         if (isTaskTerminal(attempt.state)) return
          const taskUsage = addUsage(usageFromData(task.data), input.usage)
          const taskTokens = (taskUsage?.inputTokens ?? 0) + (taskUsage?.outputTokens ?? 0)
@@ -546,7 +574,7 @@ export const layer = Layer.effect(
             ...(input.evidence === undefined ? {} : { evidence: [...input.evidence] }),
             ...(retryAt === undefined ? { retryAt: undefined } : { retryAt }),
           }
-          db.update(WorkflowTaskTable).set({ state: taskState, time_started: retryable ? null : undefined, time_ended: retryable ? null : now, time_updated: now, data }).where(eq(WorkflowTaskTable.id, input.taskID)).run()
+          db.update(WorkflowTaskTable).set({ state: taskState, time_started: retryable ? null : undefined, time_ended: retryable ? null : now, time_updated: now, data }).where(and(eq(WorkflowTaskTable.run_id, input.runID), eq(WorkflowTaskTable.id, input.taskID), eq(WorkflowTaskTable.attempt, input.attempt))).run()
          db.update(WorkflowTaskAttemptTable).set({
            state: finalState,
            failure_class: finalFailureClass,
@@ -595,10 +623,11 @@ export const layer = Layer.effect(
          })
         reconcile(db, input.runID, now)
       }, { behavior: "immediate" })
+      yield* workflow.publishTerminalNotification(input.runID)
       if (!current.tasks.some((task) => task.id === input.taskID)) throw new WorkflowNotFoundError(input.taskID)
     })
 
-    return Service.of({ tick, markStarted, finish })
+    return Service.of({ tick, heartbeat, markStarted, finish })
   }),
 )
 

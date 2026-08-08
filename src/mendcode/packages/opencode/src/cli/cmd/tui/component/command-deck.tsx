@@ -63,8 +63,8 @@ export function commandDeckLayout(input: { width: number; height: number; hasRai
   const hasRail = input.hasRail ?? true
   const hasContext = input.hasContext ?? true
   const wide = width >= 120 && height >= 24
-  const railWidth = Math.min(28, Math.max(22, Math.floor(width * 0.18)))
-  const contextWidth = Math.min(42, Math.max(30, Math.floor(width * 0.24)))
+  const railWidth = Math.min(48, Math.max(24, Math.floor(width * 0.2)))
+  const contextWidth = Math.min(50, Math.max(30, Math.floor(width * 0.24)))
   const sideWidth = (hasRail ? railWidth : 0) + (hasContext ? contextWidth : 0)
   const sideChrome = sideWidth === 0 ? 2 : sideWidth + (hasRail && hasContext ? 4 : 3)
   return {

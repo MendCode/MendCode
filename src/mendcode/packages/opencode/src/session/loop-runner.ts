@@ -1264,7 +1264,7 @@ export const layer = Layer.effect(
               )
             }),
           ),
-        { concurrency: 1 },
+        { concurrency: Math.max(1, due.length) },
       )
     })
 

@@ -18,6 +18,7 @@ import {
 import { jsonRequest, runRequest } from "./trace"
 
 const reasonBody = z.object({ reason: z.string().optional() })
+const permissionModeBody = reasonBody.extend({ mode: z.enum(["report-only", "normal", "custom"]) })
 const previewBody = z.object({ plan: WorkflowPlan.zod })
 const saveBody = previewBody.extend({
   definitionID: z.string().optional(),
@@ -44,20 +45,23 @@ const retryPhaseBody = reasonBody.extend({ phaseID: z.string() })
 
 function errorResponse(error: unknown) {
   if (error instanceof WorkflowNotFoundError) return { status: 404 as const, body: { error: error.message } }
-  if (error instanceof WorkflowValidationError) return { status: 400 as const, body: { error: error.message, issues: error.issues } }
+  if (error instanceof WorkflowValidationError)
+    return { status: 400 as const, body: { error: error.message, issues: error.issues } }
   if (error instanceof WorkflowStateError) return { status: 400 as const, body: { error: error.message, id: error.id } }
   return { status: 400 as const, body: { error: error instanceof Error ? error.message : String(error) } }
 }
 
-async function request<A, E>(
-  name: string,
-  c: Context,
-  effect: Effect.Effect<A, E, AppServices>,
-) {
-  const result = await runRequest(name, c, effect.pipe(Effect.match({
-    onFailure: (error) => ({ ok: false as const, error }),
-    onSuccess: (value) => ({ ok: true as const, value }),
-  })))
+async function request<A, E>(name: string, c: Context, effect: Effect.Effect<A, E, AppServices>) {
+  const result = await runRequest(
+    name,
+    c,
+    effect.pipe(
+      Effect.match({
+        onFailure: (error) => ({ ok: false as const, error }),
+        onSuccess: (value) => ({ ok: true as const, value }),
+      }),
+    ),
+  )
   if (!result.ok) {
     const response = errorResponse(result.error)
     return c.json(response.body, response.status)
@@ -74,27 +78,39 @@ export const WorkflowRoutes = () =>
   new Hono()
     .post("/preview", async (c) => {
       const body = previewBody.parse(await c.req.json().catch(() => ({})))
-      return request("WorkflowRoutes.preview", c, Effect.gen(function* () {
-        const workflow = yield* WorkflowService
-        return yield* workflow.preview(body.plan as unknown as WorkflowPlanInput)
-      }))
+      return request(
+        "WorkflowRoutes.preview",
+        c,
+        Effect.gen(function* () {
+          const workflow = yield* WorkflowService
+          return yield* workflow.preview(body.plan as unknown as WorkflowPlanInput)
+        }),
+      )
     })
     .post("/save", async (c) => {
       const body = saveBody.parse(await c.req.json().catch(() => ({})))
-      return request("WorkflowRoutes.save", c, Effect.gen(function* () {
-        const workflow = yield* WorkflowService
-        return yield* workflow.save(body as unknown as WorkflowSaveInput)
-      }))
+      return request(
+        "WorkflowRoutes.save",
+        c,
+        Effect.gen(function* () {
+          const workflow = yield* WorkflowService
+          return yield* workflow.save(body as unknown as WorkflowSaveInput)
+        }),
+      )
     })
     .post("/start", async (c) => {
       const body = startBody.parse(await c.req.json().catch(() => ({})))
-      return request("WorkflowRoutes.start", c, Effect.gen(function* () {
-        const workflow = yield* WorkflowService
-        const runner = yield* WorkflowRunner.Service
-        const started = yield* workflow.start(body as unknown as WorkflowStartInput)
-        yield* runner.start(started.run.id)
-        return started
-      }))
+      return request(
+        "WorkflowRoutes.start",
+        c,
+        Effect.gen(function* () {
+          const workflow = yield* WorkflowService
+          const runner = yield* WorkflowRunner.Service
+          const started = yield* workflow.start(body as unknown as WorkflowStartInput)
+          yield* runner.start(started.run.id)
+          return started
+        }),
+      )
     })
     .get("/", async (c) =>
       jsonRequest("WorkflowRoutes.list", c, function* () {
@@ -103,73 +119,155 @@ export const WorkflowRoutes = () =>
       }),
     )
     .get("/:runID", async (c) =>
-      request("WorkflowRoutes.show", c, Effect.gen(function* () {
-        const workflow = yield* WorkflowService
-        return yield* workflow.show(Workflow.WorkflowRunID.make(c.req.param("runID")))
-      })),
+      request(
+        "WorkflowRoutes.show",
+        c,
+        Effect.gen(function* () {
+          const workflow = yield* WorkflowService
+          return yield* workflow.show(Workflow.WorkflowRunID.make(c.req.param("runID")))
+        }),
+      ),
     )
     .delete("/:runID", async (c) =>
-      request("WorkflowRoutes.remove", c, Effect.gen(function* () {
-        const workflow = yield* WorkflowService
-        return yield* workflow.remove(Workflow.WorkflowRunID.make(c.req.param("runID")))
-      })),
+      request(
+        "WorkflowRoutes.remove",
+        c,
+        Effect.gen(function* () {
+          const workflow = yield* WorkflowService
+          return yield* workflow.remove(Workflow.WorkflowRunID.make(c.req.param("runID")))
+        }),
+      ),
     )
     .get("/:runID/events", async (c) =>
-      request("WorkflowRoutes.events", c, Effect.gen(function* () {
-        const workflow = yield* WorkflowService
-        return yield* workflow.events(Workflow.WorkflowRunID.make(c.req.param("runID")), queryLimit(c.req.query("limit")))
-      })),
+      request(
+        "WorkflowRoutes.events",
+        c,
+        Effect.gen(function* () {
+          const workflow = yield* WorkflowService
+          return yield* workflow.events(
+            Workflow.WorkflowRunID.make(c.req.param("runID")),
+            queryLimit(c.req.query("limit")),
+          )
+        }),
+      ),
     )
     .get("/:runID/artifacts", async (c) =>
-      request("WorkflowRoutes.artifacts", c, Effect.gen(function* () {
-        const workflow = yield* WorkflowService
-        return yield* workflow.artifacts(Workflow.WorkflowRunID.make(c.req.param("runID")), queryLimit(c.req.query("limit")))
-      })),
+      request(
+        "WorkflowRoutes.artifacts",
+        c,
+        Effect.gen(function* () {
+          const workflow = yield* WorkflowService
+          return yield* workflow.artifacts(
+            Workflow.WorkflowRunID.make(c.req.param("runID")),
+            queryLimit(c.req.query("limit")),
+          )
+        }),
+      ),
     )
     .post("/:runID/pause", async (c) => {
       const body = reasonBody.parse(await c.req.json().catch(() => ({})))
-      return request("WorkflowRoutes.pause", c, Effect.gen(function* () {
-        const workflow = yield* WorkflowService
-        return yield* workflow.pause({ runID: Workflow.WorkflowRunID.make(c.req.param("runID")), reason: body.reason, actor: "api" })
-      }))
+      return request(
+        "WorkflowRoutes.pause",
+        c,
+        Effect.gen(function* () {
+          const workflow = yield* WorkflowService
+          return yield* workflow.pause({
+            runID: Workflow.WorkflowRunID.make(c.req.param("runID")),
+            reason: body.reason,
+            actor: "api",
+          })
+        }),
+      )
     })
     .post("/:runID/resume", async (c) => {
       const body = reasonBody.parse(await c.req.json().catch(() => ({})))
-      return request("WorkflowRoutes.resume", c, Effect.gen(function* () {
-        const workflow = yield* WorkflowService
-        const runner = yield* WorkflowRunner.Service
-        const resumed = yield* workflow.resume({ runID: Workflow.WorkflowRunID.make(c.req.param("runID")), reason: body.reason, actor: "api" })
-        yield* runner.start(resumed.run.id)
-        return resumed
-      }))
+      return request(
+        "WorkflowRoutes.resume",
+        c,
+        Effect.gen(function* () {
+          const workflow = yield* WorkflowService
+          const runner = yield* WorkflowRunner.Service
+          const resumed = yield* workflow.resume({
+            runID: Workflow.WorkflowRunID.make(c.req.param("runID")),
+            reason: body.reason,
+            actor: "api",
+          })
+          yield* runner.start(resumed.run.id)
+          return resumed
+        }),
+      )
     })
     .post("/:runID/stop", async (c) => {
       const body = reasonBody.parse(await c.req.json().catch(() => ({})))
-      return request("WorkflowRoutes.stop", c, Effect.gen(function* () {
-        const workflow = yield* WorkflowService
-        const runner = yield* WorkflowRunner.Service
-        const stopped = yield* workflow.stop({ runID: Workflow.WorkflowRunID.make(c.req.param("runID")), reason: body.reason, actor: "api" })
-        yield* runner.stop(stopped.run.id)
-        return stopped
-      }))
+      return request(
+        "WorkflowRoutes.stop",
+        c,
+        Effect.gen(function* () {
+          const workflow = yield* WorkflowService
+          const runner = yield* WorkflowRunner.Service
+          const stopped = yield* workflow.stop({
+            runID: Workflow.WorkflowRunID.make(c.req.param("runID")),
+            reason: body.reason,
+            actor: "api",
+          })
+          yield* runner.stop(stopped.run.id)
+          return stopped
+        }),
+      )
+    })
+    .post("/:runID/permission-mode", async (c) => {
+      const body = permissionModeBody.parse(await c.req.json().catch(() => ({})))
+      return request(
+        "WorkflowRoutes.permissionMode",
+        c,
+        Effect.gen(function* () {
+          const runner = yield* WorkflowRunner.Service
+          const changed = yield* runner.setPermissionMode({
+            runID: Workflow.WorkflowRunID.make(c.req.param("runID")),
+            mode: body.mode,
+            reason: body.reason,
+            actor: "api",
+          })
+          if (changed.run.state === "queued") yield* runner.start(changed.run.id)
+          return changed
+        }),
+      )
     })
     .post("/:runID/retry-task", async (c) => {
       const body = retryTaskBody.parse(await c.req.json().catch(() => ({})))
-      return request("WorkflowRoutes.retryTask", c, Effect.gen(function* () {
-        const workflow = yield* WorkflowService
-        const runner = yield* WorkflowRunner.Service
-        const retried = yield* workflow.retryTask({ runID: Workflow.WorkflowRunID.make(c.req.param("runID")), taskID: Workflow.WorkflowTaskID.make(body.taskID), reason: body.reason, actor: "api" })
-        yield* runner.start(retried.run.id)
-        return retried
-      }))
+      return request(
+        "WorkflowRoutes.retryTask",
+        c,
+        Effect.gen(function* () {
+          const workflow = yield* WorkflowService
+          const runner = yield* WorkflowRunner.Service
+          const retried = yield* workflow.retryTask({
+            runID: Workflow.WorkflowRunID.make(c.req.param("runID")),
+            taskID: Workflow.WorkflowTaskID.make(body.taskID),
+            reason: body.reason,
+            actor: "api",
+          })
+          yield* runner.start(retried.run.id)
+          return retried
+        }),
+      )
     })
     .post("/:runID/retry-phase", async (c) => {
       const body = retryPhaseBody.parse(await c.req.json().catch(() => ({})))
-      return request("WorkflowRoutes.retryPhase", c, Effect.gen(function* () {
-        const workflow = yield* WorkflowService
-        const runner = yield* WorkflowRunner.Service
-        const retried = yield* workflow.retryPhase({ runID: Workflow.WorkflowRunID.make(c.req.param("runID")), phaseID: Workflow.WorkflowPhaseID.make(body.phaseID), reason: body.reason, actor: "api" })
-        yield* runner.start(retried.run.id)
-        return retried
-      }))
+      return request(
+        "WorkflowRoutes.retryPhase",
+        c,
+        Effect.gen(function* () {
+          const workflow = yield* WorkflowService
+          const runner = yield* WorkflowRunner.Service
+          const retried = yield* workflow.retryPhase({
+            runID: Workflow.WorkflowRunID.make(c.req.param("runID")),
+            phaseID: Workflow.WorkflowPhaseID.make(body.phaseID),
+            reason: body.reason,
+            actor: "api",
+          })
+          yield* runner.start(retried.run.id)
+          return retried
+        }),
+      )
     })

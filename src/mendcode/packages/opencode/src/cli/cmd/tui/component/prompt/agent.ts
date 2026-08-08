@@ -20,8 +20,10 @@ export function resolveSelectedPromptModel(input: {
   localModel?: { providerID: string; modelID: string }
   localOverride?: { providerID: string; modelID: string }
   localOverrideUpdatedAt?: number
+  localOverrideMessageID?: string
   userModel?: PromptModelRef
   userModelCreatedAt?: number
+  userMessageID?: string
   sessionModel?: PromptModelRef
   agentModel?: PromptModelRef
 }) {
@@ -33,21 +35,25 @@ export function resolveSelectedPromptVariant(input: {
   localVariant?: string
   hasLocalVariantOverride: boolean
   localVariantOverrideUpdatedAt?: number
+  localVariantOverrideMessageID?: string
   userModel?: PromptModelRef
   userModelCreatedAt?: number
+  userMessageID?: string
   sessionModel?: PromptModelRef
 }) {
-  const selected = resolveEffectivePromptSelection({
-    hasSession: input.hasSession,
-    sessionUsesSubagent: false,
-    localOverride: input.hasLocalVariantOverride ? { variant: input.localVariant } : undefined,
-    localOverrideUpdatedAt: input.localVariantOverrideUpdatedAt,
-    userModel: input.userModel,
-    userModelCreatedAt: input.userModelCreatedAt,
-    sessionModel: input.sessionModel,
-    localModel: { variant: input.localVariant },
-  })
-  return selected.variant ?? input.localVariant
+  const localOverrideMatchesUserMessage =
+    input.localVariantOverrideMessageID !== undefined &&
+    input.userMessageID !== undefined &&
+    input.localVariantOverrideMessageID === input.userMessageID
+  const localOverrideIsNewer =
+    input.hasLocalVariantOverride &&
+    (localOverrideMatchesUserMessage ||
+      !input.hasSession ||
+      !input.userModelCreatedAt ||
+      (input.localVariantOverrideUpdatedAt ?? 0) > input.userModelCreatedAt)
+  if (localOverrideIsNewer) return input.localVariant
+  if (!input.hasSession) return input.localVariant
+  return input.userModel?.variant ?? input.sessionModel?.variant ?? input.localVariant
 }
 
 export function nextPromptVariant(variants: readonly string[], current?: string) {

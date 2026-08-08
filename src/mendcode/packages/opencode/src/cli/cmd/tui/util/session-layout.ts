@@ -353,6 +353,27 @@ export function sessionTopbarLeftLabel(input: {
 
 export type SessionLoopReceiptTone = "active" | "danger" | "info" | "muted" | "success" | "warning"
 
+export function shouldRenderSessionWorkflowCard(profile?: "raw" | "minimal" | "mendcode" | "full") {
+  return profile === "mendcode" || profile === "full"
+}
+
+export function shouldRenderSessionLoopCard(input: {
+  toolStatus?: string
+  workflowID?: unknown
+  workflows?: unknown
+}) {
+  if (input.toolStatus !== "completed") return false
+  if (typeof input.workflowID === "string" && input.workflowID.trim()) return true
+  if (!Array.isArray(input.workflows)) return false
+  return input.workflows.some(
+    (workflow) =>
+      workflow !== null &&
+      typeof workflow === "object" &&
+      typeof (workflow as { workflowID?: unknown }).workflowID === "string" &&
+      Boolean((workflow as { workflowID: string }).workflowID.trim()),
+  )
+}
+
 export type SessionTaskContinuationEntry = {
   callID: string
   sessionID?: string

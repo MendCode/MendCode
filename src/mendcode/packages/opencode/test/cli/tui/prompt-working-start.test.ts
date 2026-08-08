@@ -17,6 +17,7 @@ import {
   promptDeliveryRetryAction,
   promptDeliveryRetryDelay,
   shouldRetryConnectionForPrompt,
+  shouldRecoverAcceptedPromptDeliveries,
   promptDraftHistoryAction,
   mergeOptimisticUserParts,
   optimisticUserMessage,
@@ -25,6 +26,7 @@ import {
   promptHistoryMatchesCurrent,
   latestPendingAssistantID,
   resolveWorkingStartedAt,
+  sessionActivityMessages,
   shouldAcceptPromptInterruptFocus,
   shouldAttemptPromptHistoryNavigation,
   shouldClearWorkingStartedAt,
@@ -43,11 +45,13 @@ import {
   sessionUserMovedViewport,
   sessionHasLocalQueuedTurn,
   sessionPinnedUserMessageID,
+  sessionQueuedPromptDeliveryIDs,
   sessionQueuedUserMessageIDs,
   sessionTranscriptRenderKey,
   sessionUserMessageQueued,
   sessionUserPromptHistory,
   shouldPinSessionStickyUserHeader,
+  shouldClearSessionPagingBoundarySuppression,
   shouldDeferSessionFollowSync,
   shouldHoldSessionSubmitScroll,
   shouldReleaseSessionPagingBoundarySuppression,
@@ -158,9 +162,10 @@ describe("prompt delivery recovery", () => {
     expect(promptDeliveryErrorMessage(undefined)).toBe("The server rejected this prompt.")
   })
 
-  test("does not render an accepted delivery as queued", () => {
+  test("keeps an accepted delivery queued only when it was submitted behind an active turn", () => {
     expect(promptDeliveryIsQueued("pending")).toBe(true)
     expect(promptDeliveryIsQueued("accepted")).toBe(false)
+    expect(promptDeliveryIsQueued("accepted", true)).toBe(true)
   })
 
   test("settles completed deliveries before a forced reconnect recovery", () => {
@@ -175,8 +180,41 @@ describe("prompt delivery recovery", () => {
     )
   })
 
-  test("retries accepted deliveries whose assistant was aborted or failed transiently", () => {
+  test("recovers an accepted queued prompt when the active turn becomes idle", () => {
+    expect(shouldRecoverAcceptedPromptDeliveries({ statusType: "busy", deliveries: [{ state: "accepted" }] })).toBe(
+      false,
+    )
+    expect(shouldRecoverAcceptedPromptDeliveries({ statusType: "idle", deliveries: [{ state: "pending" }] })).toBe(
+      false,
+    )
+    expect(shouldRecoverAcceptedPromptDeliveries({ statusType: "idle", deliveries: [{ state: "accepted" }] })).toBe(
+      false,
+    )
+    expect(
+      shouldRecoverAcceptedPromptDeliveries({
+        statusType: "idle",
+        deliveries: [{ state: "accepted", queuedBehindActiveTurn: true }],
+      }),
+    ).toBe(true)
+    expect(
+      shouldRecoverAcceptedPromptDeliveries({
+        statusType: "busy",
+        deliveries: [{ state: "accepted", queuedBehindActiveTurn: true }],
+      }),
+    ).toBe(false)
+    expect(
+      shouldRecoverAcceptedPromptDeliveries({
+        statusType: "busy",
+        statusSupersededByTerminalAssistant: true,
+        deliveries: [{ state: "accepted", queuedBehindActiveTurn: true }],
+      }),
+    ).toBe(true)
+  })
+
+  test("retries accepted deliveries whose assistant did not finish or failed transiently", () => {
     expect(storedAssistantDeliveryState({ time: {} })).toBe("accepted")
+    expect(storedAssistantDeliveryState({ time: { completed: 10 } })).toBe("accepted")
+    expect(storedAssistantDeliveryState({ time: { completed: 10 }, finish: "stop" })).toBe("completed")
     expect(
       storedAssistantDeliveryState({
         time: { completed: 10 },
@@ -189,7 +227,12 @@ describe("prompt delivery recovery", () => {
         error: { name: "APIError", data: { isRetryable: true } },
       }),
     ).toBe("accepted")
-    expect(storedAssistantDeliveryState({ time: { completed: 10 } })).toBe("completed")
+    expect(
+      storedAssistantDeliveryState({
+        time: { completed: 10 },
+        error: { name: "APIError", data: { isRetryable: false } },
+      }),
+    ).toBe("completed")
   })
 })
 
@@ -298,6 +341,39 @@ describe("queued user turn", () => {
         { id: "msg_002", role: "assistant", time: { created: 2 }, finish: "tool-calls" },
       ]),
     ).toBe("msg_002")
+    expect(
+      latestPendingAssistantID(
+        [
+          { id: "msg_001", role: "user", time: { created: 1 } },
+          { id: "msg_002", role: "assistant", time: { created: 2, completed: 3 }, finish: "tool-calls" },
+        ],
+        { statusType: "idle", now: 100_000, keepUnfinishedDuringLiveConnection: true },
+      ),
+    ).toBe("msg_002")
+  })
+
+  test("uses the stable terminal tail when the loaded history window ends on an old tool continuation", () => {
+    const messages = sessionActivityMessages({
+      messages: [
+        { id: "msg_001", role: "user", time: { created: 1 } },
+        { id: "msg_002", role: "assistant", time: { created: 2, completed: 3 }, finish: "tool-calls" },
+      ],
+      latestAssistant: {
+        id: "msg_004",
+        role: "assistant",
+        time: { created: 4, completed: 5 },
+        finish: "stop",
+      },
+    })
+
+    expect(messages.map((message) => message.id)).toEqual(["msg_001", "msg_002", "msg_004"])
+    expect(
+      latestPendingAssistantID(messages, {
+        statusType: "idle",
+        now: 100_000,
+        keepUnfinishedDuringLiveConnection: true,
+      }),
+    ).toBeUndefined()
   })
 
   test("does not keep the activity indicator alive after an assistant error", () => {
@@ -319,6 +395,13 @@ describe("queued user turn", () => {
     expect(latestPendingAssistantID(messages, { now: 100_000 })).toBeUndefined()
     expect(latestPendingAssistantID(messages, { statusType: "busy", now: 100_000 })).toBeUndefined()
     expect(latestPendingAssistantID(messages, { statusType: "busy", now: 100_000, statusUntil: 101_000 })).toBe("msg_001")
+    expect(
+      latestPendingAssistantID(messages, {
+        statusType: "idle",
+        now: 100_000,
+        keepUnfinishedDuringLiveConnection: true,
+      }),
+    ).toBe("msg_001")
   })
 
   test("stays visibly queued across later assistant tool iterations", () => {
@@ -383,6 +466,26 @@ describe("queued user turn", () => {
       }),
     ).toEqual(["msg_003"])
     expect(sessionQueuedUserMessageIDs({ messages, pendingAssistantID: "msg_002" })).toEqual([])
+  })
+
+  test("keeps an accepted prompt queued across compaction until its own assistant starts", () => {
+    const messages = [
+      { id: "user-active", role: "user" },
+      { id: "compaction", role: "user" },
+      { id: "user-queued", role: "user" },
+      { id: "summary", role: "assistant", parentID: "compaction" },
+      { id: "resume", role: "user" },
+      { id: "assistant-resumed", role: "assistant", parentID: "resume" },
+    ]
+    const deliveryIDs = new Set(["user-queued"])
+
+    expect(sessionQueuedPromptDeliveryIDs({ deliveryIDs, messages })).toEqual(["user-queued"])
+    expect(
+      sessionQueuedPromptDeliveryIDs({
+        deliveryIDs,
+        messages: [...messages, { id: "assistant-queued", role: "assistant", parentID: "user-queued" }],
+      }),
+    ).toEqual([])
   })
 
   test("does not queue a new prompt behind a completed final assistant", () => {
@@ -527,6 +630,10 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldClearWorkingStartedAt({ statusType: "idle", permissionPending: true })).toBe(false)
     expect(shouldClearWorkingStartedAt({ statusType: "busy" })).toBe(false)
     expect(shouldClearWorkingStartedAt({ statusType: "busy", interrupted: true })).toBe(true)
+    expect(shouldClearWorkingStartedAt({ statusType: "busy", terminalAssistant: true })).toBe(true)
+    expect(
+      shouldClearWorkingStartedAt({ statusType: "busy", terminalAssistant: true, permissionPending: true }),
+    ).toBe(false)
   })
 
   test("keeps interrupt enabled for orphaned unfinished assistant messages", () => {
@@ -1020,6 +1127,18 @@ describe("resolveWorkingStartedAt", () => {
     expect(loopStateCounts([{ state: "sleeping" }, { state: "blocked" }, { state: "blocked" }])).toEqual({ scheduled: 1, blocked: 2 })
   })
 
+  test("updates loop wakeup countdowns from the caller clock", () => {
+    const nextWakeup = Date.UTC(2026, 7, 6, 16)
+    const workflow = {
+      state: "sleeping",
+      nextWakeup,
+      spec: { trigger: { mode: "interval", intervalMs: 60_000 } },
+    } as Parameters<typeof loopWakeupLabel>[0]
+
+    expect(loopWakeupLabel(workflow, nextWakeup - 54_000)).toStartWith("54s (")
+    expect(loopWakeupLabel(workflow, nextWakeup - 53_000)).toStartWith("53s (")
+  })
+
   test("holds a deep-linked loop selection until its server page resolves", () => {
     expect(shouldKeepRouteLoopSelection({ requestedID: "loop_51", loading: true, items: [{ id: "loop_1" }] })).toBe(
       true,
@@ -1352,6 +1471,47 @@ describe("resolveWorkingStartedAt", () => {
         ...shortPage,
         boundary: "top",
         scrollTop: 5,
+      }),
+    ).toBe(true)
+  })
+
+  test("clears paging suppression when the user continues through the seam or reaches the final page", () => {
+    expect(
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: "bottom",
+        hasMoreOlder: true,
+        hasMoreNewer: true,
+        direction: "down",
+      }),
+    ).toBe(true)
+    expect(
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: "bottom",
+        hasMoreOlder: true,
+        hasMoreNewer: true,
+        direction: "up",
+      }),
+    ).toBe(false)
+    expect(
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: "bottom",
+        hasMoreOlder: true,
+        hasMoreNewer: false,
+      }),
+    ).toBe(true)
+    expect(
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: "top",
+        hasMoreOlder: true,
+        hasMoreNewer: true,
+        direction: "up",
+      }),
+    ).toBe(true)
+    expect(
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: "top",
+        hasMoreOlder: false,
+        hasMoreNewer: true,
       }),
     ).toBe(true)
   })

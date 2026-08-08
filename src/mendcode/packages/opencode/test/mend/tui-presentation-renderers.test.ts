@@ -8,6 +8,7 @@ import { groupTimelineParts, isTimelineStackStart, timelineCollapseLabel, timeli
 import {
   normalizeToolEvent,
   shouldRenderCompactTool,
+  shouldRenderImageGenerationTool,
   toolClass,
   toolPresentationIcon,
   toolPresentationIconForProfile,
@@ -342,16 +343,21 @@ describe("mend tui presentation renderers", () => {
     expect(shouldRenderCompactTool("mendcode", "task")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "loop")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "memory_graph")).toBe(false)
+    expect(shouldRenderCompactTool("mendcode", "image_gen")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "todowrite")).toBe(true)
     expect(shouldRenderCompactTool("minimal", "edit")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "apply_patch")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "task")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "loop")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "memory_graph")).toBe(false)
+    expect(shouldRenderCompactTool("minimal", "image_gen")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "todowrite")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "bash")).toBe(true)
     expect(shouldRenderCompactTool("raw", "read")).toBe(false)
     expect(shouldRenderCompactTool("raw", "edit")).toBe(false)
+    expect(shouldRenderCompactTool("raw", "image_gen")).toBe(false)
+    expect(shouldRenderImageGenerationTool("image_gen")).toBe(true)
+    expect(shouldRenderImageGenerationTool("image_generation")).toBe(false)
   })
 
   test("diff block titles keep action, path, and stats on one line", () => {

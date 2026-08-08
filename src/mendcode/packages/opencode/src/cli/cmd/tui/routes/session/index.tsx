@@ -39,6 +39,7 @@ import {
   latestPendingAssistantID,
   pendingPromptDeliveryMessageIDs,
   Prompt,
+  sessionActivityMessages,
   subscribePendingPromptDeliveries,
   type PromptRef,
   type PromptSubmitInfo,
@@ -126,8 +127,10 @@ import * as Model from "../../util/model"
 import { formatAssistantLiveUsage, formatAssistantUsage, formatLatestAssistantContextUsage } from "../../util/usage"
 import {
   isAssistantWorking,
+  isSubagentStatusActive,
   isToolActivityActive,
   SESSION_STOPPED_CONNECTION_MESSAGE,
+  shouldKeepCompactedSubagent,
   shouldShowSessionStoppedConnection,
 } from "../../util/session-working"
 import { formatTranscript } from "../../util/transcript"
@@ -135,7 +138,9 @@ import { useTuiConfig } from "../../context/tui-config"
 import {
   workflowReceiptCounts,
   workflowReceiptElapsed,
+  workflowReceiptFallbackPhases,
   workflowReceiptNextAction,
+  workflowReceiptPhaseDiagram,
   workflowReceiptProgress,
   workflowReceiptStateIsAnimated,
   workflowReceiptStateIsTerminal,
@@ -143,6 +148,7 @@ import {
   workflowReceiptStateMarker,
   workflowReceiptUsage,
 } from "@tui/util/workflow-receipt"
+import { workflowParentSessionID, workflowTaskSessionContext, workflowTaskSiblingSessionID } from "@tui/util/workflow-view"
 import {
   getScrollAcceleration,
   isScrollboxAtBottom,
@@ -157,6 +163,8 @@ import {
   sessionPendingInputSessionIDs,
   sessionPromptVisible,
   sessionLoopReceipt,
+  shouldRenderSessionLoopCard,
+  shouldRenderSessionWorkflowCard,
   sessionHeaderTitleJustify,
   sessionHeaderTitleDisplay,
   sessionTopMetricsWidth,
@@ -217,6 +225,7 @@ import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-
 import {
   normalizeToolEvent,
   shouldRenderCompactTool,
+  shouldRenderImageGenerationTool,
   toolPresentationIcon,
   toolPresentationIconForProfile,
   webSearchUrlLines,
@@ -360,6 +369,16 @@ export function sessionQueuedUserMessageIDs(input: {
     .slice(activeParentIndex + 1)
     .filter((message) => message.role === "user" && !assistantParentIDs.has(message.id))
     .map((message) => message.id)
+}
+
+export function sessionQueuedPromptDeliveryIDs(input: {
+  deliveryIDs: ReadonlySet<string>
+  messages: ReadonlyArray<{ role: string; parentID?: string }>
+}) {
+  const assistantParentIDs = new Set(
+    input.messages.flatMap((message) => (message.role === "assistant" && message.parentID ? [message.parentID] : [])),
+  )
+  return [...input.deliveryIDs].filter((messageID) => !assistantParentIDs.has(messageID))
 }
 
 export function sessionPinnedUserMessageID(input: {
@@ -611,6 +630,7 @@ export function Session() {
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
   const keybind = useKeybind()
+  const sdk = useSDK()
   const [now, setNow] = createSignal(Date.now())
   const [sessionInterruptRequested, setSessionInterruptRequested] = createSignal(false)
   createEffect(
@@ -625,6 +645,19 @@ export function Session() {
   })
   const promptRef = usePromptRef()
   const session = createMemo(() => sync.session.get(route.sessionID))
+  const [workflowTaskRuns, { refetch: refetchWorkflowTaskRuns }] = createResource(
+    () => (session()?.parentID ? route.sessionID : undefined),
+    async () => {
+      const response = await sdk.client.workflow.list({ limit: 100 }).catch(() => undefined)
+      return response?.data ?? []
+    },
+  )
+  const currentWorkflowTask = createMemo(() =>
+    workflowTaskSessionContext({
+      sessionID: route.sessionID,
+      workflows: workflowTaskRuns.latest ?? workflowTaskRuns() ?? [],
+    }),
+  )
   const [permissionModeSetting, setPermissionModeSetting] = createSignal<PermissionMode>("approval")
   const children = createMemo(() => {
     const parentID = session()?.parentID ?? session()?.id
@@ -676,9 +709,15 @@ export function Session() {
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0 || planReviews().length > 0)
 
   const [submittedUserMessageID, setSubmittedUserMessageID] = createSignal<string>()
+  const activityMessages = createMemo(() =>
+    sessionActivityMessages({
+      messages: messages(),
+      latestAssistant: sync.data.session_latest_assistant[route.sessionID],
+    }),
+  )
   const pending = createMemo(() => {
     const currentStatus = sync.data.session_status?.[route.sessionID]
-    return latestPendingAssistantID(messages(), {
+    return latestPendingAssistantID(activityMessages(), {
       statusType: currentStatus?.type,
       now: now(),
       statusUntil: currentStatus?.type === "busy" ? currentStatus.until : undefined,
@@ -689,44 +728,39 @@ export function Session() {
     const status = sync.data.session_status?.[route.sessionID]?.type
     return status === "busy" || status === "retry"
   })
-  const sessionCompacting = createMemo(() => {
-    const status = sync.data.session_status?.[route.sessionID]
-    return status?.type === "busy" && status.kind === "compaction"
-  })
   const activeTurnAssistantID = createMemo(() => {
     const unfinished = pending()
     if (unfinished) return unfinished
     const status = sync.data.session_status?.[route.sessionID]?.type
     if (status !== "busy" && status !== "retry") return
-    return messages().findLast((message) => message.role === "assistant")?.id
+    return activityMessages().findLast((message) => message.role === "assistant")?.id
+  })
+  const pendingDeliveryQueuedIDs = createMemo(() => {
+    pendingPromptRevision()
+    return new Set(
+      sessionQueuedPromptDeliveryIDs({
+        deliveryIDs: pendingPromptDeliveryMessageIDs(route.sessionID),
+        messages: messages(),
+      }),
+    )
   })
   const queuedMessageIDs = createMemo(() => {
-      pendingPromptRevision()
-      const queued = new Set(
-        sessionQueuedUserMessageIDs({
-          messages: messages(),
-          pendingAssistantID: activeTurnAssistantID(),
-          working: sessionWorking(),
-        }),
-      )
-      for (const messageID of pendingPromptDeliveryMessageIDs(route.sessionID, { includeAccepted: sessionCompacting() }))
-        queued.add(messageID)
-      return queued
+    const queued = new Set(
+      sessionQueuedUserMessageIDs({
+        messages: messages(),
+        pendingAssistantID: activeTurnAssistantID(),
+        working: sessionWorking(),
+      }),
+    )
+    for (const messageID of pendingDeliveryQueuedIDs()) queued.add(messageID)
+    return queued
   })
   const queuedMessages = createMemo(() => {
     const queuedIDs = queuedMessageIDs()
     return messages().filter((message): message is UserMessage => message.role === "user" && queuedIDs.has(message.id))
   })
   const pendingDeliveryTailIDs = createMemo(() => {
-    pendingPromptRevision()
-    const assistantParentIDs = new Set(
-      messages().flatMap((message) => (message.role === "assistant" ? [message.parentID] : [])),
-    )
-    return new Set(
-      [...pendingPromptDeliveryMessageIDs(route.sessionID, { includeAccepted: sessionCompacting() })].filter(
-        (messageID) => !assistantParentIDs.has(messageID),
-      ),
-    )
+    return pendingDeliveryQueuedIDs()
   })
   const transcriptRows = createMemo(() => {
     const compactionBoundaryIDs = new Set(
@@ -736,10 +770,11 @@ export function Session() {
           : [],
       ),
     )
-    return sessionTranscriptRows(messages(), queuedMessageIDs(), {
+    const queuedIDs = queuedMessageIDs()
+    return sessionTranscriptRows(messages(), queuedIDs, {
       boundaryIDs: compactionBoundaryIDs,
       tailIDs: pendingDeliveryTailIDs(),
-    })
+    }).filter((message) => !queuedIDs.has(message.id))
   })
   const messageByID = createMemo(() => new Map(messages().map((message) => [message.id, message] as const)))
   const pinnedTurnUserMessageID = createMemo(() =>
@@ -942,6 +977,13 @@ export function Session() {
     loopSessionWorkflows().find((workflow) => workflow.rootSessionID === route.sessionID),
   )
   const sessionTopNavLabel = createMemo(() => {
+    const workflowTask = currentWorkflowTask()
+    if (workflowTask) {
+      const cycle = workflowTask.sessionIDs.length > 1
+        ? ` ← Prev task ${keybind.print("session_child_cycle_reverse")} → Next task ${keybind.print("session_child_cycle")}`
+        : ""
+      return `↑ Workflow ${keybind.print("session_parent")}${cycle}`
+    }
     if (session()?.parentID) {
       return `↖ Parent ${keybind.print("session_parent")} ← Prev ${keybind.print("session_child_cycle_reverse")} → Next ${keybind.print("session_child_cycle")}`
     }
@@ -949,11 +991,15 @@ export function Session() {
     const parent = currentLoopWorkflow()?.ownerSessionID ? "Parent" : "Agent View"
     return `↖ ${parent} ${keybind.print("session_parent")}`
   })
-  const topbarNavVisible = createMemo(() => Boolean(session()?.parentID || currentLoopWorkflow()))
+  const topbarNavVisible = createMemo(() => Boolean(currentWorkflowTask() || session()?.parentID || currentLoopWorkflow()))
   const topbarNavWidth = createMemo(() => (topbarNavVisible() ? Bun.stringWidth(sessionTopNavLabel()) : 0))
   const headerTitleVisible = createMemo(() => tuiCustomization().sessionTitle)
   const headerTitleJustify = createMemo(() => sessionHeaderTitleJustify("center"))
-  const headerTitleText = createMemo(() => session()?.title || route.sessionID)
+  const headerTitleText = createMemo(() => {
+    const workflowTask = currentWorkflowTask()
+    if (!workflowTask) return session()?.title || route.sessionID
+    return `${workflowTask.workflowName} · Task ${workflowTask.taskIndex + 1}/${workflowTask.taskCount} · ${workflowTask.taskName}`
+  })
   const topbarLayout = createMemo(() =>
     sessionTopbarLayout({
       contentWidth: contentWidth(),
@@ -996,7 +1042,6 @@ export function Session() {
     })
   })
   const todos = createMemo(() => sync.data.todo[route.sessionID] ?? [])
-  const sdk = useSDK()
   const taskSubagentBySession = createMemo(() => {
     const result = new Map<string, { description?: string; subagentType?: string }>()
     const fullStartID = rootFullHistoryStartID()
@@ -1010,9 +1055,19 @@ export function Session() {
           title?: string
           time?: { compacted?: boolean }
         }
-        if (state.time?.compacted) continue
         const sessionId = typeof state.metadata?.sessionId === "string" ? state.metadata.sessionId : undefined
         if (!sessionId) continue
+        const status = sessionLiveStateLabel({
+          status: sync.data.session_status?.[sessionId],
+          messages: sync.data.message[sessionId] ?? [],
+          pendingInputCount:
+            (sync.data.permission[sessionId]?.length ?? 0) +
+            (sync.data.question[sessionId]?.length ?? 0) +
+            (sync.data.plan_review[sessionId]?.length ?? 0),
+          now: now(),
+          connectionStatus: sdk.connection.status,
+        })
+        if (!shouldKeepCompactedSubagent({ compacted: state.time?.compacted, status })) continue
         result.set(sessionId, {
           description:
             typeof state.input?.description === "string"
@@ -1068,8 +1123,8 @@ export function Session() {
       })
       .toSorted((a, b) => {
         if (a.active !== b.active) return a.active ? -1 : 1
-        const aRelevant = sessionSubagentIsActive(a.status)
-        const bRelevant = sessionSubagentIsActive(b.status)
+        const aRelevant = isSubagentStatusActive(a.status)
+        const bRelevant = isSubagentStatusActive(b.status)
         if (aRelevant !== bRelevant) return aRelevant ? -1 : 1
         if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt
         return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
@@ -1406,10 +1461,11 @@ export function Session() {
   )
 
   async function setPermissionModeForSession(mode: PermissionMode) {
-    const overrides = { ...sessionPermissionOverrides(), [permissionSessionID()]: mode }
-    kv.set(sessionPermissionModesKey, overrides)
-    setPermissionModeSetting(mode)
+    const sessionID = permissionSessionID()
     await syncSessionPermissionMode(mode)
+    const overrides = { ...sessionPermissionOverrides(), [sessionID]: mode }
+    kv.set(sessionPermissionModesKey, overrides)
+    if (permissionSessionID() === sessionID) setPermissionModeSetting(mode)
   }
 
   async function clearPermissionModeForSession() {
@@ -1550,7 +1606,7 @@ export function Session() {
 
           if (option.value === "smart") {
             void setPermissionModeForSession("smart")
-            void smartReviewPendingPermissions()
+              .then(() => smartReviewPendingPermissions())
               .then(({ accepted, reviewed }) => {
                 const summary = [
                   accepted ? `auto-approved ${accepted} safe permission${accepted === 1 ? "" : "s"}` : "",
@@ -1579,7 +1635,7 @@ export function Session() {
 
           if (option.value === "full_access") {
             void setPermissionModeForSession("full_access")
-            void autoAcceptPendingPermissions()
+              .then(() => autoAcceptPendingPermissions())
               .then((accepted) => {
                 toast.show({
                   message: accepted
@@ -2113,6 +2169,16 @@ export function Session() {
     persistSessionScroll(currentSessionID)
     setSessionScrollTop(scrollTop)
     const history = sync.session.history(currentSessionID)
+    if (
+      suppressedPagingBoundary &&
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: suppressedPagingBoundary,
+        hasMoreOlder: history.hasMoreOlder,
+        hasMoreNewer: history.hasMoreNewer,
+      })
+    ) {
+      suppressedPagingBoundary = undefined
+    }
     const atTop = isScrollboxAtTop(scroll)
     const atBottom = isScrollboxAtBottom(scroll)
     const userMovedViewport = sessionUserMovedViewport({
@@ -2247,6 +2313,7 @@ export function Session() {
   const markScrollDetached = () => {
     blurCompactionArcade()
     restoringSessionScroll = false
+    suppressedPagingBoundary = undefined
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
     setFollowSessionOutput(false)
@@ -2387,6 +2454,17 @@ export function Session() {
   const scrollBySession = (delta: number) => {
     blurCompactionArcade()
     restoringSessionScroll = false
+    if (
+      suppressedPagingBoundary &&
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: suppressedPagingBoundary,
+        hasMoreOlder: sync.session.history(route.sessionID).hasMoreOlder,
+        hasMoreNewer: sync.session.history(route.sessionID).hasMoreNewer,
+        direction: delta < 0 ? "up" : "down",
+      })
+    ) {
+      suppressedPagingBoundary = undefined
+    }
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
     scroll.scrollBy(delta)
@@ -2521,6 +2599,7 @@ export function Session() {
   function toBottom(options?: { sync?: boolean; submitSessionID?: string }) {
     setFollowSessionOutput(true)
     scrollAnchor = undefined
+    suppressedPagingBoundary = undefined
     if (options?.sync !== false) void sync.session.sync(route.sessionID, { force: true }).catch(() => undefined)
     if (options?.submitSessionID) {
       scheduleSubmitBottomScroll(options.submitSessionID)
@@ -2759,6 +2838,71 @@ export function Session() {
     dialog.clear()
   }
 
+  async function resolveWorkflowTaskContext(sessionID: string) {
+    if (sessionID === route.sessionID) {
+      const current = currentWorkflowTask()
+      if (current) return current
+    }
+    const response = await sdk.client.workflow.list({ limit: 100 }).catch(() => undefined)
+    return workflowTaskSessionContext({ sessionID, workflows: response?.data ?? [] })
+  }
+
+  async function navigateWorkflowTask(direction: -1 | 1, dialog: DialogContext) {
+    const currentSessionID = route.sessionID
+    const workflowTask = await resolveWorkflowTaskContext(currentSessionID)
+    if (!workflowTask || route.sessionID !== currentSessionID) return false
+    if (workflowTask.sessionIDs.length < 2) {
+      toast.show({ variant: "info", message: "No other workflow task chat is available yet.", duration: 2500 })
+      dialog.clear()
+      return true
+    }
+    const sessionID = workflowTaskSiblingSessionID({
+      sessionID: currentSessionID,
+      sessionIDs: workflowTask.sessionIDs,
+      direction,
+    })
+    if (sessionID) navigate({ type: "session", sessionID })
+    dialog.clear()
+    return true
+  }
+
+  async function navigateToSessionParent(dialog: DialogContext) {
+    const currentSessionID = route.sessionID
+    const knownWorkflowTask = currentWorkflowTask()
+    if (knownWorkflowTask) {
+      navigate({
+        type: "workflows",
+        selectedID: knownWorkflowTask.runID,
+        returnTo: { type: "session", sessionID: currentSessionID },
+      })
+      dialog.clear()
+      return
+    }
+    const parentSessionID = session()?.parentID
+    if (!parentSessionID) return
+    const response = await sdk.client.workflow.list({ limit: 100 }).catch(() => undefined)
+    if (route.sessionID !== currentSessionID) return
+    const workflowTask = workflowTaskSessionContext({ sessionID: currentSessionID, workflows: response?.data ?? [] })
+    if (workflowTask) {
+      navigate({
+        type: "workflows",
+        selectedID: workflowTask.runID,
+        returnTo: { type: "session", sessionID: currentSessionID },
+      })
+      dialog.clear()
+      return
+    }
+    navigate({
+      type: "session",
+      sessionID: workflowParentSessionID({
+        sessionID: currentSessionID,
+        parentSessionID,
+        workflows: response?.data ?? [],
+      }) ?? parentSessionID,
+    })
+    dialog.clear()
+  }
+
   function childSessionHandler(func: (dialog: DialogContext) => void) {
     return (dialog: DialogContext) => {
       if (!session()?.parentID || dialog.stack.length > 0) return
@@ -2837,6 +2981,7 @@ export function Session() {
         const unsubscribe = sdk.event.on("event", (event) => {
           const payload = event.payload as { type?: string; properties?: { sessionID?: string } }
           const type = payload.type
+          if (type?.startsWith("workflow.")) void refetchWorkflowTaskRuns()
           if (type === "background_session.updated" || type === "background_session.deleted") {
             if (payload.properties?.sessionID && payload.properties.sessionID !== sessionID) return
             void refreshBackgroundSessionState(sessionID).catch(() => undefined)
@@ -3544,21 +3689,14 @@ export function Session() {
       keybind: "session_parent",
       category: "Session",
       hidden: true,
-      enabled: !!session()?.parentID || !!currentLoopWorkflow(),
+      enabled: !!currentWorkflowTask() || !!session()?.parentID || !!currentLoopWorkflow(),
       onSelect: (dialog) => {
         if (dialog.stack.length > 0) return
         if (!session()?.parentID && currentLoopWorkflow()) {
           navigateToLoopOwner(dialog)
           return
         }
-        const parentID = session()?.parentID
-        if (parentID) {
-          navigate({
-            type: "session",
-            sessionID: parentID,
-          })
-        }
-        dialog.clear()
+        void navigateToSessionParent(dialog).catch((error) => toast.error(error))
       },
     },
     {
@@ -3567,11 +3705,16 @@ export function Session() {
       keybind: "session_child_cycle",
       category: "Session",
       hidden: true,
-      enabled: !!session()?.parentID,
+      enabled: !!currentWorkflowTask() || !!session()?.parentID,
       onSelect: (dialog) => {
-        if (!session()?.parentID || dialog.stack.length > 0) return
-        moveChild(1)
-        dialog.clear()
+        if ((!currentWorkflowTask() && !session()?.parentID) || dialog.stack.length > 0) return
+        void navigateWorkflowTask(1, dialog)
+          .then((handled) => {
+            if (handled) return
+            moveChild(1)
+            dialog.clear()
+          })
+          .catch((error) => toast.error(error))
       },
     },
     {
@@ -3580,11 +3723,16 @@ export function Session() {
       keybind: "session_child_cycle_reverse",
       category: "Session",
       hidden: true,
-      enabled: !!session()?.parentID,
+      enabled: !!currentWorkflowTask() || !!session()?.parentID,
       onSelect: (dialog) => {
-        if (!session()?.parentID || dialog.stack.length > 0) return
-        moveChild(-1)
-        dialog.clear()
+        if ((!currentWorkflowTask() && !session()?.parentID) || dialog.stack.length > 0) return
+        void navigateWorkflowTask(-1, dialog)
+          .then((handled) => {
+            if (handled) return
+            moveChild(-1)
+            dialog.clear()
+          })
+          .catch((error) => toast.error(error))
       },
     },
   ])
@@ -3746,8 +3894,8 @@ export function Session() {
                 <Show when={topbarNavVisible() && topbarLayout().navWidth > 0}>
                   <box width={topbarLayout().navWidth} overflow="hidden" flexShrink={0}>
                     <SessionTopNav
-                      mode={session()?.parentID ? "subagent" : "loop"}
-                      canCycle={!!session()?.parentID}
+                      mode={currentWorkflowTask() ? "workflow-task" : session()?.parentID ? "subagent" : "loop"}
+                      canCycle={currentWorkflowTask() ? (currentWorkflowTask()?.sessionIDs.length ?? 0) > 1 : !!session()?.parentID}
                       hasParent={!!currentLoopWorkflow()?.ownerSessionID}
                       width={topbarLayout().navWidth}
                     />
@@ -4015,6 +4163,38 @@ export function Session() {
                 )}
               </Show>
             </box>
+            <Show when={queuedMessages().length > 0}>
+              <box width="100%" flexShrink={0} paddingTop={1}>
+                <For each={queuedMessages()}>
+                  {(message, index) => (
+                    <UserMessage
+                      index={index()}
+                      message={message}
+                      parts={sync.data.part[message.id] ?? []}
+                      queued
+                      sticky
+                      anchorID={`queued-dock-${message.id}`}
+                      onSendNow={() => void sendQueuedNow(message.id)}
+                      sendNowPending={sendNowMessageID() === message.id}
+                      simpleHistory={false}
+                      compactSubagentPrompt={Boolean(session()?.parentID)}
+                      onMouseUp={() => {
+                        if (renderer.getSelection()?.getSelectedText()) return
+                        dialog.replace(() => (
+                          <DialogMessage
+                            messageID={message.id}
+                            sessionID={route.sessionID}
+                            queued
+                            setPrompt={(promptInfo) => prompt?.set(promptInfo)}
+                            onEditPrompt={editQueuedPrompt}
+                          />
+                        ))
+                      }}
+                    />
+                  )}
+                </For>
+              </box>
+            </Show>
             <box flexShrink={0} width="100%">
               <Show when={permissions().length > 0}>
                 <PermissionPrompt request={permissions()[0]} />
@@ -4157,7 +4337,7 @@ function SessionTopMetrics(props: {
   )
 }
 
-function SessionTopNav(props: { mode: "subagent" | "loop"; canCycle?: boolean; hasParent?: boolean; width: number }) {
+function SessionTopNav(props: { mode: "subagent" | "workflow-task" | "loop"; canCycle?: boolean; hasParent?: boolean; width: number }) {
   const { theme } = useTheme()
   const keybind = useKeybind()
   const command = useCommandDialog()
@@ -4169,22 +4349,22 @@ function SessionTopNav(props: { mode: "subagent" | "loop"; canCycle?: boolean; h
     const all = [
       {
         id: "parent" as const,
-        icon: "↖",
-        label: props.mode === "loop" ? (props.hasParent ? "Parent" : "Agent View") : "Parent",
+        icon: props.mode === "workflow-task" ? "↑" : "↖",
+        label: props.mode === "workflow-task" ? "Workflow" : props.mode === "loop" ? (props.hasParent ? "Parent" : "Agent View") : "Parent",
         key: keybind.print("session_parent"),
         commandID: "session.parent" as const,
       },
       {
         id: "prev" as const,
         icon: "←",
-        label: props.mode === "loop" ? "Prev loop" : "Prev",
+        label: props.mode === "workflow-task" ? "Prev task" : props.mode === "loop" ? "Prev loop" : "Prev",
         key: keybind.print("session_child_cycle_reverse"),
         commandID: "session.child.previous" as const,
       },
       {
         id: "next" as const,
         icon: "→",
-        label: props.mode === "loop" ? "Next loop" : "Next",
+        label: props.mode === "workflow-task" ? "Next task" : props.mode === "loop" ? "Next loop" : "Next",
         key: keybind.print("session_child_cycle"),
         commandID: "session.child.next" as const,
       },
@@ -4301,7 +4481,7 @@ type SessionSubagentInfo = {
 }
 
 function sessionLiveStateLabel(input: {
-  status?: { type: string; attempt?: number; message?: string; next?: number }
+  status?: { type: string; kind?: string; attempt?: number; message?: string; next?: number }
   messages: Message[]
   pendingInputCount: number
   now?: number
@@ -4319,6 +4499,7 @@ function sessionLiveStateLabel(input: {
     input.status?.type === "busy" &&
     isAssistantWorking({
       statusType: input.status.type,
+      statusKind: input.status.kind,
       now: input.now,
       assistantCreated: lastAssistant?.time.created,
       statusUntil: (input.status as { until?: number }).until,
@@ -4340,10 +4521,6 @@ function sessionLiveStateLabel(input: {
   if (lastUser && (!lastAssistant || lastAssistant.time.created < lastUser.time.created)) return "waiting"
   if (lastAssistant) return "responded"
   return "ready"
-}
-
-function sessionSubagentIsActive(status: string) {
-  return status === "working" || status === "waiting" || status === "needs input" || status.startsWith("retry")
 }
 
 export function sessionHasLocalQueuedTurn(input: {
@@ -4381,6 +4558,18 @@ export function shouldReleaseSessionPagingBoundarySuppression(input: {
   )
   if (input.boundary === "top") return input.scrollTop >= releaseDistance
   return maxScrollTop - input.scrollTop >= releaseDistance
+}
+
+export function shouldClearSessionPagingBoundarySuppression(input: {
+  boundary: "top" | "bottom"
+  hasMoreOlder: boolean
+  hasMoreNewer: boolean
+  direction?: "up" | "down"
+}) {
+  if (input.boundary === "top" && !input.hasMoreOlder) return true
+  if (input.boundary === "bottom" && !input.hasMoreNewer) return true
+  if (!input.direction) return false
+  return input.boundary === "top" ? input.direction === "up" : input.direction === "down"
 }
 
 export function sessionUserPromptHistory(input: {
@@ -5547,8 +5736,11 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   const visibleParts = createMemo(() => {
     if (streamingCompactionSummary()) return []
     const planReviewIndex = firstPlanReviewIndex()
-    if (planReviewIndex < 0) return props.parts
-    return props.parts.filter((part, index) => !(index < planReviewIndex && part.type === "text"))
+    const latestTodoWritePartID = ctx.latestTodoWritePartID()
+    return props.parts.filter((part, index) => {
+      if (index < planReviewIndex && part.type === "text") return false
+      return part.type !== "tool" || part.tool !== "todowrite" || part.id === latestTodoWritePartID
+    })
   })
   const largeToolBatch = createMemo(
     () => visibleParts().filter((part) => part.type === "tool").length >= LARGE_TOOL_BATCH_THRESHOLD,
@@ -6115,11 +6307,11 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
   const mend = useMendTuiProfile()
   const rowOnly = createMemo(() => {
     const profile = mend.profile.presentation.profile
-    if (props.part.tool === "image_gen" && profile === "mendcode") return false
+    if (shouldRenderImageGenerationTool(props.part.tool)) return false
     if (props.part.tool === ShellID.ToolID) return false
     if (props.part.tool === "plan_review") return false
     if (props.part.tool === "loop") return false
-    if (props.part.tool === "workflow") return false
+    if (props.part.tool === "workflow" && shouldRenderSessionWorkflowCard(profile)) return false
     if (props.part.tool === "memory_graph") return false
     return shouldRenderCompactTool(profile, props.part.tool)
   })
@@ -6129,7 +6321,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
     if (ctx.showDetails()) return false
     if (props.part.tool === "image_gen") return false
     if (props.part.tool === "loop") return false
-    if (props.part.tool === "workflow") return false
+    if (props.part.tool === "workflow" && shouldRenderSessionWorkflowCard(mend.profile.presentation.profile)) return false
     if (props.part.state.status !== "completed") return false
     return true
   })
@@ -6172,7 +6364,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
             output={toolprops.output}
           />
         </Match>
-        <Match when={props.part.tool === "image_gen" && mend.profile.presentation.profile === "mendcode"}>
+        <Match when={shouldRenderImageGenerationTool(props.part.tool)}>
           <ImageGen {...toolprops} />
         </Match>
         <Match when={props.part.tool === ShellID.ToolID}>
@@ -6214,10 +6406,19 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={props.part.tool === "skill"}>
           <Skill {...toolprops} />
         </Match>
-        <Match when={props.part.tool === "loop"}>
+        <Match
+          when={
+            props.part.tool === "loop" &&
+            shouldRenderSessionLoopCard({
+              toolStatus: props.part.state.status,
+              workflowID: toolprops.metadata.workflowID,
+              workflows: toolprops.metadata.workflows,
+            })
+          }
+        >
           <Loop {...toolprops} />
         </Match>
-        <Match when={props.part.tool === "workflow"}>
+        <Match when={props.part.tool === "workflow" && shouldRenderSessionWorkflowCard(mend.profile.presentation.profile)}>
           <Workflow {...toolprops} />
         </Match>
         <Match when={props.part.tool === "memory_graph"}>
@@ -6744,6 +6945,7 @@ function InlineTool(props: {
   complete: any
   pending: string
   spinner?: boolean
+  activityOverride?: boolean
   children: JSX.Element
   part: ToolPart
   onClick?: () => void
@@ -6763,6 +6965,7 @@ function InlineTool(props: {
         toolStatus: props.part.state.status,
         sessionStatusType: sync.data.session_status[ctx.sessionID]?.type,
         interrupted: ctx.interrupted(),
+        activityOverride: props.activityOverride,
       }),
   )
 
@@ -7402,12 +7605,20 @@ function Task(props: ToolProps<typeof TaskTool>) {
     )
   })
   const subagentForeground = createMemo(() => selectedForeground(theme, subagentColor()))
+  const taskVariant = createMemo(() => {
+    if (typeof props.metadata.variant === "string") return props.metadata.variant
+    if (typeof props.input.variant === "string") return props.input.variant
+    const inputModel = typeof props.input.model === "string" ? props.input.model : undefined
+    const separator = inputModel?.lastIndexOf("#") ?? -1
+    if (!inputModel || separator <= inputModel.indexOf("/") || separator === inputModel.length - 1) return undefined
+    return inputModel.slice(separator + 1)
+  })
   const model = createMemo((): { providerID: string; modelID: string } | undefined => {
     const metadataModel = props.metadata.model as { providerID?: string; modelID?: string } | undefined
     if (metadataModel?.providerID && metadataModel.modelID) {
       return { providerID: metadataModel.providerID, modelID: metadataModel.modelID }
     }
-    const inputModel = typeof props.input.model === "string" ? props.input.model : undefined
+    const inputModel = typeof props.input.model === "string" ? props.input.model.split("#", 1)[0] : undefined
     if (!inputModel?.includes("/")) return undefined
     const [providerID, ...modelParts] = inputModel.split("/")
     const modelID = modelParts.join("/")
@@ -7416,7 +7627,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
   const modelLabel = createMemo(() => {
     const value = model()
     if (!value) return undefined
-    return Model.name(sync.data.provider, value.providerID, value.modelID)
+    return [Model.name(sync.data.provider, value.providerID, value.modelID), taskVariant()].filter(Boolean).join(" ")
   })
   const childStatus = createMemo(() => {
     if (!props.metadata.sessionId) return undefined
@@ -7446,7 +7657,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
     () =>
       isRunning() ||
       continuation().activeResume ||
-      (backgroundTask() && sessionSubagentIsActive(childLiveState() ?? "")),
+      (backgroundTask() && isSubagentStatusActive(childLiveState() ?? "")),
   )
   const childStatusLabel = createMemo(() => {
     const state = childLiveState()
@@ -7509,7 +7720,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
     if (props.part.state.status === "completed") {
       if (backgroundTask()) {
         const state = childLiveState()
-        const active = sessionSubagentIsActive(state ?? "")
+        const active = isSubagentStatusActive(state ?? "")
         const label = active
           ? "running in background"
           : state === "responded"
@@ -7542,6 +7753,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
       <InlineTool
         icon={toolPresentationIcon("task")}
         spinner={isTaskActive()}
+        activityOverride={backgroundTask() && isSubagentStatusActive(childLiveState() ?? "")}
         complete={props.input.description}
         pending="Delegating..."
         part={props.part}
@@ -7940,7 +8152,7 @@ function workflowToolReceipt(snapshot: WorkflowSnapshot) {
       createdAt: workflowToolNumber(snapshot.run.createdAt),
       updatedAt: workflowToolNumber(snapshot.run.updatedAt),
     },
-    phases: snapshot.phases.map((phase) => ({ state: phase.state, counts: phase.counts, id: phase.id, name: phase.name })),
+    phases: snapshot.phases.map((phase) => ({ state: phase.state, counts: phase.counts, id: phase.id, ordinal: phase.ordinal, name: phase.name })),
     tasks: snapshot.tasks.map((task) => ({
       id: task.id,
       name: task.name,
@@ -7984,9 +8196,17 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
     const current = live()
     return current ? workflowToolReceipt(current) : undefined
   })
+  const phases = createMemo(() =>
+    workflowReceiptFallbackPhases({
+      live: receipt()?.phases,
+      metadata: props.metadata.phases,
+      plan: props.input.plan?.phases,
+    }),
+  )
+  const phaseDiagram = createMemo(() => workflowReceiptPhaseDiagram({ phases: phases() }, activityFrame(), 8))
   const state = createMemo(() => live()?.run.state ?? props.metadata.state ?? (props.part.state.status === "running" ? "working" : props.part.state.status))
-  const title = createMemo(() => live()?.definition.name || (typeof props.input.name === "string" ? props.input.name : "Workflow"))
-  const objective = createMemo(() => live()?.revision.plan.objective || props.metadata.objective || "Declarative workflow execution")
+  const title = createMemo(() => live()?.definition.name || props.input.plan?.name || (typeof props.input.name === "string" ? props.input.name : "Workflow"))
+  const objective = createMemo(() => live()?.revision.plan.objective || props.metadata.objective || props.input.plan?.objective || "Declarative workflow execution")
   const panelWidth = createMemo(() => Math.max(52, Math.min(92, dimensions().width - 12)))
   const rows = createMemo(() => {
     const current = receipt()
@@ -8101,38 +8321,29 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
             <text fg={theme.textMuted} wrapMode="word">{Locale.truncate(objective(), Math.max(24, panelWidth() - 8))}</text>
             <text fg={theme.warning} wrapMode="word">next: {Locale.truncate(nextAction(), Math.max(24, panelWidth() - 14))}</text>
           </box>
-          <Show when={receipt()?.phases.length}>
+          <Show when={phaseDiagram().length}>
             <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
-              <text fg={theme.primary} attributes={TextAttributes.BOLD}>EXECUTION PLAN</text>
-              <For each={receipt()!.phases.slice(0, 8)}>
-                {(phase) => (
-                  <box flexDirection="row">
-                    <text
-                      width={5}
-                      fg={
-                        phase.state === "completed"
+              <text fg={theme.primary} attributes={TextAttributes.BOLD}>PHASE FLOW</text>
+              <For each={phaseDiagram()}>
+                {(row) => (
+                  <text
+                    fg={
+                      row.kind !== "phase"
+                        ? theme.border
+                        : row.state === "completed"
                           ? theme.success
-                          : phase.state === "failed" || phase.state === "blocked"
+                          : row.state === "failed" || row.state === "blocked"
                             ? theme.error
-                            : phase.state === "working"
+                            : row.state === "working"
                               ? theme.secondary
                               : theme.textMuted
-                      }
-                      wrapMode="none"
-                    >
-                      {workflowReceiptStateMarker(phase.state, activityFrame())}
-                    </text>
-                    <text fg={theme.text} wrapMode="none">
-                      {Locale.truncateMiddle(phase.name || phase.id || "phase", Math.max(16, panelWidth() - 32))}
-                    </text>
-                    <box flexGrow={1} />
-                    <text fg={theme.textMuted} wrapMode="none">{phase.counts.completed}/{phase.counts.total}</text>
-                  </box>
+                    }
+                    wrapMode="none"
+                  >
+                    {Locale.truncateMiddle(row.text, Math.max(24, panelWidth() - 8))}
+                  </text>
                 )}
               </For>
-              <Show when={(receipt()?.phases.length ?? 0) > 8}>
-                <text fg={theme.textMuted}>... {(receipt()?.phases.length ?? 0) - 8} more phases</text>
-              </Show>
             </box>
           </Show>
           <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="row">

@@ -32,6 +32,7 @@ export type WorkflowReceiptSnapshot = {
   }
   phases: readonly {
     id?: string
+    ordinal?: number
     name?: string
     taskIDs?: readonly string[]
     state: string
@@ -111,8 +112,68 @@ export function workflowReceiptStateMarker(state: WorkflowReceiptState, frame = 
   if (state === "needs_input" || state === "awaiting_approval") return "[?]"
   if (state === "paused") return "[=]"
   if (state === "blocked" || state === "stopped") return "[-]"
-  if (state === "queued") return "[ ]"
+  if (state === "queued" || state === "pending") return "[ ]"
   return "[~]"
+}
+
+export type WorkflowReceiptPhaseDiagramRow = {
+  kind: "phase" | "connector" | "overflow"
+  text: string
+  state?: string
+}
+
+export type WorkflowReceiptPhaseInput = {
+  id?: string
+  ordinal?: number
+  name?: string
+  taskIDs?: readonly string[]
+  state?: string
+  counts?: { total: number; queued: number; working: number; completed: number; failed: number; blocked: number }
+}
+
+export function workflowReceiptFallbackPhases(input: {
+  live?: readonly WorkflowReceiptPhaseInput[]
+  metadata?: readonly WorkflowReceiptPhaseInput[]
+  plan?: readonly WorkflowReceiptPhaseInput[]
+}): WorkflowReceiptSnapshot["phases"] {
+  const phases = input.live?.length ? input.live : input.metadata?.length ? input.metadata : input.plan ?? []
+  return phases.map((phase, index) => ({
+    id: phase.id,
+    ordinal: phase.ordinal ?? index + 1,
+    name: phase.name,
+    taskIDs: phase.taskIDs,
+    state: phase.state ?? "pending",
+    counts: phase.counts ?? {
+      total: phase.taskIDs?.length ?? 0,
+      queued: 0,
+      working: 0,
+      completed: 0,
+      failed: 0,
+      blocked: 0,
+    },
+  }))
+}
+
+export function workflowReceiptPhaseDiagram(
+  snapshot: Pick<WorkflowReceiptSnapshot, "phases">,
+  frame = 0,
+  limit = 8,
+): WorkflowReceiptPhaseDiagramRow[] {
+  const shown = snapshot.phases.slice(0, Math.max(1, limit))
+  const rows = shown.flatMap((phase, index): WorkflowReceiptPhaseDiagramRow[] => {
+    const ordinal = String(phase.ordinal ?? index + 1).padStart(2, "0")
+    const name = (phase.name || phase.id || "phase").replace(/\s+/g, " ").trim()
+    const phaseRow = {
+      kind: "phase" as const,
+      state: phase.state,
+      text: `${workflowReceiptStateMarker(phase.state, frame)} ${ordinal} ${name}  ${phase.counts.completed}/${phase.counts.total}`,
+    }
+    if (index === shown.length - 1) return [phaseRow]
+    return [phaseRow, { kind: "connector", text: "     |" }]
+  })
+  const hidden = snapshot.phases.length - shown.length
+  if (hidden > 0) rows.push({ kind: "overflow", text: `     +-- ${hidden} more phase${hidden === 1 ? "" : "s"}` })
+  return rows
 }
 
 export function workflowReceiptElapsed(snapshot: Pick<WorkflowReceiptSnapshot, "run">, now = Date.now()) {

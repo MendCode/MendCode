@@ -32,6 +32,7 @@ import { WithInstance } from "../../src/project/with-instance"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { WorkspaceID } from "@/control-plane/schema"
 import path from "path"
+import { markPermissionPending, markPermissionResolved } from "@/session/pending-input"
 
 function promptMessage(
   text?: string,
@@ -1129,6 +1130,66 @@ describe("loop workflow service", () => {
     })
   })
 
+  test("an expired wall-clock lease does not interrupt a live loop worker after sleep", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Sleep recovery",
+          objective: "Keep a live process running after the machine wakes.",
+          trigger: { mode: "interval", intervalMs: 120_000 },
+        })
+        await svc.activate(draft.id)
+        const active = await svc.startRunWithLease(draft.id, `loop-runner:${process.pid}:sleep-test`)
+        Database.use((db) => {
+          const row = db.select().from(LoopRunTable).where(eq(LoopRunTable.id, active.id)).get()!
+          db.update(LoopRunTable)
+            .set({
+              data: {
+                ...row.data,
+                lease: { ...row.data.lease!, heartbeat: 1, expires: 1 },
+              },
+            })
+            .where(eq(LoopRunTable.id, active.id))
+            .run()
+        })
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("working")
+        expect(snapshot.runs[0]).toMatchObject({ id: active.id, state: "working" })
+      },
+    })
+  })
+
+  test("needs-input loops recover when the permission-owning worker dies", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Permission crash recovery",
+          objective: "Retry after a worker dies while awaiting permission.",
+          trigger: { mode: "interval", intervalMs: 120_000 },
+        })
+        await svc.activate(draft.id)
+        const worker = Bun.spawn(["true"])
+        await worker.exited
+        const active = await svc.startRunWithLease(draft.id, `loop-runner:${worker.pid}:permission-test`)
+        Database.use((db) =>
+          db.update(LoopWorkflowTable)
+            .set({ state: "needs_input", phase: "needs_input" })
+            .where(eq(LoopWorkflowTable.id, draft.id))
+            .run(),
+        )
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow).toMatchObject({ state: "sleeping", phase: "waiting" })
+        expect(snapshot.runs[0]).toMatchObject({ id: active.id, state: "failed", phase: "stale" })
+      },
+    })
+  })
+
   test("recovers a dead worker process before its lease expires and clears generating state", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
@@ -1848,7 +1909,7 @@ describe("loop workflow service", () => {
         })
         const active = await svc.activate(draft.id)
 
-        expect((await svc.due(Date.now())).map((item) => item.id)).toEqual([draft.id])
+        expect((await svc.due(active.nextWakeup)).map((item) => item.id)).toEqual([draft.id])
         expect((await svc.due((active.nextWakeup ?? 0) + 1)).map((item) => item.id)).toEqual([draft.id])
 
         const started = await svc.startRun(draft.id)
@@ -2166,6 +2227,114 @@ describe("loop workflow service", () => {
           nextWakeup: base + 60_000,
           scheduler: { lastRunID: result.value[0]?.runID, lastRunState: "completed", degraded: false },
         })
+      },
+    })
+  })
+
+  test("loop runner starts every due loop even when one prompt remains pending", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const base = Date.parse("2026-07-31T12:00:00Z")
+        const drafts = await Promise.all([
+          svc.createDraft({
+            name: "Pending permission monitor",
+            objective: "Wait for operator input without starving another loop.",
+            trigger: { mode: "interval", intervalMs: 60_000 },
+            budgetMode: "unbounded-monitor",
+          }),
+          svc.createDraft({
+            name: "Independent monitor",
+            objective: "Run even while another loop is waiting.",
+            trigger: { mode: "interval", intervalMs: 60_000 },
+            budgetMode: "unbounded-monitor",
+          }),
+        ])
+        await Promise.all(drafts.map((draft) =>
+          run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "concurrency test", now: base }))),
+        ))
+
+        const releaseFirst = Promise.withResolvers<void>()
+        const secondStarted = Promise.withResolvers<void>()
+        let prompts = 0
+        const checkpoint = [
+          "LOOP_CHECKPOINT:",
+          "status: continue",
+          "summary: Concurrent scheduler check completed.",
+          "evidence:",
+          "- scheduler check completed",
+          "next_action: sleep_until_next_interval",
+          "confidence: high",
+        ].join("\n")
+        const promptLayer = Layer.succeed(
+          SessionPrompt.Service,
+          SessionPrompt.Service.of({
+            cancel: () => Effect.void,
+            cancelQueued: () => Effect.succeed(false),
+            interrupt: () => Effect.void,
+            prompt: () => Effect.promise(async () => {
+              prompts++
+              if (prompts === 1) await releaseFirst.promise
+              else secondStarted.resolve()
+              return promptMessage(checkpoint)
+            }),
+            promptAsync: () => Effect.succeed(promptMessage(checkpoint)),
+            loop: () => Effect.succeed(promptMessage()),
+            shell: () => Effect.succeed(promptMessage()),
+            command: () => Effect.succeed(promptMessage()),
+            resolvePromptParts: () => Effect.succeed([]),
+          }),
+        )
+        const execution = Effect.runPromise(
+          LoopRunner.Service.use((runner) => runner.runDue({ now: base, limit: 2, execute: true })).pipe(
+            Effect.provide(Layer.mergeAll(loopWorkflowLayer, LoopRunner.defaultLayer, Session.defaultLayer, promptLayer)),
+          ),
+        )
+
+        try {
+          await Promise.race([
+            secondStarted.promise,
+            Bun.sleep(1_000).then(() => Promise.reject(new Error("second due loop was starved"))),
+          ])
+        } finally {
+          releaseFirst.resolve()
+        }
+
+        const result = await execution
+        expect(prompts).toBe(2)
+        expect(result).toHaveLength(2)
+        expect(result.every((item) => item.state === "completed")).toBe(true)
+      },
+    })
+  })
+
+  test("permission state is visible on a loop and approval resumes the same run", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Visible permission",
+          objective: "Expose permission waits without ending the active run.",
+          trigger: { mode: "interval", intervalMs: 60_000 },
+        })
+        const active = await svc.activate(draft.id)
+        const run = await svc.startRunWithLease(draft.id, `loop-runner:${process.pid}:permission-state`)
+
+        markPermissionPending({ sessionID: active.rootSessionID!, permission: "bash", patterns: ["uv run python"] }, 10)
+        await Bun.sleep(20)
+        const pending = await svc.snapshot(draft.id)
+        expect(pending.workflow).toMatchObject({ state: "needs_input", phase: "needs_input" })
+        expect(pending.runs[0]).toMatchObject({ id: run.id, state: "working" })
+        expect(Database.use((db) =>
+          db.select().from(BackgroundSessionTable).where(eq(BackgroundSessionTable.session_id, active.rootSessionID!)).get()?.data.state,
+        )).toBe("needs_input")
+
+        markPermissionResolved(active.rootSessionID!)
+        const resumed = await svc.snapshot(draft.id)
+        expect(resumed.workflow).toMatchObject({ state: "working", phase: "executing" })
+        expect(resumed.runs[0]).toMatchObject({ id: run.id, state: "working" })
       },
     })
   })

@@ -228,6 +228,12 @@ describe("mend prompt composition", () => {
     expect(fullContract?.text).toContain("zero iteration cap")
     expect(fullContract?.text).toContain("explicit normal-execution intent")
     expect(fullContract?.text).toContain("completed 0/0")
+    expect(fullContract?.text).toContain("`max-goal` with concrete completion criteria")
+    expect(fullContract?.text).toContain("`unbounded-monitor` without `maxTurns`")
+    expect(fullContract?.text).toContain("`fixed` with a positive `maxTurns`")
+    expect(fullContract?.text).toContain("completion policy separate from wakeup policy")
+    expect(fullContract?.text).toContain("`needs_input` as a durable")
+    expect(fullContract?.text).toContain("persisted `nextWakeup`")
   })
 
   test("focus mode stays sparse: provider harness plus compact MendCode basics", async () => {

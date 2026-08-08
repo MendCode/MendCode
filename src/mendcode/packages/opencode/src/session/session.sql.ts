@@ -21,6 +21,7 @@ import type {
   WorkflowRun,
   WorkflowRunID,
   WorkflowRunState,
+  WorkflowPermissionMode,
   WorkflowTask,
   WorkflowTaskAttempt,
   WorkflowTaskAttemptID,
@@ -151,19 +152,16 @@ export const SessionStatusTable = sqliteTable("session_status", {
     .primaryKey()
     .references(() => SessionTable.id, { onDelete: "cascade" }),
   ...Timestamps,
-  data: text({ mode: "json" })
-    .notNull()
-    .$type<
-       | {
-           type: "busy"
-           kind?: "mflow-wait" | "memory-extract" | "subagent-wait" | "compaction"
-           message?: string
-           until?: number
-           startedAt?: number
-         }
-
-      | { type: "retry"; attempt: number; message: string; next: number }
-    >(),
+  data: text({ mode: "json" }).notNull().$type<
+    | {
+        type: "busy"
+        kind?: "mflow-wait" | "memory-extract" | "subagent-wait" | "compaction"
+        message?: string
+        until?: number
+        startedAt?: number
+      }
+    | { type: "retry"; attempt: number; message: string; next: number }
+  >(),
 })
 
 export const BackgroundSessionTable = sqliteTable("background_session", {
@@ -218,12 +216,19 @@ export const AgentCommandTable = sqliteTable(
       .$type<SessionID>()
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
-    state: text().$type<"pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired">().notNull(),
+    state: text()
+      .$type<"pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired">()
+      .notNull(),
     time_created: integer().notNull(),
     time_updated: integer().notNull(),
     data: text({ mode: "json" }).notNull().$type<{
       type: "request_summary" | "rename" | "tag" | "pause_after_turn" | "stop" | "send_message"
-      payload: { instructions?: string } | { title: string } | { tags: readonly string[] } | { reason?: string } | { text: string }
+      payload:
+        | { instructions?: string }
+        | { title: string }
+        | { tags: readonly string[] }
+        | { reason?: string }
+        | { text: string }
       permissions: readonly string[]
       policy?: {
         decision: "safe_auto" | "same_workspace" | "approval_required" | "denied"
@@ -395,7 +400,13 @@ type LoopWorkspaceLeaseData = {
   error?: string
 }
 
-type LoopArtifactMetadataValue = string | number | boolean | null | LoopArtifactMetadataValue[] | { [key: string]: LoopArtifactMetadataValue }
+type LoopArtifactMetadataValue =
+  | string
+  | number
+  | boolean
+  | null
+  | LoopArtifactMetadataValue[]
+  | { [key: string]: LoopArtifactMetadataValue }
 type LoopArtifactMetadata = { [key: string]: LoopArtifactMetadataValue }
 
 export const LoopWorkflowTable = sqliteTable(
@@ -407,12 +418,27 @@ export const LoopWorkflowTable = sqliteTable(
       .notNull()
       .references(() => ProjectTable.id, { onDelete: "cascade" }),
     workspace_id: text().$type<WorkspaceID>(),
-    owner_session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
-    root_session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
+    owner_session_id: text()
+      .$type<SessionID>()
+      .references(() => SessionTable.id, { onDelete: "set null" }),
+    root_session_id: text()
+      .$type<SessionID>()
+      .references(() => SessionTable.id, { onDelete: "set null" }),
     name: text().notNull(),
     objective: text().notNull(),
     state: text()
-      .$type<"draft" | "active" | "sleeping" | "working" | "needs_input" | "blocked" | "paused" | "completed" | "failed" | "stopped">()
+      .$type<
+        | "draft"
+        | "active"
+        | "sleeping"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      >()
       .notNull(),
     source: text().$type<"converted-session" | "objective" | "template" | "manual">().notNull(),
     template_id: text(),
@@ -421,18 +447,15 @@ export const LoopWorkflowTable = sqliteTable(
     ...Timestamps,
     time_activated: integer(),
     time_archived: integer(),
-    data: text({ mode: "json" })
-      .notNull()
-      .$type<{
-        spec: LoopSpecData
-        policy: LoopPolicyData
-         metrics: LoopMetricsData
-         memory?: LoopMemoryData
-         scheduler?: LoopSchedulerData
-         evaluatorReason?: string
-         failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
-
-      }>(),
+    data: text({ mode: "json" }).notNull().$type<{
+      spec: LoopSpecData
+      policy: LoopPolicyData
+      metrics: LoopMetricsData
+      memory?: LoopMemoryData
+      scheduler?: LoopSchedulerData
+      evaluatorReason?: string
+      failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+    }>(),
   },
   (table) => [
     index("loop_workflow_project_idx").on(table.project_id),
@@ -449,85 +472,102 @@ export const LoopRunTable = sqliteTable(
     workflow_id: text()
       .notNull()
       .references(() => LoopWorkflowTable.id, { onDelete: "cascade" }),
-    root_session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
-    state: text().$type<"queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped">().notNull(),
-    trigger: text().$type<"manual" | "interval" | "daily" | "adaptive" | "external-signal" | "self-paced" | "resume" | "run-once">().notNull(),
+    root_session_id: text()
+      .$type<SessionID>()
+      .references(() => SessionTable.id, { onDelete: "set null" }),
+    state: text()
+      .$type<"queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped">()
+      .notNull(),
+    trigger: text()
+      .$type<"manual" | "interval" | "daily" | "adaptive" | "external-signal" | "self-paced" | "resume" | "run-once">()
+      .notNull(),
     phase: text().notNull(),
     next_wakeup: integer(),
     ...Timestamps,
     time_started: integer(),
     time_ended: integer(),
-    data: text({ mode: "json" })
-      .notNull()
-      .$type<{
-        evaluatorReason?: string
-        failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
-        budget?: LoopMetricsData
-        checkpoint?: {
-          status?: "complete" | "continue" | "needs_input" | "blocked" | "stop"
-          summary?: string
-          evidence?: string[]
-          nextAction?: string
-          confidence?: string
-        }
-        judgment?: {
-          status?: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
-          summary?: string
-          evidence?: string[]
-          recommendedNextAction?: string
-          confidence?: string
-          failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
-        }
-        rubricResult?: {
-          status: "pass" | "fail" | "blocked"
-          score: number
-          threshold: number
-          criteria: Array<{
-            id: string
-            score: number
-            maxScore: number
-            passed: boolean
-            reason: string
-            evidence: string[]
-          }>
-          blockers: Array<{
-            id: string
-            present: boolean
-            reason: string
-          }>
-        }
-        usage?: LoopUsageData
-        gateResults?: Array<{
+    data: text({ mode: "json" }).notNull().$type<{
+      evaluatorReason?: string
+      failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+      budget?: LoopMetricsData
+      checkpoint?: {
+        status?: "complete" | "continue" | "needs_input" | "blocked" | "stop"
+        summary?: string
+        evidence?: string[]
+        nextAction?: string
+        confidence?: string
+      }
+      judgment?: {
+        status?: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+        summary?: string
+        evidence?: string[]
+        recommendedNextAction?: string
+        confidence?: string
+        failureClass?:
+          | "none"
+          | "transient"
+          | "environment"
+          | "policy"
+          | "quality"
+          | "budget"
+          | "user_input"
+          | "terminal"
+      }
+      rubricResult?: {
+        status: "pass" | "fail" | "blocked"
+        score: number
+        threshold: number
+        criteria: Array<{
           id: string
-          status: "pass" | "fail" | "skip" | "blocked" | "awaiting_approval"
-          summary?: string
-          failureClass?: "none" | "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
-          evidenceArtifacts?: string[]
-          waiver?: {
-            action: "waive" | "accept"
-            actor: string
-            reason: string
-            time: number
-          }
+          score: number
+          maxScore: number
+          passed: boolean
+          reason: string
+          evidence: string[]
         }>
-        lease?: {
-          holder: string
-          acquired: number
-          heartbeat: number
-          expires: number
+        blockers: Array<{
+          id: string
+          present: boolean
+          reason: string
+        }>
+      }
+      usage?: LoopUsageData
+      gateResults?: Array<{
+        id: string
+        status: "pass" | "fail" | "skip" | "blocked" | "awaiting_approval"
+        summary?: string
+        failureClass?:
+          | "none"
+          | "transient"
+          | "environment"
+          | "policy"
+          | "quality"
+          | "budget"
+          | "user_input"
+          | "terminal"
+        evidenceArtifacts?: string[]
+        waiver?: {
+          action: "waive" | "accept"
+          actor: string
+          reason: string
+          time: number
         }
-        retry?: {
-          attempt: number
-          backoffMs?: number
-          nextWakeup?: number
-        }
-        workspaceLease?: LoopWorkspaceLeaseData
-      }>(),
+      }>
+      lease?: {
+        holder: string
+        acquired: number
+        heartbeat: number
+        expires: number
+      }
+      retry?: {
+        attempt: number
+        backoffMs?: number
+        nextWakeup?: number
+      }
+      workspaceLease?: LoopWorkspaceLeaseData
+    }>(),
   },
-  (table) => [
-    index("loop_run_workflow_idx").on(table.workflow_id),
-    index("loop_run_state_idx").on(table.state),
-  ],
+  (table) => [index("loop_run_workflow_idx").on(table.workflow_id), index("loop_run_state_idx").on(table.state)],
 )
 
 export const LoopArtifactTable = sqliteTable(
@@ -538,9 +578,24 @@ export const LoopArtifactTable = sqliteTable(
       .notNull()
       .references(() => LoopWorkflowTable.id, { onDelete: "cascade" }),
     run_id: text().references(() => LoopRunTable.id, { onDelete: "set null" }),
-    session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
+    session_id: text()
+      .$type<SessionID>()
+      .references(() => SessionTable.id, { onDelete: "set null" }),
     sequence: integer().notNull(),
-    kind: text().$type<"checkpoint" | "judgment" | "gate" | "evidence" | "command-output" | "diff" | "signal" | "memory" | "cost" | "override">().notNull(),
+    kind: text()
+      .$type<
+        | "checkpoint"
+        | "judgment"
+        | "gate"
+        | "evidence"
+        | "command-output"
+        | "diff"
+        | "signal"
+        | "memory"
+        | "cost"
+        | "override"
+      >()
+      .notNull(),
     title: text().notNull(),
     summary: text().notNull(),
     ...Timestamps,
@@ -569,7 +624,9 @@ export const LoopEventTable = sqliteTable(
       .notNull()
       .references(() => LoopWorkflowTable.id, { onDelete: "cascade" }),
     run_id: text().references(() => LoopRunTable.id, { onDelete: "set null" }),
-    session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
+    session_id: text()
+      .$type<SessionID>()
+      .references(() => SessionTable.id, { onDelete: "set null" }),
     sequence: integer().notNull(),
     level: text().$type<"debug" | "info" | "warning" | "error" | "decision">().notNull(),
     type: text()
@@ -618,7 +675,9 @@ export const LoopThreadTable = sqliteTable(
     role: text().$type<"root" | "implementer" | "reviewer" | "verifier" | "monitor" | "research">().notNull(),
     purpose: text().notNull(),
     state: text().$type<"queued" | "working" | "needs_input" | "completed" | "failed" | "stopped">().notNull(),
-    parent_session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
+    parent_session_id: text()
+      .$type<SessionID>()
+      .references(() => SessionTable.id, { onDelete: "set null" }),
     ...Timestamps,
     data: text({ mode: "json" }).$type<{
       budget?: LoopMetricsData
@@ -645,6 +704,7 @@ type WorkflowRunData = {
   nextAction?: string
   resultArtifactID?: WorkflowArtifactID
   workspaceLease?: WorkflowWorkspaceLease
+  permissionMode?: WorkflowPermissionMode
   usage?: {
     inputTokens?: number
     outputTokens?: number
@@ -683,12 +743,16 @@ export const WorkflowDefinitionTable = sqliteTable(
       .notNull()
       .references(() => ProjectTable.id, { onDelete: "cascade" }),
     workspace_id: text().$type<WorkspaceID>(),
-    owner_session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
+    owner_session_id: text()
+      .$type<SessionID>()
+      .references(() => SessionTable.id, { onDelete: "set null" }),
     name: text().notNull(),
     description: text().notNull(),
     source: text().$type<WorkflowDefinition["source"]>().notNull(),
     current_revision: integer(),
-    saved: integer({ mode: "boolean" }).notNull().$default(() => false),
+    saved: integer({ mode: "boolean" })
+      .notNull()
+      .$default(() => false),
     ...Timestamps,
   },
   (table) => [
@@ -709,7 +773,9 @@ export const WorkflowRevisionTable = sqliteTable(
     revision: integer().notNull(),
     plan_hash: text().notNull(),
     plan: text({ mode: "json" }).notNull().$type<WorkflowPlan>(),
-    immutable: integer({ mode: "boolean" }).notNull().$default(() => true),
+    immutable: integer({ mode: "boolean" })
+      .notNull()
+      .$default(() => true),
     ...Timestamps,
   },
   (table) => [
@@ -731,8 +797,12 @@ export const WorkflowRunTable = sqliteTable(
       .notNull()
       .references(() => WorkflowRevisionTable.id, { onDelete: "restrict" }),
     revision: integer().notNull(),
-    origin_session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
-    root_session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
+    origin_session_id: text()
+      .$type<SessionID>()
+      .references(() => SessionTable.id, { onDelete: "set null" }),
+    root_session_id: text()
+      .$type<SessionID>()
+      .references(() => SessionTable.id, { onDelete: "set null" }),
     loop_id: text().references(() => LoopWorkflowTable.id, { onDelete: "set null" }),
     loop_run_id: text().references(() => LoopRunTable.id, { onDelete: "set null" }),
     state: text().$type<WorkflowRunState>().notNull(),
@@ -898,7 +968,9 @@ export const WorkflowArtifactTable = sqliteTable(
       .notNull()
       .references(() => WorkflowRunTable.id, { onDelete: "cascade" }),
     task_id: text().$type<WorkflowTaskID>(),
-    attempt_id: text().$type<WorkflowTaskAttemptID>().references(() => WorkflowTaskAttemptTable.id, { onDelete: "set null" }),
+    attempt_id: text()
+      .$type<WorkflowTaskAttemptID>()
+      .references(() => WorkflowTaskAttemptTable.id, { onDelete: "set null" }),
     sequence: integer().notNull(),
     kind: text().notNull(),
     summary: text().notNull(),
@@ -906,7 +978,9 @@ export const WorkflowArtifactTable = sqliteTable(
     schema_validated: integer({ mode: "boolean" }).notNull(),
     output_refs: text({ mode: "json" }).notNull().$type<WorkflowArtifact["outputRefs"]>(),
     evidence: text({ mode: "json" }).notNull().$type<WorkflowArtifact["evidence"]>(),
-    session_id: text().$type<SessionID>().references(() => SessionTable.id, { onDelete: "set null" }),
+    session_id: text()
+      .$type<SessionID>()
+      .references(() => SessionTable.id, { onDelete: "set null" }),
     attempt: integer(),
     ...Timestamps,
     data: text({ mode: "json" }).$type<Record<string, unknown>>(),
@@ -986,5 +1060,5 @@ export const PermissionTable = sqliteTable("permission", {
     .primaryKey()
     .references(() => ProjectTable.id, { onDelete: "cascade" }),
   ...Timestamps,
-  data: text({ mode: "json" }).notNull().$type<Permission.Ruleset>(),
+  data: text({ mode: "json" }).notNull().$type<Permission.StoreData>(),
 })

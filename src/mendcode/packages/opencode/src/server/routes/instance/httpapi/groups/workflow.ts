@@ -130,6 +130,11 @@ export const WorkflowStartPayload = Schema.Struct({
 
 export const WorkflowControlPayload = Schema.Struct({ reason: Schema.optional(Schema.String) })
 
+export const WorkflowPermissionModePayload = Schema.Struct({
+  mode: Workflow.WorkflowPermissionMode,
+  reason: Schema.optional(Schema.String),
+})
+
 export const WorkflowRetryTaskPayload = Schema.Struct({
   taskID: Workflow.WorkflowTaskID,
   reason: Schema.optional(Schema.String),
@@ -156,6 +161,7 @@ export const WorkflowPaths = {
   pause: `${root}/:runID/pause`,
   resume: `${root}/:runID/resume`,
   stop: `${root}/:runID/stop`,
+  permissionMode: `${root}/:runID/permission-mode`,
   retryTask: `${root}/:runID/retry-task`,
   retryPhase: `${root}/:runID/retry-phase`,
 } as const
@@ -172,7 +178,8 @@ export const WorkflowApi = HttpApi.make("workflow")
           OpenApi.annotations({
             identifier: "workflow.preview",
             summary: "Preview a workflow plan",
-            description: "Validate a declarative workflow plan and return bounded execution estimates without starting it.",
+            description:
+              "Validate a declarative workflow plan and return bounded execution estimates without starting it.",
           }),
         ),
         HttpApiEndpoint.post("save", WorkflowPaths.save, {
@@ -227,7 +234,8 @@ export const WorkflowApi = HttpApi.make("workflow")
           OpenApi.annotations({
             identifier: "workflow.delete",
             summary: "Delete a workflow run",
-            description: "Permanently delete a terminal workflow run and its persisted phases, tasks, attempts, artifacts, events, and gates.",
+            description:
+              "Permanently delete a terminal workflow run and its persisted phases, tasks, attempts, artifacts, events, and gates.",
           }),
         ),
         HttpApiEndpoint.get("events", WorkflowPaths.events, {
@@ -270,6 +278,12 @@ export const WorkflowApi = HttpApi.make("workflow")
           params: { runID: Workflow.WorkflowRunID },
           payload: WorkflowControlPayload,
           success: described(WorkflowSnapshot, "Stopped workflow snapshot"),
+          error: [ApiBadRequestError, ApiNotFoundError],
+        }),
+        HttpApiEndpoint.post("permissionMode", WorkflowPaths.permissionMode, {
+          params: { runID: Workflow.WorkflowRunID },
+          payload: WorkflowPermissionModePayload,
+          success: described(WorkflowSnapshot, "Workflow snapshot with updated permission mode"),
           error: [ApiBadRequestError, ApiNotFoundError],
         }),
         HttpApiEndpoint.post("retryTask", WorkflowPaths.retryTask, {

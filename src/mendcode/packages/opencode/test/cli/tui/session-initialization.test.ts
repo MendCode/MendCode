@@ -30,9 +30,19 @@ describe("session route initialization", () => {
     expect(source).toContain("scrollPagingToken += 1")
     expect(source).toContain("scrollPagingInFlight = false")
     expect(source).toContain("suppressedPagingBoundary = undefined")
+    expect(source).toContain("shouldClearSessionPagingBoundarySuppression({")
+    expect(source).toContain('direction: delta < 0 ? "up" : "down"')
     expect(source).toContain("setFollowSessionOutput(true)")
     expect(source).toContain("if (pagingToken !== scrollPagingToken || route.sessionID !== currentSessionID) return")
     expect(source).toContain("shouldDeferSessionFollowSync(sync.session.history(route.sessionID))")
+  })
+
+  test("uses the stable transcript tail for prompt activity while paging older history", async () => {
+    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/component/prompt/index.tsx", import.meta.url)).text()
+
+    expect(source).toContain("const messagesForActivity = createMemo")
+    expect(source).toContain("latestAssistant: sync.data.session_latest_assistant[sessionID]")
+    expect(source).toContain("const messages = messagesForActivity()")
   })
 
   test("keeps loop card clicks scoped and restores each session scroll position", async () => {
@@ -51,6 +61,14 @@ describe("session route initialization", () => {
     expect(source).toContain("onMouseUp={handleOpenTarget}")
     expect(sessionV2).toContain("const handleOpenFirstLoop = () =>")
     expect(sessionV2).toContain("onMouseUp={handleOpenFirstLoop}")
+  })
+
+  test("renders workflow tasks in the phase-ordered monitor rows", async () => {
+    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/workflows/index.tsx", import.meta.url)).text()
+
+    expect(source).toContain("const taskRows = createMemo")
+    expect(source).toContain("<For each={taskRows().slice(0, 40)}>")
+    expect(source).not.toContain("<For each={item().tasks.slice(0, 40)}>")
   })
 
   test("captures an outgoing anchor and restores it after transcript growth", async () => {
@@ -91,19 +109,22 @@ describe("session route initialization", () => {
     expect(source).toContain("await sync.session.reloadMessages(route.sessionID)")
   })
 
-  test("keeps queued prompts in the transcript flow above the editor", async () => {
+  test("keeps queued prompts in a fixed dock above the editor", async () => {
     const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
 
     expect(source).toContain('if (mode === "after-tools") return "Waiting for the current tool iteration to finish"')
     expect(source).toContain('return "Waiting for the current response to finish"')
     expect(source).toContain("const transcriptRows = createMemo")
+    expect(source).toContain(".filter((message) => !queuedIDs.has(message.id))")
     expect(source).toContain("total: transcriptRows().length")
     expect(source).toContain("tailIDs: pendingDeliveryTailIDs()")
-    expect(source).toContain(
-      "pendingPromptDeliveryMessageIDs(route.sessionID, { includeAccepted: sessionCompacting() })",
-    )
+    expect(source).toContain("const pendingDeliveryQueuedIDs = createMemo")
+    expect(source).toContain("pendingPromptDeliveryMessageIDs(route.sessionID)")
+    expect(source).toContain("!assistantParentIDs.has(messageID)")
     expect(source).toContain("<For each={visibleMessageIDs()}>")
     expect(source).toContain("messageByID().get(messageID)")
+    expect(source).toContain('<Show when={queuedMessages().length > 0}>')
+    expect(source).toContain('anchorID={`queued-dock-${message.id}`}')
     expect(source).toContain("queuedMessageIDs().has(message().id)")
     expect(source).not.toContain("queuedMessageRenderIDs")
     expect(source).toMatch(/queued\s+sticky/)
@@ -111,5 +132,17 @@ describe("session route initialization", () => {
     expect(source).toContain('" ↗ SEND "')
     expect(source).not.toContain("paddingTop={1} paddingBottom={1}")
     expect(source).not.toContain("pending={pending()}")
+  })
+
+  test("treats workflow task chats as children of the workflow monitor", async () => {
+    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
+
+    expect(source).toContain('mode={currentWorkflowTask() ? "workflow-task"')
+    expect(source).toContain('return `↑ Workflow ${keybind.print("session_parent")}${cycle}`')
+    expect(source).toContain('return `${workflowTask.workflowName} · Task ${workflowTask.taskIndex + 1}/${workflowTask.taskCount} · ${workflowTask.taskName}`')
+    expect(source).toContain('type: "workflows"')
+    expect(source).toContain("selectedID: workflowTask.runID")
+    expect(source).toContain("navigateWorkflowTask(1, dialog)")
+    expect(source).toContain("navigateWorkflowTask(-1, dialog)")
   })
 })

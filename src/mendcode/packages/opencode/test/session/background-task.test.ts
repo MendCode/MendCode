@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Fiber, Layer, Scope } from "effect"
 import { BackgroundTask, reduceRun, type RunValue } from "@/session/background-task"
+import { markPermissionPending, markPermissionResolved } from "@/session/pending-input"
 import { BackgroundTaskEventTable, BackgroundTaskRunTable, BackgroundTaskTable } from "@/session/background-task.sql"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
@@ -271,7 +272,7 @@ describe("background task service", () => {
       Database.use((db) =>
         db
           .update(BackgroundTaskRunTable)
-          .set({ lease_expires_at: 10 })
+          .set({ owner_runtime_id: "99999999:expired-test", lease_expires_at: 10 })
           .where(eq(BackgroundTaskRunTable.task_id, child.id))
           .run(),
       )
@@ -287,6 +288,105 @@ describe("background task service", () => {
       expect(yield* tasks.pendingNotifications(parent.id)).toMatchObject([
         { taskID: child.id, parentSessionID: parent.id, state: "interrupted", background: true },
       ])
+    }),
+  )
+
+  it.instance("does not interrupt a live runtime only because wall-clock time advanced during sleep", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const tasks = yield* BackgroundTask.Service
+      const parent = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({ parentID: parent.id, title: "Sleeping child" })
+      yield* tasks.start({
+        taskID: child.id,
+        parentSessionID: parent.id,
+        startRunning: true,
+        title: "Sleeping child",
+      })
+      Database.use((db) =>
+        db.update(BackgroundTaskRunTable)
+          .set({ lease_expires_at: 10 })
+          .where(eq(BackgroundTaskRunTable.task_id, child.id))
+          .run(),
+      )
+
+      expect(yield* tasks.reclaimExpired({ now: 11 })).toHaveLength(0)
+      expect(yield* tasks.get(child.id)).toMatchObject({ state: "running" })
+    }),
+  )
+
+  it.instance("does not publish needs-input when permission resolves before the delay", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const tasks = yield* BackgroundTask.Service
+      const parent = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({ parentID: parent.id, title: "Permission child" })
+      yield* tasks.start({
+        taskID: child.id,
+        parentSessionID: parent.id,
+        startRunning: true,
+        title: "Permission child",
+      })
+
+      markPermissionPending({ sessionID: child.id, permission: "bash", patterns: ["uv run python"] }, 10)
+      expect(yield* tasks.get(child.id)).toMatchObject({ state: "running" })
+      markPermissionResolved(child.id)
+      yield* Effect.promise(() => Bun.sleep(20))
+
+      expect(yield* tasks.get(child.id)).toMatchObject({ state: "running" })
+      expect(yield* tasks.pendingNotifications(parent.id)).toHaveLength(0)
+    }),
+  )
+
+  it.instance("persists needs-input after permission remains pending and resumes the same subagent", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const tasks = yield* BackgroundTask.Service
+      const parent = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({ parentID: parent.id, title: "Permission child" })
+      yield* tasks.start({
+        taskID: child.id,
+        parentSessionID: parent.id,
+        startRunning: true,
+        title: "Permission child",
+      })
+
+      markPermissionPending({ sessionID: child.id, permission: "bash", patterns: ["uv run python"] }, 10)
+      expect(yield* tasks.get(child.id)).toMatchObject({ state: "running" })
+      yield* Effect.promise(() => Bun.sleep(20))
+
+      expect(yield* tasks.get(child.id)).toMatchObject({ state: "needs_input" })
+      expect(yield* tasks.pendingNotifications(parent.id)).toMatchObject([
+        { taskID: child.id, state: "needs_input", background: true },
+      ])
+
+      markPermissionResolved(child.id)
+      expect(yield* tasks.get(child.id)).toMatchObject({ state: "running" })
+      expect(yield* tasks.pendingNotifications(parent.id)).toHaveLength(0)
+    }),
+  )
+
+  it.instance("resumes a pending permission task on the same background generation", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const tasks = yield* BackgroundTask.Service
+      const parent = yield* sessions.create({ title: "Parent" })
+      const child = yield* sessions.create({ parentID: parent.id, title: "Permission child" })
+      const started = yield* tasks.start({
+        taskID: child.id,
+        parentSessionID: parent.id,
+        startRunning: true,
+        title: "Permission child",
+      })
+
+      markPermissionPending({ sessionID: child.id, permission: "bash", patterns: ["uv run python"] }, 10)
+      yield* Effect.promise(() => Bun.sleep(20))
+      expect(yield* tasks.get(child.id)).toMatchObject({ generation: started.generation, state: "needs_input" })
+
+      const resumed = yield* tasks.resume({ taskID: child.id, generation: started.generation })
+      expect(resumed).toMatchObject({ generation: started.generation, state: "running" })
+      expect(yield* tasks.pendingNotifications(parent.id)).toHaveLength(0)
+      markPermissionResolved(child.id)
     }),
   )
 })
