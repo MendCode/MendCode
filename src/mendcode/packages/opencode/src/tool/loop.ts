@@ -16,6 +16,7 @@ const PermissionMode = Schema.Literals(["report-only", "normal", "custom"])
 const BudgetMode = Schema.Literals(["fixed", "max-goal", "unbounded-monitor"])
 const EvaluationMode = Schema.Literals(["legacy", "deterministic", "independent"])
 const WorkspaceMode = Schema.Literals(["read-only", "in-place", "per-loop-worktree", "per-run-worktree"])
+const maxLoopNameLength = 24
 
 export const Parameters = Schema.Struct({
   action: Action.annotate({
@@ -27,7 +28,7 @@ export const Parameters = Schema.Struct({
       "Existing loop workflow id. Provide it for precise show, pause, resume, stop, and run_once actions. If omitted, the tool may resolve the current session's contextual loop or fall back to a list.",
   }),
   name: Schema.optional(Schema.String).annotate({
-    description: "Short workflow name when creating a draft or activating a new loop.",
+    description: "Concise workflow label: 2-4 words and at most 24 characters. Omit project, model, cadence, and permission details.",
   }),
   objective: Schema.optional(Schema.String).annotate({
     description: "Durable loop objective. Required when creating a draft or activating a new loop.",
@@ -481,12 +482,16 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
   if (!params.objective?.trim()) throw new Error("objective is required when creating a loop workflow")
   const artifactMaxCount = positiveMaxTurns(params.artifactMaxCount)
   if (params.artifactMaxCount !== undefined && !artifactMaxCount) throw new Error("artifactMaxCount must be > 0 when provided")
-  const name =
-    params.name?.trim() ||
-    params.objective
-      .trim()
-      .replace(/\s+/g, " ")
-      .slice(0, 80)
+  const requestedName = params.name?.trim().replace(/\s+/g, " ")
+  if (requestedName && requestedName.length > maxLoopNameLength) {
+    throw new Error(`name must be ${maxLoopNameLength} characters or fewer; use a concise 2-4 word label`)
+  }
+  const objectiveName = params.objective.trim().replace(/\s+/g, " ").split(" ").slice(0, 4).join(" ")
+  const name = requestedName || (
+    objectiveName.length <= maxLoopNameLength
+      ? objectiveName
+      : objectiveName.slice(0, maxLoopNameLength).replace(/\s+\S*$/, "").trim() || objectiveName.slice(0, maxLoopNameLength)
+  )
   const model = params.model ? parseLoopModel(params.model, params.variant) : undefined
   const allowEditsFromObjective = params.permissionMode === undefined && params.reportOnly === undefined && objectiveExplicitlyRequestsEdits(params.objective)
   const reportOnly =

@@ -1146,6 +1146,7 @@ const layer: Layer.Layer<
         // now read config providers - includes any modifications from plugin config() hook
         const configProviders = Object.entries(cfg.provider ?? {})
         const disabled = new Set(cfg.disabled_providers ?? [])
+        const disabledModels = new Set(cfg.disabled_models ?? [])
         const enabled = cfg.enabled_providers ? new Set(cfg.enabled_providers) : null
 
         function isProviderAllowed(providerID: ProviderID): boolean {
@@ -1395,6 +1396,10 @@ const layer: Layer.Layer<
           const configProvider = cfg.provider?.[providerID]
 
           for (const [modelID, model] of Object.entries(provider.models)) {
+            if (disabledModels.has(`${providerID}/${modelID}`)) {
+              delete provider.models[modelID]
+              continue
+            }
             model.api.id = model.api.id ?? model.id ?? modelID
             if (
               modelID === "gpt-5-chat-latest" ||

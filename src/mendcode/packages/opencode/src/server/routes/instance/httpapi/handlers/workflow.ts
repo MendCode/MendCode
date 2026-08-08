@@ -16,6 +16,7 @@ import * as ApiError from "../errors"
 import {
   WorkflowControlPayload,
   WorkflowListQuery,
+  WorkflowPermissionModePayload,
   WorkflowPreviewPayload,
   WorkflowRetryPhasePayload,
   WorkflowRetryTaskPayload,
@@ -34,7 +35,9 @@ const toApiError = (error: unknown) => {
   return ApiError.badRequest({ message: error instanceof Error ? error.message : String(error) })
 }
 
-const mapWorkflowError = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, ApiError.ApiBadRequestError | ApiError.ApiNotFoundError, R> =>
+const mapWorkflowError = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+): Effect.Effect<A, ApiError.ApiBadRequestError | ApiError.ApiNotFoundError, R> =>
   effect.pipe(Effect.catch((error) => Effect.fail(toApiError(error))))
 
 export const workflowHandlers = HttpApiBuilder.group(InstanceHttpApi, "workflow", (handlers) =>
@@ -42,7 +45,9 @@ export const workflowHandlers = HttpApiBuilder.group(InstanceHttpApi, "workflow"
     const workflow = yield* WorkflowService
     const runner = yield* WorkflowRunner.Service
 
-    const preview = Effect.fn("WorkflowHttpApi.preview")(function* (ctx: { payload: typeof WorkflowPreviewPayload.Type }) {
+    const preview = Effect.fn("WorkflowHttpApi.preview")(function* (ctx: {
+      payload: typeof WorkflowPreviewPayload.Type
+    }) {
       return yield* mapWorkflowError(workflow.preview(ctx.payload.plan as unknown as WorkflowPlanInput))
     })
 
@@ -86,14 +91,18 @@ export const workflowHandlers = HttpApiBuilder.group(InstanceHttpApi, "workflow"
       params: { runID: Workflow.WorkflowRunID }
       payload: typeof WorkflowControlPayload.Type
     }) {
-      return yield* mapWorkflowError(workflow.pause({ runID: ctx.params.runID, reason: ctx.payload.reason, actor: "api" }))
+      return yield* mapWorkflowError(
+        workflow.pause({ runID: ctx.params.runID, reason: ctx.payload.reason, actor: "api" }),
+      )
     })
 
     const resume = Effect.fn("WorkflowHttpApi.resume")(function* (ctx: {
       params: { runID: Workflow.WorkflowRunID }
       payload: typeof WorkflowControlPayload.Type
     }) {
-      const resumed = yield* mapWorkflowError(workflow.resume({ runID: ctx.params.runID, reason: ctx.payload.reason, actor: "api" }))
+      const resumed = yield* mapWorkflowError(
+        workflow.resume({ runID: ctx.params.runID, reason: ctx.payload.reason, actor: "api" }),
+      )
       yield* runner.start(resumed.run.id)
       return resumed
     })
@@ -102,16 +111,41 @@ export const workflowHandlers = HttpApiBuilder.group(InstanceHttpApi, "workflow"
       params: { runID: Workflow.WorkflowRunID }
       payload: typeof WorkflowControlPayload.Type
     }) {
-      const stopped = yield* mapWorkflowError(workflow.stop({ runID: ctx.params.runID, reason: ctx.payload.reason, actor: "api" }))
+      const stopped = yield* mapWorkflowError(
+        workflow.stop({ runID: ctx.params.runID, reason: ctx.payload.reason, actor: "api" }),
+      )
       yield* mapWorkflowError(runner.stop(stopped.run.id))
       return stopped
+    })
+
+    const permissionMode = Effect.fn("WorkflowHttpApi.permissionMode")(function* (ctx: {
+      params: { runID: Workflow.WorkflowRunID }
+      payload: typeof WorkflowPermissionModePayload.Type
+    }) {
+      const changed = yield* mapWorkflowError(
+        runner.setPermissionMode({
+          runID: ctx.params.runID,
+          mode: ctx.payload.mode,
+          reason: ctx.payload.reason,
+          actor: "api",
+        }),
+      )
+      if (changed.run.state === "queued") yield* runner.start(changed.run.id)
+      return changed
     })
 
     const retryTask = Effect.fn("WorkflowHttpApi.retryTask")(function* (ctx: {
       params: { runID: Workflow.WorkflowRunID }
       payload: typeof WorkflowRetryTaskPayload.Type
     }) {
-      const retried = yield* mapWorkflowError(workflow.retryTask({ runID: ctx.params.runID, taskID: ctx.payload.taskID, reason: ctx.payload.reason, actor: "api" }))
+      const retried = yield* mapWorkflowError(
+        workflow.retryTask({
+          runID: ctx.params.runID,
+          taskID: ctx.payload.taskID,
+          reason: ctx.payload.reason,
+          actor: "api",
+        }),
+      )
       yield* runner.start(retried.run.id)
       return retried
     })
@@ -120,7 +154,14 @@ export const workflowHandlers = HttpApiBuilder.group(InstanceHttpApi, "workflow"
       params: { runID: Workflow.WorkflowRunID }
       payload: typeof WorkflowRetryPhasePayload.Type
     }) {
-      const retried = yield* mapWorkflowError(workflow.retryPhase({ runID: ctx.params.runID, phaseID: ctx.payload.phaseID, reason: ctx.payload.reason, actor: "api" }))
+      const retried = yield* mapWorkflowError(
+        workflow.retryPhase({
+          runID: ctx.params.runID,
+          phaseID: ctx.payload.phaseID,
+          reason: ctx.payload.reason,
+          actor: "api",
+        }),
+      )
       yield* runner.start(retried.run.id)
       return retried
     })
@@ -137,6 +178,7 @@ export const workflowHandlers = HttpApiBuilder.group(InstanceHttpApi, "workflow"
       .handle("pause", pause)
       .handle("resume", resume)
       .handle("stop", stop)
+      .handle("permissionMode", permissionMode)
       .handle("retryTask", retryTask)
       .handle("retryPhase", retryPhase)
   }),

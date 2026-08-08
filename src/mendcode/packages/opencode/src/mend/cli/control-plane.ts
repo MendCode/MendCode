@@ -280,12 +280,18 @@ function formatLoopSummary(loop: LoopWorkflow.Info) {
   return `${loop.id}  ${loop.state.padEnd(10)}  ${loop.name}  phase=${loop.phase}  next=${formatLoopTime(loop.nextWakeup)}  scheduler=${formatLoopScheduler(loop)}`
 }
 
-function formatLoopScheduler(loop: Pick<LoopWorkflow.Info, "scheduler">) {
+function formatLoopScheduler(loop: Pick<LoopWorkflow.Info, "state" | "nextWakeup" | "scheduler">) {
   const scheduler = loop.scheduler
   if (!scheduler) return "unknown"
   const result = scheduler.lastResult ? ` result=${scheduler.lastResult}` : ""
   const error = scheduler.lastError ? ` error=${scheduler.lastError}` : ""
-  return `${scheduler.degraded ? "degraded" : "healthy"} wake=${formatLoopTime(scheduler.lastWakeAttempt)} next=${formatLoopTime(scheduler.nextWakeup)}${result}${error}`
+  const nextWakeup = scheduler.nextWakeup ?? loop.nextWakeup
+  const overdue =
+    (loop.state === "active" || loop.state === "sleeping") &&
+    typeof nextWakeup === "number" &&
+    nextWakeup < Date.now() - 2 * 60_000
+  const status = scheduler.degraded ? "degraded" : overdue ? "overdue" : "ready"
+  return `${status} wake=${formatLoopTime(scheduler.lastWakeAttempt)} next=${formatLoopTime(nextWakeup)}${result}${error}`
 }
 
 function loopServiceOptions(args: string[]) {
@@ -814,13 +820,20 @@ async function loops(args: string[]) {
       reportOnly,
       quiet,
     })
-    const recordHealth = (input: { lastWakeAttempt?: number; lastError?: string; degraded: boolean }) =>
-      writeLoopServiceHealth(servicePlan, input).catch((error) => {
+    let latestHealthWakeAttempt = 0
+    let healthWrite = Promise.resolve()
+    const recordHealth = (input: { lastWakeAttempt?: number; lastError?: string; degraded: boolean }) => {
+      if (input.lastWakeAttempt !== undefined && input.lastWakeAttempt < latestHealthWakeAttempt) return Promise.resolve()
+      latestHealthWakeAttempt = Math.max(latestHealthWakeAttempt, input.lastWakeAttempt ?? 0)
+      healthWrite = healthWrite.then(() => writeLoopServiceHealth(servicePlan, input)).catch((error) => {
         if (!quiet) console.error(`WARN: loop service health write failed: ${error instanceof Error ? error.message : String(error)}`)
       })
+      return healthWrite
+    }
     const runTick = async (disposeRuntime: boolean) => {
       const startedAt = Date.now()
       const started = new Date(startedAt).toLocaleTimeString()
+      await recordHealth({ lastWakeAttempt: startedAt, degraded: false })
       let results: LoopRunner.TickResult[]
       try {
         results = await withLoopRunner((runner) => runner.runDue({ limit, execute, reportOnly }), {
@@ -852,9 +865,16 @@ async function loops(args: string[]) {
       await runTick(true)
       return
     }
+    const activeTicks = new Set<Promise<void>>()
+    const dispatchTick = () => {
+      if (activeTicks.size >= Math.max(1, limit)) return
+      const tick = runTick(false).finally(() => activeTicks.delete(tick))
+      activeTicks.add(tick)
+    }
+    dispatchTick()
     while (true) {
-      await runTick(false)
       await new Promise((resolve) => setTimeout(resolve, interval))
+      dispatchTick()
     }
   }
   if (sub === "service") {

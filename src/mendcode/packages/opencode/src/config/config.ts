@@ -171,7 +171,11 @@ export const Info = Schema.Struct({
       "Update notifications are shown by default. Set to true to silently auto-update patch releases, false to disable updates, or 'notify' to always show notifications",
   }),
   disabled_providers: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
-    description: "Disable providers that are loaded automatically",
+    description: "Completely disable providers so they cannot be selected by agents, subagents, or background roles",
+  }),
+  disabled_models: Schema.optional(Schema.mutable(Schema.Array(ConfigModelID))).annotate({
+    description:
+      "Completely disable exact models in provider/model format so they cannot be selected by agents, subagents, or background roles",
   }),
   enabled_providers: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "When set, ONLY these providers will be enabled. All other providers will be ignored",

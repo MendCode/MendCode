@@ -5,6 +5,8 @@ import {
   sessionHeaderTitleAlign,
   sessionHeaderTitleDisplay,
   sessionLoopReceipt,
+  shouldRenderSessionLoopCard,
+  shouldRenderSessionWorkflowCard,
   sessionPendingInputSessionIDs,
   sessionTaskContinuation,
   sessionTopMetricsWidth,
@@ -18,6 +20,14 @@ import {
 } from "../../../src/cli/cmd/tui/util/session-layout"
 
 describe("session layout", () => {
+  test("renders workflow cards for normalized and persisted full presentation profiles", () => {
+    expect(shouldRenderSessionWorkflowCard("mendcode")).toBe(true)
+    expect(shouldRenderSessionWorkflowCard("full")).toBe(true)
+    expect(shouldRenderSessionWorkflowCard("minimal")).toBe(false)
+    expect(shouldRenderSessionWorkflowCard("raw")).toBe(false)
+    expect(shouldRenderSessionWorkflowCard()).toBe(false)
+  })
+
   test("shows the prompt for child sessions when there are no blocking prompts", () => {
     expect(
       sessionPromptVisible({
@@ -270,6 +280,16 @@ describe("session layout", () => {
     expect(sessionLoopReceipt({ action: "show", toolStatus: "completed", workflowState: "sleeping", workflowPhase: "waiting" })).toEqual({ label: "waiting", tone: "warning" })
     expect(sessionLoopReceipt({ action: "list", toolStatus: "completed", workflowState: "completed" })).toEqual({ label: "complete", tone: "success" })
     expect(sessionLoopReceipt({ action: "activate", toolStatus: "completed", workflowState: "failed" })).toEqual({ label: "failed", tone: "danger" })
+  })
+
+  test("renders rich loop cards only for completed operations that resolved a loop", () => {
+    expect(shouldRenderSessionLoopCard({ toolStatus: "error", workflowID: "loop_1" })).toBe(false)
+    expect(shouldRenderSessionLoopCard({ toolStatus: "running", workflowID: "loop_1" })).toBe(false)
+    expect(shouldRenderSessionLoopCard({ toolStatus: "completed", workflows: [] })).toBe(false)
+    expect(shouldRenderSessionLoopCard({ toolStatus: "completed", workflowID: "loop_1" })).toBe(true)
+    expect(
+      shouldRenderSessionLoopCard({ toolStatus: "completed", workflows: [{ workflowID: "loop_1" }] }),
+    ).toBe(true)
   })
 
   test("renders only the latest call when a task resumes the same subagent", () => {

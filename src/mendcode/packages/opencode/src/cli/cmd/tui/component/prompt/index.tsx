@@ -109,7 +109,12 @@ import {
   type MendPromptStatusScriptOutput,
   type MendPromptStatusScriptResult,
 } from "@/mend/tui/prompt-status"
-import { isAssistantWorking, SESSION_STOPPED_CONNECTION_MESSAGE, shouldShowSessionStoppedConnection } from "../../util/session-working"
+import {
+  isAssistantWorking,
+  isBusyStatusSupersededByTerminalAssistant,
+  SESSION_STOPPED_CONNECTION_MESSAGE,
+  shouldShowSessionStoppedConnection,
+} from "../../util/session-working"
 
 const NATIVE_COMPACTION_SLASHES = new Set(["compact", "summarize"])
 const ACTIVE_LOOP_STATES = new Set(["active", "sleeping", "working", "needs_input", "blocked"])
@@ -285,6 +290,8 @@ type PendingPromptDelivery = {
   nextAttemptAt: number
   inFlight: boolean
   state: "pending" | "accepted"
+  // Compaction can end while the original runner is still iterating.
+  queuedBehindActiveTurn: boolean
 }
 
 const pendingPromptDeliveries = new Map<string, PendingPromptDelivery>()
@@ -302,8 +309,8 @@ function notifyPendingPromptDeliveryListeners() {
   for (const listener of pendingPromptDeliveryListeners) listener()
 }
 
-export function promptDeliveryIsQueued(state: "pending" | "accepted") {
-  return state === "pending"
+export function promptDeliveryIsQueued(state: "pending" | "accepted", queuedBehindActiveTurn = false) {
+  return state === "pending" || queuedBehindActiveTurn
 }
 
 export function subscribePendingPromptDeliveries(listener: () => void) {
@@ -314,11 +321,10 @@ export function subscribePendingPromptDeliveries(listener: () => void) {
 export function pendingPromptDeliveryMessageIDs(sessionID: string, options?: { includeAccepted?: boolean }) {
   return new Set(
     [...pendingPromptDeliveries.values()]
-      // Accepted prompts stay tracked for reconnect recovery; compaction keeps them queued visually until the turn starts.
       .filter(
         (delivery) =>
           delivery.request.sessionID === sessionID &&
-          (promptDeliveryIsQueued(delivery.state) || options?.includeAccepted === true),
+          (promptDeliveryIsQueued(delivery.state, delivery.queuedBehindActiveTurn) || options?.includeAccepted === true),
       )
       .map((delivery) => delivery.request.messageID)
       .filter((messageID): messageID is string => Boolean(messageID)),
@@ -357,9 +363,16 @@ export function promptDeliveryErrorMessage(error: unknown) {
   return "The server rejected this prompt."
 }
 
-export function storedAssistantDeliveryState(info: { time: { completed?: number }; error?: unknown }) {
+export function storedAssistantDeliveryState(info: {
+  time: { completed?: number }
+  finish?: string
+  error?: unknown
+}) {
   if (info.time.completed === undefined) return "accepted" as const
-  if (!info.error || typeof info.error !== "object") return "completed" as const
+  if (info.finish) return "completed" as const
+  // Cleanup can persist completed even when a disconnected runner never produced a terminal result.
+  if (!info.error) return "accepted" as const
+  if (typeof info.error !== "object") return "completed" as const
 
   const error = info.error as { name?: unknown; data?: unknown }
   if (error.name === "MessageAbortedError") return "accepted" as const
@@ -380,6 +393,17 @@ export function promptDeliveryRetryAction(input: {
   return "queue" as const
 }
 
+export function shouldRecoverAcceptedPromptDeliveries(input: {
+  statusType: string
+  statusSupersededByTerminalAssistant?: boolean
+  deliveries: readonly { state: "pending" | "accepted"; queuedBehindActiveTurn?: boolean }[]
+}) {
+  return (
+    (input.statusType === "idle" || input.statusSupersededByTerminalAssistant === true) &&
+    input.deliveries.some((delivery) => delivery.state === "accepted" && delivery.queuedBehindActiveTurn === true)
+  )
+}
+
 function queuePendingPromptDelivery(request: PromptAsyncInput) {
   const key = pendingPromptDeliveryKey(request)
   const delivery = pendingPromptDeliveries.get(key)
@@ -389,6 +413,7 @@ function queuePendingPromptDelivery(request: PromptAsyncInput) {
     delivery.nextAttemptAt = Date.now() + promptDeliveryRetryDelay(delivery.attempt)
     delivery.inFlight = false
     delivery.state = "pending"
+    delivery.queuedBehindActiveTurn = true
   } else {
     pendingPromptDeliveries.set(key, {
       request,
@@ -396,12 +421,13 @@ function queuePendingPromptDelivery(request: PromptAsyncInput) {
       nextAttemptAt: Date.now() + promptDeliveryRetryDelay(1),
       inFlight: false,
       state: "pending",
+      queuedBehindActiveTurn: true,
     })
   }
   notifyPendingPromptDeliveryListeners()
 }
 
-function acceptPendingPromptDelivery(request: PromptAsyncInput) {
+function acceptPendingPromptDelivery(request: PromptAsyncInput, queuedBehindActiveTurn = false) {
   const key = pendingPromptDeliveryKey(request)
   const delivery = pendingPromptDeliveries.get(key)
   if (delivery) {
@@ -409,6 +435,7 @@ function acceptPendingPromptDelivery(request: PromptAsyncInput) {
     delivery.state = "accepted"
     delivery.inFlight = false
     delivery.nextAttemptAt = Number.POSITIVE_INFINITY
+    delivery.queuedBehindActiveTurn ||= queuedBehindActiveTurn
   } else {
     pendingPromptDeliveries.set(key, {
       request,
@@ -416,6 +443,7 @@ function acceptPendingPromptDelivery(request: PromptAsyncInput) {
       nextAttemptAt: Number.POSITIVE_INFINITY,
       inFlight: false,
       state: "accepted",
+      queuedBehindActiveTurn,
     })
   }
   notifyPendingPromptDeliveryListeners()
@@ -481,7 +509,7 @@ function cancelPendingPromptDeliveriesForInterrupt(sessionID: string, activeAssi
 }
 
 export function latestPendingAssistantID(
-  messages: Array<{
+  messages: ReadonlyArray<{
     id: string
     role: string
     time: { created?: number; completed?: number }
@@ -493,11 +521,15 @@ export function latestPendingAssistantID(
     now?: number
     statusUntil?: number
     statusNext?: number
+    keepUnfinishedDuringLiveConnection?: boolean
   },
 ) {
   const latestAssistant = messages.findLast((message) => message.role === "assistant")
-  if (!latestAssistant || latestAssistant.time.completed || latestAssistant.error) return
-  if (latestAssistant.finish && !["tool-calls", "unknown"].includes(latestAssistant.finish)) return
+  if (!latestAssistant || latestAssistant.error) return
+  const continuation = latestAssistant.finish === "tool-calls" || latestAssistant.finish === "unknown"
+  if (latestAssistant.finish && !continuation) return
+  if (latestAssistant.time.completed && !continuation) return
+  if (input?.keepUnfinishedDuringLiveConnection) return latestAssistant.id
   if (
     input &&
     !isAssistantWorking({
@@ -510,6 +542,15 @@ export function latestPendingAssistantID(
   )
     return
   return latestAssistant.id
+}
+
+export function sessionActivityMessages<T extends { id: string; time: { created: number } }>(input: {
+  messages: readonly T[]
+  latestAssistant?: T
+}) {
+  const latest = input.latestAssistant
+  if (!latest) return input.messages
+  return [...input.messages.filter((message) => message.id !== latest.id), latest].toSorted(compareSessionMessages)
 }
 
 export function resolveWorkingStartedAt(input: {
@@ -528,8 +569,11 @@ export function shouldClearWorkingStartedAt(input: {
   hasActiveWorkingAssistant?: boolean
   permissionPending?: boolean
   interrupted?: boolean
+  terminalAssistant?: boolean
 }) {
   if (input.interrupted) return true
+  if (input.permissionPending) return false
+  if (input.terminalAssistant) return true
   return input.statusType === "idle" && !input.hasActiveWorkingAssistant && !input.permissionPending
 }
 
@@ -753,6 +797,14 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  const messagesForActivity = createMemo(() => {
+    const sessionID = props.sessionID
+    if (!sessionID) return []
+    return sessionActivityMessages({
+      messages: sync.data.message[sessionID] ?? [],
+      latestAssistant: sync.data.session_latest_assistant[sessionID],
+    })
+  })
   const history = usePromptHistory()
   const [messageHistoryIndex, setMessageHistoryIndex] = createSignal(0)
   const stash = usePromptStash()
@@ -767,6 +819,7 @@ export function Prompt(props: PromptProps) {
   const fileContextEnabled = createMemo(() => kv.get("file_context_enabled", true))
   const [dismissedEditorSelectionKey, setDismissedEditorSelectionKey] = createSignal<string>()
   const [promptStatusTick, setPromptStatusTick] = createSignal(Date.now())
+  const [pendingPromptDeliveryRevision, setPendingPromptDeliveryRevision] = createSignal(0)
   const [workingTick, setWorkingTick] = createSignal(Date.now())
   const [workingStartedAt, setWorkingStartedAt] = createSignal<number>()
   const [interruptRequested, setInterruptRequested] = createSignal(false)
@@ -777,6 +830,7 @@ export function Prompt(props: PromptProps) {
   const [compactionActive, setCompactionActive] = createSignal(false)
   const [mascotHover, setMascotHover] = createSignal(false)
   let clearWorkingStartTimer: Timer | undefined
+  let acceptedPromptRecoveryKey: string | undefined
   const messageHistoryItems = createMemo(() => {
     const supplied = props.historyItems?.().filter((item) => item.input.length > 0 || item.parts.length > 0) ?? []
     const stored = history.items(props.historyScope).filter((item) => item.input.length > 0 || item.parts.length > 0)
@@ -836,27 +890,52 @@ export function Prompt(props: PromptProps) {
   function findActiveWorkingAssistant() {
     const sessionID = props.sessionID
     if (!sessionID) return
-    const messages = sync.data.message[sessionID] ?? []
+    const messages = messagesForActivity()
     const currentStatus = status()
     const activeID = latestPendingAssistantID(messages, {
       statusType: currentStatus.type,
       now: promptStatusTick(),
       statusUntil: currentStatus.type === "busy" ? currentStatus.until : undefined,
       statusNext: currentStatus.type === "retry" ? currentStatus.next : undefined,
+      keepUnfinishedDuringLiveConnection:
+        sdk.connection.status !== "disconnected" && sdk.connection.status !== "failed",
     })
     return messages.findLast((item): item is AssistantMessage => item.role === "assistant" && item.id === activeID)
   }
   function findOrphanedAssistant() {
     const sessionID = props.sessionID
     if (!sessionID) return
-    const messages = sync.data.message[sessionID] ?? []
+    const messages = messagesForActivity()
     const latestAssistant = messages.findLast((item): item is AssistantMessage => item.role === "assistant")
-    if (!latestAssistant || latestAssistant.time.completed || latestAssistant.error) return
-    if (latestAssistant.finish && !["tool-calls", "unknown"].includes(latestAssistant.finish)) return
+    if (!latestAssistant || latestAssistant.error) return
+    const continuation = latestAssistant.finish === "tool-calls" || latestAssistant.finish === "unknown"
+    if (latestAssistant.finish && !continuation) return
+    if (latestAssistant.time.completed && !continuation) return
     if (findActiveWorkingAssistant()?.id === latestAssistant.id) return
     return latestAssistant
   }
   const hasActiveWorkingAssistant = createMemo(() => Boolean(findActiveWorkingAssistant()))
+  const terminalAssistantSupersedesBusy = createMemo(() => {
+    const current = status()
+    const messages = messagesForActivity()
+    return isBusyStatusSupersededByTerminalAssistant({
+      statusType: current.type,
+      statusKind: current.type === "busy" ? current.kind : undefined,
+      statusStartedAt: current.type === "busy" ? current.startedAt : undefined,
+      latestMessage: messages.at(-1),
+    })
+  })
+  const workingStatusActive = createMemo(
+    () =>
+      !interruptRequested() &&
+      (compactionActive() ||
+        !shouldClearWorkingStartedAt({
+          statusType: status().type,
+          hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+          permissionPending: Boolean(props.permissionPending),
+          terminalAssistant: terminalAssistantSupersedesBusy(),
+        })),
+  )
   const agentStoppedMessage = createMemo(() =>
     shouldShowSessionStoppedConnection({
       connectionStatus: sdk.connection.status,
@@ -869,24 +948,29 @@ export function Prompt(props: PromptProps) {
     if (clearWorkingStartTimer) clearTimeout(clearWorkingStartTimer)
   })
   onMount(() => {
+    const unsubscribe = subscribePendingPromptDeliveries(() =>
+      setPendingPromptDeliveryRevision((value) => value + 1),
+    )
     const timer = setInterval(() => {
       const now = Date.now()
       setPromptStatusTick(now)
       setWorkingTick(now)
     }, 500)
+    onCleanup(unsubscribe)
     onCleanup(() => clearInterval(timer))
   })
   createEffect(
     on(
       () =>
         [
-          status().type !== "idle" || compactionActive(),
+          workingStatusActive(),
           status().type,
           hasActiveWorkingAssistant(),
           Boolean(props.permissionPending),
           interruptRequested(),
+          terminalAssistantSupersedesBusy(),
         ] as const,
-      ([active, statusType, hasActiveAssistant, permissionPending, interrupted]) => {
+      ([active, statusType, hasActiveAssistant, permissionPending, interrupted, terminalAssistant]) => {
         const sessionID = props.sessionID
         if (clearWorkingStartTimer) {
           clearTimeout(clearWorkingStartTimer)
@@ -908,6 +992,7 @@ export function Prompt(props: PromptProps) {
           hasActiveWorkingAssistant: hasActiveAssistant,
           permissionPending,
           interrupted,
+          terminalAssistant,
         })) {
           return
         }
@@ -920,6 +1005,7 @@ export function Prompt(props: PromptProps) {
               hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
               permissionPending: Boolean(props.permissionPending),
               interrupted: interruptRequested(),
+              terminalAssistant: terminalAssistantSupersedesBusy(),
             })
           ) {
             workingStartedAtBySession.delete(sessionID)
@@ -1213,8 +1299,10 @@ export function Prompt(props: PromptProps) {
       localModel: local.model.current(),
       localOverride: localOverride?.model,
       localOverrideUpdatedAt: localOverride?.updatedAt,
+      localOverrideMessageID: localOverride?.messageID,
       userModel,
       userModelCreatedAt: lastUserMessage()?.time.created,
+      userMessageID: lastUserMessage()?.id,
       sessionModel,
       agentModel,
     })
@@ -1228,8 +1316,10 @@ export function Prompt(props: PromptProps) {
       localVariant: local.model.variant.current(selectedModel),
       hasLocalVariantOverride: local.model.variant.hasOverride(selectedModel),
       localVariantOverrideUpdatedAt: localVariantOverride?.updatedAt,
+      localVariantOverrideMessageID: localVariantOverride?.messageID,
       userModel: lastUserMessage()?.model,
       userModelCreatedAt: lastUserMessage()?.time.created,
+      userMessageID: lastUserMessage()?.id,
       sessionModel,
     })
   })
@@ -2077,7 +2167,7 @@ export function Prompt(props: PromptProps) {
 
   async function deliverPrompt(
     request: PromptAsyncInput,
-    options?: { retry?: boolean; notify?: boolean; forceAccepted?: boolean },
+    options?: { retry?: boolean; notify?: boolean; forceAccepted?: boolean; queuedBehindActiveTurn?: boolean },
   ) {
     const retry = options?.retry === true
     const forceAccepted = options?.forceAccepted === true
@@ -2102,7 +2192,7 @@ export function Prompt(props: PromptProps) {
           return
         }
         if (action === "accept") {
-          acceptPendingPromptDelivery(request)
+          acceptPendingPromptDelivery(request, options?.queuedBehindActiveTurn)
           return
         }
         if (action === "queue") {
@@ -2127,7 +2217,7 @@ export function Prompt(props: PromptProps) {
               return
             }
           }
-          acceptPendingPromptDelivery(request)
+          acceptPendingPromptDelivery(request, options?.queuedBehindActiveTurn)
           schedulePendingPromptRetry()
           return
         }
@@ -2174,6 +2264,36 @@ export function Prompt(props: PromptProps) {
 
   createEffect(() => {
     if (sdk.connection.status === "connected") wakePendingPromptRetry(true)
+  })
+
+  createEffect(() => {
+    const sessionID = props.sessionID
+    if (!sessionID) {
+      acceptedPromptRecoveryKey = undefined
+      return
+    }
+    pendingPromptDeliveryRevision()
+    const deliveries = pendingPromptDeliveriesForSession(sessionID)
+    if (
+      !shouldRecoverAcceptedPromptDeliveries({
+        statusType: status().type,
+        statusSupersededByTerminalAssistant: terminalAssistantSupersedesBusy(),
+        deliveries,
+      })
+    ) {
+      acceptedPromptRecoveryKey = undefined
+      return
+    }
+    const recoveryKey = deliveries
+      .filter((delivery) => delivery.state === "accepted" && delivery.queuedBehindActiveTurn)
+      .map((delivery) => pendingPromptDeliveryKey(delivery.request))
+      .sort()
+      .join("|")
+    if (!recoveryKey || recoveryKey === acceptedPromptRecoveryKey) return
+    acceptedPromptRecoveryKey = recoveryKey
+    // A healthy RunningThenRun handoff stays busy. Idle, including a terminal assistant superseding stale busy state,
+    // means the accepted queued turn lost its runner queue state.
+    wakePendingPromptRetry(true)
   })
 
   createEffect(() => {
@@ -2483,14 +2603,17 @@ export function Prompt(props: PromptProps) {
         created: optimisticCreated,
         parts: skillPromptParts,
       })
-      void deliverPrompt({
-        sessionID,
-        messageID,
-        agent: agent.name,
-        model: selectedModel,
-        variant,
-        parts: skillPromptParts,
-      })
+      void deliverPrompt(
+        {
+          sessionID,
+          messageID,
+          agent: agent.name,
+          model: selectedModel,
+          variant,
+          parts: skillPromptParts,
+        },
+        { queuedBehindActiveTurn: workingStatusActive() },
+      )
       if (editorParts.length > 0) editor.markSelectionSent()
     } else if (slashInvocation && slashServerCommand) {
       void sdk.client.session.command({
@@ -2519,14 +2642,17 @@ export function Prompt(props: PromptProps) {
         created: optimisticCreated,
         parts: promptParts,
       })
-      void deliverPrompt({
-        sessionID,
-        messageID,
-        agent: agent.name,
-        model: selectedModel,
-        variant,
-        parts: promptParts,
-      })
+      void deliverPrompt(
+        {
+          sessionID,
+          messageID,
+          agent: agent.name,
+          model: selectedModel,
+          variant,
+          parts: promptParts,
+        },
+        { queuedBehindActiveTurn: workingStatusActive() },
+      )
       if (editorParts.length > 0) editor.markSelectionSent()
     }
     input.extmarks.clear()
@@ -3161,16 +3287,6 @@ export function Prompt(props: PromptProps) {
     }
   })
   const activeWorkingAssistant = createMemo(findActiveWorkingAssistant)
-  const workingStatusActive = createMemo(
-    () =>
-      !interruptRequested() &&
-      (compactionActive() ||
-        !shouldClearWorkingStartedAt({
-          statusType: status().type,
-          hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
-          permissionPending: Boolean(props.permissionPending),
-        })),
-  )
   const activityStatusType = createMemo(() =>
     workingStatusActive() && status().type === "idle" ? "busy" : status().type,
   )

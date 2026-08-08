@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "fs/promises"
 import path from "node:path"
 import { tmpdir } from "../fixture/fixture"
 import { activateTsm } from "../../src/mend/config/tsm"
-import { resolveWorktreeShortcutTarget, runtimeArgsForSessionShortcut, runtimeEnv } from "../../src/mend/cli/public-bin"
+import { resolvePublicBinCommand, resolveWorktreeShortcutTarget, runtimeArgsForSessionShortcut, runtimeEnv } from "../../src/mend/cli/public-bin"
 import { resolveCompiledRuntimeBinary } from "../../src/mend/runtime/system"
 
 const publicBin = path.resolve(import.meta.dir, "../../src/mend/cli/public-bin.ts")
@@ -91,6 +91,14 @@ function status(input: {
 }
 
 describe("mend public worktree shortcuts", () => {
+  test("keeps durable services on the public launcher instead of a source entrypoint", () => {
+    expect(resolvePublicBinCommand("/runtime/mendcode", undefined, "/runtime/mendcode/src/mend/cli/public-bin.ts")).toBe(
+      "/runtime/mendcode/bin/mend",
+    )
+    expect(resolvePublicBinCommand("/runtime/mendcode", undefined, "/usr/local/bin/mend")).toBe("/usr/local/bin/mend")
+    expect(resolvePublicBinCommand("/runtime/mendcode", "/custom/mend", "/ignored/public-bin.ts")).toBe("/custom/mend")
+  })
+
   test("does not leak the runtime project config directory into child runtimes", () => {
     const root = "/runtime/mendcode"
     const env = runtimeEnv(root, {

@@ -271,7 +271,18 @@ MendCode-native and uses `@pierre/diffs` for patch structure.
 
 ## Loop Workflows
 
-Loop Workflows are durable agent workflows for objectives that should run across multiple inspected iterations.
+Loop Workflows are durable agent workflows for verified goals, recurring jobs,
+and exact-count runs. Completion and cadence are independent contracts:
+
+- `max-goal` uses concrete completion criteria and finishes as soon as the goal
+  is verified. A positive `maxTurns` is an optional safety cap, not a schedule.
+- `unbounded-monitor` repeatedly executes the objective on its manual, interval,
+  daily, self-paced, adaptive, or external-signal trigger. Omit `maxTurns` and
+  stop it explicitly when the recurring job is no longer needed.
+- `fixed` uses a positive `maxTurns` for exactly bounded iterations.
+
+A recurring loop's objective describes the work for each wakeup; it is not an
+early-completion condition after the first successful run.
 
 Core commands:
 
@@ -288,6 +299,13 @@ For a durable report-only/read-only workflow, `--execute --report-only` wakes th
 
 Supervised completion can combine allowlisted executable validations, evidence-only success checks, independent judgment, deterministic rubric coverage, authenticated local HTTP signal ingress, audited non-critical overrides, and bounded append-triggered artifact retention.
 
+The per-project service persists scheduler state, repairs overdue wakeups, and
+uses leases to prevent duplicate execution. `/loops` presents the persisted
+`nextWakeup` as a live countdown alongside scheduler health and bounded evidence.
+Permission or user-decision gates move the current run to durable `needs_input`;
+providing input resumes that run rather than completing, failing, or duplicating
+the workflow.
+
 See [Loop Workflows](loop-workflows.md) for lifecycle, monitor, Agent View behavior, and service details.
 
 Important release notes for this page:
@@ -297,6 +315,8 @@ Important release notes for this page:
 - run journals record created, activated, wake, started, completed, failed, paused, resumed, and stopped events
 - report-only/read-only workflow contracts suppress mutation and shell/subagent tools during execution
 - service mode is per project and requests report-only execution by default, while the durable workflow contract remains authoritative
+- scheduled wakeups survive closing the TUI when the project service is running; persisted scheduler state remains the source of truth
+- `needs_input` is a durable wait on the existing run, not a terminal state or a reason to recreate the loop
 
 ## Memory, Memory Page, And Dream
 

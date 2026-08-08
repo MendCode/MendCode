@@ -1,9 +1,5 @@
 import { Permission } from "@/permission"
-import type {
-  WorkflowPermissionPolicy,
-  WorkflowTask,
-  WorkflowWorkspacePolicy,
-} from "./workflow"
+import type { WorkflowPermissionPolicy, WorkflowTask, WorkflowWorkspacePolicy } from "./workflow"
 
 const EDIT_TOOLS = ["edit", "write", "apply_patch"] as const
 const MUTATING_TOOLS = ["bash", "shell"] as const
@@ -27,28 +23,35 @@ export const effectivePolicy = (
   task: WorkflowPermissionPolicy | undefined,
 ): WorkflowPermissionPolicy | undefined => {
   if (!workflow && !task) return undefined
-  const mode = workflow?.mode === "report-only" || task?.mode === "report-only"
-    ? "report-only" as const
-    : workflow?.mode === "custom" || task?.mode === "custom"
-      ? "custom" as const
-      : "normal" as const
-  const allowedTools = workflow?.allowedTools && task?.allowedTools
-    ? workflow.allowedTools.filter((tool) => task.allowedTools?.includes(tool))
-    : workflow?.allowedTools ?? task?.allowedTools
+  const mode =
+    workflow?.mode === "report-only" || task?.mode === "report-only"
+      ? ("report-only" as const)
+      : workflow?.mode === "custom" || task?.mode === "custom"
+        ? ("custom" as const)
+        : ("normal" as const)
+  const allowedTools =
+    workflow?.allowedTools && task?.allowedTools
+      ? workflow.allowedTools.filter((tool) => task.allowedTools?.includes(tool))
+      : (workflow?.allowedTools ?? task?.allowedTools)
   const required = Array.from(
     new Set([...(workflow?.approvalRequiredFor ?? []), ...(task?.approvalRequiredFor ?? [])].map(approvalPermission)),
   )
-  const approved = workflow?.approvedActions && task?.approvedActions
-    ? workflow.approvedActions
-        .filter((action) => task.approvedActions?.some((candidate) => approvalPermission(candidate) === approvalPermission(action)))
-        .map(approvalPermission)
-    : (workflow?.approvedActions ?? task?.approvedActions)?.map(approvalPermission)
+  const approved =
+    workflow?.approvedActions && task?.approvedActions
+      ? workflow.approvedActions
+          .filter((action) =>
+            task.approvedActions?.some((candidate) => approvalPermission(candidate) === approvalPermission(action)),
+          )
+          .map(approvalPermission)
+      : (workflow?.approvedActions ?? task?.approvedActions)?.map(approvalPermission)
   return {
     mode,
     ...(allowedTools === undefined ? {} : { allowedTools }),
     ...(required.length ? { approvalRequiredFor: required } : {}),
     ...(approved?.length ? { approvedActions: approved } : {}),
-    ...(workflow?.allowEdits === false || task?.allowEdits === false || mode === "report-only" ? { allowEdits: false } : {}),
+    ...(workflow?.allowEdits === false || task?.allowEdits === false || mode === "report-only"
+      ? { allowEdits: false }
+      : {}),
     ...(workflow?.allowMutatingCommands === false || task?.allowMutatingCommands === false || mode === "report-only"
       ? { allowMutatingCommands: false }
       : {}),
@@ -56,6 +59,29 @@ export const effectivePolicy = (
       ? { allowExternalSend: false }
       : {}),
   }
+}
+
+export const permissionPolicyForMode = (
+  policy: WorkflowPermissionPolicy | undefined,
+  mode: WorkflowPermissionPolicy["mode"] | undefined,
+): WorkflowPermissionPolicy | undefined => {
+  if (!mode) return policy
+  if (mode === "normal") {
+    return {
+      mode,
+      ...(policy?.allowedTools === undefined ? {} : { allowedTools: policy.allowedTools }),
+      allowEdits: true,
+      allowMutatingCommands: true,
+      allowExternalSend: true,
+    }
+  }
+  if (mode === "report-only") {
+    return {
+      mode,
+      ...(policy?.allowedTools === undefined ? {} : { allowedTools: policy.allowedTools }),
+    }
+  }
+  return policy ?? { mode }
 }
 
 export const effectiveWorkspace = (
@@ -84,6 +110,13 @@ export const permissionRules = (
     for (const tool of policy.allowedTools) {
       rules.push(...sideEffectRules(approvalPermission(tool), "allow"))
     }
+  }
+
+  if (policy?.mode === "normal" && policy.allowedTools === undefined) {
+    for (const tool of EDIT_TOOLS) rules.push(...sideEffectRules(tool === "write" ? "edit" : tool, "allow"))
+    for (const tool of MUTATING_TOOLS) rules.push(...sideEffectRules(tool, "allow"))
+    for (const tool of CHILD_TOOLS) rules.push(...sideEffectRules(tool, "allow"))
+    for (const tool of EXTERNAL_SIDE_EFFECT_TOOLS) rules.push(...sideEffectRules(tool, "allow"))
   }
 
   for (const action of required) {
@@ -125,9 +158,12 @@ export const allowedToolFlags = (
 }
 
 export const workspaceInstruction = (workspace: WorkflowWorkspacePolicy | undefined) => {
-  if (workspace?.mode === "read-only") return "Workspace policy: read-only. Inspect and report only; do not edit files or run mutating shell commands."
-  if (workspace?.mode === "per-loop-worktree") return "Workspace policy: per-loop-worktree. Do not create, promote, or remove worktrees from this task."
-  if (workspace?.mode === "per-run-worktree") return "Workspace policy: per-run-worktree. Do not create, promote, or remove worktrees from this task."
+  if (workspace?.mode === "read-only")
+    return "Workspace policy: read-only. Inspect and report only; do not edit files or run mutating shell commands."
+  if (workspace?.mode === "per-loop-worktree")
+    return "Workspace policy: per-loop-worktree. Do not create, promote, or remove worktrees from this task."
+  if (workspace?.mode === "per-run-worktree")
+    return "Workspace policy: per-run-worktree. Do not create, promote, or remove worktrees from this task."
   return "Workspace policy: in-place. Keep changes minimal and auditable."
 }
 

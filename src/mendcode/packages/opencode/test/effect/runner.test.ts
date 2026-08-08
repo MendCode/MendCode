@@ -358,6 +358,21 @@ describe("Runner", () => {
   )
 
   it.live(
+    "cancel resolves callers when work has not started yet",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const fiber = yield* runner.ensureRunning(Effect.never.pipe(Effect.as("never"))).pipe(Effect.forkChild)
+      while (!runner.busy) yield* Effect.yieldNow
+
+      yield* runner.cancel
+
+      expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)
+      expect(Boolean(runner.busy)).toBe(false)
+    }),
+  )
+
+  it.live(
     "cancel on idle is a no-op",
     Effect.gen(function* () {
       const s = yield* Scope.Scope

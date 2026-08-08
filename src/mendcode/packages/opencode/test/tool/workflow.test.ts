@@ -1,4 +1,4 @@
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { ModelID, ProviderID } from "@/provider/schema"
@@ -8,6 +8,7 @@ import { WorkflowRunner } from "@/session/workflow-runner"
 import { WorkflowPlan } from "@/session/workflow-plan"
 import { ToolRegistry } from "@/tool/registry"
 import type { Tool } from "@/tool/tool"
+import { resolveWorkflowOriginSessionID } from "@/tool/workflow"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
@@ -56,6 +57,14 @@ afterEach(async () => {
 })
 
 describe("tool.workflow", () => {
+  test("maps the current origin alias to the invoking session", () => {
+    const current = SessionID.make("ses_workflow_tool_current")
+    expect(resolveWorkflowOriginSessionID(undefined, current)).toBe(current)
+    expect(resolveWorkflowOriginSessionID("current", current)).toBe(current)
+    expect(resolveWorkflowOriginSessionID(" CURRENT ", current)).toBe(current)
+    expect(resolveWorkflowOriginSessionID("ses_other", current)).toBe(SessionID.make("ses_other"))
+  })
+
   const it = testEffect(
     Layer.mergeAll(
       ToolRegistry.defaultLayer,
@@ -67,6 +76,7 @@ describe("tool.workflow", () => {
           start: (runID) => Effect.sync(() => void runID),
           run: () => Effect.void,
           stop: () => Effect.void,
+          setPermissionMode: () => Effect.die("unused workflow runner method"),
         }),
       ),
     ),
@@ -87,11 +97,14 @@ describe("tool.workflow", () => {
           })).find((item) => item.id === "workflow")
           if (!tool) throw new Error("Workflow tool not found")
           expect(tool.description).toContain("Do not poll")
+          expect(tool.description).toContain("Every task includes dependsOn")
+          expect(tool.description).toContain("maxFanOut")
 
           const context = { ...baseContext, sessionID: parent.id, ask: () => Effect.void }
           const preview = yield* tool.execute({ action: "preview", plan }, context)
           expect(preview.metadata.phaseCount).toBe(1)
           expect(preview.metadata.taskCount).toBe(1)
+          expect(preview.metadata.phases?.[0]).toMatchObject({ ordinal: 1, name: "Synthesis", state: "pending" })
           expect(preview.output).toContain("max_concurrency")
           expect(preview.output).toContain("preview_only: true")
 
@@ -106,9 +119,13 @@ describe("tool.workflow", () => {
           expect(saved.metadata.revisionID).toBeString()
           if (!saved.metadata.revisionID) throw new Error("Workflow revision was not returned")
 
-          const started = yield* tool.execute({ action: "start", revisionID: saved.metadata.revisionID }, context)
+          const started = yield* tool.execute(
+            { action: "start", revisionID: saved.metadata.revisionID, originSessionID: "current" },
+            context,
+          )
           expect(started.title).toContain("Started workflow")
           expect(started.metadata.state).toBe("queued")
+          expect(started.metadata.phases?.[0]).toMatchObject({ ordinal: 1, name: "Synthesis", state: "pending" })
           expect(started.output).toContain("run_id:")
           expect(started.output).toContain("execution_mode: detached")
           expect(started.output).toContain("do not poll")

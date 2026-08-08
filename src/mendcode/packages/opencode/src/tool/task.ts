@@ -196,7 +196,11 @@ export const Parameters = Schema.Struct({
   subagent_type: Schema.String.annotate({ description: "The type of specialized agent to use for this task" }),
   model: Schema.optional(ConfigModelID).annotate({
     description:
-      "Optional model to use for this subagent in provider/model-id format. Must be one of the models available in MendCode.",
+      "Optional model to use for this subagent in provider/model-id format. A trailing #variant shorthand is accepted.",
+  }),
+  variant: Schema.optional(Schema.String).annotate({
+    description:
+      "Optional model variant or reasoning effort for this subagent, for example low, high, or max. Must be supported by the selected provider/model.",
   }),
   task_id: Schema.optional(Schema.String).annotate({
     description:
@@ -272,6 +276,68 @@ export const TaskTool = Tool.define(
         maxChildren: cfg.experimental?.subagent_max_children ?? SUBAGENT_DEFAULT_MAX_CHILDREN,
         maxDescendants: cfg.experimental?.subagent_max_descendants ?? SUBAGENT_DEFAULT_MAX_DESCENDANTS,
       }
+
+      const msg = yield* Effect.sync(() => MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }))
+      if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
+
+      const explicitVariant = params.variant?.trim() || undefined
+      const modelInput = params.model?.trim()
+      const variantSeparator = modelInput?.lastIndexOf("#") ?? -1
+      const shorthandVariant =
+        modelInput && variantSeparator > modelInput.indexOf("/") && variantSeparator < modelInput.length - 1
+          ? modelInput.slice(variantSeparator + 1)
+          : undefined
+      if (explicitVariant && shorthandVariant && explicitVariant !== shorthandVariant) {
+        return yield* Effect.fail(
+          new Error(
+            `Conflicting subagent variants: model requests "${shorthandVariant}" but variant requests "${explicitVariant}".`,
+          ),
+        )
+      }
+      const requestedModel = modelInput
+        ? Provider.parseModel(shorthandVariant ? modelInput.slice(0, variantSeparator) : modelInput)
+        : undefined
+      const configuredSubagentModel = cfg.subagent_model ? Provider.parseModel(cfg.subagent_model) : undefined
+      let model = requestedModel ??
+        next.model ??
+        configuredSubagentModel ?? {
+          modelID: msg.info.modelID,
+          providerID: msg.info.providerID,
+        }
+      const variant =
+        explicitVariant ??
+        shorthandVariant ??
+        (requestedModel
+          ? undefined
+          : next.model
+            ? next.variant
+            : configuredSubagentModel
+              ? cfg.subagent_variant
+              : msg.info.variant)
+      yield* ctx.metadata({
+        title: params.description,
+        metadata: {
+          ...(session ? { sessionId: session.id } : {}),
+          model,
+          variant,
+          status: params.background ? "started" : "running",
+          rootSessionID: tree.rootSessionID,
+          depth: tree.depth,
+        },
+      })
+      const resolved = yield* provider.getModel(model.providerID, model.modelID)
+      model = { providerID: resolved.providerID, modelID: resolved.id }
+      if (variant) {
+        const available = Object.keys(resolved.variants ?? {})
+        if (!available.includes(variant)) {
+          const options = available.length
+            ? `Available variants: ${available.join(", ")}.`
+            : "This model exposes no selectable variants."
+          return yield* Effect.fail(
+            new Error(`Variant "${variant}" is not available for ${model.providerID}/${model.modelID}. ${options}`),
+          )
+        }
+      }
       const nextSession =
         session ??
         (yield* sessions.create({
@@ -310,50 +376,17 @@ export const TaskTool = Tool.define(
             })) ?? []),
           ],
         }))
-
-      const msg = yield* Effect.sync(() => MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }))
-      if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
-
-      const requestedModel = params.model ? Provider.parseModel(params.model) : undefined
-      const configuredSubagentModel = cfg.subagent_model ? Provider.parseModel(cfg.subagent_model) : undefined
-      let model = requestedModel ??
-        next.model ??
-        configuredSubagentModel ?? {
-          modelID: msg.info.modelID,
-          providerID: msg.info.providerID,
-        }
-      const variant = requestedModel
-        ? undefined
-        : next.model
-          ? next.variant
-          : configuredSubagentModel
-            ? cfg.subagent_variant
-            : msg.info.variant
       yield* ctx.metadata({
         title: params.description,
         metadata: {
           sessionId: nextSession.id,
           model,
+          variant,
           status: params.background ? "started" : "running",
           rootSessionID: tree.rootSessionID,
           depth: tree.depth,
         },
       })
-
-      if (requestedModel || next.model || configuredSubagentModel) {
-        const resolved = yield* provider.getModel(model.providerID, model.modelID)
-        model = { providerID: resolved.providerID, modelID: resolved.id }
-        yield* ctx.metadata({
-          title: params.description,
-          metadata: {
-            sessionId: nextSession.id,
-            model,
-            status: params.background ? "started" : "running",
-            rootSessionID: tree.rootSessionID,
-            depth: tree.depth,
-          },
-        })
-      }
 
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
@@ -417,6 +450,7 @@ export const TaskTool = Tool.define(
           metadata: {
             sessionId: nextSession.id,
             model,
+            variant,
             status: input.status,
             rootSessionID: tree.rootSessionID,
             depth: tree.depth,

@@ -296,7 +296,10 @@ export const make = <A, E = never>(
           Effect.gen(function* () {
             yield* options?.before ?? Effect.void
             yield* Fiber.interrupt(st.run.fiber)
-            yield* Deferred.await(st.run.done).pipe(Effect.exit, Effect.asVoid)
+            // The interrupted work normally completes this in finishRun. Close
+            // it here as well so callers cannot hang if cancellation wins the
+            // brief race before the forked work begins its on-exit path.
+            yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
             yield* idleIfCurrent()
           }),
           { _tag: "Idle" } as const,
@@ -307,7 +310,7 @@ export const make = <A, E = never>(
             if (options?.cancelPending) yield* cancelPendingHandles(st.next)
             yield* options?.before ?? Effect.void
             yield* Fiber.interrupt(st.run.fiber)
-            yield* Deferred.await(st.run.done).pipe(Effect.exit, Effect.asVoid)
+            yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
           }),
           options?.cancelPending ? { _tag: "Running", run: st.run } as const : st,
         ] as const

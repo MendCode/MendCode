@@ -338,10 +338,22 @@ See [Changes Review](docs/changes-review.md).
 ### Loop Workflows
 
 Loop Workflows are durable, monitorable loop sessions for objectives that should
-keep moving across controlled iterations. A loop starts from `/loop`, is
-supervised in `/loops`, becomes an activated root session, records run/journal
-events, appears in Agent View, and can be woken manually or by a per-project
-background service.
+keep moving across controlled iterations. Completion semantics and wakeup
+cadence are separate, so the same runtime supports three clear shapes:
+
+| Shape | Contract | When it stops |
+| --- | --- | --- |
+| Goal | `budgetMode: "max-goal"` plus concrete `completionCriteria` | As soon as completion is verified; an optional positive `maxTurns` is only a safety cap. |
+| Recurring job | `budgetMode: "unbounded-monitor"` plus an `interval`, `daily`, `self-paced`, `adaptive`, or `external-signal` trigger | When explicitly stopped or blocked by a safety, budget, approval, or input gate. Omit `maxTurns`. |
+| Bounded run | `budgetMode: "fixed"` plus a positive `maxTurns` | After the requested number of iterations unless stopped or blocked. |
+
+A recurring job still has an objective, but the objective describes what each
+wakeup should do rather than acting as an early-completion condition. A loop
+starts from `/loop`, is supervised in `/loops`, becomes an activated root
+session, records run/journal events, appears in Agent View, and can be woken
+manually or by a per-project background service. The dashboard keeps its next
+wakeup countdown live, shows scheduler health and evidence, and makes durable
+`needs_input` permission waits visible instead of presenting them as failures.
 
 <p align="center">
   <img src="docs/assets/screenshots/loop-workflow-created.png" alt="MendCode Loop Workflow receipt in chat" width="980">
@@ -589,6 +601,18 @@ Agents must keep these rules intact:
   for it or the request clearly includes that intent. Inspect existing loops
   before creating another one; never use `maxTurns: 0` or recreate an invalid
   `completed 0/0` workflow.
+- Choose the loop shape from intent: use `max-goal` with concrete completion
+  criteria for a verifiable goal, `unbounded-monitor` without `maxTurns` for a
+  recurring scheduled job, and `fixed` with a positive `maxTurns` only for an
+  exact iteration count. Do not spread goal work across the full safety cap.
+- Treat cadence and completion as independent. `daily` uses `dailyAt` plus an
+  explicit timezone; interval and self-paced/adaptive/external-signal triggers
+  wake the same durable objective repeatedly. A scheduled loop's objective
+  describes each wakeup and does not imply early completion after the first run.
+- A `needs_input` state is a durable permission or user-decision wait. Resume
+  the same run after input arrives; do not report it as completed, failed, or a
+  reason to create a duplicate loop. In `/loops`, persisted `nextWakeup` is the
+  source of truth while the visible countdown is reactive presentation.
 - Use report-only/read-only execution for inspection and monitoring. An explicit
   request to write, edit, fix, implement, code, or create files permits normal
   execution for that workflow; keep destructive worktree actions preview-first.

@@ -1,12 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 
+import { Bus } from "@/bus"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
+import { WorkflowRunTable, WorkflowTaskAttemptTable } from "@/session/session.sql"
 import { Workflow } from "@/session/workflow"
 import { WorkflowPlan } from "@/session/workflow-plan"
 import * as WorkflowScheduler from "@/session/workflow-scheduler"
 import * as WorkflowService from "@/session/workflow-service"
+import { Database, eq } from "@/storage/db"
 import { testEffect } from "../lib/effect"
 
 const phase = (id: string, ordinal: number, taskIDs: string[]) => ({
@@ -113,10 +116,104 @@ describe("workflow scheduler readiness", () => {
   })
 })
 
-const schedulerLayer = WorkflowScheduler.layer.pipe(Layer.provideMerge(WorkflowService.defaultLayer))
-const it = testEffect(Layer.mergeAll(Session.defaultLayer, schedulerLayer))
+const bus = Bus.layer
+const workflowLayer = WorkflowService.layer.pipe(Layer.provide(bus))
+const schedulerLayer = WorkflowScheduler.layer.pipe(Layer.provideMerge(workflowLayer))
+const it = testEffect(Layer.mergeAll(Session.defaultLayer, schedulerLayer, bus))
 
 describe("workflow scheduler persistence", () => {
+  it.instance("renews the scheduler lease while a claimed task is still running", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const workflow = yield* WorkflowService.Service
+      const scheduler = yield* WorkflowScheduler.Service
+      const origin = yield* sessions.create({ title: "Origin" })
+      const started = yield* workflow.start({ plan: graph(), originSessionID: origin.id })
+      expect((yield* scheduler.tick(started.run.id)).claimed.length).toBeGreaterThan(0)
+
+      Database.use((db) =>
+        db
+          .update(WorkflowRunTable)
+          .set({ lease_heartbeat_at: 1, lease_expires_at: 1 })
+          .where(eq(WorkflowRunTable.id, started.run.id))
+          .run(),
+      )
+      const before = Date.now()
+      expect(yield* scheduler.heartbeat(started.run.id)).toBe(true)
+      const lease = Database.use((db) =>
+        db
+          .select({ heartbeat: WorkflowRunTable.lease_heartbeat_at, expires: WorkflowRunTable.lease_expires_at })
+          .from(WorkflowRunTable)
+          .where(eq(WorkflowRunTable.id, started.run.id))
+          .get(),
+      )
+      expect(lease?.heartbeat).toBeGreaterThanOrEqual(before)
+      expect(lease?.expires).toBeGreaterThanOrEqual(before + 30_000)
+    }),
+  )
+
+  it.instance("rejects a task result paired with another task's attempt", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const workflow = yield* WorkflowService.Service
+      const scheduler = yield* WorkflowScheduler.Service
+      const origin = yield* sessions.create({ title: "Origin" })
+      const started = yield* workflow.start({ plan: graph(), originSessionID: origin.id })
+      const claims = (yield* scheduler.tick(started.run.id)).claimed
+      const claim = claims[0]
+      const other = claims[1]
+      if (!claim || !other) throw new Error("Expected two task claims")
+
+      const result = yield* scheduler
+        .finish({
+          runID: claim.runID,
+          taskID: other.taskID,
+          attemptID: claim.attemptID,
+          attempt: claim.attempt,
+          state: "completed",
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(result)).toBe(true)
+
+      const snapshot = yield* workflow.show(started.run.id)
+      expect(snapshot.tasks.find((task) => task.id === claim.taskID)?.state).toBe("queued")
+      expect(snapshot.tasks.find((task) => task.id === other.taskID)?.state).toBe("queued")
+      expect(
+        Database.use((db) =>
+          db
+            .select({ state: WorkflowTaskAttemptTable.state })
+            .from(WorkflowTaskAttemptTable)
+            .where(eq(WorkflowTaskAttemptTable.id, claim.attemptID))
+            .get()?.state,
+        ),
+      ).toBe("queued")
+    }),
+  )
+
+  it.instance("rejects retry shortcuts for pending tasks and phases", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const workflow = yield* WorkflowService.Service
+      const origin = yield* sessions.create({ title: "Origin" })
+      const started = yield* workflow.start({ plan: graph(), originSessionID: origin.id })
+
+      const taskRetry = yield* workflow.retryTask({
+        runID: started.run.id,
+        taskID: Workflow.WorkflowTaskID.make("investigator_1"),
+        actor: "test",
+      }).pipe(Effect.exit)
+      const phaseRetry = yield* workflow.retryPhase({
+        runID: started.run.id,
+        phaseID: Workflow.WorkflowPhaseID.make("research"),
+        actor: "test",
+      }).pipe(Effect.exit)
+
+      expect(Exit.isFailure(taskRetry)).toBe(true)
+      expect(Exit.isFailure(phaseRetry)).toBe(true)
+      expect((yield* workflow.events(started.run.id)).filter((event) => event.title.includes("retry queued"))).toEqual([])
+    }),
+  )
+
   it.instance("blocks before claiming work when the run token budget is exhausted", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
@@ -248,6 +345,64 @@ describe("workflow scheduler persistence", () => {
       yield* complete(final.claimed)
 
       expect((yield* workflow.show(started.run.id)).run.state).toBe("completed")
+      const notifications = yield* workflow.pendingNotifications(origin.id)
+      expect(notifications).toMatchObject([
+        {
+          parentSessionID: origin.id,
+          runID: started.run.id,
+          state: "completed",
+          title: "Scheduler graph",
+          background: true,
+        },
+      ])
+      yield* workflow.acknowledgeNotifications(notifications.map((notification) => notification.eventID))
+      expect(yield* workflow.pendingNotifications(origin.id)).toEqual([])
+    }),
+  )
+
+  it.instance("publishes a runner wake when a task session unlocks downstream work", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const workflow = yield* WorkflowService.Service
+      const scheduler = yield* WorkflowScheduler.Service
+      const bus = yield* Bus.Service
+      const origin = yield* sessions.create({ title: "Origin" })
+      const started = yield* workflow.start({ plan: retryGraph(), originSessionID: origin.id })
+      const claim = (yield* scheduler.tick(started.run.id)).claimed[0]
+      if (!claim) throw new Error("Expected a workflow task claim")
+
+      const taskSessionID = SessionID.make(`ses_${started.run.id}_${claim.taskID}`)
+      yield* scheduler.markStarted({
+        runID: claim.runID,
+        taskID: claim.taskID,
+        attemptID: claim.attemptID,
+        backgroundTaskID: taskSessionID,
+        backgroundGeneration: 1,
+      })
+
+      const startedSnapshot = yield* workflow.show(started.run.id)
+      expect(startedSnapshot.tasks.find((task) => task.id === claim.taskID)?.sessionID).toBe(taskSessionID)
+
+      let wakeRunID: string | undefined
+      const unsubscribe = yield* bus.subscribeCallback(WorkflowService.Event.RunWake, (event) => {
+        wakeRunID = event.properties.runID
+      })
+      try {
+        yield* workflow.finishTaskSession({
+          sessionID: taskSessionID,
+          backgroundGeneration: 1,
+          state: "completed",
+          summary: "Task completed",
+        })
+        yield* Effect.sleep("10 millis")
+      } finally {
+        unsubscribe()
+      }
+
+      const after = yield* workflow.show(started.run.id)
+      expect(after.tasks.find((task) => task.id === claim.taskID)?.state).toBe("completed")
+      expect(after.run.state).toBe("queued")
+      expect(wakeRunID).toBe(started.run.id)
     }),
   )
 

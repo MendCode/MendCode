@@ -74,6 +74,23 @@ describe("resolveSelectedPromptModel", () => {
     ).toEqual({ providerID: "openai", modelID: "gpt-5.5-fast" })
   })
 
+  test("keeps a local selection tied to the current turn after message hydration", () => {
+    expect(
+      resolveSelectedPromptModel({
+        hasSession: true,
+        sessionUsesSubagent: false,
+        localModel: { providerID: "openai", modelID: "gpt-5.5-fast" },
+        localOverride: { providerID: "openai", modelID: "gpt-5.5-fast" },
+        localOverrideUpdatedAt: 100,
+        localOverrideMessageID: "msg_current",
+        userModel: { providerID: "openai", modelID: "gpt-5.4" },
+        userModelCreatedAt: 200,
+        userMessageID: "msg_current",
+        sessionModel: { providerID: "openai", id: "gpt-5.4" },
+      }),
+    ).toEqual({ providerID: "openai", modelID: "gpt-5.5-fast" })
+  })
+
   test("keeps historical subagent model when there is no explicit override", () => {
     expect(
       resolveSelectedPromptModel({
@@ -118,6 +135,21 @@ describe("resolveSelectedPromptVariant", () => {
         localVariantOverrideUpdatedAt: 200,
         userModel: { variant: "low" },
         userModelCreatedAt: 100,
+      }),
+    ).toBe("fast")
+  })
+
+  test("keeps a local variant tied to the current turn after message hydration", () => {
+    expect(
+      resolveSelectedPromptVariant({
+        hasSession: true,
+        localVariant: "fast",
+        hasLocalVariantOverride: true,
+        localVariantOverrideUpdatedAt: 100,
+        localVariantOverrideMessageID: "msg_current",
+        userModel: { variant: "low" },
+        userModelCreatedAt: 200,
+        userMessageID: "msg_current",
       }),
     ).toBe("fast")
   })

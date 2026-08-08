@@ -1,13 +1,20 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 
+import { Bus } from "@/bus"
 import { LoopRunner } from "@/session/loop-runner"
 import { LoopWorkflow, Service as LoopWorkflowService } from "@/session/loop"
 import { SessionPrompt, type PromptInput } from "@/session/prompt"
 import * as Session from "@/session/session"
 import { WorkflowRunner } from "@/session/workflow-runner"
 import { WorkflowService } from "@/session/workflow-service"
-import { WorkflowDefinitionID, WorkflowRevisionID, WorkflowRunID, WorkflowTaskID, type WorkflowRun } from "@/session/workflow"
+import {
+  WorkflowDefinitionID,
+  WorkflowRevisionID,
+  WorkflowRunID,
+  WorkflowTaskID,
+  type WorkflowRun,
+} from "@/session/workflow"
 import type { WorkflowPlan } from "@/session/workflow-plan"
 import { WithInstance } from "../../src/project/with-instance"
 import { tmpdir } from "../fixture/fixture"
@@ -28,7 +35,11 @@ const plan: WorkflowPlan = {
   requiredGates: [],
 }
 
-function snapshot(state: WorkflowRun["state"], runID: WorkflowRunID, loopRunID?: string): WorkflowService.WorkflowSnapshot {
+function snapshot(
+  state: WorkflowRun["state"],
+  runID: WorkflowRunID,
+  loopRunID?: string,
+): WorkflowService.WorkflowSnapshot {
   return {
     definition: {
       id: definitionID,
@@ -119,6 +130,7 @@ function adapterLayers(input: {
   runner: (runID: string) => Effect.Effect<void, never>
 }) {
   return Layer.mergeAll(
+    Bus.defaultLayer,
     LoopWorkflow.defaultLayer,
     LoopRunner.defaultLayer,
     Session.defaultLayer,
@@ -138,8 +150,14 @@ function adapterLayers(input: {
         pause: unused,
         resume: unused,
         stop: unused,
+        setPermissionMode: unused,
+        resumeTaskSession: unused,
+        finishTaskSession: unused,
         retryTask: unused,
         retryPhase: unused,
+        pendingNotifications: unused,
+        acknowledgeNotifications: unused,
+        publishTerminalNotification: unused,
       }),
     ),
     Layer.succeed(
@@ -148,13 +166,14 @@ function adapterLayers(input: {
         start: () => Effect.void,
         run: input.runner,
         stop: () => Effect.void,
+        setPermissionMode: () => Effect.die("unused workflow runner method"),
       }),
     ),
   )
 }
 
 function runLoop<A, E>(effect: Effect.Effect<A, E, LoopWorkflowService>) {
-  return Effect.runPromise(effect.pipe(Effect.provide(LoopWorkflow.defaultLayer)))
+  return Effect.runPromise(effect.pipe(Effect.provide(Layer.mergeAll(Bus.defaultLayer, LoopWorkflow.defaultLayer))))
 }
 
 describe("loop workflow adapter", () => {
@@ -223,14 +242,17 @@ describe("loop workflow adapter", () => {
             }),
           ),
         )
-        await runLoop(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "adapter overlap test" })))
+        await runLoop(
+          LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "adapter overlap test" })),
+        )
 
         let runnerCalls = 0
         const result = await Effect.runPromise(
           LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })).pipe(
             Effect.provide(
               adapterLayers({
-                start: (input) => Effect.succeed(snapshot("queued", WorkflowRunID.make("existing-run"), "another-loop-run")),
+                start: (input) =>
+                  Effect.succeed(snapshot("queued", WorkflowRunID.make("existing-run"), "another-loop-run")),
                 show: (runID) => Effect.succeed(snapshot("completed", runID)),
                 runner: () =>
                   Effect.sync(() => {

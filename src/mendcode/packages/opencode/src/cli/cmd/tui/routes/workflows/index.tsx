@@ -4,12 +4,15 @@ import { For, Show, createEffect, createMemo, createResource, createSignal, onCl
 import type { OpencodeClient } from "@mendcode/sdk/v2"
 import { routeReturnTarget, useRoute, useRouteData } from "@tui/context/route"
 import { useSDK } from "@tui/context/sdk"
+import { useSync } from "@tui/context/sync"
 import { useTheme } from "@tui/context/theme"
 import { useToast } from "@tui/ui/toast"
 import { useDialog } from "@tui/ui/dialog"
 import { DialogConfirm } from "@tui/ui/dialog-confirm"
+import { DialogSelect } from "@tui/ui/dialog-select"
 import { CommandDeck, CommandDeckContext } from "@tui/component/command-deck"
 import {
+  workflowCurrentActivity,
   workflowMonitorFooter,
   workflowMonitorLayout,
   workflowMonitorRows,
@@ -25,6 +28,7 @@ import {
 } from "@tui/util/workflow-receipt"
 
 type WorkflowSnapshot = NonNullable<Awaited<ReturnType<OpencodeClient["workflow"]["show"]>>["data"]>
+type WorkflowPermissionMode = NonNullable<WorkflowSnapshot["run"]["permissionMode"]>
 
 function errorText(error: unknown) {
   if (error instanceof Error && error.message) return error.message
@@ -43,6 +47,12 @@ function numeric(value: unknown, fallback = 0) {
 
 function optionalNumeric(value: unknown) {
   return value === undefined ? undefined : numeric(value)
+}
+
+function permissionModeLabel(mode: WorkflowPermissionMode) {
+  if (mode === "report-only") return "report-only"
+  if (mode === "normal") return "normal"
+  return "custom"
 }
 
 function receipt(snapshot: WorkflowSnapshot): WorkflowReceiptSnapshot {
@@ -67,6 +77,7 @@ function receipt(snapshot: WorkflowSnapshot): WorkflowReceiptSnapshot {
     },
     phases: snapshot.phases.map((phase) => ({
       id: phase.id,
+      ordinal: phase.ordinal,
       name: phase.name,
       taskIDs: snapshot.revision.plan.phases.find((item) => item.id === phase.id)?.taskIDs,
       state: phase.state,
@@ -83,7 +94,11 @@ function receipt(snapshot: WorkflowSnapshot): WorkflowReceiptSnapshot {
       startedAt: optionalNumeric(task.startedAt),
       completedAt: optionalNumeric(task.completedAt),
     })),
-    events: snapshot.events.map((event) => ({ type: event.type, summary: event.summary, createdAt: numeric(event.createdAt) })),
+    events: snapshot.events.map((event) => ({
+      type: event.type,
+      summary: event.summary,
+      createdAt: numeric(event.createdAt),
+    })),
     usage: snapshot.usage
       ? {
           inputTokens: numeric(snapshot.usage.inputTokens),
@@ -106,6 +121,7 @@ export function Workflows() {
   const data = useRouteData("workflows")
   const route = useRoute()
   const sdk = useSDK()
+  const sync = useSync()
   const toast = useToast()
   const dialog = useDialog()
   const dimensions = useTerminalDimensions()
@@ -140,6 +156,55 @@ export function Workflows() {
     const loaded = detail.latest ?? detail()
     return loaded?.run.id === item?.run.id ? loaded : item
   })
+  const currentActivity = createMemo(() => {
+    const item = current()
+    if (!item) return
+    if (workflowReceiptStateIsTerminal(item.run.state)) return
+    const sessionIDs = new Set(
+      [item.run.rootSessionID, ...item.tasks.map((task) => task.sessionID)].filter(
+        (sessionID): sessionID is string => Boolean(sessionID),
+      ),
+    )
+    const pendingSessionIDs = [...sessionIDs]
+    while (pendingSessionIDs.length) {
+      const parentID = pendingSessionIDs.pop()
+      if (!parentID) continue
+      for (const session of sync.data.session) {
+        if (session.parentID !== parentID || sessionIDs.has(session.id)) continue
+        sessionIDs.add(session.id)
+        pendingSessionIDs.push(session.id)
+      }
+    }
+    const sessionIDList = [...sessionIDs]
+    const activeTools = sessionIDList.flatMap((sessionID) =>
+      (sync.data.message[sessionID] ?? []).flatMap((message) =>
+        (sync.data.part[message.id] ?? []).flatMap((part) => {
+          if (part.type !== "tool") return []
+          if (part.state.status !== "pending" && part.state.status !== "running") return []
+          return [{ tool: part.tool, status: part.state.status }]
+        }),
+      ),
+    )
+    const statuses = sessionIDList.flatMap((sessionID) => {
+      const status = sync.data.session_status[sessionID]
+      return status ? [status] : []
+    })
+    const pendingPermissions = sessionIDList.reduce(
+      (total, sessionID) => total + (sync.data.permission[sessionID]?.length ?? 0),
+      0,
+    )
+    return workflowCurrentActivity({
+      runState: item.run.state,
+      statuses,
+      activeTools,
+      pendingPermissions,
+      waitingTasks: item.tasks.filter((task) => task.state === "needs_input").length,
+    })
+  })
+  const currentPermissionMode = createMemo<WorkflowPermissionMode>(() => {
+    const item = current()
+    return item?.run.permissionMode ?? item?.revision.plan.permissions?.mode ?? "normal"
+  })
   const currentReceipt = createMemo(() => {
     const item = current()
     return item ? receipt(item) : undefined
@@ -150,8 +215,17 @@ export function Workflows() {
     const item = current()
     return item ? workflowMonitorTaskRows(receipt(item)) : []
   })
-  const selectedTask = createMemo(() => taskRows().find((task) => task.state === "failed" || task.state === "blocked" || task.state === "needs_input") ?? taskRows()[0])
-  const selectedPhase = createMemo(() => current()?.phases.find((phase) => phase.state === "failed" || phase.state === "blocked" || phase.state === "needs_input") ?? current()?.phases[0])
+  const selectedTask = createMemo(
+    () =>
+      taskRows().find((task) => task.state === "failed" || task.state === "blocked" || task.state === "needs_input") ??
+      taskRows()[0],
+  )
+  const selectedPhase = createMemo(
+    () =>
+      current()?.phases.find(
+        (phase) => phase.state === "failed" || phase.state === "blocked" || phase.state === "needs_input",
+      ) ?? current()?.phases[0],
+  )
   const summary = createMemo(() => {
     const snapshot = currentReceipt()
     if (!snapshot) return "no runs"
@@ -159,9 +233,7 @@ export function Workflows() {
     const completed = snapshot.tasks.filter((task) => task.state === "completed").length
     return `${completed}/${taskCount} tasks · ${snapshot.phases.length} phases`
   })
-  const railScrollbarVisible = createMemo(
-    () => items().length * 4 > Math.max(4, dimensions().height - 10),
-  )
+  const railScrollbarVisible = createMemo(() => items().length * 4 > Math.max(4, dimensions().height - 10))
 
   createEffect(() => {
     const requested = data.selectedID
@@ -190,7 +262,11 @@ export function Workflows() {
     const item = current()
     if (!item) return
     if (action === "stop") {
-      const confirmed = await DialogConfirm.show(dialog, "Stop workflow", `Stop ${item.definition.name || item.run.id}?`)
+      const confirmed = await DialogConfirm.show(
+        dialog,
+        "Stop workflow",
+        `Stop ${item.definition.name || item.run.id}?`,
+      )
       dialog.clear()
       if (!confirmed) return
     }
@@ -209,17 +285,88 @@ export function Workflows() {
     const item = current()
     const task = selectedTask()
     if (!item || !task) return
-    const response = await sdk.client.workflow.retryTask({ runID: item.run.id, taskID: task.id, reason: "TUI task retry" })
+    if (!["failed", "blocked", "needs_input", "stopped"].includes(task.state)) {
+      toast.show({
+        variant: "info",
+        message: `Task ${task.name} is ${task.state}; there is nothing to retry.`,
+        duration: 3000,
+      })
+      return
+    }
+    const response = await sdk.client.workflow.retryTask({
+      runID: item.run.id,
+      taskID: task.id,
+      reason: "TUI task retry",
+    })
     if (response.error) throw new Error(errorText(response.error))
     setRefresh((value) => value + 1)
     toast.show({ variant: "success", message: `Task ${task.name} queued for retry.`, duration: 2500 })
+  }
+
+  async function setPermissionMode(mode: WorkflowPermissionMode) {
+    const item = current()
+    if (!item) return
+    const response = await sdk.client.workflow.permissionMode({
+      runID: item.run.id,
+      mode,
+      reason: "TUI permission mode",
+    })
+    if (response.error) throw new Error(errorText(response.error))
+    setRefresh((value) => value + 1)
+    toast.show({
+      variant: "success",
+      message: `Workflow permission mode: ${permissionModeLabel(mode)}.`,
+      duration: 3000,
+    })
+  }
+
+  function showPermissionMode() {
+    dialog.replace(() => (
+      <DialogSelect
+        title="Workflow permission mode"
+        current={currentPermissionMode()}
+        options={[
+          {
+            title: "Normal",
+            value: "normal" as const,
+            description: "Allow workflow side effects and release pending permission requests.",
+          },
+          {
+            title: "Report-only",
+            value: "report-only" as const,
+            description: "Deny edits, commands, child agents, and external side effects.",
+          },
+          {
+            title: "Custom",
+            value: "custom" as const,
+            description: "Use the permission policy declared by the workflow plan.",
+          },
+        ]}
+        onSelect={(option) => {
+          dialog.clear()
+          void setPermissionMode(option.value).catch((error) => toast.error(error))
+        }}
+      />
+    ))
   }
 
   async function retryPhase() {
     const item = current()
     const phase = selectedPhase()
     if (!item || !phase) return
-    const response = await sdk.client.workflow.retryPhase({ runID: item.run.id, phaseID: phase.id, reason: "TUI phase retry" })
+    if (!["failed", "blocked", "needs_input", "stopped"].includes(phase.state)) {
+      toast.show({
+        variant: "info",
+        message: `Phase ${phase.name} is ${phase.state}; there is nothing to retry.`,
+        duration: 3000,
+      })
+      return
+    }
+    const response = await sdk.client.workflow.retryPhase({
+      runID: item.run.id,
+      phaseID: phase.id,
+      reason: "TUI phase retry",
+    })
     if (response.error) throw new Error(errorText(response.error))
     setRefresh((value) => value + 1)
     toast.show({ variant: "success", message: `Phase ${phase.name} queued for retry.`, duration: 2500 })
@@ -271,7 +418,10 @@ export function Workflows() {
   function selectOffset(offset: number) {
     const list = items()
     if (!list.length) return
-    const index = Math.max(0, list.findIndex((item) => item.run.id === selected()?.run.id))
+    const index = Math.max(
+      0,
+      list.findIndex((item) => item.run.id === selected()?.run.id),
+    )
     const next = (index + offset + list.length) % list.length
     setSelectedID(list[next]?.run.id)
   }
@@ -302,9 +452,16 @@ export function Workflows() {
       setRefresh((value) => value + 1)
       return
     }
+    if (event.name === "m") {
+      consume()
+      showPermissionMode()
+      return
+    }
     if (event.name === "p" || event.name === "u" || event.name === "x") {
       consume()
-      void control(event.name === "p" ? "pause" : event.name === "u" ? "resume" : "stop").catch((error) => toast.error(error))
+      void control(event.name === "p" ? "pause" : event.name === "u" ? "resume" : "stop").catch((error) =>
+        toast.error(error),
+      )
       return
     }
     if (event.name === "t") {
@@ -340,15 +497,27 @@ export function Workflows() {
       status={() => {
         if (runs.error) return "ERROR"
         if (runs.loading) return "SYNCING"
+        if (currentActivity()) return currentActivity()!.toUpperCase()
         const state = current()?.run.state
-        return state ? `${workflowReceiptStateMarker(state, activityFrame())} ${workflowReceiptStateLabel(state).toUpperCase()}` : "READY"
+        return state
+          ? `${workflowReceiptStateMarker(state, activityFrame())} ${workflowReceiptStateLabel(state).toUpperCase()}`
+          : "READY"
       }}
       summary={summary}
       footer={() => workflowMonitorFooter(layout().compact)}
       rail={
         <box flexDirection="column" gap={1} minHeight={0}>
-          <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">RUNS</text>
-          <Show when={items().length > 0} fallback={<text fg={theme.textMuted} wrapMode="word">No workflow runs found.</text>}>
+          <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
+            RUNS
+          </text>
+          <Show
+            when={items().length > 0}
+            fallback={
+              <text fg={theme.textMuted} wrapMode="word">
+                No workflow runs found.
+              </text>
+            }
+          >
             <scrollbox
               flexGrow={1}
               minHeight={0}
@@ -364,14 +533,25 @@ export function Workflows() {
                   {(item) => {
                     const active = () => item.run.id === selected()?.run.id
                     return (
-                      <box flexDirection="column" backgroundColor={active() ? theme.backgroundPanel : undefined} paddingLeft={1} paddingRight={1}>
-                        <text fg={active() ? theme.secondary : theme.text} attributes={active() ? TextAttributes.BOLD : undefined} wrapMode="none">
+                      <box
+                        flexDirection="column"
+                        backgroundColor={active() ? theme.backgroundPanel : undefined}
+                        paddingLeft={1}
+                        paddingRight={1}
+                      >
+                        <text
+                          fg={active() ? theme.secondary : theme.text}
+                          attributes={active() ? TextAttributes.BOLD : undefined}
+                          wrapMode="none"
+                        >
                           {short(item.definition.name || item.run.id, 24)}
                         </text>
                         <text fg={stateColor(item.run.state, theme)} wrapMode="none">
                           {workflowReceiptStateMarker(item.run.state, activityFrame())} {item.run.state}
                         </text>
-                        <text fg={theme.textMuted} wrapMode="none">{item.run.id.slice(0, 12)}</text>
+                        <text fg={theme.textMuted} wrapMode="none">
+                          {item.run.id.slice(0, 12)}
+                        </text>
                       </box>
                     )
                   }}
@@ -386,8 +566,22 @@ export function Workflows() {
           <Show when={current()}>
             {(item) => (
               <box flexDirection="column" gap={1} minHeight={0}>
-                <text fg={theme.textMuted} wrapMode="word">{short(item().revision.plan.objective, 120)}</text>
-                <text fg={theme.textMuted} wrapMode="none">{item().run.rootSessionID ? `root ${item().run.rootSessionID}` : "root session pending"}</text>
+                <text fg={theme.textMuted} wrapMode="word">
+                  {short(item().revision.plan.objective, 120)}
+                </text>
+                <text fg={theme.textMuted} wrapMode="none">
+                  {item().run.rootSessionID ? `root ${item().run.rootSessionID}` : "root session pending"}
+                </text>
+                <text fg={theme.secondary} wrapMode="none">
+                  permission {permissionModeLabel(currentPermissionMode())} · m change
+                </text>
+                <Show when={currentActivity()}>
+                  {(activity) => (
+                    <text fg={theme.warning} wrapMode="word">
+                      {activity()}
+                    </text>
+                  )}
+                </Show>
               </box>
             )}
           </Show>
@@ -416,29 +610,53 @@ export function Workflows() {
               }}
             >
               <box flexDirection="column" gap={1}>
-                <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">WORKFLOW RUNS</text>
+                <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
+                  WORKFLOW RUNS
+                </text>
                 <For each={items()}>
                   {(item) => {
                     const active = () => item.run.id === selected()?.run.id
                     return (
                       <box flexDirection="row" height={1} overflow="hidden">
-                        <text fg={active() ? theme.secondary : theme.textMuted} width={2} wrapMode="none">{active() ? "›" : " "}</text>
+                        <text fg={active() ? theme.secondary : theme.textMuted} width={2} wrapMode="none">
+                          {active() ? "›" : " "}
+                        </text>
                         <text fg={active() ? theme.text : theme.textMuted} wrapMode="none">
-                          {short(`${workflowReceiptStateMarker(item.run.state, activityFrame())} ${item.definition.name} · ${item.run.state}`, Math.max(16, layout().detailWidth - 4))}
+                          {short(
+                            `${workflowReceiptStateMarker(item.run.state, activityFrame())} ${item.definition.name} · ${item.run.state}`,
+                            Math.max(16, layout().detailWidth - 4),
+                          )}
                         </text>
                       </box>
                     )
                   }}
                 </For>
                 <Show when={!runs.loading && items().length === 0}>
-                  <text fg={theme.textMuted} wrapMode="none">No runs in this project.</text>
+                  <text fg={theme.textMuted} wrapMode="none">
+                    No runs in this project.
+                  </text>
                 </Show>
               </box>
             </scrollbox>
           </box>
         </Show>
-        <box flexGrow={1} minWidth={0} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-          <Show when={current()} fallback={<text fg={theme.textMuted} wrapMode="none">Select a workflow run.</text>}>
+        <box
+          flexGrow={1}
+          minWidth={0}
+          minHeight={0}
+          borderStyle="single"
+          borderColor={theme.border}
+          paddingLeft={1}
+          paddingRight={1}
+        >
+          <Show
+            when={current()}
+            fallback={
+              <text fg={theme.textMuted} wrapMode="none">
+                Select a workflow run.
+              </text>
+            }
+          >
             {(item) => (
               <scrollbox
                 flexGrow={1}
@@ -451,33 +669,62 @@ export function Workflows() {
                 }}
               >
                 <box flexDirection="column" gap={1} overflow="hidden">
-                  <text fg={theme.secondary} attributes={TextAttributes.BOLD} wrapMode="none">{short(item().definition.name, Math.max(20, layout().detailWidth - 4))}</text>
+                  <text fg={theme.secondary} attributes={TextAttributes.BOLD} wrapMode="none">
+                    {short(item().definition.name, Math.max(20, layout().detailWidth - 4))}
+                  </text>
                   <Show when={runs.error}>
-                    <text fg={theme.warning} wrapMode="none">{errorText(runs.error)}</text>
+                    <text fg={theme.warning} wrapMode="none">
+                      {errorText(runs.error)}
+                    </text>
                   </Show>
                   <Show when={detail.error && !runs.error}>
-                    <text fg={theme.warning} wrapMode="none">Latest detail unavailable; showing the list snapshot.</text>
+                    <text fg={theme.warning} wrapMode="none">
+                      Latest detail unavailable; showing the list snapshot.
+                    </text>
                   </Show>
-                  <text fg={theme.textMuted} wrapMode="word">{item().definition.description || item().revision.plan.objective}</text>
+                  <text fg={theme.textMuted} wrapMode="word">
+                    {item().definition.description || item().revision.plan.objective}
+                  </text>
                   <text fg={stateColor(item().run.state, theme)} wrapMode="none">
                     {workflowReceiptStateMarker(item().run.state, activityFrame())} {summary()}
                   </text>
-                  <box borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1} flexDirection="column">
-                    <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">PHASES</text>
+                  <box
+                    borderStyle="single"
+                    borderColor={theme.border}
+                    paddingLeft={1}
+                    paddingRight={1}
+                    flexDirection="column"
+                  >
+                    <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
+                      PHASES
+                    </text>
                     <For each={item().phases.slice(0, 24)}>
                       {(phase) => (
                         <box flexDirection="row" height={1} overflow="hidden">
                           <text fg={stateColor(phase.state, theme)} width={17} wrapMode="none">
                             {workflowReceiptStateMarker(phase.state, activityFrame())} {short(phase.state, 12)}
                           </text>
-                          <text fg={theme.text} wrapMode="none">{short(`${phase.name} · ${phase.counts.completed}/${phase.counts.total}`, Math.max(16, layout().detailWidth - 24))}</text>
+                          <text fg={theme.text} wrapMode="none">
+                            {short(
+                              `${phase.name} · ${phase.counts.completed}/${phase.counts.total}`,
+                              Math.max(16, layout().detailWidth - 24),
+                            )}
+                          </text>
                         </box>
                       )}
                     </For>
                   </box>
-                  <box borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1} flexDirection="column">
-                    <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">TASKS</text>
-                    <For each={item().tasks.slice(0, 40)}>
+                  <box
+                    borderStyle="single"
+                    borderColor={theme.border}
+                    paddingLeft={1}
+                    paddingRight={1}
+                    flexDirection="column"
+                  >
+                    <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
+                      TASKS
+                    </text>
+                    <For each={taskRows().slice(0, 40)}>
                       {(task) => (
                         <box flexDirection="row" height={1} overflow="hidden">
                           <text fg={stateColor(task.state, theme)} width={17} wrapMode="none">
@@ -493,10 +740,22 @@ export function Workflows() {
                       )}
                     </For>
                   </box>
-                  <box borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1} flexDirection="column">
-                    <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">LATEST EVENTS</text>
+                  <box
+                    borderStyle="single"
+                    borderColor={theme.border}
+                    paddingLeft={1}
+                    paddingRight={1}
+                    flexDirection="column"
+                  >
+                    <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
+                      LATEST EVENTS
+                    </text>
                     <For each={item().events.slice(-12).reverse()}>
-                      {(event) => <text fg={event.level === "error" ? theme.error : theme.textMuted} wrapMode="word">{short(`${event.title}: ${event.summary}`, Math.max(24, layout().detailWidth - 4))}</text>}
+                      {(event) => (
+                        <text fg={event.level === "error" ? theme.error : theme.textMuted} wrapMode="word">
+                          {short(`${event.title}: ${event.summary}`, Math.max(24, layout().detailWidth - 4))}
+                        </text>
+                      )}
                     </For>
                   </box>
                 </box>

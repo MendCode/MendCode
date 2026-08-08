@@ -1,6 +1,8 @@
 import { createHash } from "crypto"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 
+import { Bus } from "@/bus"
+import { BusEvent } from "@/bus/bus-event"
 import { InstanceState } from "@/effect/instance-state"
 import { SessionID } from "@/session/schema"
 import { Database, and, desc, eq, max } from "@/storage/db"
@@ -12,6 +14,7 @@ import {
   WorkflowPhaseTable,
   WorkflowRevisionTable,
   WorkflowRunTable,
+  SessionTable,
   WorkflowTaskAttemptTable,
   WorkflowTaskDependencyTable,
   WorkflowTaskTable,
@@ -35,6 +38,7 @@ import {
   WorkflowTaskID,
   WorkflowTaskKind,
   WorkflowTaskState,
+  WorkflowPermissionMode,
   WorkflowWorkspaceLease,
 } from "./workflow"
 import {
@@ -65,7 +69,10 @@ export class WorkflowValidationError extends Error {
 export class WorkflowStateError extends Error {
   readonly _tag = "WorkflowStateError"
 
-  constructor(readonly id: string, message: string) {
+  constructor(
+    readonly id: string,
+    message: string,
+  ) {
     super(message)
   }
 }
@@ -175,6 +182,71 @@ export interface WorkflowControlInput {
   readonly actor?: string
 }
 
+export interface WorkflowPermissionModeInput extends WorkflowControlInput {
+  readonly mode: WorkflowPermissionMode
+}
+
+export const WORKFLOW_PERMISSION_ABANDONED_REASON =
+  "The runtime stopped before the pending permission was answered."
+
+export interface WorkflowTaskSessionRecovery {
+  readonly runID: WorkflowRunID
+  readonly taskID: WorkflowTaskID
+  readonly attemptID: WorkflowTaskAttemptID
+  readonly attempt: number
+  readonly backgroundGeneration?: number
+}
+
+export interface WorkflowTaskSessionResumeInput {
+  readonly sessionID: SessionID
+  readonly backgroundGeneration?: number
+}
+
+export interface WorkflowTaskSessionFinishInput {
+  readonly sessionID: SessionID
+  readonly backgroundGeneration?: number
+  readonly state: Extract<WorkflowTaskState, "completed" | "failed">
+  readonly summary?: string
+  readonly error?: string
+}
+
+export type Notification = {
+  eventID: WorkflowEventID
+  taskID: SessionID
+  parentSessionID: SessionID
+  generation: number
+  revision: number
+  state: Extract<WorkflowRunState, "completed" | "failed" | "stopped">
+  title: string
+  summary: string
+  background: true
+  runID: WorkflowRunID
+}
+
+export const Event = {
+  RunWake: BusEvent.define(
+    "workflow.run.wake",
+    Schema.Struct({
+      runID: WorkflowRunID,
+    }),
+  ),
+  Notification: BusEvent.define(
+    "workflow.notification",
+    Schema.Struct({
+      eventID: WorkflowEventID,
+      taskID: SessionID,
+      parentSessionID: SessionID,
+      generation: Schema.Number,
+      revision: Schema.Number,
+      state: Schema.Literals(["completed", "failed", "stopped"]),
+      title: Schema.String,
+      summary: Schema.String,
+      background: Schema.Literal(true),
+      runID: WorkflowRunID,
+    }),
+  ),
+}
+
 export interface WorkflowTaskRetryInput extends WorkflowControlInput {
   readonly taskID: WorkflowTaskID
 }
@@ -185,27 +257,58 @@ export interface WorkflowPhaseRetryInput extends WorkflowControlInput {
 
 export interface Interface {
   readonly preview: (plan: WorkflowPlan) => Effect.Effect<WorkflowPlanPreview, WorkflowValidationError>
-  readonly save: (input: WorkflowSaveInput) => Effect.Effect<WorkflowRevisionReceipt, WorkflowValidationError | WorkflowNotFoundError>
-  readonly start: (input: WorkflowStartInput) => Effect.Effect<WorkflowSnapshot, WorkflowValidationError | WorkflowNotFoundError>
+  readonly save: (
+    input: WorkflowSaveInput,
+  ) => Effect.Effect<WorkflowRevisionReceipt, WorkflowValidationError | WorkflowNotFoundError>
+  readonly start: (
+    input: WorkflowStartInput,
+  ) => Effect.Effect<WorkflowSnapshot, WorkflowValidationError | WorkflowNotFoundError>
   readonly list: (limit?: number) => Effect.Effect<readonly WorkflowSnapshot[]>
   readonly show: (runID: WorkflowRunID) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError>
   readonly setWorkspaceLease: (input: {
     readonly runID: WorkflowRunID
     readonly workspaceLease: WorkflowWorkspaceLease
   }) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError>
-  readonly events: (runID: WorkflowRunID, limit?: number) => Effect.Effect<readonly WorkflowEventSnapshot[], WorkflowNotFoundError>
-  readonly artifacts: (runID: WorkflowRunID, limit?: number) => Effect.Effect<readonly WorkflowArtifact[], WorkflowNotFoundError>
-  readonly pause: (input: WorkflowControlInput) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
-  readonly resume: (input: WorkflowControlInput) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
-  readonly stop: (input: WorkflowControlInput) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
+  readonly events: (
+    runID: WorkflowRunID,
+    limit?: number,
+  ) => Effect.Effect<readonly WorkflowEventSnapshot[], WorkflowNotFoundError>
+  readonly artifacts: (
+    runID: WorkflowRunID,
+    limit?: number,
+  ) => Effect.Effect<readonly WorkflowArtifact[], WorkflowNotFoundError>
+  readonly pause: (
+    input: WorkflowControlInput,
+  ) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
+  readonly resume: (
+    input: WorkflowControlInput,
+  ) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
+  readonly stop: (
+    input: WorkflowControlInput,
+  ) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
+  readonly setPermissionMode: (
+    input: WorkflowPermissionModeInput,
+  ) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
+  readonly resumeTaskSession: (
+    input: WorkflowTaskSessionResumeInput,
+  ) => Effect.Effect<WorkflowTaskSessionRecovery | undefined>
+  readonly finishTaskSession: (input: WorkflowTaskSessionFinishInput) => Effect.Effect<void>
   readonly remove: (runID: WorkflowRunID) => Effect.Effect<boolean, WorkflowNotFoundError | WorkflowStateError>
-  readonly retryTask: (input: WorkflowTaskRetryInput) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
-  readonly retryPhase: (input: WorkflowPhaseRetryInput) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
+  readonly retryTask: (
+    input: WorkflowTaskRetryInput,
+  ) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
+  readonly retryPhase: (
+    input: WorkflowPhaseRetryInput,
+  ) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
+  readonly pendingNotifications: (parentSessionID?: SessionID) => Effect.Effect<Notification[]>
+  readonly acknowledgeNotifications: (eventIDs: readonly string[]) => Effect.Effect<void>
+  readonly publishTerminalNotification: (runID: WorkflowRunID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/WorkflowService") {}
 
 const terminalStates = new Set<WorkflowRunState>(["completed", "failed", "stopped"])
+const retryableStates = new Set(["failed", "blocked", "needs_input", "stopped"])
 
 const usageFromData = (data: Record<string, unknown> | null | undefined): WorkflowUsageSnapshot | undefined => {
   const value = data?.usage
@@ -266,6 +369,7 @@ const runFromRow = (row: typeof WorkflowRunTable.$inferSelect): WorkflowRun => (
   ...(row.loop_id ? { loopID: row.loop_id } : {}),
   ...(row.loop_run_id ? { loopRunID: row.loop_run_id } : {}),
   ...(row.data.workspaceLease ? { workspaceLease: row.data.workspaceLease } : {}),
+  ...(row.data.permissionMode ? { permissionMode: row.data.permissionMode } : {}),
   state: row.state,
   ...(row.current_phase_id ? { currentPhaseID: WorkflowPhaseID.make(row.current_phase_id) } : {}),
   createdAt: row.time_created,
@@ -384,7 +488,11 @@ const snapshotFromRows = (input: {
   }
 }
 
-const runSnapshot = (db: Parameters<typeof Database.use>[0] extends (db: infer D) => unknown ? D : never, runID: WorkflowRunID, projectID: string) => {
+const runSnapshot = (
+  db: Parameters<typeof Database.use>[0] extends (db: infer D) => unknown ? D : never,
+  runID: WorkflowRunID,
+  projectID: string,
+) => {
   const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, runID)).get()
   if (!run) return
   const definition = db
@@ -399,8 +507,18 @@ const runSnapshot = (db: Parameters<typeof Database.use>[0] extends (db: infer D
     run,
     definition,
     revision,
-    phases: db.select().from(WorkflowPhaseTable).where(eq(WorkflowPhaseTable.run_id, run.id)).orderBy(WorkflowPhaseTable.ordinal).all(),
-    tasks: db.select().from(WorkflowTaskTable).where(eq(WorkflowTaskTable.run_id, run.id)).orderBy(WorkflowTaskTable.id).all(),
+    phases: db
+      .select()
+      .from(WorkflowPhaseTable)
+      .where(eq(WorkflowPhaseTable.run_id, run.id))
+      .orderBy(WorkflowPhaseTable.ordinal)
+      .all(),
+    tasks: db
+      .select()
+      .from(WorkflowTaskTable)
+      .where(eq(WorkflowTaskTable.run_id, run.id))
+      .orderBy(WorkflowTaskTable.id)
+      .all(),
     attempts: db
       .select()
       .from(WorkflowTaskAttemptTable)
@@ -425,25 +543,208 @@ const runSnapshot = (db: Parameters<typeof Database.use>[0] extends (db: infer D
   })
 }
 
-const appendEvent = (db: Parameters<typeof Database.use>[0] extends (db: infer D) => unknown ? D : never, runID: WorkflowRunID, type: WorkflowEventSnapshot["type"], title: string, summary: string, data?: Record<string, unknown>) => {
-  const sequence = (db.select({ value: max(WorkflowEventTable.sequence) }).from(WorkflowEventTable).where(eq(WorkflowEventTable.run_id, runID)).get()?.value ?? 0) + 1
-  db.insert(WorkflowEventTable).values({
-    id: WorkflowEventID.make(),
-    run_id: runID,
-    sequence,
-    level: "info",
-    type: type as never,
-    title,
-    summary,
-    time_created: Date.now(),
-    time_updated: Date.now(),
-    data,
-  }).run()
+const appendEvent = (
+  db: Parameters<typeof Database.use>[0] extends (db: infer D) => unknown ? D : never,
+  runID: WorkflowRunID,
+  type: WorkflowEventSnapshot["type"],
+  title: string,
+  summary: string,
+  data?: Record<string, unknown>,
+) => {
+  const sequence =
+    (db
+      .select({ value: max(WorkflowEventTable.sequence) })
+      .from(WorkflowEventTable)
+      .where(eq(WorkflowEventTable.run_id, runID))
+      .get()?.value ?? 0) + 1
+  db.insert(WorkflowEventTable)
+    .values({
+      id: WorkflowEventID.make(),
+      run_id: runID,
+      sequence,
+      level: "info",
+      type: type as never,
+      title,
+      summary,
+      time_created: Date.now(),
+      time_updated: Date.now(),
+      data,
+    })
+    .run()
+}
+
+type WorkflowDB = Parameters<typeof Database.use>[0] extends (db: infer D) => unknown ? D : never
+
+const workflowPhaseBarrierSatisfied = (
+  phase: typeof WorkflowPhaseTable.$inferSelect,
+  tasks: readonly (typeof WorkflowTaskTable.$inferSelect)[],
+) => {
+  const phaseTasks = tasks.filter((task) => task.phase_id === phase.id)
+  const completed = phaseTasks.filter((task) => task.state === "completed").length
+  if (phase.barrier.kind === "all") return phaseTasks.length > 0 && completed === phaseTasks.length
+  if (phase.barrier.kind === "quorum") return completed >= phase.barrier.quorum
+  if (phase.barrier.kind === "best-effort") {
+    return phaseTasks.length > 0 && phaseTasks.every((task) =>
+      ["completed", "failed", "blocked", "stopped"].includes(task.state),
+    )
+  }
+  const expression = phase.barrier.expression.trim().toLowerCase()
+  if (expression === "true" || expression === "all" || expression === "completed") {
+    return phaseTasks.length > 0 && completed === phaseTasks.length
+  }
+  return false
+}
+
+const reconcileWorkflowSessionState = (db: WorkflowDB, runID: WorkflowRunID, now: number) => {
+  const phases = db.select().from(WorkflowPhaseTable).where(eq(WorkflowPhaseTable.run_id, runID)).orderBy(WorkflowPhaseTable.ordinal).all()
+  const tasks = db.select().from(WorkflowTaskTable).where(eq(WorkflowTaskTable.run_id, runID)).all()
+  const phaseStates = new Map<string, WorkflowPhaseState>()
+
+  for (const phase of phases) {
+    const phaseTasks = tasks.filter((task) => task.phase_id === phase.id)
+    const counts = {
+      total: phaseTasks.length,
+      queued: phaseTasks.filter((task) => task.state === "queued").length,
+      working: phaseTasks.filter((task) => task.state === "working").length,
+      completed: phaseTasks.filter((task) => task.state === "completed").length,
+      failed: phaseTasks.filter((task) => task.state === "failed").length,
+      blocked: phaseTasks.filter((task) => task.state === "blocked" || task.state === "stopped").length,
+    }
+    const state: WorkflowPhaseState = workflowPhaseBarrierSatisfied(phase, tasks)
+      ? "completed"
+      : phaseTasks.some((task) => task.state === "needs_input")
+        ? "needs_input"
+        : counts.failed > 0
+          ? "failed"
+          : counts.blocked > 0 && counts.queued === 0 && counts.working === 0
+            ? "blocked"
+            : counts.working > 0
+              ? "working"
+              : counts.queued > 0
+                ? "queued"
+                : "pending"
+    phaseStates.set(phase.id, state)
+    db.update(WorkflowPhaseTable)
+      .set({
+        state,
+        task_count: counts.total,
+        queued_count: counts.queued,
+        working_count: counts.working,
+        completed_count: counts.completed,
+        failed_count: counts.failed,
+        blocked_count: counts.blocked,
+        ...(state === "working" && phase.time_started === null ? { time_started: now } : {}),
+        ...(state === "completed" || state === "failed" || state === "blocked" ? { time_ended: now } : { time_ended: null }),
+        time_updated: now,
+      })
+      .where(and(eq(WorkflowPhaseTable.run_id, runID), eq(WorkflowPhaseTable.id, phase.id)))
+      .run()
+  }
+
+  const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, runID)).get()
+  if (!run) return
+  const allPhasesSatisfied = phases.length > 0 && phases.every((phase) => workflowPhaseBarrierSatisfied(phase, tasks))
+  const nextState: WorkflowRunState = allPhasesSatisfied
+    ? "completed"
+    : tasks.some((task) => task.state === "needs_input")
+      ? "needs_input"
+      : [...phaseStates.values()].some((state) => state === "failed")
+        ? "failed"
+        : [...phaseStates.values()].some((state) => state === "blocked")
+          ? "blocked"
+          : tasks.some((task) => task.state === "working")
+            ? "working"
+            : tasks.some((task) => task.state === "queued" || task.state === "pending")
+              ? "queued"
+              : run.state
+  const currentPhase = phases.find((phase) => !["completed", "stopped"].includes(phaseStates.get(phase.id) ?? phase.state))
+  db.update(WorkflowRunTable)
+    .set({
+      state: nextState,
+      current_phase_id: currentPhase?.id ?? null,
+      time_updated: now,
+      ...(nextState === "completed" || nextState === "failed" ? { time_ended: now } : { time_ended: null }),
+    })
+    .where(eq(WorkflowRunTable.id, runID))
+    .run()
+  if (run.state !== nextState && (nextState === "completed" || nextState === "failed")) {
+    const title = nextState === "completed" ? "Workflow completed" : "Workflow failed"
+    appendEvent(db, runID, nextState === "completed" ? "workflow.run.completed" : "workflow.run.failed", title, title, {
+      terminal: true,
+      background: true,
+      state: nextState,
+    })
+  }
+  return { state: nextState, previousState: run.state }
+}
+
+type WorkflowTaskSessionMatch = {
+  readonly attempt: typeof WorkflowTaskAttemptTable.$inferSelect
+  readonly task: typeof WorkflowTaskTable.$inferSelect
+  readonly run: typeof WorkflowRunTable.$inferSelect
+  readonly definition: typeof WorkflowDefinitionTable.$inferSelect
+}
+
+const workflowTaskSession = (db: WorkflowDB, sessionID: SessionID, projectID: string): WorkflowTaskSessionMatch | undefined => {
+  const attempts = db
+    .select()
+    .from(WorkflowTaskAttemptTable)
+    .where(eq(WorkflowTaskAttemptTable.background_task_id, sessionID))
+    .all()
+    .toSorted((left, right) => right.attempt - left.attempt)
+
+  for (const attempt of attempts) {
+    const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, attempt.run_id)).get()
+    if (!run) continue
+    const definition = db
+      .select()
+      .from(WorkflowDefinitionTable)
+      .where(eq(WorkflowDefinitionTable.id, run.definition_id))
+      .get()
+    if (!definition || definition.project_id !== projectID) continue
+    const task = db
+      .select()
+      .from(WorkflowTaskTable)
+      .where(and(eq(WorkflowTaskTable.run_id, run.id), eq(WorkflowTaskTable.id, attempt.task_id)))
+      .get()
+    if (!task) continue
+    return { attempt, task, run, definition }
+  }
+}
+
+const notificationFromEvent = (
+  db: Parameters<typeof Database.use>[0] extends (db: infer D) => unknown ? D : never,
+  event: typeof WorkflowEventTable.$inferSelect,
+): Notification | undefined => {
+  const state = event.data?.state
+  if (event.data?.terminal !== true || event.data.notificationAcknowledgedAt !== undefined) return
+  if (state !== "completed" && state !== "failed" && state !== "stopped") return
+  const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, event.run_id)).get()
+  if (!run?.origin_session_id) return
+  const definition = db
+    .select()
+    .from(WorkflowDefinitionTable)
+    .where(eq(WorkflowDefinitionTable.id, run.definition_id))
+    .get()
+  if (!definition) return
+  return {
+    eventID: event.id,
+    taskID: run.root_session_id ?? run.origin_session_id,
+    parentSessionID: run.origin_session_id,
+    generation: 0,
+    revision: event.sequence,
+    state,
+    title: definition.name,
+    summary: event.summary,
+    background: true,
+    runID: run.id,
+  }
 }
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const bus = yield* Bus.Service
     const preview = Effect.fn("WorkflowService.preview")(function* (plan: WorkflowPlan) {
       return yield* planValidation(plan)
     })
@@ -454,42 +755,53 @@ export const layer = Layer.effect(
       const now = Date.now()
       const definitionID = input.definitionID ?? WorkflowDefinitionID.make()
       const receipt = Database.transaction((db) => {
-        const current = db.select().from(WorkflowDefinitionTable).where(eq(WorkflowDefinitionTable.id, definitionID)).get()
+        const current = db
+          .select()
+          .from(WorkflowDefinitionTable)
+          .where(eq(WorkflowDefinitionTable.id, definitionID))
+          .get()
         if (current && current.project_id !== project.project.id) throw new WorkflowNotFoundError(definitionID)
         const revision = (current?.current_revision ?? 0) + 1
         const revisionID = WorkflowRevisionID.make()
         if (!current) {
-          db.insert(WorkflowDefinitionTable).values({
-            id: definitionID,
-            project_id: project.project.id,
-            name: input.name ?? input.plan.name,
-            description: input.description ?? input.plan.description,
-            source: input.source ?? "manual",
-            owner_session_id: input.ownerSessionID,
-            current_revision: revision,
-            saved: input.saved ?? true,
+          db.insert(WorkflowDefinitionTable)
+            .values({
+              id: definitionID,
+              project_id: project.project.id,
+              name: input.name ?? input.plan.name,
+              description: input.description ?? input.plan.description,
+              source: input.source ?? "manual",
+              owner_session_id: input.ownerSessionID,
+              current_revision: revision,
+              saved: input.saved ?? true,
+              time_created: now,
+              time_updated: now,
+            })
+            .run()
+        } else {
+          db.update(WorkflowDefinitionTable)
+            .set({
+              name: input.name ?? current.name,
+              description: input.description ?? current.description,
+              current_revision: revision,
+              saved: input.saved ?? current.saved,
+              time_updated: now,
+            })
+            .where(eq(WorkflowDefinitionTable.id, definitionID))
+            .run()
+        }
+        db.insert(WorkflowRevisionTable)
+          .values({
+            id: revisionID,
+            definition_id: definitionID,
+            revision,
+            plan_hash: planHash(input.plan),
+            plan: input.plan,
+            immutable: true,
             time_created: now,
             time_updated: now,
-          }).run()
-        } else {
-          db.update(WorkflowDefinitionTable).set({
-            name: input.name ?? current.name,
-            description: input.description ?? current.description,
-            current_revision: revision,
-            saved: input.saved ?? current.saved,
-            time_updated: now,
-          }).where(eq(WorkflowDefinitionTable.id, definitionID)).run()
-        }
-        db.insert(WorkflowRevisionTable).values({
-          id: revisionID,
-          definition_id: definitionID,
-          revision,
-          plan_hash: planHash(input.plan),
-          plan: input.plan,
-          immutable: true,
-          time_created: now,
-          time_updated: now,
-        }).run()
+          })
+          .run()
         return { definitionID, revisionID, revision }
       })
       return { ...receipt, plan: input.plan, preview }
@@ -545,11 +857,22 @@ export const layer = Layer.effect(
               ? db
                   .select()
                   .from(WorkflowRevisionTable)
-                  .where(and(eq(WorkflowRevisionTable.definition_id, definition.id), eq(WorkflowRevisionTable.revision, definition.current_revision)))
+                  .where(
+                    and(
+                      eq(WorkflowRevisionTable.definition_id, definition.id),
+                      eq(WorkflowRevisionTable.revision, definition.current_revision),
+                    ),
+                  )
                   .get()
               : undefined
           if (!revision) return
-          const revisionDefinition = definition ?? db.select().from(WorkflowDefinitionTable).where(eq(WorkflowDefinitionTable.id, revision.definition_id)).get()
+          const revisionDefinition =
+            definition ??
+            db
+              .select()
+              .from(WorkflowDefinitionTable)
+              .where(eq(WorkflowDefinitionTable.id, revision.definition_id))
+              .get()
           if (!revisionDefinition || revisionDefinition.project_id !== project.project.id) return
           return { revision, definition: revisionDefinition }
         })
@@ -563,7 +886,12 @@ export const layer = Layer.effect(
           preview: planPreview,
         }
       } else {
-        if (!input.plan) return yield* Effect.fail(new WorkflowValidationError([{ code: "missing-reference", message: "start requires a plan or revisionID", path: ["plan"] }]))
+        if (!input.plan)
+          return yield* Effect.fail(
+            new WorkflowValidationError([
+              { code: "missing-reference", message: "start requires a plan or revisionID", path: ["plan"] },
+            ]),
+          )
         receipt = yield* save({
           plan: input.plan,
           name: input.name,
@@ -576,7 +904,9 @@ export const layer = Layer.effect(
 
       const overlapKey = input.overlapKey?.trim() || undefined
       if (overlapKey) {
-        const existing = Database.use((db) => db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.overlap_key, overlapKey)).get())
+        const existing = Database.use((db) =>
+          db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.overlap_key, overlapKey)).get(),
+        )
         if (existing) return yield* show(WorkflowRunID.make(existing.id))
       }
 
@@ -584,78 +914,95 @@ export const layer = Layer.effect(
       const now = Date.now()
       const runState: WorkflowRunState = receipt.plan.requiredGates.length ? "awaiting_approval" : "queued"
       Database.transaction((db) => {
-        db.insert(WorkflowRunTable).values({
-          id: runID,
-          definition_id: receipt.definitionID,
-          revision_id: receipt.revisionID,
-          revision: receipt.revision,
-          origin_session_id: input.originSessionID,
-          loop_id: input.loopID,
-          loop_run_id: input.loopRunID,
-          state: runState,
-          overlap_key: overlapKey,
-          time_created: now,
-          time_updated: now,
-          data: { counts: { phases: receipt.plan.phases.length, tasks: receipt.plan.tasks.length } },
-        }).run()
-        for (const phase of receipt.plan.phases) {
-          db.insert(WorkflowPhaseTable).values({
-            run_id: runID,
-            id: phase.id,
-            ordinal: phase.ordinal,
-            name: phase.name,
-            description: phase.description,
-            state: "pending",
-            barrier: phase.barrier,
-            task_count: phase.taskIDs.length,
+        db.insert(WorkflowRunTable)
+          .values({
+            id: runID,
+            definition_id: receipt.definitionID,
+            revision_id: receipt.revisionID,
+            revision: receipt.revision,
+            origin_session_id: input.originSessionID,
+            loop_id: input.loopID,
+            loop_run_id: input.loopRunID,
+            state: runState,
+            overlap_key: overlapKey,
             time_created: now,
             time_updated: now,
-          }).run()
+            data: { counts: { phases: receipt.plan.phases.length, tasks: receipt.plan.tasks.length } },
+          })
+          .run()
+        for (const phase of receipt.plan.phases) {
+          db.insert(WorkflowPhaseTable)
+            .values({
+              run_id: runID,
+              id: phase.id,
+              ordinal: phase.ordinal,
+              name: phase.name,
+              description: phase.description,
+              state: "pending",
+              barrier: phase.barrier,
+              task_count: phase.taskIDs.length,
+              time_created: now,
+              time_updated: now,
+            })
+            .run()
         }
         for (const task of receipt.plan.tasks) {
-          db.insert(WorkflowTaskTable).values({
-            run_id: runID,
-            id: task.id,
-            phase_id: task.phaseID,
-            name: task.name,
-            kind: task.kind,
-            prompt: task.prompt,
-            state: "pending",
-            depends_on: task.dependsOn,
-            inputs: task.inputs,
-            output: task.output,
-            model: task.model,
-            agent_profile: task.agentProfile,
-            allowed_tools: task.allowedTools,
-            workspace: task.workspace,
-            permissions: task.permissions,
-            retry: task.retry,
-            budget: task.budget,
-            map: task.map,
-            time_created: now,
-            time_updated: now,
-          }).run()
+          db.insert(WorkflowTaskTable)
+            .values({
+              run_id: runID,
+              id: task.id,
+              phase_id: task.phaseID,
+              name: task.name,
+              kind: task.kind,
+              prompt: task.prompt,
+              state: "pending",
+              depends_on: task.dependsOn,
+              inputs: task.inputs,
+              output: task.output,
+              model: task.model,
+              agent_profile: task.agentProfile,
+              allowed_tools: task.allowedTools,
+              workspace: task.workspace,
+              permissions: task.permissions,
+              retry: task.retry,
+              budget: task.budget,
+              map: task.map,
+              time_created: now,
+              time_updated: now,
+            })
+            .run()
           for (const dependency of task.dependsOn) {
-            db.insert(WorkflowTaskDependencyTable).values({ run_id: runID, task_id: task.id, depends_on_task_id: dependency }).run()
+            db.insert(WorkflowTaskDependencyTable)
+              .values({ run_id: runID, task_id: task.id, depends_on_task_id: dependency })
+              .run()
           }
         }
         for (const gate of receipt.plan.requiredGates) {
-          db.insert(WorkflowGateTable).values({
-            run_id: runID,
-            id: WorkflowGateID.make(),
-            state: "pending",
-            required: true,
-            reason: gate,
-            time_created: now,
-            time_updated: now,
-            data: { key: gate },
-          }).run()
+          db.insert(WorkflowGateTable)
+            .values({
+              run_id: runID,
+              id: WorkflowGateID.make(),
+              state: "pending",
+              required: true,
+              reason: gate,
+              time_created: now,
+              time_updated: now,
+              data: { key: gate },
+            })
+            .run()
         }
-        appendEvent(db, runID, "workflow.run.created", runState === "awaiting_approval" ? "Workflow awaiting approval" : "Workflow queued", `Workflow ${receipt.plan.name} ${runState === "awaiting_approval" ? "awaits approval" : "queued"}`, {
-          actor: "workflow-service",
-          overlapKey,
-          requiredGates: receipt.plan.requiredGates,
-        })
+        appendEvent(
+          db,
+          runID,
+          "workflow.run.created",
+          runState === "awaiting_approval" ? "Workflow awaiting approval" : "Workflow queued",
+          `Workflow ${receipt.plan.name} ${runState === "awaiting_approval" ? "awaits approval" : "queued"}`,
+          {
+            actor: "workflow-service",
+            overlapKey,
+            requiredGates: receipt.plan.requiredGates,
+          },
+        )
       })
       return yield* show(runID)
     })
@@ -671,12 +1018,89 @@ export const layer = Layer.effect(
           .where(eq(WorkflowDefinitionTable.project_id, project.project.id))
           .orderBy(desc(WorkflowRunTable.time_updated))
           .limit(boundedLimit(limit))
-          .all()
+          .all(),
       )
       return rows.flatMap((row) => {
         const snapshot = Database.use((db) => runSnapshot(db, WorkflowRunID.make(row.run.id), project.project.id))
         return snapshot ? [snapshot] : []
       })
+    })
+
+    const pendingNotifications = Effect.fn("WorkflowService.pendingNotifications")(function* (
+      parentSessionID?: SessionID,
+    ) {
+      const project = yield* InstanceState.context
+      return Database.use((db) =>
+        db
+          .select()
+          .from(WorkflowEventTable)
+          .all()
+          .flatMap((event) => {
+            const notification = notificationFromEvent(db, event)
+            if (!notification) return []
+            if (parentSessionID !== undefined && notification.parentSessionID !== parentSessionID) return []
+            const parent = db
+              .select({ directory: SessionTable.directory })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, notification.parentSessionID))
+              .get()
+            return parent?.directory === project.directory ? [notification] : []
+          })
+          .toSorted((left, right) => left.eventID.localeCompare(right.eventID)),
+      )
+    })
+
+    const acknowledgeNotifications = Effect.fn("WorkflowService.acknowledgeNotifications")(
+      (eventIDs: readonly string[]) =>
+        Effect.sync(() => {
+          if (eventIDs.length === 0) return
+          const now = Date.now()
+          Database.transaction((db) => {
+            for (const eventID of new Set(eventIDs)) {
+              const id = WorkflowEventID.make(eventID)
+              const event = db.select().from(WorkflowEventTable).where(eq(WorkflowEventTable.id, id)).get()
+              if (!event || event.data?.terminal !== true) continue
+              db.update(WorkflowEventTable)
+                .set({
+                  data: { ...event.data, notificationAcknowledgedAt: now },
+                  time_updated: now,
+                })
+                .where(eq(WorkflowEventTable.id, id))
+                .run()
+            }
+          })
+        }),
+    )
+
+    const publishTerminalNotification = Effect.fn("WorkflowService.publishTerminalNotification")(function* (
+      runID: WorkflowRunID,
+    ) {
+      const result = Database.use(
+        (db) =>
+          db
+            .select()
+            .from(WorkflowEventTable)
+            .where(eq(WorkflowEventTable.run_id, runID))
+            .orderBy(desc(WorkflowEventTable.sequence))
+            .all()
+            .flatMap((event) => {
+              const notification = notificationFromEvent(db, event)
+              return notification ? [{ event, notification }] : []
+            })[0],
+      )
+      if (!result) return
+      yield* bus.publish(Event.Notification, result.notification, { id: result.event.id })
+      const now = Date.now()
+      Database.use((db) =>
+        db
+          .update(WorkflowEventTable)
+          .set({
+            data: { ...result.event.data, notificationDeliveredAt: now },
+            time_updated: now,
+          })
+          .where(eq(WorkflowEventTable.id, result.event.id))
+          .run(),
+      )
     })
 
     const events = Effect.fn("WorkflowService.events")(function* (runID: WorkflowRunID, limit?: number) {
@@ -689,33 +1113,277 @@ export const layer = Layer.effect(
       return snapshot.artifacts.slice(0, boundedLimit(limit))
     })
 
-    const updateState = Effect.fn("WorkflowService.updateState")(function* (input: WorkflowControlInput, state: WorkflowRunState) {
+    const updateState = Effect.fn("WorkflowService.updateState")(function* (
+      input: WorkflowControlInput,
+      state: WorkflowRunState,
+    ) {
       const current = yield* show(input.runID)
       if (current.run.state === state) return current
-      if (terminalStates.has(current.run.state)) return yield* Effect.fail(new WorkflowStateError(input.runID, `Workflow is already terminal: ${current.run.state}`))
-      if (state === "queued" && current.run.state === "working") return yield* Effect.fail(new WorkflowStateError(input.runID, "A working workflow must be paused before it can be resumed"))
+      if (terminalStates.has(current.run.state))
+        return yield* Effect.fail(
+          new WorkflowStateError(input.runID, `Workflow is already terminal: ${current.run.state}`),
+        )
+      if (state === "queued" && current.run.state === "working")
+        return yield* Effect.fail(
+          new WorkflowStateError(input.runID, "A working workflow must be paused before it can be resumed"),
+        )
       if (state === "queued") {
         const gate = unresolvedGate(current)
-        if (gate) return yield* Effect.fail(new WorkflowStateError(input.runID, `Required gate is not satisfied: ${gate.reason ?? gate.id}`))
+        if (gate)
+          return yield* Effect.fail(
+            new WorkflowStateError(input.runID, `Required gate is not satisfied: ${gate.reason ?? gate.id}`),
+          )
       }
       const now = Date.now()
       Database.transaction((db) => {
-        const persisted = db.select({ data: WorkflowRunTable.data }).from(WorkflowRunTable).where(eq(WorkflowRunTable.id, input.runID)).get()
-        db.update(WorkflowRunTable).set({
-          state,
-          time_updated: now,
-          ...(state === "stopped" ? { time_ended: now } : {}),
-          data: { ...persisted?.data, ...(input.reason ? { blocker: input.reason } : {}) },
-        }).where(eq(WorkflowRunTable.id, input.runID)).run()
-        const title = state === "paused" ? "Workflow paused" : state === "queued" ? "Workflow resumed" : "Workflow stopped"
-        appendEvent(db, input.runID, `workflow.run.updated`, title, input.reason ?? title, { actor: input.actor ?? "user", reason: input.reason })
+        const persisted = db
+          .select({ data: WorkflowRunTable.data })
+          .from(WorkflowRunTable)
+          .where(eq(WorkflowRunTable.id, input.runID))
+          .get()
+        db.update(WorkflowRunTable)
+          .set({
+            state,
+            time_updated: now,
+            ...(state === "stopped" ? { time_ended: now } : {}),
+            data: { ...persisted?.data, ...(input.reason ? { blocker: input.reason } : {}) },
+          })
+          .where(eq(WorkflowRunTable.id, input.runID))
+          .run()
+        const title =
+          state === "paused" ? "Workflow paused" : state === "queued" ? "Workflow resumed" : "Workflow stopped"
+        appendEvent(
+          db,
+          input.runID,
+          state === "stopped" ? "workflow.run.stopped" : "workflow.run.updated",
+          title,
+          input.reason ?? title,
+          {
+            actor: input.actor ?? "user",
+            reason: input.reason,
+            ...(state === "stopped" ? { terminal: true, background: true, state } : {}),
+          },
+        )
       })
+      if (state === "stopped") yield* publishTerminalNotification(input.runID)
       return yield* show(input.runID)
     })
 
     const pause = (input: WorkflowControlInput) => updateState(input, "paused")
     const resume = (input: WorkflowControlInput) => updateState(input, "queued")
     const stop = (input: WorkflowControlInput) => updateState(input, "stopped")
+
+    const setPermissionMode = Effect.fn("WorkflowService.setPermissionMode")(function* (
+      input: WorkflowPermissionModeInput,
+    ) {
+      const current = yield* show(input.runID)
+      if (terminalStates.has(current.run.state)) {
+        return yield* Effect.fail(
+          new WorkflowStateError(input.runID, `Workflow is already terminal: ${current.run.state}`),
+        )
+      }
+      if (current.run.permissionMode === input.mode) return current
+      const now = Date.now()
+      Database.transaction((db) => {
+        const persisted = db
+          .select({ data: WorkflowRunTable.data })
+          .from(WorkflowRunTable)
+          .where(eq(WorkflowRunTable.id, input.runID))
+          .get()
+        db.update(WorkflowRunTable)
+          .set({
+            time_updated: now,
+            data: { ...persisted?.data, permissionMode: input.mode },
+          })
+          .where(eq(WorkflowRunTable.id, input.runID))
+          .run()
+        appendEvent(
+          db,
+          input.runID,
+          "workflow.run.updated",
+          "Workflow permission mode changed",
+          input.reason ?? `Workflow permission mode is now ${input.mode}`,
+          { actor: input.actor ?? "user", permissionMode: input.mode },
+        )
+      })
+      return yield* show(input.runID)
+    })
+
+    const resumeTaskSession = Effect.fn("WorkflowService.resumeTaskSession")(function* (
+      input: WorkflowTaskSessionResumeInput,
+    ) {
+      const project = yield* InstanceState.context
+      return Database.transaction((db) => {
+        const match = workflowTaskSession(db, input.sessionID, project.project.id)
+        if (!match) return
+
+        const { attempt, task, run } = match
+        const currentGeneration = attempt.background_generation ?? undefined
+        if (attempt.state === "working") {
+          if (input.backgroundGeneration === undefined || input.backgroundGeneration === currentGeneration) return
+          const now = Date.now()
+          db.update(WorkflowTaskAttemptTable)
+            .set({
+              background_generation: input.backgroundGeneration,
+              time_updated: now,
+            })
+            .where(eq(WorkflowTaskAttemptTable.id, attempt.id))
+            .run()
+          return {
+            runID: run.id,
+            taskID: task.id,
+            attemptID: attempt.id,
+            attempt: attempt.attempt,
+            backgroundGeneration: input.backgroundGeneration,
+          }
+        }
+
+        const permissionAbandoned =
+          attempt.state === "failed" &&
+          (attempt.reason === WORKFLOW_PERMISSION_ABANDONED_REASON ||
+            task.data?.blocker === WORKFLOW_PERMISSION_ABANDONED_REASON)
+        const recoverable = attempt.state === "needs_input" || permissionAbandoned
+        if (!recoverable || (task.state !== "needs_input" && !permissionAbandoned) || run.state === "stopped") return
+
+        const now = Date.now()
+        const backgroundGeneration = input.backgroundGeneration ?? currentGeneration
+        db.update(WorkflowTaskAttemptTable)
+          .set({
+            state: "working",
+            ...(backgroundGeneration === undefined ? {} : { background_generation: backgroundGeneration }),
+            failure_class: null,
+            reason: null,
+            time_completed: null,
+            time_updated: now,
+            data: {
+              ...(attempt.data ?? {}),
+              id: attempt.id,
+              taskID: task.id,
+              attempt: attempt.attempt,
+              state: "working",
+              ...(backgroundGeneration === undefined ? {} : { backgroundGeneration }),
+            },
+          })
+          .where(eq(WorkflowTaskAttemptTable.id, attempt.id))
+          .run()
+        db.update(WorkflowTaskTable)
+          .set({
+            state: "working",
+            time_started: task.time_started ?? now,
+            time_ended: null,
+            time_updated: now,
+            data: { ...task.data, blocker: undefined },
+          })
+          .where(and(eq(WorkflowTaskTable.run_id, run.id), eq(WorkflowTaskTable.id, task.id)))
+          .run()
+        db.update(WorkflowRunTable)
+          .set({
+            state: "working",
+            lease_holder: null,
+            lease_acquired_at: null,
+            lease_heartbeat_at: null,
+            lease_expires_at: null,
+            time_ended: null,
+            time_updated: now,
+            data: { ...run.data, blocker: undefined },
+          })
+          .where(eq(WorkflowRunTable.id, run.id))
+          .run()
+        appendEvent(
+          db,
+          run.id,
+          "workflow.task.updated",
+          "Workflow task resumed",
+          `Task ${task.id} resumed from a permission interruption`,
+          {
+            taskID: task.id,
+            attemptID: attempt.id,
+            backgroundGeneration,
+            reason: WORKFLOW_PERMISSION_ABANDONED_REASON,
+          },
+        )
+        reconcileWorkflowSessionState(db, run.id, now)
+        return {
+          runID: run.id,
+          taskID: task.id,
+          attemptID: attempt.id,
+          attempt: attempt.attempt,
+          ...(backgroundGeneration === undefined ? {} : { backgroundGeneration }),
+        }
+      }, { behavior: "immediate" })
+    })
+
+    const finishTaskSession = Effect.fn("WorkflowService.finishTaskSession")(function* (
+      input: WorkflowTaskSessionFinishInput,
+    ) {
+      const project = yield* InstanceState.context
+      const terminalResult = Database.transaction((db) => {
+        const match = workflowTaskSession(db, input.sessionID, project.project.id)
+        if (!match) return
+
+        const { attempt, task, run } = match
+        if (run.state === "stopped" || (attempt.state !== "working" && attempt.state !== "needs_input")) return
+
+        const now = Date.now()
+        const summary = input.summary?.trim() || undefined
+        const error = input.error?.trim() || undefined
+        const reason = error ?? summary
+        db.update(WorkflowTaskAttemptTable)
+          .set({
+            state: input.state,
+            ...(input.backgroundGeneration === undefined
+              ? {}
+              : { background_generation: input.backgroundGeneration }),
+            failure_class: input.state === "failed" ? "environment" : null,
+            reason: reason ?? null,
+            time_completed: now,
+            time_updated: now,
+            data: {
+              ...(attempt.data ?? {}),
+              id: attempt.id,
+              taskID: task.id,
+              attempt: attempt.attempt,
+              state: input.state,
+              ...(reason === undefined ? {} : { reason }),
+            },
+          })
+          .where(eq(WorkflowTaskAttemptTable.id, attempt.id))
+          .run()
+        db.update(WorkflowTaskTable)
+          .set({
+            state: input.state,
+            time_ended: now,
+            time_updated: now,
+            data: {
+              ...task.data,
+              ...(summary === undefined ? {} : { summary }),
+              ...(input.state === "failed" && reason !== undefined ? { blocker: reason } : { blocker: undefined }),
+            },
+          })
+          .where(and(eq(WorkflowTaskTable.run_id, run.id), eq(WorkflowTaskTable.id, task.id)))
+          .run()
+        appendEvent(
+          db,
+          run.id,
+          "workflow.task.updated",
+          "Workflow task finished",
+          `Task ${task.id} finished as ${input.state}`,
+          {
+            taskID: task.id,
+            attemptID: attempt.id,
+            state: input.state,
+            ...(reason === undefined ? {} : { reason }),
+          },
+        )
+        return { runID: run.id, state: reconcileWorkflowSessionState(db, run.id, now)?.state }
+      }, { behavior: "immediate" })
+      if (terminalResult && (terminalResult.state === "queued" || terminalResult.state === "working")) {
+        yield* bus.publish(Event.RunWake, { runID: terminalResult.runID })
+      }
+      if (terminalResult && (terminalResult.state === "completed" || terminalResult.state === "failed")) {
+        yield* publishTerminalNotification(terminalResult.runID).pipe(Effect.catchCause(() => Effect.void))
+      }
+    })
 
     const remove = Effect.fn("WorkflowService.remove")(function* (runID: WorkflowRunID) {
       const current = yield* show(runID)
@@ -728,29 +1396,64 @@ export const layer = Layer.effect(
 
     const retryTask = Effect.fn("WorkflowService.retryTask")(function* (input: WorkflowTaskRetryInput) {
       const current = yield* show(input.runID)
-      if (terminalStates.has(current.run.state) && current.run.state !== "failed") return yield* Effect.fail(new WorkflowStateError(input.runID, "Only failed workflows may retry a task"))
+      if (terminalStates.has(current.run.state) && current.run.state !== "failed")
+        return yield* Effect.fail(new WorkflowStateError(input.runID, "Only failed workflows may retry a task"))
       const gate = unresolvedGate(current)
-      if (gate) return yield* Effect.fail(new WorkflowStateError(input.runID, `Required gate is not satisfied: ${gate.reason ?? gate.id}`))
+      if (gate)
+        return yield* Effect.fail(
+          new WorkflowStateError(input.runID, `Required gate is not satisfied: ${gate.reason ?? gate.id}`),
+        )
       const task = current.tasks.find((candidate) => candidate.id === input.taskID)
       if (!task) return yield* Effect.fail(new WorkflowNotFoundError(input.taskID))
+      if (!retryableStates.has(task.state)) {
+        return yield* Effect.fail(
+          new WorkflowStateError(
+            input.taskID,
+            `Task is ${task.state}; only failed, blocked, stopped, or input-waiting tasks may be retried`,
+          ),
+        )
+      }
       const now = Date.now()
       Database.transaction((db) => {
         db.update(WorkflowTaskTable)
           .set({ state: "pending", time_updated: now, data: { blocker: undefined } })
           .where(and(eq(WorkflowTaskTable.run_id, input.runID), eq(WorkflowTaskTable.id, input.taskID)))
           .run()
-        db.update(WorkflowRunTable).set({ state: "queued", time_updated: now }).where(eq(WorkflowRunTable.id, input.runID)).run()
-        appendEvent(db, input.runID, "workflow.task.updated", "Task retry queued", `Task ${input.taskID} queued for retry`, { actor: input.actor ?? "user", reason: input.reason })
+        db.update(WorkflowRunTable)
+          .set({ state: "queued", time_updated: now })
+          .where(eq(WorkflowRunTable.id, input.runID))
+          .run()
+        appendEvent(
+          db,
+          input.runID,
+          "workflow.task.updated",
+          "Task retry queued",
+          `Task ${input.taskID} queued for retry`,
+          { actor: input.actor ?? "user", reason: input.reason },
+        )
       })
       return yield* show(input.runID)
     })
 
     const retryPhase = Effect.fn("WorkflowService.retryPhase")(function* (input: WorkflowPhaseRetryInput) {
       const current = yield* show(input.runID)
-      if (terminalStates.has(current.run.state) && current.run.state !== "failed") return yield* Effect.fail(new WorkflowStateError(input.runID, "Only failed workflows may retry a phase"))
+      if (terminalStates.has(current.run.state) && current.run.state !== "failed")
+        return yield* Effect.fail(new WorkflowStateError(input.runID, "Only failed workflows may retry a phase"))
       const gate = unresolvedGate(current)
-      if (gate) return yield* Effect.fail(new WorkflowStateError(input.runID, `Required gate is not satisfied: ${gate.reason ?? gate.id}`))
-      if (!current.phases.some((phase) => phase.id === input.phaseID)) return yield* Effect.fail(new WorkflowNotFoundError(input.phaseID))
+      if (gate)
+        return yield* Effect.fail(
+          new WorkflowStateError(input.runID, `Required gate is not satisfied: ${gate.reason ?? gate.id}`),
+        )
+      const phase = current.phases.find((candidate) => candidate.id === input.phaseID)
+      if (!phase) return yield* Effect.fail(new WorkflowNotFoundError(input.phaseID))
+      if (!retryableStates.has(phase.state)) {
+        return yield* Effect.fail(
+          new WorkflowStateError(
+            input.phaseID,
+            `Phase is ${phase.state}; only failed, blocked, stopped, or input-waiting phases may be retried`,
+          ),
+        )
+      }
       const now = Date.now()
       Database.transaction((db) => {
         db.update(WorkflowTaskTable)
@@ -761,16 +1464,47 @@ export const layer = Layer.effect(
           .set({ state: "pending", time_updated: now })
           .where(and(eq(WorkflowPhaseTable.run_id, input.runID), eq(WorkflowPhaseTable.id, input.phaseID)))
           .run()
-        db.update(WorkflowRunTable).set({ state: "queued", time_updated: now }).where(eq(WorkflowRunTable.id, input.runID)).run()
-        appendEvent(db, input.runID, "workflow.phase.updated", "Phase retry queued", `Phase ${input.phaseID} queued for retry`, { actor: input.actor ?? "user", reason: input.reason })
+        db.update(WorkflowRunTable)
+          .set({ state: "queued", time_updated: now })
+          .where(eq(WorkflowRunTable.id, input.runID))
+          .run()
+        appendEvent(
+          db,
+          input.runID,
+          "workflow.phase.updated",
+          "Phase retry queued",
+          `Phase ${input.phaseID} queued for retry`,
+          { actor: input.actor ?? "user", reason: input.reason },
+        )
       })
       return yield* show(input.runID)
     })
 
-    return { preview, save, start, list, show, setWorkspaceLease, events, artifacts, pause, resume, stop, remove, retryTask, retryPhase }
+    return {
+      preview,
+      save,
+      start,
+      list,
+      show,
+      setWorkspaceLease,
+      events,
+      artifacts,
+      pause,
+      resume,
+      stop,
+      setPermissionMode,
+      resumeTaskSession,
+      finishTaskSession,
+      remove,
+      retryTask,
+      retryPhase,
+      pendingNotifications,
+      acknowledgeNotifications,
+      publishTerminalNotification,
+    }
   }),
 )
 
-export const defaultLayer = layer
+export const defaultLayer = layer.pipe(Layer.provide(Bus.layer))
 
 export * as WorkflowService from "./workflow-service"

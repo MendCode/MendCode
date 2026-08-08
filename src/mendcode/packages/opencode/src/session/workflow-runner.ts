@@ -1,7 +1,10 @@
-import { Cause, Context, Duration, Effect, Layer, Option, Scope } from "effect"
+import { Cause, Context, Duration, Effect, Layer, Option, Schedule, Scope } from "effect"
+import * as Stream from "effect/Stream"
 import { ulid } from "ulid"
 
+import { Bus } from "@/bus"
 import { InstanceState } from "@/effect/instance-state"
+import { Permission } from "@/permission"
 import type { InstanceContext } from "@/project/instance-context"
 import { InstanceStore } from "@/project/instance-store"
 import { Worktree } from "@/worktree"
@@ -14,39 +17,54 @@ import * as WorkflowTaskExecutor from "./workflow-task-executor"
 import { WorkflowPolicy } from "./workflow-policy"
 import type { WorkflowTaskClaim } from "./workflow-scheduler"
 import type { ExecutionResult } from "./workflow-task-executor"
-import type { WorkflowWorkspaceLease, WorkflowWorkspaceMode } from "./workflow"
+import type { WorkflowPermissionPolicy, WorkflowWorkspaceLease, WorkflowWorkspaceMode } from "./workflow"
 
 export interface Interface {
   readonly start: (runID: string) => Effect.Effect<void>
   readonly run: (runID: string) => Effect.Effect<void, Error>
   readonly stop: (runID: string) => Effect.Effect<void, WorkflowService.WorkflowNotFoundError>
+  readonly setPermissionMode: (
+    input: WorkflowService.WorkflowPermissionModeInput,
+  ) => Effect.Effect<
+    WorkflowService.WorkflowSnapshot,
+    WorkflowService.WorkflowNotFoundError | WorkflowService.WorkflowStateError
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/WorkflowRunner") {}
 
+const RUN_LEASE_HEARTBEAT_MS = 10_000
+
 const errorText = (error: unknown) => {
   if (error instanceof Error) return error.message
-  if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string") return error.message
+  if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string")
+    return error.message
   return String(error)
 }
 
 const artifactContext = (input: {
   readonly task: WorkflowTaskClaim["task"]
-  readonly artifacts: readonly { readonly taskID?: string; readonly summary: string; readonly evidence: readonly string[] }[]
+  readonly artifacts: readonly {
+    readonly taskID?: string
+    readonly summary: string
+    readonly evidence: readonly string[]
+  }[]
 }) => {
   const ARTIFACT_LIMIT = 64 * 1024
   const SUMMARY_LIMIT = 16 * 1024
-  const selected = input.task.inputs?.flatMap((selector) =>
-    input.artifacts
-      .filter((artifact) => artifact.taskID === selector.taskID)
-      .map((artifact) => ({ artifact, selector })),
-  ) ?? []
+  const selected =
+    input.task.inputs?.flatMap((selector) =>
+      input.artifacts
+        .filter((artifact) => artifact.taskID === selector.taskID)
+        .map((artifact) => ({ artifact, selector })),
+    ) ?? []
   if (selected.length === 0) return
   const context = selected
     .map(({ artifact, selector }) => {
       const projection = selector.projection ? ` (${selector.projection})` : ""
       const evidence = artifact.evidence.length ? `\nEvidence: ${artifact.evidence.join("; ")}` : ""
-      const summary = artifact.summary.length > SUMMARY_LIMIT ? `${artifact.summary.slice(0, SUMMARY_LIMIT)}…` : artifact.summary
+      const summary =
+        artifact.summary.length > SUMMARY_LIMIT ? `${artifact.summary.slice(0, SUMMARY_LIMIT)}…` : artifact.summary
       return `[${selector.taskID}${projection}] ${summary}${evidence}`
     })
     .join("\n")
@@ -80,17 +98,22 @@ export const layer = Layer.effect(
     const background = yield* WorkflowBackgroundTask.Service
     const executor = yield* WorkflowTaskExecutor.Service
     const sessions = Option.getOrUndefined(yield* Effect.serviceOption(Session.Service))
+    const permissions = Option.getOrUndefined(yield* Effect.serviceOption(Permission.Service))
     const instances = Option.getOrUndefined(yield* Effect.serviceOption(InstanceStore.Service))
     const worktrees = Option.getOrUndefined(yield* Effect.serviceOption(Worktree.Service))
+    const bus = yield* Bus.Service
     const scope = yield* Scope.Scope
     const activeRuns = new Set<string>()
 
-    const executionWorkspace = Effect.fn("WorkflowRunner.executionWorkspace")(function* (snapshot: WorkflowService.WorkflowSnapshot) {
+    const executionWorkspace = Effect.fn("WorkflowRunner.executionWorkspace")(function* (
+      snapshot: WorkflowService.WorkflowSnapshot,
+    ) {
       const current = yield* InstanceState.context
       const mode = workspaceMode(snapshot)
-      const previous = snapshot.run.workspaceLease && snapshot.run.workspaceLease.state !== "cleaned"
-        ? snapshot.run.workspaceLease
-        : undefined
+      const previous =
+        snapshot.run.workspaceLease && snapshot.run.workspaceLease.state !== "cleaned"
+          ? snapshot.run.workspaceLease
+          : undefined
       const lease = (path: string, managed: boolean, branch?: string): WorkflowWorkspaceLease | undefined =>
         mode === undefined
           ? undefined
@@ -106,14 +129,25 @@ export const layer = Layer.effect(
                 createdAt: Date.now(),
               }
       if (mode !== "per-loop-worktree" && mode !== "per-run-worktree") {
-        return { directory: current.directory, worktree: current.worktree, lease: lease(current.directory, false) } satisfies ExecutionWorkspace
+        return {
+          directory: current.directory,
+          worktree: current.worktree,
+          lease: lease(current.directory, false),
+        } satisfies ExecutionWorkspace
       }
 
-      const root = snapshot.run.rootSessionID && sessions
-        ? yield* sessions.get(snapshot.run.rootSessionID as SessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-        : undefined
+      const root =
+        snapshot.run.rootSessionID && sessions
+          ? yield* sessions
+              .get(snapshot.run.rootSessionID as SessionID)
+              .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+          : undefined
       if (root && (root.directory !== current.directory || current.worktree !== current.project.worktree)) {
-        return { directory: root.directory, worktree: root.directory, lease: lease(root.directory, false) } satisfies ExecutionWorkspace
+        return {
+          directory: root.directory,
+          worktree: root.directory,
+          lease: lease(root.directory, false),
+        } satisfies ExecutionWorkspace
       }
 
       if (!root && mode === "per-loop-worktree" && snapshot.run.originSessionID) {
@@ -121,12 +155,20 @@ export const layer = Layer.effect(
           ? yield* sessions.get(snapshot.run.originSessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
           : undefined
         if (origin && (origin.directory !== current.directory || current.worktree !== current.project.worktree)) {
-          return { directory: origin.directory, worktree: origin.directory, lease: lease(origin.directory, false) } satisfies ExecutionWorkspace
+          return {
+            directory: origin.directory,
+            worktree: origin.directory,
+            lease: lease(origin.directory, false),
+          } satisfies ExecutionWorkspace
         }
       }
 
       if (current.worktree !== current.project.worktree) {
-        return { directory: current.directory, worktree: current.worktree, lease: lease(current.directory, false) } satisfies ExecutionWorkspace
+        return {
+          directory: current.directory,
+          worktree: current.worktree,
+          lease: lease(current.directory, false),
+        } satisfies ExecutionWorkspace
       }
       if (root) {
         throw new Error(`Workflow ${snapshot.run.id} already has a root session in the primary workspace`)
@@ -134,7 +176,11 @@ export const layer = Layer.effect(
 
       if (!worktrees) throw new Error("Worktree service unavailable for an isolated workflow workspace")
       const created = yield* worktrees.createReady({ name: `${snapshot.definition.name}-${snapshot.run.id}` })
-      return { directory: created.directory, worktree: created.directory, lease: lease(created.directory, true, created.branch) } satisfies ExecutionWorkspace
+      return {
+        directory: created.directory,
+        worktree: created.directory,
+        lease: lease(created.directory, true, created.branch),
+      } satisfies ExecutionWorkspace
     })
 
     const cleanupWorkspace = Effect.fn("WorkflowRunner.cleanupWorkspace")(function* (input: {
@@ -144,12 +190,16 @@ export const layer = Layer.effect(
     }) {
       const lease = input.target.lease
       if (!lease?.managed) return
-      const snapshot = yield* workflow.show(input.runID as never).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+      const snapshot = yield* workflow
+        .show(input.runID as never)
+        .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
       if (!snapshot) return
       if (lease.mode !== "per-run-worktree" || snapshot.run.state !== "completed") {
         const state = snapshot.run.state === "failed" || snapshot.run.state === "stopped" ? "retained" : "active"
         if (lease.state !== state) {
-          yield* workflow.setWorkspaceLease({ runID: input.runID as never, workspaceLease: { ...lease, state } }).pipe(Effect.asVoid)
+          yield* workflow
+            .setWorkspaceLease({ runID: input.runID as never, workspaceLease: { ...lease, state } })
+            .pipe(Effect.asVoid)
         }
         return
       }
@@ -157,22 +207,28 @@ export const layer = Layer.effect(
       const cleaning = { ...lease, state: "cleaning" as const }
       yield* workflow.setWorkspaceLease({ runID: input.runID as never, workspaceLease: cleaning }).pipe(Effect.asVoid)
       if (!instances || !worktrees) {
-        yield* workflow.setWorkspaceLease({
-          runID: input.runID as never,
-          workspaceLease: { ...cleaning, state: "failed", error: "Workspace cleanup services unavailable" },
-        }).pipe(Effect.asVoid)
+        yield* workflow
+          .setWorkspaceLease({
+            runID: input.runID as never,
+            workspaceLease: { ...cleaning, state: "failed", error: "Workspace cleanup services unavailable" },
+          })
+          .pipe(Effect.asVoid)
         return
       }
 
-      const instance = yield* instances.load({ directory: input.target.directory, worktree: input.target.worktree, project: input.current.project }).pipe(
-        Effect.map((ctx) => ({ ok: true as const, ctx })),
-        Effect.catchCause((cause) => Effect.succeed({ ok: false as const, error: errorText(Cause.squash(cause)) })),
-      )
+      const instance = yield* instances
+        .load({ directory: input.target.directory, worktree: input.target.worktree, project: input.current.project })
+        .pipe(
+          Effect.map((ctx) => ({ ok: true as const, ctx })),
+          Effect.catchCause((cause) => Effect.succeed({ ok: false as const, error: errorText(Cause.squash(cause)) })),
+        )
       if (!instance.ok) {
-        yield* workflow.setWorkspaceLease({
-          runID: input.runID as never,
-          workspaceLease: { ...cleaning, state: "failed", error: instance.error },
-        }).pipe(Effect.asVoid)
+        yield* workflow
+          .setWorkspaceLease({
+            runID: input.runID as never,
+            workspaceLease: { ...cleaning, state: "failed", error: instance.error },
+          })
+          .pipe(Effect.asVoid)
         return
       }
       const disposed = yield* instances.dispose(instance.ctx).pipe(
@@ -180,22 +236,30 @@ export const layer = Layer.effect(
         Effect.catchCause(() => Effect.succeed(false as const)),
       )
       if (!disposed) {
-        yield* workflow.setWorkspaceLease({
-          runID: input.runID as never,
-          workspaceLease: { ...cleaning, state: "failed", error: "Failed to dispose the workflow workspace instance" },
-        }).pipe(Effect.asVoid)
+        yield* workflow
+          .setWorkspaceLease({
+            runID: input.runID as never,
+            workspaceLease: {
+              ...cleaning,
+              state: "failed",
+              error: "Failed to dispose the workflow workspace instance",
+            },
+          })
+          .pipe(Effect.asVoid)
         return
       }
       const removed = yield* worktrees.remove({ directory: input.target.directory }).pipe(
         Effect.as(true),
         Effect.catchCause(() => Effect.succeed(false as const)),
       )
-      yield* workflow.setWorkspaceLease({
-        runID: input.runID as never,
-        workspaceLease: removed
-          ? { ...cleaning, state: "cleaned" }
-          : { ...cleaning, state: "retained", error: "Failed to remove the completed workflow worktree" },
-      }).pipe(Effect.asVoid)
+      yield* workflow
+        .setWorkspaceLease({
+          runID: input.runID as never,
+          workspaceLease: removed
+            ? { ...cleaning, state: "cleaned" }
+            : { ...cleaning, state: "retained", error: "Failed to remove the completed workflow worktree" },
+        })
+        .pipe(Effect.asVoid)
     })
 
     const executeClaim = Effect.fn("WorkflowRunner.executeClaim")(function* (input: {
@@ -203,9 +267,13 @@ export const layer = Layer.effect(
       readonly claim: WorkflowTaskClaim
       readonly rootSessionID: SessionID
       readonly planModel?: WorkflowTaskClaim["task"]["model"]
-      readonly planPermissions?: WorkflowTaskClaim["task"]["permissions"]
+      readonly planPermissions?: WorkflowPermissionPolicy
       readonly planWorkspace?: WorkflowTaskClaim["task"]["workspace"]
-      readonly artifacts: readonly { readonly taskID?: string; readonly summary: string; readonly evidence: readonly string[] }[]
+      readonly artifacts: readonly {
+        readonly taskID?: string
+        readonly summary: string
+        readonly evidence: readonly string[]
+      }[]
     }) {
       const model = input.claim.task.model ?? input.planModel
       const policy = WorkflowPolicy.taskPolicy({
@@ -234,25 +302,29 @@ export const layer = Layer.effect(
         backgroundGeneration: attempt.generation,
       })
 
-      const result: ExecutionResult = yield* executor.execute({
-         task: input.claim.task,
-         sessionID: attempt.sessionID,
-         workflowModel: input.planModel,
-         context: [
-          WorkflowPolicy.workspaceInstruction(policy.workspace),
-          artifactContext({ task: input.claim.task, artifacts: input.artifacts }),
-        ].filter(Boolean).join("\n\n"),
-        workflowPermissions: input.planPermissions,
-        workflowWorkspace: input.planWorkspace,
-      }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.succeed<ExecutionResult>({
-            state: "failed" as const,
-            failureClass: "environment" as const,
-            error: errorText(Cause.squash(cause)),
-          }),
-        ),
-      )
+      const result: ExecutionResult = yield* executor
+        .execute({
+          task: input.claim.task,
+          sessionID: attempt.sessionID,
+          workflowModel: input.planModel,
+          context: [
+            WorkflowPolicy.workspaceInstruction(policy.workspace),
+            artifactContext({ task: input.claim.task, artifacts: input.artifacts }),
+          ]
+            .filter(Boolean)
+            .join("\n\n"),
+          workflowPermissions: input.planPermissions,
+          workflowWorkspace: input.planWorkspace,
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.succeed<ExecutionResult>({
+              state: "failed" as const,
+              failureClass: "environment" as const,
+              error: errorText(Cause.squash(cause)),
+            }),
+          ),
+        )
 
       if (result.state === "needs_input" || result.state === "blocked") {
         yield* scheduler.finish({
@@ -271,7 +343,12 @@ export const layer = Layer.effect(
           taskID: attempt.sessionID,
           generation: attempt.generation,
           state: result.state === "needs_input" ? "interrupted" : "failed",
-          result: { summary: result.summary, error: result.error, changedFiles: [], transcriptSessionID: attempt.sessionID },
+          result: {
+            summary: result.summary,
+            error: result.error,
+            changedFiles: [],
+            transcriptSessionID: attempt.sessionID,
+          },
         })
         return
       }
@@ -280,7 +357,12 @@ export const layer = Layer.effect(
         taskID: attempt.sessionID,
         generation: attempt.generation,
         state: result.state === "completed" ? "completed" : "failed",
-        result: { summary: result.summary, error: result.error, changedFiles: [], transcriptSessionID: attempt.sessionID },
+        result: {
+          summary: result.summary,
+          error: result.error,
+          changedFiles: [],
+          transcriptSessionID: attempt.sessionID,
+        },
       })
       yield* scheduler.finish({
         runID: input.runID as never,
@@ -332,38 +414,52 @@ export const layer = Layer.effect(
             yield* Effect.sleep(Duration.millis(Math.max(1, tick.nextWakeAt - Date.now())))
             continue
           }
+          const maintainLease = scheduler.heartbeat(id).pipe(
+            Effect.flatMap((renewed) =>
+              renewed ? Effect.void : Effect.fail(new Error(`Workflow ${runID} scheduler lease was lost`)),
+            ),
+            Effect.repeat(Schedule.spaced(Duration.millis(RUN_LEASE_HEARTBEAT_MS))),
+          )
           yield* Effect.forEach(
             tick.claimed,
-            (claim) => executeClaim({
-              runID,
-              claim,
-              rootSessionID: root.sessionID,
-              planModel: snapshot.revision.plan.model,
-              planPermissions: snapshot.revision.plan.permissions,
-              planWorkspace: snapshot.revision.plan.workspace,
-              artifacts: snapshot.artifacts,
-            }).pipe(
-              Effect.catchCause((cause) =>
-                failClaim({
-                  runID,
-                  claim,
-                  error: errorText(Cause.squash(cause)),
-                }).pipe(Effect.catchCause(() => Effect.void)),
+            (claim) =>
+              executeClaim({
+                runID,
+                claim,
+                rootSessionID: root.sessionID,
+                planModel: snapshot.revision.plan.model,
+                planPermissions: WorkflowPolicy.permissionPolicyForMode(
+                  snapshot.revision.plan.permissions,
+                  snapshot.run.permissionMode,
+                ),
+                planWorkspace: snapshot.revision.plan.workspace,
+                artifacts: snapshot.artifacts,
+              }).pipe(
+                Effect.catchCause((cause) =>
+                  failClaim({
+                    runID,
+                    claim,
+                    error: errorText(Cause.squash(cause)),
+                  }).pipe(Effect.catchCause(() => Effect.void)),
+                ),
               ),
-            ),
             { concurrency: Math.max(1, Math.min(snapshot.preview.maxConcurrency, tick.claimed.length)), discard: true },
-          )
+          ).pipe(Effect.raceFirst(maintainLease))
         }
       })
-      const executeTarget = target.directory === current.directory
-        ? execute
-        : !instances
-          ? Effect.fail(new Error("Instance store unavailable for an isolated workflow workspace"))
-          : instances.provide({
-              directory: target.directory,
-              worktree: target.worktree,
-              project: current.project,
-            }, execute)
+      const executeTarget =
+        target.directory === current.directory
+          ? execute
+          : !instances
+            ? Effect.fail(new Error("Instance store unavailable for an isolated workflow workspace"))
+            : instances.provide(
+                {
+                  directory: target.directory,
+                  worktree: target.worktree,
+                  project: current.project,
+                },
+                execute,
+              )
       yield* Effect.gen(function* () {
         if (target.lease) {
           yield* workflow.setWorkspaceLease({ runID: id, workspaceLease: target.lease }).pipe(Effect.asVoid)
@@ -378,22 +474,45 @@ export const layer = Layer.effect(
         if (!snapshot.run.rootSessionID) return
         const children = yield* background.listChildren(snapshot.run.rootSessionID)
         yield* Effect.forEach(
-          children.filter((child) => ["queued", "running", "needs_input"].includes(child.state) && child.controlIntent !== "cancel"),
-          (child) => background.cancelAttempt({ sessionID: child.taskID, generation: child.generation }).pipe(Effect.catchCause(() => Effect.void)),
+          children.filter(
+            (child) => ["queued", "running", "needs_input"].includes(child.state) && child.controlIntent !== "cancel",
+          ),
+          (child) =>
+            background
+              .cancelAttempt({ sessionID: child.taskID, generation: child.generation })
+              .pipe(Effect.catchCause(() => Effect.void)),
           { concurrency: 8, discard: true },
         )
       }).pipe(Effect.mapError(() => new WorkflowService.WorkflowNotFoundError(runID)))
 
+    const setPermissionMode = Effect.fn("WorkflowRunner.setPermissionMode")(function* (
+      input: WorkflowService.WorkflowPermissionModeInput,
+    ) {
+      const snapshot = yield* workflow.setPermissionMode(input)
+      if (!permissions || !snapshot.run.rootSessionID || snapshot.run.permissionMode === "custom") return snapshot
+      const waiting = (yield* background.listChildren(snapshot.run.rootSessionID)).filter(
+        (child) => child.state === "needs_input",
+      )
+      if (waiting.length === 0) return snapshot
+      yield* permissions.replyForSessions({
+        sessionIDs: waiting.map((child) => child.taskID),
+        reply: snapshot.run.permissionMode === "normal" ? "always" : "reject",
+      })
+      return snapshot
+    })
+
     const start = Effect.fn("WorkflowRunner.start")(function* (runID: string) {
       if (activeRuns.has(runID)) return
       activeRuns.add(runID)
-      yield* Effect.forkIn(
-        run(runID).pipe(Effect.ensuring(Effect.sync(() => activeRuns.delete(runID)))),
-        scope,
-      )
+      yield* Effect.forkIn(run(runID).pipe(Effect.ensuring(Effect.sync(() => activeRuns.delete(runID)))), scope)
     })
 
-    return Service.of({ start, run, stop })
+    yield* bus.subscribe(WorkflowService.Event.RunWake).pipe(
+      Stream.runForEach((event) => start(event.properties.runID).pipe(Effect.catchCause(() => Effect.void))),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+
+    return Service.of({ start, run, stop, setPermissionMode })
   }),
 )
 
@@ -402,6 +521,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(WorkflowBackgroundTask.defaultLayer),
   Layer.provide(WorkflowScheduler.defaultLayer),
   Layer.provide(WorkflowService.defaultLayer),
+  Layer.provide(Bus.layer),
 )
 
 export * as WorkflowRunner from "./workflow-runner"

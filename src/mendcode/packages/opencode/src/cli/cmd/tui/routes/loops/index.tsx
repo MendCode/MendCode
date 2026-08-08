@@ -255,6 +255,11 @@ export function loopRouteColumns(input: { width: number; stacked: boolean }) {
   }
 }
 
+export function loopRouteSelectionOffset(key: string) {
+  if (key === "j" || key === "down") return 1
+  if (key === "k" || key === "up") return -1
+}
+
 export function loopRouteStackedListHeight(itemCount: number, compact: boolean, terminalHeight?: number) {
   const rowHeight = compact ? 2 : 4
   const preferred = Math.min(compact ? 10 : 16, Math.max(compact ? 5 : 7, itemCount * rowHeight + 4))
@@ -264,10 +269,10 @@ export function loopRouteStackedListHeight(itemCount: number, compact: boolean, 
 }
 
 export function loopRouteKeyHint(input: { width: number; narrow: boolean; compact: boolean }) {
-  if (input.width < 48) return "↑ parent · c/g · a/h · i · o · q"
-  if (input.compact) return "↑ parent · c project · g all · a/h view · i inspect · pgup/dn page · o chat · q back"
-  if (input.narrow) return "↑ parent · c project · g all · a active · h history · i inspect · pgup/dn page · e agent · o open · q back"
-  return "↑ parent · c project · g all · a active · h history · i inspect · pgup/dn page · r refresh · j/k select · o open chat · e edit agent · p pause · u resume · s stop · q back"
+  if (input.width < 48) return "↑↓ select · c/g · a/h · i · o · q"
+  if (input.compact) return "↑↓ select · c project · g all · a/h view · i inspect · pgup/dn page · o chat · O parent · q back"
+  if (input.narrow) return "↑↓ select · c project · g all · a active · h history · i inspect · pgup/dn page · e agent · o open · O parent · q back"
+  return "↑↓ or j/k select · c project · g all · a active · h history · i inspect · pgup/dn page · r refresh · o open chat · O parent chat · e edit agent · p pause · u resume · s stop · q back"
 }
 
 export function loopRouteHeaderLayout(narrow: boolean) {
@@ -285,6 +290,17 @@ export function loopDetailRowLayout(width: number) {
     labelWidth,
     gap,
     valueWidth: Math.max(8, width - labelWidth - gap),
+  }
+}
+
+export function loopDetailHeaderLayout(width: number, idLength: number) {
+  const available = Math.max(24, width)
+  const idWidth = available < 56
+    ? Math.min(12, idLength)
+    : Math.min(idLength, Math.max(16, Math.min(34, Math.floor(available * 0.28))))
+  return {
+    idWidth,
+    titleWidth: Math.max(12, available - idWidth - 1),
   }
 }
 
@@ -350,7 +366,7 @@ function progressLabel(workflow: LoopWorkflow) {
   return typeof maxTurns === "number" ? `${current}/${maxTurns}` : `${current}/open`
 }
 
-export function loopWakeupLabel(workflow: LoopWorkflow) {
+export function loopWakeupLabel(workflow: LoopWorkflow, now = Date.now()) {
   if (workflow.state === "paused") return "paused"
   if (TERMINAL_STATES.has(workflow.state)) return "ended"
   const triggerMode = workflow.spec?.trigger?.mode
@@ -361,7 +377,7 @@ export function loopWakeupLabel(workflow: LoopWorkflow) {
     if (workflow.state === "working") return "running"
     return `waiting for ${triggerMode}`
   }
-  const seconds = Math.max(0, Math.round((workflow.nextWakeup - Date.now()) / 1000))
+  const seconds = Math.max(0, Math.round((workflow.nextWakeup - now) / 1000))
   const rel = formatDuration(seconds)
   const timezone = workflow.spec?.trigger?.mode === "daily" ? workflow.spec.trigger.timezone : undefined
   return `${rel || "now"} (${new Date(workflow.nextWakeup).toLocaleTimeString([], timezone ? { timeZone: timezone } : undefined)})`
@@ -444,6 +460,20 @@ function timeLabel(value: number | undefined) {
     return clock
   }
   return `${date.toLocaleDateString([], { month: "short", day: "numeric" })} ${clock}`
+}
+
+export function loopSchedulerState(
+  workflow: Pick<LoopWorkflow, "state" | "nextWakeup" | "scheduler">,
+  now = Date.now(),
+) {
+  if (workflow.scheduler?.degraded) return "degraded"
+  const nextWakeup = workflow.scheduler?.nextWakeup ?? workflow.nextWakeup
+  if (
+    (workflow.state === "active" || workflow.state === "sleeping") &&
+    typeof nextWakeup === "number" &&
+    nextWakeup < now - 2 * 60_000
+  ) return "overdue"
+  return workflow.scheduler ? "ready" : "unknown"
 }
 
 function tokenTotal(metrics?: LoopWorkflow["metrics"], usage?: LoopRun["usage"]) {
@@ -576,6 +606,7 @@ export function loopSummaryRows(input: {
   detail?: LoopWorkflow
   summary?: LoopSummary
   runs?: readonly LoopRun[]
+  now?: number
 }) {
   if (!input.detail) return []
   const run = input.runs?.[0]
@@ -586,7 +617,7 @@ export function loopSummaryRows(input: {
   return [
     ["state", stateLabel(input.detail)],
     ["iteration", progressLabel(input.detail)],
-    ["next", loopWakeupLabel(input.detail)],
+    ["next", loopWakeupLabel(input.detail, input.now)],
     ["cadence", cadenceLabel(input.detail)],
     ["run", run ? `${run.state} · ${run.trigger || "run"} · ${run.phase || "ready"}` : "none yet"],
     ["verdict", verdictSummary ? `${verdict} · ${verdictSummary}` : verdict],
@@ -1050,19 +1081,15 @@ export function Loops() {
       selectHistoryPage(1)
       return
     }
-    if (evt.name === "up") {
+    const selectionOffset = loopRouteSelectionOffset(evt.name)
+    if (selectionOffset) {
+      consume()
+      selectOffset(selectionOffset)
+      return
+    }
+    if (evt.name === "o" && evt.shift) {
       consume()
       void openOwnerChat().catch((error) => toast.error(error))
-      return
-    }
-    if (evt.name === "j" || evt.name === "down") {
-      consume()
-      selectOffset(1)
-      return
-    }
-    if (evt.name === "k") {
-      consume()
-      selectOffset(-1)
       return
     }
     if (evt.name === "return" || evt.name === "enter" || evt.name === "o") {
@@ -1101,13 +1128,13 @@ export function Loops() {
     events: events(),
     artifacts: artifacts(),
   }))
-  const summaryRows = createMemo(() => loopSummaryRows({ detail: detail(), summary: currentSummary(), runs: runs() }))
+  const summaryRows = createMemo(() => loopSummaryRows({ detail: detail(), summary: currentSummary(), runs: runs(), now: now() }))
   const contractRows = createMemo(() => loopContractPreviewRows(detail()))
 
   const detailRows = createMemo<string[][]>(() => {
     const item = detail()
     if (!item) return []
-    now()
+    const currentTime = now()
     const successChecks = item.spec?.successChecks?.length ?? 0
     const validationChecks = item.spec?.validationChecks?.length ?? 0
     const checks = successChecks + validationChecks
@@ -1115,8 +1142,8 @@ export function Loops() {
       ["state", stateLabel(item)],
       ["iteration", progressLabel(item)],
       ["budget", hasInvalidZeroBudget(item) ? "invalid maxTurns=0; recreate with positive cap or unlimited" : `${item.spec?.budgetMode ?? "budget"} · ${progressLabel(item)}`],
-      ["next", loopWakeupLabel(item)],
-      ["scheduler", item.scheduler ? `${item.scheduler.degraded ? "degraded" : "healthy"} · wake ${typeof item.scheduler.lastWakeAttempt === "number" ? new Date(item.scheduler.lastWakeAttempt).toLocaleTimeString() : "none"}` : "unknown"],
+      ["next", loopWakeupLabel(item, currentTime)],
+      ["scheduler", `${loopSchedulerState(item, currentTime)} · wake ${typeof item.scheduler?.lastWakeAttempt === "number" ? new Date(item.scheduler.lastWakeAttempt).toLocaleTimeString() : "none"}`],
       ["last result", item.scheduler?.lastResult ?? item.scheduler?.lastError ?? "none"],
       ["cadence", cadenceLabel(item)],
       ["evaluation", item.spec?.evaluation?.mode ?? "legacy"],
@@ -1142,11 +1169,11 @@ export function Loops() {
         >
           <Show
             when={!stacked()}
-            fallback={<StackedView scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} detail={detail()} detailRows={detailRows()} summaryRows={summaryRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} inspect={inspect()} width={width()} compact={frame().compact} />}
+            fallback={<StackedView scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} detail={detail()} detailRows={detailRows()} summaryRows={summaryRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} inspect={inspect()} width={width()} now={now()} compact={frame().compact} />}
           >
             <box flexDirection="row" flexGrow={1} minHeight={0} gap={1}>
               <box width={listWidth()} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
-                <LoopList scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} width={listWidth() - 4} compact={frame().compact} />
+                <LoopList scope={scope()} view={view()} items={visibleLoops()} pagination={view() === "history" ? historyPageData() : undefined} selected={selected()} select={setSelectedID} width={listWidth() - 4} now={now()} compact={frame().compact} />
               </box>
               <box flexGrow={1} minHeight={0} borderStyle="single" borderColor={theme.border} paddingLeft={1} paddingRight={1}>
                 <LoopDetail detail={detail()} rows={detailRows()} summaryRows={summaryRows()} contractRows={contractRows()} supervisionRows={supervisionRows()} summary={currentSummary()} events={events()} runs={runs()} error={snapshotError()} loading={snapshot.loading} inspect={inspect()} width={detailWidth() - 4} />
@@ -1161,7 +1188,7 @@ export function Loops() {
         subtitle={() => `${scope() === "project" ? "current project" : "all projects"} · ${view() === "active" ? "scheduled + blocked" : "history · newest first"}`}
         status={() => listError() ? "ERROR" : loops.loading ? "LOADING" : "LIVE"}
          summary={() => `active ${activeCounts().scheduled} · blocked ${activeCounts().blocked} · history ${historyCount()}`}
-        footer="↑↓ Select   Enter Open   i Inspect   h History   r Refresh   / Find   ? Help   q Back"
+        footer="↑↓ Select   Enter Open   O Parent   i Inspect   h History   r Refresh   / Find   ? Help   q Back"
          rail={
           <LoopList
             scope={scope()}
@@ -1171,6 +1198,7 @@ export function Loops() {
             selected={selected()}
             select={setSelectedID}
             width={Math.max(14, deck().railWidth - 4)}
+            now={now()}
             compact
           />
         }
@@ -1180,8 +1208,8 @@ export function Loops() {
             rows={[
               ["state", detail() ? stateLabel(detail()!) : "none"],
               ["phase", detail()?.phase ?? "none"],
-              ["next", detail() ? loopWakeupLabel(detail()!) : "none"],
-               ["scheduler", detail()?.scheduler ? `${detail()!.scheduler!.degraded ? "degraded" : "healthy"} · ${detail()!.scheduler!.lastRunState ?? "idle"}` : "unknown"],
+              ["next", detail() ? loopWakeupLabel(detail()!, now()) : "none"],
+               ["scheduler", detail() ? `${loopSchedulerState(detail()!, now())} · ${detail()!.scheduler?.lastRunState ?? "idle"}` : "unknown"],
                ["model", detail() ? modelLabel(sync.data.provider, detail()!, currentSnapshot()?.rootSession) : "none"],
                ["agent", detail()?.spec?.agent ?? "default"],
                ["runs", String(runs().length)],
@@ -1192,6 +1220,7 @@ export function Loops() {
               <text fg={theme.textMuted} wrapMode="none">ACTIONS</text>
               <text fg={theme.text} wrapMode="none">i {inspect() ? "Summary" : "Inspect"}</text>
               <text fg={theme.text} wrapMode="none">o Open chat</text>
+              <text fg={theme.text} wrapMode="none">O Parent chat</text>
               <text fg={theme.text} wrapMode="none">p Pause · u Resume</text>
               <text fg={theme.text} wrapMode="none">s Stop (confirm)</text>
             </box>
@@ -1237,10 +1266,13 @@ function LoopList(props: {
   selected?: LoopWorkflow
   select: (id: string) => void
   width: number
+  now: number
   compact?: boolean
 }) {
   const { theme } = useTheme()
-  const title = createMemo(() => `${props.scope === "project" ? "current project" : "all projects"} · ${props.view === "active" ? "scheduled + blocked" : "history · newest first"}`)
+  const title = createMemo(() => props.compact
+    ? `${props.scope === "project" ? "project" : "all"} · ${props.view}`
+    : `${props.scope === "project" ? "current project" : "all projects"} · ${props.view === "active" ? "scheduled + blocked" : "history · newest first"}`)
   const count = createMemo(() => {
     if (!props.pagination) return `${props.items.length}`
     if (!props.pagination.total) return "0 of 0"
@@ -1271,6 +1303,7 @@ function LoopList(props: {
                   selected={props.selected?.id === item.id}
                   latest={props.view === "history" && props.pagination?.page === 0 && index() === 0}
                   width={props.width}
+                  now={props.now}
                   compact={props.compact}
                   onSelect={() => props.select(item.id)}
                 />
@@ -1288,6 +1321,7 @@ function LoopRow(props: {
   selected: boolean
   latest: boolean
   width: number
+  now: number
   compact?: boolean
   onSelect: () => void
 }) {
@@ -1302,7 +1336,7 @@ function LoopRow(props: {
   const detailWidth = createMemo(() => Math.max(8, props.width - 2))
   const detail = createMemo(() => {
     const when = timeLabel(timestamp(props.item))
-    const status = isPrimaryLoop(props.item) ? `${stateLabel(props.item)} · next ${loopWakeupLabel(props.item)}` : stateLabel(props.item)
+    const status = isPrimaryLoop(props.item) ? `${stateLabel(props.item)} · next ${loopWakeupLabel(props.item, props.now)}` : stateLabel(props.item)
     const chat = props.item.rootSessionID ? "chat ready" : cadenceLabel(props.item)
     const lead = props.latest ? "latest · " : ""
     if (props.compact) return `${lead}${status} · ${chat}`
@@ -1346,6 +1380,7 @@ function LoopDetail(props: {
   const eventRows = createMemo(() => props.events.length * 3)
   const eventViewportHeight = createMemo(() => Math.min(18, Math.max(3, eventRows())))
   const eventScrollbarVisible = createMemo(() => eventRows() > eventViewportHeight())
+  const header = createMemo(() => loopDetailHeaderLayout(props.width, props.detail?.id.length ?? 0))
   return (
     <box flexDirection="column" minHeight={0} flexGrow={1}>
       <Show when={props.detail} fallback={<text fg={theme.textMuted} wrapMode="none">Select a loop.</text>}>
@@ -1360,10 +1395,10 @@ function LoopDetail(props: {
               <box flexDirection="column" gap={0}>
                 <box flexDirection="row" height={1} overflow="hidden">
                   <text fg={theme.secondary} attributes={TextAttributes.BOLD} wrapMode="none" selectable={false}>
-                    {compact(item().name || item().objective || item().id, Math.max(12, props.width - 18))}
+                    {compact(item().name || item().objective || item().id, header().titleWidth)}
                   </text>
                   <box flexGrow={1} />
-                  <text fg={theme.textMuted} wrapMode="none" selectable={false}>{compact(item().id, 16)}</text>
+                  <text fg={theme.textMuted} wrapMode="none" selectable={false}>{compact(item().id, header().idWidth)}</text>
                 </box>
                 <text fg={theme.textMuted} wrapMode="none" selectable={false}>{compact(item().objective, props.width)}</text>
               </box>
@@ -1530,6 +1565,7 @@ function StackedView(props: {
   loading?: boolean
   inspect: boolean
   width: number
+  now: number
   compact?: boolean
 }) {
   const { theme } = useTheme()
@@ -1554,6 +1590,7 @@ function StackedView(props: {
             selected={props.selected}
             select={props.select}
             width={Math.max(20, props.width - (props.compact ? 2 : 4))}
+            now={props.now}
             compact={props.compact}
           />
         </box>

@@ -42,6 +42,7 @@ import { useMendTuiProfile } from "@tui/context/mend"
 import {
   normalizeToolEvent,
   shouldRenderCompactTool,
+  shouldRenderImageGenerationTool,
   toolPresentationIcon,
   toolPresentationIconForProfile,
   webSearchUrlLines,
@@ -58,7 +59,11 @@ import {
   shouldDisplayReasoning,
   unavailableReasoningLabel,
 } from "@/mend/tui/presentation"
-import { sessionContentWidth } from "@/cli/cmd/tui/util/session-layout"
+import {
+  sessionContentWidth,
+  shouldRenderSessionLoopCard,
+  shouldRenderSessionWorkflowCard,
+} from "@/cli/cmd/tui/util/session-layout"
 import { isScrollboxAtBottom } from "@/cli/cmd/tui/util/scroll"
 import {
   hasMermaidFence,
@@ -72,6 +77,15 @@ import { visibleUserMessageText } from "@/cli/cmd/tui/routes/session/user-messag
 import { MemoryGraphCanvasRows, memoryGraphMiniMap } from "@/cli/cmd/tui/routes/memory"
 import { compactMemoryGraphRows, compactMemoryGraphSnapshot } from "@/cli/cmd/tui/util/memory-graph"
 import { isToolActivityActive } from "@/cli/cmd/tui/util/session-working"
+import {
+  workflowReceiptFallbackPhases,
+  workflowReceiptPhaseDiagram,
+  workflowReceiptStateIsAnimated,
+  workflowReceiptStateIsTerminal,
+  workflowReceiptStateLabel,
+  workflowReceiptStateMarker,
+  type WorkflowReceiptPhaseInput,
+} from "@/cli/cmd/tui/util/workflow-receipt"
 
 const id = "internal:session-v2-debug"
 const route = "session.v2.messages"
@@ -733,9 +747,10 @@ function AssistantTool(props: { sessionID: string; messageID: string; part: Sess
   const input = createMemo(() => toolInputRecord(props.part.state.input))
   const rowOnly = createMemo(() => {
     const profile = mend.profile.presentation.profile
-    if (props.part.name === "image_gen" && profile === "mendcode") return false
+    if (shouldRenderImageGenerationTool(props.part.name)) return false
     if (props.part.name === "bash" || props.part.name === "shell") return false
     if (props.part.name === "loop") return false
+    if (props.part.name === "workflow" && shouldRenderSessionWorkflowCard(profile)) return false
     if (props.part.name === "memory_graph") return false
     return shouldRenderCompactTool(profile, props.part.name)
   })
@@ -745,7 +760,7 @@ function AssistantTool(props: { sessionID: string; messageID: string; part: Sess
     },
     get metadata() {
       const structured = props.part.state.status === "pending" ? undefined : props.part.state.structured
-      return isRecord(structured) ? structured : (props.part.provider?.metadata ?? {})
+      return isRecord(structured) ? structured : (fullToolMetadata(props.part) ?? props.part.provider?.metadata ?? {})
     },
     get output() {
       return props.part.state.status === "pending" ? undefined : toolOutput(props.part.state.content)
@@ -765,7 +780,7 @@ function AssistantTool(props: { sessionID: string; messageID: string; part: Sess
           output={toolprops.output}
         />
       </Match>
-      <Match when={props.part.name === "image_gen" && mend.profile.presentation.profile === "mendcode"}>
+      <Match when={shouldRenderImageGenerationTool(props.part.name)}>
         <ImageGen {...toolprops} />
       </Match>
       <Match when={props.part.name === "bash"}>
@@ -807,11 +822,23 @@ function AssistantTool(props: { sessionID: string; messageID: string; part: Sess
       <Match when={props.part.name === "skill"}>
         <Skill {...toolprops} />
       </Match>
-      <Match when={props.part.name === "loop"}>
+      <Match
+        when={
+          props.part.name === "loop" &&
+          shouldRenderSessionLoopCard({
+            toolStatus: props.part.state.status,
+            workflowID: toolprops.metadata.workflowID,
+            workflows: toolprops.metadata.workflows,
+          })
+        }
+      >
         <Loop {...toolprops} />
       </Match>
       <Match when={props.part.name === "memory_graph"}>
         <MemoryGraph {...toolprops} />
+      </Match>
+      <Match when={props.part.name === "workflow" && shouldRenderSessionWorkflowCard(mend.profile.presentation.profile)}>
+        <Workflow {...toolprops} />
       </Match>
       <Match when={props.part.name === "task"}>
         <Task {...toolprops} />
@@ -859,7 +886,7 @@ function PresentationToolRow(props: {
   })
   return (
     <Show
-      when={mend.profile.presentation.profile === "mendcode"}
+      when={shouldRenderSessionWorkflowCard(mend.profile.presentation.profile)}
       fallback={
         <Show
           when={wrappedLines().length > 0}
@@ -1883,6 +1910,194 @@ function MemoryGraph(props: ToolProps) {
         </box>
       </BlockTool>
     </Show>
+  )
+}
+
+function workflowPhaseInputList(value: unknown): WorkflowReceiptPhaseInput[] {
+  return arrayValue(value).flatMap((item, index) => {
+    if (!isRecord(item)) return []
+    const taskIDs = arrayValue(item.taskIDs).filter((taskID): taskID is string => typeof taskID === "string")
+    const counts = isRecord(item.counts)
+      ? {
+          total: numberValue(item.counts.total) ?? taskIDs.length,
+          queued: numberValue(item.counts.queued) ?? 0,
+          working: numberValue(item.counts.working) ?? 0,
+          completed: numberValue(item.counts.completed) ?? 0,
+          failed: numberValue(item.counts.failed) ?? 0,
+          blocked: numberValue(item.counts.blocked) ?? 0,
+        }
+      : undefined
+    return [{
+      id: stringValue(item.id),
+      ordinal: numberValue(item.ordinal) ?? index + 1,
+      name: stringValue(item.name),
+      state: stringValue(item.state),
+      taskIDs,
+      counts,
+    }]
+  })
+}
+
+function Workflow(props: ToolProps) {
+  const sdk = useSDK()
+  const renderer = useRenderer()
+  const dimensions = useTerminalDimensions()
+  const { theme } = useTheme()
+  const { navigate } = useRoute()
+  const [refresh, setRefresh] = createSignal(0)
+  const [activityFrame, setActivityFrame] = createSignal(0)
+  const [hover, setHover] = createSignal(false)
+  const action = createMemo(() => stringValue(props.input.action) ?? stringValue(props.metadata.action) ?? "workflow")
+  const runID = createMemo(() => stringValue(props.metadata.runID) ?? stringValue(props.input.runID))
+  const inputPlan = createMemo(() => isRecord(props.input.plan) ? props.input.plan : undefined)
+  const [snapshot] = createResource(
+    () => `${runID() ?? ""}:${refresh()}`,
+    async () => {
+      const id = runID()
+      if (!id) return undefined
+      const headers = new Headers(sdk.headers)
+      headers.set("accept", "application/json")
+      if (sdk.directory) headers.set("x-mendcode-directory", encodeURIComponent(sdk.directory))
+      try {
+        const response = await sdk.fetch(`${sdk.url}/workflow/${id}`, { headers })
+        if (!response.ok) return undefined
+        return response.json().catch(() => undefined) as Promise<unknown>
+      } catch {
+        return undefined
+      }
+    },
+  )
+  const record = (value: unknown) => isRecord(value) ? value : undefined
+  const live = createMemo<Record<string, unknown> | undefined>(() => record(snapshot.latest))
+  const liveRun = createMemo<Record<string, unknown> | undefined>(() => record(live()?.run))
+  const liveDefinition = createMemo<Record<string, unknown> | undefined>(() => record(live()?.definition))
+  const liveRevision = createMemo<Record<string, unknown> | undefined>(() => record(live()?.revision))
+  const livePlan = createMemo<Record<string, unknown> | undefined>(() => record(liveRevision()?.plan))
+  const phases = createMemo(() =>
+    workflowReceiptFallbackPhases({
+      live: workflowPhaseInputList(live()?.phases),
+      metadata: workflowPhaseInputList(props.metadata.phases),
+      plan: workflowPhaseInputList(inputPlan()?.phases),
+    }),
+  )
+  const state = createMemo(() =>
+    stringValue(liveRun()?.state)
+      ?? stringValue(props.metadata.state)
+      ?? (props.part.state.status === "running" ? "working" : action() === "preview" ? "ready" : props.part.state.status),
+  )
+  const title = createMemo(() =>
+    stringValue(liveDefinition()?.name)
+      ?? stringValue(inputPlan()?.name)
+      ?? stringValue(props.input.name)
+      ?? "Workflow",
+  )
+  const objective = createMemo(() =>
+    stringValue(livePlan()?.objective)
+      ?? stringValue(props.metadata.objective)
+      ?? stringValue(inputPlan()?.objective),
+  )
+  const phaseDiagram = createMemo(() => workflowReceiptPhaseDiagram({ phases: phases() }, activityFrame(), 8))
+  const panelWidth = createMemo(() => Math.max(52, Math.min(92, dimensions().width - 12)))
+  const completedPhases = createMemo(() => phases().filter((phase) => phase.state === "completed").length)
+  const stateColor = createMemo(() => {
+    if (state() === "completed") return theme.success
+    if (state() === "failed" || state() === "blocked") return theme.error
+    if (state() === "stopped" || state() === "paused" || state() === "needs_input") return theme.warning
+    return theme.secondary
+  })
+
+  onMount(() => {
+    const animation = setInterval(() => {
+      if (workflowReceiptStateIsAnimated(state())) setActivityFrame((value) => value + 1)
+    }, 180)
+    const fallback = setInterval(() => {
+      if (runID() && !workflowReceiptStateIsTerminal(state())) setRefresh((value) => value + 1)
+    }, 5_000)
+    const unsubscribe = sdk.event.on("event", (event) => {
+      const type = event.payload?.type as string | undefined
+      if (type?.startsWith("workflow.")) setRefresh((value) => value + 1)
+    })
+    onCleanup(() => {
+      clearInterval(animation)
+      clearInterval(fallback)
+      unsubscribe()
+    })
+  })
+
+  const openWorkflow = () => {
+    const id = runID()
+    if (!id || renderer.getSelection()?.getSelectedText()) return
+    navigate({ type: "workflows", selectedID: id, returnTo: { type: "session", sessionID: props.sessionID } })
+  }
+
+  return (
+    <BlockTool
+      title="# ◇ Workflow"
+      titleColor={stateColor()}
+      contentGap={0}
+      part={props.part}
+      spinner={props.part.state.status === "running" && phases().length === 0}
+    >
+      <box width="100%" alignItems="center">
+        <box
+          flexDirection="column"
+          width={panelWidth()}
+          onMouseUp={openWorkflow}
+          flexShrink={0}
+          borderStyle="single"
+          borderColor={hover() ? stateColor() : theme.border}
+          paddingLeft={1}
+          paddingRight={1}
+          paddingTop={1}
+          paddingBottom={1}
+          gap={0}
+          onMouseOver={() => setHover(true)}
+          onMouseOut={() => setHover(false)}
+        >
+          <box flexDirection="row">
+            <text fg={stateColor()} attributes={TextAttributes.BOLD}>◇ {Locale.truncateMiddle(title(), Math.max(18, panelWidth() - 34))}</text>
+            <box flexGrow={1} />
+            <text fg={stateColor()}>{workflowReceiptStateMarker(state(), activityFrame())} {workflowReceiptStateLabel(state())}</text>
+          </box>
+          <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
+            <text fg={theme.textMuted}>action     <span style={{ fg: theme.text }}>{action()}</span></text>
+            <text fg={theme.textMuted}>run        <span style={{ fg: runID() ? theme.text : theme.textMuted }}>{Locale.truncateMiddle(runID() ?? "not started", Math.max(18, panelWidth() - 20))}</span></text>
+            <text fg={theme.textMuted}>phases     <span style={{ fg: theme.text }}>{completedPhases()}/{phases().length} complete</span></text>
+            <Show when={objective()}>{(value) => <text fg={theme.textMuted} wrapMode="word">{Locale.truncate(value(), Math.max(24, panelWidth() - 6))}</text>}</Show>
+          </box>
+          <Show when={phaseDiagram().length > 0}>
+            <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
+              <text fg={theme.primary} attributes={TextAttributes.BOLD}>PHASE FLOW</text>
+              <For each={phaseDiagram()}>
+                {(row) => (
+                  <text
+                    fg={
+                      row.kind !== "phase"
+                        ? theme.border
+                        : row.state === "completed"
+                          ? theme.success
+                          : row.state === "failed" || row.state === "blocked"
+                            ? theme.error
+                            : row.state === "working"
+                              ? theme.secondary
+                              : theme.textMuted
+                    }
+                    wrapMode="none"
+                  >
+                    {Locale.truncateMiddle(row.text, Math.max(24, panelWidth() - 6))}
+                  </text>
+                )}
+              </For>
+            </box>
+          </Show>
+          <Show when={runID()}>
+            <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1}>
+              <text fg={hover() ? stateColor() : theme.textMuted}>open workflow monitor</text>
+            </box>
+          </Show>
+        </box>
+      </box>
+    </BlockTool>
   )
 }
 

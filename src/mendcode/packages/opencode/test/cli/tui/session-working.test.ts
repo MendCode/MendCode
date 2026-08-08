@@ -1,10 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
   isAssistantWorking,
+  isBusyStatusSupersededByTerminalAssistant,
   isRecentWorkingAssistant,
   isStaleBusySession,
+  isSubagentStatusActive,
   isToolActivityActive,
   sessionStatusExpiryDelay,
+  shouldKeepCompactedSubagent,
   shouldShowSessionStoppedConnection,
   STALE_BUSY_SESSION_WINDOW_MS,
 } from "@/cli/cmd/tui/util/session-working"
@@ -93,6 +96,16 @@ describe("isToolActivityActive", () => {
     expect(isToolActivityActive({ toolStatus: "running", sessionStatusType: "busy", interrupted: true })).toBe(false)
     expect(isToolActivityActive({ toolStatus: "completed", sessionStatusType: "busy" })).toBe(false)
   })
+
+  test("allows active detached children to animate a completed parent task", () => {
+    expect(
+      isToolActivityActive({
+        toolStatus: "completed",
+        sessionStatusType: "idle",
+        activityOverride: true,
+      }),
+    ).toBe(true)
+  })
 })
 
 describe("isAssistantWorking", () => {
@@ -110,6 +123,69 @@ describe("isAssistantWorking", () => {
     expect(isAssistantWorking({ statusType: "busy", now: 100_000, assistantCreated: 1_000, statusUntil: 101_000 })).toBe(
       true,
     )
+  })
+
+  test("keeps compaction visibly active even after the normal busy window", () => {
+    expect(
+      isAssistantWorking({
+        statusType: "busy",
+        statusKind: "compaction",
+        now: 100_000,
+        assistantCreated: 1_000,
+      }),
+    ).toBe(true)
+  })
+})
+
+describe("terminal busy reconciliation", () => {
+  const terminal = { role: "assistant", finish: "stop", time: { created: 200, completed: 300 } }
+
+  test("suppresses only a busy status that predates the terminal assistant", () => {
+    expect(
+      isBusyStatusSupersededByTerminalAssistant({
+        statusType: "busy",
+        statusStartedAt: 100,
+        latestMessage: terminal,
+      }),
+    ).toBe(true)
+    expect(
+      isBusyStatusSupersededByTerminalAssistant({
+        statusType: "busy",
+        statusStartedAt: 400,
+        latestMessage: terminal,
+      }),
+    ).toBe(false)
+  })
+
+  test("preserves active continuations and compaction", () => {
+    expect(
+      isBusyStatusSupersededByTerminalAssistant({
+        statusType: "busy",
+        statusStartedAt: 100,
+        latestMessage: { ...terminal, finish: "tool-calls" },
+      }),
+    ).toBe(false)
+    expect(
+      isBusyStatusSupersededByTerminalAssistant({
+        statusType: "busy",
+        statusKind: "compaction",
+        statusStartedAt: 100,
+        latestMessage: terminal,
+      }),
+    ).toBe(false)
+  })
+})
+
+describe("compacted subagents", () => {
+  test("keeps an earlier compacted task visible while its child is active", () => {
+    expect(isSubagentStatusActive("working")).toBe(true)
+    expect(shouldKeepCompactedSubagent({ compacted: true, status: "working" })).toBe(true)
+    expect(shouldKeepCompactedSubagent({ compacted: true, status: "retry #2" })).toBe(true)
+  })
+
+  test("hides completed compacted tasks without hiding current history", () => {
+    expect(shouldKeepCompactedSubagent({ compacted: true, status: "responded" })).toBe(false)
+    expect(shouldKeepCompactedSubagent({ compacted: false, status: "responded" })).toBe(true)
   })
 })
 

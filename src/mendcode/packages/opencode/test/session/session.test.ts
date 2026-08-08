@@ -423,6 +423,36 @@ describe("live part delta persistence", () => {
 })
 
 describe("Session", () => {
+  test("permission synchronization does not mark a session as recently used", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const info = await create({ title: "permission-sync-activity" })
+        const before = await get(info.id)
+        await Bun.sleep(5)
+        await AppRuntime.runPromise(
+          SessionNs.Service.use((svc) =>
+            svc.setPermission({
+              sessionID: info.id,
+              permission: [{ permission: "edit", pattern: "*", action: "allow" }],
+            }),
+          ),
+        )
+
+        const updated = await get(info.id)
+        expect(updated.time.updated).toBe(before.time.updated)
+        expect(updated.permission).toEqual([{ permission: "edit", pattern: "*", action: "allow" }])
+
+        await Bun.sleep(5)
+        await AppRuntime.runPromise(SessionNs.Service.use((svc) => svc.touch(info.id)))
+        expect((await get(info.id)).time.updated).toBeGreaterThan(updated.time.updated)
+        await remove(info.id)
+      },
+    })
+  })
+
   test("remove works without an instance", async () => {
     await using tmp = await tmpdir({ git: true })
 

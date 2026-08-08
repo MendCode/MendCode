@@ -1,7 +1,7 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect, test } from "bun:test"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import path from "path"
 import { fileURLToPath } from "url"
 import { NamedError } from "@mendcode/core/util/error"
@@ -42,6 +42,7 @@ import {
   shouldResumeAfterAutoRescueCompaction,
   shouldPreflightPromptOverflow,
   shouldSkipAutoCompaction,
+  findRecoverableQueuedPrompt,
   ownerWakePromptText,
   interruptedToolPromptText,
   shouldContinueAfterCompactionStop,
@@ -56,6 +57,8 @@ import { Skill } from "../../src/skill"
 import { LoopWorkflow } from "../../src/session/loop"
 import { LoopRunner } from "../../src/session/loop-runner"
 import { WorkflowService } from "../../src/session/workflow-service"
+import { Workflow } from "../../src/session/workflow"
+import { WorkflowPlan, type WorkflowPlan as WorkflowPlanInput } from "../../src/session/workflow-plan"
 import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
 import { Snapshot } from "../../src/snapshot"
@@ -81,6 +84,67 @@ test("maps tool execution to bounded activity labels", () => {
   expect(SessionStatus.activityLabelForTool("custom_tool")).toBe("Working with a tool")
 })
 
+test("finds the first persisted user turn after the latest completed assistant", () => {
+  const activeUser = { info: { ...userInfo(), time: { created: 1 } }, parts: [] } satisfies MessageV2.WithParts
+  const activeAssistant = {
+    info: {
+      ...assistantInfo({
+        id: MessageID.ascending(),
+        finish: "stop",
+        summary: false,
+        parentID: activeUser.info.id,
+      }),
+      time: { created: 2, completed: 3 },
+    },
+    parts: [],
+  } satisfies MessageV2.WithParts
+  const queued = { info: { ...userInfo(), time: { created: 4 }, queued: true }, parts: [] } satisfies MessageV2.WithParts
+  const secondQueued = {
+    info: { ...userInfo(), time: { created: 5 }, queued: true },
+    parts: [],
+  } satisfies MessageV2.WithParts
+
+  expect(findRecoverableQueuedPrompt([activeUser, activeAssistant, secondQueued, queued])).toBe(queued)
+})
+
+test("does not recover while an assistant is still incomplete", () => {
+  const user = { info: { ...userInfo(), time: { created: 1 } }, parts: [] } satisfies MessageV2.WithParts
+  const assistant = {
+    info: {
+      ...assistantInfo({
+        id: MessageID.ascending(),
+        finish: undefined,
+        summary: false,
+        parentID: user.info.id,
+      }),
+      time: { created: 2 },
+    },
+    parts: [],
+  } satisfies MessageV2.WithParts
+  const queued = { info: { ...userInfo(), time: { created: 3 }, queued: true }, parts: [] } satisfies MessageV2.WithParts
+
+  expect(findRecoverableQueuedPrompt([user, assistant, queued])).toBeUndefined()
+})
+
+test("recovers the next queued turn even when the previous reply was created after it", () => {
+  const first = { info: { ...userInfo(), time: { created: 1 }, queued: true }, parts: [] } satisfies MessageV2.WithParts
+  const second = { info: { ...userInfo(), time: { created: 2 }, queued: true }, parts: [] } satisfies MessageV2.WithParts
+  const firstReply = {
+    info: {
+      ...assistantInfo({
+        id: MessageID.ascending(),
+        finish: "stop",
+        summary: false,
+        parentID: first.info.id,
+      }),
+      time: { created: 3, completed: 4 },
+    },
+    parts: [],
+  } satisfies MessageV2.WithParts
+
+  expect(findRecoverableQueuedPrompt([first, second, firstReply])).toBe(second)
+})
+
 test("owner wake prompts are internal runtime context", () => {
   const taskID = SessionID.make("ses_owner_wake_task")
   const text = ownerWakePromptText([
@@ -102,6 +166,23 @@ test("owner wake prompts are internal runtime context", () => {
   expect(text).toContain("not a user request")
   expect(text).toContain("task_status")
   expect(text).toContain("Do not poll or wait")
+
+  const workflowText = ownerWakePromptText([
+    {
+      eventID: Workflow.WorkflowEventID.make("wf_event_owner_wake"),
+      taskID,
+      parentSessionID: SessionID.make("ses_owner_wake_parent"),
+      generation: 0,
+      revision: 4,
+      state: "completed",
+      title: "Release workflow",
+      summary: "Workflow complete.",
+      background: true,
+      runID: Workflow.WorkflowRunID.make("wf_run_owner_wake"),
+    },
+  ])
+  expect(workflowText).toContain("workflow_run_id: wf_run_owner_wake")
+  expect(workflowText).toContain("Release workflow")
 })
 
 test("interrupted tool prompts require a safe exact retry", () => {
@@ -264,6 +345,7 @@ function makeHttp() {
     AppFileSystem.defaultLayer,
     status,
     BackgroundTask.layer.pipe(Layer.provide(bus)),
+    WorkflowService.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const planReview = PlanReview.layer.pipe(Layer.provideMerge(deps))
@@ -1205,6 +1287,58 @@ it.live("wakes an async parent by default for a background task", () =>
             ),
         ),
       ).toBe(true)
+    }),
+    {
+      git: true,
+      config: (url: string) => ({
+        ...providerCfg(url),
+      }),
+    },
+  ),
+)
+
+it.live("wakes the creator when a workflow reaches a terminal state", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const workflows = yield* WorkflowService.Service
+      const parent = yield* sessions.create({ title: "Workflow creator" })
+      yield* llm.text("creator ready")
+      yield* prompt.prompt({
+        sessionID: parent.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "start workflow" }],
+      })
+      const started = yield* workflows.start({
+        originSessionID: parent.id,
+        plan: Schema.decodeUnknownSync(WorkflowPlan)({
+          formatVersion: 1,
+          name: "Release workflow",
+          description: "Owner wake integration test",
+          objective: "Notify the creator",
+          phases: [{ id: "final", ordinal: 1, name: "Finish", barrier: { kind: "all" }, taskIDs: ["final"] }],
+          tasks: [{ id: "final", phaseID: "final", name: "Finish", kind: "synthesize", prompt: "Finish", dependsOn: [], output: { kind: "text" } }],
+          finalTaskID: "final",
+          completionCriteria: ["Finished"],
+          requiredGates: [],
+        }) as WorkflowPlanInput,
+      })
+
+      yield* llm.text("workflow acknowledged")
+      yield* workflows.stop({ runID: started.run.id, actor: "test" })
+      yield* Effect.sleep(500)
+
+      expect(yield* llm.calls).toBe(2)
+      const messages = yield* sessions.messages({ sessionID: parent.id })
+      expect(
+        messages.some((message) =>
+          message.info.role === "user"
+          && message.parts.some((part) => part.type === "text" && part.synthetic === true && part.text.includes(started.run.id)),
+        ),
+      ).toBe(true)
+      expect(yield* workflows.pendingNotifications(parent.id)).toEqual([])
     }),
     {
       git: true,
@@ -3027,7 +3161,7 @@ it.live("failed subtask preserves metadata on error tool state", () =>
 
       expect(tool.state.error).toContain("Tool execution failed")
       expect(tool.state.metadata).toBeDefined()
-      expect(tool.state.metadata?.sessionId).toBeDefined()
+      expect(tool.state.metadata?.sessionId).toBeUndefined()
       expect(tool.state.metadata?.model).toEqual({
         providerID: ProviderID.make("test"),
         modelID: ModelID.make("missing-model"),

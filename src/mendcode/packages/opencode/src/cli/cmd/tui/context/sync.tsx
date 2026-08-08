@@ -1112,11 +1112,11 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         sdk.client.planReview.list({ workspace }),
       ])
       batch(() => {
-        if (permissions.status === "fulfilled")
+        if (permissions.status === "fulfilled" && permissions.value.error === undefined)
           setStore("permission", reconcile(groupBySession(permissions.value.data ?? [])))
-        if (questions.status === "fulfilled")
+        if (questions.status === "fulfilled" && questions.value.error === undefined)
           setStore("question", reconcile(groupBySession(questions.value.data ?? [])))
-        if (planReviews.status === "fulfilled")
+        if (planReviews.status === "fulfilled" && planReviews.value.error === undefined)
           setStore("plan_review", reconcile(groupBySession(planReviews.value.data ?? [])))
       })
     }
