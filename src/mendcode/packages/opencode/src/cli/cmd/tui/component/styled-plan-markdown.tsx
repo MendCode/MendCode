@@ -1,4 +1,4 @@
-import { RGBA, type ScrollBoxRenderable, type SyntaxStyle } from "@opentui/core"
+import { RGBA, ScrollBoxRenderable, type MouseEvent as OpenTuiMouseEvent, type SyntaxStyle } from "@opentui/core"
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { normalizeHexColor } from "../util/hex-colors"
 import { extractMermaidSources, renderMermaidAsciiCard } from "../util/markdown-render"
@@ -212,9 +212,36 @@ function stopMouseEvent(event?: unknown) {
   value?.stopPropagation?.()
 }
 
-function stopMousePropagation(event?: unknown) {
-  const value = event as { stopPropagation?: () => void } | undefined
-  value?.stopPropagation?.()
+export function mermaidCardConsumesWheel(
+  event: Pick<OpenTuiMouseEvent, "modifiers" | "scroll">,
+  position: Pick<ScrollBoxRenderable, "scrollHeight" | "scrollLeft" | "scrollTop" | "scrollWidth" | "viewport">,
+) {
+  let direction = event.scroll?.direction
+  if (!direction) return false
+  if (event.modifiers.shift) {
+    direction = direction === "up" ? "left" : direction === "down" ? "right" : direction === "right" ? "down" : "up"
+  }
+
+  const maxX = Math.max(0, position.scrollWidth - position.viewport.width)
+  const maxY = Math.max(0, position.scrollHeight - position.viewport.height)
+  if (direction === "left") return position.scrollLeft > 0
+  if (direction === "right") return position.scrollLeft < maxX
+  if (direction === "up") return position.scrollTop > 0
+  return position.scrollTop < maxY
+}
+
+function effectiveWheelDirection(event: Pick<OpenTuiMouseEvent, "modifiers" | "scroll">) {
+  const direction = event.scroll?.direction
+  if (!direction || !event.modifiers.shift) return direction
+  return direction === "up" ? "left" : direction === "down" ? "right" : direction === "right" ? "down" : "up"
+}
+
+function parentScrollBox(renderable: ScrollBoxRenderable) {
+  let current = renderable.parent
+  while (current) {
+    if (current instanceof ScrollBoxRenderable) return current
+    current = current.parent
+  }
 }
 
 function MermaidAsciiCard(props: StyledPlanMarkdownProps & { content: string; mermaidSource?: string }) {
@@ -251,6 +278,19 @@ function MermaidAsciiCard(props: StyledPlanMarkdownProps & { content: string; me
   }
   const setLevel = (value: number) => {
     setLayoutLevel(Math.max(0, Math.min(2, value)))
+  }
+  const handleMouseScroll = (event: OpenTuiMouseEvent) => {
+    if (!scroll || scroll.isDestroyed) return
+    if (mermaidCardConsumesWheel(event, scroll)) event.stopPropagation()
+  }
+  const routeVerticalWheelToTranscript = (event: OpenTuiMouseEvent) => {
+    if (!scroll || scroll.isDestroyed) return
+    const direction = effectiveWheelDirection(event)
+    if (direction !== "up" && direction !== "down") return
+    const transcript = parentScrollBox(scroll)
+    if (!transcript || transcript.isDestroyed) return
+    event.stopPropagation()
+    transcript.processMouseEvent(event)
   }
 
   createEffect(() => {
@@ -292,9 +332,9 @@ function MermaidAsciiCard(props: StyledPlanMarkdownProps & { content: string; me
         viewportOptions={{ paddingRight: viewport().overflowY ? 1 : 0 }}
         horizontalScrollbarOptions={{ visible: viewport().overflowX }}
         verticalScrollbarOptions={{ visible: viewport().overflowY }}
-        onMouseScroll={stopMousePropagation}
+        onMouseScroll={handleMouseScroll}
       >
-        <box flexDirection="column" width={contentWidth()} flexShrink={0}>
+        <box flexDirection="column" width={contentWidth()} flexShrink={0} onMouseScroll={routeVerticalWheelToTranscript}>
           <text fg={props.fg} bg={props.bg} wrapMode="none">
             {centeredLines().join("\n") || " "}
           </text>

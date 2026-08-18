@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.30 - 2026-08-05
+## 0.1.30 - 2026-08-18
 
-MendCode v0.1.30 expands Full Prompt Context product awareness, makes Setup model presets provider-wide, and hardens memory extraction, Usage Insights, manual compaction testing, reconnecting TUI activity, release presentation, and Windows builds.
+MendCode v0.1.30 expands Full Prompt Context product awareness, completes Mermaid ASCII presentation, and hardens session history, test isolation, memory extraction, Usage Insights, reconnecting TUI activity, release presentation, and Windows builds.
 
 ### Added
 
@@ -19,6 +19,8 @@ MendCode v0.1.30 expands Full Prompt Context product awareness, makes Setup mode
 
 ### Fixed
 
+- Keep transcript scrolling responsive while the pointer is over a Mermaid card, while preserving Shift-wheel horizontal panning and working zoom, fit, and centering controls.
+- Fail closed before a test fixture can open or reset a SQLite database outside its isolated temporary roots, and block accidental root-level test discovery.
 - Bound automatic memory extraction to 45 seconds by default so a stalled extractor cannot keep a completed session busy indefinitely.
 - Make the manual queue/compaction smoke single-instance, recover stale locks, terminate child processes on interruption, and clean its isolated fixture and lock on exit.
 - Keep live long-running session activity authoritative beyond the stale snapshot timeout and stop tool animations immediately when `Esc` interrupts a run.
@@ -27,6 +29,7 @@ MendCode v0.1.30 expands Full Prompt Context product awareness, makes Setup mode
 
 ### Tests
 
+- Add nested transcript/Card interaction coverage for Mermaid zoom and wheel routing, plus regression coverage that rejects production-like SQLite paths during tests.
 - Add focused coverage for Full Prompt Context isolation, real CLI-family projection, provider-wide presets, free OpenCode model ordering, compact Usage Insights layouts, memory-extraction timeout recovery, queue-smoke lock cleanup, reconnect recovery, and ordered TUI activity phases.
 - Confirm the local-only queue/compaction smoke manually with three mock requests and no external provider contact.
 

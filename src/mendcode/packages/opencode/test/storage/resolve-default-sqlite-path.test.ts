@@ -3,6 +3,7 @@ import path from "path"
 import { mkdirSync, writeFileSync, rmSync } from "fs"
 import { tmpdir } from "node:os"
 import {
+  assertTestSqliteIsolation,
   legacyChannelDbPath,
   mendChannelDbPath,
   resolveDefaultSqliteDbPath,
@@ -84,5 +85,32 @@ describe("resolve-default-sqlite-path", () => {
         opencodeDb: abs,
       }),
     ).toBe(abs)
+  })
+
+  test("test isolation rejects a user database outside temporary roots", () => {
+    expect(() =>
+      assertTestSqliteIsolation({
+        dbPath: path.join(path.sep, "Users", "person", ".mendcode", "data", "mendcode-local.db"),
+        nodeEnv: "test",
+        allowedRoots: [path.join(path.sep, "tmp", "mendcode-tests")],
+      }),
+    ).toThrow("Refusing to use non-isolated SQLite database during tests")
+  })
+
+  test("test isolation allows memory and temporary databases", () => {
+    expect(() =>
+      assertTestSqliteIsolation({
+        dbPath: ":memory:",
+        nodeEnv: "test",
+        allowedRoots: [],
+      }),
+    ).not.toThrow()
+    expect(() =>
+      assertTestSqliteIsolation({
+        dbPath: path.join(tmpdir(), "mendcode-tests", "test.db"),
+        nodeEnv: "test",
+        allowedRoots: [tmpdir()],
+      }),
+    ).not.toThrow()
   })
 })
