@@ -77,7 +77,7 @@ describe("mend prompt composition", () => {
     expect(section?.text).toContain("TreeView")
     expect(section?.text).toContain("structure is materially clearer than prose")
     expect(section?.text).toContain("smallest fitting family")
-    expect(section?.text).toContain("decorative diagram")
+    expect(section?.text).toContain("decorative diagrams")
     expect(section?.text).toContain("#RRGGBB")
     expect(section?.text).toContain("ordinary rendered text")
     expect(section?.text).toContain("Embedded HTML and Markdown images are outside")

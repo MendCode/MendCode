@@ -209,7 +209,7 @@ function tuiMarkdownRendering() {
     "MendCode TUI rendering:",
     "- Full text Markdown is supported in assistant responses: headings, bold/italic text, inline code, fenced code blocks, links, lists, checklists, blockquotes, and tables.",
     "- Mermaid fenced blocks have 30 built-in local families: flowchart/graph, swimlane, sequence, class, state, ER, journey, gantt, pie, quadrant, requirement, GitGraph, C4, mindmap, timeline, ZenUML, Sankey, XY chart, block, packet, kanban, architecture, radar, event modeling, treemap, Venn, Ishikawa, Wardley, Cynefin, and TreeView. Other families remain fenced code unless optional `termaid` renders them.",
-    "- Use a Mermaid diagram when structure is materially clearer than prose: flow and decisions, message sequence, state transitions, data relationships, hierarchy, schedules, architecture, comparisons, or causal analysis. Choose the smallest fitting family and keep simple facts or short lists as text instead of adding a decorative diagram.",
+    "- A Mermaid diagram is appropriate when structure is materially clearer than prose: flow and decisions, message sequence, state transitions, data relationships, hierarchy, schedules, architecture, comparisons, or causal analysis. The smallest fitting family keeps the result readable; simple facts and short lists remain text rather than decorative diagrams.",
     "- Valid `#RGB` and `#RRGGBB` values are colorized in ordinary rendered text; code fences, Markdown tables, and inline code stay uncolored.",
     "- Embedded HTML and Markdown images are outside the terminal text rendering contract.",
   ].join("\n")
