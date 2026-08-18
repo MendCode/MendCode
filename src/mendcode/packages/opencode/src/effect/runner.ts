@@ -17,8 +17,14 @@ export interface Runner<A, E = never> {
   readonly setInterruptible: (interruptible: boolean) => Effect.Effect<void>
   readonly interrupt: Effect.Effect<void>
   readonly cancelCurrent: (options?: { before?: Effect.Effect<void>; cancelPending?: boolean }) => Effect.Effect<void>
+  readonly cancelCurrentIf: (
+    key: string,
+    options?: { before?: Effect.Effect<void>; cancelPending?: boolean; ignoreInterruptible?: boolean },
+  ) => Effect.Effect<CancelCurrentIfResult>
   readonly cancel: Effect.Effect<void>
 }
+
+export type CancelCurrentIfResult = "cancelled" | "target_mismatch" | "not_running" | "not_interruptible"
 
 export interface EnsureRunningOptions {
   queue?: boolean
@@ -336,6 +342,43 @@ export const make = <A, E = never>(
     }
   }).pipe(Effect.flatten)
 
+  const cancelCurrentIf = (
+    key: string,
+    options?: { before?: Effect.Effect<void>; cancelPending?: boolean; ignoreInterruptible?: boolean },
+  ): Effect.Effect<CancelCurrentIfResult> =>
+    SynchronizedRef.modify(
+      ref,
+      (st): readonly [Effect.Effect<CancelCurrentIfResult>, State<A, E>] => {
+        if (st._tag !== "Running" && st._tag !== "RunningThenRun") {
+          return [Effect.succeed("not_running" as const), st] as const
+        }
+        if (st.run.key !== key) return [Effect.succeed("target_mismatch" as const), st] as const
+        if (!st.run.interruptible && options?.ignoreInterruptible !== true)
+          return [Effect.succeed("not_interruptible" as const), st] as const
+        if (st._tag === "Running") {
+          return [
+            Effect.gen(function* () {
+              yield* options?.before ?? Effect.void
+              yield* Fiber.interrupt(st.run.fiber)
+              yield* Deferred.await(st.run.done).pipe(Effect.exit, Effect.asVoid)
+              return "cancelled" as const
+            }),
+            st,
+          ] as const
+        }
+        return [
+          Effect.gen(function* () {
+            if (options?.cancelPending) yield* cancelPendingHandles(st.next)
+            yield* options?.before ?? Effect.void
+            yield* Fiber.interrupt(st.run.fiber)
+            yield* Deferred.await(st.run.done).pipe(Effect.exit, Effect.asVoid)
+            return "cancelled" as const
+          }),
+          options?.cancelPending ? { _tag: "Running", run: st.run } as const : st,
+        ] as const
+      },
+    ).pipe(Effect.flatten)
+
   const cancel = cancelCurrent()
 
   const cancelPending = (predicate: (key?: string) => boolean) =>
@@ -423,6 +466,7 @@ export const make = <A, E = never>(
     setInterruptible,
     interrupt,
     cancelCurrent,
+    cancelCurrentIf,
     cancel,
   }
 }

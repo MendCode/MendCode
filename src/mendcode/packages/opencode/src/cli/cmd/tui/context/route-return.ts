@@ -7,7 +7,8 @@ export function routeReturnTarget(route: { type: string; returnTo?: RouteReturnT
       route.type === "memory" ||
       route.type === "changes" ||
       route.type === "loops" ||
-      route.type === "workflows") &&
+      route.type === "workflows" ||
+      route.type === "session-history") &&
     route.returnTo
   ) {
     return route.returnTo

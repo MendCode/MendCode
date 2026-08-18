@@ -10,14 +10,18 @@ import { useToast } from "@tui/ui/toast"
 import { useDialog } from "@tui/ui/dialog"
 import { DialogConfirm } from "@tui/ui/dialog-confirm"
 import { DialogSelect } from "@tui/ui/dialog-select"
+import { DialogAlert } from "@tui/ui/dialog-alert"
+import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
 import { CommandDeck, CommandDeckContext } from "@tui/component/command-deck"
 import {
   workflowCurrentActivity,
   workflowMonitorFooter,
   workflowMonitorLayout,
+  workflowMonitorResumeTarget,
   workflowMonitorRows,
   workflowMonitorSessionID,
   workflowMonitorTaskRows,
+  workflowRequestErrorText,
 } from "@tui/util/workflow-view"
 import {
   workflowReceiptStateIsAnimated,
@@ -29,12 +33,7 @@ import {
 
 type WorkflowSnapshot = NonNullable<Awaited<ReturnType<OpencodeClient["workflow"]["show"]>>["data"]>
 type WorkflowPermissionMode = NonNullable<WorkflowSnapshot["run"]["permissionMode"]>
-
-function errorText(error: unknown) {
-  if (error instanceof Error && error.message) return error.message
-  if (typeof error === "string" && error) return error
-  return "Workflow request failed."
-}
+type WorkflowSessionPermissionMode = "approval" | "smart" | "full_access"
 
 function short(value: string, width: number) {
   if (value.length <= width) return value
@@ -53,6 +52,12 @@ function permissionModeLabel(mode: WorkflowPermissionMode) {
   if (mode === "report-only") return "report-only"
   if (mode === "normal") return "normal"
   return "custom"
+}
+
+function sessionPermissionModeLabel(mode: WorkflowSessionPermissionMode) {
+  if (mode === "full_access") return "Full Access"
+  if (mode === "smart") return "Smart Approval"
+  return "Require approval"
 }
 
 function receipt(snapshot: WorkflowSnapshot): WorkflowReceiptSnapshot {
@@ -136,9 +141,10 @@ export function Workflows() {
 
   const [runs] = createResource(refresh, async () => {
     const response = await sdk.client.workflow.list({ limit: 100 })
-    if (response.error) throw new Error(errorText(response.error))
+    if (response.error) throw new Error(workflowRequestErrorText(response.error))
     return response.data ?? []
   })
+  const [permissionsConfig, { refetch: refetchPermissionsConfig }] = createResource(async () => readPermissionsConfig())
 
   const items = createMemo(() => runs.latest ?? runs() ?? [])
   const selected = createMemo(() => items().find((item) => item.run.id === selectedID()) ?? items()[0])
@@ -148,7 +154,7 @@ export function Workflows() {
   })
   const [detail] = createResource(detailKey, async (key) => {
     const response = await sdk.client.workflow.show({ runID: key.split(":", 1)[0] })
-    if (response.error) throw new Error(errorText(response.error))
+    if (response.error) throw new Error(workflowRequestErrorText(response.error))
     return response.data
   })
   const current = createMemo(() => {
@@ -205,6 +211,12 @@ export function Workflows() {
     const item = current()
     return item?.run.permissionMode ?? item?.revision.plan.permissions?.mode ?? "normal"
   })
+  const currentSessionPermissionOverride = createMemo<WorkflowSessionPermissionMode | undefined>(
+    () => current()?.run.sessionPermissionMode,
+  )
+  const currentSessionPermissionMode = createMemo<WorkflowSessionPermissionMode>(
+    () => currentSessionPermissionOverride() ?? permissionsConfig()?.mode ?? "approval",
+  )
   const currentReceipt = createMemo(() => {
     const item = current()
     return item ? receipt(item) : undefined
@@ -270,13 +282,42 @@ export function Workflows() {
       dialog.clear()
       if (!confirmed) return
     }
+    if (action === "resume") {
+      const target = workflowMonitorResumeTarget(receipt(item))
+      if (target.kind === "retry-task") {
+        const response = await sdk.client.workflow.retryTask({
+          runID: item.run.id,
+          taskID: target.taskID,
+          reason: "TUI resume failed workflow",
+        })
+        if (response.error) throw new Error(workflowRequestErrorText(response.error))
+        setRefresh((value) => value + 1)
+        toast.show({ variant: "success", message: `Task ${target.name} queued to resume workflow.`, duration: 2500 })
+        return
+      }
+      if (target.kind === "retry-phase") {
+        const response = await sdk.client.workflow.retryPhase({
+          runID: item.run.id,
+          phaseID: target.phaseID,
+          reason: "TUI resume failed workflow",
+        })
+        if (response.error) throw new Error(workflowRequestErrorText(response.error))
+        setRefresh((value) => value + 1)
+        toast.show({ variant: "success", message: `Phase ${target.name} queued to resume workflow.`, duration: 2500 })
+        return
+      }
+      if (target.kind === "unavailable") {
+        toast.show({ variant: "warning", message: "No failed task or phase is available to retry.", duration: 3000 })
+        return
+      }
+    }
     const response =
       action === "pause"
         ? await sdk.client.workflow.pause({ runID: item.run.id, reason: "TUI pause" })
         : action === "resume"
           ? await sdk.client.workflow.resume({ runID: item.run.id, reason: "TUI resume" })
           : await sdk.client.workflow.stop({ runID: item.run.id, reason: "TUI stop" })
-    if (response.error) throw new Error(errorText(response.error))
+    if (response.error) throw new Error(workflowRequestErrorText(response.error))
     setRefresh((value) => value + 1)
     toast.show({ variant: "success", message: `Workflow ${action} requested.`, duration: 2500 })
   }
@@ -298,53 +339,139 @@ export function Workflows() {
       taskID: task.id,
       reason: "TUI task retry",
     })
-    if (response.error) throw new Error(errorText(response.error))
+    if (response.error) throw new Error(workflowRequestErrorText(response.error))
     setRefresh((value) => value + 1)
     toast.show({ variant: "success", message: `Task ${task.name} queued for retry.`, duration: 2500 })
   }
 
-  async function setPermissionMode(mode: WorkflowPermissionMode) {
+  async function setWorkflowSessionPermissionMode(mode: WorkflowSessionPermissionMode | null) {
     const item = current()
     if (!item) return
     const response = await sdk.client.workflow.permissionMode({
       runID: item.run.id,
-      mode,
-      reason: "TUI permission mode",
+      sessionMode: mode ?? "global_default",
+      reason: mode ? `TUI workflow session mode: ${mode}` : "TUI workflow session mode: global default",
     })
-    if (response.error) throw new Error(errorText(response.error))
+    if (response.error) throw new Error(workflowRequestErrorText(response.error))
     setRefresh((value) => value + 1)
     toast.show({
       variant: "success",
-      message: `Workflow permission mode: ${permissionModeLabel(mode)}.`,
+      message: mode
+        ? `Workflow sessions now use ${sessionPermissionModeLabel(mode)}.`
+        : `Workflow sessions now follow the global default: ${sessionPermissionModeLabel(permissionsConfig()?.mode ?? "approval")}.`,
+      duration: 3000,
+    })
+  }
+
+  async function setGlobalPermissionMode(mode: PermissionMode) {
+    await writePermissionsConfig({ mode })
+    await refetchPermissionsConfig()
+    if (!currentSessionPermissionOverride()) await setWorkflowSessionPermissionMode(null)
+    toast.show({
+      variant: "success",
+      message: `Global permission default saved: ${sessionPermissionModeLabel(mode)}.`,
       duration: 3000,
     })
   }
 
   function showPermissionMode() {
+    const item = current()
+    const sessionIDs = item
+      ? [item.run.rootSessionID, ...item.tasks.map((task) => task.sessionID)].filter(
+          (sessionID): sessionID is string => Boolean(sessionID),
+        )
+      : []
+    const pending = sessionIDs.reduce((total, sessionID) => total + (sync.data.permission[sessionID]?.length ?? 0), 0)
     dialog.replace(() => (
       <DialogSelect
-        title="Workflow permission mode"
-        current={currentPermissionMode()}
+        title="Workflow session permissions"
+        current={currentSessionPermissionMode()}
         options={[
           {
-            title: "Normal",
-            value: "normal" as const,
-            description: "Allow workflow side effects and release pending permission requests.",
+            title: "Require approval",
+            value: "approval" as const,
+            description: "Ask before shell commands and other protected actions.",
           },
           {
-            title: "Report-only",
-            value: "report-only" as const,
-            description: "Deny edits, commands, child agents, and external side effects.",
+            title: "Smart Approval",
+            value: "smart" as const,
+            description: "Automatically allow deterministically safe commands; ask for risky actions.",
           },
           {
-            title: "Custom",
-            value: "custom" as const,
-            description: "Use the permission policy declared by the workflow plan.",
+            title: "Full Access",
+            value: "full_access" as const,
+            description: "Automatically allow prompts unless an explicit deny rule applies.",
+          },
+          {
+            title: "Use global default",
+            value: "global_default" as const,
+            description: `Clear this workflow override; default is ${sessionPermissionModeLabel(permissionsConfig()?.mode ?? "approval")}.`,
+          },
+          {
+            title: "Set global default",
+            value: "set_default" as const,
+            description: "Choose the default mode for workflows and interactive sessions.",
+          },
+          {
+            title: "View permission details",
+            value: "details" as const,
+            description: `Workflow policy: ${permissionModeLabel(currentPermissionMode())}; pending: ${pending}.`,
           },
         ]}
         onSelect={(option) => {
-          dialog.clear()
-          void setPermissionMode(option.value).catch((error) => toast.error(error))
+          if (option.value === "approval" || option.value === "smart" || option.value === "full_access") {
+            dialog.clear()
+            void setWorkflowSessionPermissionMode(option.value).catch((error) => toast.error(error))
+            return
+          }
+          if (option.value === "global_default") {
+            dialog.clear()
+            void setWorkflowSessionPermissionMode(null).catch((error) => toast.error(error))
+            return
+          }
+          if (option.value === "set_default") {
+            dialog.replace(() => (
+              <DialogSelect
+                title="Default permission mode"
+                current={permissionsConfig()?.mode ?? "approval"}
+                options={[
+                  {
+                    title: "Require approval",
+                    value: "approval" as const,
+                    description: "Default future sessions to manual permission prompts.",
+                  },
+                  {
+                    title: "Smart Approval",
+                    value: "smart" as const,
+                    description: "Default future sessions to deterministic safe-command approval.",
+                  },
+                  {
+                    title: "Full Access",
+                    value: "full_access" as const,
+                    description: "Default future sessions to automatic permission approval.",
+                  },
+                ]}
+                onSelect={(selected) => {
+                  dialog.clear()
+                  void setGlobalPermissionMode(selected.value).catch((error) => toast.error(error))
+                }}
+              />
+            ))
+            return
+          }
+          void DialogAlert.show(
+            dialog,
+            "Workflow permissions",
+            [
+              `Session mode: ${sessionPermissionModeLabel(currentSessionPermissionMode())}`,
+              `Workflow override: ${currentSessionPermissionOverride() ? sessionPermissionModeLabel(currentSessionPermissionOverride()!) : "none"}`,
+              `Global default: ${sessionPermissionModeLabel(permissionsConfig()?.mode ?? "approval")}`,
+              `Workflow policy: ${permissionModeLabel(currentPermissionMode())}`,
+              `Pending permission requests: ${pending}`,
+              "",
+              "Session modes do not override explicit deny rules or report-only/custom workflow gates.",
+            ].join("\n"),
+          )
         }}
       />
     ))
@@ -367,7 +494,7 @@ export function Workflows() {
       phaseID: phase.id,
       reason: "TUI phase retry",
     })
-    if (response.error) throw new Error(errorText(response.error))
+    if (response.error) throw new Error(workflowRequestErrorText(response.error))
     setRefresh((value) => value + 1)
     toast.show({ variant: "success", message: `Phase ${phase.name} queued for retry.`, duration: 2500 })
   }
@@ -387,7 +514,7 @@ export function Workflows() {
     dialog.clear()
     if (!confirmed) return
     const response = await sdk.client.workflow.delete({ runID: item.run.id })
-    if (response.error) throw new Error(errorText(response.error))
+    if (response.error) throw new Error(workflowRequestErrorText(response.error))
     setSelectedID(undefined)
     setRefresh((value) => value + 1)
     toast.show({ variant: "success", message: "Workflow deleted.", duration: 2500 })
@@ -573,7 +700,7 @@ export function Workflows() {
                   {item().run.rootSessionID ? `root ${item().run.rootSessionID}` : "root session pending"}
                 </text>
                 <text fg={theme.secondary} wrapMode="none">
-                  permission {permissionModeLabel(currentPermissionMode())} · m change
+                  session {sessionPermissionModeLabel(currentSessionPermissionMode())} · policy {permissionModeLabel(currentPermissionMode())} · m change
                 </text>
                 <Show when={currentActivity()}>
                   {(activity) => (
@@ -674,7 +801,7 @@ export function Workflows() {
                   </text>
                   <Show when={runs.error}>
                     <text fg={theme.warning} wrapMode="none">
-                      {errorText(runs.error)}
+                      {workflowRequestErrorText(runs.error)}
                     </text>
                   </Show>
                   <Show when={detail.error && !runs.error}>

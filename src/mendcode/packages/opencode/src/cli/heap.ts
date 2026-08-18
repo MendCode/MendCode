@@ -3,6 +3,7 @@ import { writeHeapSnapshot } from "node:v8"
 import { Flag } from "@mendcode/core/flag/flag"
 import { Global } from "@mendcode/core/global"
 import * as Log from "@mendcode/core/util/log"
+import { MEMORY_CRITICAL_RSS_BYTES, MEMORY_WARN_RSS_BYTES } from "@/util/process-memory"
 
 const log = Log.create({ service: "heap" })
 const MINUTE = 60_000
@@ -22,14 +23,15 @@ function telemetryInterval() {
 export function start() {
   const snapshotsEnabled = Flag.OPENCODE_AUTO_HEAP_SNAPSHOT
   const telemetryEnabled = process.env.MENDCODE_MEMORY_TELEMETRY === "1"
-  if (!snapshotsEnabled && !telemetryEnabled) return
+  const guardrailEnabled = process.env.MENDCODE_MEMORY_GUARDRAIL !== "0"
+  if (!snapshotsEnabled && !telemetryEnabled && !guardrailEnabled) return
   if (timer) return
 
   const run = async () => {
     if (lock) return
 
     const stat = process.memoryUsage()
-    if (telemetryEnabled) {
+    if (telemetryEnabled || stat.rss >= MEMORY_WARN_RSS_BYTES) {
       log.info("memory telemetry", {
         pid: process.pid,
         process_role: process.env.OPENCODE_PROCESS_ROLE ?? "main",
@@ -38,6 +40,12 @@ export function start() {
         heap_used: stat.heapUsed,
         external: stat.external,
         array_buffers: stat.arrayBuffers,
+        guardrail:
+          stat.rss >= MEMORY_CRITICAL_RSS_BYTES
+            ? "critical"
+            : stat.rss >= MEMORY_WARN_RSS_BYTES
+              ? "warning"
+              : "ok",
       })
     }
 

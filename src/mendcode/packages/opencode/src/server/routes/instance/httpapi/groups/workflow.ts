@@ -131,7 +131,10 @@ export const WorkflowStartPayload = Schema.Struct({
 export const WorkflowControlPayload = Schema.Struct({ reason: Schema.optional(Schema.String) })
 
 export const WorkflowPermissionModePayload = Schema.Struct({
-  mode: Workflow.WorkflowPermissionMode,
+  mode: Schema.optional(Workflow.WorkflowPermissionMode),
+  sessionMode: Schema.optional(
+    Schema.Union([Workflow.WorkflowSessionPermissionMode, Schema.Literal("global_default"), Schema.Null]),
+  ),
   reason: Schema.optional(Schema.String),
 })
 

@@ -18,7 +18,10 @@ import {
 import { jsonRequest, runRequest } from "./trace"
 
 const reasonBody = z.object({ reason: z.string().optional() })
-const permissionModeBody = reasonBody.extend({ mode: z.enum(["report-only", "normal", "custom"]) })
+const permissionModeBody = reasonBody.extend({
+  mode: z.enum(["report-only", "normal", "custom"]).optional(),
+  sessionMode: z.enum(["approval", "smart", "full_access", "global_default"]).nullable().optional(),
+})
 const previewBody = z.object({ plan: WorkflowPlan.zod })
 const saveBody = previewBody.extend({
   definitionID: z.string().optional(),
@@ -115,7 +118,20 @@ export const WorkflowRoutes = () =>
     .get("/", async (c) =>
       jsonRequest("WorkflowRoutes.list", c, function* () {
         const workflow = yield* WorkflowService
-        return yield* workflow.list(queryLimit(c.req.query("limit")))
+        const runner = yield* WorkflowRunner.Service
+        const initial = yield* workflow.list(queryLimit(c.req.query("limit")))
+        const stranded = initial.filter((snapshot) => snapshot.run.state === "needs_input")
+        yield* Effect.forEach(stranded, (snapshot) => runner.run(snapshot.run.id).pipe(Effect.catchCause(() => Effect.void)), {
+          concurrency: 8,
+          discard: true,
+        })
+        const snapshots = stranded.length ? yield* workflow.list(queryLimit(c.req.query("limit"))) : initial
+        yield* Effect.forEach(
+          snapshots.filter((snapshot) => snapshot.run.state === "queued" || snapshot.run.state === "working"),
+          (snapshot) => runner.start(snapshot.run.id),
+          { concurrency: 8, discard: true },
+        )
+        return snapshots
       }),
     )
     .get("/:runID", async (c) =>
@@ -124,7 +140,12 @@ export const WorkflowRoutes = () =>
         c,
         Effect.gen(function* () {
           const workflow = yield* WorkflowService
-          return yield* workflow.show(Workflow.WorkflowRunID.make(c.req.param("runID")))
+          const runner = yield* WorkflowRunner.Service
+          const initial = yield* workflow.show(Workflow.WorkflowRunID.make(c.req.param("runID")))
+          if (initial.run.state === "needs_input") yield* runner.run(initial.run.id).pipe(Effect.catchCause(() => Effect.void))
+          const snapshot = initial.run.state === "needs_input" ? yield* workflow.show(initial.run.id) : initial
+          if (snapshot.run.state === "queued" || snapshot.run.state === "working") yield* runner.start(snapshot.run.id)
+          return snapshot
         }),
       ),
     )
@@ -192,7 +213,7 @@ export const WorkflowRoutes = () =>
             reason: body.reason,
             actor: "api",
           })
-          yield* runner.start(resumed.run.id)
+          yield* runner.wake(resumed.run.id)
           return resumed
         }),
       )
@@ -225,6 +246,7 @@ export const WorkflowRoutes = () =>
           const changed = yield* runner.setPermissionMode({
             runID: Workflow.WorkflowRunID.make(c.req.param("runID")),
             mode: body.mode,
+            sessionMode: body.sessionMode === "global_default" ? null : body.sessionMode,
             reason: body.reason,
             actor: "api",
           })

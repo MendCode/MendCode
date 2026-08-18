@@ -16,9 +16,11 @@ import {
   workflowCurrentActivity,
   workflowMonitorFooter,
   workflowMonitorLayout,
+  workflowMonitorResumeTarget,
   workflowMonitorRows,
   workflowMonitorTaskRows,
   workflowMonitorSessionID,
+  workflowRequestErrorText,
   workflowParentSessionID,
   workflowTaskSessionContext,
   workflowTaskSiblingSessionID,
@@ -47,6 +49,49 @@ describe("workflow monitor helpers", () => {
     expect(workflowMonitorLayout({ width: 80, height: 30 })).toMatchObject({ compact: true, stacked: true })
     expect(workflowMonitorLayout({ width: 140, height: 30 })).toMatchObject({ compact: false, stacked: false })
     expect(workflowMonitorLayout({ width: 140, height: 20 })).toMatchObject({ compact: true, stacked: true })
+  })
+
+  test("retries failed workflow work while normally resuming non-terminal runs", () => {
+    expect(workflowMonitorResumeTarget(snapshot())).toEqual({ kind: "resume" })
+    expect(
+      workflowMonitorResumeTarget(
+        snapshot({
+          run: { ...snapshot().run, state: "failed" },
+          phases: [
+            {
+              id: "phase_1",
+              state: "failed",
+              counts: { total: 1, queued: 0, working: 0, completed: 0, failed: 1, blocked: 0 },
+            },
+          ],
+          tasks: [{ id: "task_1", name: "Implement", phaseID: "phase_1", state: "failed" }],
+        }),
+      ),
+    ).toEqual({ kind: "retry-task", taskID: "task_1", name: "Implement" })
+    expect(
+      workflowMonitorResumeTarget(
+        snapshot({
+          run: { ...snapshot().run, state: "failed" },
+          phases: [
+            {
+              id: "phase_1",
+              name: "Implementation",
+              state: "failed",
+              counts: { total: 0, queued: 0, working: 0, completed: 0, failed: 1, blocked: 0 },
+            },
+          ],
+          tasks: [],
+        }),
+      ),
+    ).toEqual({ kind: "retry-phase", phaseID: "phase_1", name: "Implementation" })
+  })
+
+  test("surfaces structured workflow API errors", () => {
+    expect(workflowRequestErrorText({ errors: [{ message: "Run is already terminal." }] })).toBe(
+      "Run is already terminal.",
+    )
+    expect(workflowRequestErrorText({ data: { message: "Run not found." } })).toBe("Run not found.")
+    expect(workflowRequestErrorText({ errors: [] })).toBe("Workflow request failed.")
   })
 
   test("advertises the controls implemented by the monitor", () => {

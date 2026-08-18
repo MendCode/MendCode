@@ -128,6 +128,11 @@ export const GlobalRoutes = lazy(() =>
                     external: z.number(),
                     arrayBuffers: z.number(),
                     uptimeSeconds: z.number(),
+                    memoryGuardrail: z.object({
+                      status: z.enum(["ok", "warning", "critical"]),
+                      warnBytes: z.number(),
+                      criticalBytes: z.number(),
+                    }),
                   }),
                 ),
               },

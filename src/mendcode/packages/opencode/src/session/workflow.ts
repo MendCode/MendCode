@@ -169,6 +169,11 @@ export const WorkflowPermissionMode = Schema.Literals(["report-only", "normal", 
 )
 export type WorkflowPermissionMode = Schema.Schema.Type<typeof WorkflowPermissionMode>
 
+export const WorkflowSessionPermissionMode = Schema.Literals(["approval", "smart", "full_access"]).pipe(
+  withStatics((schema) => ({ zod: zod(schema) })),
+)
+export type WorkflowSessionPermissionMode = Schema.Schema.Type<typeof WorkflowSessionPermissionMode>
+
 export const WorkflowPermissionPolicy = Schema.Struct({
   mode: WorkflowPermissionMode,
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
@@ -190,6 +195,32 @@ export const WorkflowFailureClass = Schema.Literals([
   "terminal",
 ]).pipe(withStatics((schema) => ({ zod: zod(schema) })))
 export type WorkflowFailureClass = Schema.Schema.Type<typeof WorkflowFailureClass>
+
+const transientWorkflowErrorPatterns = [
+  /file\s+(?:is\s+)?locked/i,
+  /resource\s+busy/i,
+  /(?:eagain|ebusy|temporarily unavailable)/i,
+  /connection\s+(?:lost|reset|closed)/i,
+  /network\s+(?:error|unavailable)/i,
+  /(?:network\s+)?request\s+failed/i,
+  /(?:timed?\s*out|timeout)/i,
+  /(?:fetch failed|socket hang up)/i,
+  /(?:runtime\s+)?lease\s+expired/i,
+  /worker\s+process\s+(?:exited|restarted)/i,
+  /\b(?:502|503|504)\b/,
+]
+
+export function isTransientWorkflowError(error: unknown) {
+  const text =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+          ? error.message
+          : String(error)
+  return transientWorkflowErrorPatterns.some((pattern) => pattern.test(text))
+}
 
 export const WorkflowRetryPolicy = Schema.Struct({
   maxAttempts: Schema.optional(PositiveInt),
@@ -362,6 +393,7 @@ export const WorkflowRun = Schema.Struct({
   loopRunID: Schema.optional(Schema.String),
   workspaceLease: Schema.optional(WorkflowWorkspaceLease),
   permissionMode: Schema.optional(WorkflowPermissionMode),
+  sessionPermissionMode: Schema.optional(WorkflowSessionPermissionMode),
   state: WorkflowRunState,
   currentPhaseID: Schema.optional(WorkflowPhaseID),
   createdAt: NonNegativeInt,

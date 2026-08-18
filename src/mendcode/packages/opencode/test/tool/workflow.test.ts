@@ -74,6 +74,7 @@ describe("tool.workflow", () => {
         WorkflowRunner.Service,
         WorkflowRunner.Service.of({
           start: (runID) => Effect.sync(() => void runID),
+          wake: (runID) => Effect.sync(() => void runID),
           run: () => Effect.void,
           stop: () => Effect.void,
           setPermissionMode: () => Effect.die("unused workflow runner method"),

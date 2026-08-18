@@ -86,6 +86,23 @@ function withProvided(dir: string) {
 
 // fromConfig tests
 
+test("withSessionMode preserves policy rules and replaces only the mode marker", () => {
+  expect(
+    Permission.withSessionMode(
+      [
+        { permission: "bash", pattern: "rm *", action: "deny" },
+        Permission.sessionModeRule("approval"),
+        { permission: "edit", pattern: "*", action: "ask" },
+      ],
+      "smart",
+    ),
+  ).toEqual([
+    { permission: "bash", pattern: "rm *", action: "deny" },
+    { permission: "edit", pattern: "*", action: "ask" },
+    Permission.sessionModeRule("smart"),
+  ])
+})
+
 test("fromConfig - string value becomes wildcard rule", () => {
   const result = Permission.fromConfig({ bash: "allow" })
   expect(result).toEqual([{ permission: "bash", pattern: "*", action: "allow" }])
@@ -577,6 +594,26 @@ it.live("ask - resolves immediately when action is allow", () =>
         ruleset: [{ permission: "bash", pattern: "*", action: "allow" }],
       })
       expect(result).toBeUndefined()
+    }),
+  ),
+)
+
+it.live("ask - Smart mode immediately allows a deterministically safe command", () =>
+  withDir({ git: true }, () =>
+    Effect.gen(function* () {
+      const result = yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["date -u +%Y-%m-%dT%H:%M:%SZ"],
+        metadata: {},
+        always: [],
+        ruleset: [
+          { permission: "*", pattern: "*", action: "allow" },
+          Permission.sessionModeRule("smart"),
+        ],
+      })
+      expect(result).toBeUndefined()
+      expect(yield* list()).toHaveLength(0)
     }),
   ),
 )

@@ -56,6 +56,7 @@ const commandLoaders = {
   pr: () => import("./cli/cmd/pr").then((module) => module.PrCommand),
   session: () => import("./cli/cmd/session").then((module) => module.SessionCommand),
   plugin: () => import("./cli/cmd/plug").then((module) => module.PluginCommand),
+  theme: () => import("./cli/cmd/theme").then((module) => module.ThemeCommand),
   db: () => import("./cli/cmd/db").then((module) => module.DbCommand),
   "global-layout": () => import("./cli/cmd/global-layout").then((module) => module.GlobalLayoutCommand),
 } satisfies Record<string, () => Promise<RuntimeCommand>>

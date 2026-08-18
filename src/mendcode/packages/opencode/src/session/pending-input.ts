@@ -11,12 +11,12 @@ import {
   LoopRunTable,
   LoopThreadTable,
   LoopWorkflowTable,
-  WorkflowPhaseTable,
+  PermissionTable,
   WorkflowRunTable,
   WorkflowTaskAttemptTable,
   WorkflowTaskTable,
 } from "./session.sql"
-import { WORKFLOW_PERMISSION_ABANDONED_REASON } from "./workflow-service"
+import { reconcileWorkflowSessionState, WORKFLOW_PERMISSION_ABANDONED_REASON } from "./workflow-service"
 
 const pendingSummary = (permission: string, patterns: readonly string[]) =>
   `Permission required: ${permission}${patterns.length ? ` — ${patterns.join(", ")}` : ""}`
@@ -73,7 +73,7 @@ function updateBackgroundTask(
       : run.state === "running" || run.state === "needs_input"
   if (!allowed) return
   const revision = run.revision + 1
-  db.update(BackgroundTaskRunTable)
+  const changed = db.update(BackgroundTaskRunTable)
     .set({
       state: input.state,
       revision,
@@ -99,7 +99,9 @@ function updateBackgroundTask(
         eq(BackgroundTaskRunTable.revision, run.revision),
       ),
     )
-    .run()
+    .returning({ revision: BackgroundTaskRunTable.revision })
+    .get()
+  if (!changed) return
   db.update(BackgroundTaskTable)
     .set({ time_updated: input.now })
     .where(eq(BackgroundTaskTable.task_id, input.sessionID))
@@ -115,7 +117,7 @@ function updateBackgroundTask(
         ),
       )
       .run()
-    return
+    return { generation: task.current_generation }
   }
   db.insert(BackgroundTaskEventTable)
     .values({
@@ -138,69 +140,32 @@ function updateBackgroundTask(
     })
     .onConflictDoNothing()
     .run()
-}
-
-function reconcileWorkflow(
-  db: TxOrDb,
-  runID: string,
-  now: number,
-) {
-  const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, runID as never)).get()
-  if (!run) return
-  const phases = db.select().from(WorkflowPhaseTable).where(eq(WorkflowPhaseTable.run_id, run.id)).all()
-  const tasks = db.select().from(WorkflowTaskTable).where(eq(WorkflowTaskTable.run_id, run.id)).all()
-  for (const phase of phases) {
-    const phaseTasks = tasks.filter((task) => task.phase_id === phase.id)
-    const state = phaseTasks.some((task) => task.state === "needs_input")
-      ? "needs_input" as const
-      : phaseTasks.some((task) => task.state === "failed")
-        ? "failed" as const
-        : phaseTasks.some((task) => task.state === "blocked" || task.state === "stopped")
-          ? "blocked" as const
-          : phaseTasks.some((task) => task.state === "working")
-            ? "working" as const
-            : phaseTasks.some((task) => task.state === "queued")
-              ? "queued" as const
-              : phase.state
-    db.update(WorkflowPhaseTable)
-      .set({
-        state,
-        task_count: phaseTasks.length,
-        queued_count: phaseTasks.filter((task) => task.state === "queued").length,
-        working_count: phaseTasks.filter((task) => task.state === "working").length,
-        completed_count: phaseTasks.filter((task) => task.state === "completed").length,
-        failed_count: phaseTasks.filter((task) => task.state === "failed").length,
-        blocked_count: phaseTasks.filter((task) => task.state === "blocked" || task.state === "stopped").length,
-        time_updated: now,
-        ...(state === "failed" || state === "blocked" ? { time_ended: now } : {}),
-      })
-      .where(and(eq(WorkflowPhaseTable.run_id, run.id), eq(WorkflowPhaseTable.id, phase.id)))
-      .run()
-  }
-  const state = tasks.some((task) => task.state === "needs_input")
-    ? "needs_input" as const
-    : tasks.some((task) => task.state === "failed")
-      ? "failed" as const
-      : tasks.some((task) => task.state === "blocked" || task.state === "stopped")
-        ? "blocked" as const
-        : tasks.some((task) => task.state === "working" || task.state === "queued")
-          ? "working" as const
-          : run.state
-  db.update(WorkflowRunTable)
-    .set({
-      state,
-      time_updated: now,
-      ...(state === "failed" ? { time_ended: now, lease_holder: null, lease_expires_at: null } : {}),
-    })
-    .where(eq(WorkflowRunTable.id, run.id))
-    .run()
+  return { generation: task.current_generation }
 }
 
 function updateWorkflowTask(
   db: TxOrDb,
-  input: { sessionID: SessionID; state: "needs_input" | "working" | "failed"; summary: string; now: number },
+  input: {
+    sessionID: SessionID
+    backgroundGeneration?: number
+    state: "needs_input" | "working" | "failed"
+    summary: string
+    now: number
+  },
 ) {
-  const attempts = db.select().from(WorkflowTaskAttemptTable).where(eq(WorkflowTaskAttemptTable.background_task_id, input.sessionID)).all()
+  const attempts = db
+    .select()
+    .from(WorkflowTaskAttemptTable)
+    .where(
+      input.backgroundGeneration === undefined
+        ? eq(WorkflowTaskAttemptTable.background_task_id, input.sessionID)
+        : and(
+            eq(WorkflowTaskAttemptTable.background_task_id, input.sessionID),
+            eq(WorkflowTaskAttemptTable.background_generation, input.backgroundGeneration),
+          ),
+    )
+    .all()
+  const changedRunIDs = new Set<string>()
   for (const attempt of attempts) {
     const allowed = input.state === "needs_input"
       ? attempt.state === "working"
@@ -208,7 +173,11 @@ function updateWorkflowTask(
         ? attempt.state === "needs_input"
         : attempt.state === "working" || attempt.state === "needs_input"
     if (!allowed) continue
-    db.update(WorkflowTaskAttemptTable)
+    if (input.state === "failed") {
+      const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, attempt.run_id)).get()
+      if (!run || !["working", "needs_input"].includes(run.state)) continue
+    }
+    const changed = db.update(WorkflowTaskAttemptTable)
       .set({
         state: input.state,
         time_updated: input.now,
@@ -219,8 +188,10 @@ function updateWorkflowTask(
           ? { failure_class: "environment", reason: input.summary, time_completed: input.now }
           : {}),
       })
-      .where(eq(WorkflowTaskAttemptTable.id, attempt.id))
-      .run()
+      .where(and(eq(WorkflowTaskAttemptTable.id, attempt.id), eq(WorkflowTaskAttemptTable.state, attempt.state)))
+      .returning({ id: WorkflowTaskAttemptTable.id })
+      .get()
+    if (!changed) continue
     const task = db.select().from(WorkflowTaskTable).where(
       and(eq(WorkflowTaskTable.run_id, attempt.run_id), eq(WorkflowTaskTable.id, attempt.task_id)),
     ).get()
@@ -234,8 +205,10 @@ function updateWorkflowTask(
         .where(and(eq(WorkflowTaskTable.run_id, attempt.run_id), eq(WorkflowTaskTable.id, attempt.task_id)))
         .run()
     }
-    reconcileWorkflow(db, attempt.run_id, input.now)
+    changedRunIDs.add(attempt.run_id)
   }
+  for (const runID of changedRunIDs) reconcileWorkflowSessionState(db, runID as never, input.now)
+  return changedRunIDs.size
 }
 
 function markPermissionPendingNow(input: { sessionID: SessionID; permission: string; patterns: readonly string[] }) {
@@ -254,8 +227,16 @@ function markPermissionPendingNow(input: { sessionID: SessionID; permission: str
         .run()
       if (loop.root_session_id) updateLoopBackground(db, loop.root_session_id, "needs_input", summary, now)
     }
-    updateBackgroundTask(db, { sessionID: input.sessionID, state: "needs_input", summary, now })
-    updateWorkflowTask(db, { sessionID: input.sessionID, state: "needs_input", summary, now })
+    const background = updateBackgroundTask(db, { sessionID: input.sessionID, state: "needs_input", summary, now })
+    if (background) {
+      updateWorkflowTask(db, {
+        sessionID: input.sessionID,
+        backgroundGeneration: background.generation,
+        state: "needs_input",
+        summary,
+        now,
+      })
+    }
   }, { behavior: "immediate" })
 }
 
@@ -303,17 +284,76 @@ export function markPermissionResolved(sessionID: SessionID) {
         .run()
       if (loop.root_session_id) updateLoopBackground(db, loop.root_session_id, "working", "Loop working: executing", now)
     }
-    updateBackgroundTask(db, { sessionID, state: "running", summary: "Permission resolved; execution resumed.", now })
-    updateWorkflowTask(db, { sessionID, state: "working", summary: "Permission resolved; execution resumed.", now })
+    const background = updateBackgroundTask(db, {
+      sessionID,
+      state: "running",
+      summary: "Permission resolved; execution resumed.",
+      now,
+    })
+    if (background) {
+      updateWorkflowTask(db, {
+        sessionID,
+        backgroundGeneration: background.generation,
+        state: "working",
+        summary: "Permission resolved; execution resumed.",
+        now,
+      })
+    }
   }, { behavior: "immediate" })
 }
 
 export function markPermissionAbandoned(sessionID: SessionID) {
+  clearPendingPermission(sessionID)
+  reconcilePermissionAbandonment(sessionID)
+}
+
+export function reconcilePermissionAbandonment(sessionID: SessionID) {
   const now = Date.now()
   const summary = WORKFLOW_PERMISSION_ABANDONED_REASON
-  clearPendingPermission(sessionID)
   Database.transaction((db) => {
-    updateBackgroundTask(db, { sessionID, state: "interrupted", summary, now })
-    updateWorkflowTask(db, { sessionID, state: "needs_input", summary, now })
+    const hasUnresolvedPermission = db
+      .select({ data: PermissionTable.data })
+      .from(PermissionTable)
+      .all()
+      .some((row) =>
+        Array.isArray(row.data)
+          ? false
+          : row.data.requests.some((request) => request.info.sessionID === sessionID && request.reply === undefined),
+      )
+    if (hasUnresolvedPermission) return
+    const task = db.select().from(BackgroundTaskTable).where(eq(BackgroundTaskTable.task_id, sessionID)).get()
+    if (!task) return
+    const run = db
+      .select()
+      .from(BackgroundTaskRunTable)
+      .where(
+        and(
+          eq(BackgroundTaskRunTable.task_id, sessionID),
+          eq(BackgroundTaskRunTable.generation, task.current_generation),
+        ),
+      )
+      .get()
+    if (!run) return
+    if (run.state === "running" || run.state === "needs_input") {
+      updateBackgroundTask(db, { sessionID, state: "interrupted", summary, now })
+    }
+    const interrupted = db
+      .select()
+      .from(BackgroundTaskRunTable)
+      .where(
+        and(
+          eq(BackgroundTaskRunTable.task_id, sessionID),
+          eq(BackgroundTaskRunTable.generation, task.current_generation),
+        ),
+      )
+      .get()
+    if (interrupted?.state !== "interrupted" || interrupted.result?.summary !== summary) return
+    updateWorkflowTask(db, {
+      sessionID,
+      backgroundGeneration: task.current_generation,
+      state: "failed",
+      summary,
+      now,
+    })
   }, { behavior: "immediate" })
 }

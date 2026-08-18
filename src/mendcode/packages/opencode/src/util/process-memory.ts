@@ -7,10 +7,28 @@ export type ProcessMemoryUsage = {
   external: number
   arrayBuffers: number
   uptimeSeconds: number
+  memoryGuardrail: MemoryGuardrail
   sharedServer?: {
     runtimeID: string
     stateOwner: boolean
     activeClientLeases: number
+  }
+}
+
+export const MEMORY_WARN_RSS_BYTES = 2 * 1024 ** 3
+export const MEMORY_CRITICAL_RSS_BYTES = 4 * 1024 ** 3
+
+export type MemoryGuardrail = {
+  status: "ok" | "warning" | "critical"
+  warnBytes: number
+  criticalBytes: number
+}
+
+export function memoryGuardrailForRSS(rss: number): MemoryGuardrail {
+  return {
+    status: rss >= MEMORY_CRITICAL_RSS_BYTES ? "critical" : rss >= MEMORY_WARN_RSS_BYTES ? "warning" : "ok",
+    warnBytes: MEMORY_WARN_RSS_BYTES,
+    criticalBytes: MEMORY_CRITICAL_RSS_BYTES,
   }
 }
 
@@ -38,6 +56,7 @@ export function processMemoryUsage(role = process.env.OPENCODE_PROCESS_ROLE ?? "
     external: memory.external,
     arrayBuffers: memory.arrayBuffers,
     uptimeSeconds: process.uptime(),
+    memoryGuardrail: memoryGuardrailForRSS(memory.rss),
   }
 }
 
@@ -48,11 +67,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function isProcessMemoryUsage(value: unknown): value is ProcessMemoryUsage {
   if (!isRecord(value)) return false
   if (
-    value.sharedServer !== undefined &&
+    (!isRecord(value.memoryGuardrail) ||
+      !["ok", "warning", "critical"].includes(value.memoryGuardrail.status as string) ||
+      typeof value.memoryGuardrail.warnBytes !== "number" ||
+      typeof value.memoryGuardrail.criticalBytes !== "number") ||
+    (value.sharedServer !== undefined &&
     (!isRecord(value.sharedServer) ||
       typeof value.sharedServer.runtimeID !== "string" ||
       typeof value.sharedServer.stateOwner !== "boolean" ||
-      typeof value.sharedServer.activeClientLeases !== "number")
+      typeof value.sharedServer.activeClientLeases !== "number"))
   ) {
     return false
   }
@@ -85,12 +108,14 @@ function formatUptime(seconds: number) {
 }
 
 export function formatProcessMemory(label: string, memory: ProcessMemoryUsage) {
+  const guardrail = memory.memoryGuardrail
   const lines = [
     `${label} (pid ${memory.pid}, ${memory.role})`,
     `  RSS (RAM): ${formatBytes(memory.rss)}`,
     `  JS heap: ${formatBytes(memory.heapUsed)} used / ${formatBytes(memory.heapTotal)} reported`,
     `  External: ${formatBytes(memory.external)}`,
     `  Array buffers: ${formatBytes(memory.arrayBuffers)}`,
+    `  Guardrail: ${guardrail.status} (warn at ${formatBytes(guardrail.warnBytes)}, critical at ${formatBytes(guardrail.criticalBytes)})`,
     `  Uptime: ${formatUptime(memory.uptimeSeconds)}`,
   ]
   if (memory.sharedServer) {

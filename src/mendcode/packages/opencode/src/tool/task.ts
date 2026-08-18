@@ -314,30 +314,23 @@ export const TaskTool = Tool.define(
             : configuredSubagentModel
               ? cfg.subagent_variant
               : msg.info.variant)
-      yield* ctx.metadata({
-        title: params.description,
-        metadata: {
-          ...(session ? { sessionId: session.id } : {}),
-          model,
-          variant,
-          status: params.background ? "started" : "running",
-          rootSessionID: tree.rootSessionID,
-          depth: tree.depth,
-        },
-      })
-      const resolved = yield* provider.getModel(model.providerID, model.modelID)
-      model = { providerID: resolved.providerID, modelID: resolved.id }
-      if (variant) {
-        const available = Object.keys(resolved.variants ?? {})
-        if (!available.includes(variant)) {
-          const options = available.length
-            ? `Available variants: ${available.join(", ")}.`
-            : "This model exposes no selectable variants."
-          return yield* Effect.fail(
-            new Error(`Variant "${variant}" is not available for ${model.providerID}/${model.modelID}. ${options}`),
-          )
+      const deferModelResolution = ctx.extra?.bypassAgentCheck === true
+      const resolveModel = Effect.fnUntraced(function* () {
+        const resolved = yield* provider.getModel(model.providerID, model.modelID)
+        model = { providerID: resolved.providerID, modelID: resolved.id }
+        if (variant) {
+          const available = Object.keys(resolved.variants ?? {})
+          if (!available.includes(variant)) {
+            const options = available.length
+              ? `Available variants: ${available.join(", ")}.`
+              : "This model exposes no selectable variants."
+            return yield* Effect.fail(
+              new Error(`Variant "${variant}" is not available for ${model.providerID}/${model.modelID}. ${options}`),
+            )
+          }
         }
-      }
+      })
+      if (!deferModelResolution) yield* resolveModel()
       const nextSession =
         session ??
         (yield* sessions.create({
@@ -387,6 +380,21 @@ export const TaskTool = Tool.define(
           depth: tree.depth,
         },
       })
+
+      if (deferModelResolution) {
+        yield* resolveModel()
+        yield* ctx.metadata({
+          title: params.description,
+          metadata: {
+            sessionId: nextSession.id,
+            model,
+            variant,
+            status: params.background ? "started" : "running",
+            rootSessionID: tree.rootSessionID,
+            depth: tree.depth,
+          },
+        })
+      }
 
       const ops = ctx.extra?.promptOps as TaskPromptOps
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
@@ -633,7 +641,10 @@ export const TaskTool = Tool.define(
               Effect.flatMap((outcome) => {
                 if (outcome.type === "abort") {
                   return Effect.gen(function* () {
-                    if (outcome.reason === "user") yield* Deferred.await(childCancelFinished)
+                    // Cancellation of the durable child is already running in
+                    // the release finalizer. Return the parent tool result now;
+                    // waiting on the same detached acknowledgement here can
+                    // strand multiple waiters when that runtime disappears.
                     return yield* errorOutput({
                       error: new DOMException(
                         outcome.reason === "user" ? "Aborted" : "Connection interrupted; subagent session retained",
@@ -676,7 +687,13 @@ export const TaskTool = Tool.define(
           Effect.gen(function* () {
             if (Exit.hasInterrupts(exit) && (parentAborted || isExplicitUserAbort(ctx))) {
               if (childCancelStarted) {
-                yield* Deferred.await(childCancelFinished)
+                // The child cancel runs in a detached runtime so the parent
+                // cannot assume its acknowledgement will always arrive. Keep
+                // Esc bounded even if that runtime or its transport vanished.
+                yield* Deferred.await(childCancelFinished).pipe(
+                  Effect.timeout(SUBAGENT_CANCEL_TIMEOUT_MS),
+                  Effect.ignore,
+                )
               } else {
                 childCancelStarted = true
                 yield* backgroundTasks

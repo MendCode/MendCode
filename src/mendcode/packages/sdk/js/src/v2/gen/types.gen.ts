@@ -11,6 +11,8 @@ export type Event =
   | EventLspClientDiagnostics
   | EventLspUpdated
   | EventMessagePartDelta
+  | EventWorkflowRunWake
+  | EventWorkflowNotification1
   | EventPermissionAsked
   | EventPermissionReplied
   | EventSessionDiff
@@ -53,7 +55,6 @@ export type Event =
   | EventLoopRunUpdated
   | EventLoopEventCreated
   | EventLoopThreadUpdated
-  | EventWorkflowNotification1
   | EventWorkspaceReady
   | EventWorkspaceFailed
   | EventWorkspaceStatus
@@ -1363,6 +1364,8 @@ export type GlobalEvent = {
     | EventLspClientDiagnostics
     | EventLspUpdated
     | EventMessagePartDelta
+    | EventWorkflowRunWake
+    | EventWorkflowNotification
     | EventPermissionAsked
     | EventPermissionReplied
     | EventSessionDiff
@@ -1405,7 +1408,6 @@ export type GlobalEvent = {
     | EventLoopRunUpdated
     | EventLoopEventCreated
     | EventLoopThreadUpdated
-    | EventWorkflowNotification
     | EventWorkspaceReady
     | EventWorkspaceFailed
     | EventWorkspaceStatus
@@ -3363,6 +3365,31 @@ export type EventMessagePartDelta = {
   }
 }
 
+export type EventWorkflowRunWake = {
+  id: string
+  type: "workflow.run.wake"
+  properties: {
+    runID: string
+  }
+}
+
+export type EventWorkflowNotification = {
+  id: string
+  type: "workflow.notification"
+  properties: {
+    eventID: string
+    taskID: string
+    parentSessionID: string
+    generation: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    revision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    state: "completed" | "failed" | "stopped"
+    title: string
+    summary: string
+    background: true
+    runID: string
+  }
+}
+
 export type EventPermissionAsked = {
   id: string
   type: "permission.asked"
@@ -3708,23 +3735,6 @@ export type EventLoopThreadUpdated = {
   properties: {
     workflowID: string
     thread: LoopThread
-  }
-}
-
-export type EventWorkflowNotification = {
-  id: string
-  type: "workflow.notification"
-  properties: {
-    eventID: string
-    taskID: string
-    parentSessionID: string
-    generation: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    revision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    state: "completed" | "failed" | "stopped"
-    title: string
-    summary: string
-    background: true
-    runID: string
   }
 }
 
@@ -4477,6 +4487,23 @@ export type SessionMessage =
   | SessionMessageAssistant
   | SessionMessageCompaction
 
+export type EventWorkflowNotification1 = {
+  id: string
+  type: "workflow.notification"
+  properties: {
+    eventID: string
+    taskID: string
+    parentSessionID: string
+    generation: number | "NaN" | "Infinity" | "-Infinity"
+    revision: number | "NaN" | "Infinity" | "-Infinity"
+    state: "completed" | "failed" | "stopped"
+    title: string
+    summary: string
+    background: true
+    runID: string
+  }
+}
+
 export type EventSkillUpdated1 = {
   id: string
   type: "skill.updated"
@@ -4510,23 +4537,6 @@ export type EventTuiToastShow1 = {
     message: string
     variant: "info" | "success" | "warning" | "error"
     duration?: number
-  }
-}
-
-export type EventWorkflowNotification1 = {
-  id: string
-  type: "workflow.notification"
-  properties: {
-    eventID: string
-    taskID: string
-    parentSessionID: string
-    generation: number | "NaN" | "Infinity" | "-Infinity"
-    revision: number | "NaN" | "Infinity" | "-Infinity"
-    state: "completed" | "failed" | "stopped"
-    title: string
-    summary: string
-    background: true
-    runID: string
   }
 }
 
@@ -7225,7 +7235,7 @@ export type SessionMessagesData = {
     limit?: number
     before?: string
     after?: string
-    view?: "full" | "tui" | "tui-all"
+    view?: "full" | "tui" | "tui-all" | "history"
     partsLimit?: string
   }
   url: "/session/{sessionID}/message"
@@ -7355,7 +7365,7 @@ export type SessionMessageData = {
   query?: {
     directory?: string
     workspace?: string
-    view?: "full" | "tui" | "tui-all"
+    view?: "full" | "tui" | "tui-all" | "history"
     partsLimit?: string
     partsAfter?: string
   }
@@ -7454,6 +7464,42 @@ export type SessionAbortResponses = {
 }
 
 export type SessionAbortResponse = SessionAbortResponses[keyof SessionAbortResponses]
+
+export type SessionCancelTurnData = {
+  body?: {
+    targetMessageID: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/cancel-turn"
+}
+
+export type SessionCancelTurnErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SessionCancelTurnError = SessionCancelTurnErrors[keyof SessionCancelTurnErrors]
+
+export type SessionCancelTurnResponses = {
+  /**
+   * Conditional cancellation result
+   */
+  200: "cancelled" | "already_terminal" | "target_mismatch" | "not_running"
+}
+
+export type SessionCancelTurnResponse = SessionCancelTurnResponses[keyof SessionCancelTurnResponses]
 
 export type SessionInterruptData = {
   body?: never
@@ -10078,6 +10124,7 @@ export type WorkflowStartResponses = {
         error?: string
       }
       permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -10644,6 +10691,7 @@ export type WorkflowListResponses = {
         error?: string
       }
       permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -11249,6 +11297,7 @@ export type WorkflowShowResponses = {
         error?: string
       }
       permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -11916,6 +11965,7 @@ export type WorkflowPauseResponses = {
         error?: string
       }
       permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -12489,6 +12539,7 @@ export type WorkflowResumeResponses = {
         error?: string
       }
       permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -13062,6 +13113,7 @@ export type WorkflowStopResponses = {
         error?: string
       }
       permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -13324,7 +13376,8 @@ export type WorkflowStopResponse = WorkflowStopResponses[keyof WorkflowStopRespo
 
 export type WorkflowPermissionModeData = {
   body?: {
-    mode: "report-only" | "normal" | "custom"
+    mode?: "report-only" | "normal" | "custom"
+    sessionMode?: "approval" | "smart" | "full_access" | "global_default"
     reason?: string
   }
   path: {
@@ -13636,6 +13689,7 @@ export type WorkflowPermissionModeResponses = {
         error?: string
       }
       permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -14210,6 +14264,7 @@ export type WorkflowRetryTaskResponses = {
         error?: string
       }
       permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -14784,6 +14839,7 @@ export type WorkflowRetryPhaseResponses = {
         error?: string
       }
       permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"

@@ -170,6 +170,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       }
       const now = Date.now()
       const resumedWithOpenStream =
+        !props.events &&
         type !== "server.connected" &&
         connection.status === "connected" &&
         connection.lastEventAt !== undefined &&
@@ -224,23 +225,24 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       flush()
     }
 
-    const recoverEventSource = (reason: string) => {
+    const refreshEventSource = () => {
       const now = Date.now()
-      setConnection({
-        status: "reconnecting",
-        attempt: Math.max(connection.attempt, 1),
-        nextRetryAt: undefined,
-        error: reason,
-        lastEventAt: connection.lastEventAt,
-        lastApplicationEventAt: connection.lastApplicationEventAt,
-        recoveringSince: connection.recoveringSince ?? now,
+      batch(() => {
+        // A worker-backed event source is an in-process subscription, not a
+        // network stream. Timer drift or an explicit refresh must reconcile
+        // snapshots without advertising a transport disconnect that did not
+        // happen. Actual RPC failure remains authoritative through the request.
+        setConnection({
+          status: "connected",
+          attempt: 0,
+          nextRetryAt: undefined,
+          error: undefined,
+          recoveringSince: undefined,
+          recoveredAt: now,
+        })
+        handleEvent(recoveryControlEvent("server.connected", now))
+        handleEvent(recoveryControlEvent("server.heartbeat", now))
       })
-
-      // Worker-backed transports do not have an SSE reconnect handshake. Emit
-      // the same control events so SyncProvider refreshes data missed while
-      // the machine was asleep, including pending questions and permissions.
-      handleEvent(recoveryControlEvent("server.connected", now))
-      handleEvent(recoveryControlEvent("server.heartbeat", now))
     }
 
     const stopReconnect = (reason = "Reconnect stopped by user") => {
@@ -266,10 +268,18 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       if (abort.signal.aborted) return
       reconnectStopped = false
       if (props.events) {
-        recoverEventSource("Retrying local connection")
+        refreshEventSource()
         return
       }
       startSSE({ reconnecting: true, reason: "Retrying connection" })
+    }
+
+    const confirmRecovery = (reconciledAt = Date.now()) => {
+      if (connection.status !== "connected" || connection.recoveringSince === undefined) return
+      setConnection({
+        recoveringSince: undefined,
+        recoveredAt: reconciledAt,
+      })
     }
 
     const startWatchdog = () => {
@@ -283,7 +293,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
         const resumed = drift > Math.max(staleDelay, watchdogInterval + 5_000)
         if (props.events) {
           if (!resumed || connection.status === "disconnected") return
-          recoverEventSource("System resumed; refreshing event state")
+          refreshEventSource()
           return
         }
         const lastSeen = connection.lastEventAt
@@ -439,6 +449,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       reconnect: {
         stop: stopReconnect,
         retry: retryConnection,
+        confirm: confirmRecovery,
       },
     }
   },

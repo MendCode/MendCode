@@ -73,10 +73,21 @@ export function shouldReplaceSharedServer(input: {
   live: boolean
   runtimeMatches: boolean
   activeClients: number
+  reachable?: boolean
 }) {
   if (!input.live) return true
+  if (input.reachable === false) return input.activeClients === 0
   if (input.runtimeMatches) return false
   return input.activeClients === 0
+}
+
+export function shouldAttachExistingSharedServer(input: {
+  live: boolean
+  runtimeMatches: boolean
+  activeClients: number
+  reachable?: boolean
+}) {
+  return input.reachable !== false && input.live && !input.runtimeMatches && input.activeClients > 0
 }
 
 export function shouldUseSharedServer(input: {

@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Layer, Schema, Stream } from "effect"
-import { Bus } from "../../src/bus"
+import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
+import { Bus, INTERNAL_EVENT_BUFFER_CAPACITY } from "../../src/bus"
 import { BusEvent } from "../../src/bus/bus-event"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { disposeAllInstances, provideInstance, tmpdirScoped } from "../fixture/fixture"
@@ -114,6 +114,45 @@ describe("Bus (Effect-native)", () => {
 
       expect(a).toEqual([99])
       expect(b).toEqual([99])
+    }),
+  )
+
+  it.instance("bounds a slow subscriber instead of retaining an unbounded event backlog", () =>
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const received: number[] = []
+
+      yield* Stream.runForEach(bus.subscribe(TestEvent.Ping), (evt) =>
+        Effect.gen(function* () {
+          if (evt.properties.value === 0) {
+            Deferred.doneUnsafe(entered, Effect.void)
+            yield* Deferred.await(release)
+          }
+          received.push(evt.properties.value)
+        }),
+      ).pipe(Effect.forkScoped)
+
+      yield* Effect.sleep("10 millis")
+      yield* bus.publish(TestEvent.Ping, { value: 0 })
+      yield* Deferred.await(entered)
+
+      let publishFinished = false
+      const publishFiber = yield* Effect.forEach(
+        Array.from({ length: INTERNAL_EVENT_BUFFER_CAPACITY + 1 }, (_, value) => value + 1),
+        (value) => bus.publish(TestEvent.Ping, { value }),
+        { discard: true },
+      ).pipe(
+        Effect.tap(() => Effect.sync(() => (publishFinished = true))),
+        Effect.forkScoped,
+      )
+      yield* Effect.sleep("20 millis")
+      expect(publishFinished).toBe(false)
+
+      Deferred.doneUnsafe(release, Effect.void)
+      yield* Fiber.join(publishFiber)
+      expect(received).toHaveLength(INTERNAL_EVENT_BUFFER_CAPACITY + 2)
     }),
   )
 

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import path from "path"
 import * as fs from "fs/promises"
 import { Effect, ManagedRuntime, Layer } from "effect"
-import { ApplyPatchTool } from "../../src/tool/apply_patch"
+import { ApplyPatchTool, patchStaleRetryDecision } from "../../src/tool/apply_patch"
 import { Instance } from "../../src/project/instance"
 import { WithInstance } from "../../src/project/with-instance"
 import { LSP } from "@/lsp/lsp"
@@ -78,6 +78,11 @@ const makeCtx = () => {
 }
 
 describe("tool.apply_patch freeform", () => {
+  test("limits an identical stale hunk to one retry and then requires a replan", () => {
+    expect(patchStaleRetryDecision(1)).toBe("retry")
+    expect(patchStaleRetryDecision(2)).toBe("replan")
+  })
+
   test("requires patchText", async () => {
     const { ctx } = makeCtx()
     await expect(execute({ patchText: "" }, ctx)).rejects.toThrow("patchText is required")
@@ -468,8 +473,10 @@ describe("tool.apply_patch freeform", () => {
         await fs.writeFile(target, "line1\nline2\n", "utf-8")
 
         const patchText = "*** Begin Patch\n*** Update File: modify.txt\n@@\n-missing\n+changed\n*** End Patch"
+        const revisedPatchText = "*** Begin Patch\n*** Update File: modify.txt\n@@\n-missing\n+changed again\n*** End Patch"
 
-        await expect(execute({ patchText }, ctx)).rejects.toThrow("read the current file contents")
+        await expect(execute({ patchText }, ctx)).rejects.toThrow("patch_stale: Read the current file contents")
+        await expect(execute({ patchText: revisedPatchText }, ctx)).rejects.toThrow("patch_stale: Stop retrying this patch")
         expect(await fs.readFile(target, "utf-8")).toBe("line1\nline2\n")
       },
     })

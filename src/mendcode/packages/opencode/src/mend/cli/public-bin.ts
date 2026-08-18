@@ -235,7 +235,7 @@ Advanced/support surface:
   mendcode providers status
   mendcode auth status|login-plan|login
   mendcode permissions status|set-default
-  mendcode memory status|search|preview|add|list
+  mendcode memory status|search|preview|add <text> [--scope project|global] [--tags a,b]|list
   mendcode focus status|list|show|use
 
 Internal/debug-only surface, intentionally hidden from normal help:

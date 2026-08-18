@@ -55,8 +55,22 @@ export type CompactionArcadeGame = {
   render: (state: unknown) => CompactionArcadeRender
 }
 
-export function shouldRenderCompactionArcade(input: { style: "minimal" | "cockpit" | "arcade" | "quiet"; arcade: string }) {
-  return input.style === "arcade" && input.arcade !== "off"
+export function shouldRenderCompactionArcade(input: {
+  style: "minimal" | "cockpit" | "arcade" | "quiet"
+  arcade: string
+  completed?: boolean
+  terminal?: boolean
+}) {
+  return !input.completed && !input.terminal && input.style === "arcade" && input.arcade !== "off"
+}
+
+export function compactionPanelIsPacked(input: { completed?: boolean; terminal?: boolean; hasSummaryBody?: boolean }) {
+  return input.completed === true || input.terminal === true || input.hasSummaryBody === true
+}
+
+export function compactionPanelHeading(input: { style: "minimal" | "cockpit" | "arcade" | "quiet"; packed: boolean }) {
+  if (input.style === "arcade" && input.packed) return "Arcade complete · Context packed"
+  return input.packed ? "Context packed" : "Packing context"
 }
 
 export function shouldAcceptCompactionArcadeFocus(input: {
@@ -317,6 +331,8 @@ export function CompactionPanel(props: {
   include?: string
   tailStartID?: string
   hasSummaryBody?: boolean
+  completed?: boolean
+  terminal?: boolean
   summaryPreview?: string
   transcriptPreview?: string
   summaryContent?: JSX.Element
@@ -337,9 +353,10 @@ export function CompactionPanel(props: {
   const promptRef = usePromptRef()
   const textareaKeybindings = useTextareaKeybindings()
   const config = createMemo(() => mend.profile.presentation.compaction)
+  const packed = createMemo(() => compactionPanelIsPacked(props))
   const stages = createMemo(() =>
     compactionStageStates({
-      hasSummary: props.hasSummaryBody,
+      hasSummary: packed(),
       resume: props.resume,
       postPrompt: props.postPrompt,
       include: props.include,
@@ -360,11 +377,13 @@ export function CompactionPanel(props: {
   const [arcadeState, setArcadeState] = createSignal<unknown>(snakeArcadeGame.initialState())
   const [summaryExpanded, setSummaryExpanded] = createSignal(false)
   const activeArcadeGame = createMemo(() =>
-    shouldRenderCompactionArcade(config()) ? registeredCompactionArcadeGame(config().arcade) : undefined,
+    shouldRenderCompactionArcade({ ...config(), completed: packed() })
+      ? registeredCompactionArcadeGame(config().arcade)
+      : undefined,
   )
   const arcadeRender = createMemo(() => activeArcadeGame()?.render(arcadeState()))
   const arcadeFrame = createMemo(() => {
-    if (!shouldRenderCompactionArcade(config()) || activeArcadeGame()) return []
+    if (!shouldRenderCompactionArcade({ ...config(), completed: packed() }) || activeArcadeGame()) return []
     const frames = compactionArcadeFrames(config().arcade)
     const frame = frames[arcadeTick() % Math.max(1, frames.length)]
     return frame ? [frame] : []
@@ -385,7 +404,7 @@ export function CompactionPanel(props: {
   )
   const compactionDetails = createMemo(() =>
     [
-      props.hasSummaryBody ? "packed" : "packing",
+      packed() ? "packed" : "packing",
       props.reason,
       props.overflow ? "overflow" : undefined,
       tailDetail(),
@@ -558,7 +577,7 @@ export function CompactionPanel(props: {
   }
 
   createEffect(() => {
-    if (!shouldRenderCompactionArcade(config())) return
+    if (!shouldRenderCompactionArcade({ ...config(), completed: packed() })) return
     const timer = setInterval(() => {
       const game = activeArcadeGame()
       if (game) {
@@ -687,7 +706,7 @@ export function CompactionPanel(props: {
   })
 
   if (config().style === "quiet") {
-    return <box marginTop={1} border={["top"]} title=" Packing context " titleAlignment="center" borderColor={theme.borderActive} />
+    return <box marginTop={1} border={["top"]} title={packed() ? " Context packed " : " Packing context "} titleAlignment="center" borderColor={theme.borderActive} />
   }
 
   if (config().style === "minimal") {
@@ -705,10 +724,10 @@ export function CompactionPanel(props: {
         flexShrink={0}
       >
         <text fg={theme.text} wrapMode="none">
-          <span style={{ fg: theme.borderActive, bold: true }}>◈</span> Packing context
+          <span style={{ fg: theme.borderActive, bold: true }}>◈</span> {compactionPanelHeading({ style: config().style, packed: packed() })}
         </text>
         <text fg={theme.textMuted} wrapMode="none">
-          {props.hasSummaryBody ? "Context packed." : "Preparing a shorter context…"}
+          {packed() ? "Context packed." : "Preparing a shorter context…"}
         </text>
       </box>
     )
@@ -732,9 +751,10 @@ export function CompactionPanel(props: {
     >
       <box width="100%">
         <text fg={theme.text} wrapMode="none">
-          <span style={{ fg: theme.borderActive, bold: true }}>◈</span> Packing context
+          <span style={{ fg: theme.borderActive, bold: true }}>◈</span> {compactionPanelHeading({ style: config().style, packed: packed() })}
         </text>
       </box>
+      <Show when={!packed()}>
       <Show when={chips().length > 0}>
         <box flexDirection="row" gap={1} flexWrap="wrap" paddingTop={1}>
           <For each={chips()}>
@@ -823,10 +843,11 @@ export function CompactionPanel(props: {
           <For each={arcadeFrame()}>{(line) => <text fg={theme.primary}>{line}</text>}</For>
         </box>
       </Show>
+      </Show>
       <box paddingTop={1} flexDirection="column" border={["top"]} borderColor={theme.border} paddingLeft={1} paddingRight={1}>
         <box flexDirection="row" justifyContent="space-between" width="100%" gap={1}>
           <text fg={theme.textMuted} wrapMode="none">
-            Compacted memory · {props.hasSummaryBody ? "packed" : "packing"}
+            {config().style === "arcade" && packed() ? "Arcade complete · " : ""}Compacted memory · {packed() ? "packed" : "packing"}
           </text>
           <Show when={summaryAvailable()}>
             <text

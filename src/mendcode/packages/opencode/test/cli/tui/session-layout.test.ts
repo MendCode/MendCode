@@ -8,7 +8,9 @@ import {
   shouldRenderSessionLoopCard,
   shouldRenderSessionWorkflowCard,
   sessionPendingInputSessionIDs,
+  sessionPendingInputStatus,
   sessionTaskContinuation,
+  sessionTranscriptBottomSpacer,
   sessionTopMetricsWidth,
   sessionTopbarLayout,
   sessionTopbarLeftLabel,
@@ -59,6 +61,20 @@ describe("session layout", () => {
         planReviewCount: 0,
       }),
     ).toBe(false)
+  })
+
+  test("reserves transcript clearance above the prompt and pending-input footer", () => {
+    expect(sessionTranscriptBottomSpacer()).toBe(3)
+    expect(sessionTranscriptBottomSpacer(24)).toBe(27)
+  })
+
+  test("labels a question after compaction as waiting instead of assistant generation", () => {
+    expect(
+      sessionPendingInputStatus({ permissionCount: 0, questionCount: 1, planReviewCount: 0, assistantActive: true }),
+    ).toBe("waiting for answer")
+    expect(
+      sessionPendingInputStatus({ permissionCount: 0, questionCount: 0, planReviewCount: 0, assistantActive: false }),
+    ).toBe("idle")
   })
 
   test("uses the current child session for pending input", () => {

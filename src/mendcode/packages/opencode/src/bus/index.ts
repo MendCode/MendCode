@@ -29,6 +29,11 @@ type State = {
   typed: Map<string, PubSub.PubSub<Payload>>
 }
 
+// Event producers must slow down when a subscriber stops consuming. An
+// unbounded PubSub turns a stalled SSE/TUI client into a process-wide memory
+// leak because every tool delta is retained until that client catches up.
+export const INTERNAL_EVENT_BUFFER_CAPACITY = 2048
+
 export interface Interface {
   readonly publish: <D extends BusEvent.Definition>(
     def: D,
@@ -51,11 +56,10 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const state = yield* InstanceState.make<State>(
       Effect.fn("Bus.state")(function* (ctx) {
-        // Internal subscribers must see every lifecycle event. The SSE layer
-        // owns backpressure and can reconnect/resync; sliding here would drop
-        // terminal events such as session.status=idle without notifying the
-        // producer or the subscriber.
-        const wildcard = yield* PubSub.unbounded<Payload>()
+        // Preserve delivery semantics while bounding memory. Publishers apply
+        // backpressure when a subscriber is slow; terminal events are never
+        // silently dropped as they would be with a dropping/sliding buffer.
+        const wildcard = yield* PubSub.bounded<Payload>(INTERNAL_EVENT_BUFFER_CAPACITY)
         const typed = new Map<string, PubSub.PubSub<Payload>>()
 
         yield* Effect.addFinalizer(() =>
@@ -81,7 +85,7 @@ export const layer = Layer.effect(
       return Effect.gen(function* () {
         let ps = state.typed.get(def.type)
         if (!ps) {
-          ps = yield* PubSub.unbounded<Payload>()
+          ps = yield* PubSub.bounded<Payload>(INTERNAL_EVENT_BUFFER_CAPACITY)
           state.typed.set(def.type, ps)
         }
         return ps as unknown as PubSub.PubSub<Payload<D>>

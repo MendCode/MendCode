@@ -62,11 +62,27 @@ export const workflowHandlers = HttpApiBuilder.group(InstanceHttpApi, "workflow"
     })
 
     const list = Effect.fn("WorkflowHttpApi.list")(function* (ctx: { query: typeof WorkflowListQuery.Type }) {
-      return yield* workflow.list(ctx.query.limit)
+      const initial = yield* workflow.list(ctx.query.limit)
+      const stranded = initial.filter((snapshot) => snapshot.run.state === "needs_input")
+      yield* Effect.forEach(stranded, (snapshot) => runner.run(snapshot.run.id).pipe(Effect.catchCause(() => Effect.void)), {
+        concurrency: 8,
+        discard: true,
+      })
+      const snapshots = stranded.length ? yield* workflow.list(ctx.query.limit) : initial
+      yield* Effect.forEach(
+        snapshots.filter((snapshot) => snapshot.run.state === "queued" || snapshot.run.state === "working"),
+        (snapshot) => runner.start(snapshot.run.id),
+        { concurrency: 8, discard: true },
+      )
+      return snapshots
     })
 
     const show = Effect.fn("WorkflowHttpApi.show")(function* (ctx: { params: { runID: Workflow.WorkflowRunID } }) {
-      return yield* mapWorkflowError(workflow.show(ctx.params.runID))
+      const initial = yield* mapWorkflowError(workflow.show(ctx.params.runID))
+      if (initial.run.state === "needs_input") yield* runner.run(initial.run.id).pipe(Effect.catchCause(() => Effect.void))
+      const snapshot = initial.run.state === "needs_input" ? yield* mapWorkflowError(workflow.show(initial.run.id)) : initial
+      if (snapshot.run.state === "queued" || snapshot.run.state === "working") yield* runner.start(snapshot.run.id)
+      return snapshot
     })
 
     const remove = Effect.fn("WorkflowHttpApi.remove")(function* (ctx: { params: { runID: Workflow.WorkflowRunID } }) {
@@ -103,7 +119,7 @@ export const workflowHandlers = HttpApiBuilder.group(InstanceHttpApi, "workflow"
       const resumed = yield* mapWorkflowError(
         workflow.resume({ runID: ctx.params.runID, reason: ctx.payload.reason, actor: "api" }),
       )
-      yield* runner.start(resumed.run.id)
+      yield* runner.wake(resumed.run.id)
       return resumed
     })
 
@@ -126,6 +142,7 @@ export const workflowHandlers = HttpApiBuilder.group(InstanceHttpApi, "workflow"
         runner.setPermissionMode({
           runID: ctx.params.runID,
           mode: ctx.payload.mode,
+          sessionMode: ctx.payload.sessionMode === "global_default" ? null : ctx.payload.sessionMode,
           reason: ctx.payload.reason,
           actor: "api",
         }),

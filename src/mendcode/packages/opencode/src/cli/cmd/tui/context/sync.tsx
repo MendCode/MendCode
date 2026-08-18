@@ -29,11 +29,12 @@ import { createSimpleContext } from "./helper"
 import type { Snapshot } from "@/snapshot"
 import { useExit } from "./exit"
 import { useArgs } from "./args"
-import { batch, onCleanup, onMount } from "solid-js"
+import { batch, createSignal, onCleanup, onMount } from "solid-js"
 import * as Log from "@mendcode/core/util/log"
 import { emptyConsoleState, type ConsoleState } from "@/config/console-state"
 import path from "path"
 import { useKV } from "./kv"
+import { useSessionControl } from "./session-control"
 import { isRecentWorkingAssistant, sessionStatusExpiryDelay } from "../util/session-working"
 import { appendLiveShellOutput, previewShellOutput } from "./shell-output"
 import {
@@ -332,6 +333,13 @@ function trimLoadedSessionMessages(input: {
       .slice(0, removeCount)
       .map((message) => message.id),
   )
+  if (removedIDs.size < removeCount) {
+    for (const message of candidates) {
+      if (removedIDs.has(message.id)) continue
+      removedIDs.add(message.id)
+      if (removedIDs.size === removeCount) break
+    }
+  }
   return {
     messages: messages.filter((message) => !removedIDs.has(message.id)),
     removed: messages.filter((message) => removedIDs.has(message.id)),
@@ -405,8 +413,8 @@ export function releasablePinnedSessionMessageIDs(messages: readonly Message[], 
 function mergeSessionMessagePage(input: {
   current: Message[] | undefined
   incoming: Message[]
-  max: number
-  drop: "oldest" | "newest"
+  max?: number
+  drop?: "oldest" | "newest"
   preserveCurrent?: "all" | "newer-working-assistant"
   preserveIDs?: ReadonlySet<string>
   excludedIDs?: ReadonlySet<string>
@@ -444,12 +452,16 @@ function mergeSessionMessagePage(input: {
     if (input.excludedIDs?.has(message.id)) continue
     byID.set(message.id, mergeMessageInfo(currentByID.get(message.id), message))
   }
-  const trimmed = trimLoadedSessionMessages({
-    messages: sortSessionMessages([...byID.values()]),
-    max: input.max,
-    drop: input.drop,
-    preserveIDs: input.preserveIDs,
-  })
+  const normalized = sortSessionMessages([...byID.values()])
+  const trimmed =
+    input.max === undefined
+      ? { messages: normalized, removed: [] as Message[] }
+      : trimLoadedSessionMessages({
+          messages: normalized,
+          max: input.max,
+          drop: input.drop ?? "oldest",
+          preserveIDs: input.preserveIDs,
+        })
   const retained = new Set(trimmed.messages.map((message) => message.id))
   return {
     messages: trimmed.messages,
@@ -556,6 +568,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     const project = useProject()
     const sdk = useSDK()
     const kv = useKV()
+    const sessionControl = useSessionControl()
     const [showCompactedToolCalls] = kv.signal(COMPACTED_TOOL_CALLS_KV_KEY, false)
 
     const sessionMessagePaging = new Map<
@@ -565,6 +578,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         hasMoreOlder: boolean
         newerCursor?: string
         hasMoreNewer: boolean
+        keepLoadedHistory?: boolean
         loadingOlder?: Promise<boolean>
         loadingNewer?: Promise<boolean>
       }
@@ -579,6 +593,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     const pendingPartDeltas = new Map<string, Map<string, Map<string, Map<string, string>>>>()
     const fullMessageRequests = new Map<string, Promise<SessionMessagePageItem>>()
     const sessionStatusTimers = new Map<string, Timer>()
+    const [reconciledAt, setReconciledAt] = createSignal<number>()
     let syncedWorkspace = project.workspace.current()
     let bootstrapGeneration = 0
     let pendingInputRefreshTimer: Timer | undefined
@@ -608,31 +623,42 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       const recentStart = Date.now() - 30 * 24 * 60 * 60 * 1000
       const sort = (items: typeof store.session) => items.toSorted((a, b) => a.id.localeCompare(b.id))
       const attempts: Array<() => Promise<typeof store.session>> = [
-        () => sdk.client.session.list({ start: recentStart, ...query }).then((x) => x.data ?? []),
-        () => sdk.client.session.list(query).then((x) => x.data ?? []),
+        () => sdk.client.session.list({ start: recentStart, ...query }, { throwOnError: true }).then((x) => x.data ?? []),
+        () => sdk.client.session.list(query, { throwOnError: true }).then((x) => x.data ?? []),
       ]
 
       if (query.path || query.scope !== "project") {
         attempts.push(
-          () => sdk.client.session.list({ start: recentStart, scope: "project" }).then((x) => x.data ?? []),
-          () => sdk.client.session.list({ scope: "project" }).then((x) => x.data ?? []),
+          () =>
+            sdk.client.session
+              .list({ start: recentStart, scope: "project" }, { throwOnError: true })
+              .then((x) => x.data ?? []),
+          () => sdk.client.session.list({ scope: "project" }, { throwOnError: true }).then((x) => x.data ?? []),
         )
       }
 
       attempts.push(
-        () => sdk.client.experimental.session.list({ start: recentStart, limit: 100 }).then((x) => x.data ?? []),
-        () => sdk.client.experimental.session.list({ limit: 100 }).then((x) => x.data ?? []),
+        () =>
+          sdk.client.experimental.session
+            .list({ start: recentStart, limit: 100 }, { throwOnError: true })
+            .then((x) => x.data ?? []),
+        () => sdk.client.experimental.session.list({ limit: 100 }, { throwOnError: true }).then((x) => x.data ?? []),
       )
 
+      let succeeded = false
+      let lastError: unknown
       for (const attempt of attempts) {
         try {
           const sessions = await attempt()
+          succeeded = true
           if (sessions.length > 0) return sort(sessions)
-        } catch {
+        } catch (error) {
+          lastError = error
           // Try the next scope; Home should not look empty just because one listing path failed.
         }
       }
 
+      if (!succeeded && lastError !== undefined) throw lastError
       return []
     }
 
@@ -997,7 +1023,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     function applySessionMessagePage(input: {
       sessionID: string
       items: SessionMessagePageItem[]
-      drop: "oldest" | "newest"
+      max?: number
+      drop?: "oldest" | "newest"
       preserveCurrent?: "all" | "newer-working-assistant"
     }) {
       const current = store.message[input.sessionID]
@@ -1020,31 +1047,17 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       )
       const compactionBoundaryID = latestCompletedCompactionSummaryID([...(current ?? []), ...incoming])
       if (compactionBoundaryID) preserveIDs.add(compactionBoundaryID)
-      const preserveVisibleAssistantIDs = new Set(preserveIDs)
-
-      const currentUserIDs = new Set(
-        (current ?? []).filter((message) => message.role === "user").map((message) => message.id),
-      )
-      for (const message of current ?? []) {
-        if (message.role !== "assistant") continue
-        if (!message.parentID || !currentUserIDs.has(message.parentID)) continue
-        if (
-          sessionIsWorking &&
-          (message.time.completed === undefined || message.finish === "tool-calls" || message.finish === "unknown")
-        ) {
-          preserveVisibleAssistantIDs.add(message.id)
-          continue
-        }
-        if (!visibleAssistantParts(incomingParts.get(message.id) ?? store.part[message.id])) continue
-        preserveVisibleAssistantIDs.add(message.id)
-      }
       const merged = mergeSessionMessagePage({
         current,
         incoming,
-        max: TUI_SESSION_MESSAGE_STORE_LIMIT,
+        max: input.max,
         drop: input.drop,
         preserveCurrent: input.preserveCurrent ?? "all",
-        preserveIDs: preserveVisibleAssistantIDs,
+        // A sliding history window must be allowed to evict completed rows.
+        // Pin only the active/tail contract above; preserving every visible
+        // assistant makes the nominal 150-message cap grow without bound and
+        // prevents older pages from ever entering the window.
+        preserveIDs,
         excludedIDs: removed,
       })
       trace.trace("message-page-merged", {
@@ -1499,6 +1512,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
           const updated = normalizeSessionMessages([...messages, event.properties.info])
           const overflowed = updated.length > TUI_SESSION_MESSAGE_STORE_LIMIT
+          const keepLoadedHistory = paging?.keepLoadedHistory === true
           const preserveIDs = preserveSessionTailIDs(
             updated,
             pinnedSessionMessages.get(event.properties.info.sessionID),
@@ -1507,12 +1521,14 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           )
           const rememberedAssistantID = store.session_latest_assistant[sessionID]?.id
           if (rememberedAssistantID) preserveIDs.add(rememberedAssistantID)
-          const trimmed = trimLoadedSessionMessages({
-            messages: updated,
-            max: TUI_SESSION_MESSAGE_STORE_LIMIT,
-            drop: "oldest",
-            preserveIDs,
-          })
+          const trimmed = keepLoadedHistory
+            ? { messages: updated, removed: [] as Message[] }
+            : trimLoadedSessionMessages({
+                messages: updated,
+                max: TUI_SESSION_MESSAGE_STORE_LIMIT,
+                drop: "oldest",
+                preserveIDs,
+              })
           batch(() => {
             setStore("message", event.properties.info.sessionID, reconcile(trimmed.messages, { key: "id" }))
             if (trimmed.removed.length > 0) removeSessionParts(trimmed.removed)
@@ -1523,9 +1539,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             sessionMessagePaging.set(event.properties.info.sessionID, {
               ...paging,
               olderCursor: paging.hasMoreOlder ? paging.olderCursor : messageCursor(first),
-              hasMoreOlder: paging.hasMoreOlder || overflowed,
+              hasMoreOlder: paging.hasMoreOlder || (!keepLoadedHistory && overflowed),
               newerCursor: undefined,
               hasMoreNewer: false,
+              keepLoadedHistory,
             })
           }
           break
@@ -1663,6 +1680,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       const fatal = input.fatal ?? true
       const workspace = project.workspace.current()
       const generation = ++bootstrapGeneration
+      setReconciledAt(undefined)
+      const controlsDelivered = await sessionControl.drain()
+      if (!controlsDelivered) {
+        Log.Default.warn("tui session control outbox remains pending", {
+          pending: sessionControl.entries().length,
+        })
+      }
       trace.trace("bootstrap-start", {
         generation,
         workspace,
@@ -1761,7 +1785,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         .then(() => {
           if (!isCurrentBootstrap()) return
           if (store.status !== "complete") setStore("status", "partial")
-          void Promise.all([
+          return Promise.all([
             ...(readiness.blockProviderMetadata ? [] : [hydrateProviderMetadata()]),
             ...(readiness.blockProviderUxMetadata ? [] : [hydrateProviderUxMetadata()]),
             ...(readiness.blockSessionList ? [] : [hydrateSessionList()]),
@@ -1792,7 +1816,14 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           ])
             .then(() => {
               if (!isCurrentBootstrap()) return
+              const completedAt = Date.now()
               setStore("status", "complete")
+              setReconciledAt(completedAt)
+              // The SDK keeps recovery visible until either a heartbeat or a
+              // full snapshot proves that missed events have been reconciled.
+              // A completed bootstrap is that proof and must clear the marker
+              // immediately instead of leaving a healthy turn labelled sync.
+              sdk.reconnect.confirm(completedAt)
               trace.trace("bootstrap-complete", {
                 generation,
                 workspace,
@@ -1825,6 +1856,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       },
       get providerMetadataReady() {
         return store.provider_metadata_ready
+      },
+      get reconciledAt() {
+        return reconciledAt()
       },
       get path() {
         return project.instance.path()
@@ -1951,7 +1985,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             })
             if (!isCurrentSessionMessageSync(sessionID, generation)) return false
             batch(() => {
-              const merged = applySessionMessagePage({ sessionID, items: messages.items, drop: "newest" })
+              const merged = applySessionMessagePage({ sessionID, items: messages.items })
               const advancedOlderCursor = Boolean(messages.cursor && messages.cursor !== page.olderCursor)
               const newest = merged.messages.at(-1)
               sessionMessagePaging.set(sessionID, {
@@ -1961,6 +1995,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 hasMoreNewer:
                   page.hasMoreNewer ||
                   merged.removed.some((message) => newest && isSessionMessageAfter(message, newest)),
+                keepLoadedHistory: true,
                 loadingOlder: page.loadingOlder,
                 loadingNewer: page.loadingNewer,
               })
@@ -1992,7 +2027,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             })
             if (!isCurrentSessionMessageSync(sessionID, generation)) return false
             batch(() => {
-              const merged = applySessionMessagePage({ sessionID, items: messages.items, drop: "oldest" })
+              const merged = applySessionMessagePage({ sessionID, items: messages.items })
               const oldest = merged.messages[0]
               const latest = merged.messages.at(-1)
               const advancedNewerCursor = Boolean(messages.cursor && messages.cursor !== after)
@@ -2004,6 +2039,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
                 newerCursor: latest ? messageCursor(latest) : messages.cursor,
                 hasMoreNewer: messages.items.length > 0 && advancedNewerCursor,
+                keepLoadedHistory: true,
                 loadingOlder: page.loadingOlder,
                 loadingNewer: page.loadingNewer,
               })
@@ -2048,6 +2084,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               sdk.client.session.status({ workspace }),
             ])
             if (!isCurrentSessionMessageSync(sessionID, generation)) return
+            const currentPaging = sessionMessagePaging.get(sessionID)
+            const keepLoadedHistory = currentPaging?.keepLoadedHistory === true
             batch(() => {
               setStore(
                 "session",
@@ -2061,6 +2099,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               applySessionMessagePage({
                 sessionID,
                 items: messages.items,
+                max: keepLoadedHistory ? undefined : TUI_SESSION_MESSAGE_STORE_LIMIT,
                 drop: "oldest",
                 preserveCurrent: "newer-working-assistant",
               })
@@ -2069,6 +2108,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 hasMoreOlder: Boolean(messages.cursor),
                 newerCursor: undefined,
                 hasMoreNewer: false,
+                keepLoadedHistory,
               })
               setStore("session_diff", sessionID, reconcile(diff.data ?? []))
               replaceSessionStatuses(statuses.data ?? {})

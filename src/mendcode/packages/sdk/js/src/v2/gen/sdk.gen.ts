@@ -159,6 +159,8 @@ import type {
   SessionBackgroundWriterAcquireResponses,
   SessionBackgroundWriterReleaseErrors,
   SessionBackgroundWriterReleaseResponses,
+  SessionCancelTurnErrors,
+  SessionCancelTurnResponses,
   SessionChildrenErrors,
   SessionChildrenResponses,
   SessionCommandErrors,
@@ -4225,6 +4227,45 @@ export class Session2 extends HeyApiClient {
   }
 
   /**
+   * Cancel active turn
+   *
+   * Cancel only the active AI turn matching the requested user message.
+   */
+  public cancelTurn<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      targetMessageID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "targetMessageID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionCancelTurnResponses, SessionCancelTurnErrors, ThrowOnError>({
+      url: "/session/{sessionID}/cancel-turn",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Send queued prompt now
    *
    * Interrupt the active turn and immediately start the next queued prompt, if one exists.
@@ -6700,7 +6741,8 @@ export class Workflow extends HeyApiClient {
       runID: string
       directory?: string
       workspace?: string
-      mode: "report-only" | "normal" | "custom"
+      mode?: "report-only" | "normal" | "custom"
+      sessionMode?: "approval" | "smart" | "full_access" | "global_default"
       reason?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -6714,6 +6756,7 @@ export class Workflow extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "mode" },
+            { in: "body", key: "sessionMode" },
             { in: "body", key: "reason" },
           ],
         },

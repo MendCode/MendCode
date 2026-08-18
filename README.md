@@ -49,6 +49,7 @@ Most coding agents give you a chat box. MendCode gives you the harness around it
 | Make the terminal feel like your workflow | TUI profiles for prompt chrome, marker, status row, home identity, split home, Agent View, chat presentation, widgets, routes, dialogs, and themes. |
 | Share a tuned setup with a team | Runtime packages for commands, agents, modes, skills, prompts, MCP config, plugins, TUI profile, model roles, permissions, memory defaults, and worktree policy. |
 | Review before implementation | Plan Mode renders Markdown, including Mermaid when supported, inside a TUI review modal before switching to the implementation agent. |
+| Keep large Mermaid diagrams readable | Mermaid fences render as bounded ASCII canvases with fit/layout zoom, centering, local pan, and horizontal or vertical scrolling instead of expanding the whole transcript. |
 | Review current code changes | `/changes` opens a responsive TUI diff workspace with comments and agent-visible review context between model turns. |
 | Keep repeat work moving | Loop Workflows create durable, monitorable loop sessions with contract-aware report-only wakeups, `/loop` creation, `/loops` supervision, and optional per-project OS services. |
 | Keep risky actions explicit | Permission modes, smart permission review, preview-first worktree actions, and approval-gated memory proposals. |
@@ -440,7 +441,9 @@ mendcode tsm setup
 | Share marketplace packages | [Marketplace and team sharing](docs/packages-and-team-sharing.md) |
 | Let another agent control sessions | [Automation runtime](docs/automation-runtime.md) |
 | Extend the TUI with code | [TUI plugins and widgets](docs/tui-plugins-and-widgets.md) |
+| Create and activate a theme | [Themes](docs/themes.md) |
 | Use plan review gates | [Plan Mode](docs/plan-mode.md) |
+| Inspect Mermaid ASCII output and stress fixtures | [Mermaid ASCII rendering](docs/mermaid-ascii-rendering.md) |
 | Review working-tree changes | [Changes Review](docs/changes-review.md) |
 | Run durable agent loops | [Loop Workflows](docs/loop-workflows.md) |
 | Inspect local activity | [Usage Insights](docs/usage-insights.md) |
@@ -483,6 +486,25 @@ If you are an agent working in this repository, use this short path first:
    the repository root.
 4. Keep changes minimal and never include provider tokens, auth state, or local
    runtime data in packages, screenshots, or docs.
+
+### Agent theme workflow
+
+When a user provides an image or visual reference, convert it into deterministic
+theme JSON using the built-in color keys, then run the supported local flow:
+
+```sh
+mendcode theme validate ./my-theme.json
+mendcode theme install ./my-theme.json --name studio --scope project
+mendcode theme select studio --scope project
+```
+
+Project themes belong in `.mendcode/themes/` and the selection belongs in
+`.mendcode/tui.json`; `--scope global` uses the XDG MendCode configuration
+directory (`Global.Path.config`). Validation resolves references and variants,
+rejects missing or circular references, and checks 3:1 text/background contrast
+when hex colors can be resolved. Do not use `kv.json` as a substitute. See
+[Themes](docs/themes.md) for the complete format. These commands are local-only
+and do not call a model or provider.
 
 <details>
 <summary><strong>Open the full MendCode repo context for coding agents</strong></summary>

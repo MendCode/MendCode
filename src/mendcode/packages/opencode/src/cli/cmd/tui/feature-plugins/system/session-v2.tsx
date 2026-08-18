@@ -202,6 +202,14 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
           <scrollbox
             ref={(value: ScrollBoxRenderable) => (scroll = value)}
             viewportOptions={{ paddingRight: 0 }}
+            scrollX
+            horizontalScrollbarOptions={{
+              paddingTop: 1,
+              trackOptions: {
+                backgroundColor: theme.backgroundElement,
+                foregroundColor: theme.border,
+              },
+            }}
             verticalScrollbarOptions={{ visible: false }}
             stickyScroll={followSessionOutput()}
             stickyStart="bottom"
@@ -557,7 +565,7 @@ function AssistantText(props: { messageID: string; part: SessionMessageAssistant
   })
   const messageWidth = createMemo(() => sessionContentWidth(dimensions().width, false))
   const markdownWidth = createMemo(() => Math.max(1, messageWidth() - textPaddingLeft))
-  const richRenderWidth = createMemo(() => Math.min(markdownWidth(), 100))
+  const richRenderWidth = createMemo(() => markdownWidth())
   const hasMermaid = createMemo(() => hasMermaidFence(source()))
   const richStaticContent = createMemo(() => {
     if (renderer() !== "markdown" && renderer() !== "rich") return
@@ -600,6 +608,7 @@ function AssistantText(props: { messageID: string; part: SessionMessageAssistant
             <StyledPlanMarkdown
               syntaxStyle={props.syntax}
               width={markdownWidth()}
+              source={source()}
               content={streaming() ? streamingContent() : markdownContent()}
               tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
               conceal={true}

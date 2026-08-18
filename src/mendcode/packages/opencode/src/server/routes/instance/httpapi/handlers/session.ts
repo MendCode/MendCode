@@ -36,6 +36,7 @@ import {
   AgentViewMetadataPayload,
   BackgroundRegisterPayload,
   BackgroundWriterPayload,
+  CancelTurnPayload,
   DiffQuery,
   ForkPayload,
   InitPayload,
@@ -104,16 +105,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
                 session: BackgroundSession.sessionInfo(sessionInfo),
               }),
             ),
-                Effect.catchIf(NotFoundError.isInstance, () =>
-                  Effect.succeed(
-                    BackgroundSession.toEntry({
-                      info,
-                      status: statuses.get(info.sessionID),
-                      metadata: metadataBySessionID.get(info.sessionID),
-                    }),
-                  ),
-                ),
-
+            Effect.catchIf(NotFoundError.isInstance, () =>
+              Effect.succeed(
+                BackgroundSession.toEntry({
+                  info,
+                  status: statuses.get(info.sessionID),
+                  metadata: metadataBySessionID.get(info.sessionID),
+                }),
+              ),
+            ),
           ),
         ),
       )
@@ -178,9 +178,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* SessionError.mapStorageNotFound(session.get(ctx.payload.sourceSessionID))
       yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID))
-      return yield* agentCommandSvc.create({ targetSessionID: ctx.params.sessionID, ...ctx.payload }).pipe(
-        Effect.catchIf(NotFoundError.isInstance, (error) => Effect.fail(ApiError.notFound(error.data.message))),
-      )
+      return yield* agentCommandSvc
+        .create({ targetSessionID: ctx.params.sessionID, ...ctx.payload })
+        .pipe(Effect.catchIf(NotFoundError.isInstance, (error) => Effect.fail(ApiError.notFound(error.data.message))))
     })
 
     const agentCommandPatch = Effect.fn("SessionHttpApi.agentCommandPatch")(function* (ctx: {
@@ -188,20 +188,22 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof AgentCommandUpdatePayload.Type
     }) {
       yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID))
-      return yield* agentCommandSvc.update({ id: ctx.params.commandID, targetSessionID: ctx.params.sessionID, ...ctx.payload }).pipe(
-        Effect.catchIf(NotFoundError.isInstance, (error) => Effect.fail(ApiError.notFound(error.data.message))),
-        Effect.catchTag("AgentCommandInvalidStateTransitionError", (error) =>
-          Effect.fail(
-            ApiError.badRequest({
-              name: error.name,
-              message: error.message,
-              commandID: error.commandID,
-              from: error.from,
-              to: error.to,
-            }),
+      return yield* agentCommandSvc
+        .update({ id: ctx.params.commandID, targetSessionID: ctx.params.sessionID, ...ctx.payload })
+        .pipe(
+          Effect.catchIf(NotFoundError.isInstance, (error) => Effect.fail(ApiError.notFound(error.data.message))),
+          Effect.catchTag("AgentCommandInvalidStateTransitionError", (error) =>
+            Effect.fail(
+              ApiError.badRequest({
+                name: error.name,
+                message: error.message,
+                commandID: error.commandID,
+                from: error.from,
+                to: error.to,
+              }),
+            ),
           ),
-        ),
-      )
+        )
     })
 
     const backgroundRegister = Effect.fn("SessionHttpApi.backgroundRegister")(function* (ctx: {
@@ -230,10 +232,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: { clientID: string }
     }) {
-      return (yield* backgroundSvc.releaseWriter({
-        sessionID: ctx.params.sessionID,
-        clientID: ctx.payload.clientID,
-      })) ?? null
+      return (
+        (yield* backgroundSvc.releaseWriter({
+          sessionID: ctx.params.sessionID,
+          clientID: ctx.payload.clientID,
+        })) ?? null
+      )
     })
 
     const children = Effect.fn("SessionHttpApi.children")(function* (ctx: { params: { sessionID: SessionID } }) {
@@ -255,7 +259,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       query: typeof MessagesQuery.Type
     }) {
-      if ((ctx.query.before || ctx.query.after) && ctx.query.limit === undefined) return yield* new HttpApiError.BadRequest({})
+      if ((ctx.query.before || ctx.query.after) && ctx.query.limit === undefined)
+        return yield* new HttpApiError.BadRequest({})
       if (ctx.query.before && ctx.query.after) return yield* new HttpApiError.BadRequest({})
       if (ctx.query.before || ctx.query.after) {
         const before = ctx.query.before ?? ctx.query.after!
@@ -276,20 +281,28 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const page = MessageV2.page({
         sessionID: ctx.params.sessionID,
         limit: ctx.query.limit,
-         before: ctx.query.before,
-         after: ctx.query.after,
-         view: ctx.query.view,
-         partsLimit: ctx.query.partsLimit,
-       })
-      if (!page.cursor && !page.sparse) return page.items
+        before: ctx.query.before,
+        after: ctx.query.after,
+        view: ctx.query.view,
+        unit: ctx.query.unit,
+        partsLimit: ctx.query.partsLimit,
+      })
+      const navigation = MessageV2.pageNavigationCursors({
+        page,
+        before: ctx.query.before,
+        after: ctx.query.after,
+      })
+      if (!page.cursor && !page.sparse && !navigation.older && !navigation.newer) return page.items
+
+      const headers: Record<string, string> = {
+        "Access-Control-Expose-Headers": "Link, X-Next-Cursor, X-Older-Cursor, X-Newer-Cursor, X-Message-View-Sparse",
+      }
+      if (page.sparse) headers["X-Message-View-Sparse"] = "true"
+      if (navigation.older) headers["X-Older-Cursor"] = navigation.older
+      if (navigation.newer) headers["X-Newer-Cursor"] = navigation.newer
 
       if (!page.cursor) {
-        return HttpServerResponse.jsonUnsafe(page.items, {
-          headers: {
-            "Access-Control-Expose-Headers": "Link, X-Next-Cursor, X-Message-View-Sparse",
-            "X-Message-View-Sparse": "true",
-          },
-        })
+        return HttpServerResponse.jsonUnsafe(page.items, { headers })
       }
 
       const request = yield* HttpServerRequest.HttpServerRequest
@@ -299,13 +312,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       url.searchParams.set("limit", ctx.query.limit.toString())
       if (ctx.query.after) url.searchParams.set("after", page.cursor)
       else url.searchParams.set("before", page.cursor)
+      headers.Link = `<${url.toString()}>; rel="next"`
+      headers["X-Next-Cursor"] = page.cursor
       return HttpServerResponse.jsonUnsafe(page.items, {
-        headers: {
-          "Access-Control-Expose-Headers": "Link, X-Next-Cursor, X-Message-View-Sparse",
-          Link: `<${url.toString()}>; rel="next"`,
-          "X-Next-Cursor": page.cursor,
-          ...(page.sparse ? { "X-Message-View-Sparse": "true" } : {}),
-        },
+        headers,
       })
     })
 
@@ -385,6 +395,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const abort = Effect.fn("SessionHttpApi.abort")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* promptSvc.cancel(ctx.params.sessionID)
       return true
+    })
+
+    const cancelTurn = Effect.fn("SessionHttpApi.cancelTurn")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof CancelTurnPayload.Type
+    }) {
+      return yield* promptSvc.cancelTurn({
+        sessionID: ctx.params.sessionID,
+        targetMessageID: ctx.payload.targetMessageID,
+      })
     })
 
     const interrupt = Effect.fn("SessionHttpApi.interrupt")(function* (ctx: { params: { sessionID: SessionID } }) {
@@ -564,6 +584,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("update", update)
       .handle("fork", fork)
       .handle("abort", abort)
+      .handle("cancelTurn", cancelTurn)
       .handle("interrupt", interrupt)
       .handle("init", init)
       .handle("share", share)

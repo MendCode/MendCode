@@ -685,6 +685,14 @@ describe("session HttpApi", () => {
         expect(forked.id).not.toBe(created.id)
 
         expect(
+          yield* requestJson<string>(pathFor(SessionPaths.cancelTurn, { sessionID: created.id }), {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ targetMessageID: MessageID.ascending() }),
+          }),
+        ).toBe("not_running")
+
+        expect(
           yield* requestJson<boolean>(pathFor(SessionPaths.abort, { sessionID: created.id }), {
             method: "POST",
             headers,
