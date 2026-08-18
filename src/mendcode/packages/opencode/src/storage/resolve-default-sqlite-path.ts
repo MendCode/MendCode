@@ -8,6 +8,12 @@ export type ResolveDefaultSqliteInput = {
   opencodeDb?: string
 }
 
+export type TestSqliteIsolationInput = {
+  dbPath: string
+  nodeEnv?: string
+  allowedRoots: string[]
+}
+
 const SIMPLE_NAME_CHANNELS = new Set(["latest", "beta", "prod"])
 
 function useSimpleDbBasename(installationChannel: string, disableChannelDb: boolean) {
@@ -58,4 +64,19 @@ export function resolveDefaultSqliteDbPath(input: ResolveDefaultSqliteInput): st
     return path.join(dataDir, opencodeDb)
   }
   return resolveDualReadDbPathFromLayout(dataDir, installationChannel, disableChannelDb)
+}
+
+function isInside(root: string, target: string) {
+  const relative = path.relative(path.resolve(root), path.resolve(target))
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+}
+
+/** Fail closed when a test runner resolves SQLite outside its isolated roots. */
+export function assertTestSqliteIsolation(input: TestSqliteIsolationInput) {
+  if (input.nodeEnv !== "test" || input.dbPath === ":memory:") return
+  if (input.allowedRoots.filter(Boolean).some((root) => isInside(root, input.dbPath))) return
+  throw new Error(
+    `Refusing to use non-isolated SQLite database during tests: ${input.dbPath}. ` +
+      "Run tests from src/mendcode/packages/opencode so test/preload.ts can configure an isolated database.",
+  )
 }

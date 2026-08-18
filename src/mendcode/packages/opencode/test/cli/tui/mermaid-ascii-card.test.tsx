@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { RGBA, SyntaxStyle } from "@opentui/core"
+import { RGBA, SyntaxStyle, type ScrollBoxRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { StyledPlanMarkdown } from "../../../src/cli/cmd/tui/component/styled-plan-markdown"
 import { renderPlanMarkdownStatic } from "../../../src/cli/cmd/tui/util/markdown-render"
@@ -90,6 +90,64 @@ test("a tall Mermaid ASCII card opens at the beginning and stays inside the chat
     expect(frame).toContain("Step 0")
     expect(frame).not.toContain("Step 119")
     expect(Math.max(...frame.split("\n").map((line) => Bun.stringWidth(line)))).toBeLessThanOrEqual(80)
+  } finally {
+    app.renderer.destroy()
+    syntaxStyle.destroy()
+  }
+})
+
+test("nested Mermaid controls work and vertical wheel continues scrolling the transcript", async () => {
+  const source = [
+    "```mermaid",
+    "sankey-beta",
+    "Users,Website,100",
+    "Website,API,80",
+    "API,Database,60",
+    "API,Cache,20",
+    "```",
+  ].join("\n")
+  const content = renderPlanMarkdownStatic(source, 160)
+  const syntaxStyle = SyntaxStyle.create()
+  let transcript: ScrollBoxRenderable | undefined
+  const app = await testRender(
+    () => (
+      <scrollbox ref={(value: ScrollBoxRenderable) => (transcript = value)} width={80} height={18}>
+        <box height={6} flexShrink={0} />
+        <StyledPlanMarkdown
+          source={source}
+          content={content}
+          syntaxStyle={syntaxStyle}
+          width={60}
+          fg={RGBA.fromInts(235, 235, 235)}
+          bg={RGBA.fromInts(20, 20, 20)}
+        />
+        <box height={30} flexShrink={0} />
+      </scrollbox>
+    ),
+    { width: 80, height: 24 },
+  )
+
+  try {
+    await Bun.sleep(20)
+    transcript?.scrollTo(6)
+    await app.renderOnce()
+
+    const frame = app.captureCharFrame()
+    const controlRow = frame.split("\n").findIndex((line) => line.includes("[−] [Fit] [+]"))
+    const plusColumn = frame.split("\n")[controlRow]?.indexOf("[+]") ?? -1
+    expect(controlRow).toBeGreaterThanOrEqual(0)
+    expect(plusColumn).toBeGreaterThan(0)
+
+    await app.mockMouse.click(plusColumn + 1, controlRow)
+    await Bun.sleep(20)
+    await app.renderOnce()
+    expect(app.captureCharFrame()).not.toContain("[Fit]")
+
+    const before = transcript?.scrollTop ?? 0
+    await app.mockMouse.scroll(plusColumn + 1, controlRow + 2, "down")
+    await Bun.sleep(20)
+    await app.renderOnce()
+    expect(transcript?.scrollTop ?? 0).toBeGreaterThan(before)
   } finally {
     app.renderer.destroy()
     syntaxStyle.destroy()

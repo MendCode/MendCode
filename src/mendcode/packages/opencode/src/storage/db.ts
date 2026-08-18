@@ -20,6 +20,7 @@ import {
   mendChannelDbPath,
   resolveDefaultSqliteDbPath,
   resolveDualReadDbPathFromLayout,
+  assertTestSqliteIsolation,
 } from "./resolve-default-sqlite-path"
 
 declare const OPENCODE_MIGRATIONS: { sql: string; timestamp: number; name: string }[] | undefined
@@ -58,6 +59,12 @@ export const Path = iife(() =>
     opencodeDb: Flag.OPENCODE_DB,
   }),
 )
+
+assertTestSqliteIsolation({
+  dbPath: Path,
+  nodeEnv: process.env.NODE_ENV,
+  allowedRoots: [process.env.XDG_DATA_HOME ?? ""],
+})
 
 export type Transaction = SQLiteTransaction<"sync", void>
 
