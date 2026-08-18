@@ -1,6 +1,7 @@
-import { RGBA, type SyntaxStyle } from "@opentui/core"
-import { For, Match, Show, Switch, createMemo } from "solid-js"
+import { RGBA, type ScrollBoxRenderable, type SyntaxStyle } from "@opentui/core"
+import { For, Match, Show, Switch, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { normalizeHexColor } from "../util/hex-colors"
+import { extractMermaidSources, renderMermaidAsciiCard } from "../util/markdown-render"
 import { styledPlanMarkdownSegments, type StyledPlanMarkdownSegment } from "../util/styled-plan-lines"
 
 type StyledPlanMarkdownProps = {
@@ -22,6 +23,7 @@ type StyledPlanMarkdownProps = {
   streamingTail?: string
   streamingTailColorizeHex?: boolean
   streamingTailMode?: "text" | "markdown"
+  source?: string
 }
 
 const HEX_PATTERN = /(^|[^A-Za-z0-9_])(#(?:[0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}))(?![A-Za-z0-9_])/g
@@ -175,6 +177,133 @@ function HexStyledLines(props: { content: string; fallback: RGBA; colorize?: boo
   )
 }
 
+const MERMAID_ASCII_CARD_PATTERN = /(^|\n)\s*╭ Mermaid ASCII ·/m
+
+export function isMermaidAsciiCardContent(content: string) {
+  return MERMAID_ASCII_CARD_PATTERN.test(content)
+}
+
+export function mermaidAsciiCardViewport(content: string, width: number, maxRows = 28) {
+  const lines = content.trimEnd().split("\n")
+  const viewportWidth = Math.max(24, Math.floor(width))
+  const naturalWidth = Math.max(1, ...lines.map((line) => Bun.stringWidth(line)))
+  const contentRows = Math.max(1, lines.length)
+  return {
+    lines,
+    viewportWidth,
+    naturalWidth,
+    contentRows,
+    overflowX: naturalWidth > viewportWidth,
+    overflowY: contentRows > maxRows,
+    viewportRows: Math.min(contentRows, maxRows),
+    centerPadding: naturalWidth < viewportWidth ? Math.floor((viewportWidth - naturalWidth) / 2) : 0,
+  }
+}
+
+function mermaidCardHeading(content: string) {
+  const match = MERMAID_ASCII_CARD_PATTERN.exec(content)
+  if (!match || match.index === 0) return ""
+  return content.slice(0, match.index + (match[1]?.length ?? 0)).trimEnd()
+}
+
+function stopMouseEvent(event?: unknown) {
+  const value = event as { preventDefault?: () => void; stopPropagation?: () => void } | undefined
+  value?.preventDefault?.()
+  value?.stopPropagation?.()
+}
+
+function stopMousePropagation(event?: unknown) {
+  const value = event as { stopPropagation?: () => void } | undefined
+  value?.stopPropagation?.()
+}
+
+function MermaidAsciiCard(props: StyledPlanMarkdownProps & { content: string; mermaidSource?: string }) {
+  let scroll: ScrollBoxRenderable | undefined
+  const [layoutLevel, setLayoutLevel] = createSignal(1)
+  const viewportWidth = createMemo(() => Math.max(24, Math.floor(props.width ?? 80)))
+  const layoutWidth = createMemo(() => {
+    const multiplier = [0.72, 1, 1.5][layoutLevel()] ?? 1
+    return Math.max(40, Math.floor(viewportWidth() * multiplier))
+  })
+  const displayContent = createMemo(() => {
+    if (!props.mermaidSource) return props.content.trimEnd()
+    const heading = mermaidCardHeading(props.content)
+    const card = renderMermaidAsciiCard(props.mermaidSource, layoutWidth())
+    return heading ? `${heading}\n\n${card}` : card
+  })
+  const viewport = createMemo(() => mermaidAsciiCardViewport(displayContent(), viewportWidth()))
+  const centeredLines = createMemo(() => {
+    const padding = " ".repeat(viewport().centerPadding)
+    return viewport().lines.map((line) => `${padding}${line}`)
+  })
+  const contentWidth = createMemo(() => Math.max(viewport().viewportWidth, viewport().naturalWidth + viewport().centerPadding))
+  const scrollHeight = createMemo(() => viewport().viewportRows + (viewport().overflowX ? 1 : 0))
+  const center = (includeVertical = true) => {
+    if (!scroll || scroll.isDestroyed) return
+    scroll.scrollTo({
+      x: Math.max(0, Math.floor((scroll.scrollWidth - scroll.viewport.width) / 2)),
+      y: includeVertical ? Math.max(0, Math.floor((scroll.scrollHeight - scroll.viewport.height) / 2)) : 0,
+    })
+  }
+  const pan = (direction: -1 | 1) => {
+    if (!scroll || scroll.isDestroyed) return
+    scroll.scrollBy({ x: direction * Math.max(4, Math.floor(viewportWidth() / 3)), y: 0 })
+  }
+  const setLevel = (value: number) => {
+    setLayoutLevel(Math.max(0, Math.min(2, value)))
+  }
+
+  createEffect(() => {
+    displayContent()
+    const timer = setTimeout(() => center(false), 0)
+    onCleanup(() => clearTimeout(timer))
+  })
+
+  return (
+    <box flexDirection="column" width={viewportWidth()} flexShrink={0} overflow="hidden">
+      <box width="100%" height={1} flexDirection="row" justifyContent="center" overflow="hidden">
+        <Show when={props.mermaidSource}>
+          <text fg={props.fg} wrapMode="none" onMouseUp={(event) => { stopMouseEvent(event); setLevel(layoutLevel() - 1) }}>
+            [−]
+          </text>
+          <text fg={props.fg} wrapMode="none" onMouseUp={(event) => { stopMouseEvent(event); setLevel(1) }}>
+            {layoutLevel() === 1 ? " [Fit] " : "  Fit  "}
+          </text>
+          <text fg={props.fg} wrapMode="none" onMouseUp={(event) => { stopMouseEvent(event); setLevel(layoutLevel() + 1) }}>
+            [+]
+          </text>
+        </Show>
+        <text fg={props.fg} wrapMode="none" onMouseUp={(event) => { stopMouseEvent(event); pan(-1) }}>
+          {"  ◀ "}
+        </text>
+        <text fg={props.fg} wrapMode="none" onMouseUp={(event) => { stopMouseEvent(event); center() }}>
+          Center
+        </text>
+        <text fg={props.fg} wrapMode="none" onMouseUp={(event) => { stopMouseEvent(event); pan(1) }}>
+          {" ▶"}
+        </text>
+      </box>
+      <scrollbox
+        ref={(value: ScrollBoxRenderable) => (scroll = value)}
+        width={viewport().viewportWidth}
+        height={scrollHeight()}
+        scrollX
+        scrollY
+        viewportOptions={{ paddingRight: viewport().overflowY ? 1 : 0 }}
+        horizontalScrollbarOptions={{ visible: viewport().overflowX }}
+        verticalScrollbarOptions={{ visible: viewport().overflowY }}
+        onMouseScroll={stopMousePropagation}
+      >
+        <box flexDirection="column" width={contentWidth()} flexShrink={0}>
+          <text fg={props.fg} bg={props.bg} wrapMode="none">
+            {centeredLines().join("\n") || " "}
+          </text>
+        </box>
+      </scrollbox>
+    </box>
+  )
+}
+
 function MarkdownSegment(props: StyledPlanMarkdownProps & { content: string }) {
   const displayContent = createMemo(() => wrapMarkdownDisplayCodeBlocks(props.content, props.width))
   const chunks = createMemo(() => {
@@ -239,9 +368,12 @@ export function shouldRenderStableTextPlain(content: string, stableTextMode?: bo
   return Boolean(stableTextMode && !MARKDOWN_SYNTAX_PATTERN.test(content))
 }
 
-function PlanMarkdownSegment(props: StyledPlanMarkdownProps & { segment: StyledPlanMarkdownSegment }) {
+function PlanMarkdownSegment(props: StyledPlanMarkdownProps & { segment: StyledPlanMarkdownSegment; mermaidSource?: string }) {
   return (
     <Switch>
+      <Match when={props.segment.kind === "text" && isMermaidAsciiCardContent(props.segment.content)}>
+        <MermaidAsciiCard {...props} content={props.segment.content} mermaidSource={props.mermaidSource} />
+      </Match>
       <Match when={props.segment.kind === "text" || shouldRenderStableTextPlain(props.segment.content, props.stableTextMode)}>
         <HexStyledLines content={props.segment.content} fallback={props.fg} colorize={props.colorizeHex} width={props.width} />
       </Match>
@@ -271,11 +403,16 @@ export function StyledPlanMarkdown(props: StyledPlanMarkdownProps) {
     previousTailSegments = reuseStableSegments(previousTailSegments, styledPlanMarkdownSegments(streamingTail()))
     return previousTailSegments
   })
+  const mermaidSources = createMemo(() => extractMermaidSources(props.source ?? ""))
+  const mermaidSourceFor = (index: number) => {
+    const cardIndex = segments().slice(0, index).filter((segment) => segment.kind === "text" && isMermaidAsciiCardContent(segment.content)).length
+    return mermaidSources()[cardIndex]
+  }
 
   return (
     <box flexDirection="column" flexShrink={0}>
       <For each={segments()}>
-        {(segment) => <PlanMarkdownSegment {...props} segment={segment} />}
+        {(segment, index) => <PlanMarkdownSegment {...props} segment={segment} mermaidSource={mermaidSourceFor(index())} />}
       </For>
       <Show when={streamingTail().length > 0}>
         <Switch>

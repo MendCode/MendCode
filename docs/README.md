@@ -11,12 +11,13 @@ If you are deciding what to show on GitHub or the website, start with [Feature M
 3. [Customization](customization.md): prompt input, input marker, prompt status, home centered/split modes, Agent View, ASCII title/mascot, activity states, and team profile examples.
 4. [Custom tool calls](custom-tool-calls.md): project-local and package-shared assistant tools with typed arguments, execution context, metadata, and permission checks.
 5. [Plan Mode](plan-mode.md): interactive plan review modal, approve/edit/comment/reject flow, Mermaid support, and post-approval implementation handoff.
-6. [Changes Review](changes-review.md): `/changes` diff workspace, keybinds, comments, responsive layout, and agent-visible review context.
-7. [Loop Workflows](loop-workflows.md): verified goals, recurring scheduled jobs, bounded runs, Agent View loop roots, `/loop` creation, `/loops` supervision with live countdowns, durable permission waits, execution modes, and the per-project OS scheduler.
-8. [Memory Center](memory-center.md): saved memories, proposals, categories, Dream status, project grouping, and the constrained memory side agent for questions, explanations, and draft proposals.
-9. [Usage Insights](usage-insights.md): global/project activity dashboard, token heatmap, AI time, top tools/agents/models, cache behavior, and weather.
-10. [Packages and team sharing](packages-and-team-sharing.md): package commands, agents, modes, skills, prompts, MCP files, widgets, TUI profiles, model policy, permissions, memory, and worktree policy for teams.
-11. [Automation runtime](automation-runtime.md): session automation commands, versioned JSON envelopes, shared model selection, progress inspection, events, waiting, and cancellation.
+6. [Mermaid ASCII rendering](mermaid-ascii-rendering.md): chat canvas controls, fit and pan behavior, supported diagram families, stress fixtures, and exact expected ASCII output.
+7. [Changes Review](changes-review.md): `/changes` diff workspace, keybinds, comments, responsive layout, and agent-visible review context.
+8. [Loop Workflows](loop-workflows.md): verified goals, recurring scheduled jobs, bounded runs, Agent View loop roots, `/loop` creation, `/loops` supervision with live countdowns, durable permission waits, execution modes, and the per-project OS scheduler.
+9. [Memory Center](memory-center.md): saved memories, proposals, categories, Dream status, project grouping, and the constrained memory side agent for questions, explanations, and draft proposals.
+10. [Usage Insights](usage-insights.md): global/project activity dashboard, token heatmap, AI time, top tools/agents/models, cache behavior, and weather.
+11. [Packages and team sharing](packages-and-team-sharing.md): package commands, agents, modes, skills, prompts, MCP files, widgets, TUI profiles, model policy, permissions, memory, and worktree policy for teams.
+12. [Automation runtime](automation-runtime.md): session automation commands, versioned JSON envelopes, shared model selection, progress inspection, events, waiting, and cancellation.
 
 ## Configure The Harness
 

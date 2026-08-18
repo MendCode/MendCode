@@ -4431,6 +4431,14 @@ export function Session() {
                     viewportOptions={{
                       paddingRight: showScrollbar() ? 1 : 0,
                     }}
+                    scrollX
+                    horizontalScrollbarOptions={{
+                      paddingTop: 1,
+                      trackOptions: {
+                        backgroundColor: theme.backgroundElement,
+                        foregroundColor: theme.border,
+                      },
+                    }}
                     verticalScrollbarOptions={{
                       paddingLeft: 1,
                       visible: showScrollbar(),
@@ -6689,7 +6697,7 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
     sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)),
   )
   const markdownWidth = createMemo(() => Math.max(1, messageWidth() - textPaddingLeft))
-  const richRenderWidth = createMemo(() => Math.min(markdownWidth(), 100))
+  const richRenderWidth = createMemo(() => markdownWidth())
   const hasMermaid = createMemo(() => hasMermaidFence(source()))
   const markdownStaticContent = createMemo(() => {
     if (renderer() !== "markdown" && renderer() !== "rich") return
@@ -6730,6 +6738,7 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
                 <StyledPlanMarkdown
                   syntaxStyle={syntax()}
                   width={markdownWidth()}
+                  source={source()}
                   content={markdownContent()}
                   tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
                   conceal={ctx.conceal()}
