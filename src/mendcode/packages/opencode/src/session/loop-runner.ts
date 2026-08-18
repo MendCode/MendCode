@@ -291,6 +291,13 @@ function usageFromMessage(message: MessageV2.WithParts | undefined, workflow: Lo
   }
 }
 
+function incompleteWorkerReason(message: MessageV2.WithParts) {
+  if (message.info.role !== "assistant" || !message.info.finish) {
+    return "Loop worker ended without a terminal finish; retrying the iteration."
+  }
+  return "Loop worker finished without a parseable LOOP_CHECKPOINT; retrying the iteration."
+}
+
 function mergeUsage(usages: Array<LoopWorkflow.Usage | undefined>): LoopWorkflow.Usage | undefined {
   const items = usages.filter((item): item is LoopWorkflow.Usage => Boolean(item))
   if (!items.length) return undefined
@@ -1131,7 +1138,31 @@ export const layer = Layer.effect(
             : (failed.evaluatorReason ?? after.evaluatorReason ?? message),
         } satisfies TickResult
       }
+      if (result.value.info.role !== "assistant" || !result.value.info.finish) {
+        const reason = incompleteWorkerReason(result.value)
+        const failed = yield* workflow.failRun({ id, runID: run.id, error: reason, failureClass: "transient", now })
+        return {
+          workflowID: id,
+          runID: failed.id,
+          state: "failed" as const,
+          summary: failed.retry
+            ? `Loop run retry scheduled for ${new Date(failed.retry.nextWakeup ?? Date.now()).toISOString()}. ${reason}`
+            : (failed.evaluatorReason ?? reason),
+        } satisfies TickResult
+      }
       const checkpoint = parseCheckpoint(assistantText(result.value))
+      if (!checkpoint.status) {
+        const reason = incompleteWorkerReason(result.value)
+        const failed = yield* workflow.failRun({ id, runID: run.id, error: reason, failureClass: "transient", now })
+        return {
+          workflowID: id,
+          runID: failed.id,
+          state: "failed" as const,
+          summary: failed.retry
+            ? `Loop run retry scheduled for ${new Date(failed.retry.nextWakeup ?? Date.now()).toISOString()}. ${reason}`
+            : (failed.evaluatorReason ?? reason),
+        } satisfies TickResult
+      }
       const validationGates = yield* executeValidationChecks(workflow, current, run, checkpoint, instance.directory)
       const preJudgeGates = [checkpointGate(checkpoint), approvalGate(current, checkpoint), ...validationGates].filter(
         (item): item is LoopGateResult => Boolean(item),
@@ -1264,7 +1295,7 @@ export const layer = Layer.effect(
               )
             }),
           ),
-        { concurrency: 1 },
+        { concurrency: Math.max(1, due.length) },
       )
     })
 

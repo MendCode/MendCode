@@ -94,9 +94,11 @@ type LocalSharedServerConnection = ReturnType<typeof sharedServerConnection> & {
   lease: SharedServerClientLease
 }
 
-async function connectToLocalSharedServer(directory: string, runtimeID: string, lease?: SharedServerClientLease) {
-  const state = await SharedServer.readState()
-  if (!state || state.runtimeID !== runtimeID) return
+async function connectToSharedServerState(
+  directory: string,
+  state: SharedServerState,
+  lease?: SharedServerClientLease,
+) {
   const connection = sharedServerConnection(state)
   try {
     await probeSharedServer({ ...connection, directory })
@@ -111,6 +113,12 @@ async function connectToLocalSharedServer(directory: string, runtimeID: string, 
   }
 }
 
+async function connectToLocalSharedServer(directory: string, runtimeID: string, lease?: SharedServerClientLease) {
+  const state = await SharedServer.readState()
+  if (!state || state.runtimeID !== runtimeID) return
+  return connectToSharedServerState(directory, state, lease)
+}
+
 async function waitForLocalSharedServer(
   directory: string,
   runtimeID: string,
@@ -123,7 +131,26 @@ async function waitForLocalSharedServer(
     if (connection) return connection
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  return
+  // A PID without a reachable listener is not a usable connection. Returning
+  // it as attached state makes the bootstrap render an empty TUI forever.
+  return undefined
+}
+
+async function waitForExistingLocalSharedServer(
+  directory: string,
+  lease?: SharedServerClientLease,
+  timeoutMs = SHARED_SERVER_WAIT_TIMEOUT_MS,
+) {
+  const started = Date.now()
+  while (Date.now() - started < timeoutMs) {
+    const state = await SharedServer.readState()
+    if (state) {
+      const connection = await connectToSharedServerState(directory, state, lease)
+      if (connection) return connection
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  return undefined
 }
 
 async function stopLocalSharedServer(state: SharedServerState) {
@@ -162,10 +189,11 @@ function runtimeEntrypoint(runtimeCwd: string) {
 
 function sharedServerCommand(runtimeCwd: string) {
   const entry = runtimeEntrypoint(runtimeCwd)
+  const port = process.env.MENDCODE_SHARED_SERVER_PORT || "0"
   if (!entry) {
     return {
       command: process.execPath,
-      args: ["serve", "--hostname", "127.0.0.1", "--port", "0"],
+      args: ["serve", "--hostname", "127.0.0.1", "--port", port],
       cwd: runtimeCwd,
     }
   }
@@ -183,7 +211,7 @@ function sharedServerCommand(runtimeCwd: string) {
       "--hostname",
       "127.0.0.1",
       "--port",
-      "0",
+      port,
     ],
     cwd: packageRoot,
   }
@@ -250,7 +278,7 @@ async function sharedServerRuntimeID(runtimeCwd: string) {
   return [executable, metadata?.size ?? "unknown", metadata?.mtimeMs ?? "unknown", sourceHash].join(":")
 }
 
-async function ensureLocalSharedServer(input: {
+export async function ensureLocalSharedServer(input: {
   directory: string
   runtimeCwd: string
   lease?: SharedServerClientLease
@@ -277,19 +305,35 @@ async function ensureLocalSharedServer(input: {
       const live = SharedServer.isProcessAlive(state.pid)
       const runtimeMatches = state.runtimeID === runtimeID
 
-      const canReplace = SharedServer.shouldReplaceSharedServer({ live, runtimeMatches, activeClients })
-      if (!canReplace && live && !runtimeMatches && activeClients > 0) {
-        // Keep clients on the old runtime, but let this client start a fresh
-        // server instead of silently inheriting stale code.
-        await SharedServer.clearState()
+      const canReplace = SharedServer.shouldReplaceSharedServer({
+        live,
+        runtimeMatches,
+        activeClients,
+        reachable: false,
+      })
+      if (SharedServer.shouldAttachExistingSharedServer({
+        live,
+        runtimeMatches,
+        activeClients,
+        reachable: false,
+      })) {
+        // An active client owns the old runtime. Attach to that server until
+        // its leases drain; starting a second server would split durable state
+        // and make reconnects race between databases.
+        const existing = await waitForExistingLocalSharedServer(input.directory, input.lease)
+        if (existing) {
+          connected = true
+          return existing
+        }
+        return
       } else if (canReplace) {
         if (!(await stopLocalSharedServer(state)))
           return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
         await SharedServer.clearStateIfOwned(state.pid)
       } else {
-        // A live server with the same runtime may be briefly unreachable during
-        // sleep, GC, or a provider request. Never dispose it from reconnect.
-        return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
+        // A live but unreachable server with active clients cannot be safely
+        // replaced. Fail closed and let the owning client recover it.
+        return undefined
       }
     }
 
@@ -488,17 +532,18 @@ export const TuiThreadCommand = cmd({
 
       let serverHeaders: RequestInit["headers"] = sharedServerURL ? ServerAuth.headers() : undefined
       let serverURL = sharedServerURL
+      let serverProbeFailed = false
       if (serverURL) {
         try {
           await probeSharedServer({ url: serverURL, directory: cwd, headers: serverHeaders })
         } catch (error) {
+          serverProbeFailed = true
           UI.println(
             UI.Style.TEXT_WARNING_BOLD +
               "! " +
               UI.Style.TEXT_NORMAL +
-              `Server unavailable; falling back to the local runtime. ${errorMessage(error)}`,
+              `Server unavailable; keeping the selected server and waiting for reconnect. ${errorMessage(error)}`,
           )
-          serverURL = undefined
         }
       }
 
@@ -627,6 +672,16 @@ export const TuiThreadCommand = cmd({
           }
         : undefined
 
+      const reconnectConfig = !transport.events
+        ? {
+            ...(reconnect ? { refresh: reconnect } : {}),
+            maxAttempts: SHARED_SERVER_RECONNECT_MAX_ATTEMPTS,
+            retryDelay: SHARED_SERVER_RECONNECT_RETRY_DELAY_MS,
+            maxRetryDelay: SHARED_SERVER_RECONNECT_MAX_DELAY_MS,
+            staleDelay: SHARED_SERVER_RECONNECT_STALE_DELAY_MS,
+          }
+        : undefined
+
       try {
         try {
           await validateSession({
@@ -635,6 +690,10 @@ export const TuiThreadCommand = cmd({
             directory: cwd,
             fetch: transport.fetch,
             headers: transport.headers,
+            // An explicitly selected server may be offline during Wi-Fi
+            // recovery or an app restart. Let the TUI enter its durable SSE
+            // reconnect loop instead of creating a competing local runtime.
+            remote: !serverProbeFailed,
           })
         } catch (error) {
           UI.error(errorMessage(error))
@@ -670,15 +729,7 @@ export const TuiThreadCommand = cmd({
             : {}),
           config,
           mendProfile,
-          reconnect: reconnect
-            ? {
-                refresh: reconnect,
-                maxAttempts: SHARED_SERVER_RECONNECT_MAX_ATTEMPTS,
-                retryDelay: SHARED_SERVER_RECONNECT_RETRY_DELAY_MS,
-                maxRetryDelay: SHARED_SERVER_RECONNECT_MAX_DELAY_MS,
-                staleDelay: SHARED_SERVER_RECONNECT_STALE_DELAY_MS,
-              }
-            : undefined,
+          reconnect: reconnectConfig,
           directory: cwd,
           fetch: transport.fetch,
           headers: transport.headers,

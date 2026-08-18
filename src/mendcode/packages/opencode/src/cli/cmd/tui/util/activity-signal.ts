@@ -24,18 +24,32 @@ export function resolveActivityPhase(input: ActivitySignalInput): MendActivityPh
   if (currentToolPhase && (input.connection === "connecting" || input.connection === "reconnecting")) {
     return currentToolPhase
   }
-  if (input.connection && input.connection !== "connected") return "blocked"
+  const hasLiveActivityEvidence = Boolean(
+    input.hasReasoning ||
+      input.hasAnswerText ||
+      (input.liveOutputTokens ?? 0) > 0 ||
+      (input.liveReasoningTokens ?? 0) > 0,
+  )
+  if (input.connection && input.connection !== "connected" && !hasLiveActivityEvidence) return "blocked"
   if (input.retry || input.status === "retry") return "retrying"
   if (input.status === "idle") return "done"
   if (input.status === "busy" && input.statusKind === "subagent-wait") return "subagents"
   if (input.status === "busy" && input.statusKind === "memory-extract") return "memory"
   if (input.status === "busy" && input.statusKind === "compaction") return "compacting"
   if (activeToolPhase) return activeToolPhase
+  // An active tool that is not registered still represents generation; do not
+  // misclassify it as reasoning-only activity.
+  if (activeNames.length > 0) return "sending"
   if (latestToolPhase) return latestToolPhase
 
   const liveOutput = input.liveOutputTokens ?? 0
   const liveReasoning = input.liveReasoningTokens ?? 0
-  const liveAnswerOutput = input.hasAnswerText || (liveReasoning <= 0 ? liveOutput > 0 : liveOutput > liveReasoning)
+  // Some providers report reasoning in the generic output counter without a
+  // separate reasoning-token total. Visible reasoning remains the stronger
+  // signal until answer text actually arrives.
+  const liveAnswerOutput =
+    input.hasAnswerText ||
+    (!input.hasReasoning && (liveReasoning <= 0 ? liveOutput > 0 : liveOutput > liveReasoning))
   if (input.livePhase === "output" && liveAnswerOutput) return "sending"
 
   const names = (input.toolNames ?? []).map((item) => item.toLowerCase())
@@ -69,6 +83,7 @@ export function trailingActivityToolNames(parts: readonly unknown[]) {
 }
 
 function phaseForToolNames(names: string[]): MendActivityPhase | undefined {
+  if (names.some((name) => name === "question" || name.includes("ask_user"))) return "awaiting-input"
   if (names.some((name) => name.includes("upload"))) return "uploading"
   if (names.some((name) => name.includes("download"))) return "downloading"
   if (

@@ -20,6 +20,7 @@ import { processMemoryUsage } from "@/util/process-memory"
 import { SharedServer } from "@/cli/cmd/tui/shared-server"
 
 const log = Log.create({ service: "server" })
+const HTTPAPI_EVENT_BUFFER_SIZE = 512
 
 function eventData(data: unknown): Sse.Event {
   return {
@@ -42,13 +43,16 @@ function eventResponse(directory?: string) {
   log.info("global event connected")
   const events = Stream.callback<GlobalBusEvent>((queue) => {
     const handler = (event: GlobalBusEvent) => {
+      // A stalled HTTP client may miss intermediate deltas, but it must not
+      // retain an unbounded queue. The TUI reconciles durable state after its
+      // reconnect handshake, so dropping here is safe and bounded.
       if (matchesGlobalEventDirectory(event, directory)) Queue.offerUnsafe(queue, event)
     }
     return Effect.acquireRelease(
       Effect.sync(() => GlobalBus.on("event", handler)),
       () => Effect.sync(() => GlobalBus.off("event", handler)),
     )
-  })
+  }, { bufferSize: HTTPAPI_EVENT_BUFFER_SIZE, strategy: "dropping" })
   const heartbeat = Stream.tick("10 seconds").pipe(
     Stream.drop(1),
     Stream.map(() => ({ payload: { id: Bus.createID(), type: "server.heartbeat", properties: {} } })),

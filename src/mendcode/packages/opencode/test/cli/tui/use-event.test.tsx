@@ -66,6 +66,7 @@ async function mount() {
   const source = createSource()
   const seen: Event[] = []
   let project!: ReturnType<typeof useProject>
+  let sdk!: ReturnType<typeof useSDK>
   let done!: () => void
   const ready = new Promise<void>((resolve) => {
     done = resolve
@@ -77,6 +78,7 @@ async function mount() {
         <Probe
           onReady={(ctx) => {
             project = ctx.project
+            sdk = ctx.sdk
             done()
           }}
           seen={seen}
@@ -86,18 +88,22 @@ async function mount() {
   ))
 
   await ready
-  return { app, emit: source.emit, project, seen }
+  return { app, emit: source.emit, project, sdk, seen }
 }
 
-function Probe(props: { seen: Event[]; onReady: (ctx: { project: ReturnType<typeof useProject> }) => void }) {
+function Probe(props: {
+  seen: Event[]
+  onReady: (ctx: { project: ReturnType<typeof useProject>; sdk: ReturnType<typeof useSDK> }) => void
+}) {
   const project = useProject()
+  const sdk = useSDK()
   const event = useEvent()
 
   onMount(() => {
     event.subscribe((evt) => {
       props.seen.push(evt)
     })
-    props.onReady({ project })
+    props.onReady({ project, sdk })
   })
 
   return <box />
@@ -231,6 +237,85 @@ function SDKProbe(props: { onReady: (ctx: { sdk: ReturnType<typeof useSDK> }) =>
 }
 
 describe("useEvent", () => {
+  test("refreshes a local event source without showing a false reconnect", async () => {
+    const { app, sdk, seen } = await mount()
+
+    try {
+      expect(sdk.connection.status).toBe("connected")
+
+      sdk.reconnect.retry()
+      await wait(() => seen.some((item) => item.type === "server.connected"))
+
+      expect(sdk.connection.status).toBe("connected")
+      expect(sdk.connection.attempt).toBe(0)
+      expect(sdk.connection.error).toBeUndefined()
+      expect(sdk.connection.recoveringSince).toBeUndefined()
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("does not treat the first local event after an idle gap as a reconnect", async () => {
+    const originalNow = Date.now
+    let nowOffset = 0
+    const { app, emit, sdk, seen } = await mount()
+
+    try {
+      Date.now = () => originalNow() + nowOffset
+      nowOffset = 30_000
+      emit(event(vcs("after-idle"), { directory: "/tmp/root" }))
+      await wait(() => seen.some((item) => item.type === "vcs.branch.updated"))
+
+      expect(seen.map((item) => item.type)).toEqual(["vcs.branch.updated"])
+      expect(sdk.connection.status).toBe("connected")
+      expect(sdk.connection.recoveringSince).toBeUndefined()
+    } finally {
+      Date.now = originalNow
+      app.renderer.destroy()
+    }
+  })
+
+  test("keeps a local event source connected when watchdog drift triggers reconciliation", async () => {
+    const originalNow = Date.now
+    let nowOffset = 0
+    const source = createSource()
+    let sdk!: ReturnType<typeof useSDK>
+    let done!: () => void
+    const ready = new Promise<void>((resolve) => {
+      done = resolve
+    })
+    const app = await testRender(() => (
+      <SDKProvider
+        url="http://test"
+        directory="/tmp/root"
+        events={source.source}
+        reconnect={{ staleDelay: 500 }}
+      >
+        <SDKProbe
+          onReady={(ctx) => {
+            sdk = ctx.sdk
+            done()
+          }}
+        />
+      </SDKProvider>
+    ))
+
+    try {
+      await ready
+      await wait(() => sdk.connection.status === "connected")
+      Date.now = () => originalNow() + nowOffset
+      nowOffset = 10_000
+
+      await wait(() => sdk.connection.recoveredAt !== undefined, 2500)
+      expect(sdk.connection.status).toBe("connected")
+      expect(sdk.connection.error).toBeUndefined()
+      expect(sdk.connection.recoveringSince).toBeUndefined()
+    } finally {
+      Date.now = originalNow
+      app.renderer.destroy()
+    }
+  })
+
   test("delivers matching directory events without an active workspace", async () => {
     const { app, emit, seen } = await mount()
 
@@ -408,6 +493,31 @@ describe("useEvent", () => {
       controllers[1].enqueue(sseEvent(heartbeatEvent()))
       await wait(() => sdk.connection.recoveringSince === undefined)
       expect(sdk.connection.lastApplicationEventAt).toBeNumber()
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("SDK event stream clears recovery after snapshot reconciliation without waiting for heartbeat", async () => {
+    const { app, sdk, controllers } = await mountSSE()
+
+    try {
+      controllers[0].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
+
+      controllers[0].close()
+      await wait(() => controllers.length === 2, 1500)
+      controllers[1].enqueue(sseEvent(connectedEvent()))
+      await wait(() => sdk.connection.status === "connected")
+      expect(sdk.connection.recoveringSince).toBeNumber()
+
+      controllers[1].enqueue(sseEvent(sessionStatusEvent()))
+      await Bun.sleep(30)
+      const reconciledAt = Date.now()
+      sdk.reconnect.confirm(reconciledAt)
+
+      expect(sdk.connection.recoveringSince).toBeUndefined()
+      expect(sdk.connection.recoveredAt).toBe(reconciledAt)
     } finally {
       app.renderer.destroy()
     }

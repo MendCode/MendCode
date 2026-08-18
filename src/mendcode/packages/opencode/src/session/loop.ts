@@ -1037,9 +1037,9 @@ function runLeaseProcessAlive(pid: number) {
 }
 
 function runLeaseStale(input: { run: RunRow; policy: Policy; now: number }) {
-  if (runLeaseExpired(input)) return true
   const pid = runLeaseProcessID(input.run.data.lease?.holder)
-  return pid !== undefined && !runLeaseProcessAlive(pid)
+  if (pid !== undefined) return !runLeaseProcessAlive(pid)
+  return runLeaseExpired(input)
 }
 
 const maxFailureRetries = 3
@@ -2229,7 +2229,7 @@ function appendArtifacts(inputs: ArtifactInput[]) {
 }
 
 function reconcileStaleWorkingRun(row: WorkflowRow, now = Date.now()): WorkflowRow {
-  if (row.state !== "working" && row.state !== "paused") return row
+  if (row.state !== "working" && row.state !== "needs_input" && row.state !== "paused") return row
   const activeRuns = Database.use((db) =>
     db
       .select()
@@ -2260,6 +2260,7 @@ function reconcileStaleWorkingRun(row: WorkflowRow, now = Date.now()): WorkflowR
           data: {
             ...staleRun.data,
             evaluatorReason: reason,
+            failureClass: "transient",
             budget: row.data.metrics,
             lease: staleRun.data.lease,
           },
@@ -2289,6 +2290,7 @@ function reconcileStaleWorkingRun(row: WorkflowRow, now = Date.now()): WorkflowR
             degraded: true,
           },
           evaluatorReason: reason,
+          failureClass: "transient",
         },
       })
       .where(eq(LoopWorkflowTable.id, row.id))
@@ -4164,6 +4166,7 @@ export const layer = Layer.effect(
             time_updated: now,
             time_ended: now,
             data: {
+              ...currentRun.data,
               evaluatorReason: input.error,
               failureClass,
               budget: metrics,

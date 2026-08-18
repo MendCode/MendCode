@@ -14,6 +14,11 @@ export type SessionRoute = {
   type: "session"
   sessionID: string
   prompt?: PromptInfo
+  submitted?: {
+    messageID: string
+    inputRows: number
+    queuedBehindActiveTurn?: boolean
+  }
 }
 
 export type SetupRoute = {
@@ -52,6 +57,13 @@ export type WorkflowsRoute = {
   returnTo?: HomeRoute | SessionRoute
 }
 
+export type SessionHistoryRoute = {
+  type: "session-history"
+  sessionID: string
+  selectedMessageID?: string
+  returnTo: SessionRoute
+}
+
 export type PluginRoute = {
   type: "plugin"
   id: string
@@ -67,6 +79,7 @@ export type Route =
   | ChangesRoute
   | LoopsRoute
   | WorkflowsRoute
+  | SessionHistoryRoute
   | PluginRoute
 
 export const { use: useRoute, provider: RouteProvider } = createSimpleContext({

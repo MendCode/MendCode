@@ -64,6 +64,7 @@ function runExecutor(input: {
     SessionPrompt.Service,
     SessionPrompt.Service.of({
       cancel: () => Effect.void,
+      cancelTurn: () => Effect.succeed("not_running" as const),
       cancelQueued: () => Effect.succeed(false),
       interrupt: () => Effect.void,
       prompt: (prompt: PromptInput) =>
@@ -121,7 +122,7 @@ describe("workflow task executor", () => {
     expect(result.error).toContain("valid JSON")
   })
 
-  test("classifies an uncollected tool result as an environment failure", async () => {
+  test("classifies an uncollected tool result as a transient failure", async () => {
     const message = promptMessage("")
     message.parts = [
       {
@@ -144,7 +145,7 @@ describe("workflow task executor", () => {
 
     const result = await runExecutor({ task: task(), promptText: "", calls: [], message })
 
-    expect(result).toMatchObject({ state: "failed", failureClass: "environment" })
+    expect(result).toMatchObject({ state: "failed", failureClass: "transient" })
     expect(result.error).toContain("connection was lost")
     expect(result.error).not.toContain("JSON")
   })

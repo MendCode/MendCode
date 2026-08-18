@@ -73,9 +73,16 @@ export default [
 
   SyncEvent.project(Session.Event.Updated, (db, data) => {
     const info = data.info
+    const values = toPartialRow(info as Session.Patch)
     const row = db
       .update(SessionTable)
-      .set(toPartialRow(info as Session.Patch))
+      .set({
+        ...values,
+        // Permission synchronization happens while opening a session and is not conversation activity.
+        ...(Object.keys(values).length === 1 && "permission" in values && !("time_updated" in values)
+          ? { time_updated: SessionTable.time_updated }
+          : {}),
+      })
       .where(eq(SessionTable.id, data.sessionID))
       .returning()
       .get()

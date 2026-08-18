@@ -5,13 +5,13 @@ import type { TextareaRenderable } from "@opentui/core"
 import { useKeybind } from "../../context/keybind"
 import { selectedForeground, tint, useTheme } from "../../context/theme"
 import type { QuestionAnswer, QuestionRequest } from "@mendcode/sdk/v2"
-import { useSDK } from "../../context/sdk"
+import { useQuestionControl } from "../../context/question-control"
 import { SplitBorder } from "../../component/border"
 import { useTextareaKeybindings } from "../../component/textarea-keybindings"
 import { useDialog } from "../../ui/dialog"
 
 export function QuestionPrompt(props: { request: QuestionRequest }) {
-  const sdk = useSDK()
+  const questionControl = useQuestionControl()
   const { theme } = useTheme()
   const keybind = useKeybind()
   const bindings = useTextareaKeybindings()
@@ -45,14 +45,16 @@ export function QuestionPrompt(props: { request: QuestionRequest }) {
 
   function submit() {
     const answers = questions().map((_, i) => store.answers[i] ?? [])
-    void sdk.client.question.reply({
+    questionControl.reply({
+      sessionID: props.request.sessionID,
       requestID: props.request.id,
       answers,
     })
   }
 
   function reject() {
-    void sdk.client.question.reject({
+    questionControl.reject({
+      sessionID: props.request.sessionID,
       requestID: props.request.id,
     })
   }
@@ -67,7 +69,8 @@ export function QuestionPrompt(props: { request: QuestionRequest }) {
       setStore("custom", inputs)
     }
     if (single()) {
-      void sdk.client.question.reply({
+      questionControl.reply({
+        sessionID: props.request.sessionID,
         requestID: props.request.id,
         answers: [[answer]],
       })
@@ -258,6 +261,7 @@ export function QuestionPrompt(props: { request: QuestionRequest }) {
       customBorderChars={SplitBorder.customBorderChars}
     >
       <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
+        <text fg={theme.warning}>Waiting for answer · Esc dismisses</text>
         <Show when={!single()}>
           <box flexDirection="row" gap={1} paddingLeft={1}>
             <For each={questions()}>

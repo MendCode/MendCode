@@ -15,6 +15,7 @@ import {
   type BackgroundTaskState,
 } from "./background-task.sql"
 import { SessionTable } from "./session.sql"
+import { markPermissionAbandoned } from "./pending-input"
 
 export const State = Schema.Literals([
   "queued",
@@ -361,6 +362,7 @@ export function hasActiveTasks() {
 
 export interface Interface {
   readonly start: (input: StartInput) => Effect.Effect<Snapshot>
+  readonly resume: (input: { taskID: SessionID; generation?: number }) => Effect.Effect<Snapshot | undefined>
   readonly markRunning: (input: { taskID: SessionID; generation: number }) => Effect.Effect<Snapshot>
   readonly reclaimExpired: (input?: { now?: number }) => Effect.Effect<Snapshot[]>
   readonly finish: (input: FinishInput) => Effect.Effect<Snapshot>
@@ -466,6 +468,17 @@ export const layer = Layer.effect(
               .get()
             if (previous && !terminalStates.has(previous.state)) {
               throw new Error(`Background task ${input.taskID} is already ${previous.state}`)
+            }
+            if (previous) {
+              db.update(BackgroundTaskEventTable)
+                .set({ time_acknowledged: now, time_updated: now })
+                .where(
+                  and(
+                    eq(BackgroundTaskEventTable.task_id, input.taskID),
+                    eq(BackgroundTaskEventTable.generation, current.current_generation),
+                  ),
+                )
+                .run()
             }
           }
 
@@ -581,6 +594,36 @@ export const layer = Layer.effect(
       return snapshot
     })
 
+    const resume = Effect.fn("BackgroundTask.resume")(function* (input: {
+      readonly taskID: SessionID
+      readonly generation?: number
+    }) {
+      const current = yield* get(input.taskID, input.generation)
+      if (!current || current.state === "completed") return current
+      if (current.state === "needs_input") {
+        return yield* update({
+          taskID: current.taskID,
+          generation: current.generation,
+          action: {
+            type: "mark_running",
+            ownerRuntimeID: runtimeID,
+            leaseExpiresAt: Date.now() + OWNER_LEASE_MS,
+          },
+        })
+      }
+      if (!terminalStates.has(current.state)) return current
+      return yield* start({
+        taskID: current.taskID,
+        parentSessionID: current.parentSessionID,
+        rootSessionID: current.rootSessionID,
+        depth: current.depth,
+        startRunning: true,
+        title: current.title,
+        agent: current.agent,
+        model: current.model,
+      })
+    })
+
     const update = Effect.fn("BackgroundTask.update")(function* (input: {
       taskID: SessionID
       generation: number
@@ -617,6 +660,18 @@ export const layer = Layer.effect(
             .set({ time_updated: next.value.time_updated })
             .where(eq(BackgroundTaskTable.task_id, input.taskID))
             .run()
+          if (input.action.type === "mark_running" && run.state === "needs_input") {
+            db.update(BackgroundTaskEventTable)
+              .set({ time_acknowledged: next.value.time_updated, time_updated: next.value.time_updated })
+              .where(
+                and(
+                  eq(BackgroundTaskEventTable.task_id, input.taskID),
+                  eq(BackgroundTaskEventTable.generation, input.generation),
+                  eq(BackgroundTaskEventTable.type, "needs_input"),
+                ),
+              )
+              .run()
+          }
           const snapshot = fromRows(task, { ...run, ...next.value })
           if (
             !next.stateChanged ||
@@ -694,28 +749,33 @@ export const layer = Layer.effect(
           .all()
           .filter(
             (run) =>
-              run.state === "running" &&
-              ((run.lease_expires_at !== null && run.lease_expires_at <= now) ||
-                !ownerRuntimeIsAlive(run.owner_runtime_id)),
+              (run.state === "running" || run.state === "needs_input") &&
+              (run.owner_runtime_id
+                ? !ownerRuntimeIsAlive(run.owner_runtime_id)
+                : run.lease_expires_at !== null && run.lease_expires_at <= now),
           ),
       )
       const results = yield* Effect.forEach(
         expired,
         (run) =>
-          update({
-            taskID: run.task_id,
-            generation: run.generation,
-            action: {
-              type: "finish",
-              state: "interrupted",
-              background: true,
-              result: {
-                summary: `Runtime lease expired before the subagent completed. Resume with task_id ${run.task_id}.`,
-                error: "Runtime lease expired",
-                changedFiles: [],
-                transcriptSessionID: run.task_id,
+          Effect.gen(function* () {
+            const snapshot = yield* update({
+              taskID: run.task_id,
+              generation: run.generation,
+              action: {
+                type: "finish",
+                state: "interrupted",
+                background: true,
+                result: {
+                  summary: `Runtime lease expired before the subagent completed. Resume with task_id ${run.task_id}.`,
+                  error: "Runtime lease expired",
+                  changedFiles: [],
+                  transcriptSessionID: run.task_id,
+                },
               },
-            },
+            })
+            if (snapshot) markPermissionAbandoned(run.task_id)
+            return snapshot
           }),
         { concurrency: 1 },
       )
@@ -853,6 +913,7 @@ export const layer = Layer.effect(
 
     return Service.of({
       start,
+      resume,
       markRunning,
       reclaimExpired,
       finish,

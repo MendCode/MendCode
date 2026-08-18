@@ -23,7 +23,9 @@ export const Parameters = Schema.Struct({
   description: Schema.optional(Schema.String),
   source: Schema.optional(Schema.Literals(["session-generated", "saved", "template", "package", "manual"])),
   saved: Schema.optional(Schema.Boolean),
-  originSessionID: Schema.optional(Schema.String),
+  originSessionID: Schema.optional(Schema.String).annotate({
+    description: "Session that owns the workflow. Omit this or use `current` to use the current tool session.",
+  }),
   overlapKey: Schema.optional(Schema.String),
   taskID: Schema.optional(Schema.String).annotate({ description: "Task ID for retry_task." }),
   phaseID: Schema.optional(Schema.String).annotate({ description: "Phase ID for retry_phase." }),
@@ -39,6 +41,13 @@ export type Metadata = {
   revisionID?: string
   phaseCount?: number
   taskCount?: number
+  phases?: readonly {
+    id: string
+    ordinal: number
+    name: string
+    state: Workflow.WorkflowPhaseState
+    counts: { total: number; queued: number; working: number; completed: number; failed: number; blocked: number }
+  }[]
   objective?: string
   model?: { providerID: string; modelID: string; variant?: string }
   agent?: string
@@ -52,6 +61,12 @@ export type Metadata = {
 }
 
 type Snapshot = WorkflowService.WorkflowSnapshot
+
+export function resolveWorkflowOriginSessionID(value: string | undefined, currentSessionID: SessionID) {
+  const normalized = value?.trim()
+  if (!normalized || normalized.toLowerCase() === "current") return currentSessionID
+  return SessionID.make(normalized)
+}
 
 function requireValue<A>(value: A | undefined, name: string) {
   if (value === undefined) return Effect.fail(new Error(`${name} is required for this workflow action.`))
@@ -68,6 +83,13 @@ function snapshotMetadata(snapshot: Snapshot): Metadata {
     revisionID: snapshot.revision.id,
     phaseCount: snapshot.phases.length,
     taskCount: snapshot.tasks.length,
+    phases: snapshot.phases.map((phase) => ({
+      id: phase.id,
+      ordinal: phase.ordinal,
+      name: phase.name,
+      state: phase.state,
+      counts: phase.counts,
+    })),
     objective: snapshot.revision.plan.objective,
     ...(model ? { model: { providerID: model.providerID, modelID: model.modelID, ...(model.variant ? { variant: model.variant } : {}) } } : {}),
     ...(snapshot.run.originSessionID ? { originSessionID: snapshot.run.originSessionID } : {}),
@@ -160,6 +182,20 @@ export const WorkflowTool = Tool.define<typeof Parameters, Metadata, WorkflowSer
                 action: params.action,
                 phaseCount: preview.phaseCount,
                 taskCount: preview.taskCount,
+                phases: plan.phases.map((phase) => ({
+                  id: phase.id,
+                  ordinal: phase.ordinal,
+                  name: phase.name,
+                  state: "pending" as const,
+                  counts: {
+                    total: phase.taskIDs.length,
+                    queued: 0,
+                    working: 0,
+                    completed: 0,
+                    failed: 0,
+                    blocked: 0,
+                  },
+                })),
               },
             }
           }
@@ -204,7 +240,7 @@ export const WorkflowTool = Tool.define<typeof Parameters, Metadata, WorkflowSer
               name: params.name,
               description: params.description,
               source: params.source,
-              originSessionID: params.originSessionID ? SessionID.make(params.originSessionID) : ctx.sessionID,
+              originSessionID: resolveWorkflowOriginSessionID(params.originSessionID, ctx.sessionID),
               overlapKey: params.overlapKey,
             })
             yield* scheduler.start(started.run.id)

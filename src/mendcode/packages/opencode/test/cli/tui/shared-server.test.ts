@@ -5,6 +5,7 @@ import {
   activeClientLeaseCount,
   activeClientLeaseCountForServer,
   shouldReplaceSharedServer,
+  shouldAttachExistingSharedServer,
   shouldReplaceLiveServer,
   shouldUseSharedServer,
   waitForClientLeases,
@@ -51,12 +52,25 @@ describe("shared server state", () => {
     expect(shouldUseSharedServer({ networkOptionSet: false, disabledByEnvironment: true })).toBe(false)
   })
 
-  test("does not replace a live server during a transient probe failure", () => {
+  test("does not replace a reachable live server during a transient probe failure", () => {
     expect(shouldReplaceSharedServer({ live: true, runtimeMatches: true, activeClients: 1 })).toBe(false)
     expect(shouldReplaceSharedServer({ live: true, runtimeMatches: true, activeClients: 0 })).toBe(false)
     expect(shouldReplaceSharedServer({ live: true, runtimeMatches: false, activeClients: 1 })).toBe(false)
     expect(shouldReplaceSharedServer({ live: true, runtimeMatches: false, activeClients: 0 })).toBe(true)
     expect(shouldReplaceSharedServer({ live: false, runtimeMatches: true, activeClients: 1 })).toBe(true)
+  })
+
+  test("replaces an unreachable live PID only when no client owns it", () => {
+    expect(shouldReplaceSharedServer({ live: true, runtimeMatches: true, activeClients: 0, reachable: false })).toBe(true)
+    expect(shouldReplaceSharedServer({ live: true, runtimeMatches: true, activeClients: 1, reachable: false })).toBe(false)
+    expect(shouldAttachExistingSharedServer({ live: true, runtimeMatches: false, activeClients: 1, reachable: false })).toBe(false)
+  })
+
+  test("attaches to a live older runtime while another client still owns it", () => {
+    expect(shouldAttachExistingSharedServer({ live: true, runtimeMatches: false, activeClients: 1 })).toBe(true)
+    expect(shouldAttachExistingSharedServer({ live: true, runtimeMatches: false, activeClients: 0 })).toBe(false)
+    expect(shouldAttachExistingSharedServer({ live: false, runtimeMatches: false, activeClients: 1 })).toBe(false)
+    expect(shouldAttachExistingSharedServer({ live: true, runtimeMatches: true, activeClients: 3 })).toBe(false)
   })
 
   test("counts and releases client leases", async () => {
@@ -101,6 +115,19 @@ describe("shared server state", () => {
     expect(await activeClientLeaseCount(first)).toBe(0)
     expect(await activeClientLeaseCount(second)).toBe(1)
     await secondLease.release()
+  })
+
+  test("keeps one shared runtime lease when the parent TUI closes before its sibling reconnects", async () => {
+    await using tmp = await tmpdir()
+    const first = await acquireClientLease(303, tmp.path)
+    const second = await acquireClientLease(303, tmp.path)
+
+    await first.release()
+    expect(await activeClientLeaseCount(tmp.path)).toBe(1)
+    expect(shouldReplaceSharedServer({ live: true, runtimeMatches: true, activeClients: 1, reachable: false })).toBe(false)
+
+    await second.release()
+    expect(await activeClientLeaseCount(tmp.path)).toBe(0)
   })
 
   test("counts legacy global leases during the scoped lease rollout", async () => {

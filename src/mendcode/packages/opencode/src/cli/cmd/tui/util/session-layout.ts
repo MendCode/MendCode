@@ -8,6 +8,25 @@ export function sessionPromptVisible(input: {
   return input.permissionCount === 0 && input.questionCount === 0 && input.planReviewCount === 0
 }
 
+export const SESSION_TRANSCRIPT_BOTTOM_CLEARANCE_ROWS = 3
+
+export function sessionTranscriptBottomSpacer(virtualBottomSpacer = 0) {
+  return Math.max(0, virtualBottomSpacer) + SESSION_TRANSCRIPT_BOTTOM_CLEARANCE_ROWS
+}
+
+export function sessionPendingInputStatus(input: {
+  permissionCount: number
+  questionCount: number
+  planReviewCount: number
+  assistantActive: boolean
+}) {
+  if (input.permissionCount > 0)
+    return `${input.permissionCount} permission${input.permissionCount === 1 ? "" : "s"} pending`
+  if (input.questionCount > 0) return "waiting for answer"
+  if (input.planReviewCount > 0) return "waiting for review"
+  return input.assistantActive ? "assistant active" : "idle"
+}
+
 export function sessionPendingInputSessionIDs(input: {
   sessionID: string
   parentID?: string
@@ -352,6 +371,27 @@ export function sessionTopbarLeftLabel(input: {
 }
 
 export type SessionLoopReceiptTone = "active" | "danger" | "info" | "muted" | "success" | "warning"
+
+export function shouldRenderSessionWorkflowCard(profile?: "raw" | "minimal" | "mendcode" | "full") {
+  return profile === "mendcode" || profile === "full"
+}
+
+export function shouldRenderSessionLoopCard(input: {
+  toolStatus?: string
+  workflowID?: unknown
+  workflows?: unknown
+}) {
+  if (input.toolStatus !== "completed") return false
+  if (typeof input.workflowID === "string" && input.workflowID.trim()) return true
+  if (!Array.isArray(input.workflows)) return false
+  return input.workflows.some(
+    (workflow) =>
+      workflow !== null &&
+      typeof workflow === "object" &&
+      typeof (workflow as { workflowID?: unknown }).workflowID === "string" &&
+      Boolean((workflow as { workflowID: string }).workflowID.trim()),
+  )
+}
 
 export type SessionTaskContinuationEntry = {
   callID: string

@@ -3,13 +3,18 @@ import { Runner } from "@/effect/runner"
 import { Effect, Latch, Layer, Scope, Context } from "effect"
 import * as Session from "./session"
 import { MessageV2 } from "./message-v2"
-import { SessionID } from "./schema"
+import { MessageID, SessionID } from "./schema"
 import { SessionStatus } from "./status"
 
 export interface Interface {
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void>
   readonly isBusy: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly cancel: (sessionID: SessionID, options?: { before?: Effect.Effect<void> }) => Effect.Effect<void>
+  readonly cancelTurn: (
+    sessionID: SessionID,
+    targetMessageID: MessageID,
+    options?: { before?: Effect.Effect<void>; ignoreInterruptible?: boolean },
+  ) => Effect.Effect<Runner.CancelCurrentIfResult>
   readonly cancelQueued: (sessionID: SessionID, queueKey: string) => Effect.Effect<boolean>
   readonly setInterruptible: (sessionID: SessionID, interruptible: boolean) => Effect.Effect<void>
   readonly ensureRunning: (
@@ -118,6 +123,20 @@ export const layer = Layer.effect(
       return yield* existing.cancelPending((key) => key === queueKey)
     })
 
+    const cancelTurn = Effect.fn("SessionRunState.cancelTurn")(function* (
+      sessionID: SessionID,
+      targetMessageID: MessageID,
+      options?: { before?: Effect.Effect<void>; ignoreInterruptible?: boolean },
+    ) {
+      const data = yield* InstanceState.get(state)
+      const existing = data.runners.get(sessionID)
+      if (!existing) {
+        yield* status.set(sessionID, { type: "idle" })
+        return "not_running" as const
+      }
+      return yield* existing.cancelCurrentIf(targetMessageID, options)
+    })
+
     const setInterruptible = Effect.fn("SessionRunState.setInterruptible")(function* (
       sessionID: SessionID,
       interruptible: boolean,
@@ -170,6 +189,7 @@ export const layer = Layer.effect(
       assertNotBusy,
       isBusy,
       cancel,
+      cancelTurn,
       cancelQueued,
       setInterruptible,
       ensureRunning,

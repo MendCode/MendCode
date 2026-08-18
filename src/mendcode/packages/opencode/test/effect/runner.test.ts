@@ -358,6 +358,21 @@ describe("Runner", () => {
   )
 
   it.live(
+    "cancel resolves callers when work has not started yet",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const fiber = yield* runner.ensureRunning(Effect.never.pipe(Effect.as("never"))).pipe(Effect.forkChild)
+      while (!runner.busy) yield* Effect.yieldNow
+
+      yield* runner.cancel
+
+      expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true)
+      expect(Boolean(runner.busy)).toBe(false)
+    }),
+  )
+
+  it.live(
     "cancel on idle is a no-op",
     Effect.gen(function* () {
       const s = yield* Scope.Scope
@@ -576,6 +591,52 @@ describe("Runner", () => {
       yield* Deferred.succeed(queuedDone, undefined)
       expect(yield* Fiber.join(queued)).toBe("queued")
       expect(runner.busy).toBe(false)
+    }),
+  )
+
+  it.live(
+    "cancelCurrentIf only interrupts the matching run key",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const started = yield* Deferred.make<void>()
+      const prepared = yield* Ref.make(0)
+      const runner = Runner.make<string>(s, { onInterrupt: Effect.succeed("cancelled") })
+      const active = yield* runner
+        .ensureRunning(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined)
+            return yield* Effect.never.pipe(Effect.as("active"))
+          }),
+          { queueKey: "turn-1" },
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+
+      expect(yield* runner.cancelCurrentIf("turn-2", { before: Ref.update(prepared, (value) => value + 1) })).toBe(
+        "target_mismatch",
+      )
+      expect(yield* Ref.get(prepared)).toBe(0)
+      expect(runner.busy).toBe(true)
+      const queued = yield* runner
+        .ensureRunning(Effect.succeed("newer turn"), { queue: true, queueKey: "turn-2" })
+        .pipe(Effect.forkChild)
+      yield* Effect.gen(function* () {
+        while (runner.state._tag !== "RunningThenRun") yield* Effect.yieldNow
+      }).pipe(Effect.timeout("250 millis"))
+      yield* runner.setInterruptible(false)
+      expect(yield* runner.cancelCurrentIf("turn-1", { before: Ref.update(prepared, (value) => value + 1) })).toBe(
+        "not_interruptible",
+      )
+      expect(yield* Ref.get(prepared)).toBe(0)
+      expect(runner.busy).toBe(true)
+      yield* runner.setInterruptible(true)
+      expect(yield* runner.cancelCurrentIf("turn-1", { before: Ref.update(prepared, (value) => value + 1) })).toBe(
+        "cancelled",
+      )
+      expect(yield* Ref.get(prepared)).toBe(1)
+      expect(yield* Fiber.join(active)).toBe("cancelled")
+      expect(yield* Fiber.join(queued)).toBe("newer turn")
+      expect(yield* runner.cancelCurrentIf("turn-1")).toBe("not_running")
     }),
   )
 

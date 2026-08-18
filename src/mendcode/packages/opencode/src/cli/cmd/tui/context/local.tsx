@@ -146,6 +146,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         >
         modelSource: Record<string, ModelSource | undefined>
         modelUpdatedAt: Record<string, number | undefined>
+        modelOverrideMessageID: Record<string, string | undefined>
         recent: {
           providerID: string
           modelID: string
@@ -157,6 +158,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         variant: Record<string, string | undefined>
         variantSource: Record<string, ModelSource | undefined>
         variantUpdatedAt: Record<string, number | undefined>
+        variantOverrideMessageID: Record<string, string | undefined>
       }>({
         ready: false,
         mendDefault: undefined,
@@ -164,11 +166,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         model: {},
         modelSource: {},
         modelUpdatedAt: {},
+        modelOverrideMessageID: {},
         recent: [],
         favorite: [],
         variant: {},
         variantSource: {},
         variantUpdatedAt: {},
+        variantOverrideMessageID: {},
       })
 
       const filePath = path.join(Global.Path.state, "model.json")
@@ -341,11 +345,18 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           localModel,
           localOverride: override,
           localOverrideUpdatedAt: key ? modelStore.modelUpdatedAt[key] : undefined,
+          localOverrideMessageID: key ? modelStore.modelOverrideMessageID[key] : undefined,
           userModel: user?.role === "user" ? user.model : undefined,
           userModelCreatedAt: user?.time.created,
+          userMessageID: user?.role === "user" ? user.id : undefined,
           sessionModel: session?.model,
           agentModel: sessionAgent?.model,
         })
+      }
+
+      function latestUserMessageID() {
+        if (route.data.type !== "session") return undefined
+        return (sync.data.message[route.data.sessionID] ?? []).findLast((item) => item.role === "user")?.id
       }
 
       function variantScopeKey(model: { providerID: string; modelID: string } | undefined) {
@@ -383,7 +394,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           }
           setModelStore("model", key, model)
           if (source === "user" || source === "agent" || modelStore.modelSource[key] !== "user") setModelStore("modelSource", key, source)
-          if (source === "user" || source === "agent") setModelStore("modelUpdatedAt", key, Date.now())
+          if (source === "user" || source === "agent") {
+            setModelStore("modelUpdatedAt", key, Date.now())
+            setModelStore("modelOverrideMessageID", key, latestUserMessageID())
+          }
           updated = true
           if (options?.recent) {
             const uniq = uniqueBy([model, ...modelStore.recent], (x) => `${x.providerID}/${x.modelID}`)
@@ -429,8 +443,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           localVariant,
           hasLocalVariantOverride: value !== undefined && (source === "user" || source === "agent"),
           localVariantOverrideUpdatedAt: modelStore.variantUpdatedAt[key],
+          localVariantOverrideMessageID: modelStore.variantOverrideMessageID[key],
           userModel,
           userModelCreatedAt: userModel ? user?.time.created : undefined,
+          userMessageID: userModel ? user?.id : undefined,
           sessionModel,
         })
       }
@@ -459,7 +475,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         }
         setModelStore("variant", key, value ?? "default")
         if (source === "user" || source === "agent" || modelStore.variantSource[key] !== "user") setModelStore("variantSource", key, source)
-        if (source === "user" || source === "agent") setModelStore("variantUpdatedAt", key, Date.now())
+        if (source === "user" || source === "agent") {
+          setModelStore("variantUpdatedAt", key, Date.now())
+          setModelStore("variantOverrideMessageID", key, latestUserMessageID())
+        }
       }
 
       return {
@@ -497,6 +516,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           return {
             model,
             updatedAt: modelStore.modelUpdatedAt[key] ?? 0,
+            messageID: modelStore.modelOverrideMessageID[key],
           }
         },
         get ready() {
@@ -541,6 +561,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             setModelStore("model", key, { ...val })
             setModelStore("modelSource", key, "user")
             setModelStore("modelUpdatedAt", key, Date.now())
+            setModelStore("modelOverrideMessageID", key, latestUserMessageID())
         },
         cycleFavorite(direction: 1 | -1) {
           const favorites = modelStore.favorite.filter((item) => isModelValid(item))
@@ -571,6 +592,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           setModelStore("model", key, { ...next })
           setModelStore("modelSource", key, "user")
           setModelStore("modelUpdatedAt", key, Date.now())
+          setModelStore("modelOverrideMessageID", key, latestUserMessageID())
           const uniq = uniqueBy([next, ...modelStore.recent], (x) => `${x.providerID}/${x.modelID}`)
           if (uniq.length > 10) uniq.pop()
           setModelStore(
@@ -617,6 +639,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             return {
               variant: raw === "default" ? undefined : raw,
               updatedAt: modelStore.variantUpdatedAt[key] ?? 0,
+              messageID: modelStore.variantOverrideMessageID[key],
             }
           },
           override(model?: { providerID: string; modelID: string }) {

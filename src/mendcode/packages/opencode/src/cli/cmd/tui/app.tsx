@@ -33,6 +33,8 @@ import { StartupLoading, startupLoadingText } from "@tui/component/startup-loadi
 import { FirstRunIntro } from "@tui/component/first-run-intro"
 import { SyncProvider, useSync } from "@tui/context/sync"
 import { SyncProviderV2 } from "@tui/context/sync-v2"
+import { SessionControlProvider } from "@tui/context/session-control"
+import { QuestionControlProvider } from "@tui/context/question-control"
 import { LocalProvider, useLocal } from "@tui/context/local"
 import { DialogModel } from "@tui/component/dialog-model"
 import { useConnected } from "@tui/component/use-connected"
@@ -54,6 +56,7 @@ import { Memory } from "@tui/routes/memory"
 import { Changes } from "@tui/routes/changes"
 import { Loops } from "@tui/routes/loops"
 import { Workflows } from "@tui/routes/workflows"
+import { SessionHistory } from "@tui/routes/session-history"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
@@ -673,34 +676,38 @@ export function tui(input: {
                           reconnect={input.reconnect}
                         >
                           <ProjectProvider>
-                            <SyncProvider>
-                              <OptionalSyncProviderV2>
-                                <ThemeProvider mode={mode}>
-                                  <LocalProvider>
-                                    <KeybindProvider>
-                                      <PromptStashProvider>
-                                        <DialogProvider>
-                                          <CommandProvider>
-                                            <FrecencyProvider>
-                                              <PromptHistoryProvider>
-                                                <PromptRefProvider>
-                                                  <EditorContextProvider>
-                                                    <App
-                                                      onSnapshot={input.onSnapshot}
-                                                      onDiagnostics={input.onDiagnostics}
-                                                    />
-                                                  </EditorContextProvider>
-                                                </PromptRefProvider>
-                                              </PromptHistoryProvider>
-                                            </FrecencyProvider>
-                                          </CommandProvider>
-                                        </DialogProvider>
-                                      </PromptStashProvider>
-                                    </KeybindProvider>
-                                  </LocalProvider>
-                                </ThemeProvider>
-                              </OptionalSyncProviderV2>
-                            </SyncProvider>
+                            <SessionControlProvider>
+                              <QuestionControlProvider>
+                                <SyncProvider>
+                                  <OptionalSyncProviderV2>
+                                    <ThemeProvider mode={mode}>
+                                      <LocalProvider>
+                                        <KeybindProvider>
+                                          <PromptStashProvider>
+                                            <DialogProvider>
+                                              <CommandProvider>
+                                                <FrecencyProvider>
+                                                  <PromptHistoryProvider>
+                                                    <PromptRefProvider>
+                                                      <EditorContextProvider>
+                                                        <App
+                                                          onSnapshot={input.onSnapshot}
+                                                          onDiagnostics={input.onDiagnostics}
+                                                        />
+                                                      </EditorContextProvider>
+                                                    </PromptRefProvider>
+                                                  </PromptHistoryProvider>
+                                                </FrecencyProvider>
+                                              </CommandProvider>
+                                            </DialogProvider>
+                                          </PromptStashProvider>
+                                        </KeybindProvider>
+                                      </LocalProvider>
+                                    </ThemeProvider>
+                                  </OptionalSyncProviderV2>
+                                </SyncProvider>
+                              </QuestionControlProvider>
+                            </SessionControlProvider>
                           </ProjectProvider>
                         </SDKProvider>
                       </MendTuiProfileProvider>
@@ -968,6 +975,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
                     ? "Loops"
                     : route.data.type === "workflows"
                       ? "Workflows"
+                      : route.data.type === "session-history"
+                        ? "Session History"
                      : route.data.type
     const sessionLabel = session && !SessionApi.isDefaultTitle(session.title) ? session.title : routeLabel
     if (
@@ -3708,9 +3717,17 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
   const addMemoryEntryFromDialog = async (scope: "global" | "project") => {
     const text = await DialogPrompt.show(dialog, `Add ${scope} memory`, { placeholder: "Memory text" })
     if (!text?.trim()) return
-    await appendMemoryEntry({ scope, text, source: "tui-memory-manager" }, memoryRoot())
-    toast.show({ variant: "success", message: `${scope} memory added.`, duration: 3000 })
-    await showMemoryManager(scope)
+    try {
+      const entry = await appendMemoryEntry({ scope, text, source: "tui-memory-manager" }, memoryRoot())
+      toast.show({ variant: "success", message: `${scope} memory added: ${entry.id}`, duration: 4000 })
+      await showMemoryManager(scope)
+    } catch (error) {
+      toast.show({
+        variant: "error",
+        message: `Could not add ${scope} memory: ${error instanceof Error ? error.message : String(error)}`,
+        duration: 6000,
+      })
+    }
   }
   const memoryProposalApplyLabel = (proposal: MemoryProposal) => {
     const operation = proposal.operation ?? "add"
@@ -4797,7 +4814,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     {
       title: "Help",
       value: "help.show",
-      keybind: ["setup", "stats", "memory", "changes", "loops", "workflows"].includes(route.data.type) ? "help" : undefined,
+      keybind: ["setup", "stats", "memory", "changes", "loops", "workflows", "session-history"].includes(route.data.type) ? "help" : undefined,
       slash: {
         name: "help",
       },
@@ -4992,22 +5009,27 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     },
   ])
 
-  event.on(TuiEvent.CommandExecute.type, (evt) => {
-    command.trigger(evt.properties.command)
-  })
+  const appEventUnsubscribers: Array<() => void> = []
+  appEventUnsubscribers.push(
+    event.on(TuiEvent.CommandExecute.type, (evt) => {
+      command.trigger(evt.properties.command)
+    }),
+  )
 
-  event.on(TuiEvent.ToastShow.type, (evt) => {
-    toast.show({
-      title: evt.properties.title,
-      message: evt.properties.message,
-      variant: evt.properties.variant,
-      duration: evt.properties.duration,
-    })
-  })
+  appEventUnsubscribers.push(
+    event.on(TuiEvent.ToastShow.type, (evt) => {
+      toast.show({
+        title: evt.properties.title,
+        message: evt.properties.message,
+        variant: evt.properties.variant,
+        duration: evt.properties.duration,
+      })
+    }),
+  )
 
   const backgroundTaskNotificationIDs = new Set<string>()
   const ownerWakeIDs = new Set<string>()
-  event.subscribe((incoming) => {
+  const unsubscribeBackgroundEvents = event.subscribe((incoming) => {
     const evt = incoming as unknown as {
       type?: string
       properties?: {
@@ -5055,35 +5077,49 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     })
     if (notification) toast.show(notification)
   })
+  appEventUnsubscribers.push(unsubscribeBackgroundEvents)
 
-  event.on(TuiEvent.SessionSelect.type, (evt) => {
-    route.navigate({
-      type: "session",
-      sessionID: evt.properties.sessionID,
-    })
+  onCleanup(() => {
+    for (const unsubscribe of appEventUnsubscribers) unsubscribe()
+    appEventUnsubscribers.length = 0
+    backgroundTaskNotificationIDs.clear()
+    ownerWakeIDs.clear()
   })
 
-  event.on("session.deleted", (evt) => {
-    if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
-      route.navigate({ type: "home" })
-      toast.show({
-        variant: "info",
-        message: "The current session was deleted",
+  appEventUnsubscribers.push(
+    event.on(TuiEvent.SessionSelect.type, (evt) => {
+      route.navigate({
+        type: "session",
+        sessionID: evt.properties.sessionID,
       })
-    }
-  })
+    }),
+  )
 
-  event.on("session.error", (evt) => {
-    const error = evt.properties.error
-    if (error && typeof error === "object" && error.name === "MessageAbortedError") return
-    const message = errorMessage(error)
+  appEventUnsubscribers.push(
+    event.on("session.deleted", (evt) => {
+      if (route.data.type === "session" && route.data.sessionID === evt.properties.info.id) {
+        route.navigate({ type: "home" })
+        toast.show({
+          variant: "info",
+          message: "The current session was deleted",
+        })
+      }
+    }),
+  )
 
-    toast.show({
-      variant: "error",
-      message,
-      duration: 5000,
-    })
-  })
+  appEventUnsubscribers.push(
+    event.on("session.error", (evt) => {
+      const error = evt.properties.error
+      if (error && typeof error === "object" && error.name === "MessageAbortedError") return
+      const message = errorMessage(error)
+
+      toast.show({
+        variant: "error",
+        message,
+        duration: 5000,
+      })
+    }),
+  )
 
   const showUpdateAvailable = async (version: string) => {
     const skipped = skippedUpdateVersion(kv.store)
@@ -5135,9 +5171,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     void exit()
   }
 
-  event.on("installation.update-available", async (evt) => {
-    await showUpdateAvailable(evt.properties.version)
-  })
+  appEventUnsubscribers.push(
+    event.on("installation.update-available", async (evt) => {
+      await showUpdateAvailable(evt.properties.version)
+    }),
+  )
 
   const plugin = createMemo(() => {
     if (!ready()) return
@@ -5214,6 +5252,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
           </Match>
           <Match when={route.data.type === "workflows"}>
             <Workflows />
+          </Match>
+          <Match when={route.data.type === "session-history"}>
+            <SessionHistory />
           </Match>
         </Switch>
       </Show>

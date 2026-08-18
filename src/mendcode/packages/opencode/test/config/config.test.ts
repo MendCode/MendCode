@@ -245,6 +245,24 @@ test("loads subagent_model without changing main model", async () => {
   })
 })
 
+test("loads disabled_models guardrails", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await writeConfig(dir, {
+        $schema: "https://mendcode.ai/config.json",
+        disabled_models: ["openai/gpt-5.6-luna", "anthropic/claude-opus-4-6"],
+      })
+    },
+  })
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await load()
+      expect(config.disabled_models).toEqual(["openai/gpt-5.6-luna", "anthropic/claude-opus-4-6"])
+    },
+  })
+})
+
 test("loads shell config field", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

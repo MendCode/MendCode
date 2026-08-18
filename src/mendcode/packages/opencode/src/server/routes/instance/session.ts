@@ -184,7 +184,8 @@ export const SessionRoutes = lazy(() =>
       "/agent-view",
       describeRoute({
         summary: "List Agent View sessions",
-        description: "Get aggregate read-only session rows for Agents View with status, background state, and metadata overrides.",
+        description:
+          "Get aggregate read-only session rows for Agents View with status, background state, and metadata overrides.",
         operationId: "session.agent_view.list",
         responses: {
           200: {
@@ -202,13 +203,15 @@ export const SessionRoutes = lazy(() =>
         "query",
         z.object({
           directory: z.string().optional().meta({ description: "Filter foreground sessions by directory" }),
-          scope: z.enum(["project"]).optional().meta({ description: "List all foreground sessions for the current project" }),
+          scope: z
+            .enum(["project"])
+            .optional()
+            .meta({ description: "List all foreground sessions for the current project" }),
           path: z.string().optional().meta({ description: "Filter foreground sessions by project-relative path" }),
           roots: QueryBoolean.optional().meta({ description: "Only include root foreground sessions" }),
-          start: z.coerce
-            .number()
-            .optional()
-            .meta({ description: "Filter foreground sessions updated on or after this timestamp (milliseconds since epoch)" }),
+          start: z.coerce.number().optional().meta({
+            description: "Filter foreground sessions updated on or after this timestamp (milliseconds since epoch)",
+          }),
           search: z.string().optional().meta({ description: "Filter foreground sessions by title (case-insensitive)" }),
           limit: z.coerce.number().optional().meta({ description: "Maximum number of foreground sessions to return" }),
         }),
@@ -289,7 +292,8 @@ export const SessionRoutes = lazy(() =>
       "/:sessionID/agent-view/metadata",
       describeRoute({
         summary: "Patch Agent View metadata",
-        description: "Update local control-plane metadata such as title override, tags, group, priority, notes, pin, or archive.",
+        description:
+          "Update local control-plane metadata such as title override, tags, group, priority, notes, pin, or archive.",
         operationId: "session.agent_view.metadata.patch",
         responses: {
           200: {
@@ -392,7 +396,10 @@ export const SessionRoutes = lazy(() =>
         },
       }),
       validator("param", z.object({ sessionID: SessionID.zod })),
-      validator("query", z.object({ state: AgentCommand.State.zod.optional().meta({ description: "Filter commands by state" }) })),
+      validator(
+        "query",
+        z.object({ state: AgentCommand.State.zod.optional().meta({ description: "Filter commands by state" }) }),
+      ),
       async (c) =>
         jsonRequest("SessionRoutes.agentCommand.listBySession", c, function* () {
           const sessionID = c.req.valid("param").sessionID
@@ -950,6 +957,41 @@ export const SessionRoutes = lazy(() =>
         }),
     )
     .post(
+      "/:sessionID/cancel-turn",
+      describeRoute({
+        summary: "Cancel active turn",
+        description: "Cancel only the active AI turn matching the requested user message.",
+        operationId: "session.cancelTurn",
+        responses: {
+          200: {
+            description: "Conditional cancellation result",
+            content: {
+              "application/json": {
+                schema: resolver(SessionPrompt.CancelTurnResult.zod),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: SessionID.zod,
+        }),
+      ),
+      validator("json", zodObject(SessionPrompt.CancelTurnInput).omit({ sessionID: true })),
+      async (c) =>
+        jsonRequest("SessionRoutes.cancelTurn", c, function* () {
+          const svc = yield* SessionPrompt.Service
+          const body = c.req.valid("json") as { targetMessageID: MessageID }
+          return yield* svc.cancelTurn({
+            sessionID: c.req.valid("param").sessionID,
+            targetMessageID: body.targetMessageID,
+          })
+        }),
+    )
+    .post(
       "/:sessionID/abort",
       describeRoute({
         summary: "Abort session",
@@ -1249,7 +1291,8 @@ export const SessionRoutes = lazy(() =>
                 },
                 { message: "Invalid cursor" },
               ),
-            view: z.enum(["full", "tui", "tui-all"]).optional(),
+            view: z.enum(["full", "tui", "tui-all", "history"]).optional(),
+            unit: z.enum(["message", "turn"]).optional(),
             partsLimit: z.coerce.number().int().min(1).optional(),
           })
           .refine((value) => !value.before || !value.after, {
@@ -1287,12 +1330,23 @@ export const SessionRoutes = lazy(() =>
           before: query.before,
           after: query.after,
           view: query.view,
+          unit: query.unit,
           partsLimit: query.partsLimit,
         })
-        if (page.cursor || page.sparse) {
-          c.header("Access-Control-Expose-Headers", "Link, X-Next-Cursor, X-Message-View-Sparse")
+        const navigation = MessageV2.pageNavigationCursors({
+          page,
+          before: query.before,
+          after: query.after,
+        })
+        if (page.cursor || page.sparse || navigation.older || navigation.newer) {
+          c.header(
+            "Access-Control-Expose-Headers",
+            "Link, X-Next-Cursor, X-Older-Cursor, X-Newer-Cursor, X-Message-View-Sparse",
+          )
         }
         if (page.sparse) c.header("X-Message-View-Sparse", "true")
+        if (navigation.older) c.header("X-Older-Cursor", navigation.older)
+        if (navigation.newer) c.header("X-Newer-Cursor", navigation.newer)
         if (page.cursor) {
           const url = new URL(c.req.url)
           url.searchParams.set("limit", query.limit.toString())
@@ -1315,9 +1369,7 @@ export const SessionRoutes = lazy(() =>
             description: "Message",
             content: {
               "application/json": {
-                schema: resolver(
-                   MessageV2.WithParts.zod,
-                ),
+                schema: resolver(MessageV2.WithParts.zod),
               },
             },
           },
@@ -1334,7 +1386,7 @@ export const SessionRoutes = lazy(() =>
       validator(
         "query",
         z.object({
-          view: z.enum(["full", "tui", "tui-all"]).optional(),
+          view: z.enum(["full", "tui", "tui-all", "history"]).optional(),
           partsLimit: z.coerce.number().int().min(1).optional(),
           partsAfter: z.string().optional(),
         }),

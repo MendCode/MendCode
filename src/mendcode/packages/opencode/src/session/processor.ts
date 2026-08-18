@@ -44,6 +44,10 @@ const log = Log.create({ service: "session.processor" })
 const DEFAULT_LLM_STREAM_IDLE_TIMEOUT_MS = 60_000
 const DEFAULT_MEMORY_EXTRACTION_TIMEOUT_MS = 45_000
 const RETRY_STATUS_EVENT_INTERVAL_MS = 5_000
+// Shell cancellation includes process-group TERM/KILL, stream drain, and
+// output persistence. Give that cleanup time to publish its real result before
+// the generic interruption fallback marks the tool as failed.
+const SHELL_TOOL_SETTLE_TIMEOUT = "5 seconds"
 
 function llmStreamIdleTimeoutMs() {
   const value = Number(process.env.MENDCODE_LLM_STREAM_IDLE_TIMEOUT_MS)
@@ -1289,7 +1293,7 @@ export const layer: Layer.Layer<
               const call = ctx.toolcalls[toolCallID]
               if (!call) return
               const match = yield* readToolCall(toolCallID)
-              const timeout = match?.part.tool === ShellID.ToolID ? "3 seconds" : "250 millis"
+              const timeout = match?.part.tool === ShellID.ToolID ? SHELL_TOOL_SETTLE_TIMEOUT : "250 millis"
               yield* Deferred.await(call.done).pipe(Effect.timeout(timeout), Effect.ignore)
             }),
           { concurrency: "unbounded" },

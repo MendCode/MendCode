@@ -535,6 +535,21 @@ describe("tool.loop", () => {
           ).pipe(Effect.exit)
 
           expect(Exit.isFailure(fixedZero)).toBe(true)
+
+          const longName = yield* tool.execute(
+            {
+              action: "draft",
+              name: "terrapredict-historical-replay-luna-hourly",
+              objective: "Replay historical predictions every hour.",
+            },
+            {
+              ...baseCtx,
+              sessionID: parent.id,
+              ask: () => Effect.void,
+            },
+          ).pipe(Effect.exit)
+
+          expect(Exit.isFailure(longName)).toBe(true)
         }),
       { git: true },
     ),
@@ -919,7 +934,7 @@ describe("tool.loop", () => {
           )
 
           expect(activated.metadata.workflowID).toStartWith("loop_")
-          expect(activated.output).toContain("loop_name: Inspect files every five minutes and report changes.")
+          expect(activated.output).toContain("loop_name: Inspect files every five")
 
           const stopped = yield* tool.execute(
             {

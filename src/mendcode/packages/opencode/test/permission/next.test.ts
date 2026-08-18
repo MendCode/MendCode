@@ -1,6 +1,6 @@
 import { afterEach, test, expect } from "bun:test"
 import os from "os"
-import { Cause, Effect, Exit, Fiber, Layer } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import { Bus } from "../../src/bus"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { Permission } from "../../src/permission"
@@ -17,6 +17,8 @@ import {
 } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
+import { Database, eq } from "../../src/storage/db"
+import { PermissionTable } from "../../src/session/session.sql"
 
 const bus = Bus.layer
 const env = Layer.mergeAll(Permission.layer.pipe(Layer.provide(bus)), bus, CrossSpawnSpawner.defaultLayer)
@@ -83,6 +85,23 @@ function withProvided(dir: string) {
 }
 
 // fromConfig tests
+
+test("withSessionMode preserves policy rules and replaces only the mode marker", () => {
+  expect(
+    Permission.withSessionMode(
+      [
+        { permission: "bash", pattern: "rm *", action: "deny" },
+        Permission.sessionModeRule("approval"),
+        { permission: "edit", pattern: "*", action: "ask" },
+      ],
+      "smart",
+    ),
+  ).toEqual([
+    { permission: "bash", pattern: "rm *", action: "deny" },
+    { permission: "edit", pattern: "*", action: "ask" },
+    Permission.sessionModeRule("smart"),
+  ])
+})
 
 test("fromConfig - string value becomes wildcard rule", () => {
   const result = Permission.fromConfig({ bash: "allow" })
@@ -579,6 +598,26 @@ it.live("ask - resolves immediately when action is allow", () =>
   ),
 )
 
+it.live("ask - Smart mode immediately allows a deterministically safe command", () =>
+  withDir({ git: true }, () =>
+    Effect.gen(function* () {
+      const result = yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["date -u +%Y-%m-%dT%H:%M:%SZ"],
+        metadata: {},
+        always: [],
+        ruleset: [
+          { permission: "*", pattern: "*", action: "allow" },
+          Permission.sessionModeRule("smart"),
+        ],
+      })
+      expect(result).toBeUndefined()
+      expect(yield* list()).toHaveLength(0)
+    }),
+  ),
+)
+
 it.live("ask - Smart mode forces an allowed bash request through pending approval", () =>
   withDir({ git: true }, () =>
     Effect.gen(function* () {
@@ -619,6 +658,88 @@ it.live("ask - Smart mode preserves an explicit deny", () =>
         }),
       )
       expect(err).toBeInstanceOf(Permission.DeniedError)
+    }),
+  ),
+)
+
+it.live("ask - Full Access bypasses an otherwise pending request", () =>
+  withDir({ git: true }, () =>
+    Effect.gen(function* () {
+      const result = yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "edit",
+        patterns: ["src/index.ts"],
+        metadata: {},
+        always: [],
+        ruleset: [Permission.sessionModeRule("full_access")],
+      })
+      expect(result).toBeUndefined()
+      expect(yield* list()).toHaveLength(0)
+    }),
+  ),
+)
+
+it.live("ask - Full Access preserves an explicit deny", () =>
+  withDir({ git: true }, () =>
+    Effect.gen(function* () {
+      const err = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_test"),
+          permission: "edit",
+          patterns: ["src/index.ts"],
+          metadata: {},
+          always: [],
+          ruleset: [
+            { permission: "edit", pattern: "*", action: "deny" },
+            Permission.sessionModeRule("full_access"),
+          ],
+        }),
+      )
+      expect(err).toBeInstanceOf(Permission.DeniedError)
+    }),
+  ),
+)
+
+it.live("ask - approval mode reviews shell external-directory access", () =>
+  withDir({ git: true }, () =>
+    Effect.gen(function* () {
+      const fiber = yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "external_directory",
+        patterns: ["/tmp/*"],
+        metadata: { source: "shell", command: "cat /tmp/example.txt" },
+        always: ["/tmp/*"],
+        ruleset: [
+          { permission: "external_directory", pattern: "*", action: "allow" },
+          Permission.sessionModeRule("approval"),
+        ],
+      }).pipe(Effect.forkScoped)
+
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(fiber)
+    }),
+  ),
+)
+
+it.live("ask - Smart mode reviews shell external-directory access", () =>
+  withDir({ git: true }, () =>
+    Effect.gen(function* () {
+      const fiber = yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "external_directory",
+        patterns: ["/tmp/*"],
+        metadata: { source: "shell", command: "cat /tmp/example.txt" },
+        always: ["/tmp/*"],
+        ruleset: [
+          { permission: "external_directory", pattern: "*", action: "allow" },
+          Permission.sessionModeRule("smart"),
+        ],
+      }).pipe(Effect.forkScoped)
+
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(fiber)
     }),
   ),
 )
@@ -678,6 +799,8 @@ it.live("ask - adds request to pending list", () =>
 
       const items = yield* waitForPending(1)
       expect(items).toHaveLength(1)
+      const encode = Schema.encodeUnknownSync(Schema.Array(Permission.Request)) as (input: unknown) => unknown
+      expect(encode(items)).toEqual(items)
       expect(items[0]).toMatchObject({
         sessionID: SessionID.make("session_test"),
         permission: "bash",
@@ -754,6 +877,46 @@ it.live("reply - once resolves the pending ask", () =>
       yield* waitForPending(1)
       yield* reply({ requestID: PermissionID.make("per_test1"), reply: "once" })
       yield* Fiber.join(fiber)
+    }),
+  ),
+)
+
+it.live("ask - resumes when another runtime persists a permission reply", () =>
+  withDir({ git: true }, () =>
+    Effect.gen(function* () {
+      const requestID = PermissionID.make("per_external_runtime")
+      const fiber = yield* ask({
+        id: requestID,
+        sessionID: SessionID.make("session_external_runtime"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+
+      yield* waitForPending(1)
+      Database.use((db) => {
+        const row = db.select().from(PermissionTable).all().find((candidate) =>
+          !Array.isArray(candidate.data) && candidate.data.requests.some((request) => request.info.id === requestID),
+        )!
+        if (Array.isArray(row.data)) throw new Error("pending permission was not persisted")
+        db.update(PermissionTable)
+          .set({
+            time_updated: Date.now(),
+            data: {
+              ...row.data,
+              requests: row.data.requests.map((request) =>
+                request.info.id === requestID ? { ...request, reply: "once" as const, timeUpdated: Date.now() } : request,
+              ),
+            },
+          })
+          .where(eq(PermissionTable.project_id, row.project_id))
+          .run()
+      })
+
+      yield* Fiber.join(fiber).pipe(Effect.timeout("2 seconds"))
+      expect(yield* list()).toHaveLength(0)
     }),
   ),
 )

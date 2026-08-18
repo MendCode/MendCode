@@ -874,7 +874,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
       sessionID: SessionID
       permission: Permission.Ruleset
     }) {
-      yield* patch(input.sessionID, { permission: input.permission, time: { updated: Date.now() } })
+      yield* patch(input.sessionID, { permission: input.permission })
     })
 
     const setRevert = Effect.fn("Session.setRevert")(function* (input: {

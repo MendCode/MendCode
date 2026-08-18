@@ -7,6 +7,7 @@ import { ArgsProvider } from "../../../../src/cli/cmd/tui/context/args"
 import { ExitProvider } from "../../../../src/cli/cmd/tui/context/exit"
 import { KVProvider, useKV } from "../../../../src/cli/cmd/tui/context/kv"
 import { ProjectProvider } from "../../../../src/cli/cmd/tui/context/project"
+import { SessionControlProvider } from "../../../../src/cli/cmd/tui/context/session-control"
 import { SDKProvider, type EventSource } from "../../../../src/cli/cmd/tui/context/sdk"
 import type { GlobalEvent } from "@mendcode/sdk/v2"
 import {
@@ -18,7 +19,11 @@ import {
   TUI_SESSION_MESSAGE_SYNC_LIMIT,
   useSync,
 } from "../../../../src/cli/cmd/tui/context/sync"
-import { SyncProviderV2, useSyncV2 } from "../../../../src/cli/cmd/tui/context/sync-v2"
+import {
+  SyncProviderV2,
+  TUI_V2_SESSION_CACHE_LIMIT,
+  useSyncV2,
+} from "../../../../src/cli/cmd/tui/context/sync-v2"
 import { tmpdir } from "../../../fixture/fixture"
 
 const worktree = "/tmp/opencode"
@@ -125,15 +130,17 @@ async function mount(
             events={options.events ?? eventSource()}
           >
             <ProjectProvider>
-              <SyncProvider>
-                <Probe
-                  onReady={(ctx) => {
-                    sync = ctx.sync
-                    kv = ctx.kv
-                    done()
-                  }}
-                />
-              </SyncProvider>
+              <SessionControlProvider>
+                <SyncProvider>
+                  <Probe
+                    onReady={(ctx) => {
+                      sync = ctx.sync
+                      kv = ctx.kv
+                      done()
+                    }}
+                  />
+                </SyncProvider>
+              </SessionControlProvider>
             </ProjectProvider>
           </SDKProvider>
         </KVProvider>
@@ -178,14 +185,16 @@ async function mountSSE(overrides: Record<string, Response | unknown | ((url: UR
         <KVProvider>
           <SDKProvider url="http://test" directory={directory} fetch={fetch}>
             <ProjectProvider>
-              <SyncProvider>
-                <Probe
-                  onReady={(ctx) => {
-                    sync = ctx.sync
-                    done()
-                  }}
-                />
-              </SyncProvider>
+              <SessionControlProvider>
+                <SyncProvider>
+                  <Probe
+                    onReady={(ctx) => {
+                      sync = ctx.sync
+                      done()
+                    }}
+                  />
+                </SyncProvider>
+              </SessionControlProvider>
             </ProjectProvider>
           </SDKProvider>
         </KVProvider>
@@ -311,6 +320,32 @@ describe("tui sync", () => {
 
       expect(session.at(-1)?.searchParams.get("scope")).toBe("project")
       expect(session.at(-1)?.searchParams.get("path")).toBeNull()
+    } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("keeps the persisted session list when every reconnect listing fails", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    let available = true
+    const unavailable = () => {
+        if (available) return [{ id: "ses_persisted" }]
+        throw new Error("simulated network loss")
+    }
+    const { app, sync } = await mount({
+      "/session": unavailable,
+      "/experimental/session": unavailable,
+    })
+
+    try {
+      expect(sync.data.session.map((session) => session.id)).toEqual(["ses_persisted"])
+      available = false
+      await expect(sync.session.refresh()).rejects.toThrow("simulated network loss")
+      expect(sync.data.session.map((session) => session.id)).toEqual(["ses_persisted"])
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous
@@ -1217,7 +1252,7 @@ describe("tui sync", () => {
     }
   })
 
-  test("session sync pages older history progressively and keeps the loaded store bounded", async () => {
+  test("session sync pages older history progressively without recutting the loaded transcript", async () => {
     const previous = Global.Path.state
     await using tmp = await tmpdir()
     Global.Path.state = tmp.path
@@ -1317,31 +1352,31 @@ describe("tui sync", () => {
         "older",
         "older",
       ])
-      expect(sync.data.message[sessionID]?.length).toBe(TUI_SESSION_MESSAGE_STORE_LIMIT)
+      expect(sync.data.message[sessionID]?.length).toBe(messages.length)
       expect(sync.data.message[sessionID]?.[0]?.id).toBe("msg_000")
-      expect(sync.data.message[sessionID]?.at(-1)?.id).toBe("msg_149")
+      expect(sync.data.message[sessionID]?.at(-1)?.id).toBe("msg_599")
       expect(sync.data.part.msg_000).toBeDefined()
-      expect(sync.data.part.msg_599).toBeUndefined()
+      expect(sync.data.part.msg_599).toBeDefined()
       expect(sync.data.session_latest_assistant[sessionID]?.id).toBe("msg_599")
       expect(sync.session.history(sessionID)).toMatchObject({
         hasMoreOlder: false,
-        hasMoreNewer: true,
-        loaded: TUI_SESSION_MESSAGE_STORE_LIMIT,
+        hasMoreNewer: false,
+        loaded: messages.length,
       })
 
-      for (let index = 0; index < 9; index++) await sync.session.loadNewer(sessionID)
+      const requestCountBeforeNewer = starts.length
+      for (let index = 0; index < 9; index++) expect(await sync.session.loadNewer(sessionID)).toBe(false)
 
-      expect(starts.slice(-6)).toEqual([300, 350, 400, 450, 500, 550])
-      expect(directions.slice(-6)).toEqual(["newer", "newer", "newer", "newer", "newer", "newer"])
-      expect(sync.data.message[sessionID]?.length).toBe(TUI_SESSION_MESSAGE_STORE_LIMIT)
-      expect(sync.data.message[sessionID]?.[0]?.id).toBe("msg_450")
+      expect(starts.length).toBe(requestCountBeforeNewer)
+      expect(sync.data.message[sessionID]?.length).toBe(messages.length)
+      expect(sync.data.message[sessionID]?.[0]?.id).toBe("msg_000")
       expect(sync.data.message[sessionID]?.at(-1)?.id).toBe("msg_599")
-      expect(sync.data.part.msg_000).toBeUndefined()
+      expect(sync.data.part.msg_000).toBeDefined()
       expect(sync.data.part.msg_599).toBeDefined()
       expect(sync.session.history(sessionID)).toMatchObject({
-        hasMoreOlder: true,
+        hasMoreOlder: false,
         hasMoreNewer: false,
-        loaded: TUI_SESSION_MESSAGE_STORE_LIMIT,
+        loaded: messages.length,
       })
     } finally {
       app.renderer.destroy()
@@ -1505,7 +1540,7 @@ describe("tui sync", () => {
     }
   })
 
-  test("session sync returns false for empty newer pages and clears the newer boundary", async () => {
+  test("session sync does not reload the newest edge after older paging", async () => {
     const previous = Global.Path.state
     await using tmp = await tmpdir()
     Global.Path.state = tmp.path
@@ -1533,12 +1568,16 @@ describe("tui sync", () => {
       parts: [],
     }))
 
+    let newerRequests = 0
     const { app, sync } = await mount({
       [`/session/${sessionID}`]: info,
       [`/session/${sessionID}/message`]: (url: URL) => {
         const before = url.searchParams.get("before")
         const after = url.searchParams.get("after")
-        if (after) return page([], undefined)
+        if (after) {
+          newerRequests++
+          return page([], undefined)
+        }
         const start = before ? Math.max(0, (messageIndexFromCursor(before) ?? 0) - TUI_SESSION_MESSAGE_SYNC_LIMIT) : 550
         return page(
           messages.slice(start, start + TUI_SESSION_MESSAGE_SYNC_LIMIT),
@@ -1563,14 +1602,15 @@ describe("tui sync", () => {
       for (let index = 0; index < 9; index++) await sync.session.loadOlder(sessionID)
 
       expect(sync.data.message[sessionID]?.[0]?.id).toBe("msg_000")
-      expect(sync.data.message[sessionID]?.at(-1)?.id).toBe("msg_149")
-      expect(sync.session.history(sessionID)).toMatchObject({ hasMoreOlder: false, hasMoreNewer: true })
+      expect(sync.data.message[sessionID]?.at(-1)?.id).toBe("msg_599")
+      expect(sync.session.history(sessionID)).toMatchObject({ hasMoreOlder: false, hasMoreNewer: false })
 
       const loaded = await sync.session.loadNewer(sessionID)
 
       expect(loaded).toBe(false)
+      expect(newerRequests).toBe(0)
       expect(sync.data.message[sessionID]?.[0]?.id).toBe("msg_000")
-      expect(sync.data.message[sessionID]?.at(-1)?.id).toBe("msg_149")
+      expect(sync.data.message[sessionID]?.at(-1)?.id).toBe("msg_599")
       expect(sync.session.history(sessionID)).toMatchObject({
         hasMoreOlder: false,
         hasMoreNewer: false,
@@ -3113,7 +3153,7 @@ describe("tui sync", () => {
     }
   })
 
-  test("live message events do not replace an older paged window with a tail message", async () => {
+  test("live message events append to an expanded history without recutting it", async () => {
     const previous = Global.Path.state
     await using tmp = await tmpdir()
     Global.Path.state = tmp.path
@@ -3197,8 +3237,8 @@ describe("tui sync", () => {
       for (let index = 0; index < 9; index++) await sync.session.loadOlder(sessionID)
 
       expect(sync.data.message[sessionID]?.[0]?.id).toBe("msg_000")
-      expect(sync.data.message[sessionID]?.at(-1)?.id).toBe("msg_149")
-      expect(sync.session.history(sessionID)).toMatchObject({ hasMoreOlder: false, hasMoreNewer: true })
+      expect(sync.data.message[sessionID]?.at(-1)?.id).toBe("msg_599")
+      expect(sync.session.history(sessionID)).toMatchObject({ hasMoreOlder: false, hasMoreNewer: false })
 
       emit({
         directory,
@@ -3210,12 +3250,12 @@ describe("tui sync", () => {
         },
       } as GlobalEvent)
 
-      expect(sync.data.message[sessionID]?.length).toBe(TUI_SESSION_MESSAGE_STORE_LIMIT)
+      expect(sync.data.message[sessionID]?.length).toBe(messages.length + 1)
       expect(sync.data.message[sessionID]?.[0]?.id).toBe("msg_000")
-      expect(sync.data.message[sessionID]?.at(-1)?.id).toBe("msg_149")
+      expect(sync.data.message[sessionID]?.at(-1)?.id).toBe(nextMessage.id)
       expect(sync.data.session_latest_assistant[sessionID]?.id).toBe(nextMessage.id)
 
-      expect(sync.session.history(sessionID)).toMatchObject({ hasMoreOlder: false, hasMoreNewer: true })
+      expect(sync.session.history(sessionID)).toMatchObject({ hasMoreOlder: false, hasMoreNewer: false })
     } finally {
       app.renderer.destroy()
       Global.Path.state = previous
@@ -3747,6 +3787,43 @@ describe("tui sync", () => {
 
       await wait(() => sync.data.messages[sessionID]?.[0]?.id === "msg_after")
       expect(sync.data.messages[sessionID]?.[0]).toMatchObject({ id: "msg_after", text: "after" })
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("v2 event projection evicts old session caches", async () => {
+    let emit!: (event: GlobalEvent) => void
+    const { app, sync } = await mountV2({}, {
+      events: eventSource({
+        onSubscribe: (handler) => {
+          emit = handler
+        },
+      }),
+    })
+
+    try {
+      for (let index = 0; index < TUI_V2_SESSION_CACHE_LIMIT + 3; index++) {
+        const sessionID = `ses_v2_cache_${index}`
+        emit({
+          directory,
+          project: "proj_test",
+          payload: {
+            id: `evt_v2_cache_${index}`,
+            type: "session.next.step.started",
+            properties: {
+              sessionID,
+              agent: "build",
+              model: { id: "gpt-test", providerID: "openai", variant: "test" },
+              timestamp: index + 1,
+            },
+          },
+        } as GlobalEvent)
+      }
+
+      await wait(() => sync.data.messages.ses_v2_cache_10 !== undefined)
+      expect(Object.keys(sync.data.messages).length).toBeLessThanOrEqual(TUI_V2_SESSION_CACHE_LIMIT)
+      expect(sync.data.messages.ses_v2_cache_0).toBeUndefined()
     } finally {
       app.renderer.destroy()
     }

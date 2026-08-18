@@ -30,15 +30,25 @@ export { Parameters } from "./shell/prompt"
 const MAX_METADATA_LENGTH = 30_000
 const METADATA_UPDATE_INTERVAL = 250
 const ABORT_GRACE_PERIOD_MS = 250
+const ABORT_OUTPUT_DRAIN_MS = 750
 const MAX_TERMINAL_PREVIEW_CHARS = MAX_METADATA_LENGTH * 2
 const MAX_TERMINAL_PREVIEW_LINES = 2_000
 const DEFAULT_TIMEOUT = Flag.OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS || 2 * 60 * 1000
-const ABORT_FORCE_KILL_AFTER = "1 second"
 const SAFE_RETRY_GUIDANCE =
   "The command result is unknown. If this command is read-only or idempotent, retry the exact same command once before choosing a different approach. If it may have changed state, inspect the current state first and do not repeat destructive actions blindly."
 const TIMEOUT_RETRY_GUIDANCE =
   "The command result is unknown because it was stopped by the timeout. If it is safe and idempotent, retry the exact same command with a larger timeout before choosing a different approach. If it may have changed state, inspect the current state first and do not repeat destructive actions blindly."
 const CWD = new Set(["cd", "chdir", "popd", "pushd", "push-location", "set-location"])
+
+function killProcessGroup(pid: number | undefined, signal: NodeJS.Signals = "SIGTERM") {
+  if (!pid || process.platform === "win32") return false
+  try {
+    process.kill(-pid, signal)
+    return true
+  } catch {
+    return false
+  }
+}
 const FILES = new Set([
   ...CWD,
   "rm",
@@ -536,6 +546,7 @@ export const ShellTool = Tool.define(
       let terminalPreviewCells = 0
       let pendingStoredCarriageReturn = false
       let previousStoredEndedWithNewline = false
+      let processedOutputChunks = 0
 
       const flushMetadata = (force?: boolean) => {
         const now = Date.now()
@@ -657,7 +668,12 @@ export const ShellTool = Tool.define(
         last = preview(updateTerminalPreview(chunk))
         if (!rewrite) pendingOutputDelta.append(outputChunk)
 
-        return flushMetadata().pipe(Effect.andThen(() => flushOutputEvent()))
+        processedOutputChunks++
+        const flush = flushMetadata().pipe(Effect.andThen(() => flushOutputEvent()))
+        // A bursty command can enqueue thousands of chunks without hitting an
+        // async metadata flush. Yield periodically so abort timers, TUI input,
+        // and process cleanup are not starved by output rendering.
+        return processedOutputChunks % 32 === 0 ? flush.pipe(Effect.andThen(Effect.yieldNow)) : flush
       }
 
       const runPipe = Effect.gen(function* () {
@@ -681,16 +697,35 @@ export const ShellTool = Tool.define(
         ])
 
         if (exit.kind === "abort") {
-          const grace = yield* Effect.raceFirst(
-            handle.exitCode.pipe(Effect.as("exited" as const)),
-            Effect.sleep(ABORT_GRACE_PERIOD_MS).pipe(Effect.as("grace-expired" as const)),
-          )
-          if (grace === "grace-expired") yield* handle.kill({ forceKillAfter: ABORT_FORCE_KILL_AFTER }).pipe(Effect.orDie)
+          // The shell is detached and owns the command's process group. Kill
+          // the group first so package managers and nested children (pnpm,
+          // node, git) cannot outlive the tool after Esc/cancel-turn.
+          const pid = Number(handle.pid)
+          killProcessGroup(pid)
+          // Do not await exitCode here: some runtimes resolve it only after
+          // stdout is fully consumed, which deadlocks cancellation behind a
+          // large buffered stream. Schedule a group-wide hard stop after the
+          // grace period and let bounded output draining proceed independently.
+          const forceKill = setTimeout(() => killProcessGroup(pid, "SIGKILL"), ABORT_GRACE_PERIOD_MS)
+          forceKill.unref?.()
         }
         if (exit.kind === "timeout") {
+          killProcessGroup(Number(handle.pid))
           yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
         }
-        yield* Fiber.await(outputFiber).pipe(Effect.exit, Effect.asVoid)
+        if (exit.kind === "exit") {
+          yield* Fiber.await(outputFiber).pipe(Effect.exit, Effect.asVoid)
+        } else {
+          // A noisy child can leave thousands of already-buffered chunks for
+          // the renderer after its process group is gone. Preserve a bounded
+          // excerpt, then stop consuming the dead pipe so Esc cannot remain
+          // blocked behind historical output.
+          const drained = yield* Effect.raceFirst(
+            Fiber.await(outputFiber).pipe(Effect.as(true)),
+            Effect.sleep(ABORT_OUTPUT_DRAIN_MS).pipe(Effect.as(false)),
+          )
+          if (!drained) yield* Fiber.interrupt(outputFiber).pipe(Effect.asVoid)
+        }
 
         return exit
       })

@@ -291,6 +291,7 @@ describe("SessionStatus.Info", () => {
       message: "wait",
       next: now + 1,
     })
+    expect(freshStatus({ time_updated: now, data: { type: "retry", attempt: 0, message: "recovered", next: now - 1 } }, now)).toBeUndefined()
   })
 
   test("adds stable busy startedAt without resetting an existing active status", () => {

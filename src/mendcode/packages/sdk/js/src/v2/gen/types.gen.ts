@@ -11,6 +11,8 @@ export type Event =
   | EventLspClientDiagnostics
   | EventLspUpdated
   | EventMessagePartDelta
+  | EventWorkflowRunWake
+  | EventWorkflowNotification1
   | EventPermissionAsked
   | EventPermissionReplied
   | EventSessionDiff
@@ -966,6 +968,7 @@ export type UserMessage = {
   tools?: {
     [key: string]: boolean
   }
+  queued?: boolean
 }
 
 export type AssistantMessage = {
@@ -1361,6 +1364,8 @@ export type GlobalEvent = {
     | EventLspClientDiagnostics
     | EventLspUpdated
     | EventMessagePartDelta
+    | EventWorkflowRunWake
+    | EventWorkflowNotification
     | EventPermissionAsked
     | EventPermissionReplied
     | EventSessionDiff
@@ -1733,6 +1738,7 @@ export type Config = {
    */
   autoupdate?: boolean | "notify"
   disabled_providers?: Array<string>
+  disabled_models?: Array<string>
   enabled_providers?: Array<string>
   model?: string
   small_model?: string
@@ -3359,6 +3365,31 @@ export type EventMessagePartDelta = {
   }
 }
 
+export type EventWorkflowRunWake = {
+  id: string
+  type: "workflow.run.wake"
+  properties: {
+    runID: string
+  }
+}
+
+export type EventWorkflowNotification = {
+  id: string
+  type: "workflow.notification"
+  properties: {
+    eventID: string
+    taskID: string
+    parentSessionID: string
+    generation: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    revision: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    state: "completed" | "failed" | "stopped"
+    title: string
+    summary: string
+    background: true
+    runID: string
+  }
+}
+
 export type EventPermissionAsked = {
   id: string
   type: "permission.asked"
@@ -4455,6 +4486,23 @@ export type SessionMessage =
   | SessionMessageShell
   | SessionMessageAssistant
   | SessionMessageCompaction
+
+export type EventWorkflowNotification1 = {
+  id: string
+  type: "workflow.notification"
+  properties: {
+    eventID: string
+    taskID: string
+    parentSessionID: string
+    generation: number | "NaN" | "Infinity" | "-Infinity"
+    revision: number | "NaN" | "Infinity" | "-Infinity"
+    state: "completed" | "failed" | "stopped"
+    title: string
+    summary: string
+    background: true
+    runID: string
+  }
+}
 
 export type EventSkillUpdated1 = {
   id: string
@@ -7187,7 +7235,7 @@ export type SessionMessagesData = {
     limit?: number
     before?: string
     after?: string
-    view?: "full" | "tui" | "tui-all"
+    view?: "full" | "tui" | "tui-all" | "history"
     partsLimit?: string
   }
   url: "/session/{sessionID}/message"
@@ -7317,7 +7365,7 @@ export type SessionMessageData = {
   query?: {
     directory?: string
     workspace?: string
-    view?: "full" | "tui" | "tui-all"
+    view?: "full" | "tui" | "tui-all" | "history"
     partsLimit?: string
     partsAfter?: string
   }
@@ -7416,6 +7464,42 @@ export type SessionAbortResponses = {
 }
 
 export type SessionAbortResponse = SessionAbortResponses[keyof SessionAbortResponses]
+
+export type SessionCancelTurnData = {
+  body?: {
+    targetMessageID: string
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/cancel-turn"
+}
+
+export type SessionCancelTurnErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type SessionCancelTurnError = SessionCancelTurnErrors[keyof SessionCancelTurnErrors]
+
+export type SessionCancelTurnResponses = {
+  /**
+   * Conditional cancellation result
+   */
+  200: "cancelled" | "already_terminal" | "target_mismatch" | "not_running"
+}
+
+export type SessionCancelTurnResponse = SessionCancelTurnResponses[keyof SessionCancelTurnResponses]
 
 export type SessionInterruptData = {
   body?: never
@@ -8673,15 +8757,33 @@ export type ExperimentalWorkspaceWarpResponse =
 export type WorkflowPreviewData = {
   body?: {
     plan: {
+      /**
+       * Workflow plan format version. Use 1.
+       */
       formatVersion: number
+      /**
+       * Concise workflow display name.
+       */
       name: string
+      /**
+       * What the workflow does and its boundaries.
+       */
       description: string
+      /**
+       * Durable outcome the complete workflow must achieve.
+       */
       objective: string
+      /**
+       * Ordered execution stages. Each phase must list all of its task IDs.
+       */
       phases: Array<{
         id: string
         ordinal: number
         name: string
         description?: string
+        /**
+         * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+         */
         barrier:
           | {
               kind: "all"
@@ -8697,14 +8799,23 @@ export type WorkflowPreviewData = {
               kind: "condition"
               expression: string
             }
+        /**
+         * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+         */
         taskIDs: Array<string>
       }>
+      /**
+       * Complete DAG of workflow tasks. Every task must belong to one phase.
+       */
       tasks: Array<{
         id: string
         phaseID: string
         name: string
         kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
         prompt: string
+        /**
+         * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+         */
         dependsOn: Array<string>
         inputs?: Array<{
           taskID: string
@@ -8712,6 +8823,9 @@ export type WorkflowPreviewData = {
           projection?: string
           required?: boolean
         }>
+        /**
+         * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+         */
         output:
           | {
               kind: "text"
@@ -8834,8 +8948,17 @@ export type WorkflowPreviewData = {
           }
         }
       }>
+      /**
+       * Existing synthesize task that produces the workflow's final non-none output.
+       */
       finalTaskID: string
+      /**
+       * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+       */
       completionCriteria: Array<string>
+      /**
+       * Approval gates required before execution. Use [] for immediate execution.
+       */
       requiredGates: Array<string>
       model?: {
         providerID: string
@@ -8915,15 +9038,33 @@ export type WorkflowPreviewResponse = WorkflowPreviewResponses[keyof WorkflowPre
 export type WorkflowSaveData = {
   body?: {
     plan: {
+      /**
+       * Workflow plan format version. Use 1.
+       */
       formatVersion: number
+      /**
+       * Concise workflow display name.
+       */
       name: string
+      /**
+       * What the workflow does and its boundaries.
+       */
       description: string
+      /**
+       * Durable outcome the complete workflow must achieve.
+       */
       objective: string
+      /**
+       * Ordered execution stages. Each phase must list all of its task IDs.
+       */
       phases: Array<{
         id: string
         ordinal: number
         name: string
         description?: string
+        /**
+         * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+         */
         barrier:
           | {
               kind: "all"
@@ -8939,14 +9080,23 @@ export type WorkflowSaveData = {
               kind: "condition"
               expression: string
             }
+        /**
+         * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+         */
         taskIDs: Array<string>
       }>
+      /**
+       * Complete DAG of workflow tasks. Every task must belong to one phase.
+       */
       tasks: Array<{
         id: string
         phaseID: string
         name: string
         kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
         prompt: string
+        /**
+         * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+         */
         dependsOn: Array<string>
         inputs?: Array<{
           taskID: string
@@ -8954,6 +9104,9 @@ export type WorkflowSaveData = {
           projection?: string
           required?: boolean
         }>
+        /**
+         * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+         */
         output:
           | {
               kind: "text"
@@ -9076,8 +9229,17 @@ export type WorkflowSaveData = {
           }
         }
       }>
+      /**
+       * Existing synthesize task that produces the workflow's final non-none output.
+       */
       finalTaskID: string
+      /**
+       * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+       */
       completionCriteria: Array<string>
+      /**
+       * Approval gates required before execution. Use [] for immediate execution.
+       */
       requiredGates: Array<string>
       model?: {
         providerID: string
@@ -9151,15 +9313,33 @@ export type WorkflowSaveResponses = {
     revisionID: string
     revision: number
     plan: {
+      /**
+       * Workflow plan format version. Use 1.
+       */
       formatVersion: number
+      /**
+       * Concise workflow display name.
+       */
       name: string
+      /**
+       * What the workflow does and its boundaries.
+       */
       description: string
+      /**
+       * Durable outcome the complete workflow must achieve.
+       */
       objective: string
+      /**
+       * Ordered execution stages. Each phase must list all of its task IDs.
+       */
       phases: Array<{
         id: string
         ordinal: number
         name: string
         description?: string
+        /**
+         * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+         */
         barrier:
           | {
               kind: "all"
@@ -9175,14 +9355,23 @@ export type WorkflowSaveResponses = {
               kind: "condition"
               expression: string
             }
+        /**
+         * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+         */
         taskIDs: Array<string>
       }>
+      /**
+       * Complete DAG of workflow tasks. Every task must belong to one phase.
+       */
       tasks: Array<{
         id: string
         phaseID: string
         name: string
         kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
         prompt: string
+        /**
+         * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+         */
         dependsOn: Array<string>
         inputs?: Array<{
           taskID: string
@@ -9190,6 +9379,9 @@ export type WorkflowSaveResponses = {
           projection?: string
           required?: boolean
         }>
+        /**
+         * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+         */
         output:
           | {
               kind: "text"
@@ -9312,8 +9504,17 @@ export type WorkflowSaveResponses = {
           }
         }
       }>
+      /**
+       * Existing synthesize task that produces the workflow's final non-none output.
+       */
       finalTaskID: string
+      /**
+       * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+       */
       completionCriteria: Array<string>
+      /**
+       * Approval gates required before execution. Use [] for immediate execution.
+       */
       requiredGates: Array<string>
       model?: {
         providerID: string
@@ -9368,15 +9569,33 @@ export type WorkflowSaveResponse = WorkflowSaveResponses[keyof WorkflowSaveRespo
 export type WorkflowStartData = {
   body?: {
     plan?: {
+      /**
+       * Workflow plan format version. Use 1.
+       */
       formatVersion: number
+      /**
+       * Concise workflow display name.
+       */
       name: string
+      /**
+       * What the workflow does and its boundaries.
+       */
       description: string
+      /**
+       * Durable outcome the complete workflow must achieve.
+       */
       objective: string
+      /**
+       * Ordered execution stages. Each phase must list all of its task IDs.
+       */
       phases: Array<{
         id: string
         ordinal: number
         name: string
         description?: string
+        /**
+         * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+         */
         barrier:
           | {
               kind: "all"
@@ -9392,14 +9611,23 @@ export type WorkflowStartData = {
               kind: "condition"
               expression: string
             }
+        /**
+         * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+         */
         taskIDs: Array<string>
       }>
+      /**
+       * Complete DAG of workflow tasks. Every task must belong to one phase.
+       */
       tasks: Array<{
         id: string
         phaseID: string
         name: string
         kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
         prompt: string
+        /**
+         * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+         */
         dependsOn: Array<string>
         inputs?: Array<{
           taskID: string
@@ -9407,6 +9635,9 @@ export type WorkflowStartData = {
           projection?: string
           required?: boolean
         }>
+        /**
+         * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+         */
         output:
           | {
               kind: "text"
@@ -9529,8 +9760,17 @@ export type WorkflowStartData = {
           }
         }
       }>
+      /**
+       * Existing synthesize task that produces the workflow's final non-none output.
+       */
       finalTaskID: string
+      /**
+       * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+       */
       completionCriteria: Array<string>
+      /**
+       * Approval gates required before execution. Use [] for immediate execution.
+       */
       requiredGates: Array<string>
       model?: {
         providerID: string
@@ -9620,15 +9860,33 @@ export type WorkflowStartResponses = {
       definitionID: string
       revision: number
       plan: {
+        /**
+         * Workflow plan format version. Use 1.
+         */
         formatVersion: number
+        /**
+         * Concise workflow display name.
+         */
         name: string
+        /**
+         * What the workflow does and its boundaries.
+         */
         description: string
+        /**
+         * Durable outcome the complete workflow must achieve.
+         */
         objective: string
+        /**
+         * Ordered execution stages. Each phase must list all of its task IDs.
+         */
         phases: Array<{
           id: string
           ordinal: number
           name: string
           description?: string
+          /**
+           * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+           */
           barrier:
             | {
                 kind: "all"
@@ -9644,14 +9902,23 @@ export type WorkflowStartResponses = {
                 kind: "condition"
                 expression: string
               }
+          /**
+           * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+           */
           taskIDs: Array<string>
         }>
+        /**
+         * Complete DAG of workflow tasks. Every task must belong to one phase.
+         */
         tasks: Array<{
           id: string
           phaseID: string
           name: string
           kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
           prompt: string
+          /**
+           * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+           */
           dependsOn: Array<string>
           inputs?: Array<{
             taskID: string
@@ -9659,6 +9926,9 @@ export type WorkflowStartResponses = {
             projection?: string
             required?: boolean
           }>
+          /**
+           * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+           */
           output:
             | {
                 kind: "text"
@@ -9783,8 +10053,17 @@ export type WorkflowStartResponses = {
             }
           }
         }>
+        /**
+         * Existing synthesize task that produces the workflow's final non-none output.
+         */
         finalTaskID: string
+        /**
+         * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+         */
         completionCriteria: Array<string>
+        /**
+         * Approval gates required before execution. Use [] for immediate execution.
+         */
         requiredGates: Array<string>
         model?: {
           providerID: string
@@ -9844,6 +10123,8 @@ export type WorkflowStartResponses = {
         createdAt: number
         error?: string
       }
+      permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -10146,15 +10427,33 @@ export type WorkflowListResponses = {
       definitionID: string
       revision: number
       plan: {
+        /**
+         * Workflow plan format version. Use 1.
+         */
         formatVersion: number
+        /**
+         * Concise workflow display name.
+         */
         name: string
+        /**
+         * What the workflow does and its boundaries.
+         */
         description: string
+        /**
+         * Durable outcome the complete workflow must achieve.
+         */
         objective: string
+        /**
+         * Ordered execution stages. Each phase must list all of its task IDs.
+         */
         phases: Array<{
           id: string
           ordinal: number
           name: string
           description?: string
+          /**
+           * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+           */
           barrier:
             | {
                 kind: "all"
@@ -10170,14 +10469,23 @@ export type WorkflowListResponses = {
                 kind: "condition"
                 expression: string
               }
+          /**
+           * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+           */
           taskIDs: Array<string>
         }>
+        /**
+         * Complete DAG of workflow tasks. Every task must belong to one phase.
+         */
         tasks: Array<{
           id: string
           phaseID: string
           name: string
           kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
           prompt: string
+          /**
+           * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+           */
           dependsOn: Array<string>
           inputs?: Array<{
             taskID: string
@@ -10185,6 +10493,9 @@ export type WorkflowListResponses = {
             projection?: string
             required?: boolean
           }>
+          /**
+           * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+           */
           output:
             | {
                 kind: "text"
@@ -10309,8 +10620,17 @@ export type WorkflowListResponses = {
             }
           }
         }>
+        /**
+         * Existing synthesize task that produces the workflow's final non-none output.
+         */
         finalTaskID: string
+        /**
+         * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+         */
         completionCriteria: Array<string>
+        /**
+         * Approval gates required before execution. Use [] for immediate execution.
+         */
         requiredGates: Array<string>
         model?: {
           providerID: string
@@ -10370,6 +10690,8 @@ export type WorkflowListResponses = {
         createdAt: number
         error?: string
       }
+      permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -10711,15 +11033,33 @@ export type WorkflowShowResponses = {
       definitionID: string
       revision: number
       plan: {
+        /**
+         * Workflow plan format version. Use 1.
+         */
         formatVersion: number
+        /**
+         * Concise workflow display name.
+         */
         name: string
+        /**
+         * What the workflow does and its boundaries.
+         */
         description: string
+        /**
+         * Durable outcome the complete workflow must achieve.
+         */
         objective: string
+        /**
+         * Ordered execution stages. Each phase must list all of its task IDs.
+         */
         phases: Array<{
           id: string
           ordinal: number
           name: string
           description?: string
+          /**
+           * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+           */
           barrier:
             | {
                 kind: "all"
@@ -10735,14 +11075,23 @@ export type WorkflowShowResponses = {
                 kind: "condition"
                 expression: string
               }
+          /**
+           * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+           */
           taskIDs: Array<string>
         }>
+        /**
+         * Complete DAG of workflow tasks. Every task must belong to one phase.
+         */
         tasks: Array<{
           id: string
           phaseID: string
           name: string
           kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
           prompt: string
+          /**
+           * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+           */
           dependsOn: Array<string>
           inputs?: Array<{
             taskID: string
@@ -10750,6 +11099,9 @@ export type WorkflowShowResponses = {
             projection?: string
             required?: boolean
           }>
+          /**
+           * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+           */
           output:
             | {
                 kind: "text"
@@ -10874,8 +11226,17 @@ export type WorkflowShowResponses = {
             }
           }
         }>
+        /**
+         * Existing synthesize task that produces the workflow's final non-none output.
+         */
         finalTaskID: string
+        /**
+         * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+         */
         completionCriteria: Array<string>
+        /**
+         * Approval gates required before execution. Use [] for immediate execution.
+         */
         requiredGates: Array<string>
         model?: {
           providerID: string
@@ -10935,6 +11296,8 @@ export type WorkflowShowResponses = {
         createdAt: number
         error?: string
       }
+      permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -11338,15 +11701,33 @@ export type WorkflowPauseResponses = {
       definitionID: string
       revision: number
       plan: {
+        /**
+         * Workflow plan format version. Use 1.
+         */
         formatVersion: number
+        /**
+         * Concise workflow display name.
+         */
         name: string
+        /**
+         * What the workflow does and its boundaries.
+         */
         description: string
+        /**
+         * Durable outcome the complete workflow must achieve.
+         */
         objective: string
+        /**
+         * Ordered execution stages. Each phase must list all of its task IDs.
+         */
         phases: Array<{
           id: string
           ordinal: number
           name: string
           description?: string
+          /**
+           * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+           */
           barrier:
             | {
                 kind: "all"
@@ -11362,14 +11743,23 @@ export type WorkflowPauseResponses = {
                 kind: "condition"
                 expression: string
               }
+          /**
+           * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+           */
           taskIDs: Array<string>
         }>
+        /**
+         * Complete DAG of workflow tasks. Every task must belong to one phase.
+         */
         tasks: Array<{
           id: string
           phaseID: string
           name: string
           kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
           prompt: string
+          /**
+           * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+           */
           dependsOn: Array<string>
           inputs?: Array<{
             taskID: string
@@ -11377,6 +11767,9 @@ export type WorkflowPauseResponses = {
             projection?: string
             required?: boolean
           }>
+          /**
+           * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+           */
           output:
             | {
                 kind: "text"
@@ -11501,8 +11894,17 @@ export type WorkflowPauseResponses = {
             }
           }
         }>
+        /**
+         * Existing synthesize task that produces the workflow's final non-none output.
+         */
         finalTaskID: string
+        /**
+         * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+         */
         completionCriteria: Array<string>
+        /**
+         * Approval gates required before execution. Use [] for immediate execution.
+         */
         requiredGates: Array<string>
         model?: {
           providerID: string
@@ -11562,6 +11964,8 @@ export type WorkflowPauseResponses = {
         createdAt: number
         error?: string
       }
+      permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -11871,15 +12275,33 @@ export type WorkflowResumeResponses = {
       definitionID: string
       revision: number
       plan: {
+        /**
+         * Workflow plan format version. Use 1.
+         */
         formatVersion: number
+        /**
+         * Concise workflow display name.
+         */
         name: string
+        /**
+         * What the workflow does and its boundaries.
+         */
         description: string
+        /**
+         * Durable outcome the complete workflow must achieve.
+         */
         objective: string
+        /**
+         * Ordered execution stages. Each phase must list all of its task IDs.
+         */
         phases: Array<{
           id: string
           ordinal: number
           name: string
           description?: string
+          /**
+           * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+           */
           barrier:
             | {
                 kind: "all"
@@ -11895,14 +12317,23 @@ export type WorkflowResumeResponses = {
                 kind: "condition"
                 expression: string
               }
+          /**
+           * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+           */
           taskIDs: Array<string>
         }>
+        /**
+         * Complete DAG of workflow tasks. Every task must belong to one phase.
+         */
         tasks: Array<{
           id: string
           phaseID: string
           name: string
           kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
           prompt: string
+          /**
+           * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+           */
           dependsOn: Array<string>
           inputs?: Array<{
             taskID: string
@@ -11910,6 +12341,9 @@ export type WorkflowResumeResponses = {
             projection?: string
             required?: boolean
           }>
+          /**
+           * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+           */
           output:
             | {
                 kind: "text"
@@ -12034,8 +12468,17 @@ export type WorkflowResumeResponses = {
             }
           }
         }>
+        /**
+         * Existing synthesize task that produces the workflow's final non-none output.
+         */
         finalTaskID: string
+        /**
+         * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+         */
         completionCriteria: Array<string>
+        /**
+         * Approval gates required before execution. Use [] for immediate execution.
+         */
         requiredGates: Array<string>
         model?: {
           providerID: string
@@ -12095,6 +12538,8 @@ export type WorkflowResumeResponses = {
         createdAt: number
         error?: string
       }
+      permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -12404,15 +12849,33 @@ export type WorkflowStopResponses = {
       definitionID: string
       revision: number
       plan: {
+        /**
+         * Workflow plan format version. Use 1.
+         */
         formatVersion: number
+        /**
+         * Concise workflow display name.
+         */
         name: string
+        /**
+         * What the workflow does and its boundaries.
+         */
         description: string
+        /**
+         * Durable outcome the complete workflow must achieve.
+         */
         objective: string
+        /**
+         * Ordered execution stages. Each phase must list all of its task IDs.
+         */
         phases: Array<{
           id: string
           ordinal: number
           name: string
           description?: string
+          /**
+           * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+           */
           barrier:
             | {
                 kind: "all"
@@ -12428,14 +12891,23 @@ export type WorkflowStopResponses = {
                 kind: "condition"
                 expression: string
               }
+          /**
+           * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+           */
           taskIDs: Array<string>
         }>
+        /**
+         * Complete DAG of workflow tasks. Every task must belong to one phase.
+         */
         tasks: Array<{
           id: string
           phaseID: string
           name: string
           kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
           prompt: string
+          /**
+           * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+           */
           dependsOn: Array<string>
           inputs?: Array<{
             taskID: string
@@ -12443,6 +12915,9 @@ export type WorkflowStopResponses = {
             projection?: string
             required?: boolean
           }>
+          /**
+           * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+           */
           output:
             | {
                 kind: "text"
@@ -12567,8 +13042,17 @@ export type WorkflowStopResponses = {
             }
           }
         }>
+        /**
+         * Existing synthesize task that produces the workflow's final non-none output.
+         */
         finalTaskID: string
+        /**
+         * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+         */
         completionCriteria: Array<string>
+        /**
+         * Approval gates required before execution. Use [] for immediate execution.
+         */
         requiredGates: Array<string>
         model?: {
           providerID: string
@@ -12628,6 +13112,8 @@ export type WorkflowStopResponses = {
         createdAt: number
         error?: string
       }
+      permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -12888,9 +13374,10 @@ export type WorkflowStopResponses = {
 
 export type WorkflowStopResponse = WorkflowStopResponses[keyof WorkflowStopResponses]
 
-export type WorkflowRetryTaskData = {
+export type WorkflowPermissionModeData = {
   body?: {
-    taskID: string
+    mode?: "report-only" | "normal" | "custom"
+    sessionMode?: "approval" | "smart" | "full_access" | "global_default"
     reason?: string
   }
   path: {
@@ -12900,10 +13387,10 @@ export type WorkflowRetryTaskData = {
     directory?: string
     workspace?: string
   }
-  url: "/workflow/{runID}/retry-task"
+  url: "/workflow/{runID}/permission-mode"
 }
 
-export type WorkflowRetryTaskErrors = {
+export type WorkflowPermissionModeErrors = {
   /**
    * BadRequestError
    */
@@ -12914,11 +13401,11 @@ export type WorkflowRetryTaskErrors = {
   404: NotFoundError
 }
 
-export type WorkflowRetryTaskError = WorkflowRetryTaskErrors[keyof WorkflowRetryTaskErrors]
+export type WorkflowPermissionModeError = WorkflowPermissionModeErrors[keyof WorkflowPermissionModeErrors]
 
-export type WorkflowRetryTaskResponses = {
+export type WorkflowPermissionModeResponses = {
   /**
-   * Workflow snapshot with task retry queued
+   * Workflow snapshot with updated permission mode
    */
   200: {
     definition: {
@@ -12938,15 +13425,33 @@ export type WorkflowRetryTaskResponses = {
       definitionID: string
       revision: number
       plan: {
+        /**
+         * Workflow plan format version. Use 1.
+         */
         formatVersion: number
+        /**
+         * Concise workflow display name.
+         */
         name: string
+        /**
+         * What the workflow does and its boundaries.
+         */
         description: string
+        /**
+         * Durable outcome the complete workflow must achieve.
+         */
         objective: string
+        /**
+         * Ordered execution stages. Each phase must list all of its task IDs.
+         */
         phases: Array<{
           id: string
           ordinal: number
           name: string
           description?: string
+          /**
+           * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+           */
           barrier:
             | {
                 kind: "all"
@@ -12962,14 +13467,23 @@ export type WorkflowRetryTaskResponses = {
                 kind: "condition"
                 expression: string
               }
+          /**
+           * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+           */
           taskIDs: Array<string>
         }>
+        /**
+         * Complete DAG of workflow tasks. Every task must belong to one phase.
+         */
         tasks: Array<{
           id: string
           phaseID: string
           name: string
           kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
           prompt: string
+          /**
+           * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+           */
           dependsOn: Array<string>
           inputs?: Array<{
             taskID: string
@@ -12977,6 +13491,9 @@ export type WorkflowRetryTaskResponses = {
             projection?: string
             required?: boolean
           }>
+          /**
+           * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+           */
           output:
             | {
                 kind: "text"
@@ -13101,8 +13618,17 @@ export type WorkflowRetryTaskResponses = {
             }
           }
         }>
+        /**
+         * Existing synthesize task that produces the workflow's final non-none output.
+         */
         finalTaskID: string
+        /**
+         * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+         */
         completionCriteria: Array<string>
+        /**
+         * Approval gates required before execution. Use [] for immediate execution.
+         */
         requiredGates: Array<string>
         model?: {
           providerID: string
@@ -13162,6 +13688,583 @@ export type WorkflowRetryTaskResponses = {
         createdAt: number
         error?: string
       }
+      permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
+      state:
+        | "planning"
+        | "awaiting_approval"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      currentPhaseID?: string
+      createdAt: number
+      updatedAt: number
+    }
+    preview: {
+      phaseCount: number
+      taskCount: number
+      taskUpperBound: number
+      maxConcurrency: number
+      maxFanOut: number
+      sideEffectClasses: Array<string>
+      estimatedTokenLimit?: number
+      estimatedCostLimit?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    phases: Array<{
+      id: string
+      ordinal: number
+      name: string
+      description?: string
+      state:
+        | "pending"
+        | "queued"
+        | "working"
+        | "needs_input"
+        | "blocked"
+        | "paused"
+        | "completed"
+        | "failed"
+        | "stopped"
+      barrier:
+        | {
+            kind: "all"
+          }
+        | {
+            kind: "quorum"
+            quorum: number
+          }
+        | {
+            kind: "best-effort"
+          }
+        | {
+            kind: "condition"
+            expression: string
+          }
+      counts: {
+        total: number
+        queued: number
+        working: number
+        completed: number
+        failed: number
+        blocked: number
+      }
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    tasks: Array<{
+      id: string
+      phaseID: string
+      name: string
+      kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+      prompt: string
+      dependsOn: Array<string>
+      inputs?: Array<{
+        taskID: string
+        path?: string
+        projection?: string
+        required?: boolean
+      }>
+      output:
+        | {
+            kind: "text"
+            maxChars?: number
+          }
+        | {
+            kind: "json"
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "artifact"
+            artifactKind?: string
+            schema?: {
+              [key: string]: unknown
+            }
+          }
+        | {
+            kind: "none"
+          }
+      model?: {
+        providerID: string
+        modelID: string
+        variant?: string
+        reasoning?: string
+      }
+      agentProfile?: string
+      allowedTools?: Array<string>
+      workspace?: {
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+      }
+      permissions?: {
+        mode: "report-only" | "normal" | "custom"
+        allowedTools?: Array<string>
+        approvalRequiredFor?: Array<string>
+        approvedActions?: Array<string>
+        allowEdits?: boolean
+        allowMutatingCommands?: boolean
+        allowExternalSend?: boolean
+      }
+      retry?: {
+        maxAttempts?: number
+        backoffMs?: number
+        retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+      }
+      budget?: {
+        maxTurns?: number
+        maxRuntimeMs?: number
+        maxTokens?: number
+        maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        maxChildren?: number
+        maxDepth?: number
+      }
+      map?: {
+        source: {
+          taskID: string
+          path?: string
+          projection?: string
+          required?: boolean
+        }
+        maxItems: number
+        taskTemplate: {
+          kind: "agent" | "synthesize" | "verify" | "validate"
+          prompt: string
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+        }
+      }
+      state: "pending" | "queued" | "working" | "needs_input" | "blocked" | "completed" | "failed" | "stopped"
+      attempt: number
+      sessionID?: string
+      startedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      completedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      blocker?: string
+      usage?: {
+        inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+    }>
+    artifacts: Array<{
+      id: string
+      runID: string
+      taskID?: string
+      kind: string
+      summary: string
+      status: "pending" | "valid" | "invalid"
+      schemaValidated: boolean
+      outputRefs: Array<string>
+      evidence: Array<string>
+      sessionID?: string
+      attempt?: number
+      createdAt: number
+    }>
+    events: Array<{
+      id: string
+      sequence: number
+      level: "debug" | "info" | "warning" | "error" | "decision"
+      type: string
+      title: string
+      summary: string
+      createdAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      data?: {
+        [key: string]: unknown
+      }
+    }>
+    gates: Array<{
+      id: string
+      phaseID?: string
+      taskID?: string
+      state: "pending" | "pass" | "fail" | "blocked" | "awaiting_approval" | "waived"
+      required: boolean
+      actor?: string
+      reason?: string
+    }>
+    usage?: {
+      inputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      outputTokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      cost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  }
+}
+
+export type WorkflowPermissionModeResponse = WorkflowPermissionModeResponses[keyof WorkflowPermissionModeResponses]
+
+export type WorkflowRetryTaskData = {
+  body?: {
+    taskID: string
+    reason?: string
+  }
+  path: {
+    runID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workflow/{runID}/retry-task"
+}
+
+export type WorkflowRetryTaskErrors = {
+  /**
+   * BadRequestError
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type WorkflowRetryTaskError = WorkflowRetryTaskErrors[keyof WorkflowRetryTaskErrors]
+
+export type WorkflowRetryTaskResponses = {
+  /**
+   * Workflow snapshot with task retry queued
+   */
+  200: {
+    definition: {
+      id: string
+      projectID: string
+      name: string
+      description: string
+      source: "session-generated" | "saved" | "template" | "package" | "manual"
+      ownerSessionID?: string
+      currentRevision?: number
+      saved: boolean
+      createdAt: number
+      updatedAt: number
+    }
+    revision: {
+      id: string
+      definitionID: string
+      revision: number
+      plan: {
+        /**
+         * Workflow plan format version. Use 1.
+         */
+        formatVersion: number
+        /**
+         * Concise workflow display name.
+         */
+        name: string
+        /**
+         * What the workflow does and its boundaries.
+         */
+        description: string
+        /**
+         * Durable outcome the complete workflow must achieve.
+         */
+        objective: string
+        /**
+         * Ordered execution stages. Each phase must list all of its task IDs.
+         */
+        phases: Array<{
+          id: string
+          ordinal: number
+          name: string
+          description?: string
+          /**
+           * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+           */
+          barrier:
+            | {
+                kind: "all"
+              }
+            | {
+                kind: "quorum"
+                quorum: number
+              }
+            | {
+                kind: "best-effort"
+              }
+            | {
+                kind: "condition"
+                expression: string
+              }
+          /**
+           * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+           */
+          taskIDs: Array<string>
+        }>
+        /**
+         * Complete DAG of workflow tasks. Every task must belong to one phase.
+         */
+        tasks: Array<{
+          id: string
+          phaseID: string
+          name: string
+          kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
+          prompt: string
+          /**
+           * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+           */
+          dependsOn: Array<string>
+          inputs?: Array<{
+            taskID: string
+            path?: string
+            projection?: string
+            required?: boolean
+          }>
+          /**
+           * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+           */
+          output:
+            | {
+                kind: "text"
+                maxChars?: number
+              }
+            | {
+                kind: "json"
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "artifact"
+                artifactKind?: string
+                schema?: {
+                  [key: string]: unknown
+                }
+              }
+            | {
+                kind: "none"
+              }
+          model?: {
+            providerID: string
+            modelID: string
+            variant?: string
+            reasoning?: string
+          }
+          agentProfile?: string
+          allowedTools?: Array<string>
+          workspace?: {
+            mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+          }
+          permissions?: {
+            mode: "report-only" | "normal" | "custom"
+            allowedTools?: Array<string>
+            approvalRequiredFor?: Array<string>
+            approvedActions?: Array<string>
+            allowEdits?: boolean
+            allowMutatingCommands?: boolean
+            allowExternalSend?: boolean
+          }
+          retry?: {
+            maxAttempts?: number
+            backoffMs?: number
+            retryOn?: Array<"transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal">
+          }
+          budget?: {
+            maxTurns?: number
+            maxRuntimeMs?: number
+            maxTokens?: number
+            maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            maxChildren?: number
+            maxDepth?: number
+          }
+          map?: {
+            source: {
+              taskID: string
+              path?: string
+              projection?: string
+              required?: boolean
+            }
+            maxItems: number
+            taskTemplate: {
+              kind: "agent" | "synthesize" | "verify" | "validate"
+              prompt: string
+              output:
+                | {
+                    kind: "text"
+                    maxChars?: number
+                  }
+                | {
+                    kind: "json"
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "artifact"
+                    artifactKind?: string
+                    schema?: {
+                      [key: string]: unknown
+                    }
+                  }
+                | {
+                    kind: "none"
+                  }
+              model?: {
+                providerID: string
+                modelID: string
+                variant?: string
+                reasoning?: string
+              }
+              agentProfile?: string
+              allowedTools?: Array<string>
+              workspace?: {
+                mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+              }
+              permissions?: {
+                mode: "report-only" | "normal" | "custom"
+                allowedTools?: Array<string>
+                approvalRequiredFor?: Array<string>
+                approvedActions?: Array<string>
+                allowEdits?: boolean
+                allowMutatingCommands?: boolean
+                allowExternalSend?: boolean
+              }
+              retry?: {
+                maxAttempts?: number
+                backoffMs?: number
+                retryOn?: Array<
+                  "transient" | "environment" | "policy" | "quality" | "budget" | "user_input" | "terminal"
+                >
+              }
+              budget?: {
+                maxTurns?: number
+                maxRuntimeMs?: number
+                maxTokens?: number
+                maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+                maxChildren?: number
+                maxDepth?: number
+              }
+            }
+          }
+        }>
+        /**
+         * Existing synthesize task that produces the workflow's final non-none output.
+         */
+        finalTaskID: string
+        /**
+         * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+         */
+        completionCriteria: Array<string>
+        /**
+         * Approval gates required before execution. Use [] for immediate execution.
+         */
+        requiredGates: Array<string>
+        model?: {
+          providerID: string
+          modelID: string
+          variant?: string
+          reasoning?: string
+        }
+        workspace?: {
+          mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        }
+        permissions?: {
+          mode: "report-only" | "normal" | "custom"
+          allowedTools?: Array<string>
+          approvalRequiredFor?: Array<string>
+          approvedActions?: Array<string>
+          allowEdits?: boolean
+          allowMutatingCommands?: boolean
+          allowExternalSend?: boolean
+        }
+        budget?: {
+          maxConcurrency?: number
+          maxFanOut?: number
+          maxTurns?: number
+          maxRuntimeMs?: number
+          maxTokens?: number
+          maxCost?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          maxChildren?: number
+          maxDepth?: number
+          retention?: {
+            maxArtifacts?: number
+            maxAgeMs?: number
+            maxBytes?: number
+          }
+        }
+        overlapPolicy?: "skip" | "queue" | "replace"
+      }
+      planHash: string
+      immutable: boolean
+      createdAt: number
+    }
+    run: {
+      id: string
+      definitionID: string
+      revisionID: string
+      revision: number
+      originSessionID?: string
+      rootSessionID?: string
+      loopID?: string
+      loopRunID?: string
+      workspaceLease?: {
+        id: string
+        mode: "read-only" | "in-place" | "per-loop-worktree" | "per-run-worktree"
+        path: string
+        branch?: string
+        state: "active" | "retained" | "cleaning" | "cleaned" | "failed"
+        managed: boolean
+        createdAt: number
+        error?: string
+      }
+      permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"
@@ -13472,15 +14575,33 @@ export type WorkflowRetryPhaseResponses = {
       definitionID: string
       revision: number
       plan: {
+        /**
+         * Workflow plan format version. Use 1.
+         */
         formatVersion: number
+        /**
+         * Concise workflow display name.
+         */
         name: string
+        /**
+         * What the workflow does and its boundaries.
+         */
         description: string
+        /**
+         * Durable outcome the complete workflow must achieve.
+         */
         objective: string
+        /**
+         * Ordered execution stages. Each phase must list all of its task IDs.
+         */
         phases: Array<{
           id: string
           ordinal: number
           name: string
           description?: string
+          /**
+           * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+           */
           barrier:
             | {
                 kind: "all"
@@ -13496,14 +14617,23 @@ export type WorkflowRetryPhaseResponses = {
                 kind: "condition"
                 expression: string
               }
+          /**
+           * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+           */
           taskIDs: Array<string>
         }>
+        /**
+         * Complete DAG of workflow tasks. Every task must belong to one phase.
+         */
         tasks: Array<{
           id: string
           phaseID: string
           name: string
           kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
           prompt: string
+          /**
+           * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+           */
           dependsOn: Array<string>
           inputs?: Array<{
             taskID: string
@@ -13511,6 +14641,9 @@ export type WorkflowRetryPhaseResponses = {
             projection?: string
             required?: boolean
           }>
+          /**
+           * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+           */
           output:
             | {
                 kind: "text"
@@ -13635,8 +14768,17 @@ export type WorkflowRetryPhaseResponses = {
             }
           }
         }>
+        /**
+         * Existing synthesize task that produces the workflow's final non-none output.
+         */
         finalTaskID: string
+        /**
+         * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+         */
         completionCriteria: Array<string>
+        /**
+         * Approval gates required before execution. Use [] for immediate execution.
+         */
         requiredGates: Array<string>
         model?: {
           providerID: string
@@ -13696,6 +14838,8 @@ export type WorkflowRetryPhaseResponses = {
         createdAt: number
         error?: string
       }
+      permissionMode?: "report-only" | "normal" | "custom"
+      sessionPermissionMode?: "approval" | "smart" | "full_access"
       state:
         | "planning"
         | "awaiting_approval"

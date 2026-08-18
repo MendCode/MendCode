@@ -18,6 +18,13 @@ export const Info = Schema.Union([
     attempt: NonNegativeInt,
     message: Schema.String,
     next: NonNegativeInt,
+    recovery: Schema.optional(
+      Schema.Struct({
+        kind: Schema.Literal("stale-session"),
+        reason: Schema.String,
+        tool: Schema.optional(Schema.String),
+      }),
+    ),
   }),
   Schema.Struct({
     type: Schema.Literal("busy"),
@@ -96,7 +103,7 @@ function foreign(err: unknown) {
 export function freshStatus(row: StatusRecord, now = Date.now()) {
   if (row.data.type === "busy" && row.data.until && row.data.until > now) return row.data
   if (row.data.type === "busy") return now - row.time_updated <= BUSY_STATUS_STALE_MS ? row.data : undefined
-  if (row.data.type === "retry" && row.data.next > now) return row.data
+  if (row.data.type === "retry") return row.data.next > now ? row.data : undefined
   return now - row.time_updated <= PERSISTED_STATUS_STALE_MS ? row.data : undefined
 }
 
