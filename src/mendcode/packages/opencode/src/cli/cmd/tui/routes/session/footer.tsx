@@ -29,7 +29,7 @@ export function Footer() {
     if (state.status === "connected" && !recovering) return
     if (state.status === "connecting") return "connecting"
     if (state.status === "reconnecting" || recovering) return `reconnecting${state.attempt > 1 ? ` #${state.attempt}` : ""}`
-    if (state.status === "failed") return `connection lost after ${state.attempt} retries`
+    if (state.status === "failed") return `local connection unavailable after ${state.attempt} retries`
     return "disconnected"
   })
   const connectionColor = createMemo(() => (sdk.connection.status === "failed" ? theme.error : theme.warning))

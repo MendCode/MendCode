@@ -62,8 +62,10 @@ export function resolveEffectivePromptSelection(input: {
   localModelSource?: PromptModelSource
   localOverride?: PromptModelRef
   localOverrideUpdatedAt?: number
+  localOverrideMessageID?: string
   userModel?: PromptModelRef
   userModelCreatedAt?: number
+  userMessageID?: string
   sessionModel?: PromptModelRef
   agentModel?: PromptModelRef
   }): PromptModelSelection {
@@ -77,9 +79,17 @@ export function resolveEffectivePromptSelection(input: {
     }
   }
 
+  // A hydrated message can receive its server timestamp after the local selection.
+  const localOverrideMatchesUserMessage =
+    input.localOverrideMessageID !== undefined &&
+    input.userMessageID !== undefined &&
+    input.localOverrideMessageID === input.userMessageID
   const localOverrideIsNewer =
     input.localOverride &&
-    (!input.hasSession || !input.userModelCreatedAt || (input.localOverrideUpdatedAt ?? 0) > input.userModelCreatedAt)
+    (localOverrideMatchesUserMessage ||
+      !input.hasSession ||
+      !input.userModelCreatedAt ||
+      (input.localOverrideUpdatedAt ?? 0) > input.userModelCreatedAt)
   if (localOverrideIsNewer) {
     return {
       model: promptModelRef(input.localOverride),

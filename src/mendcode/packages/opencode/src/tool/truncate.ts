@@ -5,7 +5,6 @@ import type { Agent } from "../agent/agent"
 import { AppFileSystem } from "@mendcode/core/filesystem"
 import { evaluate } from "@/permission/evaluate"
 import { Config } from "@/config/config"
-import { Identifier } from "../id/id"
 import * as Log from "@mendcode/core/util/log"
 import { ToolID } from "./schema"
 import { TRUNCATION_DIR } from "./truncation-dir"
@@ -71,9 +70,8 @@ export const layer = Layer.effect(
     const fs = yield* AppFileSystem.Service
 
     const cleanup = Effect.fn("Truncate.cleanup")(function* () {
-      const cutoff = Identifier.timestamp(
-        Identifier.create("tool", "ascending", Date.now() - Duration.toMillis(RETENTION)),
-      )
+      const now = Date.now()
+      const cutoff = now - Duration.toMillis(RETENTION)
       const entries = yield* fs.readDirectory(TRUNCATION_DIR).pipe(
         Effect.map((all) => all.filter((name) => name.startsWith("tool_"))),
         Effect.catch(() => Effect.succeed([])),
@@ -81,13 +79,14 @@ export const layer = Layer.effect(
       const remaining: { file: string; size: number; time: number }[] = []
       for (const entry of entries) {
         const file = path.join(TRUNCATION_DIR, entry)
-        const time = Identifier.timestamp(entry)
+        const stat = yield* fs.stat(file).pipe(Effect.catch(() => Effect.void))
+        if (!stat || stat.type !== "File") continue
+        // Missing metadata is not evidence that a fresh tool output is stale.
+        const time = Option.getOrElse(stat.mtime, () => new Date(now)).getTime()
         if (time < cutoff) {
           yield* fs.remove(file).pipe(Effect.catch(() => Effect.void))
           continue
         }
-        const stat = yield* fs.stat(file).pipe(Effect.catch(() => Effect.void))
-        if (!stat || stat.type !== "File") continue
         const size = typeof stat.size === "bigint" ? Number(stat.size) : stat.size
         remaining.push({ file, size, time })
       }

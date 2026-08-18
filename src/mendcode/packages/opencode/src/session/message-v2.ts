@@ -473,6 +473,7 @@ export const User = Schema.Struct({
   }),
   system: Schema.optional(Schema.String),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+  queued: Schema.optional(Schema.Boolean),
 })
   .annotate({ identifier: "UserMessage" })
   .pipe(withStatics((s) => ({ zod: zod(s) })))
@@ -777,7 +778,8 @@ const info = (row: typeof MessageTable.$inferSelect) =>
     sessionID: row.session_id,
   }) as Info
 
-export type PageView = "full" | "tui" | "tui-all"
+export type PageView = "full" | "tui" | "tui-all" | "history"
+export type PageUnit = "message" | "turn"
 
 function previewInfoForTui(message: Info): Info {
   if (message.role !== "user" || !message.summary) return message
@@ -959,6 +961,30 @@ export function previewPartForTui(part: Part): Part {
   }
 }
 
+function partForHistory(part: Part): Part {
+  if (part.type === "file") return previewFilePartForTui(part)
+  if (part.type === "subtask") return { ...part, prompt: "" }
+  if (part.type !== "tool") return part
+  const state =
+    part.state.status === "pending"
+      ? { ...part.state, input: {}, raw: "" }
+      : part.state.status === "running"
+        ? { ...part.state, input: {}, metadata: undefined }
+        : part.state.status === "completed"
+          ? { ...part.state, input: {}, output: "", metadata: {}, attachments: undefined }
+          : {
+              ...part.state,
+              input: {},
+              error: previewString(part.state.error, TUI_FIELD_PREVIEW_CHARS, "tool error"),
+              metadata: undefined,
+            }
+  return { ...part, state, metadata: undefined }
+}
+
+function historyPartRow(row: typeof PartTable.$inferSelect) {
+  return row.data.type === "text" || row.data.type === "file" || row.data.type === "tool" || row.data.type === "subtask"
+}
+
 const part = (row: typeof PartTable.$inferSelect, view: PageView = "full") => {
   const hydrated = {
     ...row.data,
@@ -966,6 +992,7 @@ const part = (row: typeof PartTable.$inferSelect, view: PageView = "full") => {
     sessionID: row.session_id,
     messageID: row.message_id,
   } as Part
+  if (view === "history") return partForHistory(hydrated)
   return view === "tui" || view === "tui-all" ? previewPartForTui(hydrated) : hydrated
 }
 
@@ -994,6 +1021,10 @@ function hydrate(
     partFilter?: (row: typeof PartTable.$inferSelect) => boolean
   } = {},
 ) {
+  const partFilter =
+    options.view === "history"
+      ? (row: typeof PartTable.$inferSelect) => historyPartRow(row) && (!options.partFilter || options.partFilter(row))
+      : options.partFilter
   const ids = rows.map((row) => row.id)
   const partByMessage = new Map<string, { parts: Part[]; more?: boolean; cursor?: string }>()
   if (ids.length > 0) {
@@ -1007,7 +1038,7 @@ function hydrate(
           .all(),
       )
       for (const row of partRows) {
-        if (options.partFilter && !options.partFilter(row)) continue
+        if (partFilter && !partFilter(row)) continue
         const next = part(row, options.view)
         const current = partByMessage.get(row.message_id)
         if (current) current.parts.push(next)
@@ -1016,6 +1047,38 @@ function hydrate(
     } else {
       const limit = Math.max(1, Math.floor(options.partsLimit))
       const after = options.partsAfter ? decodePartCursor(options.partsAfter) : undefined
+      const terminalTextByMessage =
+        limit > 1 && (options.view === "tui" || options.view === "tui-all")
+          ? (() => {
+              const completedAssistants = new Set(
+                rows.flatMap((row) =>
+                  row.data.role === "assistant" && "completed" in row.data.time && row.data.time.completed !== undefined
+                    ? [row.id]
+                    : [],
+                ),
+              )
+              if (completedAssistants.size === 0) return new Map<string, typeof PartTable.$inferSelect>()
+              const result = new Map<string, typeof PartTable.$inferSelect>()
+              for (const row of Database.use((db) =>
+                db
+                  .select()
+                  .from(PartTable)
+                  .where(
+                    and(
+                      inArray(PartTable.message_id, [...completedAssistants]),
+                      sql`json_extract(${PartTable.data}, '$.type') = 'text'`,
+                      sql`length(trim(coalesce(json_extract(${PartTable.data}, '$.text'), ''))) > 0`,
+                    ),
+                  )
+                  .orderBy(PartTable.message_id, desc(PartTable.id))
+                  .all(),
+              )) {
+                if (partFilter && !partFilter(row)) continue
+                if (!result.has(row.message_id)) result.set(row.message_id, row)
+              }
+              return result
+            })()
+          : undefined
       for (const messageID of ids) {
         const partRows = Database.use((db) =>
           db
@@ -1031,9 +1094,20 @@ function hydrate(
             .all(),
         )
         const more = partRows.length > limit
-        const selected = (options.partFilter ? partRows.filter(options.partFilter) : partRows).slice(0, limit)
+        const filtered = partFilter ? partRows.filter(partFilter) : partRows
+        const firstPage = filtered.slice(0, limit)
+        const terminalText = terminalTextByMessage?.get(messageID)
+        const reserveTerminalText =
+          terminalText !== undefined &&
+          more &&
+          (!after || terminalText.id > after) &&
+          !firstPage.some((row) => row.id === terminalText.id)
+        const prefix = reserveTerminalText && firstPage.length >= limit ? firstPage.slice(0, limit - 1) : firstPage
+        const selected = reserveTerminalText ? [...prefix, terminalText] : firstPage
         const parts = selected.map((row) => part(row, options.view))
-        const last = selected.at(-1) ?? (more ? partRows.at(-1) : undefined)
+        const last = reserveTerminalText
+          ? (prefix.at(-1) ?? partRows.at(-1))
+          : (selected.at(-1) ?? (more ? partRows.at(-1) : undefined))
         partByMessage.set(messageID, {
           parts,
           more,
@@ -1046,7 +1120,10 @@ function hydrate(
   return rows.map((row) => {
     const hydrated = partByMessage.get(row.id)
     const message = info(row)
-    const renderedInfo = options.view === "tui" || options.view === "tui-all" ? previewInfoForTui(message) : message
+    const renderedInfo =
+      options.view === "tui" || options.view === "tui-all" || options.view === "history"
+        ? previewInfoForTui(message)
+        : message
     if (!hydrated) return { info: renderedInfo, parts: [] }
     return {
       info: renderedInfo,
@@ -1243,9 +1320,16 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
         if (part.type === "file" && part.mime !== "text/plain" && part.mime !== "application/x-directory") {
           const preserveMedia = options?.preserveMedia?.(msg, part) === true
           if (options?.stripMedia && isMedia(part.mime) && !preserveMedia) {
+            const resumeMessage = msg.parts.some(
+              (item) =>
+                item.type === "text" &&
+                (item.metadata?.compaction_continue === true || item.metadata?.compaction_post_prompt === true),
+            )
             userMessage.parts.push({
               type: "text",
-              text: `[Attached ${part.mime}: ${part.filename ?? "file"}]`,
+              text: resumeMessage
+                ? `[Attached ${part.mime}: ${part.filename ?? "file"}; image unavailable to this provider after compaction. Ask the user to re-attach it.]`
+                : `[Attached ${part.mime}: ${part.filename ?? "file"}]`,
             })
           } else {
             userMessage.parts.push({
@@ -1627,6 +1711,95 @@ export interface PageResult {
   more: boolean
   cursor?: string
   sparse?: boolean
+  navigation?: {
+    oldest: string
+    newest: string
+  }
+}
+
+function turnPage(input: {
+  sessionID: SessionID
+  limit: number
+  before?: Cursor
+  after?: Cursor
+  view?: PageView
+  partsLimit?: number
+}): PageResult {
+  const userMessage = sql`json_extract(${MessageTable.data}, '$.role') = 'user'`
+  const where = input.before
+    ? and(eq(MessageTable.session_id, input.sessionID), userMessage, older(input.before))
+    : input.after
+      ? and(eq(MessageTable.session_id, input.sessionID), userMessage, newer(input.after))
+      : and(eq(MessageTable.session_id, input.sessionID), userMessage)
+  const roots = Database.use((db) =>
+    db
+      .select()
+      .from(MessageTable)
+      .where(where)
+      .orderBy(
+        input.after ? asc(MessageTable.time_created) : desc(MessageTable.time_created),
+        input.after ? asc(MessageTable.id) : desc(MessageTable.id),
+      )
+      .limit(input.limit + 1)
+      .all(),
+  )
+  if (roots.length === 0) {
+    const session = Database.use((db) =>
+      db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, input.sessionID)).get(),
+    )
+    if (!session) throw new NotFoundError({ message: `Session not found: ${input.sessionID}` })
+    return { items: [], more: false }
+  }
+
+  const more = roots.length > input.limit
+  const selected = more ? roots.slice(0, input.limit) : roots
+  const rootIDs = selected.map((row) => row.id)
+  const rows = Database.use((db) =>
+    db
+      .select()
+      .from(MessageTable)
+      .where(
+        and(
+          eq(MessageTable.session_id, input.sessionID),
+          or(
+            inArray(MessageTable.id, rootIDs),
+            inArray(sql<MessageID>`json_extract(${MessageTable.data}, '$.parentID')`, rootIDs),
+          ),
+        ),
+      )
+      .orderBy(asc(MessageTable.time_created), asc(MessageTable.id))
+      .all(),
+  )
+  const tail = selected.at(-1)
+  const chronologicalRoots = selected.toSorted((a, b) => a.time_created - b.time_created || a.id.localeCompare(b.id))
+  const oldestRoot = chronologicalRoots.at(0)!
+  const newestRoot = chronologicalRoots.at(-1)!
+  return {
+    items: hydrate(rows, { view: input.view, partsLimit: input.partsLimit }),
+    more,
+    cursor: more && tail ? cursor.encode({ id: tail.id, time: tail.time_created }) : undefined,
+    navigation: {
+      oldest: cursor.encode({ id: oldestRoot.id, time: oldestRoot.time_created }),
+      newest: cursor.encode({ id: newestRoot.id, time: newestRoot.time_created }),
+    },
+  }
+}
+
+export function pageNavigationCursors(input: { page: PageResult; before?: string; after?: string }) {
+  const oldest = input.page.items.at(0)?.info
+  const newest = input.page.items.at(-1)?.info
+  return {
+    older:
+      input.after && oldest
+        ? (input.page.navigation?.oldest ?? cursor.encode({ id: oldest.id, time: oldest.time.created }))
+        : input.page.cursor,
+    newer:
+      input.before && newest
+        ? (input.page.navigation?.newest ?? cursor.encode({ id: newest.id, time: newest.time.created }))
+        : input.after
+          ? input.page.cursor
+          : undefined,
+  }
 }
 
 function latestTuiUserMessage(sessionID: SessionID) {
@@ -1754,12 +1927,23 @@ export function page(input: {
   before?: string
   after?: string
   view?: PageView
+  unit?: PageUnit
   partsLimit?: number
 }): PageResult {
   const before = input.before ? cursor.decode(input.before) : undefined
   const after = input.after ? cursor.decode(input.after) : undefined
   const partsLimit =
     input.view === "tui" || input.view === "tui-all" ? (input.partsLimit ?? TUI_PARTS_PAGE_LIMIT) : input.partsLimit
+  if (input.unit === "turn") {
+    return turnPage({
+      sessionID: input.sessionID,
+      limit: input.limit,
+      before,
+      after,
+      view: input.view,
+      partsLimit,
+    })
+  }
   if (input.view === "tui") {
     const compacted = compactedPage({ sessionID: input.sessionID, limit: input.limit, before, after, partsLimit })
     if (compacted) return compacted

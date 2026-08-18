@@ -26,16 +26,32 @@ describe("workflow policy", () => {
     expect(Permission.evaluate("external_send", "*", rules).action).toBe("deny")
   })
 
+  test("applies the normal override to pending workflow policy", () => {
+    const policy = WorkflowPolicy.permissionPolicyForMode({ mode: "custom", approvalRequiredFor: ["bash"] }, "normal")
+    const rules = WorkflowPolicy.permissionRules(policy, undefined)
+
+    expect(Permission.evaluate("edit", "*", rules).action).toBe("allow")
+    expect(Permission.evaluate("bash", "*", rules).action).toBe("allow")
+    expect(Permission.evaluate("task", "*", rules).action).toBe("allow")
+    expect(Permission.evaluate("external_send", "*", rules).action).toBe("allow")
+  })
+
   test("keeps approval-required actions pending until explicitly approved", () => {
-    const pending = WorkflowPolicy.permissionRules({
-      mode: "custom",
-      approvalRequiredFor: ["edit", "push"],
-    }, undefined)
-    const approved = WorkflowPolicy.permissionRules({
-      mode: "custom",
-      approvalRequiredFor: ["edit", "push"],
-      approvedActions: ["edit"],
-    }, undefined)
+    const pending = WorkflowPolicy.permissionRules(
+      {
+        mode: "custom",
+        approvalRequiredFor: ["edit", "push"],
+      },
+      undefined,
+    )
+    const approved = WorkflowPolicy.permissionRules(
+      {
+        mode: "custom",
+        approvalRequiredFor: ["edit", "push"],
+        approvedActions: ["edit"],
+      },
+      undefined,
+    )
 
     expect(Permission.evaluate("edit", "*", pending).action).toBe("ask")
     expect(Permission.evaluate("bash", "*", pending).action).toBe("ask")
@@ -44,11 +60,14 @@ describe("workflow policy", () => {
   })
 
   test("normalizes approval aliases without widening unrelated permissions", () => {
-    const rules = WorkflowPolicy.permissionRules({
-      mode: "custom",
-      approvalRequiredFor: ["write"],
-      approvedActions: ["edit"],
-    }, undefined)
+    const rules = WorkflowPolicy.permissionRules(
+      {
+        mode: "custom",
+        approvalRequiredFor: ["write"],
+        approvedActions: ["edit"],
+      },
+      undefined,
+    )
 
     expect(Permission.evaluate("edit", "*", rules).action).toBe("allow")
     expect(Permission.evaluate("bash", "*", rules).action).toBe("ask")
@@ -93,11 +112,7 @@ describe("workflow policy", () => {
 
   test("returns deny-aware tool flags", () => {
     expect(
-      WorkflowPolicy.allowedToolFlags(
-        { mode: "custom", allowedTools: ["read"] },
-        undefined,
-        ["read", "bash"],
-      ),
+      WorkflowPolicy.allowedToolFlags({ mode: "custom", allowedTools: ["read"] }, undefined, ["read", "bash"]),
     ).toEqual({ read: true, bash: false })
   })
 })

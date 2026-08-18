@@ -52,6 +52,25 @@ const IdentityConfigOverride = z
   })
   .strict()
 
+const SessionHistoryConfigOverride = z
+  .object({
+    enabled: z.boolean().optional(),
+    view: z.enum(["auto", "timeline", "tree", "split", "chapters", "pages"]).optional(),
+    split: z.union([z.boolean(), z.literal("auto")]).optional(),
+    page_size: z.number().int().min(10).max(200).optional(),
+    group_by: z.enum(["day", "none"]).optional(),
+    show_tools: z.enum(["hidden", "count", "tree"]).optional(),
+    show_subagents: z.boolean().optional(),
+    search: z.boolean().optional(),
+    remember_position: z.boolean().optional(),
+    open_at: z.enum(["latest", "oldest"]).optional(),
+    preview_width: z.number().int().min(40).max(75).optional(),
+    // Kept so older configs continue to parse; chapters now map to timeline.
+    chapter_gap_minutes: z.number().int().min(5).max(180).optional(),
+    search_page_limit: z.number().int().min(1).max(1000).optional(),
+  })
+  .strict()
+
 export const TuiOptions = z.object({
   scroll_speed: z.number().min(0.001).optional().describe("TUI scroll speed"),
   scroll_acceleration: z
@@ -76,6 +95,7 @@ export const TuiInfo = z
     presentation: z.any().optional(),
     home: HomeConfigOverride.optional(),
     identity: IdentityConfigOverride.optional(),
+    session_history: SessionHistoryConfigOverride.optional(),
     plugin: ConfigPlugin.Spec.zod.array().optional(),
     plugin_enabled: z.record(z.string(), z.boolean()).optional(),
   })

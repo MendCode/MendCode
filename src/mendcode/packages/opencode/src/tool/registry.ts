@@ -330,16 +330,24 @@ export const layer: Layer.Layer<
         .join("\n")
       const providers = yield* provider.list().pipe(Effect.catch(() => Effect.succeed({})))
       const models = Object.values(providers)
-        .flatMap((item) => Object.values(item.models).map((model) => `${item.id}/${model.id}`))
-        .toSorted()
-      const modelLines = models.slice(0, 20).map((model) => `- ${model}`)
+        .flatMap((item) =>
+          Object.values(item.models).map((model) => ({
+            id: `${item.id}/${model.id}`,
+            variants: Object.keys(model.variants ?? {}),
+          })),
+        )
+        .toSorted((a, b) => a.id.localeCompare(b.id))
+      const modelLines = models
+        .slice(0, 20)
+        .map((model) => `- ${model.id}${model.variants.length ? ` (variants: ${model.variants.join(", ")})` : ""}`)
       const more = models.length > modelLines.length ? [`- ...and ${models.length - modelLines.length} more`] : []
       return [
         "Available agent types and the tools they have access to:",
         description,
         "",
         "Optional subagent model selection:",
-        "Pass model as provider/model-id to run this task on a specific available MendCode model.",
+        "Pass model as provider/model-id and variant as a separate reasoning-effort name.",
+        "A trailing #variant in model is accepted as shorthand. Do not invent variants; use only those advertised for that exact model.",
         "If omitted, MendCode uses the agent model, then subagent_model, then the parent chat model.",
         ...(modelLines.length > 0 ? ["Available model examples:", ...modelLines, ...more] : []),
       ].join("\n")

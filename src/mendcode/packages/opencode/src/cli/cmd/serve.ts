@@ -6,7 +6,10 @@ import { Flag } from "@mendcode/core/flag/flag"
 import { SharedServer } from "./tui/shared-server"
 import { InstanceStore } from "@/project/instance-store"
 import { BackgroundTask } from "@/session/background-task"
+import { SessionRunState } from "@/session/run-state"
+import { SessionStatus } from "@/session/status"
 import * as Log from "@mendcode/core/util/log"
+import { recoverStaleSessionStatuses } from "@/session/recovery"
 
 const log = Log.create({ service: "cli.serve" })
 const INSTANCE_DISPOSE_TIMEOUT_MS = 10_000
@@ -56,6 +59,8 @@ export const ServeCommand = effectCmd({
   // need for an ambient project InstanceContext at startup.
   instance: false,
   handler: Effect.fn("Cli.serve")(function* (args) {
+    const recovered = yield* Effect.sync(() => recoverStaleSessionStatuses())
+    if (recovered.length > 0) log.warn("finalized stale foreground sessions", { count: recovered.length })
     if (!Flag.OPENCODE_SERVER_PASSWORD) {
       console.log("Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.")
     }
@@ -109,7 +114,20 @@ export const ServeCommand = effectCmd({
                     Effect.forEach(
                       instances,
                       (instance) =>
-                        store.provide(instance, Effect.sync(() => BackgroundTask.hasActiveTasks())),
+                        store.provide(
+                          instance,
+                          Effect.gen(function* () {
+                            if (BackgroundTask.hasActiveTasks()) return true
+                            const statuses = yield* SessionStatus.Service
+                            const runState = yield* SessionRunState.Service
+                            const sessions = yield* statuses.list()
+                            for (const [sessionID, status] of sessions) {
+                              if (status.type !== "busy") continue
+                              if (yield* runState.isBusy(sessionID)) return true
+                            }
+                            return false
+                          }).pipe(Effect.provide([SessionRunState.defaultLayer, SessionStatus.defaultLayer])),
+                        ),
                       { concurrency: "unbounded" },
                     ),
                   ),

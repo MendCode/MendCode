@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Exit, Fiber, Layer, Scope } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Scope } from "effect"
 import { Agent } from "../../src/agent/agent"
 import { Config } from "@/config/config"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
@@ -50,6 +50,7 @@ function model(providerID: ProviderID, modelID: ModelID): Provider.Model {
     options: {},
     headers: {},
     release_date: "2026-01-01",
+    variants: { low: {}, high: {}, max: {} },
   }
 }
 
@@ -218,6 +219,8 @@ describe("tool.task", () => {
         expect(zebra).toBeGreaterThan(general)
         expect(first).toContain("Optional subagent model selection:")
         expect(first).toContain("Available model examples:")
+        expect(first).toContain("Pass model as provider/model-id and variant as a separate reasoning-effort name.")
+        expect(first).toMatch(/^- .+ \(variants: .+\)$/m)
         expect(first).toContain("Do not use it for greetings")
         expect(first).toContain("Set `background: true`")
         expect(first).not.toContain("greeting-responder")
@@ -1340,6 +1343,109 @@ describe("tool.task", () => {
     },
   )
 
+  it.instance("execute applies explicit reasoning variant", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      let seen: SessionPrompt.PromptInput | undefined
+      const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+      const result = yield* def.execute(
+        {
+          description: "inspect deeply",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+          model: "test/explicit",
+          variant: "max",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(seen?.model).toEqual({ providerID: ref.providerID, modelID: ModelID.make("explicit") })
+      expect(seen?.variant).toBe("max")
+      expect(result.metadata.variant).toBe("max")
+    }),
+  )
+
+  it.instance("execute accepts model hash variant shorthand", () =>
+    Effect.gen(function* () {
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      let seen: SessionPrompt.PromptInput | undefined
+      const promptOps = stubOps({ onPrompt: (input) => (seen = input) })
+
+      yield* def.execute(
+        {
+          description: "inspect deeply",
+          prompt: "look into the cache key path",
+          subagent_type: "general",
+          model: "test/explicit#max",
+        },
+        {
+          sessionID: chat.id,
+          messageID: assistant.id,
+          agent: "build",
+          abort: new AbortController().signal,
+          extra: { promptOps },
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        },
+      )
+
+      expect(seen?.model).toEqual({ providerID: ref.providerID, modelID: ModelID.make("explicit") })
+      expect(seen?.variant).toBe("max")
+    }),
+  )
+
+  it.instance("execute rejects unsupported variant before creating child", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+
+      const exit = yield* def
+        .execute(
+          {
+            description: "inspect deeply",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+            model: "test/explicit",
+            variant: "ultra",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: stubOps() },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isSuccess(exit)) return
+      expect(Cause.pretty(exit.cause)).toContain('Variant "ultra" is not available for test/explicit')
+      expect(Cause.pretty(exit.cause)).toContain("Available variants: low, high, max")
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
+    }),
+  )
+
   it.instance(
     "execute uses agent model over subagent_model",
     () =>
@@ -1497,6 +1603,39 @@ describe("tool.task", () => {
         .pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
+    }),
+  )
+
+  it.instance("execute validates the inherited parent model before creating a child", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const { chat, assistant } = yield* seed()
+      yield* sessions.updateMessage({ ...assistant, modelID: ModelID.make("missing") })
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+
+      const exit = yield* def
+        .execute(
+          {
+            description: "inspect bug",
+            prompt: "look into the cache key path",
+            subagent_type: "general",
+          },
+          {
+            sessionID: chat.id,
+            messageID: assistant.id,
+            agent: "build",
+            abort: new AbortController().signal,
+            extra: { promptOps: stubOps() },
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          },
+        )
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(yield* sessions.children(chat.id)).toHaveLength(0)
     }),
   )
 

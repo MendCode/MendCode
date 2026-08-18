@@ -15,6 +15,7 @@ The pitch is not “another chat box.” The pitch is a configurable coding term
 | Custom terminal UI              | Prompt frame, input marker, status row, home logo, split home, Agent View, chat presentation, themes, widgets, and plugin-driven surfaces.                                                             | [Customization](customization.md), [TUI plugins and widgets](tui-plugins-and-widgets.md) |
 | Package system                  | Bundle commands, agents, modes, skills, prompts, MCP config, TUI profile, widgets, model roles, permission defaults, memory defaults, and worktree policy.                                             | [Packages and team sharing](packages-and-team-sharing.md)                                |
 | Plan Mode                       | The agent presents a Markdown plan inside a TUI review modal; the user can approve, edit, comment, or reject before implementation starts. Approval switches into the configured implementation agent. | [Plan Mode](plan-mode.md)                                                                |
+| Mermaid ASCII canvases          | Mermaid fences render as centered terminal diagrams with fit/layout zoom, local horizontal and vertical scrolling, pan controls, and documented stress fixtures.                                 | [Mermaid ASCII rendering](mermaid-ascii-rendering.md)                                    |
 | Changes Review                  | `/changes` opens a responsive TUI diff workspace with file/block/line navigation, comments, reload, return-to-chat behavior, and agent-visible review context between model turns.                     | [Changes Review](changes-review.md)                                                      |
 | Loop Workflows                  | Durable, monitorable loop sessions with `/loop` creation, `/loops` supervision, Agent View roots, contract-aware report-only mode, and a per-project OS background service.                                     | [Loop Workflows](loop-workflows.md)                                                      |
 | Automation runtime              | Let another local agent create, continue, inspect, wait for, stream, and cancel real MendCode sessions through the same runtime, with versioned JSON output and shared model selection.                | [Automation runtime](automation-runtime.md)                                              |
@@ -271,7 +272,18 @@ MendCode-native and uses `@pierre/diffs` for patch structure.
 
 ## Loop Workflows
 
-Loop Workflows are durable agent workflows for objectives that should run across multiple inspected iterations.
+Loop Workflows are durable agent workflows for verified goals, recurring jobs,
+and exact-count runs. Completion and cadence are independent contracts:
+
+- `max-goal` uses concrete completion criteria and finishes as soon as the goal
+  is verified. A positive `maxTurns` is an optional safety cap, not a schedule.
+- `unbounded-monitor` repeatedly executes the objective on its manual, interval,
+  daily, self-paced, adaptive, or external-signal trigger. Omit `maxTurns` and
+  stop it explicitly when the recurring job is no longer needed.
+- `fixed` uses a positive `maxTurns` for exactly bounded iterations.
+
+A recurring loop's objective describes the work for each wakeup; it is not an
+early-completion condition after the first successful run.
 
 Core commands:
 
@@ -288,6 +300,13 @@ For a durable report-only/read-only workflow, `--execute --report-only` wakes th
 
 Supervised completion can combine allowlisted executable validations, evidence-only success checks, independent judgment, deterministic rubric coverage, authenticated local HTTP signal ingress, audited non-critical overrides, and bounded append-triggered artifact retention.
 
+The per-project service persists scheduler state, repairs overdue wakeups, and
+uses leases to prevent duplicate execution. `/loops` presents the persisted
+`nextWakeup` as a live countdown alongside scheduler health and bounded evidence.
+Permission or user-decision gates move the current run to durable `needs_input`;
+providing input resumes that run rather than completing, failing, or duplicating
+the workflow.
+
 See [Loop Workflows](loop-workflows.md) for lifecycle, monitor, Agent View behavior, and service details.
 
 Important release notes for this page:
@@ -297,6 +316,8 @@ Important release notes for this page:
 - run journals record created, activated, wake, started, completed, failed, paused, resumed, and stopped events
 - report-only/read-only workflow contracts suppress mutation and shell/subagent tools during execution
 - service mode is per project and requests report-only execution by default, while the durable workflow contract remains authoritative
+- scheduled wakeups survive closing the TUI when the project service is running; persisted scheduler state remains the source of truth
+- `needs_input` is a durable wait on the existing run, not a terminal state or a reason to recreate the loop
 
 ## Memory, Memory Page, And Dream
 

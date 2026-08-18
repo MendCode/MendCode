@@ -85,7 +85,7 @@ describe("loop service plans", () => {
     }
   })
 
-  test("builds a project-scoped report-only daemon by default", () => {
+  test("builds a persistent project-scoped report-only daemon by default", () => {
     const plan = loopServicePlan({
       projectRoot: "/tmp/acme repo",
       intervalMs: 5000,
@@ -113,7 +113,6 @@ describe("loop service plans", () => {
       "3",
       "--execute",
       "--report-only",
-      "--once",
       "--quiet",
     ])
   })
@@ -137,6 +136,7 @@ describe("loop service plans", () => {
 
     expect(DEFAULT_LOOP_SERVICE_LIMIT).toBeGreaterThan(1)
     expect(plan.limit).toBe(DEFAULT_LOOP_SERVICE_LIMIT)
+    expect(plan.executable).toBe(process.env.MENDCODE_PUBLIC_BIN || "mend")
     expect(plan.programArguments).toContain(String(DEFAULT_LOOP_SERVICE_LIMIT))
   })
 
@@ -219,7 +219,7 @@ describe("loop service plans", () => {
     expect(loopServiceWindowsCommand(plan)).toContain("mendcode.exe loops daemon")
     expect(loopServiceWindowsCommand(plan)).toContain(`MENDCODE_SHELL_CWD=${plan.projectRoot}`)
     expect(loopServiceWindowsCommand(plan)).toContain("--execute --report-only")
-    expect(loopServiceWindowsCommand(plan)).toContain("--once")
+    expect(loopServiceWindowsCommand(plan)).not.toContain("--once")
     expect(loopServiceWindowsCommand(plan)).toContain("--quiet")
   })
 
@@ -238,6 +238,10 @@ describe("loop service plans", () => {
     const plan = loopServicePlan(args)
     await mkdir(path.dirname(plan.definitionPath), { recursive: true })
     await Bun.write(plan.definitionPath, loopServiceDefinition(plan))
+    await Promise.all([
+      writeLoopServiceHealth(plan, { lastWakeAttempt: 121, degraded: false }),
+      writeLoopServiceHealth(plan, { lastWakeAttempt: 122, degraded: false }),
+    ])
     await writeLoopServiceHealth(plan, {
       lastWakeAttempt: 123,
       lastError: "scheduler failure ".repeat(500),

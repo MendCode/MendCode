@@ -1,6 +1,8 @@
 import { afterEach, describe, expect } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Fiber } from "effect"
 import { Flag } from "@mendcode/core/flag/flag"
+import { Permission } from "../../src/permission"
+import { PermissionID } from "../../src/permission/schema"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Instance } from "../../src/project/instance"
 import { Server } from "../../src/server/server"
@@ -11,7 +13,7 @@ import { InstancePaths } from "../../src/server/routes/instance/httpapi/groups/i
 import { McpPaths } from "../../src/server/routes/instance/httpapi/groups/mcp"
 import { PtyPaths } from "../../src/server/routes/instance/httpapi/groups/pty"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
-import { MessageID, PartID } from "../../src/session/schema"
+import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Session } from "@/session/session"
 import * as Log from "@mendcode/core/util/log"
 import { resetDatabase } from "../fixture/db"
@@ -249,6 +251,43 @@ describe("HttpApi JSON parity", () => {
           { concurrency: 1 },
         )
       }),
+    ),
+  )
+
+  it.live(
+    "serializes persisted pending permission requests",
+    withTmp({ git: true }, (tmp) =>
+      Effect.gen(function* () {
+        const permission = yield* Permission.Service
+        const requestID = PermissionID.make("per_httpapi_pending")
+        const fiber = yield* permission
+          .ask({
+            id: requestID,
+            sessionID: SessionID.make("ses_httpapi_pending"),
+            permission: "external_directory",
+            patterns: [`${tmp.path}/*`],
+            metadata: { filepath: tmp.path },
+            always: [`${tmp.path}/*`],
+            ruleset: [],
+          })
+          .pipe(Effect.forkScoped)
+
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if ((yield* permission.list()).length > 0) break
+          yield* Effect.sleep("10 millis")
+        }
+
+        const response = yield* Effect.promise(async () =>
+          app(true).request("/permission", { headers: { "x-opencode-directory": tmp.path } }),
+        )
+        expect(response.status).toBe(200)
+        expect(yield* Effect.promise(() => response.json())).toEqual([
+          expect.objectContaining({ id: requestID, sessionID: "ses_httpapi_pending" }),
+        ])
+
+        yield* permission.reply({ requestID, reply: "reject" })
+        yield* Fiber.await(fiber)
+      }).pipe(Effect.provide(Permission.defaultLayer)),
     ),
   )
 })

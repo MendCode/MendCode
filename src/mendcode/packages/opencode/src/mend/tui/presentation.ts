@@ -26,6 +26,7 @@ export type MendActivityPhase =
   | "planning"
   | "memory"
   | "compacting"
+  | "awaiting-input"
   | "retrying"
   | "blocked"
   | "done"
@@ -91,6 +92,7 @@ const activityMessages: MendActivityMessages = {
   planning: ["Planning..."],
   memory: ["Preparing memory..."],
   compacting: ["Compacting..."],
+  "awaiting-input": ["Waiting for answer..."],
   retrying: ["Retrying..."],
   blocked: ["Waiting..."],
   done: ["Done"],
@@ -347,6 +349,44 @@ export function rawReasoningDisplay(text: string, input?: { fallbackTitle?: stri
     title: body ? null : (input?.fallbackTitle ?? null),
     body,
   }
+}
+
+export function reasoningPreview(text: string, maxChars = 1200, maxLines = 8) {
+  const content = text.trim()
+  if (!content) return { text: "", truncated: false }
+  const lines = content.split(/\r?\n/)
+  const bounded = lines.slice(0, maxLines).join("\n")
+  if (bounded.length <= maxChars && lines.length <= maxLines) return { text: bounded, truncated: false }
+  const clipped = bounded.slice(0, Math.max(0, maxChars - 1)).trimEnd()
+  return { text: `${clipped}…`, truncated: true }
+}
+
+export function shouldShowToolContinuation(input: {
+  finish?: string
+  terminal: boolean
+  activeTool: boolean
+}) {
+  if (input.terminal || !input.activeTool) return false
+  return input.finish === "tool-calls" || input.finish === "unknown"
+}
+
+export function toolContinuationActivity(input: { status: string; tool?: string }) {
+  const name = (input.tool ?? "").toLowerCase()
+  if (name === "question" || name.includes("ask_user")) return "Waiting for answer..."
+  if (name.includes("upload")) return "Uploading..."
+  if (name.includes("download")) return "Downloading..."
+  if (name.includes("web") || name.includes("fetch") || name.includes("browser") || name.includes("chrome")) return "Browsing..."
+  if (name.includes("install") || name.includes("pnpm") || name.includes("npm") || name.includes("bun")) return "Installing..."
+  if (name.includes("test") || name.includes("typecheck") || name.includes("lint") || name.includes("build")) return "Testing..."
+  if (name.includes("patch") || name.includes("diff")) return "Patching..."
+  if (name.includes("edit") || name.includes("write") || name.includes("update")) return "Editing..."
+  if (name.includes("read") || name.includes("open") || name.includes("cat")) return "Reading..."
+  if (name.includes("search") || name.includes("grep") || name.includes("glob") || name.includes("list")) return "Searching..."
+  if (name.includes("plan") || name.includes("spec") || name.includes("review")) return "Planning..."
+  if (name === "task" || name.includes("subagent")) return "Waiting for subagents..."
+  if (name.includes("bash") || name.includes("shell") || name.includes("exec") || name.includes("command")) return "Running command..."
+  if (input.status === "pending") return "Generating..."
+  return "Thinking..."
 }
 
 export function unavailableReasoningLabel(input: { hasReadableContent: boolean; encrypted: boolean }) {

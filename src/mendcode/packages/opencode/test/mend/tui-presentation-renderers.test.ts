@@ -3,11 +3,12 @@ import path from "path"
 import { parseTimelineDiffRows, timelineDiffFileStatus, timelineDiffIsNonText } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
 import { diffStatsFromPatch, formatDiffStats, patchFileTitle } from "../../src/cli/cmd/tui/routes/session/renderers/diff-label"
 import { compactMemoryGraphRows, compactMemoryGraphSnapshot } from "../../src/cli/cmd/tui/util/memory-graph"
-import { compactionArcadeFrames, compactionStageStates, compactionSummaryPreview, rawReasoningDisplay, resolveTuiPresentation, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
+import { compactionArcadeFrames, compactionStageStates, compactionSummaryPreview, rawReasoningDisplay, reasoningPreview, resolveTuiPresentation, shouldShowToolContinuation, toolContinuationActivity, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
 import { groupTimelineParts, isTimelineStackStart, timelineCollapseLabel, timelineNodeKeys } from "../../src/mend/tui/timeline/group"
 import {
   normalizeToolEvent,
   shouldRenderCompactTool,
+  shouldRenderImageGenerationTool,
   toolClass,
   toolPresentationIcon,
   toolPresentationIconForProfile,
@@ -342,16 +343,21 @@ describe("mend tui presentation renderers", () => {
     expect(shouldRenderCompactTool("mendcode", "task")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "loop")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "memory_graph")).toBe(false)
+    expect(shouldRenderCompactTool("mendcode", "image_gen")).toBe(false)
     expect(shouldRenderCompactTool("mendcode", "todowrite")).toBe(true)
     expect(shouldRenderCompactTool("minimal", "edit")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "apply_patch")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "task")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "loop")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "memory_graph")).toBe(false)
+    expect(shouldRenderCompactTool("minimal", "image_gen")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "todowrite")).toBe(false)
     expect(shouldRenderCompactTool("minimal", "bash")).toBe(true)
     expect(shouldRenderCompactTool("raw", "read")).toBe(false)
     expect(shouldRenderCompactTool("raw", "edit")).toBe(false)
+    expect(shouldRenderCompactTool("raw", "image_gen")).toBe(false)
+    expect(shouldRenderImageGenerationTool("image_gen")).toBe(true)
+    expect(shouldRenderImageGenerationTool("image_generation")).toBe(false)
   })
 
   test("diff block titles keep action, path, and stats on one line", () => {
@@ -790,6 +796,36 @@ describe("mend tui presentation renderers", () => {
     expect(unavailableReasoningLabel({ hasReadableContent: true, encrypted: true })).toBeNull()
     expect(unavailableReasoningLabel({ hasReadableContent: false, encrypted: true })).toBe("reasoning unavailable")
     expect(unavailableReasoningLabel({ hasReadableContent: false, encrypted: false })).toBe("reasoning unavailable")
+  })
+
+  test("bounds long reasoning to a readable preview while preserving expansion state", () => {
+    const long = Array.from({ length: 12 }, (_, index) => `step ${index} ${"x".repeat(180)}`).join("\n")
+    const preview = reasoningPreview(long)
+
+    expect(preview.truncated).toBe(true)
+    expect(preview.text.length).toBeLessThanOrEqual(1200)
+    expect(preview.text).toContain("step 0")
+    expect(preview.text.endsWith("…")).toBe(true)
+    expect(reasoningPreview("short reasoning")).toEqual({ text: "short reasoning", truncated: false })
+  })
+
+  test("shows tool continuation only while a non-terminal tool is actually active", () => {
+    expect(shouldShowToolContinuation({ finish: "tool-calls", terminal: false, activeTool: true })).toBe(true)
+    expect(shouldShowToolContinuation({ finish: "tool-calls", terminal: false, activeTool: false })).toBe(false)
+    expect(shouldShowToolContinuation({ finish: "tool-calls", terminal: true, activeTool: true })).toBe(false)
+    expect(shouldShowToolContinuation({ finish: "stop", terminal: false, activeTool: true })).toBe(false)
+  })
+
+  test("uses the active phase instead of a generic continuation label", () => {
+    expect(toolContinuationActivity({ status: "running", tool: "bash" })).toBe("Running command...")
+    expect(toolContinuationActivity({ status: "running", tool: "task" })).toBe("Waiting for subagents...")
+    expect(toolContinuationActivity({ status: "running", tool: "question" })).toBe("Waiting for answer...")
+    expect(toolContinuationActivity({ status: "pending", tool: "read" })).toBe("Reading...")
+    expect(toolContinuationActivity({ status: "running", tool: "read" })).toBe("Reading...")
+    expect(toolContinuationActivity({ status: "running", tool: "grep" })).toBe("Searching...")
+    expect(toolContinuationActivity({ status: "running", tool: "pnpm install" })).toBe("Installing...")
+    expect(toolContinuationActivity({ status: "running", tool: "apply_patch" })).toBe("Patching...")
+    expect(toolContinuationActivity({ status: "running", tool: "unknown" })).toBe("Thinking...")
   })
 
   test("minimal and mendcode compact active streaming tool rows", () => {

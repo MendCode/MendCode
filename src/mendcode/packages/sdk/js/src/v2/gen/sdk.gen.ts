@@ -159,6 +159,8 @@ import type {
   SessionBackgroundWriterAcquireResponses,
   SessionBackgroundWriterReleaseErrors,
   SessionBackgroundWriterReleaseResponses,
+  SessionCancelTurnErrors,
+  SessionCancelTurnResponses,
   SessionChildrenErrors,
   SessionChildrenResponses,
   SessionCommandErrors,
@@ -256,6 +258,8 @@ import type {
   WorkflowListResponses,
   WorkflowPauseErrors,
   WorkflowPauseResponses,
+  WorkflowPermissionModeErrors,
+  WorkflowPermissionModeResponses,
   WorkflowPreviewErrors,
   WorkflowPreviewResponses,
   WorkflowResumeErrors,
@@ -4223,6 +4227,45 @@ export class Session2 extends HeyApiClient {
   }
 
   /**
+   * Cancel active turn
+   *
+   * Cancel only the active AI turn matching the requested user message.
+   */
+  public cancelTurn<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      targetMessageID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "targetMessageID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionCancelTurnResponses, SessionCancelTurnErrors, ThrowOnError>({
+      url: "/session/{sessionID}/cancel-turn",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
    * Send queued prompt now
    *
    * Interrupt the active turn and immediately start the next queued prompt, if one exists.
@@ -5576,15 +5619,33 @@ export class Workflow extends HeyApiClient {
       directory?: string
       workspace?: string
       plan: {
+        /**
+         * Workflow plan format version. Use 1.
+         */
         formatVersion: number
+        /**
+         * Concise workflow display name.
+         */
         name: string
+        /**
+         * What the workflow does and its boundaries.
+         */
         description: string
+        /**
+         * Durable outcome the complete workflow must achieve.
+         */
         objective: string
+        /**
+         * Ordered execution stages. Each phase must list all of its task IDs.
+         */
         phases: Array<{
           id: string
           ordinal: number
           name: string
           description?: string
+          /**
+           * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+           */
           barrier:
             | {
                 kind: "all"
@@ -5600,14 +5661,23 @@ export class Workflow extends HeyApiClient {
                 kind: "condition"
                 expression: string
               }
+          /**
+           * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+           */
           taskIDs: Array<string>
         }>
+        /**
+         * Complete DAG of workflow tasks. Every task must belong to one phase.
+         */
         tasks: Array<{
           id: string
           phaseID: string
           name: string
           kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
           prompt: string
+          /**
+           * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+           */
           dependsOn: Array<string>
           inputs?: Array<{
             taskID: string
@@ -5615,6 +5685,9 @@ export class Workflow extends HeyApiClient {
             projection?: string
             required?: boolean
           }>
+          /**
+           * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+           */
           output:
             | {
                 kind: "text"
@@ -5739,8 +5812,17 @@ export class Workflow extends HeyApiClient {
             }
           }
         }>
+        /**
+         * Existing synthesize task that produces the workflow's final non-none output.
+         */
         finalTaskID: string
+        /**
+         * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+         */
         completionCriteria: Array<string>
+        /**
+         * Approval gates required before execution. Use [] for immediate execution.
+         */
         requiredGates: Array<string>
         model?: {
           providerID: string
@@ -5814,15 +5896,33 @@ export class Workflow extends HeyApiClient {
       directory?: string
       workspace?: string
       plan: {
+        /**
+         * Workflow plan format version. Use 1.
+         */
         formatVersion: number
+        /**
+         * Concise workflow display name.
+         */
         name: string
+        /**
+         * What the workflow does and its boundaries.
+         */
         description: string
+        /**
+         * Durable outcome the complete workflow must achieve.
+         */
         objective: string
+        /**
+         * Ordered execution stages. Each phase must list all of its task IDs.
+         */
         phases: Array<{
           id: string
           ordinal: number
           name: string
           description?: string
+          /**
+           * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+           */
           barrier:
             | {
                 kind: "all"
@@ -5838,14 +5938,23 @@ export class Workflow extends HeyApiClient {
                 kind: "condition"
                 expression: string
               }
+          /**
+           * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+           */
           taskIDs: Array<string>
         }>
+        /**
+         * Complete DAG of workflow tasks. Every task must belong to one phase.
+         */
         tasks: Array<{
           id: string
           phaseID: string
           name: string
           kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
           prompt: string
+          /**
+           * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+           */
           dependsOn: Array<string>
           inputs?: Array<{
             taskID: string
@@ -5853,6 +5962,9 @@ export class Workflow extends HeyApiClient {
             projection?: string
             required?: boolean
           }>
+          /**
+           * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+           */
           output:
             | {
                 kind: "text"
@@ -5977,8 +6089,17 @@ export class Workflow extends HeyApiClient {
             }
           }
         }>
+        /**
+         * Existing synthesize task that produces the workflow's final non-none output.
+         */
         finalTaskID: string
+        /**
+         * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+         */
         completionCriteria: Array<string>
+        /**
+         * Approval gates required before execution. Use [] for immediate execution.
+         */
         requiredGates: Array<string>
         model?: {
           providerID: string
@@ -6064,15 +6185,33 @@ export class Workflow extends HeyApiClient {
       directory?: string
       workspace?: string
       plan?: {
+        /**
+         * Workflow plan format version. Use 1.
+         */
         formatVersion: number
+        /**
+         * Concise workflow display name.
+         */
         name: string
+        /**
+         * What the workflow does and its boundaries.
+         */
         description: string
+        /**
+         * Durable outcome the complete workflow must achieve.
+         */
         objective: string
+        /**
+         * Ordered execution stages. Each phase must list all of its task IDs.
+         */
         phases: Array<{
           id: string
           ordinal: number
           name: string
           description?: string
+          /**
+           * How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.
+           */
           barrier:
             | {
                 kind: "all"
@@ -6088,14 +6227,23 @@ export class Workflow extends HeyApiClient {
                 kind: "condition"
                 expression: string
               }
+          /**
+           * All task IDs assigned to this phase. Every listed task must point back through phaseID.
+           */
           taskIDs: Array<string>
         }>
+        /**
+         * Complete DAG of workflow tasks. Every task must belong to one phase.
+         */
         tasks: Array<{
           id: string
           phaseID: string
           name: string
           kind: "agent" | "synthesize" | "verify" | "validate" | "human" | "map"
           prompt: string
+          /**
+           * Producer task IDs that must finish first. Required for every task; use [] for entry tasks.
+           */
           dependsOn: Array<string>
           inputs?: Array<{
             taskID: string
@@ -6103,6 +6251,9 @@ export class Workflow extends HeyApiClient {
             projection?: string
             required?: boolean
           }>
+          /**
+           * Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.
+           */
           output:
             | {
                 kind: "text"
@@ -6227,8 +6378,17 @@ export class Workflow extends HeyApiClient {
             }
           }
         }>
+        /**
+         * Existing synthesize task that produces the workflow's final non-none output.
+         */
         finalTaskID: string
+        /**
+         * Concrete criteria that prove the workflow finished successfully. Must not be empty.
+         */
         completionCriteria: Array<string>
+        /**
+         * Approval gates required before execution. Use [] for immediate execution.
+         */
         requiredGates: Array<string>
         model?: {
           providerID: string
@@ -6566,6 +6726,48 @@ export class Workflow extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<WorkflowStopResponses, WorkflowStopErrors, ThrowOnError>({
       url: "/workflow/{runID}/stop",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  public permissionMode<ThrowOnError extends boolean = false>(
+    parameters: {
+      runID: string
+      directory?: string
+      workspace?: string
+      mode?: "report-only" | "normal" | "custom"
+      sessionMode?: "approval" | "smart" | "full_access" | "global_default"
+      reason?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "runID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "mode" },
+            { in: "body", key: "sessionMode" },
+            { in: "body", key: "reason" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      WorkflowPermissionModeResponses,
+      WorkflowPermissionModeErrors,
+      ThrowOnError
+    >({
+      url: "/workflow/{runID}/permission-mode",
       ...options,
       ...params,
       headers: {

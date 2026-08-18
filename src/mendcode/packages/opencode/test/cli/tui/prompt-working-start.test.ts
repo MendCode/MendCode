@@ -4,6 +4,8 @@ import {
   shouldBlurCompactionArcadeWhenOffscreen,
   shouldRestoreCompactionPromptFocus,
   shouldRenderCompactionArcade,
+  compactionPanelIsPacked,
+  compactionPanelHeading,
   compactionTranscriptToggleLabel,
 } from "@/cli/cmd/tui/component/compaction-panel"
 import {
@@ -13,29 +15,39 @@ import {
   fetchLoopWorkflowsFromServer,
   isRetryablePromptDelivery,
   promptDeliveryErrorMessage,
+  promptDeliveryHasCompletedAssistant,
   promptDeliveryIsQueued,
   promptDeliveryRetryAction,
   promptDeliveryRetryDelay,
+  promptRecoveryReady,
   shouldRetryConnectionForPrompt,
+  shouldRecoverAcceptedPromptDeliveries,
+  acceptedPromptRecoveryDecision,
   promptDraftHistoryAction,
   mergeOptimisticUserParts,
   optimisticUserMessage,
   supplementalSlashPromptParts,
   optimisticUserParts,
   promptHistoryMatchesCurrent,
+  promptWorkingIndicatorVisible,
   latestPendingAssistantID,
   resolveWorkingStartedAt,
+  sessionActivityMessages,
   shouldAcceptPromptInterruptFocus,
   shouldAttemptPromptHistoryNavigation,
   shouldClearWorkingStartedAt,
+  shouldKeepWorkingStatus,
   shouldEnableSessionInterrupt,
   shouldHandlePromptCursorArrow,
   shouldInterruptImmediately,
+  clipboardPasteAction,
   shouldPreferMessagePromptHistory,
   storedAssistantDeliveryState,
+  storedPromptDeliveryStateFromMessages,
   shouldSnapPromptCursorToEnd,
   shouldUseStoredPromptHistoryFallback,
 } from "@/cli/cmd/tui/component/prompt"
+import { terminalAssistantSettlesActivity } from "@/cli/cmd/tui/util/session-working"
 import {
   latestFullSessionHistoryStartID,
   sessionFollowSyncIsStale,
@@ -43,13 +55,18 @@ import {
   sessionUserMovedViewport,
   sessionHasLocalQueuedTurn,
   sessionPinnedUserMessageID,
+  sessionSubmitScrollSettlement,
+  sessionTerminalReceiptShouldFollow,
+  sessionStickyUserEligible,
+  sessionQueuedPromptDeliveryIDs,
   sessionQueuedUserMessageIDs,
   sessionTranscriptRenderKey,
   sessionUserMessageQueued,
   sessionUserPromptHistory,
   shouldPinSessionStickyUserHeader,
+  shouldClearSessionPagingBoundarySuppression,
   shouldDeferSessionFollowSync,
-  shouldHoldSessionSubmitScroll,
+  sessionBottomFollowMode,
   shouldReleaseSessionPagingBoundarySuppression,
   shouldRestoreSessionScrollAnchor,
   shouldUseSimpleSessionHistory,
@@ -113,6 +130,70 @@ describe("shared-server loop status", () => {
   })
 })
 
+describe("prompt input event priority", () => {
+  test("classifies clipboard images without awaiting the key event", () => {
+    expect(clipboardPasteAction({ mime: "image/png", data: "base64" })).toBe("image")
+    expect(clipboardPasteAction({ mime: "text/plain", data: "prompt" })).toBe("text")
+    expect(clipboardPasteAction(undefined)).toBe("none")
+  })
+
+  test("keeps Esc immediate while a clipboard probe is pending", () => {
+    expect(shouldInterruptImmediately({ statusType: "busy", hasActiveWorkingAssistant: true })).toBe(true)
+    expect(shouldEnableSessionInterrupt({ statusType: "busy", autocompleteVisible: false, promptFocused: false })).toBe(true)
+  })
+})
+
+describe("terminal activity reconciliation", () => {
+  test("does not render Generating for a final assistant with stale busy/recovery state", () => {
+    const settled = terminalAssistantSettlesActivity({
+      statusType: "retry",
+      latestMessage: { role: "assistant", finish: "stop", time: { created: 100, completed: 200 } },
+      hasActiveTool: false,
+    })
+    expect(
+      promptWorkingIndicatorVisible({
+        hasSession: true,
+        submitPreflightActive: false,
+        configuredVisible: true,
+        working: !settled,
+      }),
+    ).toBe(false)
+  })
+
+  test("keeps Generating when a real tool is still pending after a terminal-looking event", () => {
+    const settled = terminalAssistantSettlesActivity({
+      statusType: "busy",
+      latestMessage: { role: "assistant", finish: "stop", time: { created: 100, completed: 200 } },
+      hasActiveTool: true,
+    })
+    expect(settled).toBe(false)
+  })
+
+  test("does not let a stale submit preflight resurrect Generating after terminal recovery", () => {
+    expect(
+      shouldKeepWorkingStatus({
+        statusType: "busy",
+        submitPreflightActive: true,
+        terminalAssistant: true,
+        hasActiveWorkingAssistant: false,
+        hasPendingPromptDelivery: false,
+      }),
+    ).toBe(false)
+  })
+
+  test("keeps the indicator for a real queued prompt despite the previous assistant finishing", () => {
+    expect(
+      shouldKeepWorkingStatus({
+        statusType: "busy",
+        submitPreflightActive: true,
+        terminalAssistant: true,
+        hasActiveWorkingAssistant: false,
+        hasPendingPromptDelivery: true,
+      }),
+    ).toBe(true)
+  })
+})
+
 describe("prompt draft history", () => {
   test("uses the terminal-safe undo binding only when the editor has an undo point", () => {
     expect(promptDraftHistoryAction({ undo: true, redo: false, canUndo: true, canRedo: false })).toBe("undo")
@@ -153,14 +234,22 @@ describe("prompt delivery recovery", () => {
     expect(shouldRetryConnectionForPrompt("connected")).toBe(false)
   })
 
+  test("waits for a post-reconnect snapshot before retrying pending prompts", () => {
+    expect(promptRecoveryReady({ connectionStatus: "reconnecting", reconciledAt: 200, recoveredAt: 100 })).toBe(false)
+    expect(promptRecoveryReady({ connectionStatus: "connected", recoveredAt: 100 })).toBe(false)
+    expect(promptRecoveryReady({ connectionStatus: "connected", reconciledAt: 99, recoveredAt: 100 })).toBe(false)
+    expect(promptRecoveryReady({ connectionStatus: "connected", reconciledAt: 100, recoveredAt: 100 })).toBe(true)
+  })
+
   test("extracts structured server error messages", () => {
     expect(promptDeliveryErrorMessage({ data: { message: "invalid prompt" } })).toBe("invalid prompt")
     expect(promptDeliveryErrorMessage(undefined)).toBe("The server rejected this prompt.")
   })
 
-  test("does not render an accepted delivery as queued", () => {
+  test("keeps an accepted delivery queued only when it was submitted behind an active turn", () => {
     expect(promptDeliveryIsQueued("pending")).toBe(true)
     expect(promptDeliveryIsQueued("accepted")).toBe(false)
+    expect(promptDeliveryIsQueued("accepted", true)).toBe(true)
   })
 
   test("settles completed deliveries before a forced reconnect recovery", () => {
@@ -175,21 +264,155 @@ describe("prompt delivery recovery", () => {
     )
   })
 
-  test("retries accepted deliveries whose assistant was aborted or failed transiently", () => {
-    expect(storedAssistantDeliveryState({ time: {} })).toBe("accepted")
+  test("recovers an accepted queued prompt when the active turn becomes idle", () => {
+    expect(shouldRecoverAcceptedPromptDeliveries({ statusType: "busy", deliveries: [{ state: "accepted" }] })).toBe(
+      false,
+    )
+    expect(shouldRecoverAcceptedPromptDeliveries({ statusType: "idle", deliveries: [{ state: "pending" }] })).toBe(
+      false,
+    )
+    expect(shouldRecoverAcceptedPromptDeliveries({ statusType: "idle", deliveries: [{ state: "accepted" }] })).toBe(
+      false,
+    )
+    expect(
+      shouldRecoverAcceptedPromptDeliveries({
+        statusType: "idle",
+        deliveries: [{ state: "accepted", queuedBehindActiveTurn: true }],
+      }),
+    ).toBe(true)
+    expect(
+      shouldRecoverAcceptedPromptDeliveries({
+        statusType: "busy",
+        deliveries: [{ state: "accepted", queuedBehindActiveTurn: true }],
+      }),
+    ).toBe(false)
+    expect(
+      shouldRecoverAcceptedPromptDeliveries({
+        statusType: "busy",
+        statusSupersededByTerminalAssistant: true,
+        deliveries: [{ state: "accepted", queuedBehindActiveTurn: true }],
+      }),
+    ).toBe(true)
+  })
+
+  test("force-recovers an accepted queued prompt once instead of looping on delivery revisions", () => {
+    const first = acceptedPromptRecoveryDecision({
+      eligible: true,
+      deliveryKeys: ["ses_001:msg_queued"],
+    })
+    expect(first).toEqual({ key: "ses_001:msg_queued", retry: true })
+
+    const acceptedRevision = acceptedPromptRecoveryDecision({
+      previousKey: first.key,
+      eligible: true,
+      deliveryKeys: ["ses_001:msg_queued"],
+    })
+    expect(acceptedRevision).toEqual({ key: "ses_001:msg_queued", retry: false })
+
+    const busySnapshot = acceptedPromptRecoveryDecision({
+      previousKey: first.key,
+      eligible: false,
+      deliveryKeys: ["ses_001:msg_queued"],
+    })
+    expect(busySnapshot).toEqual({ key: "ses_001:msg_queued", retry: false })
+    expect(
+      acceptedPromptRecoveryDecision({
+        previousKey: busySnapshot.key,
+        eligible: true,
+        deliveryKeys: ["ses_001:msg_queued"],
+      }),
+    ).toEqual({ key: "ses_001:msg_queued", retry: false })
+
+    expect(
+      acceptedPromptRecoveryDecision({
+        previousKey: first.key,
+        eligible: false,
+        deliveryKeys: [],
+      }),
+    ).toEqual({ key: undefined, retry: false })
+  })
+
+  test("settles delivery as soon as any assistant child proves backend consumption", () => {
+    expect(storedAssistantDeliveryState({ time: {} })).toBe("completed")
+    expect(storedAssistantDeliveryState({ time: {}, finish: "stop" })).toBe("completed")
+    expect(storedAssistantDeliveryState({ time: { completed: 10 } })).toBe("completed")
+    expect(storedAssistantDeliveryState({ time: { completed: 10 }, finish: "stop" })).toBe("completed")
+    expect(storedAssistantDeliveryState({ time: { completed: 10 }, finish: "tool-calls" })).toBe("completed")
     expect(
       storedAssistantDeliveryState({
         time: { completed: 10 },
         error: { name: "MessageAbortedError", data: { message: "Aborted" } },
       }),
-    ).toBe("accepted")
+    ).toBe("completed")
     expect(
       storedAssistantDeliveryState({
         time: { completed: 10 },
         error: { name: "APIError", data: { isRetryable: true } },
       }),
-    ).toBe("accepted")
-    expect(storedAssistantDeliveryState({ time: { completed: 10 } })).toBe("completed")
+    ).toBe("completed")
+    expect(
+      storedAssistantDeliveryState({
+        time: { completed: 10 },
+        error: { name: "APIError", data: { isRetryable: false } },
+      }),
+    ).toBe("completed")
+  })
+
+  test("settles delivery from the stable terminal assistant tail", () => {
+    const messages = sessionActivityMessages<{
+      id: string
+      role: string
+      parentID?: string
+      time: { created: number; completed?: number }
+      finish?: string
+    }>({
+      messages: [
+        { id: "msg_001", role: "user", time: { created: 1 } },
+        {
+          id: "msg_002",
+          role: "assistant",
+          parentID: "msg_001",
+          time: { created: 2 },
+        },
+      ],
+      latestAssistant: {
+        id: "msg_002",
+        role: "assistant",
+        parentID: "msg_001",
+        time: { created: 2 },
+        finish: "stop",
+      },
+    })
+
+    expect(promptDeliveryHasCompletedAssistant(messages, "msg_001")).toBe(true)
+  })
+
+  test("settles a multi-step delivery from its final assistant instead of retrying the first tool-call step", () => {
+    const messages = [
+      { role: "user", time: { created: 1 } },
+      {
+        role: "assistant",
+        parentID: "msg_user",
+        time: { created: 2, completed: 3 },
+        finish: "tool-calls",
+      },
+      {
+        role: "assistant",
+        parentID: "msg_user",
+        time: { created: 4, completed: 5 },
+        finish: "tool-calls",
+      },
+      {
+        role: "assistant",
+        parentID: "msg_user",
+        time: { created: 6, completed: 7 },
+        finish: "stop",
+      },
+    ]
+
+    const state = storedPromptDeliveryStateFromMessages(messages, "msg_user")
+    expect(state).toBe("completed")
+    expect(promptDeliveryRetryAction({ state, forceAccepted: true, replaceExisting: false })).toBe("settle")
   })
 })
 
@@ -298,6 +521,46 @@ describe("queued user turn", () => {
         { id: "msg_002", role: "assistant", time: { created: 2 }, finish: "tool-calls" },
       ]),
     ).toBe("msg_002")
+    const completedToolStep = [
+      { id: "msg_001", role: "user", time: { created: 1 } },
+      { id: "msg_002", role: "assistant", time: { created: 2, completed: 3 }, finish: "tool-calls" },
+    ]
+    expect(
+      latestPendingAssistantID(completedToolStep, {
+        statusType: "idle",
+        now: 100_000,
+      }),
+    ).toBeUndefined()
+    expect(
+      latestPendingAssistantID(completedToolStep, {
+        statusType: "idle",
+        now: 100_000,
+        hasActiveTool: true,
+      }),
+    ).toBeUndefined()
+  })
+
+  test("uses the stable terminal tail when the loaded history window ends on an old tool continuation", () => {
+    const messages = sessionActivityMessages({
+      messages: [
+        { id: "msg_001", role: "user", time: { created: 1 } },
+        { id: "msg_002", role: "assistant", time: { created: 2, completed: 3 }, finish: "tool-calls" },
+      ],
+      latestAssistant: {
+        id: "msg_004",
+        role: "assistant",
+        time: { created: 4, completed: 5 },
+        finish: "stop",
+      },
+    })
+
+    expect(messages.map((message) => message.id)).toEqual(["msg_001", "msg_002", "msg_004"])
+    expect(
+      latestPendingAssistantID(messages, {
+        statusType: "idle",
+        now: 100_000,
+      }),
+    ).toBeUndefined()
   })
 
   test("does not keep the activity indicator alive after an assistant error", () => {
@@ -319,6 +582,18 @@ describe("queued user turn", () => {
     expect(latestPendingAssistantID(messages, { now: 100_000 })).toBeUndefined()
     expect(latestPendingAssistantID(messages, { statusType: "busy", now: 100_000 })).toBeUndefined()
     expect(latestPendingAssistantID(messages, { statusType: "busy", now: 100_000, statusUntil: 101_000 })).toBe("msg_001")
+    expect(latestPendingAssistantID(messages, { statusType: "idle", now: 100_000 })).toBeUndefined()
+  })
+
+  test("keeps a long-running tool visible after the assistant-age fallback expires", () => {
+    const messages = [{ id: "msg_001", role: "assistant", time: { created: 1_000 } }]
+    expect(
+      latestPendingAssistantID(messages, {
+        statusType: "busy",
+        now: 100_000,
+        hasActiveTool: true,
+      }),
+    ).toBe("msg_001")
   })
 
   test("stays visibly queued across later assistant tool iterations", () => {
@@ -383,6 +658,26 @@ describe("queued user turn", () => {
       }),
     ).toEqual(["msg_003"])
     expect(sessionQueuedUserMessageIDs({ messages, pendingAssistantID: "msg_002" })).toEqual([])
+  })
+
+  test("keeps an accepted prompt queued across compaction until its own assistant starts", () => {
+    const messages = [
+      { id: "user-active", role: "user" },
+      { id: "compaction", role: "user" },
+      { id: "user-queued", role: "user" },
+      { id: "summary", role: "assistant", parentID: "compaction" },
+      { id: "resume", role: "user" },
+      { id: "assistant-resumed", role: "assistant", parentID: "resume" },
+    ]
+    const deliveryIDs = new Set(["user-queued"])
+
+    expect(sessionQueuedPromptDeliveryIDs({ deliveryIDs, messages })).toEqual(["user-queued"])
+    expect(
+      sessionQueuedPromptDeliveryIDs({
+        deliveryIDs,
+        messages: [...messages, { id: "assistant-queued", role: "assistant", parentID: "user-queued" }],
+      }),
+    ).toEqual([])
   })
 
   test("does not queue a new prompt behind a completed final assistant", () => {
@@ -477,6 +772,67 @@ describe("queued user turn", () => {
     ).toBe(user.id)
   })
 
+  test("follows the final receipt after an anchored turn settles without overriding manual detachment", () => {
+    expect(
+      sessionSubmitScrollSettlement({
+        intentMessageID: "msg_user",
+        assistant: {
+          parentID: "msg_user",
+          finish: "tool-calls",
+          time: { completed: 2 },
+        },
+      }),
+    ).toBe("hold")
+
+    expect(
+      sessionSubmitScrollSettlement({
+        intentMessageID: "msg_user",
+        assistant: {
+          parentID: "msg_user",
+          finish: "stop",
+          time: { completed: 3 },
+        },
+      }),
+    ).toBe("follow")
+
+    expect(
+      sessionSubmitScrollSettlement({
+        assistant: {
+          parentID: "msg_user",
+          finish: "stop",
+          time: { completed: 3 },
+        },
+      }),
+    ).toBe("none")
+
+    expect(
+      sessionTerminalReceiptShouldFollow({
+        following: true,
+        assistant: { finish: "stop", time: { completed: 3 } },
+      }),
+    ).toBe(true)
+    expect(
+      sessionTerminalReceiptShouldFollow({
+        following: true,
+        hasActiveTool: true,
+        assistant: { finish: "stop", time: { completed: 3 } },
+      }),
+    ).toBe(false)
+    expect(
+      sessionTerminalReceiptShouldFollow({
+        following: false,
+        assistant: { finish: "stop", time: { completed: 3 } },
+      }),
+    ).toBe(false)
+  })
+
+  test("does not treat a synthetic compaction user as a sticky transcript header", () => {
+    expect(sessionStickyUserEligible({ role: "user", parts: [{ type: "compaction" }, { type: "text" }] })).toBe(false)
+    expect(sessionStickyUserEligible({ role: "user", parts: [{ type: "text" }] })).toBe(true)
+    expect(sessionStickyUserEligible({ role: "user" })).toBe(false)
+    expect(sessionStickyUserEligible({ role: "assistant", parts: [{ type: "text" }] })).toBe(false)
+  })
+
   test("pins the active user only after it crosses the viewport top", () => {
     expect(
       shouldPinSessionStickyUserHeader({
@@ -521,43 +877,69 @@ describe("resolveWorkingStartedAt", () => {
     expect(resolveWorkingStartedAt({ fallback: 2_000 })).toBe(2_000)
   })
 
+  test("shows immediate working feedback while a new session is still being created", () => {
+    expect(
+      promptWorkingIndicatorVisible({
+        hasSession: false,
+        submitPreflightActive: true,
+        configuredVisible: true,
+        working: true,
+      }),
+    ).toBe(true)
+    expect(
+      promptWorkingIndicatorVisible({
+        hasSession: false,
+        submitPreflightActive: false,
+        configuredVisible: true,
+        working: true,
+      }),
+    ).toBe(false)
+  })
+
   test("does not clear the working start during transient idle snapshots", () => {
     expect(shouldClearWorkingStartedAt({ statusType: "idle" })).toBe(true)
     expect(shouldClearWorkingStartedAt({ statusType: "idle", hasActiveWorkingAssistant: true })).toBe(false)
     expect(shouldClearWorkingStartedAt({ statusType: "idle", permissionPending: true })).toBe(false)
     expect(shouldClearWorkingStartedAt({ statusType: "busy" })).toBe(false)
     expect(shouldClearWorkingStartedAt({ statusType: "busy", interrupted: true })).toBe(true)
+    expect(shouldClearWorkingStartedAt({ statusType: "busy", terminalAssistant: true })).toBe(true)
+    expect(
+      shouldClearWorkingStartedAt({ statusType: "busy", terminalAssistant: true, permissionPending: true }),
+    ).toBe(false)
   })
 
   test("keeps interrupt enabled for orphaned unfinished assistant messages", () => {
     expect(shouldEnableSessionInterrupt({ statusType: "busy" })).toBe(true)
-    expect(shouldEnableSessionInterrupt({ statusType: "busy", autocompleteVisible: true })).toBe(false)
+    expect(shouldEnableSessionInterrupt({ statusType: "busy", autocompleteVisible: true })).toBe(true)
+    expect(shouldEnableSessionInterrupt({ statusType: "busy", compactionActive: true })).toBe(true)
+    expect(shouldEnableSessionInterrupt({ statusType: "busy", interruptRequested: true })).toBe(false)
     expect(shouldEnableSessionInterrupt({ statusType: "retry" })).toBe(true)
     expect(shouldEnableSessionInterrupt({ statusType: "idle" })).toBe(false)
     expect(shouldEnableSessionInterrupt({ statusType: "idle", hasActiveWorkingAssistant: true })).toBe(true)
     expect(shouldEnableSessionInterrupt({ statusType: "idle", hasPendingPromptDelivery: true })).toBe(true)
-    expect(shouldEnableSessionInterrupt({ statusType: "busy", promptFocused: false })).toBe(false)
+    expect(shouldEnableSessionInterrupt({ statusType: "busy", promptFocused: false })).toBe(true)
     expect(shouldEnableSessionInterrupt({ statusType: "busy", promptFocused: true })).toBe(true)
-    expect(shouldEnableSessionInterrupt({ statusType: "busy", autocompleteVisible: true })).toBe(false)
+    expect(shouldEnableSessionInterrupt({ statusType: "busy", autocompleteVisible: true })).toBe(true)
     expect(
       shouldEnableSessionInterrupt({
         statusType: "idle",
         hasActiveWorkingAssistant: true,
         autocompleteVisible: true,
       }),
-    ).toBe(false)
+    ).toBe(true)
   })
 
-  test("interrupts immediately only while the session is actively busy without a local draft", () => {
+  test("interrupts an active turn immediately without discarding the local draft", () => {
     expect(shouldInterruptImmediately({ statusType: "busy" })).toBe(true)
+    expect(shouldInterruptImmediately({ statusType: "busy", compactionActive: true })).toBe(true)
     expect(shouldInterruptImmediately({ statusType: "retry" })).toBe(true)
-    expect(shouldInterruptImmediately({ statusType: "busy", hasDraft: true })).toBe(false)
-    expect(shouldInterruptImmediately({ statusType: "retry", hasDraft: true })).toBe(false)
+    expect(shouldInterruptImmediately({ statusType: "busy", hasDraft: true })).toBe(true)
+    expect(shouldInterruptImmediately({ statusType: "retry", hasDraft: true })).toBe(true)
     expect(shouldInterruptImmediately({ statusType: "idle" })).toBe(false)
     expect(shouldInterruptImmediately({ statusType: "idle", hasActiveWorkingAssistant: true })).toBe(true)
     expect(shouldInterruptImmediately({ statusType: "idle", hasPendingPromptDelivery: true })).toBe(true)
     expect(shouldInterruptImmediately({ statusType: "idle", hasActiveWorkingAssistant: true, hasDraft: true })).toBe(
-      false,
+      true,
     )
   })
 
@@ -656,7 +1038,23 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldRenderCompactionArcade({ style: "cockpit", arcade: "snake" })).toBe(false)
     expect(shouldRenderCompactionArcade({ style: "minimal", arcade: "snake" })).toBe(false)
     expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake" })).toBe(true)
+    expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake", completed: true })).toBe(false)
+    expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake", terminal: true })).toBe(false)
     expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "off" })).toBe(false)
+  })
+
+  test("stops the compaction arcade as soon as a summary body is persisted", () => {
+    const packed = compactionPanelIsPacked({ completed: false, hasSummaryBody: true })
+    expect(packed).toBe(true)
+    expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake", completed: packed })).toBe(false)
+    expect(compactionPanelIsPacked({ completed: false, hasSummaryBody: false })).toBe(false)
+    expect(compactionPanelIsPacked({ terminal: true })).toBe(true)
+  })
+
+  test("keeps Arcade completion distinguishable after the live game is packed away", () => {
+    expect(compactionPanelHeading({ style: "arcade", packed: true })).toBe("Arcade complete · Context packed")
+    expect(compactionPanelHeading({ style: "arcade", packed: false })).toBe("Packing context")
+    expect(compactionPanelHeading({ style: "cockpit", packed: true })).toBe("Context packed")
   })
 
   test("keeps plain left and right arrows available for prompt cursor movement", () => {
@@ -1020,6 +1418,18 @@ describe("resolveWorkingStartedAt", () => {
     expect(loopStateCounts([{ state: "sleeping" }, { state: "blocked" }, { state: "blocked" }])).toEqual({ scheduled: 1, blocked: 2 })
   })
 
+  test("updates loop wakeup countdowns from the caller clock", () => {
+    const nextWakeup = Date.UTC(2026, 7, 6, 16)
+    const workflow = {
+      state: "sleeping",
+      nextWakeup,
+      spec: { trigger: { mode: "interval", intervalMs: 60_000 } },
+    } as Parameters<typeof loopWakeupLabel>[0]
+
+    expect(loopWakeupLabel(workflow, nextWakeup - 54_000)).toStartWith("54s (")
+    expect(loopWakeupLabel(workflow, nextWakeup - 53_000)).toStartWith("53s (")
+  })
+
   test("holds a deep-linked loop selection until its server page resolves", () => {
     expect(shouldKeepRouteLoopSelection({ requestedID: "loop_51", loading: true, items: [{ id: "loop_1" }] })).toBe(
       true,
@@ -1259,6 +1669,42 @@ describe("resolveWorkingStartedAt", () => {
         lastViewportHeight: 48,
       }),
     ).toBe(false)
+    expect(
+      sessionUserMovedViewport({
+        scrollTop: 900,
+        lastScrollTop: 840,
+        scrollHeight: 1_260,
+        lastScrollHeight: 1_200,
+        viewportHeight: 48,
+        lastViewportHeight: 48,
+        followOutput: true,
+      }),
+    ).toBe(false)
+  })
+
+  test("keeps a following viewport attached when streamed content changes layout", () => {
+    expect(
+      sessionUserMovedViewport({
+        scrollTop: 910,
+        lastScrollTop: 840,
+        scrollHeight: 1_260,
+        lastScrollHeight: 1_200,
+        viewportHeight: 48,
+        lastViewportHeight: 48,
+        followOutput: true,
+      }),
+    ).toBe(false)
+    expect(
+      sessionUserMovedViewport({
+        scrollTop: 780,
+        lastScrollTop: 840,
+        scrollHeight: 1_200,
+        lastScrollHeight: 1_200,
+        viewportHeight: 48,
+        lastViewportHeight: 48,
+        followOutput: true,
+      }),
+    ).toBe(true)
   })
 
   test("does not refetch the transcript for canonical incremental message events", () => {
@@ -1279,10 +1725,16 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldDeferSessionFollowSync({ hasMoreNewer: false, loadingOlder: false, loadingNewer: true })).toBe(true)
   })
 
-  test("holds follow-sync while the single submit scroll is pending", () => {
-    expect(shouldHoldSessionSubmitScroll({ sessionID: "ses_001", submitSessionID: "ses_001" })).toBe(true)
-    expect(shouldHoldSessionSubmitScroll({ sessionID: "ses_001", submitSessionID: "ses_002" })).toBe(false)
-    expect(shouldHoldSessionSubmitScroll({ sessionID: "ses_001" })).toBe(false)
+  test("does not detach an already-following bottom viewport during newer-page reconciliation", () => {
+    expect(
+      sessionBottomFollowMode({ alreadyFollowing: true, hasMoreNewer: true, loadingNewer: false }),
+    ).toBe("follow")
+    expect(
+      sessionBottomFollowMode({ alreadyFollowing: false, hasMoreNewer: true, loadingNewer: false }),
+    ).toBe("page")
+    expect(
+      sessionBottomFollowMode({ alreadyFollowing: true, hasMoreNewer: true, loadingNewer: false, suppressedBoundary: "bottom" }),
+    ).toBe("follow")
   })
 
   test("keeps paging boundary suppression through small scrollbar bounce near page seams", () => {
@@ -1352,6 +1804,47 @@ describe("resolveWorkingStartedAt", () => {
         ...shortPage,
         boundary: "top",
         scrollTop: 5,
+      }),
+    ).toBe(true)
+  })
+
+  test("clears paging suppression when the user continues through the seam or reaches the final page", () => {
+    expect(
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: "bottom",
+        hasMoreOlder: true,
+        hasMoreNewer: true,
+        direction: "down",
+      }),
+    ).toBe(true)
+    expect(
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: "bottom",
+        hasMoreOlder: true,
+        hasMoreNewer: true,
+        direction: "up",
+      }),
+    ).toBe(false)
+    expect(
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: "bottom",
+        hasMoreOlder: true,
+        hasMoreNewer: false,
+      }),
+    ).toBe(true)
+    expect(
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: "top",
+        hasMoreOlder: true,
+        hasMoreNewer: true,
+        direction: "up",
+      }),
+    ).toBe(true)
+    expect(
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: "top",
+        hasMoreOlder: false,
+        hasMoreNewer: true,
       }),
     ).toBe(true)
   })

@@ -139,9 +139,12 @@ export const WorkflowModelRoute = Schema.Struct({
 })
 export type WorkflowModelRoute = Types.DeepMutable<Schema.Schema.Type<typeof WorkflowModelRoute>>
 
-export const WorkflowWorkspaceMode = Schema.Literals(["read-only", "in-place", "per-loop-worktree", "per-run-worktree"]).pipe(
-  withStatics((schema) => ({ zod: zod(schema) })),
-)
+export const WorkflowWorkspaceMode = Schema.Literals([
+  "read-only",
+  "in-place",
+  "per-loop-worktree",
+  "per-run-worktree",
+]).pipe(withStatics((schema) => ({ zod: zod(schema) })))
 export type WorkflowWorkspaceMode = Schema.Schema.Type<typeof WorkflowWorkspaceMode>
 
 export const WorkflowWorkspacePolicy = Schema.Struct({
@@ -166,6 +169,11 @@ export const WorkflowPermissionMode = Schema.Literals(["report-only", "normal", 
 )
 export type WorkflowPermissionMode = Schema.Schema.Type<typeof WorkflowPermissionMode>
 
+export const WorkflowSessionPermissionMode = Schema.Literals(["approval", "smart", "full_access"]).pipe(
+  withStatics((schema) => ({ zod: zod(schema) })),
+)
+export type WorkflowSessionPermissionMode = Schema.Schema.Type<typeof WorkflowSessionPermissionMode>
+
 export const WorkflowPermissionPolicy = Schema.Struct({
   mode: WorkflowPermissionMode,
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
@@ -177,10 +185,42 @@ export const WorkflowPermissionPolicy = Schema.Struct({
 })
 export type WorkflowPermissionPolicy = Types.DeepMutable<Schema.Schema.Type<typeof WorkflowPermissionPolicy>>
 
-export const WorkflowFailureClass = Schema.Literals(["transient", "environment", "policy", "quality", "budget", "user_input", "terminal"]).pipe(
-  withStatics((schema) => ({ zod: zod(schema) })),
-)
+export const WorkflowFailureClass = Schema.Literals([
+  "transient",
+  "environment",
+  "policy",
+  "quality",
+  "budget",
+  "user_input",
+  "terminal",
+]).pipe(withStatics((schema) => ({ zod: zod(schema) })))
 export type WorkflowFailureClass = Schema.Schema.Type<typeof WorkflowFailureClass>
+
+const transientWorkflowErrorPatterns = [
+  /file\s+(?:is\s+)?locked/i,
+  /resource\s+busy/i,
+  /(?:eagain|ebusy|temporarily unavailable)/i,
+  /connection\s+(?:lost|reset|closed)/i,
+  /network\s+(?:error|unavailable)/i,
+  /(?:network\s+)?request\s+failed/i,
+  /(?:timed?\s*out|timeout)/i,
+  /(?:fetch failed|socket hang up)/i,
+  /(?:runtime\s+)?lease\s+expired/i,
+  /worker\s+process\s+(?:exited|restarted)/i,
+  /\b(?:502|503|504)\b/,
+]
+
+export function isTransientWorkflowError(error: unknown) {
+  const text =
+    error instanceof Error
+      ? error.message
+      : typeof error === "string"
+        ? error
+        : typeof error === "object" && error !== null && "message" in error && typeof error.message === "string"
+          ? error.message
+          : String(error)
+  return transientWorkflowErrorPatterns.some((pattern) => pattern.test(text))
+}
 
 export const WorkflowRetryPolicy = Schema.Struct({
   maxAttempts: Schema.optional(PositiveInt),
@@ -200,8 +240,12 @@ export const WorkflowTaskBudget = Schema.Struct({
 export type WorkflowTaskBudget = Types.DeepMutable<Schema.Schema.Type<typeof WorkflowTaskBudget>>
 
 export const WorkflowBudget = Schema.Struct({
-  maxConcurrency: Schema.optional(PositiveInt),
-  maxFanOut: Schema.optional(PositiveInt),
+  maxConcurrency: Schema.optional(PositiveInt).annotate({
+    description: "Maximum concurrently executing tasks. Omit to use the safe inferred default.",
+  }),
+  maxFanOut: Schema.optional(PositiveInt).annotate({
+    description: "Upper bound for all declared tasks plus bounded map expansion. Omit to infer it from the plan.",
+  }),
   maxTurns: Schema.optional(NonNegativeInt),
   maxRuntimeMs: Schema.optional(NonNegativeInt),
   maxTokens: Schema.optional(NonNegativeInt),
@@ -258,9 +302,16 @@ export const WorkflowTask = Schema.Struct({
   name: Schema.String,
   kind: WorkflowTaskKind,
   prompt: Schema.String,
-  dependsOn: Schema.Array(WorkflowTaskID),
-  inputs: Schema.optional(Schema.Array(WorkflowArtifactSelector)),
-  output: WorkflowOutputContract,
+  dependsOn: Schema.Array(WorkflowTaskID).annotate({
+    description: "Producer task IDs that must finish first. Required for every task; use [] for entry tasks.",
+  }),
+  inputs: Schema.optional(Schema.Array(WorkflowArtifactSelector)).annotate({
+    description:
+      "Artifacts consumed from prior tasks. Each producer must also appear in the transitive dependsOn chain.",
+  }),
+  output: WorkflowOutputContract.annotate({
+    description: "Declared task output. Synthesize tasks, including finalTaskID, cannot use kind none.",
+  }),
   model: Schema.optional(WorkflowModelRoute),
   agentProfile: Schema.optional(Schema.String),
   allowedTools: Schema.optional(Schema.Array(Schema.String)),
@@ -277,8 +328,13 @@ export const WorkflowPhase = Schema.Struct({
   ordinal: PositiveInt,
   name: Schema.String,
   description: Schema.optional(Schema.String),
-  barrier: WorkflowBarrier,
-  taskIDs: Schema.Array(WorkflowTaskID),
+  barrier: WorkflowBarrier.annotate({
+    description:
+      'How this phase decides that its listed tasks may release downstream work. Use { kind: "all" } for the common case.',
+  }),
+  taskIDs: Schema.Array(WorkflowTaskID).annotate({
+    description: "All task IDs assigned to this phase. Every listed task must point back through phaseID.",
+  }),
 })
 export type WorkflowPhase = Types.DeepMutable<Schema.Schema.Type<typeof WorkflowPhase>>
 
@@ -336,6 +392,8 @@ export const WorkflowRun = Schema.Struct({
   loopID: Schema.optional(Schema.String),
   loopRunID: Schema.optional(Schema.String),
   workspaceLease: Schema.optional(WorkflowWorkspaceLease),
+  permissionMode: Schema.optional(WorkflowPermissionMode),
+  sessionPermissionMode: Schema.optional(WorkflowSessionPermissionMode),
   state: WorkflowRunState,
   currentPhaseID: Schema.optional(WorkflowPhaseID),
   createdAt: NonNegativeInt,

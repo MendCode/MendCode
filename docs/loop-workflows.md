@@ -29,6 +29,24 @@ A loop has six layers:
 
 The DB remembers the workflow even when MendCode exits. A live process is still required to wake due loops.
 
+## Choose The Loop Shape
+
+Completion policy and wakeup policy are independent. Choose the budget mode
+from how the work should finish, then choose a trigger from when it should run:
+
+| Intent | Budget contract | Trigger contract | Completion behavior |
+|---|---|---|---|
+| Reach a verifiable goal | `budgetMode: "max-goal"` plus concrete `completionCriteria`, with `successChecks` when evidence must be checked | Manual, self-paced, interval, daily, adaptive, or external signal | Complete as soon as the goal passes its checks and gates. A positive `maxTurns` is an optional safety cap, not a target. |
+| Run a recurring job | `budgetMode: "unbounded-monitor"`; omit `maxTurns` | Usually interval, daily, adaptive, or external signal | Keep running the objective at each wakeup until explicitly stopped or blocked by a safety, budget, approval, or input gate. |
+| Run an exact number of iterations | `budgetMode: "fixed"` plus a positive `maxTurns` | Manual or scheduled | Consume the requested iteration count unless stopped or blocked. |
+
+Every loop has an objective. For `max-goal`, the objective and completion
+criteria describe a result that can be verified once. For a recurring job, the
+objective describes what to inspect or perform at every wakeup; a successful run
+does not make the ongoing schedule complete. Do not divide goal work across all
+available turns just because a cap exists, and never encode unlimited work as
+`maxTurns: 0`.
+
 ## Supervised Completion
 
 Loop Engineering separates proposing completion from accepting it:
@@ -98,6 +116,13 @@ mendcode loops monitor loop_...
 
 Daily schedules are first-class triggers rather than 24-hour intervals. Create one with `triggerMode: "daily"`, `dailyAt: "10:00"`, and a timezone such as `UTC`, `GMT`, `America/New_York`, or `Europe/Madrid`. MendCode accepts valid IANA/UTC/GMT zones, persists the timezone, calculates the next wall-clock occurrence (including daylight-saving transitions), and lets the project loop service process the workflow when that wakeup is due.
 
+The persisted `nextWakeup` is the scheduling source of truth. The project
+service scans a bounded set of due workflows, repairs overdue scheduled wakeups,
+and acquires a workflow lease before execution so concurrent scheduler ticks do
+not run the same workflow twice. Closing and reopening the TUI does not reset
+that schedule. The `/loops` countdown is reactive presentation derived from the
+persisted timestamp, not a separate timer contract.
+
 `tick` is the manual wakeup command.
 
 Dry-run preview:
@@ -145,7 +170,7 @@ mendcode loops service status
 mendcode loops service logs
 ```
 
-The service is installed per project and runs with that project as its working directory. It survives closing MendCode or the terminal because the OS owns the process.
+The service is installed per project and runs with that project as its working directory. It survives closing MendCode or the terminal because the OS owns the process. Its durable workflow state, catch-up behavior, and leases let scheduled work continue without relying on an open chat or TUI.
 
 Backends:
 
@@ -244,7 +269,7 @@ Expected product behavior:
 
 ### `/loops` operator dashboard
 
-The `/loops` route separates active workflows from history and refreshes from loop events with a polling fallback. The detail view exposes a bounded summary of the objective, contract preview, state/phase, wake reason, latest run, checkpoint/judgment verdict, executable check labels/counts, rubric result, override audit count, retention policy, evidence summary, loop memory, cost, and next action when those fields exist.
+The `/loops` route separates active workflows from history and refreshes from loop events with a polling fallback. The detail view exposes a bounded summary of the objective, contract preview, state/phase, wake reason, latest run, checkpoint/judgment verdict, executable check labels/counts, rubric result, override audit count, retention policy, evidence summary, loop memory, cost, and next action when those fields exist. Scheduled workflows show a live countdown to persisted `nextWakeup` plus scheduler state; the countdown updates without mutating the workflow record.
 
 Keyboard controls:
 
@@ -266,7 +291,7 @@ Use the state and phase together when diagnosing a workflow:
 | `draft` | Stored but inert; activation has not created/scheduled the root run context. |
 | `active` / `sleeping` | Eligible to run now or waiting for its trigger. |
 | `working` | A run currently owns the workflow lease. |
-| `needs_input` | A user decision or input is required. |
+| `needs_input` | A user decision, permission, or gated input is required. The wait is durable; resolving it resumes the same run rather than completing, failing, or recreating the workflow. |
 | `blocked` | A policy, budget, quality, environment, or other blocker prevents progress. |
 | `paused` | Temporarily disabled but resumable. |
 | `completed` | The completion contract passed. |
@@ -329,7 +354,7 @@ The Loop Engineering upgrade is additive. Existing workflow records do not need 
 
 Migration does not weaken current validation:
 
-- New `fixed` and `max-goal` workflows require a positive `maxTurns` cap.
+- New `fixed` workflows require a positive `maxTurns` cap. A `max-goal` workflow may use a positive safety cap or omit `maxTurns` when no iteration cap is configured.
 - `unbounded-monitor` omits `maxTurns`; never encode unlimited work as `maxTurns: 0`.
 - A legacy row containing `maxTurns: 0` is shown as invalid in `/loops`; recreate the workflow with a positive cap or an unbounded monitor contract.
 - Runtime defaults are application behavior, not database column defaults. Backups and migration tools should preserve the full loop JSON payload instead of reconstructing it from only top-level columns.

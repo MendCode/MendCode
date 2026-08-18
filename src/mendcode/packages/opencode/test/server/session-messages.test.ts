@@ -91,12 +91,23 @@ describe("session messages endpoint", () => {
           expect(aBody.map((item) => item.info.id)).toEqual(ids.slice(-2))
           const cursor = a.headers.get("x-next-cursor")
           expect(cursor).toBeTruthy()
+          expect(a.headers.get("x-older-cursor")).toBe(cursor)
+          expect(a.headers.get("x-newer-cursor")).toBeNull()
           expect(a.headers.get("link")).toContain('rel="next"')
 
           const b = await app.request(`/session/${session.id}/message?limit=2&before=${encodeURIComponent(cursor!)}`)
           expect(b.status).toBe(200)
           const bBody = (await b.json()) as MessageV2.WithParts[]
           expect(bBody.map((item) => item.info.id)).toEqual(ids.slice(-4, -2))
+          expect(b.headers.get("x-older-cursor")).toBeTruthy()
+          const newer = b.headers.get("x-newer-cursor")
+          expect(newer).toBeTruthy()
+
+          const c = await app.request(`/session/${session.id}/message?limit=2&after=${encodeURIComponent(newer!)}`)
+          expect(c.status).toBe(200)
+          const cBody = (await c.json()) as MessageV2.WithParts[]
+          expect(cBody.map((item) => item.info.id)).toEqual(ids.slice(-2))
+          expect(c.headers.get("x-newer-cursor")).toBeNull()
 
           await svc.remove(session.id)
         },

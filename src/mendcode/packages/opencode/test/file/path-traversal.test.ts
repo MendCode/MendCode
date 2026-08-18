@@ -136,6 +136,24 @@ describe("containsPath", () => {
     })
   })
 
+  test.skipIf(process.platform === "win32")("returns true for a realpath alias of the directory", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const alias = `${tmp.path}-alias`
+    await Bun.write(path.join(tmp.path, "file.txt"), "content")
+    await fs.symlink(tmp.path, alias, "dir")
+
+    try {
+      await WithInstance.provide({
+        directory: tmp.path,
+        fn: () => {
+          expect(containsPath(path.join(alias, "file.txt"), Instance.current)).toBe(true)
+        },
+      })
+    } finally {
+      await fs.unlink(alias)
+    }
+  })
+
   test("returns true for path inside worktree but outside directory (monorepo subdirectory scenario)", async () => {
     await using tmp = await tmpdir({ git: true })
     const subdir = path.join(tmp.path, "packages", "lib")

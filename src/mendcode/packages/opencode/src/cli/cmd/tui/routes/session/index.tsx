@@ -39,6 +39,7 @@ import {
   latestPendingAssistantID,
   pendingPromptDeliveryMessageIDs,
   Prompt,
+  sessionActivityMessages,
   subscribePendingPromptDeliveries,
   type PromptRef,
   type PromptSubmitInfo,
@@ -126,16 +127,21 @@ import * as Model from "../../util/model"
 import { formatAssistantLiveUsage, formatAssistantUsage, formatLatestAssistantContextUsage } from "../../util/usage"
 import {
   isAssistantWorking,
+  terminalAssistantSettlesActivity,
+  isSubagentStatusActive,
   isToolActivityActive,
-  SESSION_STOPPED_CONNECTION_MESSAGE,
-  shouldShowSessionStoppedConnection,
+  SESSION_AGENT_STATE_UNKNOWN_MESSAGE,
+  shouldKeepCompactedSubagent,
+  shouldShowAgentStateUnknown,
 } from "../../util/session-working"
 import { formatTranscript } from "../../util/transcript"
 import { useTuiConfig } from "../../context/tui-config"
 import {
   workflowReceiptCounts,
   workflowReceiptElapsed,
+  workflowReceiptFallbackPhases,
   workflowReceiptNextAction,
+  workflowReceiptPhaseDiagram,
   workflowReceiptProgress,
   workflowReceiptStateIsAnimated,
   workflowReceiptStateIsTerminal,
@@ -143,6 +149,7 @@ import {
   workflowReceiptStateMarker,
   workflowReceiptUsage,
 } from "@tui/util/workflow-receipt"
+import { workflowParentSessionID, workflowTaskSessionContext, workflowTaskSiblingSessionID } from "@tui/util/workflow-view"
 import {
   getScrollAcceleration,
   isScrollboxAtBottom,
@@ -155,8 +162,12 @@ import {
   sessionContentWidth,
   sessionTaskContinuation,
   sessionPendingInputSessionIDs,
+  sessionPendingInputStatus,
   sessionPromptVisible,
+  sessionTranscriptBottomSpacer,
   sessionLoopReceipt,
+  shouldRenderSessionLoopCard,
+  shouldRenderSessionWorkflowCard,
   sessionHeaderTitleJustify,
   sessionHeaderTitleDisplay,
   sessionTopMetricsWidth,
@@ -173,9 +184,15 @@ import {
   type SessionTodo,
 } from "../../util/session-bottom-dock"
 import { renderSessionExitSummary } from "../../util/session-exit-summary"
-import { sessionMessageVirtualWindow, stickyUserIDFromVirtualWindow } from "../../util/session-virtual-window"
+import {
+  sessionMeasuredHeight,
+  sessionMessageVirtualWindow,
+  sessionScrollAnchor,
+  stickyUserIDFromVirtualWindow,
+} from "../../util/session-virtual-window"
 import { sessionTranscriptRows } from "../../util/session-transcript-rows"
 import { latestCompletedCompactionSummaryID } from "../../util/session-message-order"
+import { sessionHistoryBoundaryVisible } from "../../util/session-history"
 import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import { getRevertDiffFiles } from "../../util/revert-diff"
 import { appendPromptInfo, restorePromptFromSubmittedParts } from "../../component/prompt/submit-parts"
@@ -217,6 +234,7 @@ import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-
 import {
   normalizeToolEvent,
   shouldRenderCompactTool,
+  shouldRenderImageGenerationTool,
   toolPresentationIcon,
   toolPresentationIconForProfile,
   webSearchUrlLines,
@@ -254,6 +272,10 @@ import {
 addDefaultParsers(parsers.parsers)
 const trace = Log.create({ service: "tui.session" })
 const LARGE_TOOL_BATCH_THRESHOLD = 80
+// Keep the first loaded history page stable until the virtualized older-history
+// renderer is fixed. The scrollbox still clamps at scrollTop=0; this prevents
+// the top-edge handler from swapping the transcript underneath the viewport.
+const SESSION_OLDER_HISTORY_PAGING_ENABLED = false
 
 // Core message/part/status events are reconciled incrementally by SyncProvider.
 // Poll only for lifecycle events that do not carry their canonical store update.
@@ -362,6 +384,16 @@ export function sessionQueuedUserMessageIDs(input: {
     .map((message) => message.id)
 }
 
+export function sessionQueuedPromptDeliveryIDs(input: {
+  deliveryIDs: ReadonlySet<string>
+  messages: ReadonlyArray<{ role: string; parentID?: string }>
+}) {
+  const assistantParentIDs = new Set(
+    input.messages.flatMap((message) => (message.role === "assistant" && message.parentID ? [message.parentID] : [])),
+  )
+  return [...input.deliveryIDs].filter((messageID) => !assistantParentIDs.has(messageID))
+}
+
 export function sessionPinnedUserMessageID(input: {
   messages: ReadonlyArray<{
     id: string
@@ -399,6 +431,13 @@ export function sessionPinnedUserMessageID(input: {
   return activeParentID && visible(activeParentID) ? activeParentID : undefined
 }
 
+export function sessionStickyUserEligible(input: {
+  role: string
+  parts?: ReadonlyArray<{ type?: string }>
+}) {
+  return input.role === "user" && input.parts !== undefined && !input.parts.some((part) => part.type === "compaction")
+}
+
 export function shouldPinSessionStickyUserHeader(input: {
   pinnedUserID?: string
   pinnedAnchor?: { id: string; y: number }
@@ -425,12 +464,54 @@ export function sessionUserMovedViewport(input: {
   lastScrollHeight: number
   viewportHeight: number
   lastViewportHeight: number
+  followOutput?: boolean
 }) {
+  // A sticky/following scrollbox can move its scrollTop while layout is
+  // settling after a streamed part changes height. That is not user intent;
+  // retain follow mode until the next measured frame resolves the bottom.
+  if (
+    input.followOutput &&
+    (Math.abs(input.scrollHeight - input.lastScrollHeight) > 1 ||
+      Math.abs(input.viewportHeight - input.lastViewportHeight) > 1)
+  )
+    return false
   return (
     Math.abs(input.scrollTop - input.lastScrollTop) > 1 &&
     Math.abs(input.scrollHeight - input.lastScrollHeight) <= 1 &&
     Math.abs(input.viewportHeight - input.lastViewportHeight) <= 1
   )
+}
+
+export function sessionSubmitScrollSettlement(input: {
+  intentMessageID?: string
+  pinnedMessageID?: string
+  assistant?: {
+    parentID?: string
+    finish?: string
+    time?: { completed?: number }
+  }
+}) {
+  const messageID = input.intentMessageID
+  if (!messageID) return "none" as const
+  const assistant = input.assistant
+  if (!assistant || assistant.parentID !== messageID) return "hold" as const
+  const terminal =
+    assistant.time?.completed !== undefined &&
+    Boolean(assistant.finish && !["tool-calls", "unknown"].includes(assistant.finish))
+  if (!terminal || input.pinnedMessageID === messageID) return "hold" as const
+  return "follow" as const
+}
+
+export function sessionTerminalReceiptShouldFollow(input: {
+  following: boolean
+  submitIntentActive?: boolean
+  hasActiveTool?: boolean
+  assistant?: { finish?: string; error?: unknown; time?: { completed?: number } }
+}) {
+  if (!input.following || input.submitIntentActive || input.hasActiveTool) return false
+  const assistant = input.assistant
+  if (!assistant || assistant.time?.completed === undefined) return false
+  return Boolean(assistant.error || (assistant.finish && !["tool-calls", "unknown"].includes(assistant.finish)))
 }
 
 export function shouldDeferSessionFollowSync(input: {
@@ -441,8 +522,15 @@ export function shouldDeferSessionFollowSync(input: {
   return input.hasMoreNewer || input.loadingOlder || input.loadingNewer
 }
 
-export function shouldHoldSessionSubmitScroll(input: { sessionID: string; submitSessionID?: string }) {
-  return input.submitSessionID !== undefined && input.submitSessionID === input.sessionID
+export function sessionBottomFollowMode(input: {
+  alreadyFollowing: boolean
+  hasMoreNewer: boolean
+  loadingNewer: boolean
+  suppressedBoundary?: "top" | "bottom"
+}) {
+  if (input.suppressedBoundary === "bottom") return input.alreadyFollowing ? "follow" : "detached"
+  if (input.hasMoreNewer && !input.loadingNewer) return input.alreadyFollowing ? "follow" : "page"
+  return "follow"
 }
 
 const context = createContext<{
@@ -611,6 +699,7 @@ export function Session() {
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
   const keybind = useKeybind()
+  const sdk = useSDK()
   const [now, setNow] = createSignal(Date.now())
   const [sessionInterruptRequested, setSessionInterruptRequested] = createSignal(false)
   createEffect(
@@ -625,6 +714,19 @@ export function Session() {
   })
   const promptRef = usePromptRef()
   const session = createMemo(() => sync.session.get(route.sessionID))
+  const [workflowTaskRuns, { refetch: refetchWorkflowTaskRuns }] = createResource(
+    () => (session()?.parentID ? route.sessionID : undefined),
+    async () => {
+      const response = await sdk.client.workflow.list({ limit: 100 }).catch(() => undefined)
+      return response?.data ?? []
+    },
+  )
+  const currentWorkflowTask = createMemo(() =>
+    workflowTaskSessionContext({
+      sessionID: route.sessionID,
+      workflows: workflowTaskRuns.latest ?? workflowTaskRuns() ?? [],
+    }),
+  )
   const [permissionModeSetting, setPermissionModeSetting] = createSignal<PermissionMode>("approval")
   const children = createMemo(() => {
     const parentID = session()?.parentID ?? session()?.id
@@ -676,57 +778,67 @@ export function Session() {
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0 || planReviews().length > 0)
 
   const [submittedUserMessageID, setSubmittedUserMessageID] = createSignal<string>()
+  const [submitScrollIntent, setSubmitScrollIntent] = createSignal<{
+    sessionID: string
+    messageID: string
+    offset: number
+  }>()
+  const activityMessages = createMemo(() =>
+    sessionActivityMessages({
+      messages: messages(),
+      latestAssistant: sync.data.session_latest_assistant[route.sessionID],
+    }),
+  )
   const pending = createMemo(() => {
     const currentStatus = sync.data.session_status?.[route.sessionID]
-    return latestPendingAssistantID(messages(), {
+    const latestAssistant = activityMessages().findLast((message) => message.role === "assistant")
+    const hasActiveTool = latestAssistant
+      ? (sync.data.part[latestAssistant.id] ?? []).some((part) => {
+          const raw = part as Record<string, any>
+          return raw.type === "tool" && (raw.state?.status === "pending" || raw.state?.status === "running")
+        })
+      : false
+    return latestPendingAssistantID(activityMessages(), {
       statusType: currentStatus?.type,
       now: now(),
       statusUntil: currentStatus?.type === "busy" ? currentStatus.until : undefined,
       statusNext: currentStatus?.type === "retry" ? currentStatus.next : undefined,
+      hasActiveTool,
     })
   })
   const sessionWorking = createMemo(() => {
     const status = sync.data.session_status?.[route.sessionID]?.type
     return status === "busy" || status === "retry"
   })
-  const sessionCompacting = createMemo(() => {
-    const status = sync.data.session_status?.[route.sessionID]
-    return status?.type === "busy" && status.kind === "compaction"
-  })
   const activeTurnAssistantID = createMemo(() => {
     const unfinished = pending()
     if (unfinished) return unfinished
     const status = sync.data.session_status?.[route.sessionID]?.type
     if (status !== "busy" && status !== "retry") return
-    return messages().findLast((message) => message.role === "assistant")?.id
+    return activityMessages().findLast((message) => message.role === "assistant")?.id
+  })
+  const pendingDeliveryQueuedIDs = createMemo(() => {
+    pendingPromptRevision()
+    return new Set(
+      sessionQueuedPromptDeliveryIDs({
+        deliveryIDs: pendingPromptDeliveryMessageIDs(route.sessionID),
+        messages: messages(),
+      }),
+    )
   })
   const queuedMessageIDs = createMemo(() => {
-      pendingPromptRevision()
-      const queued = new Set(
-        sessionQueuedUserMessageIDs({
-          messages: messages(),
-          pendingAssistantID: activeTurnAssistantID(),
-          working: sessionWorking(),
-        }),
-      )
-      for (const messageID of pendingPromptDeliveryMessageIDs(route.sessionID, { includeAccepted: sessionCompacting() }))
-        queued.add(messageID)
-      return queued
-  })
-  const queuedMessages = createMemo(() => {
-    const queuedIDs = queuedMessageIDs()
-    return messages().filter((message): message is UserMessage => message.role === "user" && queuedIDs.has(message.id))
+    const queued = new Set(
+      sessionQueuedUserMessageIDs({
+        messages: messages(),
+        pendingAssistantID: activeTurnAssistantID(),
+        working: sessionWorking(),
+      }),
+    )
+    for (const messageID of pendingDeliveryQueuedIDs()) queued.add(messageID)
+    return queued
   })
   const pendingDeliveryTailIDs = createMemo(() => {
-    pendingPromptRevision()
-    const assistantParentIDs = new Set(
-      messages().flatMap((message) => (message.role === "assistant" ? [message.parentID] : [])),
-    )
-    return new Set(
-      [...pendingPromptDeliveryMessageIDs(route.sessionID, { includeAccepted: sessionCompacting() })].filter(
-        (messageID) => !assistantParentIDs.has(messageID),
-      ),
-    )
+    return pendingDeliveryQueuedIDs()
   })
   const transcriptRows = createMemo(() => {
     const compactionBoundaryIDs = new Set(
@@ -740,6 +852,18 @@ export function Session() {
       boundaryIDs: compactionBoundaryIDs,
       tailIDs: pendingDeliveryTailIDs(),
     })
+  })
+  const transcriptChildIDs = createMemo(() => {
+    const ids = new Set<string>()
+    for (const message of transcriptRows()) {
+      ids.add(message.id)
+      ids.add(`queued-${message.id}`)
+    }
+    return ids
+  })
+  const queuedMessages = createMemo(() => {
+    const queuedIDs = queuedMessageIDs()
+    return messages().filter((message): message is UserMessage => message.role === "user" && queuedIDs.has(message.id))
   })
   const messageByID = createMemo(() => new Map(messages().map((message) => [message.id, message] as const)))
   const pinnedTurnUserMessageID = createMemo(() =>
@@ -942,6 +1066,13 @@ export function Session() {
     loopSessionWorkflows().find((workflow) => workflow.rootSessionID === route.sessionID),
   )
   const sessionTopNavLabel = createMemo(() => {
+    const workflowTask = currentWorkflowTask()
+    if (workflowTask) {
+      const cycle = workflowTask.sessionIDs.length > 1
+        ? ` ← Prev task ${keybind.print("session_child_cycle_reverse")} → Next task ${keybind.print("session_child_cycle")}`
+        : ""
+      return `↑ Workflow ${keybind.print("session_parent")}${cycle}`
+    }
     if (session()?.parentID) {
       return `↖ Parent ${keybind.print("session_parent")} ← Prev ${keybind.print("session_child_cycle_reverse")} → Next ${keybind.print("session_child_cycle")}`
     }
@@ -949,11 +1080,15 @@ export function Session() {
     const parent = currentLoopWorkflow()?.ownerSessionID ? "Parent" : "Agent View"
     return `↖ ${parent} ${keybind.print("session_parent")}`
   })
-  const topbarNavVisible = createMemo(() => Boolean(session()?.parentID || currentLoopWorkflow()))
+  const topbarNavVisible = createMemo(() => Boolean(currentWorkflowTask() || session()?.parentID || currentLoopWorkflow()))
   const topbarNavWidth = createMemo(() => (topbarNavVisible() ? Bun.stringWidth(sessionTopNavLabel()) : 0))
   const headerTitleVisible = createMemo(() => tuiCustomization().sessionTitle)
   const headerTitleJustify = createMemo(() => sessionHeaderTitleJustify("center"))
-  const headerTitleText = createMemo(() => session()?.title || route.sessionID)
+  const headerTitleText = createMemo(() => {
+    const workflowTask = currentWorkflowTask()
+    if (!workflowTask) return session()?.title || route.sessionID
+    return `${workflowTask.workflowName} · Task ${workflowTask.taskIndex + 1}/${workflowTask.taskCount} · ${workflowTask.taskName}`
+  })
   const topbarLayout = createMemo(() =>
     sessionTopbarLayout({
       contentWidth: contentWidth(),
@@ -996,7 +1131,6 @@ export function Session() {
     })
   })
   const todos = createMemo(() => sync.data.todo[route.sessionID] ?? [])
-  const sdk = useSDK()
   const taskSubagentBySession = createMemo(() => {
     const result = new Map<string, { description?: string; subagentType?: string }>()
     const fullStartID = rootFullHistoryStartID()
@@ -1010,9 +1144,22 @@ export function Session() {
           title?: string
           time?: { compacted?: boolean }
         }
-        if (state.time?.compacted) continue
         const sessionId = typeof state.metadata?.sessionId === "string" ? state.metadata.sessionId : undefined
         if (!sessionId) continue
+        const status = sessionLiveStateLabel({
+          status: sync.data.session_status?.[sessionId],
+          messages: sync.data.message[sessionId] ?? [],
+          pendingInputCount:
+            (sync.data.permission[sessionId]?.length ?? 0) +
+            (sync.data.question[sessionId]?.length ?? 0) +
+            (sync.data.plan_review[sessionId]?.length ?? 0),
+          now: now(),
+          connectionStatus:
+            sdk.connection.status === "connected" && sdk.connection.recoveringSince !== undefined
+              ? "reconnecting"
+              : sdk.connection.status,
+        })
+        if (!shouldKeepCompactedSubagent({ compacted: state.time?.compacted, status })) continue
         result.set(sessionId, {
           description:
             typeof state.input?.description === "string"
@@ -1046,7 +1193,10 @@ export function Session() {
             (sync.data.question[child.id]?.length ?? 0) +
             (sync.data.plan_review[child.id]?.length ?? 0),
           now: now(),
-          connectionStatus: sdk.connection.status,
+          connectionStatus:
+            sdk.connection.status === "connected" && sdk.connection.recoveringSince !== undefined
+              ? "reconnecting"
+              : sdk.connection.status,
         })
         const usage = latestAssistant
           ? (formatAssistantLiveUsage(latestAssistant, providers(), { config: sync.data.config }) ??
@@ -1068,8 +1218,8 @@ export function Session() {
       })
       .toSorted((a, b) => {
         if (a.active !== b.active) return a.active ? -1 : 1
-        const aRelevant = sessionSubagentIsActive(a.status)
-        const bRelevant = sessionSubagentIsActive(b.status)
+        const aRelevant = isSubagentStatusActive(a.status)
+        const bRelevant = isSubagentStatusActive(b.status)
         if (aRelevant !== bRelevant) return aRelevant ? -1 : 1
         if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt
         return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
@@ -1261,15 +1411,16 @@ export function Session() {
             const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
             return result.data?.permission
           },
-          write: async () => {
-            await sdk.client.session.update(
-              {
-                sessionID,
-                permission: [Permission.sessionModeRule(mode)],
-              },
-              { throwOnError: true },
-            )
-          },
+           write: async () => {
+             const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
+             await sdk.client.session.update(
+               {
+                 sessionID,
+                 permission: Permission.withSessionMode(result.data?.permission ?? [], mode),
+               },
+               { throwOnError: true },
+             )
+           },
         }),
       )
       .then((synced) => {
@@ -1350,7 +1501,20 @@ export function Session() {
     let reviewed = 0
     for (const request of permissions()) {
       if (isSafeSmartPermissionRequest(request)) {
-        if (await replyPermissionOnce(request)) accepted++
+        if (await replyPermissionOnce(request)) {
+          accepted++
+          setSmartPermissionStatus("Smart allowed: bounded read-only command")
+          toast.show({
+            message: "Smart Approval allowed this bounded read-only command.",
+            variant: "success",
+            duration: 4000,
+          })
+          setTimeout(() => {
+            setSmartPermissionStatus((current) =>
+              current === "Smart allowed: bounded read-only command" ? null : current,
+            )
+          }, 4000)
+        }
         continue
       }
       if (smartReviewedPermissionIDs.has(request.id)) continue
@@ -1365,7 +1529,7 @@ export function Session() {
         if (!decision.triggered || decision.decision === "ask") {
           setSmartPermissionStatus(`Smart needs approval`)
           toast.show({
-            message: "Smart Approval needs manual input for this command.",
+            message: `Smart Approval needs manual input: ${decision.reason}`,
             variant: "info",
             duration: 5000,
           })
@@ -1378,7 +1542,7 @@ export function Session() {
           workspace: project.workspace.current(),
         })
         toast.show({
-          message: `Smart Approval ${decision.decision === "allow" ? "allowed" : "rejected"} this command.`,
+          message: `Smart Approval ${decision.decision === "allow" ? "allowed" : "rejected"} this command: ${decision.reason}`,
           variant: decision.decision === "allow" ? "success" : "warning",
           duration: 5000,
         })
@@ -1406,10 +1570,11 @@ export function Session() {
   )
 
   async function setPermissionModeForSession(mode: PermissionMode) {
-    const overrides = { ...sessionPermissionOverrides(), [permissionSessionID()]: mode }
-    kv.set(sessionPermissionModesKey, overrides)
-    setPermissionModeSetting(mode)
+    const sessionID = permissionSessionID()
     await syncSessionPermissionMode(mode)
+    const overrides = { ...sessionPermissionOverrides(), [sessionID]: mode }
+    kv.set(sessionPermissionModesKey, overrides)
+    if (permissionSessionID() === sessionID) setPermissionModeSetting(mode)
   }
 
   async function clearPermissionModeForSession() {
@@ -1550,7 +1715,7 @@ export function Session() {
 
           if (option.value === "smart") {
             void setPermissionModeForSession("smart")
-            void smartReviewPendingPermissions()
+              .then(() => smartReviewPendingPermissions())
               .then(({ accepted, reviewed }) => {
                 const summary = [
                   accepted ? `auto-approved ${accepted} safe permission${accepted === 1 ? "" : "s"}` : "",
@@ -1579,7 +1744,7 @@ export function Session() {
 
           if (option.value === "full_access") {
             void setPermissionModeForSession("full_access")
-            void autoAcceptPendingPermissions()
+              .then(() => autoAcceptPendingPermissions())
               .then((accepted) => {
                 toast.show({
                   message: accepted
@@ -1972,14 +2137,33 @@ export function Session() {
   let manualScrollGraceUntil = 0
   let bottomScrollToken = 0
   let routeBottomScrollToken = 0
-  let submitBottomScrollTimer: ReturnType<typeof setTimeout> | undefined
-  let submitBottomScrollSessionID: string | undefined
+  let submitScrollToken = 0
+  let applyingSubmitScroll = false
+  const submittedTurnIDs = new Set<string>()
   let scrollPagingInFlight = false
   let scrollPagingToken = 0
+  let scrollPagingRestoreToken = 0
   let suppressedPagingBoundary: "top" | "bottom" | undefined
   let activeSessionID = route.sessionID
   let restoringSessionScroll = false
   const [sessionScrollTop, setSessionScrollTop] = createSignal(0)
+  // `scrollAnchor` is retained as the logical identity for persistence, but it
+  // must not permanently constrain the virtual window. This separate signal
+  // is armed only while a structural update still needs that row mounted for
+  // scroll restoration.
+  const [virtualScrollAnchorID, setVirtualScrollAnchorID] = createSignal<string>()
+  let virtualScrollAnchorBoundary: "top" | "bottom" | undefined
+  const armVirtualScrollAnchor = (id?: string, boundary?: "top" | "bottom") => {
+    virtualScrollAnchorBoundary = boundary
+    setVirtualScrollAnchorID(id)
+  }
+  const clearVirtualScrollAnchor = () => {
+    virtualScrollAnchorBoundary = undefined
+    setVirtualScrollAnchorID(undefined)
+  }
+  const measuredMessageHeights = new Map<string, number>()
+  const [messageHeightRevision, setMessageHeightRevision] = createSignal(0)
+  let measuredTranscriptWidth = 0
   let prompt: PromptRef | undefined
   const bind = (r: PromptRef | undefined) => {
     prompt = r
@@ -2014,6 +2198,37 @@ export function Session() {
   const dialog = useDialog()
   const renderer = useRenderer()
 
+  const updateMountedMessageHeights = () => {
+    if (!scroll || scroll.isDestroyed) return false
+    const width = Math.max(1, scroll.viewport.width)
+    let changed = false
+    if (measuredTranscriptWidth > 0 && measuredTranscriptWidth !== width) {
+      const ratio = measuredTranscriptWidth / width
+      for (const [messageID, height] of measuredMessageHeights) {
+        measuredMessageHeights.set(messageID, Math.max(1, Math.round(height * ratio)))
+      }
+      changed = measuredMessageHeights.size > 0
+    }
+    measuredTranscriptWidth = width
+
+    const liveIDs = new Set(transcriptRows().map((message) => message.id))
+    for (const messageID of measuredMessageHeights.keys()) {
+      if (liveIDs.has(messageID)) continue
+      measuredMessageHeights.delete(messageID)
+      changed = true
+    }
+    for (const child of scroll.getChildren()) {
+      const messageID = child.id?.startsWith("queued-") ? child.id.slice("queued-".length) : child.id
+      if (!messageID || !liveIDs.has(messageID)) continue
+      const height = sessionMeasuredHeight(child.height, measuredMessageHeights.get(messageID))
+      if (height === undefined || measuredMessageHeights.get(messageID) === height) continue
+      measuredMessageHeights.set(messageID, height)
+      changed = true
+    }
+    if (changed) setMessageHeightRevision((revision) => revision + 1)
+    return changed
+  }
+
   // Keep the child-session exit shortcut for states where the prompt is not mounted.
   const exit = useExit()
 
@@ -2034,18 +2249,29 @@ export function Session() {
     return navigateRoute(...args)
   }
 
+  const sessionHistoryEnabled = () => tuiConfig.session_history?.enabled !== false
+  const openSessionHistory = (selectedMessageID?: string) => {
+    if (!sessionHistoryEnabled()) return
+    navigate({
+      type: "session-history",
+      sessionID: route.sessionID,
+      selectedMessageID,
+      returnTo: { type: "session", sessionID: route.sessionID },
+    })
+  }
+
   const captureScrollAnchor = () => {
     if (!scroll || scroll.isDestroyed) {
       scrollAnchor = undefined
       return undefined
     }
 
-    const top = scroll.y
-    const child = scroll
-      .getChildren()
-      .filter((item) => item.id && item.y >= top)
-      .sort((a, b) => a.y - b.y)[0]
-    scrollAnchor = child?.id ? { id: child.id, offset: child.y - top } : undefined
+    scrollAnchor = sessionScrollAnchor({
+      children: scroll.getChildren(),
+      top: scroll.y,
+      viewportHeight: scroll.viewport.height,
+      transcriptChildIDs: transcriptChildIDs(),
+    })
     return scrollAnchor
   }
 
@@ -2060,52 +2286,140 @@ export function Session() {
 
   const restoreScrollAnchor = (options?: { preserveMissing?: boolean }) => {
     if (!scroll || scroll.isDestroyed || !scrollAnchor) return false
-    const child = scroll.getChildren().find((item) => item.id === scrollAnchor?.id)
+    const anchor = scrollAnchor
+    const child = scroll.getChildren().find((item) => item.id === anchor.id)
     if (!child) {
       if (!options?.preserveMissing) captureScrollAnchor()
       return false
     }
 
-    const delta = child.y - scroll.y - scrollAnchor.offset
+    const delta = child.y - scroll.y - anchor.offset
     if (delta !== 0) scroll.scrollBy(delta)
+    if (virtualScrollAnchorID() === anchor.id) clearVirtualScrollAnchor()
     return true
   }
 
   const restoreScrollAfterPaging = (boundary: "top" | "bottom", anchor?: { id: string; offset: number }) => {
     const pagingToken = scrollPagingToken
+    const restoreToken = ++scrollPagingRestoreToken
     const sessionID = route.sessionID
     scrollAnchor = anchor
+    clearVirtualScrollAnchor()
     suppressedPagingBoundary = boundary
-    setTimeout(() => {
-      if (pagingToken !== scrollPagingToken || route.sessionID !== sessionID) return
-      if (!scroll || scroll.isDestroyed) return
-      const restored = Boolean(anchor && restoreScrollAnchor())
-      if (!restored) scroll.scrollTo(boundary === "top" ? 0 : scroll.scrollHeight)
-      lastObservedScrollTop = scroll.scrollTop
-      lastObservedScrollHeight = scroll.scrollHeight
-      lastObservedViewportHeight = scroll.viewport.height
-      setSessionScrollTop(scroll.scrollTop)
-      persistSessionScroll(sessionID)
-    }, 0)
+    const delays = [0, 16, 50, 120, 240, 480]
+    delays.forEach((delay) => {
+      setTimeout(() => {
+        if (
+          restoreToken !== scrollPagingRestoreToken ||
+          pagingToken !== scrollPagingToken ||
+          route.sessionID !== sessionID
+        )
+          return
+        if (!scroll || scroll.isDestroyed) return
+        if (
+          anchor &&
+          (boundary === "top" ? !isScrollboxAtTop(scroll, 1) : !isScrollboxAtBottom(scroll, 1))
+        ) {
+          // The user or the scrollbox already moved away from the paging edge.
+          // Do not resurrect an old anchor into the virtual window: that would
+          // mount rows around the old page while the physical viewport is at a
+          // different position, producing a blank transcript on the next
+          // scroll.
+          scrollAnchor = undefined
+          clearVirtualScrollAnchor()
+          suppressedPagingBoundary = undefined
+          setSessionScrollTop(scroll.scrollTop)
+          persistSessionScroll(sessionID)
+          return
+        }
+        armVirtualScrollAnchor(anchor?.id, anchor ? boundary : undefined)
+        renderer.requestRender()
+        const restored = Boolean(anchor && restoreScrollAnchor({ preserveMissing: true }))
+        // Keep the outgoing anchor alive while the newly paged rows mount. If
+        // the user moves before the anchor appears, cancelScrollPagingRestore
+        // invalidates all remaining retries and leaves the manual position alone.
+        if (!restored && anchor && delay !== delays[delays.length - 1]) return
+        if (!restored) {
+          scroll.scrollTo(boundary === "top" ? 0 : scroll.scrollHeight)
+          clearVirtualScrollAnchor()
+        }
+        lastObservedScrollTop = scroll.scrollTop
+        lastObservedScrollHeight = scroll.scrollHeight
+        lastObservedViewportHeight = scroll.viewport.height
+        setSessionScrollTop(scroll.scrollTop)
+        persistSessionScroll(sessionID)
+      }, delay)
+    })
+  }
+
+  const cancelScrollPagingRestore = () => {
+    scrollPagingRestoreToken += 1
+    clearVirtualScrollAnchor()
   }
 
   const cancelBottomScrollTimers = () => {
     bottomScrollToken += 1
     routeBottomScrollToken += 1
-    if (submitBottomScrollTimer) clearTimeout(submitBottomScrollTimer)
-    submitBottomScrollTimer = undefined
-    submitBottomScrollSessionID = undefined
+  }
+
+  const cancelSubmitScrollIntent = (options?: { discard?: boolean }) => {
+    if (options?.discard) {
+      const messageID = submitScrollIntent()?.messageID
+      if (messageID) submittedTurnIDs.delete(messageID)
+    }
+    submitScrollToken += 1
+    applyingSubmitScroll = false
+    setSubmitScrollIntent(undefined)
+  }
+
+  const reconcileSubmitScrollIntent = (token = submitScrollToken) => {
+    const intent = submitScrollIntent()
+    if (token !== submitScrollToken || !intent || route.sessionID !== intent.sessionID) return false
+    if (!scroll || scroll.isDestroyed) return false
+    renderer.requestRender()
+    const child = scroll.getChildren().find((item) => item.id === intent.messageID)
+    if (!child) return false
+    applyingSubmitScroll = true
+    const delta = child.y - scroll.y - intent.offset
+    if (delta !== 0) scroll.scrollBy(delta)
+    applyingSubmitScroll = false
+    lastObservedScrollTop = scroll.scrollTop
+    lastObservedScrollHeight = scroll.scrollHeight
+    lastObservedViewportHeight = scroll.viewport.height
+    setSessionScrollTop(scroll.scrollTop)
+    persistSessionScroll(intent.sessionID)
+    return true
+  }
+
+  const scheduleSubmitScrollIntent = () => {
+    const token = ++submitScrollToken
+    ;[0, 16, 50, 120, 240, 480].forEach((delay) => {
+      setTimeout(() => reconcileSubmitScrollIntent(token), delay)
+    })
+  }
+
+  const activateSubmitScrollIntent = (input: { sessionID: string; messageID: string; offset?: number }) => {
+    if (route.sessionID !== input.sessionID) return
+    const currentID = submitScrollIntent()?.messageID
+    if (currentID && currentID !== input.messageID) submittedTurnIDs.delete(currentID)
+    cancelBottomScrollTimers()
+    cancelScrollPagingRestore()
+    scrollAnchor = undefined
+    suppressedPagingBoundary = undefined
+    restoringSessionScroll = false
+    setFollowSessionOutput(false)
+    setSubmitScrollIntent({ sessionID: input.sessionID, messageID: input.messageID, offset: input.offset ?? 0 })
+    scheduleSubmitScrollIntent()
   }
 
   const syncScrollFollowMode = () => {
     if (!scroll || scroll.isDestroyed) return
+    const heldAnchor = followSessionOutput() ? undefined : scrollAnchor ?? captureScrollAnchor()
     const scrollTop = scroll.scrollTop
     const scrollHeight = scroll.scrollHeight
     const viewportHeight = scroll.viewport.height
     const currentSessionID = route.sessionID
     if (restoringSessionScroll && currentSessionID === activeSessionID) return
-    if (shouldHoldSessionSubmitScroll({ sessionID: currentSessionID, submitSessionID: submitBottomScrollSessionID }))
-      return
     // Keep the active session's snapshot live while its keyed transcript still owns
     // the scrollbox. Do not recapture the anchor here: transcript growth has already
     // happened by the time this interval runs, so replacing it would lose the point
@@ -2113,6 +2427,16 @@ export function Session() {
     persistSessionScroll(currentSessionID)
     setSessionScrollTop(scrollTop)
     const history = sync.session.history(currentSessionID)
+    if (
+      suppressedPagingBoundary &&
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: suppressedPagingBoundary,
+        hasMoreOlder: history.hasMoreOlder,
+        hasMoreNewer: history.hasMoreNewer,
+      })
+    ) {
+      suppressedPagingBoundary = undefined
+    }
     const atTop = isScrollboxAtTop(scroll)
     const atBottom = isScrollboxAtBottom(scroll)
     const userMovedViewport = sessionUserMovedViewport({
@@ -2122,12 +2446,44 @@ export function Session() {
       lastScrollHeight: lastObservedScrollHeight,
       viewportHeight,
       lastViewportHeight: lastObservedViewportHeight,
+      followOutput: followSessionOutput(),
     })
     const contentHeightChanged = Math.abs(scrollHeight - lastObservedScrollHeight) > 1
     const viewportHeightChanged = Math.abs(viewportHeight - lastObservedViewportHeight) > 1
+    const measurementsChanged = updateMountedMessageHeights()
+    if (
+      measurementsChanged &&
+      heldAnchor &&
+      shouldRestoreSessionScrollAnchor({
+        now: Date.now(),
+        manualScrollGraceUntil,
+        userMovedViewport,
+        hasAnchor: true,
+      })
+    ) {
+      scrollAnchor = heldAnchor
+      queueMicrotask(() => {
+        if (!scroll || scroll.isDestroyed || followSessionOutput()) return
+        renderer.requestRender()
+        restoreScrollAnchor({ preserveMissing: true })
+      })
+    }
+
+    if (submitScrollIntent()?.sessionID === currentSessionID) {
+      if (userMovedViewport && !applyingSubmitScroll) {
+        cancelSubmitScrollIntent({ discard: true })
+        setFollowSessionOutput(false)
+        captureScrollAnchor()
+      } else {
+        reconcileSubmitScrollIntent()
+      }
+      persistSessionScroll(currentSessionID)
+      return
+    }
 
     if (userMovedViewport) {
       blurCompactionArcade()
+      cancelScrollPagingRestore()
       cancelBottomScrollTimers()
     }
 
@@ -2143,13 +2499,21 @@ export function Session() {
       suppressedPagingBoundary = undefined
     }
 
-    if (!followSessionOutput() && atTop && history.hasMoreOlder && !history.loadingOlder && !scrollPagingInFlight) {
+    if (
+      SESSION_OLDER_HISTORY_PAGING_ENABLED &&
+      !followSessionOutput() &&
+      atTop &&
+      history.hasMoreOlder &&
+      !history.loadingOlder &&
+      !scrollPagingInFlight
+    ) {
       if (suppressedPagingBoundary) {
         setFollowSessionOutput(false)
         persistSessionScroll(currentSessionID)
         return
       }
       const pagingToken = scrollPagingToken
+      const pagingRestoreToken = scrollPagingRestoreToken
       const pagingAnchor = captureScrollAnchor()
       setFollowSessionOutput(false)
       persistSessionScroll(currentSessionID)
@@ -2158,7 +2522,12 @@ export function Session() {
         .loadOlder(currentSessionID)
         .then((loaded) => {
           if (!loaded) return
-          if (pagingToken !== scrollPagingToken || route.sessionID !== currentSessionID) return
+          if (
+            pagingToken !== scrollPagingToken ||
+            pagingRestoreToken !== scrollPagingRestoreToken ||
+            route.sessionID !== currentSessionID
+          )
+            return
           restoreScrollAfterPaging("top", pagingAnchor)
         })
         .catch(() => undefined)
@@ -2170,6 +2539,12 @@ export function Session() {
     }
 
     if (atBottom) {
+      const bottomFollowMode = sessionBottomFollowMode({
+        alreadyFollowing: followSessionOutput(),
+        hasMoreNewer: history.hasMoreNewer,
+        loadingNewer: history.loadingNewer,
+        suppressedBoundary: suppressedPagingBoundary,
+      })
       const pagingAnchor =
         history.hasMoreNewer && !history.loadingNewer && !scrollPagingInFlight && !suppressedPagingBoundary
           ? captureScrollAnchor()
@@ -2180,30 +2555,40 @@ export function Session() {
       lastObservedViewportHeight = viewportHeight
       if (history.hasMoreNewer && !history.loadingNewer && !scrollPagingInFlight) {
         if (suppressedPagingBoundary) {
-          setFollowSessionOutput(false)
+          setFollowSessionOutput(bottomFollowMode === "follow")
           persistSessionScroll(currentSessionID)
           return
         }
         const pagingToken = scrollPagingToken
-        setFollowSessionOutput(false)
+        const pagingRestoreToken = scrollPagingRestoreToken
+        setFollowSessionOutput(bottomFollowMode === "follow")
         persistSessionScroll(currentSessionID)
         scrollPagingInFlight = true
         void sync.session
           .loadNewer(currentSessionID)
           .then((loaded) => {
             if (!loaded) return
-            if (pagingToken !== scrollPagingToken || route.sessionID !== currentSessionID) return
+            if (
+              pagingToken !== scrollPagingToken ||
+              pagingRestoreToken !== scrollPagingRestoreToken ||
+              route.sessionID !== currentSessionID
+            )
+              return
             restoreScrollAfterPaging("bottom", pagingAnchor)
           })
           .catch(() => undefined)
           .finally(() => {
             if (pagingToken !== scrollPagingToken || route.sessionID !== currentSessionID) return
             scrollPagingInFlight = false
+            if (bottomFollowMode === "follow" && pagingRestoreToken === scrollPagingRestoreToken) {
+              setFollowSessionOutput(true)
+              scheduleFollowBottomScroll(currentSessionID)
+            }
           })
         return
       }
       if (suppressedPagingBoundary) {
-        setFollowSessionOutput(false)
+        setFollowSessionOutput(bottomFollowMode === "follow")
         persistSessionScroll(currentSessionID)
         return
       }
@@ -2247,8 +2632,12 @@ export function Session() {
   const markScrollDetached = () => {
     blurCompactionArcade()
     restoringSessionScroll = false
+    cancelScrollPagingRestore()
+    suppressedPagingBoundary = undefined
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
+    cancelSubmitScrollIntent({ discard: true })
+    if (scroll && !scroll.isDestroyed) setSessionScrollTop(scroll.scrollTop)
     setFollowSessionOutput(false)
     setTimeout(() => {
       captureScrollAnchor()
@@ -2259,6 +2648,7 @@ export function Session() {
   const scrollToBottomIfAllowed = (options?: { force?: boolean }) => {
     if (!scroll || scroll.isDestroyed) return
     if (isCompactionArcadeFocused()) return
+    if (submitScrollIntent()?.sessionID === route.sessionID) return
     if (!options?.force && !followSessionOutput()) return
     scrollAnchor = undefined
     renderer.requestRender()
@@ -2291,6 +2681,10 @@ export function Session() {
       () => {
         queueMicrotask(() => {
           renderer.requestRender()
+          if (submitScrollIntent()?.sessionID === route.sessionID) {
+            reconcileSubmitScrollIntent()
+            return
+          }
           if (followSessionOutput() && !isCompactionArcadeFocused()) scheduleBottomScroll(0, { force: true })
         })
       },
@@ -2299,9 +2693,57 @@ export function Session() {
   )
 
   const scheduleFollowBottomScroll = (sessionID: string) => {
+    if (submitScrollIntent()?.sessionID === sessionID) return
     const token = ++routeBottomScrollToken
     setTimeout(() => scrollToBottomForRouteToken(token, sessionID, { force: true }), 0)
   }
+
+  const scheduleTerminalReceiptBottomScroll = (sessionID: string) => {
+    if (submitScrollIntent()?.sessionID === sessionID) return
+    const token = ++routeBottomScrollToken
+    // The terminal receipt and disappearing activity row settle across more
+    // than one OpenTUI layout pass. Keep the bounded follow through that reflow.
+    ;[0, 16, 50, 120].forEach((delay) => {
+      setTimeout(() => scrollToBottomForRouteToken(token, sessionID, { force: true }), delay)
+    })
+  }
+
+  createEffect(
+    on(
+      () => {
+        const assistant = lastAssistant()
+        const hasActiveTool = assistant
+          ? (sync.data.part[assistant.id] ?? []).some(
+              (part) =>
+                part.type === "tool" && (part.state.status === "pending" || part.state.status === "running"),
+            )
+          : false
+        return [
+          route.sessionID,
+          assistant?.id,
+          assistant?.finish,
+          assistant?.time.completed,
+          Boolean(assistant?.error),
+          hasActiveTool,
+          followSessionOutput(),
+          submitScrollIntent()?.sessionID === route.sessionID,
+        ] as const
+      },
+      ([sessionID, assistantID, finish, completed, error, hasActiveTool, following, submitIntentActive]) => {
+        if (
+          !sessionTerminalReceiptShouldFollow({
+            following,
+            submitIntentActive,
+            hasActiveTool,
+            assistant: assistantID ? { finish, error: error || undefined, time: { completed } } : undefined,
+          })
+        )
+          return
+        scheduleTerminalReceiptBottomScroll(sessionID)
+      },
+      { defer: true },
+    ),
+  )
 
   const scheduleSessionScrollRestore = (sessionID: string, state?: SessionScrollState) => {
     const token = ++routeBottomScrollToken
@@ -2317,7 +2759,10 @@ export function Session() {
         if (target !== "bottom") {
           renderer.requestRender()
           const restored = state?.anchor ? restoreScrollAnchor({ preserveMissing: true }) : false
-          if (!restored) scroll.scrollTo(target)
+          if (!restored) {
+            scroll.scrollTo(target)
+            if (delay === delays[delays.length - 1]) clearVirtualScrollAnchor()
+          }
           lastObservedScrollTop = scroll.scrollTop
           lastObservedScrollHeight = scroll.scrollHeight
           lastObservedViewportHeight = scroll.viewport.height
@@ -2333,21 +2778,6 @@ export function Session() {
     })
   }
 
-  const scheduleSubmitBottomScroll = (sessionID: string) => {
-    if (submitBottomScrollTimer) clearTimeout(submitBottomScrollTimer)
-    submitBottomScrollSessionID = sessionID
-    submitBottomScrollTimer = setTimeout(() => {
-      submitBottomScrollTimer = undefined
-      if (route.sessionID !== sessionID) {
-        submitBottomScrollSessionID = undefined
-        return
-      }
-      renderer.requestRender()
-      scrollToBottomIfAllowed({ force: true })
-      submitBottomScrollSessionID = undefined
-    }, 0)
-  }
-
   createEffect(
     on(
       () => route.sessionID,
@@ -2355,18 +2785,50 @@ export function Session() {
         if (!sessionID) return
         if (activeSessionID !== sessionID) rememberSessionScroll(activeSessionID)
         activeSessionID = sessionID
+        measuredMessageHeights.clear()
+        measuredTranscriptWidth = 0
+        setMessageHeightRevision((revision) => revision + 1)
         const remembered = sessionScrollStates.get(sessionID)
         scrollPagingToken += 1
+        cancelScrollPagingRestore()
         scrollPagingInFlight = false
         suppressedPagingBoundary = undefined
         scrollAnchor = remembered?.anchor
+        armVirtualScrollAnchor(remembered?.follow ? undefined : remembered?.anchor?.id)
         lastObservedScrollTop = 0
         lastObservedScrollHeight = 0
         lastObservedViewportHeight = 0
         manualScrollGraceUntil = 0
         cancelBottomScrollTimers()
+        cancelSubmitScrollIntent()
         cancelSubmitFollowSync()
+        submittedTurnIDs.clear()
         setSubmittedUserMessageID(undefined)
+        const submitted = route.submitted
+        if (submitted) {
+          submittedTurnIDs.add(submitted.messageID)
+          setSubmittedUserMessageID(submitted.messageID)
+          restoringSessionScroll = false
+          setSessionScrollTop(0)
+          setFollowSessionOutput(false)
+          lastSessionEventAt = Date.now()
+          if (scroll && !scroll.isDestroyed) {
+            scroll.scrollTo(0)
+            lastObservedScrollTop = scroll.scrollTop
+            lastObservedScrollHeight = scroll.scrollHeight
+            lastObservedViewportHeight = scroll.viewport.height
+          }
+          scheduleSubmitFollowSync({
+            sessionID,
+            messageID: submitted.messageID,
+            inputRows: submitted.inputRows,
+            queuedBehindActiveTurn: submitted.queuedBehindActiveTurn === true,
+          })
+          if (!submitted.queuedBehindActiveTurn) {
+            activateSubmitScrollIntent({ sessionID, messageID: submitted.messageID })
+          }
+          return
+        }
         const targetScrollTop = sessionScrollTarget(remembered)
         restoringSessionScroll = true
         setSessionScrollTop(targetScrollTop === "bottom" ? 0 : targetScrollTop)
@@ -2387,18 +2849,35 @@ export function Session() {
   const scrollBySession = (delta: number) => {
     blurCompactionArcade()
     restoringSessionScroll = false
+    cancelScrollPagingRestore()
+    if (
+      suppressedPagingBoundary &&
+      shouldClearSessionPagingBoundarySuppression({
+        boundary: suppressedPagingBoundary,
+        hasMoreOlder: sync.session.history(route.sessionID).hasMoreOlder,
+        hasMoreNewer: sync.session.history(route.sessionID).hasMoreNewer,
+        direction: delta < 0 ? "up" : "down",
+      })
+    ) {
+      suppressedPagingBoundary = undefined
+    }
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
+    cancelSubmitScrollIntent({ discard: true })
     scroll.scrollBy(delta)
+    setSessionScrollTop(scroll.scrollTop)
     rememberSessionScroll(activeSessionID)
     setTimeout(syncScrollFollowMode, 0)
   }
   const scrollToSession = (position: number) => {
     blurCompactionArcade()
     restoringSessionScroll = false
+    cancelScrollPagingRestore()
     manualScrollGraceUntil = Date.now() + 250
     cancelBottomScrollTimers()
+    cancelSubmitScrollIntent({ discard: true })
     scroll.scrollTo(position)
+    setSessionScrollTop(scroll.scrollTop)
     rememberSessionScroll(activeSessionID)
     setTimeout(syncScrollFollowMode, 0)
   }
@@ -2518,14 +2997,13 @@ export function Session() {
     dialog.clear()
   }
 
-  function toBottom(options?: { sync?: boolean; submitSessionID?: string }) {
+  function toBottom(options?: { sync?: boolean }) {
+    cancelSubmitScrollIntent({ discard: true })
+    cancelScrollPagingRestore()
     setFollowSessionOutput(true)
     scrollAnchor = undefined
+    suppressedPagingBoundary = undefined
     if (options?.sync !== false) void sync.session.sync(route.sessionID, { force: true }).catch(() => undefined)
-    if (options?.submitSessionID) {
-      scheduleSubmitBottomScroll(options.submitSessionID)
-      return
-    }
     scheduleBottomScroll(50, { force: true })
   }
 
@@ -2562,32 +3040,86 @@ export function Session() {
       follow: followSessionOutput(),
     })
     if (info && info.sessionID === route.sessionID) {
+      submittedTurnIDs.add(info.messageID)
       setSubmittedUserMessageID(info.messageID)
       scheduleSubmitFollowSync(info)
+      if (!info.queuedBehindActiveTurn) {
+        activateSubmitScrollIntent({ sessionID: info.sessionID, messageID: info.messageID })
+      }
     }
-    toBottom({
-      sync: false,
-      submitSessionID: info?.sessionID === route.sessionID ? info.sessionID : undefined,
-    })
   }
 
   onCleanup(() => {
     cancelSubmitFollowSync()
+    cancelSubmitScrollIntent()
   })
 
+  const virtualScrollAnchorIndex = createMemo(() => {
+    const intent = submitScrollIntent()
+    const virtualAnchorID = virtualScrollAnchorID()
+    const anchorID = intent?.sessionID === route.sessionID ? intent.messageID : virtualAnchorID
+    if (!anchorID) return
+    if (virtualAnchorID && virtualScrollAnchorBoundary && scroll && !scroll.isDestroyed) {
+      const atBoundary =
+        virtualScrollAnchorBoundary === "top" ? isScrollboxAtTop(scroll, 1) : isScrollboxAtBottom(scroll, 1)
+      if (!atBoundary) return
+    }
+    const index = transcriptRows().findIndex((message) => message.id === anchorID)
+    return index >= 0 ? index : undefined
+  })
   const virtualWindow = createMemo(() =>
-    sessionMessageVirtualWindow({
-      total: transcriptRows().length,
-      scrollTop: sessionScrollTop(),
-      viewportHeight: scroll && !scroll.isDestroyed ? scroll.height : dimensions().height,
-      followOutput: followSessionOutput(),
-    }),
+    (() => {
+      messageHeightRevision()
+      const rows = transcriptRows()
+      return sessionMessageVirtualWindow({
+        total: rows.length,
+        scrollTop: sessionScrollTop(),
+        viewportHeight: scroll && !scroll.isDestroyed ? scroll.viewport.height : dimensions().height,
+        followOutput: followSessionOutput(),
+        anchorIndex: virtualScrollAnchorIndex(),
+        itemHeights: rows.map((message) => measuredMessageHeights.get(message.id)),
+      })
+    })(),
   )
   const visibleMessages = createMemo(() => {
     const window = virtualWindow()
     return transcriptRows().slice(window.start, window.end)
   })
   const visibleMessageIDs = createMemo(() => visibleMessages().map((message) => message.id))
+
+  createEffect(() => {
+    const pinnedID = pinnedTurnUserMessageID()
+    const anchoredID = submitScrollIntent()?.messageID
+    const pinnedIsMountedTurn =
+      pinnedID !== undefined &&
+      submittedTurnIDs.has(pinnedID) &&
+      transcriptRows().some((message) => message.id === pinnedID)
+    if (pinnedIsMountedTurn && pinnedID !== anchoredID) {
+      activateSubmitScrollIntent({ sessionID: route.sessionID, messageID: pinnedID })
+      return
+    }
+    if (pinnedIsMountedTurn) reconcileSubmitScrollIntent()
+
+    const intent = submitScrollIntent()
+    if (!intent || intent.sessionID !== route.sessionID) return
+    const child = messages().findLast(
+      (message): message is AssistantMessage => message.role === "assistant" && message.parentID === intent.messageID,
+    )
+    const settlement = sessionSubmitScrollSettlement({
+      intentMessageID: intent.messageID,
+      pinnedMessageID: pinnedTurnUserMessageID(),
+      assistant: child,
+    })
+    if (settlement !== "follow") return
+    submittedTurnIDs.delete(intent.messageID)
+    if (submittedUserMessageID() === intent.messageID) setSubmittedUserMessageID(undefined)
+    cancelSubmitScrollIntent()
+    scrollAnchor = undefined
+    suppressedPagingBoundary = undefined
+    setFollowSessionOutput(true)
+    scheduleTerminalReceiptBottomScroll(route.sessionID)
+  })
+
   const renderSnapshot = (includeVisibleIDs = true) => {
     const window = virtualWindow()
     const mountedChildren = scroll && !scroll.isDestroyed ? scroll.getChildren() : []
@@ -2640,7 +3172,10 @@ export function Session() {
         ] as const,
       () => {
         trace.trace("virtual-window", renderSnapshot())
-        if (submitBottomScrollSessionID === route.sessionID) return
+        if (submitScrollIntent()?.sessionID === route.sessionID) {
+          reconcileSubmitScrollIntent()
+          return
+        }
         if (followSessionOutput()) scheduleFollowBottomScroll(route.sessionID)
       },
       { defer: true },
@@ -2759,6 +3294,71 @@ export function Session() {
     dialog.clear()
   }
 
+  async function resolveWorkflowTaskContext(sessionID: string) {
+    if (sessionID === route.sessionID) {
+      const current = currentWorkflowTask()
+      if (current) return current
+    }
+    const response = await sdk.client.workflow.list({ limit: 100 }).catch(() => undefined)
+    return workflowTaskSessionContext({ sessionID, workflows: response?.data ?? [] })
+  }
+
+  async function navigateWorkflowTask(direction: -1 | 1, dialog: DialogContext) {
+    const currentSessionID = route.sessionID
+    const workflowTask = await resolveWorkflowTaskContext(currentSessionID)
+    if (!workflowTask || route.sessionID !== currentSessionID) return false
+    if (workflowTask.sessionIDs.length < 2) {
+      toast.show({ variant: "info", message: "No other workflow task chat is available yet.", duration: 2500 })
+      dialog.clear()
+      return true
+    }
+    const sessionID = workflowTaskSiblingSessionID({
+      sessionID: currentSessionID,
+      sessionIDs: workflowTask.sessionIDs,
+      direction,
+    })
+    if (sessionID) navigate({ type: "session", sessionID })
+    dialog.clear()
+    return true
+  }
+
+  async function navigateToSessionParent(dialog: DialogContext) {
+    const currentSessionID = route.sessionID
+    const knownWorkflowTask = currentWorkflowTask()
+    if (knownWorkflowTask) {
+      navigate({
+        type: "workflows",
+        selectedID: knownWorkflowTask.runID,
+        returnTo: { type: "session", sessionID: currentSessionID },
+      })
+      dialog.clear()
+      return
+    }
+    const parentSessionID = session()?.parentID
+    if (!parentSessionID) return
+    const response = await sdk.client.workflow.list({ limit: 100 }).catch(() => undefined)
+    if (route.sessionID !== currentSessionID) return
+    const workflowTask = workflowTaskSessionContext({ sessionID: currentSessionID, workflows: response?.data ?? [] })
+    if (workflowTask) {
+      navigate({
+        type: "workflows",
+        selectedID: workflowTask.runID,
+        returnTo: { type: "session", sessionID: currentSessionID },
+      })
+      dialog.clear()
+      return
+    }
+    navigate({
+      type: "session",
+      sessionID: workflowParentSessionID({
+        sessionID: currentSessionID,
+        parentSessionID,
+        workflows: response?.data ?? [],
+      }) ?? parentSessionID,
+    })
+    dialog.clear()
+  }
+
   function childSessionHandler(func: (dialog: DialogContext) => void) {
     return (dialog: DialogContext) => {
       if (!session()?.parentID || dialog.stack.length > 0) return
@@ -2837,6 +3437,7 @@ export function Session() {
         const unsubscribe = sdk.event.on("event", (event) => {
           const payload = event.payload as { type?: string; properties?: { sessionID?: string } }
           const type = payload.type
+          if (type?.startsWith("workflow.")) void refetchWorkflowTaskRuns()
           if (type === "background_session.updated" || type === "background_session.deleted") {
             if (payload.properties?.sessionID && payload.properties.sessionID !== sessionID) return
             void refreshBackgroundSessionState(sessionID).catch(() => undefined)
@@ -3001,6 +3602,21 @@ export function Session() {
             duration: 5000,
           })
         })
+      },
+    },
+    {
+      title: "Browse complete session history",
+      value: "session.history",
+      keybind: "session_history",
+      category: "Session",
+      enabled: sessionHistoryEnabled(),
+      slash: {
+        name: "history",
+        aliases: ["session-history"],
+      },
+      onSelect: (dialog) => {
+        dialog.clear()
+        openSessionHistory()
       },
     },
     {
@@ -3544,21 +4160,14 @@ export function Session() {
       keybind: "session_parent",
       category: "Session",
       hidden: true,
-      enabled: !!session()?.parentID || !!currentLoopWorkflow(),
+      enabled: !!currentWorkflowTask() || !!session()?.parentID || !!currentLoopWorkflow(),
       onSelect: (dialog) => {
         if (dialog.stack.length > 0) return
         if (!session()?.parentID && currentLoopWorkflow()) {
           navigateToLoopOwner(dialog)
           return
         }
-        const parentID = session()?.parentID
-        if (parentID) {
-          navigate({
-            type: "session",
-            sessionID: parentID,
-          })
-        }
-        dialog.clear()
+        void navigateToSessionParent(dialog).catch((error) => toast.error(error))
       },
     },
     {
@@ -3567,11 +4176,16 @@ export function Session() {
       keybind: "session_child_cycle",
       category: "Session",
       hidden: true,
-      enabled: !!session()?.parentID,
+      enabled: !!currentWorkflowTask() || !!session()?.parentID,
       onSelect: (dialog) => {
-        if (!session()?.parentID || dialog.stack.length > 0) return
-        moveChild(1)
-        dialog.clear()
+        if ((!currentWorkflowTask() && !session()?.parentID) || dialog.stack.length > 0) return
+        void navigateWorkflowTask(1, dialog)
+          .then((handled) => {
+            if (handled) return
+            moveChild(1)
+            dialog.clear()
+          })
+          .catch((error) => toast.error(error))
       },
     },
     {
@@ -3580,11 +4194,16 @@ export function Session() {
       keybind: "session_child_cycle_reverse",
       category: "Session",
       hidden: true,
-      enabled: !!session()?.parentID,
+      enabled: !!currentWorkflowTask() || !!session()?.parentID,
       onSelect: (dialog) => {
-        if (!session()?.parentID || dialog.stack.length > 0) return
-        moveChild(-1)
-        dialog.clear()
+        if ((!currentWorkflowTask() && !session()?.parentID) || dialog.stack.length > 0) return
+        void navigateWorkflowTask(-1, dialog)
+          .then((handled) => {
+            if (handled) return
+            moveChild(-1)
+            dialog.clear()
+          })
+          .catch((error) => toast.error(error))
       },
     },
   ])
@@ -3746,8 +4365,8 @@ export function Session() {
                 <Show when={topbarNavVisible() && topbarLayout().navWidth > 0}>
                   <box width={topbarLayout().navWidth} overflow="hidden" flexShrink={0}>
                     <SessionTopNav
-                      mode={session()?.parentID ? "subagent" : "loop"}
-                      canCycle={!!session()?.parentID}
+                      mode={currentWorkflowTask() ? "workflow-task" : session()?.parentID ? "subagent" : "loop"}
+                      canCycle={currentWorkflowTask() ? (currentWorkflowTask()?.sessionIDs.length ?? 0) > 1 : !!session()?.parentID}
                       hasParent={!!currentLoopWorkflow()?.ownerSessionID}
                       width={topbarLayout().navWidth}
                     />
@@ -3812,6 +4431,14 @@ export function Session() {
                     viewportOptions={{
                       paddingRight: showScrollbar() ? 1 : 0,
                     }}
+                    scrollX
+                    horizontalScrollbarOptions={{
+                      paddingTop: 1,
+                      trackOptions: {
+                        backgroundColor: theme.backgroundElement,
+                        foregroundColor: theme.border,
+                      },
+                    }}
                     verticalScrollbarOptions={{
                       paddingLeft: 1,
                       visible: showScrollbar(),
@@ -3825,8 +4452,31 @@ export function Session() {
                     flexGrow={1}
                     width="100%"
                     scrollAcceleration={scrollAcceleration()}
-                    onMouseScroll={() => markScrollDetached()}
+                    onMouseScroll={() => queueMicrotask(markScrollDetached)}
                   >
+                    <Show
+                      when={sessionHistoryBoundaryVisible({
+                        enabled: sessionHistoryEnabled(),
+                        hasMoreOlder: sync.session.history(route.sessionID).hasMoreOlder,
+                      })}
+                    >
+                      <box
+                        width="100%"
+                        flexDirection="row"
+                        justifyContent="space-between"
+                        paddingLeft={2}
+                        paddingRight={2}
+                        paddingTop={1}
+                        paddingBottom={1}
+                        backgroundColor={theme.backgroundPanel}
+                        onMouseUp={() => openSessionHistory(visibleMessageIDs().at(0))}
+                      >
+                        <text fg={theme.text}>↑ Earlier session history</text>
+                        <text fg={theme.textMuted}>
+                          {keybind.print("session_history")} or /history
+                        </text>
+                      </box>
+                    </Show>
                     <box height={1} />
                     <Show when={virtualWindow().topSpacer > 0}>
                       <box height={virtualWindow().topSpacer} flexShrink={0} />
@@ -3922,13 +4572,13 @@ export function Session() {
                                onMouseUp={() => {
                                  if (renderer.getSelection()?.getSelectedText()) return
                                  dialog.replace(() => (
-                                    <DialogMessage
-                                      messageID={message().id}
-                                      sessionID={route.sessionID}
-                                      queued
-                                      setPrompt={(promptInfo) => prompt?.set(promptInfo)}
-                                      onEditPrompt={editQueuedPrompt}
-                                    />
+                                   <DialogMessage
+                                     messageID={message().id}
+                                     sessionID={route.sessionID}
+                                     queued
+                                     setPrompt={(promptInfo) => prompt?.set(promptInfo)}
+                                     onEditPrompt={editQueuedPrompt}
+                                   />
                                  ))
                                }}
                              />
@@ -3959,7 +4609,7 @@ export function Session() {
                               }
                               compactSubagentPrompt={Boolean(session()?.parentID)}
                             />
-                          </Match>
+                           </Match>
                           <Match when={message().role === "assistant"}>
                             <box id={message().id} width="100%" flexDirection="column" flexShrink={0}>
                               <AssistantMessage
@@ -3983,9 +4633,7 @@ export function Session() {
                         )
                       }}
                     </For>
-                    <Show when={virtualWindow().bottomSpacer > 0}>
-                      <box height={virtualWindow().bottomSpacer} flexShrink={0} />
-                    </Show>
+                    <box height={sessionTranscriptBottomSpacer(virtualWindow().bottomSpacer)} flexShrink={0} />
                   </scrollbox>
                 )}
               </For>
@@ -4037,12 +4685,12 @@ export function Session() {
                       return model ? Model.name(providers(), model.providerID, model.modelID) : "model unset"
                     })(),
                     context: topUsage()?.contextLabel ?? "context n/a",
-                    status:
-                      permissionPendingCount() > 0
-                        ? `${permissionPendingCount()} permission`
-                        : pending()
-                          ? "assistant active"
-                          : "idle",
+                    status: sessionPendingInputStatus({
+                      permissionCount: permissionPendingCount(),
+                      questionCount: questions().length,
+                      planReviewCount: planReviews().length,
+                      assistantActive: Boolean(pending()),
+                    }),
                     permission: permissionModeLabel(),
                   }}
                 />
@@ -4157,7 +4805,7 @@ function SessionTopMetrics(props: {
   )
 }
 
-function SessionTopNav(props: { mode: "subagent" | "loop"; canCycle?: boolean; hasParent?: boolean; width: number }) {
+function SessionTopNav(props: { mode: "subagent" | "workflow-task" | "loop"; canCycle?: boolean; hasParent?: boolean; width: number }) {
   const { theme } = useTheme()
   const keybind = useKeybind()
   const command = useCommandDialog()
@@ -4169,22 +4817,22 @@ function SessionTopNav(props: { mode: "subagent" | "loop"; canCycle?: boolean; h
     const all = [
       {
         id: "parent" as const,
-        icon: "↖",
-        label: props.mode === "loop" ? (props.hasParent ? "Parent" : "Agent View") : "Parent",
+        icon: props.mode === "workflow-task" ? "↑" : "↖",
+        label: props.mode === "workflow-task" ? "Workflow" : props.mode === "loop" ? (props.hasParent ? "Parent" : "Agent View") : "Parent",
         key: keybind.print("session_parent"),
         commandID: "session.parent" as const,
       },
       {
         id: "prev" as const,
         icon: "←",
-        label: props.mode === "loop" ? "Prev loop" : "Prev",
+        label: props.mode === "workflow-task" ? "Prev task" : props.mode === "loop" ? "Prev loop" : "Prev",
         key: keybind.print("session_child_cycle_reverse"),
         commandID: "session.child.previous" as const,
       },
       {
         id: "next" as const,
         icon: "→",
-        label: props.mode === "loop" ? "Next loop" : "Next",
+        label: props.mode === "workflow-task" ? "Next task" : props.mode === "loop" ? "Next loop" : "Next",
         key: keybind.print("session_child_cycle"),
         commandID: "session.child.next" as const,
       },
@@ -4301,15 +4949,24 @@ type SessionSubagentInfo = {
 }
 
 function sessionLiveStateLabel(input: {
-  status?: { type: string; attempt?: number; message?: string; next?: number }
+  status?: { type: string; kind?: string; attempt?: number; message?: string; next?: number; startedAt?: number }
   messages: Message[]
   pendingInputCount: number
   now?: number
   connectionStatus?: string
+  hasActiveTool?: boolean
 }) {
   if (input.pendingInputCount > 0) return "needs input"
+  const terminalAssistantSettles = terminalAssistantSettlesActivity({
+    statusType: input.status?.type,
+    statusKind: input.status?.kind,
+    statusStartedAt: input.status?.type === "busy" ? input.status.startedAt : undefined,
+    latestMessage: input.messages.findLast((message) => message.role === "assistant"),
+    hasActiveTool: input.hasActiveTool,
+  })
   if (
     input.status?.type === "retry" &&
+    !terminalAssistantSettles &&
     isAssistantWorking({ statusType: input.status.type, now: input.now, statusNext: input.status.next })
   )
     return input.status.attempt && input.status.attempt > 1 ? `retry #${input.status.attempt}` : "retrying"
@@ -4317,11 +4974,14 @@ function sessionLiveStateLabel(input: {
   const lastAssistant = input.messages.findLast((message) => message.role === "assistant")
   if (
     input.status?.type === "busy" &&
+    !terminalAssistantSettles &&
     isAssistantWorking({
       statusType: input.status.type,
+      statusKind: input.status.kind,
       now: input.now,
       assistantCreated: lastAssistant?.time.created,
       statusUntil: (input.status as { until?: number }).until,
+      hasActiveTool: input.hasActiveTool,
     })
   )
     return "working"
@@ -4332,18 +4992,17 @@ function sessionLiveStateLabel(input: {
   )
     return "working"
   if (
-    shouldShowSessionStoppedConnection({
+    shouldShowAgentStateUnknown({
       connectionStatus: input.connectionStatus ?? "disconnected",
-      hasOrphanedAssistant: Boolean(lastAssistant && !lastAssistant.time.completed),
+      hasUncertainAgentState:
+        input.status?.type === "busy" ||
+        input.status?.type === "retry" ||
+        Boolean(lastAssistant && !lastAssistant.time.completed),
     })
-  ) return SESSION_STOPPED_CONNECTION_MESSAGE
+  ) return SESSION_AGENT_STATE_UNKNOWN_MESSAGE
   if (lastUser && (!lastAssistant || lastAssistant.time.created < lastUser.time.created)) return "waiting"
   if (lastAssistant) return "responded"
   return "ready"
-}
-
-function sessionSubagentIsActive(status: string) {
-  return status === "working" || status === "waiting" || status === "needs input" || status.startsWith("retry")
 }
 
 export function sessionHasLocalQueuedTurn(input: {
@@ -4381,6 +5040,18 @@ export function shouldReleaseSessionPagingBoundarySuppression(input: {
   )
   if (input.boundary === "top") return input.scrollTop >= releaseDistance
   return maxScrollTop - input.scrollTop >= releaseDistance
+}
+
+export function shouldClearSessionPagingBoundarySuppression(input: {
+  boundary: "top" | "bottom"
+  hasMoreOlder: boolean
+  hasMoreNewer: boolean
+  direction?: "up" | "down"
+}) {
+  if (input.boundary === "top" && !input.hasMoreOlder) return true
+  if (input.boundary === "bottom" && !input.hasMoreNewer) return true
+  if (!input.direction) return false
+  return input.boundary === "top" ? input.direction === "up" : input.direction === "down"
 }
 
 export function sessionUserPromptHistory(input: {
@@ -6026,7 +6697,7 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
     sessionContentWidth(dimensions().width, promptChromeUsesFullSessionWidth(mend.profile.promptChrome.preset)),
   )
   const markdownWidth = createMemo(() => Math.max(1, messageWidth() - textPaddingLeft))
-  const richRenderWidth = createMemo(() => Math.min(markdownWidth(), 100))
+  const richRenderWidth = createMemo(() => markdownWidth())
   const hasMermaid = createMemo(() => hasMermaidFence(source()))
   const markdownStaticContent = createMemo(() => {
     if (renderer() !== "markdown" && renderer() !== "rich") return
@@ -6067,6 +6738,7 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
                 <StyledPlanMarkdown
                   syntaxStyle={syntax()}
                   width={markdownWidth()}
+                  source={source()}
                   content={markdownContent()}
                   tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
                   conceal={ctx.conceal()}
@@ -6115,11 +6787,11 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
   const mend = useMendTuiProfile()
   const rowOnly = createMemo(() => {
     const profile = mend.profile.presentation.profile
-    if (props.part.tool === "image_gen" && profile === "mendcode") return false
+    if (shouldRenderImageGenerationTool(props.part.tool)) return false
     if (props.part.tool === ShellID.ToolID) return false
     if (props.part.tool === "plan_review") return false
     if (props.part.tool === "loop") return false
-    if (props.part.tool === "workflow") return false
+    if (props.part.tool === "workflow" && shouldRenderSessionWorkflowCard(profile)) return false
     if (props.part.tool === "memory_graph") return false
     return shouldRenderCompactTool(profile, props.part.tool)
   })
@@ -6129,7 +6801,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
     if (ctx.showDetails()) return false
     if (props.part.tool === "image_gen") return false
     if (props.part.tool === "loop") return false
-    if (props.part.tool === "workflow") return false
+    if (props.part.tool === "workflow" && shouldRenderSessionWorkflowCard(mend.profile.presentation.profile)) return false
     if (props.part.state.status !== "completed") return false
     return true
   })
@@ -6172,7 +6844,7 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
             output={toolprops.output}
           />
         </Match>
-        <Match when={props.part.tool === "image_gen" && mend.profile.presentation.profile === "mendcode"}>
+        <Match when={shouldRenderImageGenerationTool(props.part.tool)}>
           <ImageGen {...toolprops} />
         </Match>
         <Match when={props.part.tool === ShellID.ToolID}>
@@ -6214,10 +6886,19 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={props.part.tool === "skill"}>
           <Skill {...toolprops} />
         </Match>
-        <Match when={props.part.tool === "loop"}>
+        <Match
+          when={
+            props.part.tool === "loop" &&
+            shouldRenderSessionLoopCard({
+              toolStatus: props.part.state.status,
+              workflowID: toolprops.metadata.workflowID,
+              workflows: toolprops.metadata.workflows,
+            })
+          }
+        >
           <Loop {...toolprops} />
         </Match>
-        <Match when={props.part.tool === "workflow"}>
+        <Match when={props.part.tool === "workflow" && shouldRenderSessionWorkflowCard(mend.profile.presentation.profile)}>
           <Workflow {...toolprops} />
         </Match>
         <Match when={props.part.tool === "memory_graph"}>
@@ -6744,6 +7425,7 @@ function InlineTool(props: {
   complete: any
   pending: string
   spinner?: boolean
+  activityOverride?: boolean
   children: JSX.Element
   part: ToolPart
   onClick?: () => void
@@ -6763,6 +7445,7 @@ function InlineTool(props: {
         toolStatus: props.part.state.status,
         sessionStatusType: sync.data.session_status[ctx.sessionID]?.type,
         interrupted: ctx.interrupted(),
+        activityOverride: props.activityOverride,
       }),
   )
 
@@ -7402,12 +8085,20 @@ function Task(props: ToolProps<typeof TaskTool>) {
     )
   })
   const subagentForeground = createMemo(() => selectedForeground(theme, subagentColor()))
+  const taskVariant = createMemo(() => {
+    if (typeof props.metadata.variant === "string") return props.metadata.variant
+    if (typeof props.input.variant === "string") return props.input.variant
+    const inputModel = typeof props.input.model === "string" ? props.input.model : undefined
+    const separator = inputModel?.lastIndexOf("#") ?? -1
+    if (!inputModel || separator <= inputModel.indexOf("/") || separator === inputModel.length - 1) return undefined
+    return inputModel.slice(separator + 1)
+  })
   const model = createMemo((): { providerID: string; modelID: string } | undefined => {
     const metadataModel = props.metadata.model as { providerID?: string; modelID?: string } | undefined
     if (metadataModel?.providerID && metadataModel.modelID) {
       return { providerID: metadataModel.providerID, modelID: metadataModel.modelID }
     }
-    const inputModel = typeof props.input.model === "string" ? props.input.model : undefined
+    const inputModel = typeof props.input.model === "string" ? props.input.model.split("#", 1)[0] : undefined
     if (!inputModel?.includes("/")) return undefined
     const [providerID, ...modelParts] = inputModel.split("/")
     const modelID = modelParts.join("/")
@@ -7416,7 +8107,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
   const modelLabel = createMemo(() => {
     const value = model()
     if (!value) return undefined
-    return Model.name(sync.data.provider, value.providerID, value.modelID)
+    return [Model.name(sync.data.provider, value.providerID, value.modelID), taskVariant()].filter(Boolean).join(" ")
   })
   const childStatus = createMemo(() => {
     if (!props.metadata.sessionId) return undefined
@@ -7438,7 +8129,10 @@ function Task(props: ToolProps<typeof TaskTool>) {
       messages: messages(),
       pendingInputCount: childPendingInputCount(),
       now: ctx.now(),
-      connectionStatus: sdk.connection.status,
+      connectionStatus:
+        sdk.connection.status === "connected" && sdk.connection.recoveringSince !== undefined
+          ? "reconnecting"
+          : sdk.connection.status,
     })
   })
   const backgroundTask = createMemo(() => props.metadata.status === "started")
@@ -7446,7 +8140,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
     () =>
       isRunning() ||
       continuation().activeResume ||
-      (backgroundTask() && sessionSubagentIsActive(childLiveState() ?? "")),
+      (backgroundTask() && isSubagentStatusActive(childLiveState() ?? "")),
   )
   const childStatusLabel = createMemo(() => {
     const state = childLiveState()
@@ -7464,11 +8158,12 @@ function Task(props: ToolProps<typeof TaskTool>) {
       const attempt = state.attempt > 1 ? ` #${state.attempt}` : ""
       return `↳ reconnecting${attempt}: local connection lost`
     }
-    if (state.status === "failed") return `↳ connection lost: stopped after ${state.attempt} reconnect attempts`
+    if (state.status === "failed")
+      return `↳ local connection unavailable after ${state.attempt} retries; agent state unknown`
     return "↳ disconnected: waiting for local connection"
   })
   const contentColor = (line: string) => {
-    if (line.startsWith("↳ connection lost:") || line.includes("agent stopped:")) return theme.error
+    if (line.startsWith("↳ local connection unavailable")) return theme.error
     return theme.textMuted
   }
   const childErrorLabel = createMemo(() => {
@@ -7509,7 +8204,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
     if (props.part.state.status === "completed") {
       if (backgroundTask()) {
         const state = childLiveState()
-        const active = sessionSubagentIsActive(state ?? "")
+        const active = isSubagentStatusActive(state ?? "")
         const label = active
           ? "running in background"
           : state === "responded"
@@ -7542,6 +8237,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
       <InlineTool
         icon={toolPresentationIcon("task")}
         spinner={isTaskActive()}
+        activityOverride={backgroundTask() && isSubagentStatusActive(childLiveState() ?? "")}
         complete={props.input.description}
         pending="Delegating..."
         part={props.part}
@@ -7940,7 +8636,7 @@ function workflowToolReceipt(snapshot: WorkflowSnapshot) {
       createdAt: workflowToolNumber(snapshot.run.createdAt),
       updatedAt: workflowToolNumber(snapshot.run.updatedAt),
     },
-    phases: snapshot.phases.map((phase) => ({ state: phase.state, counts: phase.counts, id: phase.id, name: phase.name })),
+    phases: snapshot.phases.map((phase) => ({ state: phase.state, counts: phase.counts, id: phase.id, ordinal: phase.ordinal, name: phase.name })),
     tasks: snapshot.tasks.map((task) => ({
       id: task.id,
       name: task.name,
@@ -7984,9 +8680,17 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
     const current = live()
     return current ? workflowToolReceipt(current) : undefined
   })
+  const phases = createMemo(() =>
+    workflowReceiptFallbackPhases({
+      live: receipt()?.phases,
+      metadata: props.metadata.phases,
+      plan: props.input.plan?.phases,
+    }),
+  )
+  const phaseDiagram = createMemo(() => workflowReceiptPhaseDiagram({ phases: phases() }, activityFrame(), 8))
   const state = createMemo(() => live()?.run.state ?? props.metadata.state ?? (props.part.state.status === "running" ? "working" : props.part.state.status))
-  const title = createMemo(() => live()?.definition.name || (typeof props.input.name === "string" ? props.input.name : "Workflow"))
-  const objective = createMemo(() => live()?.revision.plan.objective || props.metadata.objective || "Declarative workflow execution")
+  const title = createMemo(() => live()?.definition.name || props.input.plan?.name || (typeof props.input.name === "string" ? props.input.name : "Workflow"))
+  const objective = createMemo(() => live()?.revision.plan.objective || props.metadata.objective || props.input.plan?.objective || "Declarative workflow execution")
   const panelWidth = createMemo(() => Math.max(52, Math.min(92, dimensions().width - 12)))
   const rows = createMemo(() => {
     const current = receipt()
@@ -8101,38 +8805,29 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
             <text fg={theme.textMuted} wrapMode="word">{Locale.truncate(objective(), Math.max(24, panelWidth() - 8))}</text>
             <text fg={theme.warning} wrapMode="word">next: {Locale.truncate(nextAction(), Math.max(24, panelWidth() - 14))}</text>
           </box>
-          <Show when={receipt()?.phases.length}>
+          <Show when={phaseDiagram().length}>
             <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
-              <text fg={theme.primary} attributes={TextAttributes.BOLD}>EXECUTION PLAN</text>
-              <For each={receipt()!.phases.slice(0, 8)}>
-                {(phase) => (
-                  <box flexDirection="row">
-                    <text
-                      width={5}
-                      fg={
-                        phase.state === "completed"
+              <text fg={theme.primary} attributes={TextAttributes.BOLD}>PHASE FLOW</text>
+              <For each={phaseDiagram()}>
+                {(row) => (
+                  <text
+                    fg={
+                      row.kind !== "phase"
+                        ? theme.border
+                        : row.state === "completed"
                           ? theme.success
-                          : phase.state === "failed" || phase.state === "blocked"
+                          : row.state === "failed" || row.state === "blocked"
                             ? theme.error
-                            : phase.state === "working"
+                            : row.state === "working"
                               ? theme.secondary
                               : theme.textMuted
-                      }
-                      wrapMode="none"
-                    >
-                      {workflowReceiptStateMarker(phase.state, activityFrame())}
-                    </text>
-                    <text fg={theme.text} wrapMode="none">
-                      {Locale.truncateMiddle(phase.name || phase.id || "phase", Math.max(16, panelWidth() - 32))}
-                    </text>
-                    <box flexGrow={1} />
-                    <text fg={theme.textMuted} wrapMode="none">{phase.counts.completed}/{phase.counts.total}</text>
-                  </box>
+                    }
+                    wrapMode="none"
+                  >
+                    {Locale.truncateMiddle(row.text, Math.max(24, panelWidth() - 8))}
+                  </text>
                 )}
               </For>
-              <Show when={(receipt()?.phases.length ?? 0) > 8}>
-                <text fg={theme.textMuted}>... {(receipt()?.phases.length ?? 0) - 8} more phases</text>
-              </Show>
             </box>
           </Show>
           <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="row">

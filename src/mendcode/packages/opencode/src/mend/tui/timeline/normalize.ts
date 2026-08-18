@@ -35,7 +35,12 @@ export function toolClass(tool: string, state?: TimelineToolState): TimelineTool
   return "generic"
 }
 
+export function shouldRenderImageGenerationTool(tool: string) {
+  return tool === "image_gen"
+}
+
 export function shouldRenderCompactTool(profile: MendPresentationProfile, tool: string) {
+  if (shouldRenderImageGenerationTool(tool)) return false
   if (profile === "raw") return false
   if (tool === "task") return false
   if (tool === "loop") return false

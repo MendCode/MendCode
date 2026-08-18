@@ -26,6 +26,11 @@ type ShellOutputEvent = {
 const PREVIEW_TEXT_LIMIT = 128 * 1024
 const PREVIEW_CONTENT_LIMIT = 512 * 1024
 
+// V2 is an optional compatibility projection. Keep it materially smaller
+// than the durable transcript; the legacy sync owns the full paged history.
+export const TUI_V2_SESSION_CACHE_LIMIT = 8
+export const TUI_V2_MESSAGE_STORE_LIMIT = 150
+
 function previewText(value: string) {
   if (value.length <= PREVIEW_TEXT_LIMIT) return value
   const marker = `\n[Preview truncated: omitted ${value.length - PREVIEW_TEXT_LIMIT} chars; showing start and latest tail.]\n`
@@ -150,8 +155,29 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
     const syncTimers = new Map<string, Timer>()
     const syncInFlight = new Map<string, Promise<void>>()
     const syncQueued = new Set<string>()
+    const sessionOrder = new Map<string, true>()
+    const sessionGenerations = new Map<string, number>()
+    let disposed = false
+
+    function touchSession(sessionID: string) {
+      sessionOrder.delete(sessionID)
+      sessionOrder.set(sessionID, true)
+      while (sessionOrder.size > TUI_V2_SESSION_CACHE_LIMIT) {
+        const oldest = sessionOrder.keys().next().value
+        if (!oldest || oldest === sessionID) break
+        sessionOrder.delete(oldest)
+        syncedSessions.delete(oldest)
+        setStore("messages", produce((draft) => delete draft[oldest]))
+        const timer = syncTimers.get(oldest)
+        if (timer) clearTimeout(timer)
+        syncTimers.delete(oldest)
+        syncQueued.delete(oldest)
+        sessionGenerations.set(oldest, (sessionGenerations.get(oldest) ?? 0) + 1)
+      }
+    }
 
     function update(sessionID: string, fn: (messages: SessionMessage[]) => void) {
+      touchSession(sessionID)
       syncedSessions.add(sessionID)
       setStore(
         "messages",
@@ -162,6 +188,8 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
     }
 
     async function syncMessages(sessionID: string, options?: { force?: boolean }) {
+      if (disposed) return
+      touchSession(sessionID)
       syncedSessions.add(sessionID)
       if (!options?.force && store.messages[sessionID]) return
 
@@ -171,12 +199,16 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
         return existing
       }
 
+      const generation = (sessionGenerations.get(sessionID) ?? 0) + 1
+      sessionGenerations.set(sessionID, generation)
       const run = sdk.client.v2.session
-        .messages({ sessionID, limit: 5_000, view: "tui" } as Parameters<
+        .messages({ sessionID, limit: TUI_V2_MESSAGE_STORE_LIMIT, view: "tui" } as Parameters<
           typeof sdk.client.v2.session.messages
         >[0] & { limit: number; view: "tui" })
         .then((response) => {
-          setStore("messages", sessionID, reconcile((response.data?.items ?? []).map(previewMessage)))
+          if (disposed || sessionGenerations.get(sessionID) !== generation) return
+          const items = (response.data?.items ?? []).slice(0, TUI_V2_MESSAGE_STORE_LIMIT)
+          setStore("messages", sessionID, reconcile(items.map(previewMessage)))
         })
         .finally(() => {
           syncInFlight.delete(sessionID)
@@ -205,7 +237,7 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
       for (const sessionID of syncedSessions) scheduleSync(sessionID, delay)
     }
 
-    event.subscribe((event) => {
+    const unsubscribeEvent = event.subscribe((event) => {
       const shellOutputEvent = event as typeof event | ShellOutputEvent
       if (shellOutputEvent.type === "session.next.shell.output") {
         update(shellOutputEvent.properties.sessionID, (draft) => {
@@ -459,9 +491,16 @@ export const { use: useSyncV2, provider: SyncProviderV2 } = createSimpleContext(
     }
 
     onCleanup(() => {
+      disposed = true
+      unsubscribeEvent()
       unsubscribeConnection()
       for (const timer of syncTimers.values()) clearTimeout(timer)
       syncTimers.clear()
+      syncInFlight.clear()
+      syncQueued.clear()
+      syncedSessions.clear()
+      sessionOrder.clear()
+      sessionGenerations.clear()
     })
 
     return result
