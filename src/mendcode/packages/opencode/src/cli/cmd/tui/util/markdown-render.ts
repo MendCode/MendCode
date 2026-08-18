@@ -792,7 +792,7 @@ function alignTextBlock(input: string, width: number) {
 function mermaidSourceLine(input: string) {
   return cleanMermaidLabel(input)
     .replace(/--!?>\|([^|]+)\|/g, "── $1 ─▶")
-    .replace(/-->/g, "──▶")
+    .replaceAll("-->", "──▶")
     .replace(/-\.->/g, "╌╌▶")
     .replace(/==>/g, "━━▶")
 }
@@ -1390,20 +1390,38 @@ function renderCompactRankedVerticalFlowchart(input: {
   return output.join("\n")
 }
 
+function stripAngleBracketMarkup(input: string) {
+  let output = ""
+  let insideTag = false
+  for (const character of input) {
+    if (character === "<") {
+      insideTag = true
+      continue
+    }
+    if (character === ">" && insideTag) {
+      insideTag = false
+      continue
+    }
+    if (!insideTag) output += character
+  }
+  return output
+}
+
 function cleanMermaidLabel(input: string | undefined) {
-  return (input ?? "")
-    .trim()
-    .replace(/^(?:["'`])([\s\S]*)(?:["'`])$/, "$1")
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/#(quot|apos|amp|lt|gt);/gi, (_match, entity: string) => {
-      const values: Record<string, string> = { quot: '"', apos: "'", amp: "&", lt: "<", gt: ">" }
-      return values[entity.toLowerCase()] ?? _match
-    })
-    .replace(/&quot;|&apos;|&amp;|&lt;|&gt;/gi, (match) => {
-      const values: Record<string, string> = { "&quot;": '"', "&apos;": "'", "&amp;": "&", "&lt;": "<", "&gt;": ">" }
-      return values[match.toLowerCase()] ?? match
-    })
+  return stripAngleBracketMarkup(
+    (input ?? "")
+      .trim()
+      .replace(/^(?:["'`])([\s\S]*)(?:["'`])$/, "$1")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/#(quot|apos|amp|lt|gt);/gi, (_match, entity: string) => {
+        const values: Record<string, string> = { quot: '"', apos: "'", amp: "&", lt: "<", gt: ">" }
+        return values[entity.toLowerCase()] ?? _match
+      })
+      .replace(/&quot;|&apos;|&amp;|&lt;|&gt;/gi, (match) => {
+        const values: Record<string, string> = { "&quot;": '"', "&apos;": "'", "&amp;": "&", "&lt;": "<", "&gt;": ">" }
+        return values[match.toLowerCase()] ?? match
+      }),
+  )
     .replace(/\*\*([^*]+)\*\*/g, "$1")
     .replace(/__([^_]+)__/g, "$1")
     .replace(/(^|\s)[*_]([^*_]+)[*_](?=\s|$)/g, "$1$2")
@@ -1876,7 +1894,7 @@ function classRelationConnector(relation: string) {
 }
 
 function erRelationConnector(relation: string) {
-  return relation.replace("--", "────").replace("..", "╌╌╌╌")
+  return relation.replaceAll("--", "────").replaceAll("..", "╌╌╌╌")
 }
 
 function flowchartShapeMarker(shape: FlowchartNodeShape | undefined) {
@@ -3511,7 +3529,7 @@ function renderQuadrantChart(input: string, width: number): string | undefined {
     }
     const axis = /^(x-axis|y-axis)\s+(.+)$/i.exec(line)
     if (axis) {
-      const ends = axis[2].split(/\s*-->\s*/).map(cleanLabel)
+      const ends = axis[2].split("-->").map(cleanLabel)
       if (axis[1].toLowerCase() === "x-axis") [xLow, xHigh] = [ends[0] || xLow, ends[1] || xHigh]
       else [yLow, yHigh] = [ends[0] || yLow, ends[1] || yHigh]
       continue

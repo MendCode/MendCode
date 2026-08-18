@@ -43,6 +43,22 @@ test("renderPlanMarkdown renders simple mermaid flowcharts without termaid", asy
   expect(result).not.toContain("flowchart TD")
 })
 
+test("renderPlanMarkdown strips decoded markup from Mermaid labels", async () => {
+  process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
+  const markdown = [
+    "```mermaid",
+    "flowchart LR",
+    '  A["Safe &lt;script&gt;hidden&lt;/script&gt; label"] --> B[Next]',
+    "```",
+  ].join("\n")
+
+  const result = await renderPlanMarkdown(markdown, 100)
+  expect(result).toContain("Safe hidden label")
+  expect(result).not.toContain("script")
+  expect(result).not.toContain("<")
+  expect(result).not.toContain(">")
+})
+
 test("renderPlanMarkdown attaches single Mermaid edge labels to the vertical connector", async () => {
   process.env.MENDCODE_TERMAID_BIN = "/definitely/not/termaid"
   const markdown = [
