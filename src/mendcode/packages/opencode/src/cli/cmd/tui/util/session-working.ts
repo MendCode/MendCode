@@ -1,12 +1,34 @@
 export const RECENT_WORKING_ASSISTANT_WINDOW_MS = 30_000
 export const STALE_BUSY_SESSION_WINDOW_MS = 60_000
-export const SESSION_STOPPED_CONNECTION_MESSAGE = "agent stopped: local server connection lost"
+export const SESSION_AGENT_STATE_UNKNOWN_MESSAGE = "agent state unknown"
 
-export function shouldShowSessionStoppedConnection(input: {
+export function displayConnectionStatus(input: { status: string; recoveringSince?: number }) {
+  return input.status === "connected" && input.recoveringSince !== undefined ? "reconnecting" : input.status
+}
+
+export function shouldShowAgentStateUnknown(input: {
   connectionStatus: string
-  hasOrphanedAssistant: boolean
+  hasUncertainAgentState: boolean
+  hasKnownAgentActivity?: boolean
 }) {
-  return input.connectionStatus !== "connected" && input.hasOrphanedAssistant
+  if (
+    input.hasKnownAgentActivity &&
+    (input.connectionStatus === "connecting" || input.connectionStatus === "reconnecting")
+  )
+    return false
+  return input.connectionStatus !== "connected" && input.hasUncertainAgentState
+}
+
+export function knownAgentActivityConnectionLabel(input: {
+  connectionStatus: string
+  hasKnownAgentActivity: boolean
+  attempt?: number
+}) {
+  if (!input.hasKnownAgentActivity) return
+  if (input.connectionStatus === "connecting") return "connecting transport..."
+  if (input.connectionStatus !== "reconnecting") return
+  const attempt = input.attempt && input.attempt > 1 ? ` #${input.attempt}` : ""
+  return `syncing connection${attempt}...`
 }
 
 type TuiSessionStatus =
@@ -40,10 +62,12 @@ export function isAssistantWorking(input: {
   assistantCreated?: number
   statusUntil?: number
   statusNext?: number
+  hasActiveTool?: boolean
 }) {
   const now = input.now ?? Date.now()
   if (input.statusType === "busy") {
     if (input.statusKind === "compaction") return true
+    if (input.hasActiveTool) return true
     return !isStaleBusySession({
       statusType: input.statusType,
       now,
@@ -66,14 +90,34 @@ export function isBusyStatusSupersededByTerminalAssistant(input: {
     time: { created?: number; completed?: number }
   }
 }) {
-  if (input.statusType !== "busy" || input.statusKind === "compaction") return false
+  if ((input.statusType !== "busy" && input.statusType !== "retry") || input.statusKind === "compaction") return false
   const message = input.latestMessage
   if (!message || message.role !== "assistant") return false
   const terminalFinish = Boolean(message.finish && !["tool-calls", "unknown"].includes(message.finish))
   if (!terminalFinish && !message.error) return false
   const terminalAt = message.time.completed ?? message.time.created
-  if (typeof input.statusStartedAt !== "number" || typeof terminalAt !== "number") return false
+  if (typeof terminalAt !== "number") return false
+  // Older/status-recovered sessions may not carry startedAt. Once the latest
+  // assistant is durably terminal, a stale busy flag must not keep the TUI in
+  // Generating forever. When startedAt exists, retain the ordering guard so a
+  // newer turn is never hidden by an older terminal response.
+  if (typeof input.statusStartedAt !== "number") return Boolean(message.time.completed || terminalFinish || message.error)
   return input.statusStartedAt <= terminalAt
+}
+
+/**
+ * A terminal assistant is authoritative over stale transport/recovery labels,
+ * but only when its own tool stream has no pending/running work left.
+ */
+export function terminalAssistantSettlesActivity(input: {
+  statusType?: string
+  statusKind?: string
+  statusStartedAt?: number
+  latestMessage?: Parameters<typeof isBusyStatusSupersededByTerminalAssistant>[0]["latestMessage"]
+  hasActiveTool?: boolean
+}) {
+  if (input.hasActiveTool) return false
+  return isBusyStatusSupersededByTerminalAssistant(input)
 }
 
 export function isStaleBusySession(input: {

@@ -5,10 +5,12 @@ import { ulid } from "ulid"
 import { Bus } from "@/bus"
 import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
+import { readPermissionsConfig } from "@/mend/config/permissions"
 import type { InstanceContext } from "@/project/instance-context"
 import { InstanceStore } from "@/project/instance-store"
 import { Worktree } from "@/worktree"
 import { Session } from "./session"
+import { reconcilePermissionAbandonment } from "./pending-input"
 import { SessionID } from "./schema"
 import * as WorkflowBackgroundTask from "./workflow-background-task"
 import * as WorkflowScheduler from "./workflow-scheduler"
@@ -17,10 +19,18 @@ import * as WorkflowTaskExecutor from "./workflow-task-executor"
 import { WorkflowPolicy } from "./workflow-policy"
 import type { WorkflowTaskClaim } from "./workflow-scheduler"
 import type { ExecutionResult } from "./workflow-task-executor"
-import type { WorkflowPermissionPolicy, WorkflowWorkspaceLease, WorkflowWorkspaceMode } from "./workflow"
+import type {
+  WorkflowPermissionPolicy,
+  WorkflowSessionPermissionMode,
+  WorkflowRunState,
+  WorkflowWorkspaceLease,
+  WorkflowWorkspaceMode,
+} from "./workflow"
+import { isTransientWorkflowError } from "./workflow"
 
 export interface Interface {
   readonly start: (runID: string) => Effect.Effect<void>
+  readonly wake: (runID: string) => Effect.Effect<void>
   readonly run: (runID: string) => Effect.Effect<void, Error>
   readonly stop: (runID: string) => Effect.Effect<void, WorkflowService.WorkflowNotFoundError>
   readonly setPermissionMode: (
@@ -33,7 +43,9 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/WorkflowRunner") {}
 
-const RUN_LEASE_HEARTBEAT_MS = 10_000
+export function shouldRecoverWorkflowRun(state: WorkflowRunState) {
+  return state === "queued" || state === "working"
+}
 
 const errorText = (error: unknown) => {
   if (error instanceof Error) return error.message
@@ -97,13 +109,90 @@ export const layer = Layer.effect(
     const scheduler = yield* WorkflowScheduler.Service
     const background = yield* WorkflowBackgroundTask.Service
     const executor = yield* WorkflowTaskExecutor.Service
-    const sessions = Option.getOrUndefined(yield* Effect.serviceOption(Session.Service))
+    const sessions = yield* Session.Service
     const permissions = Option.getOrUndefined(yield* Effect.serviceOption(Permission.Service))
     const instances = Option.getOrUndefined(yield* Effect.serviceOption(InstanceStore.Service))
     const worktrees = Option.getOrUndefined(yield* Effect.serviceOption(Worktree.Service))
     const bus = yield* Bus.Service
     const scope = yield* Scope.Scope
-    const activeRuns = new Set<string>()
+    const activeRuns = new Map<string, number>()
+
+    const reconcileAttempts = Effect.fn("WorkflowRunner.reconcileAttempts")(function* (
+      snapshot: WorkflowService.WorkflowSnapshot,
+    ) {
+      yield* Effect.forEach(
+        snapshot.tasks.filter((task) => (task.state === "working" || task.state === "needs_input") && task.sessionID),
+        (task) =>
+          Effect.gen(function* () {
+            if (!task.sessionID) return
+            if (task.state === "needs_input") {
+              yield* Effect.sync(() => reconcilePermissionAbandonment(task.sessionID!))
+              return
+            }
+            const latest = (
+              yield* sessions
+                .messages({ sessionID: task.sessionID, limit: 1 })
+                .pipe(Effect.catchCause(() => Effect.succeed([])))
+            )[0]
+            const backgroundAttempt = yield* background
+              .getAttempt({ sessionID: task.sessionID })
+              .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+            const terminalMessage =
+              latest?.info.role === "assistant" &&
+              (latest.info.error !== undefined || Boolean(latest.info.finish) || latest.info.time.completed !== undefined)
+                ? latest
+                : undefined
+            const result = terminalMessage
+              ? WorkflowTaskExecutor.resultFromMessage(task, terminalMessage)
+              : backgroundAttempt?.state === "completed"
+                ? ({ state: "completed", summary: backgroundAttempt.result?.summary } satisfies ExecutionResult)
+                : backgroundAttempt && ["failed", "cancelled", "interrupted"].includes(backgroundAttempt.state)
+                  ? ({
+                      state: "failed",
+                      failureClass: isTransientWorkflowError(
+                        backgroundAttempt.result?.error ??
+                          backgroundAttempt.result?.summary ??
+                          `Background task ended as ${backgroundAttempt.state} before the workflow attempt was reconciled.`,
+                      )
+                        ? "transient"
+                        : "environment",
+                      error:
+                        backgroundAttempt.result?.error ??
+                        `Background task ended as ${backgroundAttempt.state} before the workflow attempt was reconciled.`,
+                      summary: backgroundAttempt.result?.summary,
+                    } satisfies ExecutionResult)
+                  : undefined
+            if (!result) return
+
+            if (backgroundAttempt && !["completed", "failed", "cancelled", "interrupted"].includes(backgroundAttempt.state)) {
+              yield* background
+                .finishAttempt({
+                  taskID: task.sessionID,
+                  generation: backgroundAttempt.generation,
+                  state: result.state === "completed" ? "completed" : "failed",
+                  result: {
+                    summary: result.summary,
+                    error: result.error,
+                    changedFiles: [],
+                    transcriptSessionID: task.sessionID,
+                  },
+                })
+                .pipe(Effect.catchCause(() => Effect.void))
+            }
+            yield* scheduler.finishSession({
+              sessionID: task.sessionID,
+              ...(backgroundAttempt === undefined ? {} : { backgroundGeneration: backgroundAttempt.generation }),
+              state: result.state,
+              summary: result.summary,
+              error: result.error,
+              failureClass: result.failureClass,
+              usage: result.usage,
+              evidence: result.evidence,
+            })
+          }).pipe(Effect.catchCause(() => Effect.void)),
+        { concurrency: 8, discard: true },
+      )
+    })
 
     const executionWorkspace = Effect.fn("WorkflowRunner.executionWorkspace")(function* (
       snapshot: WorkflowService.WorkflowSnapshot,
@@ -137,10 +226,8 @@ export const layer = Layer.effect(
       }
 
       const root =
-        snapshot.run.rootSessionID && sessions
-          ? yield* sessions
-              .get(snapshot.run.rootSessionID as SessionID)
-              .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        snapshot.run.rootSessionID
+          ? yield* sessions.get(snapshot.run.rootSessionID as SessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
           : undefined
       if (root && (root.directory !== current.directory || current.worktree !== current.project.worktree)) {
         return {
@@ -151,9 +238,9 @@ export const layer = Layer.effect(
       }
 
       if (!root && mode === "per-loop-worktree" && snapshot.run.originSessionID) {
-        const origin = sessions
-          ? yield* sessions.get(snapshot.run.originSessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-          : undefined
+        const origin = yield* sessions
+          .get(snapshot.run.originSessionID)
+          .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         if (origin && (origin.directory !== current.directory || current.worktree !== current.project.worktree)) {
           return {
             directory: origin.directory,
@@ -268,6 +355,7 @@ export const layer = Layer.effect(
       readonly rootSessionID: SessionID
       readonly planModel?: WorkflowTaskClaim["task"]["model"]
       readonly planPermissions?: WorkflowPermissionPolicy
+      readonly sessionPermissionMode: WorkflowSessionPermissionMode
       readonly planWorkspace?: WorkflowTaskClaim["task"]["workspace"]
       readonly artifacts: readonly {
         readonly taskID?: string
@@ -290,7 +378,7 @@ export const layer = Layer.effect(
         title: input.claim.task.name,
         agent: input.claim.task.agentProfile ?? "general",
         model,
-        permission: policy.permission,
+        permission: Permission.withSessionMode(policy.permission, input.sessionPermissionMode),
         depth: 1,
         maxChildren: input.claim.maxChildren,
       })
@@ -320,7 +408,7 @@ export const layer = Layer.effect(
           Effect.catchCause((cause) =>
             Effect.succeed<ExecutionResult>({
               state: "failed" as const,
-              failureClass: "environment" as const,
+              failureClass: isTransientWorkflowError(errorText(Cause.squash(cause))) ? "transient" as const : "environment" as const,
               error: errorText(Cause.squash(cause)),
             }),
           ),
@@ -390,36 +478,35 @@ export const layer = Layer.effect(
         attempt: input.claim.attempt,
         state: "failed",
         error: input.error,
-        failureClass: "environment",
+        failureClass: isTransientWorkflowError(input.error) ? "transient" : "environment",
       })
     })
 
     const run = Effect.fn("WorkflowRunner.run")(function* (runID: string) {
       const id = runID as never
       const initial = yield* workflow.show(id)
+      yield* reconcileAttempts(initial)
+      const recovered = yield* workflow.show(id)
+      if (!["queued", "working"].includes(recovered.run.state)) return
       const current = yield* InstanceState.context
-      const target = yield* executionWorkspace(initial)
+      const target = yield* executionWorkspace(recovered)
       const execute = Effect.gen(function* () {
         const root = yield* background.ensureRoot({
           runID: id,
-          title: initial.definition.name,
-          model: initial.revision.plan.model,
+          title: recovered.definition.name,
+          model: recovered.revision.plan.model,
         })
 
         while (true) {
           const snapshot = yield* workflow.show(id)
+          const sessionPermissionMode =
+            snapshot.run.sessionPermissionMode ?? (yield* Effect.promise(() => readPermissionsConfig())).mode
           const tick = yield* scheduler.tick(id)
           if (tick.claimed.length === 0) {
             if (tick.nextWakeAt === undefined) return
             yield* Effect.sleep(Duration.millis(Math.max(1, tick.nextWakeAt - Date.now())))
             continue
           }
-          const maintainLease = scheduler.heartbeat(id).pipe(
-            Effect.flatMap((renewed) =>
-              renewed ? Effect.void : Effect.fail(new Error(`Workflow ${runID} scheduler lease was lost`)),
-            ),
-            Effect.repeat(Schedule.spaced(Duration.millis(RUN_LEASE_HEARTBEAT_MS))),
-          )
           yield* Effect.forEach(
             tick.claimed,
             (claim) =>
@@ -432,6 +519,7 @@ export const layer = Layer.effect(
                   snapshot.revision.plan.permissions,
                   snapshot.run.permissionMode,
                 ),
+                sessionPermissionMode,
                 planWorkspace: snapshot.revision.plan.workspace,
                 artifacts: snapshot.artifacts,
               }).pipe(
@@ -444,7 +532,7 @@ export const layer = Layer.effect(
                 ),
               ),
             { concurrency: Math.max(1, Math.min(snapshot.preview.maxConcurrency, tick.claimed.length)), discard: true },
-          ).pipe(Effect.raceFirst(maintainLease))
+          )
         }
       })
       const executeTarget =
@@ -489,30 +577,106 @@ export const layer = Layer.effect(
       input: WorkflowService.WorkflowPermissionModeInput,
     ) {
       const snapshot = yield* workflow.setPermissionMode(input)
-      if (!permissions || !snapshot.run.rootSessionID || snapshot.run.permissionMode === "custom") return snapshot
-      const waiting = (yield* background.listChildren(snapshot.run.rootSessionID)).filter(
-        (child) => child.state === "needs_input",
+      if (!snapshot.run.rootSessionID) return snapshot
+      const children = yield* background.listChildren(snapshot.run.rootSessionID)
+      const sessionIDs = children.map((child) => child.taskID)
+      const sessionPermissionMode =
+        snapshot.run.sessionPermissionMode ?? (yield* Effect.promise(() => readPermissionsConfig())).mode
+
+      yield* Effect.forEach(
+        sessionIDs,
+        (sessionID) =>
+          sessions.get(sessionID).pipe(
+            Effect.flatMap((session) =>
+              sessions.setPermission({
+                sessionID,
+                permission: Permission.withSessionMode(session.permission ?? [], sessionPermissionMode),
+              }),
+            ),
+            Effect.catchCause(() => Effect.void),
+          ),
+        { concurrency: 8, discard: true },
       )
-      if (waiting.length === 0) return snapshot
-      yield* permissions.replyForSessions({
-        sessionIDs: waiting.map((child) => child.taskID),
-        reply: snapshot.run.permissionMode === "normal" ? "always" : "reject",
-      })
+      if (!permissions || sessionIDs.length === 0) return snapshot
+
+      if (input.mode !== undefined && snapshot.run.permissionMode !== "custom") {
+        yield* permissions.replyForSessions({
+          sessionIDs,
+          reply: snapshot.run.permissionMode === "normal" ? "always" : "reject",
+        })
+        return snapshot
+      }
+      if (sessionPermissionMode === "full_access") {
+        yield* permissions.replyForSessions({ sessionIDs, reply: "once" })
+      }
+      if (sessionPermissionMode === "smart") {
+        yield* permissions.replyForSessions({
+          sessionIDs,
+          reply: "once",
+          filter: Permission.isSafeSmartAutoApprovalRequest,
+        })
+      }
       return snapshot
     })
 
-    const start = Effect.fn("WorkflowRunner.start")(function* (runID: string) {
-      if (activeRuns.has(runID)) return
-      activeRuns.add(runID)
-      yield* Effect.forkIn(run(runID).pipe(Effect.ensuring(Effect.sync(() => activeRuns.delete(runID)))), scope)
+    const launch = Effect.fn("WorkflowRunner.launch")(function* (runID: string, force: boolean) {
+      const active = activeRuns.get(runID) ?? 0
+      if (active > 0 && !force) return
+      activeRuns.set(runID, active + 1)
+      yield* Effect.forkIn(
+        run(runID).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              const remaining = (activeRuns.get(runID) ?? 1) - 1
+              if (remaining > 0) activeRuns.set(runID, remaining)
+              else activeRuns.delete(runID)
+            }),
+          ),
+        ),
+        scope,
+      )
     })
 
-    yield* bus.subscribe(WorkflowService.Event.RunWake).pipe(
-      Stream.runForEach((event) => start(event.properties.runID).pipe(Effect.catchCause(() => Effect.void))),
+    const start = Effect.fn("WorkflowRunner.start")((runID: string) => launch(runID, false))
+    const wake = Effect.fn("WorkflowRunner.wake")((runID: string) => launch(runID, true))
+
+    // A process restart loses the in-memory RunWake event and activeRuns map,
+    // but the workflow run and task leases remain durable. Reattach every
+    // runnable run once the instance services are ready; approval, pause,
+    // input, and terminal states remain operator-controlled. Repeat the scan
+    // so a sibling server holding SQLite during startup cannot strand a queued
+    // run forever after the first recovery attempt fails.
+    const recoverDurableRuns = Effect.gen(function* () {
+      let snapshots: readonly WorkflowService.WorkflowSnapshot[] | undefined
+      for (let attempt = 0; attempt < 4 && snapshots === undefined; attempt++) {
+        const result = yield* workflow.list(500).pipe(
+          Effect.map((value) => ({ ok: true as const, value })),
+          Effect.catchCause(() => Effect.succeed({ ok: false as const })),
+        )
+        if (result.ok) {
+          snapshots = result.value
+          break
+        }
+        if (attempt < 3) yield* Effect.sleep(Duration.millis(250 * (attempt + 1)))
+      }
+      if (!snapshots) return
+      yield* Effect.forEach(
+        snapshots.filter((snapshot) => shouldRecoverWorkflowRun(snapshot.run.state)),
+        (snapshot) => launch(snapshot.run.id, false).pipe(Effect.catchCause(() => Effect.void)),
+        { concurrency: 8, discard: true },
+      )
+    }).pipe(
+      Effect.repeat(Schedule.spaced(Duration.seconds(5))),
+      Effect.ignore,
       Effect.forkScoped({ startImmediately: true }),
     )
 
-    return Service.of({ start, run, stop, setPermissionMode })
+    yield* bus.subscribe(WorkflowService.Event.RunWake).pipe(
+      Stream.runForEach((event) => wake(event.properties.runID).pipe(Effect.catchCause(() => Effect.void))),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+
+    return Service.of({ start, wake, run, stop, setPermissionMode })
   }),
 )
 
@@ -521,6 +685,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(WorkflowBackgroundTask.defaultLayer),
   Layer.provide(WorkflowScheduler.defaultLayer),
   Layer.provide(WorkflowService.defaultLayer),
+  Layer.provide(Session.defaultLayer),
   Layer.provide(Bus.layer),
 )
 

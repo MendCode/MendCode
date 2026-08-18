@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { sessionMessageVirtualWindow, stickyUserIDFromVirtualWindow } from "@/cli/cmd/tui/util/session-virtual-window"
+import {
+  sessionMeasuredHeight,
+  sessionMessageVirtualWindow,
+  sessionScrollAnchor,
+  stickyUserIDFromVirtualWindow,
+} from "@/cli/cmd/tui/util/session-virtual-window"
 import { compareSessionMessages, sortSessionMessages } from "@/cli/cmd/tui/util/session-message-order"
 import { sessionTranscriptRows } from "@/cli/cmd/tui/util/session-transcript-rows"
 
@@ -9,6 +14,37 @@ const messages = Array.from({ length: 300 }, (_, index) => ({
 }))
 
 describe("session transcript virtual window", () => {
+  test("does not commit transient zero-height measurements", () => {
+    expect(sessionMeasuredHeight(0)).toBeUndefined()
+    expect(sessionMeasuredHeight(0, 12)).toBe(12)
+    expect(sessionMeasuredHeight(4.2)).toBe(5)
+  })
+
+  test("anchors only transcript rows, not layout spacers", () => {
+    expect(
+      sessionScrollAnchor({
+        children: [
+          { id: "box-padding", y: 0 },
+          { id: "top-spacer", y: 1 },
+          { id: "msg-10", y: 42, height: 7 },
+          { id: "msg-11", y: 100, height: 7 },
+        ],
+        top: 30,
+        viewportHeight: 24,
+        transcriptChildIDs: new Set(["msg-10", "msg-11"]),
+      }),
+    ).toEqual({ id: "msg-10", offset: 12 })
+
+    expect(
+      sessionScrollAnchor({
+        children: [{ id: "msg-far", y: 200, height: 7 }],
+        top: 0,
+        viewportHeight: 24,
+        transcriptChildIDs: new Set(["msg-far"]),
+      }),
+    ).toBeUndefined()
+  })
+
   test("keeps small sessions fully rendered", () => {
     expect(sessionMessageVirtualWindow({ total: 20, scrollTop: 0, viewportHeight: 30, followOutput: true })).toEqual({
       start: 0,
@@ -19,14 +55,24 @@ describe("session transcript virtual window", () => {
     })
   })
 
+  test("keeps the normal 150-message reopen path fully rendered", () => {
+    expect(sessionMessageVirtualWindow({ total: 150, scrollTop: 0, viewportHeight: 30, followOutput: true })).toEqual({
+      start: 0,
+      end: 150,
+      topSpacer: 0,
+      bottomSpacer: 0,
+      virtualized: false,
+    })
+  })
+
   test("virtualizes very large sessions by default to keep reopen memory bounded", () => {
     expect(sessionMessageVirtualWindow({ total: 1_000, scrollTop: 0, viewportHeight: 30, followOutput: true })).toEqual(
       {
-      start: 946,
-      end: 1_000,
-      topSpacer: 5_676,
-      bottomSpacer: 0,
-      virtualized: true,
+        start: 989,
+        end: 1_000,
+        topSpacer: 5_934,
+        bottomSpacer: 0,
+        virtualized: true,
       },
     )
   })
@@ -42,10 +88,31 @@ describe("session transcript virtual window", () => {
       estimatedMessageHeight: 5,
     })
 
-    expect(window.start).toBe(250)
+    expect(window.start).toBe(292)
     expect(window.end).toBe(300)
-    expect(window.topSpacer).toBe(1250)
+    expect(window.topSpacer).toBe(1460)
     expect(window.bottomSpacer).toBe(0)
+  })
+
+  test("keeps an identity-resolved submit anchor mounted instead of following the tail", () => {
+    const window = sessionMessageVirtualWindow({
+      total: 300,
+      scrollTop: 0,
+      viewportHeight: 30,
+      followOutput: false,
+      anchorIndex: messages.findIndex((message) => message.id === "msg-120"),
+      threshold: 100,
+      overscan: 10,
+      estimatedMessageHeight: 5,
+    })
+
+    // Keep the physical viewport mounted while the identity anchor is brought
+    // into the same window. The route can then restore to the anchor without
+    // exposing the prefix spacer as a blank frame.
+    expect(window.start).toBe(0)
+    expect(window.end).toBe(130)
+    expect(120).toBeGreaterThanOrEqual(window.start)
+    expect(120).toBeLessThan(window.end)
   })
 
   test("moves the rendered range near the scroll position with overscan", () => {
@@ -59,10 +126,88 @@ describe("session transcript virtual window", () => {
       estimatedMessageHeight: 5,
     })
 
-    expect(window.start).toBe(90)
-    expect(window.end).toBe(140)
-    expect(window.topSpacer).toBe(450)
-    expect(window.bottomSpacer).toBe(800)
+    expect(window.start).toBe(98)
+    expect(window.end).toBe(109)
+    expect(window.topSpacer).toBe(490)
+    expect(window.bottomSpacer).toBe(955)
+  })
+
+  test("uses measured variable heights instead of treating a large response like a fixed row", () => {
+    const heights = Array.from({ length: 300 }, (_, index) => (index < 100 ? 1 : index === 100 ? 100 : 2))
+    const window = sessionMessageVirtualWindow({
+      total: heights.length,
+      scrollTop: 120,
+      viewportHeight: 30,
+      followOutput: false,
+      threshold: 40,
+      overscan: 10,
+      itemHeights: heights,
+    })
+
+    expect(window.start).toBe(100)
+    expect(window.end).toBe(101)
+    expect(window.topSpacer).toBe(100)
+    expect(window.bottomSpacer).toBe(398)
+  })
+
+  test("caps mounted rows even when thousands of one-line events are loaded", () => {
+    const window = sessionMessageVirtualWindow({
+      total: 10_000,
+      scrollTop: 5_000,
+      viewportHeight: 200,
+      followOutput: false,
+      threshold: 40,
+      overscan: 100,
+      maxMounted: 96,
+      itemHeights: Array.from({ length: 10_000 }, () => 1),
+    })
+
+    expect(window.end - window.start).toBe(96)
+    expect(window.topSpacer).toBe(4_900)
+  })
+
+  test("does not mount an invisible zero-height tail while following output", () => {
+    const heights = [...Array(70).fill(1), ...Array(150).fill(0)]
+    const window = sessionMessageVirtualWindow({
+      total: heights.length,
+      scrollTop: 0,
+      viewportHeight: 30,
+      followOutput: true,
+      itemHeights: heights,
+    })
+
+    expect(window.end - window.start).toBeGreaterThan(0)
+    expect(window.topSpacer).toBeLessThan(heights.length)
+    expect(window.bottomSpacer).toBe(0)
+  })
+
+  test("keeps the complete bounded follow tail during a partial zero-height layout pass", () => {
+    const window = sessionMessageVirtualWindow({
+      total: 100,
+      scrollTop: 0,
+      viewportHeight: 30,
+      followOutput: true,
+      itemHeights: [...Array(70).fill(1), ...Array(30).fill(0)],
+    })
+
+    expect(window.start).toBe(0)
+    expect(window.end).toBe(100)
+    expect(window.bottomSpacer).toBe(0)
+  })
+
+  test("treats an all-zero measurement pass as unmeasured instead of rendering a blank window", () => {
+    const window = sessionMessageVirtualWindow({
+      total: 220,
+      scrollTop: 0,
+      viewportHeight: 30,
+      followOutput: true,
+      itemHeights: Array.from({ length: 220 }, () => 0),
+    })
+
+    expect(window.end).toBe(220)
+    expect(window.end - window.start).toBeGreaterThan(0)
+    expect(window.bottomSpacer).toBe(0)
+    expect(window.topSpacer).toBeGreaterThan(0)
   })
 
   test("sticky user falls back to logical history before the mounted window", () => {
@@ -114,6 +259,22 @@ describe("session transcript virtual window", () => {
     })
 
     expect(sticky).toBe("msg-102")
+  })
+
+  test("chooses the latest mounted sticky anchor without sorting the mounted list", () => {
+    const sticky = stickyUserIDFromVirtualWindow({
+      messages,
+      window: { start: 101 },
+      mountedUserAnchors: [
+        { id: "msg-108", y: 90 },
+        { id: "msg-102", y: 50 },
+        { id: "msg-110", y: 120 },
+      ],
+      top: 100,
+      isUser: (message) => message.role === "user",
+    })
+
+    expect(sticky).toBe("msg-108")
   })
 
   test("orders messages by creation time instead of assuming IDs are chronological", () => {

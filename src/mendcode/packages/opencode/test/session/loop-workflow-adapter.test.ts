@@ -108,6 +108,7 @@ function promptLayer() {
     SessionPrompt.Service,
     SessionPrompt.Service.of({
       cancel: () => Effect.void,
+      cancelTurn: () => Effect.succeed("not_running" as const),
       cancelQueued: () => Effect.succeed(false),
       interrupt: () => Effect.void,
       prompt: (_input: PromptInput) => Effect.succeed(message),
@@ -149,6 +150,7 @@ function adapterLayers(input: {
         artifacts: unused,
         pause: unused,
         resume: unused,
+        wake: unused,
         stop: unused,
         setPermissionMode: unused,
         resumeTaskSession: unused,
@@ -164,6 +166,7 @@ function adapterLayers(input: {
       WorkflowRunner.Service,
       WorkflowRunner.Service.of({
         start: () => Effect.void,
+        wake: () => Effect.void,
         run: input.runner,
         stop: () => Effect.void,
         setPermissionMode: () => Effect.die("unused workflow runner method"),

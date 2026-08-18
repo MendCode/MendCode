@@ -3,6 +3,9 @@ import {
   formatBytes,
   formatDiagnostics,
   isProcessMemoryUsage,
+  memoryGuardrailForRSS,
+  MEMORY_CRITICAL_RSS_BYTES,
+  MEMORY_WARN_RSS_BYTES,
   type ProcessMemoryUsage,
 } from "../../../src/util/process-memory"
 
@@ -15,6 +18,11 @@ const sample: ProcessMemoryUsage = {
   external: 4 * 1024 ** 2,
   arrayBuffers: 2 * 1024 ** 2,
   uptimeSeconds: 3661,
+  memoryGuardrail: {
+    status: "ok",
+    warnBytes: 2 * 1024 ** 3,
+    criticalBytes: 4 * 1024 ** 3,
+  },
 }
 
 describe("process diagnostics", () => {
@@ -71,5 +79,11 @@ describe("process diagnostics", () => {
     expect(formatBytes(1024)).toBe("1.0 KiB")
     expect(formatBytes(1024 ** 2)).toBe("1.0 MiB")
     expect(formatBytes(1024 ** 3)).toBe("1.00 GiB")
+  })
+
+  test("classifies RSS before it becomes an unbounded runtime incident", () => {
+    expect(memoryGuardrailForRSS(0).status).toBe("ok")
+    expect(memoryGuardrailForRSS(MEMORY_WARN_RSS_BYTES).status).toBe("warning")
+    expect(memoryGuardrailForRSS(MEMORY_CRITICAL_RSS_BYTES).status).toBe("critical")
   })
 })

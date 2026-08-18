@@ -1,9 +1,14 @@
-import type { PermissionRequest } from "@mendcode/sdk/v2"
 import { ShellID } from "@/tool/shell/id"
 import { resolveModelRoles } from "@/mend/config/models"
 import { readPermissionsConfig } from "@/mend/config/permissions"
 import { runProviderAdapter } from "@/mend/runtime/provider-adapters"
 import { errorMessage } from "@/util/error"
+
+export type SmartPermissionRequest = {
+  permission: string
+  patterns: readonly string[]
+  metadata: Readonly<Record<string, unknown>>
+}
 
 export type SmartPermissionDecision = {
   triggered: boolean
@@ -359,7 +364,7 @@ function isSafeShellCommand(command: string, allowBenignWrites = false) {
   })
 }
 
-function requestCommands(request: PermissionRequest) {
+function requestCommands(request: SmartPermissionRequest) {
   const commands = new Set<string>()
   const metadataCommand = request.metadata?.command
   if (typeof metadataCommand === "string" && metadataCommand.trim()) commands.add(metadataCommand.trim())
@@ -369,16 +374,16 @@ function requestCommands(request: PermissionRequest) {
   return Array.from(commands)
 }
 
-function commandFromRequest(request: PermissionRequest) {
+function commandFromRequest(request: SmartPermissionRequest) {
   return requestCommands(request).join("\n")
 }
 
-function requestHasSuspiciousText(request: PermissionRequest) {
+function requestHasSuspiciousText(request: SmartPermissionRequest) {
   if (requestCommands(request).some(hasSuspiciousText)) return true
   return Object.values(request.metadata || {}).some((value) => typeof value === "string" && hasSuspiciousText(value))
 }
 
-function hasReviewableShellCommand(request: PermissionRequest) {
+function hasReviewableShellCommand(request: SmartPermissionRequest) {
   if (request.permission === ShellID.ToolID || request.permission === "bash") {
     return requestCommands(request).length > 0
   }
@@ -389,7 +394,7 @@ function hasReviewableShellCommand(request: PermissionRequest) {
 }
 
 export function normalizeSmartPermissionDecision(
-  request: PermissionRequest,
+  request: SmartPermissionRequest,
   decision: SmartPermissionDecision,
 ): SmartPermissionDecision {
   if (decision.decision === "allow" && !isSafeSmartPermissionRequest(request)) {
@@ -413,7 +418,7 @@ export function normalizeSmartPermissionDecision(
   }
 }
 
-function isSafeShellRequest(request: PermissionRequest) {
+function isSafeShellRequest(request: SmartPermissionRequest) {
   const commands = requestCommands(request)
   return (
     !requestHasSuspiciousText(request) &&
@@ -422,16 +427,16 @@ function isSafeShellRequest(request: PermissionRequest) {
   )
 }
 
-export function shouldTriggerSmartApproval(request: PermissionRequest) {
+export function shouldTriggerSmartApproval(request: SmartPermissionRequest) {
   if (!hasReviewableShellCommand(request)) return false
   return !isSafeSmartPermissionRequest(request)
 }
 
-export function shouldReviewSmartApproval(request: PermissionRequest) {
+export function shouldReviewSmartApproval(request: SmartPermissionRequest) {
   return shouldTriggerSmartApproval(request)
 }
 
-export function isSafeSmartPermissionRequest(request: PermissionRequest) {
+export function isSafeSmartPermissionRequest(request: SmartPermissionRequest) {
   if (request.permission === ShellID.ToolID || request.permission === "bash") {
     return isSafeShellRequest(request)
   }
@@ -464,7 +469,7 @@ function parseDecision(text: string): SmartPermissionDecision {
 }
 
 export async function reviewPermissionRequestWithModel(
-  request: PermissionRequest,
+  request: SmartPermissionRequest,
   root: string,
 ): Promise<SmartPermissionDecision> {
   if (!shouldReviewSmartApproval(request))

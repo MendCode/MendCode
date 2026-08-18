@@ -102,6 +102,26 @@ describe("workflow routes", () => {
         expect(modeResponse.status).toBe(200)
         expect(((await modeResponse.json()) as { run: { permissionMode: string } }).run.permissionMode).toBe("normal")
 
+        const sessionModeResponse = await app.request(`/workflow/${started.run.id}/permission-mode`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ sessionMode: "smart" }),
+        })
+        expect(sessionModeResponse.status).toBe(200)
+        expect(
+          ((await sessionModeResponse.json()) as { run: { sessionPermissionMode?: string } }).run.sessionPermissionMode,
+        ).toBe("smart")
+
+        const globalModeResponse = await app.request(`/workflow/${started.run.id}/permission-mode`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ sessionMode: "global_default" }),
+        })
+        expect(globalModeResponse.status).toBe(200)
+        expect(
+          ((await globalModeResponse.json()) as { run: { sessionPermissionMode?: string } }).run.sessionPermissionMode,
+        ).toBeUndefined()
+
         const listResponse = await app.request("/workflow")
         expect(listResponse.status).toBe(200)
         expect((await listResponse.json()) as Array<{ run: { id: string } }>).toHaveLength(1)
@@ -186,6 +206,15 @@ describe("workflow routes", () => {
         expect(((await modeResponse.json()) as { run: { permissionMode: string } }).run.permissionMode).toBe(
           "report-only",
         )
+
+        const sessionModeResponse = await request(`/workflow/${snapshot.run.id}/permission-mode`, {
+          method: "POST",
+          body: JSON.stringify({ sessionMode: "full_access" }),
+        })
+        expect(sessionModeResponse.status).toBe(200)
+        expect(
+          ((await sessionModeResponse.json()) as { run: { sessionPermissionMode?: string } }).run.sessionPermissionMode,
+        ).toBe("full_access")
 
         const stopResponse = await request(`/workflow/${snapshot.run.id}/stop`, {
           method: "POST",

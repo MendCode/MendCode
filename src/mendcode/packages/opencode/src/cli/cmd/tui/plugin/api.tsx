@@ -39,8 +39,21 @@ import type { useToast } from "../ui/toast"
 import { InstallationVersion } from "@mendcode/core/installation/version"
 import { visibleCustomizationCapabilities } from "@/mend/tui/capabilities"
 import { clearMendStatus, setMendStatus } from "@/mend/tui/status"
-import { blurMendWidget, clearMendWidget, focusMendWidget, setMendWidget, type MendWidgetRenderContext } from "@/mend/tui/widgets"
-import { blurMendOverlay, clearMendOverlay, focusMendOverlay, readFocusedMendOverlayID, setMendOverlay, type MendOverlayRenderContext } from "@/mend/tui/overlays"
+import {
+  blurMendWidget,
+  clearMendWidget,
+  focusMendWidget,
+  setMendWidget,
+  type MendWidgetRenderContext,
+} from "@/mend/tui/widgets"
+import {
+  blurMendOverlay,
+  clearMendOverlay,
+  focusMendOverlay,
+  readFocusedMendOverlayID,
+  setMendOverlay,
+  type MendOverlayRenderContext,
+} from "@/mend/tui/overlays"
 import { setMendFooter, setMendFooterEntry } from "@/mend/tui/footer"
 import { setMendWorkingIndicator } from "@/mend/tui/working-indicator"
 import { setMendEditor, setMendEditorVisual } from "@/mend/tui/editor-host"
@@ -124,7 +137,10 @@ function routeNavigate(route: ReturnType<typeof useRoute>, name: string, params?
   }
 
   if (name === "workflows") {
-    route.navigate({ type: "workflows", selectedID: typeof params?.selectedID === "string" ? params.selectedID : undefined })
+    route.navigate({
+      type: "workflows",
+      selectedID: typeof params?.selectedID === "string" ? params.selectedID : undefined,
+    })
     return
   }
 
@@ -183,6 +199,15 @@ function routeCurrent(route: ReturnType<typeof useRoute>): TuiPluginApi["route"]
       name: "workflows",
       params: {
         selectedID: route.data.selectedID,
+      },
+    }
+  }
+  if (route.data.type === "session-history") {
+    return {
+      name: "session-history",
+      params: {
+        sessionID: route.data.sessionID,
+        selectedMessageID: route.data.selectedMessageID,
       },
     }
   }
@@ -303,7 +328,9 @@ function shellApi(): TuiShellApi {
 function ptyApi(): TuiPtyApi {
   return {
     async spawn() {
-      throw new Error("TUI PTY widgets are disabled in this build. Use the widget/overlay substrate for interactive UI and api.shell.spawn only for non-interactive output.")
+      throw new Error(
+        "TUI PTY widgets are disabled in this build. Use the widget/overlay substrate for interactive UI and api.shell.spawn only for non-interactive output.",
+      )
     },
   }
 }
@@ -476,8 +503,18 @@ function memoryApi(input: Input): TuiMemoryApi {
       return {
         root: root(),
         facts: overview.facts.map(memoryFactView),
-        links: overview.links.map((link) => ({ id: link.id, from: link.from, to: link.to, kind: link.kind, createdAt: link.createdAt })),
-        categories: overview.categories.map((category) => ({ id: category.id, label: category.label, count: category.count })),
+        links: overview.links.map((link) => ({
+          id: link.id,
+          from: link.from,
+          to: link.to,
+          kind: link.kind,
+          createdAt: link.createdAt,
+        })),
+        categories: overview.categories.map((category) => ({
+          id: category.id,
+          label: category.label,
+          count: category.count,
+        })),
         health: overview.graphHealth,
       }
     },

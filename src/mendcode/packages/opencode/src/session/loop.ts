@@ -2260,6 +2260,7 @@ function reconcileStaleWorkingRun(row: WorkflowRow, now = Date.now()): WorkflowR
           data: {
             ...staleRun.data,
             evaluatorReason: reason,
+            failureClass: "transient",
             budget: row.data.metrics,
             lease: staleRun.data.lease,
           },
@@ -2289,6 +2290,7 @@ function reconcileStaleWorkingRun(row: WorkflowRow, now = Date.now()): WorkflowR
             degraded: true,
           },
           evaluatorReason: reason,
+          failureClass: "transient",
         },
       })
       .where(eq(LoopWorkflowTable.id, row.id))
@@ -4164,6 +4166,7 @@ export const layer = Layer.effect(
             time_updated: now,
             time_ended: now,
             data: {
+              ...currentRun.data,
               evaluatorReason: input.error,
               failureClass,
               budget: metrics,

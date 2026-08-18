@@ -22,6 +22,7 @@ import type {
   WorkflowRunID,
   WorkflowRunState,
   WorkflowPermissionMode,
+  WorkflowSessionPermissionMode,
   WorkflowTask,
   WorkflowTaskAttempt,
   WorkflowTaskAttemptID,
@@ -33,8 +34,12 @@ import type {
 import type { WorkflowPlan } from "./workflow-plan"
 import { Timestamps } from "../storage/schema.sql"
 
-type PartData = Omit<MessageV2.Part, "id" | "sessionID" | "messageID">
-type InfoData = Omit<MessageV2.Info, "id" | "sessionID">
+// Omit is not distributive over unions. Keep each discriminator branch intact
+// so JSON columns can be narrowed by `type` / `role` after a database read.
+type StoredPart<T> = T extends MessageV2.Part ? Omit<T, "id" | "sessionID" | "messageID"> : never
+type StoredInfo<T> = T extends MessageV2.Info ? Omit<T, "id" | "sessionID"> : never
+type PartData = StoredPart<MessageV2.Part>
+type InfoData = StoredInfo<MessageV2.Info>
 type SessionMessageData = Omit<(typeof SessionMessage.Message)["Encoded"], "type" | "id">
 
 export const SessionTable = sqliteTable(
@@ -705,6 +710,7 @@ type WorkflowRunData = {
   resultArtifactID?: WorkflowArtifactID
   workspaceLease?: WorkflowWorkspaceLease
   permissionMode?: WorkflowPermissionMode
+  sessionPermissionMode?: WorkflowSessionPermissionMode
   usage?: {
     inputTokens?: number
     outputTokens?: number

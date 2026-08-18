@@ -299,10 +299,38 @@ describe("mend tui prompt chrome", () => {
     expect(resolveActivityPhase({ status: "busy", toolNames: ["download_file"] })).toBe("downloading")
     expect(resolveActivityPhase({ status: "busy", toolNames: ["pnpm_install"] })).toBe("installing")
     expect(resolveActivityPhase({ status: "busy", activeToolNames: ["task"] })).toBe("subagents")
+    expect(resolveActivityPhase({ status: "busy", activeToolNames: ["question"] })).toBe("awaiting-input")
     expect(resolveActivityPhase({ status: "busy", statusKind: "subagent-wait" })).toBe("subagents")
     expect(resolveActivityPhase({ status: "busy", statusKind: "memory-extract" })).toBe("memory")
     expect(resolveActivityPhase({ status: "busy", statusKind: "compaction" })).toBe("compacting")
+    expect(resolveActivityPhase({ status: "busy", connection: "reconnecting", activeToolNames: ["apply_patch"] })).toBe(
+      "patching",
+    )
+    expect(resolveActivityPhase({ status: "busy", connection: "reconnecting" })).toBe("blocked")
+    expect(resolveActivityPhase({ status: "busy", connection: "reconnecting", hasReasoning: true })).toBe("thinking")
+    expect(resolveActivityPhase({ status: "retry", connection: "reconnecting" })).toBe("blocked")
     expect(activityMascotText(defaultTuiProfile(), "compacting")).toContain("c")
+    expect(activityMessagesForPhase(defaultTuiProfile(), "awaiting-input")).toEqual(["Waiting for answer..."])
+  })
+
+  test("keeps reasoning-only turns in Thinking and reserves Generating for unknown live tools", () => {
+    expect(resolveActivityPhase({ status: "busy", hasReasoning: true, hasAnswerText: false })).toBe("thinking")
+    expect(
+      resolveActivityPhase({
+        status: "busy",
+        connection: "reconnecting",
+        hasReasoning: true,
+        hasAnswerText: false,
+        livePhase: "output",
+        liveOutputTokens: 45,
+        liveReasoningTokens: 0,
+      }),
+    ).toBe("thinking")
+    expect(resolveActivityPhase({ status: "busy", hasReasoning: true, activeToolNames: ["mystery_tool"] })).toBe(
+      "sending",
+    )
+    expect(resolveActivityPhase({ status: "busy", hasReasoning: true, activeToolNames: ["read"] })).toBe("reading")
+    expect(resolveActivityPhase({ status: "idle", hasReasoning: true })).toBe("done")
   })
 
   test("resolves presets into prompt border sides", () => {

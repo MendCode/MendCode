@@ -21,6 +21,11 @@ const ProcessMemory = Schema.Struct({
   external: Schema.Number,
   arrayBuffers: Schema.Number,
   uptimeSeconds: Schema.Number,
+  memoryGuardrail: Schema.Struct({
+    status: Schema.Union([Schema.Literal("ok"), Schema.Literal("warning"), Schema.Literal("critical")]),
+    warnBytes: Schema.Number,
+    criticalBytes: Schema.Number,
+  }),
   sharedServer: Schema.optional(
     Schema.Struct({
       runtimeID: Schema.String,

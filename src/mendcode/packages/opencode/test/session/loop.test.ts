@@ -36,7 +36,7 @@ import { markPermissionPending, markPermissionResolved } from "@/session/pending
 
 function promptMessage(
   text?: string,
-  overrides?: Partial<Pick<MessageV2.Assistant, "cost" | "modelID" | "providerID" | "tokens">>,
+  overrides?: Partial<Pick<MessageV2.Assistant, "cost" | "finish" | "modelID" | "providerID" | "tokens">>,
 ): MessageV2.WithParts {
   return {
     info: {
@@ -52,6 +52,7 @@ function promptMessage(
       path: { cwd: "/tmp", root: "/tmp" },
       cost: overrides?.cost ?? 0,
       tokens: overrides?.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      finish: overrides?.finish ?? "stop",
     },
     parts: text
       ? [
@@ -89,6 +90,7 @@ function runRunner<A, E>(
     SessionPrompt.Service,
     SessionPrompt.Service.of({
       cancel: () => Effect.void,
+      cancelTurn: () => Effect.succeed("not_running" as const),
       cancelQueued: () => Effect.succeed(false),
       interrupt: () => Effect.void,
       prompt: (input: PromptInput) =>
@@ -96,14 +98,22 @@ function runRunner<A, E>(
           prompts++
           promptCalls.push(input)
           const response = typeof promptText === "function" ? promptText(prompts) : promptText
-          return typeof response === "string" || response === undefined ? promptMessage(response) : response
+          return typeof response === "string"
+            ? promptMessage(response)
+            : response === undefined
+              ? promptMessage("LOOP_CHECKPOINT:\nstatus: complete\nsummary: Test iteration completed.")
+              : response
         }),
       promptAsync: (input: PromptInput) =>
         Effect.sync(() => {
           prompts++
           promptCalls.push(input)
           const response = typeof promptText === "function" ? promptText(prompts) : promptText
-          return typeof response === "string" || response === undefined ? promptMessage(response) : response
+          return typeof response === "string"
+            ? promptMessage(response)
+            : response === undefined
+              ? promptMessage("LOOP_CHECKPOINT:\nstatus: complete\nsummary: Test iteration completed.")
+              : response
         }),
       loop: () => Effect.succeed(promptMessage()),
       shell: () => Effect.succeed(promptMessage()),
@@ -111,9 +121,11 @@ function runRunner<A, E>(
       resolvePromptParts: () => Effect.succeed([]),
     }),
   )
-  return Effect.runPromise(fx.pipe(Effect.provide(Layer.mergeAll(loopWorkflowLayer, LoopRunner.defaultLayer, Session.defaultLayer, promptLayer)))).then(
-    (value) => ({ value, prompts, promptCalls }),
-  )
+  return Effect.runPromise(
+    fx.pipe(
+      Effect.provide(Layer.mergeAll(loopWorkflowLayer, LoopRunner.defaultLayer, Session.defaultLayer, promptLayer)),
+    ),
+  ).then((value) => ({ value, prompts, promptCalls }))
 }
 
 const svc = {
@@ -157,7 +169,9 @@ const svc = {
     return run(LoopWorkflowService.use((loop) => loop.startRun({ id, trigger: "interval", reason: "test start" })))
   },
   startRunWithLease(id: LoopID, leaseHolder: string) {
-    return run(LoopWorkflowService.use((loop) => loop.startRun({ id, trigger: "interval", reason: "test start", leaseHolder })))
+    return run(
+      LoopWorkflowService.use((loop) => loop.startRun({ id, trigger: "interval", reason: "test start", leaseHolder })),
+    )
   },
   ingestSignal(input: IngestSignalInput) {
     return run(LoopWorkflowService.use((loop) => loop.ingestSignal(input)))
@@ -182,13 +196,19 @@ afterEach(async () => {
 
 describe("loop workflow service", () => {
   test("calculates the next daily wakeup in the requested IANA timezone", () => {
-    expect(nextDailyWakeup(Date.parse("2026-07-17T13:30:00Z"), "10:00", "America/New_York")).toBe(Date.parse("2026-07-17T14:00:00Z"))
-    expect(nextDailyWakeup(Date.parse("2026-07-17T14:00:01Z"), "10:00", "America/New_York")).toBe(Date.parse("2026-07-18T14:00:00Z"))
+    expect(nextDailyWakeup(Date.parse("2026-07-17T13:30:00Z"), "10:00", "America/New_York")).toBe(
+      Date.parse("2026-07-17T14:00:00Z"),
+    )
+    expect(nextDailyWakeup(Date.parse("2026-07-17T14:00:01Z"), "10:00", "America/New_York")).toBe(
+      Date.parse("2026-07-18T14:00:00Z"),
+    )
     expect(nextDailyWakeup(Date.parse("2026-07-17T09:00:00Z"), "10:00", "UTC")).toBe(Date.parse("2026-07-17T10:00:00Z"))
   })
 
   test("skips a nonexistent DST wall-clock time instead of scheduling the wrong hour", () => {
-    expect(nextDailyWakeup(Date.parse("2026-03-08T06:00:00Z"), "02:30", "America/New_York")).toBe(Date.parse("2026-03-09T06:30:00Z"))
+    expect(nextDailyWakeup(Date.parse("2026-03-08T06:00:00Z"), "02:30", "America/New_York")).toBe(
+      Date.parse("2026-03-09T06:30:00Z"),
+    )
   })
 
   test("activates daily loops with a durable next wakeup and due filtering", async () => {
@@ -225,23 +245,33 @@ describe("loop workflow service", () => {
           trigger: { mode: "interval", intervalMs },
           budgetMode: "unbounded-monitor",
         })
-        const active = await run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "fake clock", now: base })))
+        const active = await run(
+          LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "fake clock", now: base })),
+        )
         expect(active.nextWakeup).toBe(base)
 
-        const started = await run(LoopWorkflowService.use((loop) => loop.startRun({
-          id: draft.id,
-          trigger: "interval",
-          reason: "fake clock run",
-          now: base,
-        })))
+        const started = await run(
+          LoopWorkflowService.use((loop) =>
+            loop.startRun({
+              id: draft.id,
+              trigger: "interval",
+              reason: "fake clock run",
+              now: base,
+            }),
+          ),
+        )
         const completedAt = base + 1_000
-        await run(LoopWorkflowService.use((loop) => loop.completeRun({
-          id: draft.id,
-          runID: started.id,
-          reason: "healthy checkpoint",
-          now: completedAt,
-          checkpoint: { status: "continue", summary: "Healthy checkpoint." },
-        })))
+        await run(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: started.id,
+              reason: "healthy checkpoint",
+              now: completedAt,
+              checkpoint: { status: "continue", summary: "Healthy checkpoint." },
+            }),
+          ),
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow).toMatchObject({
@@ -273,11 +303,17 @@ describe("loop workflow service", () => {
           budgetMode: "unbounded-monitor",
         })
         await run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "fake clock", now: base })))
-        Database.use((db) => db.update(LoopWorkflowTable).set({
-          state: "sleeping",
-          phase: "waiting",
-          next_wakeup: base - 1,
-        }).where(eq(LoopWorkflowTable.id, draft.id)).run())
+        Database.use((db) =>
+          db
+            .update(LoopWorkflowTable)
+            .set({
+              state: "sleeping",
+              phase: "waiting",
+              next_wakeup: base - 1,
+            })
+            .where(eq(LoopWorkflowTable.id, draft.id))
+            .run(),
+        )
 
         const due = await run(LoopWorkflowService.use((loop) => loop.due({ now: base })))
         expect(due[0]).toMatchObject({ id: draft.id, state: "sleeping", phase: "catch_up", nextWakeup: base })
@@ -285,12 +321,16 @@ describe("loop workflow service", () => {
           type: "wake",
           title: "Scheduled wakeup repaired",
         })
-        const started = await run(LoopWorkflowService.use((loop) => loop.startRun({
-          id: draft.id,
-          trigger: "interval",
-          reason: "catch up overdue wake",
-          now: base,
-        })))
+        const started = await run(
+          LoopWorkflowService.use((loop) =>
+            loop.startRun({
+              id: draft.id,
+              trigger: "interval",
+              reason: "catch up overdue wake",
+              now: base,
+            }),
+          ),
+        )
         expect(started.state).toBe("working")
       },
     })
@@ -310,39 +350,59 @@ describe("loop workflow service", () => {
           budgetMode: "unbounded-monitor",
         })
         await run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "fake clock", now: base })))
-        Database.use((db) => db.update(LoopWorkflowTable).set({
-          state: "sleeping",
-          phase: "waiting",
-          next_wakeup: base - 1,
-        }).where(eq(LoopWorkflowTable.id, draft.id)).run())
+        Database.use((db) =>
+          db
+            .update(LoopWorkflowTable)
+            .set({
+              state: "sleeping",
+              phase: "waiting",
+              next_wakeup: base - 1,
+            })
+            .where(eq(LoopWorkflowTable.id, draft.id))
+            .run(),
+        )
 
         const firstDue = await run(LoopWorkflowService.use((loop) => loop.due({ now: base })))
         const secondDue = await run(LoopWorkflowService.use((loop) => loop.due({ now: base })))
         expect(firstDue).toHaveLength(1)
         expect(secondDue).toHaveLength(1)
-        expect((await svc.snapshot(draft.id)).events.filter((event) => event.title === "Scheduled wakeup repaired")).toHaveLength(1)
+        expect(
+          (await svc.snapshot(draft.id)).events.filter((event) => event.title === "Scheduled wakeup repaired"),
+        ).toHaveLength(1)
 
-        const firstRun = await run(LoopWorkflowService.use((loop) => loop.startRun({
-          id: draft.id,
-          trigger: "interval",
-          reason: "first catch-up tick",
-          now: base,
-        })))
-        const duplicateRun = await run(LoopWorkflowService.use((loop) => loop.startRun({
-          id: draft.id,
-          trigger: "interval",
-          reason: "duplicate catch-up tick",
-          now: base,
-        })))
+        const firstRun = await run(
+          LoopWorkflowService.use((loop) =>
+            loop.startRun({
+              id: draft.id,
+              trigger: "interval",
+              reason: "first catch-up tick",
+              now: base,
+            }),
+          ),
+        )
+        const duplicateRun = await run(
+          LoopWorkflowService.use((loop) =>
+            loop.startRun({
+              id: draft.id,
+              trigger: "interval",
+              reason: "duplicate catch-up tick",
+              now: base,
+            }),
+          ),
+        )
         expect(duplicateRun.id).toBe(firstRun.id)
 
-        await run(LoopWorkflowService.use((loop) => loop.completeRun({
-          id: draft.id,
-          runID: firstRun.id,
-          reason: "catch-up completed",
-          now: base + 1_000,
-          checkpoint: { status: "continue", summary: "Catch-up completed." },
-        })))
+        await run(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: firstRun.id,
+              reason: "catch-up completed",
+              now: base + 1_000,
+              checkpoint: { status: "continue", summary: "Catch-up completed." },
+            }),
+          ),
+        )
         expect((await svc.snapshot(draft.id)).workflow).toMatchObject({
           state: "sleeping",
           nextWakeup: base + 1_000 + intervalMs,
@@ -372,29 +432,41 @@ describe("loop workflow service", () => {
             expect(due.map((item) => item.id)).toEqual([workflowID!])
             expect(duplicateDue.map((item) => item.id)).toEqual([workflowID!])
 
-            const first = await run(LoopWorkflowService.use((loop) => loop.startRun({
-              id: workflowID!,
-              trigger: "interval",
-              reason: `endurance tick ${tick}`,
-              now,
-            })))
-            const duplicate = await run(LoopWorkflowService.use((loop) => loop.startRun({
-              id: workflowID!,
-              trigger: "interval",
-              reason: `duplicate endurance tick ${tick}`,
-              now,
-            })))
+            const first = await run(
+              LoopWorkflowService.use((loop) =>
+                loop.startRun({
+                  id: workflowID!,
+                  trigger: "interval",
+                  reason: `endurance tick ${tick}`,
+                  now,
+                }),
+              ),
+            )
+            const duplicate = await run(
+              LoopWorkflowService.use((loop) =>
+                loop.startRun({
+                  id: workflowID!,
+                  trigger: "interval",
+                  reason: `duplicate endurance tick ${tick}`,
+                  now,
+                }),
+              ),
+            )
             expect(duplicate.id).toBe(first.id)
             runIDs.add(first.id)
 
             const completedAt = now + 1_000
-            await run(LoopWorkflowService.use((loop) => loop.completeRun({
-              id: workflowID!,
-              runID: first.id,
-              reason: `completed endurance tick ${tick}`,
-              now: completedAt,
-              checkpoint: { status: "continue", summary: "Endurance checkpoint completed." },
-            })))
+            await run(
+              LoopWorkflowService.use((loop) =>
+                loop.completeRun({
+                  id: workflowID!,
+                  runID: first.id,
+                  reason: `completed endurance tick ${tick}`,
+                  now: completedAt,
+                  checkpoint: { status: "continue", summary: "Endurance checkpoint completed." },
+                }),
+              ),
+            )
             scheduled = completedAt + intervalMs
           }
           nextScheduled = scheduled
@@ -412,7 +484,9 @@ describe("loop workflow service", () => {
           budgetMode: "unbounded-monitor",
         })
         workflowID = draft.id
-        await run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "endurance start", now: base })))
+        await run(
+          LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "endurance start", now: base })),
+        )
       },
     })
 
@@ -447,14 +521,22 @@ describe("loop workflow service", () => {
         })
         await run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "fake clock", now: base })))
 
-        const failed = await run(LoopWorkflowService.use((loop) => loop.recordSchedulerFailure({
-          id: draft.id,
-          error: "daemon dispatch failed",
-          failureClass: "environment",
-          now: base,
-        })))
+        const failed = await run(
+          LoopWorkflowService.use((loop) =>
+            loop.recordSchedulerFailure({
+              id: draft.id,
+              error: "daemon dispatch failed",
+              failureClass: "environment",
+              now: base,
+            }),
+          ),
+        )
         const snapshot = await svc.snapshot(draft.id)
-        expect(failed).toMatchObject({ state: "failed", phase: "scheduler_degraded", retry: { nextWakeup: base + intervalMs } })
+        expect(failed).toMatchObject({
+          state: "failed",
+          phase: "scheduler_degraded",
+          retry: { nextWakeup: base + intervalMs },
+        })
         expect(snapshot.workflow).toMatchObject({
           state: "sleeping",
           phase: "scheduler_degraded",
@@ -527,23 +609,40 @@ describe("loop workflow service", () => {
         const first = await svc.createDraft({ name: "First history", objective: "First terminal history row." })
         const second = await svc.createDraft({ name: "Second history", objective: "Second terminal history row." })
         const third = await svc.createDraft({ name: "Third history", objective: "Third terminal history row." })
-        const sleeping = await svc.createDraft({ name: "Sleeping active", objective: "Remain visible with active loops." })
+        const sleeping = await svc.createDraft({
+          name: "Sleeping active",
+          objective: "Remain visible with active loops.",
+        })
         await svc.activate(sleeping.id)
         const paused = await svc.createDraft({ name: "Paused active", objective: "Remain visible while paused." })
         await svc.activate(paused.id)
         await svc.pause(paused.id)
         const historyBase = Date.now() + 60_000
         Database.use((db) => {
-          db.update(LoopWorkflowTable).set({ time_updated: historyBase }).where(eq(LoopWorkflowTable.id, first.id)).run()
-          db.update(LoopWorkflowTable).set({ time_updated: historyBase + 1 }).where(eq(LoopWorkflowTable.id, second.id)).run()
-          db.update(LoopWorkflowTable).set({ time_updated: historyBase + 2 }).where(eq(LoopWorkflowTable.id, third.id)).run()
-          db.update(LoopWorkflowTable).set({ time_updated: historyBase + 3 }).where(eq(LoopWorkflowTable.id, paused.id)).run()
+          db.update(LoopWorkflowTable)
+            .set({ time_updated: historyBase })
+            .where(eq(LoopWorkflowTable.id, first.id))
+            .run()
+          db.update(LoopWorkflowTable)
+            .set({ time_updated: historyBase + 1 })
+            .where(eq(LoopWorkflowTable.id, second.id))
+            .run()
+          db.update(LoopWorkflowTable)
+            .set({ time_updated: historyBase + 2 })
+            .where(eq(LoopWorkflowTable.id, third.id))
+            .run()
+          db.update(LoopWorkflowTable)
+            .set({ time_updated: historyBase + 3 })
+            .where(eq(LoopWorkflowTable.id, paused.id))
+            .run()
         })
 
         const firstPage = await svc.listGlobalPage({ offset: -10, limit: 999 })
         expect(firstPage.active.map((item) => item.id)).toContain(sleeping.id)
         expect(firstPage.active.map((item) => item.id)).not.toContain(paused.id)
-        expect(firstPage.history.map((item) => item.id)).toEqual(expect.arrayContaining([first.id, second.id, third.id, paused.id]))
+        expect(firstPage.history.map((item) => item.id)).toEqual(
+          expect.arrayContaining([first.id, second.id, third.id, paused.id]),
+        )
         expect(firstPage.page).toEqual({ offset: 0, limit: 100, total: historyTotal + 4 })
 
         const selectedPage = await svc.listGlobalPage({ limit: 1, selectedID: first.id })
@@ -590,10 +689,7 @@ describe("loop workflow service", () => {
             })
             .where(eq(BackgroundSessionTable.session_id, active.rootSessionID!))
             .run()
-          db.update(LoopThreadTable)
-            .set({ state: "working" })
-            .where(eq(LoopThreadTable.workflow_id, draft.id))
-            .run()
+          db.update(LoopThreadTable).set({ state: "working" }).where(eq(LoopThreadTable.workflow_id, draft.id)).run()
         })
 
         const page = await svc.listGlobalPage({ limit: 1, selectedID: draft.id })
@@ -611,7 +707,10 @@ describe("loop workflow service", () => {
       directory: tmp.path,
       fn: async () => {
         const first = await svc.createDraft({ name: "Same time first", objective: "Older ID at identical timestamp." })
-        const second = await svc.createDraft({ name: "Same time second", objective: "Newer ID at identical timestamp." })
+        const second = await svc.createDraft({
+          name: "Same time second",
+          objective: "Newer ID at identical timestamp.",
+        })
         const updatedAt = Date.parse("2100-01-01T00:00:00Z")
         Database.use((db) => {
           db.update(LoopWorkflowTable).set({ time_updated: updatedAt }).where(eq(LoopWorkflowTable.id, first.id)).run()
@@ -706,7 +805,11 @@ describe("loop workflow service", () => {
 
         const snapshot = await svc.snapshot(active.id)
         expect(snapshot.workflow.metrics.turns).toBe(0)
-        expect(snapshot.rootSession?.model).toEqual({ providerID: "openai", modelID: "gpt-test-loop", variant: "medium" })
+        expect(snapshot.rootSession?.model).toEqual({
+          providerID: "openai",
+          modelID: "gpt-test-loop",
+          variant: "medium",
+        })
         expect(snapshot.threads).toHaveLength(1)
         expect(snapshot.threads[0]).toMatchObject({ role: "root", sessionID: active.rootSessionID })
         expect(snapshot.events.map((event) => event.type)).toEqual(["created", "activated", "failed"])
@@ -788,7 +891,11 @@ describe("loop workflow service", () => {
         expect(active.workspaceID).toBe(workspaceID)
 
         const rootSession = Database.use((db) =>
-          db.select({ workspaceID: SessionTable.workspace_id }).from(SessionTable).where(eq(SessionTable.id, active.rootSessionID!)).get(),
+          db
+            .select({ workspaceID: SessionTable.workspace_id })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, active.rootSessionID!))
+            .get(),
         )
         expect(rootSession?.workspaceID).toBe(workspaceID)
 
@@ -804,14 +911,24 @@ describe("loop workflow service", () => {
     await WithInstance.provide({
       directory: tmp.path,
       fn: async () => {
-        const draft = await runWithWorktree(LoopWorkflowService.use((loop) => loop.createDraft({
-          name: "Per-run worktree loop",
-          objective: "Edit safely in an isolated worktree.",
-          workspace: { mode: "per-run-worktree" },
-        })))
-        await runWithWorktree(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "test activate" })))
+        const draft = await runWithWorktree(
+          LoopWorkflowService.use((loop) =>
+            loop.createDraft({
+              name: "Per-run worktree loop",
+              objective: "Edit safely in an isolated worktree.",
+              workspace: { mode: "per-run-worktree" },
+            }),
+          ),
+        )
+        await runWithWorktree(
+          LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "test activate" })),
+        )
 
-        const run = await runWithWorktree(LoopWorkflowService.use((loop) => loop.startRun({ id: draft.id, trigger: "manual", reason: "test isolated start" })))
+        const run = await runWithWorktree(
+          LoopWorkflowService.use((loop) =>
+            loop.startRun({ id: draft.id, trigger: "manual", reason: "test isolated start" }),
+          ),
+        )
         expect(run.workspaceLease).toMatchObject({
           workflowID: draft.id,
           runID: run.id,
@@ -825,14 +942,22 @@ describe("loop workflow service", () => {
 
         const snapshot = await runWithWorktree(LoopWorkflowService.use((loop) => loop.snapshot(draft.id)))
         expect(snapshot.runs[0]?.workspaceLease?.path).toBe(run.workspaceLease?.path)
-        expect(snapshot.threads[0]).toMatchObject({ runID: run.id, worktree: run.workspaceLease?.path, branch: run.workspaceLease?.branch })
-        expect(snapshot.events.find((event) => event.title === "Loop run started")?.data?.workspaceLease).toMatchObject({
-          mode: "per-run-worktree",
-          state: "active",
+        expect(snapshot.threads[0]).toMatchObject({
+          runID: run.id,
+          worktree: run.workspaceLease?.path,
+          branch: run.workspaceLease?.branch,
         })
+        expect(snapshot.events.find((event) => event.title === "Loop run started")?.data?.workspaceLease).toMatchObject(
+          {
+            mode: "per-run-worktree",
+            state: "active",
+          },
+        )
 
         if (run.workspaceLease?.path) {
-          await runWithWorktree(Worktree.Service.use((worktree) => worktree.remove({ directory: run.workspaceLease!.path })))
+          await runWithWorktree(
+            Worktree.Service.use((worktree) => worktree.remove({ directory: run.workspaceLease!.path })),
+          )
         }
       },
     })
@@ -865,7 +990,12 @@ describe("loop workflow service", () => {
         expect(first.signal.matches).toEqual([draft.id])
         expect(first.signal.receivedAt).toBeGreaterThanOrEqual(beforeSignal)
         expect(first.signal.receivedAt).toBeLessThanOrEqual(afterSignal)
-        expect(first.matched[0]).toMatchObject({ id: draft.id, state: "sleeping", phase: "signal_received", nextWakeup: first.signal.receivedAt })
+        expect(first.matched[0]).toMatchObject({
+          id: draft.id,
+          state: "sleeping",
+          phase: "signal_received",
+          nextWakeup: first.signal.receivedAt,
+        })
         expect((await svc.due(first.signal.receivedAt)).map((item) => item.id)).toContain(draft.id)
 
         const duplicate = await svc.ingestSignal({
@@ -901,7 +1031,12 @@ describe("loop workflow service", () => {
         await svc.activate(draft.id)
         await svc.ingestSignal({ workflowID: draft.id, source: "ci", type: "ci.first", dedupeKey: "first" })
         const started = await svc.startRun(draft.id)
-        const second = await svc.ingestSignal({ workflowID: draft.id, source: "ci", type: "ci.second", dedupeKey: "second" })
+        const second = await svc.ingestSignal({
+          workflowID: draft.id,
+          source: "ci",
+          type: "ci.second",
+          dedupeKey: "second",
+        })
         const secondAt = second.signal.receivedAt
         await svc.completeRun(draft.id, started.id, { status: "continue", summary: "Processed the first signal." })
 
@@ -910,7 +1045,12 @@ describe("loop workflow service", () => {
         expect((await svc.due(secondAt)).map((item) => item.id)).toContain(draft.id)
 
         await svc.pause(draft.id)
-        const paused = await svc.ingestSignal({ workflowID: draft.id, source: "ci", type: "ci.paused", dedupeKey: "paused" })
+        const paused = await svc.ingestSignal({
+          workflowID: draft.id,
+          source: "ci",
+          type: "ci.paused",
+          dedupeKey: "paused",
+        })
         const pausedAt = paused.signal.receivedAt
         snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow).toMatchObject({ state: "paused", phase: "signal_received", nextWakeup: pausedAt })
@@ -933,7 +1073,12 @@ describe("loop workflow service", () => {
         await svc.activate(draft.id)
         await svc.ingestSignal({ workflowID: draft.id, source: "ci", type: "ci.first", dedupeKey: "first" })
         const started = await svc.startRun(draft.id)
-        const queued = await svc.ingestSignal({ workflowID: draft.id, source: "ci", type: "ci.second", dedupeKey: "second" })
+        const queued = await svc.ingestSignal({
+          workflowID: draft.id,
+          source: "ci",
+          type: "ci.second",
+          dedupeKey: "second",
+        })
         const queuedAt = queued.signal.receivedAt
         await svc.failRunWithError(draft.id, started.id, "network timeout", "transient")
 
@@ -956,7 +1101,10 @@ describe("loop workflow service", () => {
         })
         await svc.activate(draft.id)
 
-        const result = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), "should not run")
+        const result = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          "should not run",
+        )
         expect(result.prompts).toBe(0)
         expect(result.value).toMatchObject({
           workflowID: draft.id,
@@ -970,7 +1118,9 @@ describe("loop workflow service", () => {
         expect(snapshot.events.find((event) => event.title === "Loop readiness skipped")?.summary).toBe(
           "External-signal loop has no pending normalized signal evidence to process.",
         )
-        expect(snapshot.artifacts.find((artifact) => artifact.title === "Proactive readiness skipped")?.status).toBe("skipped")
+        expect(snapshot.artifacts.find((artifact) => artifact.title === "Proactive readiness skipped")?.status).toBe(
+          "skipped",
+        )
         expect(snapshot.runs).toHaveLength(0)
       },
     })
@@ -990,18 +1140,22 @@ describe("loop workflow service", () => {
         await svc.activate(draft.id)
         const runInfo = await svc.startRun(draft.id)
 
-        const completed = await run(LoopWorkflowService.use((loop) => loop.completeRun({
-          id: draft.id,
-          runID: runInfo.id,
-          reason: "usage test",
-          checkpoint: { status: "complete", summary: "Done with usage evidence." },
-          usage: {
-            providerID: "openai",
-            modelID: "gpt-test",
-            cost: 0.02,
-            tokens: { input: 10, output: 12, reasoning: 11, cacheRead: 2, cacheWrite: 1 },
-          },
-        })))
+        const completed = await run(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: runInfo.id,
+              reason: "usage test",
+              checkpoint: { status: "complete", summary: "Done with usage evidence." },
+              usage: {
+                providerID: "openai",
+                modelID: "gpt-test",
+                cost: 0.02,
+                tokens: { input: 10, output: 12, reasoning: 11, cacheRead: 2, cacheWrite: 1 },
+              },
+            }),
+          ),
+        )
 
         expect(completed.usage).toMatchObject({ providerID: "openai", modelID: "gpt-test", cost: 0.02 })
         expect(completed.gateResults?.find((gate) => gate.id === "cost-budget")?.status).toBe("blocked")
@@ -1053,7 +1207,9 @@ describe("loop workflow service", () => {
         expect(snapshot.workflow.state).toBe("blocked")
         expect(snapshot.workflow.phase).toBe("approval_required")
         expect(snapshot.runs[0]?.usage).toMatchObject({ providerID: "openai", modelID: "gpt-test" })
-        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "approval-policy")?.status).toBe("awaiting_approval")
+        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "approval-policy")?.status).toBe(
+          "awaiting_approval",
+        )
       },
     })
   })
@@ -1177,7 +1333,8 @@ describe("loop workflow service", () => {
         await worker.exited
         const active = await svc.startRunWithLease(draft.id, `loop-runner:${worker.pid}:permission-test`)
         Database.use((db) =>
-          db.update(LoopWorkflowTable)
+          db
+            .update(LoopWorkflowTable)
             .set({ state: "needs_input", phase: "needs_input" })
             .where(eq(LoopWorkflowTable.id, draft.id))
             .run(),
@@ -1225,22 +1382,44 @@ describe("loop workflow service", () => {
             .values({
               session_id: active.rootSessionID!,
               time_created: now,
-               time_updated: now,
-               data: { type: "busy" },
+              time_updated: now,
+              data: { type: "busy" },
             })
             .onConflictDoUpdate({
-               target: SessionStatusTable.session_id,
-               set: { time_updated: now, data: { type: "busy" } },
+              target: SessionStatusTable.session_id,
+              set: { time_updated: now, data: { type: "busy" } },
             })
             .run()
         })
 
         const recovered = await svc.snapshot(draft.id)
-        expect(recovered.workflow).toMatchObject({ state: "sleeping", phase: "waiting", nextWakeup: expect.any(Number) })
-        expect(recovered.runs[0]).toMatchObject({ id: stuck.id, state: "failed", phase: "stale" })
-        expect(Database.use((db) => db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, active.rootSessionID!)).get())).toBeUndefined()
-        expect(Database.use((db) => db.select().from(LoopThreadTable).where(eq(LoopThreadTable.workflow_id, draft.id)).get()?.state)).toBe("queued")
-        expect(Database.use((db) => db.select().from(BackgroundSessionTable).where(eq(BackgroundSessionTable.session_id, active.rootSessionID!)).get()?.data.state)).toBe("queued")
+        expect(recovered.workflow).toMatchObject({
+          state: "sleeping",
+          phase: "waiting",
+          nextWakeup: expect.any(Number),
+        })
+        expect(recovered.runs[0]).toMatchObject({ id: stuck.id, state: "failed", phase: "stale", failureClass: "transient" })
+        expect(recovered.workflow.failureClass).toBe("transient")
+        expect(
+          Database.use((db) =>
+            db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, active.rootSessionID!)).get(),
+          ),
+        ).toBeUndefined()
+        expect(
+          Database.use(
+            (db) => db.select().from(LoopThreadTable).where(eq(LoopThreadTable.workflow_id, draft.id)).get()?.state,
+          ),
+        ).toBe("queued")
+        expect(
+          Database.use(
+            (db) =>
+              db
+                .select()
+                .from(BackgroundSessionTable)
+                .where(eq(BackgroundSessionTable.session_id, active.rootSessionID!))
+                .get()?.data.state,
+          ),
+        ).toBe("queued")
       },
     })
   })
@@ -1378,7 +1557,12 @@ describe("loop workflow service", () => {
         expect(recovered.workflow.state).toBe("sleeping")
         expect(recovered.runs[0]?.state).toBe("failed")
 
-        const late = await svc.failRunWithError(draft.id, stuck.id, "Provider timeout while streaming response", "transient")
+        const late = await svc.failRunWithError(
+          draft.id,
+          stuck.id,
+          "Provider timeout while streaming response",
+          "transient",
+        )
 
         expect(late.state).toBe("failed")
         expect(late.phase).toBe("stale")
@@ -1387,7 +1571,7 @@ describe("loop workflow service", () => {
         expect(finalSnapshot.workflow.state).toBe("sleeping")
         expect(finalSnapshot.workflow.phase).toBe("waiting")
         expect(finalSnapshot.workflow.metrics.failures).toBe(1)
-        expect(finalSnapshot.workflow.failureClass).toBeUndefined()
+        expect(finalSnapshot.workflow.failureClass).toBe("transient")
         expect(finalSnapshot.workflow.nextWakeup).toBeLessThanOrEqual(Date.now())
         expect(finalSnapshot.events.at(-1)?.title).toBe("Stale loop run recovered")
       },
@@ -1498,13 +1682,19 @@ describe("loop workflow service", () => {
         expect(active.spec.costBudget).toBeUndefined()
 
         const started = await svc.startRun(draft.id)
-        await run(LoopWorkflowService.use((loop) => loop.completeRun({
-          id: draft.id,
-          runID: started.id,
-          reason: "Snapshots are stale; report blocked_stale_data.",
-          checkpoint: { status: "blocked", summary: "Snapshots are stale; report blocked_stale_data." },
-          gateResults: [{ id: "snapshot-freshness", status: "blocked", summary: "Inputs are stale.", failureClass: "quality" }],
-        })))
+        await run(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: started.id,
+              reason: "Snapshots are stale; report blocked_stale_data.",
+              checkpoint: { status: "blocked", summary: "Snapshots are stale; report blocked_stale_data." },
+              gateResults: [
+                { id: "snapshot-freshness", status: "blocked", summary: "Inputs are stale.", failureClass: "quality" },
+              ],
+            }),
+          ),
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow).toMatchObject({ state: "sleeping", phase: "waiting" })
@@ -1528,7 +1718,10 @@ describe("loop workflow service", () => {
         await svc.activate(draft.id)
 
         const started = await svc.startRun(draft.id)
-        await svc.completeRun(draft.id, started.id, { status: "blocked", summary: "Inputs are stale; report blocked_stale_data." })
+        await svc.completeRun(draft.id, started.id, {
+          status: "blocked",
+          summary: "Inputs are stale; report blocked_stale_data.",
+        })
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.state).toBe("sleeping")
@@ -1555,7 +1748,8 @@ describe("loop workflow service", () => {
         })
         await svc.activate(draft.id)
         Database.use((db) =>
-          db.update(LoopWorkflowTable)
+          db
+            .update(LoopWorkflowTable)
             .set({ next_wakeup: Date.now() - 1 })
             .where(eq(LoopWorkflowTable.id, draft.id))
             .run(),
@@ -1613,7 +1807,14 @@ describe("loop workflow service", () => {
               time_ended: now,
               data: {
                 ...run.data,
-                gateResults: [{ id: "cost-budget", status: "blocked", summary: "Token budget exceeded (1/0).", failureClass: "budget" }],
+                gateResults: [
+                  {
+                    id: "cost-budget",
+                    status: "blocked",
+                    summary: "Token budget exceeded (1/0).",
+                    failureClass: "budget",
+                  },
+                ],
               },
             })
             .where(eq(LoopRunTable.id, run.id))
@@ -1726,7 +1927,10 @@ describe("loop workflow service", () => {
           "next_action: continue",
           "confidence: medium",
         ].join("\n")
-        await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          checkpoint,
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.metrics.turns).toBe(1)
@@ -1785,7 +1989,13 @@ describe("loop workflow service", () => {
         expect((await svc.pause(draft.id)).state).toBe("stopped")
 
         const snapshot = await svc.snapshot(draft.id)
-        expect(snapshot.events.map((event) => event.type)).toEqual(["created", "activated", "paused", "resumed", "stopped"])
+        expect(snapshot.events.map((event) => event.type)).toEqual([
+          "created",
+          "activated",
+          "paused",
+          "resumed",
+          "stopped",
+        ])
       },
     })
   })
@@ -1815,7 +2025,10 @@ describe("loop workflow service", () => {
     await WithInstance.provide({
       directory: tmp.path,
       fn: async () => {
-        const draft = await svc.createDraft({ name: "Paused retry", objective: "Stay paused after a transient failure." })
+        const draft = await svc.createDraft({
+          name: "Paused retry",
+          objective: "Stay paused after a transient failure.",
+        })
         await svc.activate(draft.id)
         const started = await svc.startRun(draft.id)
         await svc.pause(draft.id)
@@ -1823,10 +2036,18 @@ describe("loop workflow service", () => {
 
         let snapshot = await svc.snapshot(draft.id)
         expect(failed.retry?.nextWakeup).toBeDefined()
-        expect(snapshot.workflow).toMatchObject({ state: "paused", phase: "paused", nextWakeup: failed.retry?.nextWakeup })
+        expect(snapshot.workflow).toMatchObject({
+          state: "paused",
+          phase: "paused",
+          nextWakeup: failed.retry?.nextWakeup,
+        })
         await svc.resume(draft.id)
         snapshot = await svc.snapshot(draft.id)
-        expect(snapshot.workflow).toMatchObject({ state: "sleeping", phase: "waiting", nextWakeup: failed.retry?.nextWakeup })
+        expect(snapshot.workflow).toMatchObject({
+          state: "sleeping",
+          phase: "waiting",
+          nextWakeup: failed.retry?.nextWakeup,
+        })
       },
     })
   })
@@ -1853,10 +2074,15 @@ describe("loop workflow service", () => {
           events: db.select().from(LoopEventTable).where(eq(LoopEventTable.workflow_id, active.id)).all().length,
           threads: db.select().from(LoopThreadTable).where(eq(LoopThreadTable.workflow_id, active.id)).all().length,
           background: active.rootSessionID
-            ? db.select().from(BackgroundSessionTable).where(eq(BackgroundSessionTable.session_id, active.rootSessionID)).all().length
+            ? db
+                .select()
+                .from(BackgroundSessionTable)
+                .where(eq(BackgroundSessionTable.session_id, active.rootSessionID))
+                .all().length
             : 0,
           status: active.rootSessionID
-            ? db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, active.rootSessionID)).all().length
+            ? db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, active.rootSessionID)).all()
+                .length
             : 0,
           session: active.rootSessionID
             ? db.select().from(SessionTable).where(eq(SessionTable.id, active.rootSessionID)).all().length
@@ -1891,7 +2117,13 @@ describe("loop workflow service", () => {
         expect(snapshot.workflow.phase).toBe("paused")
         expect(snapshot.workflow.nextWakeup).toBeUndefined()
         expect(snapshot.workflow.metrics.turns).toBe(1)
-        expect(snapshot.events.map((event) => event.type)).toEqual(["created", "activated", "started", "paused", "completed"])
+        expect(snapshot.events.map((event) => event.type)).toEqual([
+          "created",
+          "activated",
+          "started",
+          "paused",
+          "completed",
+        ])
         expect(snapshot.events.at(-1)?.summary).toBe("Loop paused after completing the current run.")
       },
     })
@@ -1909,8 +2141,10 @@ describe("loop workflow service", () => {
         })
         const active = await svc.activate(draft.id)
 
-        expect((await svc.due(active.nextWakeup)).map((item) => item.id)).toEqual([draft.id])
-        expect((await svc.due((active.nextWakeup ?? 0) + 1)).map((item) => item.id)).toEqual([draft.id])
+        expect((await svc.due(Date.now())).map((item) => item.id)).toEqual([draft.id])
+        // The first due() repairs the persisted wakeup to its observed clock.
+        // Re-check against the current clock, not the stale activation object.
+        expect((await svc.due(Date.now() + 1)).map((item) => item.id)).toEqual([draft.id])
 
         const started = await svc.startRun(draft.id)
         expect(started.state).toBe("working")
@@ -1925,7 +2159,11 @@ describe("loop workflow service", () => {
         expect(snapshot.workflow.state).toBe("sleeping")
         expect(snapshot.events.map((event) => event.type)).toContain("completed")
         Database.use((db) =>
-          db.update(LoopWorkflowTable).set({ next_wakeup: Date.now() - 1 }).where(eq(LoopWorkflowTable.id, draft.id)).run(),
+          db
+            .update(LoopWorkflowTable)
+            .set({ next_wakeup: Date.now() - 1 })
+            .where(eq(LoopWorkflowTable.id, draft.id))
+            .run(),
         )
 
         const failedStart = await svc.startRun(draft.id)
@@ -1952,7 +2190,12 @@ describe("loop workflow service", () => {
         await svc.activate(draft.id)
         const started = await svc.startRun(draft.id)
 
-        const failed = await svc.failRunWithError(draft.id, started.id, "Provider timeout while streaming response", "transient")
+        const failed = await svc.failRunWithError(
+          draft.id,
+          started.id,
+          "Provider timeout while streaming response",
+          "transient",
+        )
 
         expect(failed.state).toBe("failed")
         expect(failed.phase).toBe("retry_scheduled")
@@ -1971,6 +2214,62 @@ describe("loop workflow service", () => {
     })
   })
 
+  test("incomplete worker output retries and preserves the last durable checkpoint", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "TerraPredict retry",
+          objective: "Continue a simple iteration after a worker disappears.",
+          trigger: { mode: "self-paced" },
+          budgetMode: "max-goal",
+          policy: { maxTurns: 3 },
+        })
+        await svc.activate(draft.id)
+        const checkpoint = [
+          "LOOP_CHECKPOINT:",
+          "status: continue",
+          "summary: First iteration checkpoint is durable.",
+          "evidence:",
+          "- baseline prediction recorded",
+          "next_action: retry next iteration",
+        ].join("\n")
+        await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+
+        const incomplete = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          promptMessage("partial TerraPredict output", { finish: "" }),
+        )
+        expect(incomplete.value.state).toBe("failed")
+        expect(incomplete.value.summary).toContain("retry scheduled")
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("sleeping")
+        expect(snapshot.workflow.phase).toBe("retry_scheduled")
+        expect(snapshot.workflow.failureClass).toBe("transient")
+        expect(snapshot.runs.find((run) => run.checkpoint?.summary === "First iteration checkpoint is durable.")?.checkpoint).toMatchObject({
+          status: "continue",
+          summary: "First iteration checkpoint is durable.",
+        })
+        const retriedRun = snapshot.runs.find((run) => run.failureClass === "transient")
+        expect(retriedRun?.retry?.backoffMs).toBe(30_000)
+
+        Database.use((db) =>
+          db.update(LoopWorkflowTable).set({ next_wakeup: Date.now() - 1 }).where(eq(LoopWorkflowTable.id, draft.id)).run(),
+        )
+
+        const missingCheckpoint = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          promptMessage("finished but omitted checkpoint", { finish: "stop" }),
+        )
+        expect(missingCheckpoint.value.state).toBe("failed")
+        expect(missingCheckpoint.value.summary).toContain("retry scheduled")
+        expect((await svc.snapshot(draft.id)).workflow.failureClass).toBe("transient")
+      },
+    })
+  })
+
   test("retryable failures become terminal after the retry budget is exhausted", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
@@ -1985,14 +2284,32 @@ describe("loop workflow service", () => {
         await svc.activate(draft.id)
 
         const first = await svc.startRun(draft.id)
-        const firstFailure = await svc.failRunWithError(draft.id, first.id, "ENOSPC writing loop artifact", "environment")
+        const firstFailure = await svc.failRunWithError(
+          draft.id,
+          first.id,
+          "ENOSPC writing loop artifact",
+          "environment",
+        )
         Database.use((db) =>
-          db.update(LoopWorkflowTable).set({ next_wakeup: (firstFailure.retry?.nextWakeup ?? Date.now()) - 60_000 }).where(eq(LoopWorkflowTable.id, draft.id)).run(),
+          db
+            .update(LoopWorkflowTable)
+            .set({ next_wakeup: (firstFailure.retry?.nextWakeup ?? Date.now()) - 60_000 })
+            .where(eq(LoopWorkflowTable.id, draft.id))
+            .run(),
         )
         const second = await svc.startRun(draft.id)
-        const secondFailure = await svc.failRunWithError(draft.id, second.id, "ENOSPC writing loop artifact", "environment")
+        const secondFailure = await svc.failRunWithError(
+          draft.id,
+          second.id,
+          "ENOSPC writing loop artifact",
+          "environment",
+        )
         Database.use((db) =>
-          db.update(LoopWorkflowTable).set({ next_wakeup: (secondFailure.retry?.nextWakeup ?? Date.now()) - 60_000 }).where(eq(LoopWorkflowTable.id, draft.id)).run(),
+          db
+            .update(LoopWorkflowTable)
+            .set({ next_wakeup: (secondFailure.retry?.nextWakeup ?? Date.now()) - 60_000 })
+            .where(eq(LoopWorkflowTable.id, draft.id))
+            .run(),
         )
         const third = await svc.startRun(draft.id)
         const failed = await svc.failRunWithError(draft.id, third.id, "ENOSPC writing loop artifact", "environment")
@@ -2020,7 +2337,12 @@ describe("loop workflow service", () => {
         })
         await svc.activate(policyDraft.id)
         const policyRun = await svc.startRun(policyDraft.id)
-        const policyFailure = await svc.failRunWithError(policyDraft.id, policyRun.id, "Approval required for destructive shell", "policy")
+        const policyFailure = await svc.failRunWithError(
+          policyDraft.id,
+          policyRun.id,
+          "Approval required for destructive shell",
+          "policy",
+        )
         expect(policyFailure.state).toBe("blocked")
         expect(policyFailure.phase).toBe("policy_blocked")
         const policySnapshot = await svc.snapshot(policyDraft.id)
@@ -2034,7 +2356,12 @@ describe("loop workflow service", () => {
         })
         await svc.activate(inputDraft.id)
         const inputRun = await svc.startRun(inputDraft.id)
-        const inputFailure = await svc.failRunWithError(inputDraft.id, inputRun.id, "Needs user input to choose a target branch", "user_input")
+        const inputFailure = await svc.failRunWithError(
+          inputDraft.id,
+          inputRun.id,
+          "Needs user input to choose a target branch",
+          "user_input",
+        )
         expect(inputFailure.state).toBe("needs_input")
         expect(inputFailure.phase).toBe("needs_input")
         const inputSnapshot = await svc.snapshot(inputDraft.id)
@@ -2110,10 +2437,7 @@ describe("loop workflow service", () => {
               data: { type: "busy" },
             })
             .run()
-          db.update(LoopThreadTable)
-            .set({ state: "working" })
-            .where(eq(LoopThreadTable.workflow_id, draft.id))
-            .run()
+          db.update(LoopThreadTable).set({ state: "working" }).where(eq(LoopThreadTable.workflow_id, draft.id)).run()
           db.insert(LoopRunTable)
             .values({
               id: legacyRunID,
@@ -2147,7 +2471,11 @@ describe("loop workflow service", () => {
             .from(BackgroundSessionTable)
             .where(eq(BackgroundSessionTable.session_id, active.rootSessionID!))
             .get(),
-          status: db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, active.rootSessionID!)).get(),
+          status: db
+            .select()
+            .from(SessionStatusTable)
+            .where(eq(SessionStatusTable.session_id, active.rootSessionID!))
+            .get(),
           thread: db.select().from(LoopThreadTable).where(eq(LoopThreadTable.workflow_id, draft.id)).get(),
           run: db.select().from(LoopRunTable).where(eq(LoopRunTable.workflow_id, draft.id)).get(),
         }))
@@ -2182,11 +2510,15 @@ describe("loop workflow service", () => {
         expect(dry.prompts).toBe(0)
         expect((await svc.snapshot(draft.id)).workflow.metrics.turns).toBe(0)
 
-        const executed = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true, reportOnly: true })))
+        const executed = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true, reportOnly: true })),
+        )
         expect(executed.value.state).toBe("completed")
         expect(executed.prompts).toBe(1)
         expect(executed.promptCalls[0]?.tools).toEqual({ loop: false })
-        expect(promptInputText(executed.promptCalls[0])).toContain("Do not call the loop tool from inside a loop iteration")
+        expect(promptInputText(executed.promptCalls[0])).toContain(
+          "Do not call the loop tool from inside a loop iteration",
+        )
         expect((await svc.snapshot(draft.id)).workflow.metrics.turns).toBe(1)
       },
     })
@@ -2251,9 +2583,13 @@ describe("loop workflow service", () => {
             budgetMode: "unbounded-monitor",
           }),
         ])
-        await Promise.all(drafts.map((draft) =>
-          run(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "concurrency test", now: base }))),
-        ))
+        await Promise.all(
+          drafts.map((draft) =>
+            run(
+              LoopWorkflowService.use((loop) => loop.activate({ id: draft.id, reason: "concurrency test", now: base })),
+            ),
+          ),
+        )
 
         const releaseFirst = Promise.withResolvers<void>()
         const secondStarted = Promise.withResolvers<void>()
@@ -2271,14 +2607,16 @@ describe("loop workflow service", () => {
           SessionPrompt.Service,
           SessionPrompt.Service.of({
             cancel: () => Effect.void,
+            cancelTurn: () => Effect.succeed("not_running" as const),
             cancelQueued: () => Effect.succeed(false),
             interrupt: () => Effect.void,
-            prompt: () => Effect.promise(async () => {
-              prompts++
-              if (prompts === 1) await releaseFirst.promise
-              else secondStarted.resolve()
-              return promptMessage(checkpoint)
-            }),
+            prompt: () =>
+              Effect.promise(async () => {
+                prompts++
+                if (prompts === 1) await releaseFirst.promise
+                else secondStarted.resolve()
+                return promptMessage(checkpoint)
+              }),
             promptAsync: () => Effect.succeed(promptMessage(checkpoint)),
             loop: () => Effect.succeed(promptMessage()),
             shell: () => Effect.succeed(promptMessage()),
@@ -2288,7 +2626,9 @@ describe("loop workflow service", () => {
         )
         const execution = Effect.runPromise(
           LoopRunner.Service.use((runner) => runner.runDue({ now: base, limit: 2, execute: true })).pipe(
-            Effect.provide(Layer.mergeAll(loopWorkflowLayer, LoopRunner.defaultLayer, Session.defaultLayer, promptLayer)),
+            Effect.provide(
+              Layer.mergeAll(loopWorkflowLayer, LoopRunner.defaultLayer, Session.defaultLayer, promptLayer),
+            ),
           ),
         )
 
@@ -2327,9 +2667,16 @@ describe("loop workflow service", () => {
         const pending = await svc.snapshot(draft.id)
         expect(pending.workflow).toMatchObject({ state: "needs_input", phase: "needs_input" })
         expect(pending.runs[0]).toMatchObject({ id: run.id, state: "working" })
-        expect(Database.use((db) =>
-          db.select().from(BackgroundSessionTable).where(eq(BackgroundSessionTable.session_id, active.rootSessionID!)).get()?.data.state,
-        )).toBe("needs_input")
+        expect(
+          Database.use(
+            (db) =>
+              db
+                .select()
+                .from(BackgroundSessionTable)
+                .where(eq(BackgroundSessionTable.session_id, active.rootSessionID!))
+                .get()?.data.state,
+          ),
+        ).toBe("needs_input")
 
         markPermissionResolved(active.rootSessionID!)
         const resumed = await svc.snapshot(draft.id)
@@ -2352,7 +2699,9 @@ describe("loop workflow service", () => {
         await svc.activate(draft.id)
         const activeRun = await svc.startRunWithLease(draft.id, "runner-a")
 
-        const skipped = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })))
+        const skipped = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+        )
 
         expect(skipped.value).toMatchObject({
           workflowID: draft.id,
@@ -2383,7 +2732,9 @@ describe("loop workflow service", () => {
           summary: "A safety gate requires operator action.",
         })
 
-        const skipped = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })))
+        const skipped = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+        )
 
         expect(skipped.value).toMatchObject({ workflowID: draft.id, state: "skipped" })
         expect(skipped.value.summary).toContain("blocked")
@@ -2404,12 +2755,27 @@ describe("loop workflow service", () => {
           objective: "Inspect status and report findings without editing files.",
           gates: ["report-only"],
           policy: {
-            requireApprovalFor: ["edit", "write", "apply_patch", "shell", "subagent", "push", "merge", "release", "version-bump", "external-send", "destructive-shell", "broad-refactor"],
+            requireApprovalFor: [
+              "edit",
+              "write",
+              "apply_patch",
+              "shell",
+              "subagent",
+              "push",
+              "merge",
+              "release",
+              "version-bump",
+              "external-send",
+              "destructive-shell",
+              "broad-refactor",
+            ],
           },
         })
         await svc.activate(draft.id)
 
-        const executed = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true, reportOnly: true })))
+        const executed = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true, reportOnly: true })),
+        )
 
         expect(executed.value.state).toBe("completed")
         expect(executed.promptCalls[0]?.tools).toEqual({
@@ -2441,7 +2807,9 @@ describe("loop workflow service", () => {
         })
         await svc.activate(draft.id)
 
-        const executed = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })))
+        const executed = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+        )
 
         expect(executed.value.state).toBe("completed")
         expect(executed.prompts).toBe(1)
@@ -2473,12 +2841,22 @@ describe("loop workflow service", () => {
           objective: "Code and test the requested fix.",
           policy: {
             maxTurns: 3,
-            requireApprovalFor: ["push", "merge", "release", "version-bump", "external-send", "destructive-shell", "broad-refactor"],
+            requireApprovalFor: [
+              "push",
+              "merge",
+              "release",
+              "version-bump",
+              "external-send",
+              "destructive-shell",
+              "broad-refactor",
+            ],
           },
         })
         await svc.activate(draft.id)
 
-        const executed = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true, reportOnly: true })))
+        const executed = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true, reportOnly: true })),
+        )
         expect(executed.value.state).toBe("completed")
         expect(executed.prompts).toBe(1)
         expect(executed.promptCalls[0]?.tools).toEqual({ loop: false })
@@ -2513,7 +2891,10 @@ describe("loop workflow service", () => {
           "next_action: stop",
           "confidence: high",
         ].join("\n")
-        const executed = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+        const executed = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          checkpoint,
+        )
 
         expect(executed.value.state).toBe("completed")
         expect(executed.prompts).toBe(1)
@@ -2525,7 +2906,9 @@ describe("loop workflow service", () => {
         expect(snapshot.runs[0]?.evaluatorReason).toBe("Bug fixed and focused tests pass.")
         expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "success-checks")?.status).toBe("pass")
         expect(snapshot.artifacts.map((artifact) => artifact.kind)).toEqual(["checkpoint", "gate", "gate"])
-        expect(snapshot.artifacts.find((artifact) => artifact.kind === "checkpoint")?.evidence).toContain("bun test focused passed")
+        expect(snapshot.artifacts.find((artifact) => artifact.kind === "checkpoint")?.evidence).toContain(
+          "bun test focused passed",
+        )
         expect(snapshot.artifacts.find((artifact) => artifact.title === "Gate: success-checks")?.status).toBe("pass")
         expect(snapshot.events.at(-1)?.summary).toBe("Loop completed after the goal checkpoint reported success.")
       },
@@ -2546,22 +2929,24 @@ describe("loop workflow service", () => {
         await svc.activate(draft.id)
         const started = await svc.startRun(draft.id)
 
-        await run(LoopWorkflowService.use((loop) =>
-          loop.completeRun({
-            id: draft.id,
-            runID: started.id,
-            checkpoint: {
-              status: "continue",
-              summary: "Checked with Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
-              evidence: [
-                `token=secret-token-value ${"x".repeat(1_500)}`,
-                'payload={"token":"json-secret-value"}',
-                "validated with sk-abcdefghijklmnopqrstuvwxyz123456",
-              ],
-              nextAction: 'Retry after setting payload={"password":"hunter2"}',
-            },
-          }),
-        ))
+        await run(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: started.id,
+              checkpoint: {
+                status: "continue",
+                summary: "Checked with Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+                evidence: [
+                  `token=secret-token-value ${"x".repeat(1_500)}`,
+                  'payload={"token":"json-secret-value"}',
+                  "validated with sk-abcdefghijklmnopqrstuvwxyz123456",
+                ],
+                nextAction: 'Retry after setting payload={"password":"hunter2"}',
+              },
+            }),
+          ),
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         const checkpoint = snapshot.artifacts.find((artifact) => artifact.kind === "checkpoint")
@@ -2580,7 +2965,9 @@ describe("loop workflow service", () => {
         expect(JSON.stringify(snapshot.runs[0]?.checkpoint)).not.toContain("hunter2")
         expect(JSON.stringify(snapshot.events.at(-1)?.data)).toContain("Authorization:[REDACTED]")
         expect(JSON.stringify(snapshot.events.at(-1)?.data)).not.toContain("secret-token-value")
-        expect((snapshot.workflow.memory?.entries ?? []).some((entry) => entry.summary.includes("[REDACTED]"))).toBe(true)
+        expect((snapshot.workflow.memory?.entries ?? []).some((entry) => entry.summary.includes("[REDACTED]"))).toBe(
+          true,
+        )
       },
     })
   })
@@ -2600,27 +2987,31 @@ describe("loop workflow service", () => {
 
         for (let index = 0; index < 45; index++) {
           const started = await svc.startRun(draft.id)
-          await run(LoopWorkflowService.use((loop) =>
-            loop.completeRun({
-              id: draft.id,
-              runID: started.id,
-              checkpoint: {
-                status: "continue",
-                summary: `checkpoint ${index}`,
-              },
-              gateResults: [
-                { id: `gate-a-${index}`, status: "pass", summary: `gate a ${index}`, failureClass: "none" },
-                { id: `gate-b-${index}`, status: "skip", summary: `gate b ${index}`, failureClass: "none" },
-              ],
-            }),
-          ))
+          await run(
+            LoopWorkflowService.use((loop) =>
+              loop.completeRun({
+                id: draft.id,
+                runID: started.id,
+                checkpoint: {
+                  status: "continue",
+                  summary: `checkpoint ${index}`,
+                },
+                gateResults: [
+                  { id: `gate-a-${index}`, status: "pass", summary: `gate a ${index}`, failureClass: "none" },
+                  { id: `gate-b-${index}`, status: "skip", summary: `gate b ${index}`, failureClass: "none" },
+                ],
+              }),
+            ),
+          )
         }
 
         const snapshot = await run(LoopWorkflowService.use((loop) => loop.snapshot(draft.id, 200)))
         expect(snapshot.artifacts).toHaveLength(120)
         expect(snapshot.artifacts[0]?.summary).not.toBe("checkpoint 0")
         expect(snapshot.artifacts.at(-1)?.summary).toBe("gate b 44")
-        expect(snapshot.artifacts.map((artifact) => artifact.sequence)).toEqual([...snapshot.artifacts.map((artifact) => artifact.sequence)].sort((a, b) => a - b))
+        expect(snapshot.artifacts.map((artifact) => artifact.sequence)).toEqual(
+          [...snapshot.artifacts.map((artifact) => artifact.sequence)].sort((a, b) => a - b),
+        )
       },
     })
   })
@@ -2641,30 +3032,43 @@ describe("loop workflow service", () => {
         await svc.activate(draft.id)
         const started = await svc.startRun(draft.id)
 
-        await run(LoopWorkflowService.use((loop) =>
-          loop.completeRun({
-            id: draft.id,
-            runID: started.id,
-            checkpoint: {
-              status: "complete",
-              summary: "Implemented the memory path.",
-              nextAction: "Rerun focused tests after fixing the parser.",
-            },
-            judgment: {
-              status: "fail",
-              summary: "Completion is not accepted because focused tests were not shown.",
-              recommendedNextAction: "Run the focused tests and report their output.",
-            },
-            gateResults: [{ id: "independent-evaluator", status: "fail", summary: "Missing test evidence.", failureClass: "quality" }],
-          }),
-        ))
+        await run(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: started.id,
+              checkpoint: {
+                status: "complete",
+                summary: "Implemented the memory path.",
+                nextAction: "Rerun focused tests after fixing the parser.",
+              },
+              judgment: {
+                status: "fail",
+                summary: "Completion is not accepted because focused tests were not shown.",
+                recommendedNextAction: "Run the focused tests and report their output.",
+              },
+              gateResults: [
+                {
+                  id: "independent-evaluator",
+                  status: "fail",
+                  summary: "Missing test evidence.",
+                  failureClass: "quality",
+                },
+              ],
+            }),
+          ),
+        )
 
         const memory = (await svc.snapshot(draft.id)).workflow.memory?.entries ?? []
         expect(memory.map((entry) => entry.section)).toContain("tried")
         expect(memory.find((entry) => entry.section === "tried")?.summary).toBe("Implemented the memory path.")
-        expect(memory.find((entry) => entry.section === "open")?.summary).toBe("Rerun focused tests after fixing the parser.")
+        expect(memory.find((entry) => entry.section === "open")?.summary).toBe(
+          "Rerun focused tests after fixing the parser.",
+        )
         expect(memory.find((entry) => entry.section === "rejected")?.summary).toContain("Missing test evidence")
-        expect(memory.find((entry) => entry.section === "rejected" && entry.source === "independent-evaluator")?.summary).toContain("not accepted")
+        expect(
+          memory.find((entry) => entry.section === "rejected" && entry.source === "independent-evaluator")?.summary,
+        ).toContain("not accepted")
       },
     })
   })
@@ -2684,17 +3088,19 @@ describe("loop workflow service", () => {
         await svc.activate(draft.id)
         const started = await svc.startRun(draft.id)
 
-        await run(LoopWorkflowService.use((loop) =>
-          loop.completeRun({
-            id: draft.id,
-            runID: started.id,
-            checkpoint: {
-              status: "continue",
-              summary: "Checked the current state.",
-              nextAction: "Implement the missing persistence hook.",
-            },
-          }),
-        ))
+        await run(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: started.id,
+              checkpoint: {
+                status: "continue",
+                summary: "Checked the current state.",
+                nextAction: "Implement the missing persistence hook.",
+              },
+            }),
+          ),
+        )
 
         const memory = (await svc.snapshot(draft.id)).workflow.memory?.entries ?? []
         expect(memory).toHaveLength(1)
@@ -2757,17 +3163,19 @@ describe("loop workflow service", () => {
         })
         await svc.activate(draft.id)
         const first = await svc.startRun(draft.id)
-        await run(LoopWorkflowService.use((loop) =>
-          loop.completeRun({
-            id: draft.id,
-            runID: first.id,
-            checkpoint: {
-              status: "continue",
-              summary: "Confirmed the missing persistence hook.",
-              nextAction: "Add the persistence hook before retrying.",
-            },
-          }),
-        ))
+        await run(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: first.id,
+              checkpoint: {
+                status: "continue",
+                summary: "Confirmed the missing persistence hook.",
+                nextAction: "Add the persistence hook before retrying.",
+              },
+            }),
+          ),
+        )
 
         const second = await svc.startRunWithLease(draft.id, "runner-stale")
         const expired = Date.now() - 1
@@ -2792,8 +3200,12 @@ describe("loop workflow service", () => {
         const snapshot = await svc.snapshot(draft.id)
         const memory = snapshot.workflow.memory?.entries ?? []
         expect(snapshot.workflow.state).toBe("active")
-        expect(memory.find((entry) => entry.section === "tried")?.summary).toBe("Confirmed the missing persistence hook.")
-        expect(memory.find((entry) => entry.section === "open")?.summary).toBe("Add the persistence hook before retrying.")
+        expect(memory.find((entry) => entry.section === "tried")?.summary).toBe(
+          "Confirmed the missing persistence hook.",
+        )
+        expect(memory.find((entry) => entry.section === "open")?.summary).toBe(
+          "Add the persistence hook before retrying.",
+        )
       },
     })
   })
@@ -2833,7 +3245,9 @@ describe("loop workflow service", () => {
           })
         } finally {
           Database.use((db) => {
-            db.run("CREATE TABLE loop_artifact (id text PRIMARY KEY NOT NULL, workflow_id text NOT NULL, run_id text, session_id text, sequence integer NOT NULL, kind text NOT NULL, title text NOT NULL, summary text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text, FOREIGN KEY (workflow_id) REFERENCES loop_workflow(id) ON DELETE cascade, FOREIGN KEY (run_id) REFERENCES loop_run(id) ON DELETE set null, FOREIGN KEY (session_id) REFERENCES session(id) ON DELETE set null)")
+            db.run(
+              "CREATE TABLE loop_artifact (id text PRIMARY KEY NOT NULL, workflow_id text NOT NULL, run_id text, session_id text, sequence integer NOT NULL, kind text NOT NULL, title text NOT NULL, summary text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, data text, FOREIGN KEY (workflow_id) REFERENCES loop_workflow(id) ON DELETE cascade, FOREIGN KEY (run_id) REFERENCES loop_run(id) ON DELETE set null, FOREIGN KEY (session_id) REFERENCES session(id) ON DELETE set null)",
+            )
             db.run("CREATE INDEX loop_artifact_workflow_sequence_idx ON loop_artifact (workflow_id, sequence)")
             db.run("CREATE INDEX loop_artifact_workflow_time_idx ON loop_artifact (workflow_id, time_created)")
             db.run("CREATE INDEX loop_artifact_run_idx ON loop_artifact (run_id)")
@@ -2870,7 +3284,10 @@ describe("loop workflow service", () => {
           "next_action: stop",
           "confidence: high",
         ].join("\n")
-        await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          checkpoint,
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.state).toBe("completed")
@@ -2905,7 +3322,10 @@ describe("loop workflow service", () => {
           "next_action: stop",
           "confidence: high",
         ].join("\n")
-        await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          checkpoint,
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.metrics.turns).toBe(1)
@@ -2947,7 +3367,10 @@ describe("loop workflow service", () => {
           "next_action: stop",
           "confidence: high",
         ].join("\n")
-        await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          checkpoint,
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.state).toBe("active")
@@ -2982,7 +3405,10 @@ describe("loop workflow service", () => {
           "next_action: stop",
           "confidence: high",
         ].join("\n")
-        await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          checkpoint,
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.state).toBe("completed")
@@ -3017,7 +3443,10 @@ describe("loop workflow service", () => {
           "  confidence: high",
           "```",
         ].join("\n")
-        await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          checkpoint,
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.state).toBe("completed")
@@ -3054,7 +3483,10 @@ describe("loop workflow service", () => {
           "next_action: stop",
           "confidence: high",
         ].join("\n")
-        await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          checkpoint,
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.state).toBe("completed")
@@ -3238,7 +3670,9 @@ describe("loop workflow service", () => {
           status: "blocked",
           failureClass: "transient",
         })
-        expect(snapshot.workflow.evaluatorReason).toContain("Evaluator failed: Evaluator timeout while contacting provider")
+        expect(snapshot.workflow.evaluatorReason).toContain(
+          "Evaluator failed: Evaluator timeout while contacting provider",
+        )
       },
     })
   })
@@ -3311,27 +3745,36 @@ describe("loop workflow service", () => {
         await svc.activate(draft.id)
 
         const started = await svc.startRun(draft.id)
-        await run(LoopWorkflowService.use((loop) =>
-          loop.completeRun({
-            id: draft.id,
-            runID: started.id,
-            checkpoint: {
-              status: "blocked",
-              summary: "Worker could not decide whether the objective is done.",
-              evidence: ["final artifact exists but worker is uncertain"],
-              nextAction: "ask_user",
-              confidence: "low",
-            },
-            judgment: {
-              status: "pass",
-              summary: "The final artifact proves the objective is complete.",
-              evidence: ["final artifact satisfies the completion criteria"],
-              recommendedNextAction: "complete",
-              confidence: "high",
-            },
-            gateResults: [{ id: "independent-evaluator", status: "pass", summary: "Judge accepted final evidence.", failureClass: "none" }],
-          }),
-        ))
+        await run(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: started.id,
+              checkpoint: {
+                status: "blocked",
+                summary: "Worker could not decide whether the objective is done.",
+                evidence: ["final artifact exists but worker is uncertain"],
+                nextAction: "ask_user",
+                confidence: "low",
+              },
+              judgment: {
+                status: "pass",
+                summary: "The final artifact proves the objective is complete.",
+                evidence: ["final artifact satisfies the completion criteria"],
+                recommendedNextAction: "complete",
+                confidence: "high",
+              },
+              gateResults: [
+                {
+                  id: "independent-evaluator",
+                  status: "pass",
+                  summary: "Judge accepted final evidence.",
+                  failureClass: "none",
+                },
+              ],
+            }),
+          ),
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.state).toBe("completed")
@@ -3451,7 +3894,9 @@ describe("loop workflow service", () => {
           status: "fail",
           failureClass: "quality",
         })
-        expect(snapshot.workflow.evaluatorReason).toBe("The final artifact looks sufficient, but validation evidence is missing.")
+        expect(snapshot.workflow.evaluatorReason).toBe(
+          "The final artifact looks sufficient, but validation evidence is missing.",
+        )
       },
     })
   })
@@ -3472,27 +3917,36 @@ describe("loop workflow service", () => {
         await svc.activate(draft.id)
 
         const started = await svc.startRun(draft.id)
-        await run(LoopWorkflowService.use((loop) =>
-          loop.completeRun({
-            id: draft.id,
-            runID: started.id,
-            checkpoint: {
-              status: "needs_input",
-              summary: "Worker still needs a human decision before proceeding.",
-              evidence: ["pending approval from user"],
-              nextAction: "ask_user",
-              confidence: "high",
-            },
-            judgment: {
-              status: "pass",
-              summary: "Existing artifacts look complete, but the worker asked for input.",
-              evidence: ["artifact appears complete"],
-              recommendedNextAction: "wait_for_user",
-              confidence: "medium",
-            },
-            gateResults: [{ id: "independent-evaluator", status: "pass", summary: "Judge would otherwise accept the evidence.", failureClass: "none" }],
-          }),
-        ))
+        await run(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: started.id,
+              checkpoint: {
+                status: "needs_input",
+                summary: "Worker still needs a human decision before proceeding.",
+                evidence: ["pending approval from user"],
+                nextAction: "ask_user",
+                confidence: "high",
+              },
+              judgment: {
+                status: "pass",
+                summary: "Existing artifacts look complete, but the worker asked for input.",
+                evidence: ["artifact appears complete"],
+                recommendedNextAction: "wait_for_user",
+                confidence: "medium",
+              },
+              gateResults: [
+                {
+                  id: "independent-evaluator",
+                  status: "pass",
+                  summary: "Judge would otherwise accept the evidence.",
+                  failureClass: "none",
+                },
+              ],
+            }),
+          ),
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.state).toBe("needs_input")
@@ -3680,7 +4134,10 @@ describe("loop workflow service", () => {
           "next_action: ask for more budget",
           "confidence: medium",
         ].join("\n")
-        await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          checkpoint,
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.metrics.turns).toBe(1)
@@ -3719,7 +4176,10 @@ describe("loop workflow service", () => {
           "next_action: stop",
           "confidence: high",
         ].join("\n")
-        const executed = await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+        const executed = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          checkpoint,
+        )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.metrics.turns).toBe(1)
@@ -3744,7 +4204,9 @@ describe("loop workflow service", () => {
       directory: tmp.path,
       fn: async () => {
         const owner = await Effect.runPromise(
-          Session.Service.use((session) => session.create({ title: "Loop owner" })).pipe(Effect.provide(Session.defaultLayer)),
+          Session.Service.use((session) => session.create({ title: "Loop owner" })).pipe(
+            Effect.provide(Session.defaultLayer),
+          ),
         )
         const draft = await svc.createDraft({
           name: "Notify owner",
@@ -3846,7 +4308,9 @@ describe("loop workflow service", () => {
           status: "blocked",
           failureClass: "policy",
         })
-        expect(snapshot.artifacts.find((artifact) => artifact.kind === "command-output")?.text).toContain("Blocked in report-only mode")
+        expect(snapshot.artifacts.find((artifact) => artifact.kind === "command-output")?.text).toContain(
+          "Blocked in report-only mode",
+        )
       },
     })
   })
@@ -3892,7 +4356,10 @@ describe("loop workflow service", () => {
 
   test("fixed workflows do not report completion at the cap when a completion gate fails", async () => {
     await using tmp = await tmpdir({ git: true })
-    await Bun.write(path.join(tmp.path, "package.json"), JSON.stringify({ scripts: { check: "bun -e 'process.exit(1)'" } }))
+    await Bun.write(
+      path.join(tmp.path, "package.json"),
+      JSON.stringify({ scripts: { check: "bun -e 'process.exit(1)'" } }),
+    )
     await WithInstance.provide({
       directory: tmp.path,
       fn: async () => {
@@ -3911,7 +4378,9 @@ describe("loop workflow service", () => {
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow).toMatchObject({ state: "blocked", phase: "completion_gate_failed" })
-        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "validation:project-check")?.status).toBe("fail")
+        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "validation:project-check")?.status).toBe(
+          "fail",
+        )
       },
     })
   })
@@ -3931,25 +4400,34 @@ describe("loop workflow service", () => {
           policy: { maxTurns: 3 },
         })
         await svc.activate(draft.id)
-        const worker = "LOOP_CHECKPOINT:\nstatus: complete\nsummary: Ready.\nevidence:\n- implementation inspected\nnext_action: stop\nconfidence: high"
-        const judge = "LOOP_JUDGMENT:\nstatus: pass\nsummary: Judge accepts the implementation evidence.\nevidence:\n- implementation inspected\nrecommended_next_action: complete\nconfidence: high"
+        const worker =
+          "LOOP_CHECKPOINT:\nstatus: complete\nsummary: Ready.\nevidence:\n- implementation inspected\nnext_action: stop\nconfidence: high"
+        const judge =
+          "LOOP_JUDGMENT:\nstatus: pass\nsummary: Judge accepts the implementation evidence.\nevidence:\n- implementation inspected\nrecommended_next_action: complete\nconfidence: high"
 
         await runRunner(
           LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
-          (call) => call === 1 ? worker : judge,
+          (call) => (call === 1 ? worker : judge),
         )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.state).not.toBe("completed")
-        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "validation:diff-check")).toMatchObject({ status: "pass" })
-        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "success-checks")).toMatchObject({ status: "fail" })
+        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "validation:diff-check")).toMatchObject({
+          status: "pass",
+        })
+        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "success-checks")).toMatchObject({
+          status: "fail",
+        })
       },
     })
   })
 
   test("runtime rubric blocks a passing judge when executable validation fails", async () => {
     await using tmp = await tmpdir({ git: true })
-    await Bun.write(path.join(tmp.path, "package.json"), JSON.stringify({ scripts: { check: "bun -e 'process.exit(1)'" } }))
+    await Bun.write(
+      path.join(tmp.path, "package.json"),
+      JSON.stringify({ scripts: { check: "bun -e 'process.exit(1)'" } }),
+    )
     await WithInstance.provide({
       directory: tmp.path,
       fn: async () => {
@@ -3961,25 +4439,41 @@ describe("loop workflow service", () => {
           evaluation: { mode: "independent", requireIndependentForCompletion: true },
           rubric: {
             passThreshold: 0.8,
-            criteria: [{ id: "verification", description: "Executable validation passes.", weight: 1, minScore: 4, evidenceRequired: ["success check output"] }],
+            criteria: [
+              {
+                id: "verification",
+                description: "Executable validation passes.",
+                weight: 1,
+                minScore: 4,
+                evidenceRequired: ["success check output"],
+              },
+            ],
             mandatoryBlockers: ["configured validation failed"],
           },
           policy: { maxTurns: 3 },
         })
         await svc.activate(draft.id)
-        const worker = "LOOP_CHECKPOINT:\nstatus: complete\nsummary: Claimed complete.\nevidence:\n- implementation updated\nnext_action: stop\nconfidence: high"
-        const judge = "LOOP_JUDGMENT:\nstatus: pass\nsummary: Judge accepts the proposal.\nevidence:\n- implementation updated\nrecommended_next_action: complete\nconfidence: high"
+        const worker =
+          "LOOP_CHECKPOINT:\nstatus: complete\nsummary: Claimed complete.\nevidence:\n- implementation updated\nnext_action: stop\nconfidence: high"
+        const judge =
+          "LOOP_JUDGMENT:\nstatus: pass\nsummary: Judge accepts the proposal.\nevidence:\n- implementation updated\nrecommended_next_action: complete\nconfidence: high"
 
         const executed = await runRunner(
           LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
-          (call) => call === 1 ? worker : judge,
+          (call) => (call === 1 ? worker : judge),
         )
 
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.workflow.state).not.toBe("completed")
-        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "validation:project-check")).toMatchObject({ status: "fail", failureClass: "quality" })
+        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "validation:project-check")).toMatchObject({
+          status: "fail",
+          failureClass: "quality",
+        })
         expect(snapshot.runs[0]?.rubricResult).toMatchObject({ status: "blocked", score: 0, threshold: 0.8 })
-        expect(snapshot.runs[0]?.rubricResult?.blockers.find((blocker) => blocker.id === "configured validation failed")?.present).toBe(true)
+        expect(
+          snapshot.runs[0]?.rubricResult?.blockers.find((blocker) => blocker.id === "configured validation failed")
+            ?.present,
+        ).toBe(true)
         expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "rubric")?.status).toBe("blocked")
         expect(promptInputText(executed.promptCalls[1])).toContain("validation:project-check: fail")
       },
@@ -3999,20 +4493,30 @@ describe("loop workflow service", () => {
         })
         await svc.activate(draft.id)
         const started = await svc.startRun(draft.id)
-        await run(LoopWorkflowService.use((loop) => loop.completeRun({
-          id: draft.id,
-          runID: started.id,
-          checkpoint: { status: "blocked", summary: "A flaky quality check blocked completion." },
-          gateResults: [{ id: "flaky-quality", status: "blocked", summary: "Flaky check failed.", failureClass: "quality" }],
-        })))
+        await run(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: started.id,
+              checkpoint: { status: "blocked", summary: "A flaky quality check blocked completion." },
+              gateResults: [
+                { id: "flaky-quality", status: "blocked", summary: "Flaky check failed.", failureClass: "quality" },
+              ],
+            }),
+          ),
+        )
 
-        const waived = await run(LoopWorkflowService.use((loop) => loop.override({
-          id: draft.id,
-          action: "waive",
-          gateID: "flaky-quality",
-          actor: "user:operator",
-          reason: "Verified the failure is unrelated and accepted the risk.",
-        })))
+        const waived = await run(
+          LoopWorkflowService.use((loop) =>
+            loop.override({
+              id: draft.id,
+              action: "waive",
+              gateID: "flaky-quality",
+              actor: "user:operator",
+              reason: "Verified the failure is unrelated and accepted the risk.",
+            }),
+          ),
+        )
         expect(waived.state).toBe("active")
         let snapshot = await svc.snapshot(draft.id)
         expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "flaky-quality")).toMatchObject({
@@ -4020,12 +4524,16 @@ describe("loop workflow service", () => {
           waiver: { action: "waive", actor: "user:operator" },
         })
 
-        const accepted = await run(LoopWorkflowService.use((loop) => loop.override({
-          id: draft.id,
-          action: "accept",
-          actor: "user:operator",
-          reason: "Accept completion after reviewing the waived gate.",
-        })))
+        const accepted = await run(
+          LoopWorkflowService.use((loop) =>
+            loop.override({
+              id: draft.id,
+              action: "accept",
+              actor: "user:operator",
+              reason: "Accept completion after reviewing the waived gate.",
+            }),
+          ),
+        )
         expect(accepted.state).toBe("completed")
         snapshot = await svc.snapshot(draft.id)
         expect(snapshot.artifacts.filter((artifact) => artifact.kind === "override")).toHaveLength(2)
@@ -4047,27 +4555,42 @@ describe("loop workflow service", () => {
         })
         await svc.activate(draft.id)
         const started = await svc.startRun(draft.id)
-        await run(LoopWorkflowService.use((loop) => loop.completeRun({
-          id: draft.id,
-          runID: started.id,
-          checkpoint: { status: "blocked", summary: "Quality and approval gates are unresolved." },
-          gateResults: [
-            { id: "flaky-quality", status: "blocked", summary: "Flaky check failed.", failureClass: "quality" },
-            { id: "approval-policy", status: "awaiting_approval", summary: "Release approval is required.", failureClass: "policy" },
-          ],
-        })))
+        await run(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: started.id,
+              checkpoint: { status: "blocked", summary: "Quality and approval gates are unresolved." },
+              gateResults: [
+                { id: "flaky-quality", status: "blocked", summary: "Flaky check failed.", failureClass: "quality" },
+                {
+                  id: "approval-policy",
+                  status: "awaiting_approval",
+                  summary: "Release approval is required.",
+                  failureClass: "policy",
+                },
+              ],
+            }),
+          ),
+        )
 
-        const waived = await run(LoopWorkflowService.use((loop) => loop.override({
-          id: draft.id,
-          action: "waive",
-          gateID: "flaky-quality",
-          actor: "user:operator",
-          reason: "Accepted only the flaky quality result.",
-        })))
+        const waived = await run(
+          LoopWorkflowService.use((loop) =>
+            loop.override({
+              id: draft.id,
+              action: "waive",
+              gateID: "flaky-quality",
+              actor: "user:operator",
+              reason: "Accepted only the flaky quality result.",
+            }),
+          ),
+        )
         expect(waived).toMatchObject({ state: "needs_input", phase: "needs_input" })
         const snapshot = await svc.snapshot(draft.id)
         expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "flaky-quality")?.status).toBe("pass")
-        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "approval-policy")?.status).toBe("awaiting_approval")
+        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "approval-policy")?.status).toBe(
+          "awaiting_approval",
+        )
       },
     })
   })
@@ -4083,13 +4606,17 @@ describe("loop workflow service", () => {
           trigger: { mode: "external-signal" },
         })
         await svc.activate(draft.id)
-        const attempts = await Promise.all(["first", "replay"].map(() => svc.ingestSignal({
-          workflowID: draft.id,
-          source: "ci",
-          type: "ci.check.failed",
-          dedupeKey: "event-1",
-          rateLimit: { maxEvents: 1, windowMs: 60_000 },
-        })))
+        const attempts = await Promise.all(
+          ["first", "replay"].map(() =>
+            svc.ingestSignal({
+              workflowID: draft.id,
+              source: "ci",
+              type: "ci.check.failed",
+              dedupeKey: "event-1",
+              rateLimit: { maxEvents: 1, windowMs: 60_000 },
+            }),
+          ),
+        )
         const first = attempts.find((attempt) => !attempt.deduped)!
         const duplicate = attempts.find((attempt) => attempt.deduped)!
         const limited = await svc.ingestSignal({
@@ -4103,7 +4630,9 @@ describe("loop workflow service", () => {
         expect(first).toMatchObject({ deduped: false, rateLimited: false })
         expect(duplicate).toMatchObject({ deduped: true, rateLimited: false })
         expect(limited).toMatchObject({ deduped: false, rateLimited: true })
-        expect((await svc.snapshot(draft.id)).artifacts.filter((artifact) => artifact.kind === "signal")).toHaveLength(1)
+        expect((await svc.snapshot(draft.id)).artifacts.filter((artifact) => artifact.kind === "signal")).toHaveLength(
+          1,
+        )
       },
     })
   })
@@ -4120,23 +4649,38 @@ describe("loop workflow service", () => {
         })
         await svc.activate(draft.id)
         const started = await svc.startRun(draft.id)
-        const record = (checkID: string) => run(LoopWorkflowService.use((loop) => loop.recordValidation({
-          id: draft.id,
-          runID: started.id,
-          checkID,
-          command: "git diff --check",
-          status: "pass",
-          summary: `${checkID} passed`,
-          output: "x".repeat(900),
-        })))
+        const record = (checkID: string) =>
+          run(
+            LoopWorkflowService.use((loop) =>
+              loop.recordValidation({
+                id: draft.id,
+                runID: started.id,
+                checkID,
+                command: "git diff --check",
+                status: "pass",
+                summary: `${checkID} passed`,
+                output: "x".repeat(900),
+              }),
+            ),
+          )
         const old = await record("old")
-        Database.use((db) => db.update(LoopArtifactTable).set({ time_created: Date.now() - 10_000 }).where(eq(LoopArtifactTable.id, old.id)).run())
+        Database.use((db) =>
+          db
+            .update(LoopArtifactTable)
+            .set({ time_created: Date.now() - 10_000 })
+            .where(eq(LoopArtifactTable.id, old.id))
+            .run(),
+        )
         await record("new-1")
         await record("new-2")
-        expect((await svc.snapshot(draft.id, 50)).artifacts.filter((artifact) => artifact.kind === "command-output")).toHaveLength(3)
+        expect(
+          (await svc.snapshot(draft.id, 50)).artifacts.filter((artifact) => artifact.kind === "command-output"),
+        ).toHaveLength(3)
         await svc.completeRun(draft.id, started.id, { status: "continue", summary: "Validation run finished." })
 
-        const artifacts = (await svc.snapshot(draft.id, 50)).artifacts.filter((artifact) => artifact.kind === "command-output")
+        const artifacts = (await svc.snapshot(draft.id, 50)).artifacts.filter(
+          (artifact) => artifact.kind === "command-output",
+        )
         expect(artifacts.some((artifact) => artifact.id === old.id)).toBe(false)
         expect(artifacts.length).toBeLessThan(3)
       },

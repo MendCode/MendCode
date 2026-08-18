@@ -16,6 +16,7 @@ import os from "os"
 import { evaluate as evalRule } from "./evaluate"
 import { PermissionID } from "./schema"
 import { markPermissionAbandoned, markPermissionPending, markPermissionResolved } from "@/session/pending-input"
+import { isSafeSmartPermissionRequest } from "@/mend/permission/smart-approval"
 
 const log = Log.create({ service: "permission" })
 
@@ -45,6 +46,10 @@ export function sessionModeRule(mode: SessionPermissionMode): Rule {
   return { permission: SESSION_MODE_PERMISSION, pattern: mode, action: "allow" }
 }
 
+export function withSessionMode(ruleset: Ruleset, mode: SessionPermissionMode): Ruleset {
+  return [...ruleset.filter((rule) => rule.permission !== SESSION_MODE_PERMISSION), sessionModeRule(mode)]
+}
+
 function isShellPermissionRequest(request: Pick<Request, "permission" | "metadata">) {
   return (
     request.permission === "bash" ||
@@ -67,6 +72,10 @@ export class Request extends Schema.Class<Request>("PermissionRequest")({
   ),
 }) {
   static readonly zod = zod(this)
+}
+
+export function isSafeSmartAutoApprovalRequest(request: Request) {
+  return request.permission !== "external_directory" && isSafeSmartPermissionRequest(request)
 }
 
 export const Reply = Schema.Literals(["once", "always", "reject"]).pipe(withStatics((s) => ({ zod: zod(s) })))
@@ -163,7 +172,11 @@ export type StoreData =
 export interface Interface {
   readonly ask: (input: AskInput) => Effect.Effect<void, Error>
   readonly reply: (input: ReplyInput) => Effect.Effect<void>
-  readonly replyForSessions: (input: { sessionIDs: readonly SessionID[]; reply: Reply }) => Effect.Effect<void>
+  readonly replyForSessions: (input: {
+    sessionIDs: readonly SessionID[]
+    reply: Reply
+    filter?: (request: Request) => boolean
+  }) => Effect.Effect<void>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
 }
 
@@ -322,6 +335,7 @@ export const layer = Layer.effect(
         id,
         ...request,
       })
+      if (mode === "smart" && isSafeSmartAutoApprovalRequest(info)) return
       log.info("asking", { id, permission: info.permission, patterns: info.patterns })
 
       const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
@@ -430,6 +444,7 @@ export const layer = Layer.effect(
     const replyForSessions = Effect.fn("Permission.replyForSessions")(function* (input: {
       sessionIDs: readonly SessionID[]
       reply: Reply
+      filter?: (request: Request) => boolean
     }) {
       const context = yield* InstanceState.context
       const sessionIDs = new Set(input.sessionIDs)
@@ -438,7 +453,12 @@ export const layer = Layer.effect(
           const abandoned = cleanDeadRequests(store)
           return {
             requests: store.requests
-              .filter((request) => request.reply === undefined && sessionIDs.has(request.info.sessionID))
+              .filter(
+                (request) =>
+                  request.reply === undefined &&
+                  sessionIDs.has(request.info.sessionID) &&
+                  (!input.filter || input.filter(request.info)),
+              )
               .map((request) => Schema.decodeUnknownSync(Request)(request.info)),
             abandoned,
           }

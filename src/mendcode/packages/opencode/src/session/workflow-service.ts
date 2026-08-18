@@ -39,6 +39,7 @@ import {
   WorkflowTaskKind,
   WorkflowTaskState,
   WorkflowPermissionMode,
+  WorkflowSessionPermissionMode,
   WorkflowWorkspaceLease,
 } from "./workflow"
 import {
@@ -183,7 +184,8 @@ export interface WorkflowControlInput {
 }
 
 export interface WorkflowPermissionModeInput extends WorkflowControlInput {
-  readonly mode: WorkflowPermissionMode
+  readonly mode?: WorkflowPermissionMode
+  readonly sessionMode?: WorkflowSessionPermissionMode | null
 }
 
 export const WORKFLOW_PERMISSION_ABANDONED_REASON =
@@ -195,6 +197,7 @@ export interface WorkflowTaskSessionRecovery {
   readonly attemptID: WorkflowTaskAttemptID
   readonly attempt: number
   readonly backgroundGeneration?: number
+  readonly runnerManaged?: boolean
 }
 
 export interface WorkflowTaskSessionResumeInput {
@@ -283,6 +286,7 @@ export interface Interface {
   readonly resume: (
     input: WorkflowControlInput,
   ) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
+  readonly wake: (runID: WorkflowRunID) => Effect.Effect<void>
   readonly stop: (
     input: WorkflowControlInput,
   ) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
@@ -370,6 +374,7 @@ const runFromRow = (row: typeof WorkflowRunTable.$inferSelect): WorkflowRun => (
   ...(row.loop_run_id ? { loopRunID: row.loop_run_id } : {}),
   ...(row.data.workspaceLease ? { workspaceLease: row.data.workspaceLease } : {}),
   ...(row.data.permissionMode ? { permissionMode: row.data.permissionMode } : {}),
+  ...(row.data.sessionPermissionMode ? { sessionPermissionMode: row.data.sessionPermissionMode } : {}),
   state: row.state,
   ...(row.current_phase_id ? { currentPhaseID: WorkflowPhaseID.make(row.current_phase_id) } : {}),
   createdAt: row.time_created,
@@ -595,7 +600,7 @@ const workflowPhaseBarrierSatisfied = (
   return false
 }
 
-const reconcileWorkflowSessionState = (db: WorkflowDB, runID: WorkflowRunID, now: number) => {
+export const reconcileWorkflowSessionState = (db: WorkflowDB, runID: WorkflowRunID, now: number) => {
   const phases = db.select().from(WorkflowPhaseTable).where(eq(WorkflowPhaseTable.run_id, runID)).orderBy(WorkflowPhaseTable.ordinal).all()
   const tasks = db.select().from(WorkflowTaskTable).where(eq(WorkflowTaskTable.run_id, runID)).all()
   const phaseStates = new Map<string, WorkflowPhaseState>()
@@ -1123,10 +1128,10 @@ export const layer = Layer.effect(
         return yield* Effect.fail(
           new WorkflowStateError(input.runID, `Workflow is already terminal: ${current.run.state}`),
         )
-      if (state === "queued" && current.run.state === "working")
-        return yield* Effect.fail(
-          new WorkflowStateError(input.runID, "A working workflow must be paused before it can be resumed"),
-        )
+      if (state === "queued" && current.run.state === "working") {
+        yield* bus.publish(Event.RunWake, { runID: input.runID })
+        return current
+      }
       if (state === "queued") {
         const gate = unresolvedGate(current)
         if (gate)
@@ -1171,6 +1176,9 @@ export const layer = Layer.effect(
 
     const pause = (input: WorkflowControlInput) => updateState(input, "paused")
     const resume = (input: WorkflowControlInput) => updateState(input, "queued")
+    const wake = Effect.fn("WorkflowService.wake")((runID: WorkflowRunID) =>
+      bus.publish(Event.RunWake, { runID }),
+    )
     const stop = (input: WorkflowControlInput) => updateState(input, "stopped")
 
     const setPermissionMode = Effect.fn("WorkflowService.setPermissionMode")(function* (
@@ -1182,7 +1190,14 @@ export const layer = Layer.effect(
           new WorkflowStateError(input.runID, `Workflow is already terminal: ${current.run.state}`),
         )
       }
-      if (current.run.permissionMode === input.mode) return current
+      if (input.mode === undefined && input.sessionMode === undefined) return current
+      const unchanged =
+        (input.mode === undefined || current.run.permissionMode === input.mode) &&
+        (input.sessionMode === undefined ||
+          (input.sessionMode === null
+            ? current.run.sessionPermissionMode === undefined
+            : current.run.sessionPermissionMode === input.sessionMode))
+      if (unchanged) return current
       const now = Date.now()
       Database.transaction((db) => {
         const persisted = db
@@ -1190,22 +1205,31 @@ export const layer = Layer.effect(
           .from(WorkflowRunTable)
           .where(eq(WorkflowRunTable.id, input.runID))
           .get()
+        const data = { ...persisted?.data }
+        if (input.mode !== undefined) data.permissionMode = input.mode
+        if (input.sessionMode === null) delete data.sessionPermissionMode
+        if (input.sessionMode !== undefined && input.sessionMode !== null) {
+          data.sessionPermissionMode = input.sessionMode
+        }
         db.update(WorkflowRunTable)
-          .set({
-            time_updated: now,
-            data: { ...persisted?.data, permissionMode: input.mode },
-          })
+          .set({ time_updated: now, data })
           .where(eq(WorkflowRunTable.id, input.runID))
           .run()
+        const sessionMode = input.sessionMode === null ? "global default" : input.sessionMode
         appendEvent(
           db,
           input.runID,
           "workflow.run.updated",
-          "Workflow permission mode changed",
-          input.reason ?? `Workflow permission mode is now ${input.mode}`,
-          { actor: input.actor ?? "user", permissionMode: input.mode },
+          "Workflow permission settings changed",
+          input.reason ?? `Workflow permission settings changed${sessionMode ? `: ${sessionMode}` : ""}`,
+          {
+            actor: input.actor ?? "user",
+            ...(input.mode === undefined ? {} : { permissionMode: input.mode }),
+            ...(input.sessionMode === undefined ? {} : { sessionPermissionMode: input.sessionMode }),
+          },
         )
       })
+      yield* bus.publish(Event.RunWake, { runID: input.runID })
       return yield* show(input.runID)
     })
 
@@ -1220,12 +1244,20 @@ export const layer = Layer.effect(
         const { attempt, task, run } = match
         const currentGeneration = attempt.background_generation ?? undefined
         if (attempt.state === "working") {
-          if (input.backgroundGeneration === undefined || input.backgroundGeneration === currentGeneration) return
-          const now = Date.now()
+          if (input.backgroundGeneration === undefined || input.backgroundGeneration === currentGeneration) {
+            return {
+              runID: run.id,
+              taskID: task.id,
+              attemptID: attempt.id,
+              attempt: attempt.attempt,
+              ...(currentGeneration === undefined ? {} : { backgroundGeneration: currentGeneration }),
+              runnerManaged: true,
+            }
+          }
           db.update(WorkflowTaskAttemptTable)
             .set({
               background_generation: input.backgroundGeneration,
-              time_updated: now,
+              time_updated: Date.now(),
             })
             .where(eq(WorkflowTaskAttemptTable.id, attempt.id))
             .run()
@@ -1432,6 +1464,7 @@ export const layer = Layer.effect(
           { actor: input.actor ?? "user", reason: input.reason },
         )
       })
+      yield* bus.publish(Event.RunWake, { runID: input.runID })
       return yield* show(input.runID)
     })
 
@@ -1477,6 +1510,7 @@ export const layer = Layer.effect(
           { actor: input.actor ?? "user", reason: input.reason },
         )
       })
+      yield* bus.publish(Event.RunWake, { runID: input.runID })
       return yield* show(input.runID)
     })
 
@@ -1491,6 +1525,7 @@ export const layer = Layer.effect(
       artifacts,
       pause,
       resume,
+      wake,
       stop,
       setPermissionMode,
       resumeTaskSession,

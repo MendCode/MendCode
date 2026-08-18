@@ -1,16 +1,27 @@
 import { describe, expect, test } from "bun:test"
 import {
   isAssistantWorking,
+  displayConnectionStatus,
+  knownAgentActivityConnectionLabel,
   isBusyStatusSupersededByTerminalAssistant,
+  terminalAssistantSettlesActivity,
   isRecentWorkingAssistant,
   isStaleBusySession,
   isSubagentStatusActive,
   isToolActivityActive,
   sessionStatusExpiryDelay,
   shouldKeepCompactedSubagent,
-  shouldShowSessionStoppedConnection,
+  shouldShowAgentStateUnknown,
   STALE_BUSY_SESSION_WINDOW_MS,
 } from "@/cli/cmd/tui/util/session-working"
+
+describe("displayConnectionStatus", () => {
+  test("labels a connected transport that is still recovering", () => {
+    expect(displayConnectionStatus({ status: "connected", recoveringSince: 123 })).toBe("reconnecting")
+    expect(displayConnectionStatus({ status: "connected" })).toBe("connected")
+    expect(displayConnectionStatus({ status: "failed", recoveringSince: 123 })).toBe("failed")
+  })
+})
 
 describe("isRecentWorkingAssistant", () => {
   test("rejects stale unfinished assistant history", () => {
@@ -125,6 +136,25 @@ describe("isAssistantWorking", () => {
     )
   })
 
+  test("keeps a stale-aged busy assistant visible while its tool is still active", () => {
+    expect(
+      isAssistantWorking({
+        statusType: "busy",
+        now: 100_000,
+        assistantCreated: 1_000,
+        hasActiveTool: true,
+      }),
+    ).toBe(true)
+    expect(
+      isAssistantWorking({
+        statusType: "idle",
+        now: 100_000,
+        assistantCreated: 1_000,
+        hasActiveTool: true,
+      }),
+    ).toBe(false)
+  })
+
   test("keeps compaction visibly active even after the normal busy window", () => {
     expect(
       isAssistantWorking({
@@ -174,6 +204,47 @@ describe("terminal busy reconciliation", () => {
       }),
     ).toBe(false)
   })
+
+  test("clears a stale busy flag when a terminal response has no startedAt", () => {
+    expect(
+      isBusyStatusSupersededByTerminalAssistant({
+        statusType: "busy",
+        latestMessage: terminal,
+      }),
+    ).toBe(true)
+  })
+
+  test("clears stale retry/reconnect activity after a terminal final response", () => {
+    expect(
+      terminalAssistantSettlesActivity({
+        statusType: "retry",
+        latestMessage: terminal,
+        hasActiveTool: false,
+      }),
+    ).toBe(true)
+  })
+
+  test("clears a stale busy flag even when its recovery startedAt is older than the final response", () => {
+    expect(
+      terminalAssistantSettlesActivity({
+        statusType: "busy",
+        statusStartedAt: 1,
+        latestMessage: terminal,
+        hasActiveTool: false,
+      }),
+    ).toBe(true)
+  })
+
+  test("keeps the activity indicator when the terminal-looking response still owns a running tool", () => {
+    expect(
+      terminalAssistantSettlesActivity({
+        statusType: "busy",
+        statusStartedAt: 100,
+        latestMessage: terminal,
+        hasActiveTool: true,
+      }),
+    ).toBe(false)
+  })
 })
 
 describe("compacted subagents", () => {
@@ -189,9 +260,42 @@ describe("compacted subagents", () => {
   })
 })
 
-describe("shouldShowSessionStoppedConnection", () => {
+describe("shouldShowAgentStateUnknown", () => {
   test("hides an orphaned assistant warning after reconnect", () => {
-    expect(shouldShowSessionStoppedConnection({ connectionStatus: "connected", hasOrphanedAssistant: true })).toBe(false)
-    expect(shouldShowSessionStoppedConnection({ connectionStatus: "disconnected", hasOrphanedAssistant: true })).toBe(true)
+    expect(shouldShowAgentStateUnknown({ connectionStatus: "connected", hasUncertainAgentState: true })).toBe(false)
+    expect(shouldShowAgentStateUnknown({ connectionStatus: "disconnected", hasUncertainAgentState: true })).toBe(true)
+  })
+
+  test("keeps known live activity visible while the transport reconciles", () => {
+    expect(
+      shouldShowAgentStateUnknown({
+        connectionStatus: "reconnecting",
+        hasUncertainAgentState: true,
+        hasKnownAgentActivity: true,
+      }),
+    ).toBe(false)
+    expect(
+      knownAgentActivityConnectionLabel({
+        connectionStatus: "reconnecting",
+        hasKnownAgentActivity: true,
+        attempt: 2,
+      }),
+    ).toBe("syncing connection #2...")
+  })
+
+  test("does not claim known activity after a hard disconnect", () => {
+    expect(
+      shouldShowAgentStateUnknown({
+        connectionStatus: "disconnected",
+        hasUncertainAgentState: true,
+        hasKnownAgentActivity: true,
+      }),
+    ).toBe(true)
+    expect(
+      knownAgentActivityConnectionLabel({
+        connectionStatus: "disconnected",
+        hasKnownAgentActivity: true,
+      }),
+    ).toBeUndefined()
   })
 })

@@ -1,9 +1,16 @@
 import { Cause, Context, Effect, Layer } from "effect"
 
 import { ModelID, ProviderID } from "@/provider/schema"
+import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import { SessionPrompt } from "./prompt"
-import type { WorkflowModelRoute, WorkflowPermissionPolicy, WorkflowTask, WorkflowWorkspacePolicy } from "./workflow"
+import {
+  isTransientWorkflowError,
+  type WorkflowModelRoute,
+  type WorkflowPermissionPolicy,
+  type WorkflowTask,
+  type WorkflowWorkspacePolicy,
+} from "./workflow"
 import { WorkflowPolicy } from "./workflow-policy"
 
 export interface ExecuteInput {
@@ -19,7 +26,7 @@ export interface ExecutionResult {
   readonly state: "completed" | "failed" | "blocked" | "needs_input"
   readonly summary?: string
   readonly error?: string
-  readonly failureClass?: "environment" | "quality" | "policy" | "user_input"
+  readonly failureClass?: "transient" | "environment" | "quality" | "policy" | "user_input"
   readonly usage?: {
     readonly inputTokens?: number
     readonly outputTokens?: number
@@ -206,6 +213,79 @@ const usageOutput = (message: PromptMessage) => {
   }
 }
 
+export const resultFromMessage = (task: WorkflowTask, message: MessageV2.WithParts): ExecutionResult => {
+  const text = textOutput(message)
+  const error = message.info.role === "assistant" && message.info.error ? errorText(message.info.error) : undefined
+  const structured = message.info.role === "assistant" ? message.info.structured : undefined
+  const output = structured === undefined ? text : JSON.stringify(structured)
+  if (error) {
+    return {
+      state: "failed",
+      failureClass: isTransientWorkflowError(error) ? "transient" : "environment",
+      error,
+      ...(text ? { summary: text } : {}),
+      usage: usageOutput(message),
+    }
+  }
+  const unknownTool = unknownToolName(message)
+  if (unknownTool) {
+    return {
+      state: "failed",
+      failureClass: "transient",
+      error: `The ${unknownTool} result is unknown because the session connection was lost before it could be collected.`,
+      ...(text ? { summary: text } : {}),
+      usage: usageOutput(message),
+    }
+  }
+  const terminalError =
+    message.info.role !== "assistant"
+      ? "Workflow task response ended without an assistant result"
+      : !message.info.finish
+        ? "Workflow task response ended without a terminal finish"
+        : undefined
+  if (terminalError) {
+    return {
+      state: "failed",
+      failureClass: isTransientWorkflowError(terminalError) ? "transient" : "environment",
+      error: terminalError,
+      ...(text ? { summary: text } : {}),
+      usage: usageOutput(message),
+    }
+  }
+  const schema = task.output.kind === "json" || task.output.kind === "artifact" ? task.output.schema : undefined
+  if (task.output.kind === "json" || schema !== undefined) {
+    const parsed = parseJsonOutput(text, structured)
+    if (parsed.error) {
+      return {
+        state: "failed",
+        failureClass: "quality",
+        error: parsed.error,
+        ...(text ? { summary: text } : {}),
+        usage: usageOutput(message),
+      }
+    }
+    const schemaError = schema === undefined ? undefined : validateJsonSchema(parsed.value, schema)
+    if (schemaError) {
+      return {
+        state: "failed",
+        failureClass: "quality",
+        error: `The task output did not match its declared schema: ${schemaError}`,
+        summary: output,
+        usage: usageOutput(message),
+      }
+    }
+  }
+  const bounded = task.output.kind === "text" && task.output.maxChars !== undefined
+    ? text.slice(0, task.output.maxChars)
+    : output
+  return {
+    state: "completed",
+    ...(bounded ? { summary: bounded } : {}),
+    usage: usageOutput(message),
+    ...(text && bounded !== text ? { evidence: [`output-truncated:${text.length - bounded.length}`] } : {}),
+  }
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -250,76 +330,7 @@ export const layer = Layer.effect(
       }).pipe(
         Effect.mapError((error) => new Error(errorText(Cause.squash(error)))),
       )
-      const text = textOutput(message)
-      const error = message.info.role === "assistant" && message.info.error ? errorText(message.info.error) : undefined
-      const structured = message.info.role === "assistant" ? message.info.structured : undefined
-      const output = structured === undefined ? text : JSON.stringify(structured)
-      if (error) {
-        return {
-          state: "failed" as const,
-          failureClass: "environment" as const,
-          error,
-          ...(text ? { summary: text } : {}),
-          usage: usageOutput(message),
-        }
-      }
-      const unknownTool = unknownToolName(message)
-      if (unknownTool) {
-        return {
-          state: "failed" as const,
-          failureClass: "environment" as const,
-          error: `The ${unknownTool} result is unknown because the session connection was lost before it could be collected.`,
-          ...(text ? { summary: text } : {}),
-          usage: usageOutput(message),
-        }
-      }
-      const terminalError =
-        message.info.role !== "assistant"
-          ? "Workflow task response ended without an assistant result"
-          : !message.info.finish
-            ? "Workflow task response ended without a terminal finish"
-            : undefined
-      if (terminalError) {
-        return {
-          state: "failed" as const,
-          failureClass: "environment" as const,
-          error: terminalError,
-          ...(text ? { summary: text } : {}),
-          usage: usageOutput(message),
-        }
-      }
-      const schema = input.task.output.kind === "json" || input.task.output.kind === "artifact" ? input.task.output.schema : undefined
-      if (input.task.output.kind === "json" || schema !== undefined) {
-        const parsed = parseJsonOutput(text, structured)
-        if (parsed.error) {
-          return {
-            state: "failed" as const,
-            failureClass: "quality" as const,
-            error: parsed.error,
-            ...(text ? { summary: text } : {}),
-            usage: usageOutput(message),
-          }
-        }
-        const schemaError = schema === undefined ? undefined : validateJsonSchema(parsed.value, schema)
-        if (schemaError) {
-          return {
-            state: "failed" as const,
-            failureClass: "quality" as const,
-            error: `The task output did not match its declared schema: ${schemaError}`,
-            summary: output,
-            usage: usageOutput(message),
-          }
-        }
-      }
-      const bounded = input.task.output.kind === "text" && input.task.output.maxChars !== undefined
-        ? text.slice(0, input.task.output.maxChars)
-        : output
-      return {
-        state: "completed" as const,
-        ...(bounded ? { summary: bounded } : {}),
-        usage: usageOutput(message),
-        ...(text && bounded !== text ? { evidence: [`output-truncated:${text.length - bounded.length}`] } : {}),
-      }
+      return resultFromMessage(input.task, message)
     })
 
     return Service.of({ execute })

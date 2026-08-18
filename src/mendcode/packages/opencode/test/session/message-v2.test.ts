@@ -349,6 +349,37 @@ describe("session.message-v2.toModelMessage", () => {
     ])
   })
 
+  test("labels a compacted image explicitly when the provider cannot receive media", async () => {
+    const input: MessageV2.WithParts[] = [
+      {
+        info: userInfo("m-resume-unavailable"),
+        parts: [
+          {
+            ...basePart("m-resume-unavailable", "resume-text"),
+            type: "text",
+            text: "Continue from the summary.",
+            metadata: { compaction_continue: true },
+          },
+          {
+            ...basePart("m-resume-unavailable", "resume-image"),
+            type: "file",
+            mime: "image/png",
+            filename: "resume.png",
+            url: "https://example.com/resume.png",
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+    const result = await MessageV2.toModelMessages(input, model, { stripMedia: true })
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "Continue from the summary." },
+      {
+        type: "text",
+        text: "[Attached image/png: resume.png; image unavailable to this provider after compaction. Ask the user to re-attach it.]",
+      },
+    ])
+  })
+
   test("keeps embedded data-url attachments inline instead of making the SDK download them", async () => {
     const messageID = "m-user"
 

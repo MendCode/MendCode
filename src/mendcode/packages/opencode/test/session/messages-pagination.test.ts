@@ -147,7 +147,7 @@ async function addLargeToolPart(sessionID: SessionID, messageID: MessageID, text
     tool: "bash",
     state: {
       status: "completed",
-       input: { command: "large-output", ...(includeContent ? { content: text } : {}) },
+      input: { command: "large-output", ...(includeContent ? { content: text } : {}) },
       output: text,
       title: "large output",
       metadata: {
@@ -199,6 +199,119 @@ describe("MessageV2.page", () => {
         expect(c.items.map((item) => item.info.id)).toEqual(ids.slice(0, 2))
         expect(c.more).toBe(false)
         expect(c.cursor).toBeUndefined()
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+
+  test("pages complete conversation turns instead of raw assistant events", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const turns: Array<{ user: MessageID; assistants: MessageID[] }> = []
+        for (let turn = 0; turn < 4; turn++) {
+          const user = await addUser(session.id, `turn ${turn}`)
+          const assistants: MessageID[] = []
+          const assistantCount = turn === 3 ? 49 : 1
+          for (let index = 0; index < assistantCount; index++) {
+            const assistant = await addAssistant(session.id, user, { finish: "stop", completed: true })
+            await addText(session.id, assistant, index === assistantCount - 1 ? `answer ${turn}` : "")
+            assistants.push(assistant)
+          }
+          turns.push({ user, assistants })
+        }
+
+        const latest = MessageV2.page({ sessionID: session.id, limit: 2, view: "tui-all", unit: "turn" })
+        expect(latest.items.filter((item) => item.info.role === "user").map((item) => item.info.id)).toEqual(
+          turns.slice(2).map((turn) => turn.user),
+        )
+        expect(latest.items.filter((item) => item.info.role === "assistant")).toHaveLength(50)
+        expect(latest.cursor).toBeTruthy()
+
+        const older = MessageV2.page({
+          sessionID: session.id,
+          limit: 2,
+          before: latest.cursor,
+          view: "tui-all",
+          unit: "turn",
+        })
+        expect(older.items.filter((item) => item.info.role === "user").map((item) => item.info.id)).toEqual(
+          turns.slice(0, 2).map((turn) => turn.user),
+        )
+        expect(older.more).toBe(false)
+
+        const navigation = MessageV2.pageNavigationCursors({ page: older, before: latest.cursor })
+        const newer = MessageV2.page({
+          sessionID: session.id,
+          limit: 2,
+          after: navigation.newer,
+          view: "tui-all",
+          unit: "turn",
+        })
+        expect(newer.items.filter((item) => item.info.role === "user").map((item) => item.info.id)).toEqual(
+          turns.slice(2).map((turn) => turn.user),
+        )
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+
+  test("history view keeps conversation text and compacts agent activity", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const user = await addUser(session.id, "complete user prompt")
+        const assistant = await addAssistant(session.id, user, { finish: "stop", completed: true })
+        await svc.updatePart({
+          id: PartID.ascending(),
+          sessionID: session.id,
+          messageID: assistant,
+          type: "reasoning",
+          text: "private reasoning".repeat(10_000),
+          time: { start: Date.now(), end: Date.now() },
+        })
+        await addLargeToolPart(session.id, assistant, "large tool output".repeat(10_000), true)
+        await addText(session.id, assistant, "complete assistant response")
+
+        const page = MessageV2.page({ sessionID: session.id, limit: 1, view: "history", unit: "turn" })
+        const text = page.items.flatMap((item) => item.parts).filter((part) => part.type === "text")
+        const tool = page.items.flatMap((item) => item.parts).find((part) => part.type === "tool")
+
+        expect(text.map((part) => part.text)).toEqual(["complete user prompt", "complete assistant response"])
+        expect(page.items.flatMap((item) => item.parts).some((part) => part.type === "reasoning")).toBe(false)
+        expect(tool?.type === "tool" && tool.state.status === "completed" && tool.state.output).toBe("")
+        expect(tool?.type === "tool" && tool.state.status === "completed" && tool.state.input).toEqual({})
+        expect(JSON.stringify(page.items).length).toBeLessThan(10_000)
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+
+  test("exposes bounded cursors for moving both directions between history pages", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const ids = await fill(session.id, 6)
+
+        const latest = MessageV2.page({ sessionID: session.id, limit: 2 })
+        const latestNavigation = MessageV2.pageNavigationCursors({ page: latest })
+        expect(latestNavigation.older).toBe(latest.cursor)
+        expect(latestNavigation.newer).toBeUndefined()
+
+        const older = MessageV2.page({ sessionID: session.id, limit: 2, before: latestNavigation.older })
+        const olderNavigation = MessageV2.pageNavigationCursors({ page: older, before: latestNavigation.older })
+        expect(older.items.map((item) => item.info.id)).toEqual(ids.slice(2, 4))
+        expect(olderNavigation.older).toBe(older.cursor)
+        expect(olderNavigation.newer).toBeTruthy()
+
+        const newer = MessageV2.page({ sessionID: session.id, limit: 2, after: olderNavigation.newer })
+        expect(newer.items.map((item) => item.info.id)).toEqual(ids.slice(4, 6))
 
         await svc.remove(session.id)
       },
@@ -374,17 +487,17 @@ describe("MessageV2.page", () => {
         const tuiLoop = tui.items[0]?.parts.find((part) => part.type === "tool" && part.callID === "call_loop")
 
         expect(fullTool?.type === "tool" && fullTool.state.status === "completed" && fullTool.state.output).toBe(large)
-        expect(fullTool?.type === "tool" && fullTool.state.status === "completed" && fullTool.state.input.content).toBe(large)
-        expect(tuiTool?.type === "tool" && tuiTool.state.status === "completed" && tuiTool.state.output.length).toBeLessThan(
-          large.length,
+        expect(fullTool?.type === "tool" && fullTool.state.status === "completed" && fullTool.state.input.content).toBe(
+          large,
         )
+        expect(
+          tuiTool?.type === "tool" && tuiTool.state.status === "completed" && tuiTool.state.output.length,
+        ).toBeLessThan(large.length)
         expect(
           tuiTool?.type === "tool" && tuiTool.state.status === "completed" && String(tuiTool.state.input.content),
         ).toContain("tool input.content preview truncated")
         expect(
-          tuiTool?.type === "tool" &&
-            tuiTool.state.status === "completed" &&
-            String(tuiTool.state.metadata.outputPath),
+          tuiTool?.type === "tool" && tuiTool.state.status === "completed" && String(tuiTool.state.metadata.outputPath),
         ).toBe("/tmp/full-output")
         expect(
           tuiTool?.type === "tool" && tuiTool.state.status === "completed" && String(tuiTool.state.metadata.diff),
@@ -393,13 +506,19 @@ describe("MessageV2.page", () => {
           tuiTool?.type === "tool" && tuiTool.state.status === "completed" && String(tuiTool.state.metadata.diff),
         ).toContain("Show more")
         expect(
-          tuiTool?.type === "tool" && tuiTool.state.status === "completed" && String(tuiTool.state.metadata.diff).length,
+          tuiTool?.type === "tool" &&
+            tuiTool.state.status === "completed" &&
+            String(tuiTool.state.metadata.diff).length,
         ).toBeLessThanOrEqual(512 * 1024)
         expect(tuiFile?.type === "file" && tuiFile.url.length).toBeLessThan(16 * 1024)
         expect(fullPatch?.type === "patch" && fullPatch.files.length).toBe(4_444)
         expect(tuiPatch?.type === "patch" && tuiPatch.files.length).toBe(256)
-        expect(fullLoop?.type === "tool" && fullLoop.state.status === "completed" && fullLoop.state.metadata.workflows).toHaveLength(32)
-        expect(tuiLoop?.type === "tool" && tuiLoop.state.status === "completed" && tuiLoop.state.metadata.workflows).toHaveLength(2)
+        expect(
+          fullLoop?.type === "tool" && fullLoop.state.status === "completed" && fullLoop.state.metadata.workflows,
+        ).toHaveLength(32)
+        expect(
+          tuiLoop?.type === "tool" && tuiLoop.state.status === "completed" && tuiLoop.state.metadata.workflows,
+        ).toHaveLength(2)
         expect(Buffer.byteLength(JSON.stringify(tui))).toBeLessThan(1.25 * 1024 * 1024)
 
         await svc.remove(session.id)
@@ -447,6 +566,52 @@ describe("MessageV2.page", () => {
     })
   })
 
+  test("tui pages keep terminal assistant text visible after many tool parts", async () => {
+    await WithInstance.provide({
+      directory: root,
+      fn: async () => {
+        const session = await svc.create({})
+        const user = await addUser(session.id, "run the long tool sequence")
+        const assistant = await addAssistant(session.id, user, { finish: "stop", completed: true })
+        for (let index = 0; index < 130; index++) {
+          await addLargeToolPart(session.id, assistant, `tool ${index}`)
+        }
+        await addText(session.id, assistant, "final assistant output")
+
+        const first = MessageV2.page({ sessionID: session.id, limit: 1, view: "tui" }).items[0]!
+
+        expect(first.parts).toHaveLength(96)
+        expect(first.parts.some((part) => part.type === "text" && part.text === "final assistant output")).toBe(true)
+        expect(first.partsMore).toBe(true)
+        expect(first.partsCursor).toBeTruthy()
+
+        const next = MessageV2.get({
+          sessionID: session.id,
+          messageID: assistant,
+          view: "tui-all",
+          partsLimit: 96,
+          partsAfter: first.partsCursor,
+        })
+        expect(next.parts.some((part) => part.type === "tool")).toBe(true)
+        expect(next.parts.some((part) => part.type === "text" && part.text === "final assistant output")).toBe(true)
+
+        const tiny = MessageV2.get({ sessionID: session.id, messageID: assistant, view: "tui-all", partsLimit: 1 })
+        const tinyNext = MessageV2.get({
+          sessionID: session.id,
+          messageID: assistant,
+          view: "tui-all",
+          partsLimit: 1,
+          partsAfter: tiny.partsCursor,
+        })
+        expect(tiny.parts).toHaveLength(1)
+        expect(tinyNext.parts).toHaveLength(1)
+        expect(tinyNext.parts[0]?.id).not.toBe(tiny.parts[0]?.id)
+
+        await svc.remove(session.id)
+      },
+    })
+  })
+
   test("tui pagination skips tool-only messages and heavy parts before the latest completed compaction", async () => {
     await WithInstance.provide({
       directory: root,
@@ -473,7 +638,13 @@ describe("MessageV2.page", () => {
         await addText(session.id, latestAssistant, "latest answer")
 
         const latest = MessageV2.page({ sessionID: session.id, limit: 4, view: "tui" })
-        expect(latest.items.map((item) => item.info.id)).toEqual([oldFinal, compact, summary, latestUser, latestAssistant])
+        expect(latest.items.map((item) => item.info.id)).toEqual([
+          oldFinal,
+          compact,
+          summary,
+          latestUser,
+          latestAssistant,
+        ])
         expect(latest.items.find((item) => item.info.id === oldFinal)?.parts).toHaveLength(1)
         expect(latest.items.find((item) => item.info.id === oldFinal)?.parts[0]?.type).toBe("text")
         expect(latest.cursor).toBeTruthy()
@@ -512,9 +683,9 @@ describe("MessageV2.page", () => {
 
         expect(latest.items.some((item) => item.info.id === activeUser)).toBe(true)
         expect(
-          latest.items.find((item) => item.info.id === activeUser)?.parts.some(
-            (part) => part.type === "text" && part.text === "keep the active prompt visible",
-          ),
+          latest.items
+            .find((item) => item.info.id === activeUser)
+            ?.parts.some((part) => part.type === "text" && part.text === "keep the active prompt visible"),
         ).toBe(true)
 
         await svc.remove(session.id)
@@ -537,9 +708,9 @@ describe("MessageV2.page", () => {
         const tuiTool = tui[0]?.parts.find((part) => part.type === "tool")
 
         expect(fullTool?.type === "tool" && fullTool.state.status === "completed" && fullTool.state.output).toBe(large)
-        expect(tuiTool?.type === "tool" && tuiTool.state.status === "completed" && tuiTool.state.output.length).toBeLessThan(
-          large.length,
-        )
+        expect(
+          tuiTool?.type === "tool" && tuiTool.state.status === "completed" && tuiTool.state.output.length,
+        ).toBeLessThan(large.length)
 
         await svc.remove(session.id)
       },
@@ -1401,9 +1572,9 @@ describe("MessageV2.filterCompacted", () => {
     await WithInstance.provide({
       directory: root,
       fn: async () => {
-        await expect(Effect.runPromise(MessageV2.filterCompactedEffect("missing-session" as SessionID))).rejects.toThrow(
-          "NotFoundError",
-        )
+        await expect(
+          Effect.runPromise(MessageV2.filterCompactedEffect("missing-session" as SessionID)),
+        ).rejects.toThrow("NotFoundError")
       },
     })
   })

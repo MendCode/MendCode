@@ -1,4 +1,5 @@
 import * as path from "path"
+import { createHash } from "node:crypto"
 import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { Bus } from "../bus"
@@ -19,6 +20,41 @@ import { APPLY_PATCH_DIFF_BYTES, APPLY_PATCH_FILES_BYTES, previewDiff } from "./
 
 const MAX_PATCH_SOURCE_BYTES = 2 * 1024 * 1024
 const MAX_PATCH_TEXT_BYTES = 8 * 1024 * 1024
+export const PATCH_STALE_RETRY_LIMIT = 1
+const PATCH_STALE_ATTEMPT_TTL_MS = 15 * 60 * 1000
+const PATCH_STALE_ATTEMPT_LIMIT = 512
+
+const stalePatchAttempts = new Map<string, { attempts: number; seenAt: number }>()
+
+export function patchStaleRetryDecision(attempts: number): "retry" | "replan" {
+  return attempts <= PATCH_STALE_RETRY_LIMIT ? "retry" : "replan"
+}
+
+function stalePatchKey(sessionID: string, filePath: string, oldLines: string[]) {
+  const fingerprint = createHash("sha256").update(`${filePath}\u0000${oldLines.join("\n")}`).digest("hex")
+  return `${sessionID}\u0000${fingerprint}`
+}
+
+function recordStalePatchAttempt(sessionID: string, filePath: string, oldLines: string[], now = Date.now()) {
+  for (const [key, value] of stalePatchAttempts) {
+    if (now - value.seenAt > PATCH_STALE_ATTEMPT_TTL_MS) stalePatchAttempts.delete(key)
+  }
+  while (stalePatchAttempts.size >= PATCH_STALE_ATTEMPT_LIMIT) {
+    const oldest = stalePatchAttempts.keys().next().value
+    if (!oldest) break
+    stalePatchAttempts.delete(oldest)
+  }
+  const key = stalePatchKey(sessionID, filePath, oldLines)
+  const next = (stalePatchAttempts.get(key)?.attempts ?? 0) + 1
+  stalePatchAttempts.set(key, { attempts: next, seenAt: now })
+  return next
+}
+
+function clearStalePatchAttempts(sessionID: string) {
+  for (const key of stalePatchAttempts.keys()) {
+    if (key.startsWith(`${sessionID}\u0000`)) stalePatchAttempts.delete(key)
+  }
+}
 
 function compactBinaryDiff(filePath: string, byteLength: number) {
   return [
@@ -181,7 +217,21 @@ export const ApplyPatchTool = Tool.define(
               newContent = fileUpdate.content
               bom = fileUpdate.bom
             } catch (error) {
-              return yield* Effect.fail(verificationError(error))
+              const attempts = recordStalePatchAttempt(
+                String(ctx.sessionID),
+                filePath,
+                hunk.chunks.flatMap((chunk) => chunk.old_lines),
+              )
+              const action = patchStaleRetryDecision(attempts)
+              const recovery =
+                action === "retry"
+                  ? "Read the current file contents now, then retry once with a smaller hunk matching the latest text."
+                  : "Stop retrying this patch, reread the file, and replan the edit with a new approach."
+              return yield* Effect.fail(
+                new Error(
+                  `${verificationError(error).message}\n\npatch_stale: ${recovery} (attempt ${attempts}/${PATCH_STALE_RETRY_LIMIT + 1})`,
+                ),
+              )
             }
             const nextByteLength = Buffer.byteLength(newContent, "utf8")
             if (nextByteLength > MAX_PATCH_SOURCE_BYTES) {
@@ -368,6 +418,8 @@ export const ApplyPatchTool = Tool.define(
       for (const update of updates) {
         yield* bus.publish(FileWatcher.Event.Updated, update)
       }
+
+      clearStalePatchAttempts(String(ctx.sessionID))
 
       // Notify LSP of file changes and collect diagnostics
       for (const change of fileChanges) {

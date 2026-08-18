@@ -43,11 +43,12 @@ export const MessagesQuery = Schema.Struct({
   limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
   before: Schema.optional(Schema.String),
   after: Schema.optional(Schema.String),
-  view: Schema.optional(Schema.Literals(["full", "tui", "tui-all"])),
+  view: Schema.optional(Schema.Literals(["full", "tui", "tui-all", "history"])),
+  unit: Schema.optional(Schema.Literals(["message", "turn"])),
   partsLimit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThan(0))),
 })
 export const MessageQuery = Schema.Struct({
-  view: Schema.optional(Schema.Literals(["full", "tui", "tui-all"])),
+  view: Schema.optional(Schema.Literals(["full", "tui", "tui-all", "history"])),
   partsLimit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThan(0))),
   partsAfter: Schema.optional(Schema.String),
 })
@@ -62,6 +63,7 @@ export const UpdatePayload = Schema.Struct({
   ),
 })
 export const ForkPayload = Schema.Struct(Struct.omit(Session.ForkInput.fields, ["sessionID"]))
+export const CancelTurnPayload = Schema.Struct(Struct.omit(SessionPrompt.CancelTurnInput.fields, ["sessionID"]))
 export const InitPayload = Schema.Struct({
   modelID: ModelID,
   providerID: ProviderID,
@@ -135,6 +137,7 @@ export const SessionPaths = {
   remove: `${root}/:sessionID`,
   update: `${root}/:sessionID`,
   fork: `${root}/:sessionID/fork`,
+  cancelTurn: `${root}/:sessionID/cancel-turn`,
   abort: `${root}/:sessionID/abort`,
   interrupt: `${root}/:sessionID/interrupt`,
   share: `${root}/:sessionID/share`,
@@ -194,7 +197,8 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "session.agent_view.list",
             summary: "List Agent View sessions",
-            description: "Get aggregate read-only session rows for Agents View with status, background state, and metadata overrides.",
+            description:
+              "Get aggregate read-only session rows for Agents View with status, background state, and metadata overrides.",
           }),
         ),
         HttpApiEndpoint.get("get", SessionPaths.get, {
@@ -238,7 +242,8 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "session.agent_view.metadata.patch",
             summary: "Patch Agent View metadata",
-            description: "Update local control-plane metadata such as title override, tags, group, priority, notes, pin, or archive.",
+            description:
+              "Update local control-plane metadata such as title override, tags, group, priority, notes, pin, or archive.",
           }),
         ),
         HttpApiEndpoint.get("agentCommandList", SessionPaths.agentCommandList, {
@@ -330,7 +335,8 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "session.background.writer.acquire",
             summary: "Register background writer presence",
-            description: "Register an interactive terminal for a background session without taking exclusive ownership.",
+            description:
+              "Register an interactive terminal for a background session without taking exclusive ownership.",
           }),
         ),
         HttpApiEndpoint.delete("backgroundWriterRelease", SessionPaths.backgroundWriter, {
@@ -457,6 +463,18 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.abort",
             summary: "Abort session",
             description: "Abort an active session and stop any ongoing AI processing or command execution.",
+          }),
+        ),
+        HttpApiEndpoint.post("cancelTurn", SessionPaths.cancelTurn, {
+          params: { sessionID: SessionID },
+          payload: CancelTurnPayload,
+          success: described(SessionPrompt.CancelTurnResult, "Conditional cancellation result"),
+          error: [HttpApiError.BadRequest, HttpApiError.NotFound],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.cancelTurn",
+            summary: "Cancel active turn",
+            description: "Cancel only the active AI turn matching the requested user message.",
           }),
         ),
         HttpApiEndpoint.post("interrupt", SessionPaths.interrupt, {

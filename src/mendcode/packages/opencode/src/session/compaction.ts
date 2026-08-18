@@ -324,7 +324,7 @@ function imageAttachmentContext(messages: MessageV2.WithParts[], options?: { med
   ]
 }
 
-function resumeImageParts(messages: MessageV2.WithParts[], messageID: MessageID, sessionID: SessionID) {
+export function resumeImageParts(messages: MessageV2.WithParts[], messageID: MessageID, sessionID: SessionID) {
   return messages
     .flatMap((message) =>
       message.parts
@@ -340,6 +340,7 @@ function resumeImageParts(messages: MessageV2.WithParts[], messageID: MessageID,
       mime: part.mime,
       ...(part.filename ? { filename: part.filename } : {}),
       url: part.url,
+      ...(part.source ? { source: part.source } : {}),
     }))
 }
 
@@ -1316,6 +1317,8 @@ export interface Interface {
     auto: boolean
     overflow?: boolean
     resume?: boolean
+    abort?: AbortSignal
+    isManualAbort?: () => boolean
   }) => Effect.Effect<"continue" | "stop">
   readonly create: (input: {
     sessionID: SessionID
@@ -1491,6 +1494,8 @@ export const layer: Layer.Layer<
       auto: boolean
       overflow?: boolean
       resume?: boolean
+      abort?: AbortSignal
+      isManualAbort?: () => boolean
     }) {
       const parent = input.messages.findLast((m) => m.info.id === input.parentID)
       if (!parent || parent.info.role !== "user") {
@@ -1596,6 +1601,8 @@ export const layer: Layer.Layer<
         assistantMessage: msg,
         sessionID: input.sessionID,
         model,
+        abort: input.abort,
+        isManualAbort: input.isManualAbort,
       })
       const compactionMessages = [
         ...modelMessages,
@@ -1695,10 +1702,8 @@ export const layer: Layer.Layer<
               end: Date.now(),
             },
           })
-          if (!includeImageMedia) {
-            for (const part of resumeImageParts(visibleHistory, postPromptMsg.id, input.sessionID)) {
-              yield* session.updatePart(part)
-            }
+          for (const part of resumeImageParts(visibleHistory, postPromptMsg.id, input.sessionID)) {
+            yield* session.updatePart(part)
           }
         }
         shouldResume = true
@@ -1756,10 +1761,8 @@ export const layer: Layer.Layer<
               end: Date.now(),
             },
           })
-          if (!includeImageMedia) {
-            for (const part of resumeImageParts(visibleHistory, continueMsg.id, input.sessionID)) {
-              yield* session.updatePart(part)
-            }
+          for (const part of resumeImageParts(visibleHistory, continueMsg.id, input.sessionID)) {
+            yield* session.updatePart(part)
           }
         } else {
           shouldResume = false

@@ -582,7 +582,23 @@ function formatWorkflowSnapshot(snapshot: WorkflowService.WorkflowSnapshot) {
 async function workflows(args: string[]) {
   const sub = args[0] || "list"
   if (sub === "status" || sub === "list") {
-    const items = await withWorkflowService((workflow) => workflow.list())
+    const items = await withWorkflowRuntime((workflow, runner) =>
+      Effect.gen(function* () {
+        const initial = yield* workflow.list()
+        const stranded = initial.filter((snapshot) => snapshot.run.state === "needs_input")
+        yield* Effect.forEach(stranded, (snapshot) => runner.run(snapshot.run.id).pipe(Effect.catchCause(() => Effect.void)), {
+          concurrency: 8,
+          discard: true,
+        })
+        const snapshots = stranded.length ? yield* workflow.list() : initial
+        yield* Effect.forEach(
+          snapshots.filter((snapshot) => snapshot.run.state === "queued" || snapshot.run.state === "working"),
+          (snapshot) => runner.start(snapshot.run.id),
+          { concurrency: 8, discard: true },
+        )
+        return snapshots
+      }),
+    )
     printResult(args, items, (value: readonly WorkflowService.WorkflowSnapshot[]) =>
       value.length ? value.map(formatWorkflowSummary).join("\n") : "Workflows: none",
     )
@@ -641,7 +657,15 @@ async function workflows(args: string[]) {
     return
   }
   if (sub === "show") {
-    const snapshot = await withWorkflowService((workflow) => workflow.show(workflowRunID(args[1])))
+    const snapshot = await withWorkflowRuntime((workflow, runner) =>
+      Effect.gen(function* () {
+        const initial = yield* workflow.show(workflowRunID(args[1]))
+        if (initial.run.state === "needs_input") yield* runner.run(initial.run.id).pipe(Effect.catchCause(() => Effect.void))
+        const current = initial.run.state === "needs_input" ? yield* workflow.show(initial.run.id) : initial
+        if (current.run.state === "queued" || current.run.state === "working") yield* runner.start(current.run.id)
+        return current
+      }),
+    )
     printResult(args, snapshot, formatWorkflowSnapshot)
     return
   }

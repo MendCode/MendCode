@@ -8,6 +8,25 @@ export function sessionPromptVisible(input: {
   return input.permissionCount === 0 && input.questionCount === 0 && input.planReviewCount === 0
 }
 
+export const SESSION_TRANSCRIPT_BOTTOM_CLEARANCE_ROWS = 3
+
+export function sessionTranscriptBottomSpacer(virtualBottomSpacer = 0) {
+  return Math.max(0, virtualBottomSpacer) + SESSION_TRANSCRIPT_BOTTOM_CLEARANCE_ROWS
+}
+
+export function sessionPendingInputStatus(input: {
+  permissionCount: number
+  questionCount: number
+  planReviewCount: number
+  assistantActive: boolean
+}) {
+  if (input.permissionCount > 0)
+    return `${input.permissionCount} permission${input.permissionCount === 1 ? "" : "s"} pending`
+  if (input.questionCount > 0) return "waiting for answer"
+  if (input.planReviewCount > 0) return "waiting for review"
+  return input.assistantActive ? "assistant active" : "idle"
+}
+
 export function sessionPendingInputSessionIDs(input: {
   sessionID: string
   parentID?: string

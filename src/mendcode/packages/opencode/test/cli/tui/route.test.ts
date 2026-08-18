@@ -9,6 +9,7 @@ describe("tui route helpers", () => {
 
     expect(routeReturnTarget({ type: "setup", returnTo: session })).toEqual(session)
     expect(routeReturnTarget({ type: "stats", scope: "global", returnTo: session })).toEqual(session)
+    expect(routeReturnTarget({ type: "session-history", sessionID: session.sessionID, returnTo: session })).toEqual(session)
   })
 
   test("setup and stats fall back to home without a return route", () => {

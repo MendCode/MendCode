@@ -350,10 +350,10 @@ async function main() {
           "MendCode queue/compaction smoke is ready (the provider is local and never calls an API).",
           `Model context limit: ${CONTEXT_LIMIT.toLocaleString()} tokens; auto-compaction: ${COMPACTION_LIMIT.toLocaleString()} tokens.`,
           "The TUI opens with a synthetic trigger prompt already loaded.",
-          "Press Enter to submit it, then submit two short prompts while compaction is active.",
+          "Press Enter to submit it, press Esc once while compaction is active to cancel it, then submit two short prompts.",
           `The local model holds that request for ${Math.round(HOLD_MS / 1_000)} seconds so the queued state is visible.`,
           "Only one smoke can run at a time. Exit with /exit or Ctrl+C; child processes and the lock are cleaned automatically.",
-          "Expected result: queued messages remain paired with their queued/send state after compaction, not ordinary transcript rows.",
+          "Expected result: one Esc issues one cancellation; the compaction summary terminates once, Snake disappears, the panel collapses, and queued messages remain paired with their queued/send state.",
           "",
         ].join("\n"),
       )

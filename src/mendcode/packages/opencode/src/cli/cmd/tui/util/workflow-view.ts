@@ -65,6 +65,21 @@ export function workflowCurrentActivity(input: {
   }
 }
 
+export function workflowRequestErrorText(error: unknown) {
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error === "string" && error) return error
+  if (!error || typeof error !== "object") return "Workflow request failed."
+  const value = error as {
+    message?: unknown
+    data?: { message?: unknown } | null
+    errors?: readonly { message?: unknown }[]
+  }
+  if (typeof value.message === "string" && value.message) return value.message
+  if (typeof value.data?.message === "string" && value.data.message) return value.data.message
+  const message = value.errors?.find((item) => typeof item.message === "string" && item.message)?.message
+  return typeof message === "string" ? message : "Workflow request failed."
+}
+
 export function workflowMonitorLayout(input: { width: number; height: number }) {
   const width = Math.max(24, Math.floor(input.width))
   const compact = width < 96 || input.height < 22
@@ -141,6 +156,17 @@ export function workflowMonitorTaskRows(snapshot: WorkflowReceiptSnapshot, phase
     }
     return (originalOrder.get(left.id) ?? 0) - (originalOrder.get(right.id) ?? 0)
   })
+}
+
+export function workflowMonitorResumeTarget(snapshot: WorkflowReceiptSnapshot) {
+  if (snapshot.run.state !== "failed") return { kind: "resume" } as const
+  const task = workflowMonitorTaskRows(snapshot).find((item) => item.state === "failed")
+  if (task) return { kind: "retry-task", taskID: task.id, name: task.name } as const
+  const phase = snapshot.phases
+    .filter((item) => item.id && item.state === "failed")
+    .toSorted((left, right) => (left.ordinal ?? 0) - (right.ordinal ?? 0))[0]
+  if (phase?.id) return { kind: "retry-phase", phaseID: phase.id, name: phase.name ?? phase.id } as const
+  return { kind: "unavailable" } as const
 }
 
 export function workflowMonitorSessionID(snapshot?: WorkflowReceiptSnapshot) {
