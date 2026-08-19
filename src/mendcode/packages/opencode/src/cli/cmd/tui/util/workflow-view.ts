@@ -25,6 +25,7 @@ export function workflowCurrentActivity(input: {
   activeTools?: readonly WorkflowActiveTool[]
   pendingPermissions?: number
   waitingTasks?: number
+  completionStatus?: string
 }) {
   const pendingPermissions = input.pendingPermissions ?? 0
   const runningTool = input.activeTools?.findLast((tool) => tool.status === "running" && tool.tool !== "task")
@@ -41,6 +42,8 @@ export function workflowCurrentActivity(input: {
   if (waitingTasks > 0) return `${waitingTasks} task${waitingTasks === 1 ? "" : "s"} waiting for input`
   if (input.runState === "awaiting_approval") return "Workflow approval required"
   if (input.runState === "needs_input") return "Workflow waiting for input"
+  if (input.completionStatus === "candidate") return "Completion candidate waiting for a fresh audit"
+  if (input.completionStatus === "auditing") return "Auditing completion evidence"
 
   const compacting = input.statuses.find((status) => status.type === "busy" && status.kind === "compaction")
   if (compacting) return compacting.message || "AI is compacting context"
@@ -104,6 +107,7 @@ export function workflowMonitorRows(snapshot?: WorkflowReceiptSnapshot): Array<[
   const elapsed = workflowReceiptElapsed(snapshot)
   return [
     ["state", workflowReceiptStateLabel(snapshot.run.state)],
+    ["completion", snapshot.run.completion ? `${snapshot.run.completion.status} · gen ${snapshot.run.completion.generation} · ${snapshot.run.completion.auditAttempts} audit${snapshot.run.completion.auditAttempts === 1 ? "" : "s"}` : "legacy same-run"],
     ["progress", workflowReceiptProgress(snapshot)],
     [
       "phases",

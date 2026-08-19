@@ -16,7 +16,44 @@ A loop can reference a saved Workflow definition. The loop remains responsible f
 
 ## Plan shape
 
-A plan contains a name, description, objective, phases, tasks, a final task, completion criteria, required gates, and optional model, permission, workspace, retry, and budget policies. Each task declares its phase, dependencies, execution kind, bounded output, and optional route/policy overrides.
+A plan contains a name, description, objective, phases, tasks, a final task, completion criteria, required gates, and optional completion, model, permission, workspace, retry, and budget policies. Each task declares its phase, dependencies, execution kind, bounded output, and optional route/policy overrides.
+
+## Terminal completion
+
+Completing the task DAG proves that every scheduled task reached its output contract; it does not by itself prove the objective. Plans that declare `completion` use a durable terminal protocol:
+
+1. The finished DAG creates a generation-bound completion candidate and keeps the run non-terminal.
+2. A separately leased, fresh read-only child session audits the current workspace. It must actually inspect through read-only tools; a JSON verdict without inspection is rejected.
+3. Host-side allowlisted validation checks are rerun and workspace fingerprints before and after the audit must match.
+4. Every criterion needs current evidence. `ownerTaskIDs` identify the tasks capable of repairing that criterion.
+5. A passing receipt completes the run. A quality failure reopens only failed criterion owners and their descendants, invalidating only their artifacts. Missing ownership, stale evidence, approval, policy, budget, or environment failures remain blocked or retry according to their own gate.
+
+`completion.confirmation` defaults to `next-run` whenever the `completion` block is present. Definitions saved before this contract, or plans that omit the block, retain legacy `same-run` closure. Approval gates remain separate from completion gates: authorizing execution is not evidence that the objective succeeded.
+
+Example completion policy:
+
+```json
+{
+  "completion": {
+    "confirmation": "next-run",
+    "maxAuditAttempts": 2,
+    "criteria": [
+      {
+        "id": "tests-green",
+        "description": "Focused regression tests pass",
+        "ownerTaskIDs": ["implement", "verify"]
+      }
+    ],
+    "validationChecks": [
+      {
+        "id": "focused-tests",
+        "command": "bun test test/session/example.test.ts",
+        "timeoutMs": 30000
+      }
+    ]
+  }
+}
+```
 
 ### Representative fan-out template
 
@@ -136,6 +173,7 @@ POST   /workflow/:runID/retry-phase
 - Workflow policy is narrowed by task policy; a task cannot escalate permissions, workspace access, or side-effect classes.
 - Report-only and read-only modes deny edits, mutating commands, and external sends.
 - Required gates remain durable and cannot be waived by model output.
+- Strict completion runs cannot become `completed` without a current audit receipt; leases and generations reject duplicate, late, or post-restart stale audit results.
 - Fan-out, concurrency, depth, child, runtime, token, cost, artifact, and event limits remain bounded.
 - Actual agent attempts reuse the durable `BackgroundTask` supervisor; Workflow owns graph readiness while BackgroundTask owns task leases, generations, cancellation, and bounded results.
 - Full child output is not rendered in the chat receipt or Agent View by default.

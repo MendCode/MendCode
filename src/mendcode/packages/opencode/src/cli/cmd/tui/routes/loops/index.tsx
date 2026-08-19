@@ -37,7 +37,7 @@ export type LoopWorkflow = {
     stopWhen?: string[]
     gates?: string[]
     strategy?: { targetTurns?: number; reserveTurns?: number; notifyOwnerOnComplete?: boolean }
-    evaluation?: { mode?: string; evaluatorAgent?: string }
+    evaluation?: { mode?: string; confirmation?: string; evaluatorAgent?: string }
     rubric?: { criteria?: { description?: string }[] }
     workspace?: { mode?: string }
     costBudget?: { maxCost?: number; maxTokens?: number }
@@ -92,6 +92,13 @@ export type LoopRun = {
     tokens?: { input?: number; output?: number; reasoning?: number; cacheRead?: number; cacheWrite?: number }
   }
   gateResults?: { id: string; status: string; summary?: string; failureClass?: string; waiver?: { action: string; actor: string; reason: string; time: number } }[]
+  completion?: {
+    status: string
+    generation: number
+    auditAttempts: number
+    summary?: string
+    failedCriteria?: string[]
+  }
   time?: { created?: number; started?: number; ended?: number; updated?: number }
 }
 
@@ -537,7 +544,7 @@ export function loopContractPreviewRows(workflow?: LoopWorkflow) {
     ["can do", reportOnly ? "Inspect, summarize, and produce evidence without edits." : `Work on the objective in ${workflow.spec?.workspace?.mode ?? "in-place"} mode.`],
     ["approval", approvalPreview(workflow)],
     ["verify", `Verify by ${listPreview(verificationChecks(workflow), "checkpoint evidence and gate results")}.`],
-    ["judge", `${workflow.spec?.evaluation?.mode ?? "legacy"} judge checks ${listPreview(criteria, "objective evidence and safety gates")}.`],
+    ["judge", `${workflow.spec?.evaluation?.mode ?? "legacy"} judge with ${workflow.spec?.evaluation?.confirmation ?? "same-run"} confirmation checks ${listPreview(criteria, "objective evidence and safety gates")}.`],
     ["stop", `Stop when ${listPreview(workflow.spec?.stopWhen, workflow.spec?.budgetMode === "max-goal" ? "goal verified or budget/gates block progress" : "budget exhausted, stopped, or blocked")}.`],
     ["budget", budgetPreview(workflow)],
     ["workspace", workflow.spec?.workspace?.mode ?? "in-place"],
@@ -590,6 +597,7 @@ export function loopSupervisionRows(input: {
   return [
     ["wake", latestLoopWakeReason(input.events ?? []) ?? run?.trigger ?? "not started"],
     ["latest run", run ? `${run.state} · ${run.trigger || "run"} · ${run.phase || "ready"}` : "none yet"],
+    ["completion", run?.completion ? `${run.completion.status} · gen ${run.completion.generation} · ${run.completion.auditAttempts} audit${run.completion.auditAttempts === 1 ? "" : "s"}${run.completion.failedCriteria?.length ? ` · failed ${run.completion.failedCriteria.join(", ")}` : ""}` : "not proposed"],
     ["verdict", verdictSummary ? `${verdict} · ${verdictSummary}` : verdict],
     ["gates", gateSummaryLabel(input.summary?.gateSummary, run?.gateResults)],
     ["rubric", rubric ? `${rubric.status} · ${Math.round(rubric.score * 100)}% / ${Math.round(rubric.threshold * 100)}%${rubric.blockers?.some((blocker) => blocker.present) ? " · blocker present" : ""}` : "not evaluated"],
@@ -620,6 +628,7 @@ export function loopSummaryRows(input: {
     ["next", loopWakeupLabel(input.detail, input.now)],
     ["cadence", cadenceLabel(input.detail)],
     ["run", run ? `${run.state} · ${run.trigger || "run"} · ${run.phase || "ready"}` : "none yet"],
+    ["completion", run?.completion ? `${run.completion.status} · gen ${run.completion.generation} · ${run.completion.auditAttempts} audit${run.completion.auditAttempts === 1 ? "" : "s"}` : "not proposed"],
     ["verdict", verdictSummary ? `${verdict} · ${verdictSummary}` : verdict],
     ["next action", input.summary?.nextAction ?? run?.judgment?.recommendedNextAction ?? run?.checkpoint?.nextAction ?? input.detail.evaluatorReason ?? "monitor"],
     ["usage", `${tokens} tokens${currency(cost) ? ` · ${currency(cost)}` : ""}`],

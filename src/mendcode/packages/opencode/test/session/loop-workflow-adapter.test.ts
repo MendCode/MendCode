@@ -148,6 +148,8 @@ function adapterLayers(input: {
         setWorkspaceLease: unused,
         events: unused,
         artifacts: unused,
+        claimCompletionAudit: unused,
+        applyCompletionAudit: unused,
         pause: unused,
         resume: unused,
         wake: unused,

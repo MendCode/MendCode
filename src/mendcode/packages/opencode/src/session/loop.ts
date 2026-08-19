@@ -29,6 +29,14 @@ import type { ProjectID } from "@/project/schema"
 import { ProjectTable } from "@/project/project.sql"
 import { WorkspaceTable } from "@/control-plane/workspace.sql"
 import type { WorkspaceID } from "@/control-plane/schema"
+import {
+  CompletionAuditReceipt,
+  CompletionConfirmation,
+  CompletionProgress,
+  compileCompletionCriteria,
+  decideCompletionAudit,
+  nextCompletionProgress,
+} from "./completion-contract"
 
 export const LoopID = Schema.String.pipe(
   Schema.brand("LoopID"),
@@ -148,7 +156,7 @@ export const EventType = Schema.Literals([
 ]).pipe(withStatics((s) => ({ zod: zod(s) })))
 export type EventType = Schema.Schema.Type<typeof EventType>
 
-export const ArtifactKind = Schema.Literals(["checkpoint", "judgment", "gate", "evidence", "command-output", "diff", "signal", "memory", "cost", "override"]).pipe(
+export const ArtifactKind = Schema.Literals(["checkpoint", "judgment", "gate", "evidence", "command-output", "diff", "signal", "memory", "cost", "override", "completion-candidate", "completion-audit"]).pipe(
   withStatics((s) => ({ zod: zod(s) })),
 )
 export type ArtifactKind = Schema.Schema.Type<typeof ArtifactKind>
@@ -238,6 +246,7 @@ const Spec = Schema.Struct({
   agent: Schema.optional(Schema.String),
   evaluation: Schema.optional(Schema.Struct({
     mode: Schema.optional(EvaluationMode),
+    confirmation: Schema.optional(CompletionConfirmation),
     evaluatorAgent: Schema.optional(Schema.String),
     requireIndependentForCompletion: Schema.optional(Schema.Boolean),
     allowWorkerSelfComplete: Schema.optional(Schema.Boolean),
@@ -466,6 +475,7 @@ export const RunInfo = Schema.Struct({
     evidenceArtifacts: Schema.optional(Schema.Array(ArtifactID)),
     waiver: Schema.optional(GateWaiver),
   }))),
+  completion: Schema.optional(CompletionProgress),
   retry: Schema.optional(Schema.Struct({
     attempt: NonNegativeInt,
     backoffMs: Schema.optional(NonNegativeInt),
@@ -764,6 +774,10 @@ export type CompleteRunInput = {
     evidenceArtifacts?: ArtifactID[]
     waiver?: GateWaiver
   }>
+  completion?: {
+    candidate: CompletionProgress
+    receipt?: CompletionAuditReceipt
+  }
 }
 
 export type FailRunInput = {
@@ -1713,6 +1727,45 @@ function completionArtifacts(input: CompleteRunInput & { rootSessionID?: Session
       },
     })
   }
+  if (input.completion?.candidate && !input.completion.receipt) {
+    artifacts.push({
+      workflowID: input.id,
+      runID: input.runID,
+      sessionID: input.rootSessionID,
+      kind: "completion-candidate",
+      title: "Completion candidate",
+      summary: input.completion.candidate.summary ?? "Loop work passed its same-run gates and is waiting for a fresh audit iteration.",
+      source: "completion-engine",
+      status: input.completion.candidate.status,
+      contentType: "application/json",
+      metadata: {
+        generation: input.completion.candidate.generation,
+        sourceID: input.completion.candidate.sourceID,
+        candidateFingerprint: input.completion.candidate.candidateFingerprint,
+      },
+    })
+  }
+  if (input.completion?.receipt) {
+    artifacts.push({
+      workflowID: input.id,
+      runID: input.runID,
+      sessionID: input.rootSessionID,
+      kind: "completion-audit",
+      title: "Completion audit",
+      summary: input.completion.receipt.summary,
+      source: "completion-auditor",
+      status: input.completion.receipt.status,
+      contentType: "application/json",
+      evidence: input.completion.receipt.criteria.flatMap((criterion) => criterion.evidence.map((item) => item.summary)),
+      metadata: {
+        generation: input.completion.receipt.generation,
+        fingerprintBefore: input.completion.receipt.fingerprintBefore,
+        fingerprintAfter: input.completion.receipt.fingerprintAfter,
+        recommendedNextAction: input.completion.receipt.recommendedNextAction,
+        failedCriteria: input.completion.receipt.criteria.filter((criterion) => criterion.status !== "pass").map((criterion) => criterion.id),
+      },
+    })
+  }
   if (input.usage && ((input.usage.cost ?? 0) > 0 || usageTokenTotal(input.usage) > 0)) {
     artifacts.push({
       workflowID: input.id,
@@ -2030,6 +2083,7 @@ function fromRunRow(row: RunRow): RunInfo {
       ...gate,
       evidenceArtifacts: gate.evidenceArtifacts?.map(ArtifactID.make),
     })),
+    completion: row.data.completion,
     lease: row.data.lease,
     retry: row.data.retry,
     workspaceLease: row.data.workspaceLease
@@ -2759,7 +2813,14 @@ export const layer = Layer.effect(
         .filter((item) => {
           if (item.state !== "active" && item.state !== "sleeping") return false
           const mode = item.spec.trigger?.mode
-          if (mode !== "interval" && mode !== "daily" && mode !== "adaptive" && mode !== "self-paced" && mode !== "external-signal") return false
+          if (
+            item.phase !== "completion_audit" &&
+            mode !== "interval" &&
+            mode !== "daily" &&
+            mode !== "adaptive" &&
+            mode !== "self-paced" &&
+            mode !== "external-signal"
+          ) return false
           return typeof item.nextWakeup === "number" && item.nextWakeup <= now
         })
         .slice(0, limit)
@@ -2973,10 +3034,37 @@ export const layer = Layer.effect(
       )
     }
 
-    const createWorkspaceLease = Effect.fn("LoopWorkflow.createWorkspaceLease")(function* (workflow: Info, runID: RunID) {
+    function previousCompletionCandidateLease(workflowID: LoopID) {
+      return Database.use((db) =>
+        db
+          .select()
+          .from(LoopRunTable)
+          .where(eq(LoopRunTable.workflow_id, workflowID))
+          .orderBy(desc(LoopRunTable.time_created))
+          .all()
+          .find((row) => row.data.completion?.status === "candidate")
+          ?.data.workspaceLease,
+      )
+    }
+
+    const createWorkspaceLease = Effect.fn("LoopWorkflow.createWorkspaceLease")(function* (
+      workflow: Info,
+      runID: RunID,
+      completionAudit: boolean,
+    ) {
       const mode = workflow.spec.workspace?.mode
       if (mode !== "per-loop-worktree" && mode !== "per-run-worktree") return undefined
       const now = Date.now()
+      if (completionAudit && mode === "per-run-worktree") {
+        const candidate = previousCompletionCandidateLease(workflow.id)
+        return candidate
+          ? {
+              ...candidate,
+              workflowID: LoopID.make(candidate.workflowID),
+              runID,
+            } satisfies WorkspaceLease
+          : undefined
+      }
       if (mode === "per-loop-worktree") {
         const previous = previousPerLoopLease(workflow.id)
         if (previous) return { ...previous, workflowID: workflow.id, runID: undefined } satisfies WorkspaceLease
@@ -3843,7 +3931,11 @@ export const layer = Layer.effect(
       const workflow = fromWorkflowRow(started.workflow)
       const run = fromRunRow(started.run)
       if (!started.acquired) return run
-      const workspaceLease: WorkspaceLease | undefined = yield* createWorkspaceLease(workflow, run.id)
+      const workspaceLease: WorkspaceLease | undefined = yield* createWorkspaceLease(
+        workflow,
+        run.id,
+        current.phase === "completion_audit",
+      )
       const persistedRun = persistRunWorkspaceLease(run, workspaceLease)
       yield* publishBackgroundForWorkflow(workflow, {
         state: "working",
@@ -3909,65 +4001,124 @@ export const layer = Layer.effect(
       const budgetMode = current.spec.budgetMode
       const turns = metrics.turns ?? 0
       const reachedMaxTurns = typeof current.policy.maxTurns === "number" && turns >= current.policy.maxTurns
+      const confirmation = current.spec.evaluation?.confirmation ?? "same-run"
       const independentRequired = requiresIndependentCompletion(current.spec)
-      const judgeCompletedGoal = independentRequired && judgmentPassed(sanitizedJudgment) && (checkpointStatus === "complete" || checkpointStatus === "blocked")
-      const completionJudged = !independentRequired || judgmentPassed(sanitizedJudgment)
+      const sameRunJudgeRequired = confirmation === "same-run" && independentRequired
+      const judgeCompletedGoal = sameRunJudgeRequired && judgmentPassed(sanitizedJudgment) && (checkpointStatus === "complete" || checkpointStatus === "blocked")
+      const completionJudged = !sameRunJudgeRequired || judgmentPassed(sanitizedJudgment)
       const gateFailure = completionGateFailureSummary(sanitizedGateResults)
       const gatesPassed = completionGatesPassed(sanitizedGateResults)
-       const blockingGate = sanitizedGateResults.find(workflowBlockingGate)
+      const blockingGate = sanitizedGateResults.find(workflowBlockingGate)
       const gateBlocked = Boolean(blockingGate)
-       const scheduledBlocked = checkpointStatus === "blocked" && scheduledMonitor(current.spec) && !gateBlocked && typeof nextWakeup === "number"
-      const goalComplete = (checkpointStatus === "complete" || judgeCompletedGoal) && completionJudged && gatesPassed && budgetMode !== "fixed" && budgetMode !== "unbounded-monitor"
+      const scheduledBlocked = checkpointStatus === "blocked" && scheduledMonitor(current.spec) && !gateBlocked && typeof nextWakeup === "number"
+      const workSatisfied = input.completion?.receipt
+        ? Boolean(input.completion.candidate)
+        : (checkpointStatus === "complete" || judgeCompletedGoal) && completionJudged && gatesPassed && budgetMode !== "fixed" && budgetMode !== "unbounded-monitor"
+      const completionTransition = nextCompletionProgress({
+        confirmation,
+        workSatisfied,
+        current: input.completion?.candidate,
+        sourceID: input.runID,
+        now,
+      })
+      const candidate = completionTransition.progress
+        ? {
+            ...completionTransition.progress,
+            ...(input.completion?.candidate?.candidateFingerprint === undefined
+              ? {}
+              : { candidateFingerprint: input.completion.candidate.candidateFingerprint }),
+            ...(sanitizedCheckpoint?.summary ? { summary: sanitizedCheckpoint.summary } : {}),
+          }
+        : undefined
+      const auditDecision = input.completion?.receipt && candidate
+        ? decideCompletionAudit({
+            progress: candidate,
+            receipt: input.completion.receipt,
+            criteria: compileCompletionCriteria(current.spec.completionCriteria?.length ? current.spec.completionCriteria : [current.objective]),
+            gates: sanitizedGateResults,
+            maxAuditAttempts: Math.max(1, current.spec.evaluation?.maxEvaluatorRetries ?? 1),
+          })
+        : undefined
+      const goalComplete = confirmation === "same-run"
+        ? workSatisfied
+        : auditDecision?.outcome === "complete"
       const explicitStop = checkpointStatus === "stop"
       const budgetExhaustedBeforeGoal = budgetMode === "max-goal" && reachedMaxTurns && !goalComplete
       const fixedCompletionRejectedAtLimit = budgetMode === "fixed" && reachedMaxTurns && completionProposed && !gatesPassed
+      const completionForRun: CompletionProgress | undefined = candidate
+        ? {
+            ...candidate,
+            status: goalComplete
+              ? "passed"
+              : budgetExhaustedBeforeGoal
+                ? "blocked"
+              : auditDecision?.outcome === "blocked" || auditDecision?.outcome === "needs-input"
+                ? "blocked"
+                : auditDecision?.outcome === "retry-work"
+                  ? "rejected"
+                  : auditDecision?.outcome === "retry-audit"
+                    ? "candidate"
+                    : candidate.status,
+            ...(auditDecision && "failedCriteria" in auditDecision ? { failedCriteria: [...auditDecision.failedCriteria] } : {}),
+            ...(input.completion?.receipt ? { receipt: input.completion.receipt } : {}),
+            updatedAt: now,
+          }
+        : undefined
+      const completionCandidateReady = confirmation === "next-run" && workSatisfied && !input.completion?.receipt
       const budgetExhaustedReason = gateFailure
         ? `Loop reached its maximum iteration budget (${turns}/${current.policy.maxTurns}) before the goal was marked complete because completion gate did not pass (${gateFailure}). Last checkpoint: ${sanitizedReason ?? sanitizedCheckpoint?.summary ?? "no checkpoint summary"}`
         : `Loop reached its maximum iteration budget (${turns}/${current.policy.maxTurns}) before the goal was marked complete. Last checkpoint: ${sanitizedReason ?? sanitizedCheckpoint?.summary ?? "no checkpoint summary"}`
-      const computedNext =
-        explicitStop
-          ? ({ state: "stopped" as const, phase: "stopped", completed: false, nextWakeup: undefined })
-          : gateBlocked
-            ? ({ state: "blocked" as const, phase: blockingGate?.status === "awaiting_approval" ? "approval_required" : "blocked", completed: false, nextWakeup: undefined })
-            : scheduledBlocked
-              ? ({ state: "sleeping" as const, phase: "waiting", completed: false, nextWakeup })
-              : goalComplete
-                ? ({ state: "completed" as const, phase: "completed", completed: true, nextWakeup: undefined })
-                : budgetExhaustedBeforeGoal
-                  ? ({ state: "blocked" as const, phase: "budget_exhausted", completed: false, nextWakeup: undefined })
-              : fixedCompletionRejectedAtLimit
-                ? ({ state: "blocked" as const, phase: "completion_gate_failed", completed: false, nextWakeup: undefined })
-              : checkpointStatus === "needs_input"
-                ? ({ state: "needs_input" as const, phase: "needs_input", completed: false, nextWakeup: undefined })
-                : checkpointStatus === "blocked"
-                  ? ({ state: "blocked" as const, phase: "blocked", completed: false, nextWakeup: undefined })
-                  : pendingExternalSignal
-                    ? ({ state: "sleeping" as const, phase: "signal_received", completed: false, nextWakeup })
-                    : completionState({ metrics, policy: current.policy, nextWakeup })
+      const computedNext = (() => {
+        if (explicitStop) return { state: "stopped" as const, phase: "stopped", completed: false, nextWakeup: undefined }
+        if (gateBlocked && !input.completion?.receipt) {
+          return {
+            state: "blocked" as const,
+            phase: blockingGate?.status === "awaiting_approval" ? "approval_required" : "blocked",
+            completed: false,
+            nextWakeup: undefined,
+          }
+        }
+        if (auditDecision?.outcome === "needs-input") {
+          return { state: "needs_input" as const, phase: "completion_audit_needs_input", completed: false, nextWakeup: undefined }
+        }
+        if (auditDecision?.outcome === "blocked") {
+          return { state: "blocked" as const, phase: "completion_audit_blocked", completed: false, nextWakeup: undefined }
+        }
+        if (scheduledBlocked) return { state: "sleeping" as const, phase: "waiting", completed: false, nextWakeup }
+        if (goalComplete) return { state: "completed" as const, phase: "completed", completed: true, nextWakeup: undefined }
+        if (budgetExhaustedBeforeGoal) return { state: "blocked" as const, phase: "budget_exhausted", completed: false, nextWakeup: undefined }
+        if (completionCandidateReady || auditDecision?.outcome === "retry-audit") {
+          return { state: "sleeping" as const, phase: "completion_audit", completed: false, nextWakeup: now }
+        }
+        if (fixedCompletionRejectedAtLimit) return { state: "blocked" as const, phase: "completion_gate_failed", completed: false, nextWakeup: undefined }
+        if (checkpointStatus === "needs_input") return { state: "needs_input" as const, phase: "needs_input", completed: false, nextWakeup: undefined }
+        if (checkpointStatus === "blocked") return { state: "blocked" as const, phase: "blocked", completed: false, nextWakeup: undefined }
+        if (pendingExternalSignal) return { state: "sleeping" as const, phase: "signal_received", completed: false, nextWakeup }
+        return completionState({ metrics, policy: current.policy, nextWakeup })
+      })()
       const pauseAfterRun = current.state === "paused" && !computedNext.completed && computedNext.state !== "blocked" && computedNext.state !== "needs_input"
       const next = pauseAfterRun
         ? { state: "paused" as const, phase: "paused", completed: false, nextWakeup: pendingExternalSignal ? current.nextWakeup : undefined }
         : computedNext
-      const evaluatorReason = sanitizeArtifactString(
-        goalComplete
-          ? (sanitizedJudgment?.summary ?? sanitizedReason ?? sanitizedCheckpoint?.summary ?? "Loop goal completed and verified by checkpoint.")
-          : explicitStop
-            ? (sanitizedReason ?? sanitizedCheckpoint?.summary ?? "Loop checkpoint requested stop.")
-            : budgetExhaustedBeforeGoal
-              ? budgetExhaustedReason
-              : fixedCompletionRejectedAtLimit
-                ? `Loop reached its fixed iteration limit, but completion gate did not pass (${gateFailure ?? "unknown gate failure"}).`
-              : gateBlocked
-                ? (blockingGate?.summary ?? "Loop blocked by policy gate.")
-              : checkpointStatus === "complete" && independentRequired && sanitizedJudgment?.status && sanitizedJudgment.status !== "pass"
-                ? `Independent evaluator did not accept completion (${sanitizedJudgment.status}): ${sanitizedJudgment.summary ?? sanitizedReason ?? sanitizedCheckpoint?.summary ?? "no evaluator summary"}`
-                : checkpointStatus === "complete" && independentRequired && !sanitizedJudgment?.status
-                  ? `Independent evaluator did not provide a passing verdict; continuing instead of trusting worker self-completion. Last checkpoint: ${sanitizedReason ?? sanitizedCheckpoint?.summary ?? "no checkpoint summary"}`
-                  : checkpointStatus === "complete" && gateFailure
-                    ? `Completion gate did not pass (${gateFailure}); continuing instead of marking the loop complete.`
-                    : (sanitizedReason ?? sanitizedCheckpoint?.summary ?? "Loop run completed."),
-        maxArtifactSummaryChars,
-      ) ?? "Loop run completed."
+      const evaluatorReason = sanitizeArtifactString((() => {
+        if (goalComplete) {
+          return input.completion?.receipt?.summary ?? sanitizedJudgment?.summary ?? sanitizedReason ?? sanitizedCheckpoint?.summary ?? "Loop goal completed after a fresh audit iteration."
+        }
+        if (explicitStop) return sanitizedReason ?? sanitizedCheckpoint?.summary ?? "Loop checkpoint requested stop."
+        if (budgetExhaustedBeforeGoal) return budgetExhaustedReason
+        if (fixedCompletionRejectedAtLimit) return `Loop reached its fixed iteration limit, but completion gate did not pass (${gateFailure ?? "unknown gate failure"}).`
+        if (gateBlocked) return blockingGate?.summary ?? "Loop blocked by policy gate."
+        if (completionCandidateReady) return "Completion candidate recorded; a fresh audit iteration is required before the loop can finish."
+        if (auditDecision) return auditDecision.summary
+        if (checkpointStatus === "complete" && independentRequired && sanitizedJudgment?.status && sanitizedJudgment.status !== "pass") {
+          return `Independent evaluator did not accept completion (${sanitizedJudgment.status}): ${sanitizedJudgment.summary ?? sanitizedReason ?? sanitizedCheckpoint?.summary ?? "no evaluator summary"}`
+        }
+        if (checkpointStatus === "complete" && independentRequired && !sanitizedJudgment?.status) {
+          return `Independent evaluator did not provide a passing verdict; continuing instead of trusting worker self-completion. Last checkpoint: ${sanitizedReason ?? sanitizedCheckpoint?.summary ?? "no checkpoint summary"}`
+        }
+        if (checkpointStatus === "complete" && gateFailure) return `Completion gate did not pass (${gateFailure}); continuing instead of marking the loop complete.`
+        return sanitizedReason ?? sanitizedCheckpoint?.summary ?? "Loop run completed."
+      })(), maxArtifactSummaryChars) ?? "Loop run completed."
       const artifacts = completionArtifacts({
         ...input,
         checkpoint: sanitizedCheckpoint,
@@ -3977,6 +4128,7 @@ export const layer = Layer.effect(
         gateResults: sanitizedGateResults,
         reason: sanitizedReason,
         rootSessionID: current.rootSessionID,
+        completion: completionForRun ? { candidate: completionForRun, receipt: input.completion?.receipt } : undefined,
       })
       const memory = appendRuntimeMemory(current.memory, current.spec, completionMemoryEntries({
         runID: input.runID,
@@ -4021,6 +4173,7 @@ export const layer = Layer.effect(
               rubricResult: sanitizedRubricResult,
               usage,
               gateResults: sanitizedGateResults,
+              completion: completionForRun,
               lease: currentRun.data.lease,
               workspaceLease: currentRun.data.workspaceLease,
             },
@@ -4099,6 +4252,7 @@ export const layer = Layer.effect(
           rubricResult: sanitizedRubricResult,
           gateResults: sanitizedGateResults,
           usage,
+          completion: completionForRun,
         },
 
       })

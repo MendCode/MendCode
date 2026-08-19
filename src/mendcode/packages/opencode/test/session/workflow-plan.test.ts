@@ -95,6 +95,33 @@ describe("WorkflowPlan", () => {
     expect(WorkflowPlan.zod.parse(plan)).toEqual(plan)
   })
 
+  test("accepts a strict next-run completion policy with criterion ownership", () => {
+    const plan = basePlan()
+    plan.completion = {
+      confirmation: "next-run",
+      maxAuditAttempts: 2,
+      validationChecks: [{ id: "focused-tests", command: "bun test test/session/workflow-plan.test.ts" }],
+      criteria: [{ id: "synthesis-valid", description: "The synthesis is schema-valid", ownerTaskIDs: [taskSynthesis] }],
+    }
+
+    const decoded = decode(plan)
+    expect(validateWorkflowPlan(decoded).valid).toBe(true)
+    expect(decoded.completion?.confirmation).toBe("next-run")
+  })
+
+  test("rejects completion owners and validation identifiers that do not exist", () => {
+    const plan = basePlan()
+    plan.completion = {
+      confirmation: "next-run",
+      validationChecks: [{ id: "bad id", command: "" }],
+      criteria: [{ id: "criterion", description: "Must pass", ownerTaskIDs: [WorkflowTaskID.make("missing-owner")] }],
+    }
+
+    const result = validateWorkflowPlan(plan)
+    expect(result.valid).toBe(false)
+    expect(result.issues.map((entry) => entry.code)).toEqual(expect.arrayContaining(["invalid-identifier", "invalid-completion-criteria", "missing-reference"]))
+  })
+
   test("rejects duplicate identifiers and missing references", () => {
     const plan = basePlan()
     plan.tasks[1] = { ...plan.tasks[1], id: taskResearch, dependsOn: [WorkflowTaskID.make("missing")] }

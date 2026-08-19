@@ -20,6 +20,7 @@ export type WorkflowReceiptSnapshot = {
     plan: {
       objective: string
       model?: { providerID: string; modelID: string; variant?: string }
+      completion?: { confirmation?: "same-run" | "next-run" }
     }
   }
   run: {
@@ -29,6 +30,13 @@ export type WorkflowReceiptSnapshot = {
     rootSessionID?: string
     createdAt: number
     updatedAt: number
+    completion?: {
+      status: string
+      generation: number
+      auditAttempts: number
+      summary?: string
+      failedCriteria?: readonly string[]
+    }
   }
   phases: readonly {
     id?: string
@@ -186,6 +194,9 @@ export function workflowReceiptNextAction(snapshot: WorkflowReceiptSnapshot) {
   if (blocker) return blocker
   if (snapshot.run.state === "needs_input" || snapshot.run.state === "awaiting_approval") return "Operator input or approval required."
   if (snapshot.run.state === "blocked") return "Inspect the blocker before resuming."
+  if (snapshot.run.completion?.status === "candidate") return "Run the fresh completion audit before closing."
+  if (snapshot.run.completion?.status === "auditing") return "Fresh completion audit is inspecting current evidence."
+  if (snapshot.run.completion?.status === "rejected") return "Repair the failed completion criteria and regenerate the final evidence."
   if (snapshot.run.state === "paused") return "Resume when the workflow is ready to continue."
   if (snapshot.run.state === "completed") return "Review the final artifact."
   if (snapshot.run.state === "failed") return "Retry the failed task or phase."

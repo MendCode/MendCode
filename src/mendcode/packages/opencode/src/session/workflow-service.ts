@@ -50,6 +50,15 @@ import {
   WorkflowRevision,
 } from "./workflow-plan"
 import type { WorkflowPlanValidationIssue } from "./workflow-plan"
+import {
+  type CompletionAuditReceipt,
+  type CompletionAuditDecision,
+  type CompletionGate,
+  type CompletionProgress,
+  compileCompletionCriteria,
+  decideCompletionAudit,
+  nextCompletionProgress,
+} from "./completion-contract"
 
 export class WorkflowNotFoundError extends Error {
   readonly _tag = "WorkflowNotFoundError"
@@ -131,6 +140,7 @@ export interface WorkflowGateSnapshot {
   readonly required: boolean
   readonly actor?: string
   readonly reason?: string
+  readonly kind: "approval" | "completion"
 }
 
 export interface WorkflowSnapshot {
@@ -258,6 +268,25 @@ export interface WorkflowPhaseRetryInput extends WorkflowControlInput {
   readonly phaseID: WorkflowPhaseID
 }
 
+export interface WorkflowCompletionAuditClaimInput {
+  readonly runID: WorkflowRunID
+  readonly holder: string
+  readonly leaseMs: number
+  readonly candidateFingerprint?: string
+}
+
+export interface WorkflowCompletionAuditApplyInput {
+  readonly runID: WorkflowRunID
+  readonly holder: string
+  readonly receipt: CompletionAuditReceipt
+  readonly gates: readonly CompletionGate[]
+  readonly usage?: {
+    readonly inputTokens?: number
+    readonly outputTokens?: number
+    readonly cost?: number
+  }
+}
+
 export interface Interface {
   readonly preview: (plan: WorkflowPlan) => Effect.Effect<WorkflowPlanPreview, WorkflowValidationError>
   readonly save: (
@@ -307,6 +336,12 @@ export interface Interface {
   readonly pendingNotifications: (parentSessionID?: SessionID) => Effect.Effect<Notification[]>
   readonly acknowledgeNotifications: (eventIDs: readonly string[]) => Effect.Effect<void>
   readonly publishTerminalNotification: (runID: WorkflowRunID) => Effect.Effect<void>
+  readonly claimCompletionAudit: (
+    input: WorkflowCompletionAuditClaimInput,
+  ) => Effect.Effect<CompletionProgress | undefined, WorkflowNotFoundError>
+  readonly applyCompletionAudit: (
+    input: WorkflowCompletionAuditApplyInput,
+  ) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/WorkflowService") {}
@@ -329,8 +364,45 @@ const usageFromData = (data: Record<string, unknown> | null | undefined): Workfl
   }
 }
 
+const addUsage = (
+  left: WorkflowUsageSnapshot | undefined,
+  right: WorkflowUsageSnapshot | undefined,
+): WorkflowUsageSnapshot | undefined => {
+  if (!left && !right) return undefined
+  return {
+    inputTokens: (left?.inputTokens ?? 0) + (right?.inputTokens ?? 0),
+    outputTokens: (left?.outputTokens ?? 0) + (right?.outputTokens ?? 0),
+    cost: (left?.cost ?? 0) + (right?.cost ?? 0),
+  }
+}
+
 const unresolvedGate = (snapshot: WorkflowSnapshot) =>
-  snapshot.gates.find((gate) => gate.required && gate.state !== "pass" && gate.state !== "waived")
+  snapshot.gates.find((gate) => gate.kind === "approval" && gate.required && gate.state !== "pass" && gate.state !== "waived")
+
+export const workflowCompletionCriteria = (plan: WorkflowPlan) =>
+  plan.completion?.criteria?.length
+    ? plan.completion.criteria.map((criterion) => ({ id: criterion.id, description: criterion.description }))
+    : compileCompletionCriteria(plan.completionCriteria)
+
+export const workflowCompletionTransition = (input: {
+  readonly plan: WorkflowPlan
+  readonly current?: CompletionProgress
+  readonly finalTaskComplete: boolean
+  readonly allPhasesSatisfied: boolean
+  readonly now: number
+}) => {
+  const workSatisfied = input.finalTaskComplete && input.allPhasesSatisfied
+  if (!workSatisfied) return { terminal: false, completion: input.current }
+  const confirmation = input.plan.completion?.confirmation ?? (input.plan.completion ? "next-run" : "same-run")
+  const transition = nextCompletionProgress({
+    confirmation,
+    workSatisfied,
+    current: input.current,
+    sourceID: input.plan.finalTaskID,
+    now: input.now,
+  })
+  return { terminal: transition.terminal, completion: transition.progress ?? input.current }
+}
 
 const planValidation = (plan: WorkflowPlan) => {
   const result = validateWorkflowPlan(plan)
@@ -375,6 +447,7 @@ const runFromRow = (row: typeof WorkflowRunTable.$inferSelect): WorkflowRun => (
   ...(row.data.workspaceLease ? { workspaceLease: row.data.workspaceLease } : {}),
   ...(row.data.permissionMode ? { permissionMode: row.data.permissionMode } : {}),
   ...(row.data.sessionPermissionMode ? { sessionPermissionMode: row.data.sessionPermissionMode } : {}),
+  ...(row.data.completion ? { completion: row.data.completion } : {}),
   state: row.state,
   ...(row.current_phase_id ? { currentPhaseID: WorkflowPhaseID.make(row.current_phase_id) } : {}),
   createdAt: row.time_created,
@@ -462,6 +535,7 @@ const gateFromRow = (row: typeof WorkflowGateTable.$inferSelect): WorkflowGateSn
   required: row.required,
   ...(row.actor ? { actor: row.actor } : {}),
   ...(row.reason ? { reason: row.reason } : {}),
+  kind: row.data?.kind === "completion" ? "completion" : "approval",
 })
 
 const boundedLimit = (value: number | undefined, fallback = 100) =>
@@ -648,8 +722,21 @@ export const reconcileWorkflowSessionState = (db: WorkflowDB, runID: WorkflowRun
 
   const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, runID)).get()
   if (!run) return
+  const revision = db.select().from(WorkflowRevisionTable).where(eq(WorkflowRevisionTable.id, run.revision_id)).get()
+  const finalTask = revision
+    ? tasks.find((task) => task.id === revision.plan.finalTaskID)
+    : undefined
   const allPhasesSatisfied = phases.length > 0 && phases.every((phase) => workflowPhaseBarrierSatisfied(phase, tasks))
-  const nextState: WorkflowRunState = allPhasesSatisfied
+  const completion = revision
+    ? workflowCompletionTransition({
+        plan: revision.plan,
+        current: run.data.completion,
+        finalTaskComplete: finalTask?.state === "completed",
+        allPhasesSatisfied,
+        now,
+      })
+    : { terminal: false, completion: run.data.completion }
+  const computedState: WorkflowRunState = completion.terminal
     ? "completed"
     : tasks.some((task) => task.state === "needs_input")
       ? "needs_input"
@@ -661,13 +748,23 @@ export const reconcileWorkflowSessionState = (db: WorkflowDB, runID: WorkflowRun
             ? "working"
             : tasks.some((task) => task.state === "queued" || task.state === "pending")
               ? "queued"
+              : finalTask?.state === "completed" && allPhasesSatisfied && completion.completion?.status === "candidate"
+                ? "working"
               : run.state
+  const nextState: WorkflowRunState = run.state === "stopped"
+    ? "stopped"
+    : run.state === "blocked"
+      ? "blocked"
+      : run.state === "paused" && !completion.terminal
+        ? "paused"
+        : computedState
   const currentPhase = phases.find((phase) => !["completed", "stopped"].includes(phaseStates.get(phase.id) ?? phase.state))
   db.update(WorkflowRunTable)
     .set({
       state: nextState,
       current_phase_id: currentPhase?.id ?? null,
       time_updated: now,
+      data: { ...run.data, completion: completion.completion },
       ...(nextState === "completed" || nextState === "failed" ? { time_ended: now } : { time_ended: null }),
     })
     .where(eq(WorkflowRunTable.id, runID))
@@ -1118,6 +1215,274 @@ export const layer = Layer.effect(
       return snapshot.artifacts.slice(0, boundedLimit(limit))
     })
 
+    const claimCompletionAudit = Effect.fn("WorkflowService.claimCompletionAudit")(function* (
+      input: WorkflowCompletionAuditClaimInput,
+    ) {
+      yield* show(input.runID)
+      const now = Date.now()
+      return Database.transaction((db) => {
+        const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, input.runID)).get()
+        if (!run) throw new WorkflowNotFoundError(input.runID)
+        const current = run.data.completion
+        if (run.state !== "working") return
+        if (!current || (current.status !== "candidate" && current.status !== "auditing")) return
+        if (current.status === "auditing" && (current.auditLease?.expiresAt ?? 0) > now) return
+        const progress: CompletionProgress = {
+          ...current,
+          status: "auditing",
+          auditAttempts: current.auditAttempts + 1,
+          candidateFingerprint: current.candidateFingerprint ?? input.candidateFingerprint,
+          auditLease: { holder: input.holder, expiresAt: now + Math.max(5_000, input.leaseMs) },
+          updatedAt: now,
+        }
+        db.update(WorkflowRunTable)
+          .set({
+            state: "working",
+            time_ended: null,
+            time_updated: now,
+            data: { ...run.data, completion: progress, blocker: undefined, nextAction: "Run the fresh completion audit." },
+          })
+          .where(eq(WorkflowRunTable.id, input.runID))
+          .run()
+        appendEvent(
+          db,
+          input.runID,
+          "workflow.run.updated",
+          "Completion audit claimed",
+          `Completion candidate generation ${progress.generation} is being audited`,
+          { generation: progress.generation, attempt: progress.auditAttempts },
+        )
+        return progress
+      }, { behavior: "immediate" })
+    })
+
+    const applyCompletionAudit = Effect.fn("WorkflowService.applyCompletionAudit")(function* (
+      input: WorkflowCompletionAuditApplyInput,
+    ) {
+      yield* show(input.runID)
+      const result = Database.transaction((db) => {
+        const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, input.runID)).get()
+        if (!run) throw new WorkflowNotFoundError(input.runID)
+        const revision = db.select().from(WorkflowRevisionTable).where(eq(WorkflowRevisionTable.id, run.revision_id)).get()
+        if (!revision) throw new WorkflowNotFoundError(run.revision_id)
+        const progress = run.data.completion
+        const now = Date.now()
+        if (
+          !progress ||
+          progress.status !== "auditing" ||
+          progress.auditLease?.holder !== input.holder ||
+          (progress.auditLease.expiresAt ?? 0) <= now
+        ) {
+          throw new WorkflowStateError(input.runID, "Completion audit claim is stale or owned by another runner")
+        }
+        const criteria = workflowCompletionCriteria(revision.plan)
+        const completionUsage = addUsage(run.data.completionUsage, input.usage)
+        const totalUsage = addUsage(usageFromData(run.data), input.usage)
+        const totalTokens = (totalUsage?.inputTokens ?? 0) + (totalUsage?.outputTokens ?? 0)
+        const budget = revision.plan.budget
+        const budgetGates: CompletionGate[] = []
+        if (budget?.maxTokens !== undefined && totalTokens >= budget.maxTokens) {
+          budgetGates.push({ id: "budget:tokens", status: "blocked", summary: `Workflow token budget exhausted during completion audit (${totalTokens}/${budget.maxTokens}).` })
+        }
+        if (budget?.maxCost !== undefined && (totalUsage?.cost ?? 0) >= budget.maxCost) {
+          budgetGates.push({ id: "budget:cost", status: "blocked", summary: `Workflow cost budget exhausted during completion audit (${totalUsage?.cost ?? 0}/${budget.maxCost}).` })
+        }
+        if (budget?.maxRuntimeMs !== undefined && run.time_started !== null && now - run.time_started >= budget.maxRuntimeMs) {
+          budgetGates.push({ id: "budget:runtime", status: "blocked", summary: `Workflow runtime budget exhausted during completion audit (${now - run.time_started}/${budget.maxRuntimeMs}ms).` })
+        }
+        const completionGates = [...input.gates, ...budgetGates]
+        let decision: CompletionAuditDecision = decideCompletionAudit({
+          progress,
+          receipt: input.receipt,
+          criteria,
+          gates: completionGates,
+          maxAuditAttempts: Math.max(1, revision.plan.completion?.maxAuditAttempts ?? 2),
+        })
+        const repairOwners = new Set<string>()
+        if (decision.outcome === "retry-work") {
+          const configuredOwners = new Map(
+            (revision.plan.completion?.criteria ?? []).map((criterion) => [criterion.id, criterion.ownerTaskIDs ?? []]),
+          )
+          const failedCriteria = decision.failedCriteria.length
+            ? decision.failedCriteria
+            : [...configuredOwners.keys()]
+          for (const criterionID of failedCriteria) {
+            for (const owner of configuredOwners.get(criterionID) ?? []) repairOwners.add(owner)
+          }
+          if (repairOwners.size === 0) {
+            decision = {
+              outcome: "blocked",
+              summary: `${decision.summary} No completion criterion declares a repair owner, so MendCode will not guess which workflow tasks to rerun.`,
+            }
+          }
+        }
+        const nextProgress: CompletionProgress = {
+          ...progress,
+          status: decision.outcome === "complete"
+            ? "passed"
+            : decision.outcome === "retry-work"
+              ? "rejected"
+              : decision.outcome === "retry-audit"
+                ? "candidate"
+                : "blocked",
+          ...(decision.outcome === "retry-work" ? { failedCriteria: [...decision.failedCriteria] } : {}),
+          receipt: input.receipt,
+          auditLease: undefined,
+          summary: decision.summary,
+          updatedAt: now,
+        }
+
+        const gateRows = [
+          ...completionGates.map((gate) => ({
+            id: `completion-gate-${createHash("sha256").update(gate.id).digest("hex").slice(0, 16)}`,
+            state: gate.status === "pass" || gate.status === "waived"
+              ? "pass" as const
+              : gate.status === "awaiting_approval"
+                ? "awaiting_approval" as const
+                : gate.status === "blocked"
+                  ? "blocked" as const
+                  : "fail" as const,
+            reason: gate.summary ?? gate.id,
+            key: gate.id,
+          })),
+          ...input.receipt.criteria.map((criterion) => ({
+            id: `completion-${criterion.id}`,
+            state: criterion.status === "pass"
+              ? "pass" as const
+              : criterion.status === "needs_human"
+                ? "awaiting_approval" as const
+                : criterion.status === "blocked" || criterion.status === "uncertain"
+                  ? "blocked" as const
+                  : "fail" as const,
+            reason: criterion.summary,
+            key: criterion.id,
+          })),
+        ]
+        for (const gate of gateRows) {
+          const id = WorkflowGateID.make(gate.id)
+          const existing = db.select().from(WorkflowGateTable).where(and(eq(WorkflowGateTable.run_id, input.runID), eq(WorkflowGateTable.id, id))).get()
+          if (existing) {
+            db.update(WorkflowGateTable)
+              .set({ state: gate.state, reason: gate.reason, time_updated: now, data: { ...existing.data, kind: "completion", key: gate.key, generation: progress.generation } })
+              .where(and(eq(WorkflowGateTable.run_id, input.runID), eq(WorkflowGateTable.id, id)))
+              .run()
+          } else {
+            db.insert(WorkflowGateTable).values({
+              run_id: input.runID,
+              id,
+              state: gate.state,
+              required: true,
+              reason: gate.reason,
+              time_created: now,
+              time_updated: now,
+              data: { kind: "completion", key: gate.key, generation: progress.generation },
+            }).run()
+          }
+        }
+
+        const sequence = (db.select({ value: max(WorkflowArtifactTable.sequence) }).from(WorkflowArtifactTable).where(eq(WorkflowArtifactTable.run_id, input.runID)).get()?.value ?? 0) + 1
+        db.insert(WorkflowArtifactTable).values({
+          id: WorkflowArtifactID.make(),
+          run_id: input.runID,
+          sequence,
+          kind: "completion-audit",
+          summary: decision.summary,
+          status: decision.outcome === "complete" ? "valid" : "invalid",
+          schema_validated: true,
+          output_refs: [],
+          evidence: input.receipt.criteria.flatMap((criterion) => criterion.evidence.map((evidence) => evidence.summary)),
+          time_created: now,
+          time_updated: now,
+          data: { receipt: input.receipt, decision, gates: completionGates, usage: input.usage },
+        }).run()
+
+        if (decision.outcome === "retry-work") {
+          const tasks = db.select().from(WorkflowTaskTable).where(eq(WorkflowTaskTable.run_id, input.runID)).all()
+          const affected = new Set<string>(repairOwners)
+          let expanded = true
+          while (expanded) {
+            expanded = false
+            for (const task of tasks) {
+              if (affected.has(task.id) || !task.depends_on.some((dependency) => affected.has(dependency))) continue
+              affected.add(task.id)
+              expanded = true
+            }
+          }
+          for (const taskID of affected) {
+            const task = tasks.find((candidate) => candidate.id === taskID)
+            db.update(WorkflowTaskTable)
+              .set({
+                state: "pending",
+                time_started: null,
+                time_ended: null,
+                time_updated: now,
+                data: { ...task?.data, blocker: undefined, retryAt: undefined },
+              })
+              .where(and(eq(WorkflowTaskTable.run_id, input.runID), eq(WorkflowTaskTable.id, WorkflowTaskID.make(taskID))))
+              .run()
+            db.update(WorkflowArtifactTable)
+              .set({ status: "invalid", time_updated: now })
+              .where(and(eq(WorkflowArtifactTable.run_id, input.runID), eq(WorkflowArtifactTable.task_id, WorkflowTaskID.make(taskID))))
+              .run()
+          }
+        }
+
+        const nextState: WorkflowRunState = decision.outcome === "complete"
+          ? "completed"
+          : decision.outcome === "retry-work"
+            ? "queued"
+            : decision.outcome === "retry-audit"
+              ? "working"
+              : decision.outcome === "needs-input"
+                ? "needs_input"
+                : "blocked"
+        db.update(WorkflowRunTable)
+          .set({
+            state: nextState,
+            time_updated: now,
+            time_ended: nextState === "completed" ? now : null,
+            data: {
+              ...run.data,
+              completion: nextProgress,
+              completionUsage,
+              usage: totalUsage,
+              blocker: nextState === "blocked" || nextState === "needs_input" ? decision.summary : undefined,
+              nextAction: decision.outcome === "retry-work"
+                ? "Rerun the tasks that own failed completion criteria and their descendants."
+                : decision.outcome === "retry-audit"
+                  ? "Retry the fresh completion audit."
+                  : undefined,
+            },
+          })
+          .where(eq(WorkflowRunTable.id, input.runID))
+          .run()
+        if (decision.outcome === "retry-work") reconcileWorkflowSessionState(db, input.runID, now)
+        appendEvent(
+          db,
+          input.runID,
+          decision.outcome === "complete" ? "workflow.run.completed" : "workflow.run.updated",
+          decision.outcome === "complete" ? "Workflow completion verified" : "Workflow completion audit did not close the run",
+          decision.summary,
+          {
+            terminal: decision.outcome === "complete",
+            background: decision.outcome === "complete",
+            state: nextState,
+            outcome: decision.outcome,
+            generation: progress.generation,
+            failedCriteria: decision.outcome === "retry-work" ? decision.failedCriteria : [],
+          },
+        )
+        return { nextState, decision }
+      }, { behavior: "immediate" })
+      if (result.nextState === "queued" || result.nextState === "working") {
+        yield* bus.publish(Event.RunWake, { runID: input.runID })
+      }
+      if (result.nextState === "completed") {
+        yield* publishTerminalNotification(input.runID).pipe(Effect.catchCause(() => Effect.void))
+      }
+      return yield* show(input.runID)
+    })
+
     const updateState = Effect.fn("WorkflowService.updateState")(function* (
       input: WorkflowControlInput,
       state: WorkflowRunState,
@@ -1523,6 +1888,8 @@ export const layer = Layer.effect(
       setWorkspaceLease,
       events,
       artifacts,
+      claimCompletionAudit,
+      applyCompletionAudit,
       pause,
       resume,
       wake,
