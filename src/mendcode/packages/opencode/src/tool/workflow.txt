@@ -9,6 +9,10 @@ Build a valid plan with this checklist:
 - If a task consumes another task's output through inputs, it must depend on that producer directly or transitively.
 - finalTaskID must name a synthesize task with a non-none output.
 - Define at least one concrete completion criterion.
+- For new workflows, set `completion.confirmation` to `next-run`. This keeps a finished DAG as a completion candidate and requires a fresh read-only audit with per-criterion evidence before the run becomes completed. Omit `completion` only when intentionally preserving legacy same-run closure.
+- Use `completion.criteria` with stable IDs and `ownerTaskIDs` for every criterion that MendCode may repair. Without a safe owner mapping, a failed audit blocks and asks for remediation instead of guessing which tasks to rerun.
+- Put deterministic test/check commands in `completion.validationChecks`; they run again during the terminal audit and must use the bounded validation allowlist.
+- `budget.maxTurns` bounds task attempts; terminal audits are bounded separately by `completion.maxAuditAttempts`. Token, cost, and runtime budgets still include the audit and can block terminal completion.
 - Keep requiredGates empty for immediate execution. This tool cannot approve unresolved gates.
 - Omit budget unless the user requested limits. If supplied, maxFanOut must cover the total bounded task/map fan-out and maxConcurrency must be positive.
 - Model precedence is task.model, then plan.model, then the task agent's configured model, then MendCode's global default model. Set plan.model to pin the whole workflow or task.model for one task; otherwise omit both so global config remains authoritative.

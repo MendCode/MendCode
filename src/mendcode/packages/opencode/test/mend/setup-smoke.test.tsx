@@ -340,8 +340,8 @@ describe("setup route smoke", () => {
     expect(loopRouteStackedListHeight(12, true, 14)).toBe(6)
     expect(loopRouteStackedListHeight(12, true, 12)).toBe(4)
     expect(loopRouteStackedListHeight(12, false, 20)).toBe(8)
-    expect(loopRouteKeyHint({ width: 46, narrow: true, compact: true })).toBe("↑ parent · c/g · a/h · i · o · q")
-    expect(loopRouteKeyHint({ width: 88, narrow: true, compact: true })).toBe("↑ parent · c project · g all · a/h view · i inspect · pgup/dn page · o chat · q back")
+    expect(loopRouteKeyHint({ width: 46, narrow: true, compact: true })).toBe("↑↓ select · c/g · a/h · i · o · q")
+    expect(loopRouteKeyHint({ width: 88, narrow: true, compact: true })).toBe("↑↓ select · c project · g all · a/h view · i inspect · pgup/dn page · o chat · O parent · q back")
   })
 
   test("loops route reserves non-shrinking responsive header rows", () => {
@@ -543,7 +543,8 @@ describe("setup route smoke", () => {
     })
     const lines = compactLoopSummaryLines({ detail, summaryRows })
 
-    expect(summaryRows.map((row) => row[0])).toEqual(["state", "iteration", "next", "cadence", "run", "verdict", "next action", "usage"])
+    expect(summaryRows.map((row) => row[0])).toEqual(["state", "iteration", "next", "cadence", "run", "completion", "verdict", "next action", "usage"])
+    expect(summaryRows.find((row) => row[0] === "completion")?.[1]).toBe("not proposed")
     expect(lines.join("\n")).toContain("verdict · continue · Waiting for the next check.")
     expect(lines.join("\n")).not.toContain("contract")
   })
@@ -619,7 +620,7 @@ describe("setup route smoke", () => {
     expect(lines.join("\n")).toContain("can do · Inspect, summarize, and produce evidence without edits.")
     expect(lines.join("\n")).toContain("approval · Needs approval for push.")
     expect(lines.join("\n")).toContain("verify · Verify by bun test test/triage.test.ts.")
-    expect(lines.join("\n")).toContain("judge · independent judge checks Issue summary is ready.")
+    expect(lines.join("\n")).toContain("judge · independent judge with same-run confirmation checks Issue summary is ready.")
     expect(lines.join("\n")).toContain("stop · Stop when summary posted or approval denied.")
     expect(lines.join("\n")).toContain("budget · max-goal · 5 turns")
     expect(lines.join("\n")).toContain("workspace · read-only")

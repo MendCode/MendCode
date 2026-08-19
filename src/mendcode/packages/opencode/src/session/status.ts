@@ -66,11 +66,13 @@ export interface Interface {
   readonly get: (sessionID: SessionID) => Effect.Effect<Info>
   readonly list: () => Effect.Effect<Map<SessionID, Info>>
   readonly set: (sessionID: SessionID, status: Info, options?: { notify?: boolean }) => Effect.Effect<void>
+  readonly heartbeat: (sessionID: SessionID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionStatus") {}
 
 export const BUSY_STATUS_STALE_MS = 60 * 1000
+export const BUSY_STATUS_HEARTBEAT_MS = Math.floor(BUSY_STATUS_STALE_MS / 3)
 const PERSISTED_STATUS_STALE_MS = 5 * 60 * 1000
 
 export const SESSION_ACTIVITY_WAITING = "Waiting for input/tools"
@@ -115,6 +117,16 @@ export function withStartedAt(status: Info, current: StatusRecord | undefined, n
     ...status,
     startedAt: status.startedAt ?? currentStartedAt ?? now,
   }
+}
+
+export function refreshBusyStatus(current: StatusRecord, now = Date.now()) {
+  const status = freshStatus(current, now)
+  if (status?.type !== "busy") return
+  return {
+    ...current,
+    time_updated: now,
+    data: status,
+  } satisfies StatusRecord
 }
 
 export const layer = Layer.effect(
@@ -211,7 +223,22 @@ export const layer = Layer.effect(
       }
     })
 
-    return Service.of({ get, list, set })
+    const heartbeat = Effect.fn("SessionStatus.heartbeat")(function* (sessionID: SessionID) {
+      const data = yield* InstanceState.get(state)
+      const current = data.get(sessionID)
+      if (!current) return
+      const refreshed = refreshBusyStatus(current)
+      if (refreshed) {
+        data.set(sessionID, refreshed)
+        // Keep connected and recently rehydrated TUIs on live liveness semantics
+        // without extending the crash-recovery record persisted in SQLite.
+        yield* bus.publish(Event.Status, { sessionID, status: refreshed.data })
+        return
+      }
+      if (!freshStatus(current)) data.delete(sessionID)
+    })
+
+    return Service.of({ get, list, set, heartbeat })
   }),
 )
 

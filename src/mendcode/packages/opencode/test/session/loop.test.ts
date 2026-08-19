@@ -68,6 +68,27 @@ function promptMessage(
   }
 }
 
+function promptMessageWithInspection(text: string): MessageV2.WithParts {
+  const message = promptMessage(text)
+  message.parts.push({
+    id: "part_test_read" as MessageV2.ToolPart["id"],
+    sessionID: message.info.sessionID,
+    messageID: message.info.id,
+    type: "tool",
+    callID: "call_test_read",
+    tool: "read",
+    state: {
+      status: "completed",
+      input: { filePath: "/tmp/current-workspace-file" },
+      output: "current workspace evidence",
+      title: "Read current workspace evidence",
+      metadata: {},
+      time: { start: Date.now(), end: Date.now() },
+    },
+  })
+  return message
+}
+
 function promptInputText(input: PromptInput | undefined) {
   return input?.parts.find((part): part is MessageV2.TextPartInput => part.type === "text")?.text
 }
@@ -957,6 +978,61 @@ describe("loop workflow service", () => {
         if (run.workspaceLease?.path) {
           await runWithWorktree(
             Worktree.Service.use((worktree) => worktree.remove({ directory: run.workspaceLease!.path })),
+          )
+        }
+      },
+    })
+  })
+
+  test("completion audit reuses the candidate per-run worktree instead of auditing a fresh empty worktree", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await runWithWorktree(
+          LoopWorkflowService.use((loop) => loop.createDraft({
+            name: "Audit candidate worktree",
+            objective: "Audit the exact workspace that proposed completion.",
+            budgetMode: "max-goal",
+            completionCriteria: ["candidate workspace is reused"],
+            policy: { maxTurns: 3 },
+            evaluation: { mode: "independent", confirmation: "next-run" },
+            workspace: { mode: "per-run-worktree" },
+          })),
+        )
+        await runWithWorktree(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id })))
+        const workRun = await runWithWorktree(
+          LoopWorkflowService.use((loop) => loop.startRun({ id: draft.id, trigger: "manual" })),
+        )
+        const now = Date.now()
+        await runWithWorktree(LoopWorkflowService.use((loop) => loop.completeRun({
+          id: draft.id,
+          runID: workRun.id,
+          now,
+          goalStatus: "complete",
+          checkpoint: { status: "complete", summary: "Candidate ready", evidence: ["workspace prepared"] },
+          completion: {
+            candidate: {
+              status: "candidate",
+              generation: 1,
+              sourceID: workRun.id,
+              auditAttempts: 0,
+              candidateFingerprint: "candidate-fingerprint",
+              createdAt: now,
+              updatedAt: now,
+            },
+          },
+        })))
+
+        const auditRun = await runWithWorktree(
+          LoopWorkflowService.use((loop) => loop.startRun({ id: draft.id, trigger: "manual" })),
+        )
+        expect(auditRun.workspaceLease?.path).toBe(workRun.workspaceLease?.path)
+        expect(auditRun.workspaceLease?.runID).toBe(auditRun.id)
+
+        if (auditRun.workspaceLease?.path) {
+          await runWithWorktree(
+            Worktree.Service.use((worktree) => worktree.remove({ directory: auditRun.workspaceLease!.path })),
           )
         }
       },
@@ -3492,6 +3568,168 @@ describe("loop workflow service", () => {
         expect(snapshot.workflow.state).toBe("completed")
         expect(snapshot.runs[0]?.checkpoint?.evidence).toEqual(["focused validation passed"])
         expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "success-checks")?.status).toBe("pass")
+      },
+    })
+  })
+
+  test("next-run completion requires a fresh audit iteration before a max-goal loop can finish", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Fresh completion audit",
+          objective: "Finish only after a fresh audit verifies the current workspace.",
+          budgetMode: "max-goal",
+          completionCriteria: ["workspace evidence supports completion"],
+          policy: { maxTurns: 3 },
+          evaluation: { mode: "independent", confirmation: "next-run", maxEvaluatorRetries: 1 },
+        })
+        await svc.activate(draft.id)
+
+        const worker = [
+          "Implementation complete.",
+          "LOOP_CHECKPOINT:",
+          "status: complete",
+          "summary: The workspace is ready for independent verification.",
+          "evidence:",
+          "- implementation inspected",
+          "next_action: audit",
+          "confidence: high",
+        ].join("\n")
+        const first = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          worker,
+        )
+
+        expect(first.prompts).toBe(1)
+        let snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("sleeping")
+        expect(snapshot.workflow.phase).toBe("completion_audit")
+        expect(snapshot.runs[0]?.completion?.status).toBe("candidate")
+        expect(snapshot.runs[0]?.completion?.candidateFingerprint).toBeTruthy()
+
+        Database.use((db) =>
+          db.update(LoopWorkflowTable)
+            .set({ state: "sleeping", phase: "retry_scheduled", next_wakeup: Date.now() - 1 })
+            .where(eq(LoopWorkflowTable.id, draft.id))
+            .run(),
+        )
+
+        const judge = [
+          "Fresh audit complete.",
+          "LOOP_JUDGMENT:",
+          "status: pass",
+          "summary: Current workspace evidence satisfies every completion criterion.",
+          "evidence:",
+          "- criterion-1: inspected the current Git workspace and its deterministic gates",
+          "recommended_next_action: complete",
+          "confidence: high",
+        ].join("\n")
+        const second = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          promptMessageWithInspection(judge),
+        )
+
+        expect(second.prompts).toBe(1)
+        snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("completed")
+        expect(snapshot.runs[0]?.completion?.status).toBe("passed")
+        expect(snapshot.runs[0]?.completion?.receipt?.criteria[0]?.evidence).toHaveLength(1)
+        expect(snapshot.artifacts.some((artifact) => artifact.kind === "completion-candidate")).toBe(true)
+        expect(snapshot.artifacts.some((artifact) => artifact.kind === "completion-audit")).toBe(true)
+      },
+    })
+  })
+
+  test("next-run completion rejects a passing verdict that performed no workspace inspection", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Inspection required",
+          objective: "Require the fresh auditor to inspect the current workspace.",
+          budgetMode: "max-goal",
+          completionCriteria: ["current workspace was inspected"],
+          policy: { maxTurns: 3 },
+          evaluation: { mode: "independent", confirmation: "next-run", maxEvaluatorRetries: 1 },
+        })
+        await svc.activate(draft.id)
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          "LOOP_CHECKPOINT:\nstatus: complete\nsummary: Candidate ready.\nevidence:\n- worker claim\nnext_action: audit",
+        )
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          "LOOP_JUDGMENT:\nstatus: pass\nsummary: Claimed complete without inspecting.\nevidence:\n- criterion-1: claimed evidence\nrecommended_next_action: complete",
+        )
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("active")
+        expect(snapshot.runs[0]?.completion?.status).toBe("rejected")
+        expect(snapshot.runs[0]?.gateResults?.find((gate) => gate.id === "audit-inspection")?.status).toBe("fail")
+      },
+    })
+  })
+
+  test("next-run completion rejects a candidate when the workspace changes before audit", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Stale completion candidate",
+          objective: "Do not finish from stale workspace evidence.",
+          budgetMode: "max-goal",
+          completionCriteria: ["workspace remains unchanged while completion is audited"],
+          policy: { maxTurns: 3 },
+          evaluation: { mode: "independent", confirmation: "next-run" },
+        })
+        await svc.activate(draft.id)
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          "LOOP_CHECKPOINT:\nstatus: complete\nsummary: Candidate ready.\nevidence:\n- initial workspace inspected\nnext_action: audit",
+        )
+
+        await Bun.write(path.join(tmp.path, "changed-after-candidate.txt"), "invalidates the completion candidate\n")
+        const audited = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+        )
+
+        expect(audited.prompts).toBe(0)
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("active")
+        expect(snapshot.runs[0]?.completion?.status).toBe("rejected")
+        expect(snapshot.runs[0]?.completion?.receipt?.status).toBe("fail")
+        expect(snapshot.workflow.evaluatorReason).toContain("Workspace changed")
+      },
+    })
+  })
+
+  test("next-run completion blocks when no iteration budget remains for the required audit", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "No audit budget",
+          objective: "Require a separate audit without exceeding the iteration budget.",
+          budgetMode: "max-goal",
+          completionCriteria: ["completion receives a separate audit"],
+          policy: { maxTurns: 1 },
+          evaluation: { mode: "independent", confirmation: "next-run" },
+        })
+        await svc.activate(draft.id)
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          "LOOP_CHECKPOINT:\nstatus: complete\nsummary: Candidate ready.\nevidence:\n- worker evidence\nnext_action: audit",
+        )
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("blocked")
+        expect(snapshot.workflow.phase).toBe("budget_exhausted")
+        expect(snapshot.runs[0]?.completion?.status).toBe("blocked")
       },
     })
   })

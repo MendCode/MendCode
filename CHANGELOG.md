@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.31 - 2026-08-19
+
+MendCode v0.1.31 adds completion-verified Loop and Workflow execution and keeps long-running agent work visibly active until it actually finishes.
+
+### Added
+
+- Add completion contracts, auditing, and validation so Loop and Workflow runs only report success after a complete iteration satisfies its required checks.
+- Add durable workflow planning, execution, scheduling, receipts, and recovery state across the runtime, server, tools, and TUI monitors.
+- Add focused regression coverage for completion validation, Loop/Workflow orchestration, scheduler recovery, and long-running session activity.
+
+### Changed
+
+- Expand the Loop and Workflow views with phase-aware status, receipts, task progress, and terminal outcome details.
+- Keep workflow task and phase state synchronized across adapters, background execution, persistence, and recovery.
+- Refresh live session status with bounded in-memory heartbeats while provider and tool work is still running.
+
+### Fixed
+
+- Prevent long-running sessions from becoming idle after the stale status snapshot timeout while work is still active.
+- Prevent incomplete Loop or Workflow runs from being presented as completed before their validation contract passes.
+- Preserve authoritative activity state through the TUI activity footer and Agents view during long-running execution.
+
+### Tests
+
+- Run focused completion, Loop/Workflow, scheduler, TUI activity, edit, and patch-tool regression suites.
+- Verify the local source CLI manually with `mend --isolated` and a long-running `sleep 90` activity check.
+
 ## 0.1.30 - 2026-08-18
 
 MendCode v0.1.30 expands Full Prompt Context product awareness, completes Mermaid ASCII presentation, and hardens session history, test isolation, memory extraction, Usage Insights, reconnecting TUI activity, release presentation, and Windows builds.

@@ -58,8 +58,10 @@ Loop Workflows now support durable scheduler state, a TUI dashboard, a static ch
 - `unbounded-monitor` means the loop continues until stopped, blocked, or a stop condition is met.
 - Goal loops SHOULD store completion criteria, success checks, target turns, and reserved verification/recovery turns.
 - Every executed iteration SHOULD end with a machine-readable checkpoint containing status, summary, evidence, next action, and confidence.
-- A `max-goal` loop that exhausts its iteration budget before a `complete` checkpoint MUST become blocked/needs-input instead of reporting completed success.
-- When configured, a completed goal loop SHOULD wake the owner session with a bounded completion summary so the parent conversation can decide the next step.
+- A new `max-goal` loop MUST treat a passing worker checkpoint as a completion candidate, then require a fresh read-only audit run and current receipt before entering `completed`.
+- The audit MUST perform real read-only inspection, rerun declared allowlisted validation commands, require evidence for every criterion, and reject stale generations or a workspace fingerprint that changes during inspection.
+- A `max-goal` loop that exhausts its iteration or audit budget before a passing receipt MUST become blocked/needs-input instead of reporting completed success.
+- A completed goal loop SHOULD wake the owner session only after the terminal audit receipt is persisted, with a bounded completion summary so the parent conversation can decide the next step.
 
 ### Signal Triggers
 
@@ -89,8 +91,8 @@ Loop Workflows now support durable scheduler state, a TUI dashboard, a static ch
 
 - A report-only loop never mutates files even if the service is in execute mode.
 - A coding loop created from text like `codea/fixea/implementa y prueba` can edit/test in its loop session.
-- A max-goal loop completes before its iteration cap when its checkpoint proves the goal is done.
-- A max-goal loop blocks instead of claiming success when it reaches its cap without a complete checkpoint.
+- A max-goal loop records a candidate when the worker believes the goal is done and completes only after a later read-only audit receipt passes.
+- A max-goal loop blocks instead of claiming success when it reaches its cap without a passing audit receipt.
 - `/loops` shows active loops first and history separately.
 - A completed run appears as a readable timeline group with a bounded summary.
 - A queued signal wakes an `external-signal` loop without waiting for its normal interval.
