@@ -2,6 +2,7 @@ import { Schema, Types } from "effect"
 
 import { zod } from "@/util/effect-zod"
 import { NonNegativeInt, PositiveInt, withStatics } from "@/util/schema"
+import { CompletionConfirmation } from "./completion-contract"
 import {
   WorkflowArtifactSelector,
   WorkflowBudget,
@@ -26,6 +27,24 @@ export const WorkflowPlan = Schema.Struct({
   tasks: Schema.Array(WorkflowTask).annotate({ description: "Complete DAG of workflow tasks. Every task must belong to one phase." }),
   finalTaskID: WorkflowTaskID.annotate({ description: "Existing synthesize task that produces the workflow's final non-none output." }),
   completionCriteria: Schema.Array(Schema.String).annotate({ description: "Concrete criteria that prove the workflow finished successfully. Must not be empty." }),
+  completion: Schema.optional(Schema.Struct({
+    confirmation: Schema.optional(CompletionConfirmation).annotate({
+      description: "Use next-run to require a fresh, separate semantic audit after the task DAG finishes.",
+    }),
+    maxAuditAttempts: Schema.optional(PositiveInt),
+    validationChecks: Schema.optional(Schema.Array(Schema.Struct({
+      id: Schema.String,
+      command: Schema.String,
+      timeoutMs: Schema.optional(PositiveInt),
+    }))),
+    criteria: Schema.optional(Schema.Array(Schema.Struct({
+      id: Schema.String,
+      description: Schema.String,
+      ownerTaskIDs: Schema.optional(Schema.Array(WorkflowTaskID)),
+    }))),
+  })).annotate({
+    description: "Optional strict completion policy. When present, confirmation defaults to next-run; omitted plans keep legacy same-run closure.",
+  }),
   requiredGates: Schema.Array(Schema.String).annotate({ description: "Approval gates required before execution. Use [] for immediate execution." }),
   model: Schema.optional(WorkflowModelRoute),
   workspace: Schema.optional(WorkflowWorkspacePolicy),
@@ -189,6 +208,40 @@ export const validateWorkflowPlan = (plan: WorkflowPlan): WorkflowPlanValidation
   }
   if (plan.completionCriteria.some((criterion) => criterion.trim().length === 0)) {
     issues.push(issue("invalid-completion-criteria", "Completion criteria cannot be empty", ["completionCriteria"]))
+  }
+  if (plan.completion?.criteria) {
+    if (hasDuplicate(plan.completion.criteria.map((criterion) => criterion.id))) {
+      issues.push(issue("duplicate-identifier", "Completion criterion IDs must be unique", ["completion", "criteria"]))
+    }
+    for (const [index, criterion] of plan.completion.criteria.entries()) {
+      if (!identifierPattern.test(criterion.id)) {
+        issues.push(issue("invalid-identifier", `Invalid completion criterion identifier: ${criterion.id}`, ["completion", "criteria", String(index), "id"]))
+      }
+      if (!criterion.description.trim()) {
+        issues.push(issue("invalid-completion-criteria", `Completion criterion ${criterion.id} has an empty description`, ["completion", "criteria", String(index), "description"]))
+      }
+      if (hasDuplicate(criterion.ownerTaskIDs ?? [])) {
+        issues.push(issue("duplicate-identifier", `Completion criterion ${criterion.id} repeats an owner task`, ["completion", "criteria", String(index), "ownerTaskIDs"]))
+      }
+      for (const ownerTaskID of criterion.ownerTaskIDs ?? []) {
+        if (!taskIDs.has(ownerTaskID)) {
+          issues.push(issue("missing-reference", `Completion criterion ${criterion.id} references missing owner task ${ownerTaskID}`, ["completion", "criteria", String(index), "ownerTaskIDs"]))
+        }
+      }
+    }
+  }
+  if (plan.completion?.validationChecks) {
+    if (hasDuplicate(plan.completion.validationChecks.map((check) => check.id))) {
+      issues.push(issue("duplicate-identifier", "Completion validation check IDs must be unique", ["completion", "validationChecks"]))
+    }
+    for (const [index, check] of plan.completion.validationChecks.entries()) {
+      if (!identifierPattern.test(check.id)) {
+        issues.push(issue("invalid-identifier", `Invalid completion validation identifier: ${check.id}`, ["completion", "validationChecks", String(index), "id"]))
+      }
+      if (!check.command.trim()) {
+        issues.push(issue("invalid-completion-criteria", `Completion validation ${check.id} has an empty command`, ["completion", "validationChecks", String(index), "command"]))
+      }
+    }
   }
   if (hasDuplicate(plan.requiredGates)) {
     issues.push(issue("duplicate-identifier", "Required gates must have unique identifiers", ["requiredGates"]))

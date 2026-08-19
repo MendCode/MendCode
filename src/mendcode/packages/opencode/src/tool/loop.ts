@@ -15,6 +15,7 @@ const TriggerMode = Schema.Literals(["manual", "interval", "daily", "adaptive", 
 const PermissionMode = Schema.Literals(["report-only", "normal", "custom"])
 const BudgetMode = Schema.Literals(["fixed", "max-goal", "unbounded-monitor"])
 const EvaluationMode = Schema.Literals(["legacy", "deterministic", "independent"])
+const CompletionConfirmation = Schema.Literals(["same-run", "next-run"])
 const WorkspaceMode = Schema.Literals(["read-only", "in-place", "per-loop-worktree", "per-run-worktree"])
 const maxLoopNameLength = 24
 
@@ -71,6 +72,9 @@ export const Parameters = Schema.Struct({
   }),
   evaluationMode: Schema.optional(EvaluationMode).annotate({
     description: "Completion evaluation mode. max-goal loops default to independent so worker self-completion must be judged before the workflow completes.",
+  }),
+  completionConfirmation: Schema.optional(CompletionConfirmation).annotate({
+    description: "Terminal confirmation protocol. New max-goal loops default to next-run so a separate full audit iteration must pass before completion.",
   }),
   evaluatorAgent: Schema.optional(Schema.String).annotate({
     description: "Optional agent/profile for the independent evaluator. Defaults to the loop agent/session default.",
@@ -181,6 +185,7 @@ type LatestRunMetadata = {
   failureClass?: LoopWorkflow.RunInfo["failureClass"]
   retry?: LoopWorkflow.RunInfo["retry"]
   workspaceLease?: LoopWorkflow.RunInfo["workspaceLease"]
+  completion?: LoopWorkflow.RunInfo["completion"]
 }
 
 type LatestCheckpointMetadata = NonNullable<LoopWorkflow.RunInfo["checkpoint"]>
@@ -241,6 +246,7 @@ type WorkflowListMetadata = {
   tokens?: number
   approvalPolicy?: ApprovalPolicyMetadata
   evaluationMode?: NonNullable<LoopWorkflow.Info["spec"]["evaluation"]>["mode"]
+  completionConfirmation?: NonNullable<LoopWorkflow.Info["spec"]["evaluation"]>["confirmation"]
   evaluatorAgent?: NonNullable<LoopWorkflow.Info["spec"]["evaluation"]>["evaluatorAgent"]
   model?: ModelMetadata
   agent?: LoopWorkflow.Info["spec"]["agent"]
@@ -287,6 +293,7 @@ type Metadata = {
   tokens?: number
   approvalPolicy?: ApprovalPolicyMetadata
   evaluationMode?: NonNullable<LoopWorkflow.Info["spec"]["evaluation"]>["mode"]
+  completionConfirmation?: NonNullable<LoopWorkflow.Info["spec"]["evaluation"]>["confirmation"]
   evaluatorAgent?: NonNullable<LoopWorkflow.Info["spec"]["evaluation"]>["evaluatorAgent"]
   model?: ModelMetadata
   agent?: LoopWorkflow.Info["spec"]["agent"]
@@ -426,7 +433,7 @@ function contractPreview(workflow: LoopWorkflow.Info): ContractPreviewMetadata {
     requiresApproval: `I cannot do without approval: ${listText(approvals, "actions outside the configured permission envelope")}.`,
     verifyBy: `I will verify by ${listText(verificationChecks(workflow), "recording checkpoint evidence and configured gate results")}.`,
     judgeChecks: workflow.spec.evaluation?.mode === "independent"
-      ? `The independent judge will check ${listText(criteria, "objective evidence, validation output, and safety gates")}.`
+      ? `The independent judge will use ${workflow.spec.evaluation?.confirmation ?? "same-run"} confirmation to check ${listText(criteria, "objective evidence, validation output, and safety gates")}.`
       : `The ${workflow.spec.evaluation?.mode ?? "legacy"} evaluator will check ${listText(criteria, "the checkpoint summary and available evidence")}.`,
     stopWhen: `I will stop when ${listText(workflow.spec.stopWhen, workflow.spec.budgetMode === "max-goal" ? "the goal is independently verified or budget/gates block progress" : "the budget is exhausted, stopped, or a gate blocks progress")}.`,
     estimatedBudget: `Estimated budget: ${budgetPreview(workflow)}.`,
@@ -547,6 +554,7 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
     agent: params.agent?.trim() || undefined,
     evaluation: {
       mode: evaluationMode,
+      confirmation: params.completionConfirmation ?? (budgetMode === "max-goal" ? "next-run" : "same-run"),
       evaluatorAgent: params.evaluatorAgent?.trim() || undefined,
       requireIndependentForCompletion: evaluationMode === "independent",
       allowWorkerSelfComplete: evaluationMode === "legacy",
@@ -643,6 +651,7 @@ function formatWorkflow(workflow: LoopWorkflow.Info) {
     `validation_checks: ${workflow.spec.validationChecks?.map((check) => check.command).join(", ") || "none"}`,
     `artifact_retention: count=${workflow.spec.retention?.maxArtifacts ?? "default"} age_ms=${workflow.spec.retention?.maxAgeMs ?? "unlimited"} bytes=${workflow.spec.retention?.maxBytes ?? "unlimited"}`,
     `evaluation_mode: ${workflow.spec.evaluation?.mode ?? "legacy"}`,
+    `completion_confirmation: ${workflow.spec.evaluation?.confirmation ?? "same-run"}`,
     `evaluator_agent: ${workflow.spec.evaluation?.evaluatorAgent ?? "loop/session default"}`,
     `max_turns: ${workflow.policy.maxTurns ?? "unlimited"}`,
     `max_runtime_ms: ${workflow.policy.maxRuntimeMs ?? "unlimited"}`,
@@ -772,6 +781,7 @@ function formatSnapshotContext(input: {
           failureClass: latestRun.failureClass,
           retry: latestRun.retry,
           workspaceLease: latestRun.workspaceLease,
+          completion: latestRun.completion,
         }
       : undefined,
     latestCheckpoint: checkpointInfo,
@@ -797,6 +807,9 @@ function formatSnapshotContext(input: {
       latestRun?.workspaceLease
         ? `latest_workspace_lease: ${latestRun.workspaceLease.mode}/${latestRun.workspaceLease.state} path=${latestRun.workspaceLease.path}${latestRun.workspaceLease.branch ? ` branch=${latestRun.workspaceLease.branch}` : ""}`
         : undefined,
+      latestRun?.completion
+        ? `latest_completion: ${latestRun.completion.status} generation=${latestRun.completion.generation} audit_attempts=${latestRun.completion.auditAttempts}${latestRun.completion.failedCriteria?.length ? ` failed=${latestRun.completion.failedCriteria.join(",")}` : ""}`
+        : "latest_completion: none",
       checkpointInfo
         ? [
             "latest_checkpoint:",
@@ -999,6 +1012,7 @@ function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean, rootSes
     tokens: tokenTotal(workflow.metrics),
     approvalPolicy: policy,
     evaluationMode: workflow.spec.evaluation?.mode,
+    completionConfirmation: workflow.spec.evaluation?.confirmation,
     evaluatorAgent: workflow.spec.evaluation?.evaluatorAgent,
     model,
     agent: workflow.spec.agent,
@@ -1031,6 +1045,7 @@ function metadata(workflow: LoopWorkflow.Info, serviceEnsured?: boolean, rootSes
         tokens: tokenTotal(workflow.metrics),
         approvalPolicy: policy,
         evaluationMode: workflow.spec.evaluation?.mode,
+        completionConfirmation: workflow.spec.evaluation?.confirmation,
         evaluatorAgent: workflow.spec.evaluation?.evaluatorAgent,
         model,
         agent: workflow.spec.agent,
@@ -1331,12 +1346,27 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
           if (action === "run_once") {
             const promptOps = ctx.extra?.promptOps as Pick<SessionPrompt.Interface, "prompt"> | undefined
             if (!promptOps) throw new Error("Loop run_once requires prompt operations from the active session.")
-            const result = yield* runner.runOne({ id: workflow.id, execute: true, reason: params.reason, trigger: "run-once" }).pipe(
+            let result = yield* runner.runOne({ id: workflow.id, execute: true, reason: params.reason, trigger: "run-once" }).pipe(
               Effect.provideService(LoopWorkflow.Service, workflows),
               Effect.provideService(SessionPrompt.Service, promptOps as SessionPrompt.Interface),
               Effect.provideService(Session.Service, sessions),
             )
-            const updated = yield* workflows.get(workflow.id)
+            let updated = yield* workflows.get(workflow.id)
+            const maxAuditRuns = Math.max(1, updated.spec.evaluation?.maxEvaluatorRetries ?? 1)
+            let auditRuns = 0
+            while (
+              updated.phase === "completion_audit" &&
+              updated.state === "sleeping" &&
+              auditRuns < maxAuditRuns
+            ) {
+              auditRuns++
+              result = yield* runner.runOne({ id: workflow.id, execute: true, reason: "Fresh completion audit after run_once candidate.", trigger: "run-once" }).pipe(
+                Effect.provideService(LoopWorkflow.Service, workflows),
+                Effect.provideService(SessionPrompt.Service, promptOps as SessionPrompt.Interface),
+                Effect.provideService(Session.Service, sessions),
+              )
+              updated = yield* workflows.get(workflow.id)
+            }
             return {
               title: `Executed loop ${workflow.id}`,
               output: [formatWorkflow(updated), "", `run_id: ${result.runID ?? "none"}`, `run_state: ${result.state}`, `run_summary: ${result.summary}`].join("\n"),

@@ -428,6 +428,7 @@ const controlledStatus = Layer.succeed(
   SessionStatus.Service.of({
     get: () => Effect.succeed({ type: "idle" as const }),
     list: () => Effect.succeed(new Map<SessionID, SessionStatus.Info>()),
+    heartbeat: () => Effect.void,
     set: (sessionID, next) => {
       const control = idleRunnerControls.get(sessionID)
       if (!control || next.type !== "idle") return Effect.void

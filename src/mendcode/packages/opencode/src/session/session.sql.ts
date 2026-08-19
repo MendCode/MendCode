@@ -7,6 +7,7 @@ import type { Permission } from "../permission"
 import type { ProjectID } from "../project/schema"
 import type { SessionID, MessageID, PartID, AgentCommandID } from "./schema"
 import type { WorkspaceID } from "../control-plane/schema"
+import type { CompletionProgress } from "./completion-contract"
 import type {
   WorkflowArtifact,
   WorkflowArtifactID,
@@ -294,6 +295,7 @@ type LoopSpecData = {
   agent?: string
   evaluation?: {
     mode?: "legacy" | "deterministic" | "independent"
+    confirmation?: "same-run" | "next-run"
     evaluatorAgent?: string
     requireIndependentForCompletion?: boolean
     allowWorkerSelfComplete?: boolean
@@ -570,6 +572,7 @@ export const LoopRunTable = sqliteTable(
         nextWakeup?: number
       }
       workspaceLease?: LoopWorkspaceLeaseData
+      completion?: CompletionProgress
     }>(),
   },
   (table) => [index("loop_run_workflow_idx").on(table.workflow_id), index("loop_run_state_idx").on(table.state)],
@@ -599,6 +602,8 @@ export const LoopArtifactTable = sqliteTable(
         | "memory"
         | "cost"
         | "override"
+        | "completion-candidate"
+        | "completion-audit"
       >()
       .notNull(),
     title: text().notNull(),
@@ -711,6 +716,12 @@ type WorkflowRunData = {
   workspaceLease?: WorkflowWorkspaceLease
   permissionMode?: WorkflowPermissionMode
   sessionPermissionMode?: WorkflowSessionPermissionMode
+  completion?: CompletionProgress
+  completionUsage?: {
+    inputTokens?: number
+    outputTokens?: number
+    cost?: number
+  }
   usage?: {
     inputTokens?: number
     outputTokens?: number

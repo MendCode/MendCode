@@ -31,7 +31,23 @@ import {
   type WorkflowReceiptSnapshot,
 } from "@tui/util/workflow-receipt"
 
-type WorkflowSnapshot = NonNullable<Awaited<ReturnType<OpencodeClient["workflow"]["show"]>>["data"]>
+type WorkflowSnapshotBase = NonNullable<Awaited<ReturnType<OpencodeClient["workflow"]["show"]>>["data"]>
+type WorkflowSnapshot = Omit<WorkflowSnapshotBase, "run" | "revision"> & {
+  run: WorkflowSnapshotBase["run"] & {
+    completion?: {
+      status: string
+      generation: number
+      auditAttempts: number
+      summary?: string
+      failedCriteria?: string[]
+    }
+  }
+  revision: Omit<WorkflowSnapshotBase["revision"], "plan"> & {
+    plan: WorkflowSnapshotBase["revision"]["plan"] & {
+      completion?: { confirmation?: "same-run" | "next-run" }
+    }
+  }
+}
 type WorkflowPermissionMode = NonNullable<WorkflowSnapshot["run"]["permissionMode"]>
 type WorkflowSessionPermissionMode = "approval" | "smart" | "full_access"
 
@@ -70,6 +86,7 @@ function receipt(snapshot: WorkflowSnapshot): WorkflowReceiptSnapshot {
       plan: {
         objective: snapshot.revision.plan.objective,
         model: snapshot.revision.plan.model,
+        completion: snapshot.revision.plan.completion,
       },
     },
     run: {
@@ -79,6 +96,7 @@ function receipt(snapshot: WorkflowSnapshot): WorkflowReceiptSnapshot {
       rootSessionID: snapshot.run.rootSessionID,
       createdAt: numeric(snapshot.run.createdAt),
       updatedAt: numeric(snapshot.run.updatedAt),
+      completion: snapshot.run.completion,
     },
     phases: snapshot.phases.map((phase) => ({
       id: phase.id,
@@ -142,7 +160,7 @@ export function Workflows() {
   const [runs] = createResource(refresh, async () => {
     const response = await sdk.client.workflow.list({ limit: 100 })
     if (response.error) throw new Error(workflowRequestErrorText(response.error))
-    return response.data ?? []
+    return (response.data ?? []) as WorkflowSnapshot[]
   })
   const [permissionsConfig, { refetch: refetchPermissionsConfig }] = createResource(async () => readPermissionsConfig())
 
@@ -155,7 +173,7 @@ export function Workflows() {
   const [detail] = createResource(detailKey, async (key) => {
     const response = await sdk.client.workflow.show({ runID: key.split(":", 1)[0] })
     if (response.error) throw new Error(workflowRequestErrorText(response.error))
-    return response.data
+    return response.data as WorkflowSnapshot | undefined
   })
   const current = createMemo(() => {
     const item = selected()
@@ -205,6 +223,7 @@ export function Workflows() {
       activeTools,
       pendingPermissions,
       waitingTasks: item.tasks.filter((task) => task.state === "needs_input").length,
+      completionStatus: item.run.completion?.status,
     })
   })
   const currentPermissionMode = createMemo<WorkflowPermissionMode>(() => {

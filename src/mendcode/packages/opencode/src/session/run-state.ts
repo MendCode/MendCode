@@ -1,6 +1,6 @@
 import { InstanceState } from "@/effect/instance-state"
 import { Runner } from "@/effect/runner"
-import { Effect, Latch, Layer, Scope, Context } from "effect"
+import { Duration, Effect, Latch, Layer, Scope, Context } from "effect"
 import * as Session from "./session"
 import { MessageV2 } from "./message-v2"
 import { MessageID, SessionID } from "./schema"
@@ -40,6 +40,23 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionRunState") {}
+
+export function withBusyStatusHeartbeat<A, E, R>(
+  status: Pick<SessionStatus.Interface, "heartbeat">,
+  sessionID: SessionID,
+  work: Effect.Effect<A, E, R>,
+  intervalMs = SessionStatus.BUSY_STATUS_HEARTBEAT_MS,
+) {
+  return Effect.gen(function* () {
+    yield* Effect.gen(function* () {
+      while (true) {
+        yield* Effect.sleep(Duration.millis(intervalMs))
+        yield* status.heartbeat(sessionID)
+      }
+    }).pipe(Effect.forkScoped({ startImmediately: true }))
+    return yield* work
+  }).pipe(Effect.scoped)
+}
 
 export const layer = Layer.effect(
   Service,
@@ -173,7 +190,10 @@ export const layer = Layer.effect(
       work: Effect.Effect<MessageV2.WithParts>,
       options?: Runner.EnsureRunningOptions,
     ) {
-      return yield* (yield* runner(sessionID, onInterrupt)).ensureRunning(work, options)
+      return yield* (yield* runner(sessionID, onInterrupt)).ensureRunning(
+        withBusyStatusHeartbeat(status, sessionID, work),
+        options,
+      )
     })
 
     const startShell = Effect.fn("SessionRunState.startShell")(function* (
@@ -182,7 +202,10 @@ export const layer = Layer.effect(
       work: Effect.Effect<MessageV2.WithParts>,
       ready?: Latch.Latch,
     ) {
-      return yield* (yield* runner(sessionID, onInterrupt)).startShell(work, ready)
+      return yield* (yield* runner(sessionID, onInterrupt)).startShell(
+        withBusyStatusHeartbeat(status, sessionID, work),
+        ready,
+      )
     })
 
     return Service.of({

@@ -25,7 +25,12 @@ import {
 } from "./workflow"
 import { isTransientWorkflowError } from "./workflow"
 import { SessionID } from "./schema"
-import { Service as WorkflowService, WorkflowNotFoundError, WorkflowStateError } from "./workflow-service"
+import {
+  Service as WorkflowService,
+  WorkflowNotFoundError,
+  WorkflowStateError,
+  workflowCompletionTransition,
+} from "./workflow-service"
 
 export interface SchedulerPhaseNode {
   readonly id: string
@@ -216,11 +221,17 @@ const budgetBlocker = (input: {
 }) => {
   const budget = input.plan.budget
   if (!budget) return
-  const usage = input.tasks.reduce<Usage | undefined>((total, task) => addUsage(total, usageFromData(task.data)), undefined)
+  const taskUsage = input.tasks.reduce<Usage | undefined>((total, task) => addUsage(total, usageFromData(task.data)), undefined)
+  const usage = addUsage(taskUsage, usageFromData({ usage: input.run.data.completionUsage }))
   const tokens = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0)
   if (budget.maxTokens !== undefined && tokens >= budget.maxTokens) return `Workflow token budget exhausted (${tokens}/${budget.maxTokens})`
   if (budget.maxCost !== undefined && (usage?.cost ?? 0) >= budget.maxCost) return `Workflow cost budget exhausted (${usage?.cost ?? 0}/${budget.maxCost})`
-  if (budget.maxTurns !== undefined && input.attempts.length >= budget.maxTurns) return `Workflow turn budget exhausted (${input.attempts.length}/${budget.maxTurns})`
+  if (
+    budget.maxTurns !== undefined &&
+    input.attempts.length >= budget.maxTurns &&
+    input.run.data.completion?.status !== "candidate" &&
+    input.run.data.completion?.status !== "auditing"
+  ) return `Workflow turn budget exhausted (${input.attempts.length}/${budget.maxTurns})`
   if (budget.maxRuntimeMs !== undefined && input.run.time_started !== null && input.now - input.run.time_started >= budget.maxRuntimeMs) {
     return `Workflow runtime budget exhausted (${input.now - input.run.time_started}/${budget.maxRuntimeMs}ms)`
   }
@@ -319,7 +330,16 @@ const reconcile = (db: DB, runID: WorkflowRunID, now: number) => {
   const hasFailure = [...phaseStates.values()].some((state) => state === "failed")
   const hasBlocked = [...phaseStates.values()].some((state) => state === "blocked")
   const allPhasesSatisfied = phases.every((phase) => phaseBarrierSatisfied(phase, refreshedTasks))
-  const computedState: WorkflowRunState = finalTaskID?.state === "completed" && allPhasesSatisfied
+  const completion = revision
+    ? workflowCompletionTransition({
+        plan: revision.plan,
+        current: run.data.completion,
+        finalTaskComplete: finalTaskID?.state === "completed",
+        allPhasesSatisfied,
+        now,
+      })
+    : { terminal: false, completion: run.data.completion }
+  const computedState: WorkflowRunState = completion.terminal
     ? "completed"
     : hasInput
       ? "needs_input"
@@ -329,7 +349,9 @@ const reconcile = (db: DB, runID: WorkflowRunID, now: number) => {
           ? "blocked"
           : hasWorking
             ? "working"
-            : "queued"
+            : finalTaskID?.state === "completed" && allPhasesSatisfied && completion.completion?.status === "candidate"
+              ? "working"
+              : "queued"
   const state: WorkflowRunState = run.state === "stopped"
     ? "stopped"
     : run.state === "blocked"
@@ -338,13 +360,18 @@ const reconcile = (db: DB, runID: WorkflowRunID, now: number) => {
         ? "paused"
         : computedState
   const currentPhase = phases.find((phase) => !["completed", "stopped"].includes(phaseStates.get(phase.id) ?? phase.state))
-  const runUsage = refreshedTasks.reduce<Usage | undefined>((total, task) => addUsage(total, usageFromData(task.data)), undefined)
+  const taskUsage = refreshedTasks.reduce<Usage | undefined>((total, task) => addUsage(total, usageFromData(task.data)), undefined)
+  const runUsage = addUsage(taskUsage, usageFromData({ usage: run.data.completionUsage }))
   db.update(WorkflowRunTable)
     .set({
       state,
       current_phase_id: currentPhase?.id ?? null,
       time_updated: now,
-      ...(runUsage === undefined ? {} : { data: { ...run.data, usage: runUsage } }),
+      data: {
+        ...run.data,
+        ...(runUsage === undefined ? {} : { usage: runUsage }),
+        completion: completion.completion,
+      },
       ...(state === "working" && run.time_started === null ? { time_started: now } : {}),
       ...(state === "completed" || state === "failed" ? { time_ended: now } : {}),
     })

@@ -58,6 +58,8 @@ export type Metadata = {
   inputTokens?: number
   outputTokens?: number
   cost?: number
+  completion?: Workflow.WorkflowRun["completion"]
+  completionConfirmation?: "same-run" | "next-run"
 }
 
 type Snapshot = WorkflowService.WorkflowSnapshot
@@ -99,6 +101,8 @@ function snapshotMetadata(snapshot: Snapshot): Metadata {
     ...(snapshot.usage?.inputTokens === undefined ? {} : { inputTokens: snapshot.usage.inputTokens }),
     ...(snapshot.usage?.outputTokens === undefined ? {} : { outputTokens: snapshot.usage.outputTokens }),
     ...(snapshot.usage?.cost === undefined ? {} : { cost: snapshot.usage.cost }),
+    ...(snapshot.run.completion ? { completion: snapshot.run.completion } : {}),
+    completionConfirmation: snapshot.revision.plan.completion?.confirmation ?? (snapshot.revision.plan.completion ? "next-run" : "same-run"),
   }
 }
 
@@ -110,6 +114,11 @@ function snapshotOutput(snapshot: Snapshot) {
     `definition_id: ${snapshot.definition.id}`,
     `revision_id: ${snapshot.revision.id}`,
     `state: ${snapshot.run.state}`,
+    `completion_confirmation: ${snapshot.revision.plan.completion?.confirmation ?? (snapshot.revision.plan.completion ? "next-run" : "same-run")}`,
+    `completion_state: ${snapshot.run.completion?.status ?? "not-started"}`,
+    snapshot.run.completion
+      ? `completion_audit: generation=${snapshot.run.completion.generation} attempts=${snapshot.run.completion.auditAttempts}${snapshot.run.completion.failedCriteria?.length ? ` failed=${snapshot.run.completion.failedCriteria.join(",")}` : ""}`
+      : undefined,
     `name: ${snapshot.definition.name}`,
     `phases: ${snapshot.phases.length}`,
     `tasks: ${snapshot.tasks.length}`,
@@ -117,7 +126,10 @@ function snapshotOutput(snapshot: Snapshot) {
     tasks.length ? ["tasks:", ...tasks].join("\n") : "tasks: none",
     snapshot.artifacts.length ? `artifacts: ${snapshot.artifacts.length}` : "artifacts: none",
     snapshot.gates.length ? `gates: ${snapshot.gates.length}` : "gates: none",
-  ].join("\n")
+    snapshot.gates.some((gate) => gate.kind === "completion")
+      ? ["completion_gates:", ...snapshot.gates.filter((gate) => gate.kind === "completion").map((gate) => `- ${gate.id}: ${gate.state} — ${gate.reason ?? "no summary"}`)].join("\n")
+      : "completion_gates: none",
+  ].filter((line): line is string => Boolean(line)).join("\n")
 }
 
 function receiptOutput(receipt: WorkflowService.WorkflowRevisionReceipt) {
