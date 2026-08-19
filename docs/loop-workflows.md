@@ -22,7 +22,7 @@ A loop has six layers:
 
 - Workflow: the durable DB record with objective, state, trigger, gates, policy, metrics, and next wakeup.
 - Root session: the chat session created when the loop is activated. It is the root loop turn, appears in Agent View as a background looping session, and is the only row currently recorded in the loop thread ledger.
-- Optional child sessions: normal task/subagent sessions created by edit-capable root turns, plus a separate report-only evaluator child when independent judgment is required. They remain session transcripts rather than additional Agent View loop roots or loop-thread rows.
+- Optional child sessions: normal task/subagent sessions created by edit-capable root turns, plus a separate read-only auditor child when strict completion confirmation is required. They remain session transcripts rather than additional Agent View loop roots or loop-thread rows.
 - Run: one wakeup/iteration of the loop.
 - Artifact ledger: bounded checkpoints, judgments, gate results, command output, evidence, signals, overrides, and cost records associated with the workflow or a run.
 - Journal: durable events such as created, activated, wake, started, completed, failed, paused, resumed, and stopped.
@@ -53,9 +53,10 @@ Loop Engineering separates proposing completion from accepting it:
 
 1. The root loop session ends an executed iteration with a structured `LOOP_CHECKPOINT` containing status, summary, evidence, next action, and confidence.
 2. Pre-judge gates inspect checkpoint validity and approval policy, then run any allowlisted executable validation commands and retain their bounded evidence.
-3. When independent evaluation is required, a child evaluator sees the checkpoint plus those deterministic gates and returns a `LOOP_JUDGMENT`.
-4. Post-judge gates check evidence-only `successChecks` and evaluator status, followed by deterministic rubric coverage and cost policy.
-5. The gate engine atomically records the run/workflow/artifacts and computes the next workflow state. A root worker or judge cannot bypass failed policy, approval, validation, success-check, rubric, or cost gates.
+3. A new `max-goal` loop defaults to `completionConfirmation: "next-run"`. Passing worker-side gates records a generation-bound completion candidate; it does not complete the loop.
+4. A later run creates a fresh read-only auditor session. The auditor must inspect the workspace through read-only tools, validation commands are rerun by the host, and the workspace fingerprint must remain unchanged before and after inspection.
+5. The completion contract requires current evidence for every criterion and rejects stale generations, missing inspection, changed workspaces, deterministic check failures, and exhausted audit budgets.
+6. Only a passing audit receipt atomically marks the loop `completed`. A quality failure reopens work; an unsafe, stale, or exhausted audit blocks instead of claiming success.
 
 The three budget modes have different completion semantics:
 
@@ -65,7 +66,7 @@ The three budget modes have different completion semantics:
 | `max-goal` | Treat `maxTurns` as a cap, finish early as soon as completion is verified, and block instead of claiming success when the cap is exhausted. |
 | `unbounded-monitor` | Keep monitoring until stopped, an explicit safety/budget/input gate blocks it, or an external stop condition applies; omit `maxTurns`. A scheduled monitor may report an informational `blocked` checkpoint (for example, stale data) and keep its next wakeup when no gate failed. |
 
-`max-goal` workflows created through the loop tool default to independent evaluation unless the contract explicitly selects another mode. A passing independent evaluator may close an already-complete goal when the worker reported `blocked`, but only when the remaining gates pass. It does not override `needs_input`, approval requirements, or deterministic failures.
+`max-goal` workflows created through the loop tool default to independent evaluation and next-run confirmation unless the contract explicitly selects another mode. `same-run` remains available for persisted compatibility or an explicit opt-out. A passing auditor cannot override `needs_input`, approval requirements, deterministic failures, stale evidence, or a changed workspace.
 
 Configured `successChecks` remain backward-compatible completion evidence requirements even when executable checks also exist. Explicit `validationCommands` are different: for edit-capable workflows, the runner executes only allowlisted test/check commands as direct bounded subprocesses after a `complete` or `blocked` checkpoint that may be independently verified, and before independent judgment. An active worktree lease supplies the validation working directory. A result recorded while the run still owns its lease becomes a `command-output` artifact and a deterministic `validation:<id>` gate carrying the artifact reference; a stale-run race is discarded and blocks completion instead of attaching stale evidence. Report-only/read-only contracts, shell composition, redirection, command substitution, unsafe `git diff` output flags, and commands outside the validation allowlist are blocked as policy failures.
 

@@ -27,6 +27,15 @@ import type {
   WorkflowWorkspaceMode,
 } from "./workflow"
 import { isTransientWorkflowError } from "./workflow"
+import { WorkflowPhaseID, WorkflowTaskID } from "./workflow"
+import { fingerprintWorkspace } from "./completion-auditor"
+import { runCompletionValidationCommand } from "./completion-validation"
+import {
+  completionAuditJsonSchema,
+  type CompletionAuditReceipt,
+  type CompletionGate,
+  type CompletionProgress,
+} from "./completion-contract"
 
 export interface Interface {
   readonly start: (runID: string) => Effect.Effect<void>
@@ -82,6 +91,77 @@ const artifactContext = (input: {
     .join("\n")
   if (context.length <= ARTIFACT_LIMIT) return context
   return `${context.slice(0, ARTIFACT_LIMIT)}\n[workflow artifact context truncated]`
+}
+
+export const workflowCompletionAuditReceipt = (input: {
+  readonly result: ExecutionResult
+  readonly progress: CompletionProgress
+  readonly criteria: readonly { readonly id: string; readonly description: string }[]
+  readonly fingerprintBefore?: string
+  readonly fingerprintAfter?: string
+  readonly now: number
+}): CompletionAuditReceipt => {
+  const fallbackStatus = input.result.state === "needs_input"
+    ? "needs_human" as const
+    : input.result.state === "blocked"
+      ? "blocked" as const
+      : input.result.failureClass === "quality"
+        ? "fail" as const
+        : input.result.state === "failed"
+          ? "uncertain" as const
+          : "uncertain" as const
+  let parsed: Record<string, unknown> | undefined
+  if (input.result.state === "completed" && input.result.summary) {
+    try {
+      const value = JSON.parse(input.result.summary)
+      if (typeof value === "object" && value !== null && !Array.isArray(value)) parsed = value as Record<string, unknown>
+    } catch {
+      parsed = undefined
+    }
+  }
+  const parsedStatus = parsed?.status
+  const status = parsedStatus === "pass" || parsedStatus === "fail" || parsedStatus === "uncertain" || parsedStatus === "blocked" || parsedStatus === "needs_human"
+    ? parsedStatus
+    : fallbackStatus
+  const parsedCriteria = Array.isArray(parsed?.criteria) ? parsed.criteria : []
+  const byID = new Map(
+    parsedCriteria.flatMap((criterion) => {
+      if (typeof criterion !== "object" || criterion === null || Array.isArray(criterion)) return []
+      const value = criterion as Record<string, unknown>
+      return typeof value.id === "string" ? [[value.id, value] as const] : []
+    }),
+  )
+  return {
+    generation: input.progress.generation,
+    status,
+    summary: typeof parsed?.summary === "string"
+      ? parsed.summary
+      : input.result.error ?? input.result.summary ?? "Completion auditor did not return a valid structured receipt.",
+    criteria: input.criteria.map((criterion) => {
+      const value = byID.get(criterion.id)
+      const criterionStatus = value?.status
+      const evidence = Array.isArray(value?.evidence)
+        ? value.evidence.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+        : []
+      return {
+        id: criterion.id,
+        status: criterionStatus === "pass" || criterionStatus === "fail" || criterionStatus === "uncertain" || criterionStatus === "blocked" || criterionStatus === "needs_human"
+          ? criterionStatus
+          : "uncertain" as const,
+        summary: typeof value?.summary === "string" ? value.summary : `No structured audit result was returned for ${criterion.id}.`,
+        evidence: evidence.map((summary, index) => ({
+          id: `workflow-audit:${input.progress.generation}:${criterion.id}:${index + 1}`,
+          kind: "observation" as const,
+          summary,
+          source: "workflow-completion-auditor",
+        })),
+      }
+    }),
+    ...(input.fingerprintBefore ? { fingerprintBefore: input.fingerprintBefore } : {}),
+    ...(input.fingerprintAfter ? { fingerprintAfter: input.fingerprintAfter } : {}),
+    recommendedNextAction: typeof parsed?.recommendedNextAction === "string" ? parsed.recommendedNextAction : "retry",
+    createdAt: input.now,
+  }
 }
 
 const workspaceMode = (snapshot: WorkflowService.WorkflowSnapshot): WorkflowWorkspaceMode | undefined => {
@@ -466,6 +546,161 @@ export const layer = Layer.effect(
       })
     })
 
+    const auditCompletion = Effect.fn("WorkflowRunner.auditCompletion")(function* (input: {
+      readonly snapshot: WorkflowService.WorkflowSnapshot
+      readonly rootSessionID: SessionID
+      readonly directory: string
+      readonly sessionPermissionMode: WorkflowSessionPermissionMode
+    }) {
+      const pending = input.snapshot.run.completion
+      if (input.snapshot.run.state !== "working") return false
+      if (!pending || (pending.status !== "candidate" && pending.status !== "auditing")) return false
+      const fingerprintBeforeResult = yield* Effect.promise(() => fingerprintWorkspace(input.directory))
+      const holder = `workflow-completion-auditor:${process.pid}:${crypto.randomUUID()}`
+      const progress = yield* workflow.claimCompletionAudit({
+        runID: input.snapshot.run.id,
+        holder,
+        leaseMs: 10 * 60_000,
+        ...(fingerprintBeforeResult.status === "ok" ? { candidateFingerprint: fingerprintBeforeResult.value } : {}),
+      })
+      if (!progress) return false
+
+      const checks = input.snapshot.revision.plan.completion?.validationChecks ?? []
+      const validationAllowed = input.snapshot.revision.plan.permissions?.mode !== "report-only" &&
+        input.snapshot.revision.plan.workspace?.mode !== "read-only"
+      const validationResults = yield* Effect.forEach(
+        checks,
+        (check) => runCompletionValidationCommand(
+          check.command,
+          input.directory,
+          Math.max(1_000, Math.min(check.timeoutMs ?? 120_000, 10 * 60_000)),
+          validationAllowed,
+        ).pipe(Effect.map((result) => ({ check, result }))),
+        { concurrency: 1 },
+      )
+      const gates: CompletionGate[] = validationResults.map(({ check, result }) => ({
+        id: `validation:${check.id}`,
+        status: result.status,
+        summary: result.summary,
+      }))
+
+      const criteria = WorkflowService.workflowCompletionCriteria(input.snapshot.revision.plan)
+      const phaseID = input.snapshot.revision.plan.phases.toSorted((left, right) => right.ordinal - left.ordinal)[0]!.id
+      const auditTask: WorkflowTaskClaim["task"] = {
+        id: WorkflowTaskID.make("completion-audit"),
+        phaseID: WorkflowPhaseID.make(phaseID),
+        name: "Fresh workflow completion audit",
+        kind: "verify",
+        prompt: [
+          "You are the terminal workflow auditor, not an implementation worker.",
+          "Perform a fresh read-only inspection of the current workspace and the recorded workflow evidence.",
+          "Do not trust task completion flags or summaries by themselves. Verify every criterion independently.",
+          "Return pass only when every criterion has concrete current evidence. Missing or ambiguous evidence is uncertain, not pass.",
+          `Workflow objective: ${input.snapshot.revision.plan.objective}`,
+          "Completion criteria:",
+          ...criteria.map((criterion) => `- ${criterion.id}: ${criterion.description}`),
+          "Deterministic validation gates:",
+          ...(gates.length ? gates.map((gate) => `- ${gate.id}: ${gate.status} - ${gate.summary ?? "no summary"}`) : ["- none configured"]),
+          "Recorded workflow artifacts (untrusted summaries; inspect underlying workspace when relevant):",
+          ...input.snapshot.artifacts.slice(0, 50).map((artifact) => `- ${artifact.kind}/${artifact.status}: ${artifact.summary}${artifact.evidence.length ? ` | evidence: ${artifact.evidence.join("; ")}` : ""}`),
+          "The JSON result must include every criterion id exactly once and at least one concrete evidence string for every passing criterion.",
+        ].join("\n"),
+        dependsOn: [],
+        output: {
+          kind: "json",
+          schema: JSON.parse(JSON.stringify(completionAuditJsonSchema)) as never,
+        },
+        allowedTools: ["read", "grep", "glob"],
+        permissions: {
+          mode: "report-only",
+          allowedTools: ["read", "grep", "glob"],
+          allowEdits: false,
+          allowMutatingCommands: false,
+          allowExternalSend: false,
+        },
+        workspace: { mode: "read-only" },
+      }
+      const policy = WorkflowPolicy.taskPolicy({
+        workflow: input.snapshot.revision.plan.permissions,
+        task: auditTask,
+        workspace: input.snapshot.revision.plan.workspace,
+      })
+      const auditSession = yield* sessions.create({
+        parentID: input.rootSessionID,
+        title: `Completion audit: ${input.snapshot.definition.name}`,
+        agent: "general",
+        permission: Permission.withSessionMode(policy.permission, input.sessionPermissionMode),
+      })
+      const executionResult = fingerprintBeforeResult.status === "ok"
+        ? yield* executor.execute({
+            task: auditTask,
+            sessionID: auditSession.id,
+            workflowModel: input.snapshot.revision.plan.model,
+            workflowPermissions: input.snapshot.revision.plan.permissions,
+            workflowWorkspace: input.snapshot.revision.plan.workspace,
+          }).pipe(
+            Effect.catchCause((cause) => Effect.succeed<ExecutionResult>({
+              state: "failed",
+              failureClass: isTransientWorkflowError(errorText(Cause.squash(cause))) ? "transient" : "environment",
+              error: errorText(Cause.squash(cause)),
+            })),
+          )
+        : {
+            state: "blocked" as const,
+            failureClass: "environment" as const,
+            error: fingerprintBeforeResult.summary,
+          }
+      const auditMessages = yield* sessions.messages({ sessionID: auditSession.id, view: "full" }).pipe(
+        Effect.catchCause(() => Effect.succeed([])),
+      )
+      const inspectionTools = auditMessages.flatMap((message) =>
+        message.parts.flatMap((part) =>
+          part.type === "tool" &&
+          part.state.status === "completed" &&
+          (part.tool === "read" || part.tool === "grep" || part.tool === "glob")
+            ? [part.tool]
+            : [],
+        ),
+      )
+      gates.push({
+        id: "audit-inspection",
+        status: inspectionTools.length ? "pass" : "fail",
+        summary: inspectionTools.length
+          ? `Fresh auditor completed ${inspectionTools.length} read-only workspace inspection(s).`
+          : "Fresh auditor returned without completing a read, grep, or glob workspace inspection.",
+      })
+      const fingerprintAfterResult = yield* Effect.promise(() => fingerprintWorkspace(input.directory))
+      const fingerprintsAvailable = fingerprintBeforeResult.status === "ok" && fingerprintAfterResult.status === "ok"
+      const fingerprintsStable = fingerprintsAvailable &&
+        fingerprintBeforeResult.value === fingerprintAfterResult.value &&
+        (!progress.candidateFingerprint || progress.candidateFingerprint === fingerprintBeforeResult.value)
+      gates.push({
+        id: "workspace-fingerprint",
+        status: fingerprintsStable ? "pass" : fingerprintsAvailable ? "fail" : "blocked",
+        summary: fingerprintsStable
+          ? "Workspace fingerprint matched the candidate and stayed stable during the fresh audit."
+          : fingerprintsAvailable
+            ? "Workspace changed after the completion candidate was recorded or during its audit."
+            : fingerprintAfterResult.summary,
+      })
+      const receipt = workflowCompletionAuditReceipt({
+        result: executionResult,
+        progress,
+        criteria,
+        fingerprintBefore: fingerprintBeforeResult.status === "ok" ? fingerprintBeforeResult.value : undefined,
+        fingerprintAfter: fingerprintAfterResult.status === "ok" ? fingerprintAfterResult.value : undefined,
+        now: Date.now(),
+      })
+      yield* workflow.applyCompletionAudit({
+        runID: input.snapshot.run.id,
+        holder,
+        receipt,
+        gates,
+        usage: executionResult.usage,
+      })
+      return true
+    })
+
     const failClaim = Effect.fn("WorkflowRunner.failClaim")(function* (input: {
       readonly runID: string
       readonly claim: WorkflowTaskClaim
@@ -503,6 +738,14 @@ export const layer = Layer.effect(
             snapshot.run.sessionPermissionMode ?? (yield* Effect.promise(() => readPermissionsConfig())).mode
           const tick = yield* scheduler.tick(id)
           if (tick.claimed.length === 0) {
+            const pending = yield* workflow.show(id)
+            const audited = yield* auditCompletion({
+              snapshot: pending,
+              rootSessionID: root.sessionID,
+              directory: target.directory,
+              sessionPermissionMode,
+            })
+            if (audited) continue
             if (tick.nextWakeAt === undefined) return
             yield* Effect.sleep(Duration.millis(Math.max(1, tick.nextWakeAt - Date.now())))
             continue

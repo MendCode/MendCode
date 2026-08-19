@@ -5,7 +5,13 @@ import { Session } from "@/session/session"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
-import { BUSY_STATUS_STALE_MS, SessionStatus, freshStatus, withStartedAt } from "../../src/session/status"
+import {
+  BUSY_STATUS_STALE_MS,
+  SessionStatus,
+  freshStatus,
+  refreshBusyStatus,
+  withStartedAt,
+} from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
 import { Todo } from "../../src/session/todo"
 import { SessionID, MessageID, PartID } from "../../src/session/schema"
@@ -310,6 +316,30 @@ describe("SessionStatus.Info", () => {
       message: "wait",
       next: now + 1,
     })
+  })
+
+  test("refreshes only a live busy status without changing its activity details", () => {
+    const now = 200_000
+    const current = {
+      time_created: 100_000,
+      time_updated: now - BUSY_STATUS_STALE_MS + 1,
+      data: {
+        type: "busy" as const,
+        kind: "subagent-wait" as const,
+        message: "Waiting for a subagent...",
+        startedAt: 100_000,
+      },
+    }
+    expect(refreshBusyStatus(current, now)).toEqual({ ...current, time_updated: now })
+    expect(
+      refreshBusyStatus({ time_updated: now - BUSY_STATUS_STALE_MS - 1, data: { type: "busy" } }, now),
+    ).toBeUndefined()
+    expect(
+      refreshBusyStatus(
+        { time_updated: now, data: { type: "retry", attempt: 1, message: "wait", next: now + 1 } },
+        now,
+      ),
+    ).toBeUndefined()
   })
 })
 

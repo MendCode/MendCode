@@ -8,6 +8,9 @@ import { ModelID, ProviderID } from "@/provider/schema"
 import { InstanceState } from "@/effect/instance-state"
 import { WorkflowRunner } from "@/session/workflow-runner"
 import { WorkflowService } from "@/session/workflow-service"
+import { fingerprintWorkspace } from "@/session/completion-auditor"
+import { compileCompletionCriteria, type CompletionAuditReceipt, type CompletionProgress } from "@/session/completion-contract"
+import { completionValidationCommandAllowed, runCompletionValidationCommand } from "@/session/completion-validation"
 
 export const TickResult = Schema.Struct({
   workflowID: LoopWorkflow.LoopID,
@@ -410,6 +413,7 @@ function requiresIndependentCompletion(workflow: LoopWorkflow.Info, checkpoint: 
   if (workflow.spec.budgetMode !== "max-goal") return false
   if (checkpoint.status !== "complete" && checkpoint.status !== "blocked") return false
   if (workflow.spec.evaluation?.allowWorkerSelfComplete === true) return false
+  if (workflow.spec.evaluation?.confirmation === "next-run") return false
   return workflow.spec.evaluation?.mode === "independent" || workflow.spec.evaluation?.requireIndependentForCompletion === true
 }
 
@@ -509,164 +513,8 @@ function successChecksGate(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoi
   }
 }
 
-const validationCommandPatterns = [
-  /^git\s+diff\s+--check(?:\s|$)/i,
-  /^bun\s+(?:test|typecheck|run\s+(?:test|typecheck|lint|check|build))(?:\s|$)/i,
-  /^(?:npm|pnpm|yarn)\s+(?:test|run\s+(?:test|typecheck|lint|check|build))(?:\s|$)/i,
-  /^deno\s+(?:test|lint|check)(?:\s|$)/i,
-  /^(?:pytest|python(?:3)?\s+-m\s+pytest)(?:\s|$)/i,
-  /^go\s+test(?:\s|$)/i,
-  /^cargo\s+(?:test|check|clippy)(?:\s|$)/i,
-  /^make\s+(?:test|check|lint|build)(?:\s|$)/i,
-]
-
-const maxValidationOutputBytes = 128 * 1024
-
-function validationCommandArgs(command: string) {
-  const value = command.trim()
-  if (!value || /[;&|><`$\\\r\n\0]/.test(value)) return
-  if (!validationCommandPatterns.some((pattern) => pattern.test(value))) return
-  const args = value.split(/\s+/)
-  if (
-    args[0] === "git" &&
-    args[1] === "diff" &&
-    args[2] === "--check" &&
-    args.slice(3).some((argument) => argument.startsWith("-") && argument !== "--" && argument !== "--cached" && argument !== "--staged")
-  ) return
-  return args
-}
-
 export function loopValidationCommandAllowed(command: string) {
-  return Boolean(validationCommandArgs(command))
-}
-
-async function readValidationOutput(stream: ReadableStream<Uint8Array>) {
-  const reader = stream.getReader()
-  let kept = new Uint8Array(0)
-  let truncated = false
-  while (true) {
-    const chunk = await reader.read()
-    if (chunk.done) break
-    if (!chunk.value.byteLength) continue
-    if (chunk.value.byteLength >= maxValidationOutputBytes) {
-      kept = chunk.value.slice(-maxValidationOutputBytes)
-      truncated = true
-      continue
-    }
-    const overflow = kept.byteLength + chunk.value.byteLength - maxValidationOutputBytes
-    if (overflow > 0) {
-      kept = kept.slice(overflow)
-      truncated = true
-    }
-    const combined = new Uint8Array(kept.byteLength + chunk.value.byteLength)
-    combined.set(kept)
-    combined.set(chunk.value, kept.byteLength)
-    kept = combined
-  }
-  const output = new TextDecoder().decode(kept)
-  return truncated ? `[validation output truncated to last ${maxValidationOutputBytes} bytes]\n${output}` : output
-}
-
-function validationEnvironment() {
-  const inherited = [
-    "PATH",
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "TMPDIR",
-    "TMP",
-    "TEMP",
-    "LANG",
-    "LC_ALL",
-    "TZ",
-    "SYSTEMROOT",
-    "WINDIR",
-    "PATHEXT",
-    "COMSPEC",
-  ]
-  return {
-    ...Object.fromEntries(inherited.flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]!]])),
-    CI: process.env.CI ?? "1",
-    NO_COLOR: "1",
-    TERM: "dumb",
-  }
-}
-
-function runValidationCommand(command: string, cwd: string, timeoutMs: number, executionAllowed: boolean) {
-  const args = validationCommandArgs(command)
-  if (!args) {
-    return Effect.succeed({
-      status: "blocked" as const,
-      summary: "Validation command is outside the read-only validation allowlist.",
-      output: `Blocked command: ${command}`,
-      durationMs: 0,
-      timedOut: false,
-      failureClass: "policy" as const,
-    })
-  }
-  if (!executionAllowed) {
-    return Effect.succeed({
-      status: "blocked" as const,
-      summary: "Executable validation is disabled by the workflow's report-only/read-only contract.",
-      output: `Blocked in report-only mode: ${command}`,
-      durationMs: 0,
-      timedOut: false,
-      failureClass: "policy" as const,
-    })
-  }
-  return Effect.tryPromise({
-    try: async () => {
-      const started = Date.now()
-      const child = Bun.spawn(args, {
-        cwd,
-        env: validationEnvironment(),
-        stdout: "pipe",
-        stderr: "pipe",
-      })
-      let timedOut = false
-      const timer = setTimeout(() => {
-        timedOut = true
-        child.kill()
-      }, timeoutMs)
-      const [exitCode, stdout, stderr] = await Promise.all([
-        child.exited,
-        readValidationOutput(child.stdout),
-        readValidationOutput(child.stderr),
-      ])
-      clearTimeout(timer)
-      const output = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n")
-      if (timedOut) {
-        return {
-          status: "blocked" as const,
-          summary: `Validation timed out after ${timeoutMs}ms: ${command}`,
-          output,
-          exitCode,
-          durationMs: Date.now() - started,
-          timedOut: true,
-          failureClass: "environment" as const,
-        }
-      }
-      return {
-        status: exitCode === 0 ? "pass" as const : "fail" as const,
-        summary: exitCode === 0 ? `Validation passed: ${command}` : `Validation failed with exit ${exitCode}: ${command}`,
-        output,
-        exitCode,
-        durationMs: Date.now() - started,
-        timedOut: false,
-        failureClass: exitCode === 0 ? "none" as const : "quality" as const,
-      }
-    },
-    catch: (error) => errorMessage(error),
-  }).pipe(
-    Effect.catch((error) => Effect.succeed({
-      status: "blocked" as const,
-      summary: `Validation could not run: ${command}`,
-      output: error,
-      durationMs: 0,
-      timedOut: false,
-      failureClass: "environment" as const,
-    })),
-  )
+  return completionValidationCommandAllowed(command)
 }
 
 function executeValidationChecks(workflowService: LoopWorkflow.Interface, workflow: LoopWorkflow.Info, run: LoopWorkflow.RunInfo, checkpoint: LoopCheckpoint, directory: string) {
@@ -676,7 +524,7 @@ function executeValidationChecks(workflowService: LoopWorkflow.Interface, workfl
     return yield* Effect.forEach(checks, (check) =>
       Effect.gen(function* () {
         const command = check.command.trim()
-        const result: ValidationExecution = yield* runValidationCommand(
+        const result: ValidationExecution = yield* runCompletionValidationCommand(
           command,
           run.workspaceLease?.state === "active" ? run.workspaceLease.path : directory,
           Math.max(1_000, Math.min(check.timeoutMs ?? 120_000, 10 * 60_000)),
@@ -860,7 +708,9 @@ function classifyEvaluatorFailure(error: string): LoopWorkflow.FailureClass {
 }
 
 function judgmentPrompt(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint, gates: LoopGateResult[]) {
-  const criteria = numberedList(workflow.spec.completionCriteria, "Use the objective as the completion criteria.")
+  const criteria = compileCompletionCriteria(
+    workflow.spec.completionCriteria?.length ? workflow.spec.completionCriteria : [workflow.objective],
+  )
   const successChecks = numberedList(workflow.spec.successChecks, "No explicit success checks were configured; evaluate only the evidence provided.")
   const rubric = workflow.spec.rubric
   return [
@@ -872,7 +722,7 @@ function judgmentPrompt(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint,
     `Objective: ${workflow.objective}`,
     "",
     "Completion criteria:",
-    criteria,
+    criteria.map((criterion) => `- ${criterion.id}: ${criterion.description}`).join("\n"),
     "",
     "Success checks:",
     successChecks,
@@ -902,12 +752,103 @@ function judgmentPrompt(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint,
     "status: pass | fail | uncertain | blocked | needs_human",
     "summary: one concise sentence explaining the verdict",
     "evidence:",
-    "- evidence item reviewed or missing evidence",
+    "- criterion-1: concrete evidence inspected for that criterion",
+    "Include at least one concrete evidence item prefixed with each criterion id. A passing verdict without per-criterion evidence will be rejected.",
     "recommended_next_action: complete, continue, retry, ask_user, or block",
     "confidence: high | medium | low",
   ]
     .filter((line): line is string => Boolean(line))
     .join("\n")
+}
+
+function workspaceFingerprintGate(result: Awaited<ReturnType<typeof fingerprintWorkspace>>): LoopGateResult {
+  return {
+    id: "workspace-fingerprint",
+    status: result.status === "ok" ? "pass" : "blocked",
+    summary: result.summary,
+    failureClass: result.status === "ok" ? "none" : "environment",
+  }
+}
+
+function auditInspectionGate(messages: readonly MessageV2.WithParts[]): LoopGateResult {
+  const tools = new Map(
+    messages.flatMap((message) =>
+      message.parts.flatMap((part) =>
+        part.type === "tool" &&
+        part.state.status === "completed" &&
+        (part.tool === "read" || part.tool === "grep" || part.tool === "glob")
+          ? [[part.callID, part.tool] as const]
+          : [],
+      ),
+    ),
+  )
+  return {
+    id: "audit-inspection",
+    status: tools.size ? "pass" : "fail",
+    summary: tools.size
+      ? `Fresh auditor completed ${tools.size} read-only workspace inspection(s).`
+      : "Fresh auditor returned without completing a read, grep, or glob workspace inspection.",
+    failureClass: tools.size ? "none" : "quality",
+  }
+}
+
+function completionCandidate(input: {
+  workflow: LoopWorkflow.Info
+  run: LoopWorkflow.RunInfo
+  checkpoint: LoopCheckpoint
+  fingerprint?: string
+  now: number
+}): CompletionProgress {
+  return {
+    status: "candidate",
+    generation: (input.workflow.metrics.turns ?? 0) + 1,
+    sourceID: input.run.id,
+    auditAttempts: 0,
+    ...(input.fingerprint ? { candidateFingerprint: input.fingerprint } : {}),
+    ...(input.checkpoint.summary ? { summary: input.checkpoint.summary } : {}),
+    createdAt: input.now,
+    updatedAt: input.now,
+  }
+}
+
+function auditReceipt(input: {
+  workflow: LoopWorkflow.Info
+  candidate: CompletionProgress
+  judgment: LoopJudgment | undefined
+  fingerprintBefore?: string
+  fingerprintAfter?: string
+  now: number
+}): CompletionAuditReceipt {
+  const status = input.judgment?.status ?? "uncertain"
+  const evidence = input.judgment?.evidence ?? []
+  const criteria = compileCompletionCriteria(
+    input.workflow.spec.completionCriteria?.length ? input.workflow.spec.completionCriteria : [input.workflow.objective],
+  )
+  return {
+    generation: input.candidate.generation,
+    status,
+    summary: input.judgment?.summary ?? "Completion auditor did not return a parseable verdict.",
+    criteria: criteria.map((criterion) => {
+      const criterionEvidence = evidence.filter((item) => item.toLowerCase().includes(criterion.id.toLowerCase()))
+      return {
+        id: criterion.id,
+        status: status === "pass" && criterionEvidence.length === 0 ? "uncertain" as const : status,
+        summary: criterionEvidence.length
+          ? (input.judgment?.summary ?? `${criterion.id} verified.`)
+          : `No concrete audit evidence was recorded for ${criterion.id}.`,
+        evidence: criterionEvidence.map((item, index) => ({
+          id: `audit:${input.candidate.generation}:${criterion.id}:${index + 1}`,
+          kind: "observation" as const,
+          summary: item,
+          source: "independent-evaluator",
+        })),
+      }
+    }),
+    ...(input.fingerprintBefore ? { fingerprintBefore: input.fingerprintBefore } : {}),
+    ...(input.fingerprintAfter ? { fingerprintAfter: input.fingerprintAfter } : {}),
+    recommendedNextAction: input.judgment?.recommendedNextAction ?? "retry",
+    createdAt: input.now,
+  }
 }
 
 function parentCompletionPrompt(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint, runID: LoopWorkflow.RunID) {
@@ -977,6 +918,12 @@ export const layer = Layer.effect(
           summary: skipped.evaluatorReason ?? readiness.reason,
         } satisfies TickResult
       }
+      const latestCompletionRun = before.spec.evaluation?.confirmation === "next-run"
+        ? (yield* workflow.snapshot(id, 20)).runs.find((item) => item.completion !== undefined)
+        : undefined
+      const pendingCompletionRun = latestCompletionRun?.completion?.status === "candidate"
+        ? latestCompletionRun
+        : undefined
       const leaseHolder = `loop-runner:${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2)}`
       const run = yield* workflow.startRun({ id, trigger: input.trigger ?? runTriggerFor(before), leaseHolder, now })
       if (run.lease?.holder !== leaseHolder) {
@@ -997,6 +944,181 @@ export const layer = Layer.effect(
             summary: failed.evaluatorReason ?? "Loop run failed.",
           })),
         )
+      }
+      if (pendingCompletionRun?.completion?.status === "candidate") {
+        const candidate = {
+          ...pendingCompletionRun.completion,
+          status: "auditing" as const,
+          auditAttempts: pendingCompletionRun.completion.auditAttempts + 1,
+          updatedAt: now,
+        }
+        const checkpoint: LoopCheckpoint = pendingCompletionRun.checkpoint ?? {
+          status: "complete",
+          summary: pendingCompletionRun.evaluatorReason ?? "Previous loop run proposed completion.",
+          evidence: [],
+          nextAction: "audit",
+          confidence: "medium",
+        }
+        const directory = pendingCompletionRun.workspaceLease?.path ?? instance.directory
+        const fingerprintBeforeResult = yield* Effect.promise(() => fingerprintWorkspace(directory))
+        const validationRun = pendingCompletionRun.workspaceLease
+          ? { ...run, workspaceLease: pendingCompletionRun.workspaceLease }
+          : run
+        const validationGates = yield* executeValidationChecks(workflow, current, validationRun, checkpoint, directory)
+        const priorGates = (pendingCompletionRun.gateResults ?? []).filter((gate) => gate.id !== "independent-evaluator")
+        const preJudgeGates = Array.from(
+          new Map(
+            [...priorGates, ...validationGates, workspaceFingerprintGate(fingerprintBeforeResult)].map((gate) => [gate.id, gate]),
+          ).values(),
+        )
+        let judgment: LoopJudgment
+        let evaluatorUsage: LoopWorkflow.Usage | undefined
+        let inspectionGate = auditInspectionGate([])
+        if (fingerprintBeforeResult.status !== "ok") {
+          judgment = {
+            status: "blocked",
+            summary: fingerprintBeforeResult.summary,
+            evidence: [],
+            recommendedNextAction: "block",
+            confidence: "high",
+            failureClass: "environment",
+          }
+        } else if (
+          candidate.candidateFingerprint &&
+          fingerprintBeforeResult.value !== candidate.candidateFingerprint
+        ) {
+          judgment = {
+            status: "fail",
+            summary: "Workspace changed after the completion candidate was recorded.",
+            evidence: ["candidate and audit workspace fingerprints differ"],
+            recommendedNextAction: "continue",
+            confidence: "high",
+            failureClass: "quality",
+          }
+        } else {
+          const evaluatorSession = yield* sessions.create({
+            parentID: current.rootSessionID,
+            title: `Loop completion audit: ${current.name}`,
+          })
+          const evaluatorStarted = Date.now()
+          const evaluatorResult = yield* prompt
+            .prompt({
+              sessionID: evaluatorSession.id,
+              agent: current.spec.evaluation?.evaluatorAgent ?? current.spec.agent,
+              model: promptModel(current),
+              variant: current.spec.model?.variant,
+              tools: loopIterationTools(true),
+              parts: [{
+                type: "text",
+                text: [
+                  judgmentPrompt(current, checkpoint, preJudgeGates),
+                  "",
+                  `This is a fresh terminal audit iteration for candidate generation ${candidate.generation}.`,
+                  `Inspect the current workspace at ${directory}; do not rely only on the worker summary.`,
+                  "Verify every completion criterion against current files and recorded deterministic gates.",
+                ].join("\n"),
+              }],
+            })
+            .pipe(
+              Effect.map((message) => ({ message, judgment: parseJudgment(assistantText(message)) })),
+              Effect.catchCause((cause) => {
+                const error = errorMessage(Cause.squash(cause))
+                return Effect.succeed({
+                  judgment: {
+                    status: "uncertain" as const,
+                    summary: `Evaluator failed: ${error}`,
+                    recommendedNextAction: "retry",
+                    confidence: "low",
+                    failureClass: classifyEvaluatorFailure(error),
+                  },
+                })
+              }),
+            )
+          const evaluatorMessage = "message" in evaluatorResult ? evaluatorResult.message : undefined
+          evaluatorUsage = usageFromMessage(evaluatorMessage, current, evaluatorStarted)
+          judgment = evaluatorResult.judgment
+          const auditMessages = yield* sessions.messages({ sessionID: evaluatorSession.id, view: "full" }).pipe(
+            Effect.catchCause(() => Effect.succeed([])),
+          )
+          inspectionGate = auditInspectionGate(evaluatorMessage ? [...auditMessages, evaluatorMessage] : auditMessages)
+        }
+        const fingerprintAfterResult = yield* Effect.promise(() => fingerprintWorkspace(directory))
+        if (
+          fingerprintBeforeResult.status === "ok" &&
+          fingerprintAfterResult.status === "ok" &&
+          fingerprintBeforeResult.value !== fingerprintAfterResult.value
+        ) {
+          judgment = {
+            status: "fail",
+            summary: "Workspace changed while the completion audit was running.",
+            evidence: ["pre-audit and post-audit workspace fingerprints differ"],
+            recommendedNextAction: "continue",
+            confidence: "high",
+            failureClass: "quality",
+          }
+        }
+        const fingerprintsAvailable = fingerprintAfterResult.status === "ok" && fingerprintBeforeResult.status === "ok"
+        const fingerprintStable = fingerprintsAvailable && fingerprintAfterResult.value === fingerprintBeforeResult.value
+        const fingerprintMatchesCandidate = fingerprintsAvailable && (
+          !candidate.candidateFingerprint || fingerprintBeforeResult.value === candidate.candidateFingerprint
+        )
+        const fingerprintGate: LoopGateResult = fingerprintStable && fingerprintMatchesCandidate
+          ? { id: "workspace-fingerprint", status: "pass", summary: "Workspace fingerprint matched the candidate and stayed stable throughout the audit.", failureClass: "none" }
+          : fingerprintsAvailable
+            ? { id: "workspace-fingerprint", status: "fail", summary: "Workspace fingerprint changed after completion was proposed or during its audit.", failureClass: "quality" }
+            : { id: "workspace-fingerprint", status: "blocked", summary: fingerprintAfterResult.summary, failureClass: "environment" }
+        const deterministicGates = Array.from(
+          new Map(
+            [...preJudgeGates.filter((gate) => gate.id !== "workspace-fingerprint"), fingerprintGate, inspectionGate, successChecksGate(current, checkpoint, judgment)].filter(
+              (item): item is LoopGateResult => Boolean(item),
+            ).map((gate) => [gate.id, gate]),
+          ).values(),
+        )
+        const gateResults = [...deterministicGates, evaluatorGate(judgment)].filter((item): item is LoopGateResult => Boolean(item))
+        const receipt = auditReceipt({
+          workflow: current,
+          candidate,
+          judgment,
+          fingerprintBefore: fingerprintBeforeResult.status === "ok" ? fingerprintBeforeResult.value : undefined,
+          fingerprintAfter: fingerprintAfterResult.status === "ok" ? fingerprintAfterResult.value : undefined,
+          now,
+        })
+        const completed = yield* workflow.completeRun({
+          id,
+          runID: run.id,
+          reason: judgment.summary,
+          now,
+          goalStatus: "complete",
+          checkpoint,
+          judgment,
+          rubricResult: evaluateRubric(current, checkpoint, judgment, gateResults),
+          gateResults,
+          usage: evaluatorUsage,
+          completion: { candidate, receipt },
+        })
+        const after = yield* workflow.get(id)
+        if (
+          after.state === "completed" &&
+          after.spec.strategy?.notifyOwnerOnComplete === true &&
+          after.ownerSessionID &&
+          after.ownerSessionID !== after.rootSessionID
+        ) {
+          yield* prompt.prompt({
+            sessionID: after.ownerSessionID,
+            agent: after.spec.agent,
+            model: promptModel(after),
+            variant: after.spec.model?.variant,
+            parts: [{ type: "text", text: parentCompletionPrompt(after, { ...checkpoint, summary: receipt.summary }, completed.id) }],
+          }).pipe(Effect.ignore)
+        }
+        return {
+          workflowID: id,
+          runID: completed.id,
+          state: after.state === "blocked" || after.state === "needs_input" || after.state === "stopped" || after.state === "failed"
+            ? after.state
+            : "completed",
+          summary: after.evaluatorReason ?? receipt.summary,
+        } satisfies TickResult
       }
       if (current.spec.workflow) {
         const workflowService = Option.getOrUndefined(yield* Effect.serviceOption(WorkflowService.Service))
@@ -1210,7 +1332,23 @@ export const layer = Layer.effect(
       const deterministicGates = [...preJudgeGates, successChecksGate(current, checkpoint, judgment)].filter(
         (item): item is LoopGateResult => Boolean(item),
       )
-      const gateResults = [...deterministicGates, evaluatorGate(judgment)].filter((item): item is LoopGateResult => Boolean(item))
+      const candidateFingerprintResult = current.spec.evaluation?.confirmation === "next-run" && checkpoint.status === "complete"
+        ? yield* Effect.promise(() => fingerprintWorkspace(run.workspaceLease?.state === "active" ? run.workspaceLease.path : instance.directory))
+        : undefined
+      const gateResults = [
+        ...deterministicGates,
+        evaluatorGate(judgment),
+        candidateFingerprintResult ? workspaceFingerprintGate(candidateFingerprintResult) : undefined,
+      ].filter((item): item is LoopGateResult => Boolean(item))
+      const candidate = candidateFingerprintResult?.status === "ok"
+        ? completionCandidate({
+            workflow: current,
+            run,
+            checkpoint,
+            fingerprint: candidateFingerprintResult.value,
+            now,
+          })
+        : undefined
       const completed = yield* workflow.completeRun({
         id,
         runID: run.id,
@@ -1225,6 +1363,7 @@ export const layer = Layer.effect(
           usageFromMessage(result.value, current, runStarted),
           evaluatorUsage,
         ]),
+        ...(candidate ? { completion: { candidate } } : {}),
       })
       const after = yield* workflow.get(id)
       const summary =

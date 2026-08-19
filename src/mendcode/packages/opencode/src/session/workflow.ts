@@ -4,6 +4,7 @@ import { ulid } from "ulid"
 import { SessionID } from "@/session/schema"
 import { zod } from "@/util/effect-zod"
 import { NonNegativeInt, PositiveInt, withStatics } from "@/util/schema"
+import { CompletionProgress } from "./completion-contract"
 
 const brandedID = <Brand extends string>(brand: Brand, prefix: string) =>
   Schema.String.pipe(
@@ -394,6 +395,7 @@ export const WorkflowRun = Schema.Struct({
   workspaceLease: Schema.optional(WorkflowWorkspaceLease),
   permissionMode: Schema.optional(WorkflowPermissionMode),
   sessionPermissionMode: Schema.optional(WorkflowSessionPermissionMode),
+  completion: Schema.optional(CompletionProgress),
   state: WorkflowRunState,
   currentPhaseID: Schema.optional(WorkflowPhaseID),
   createdAt: NonNegativeInt,

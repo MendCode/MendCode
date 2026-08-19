@@ -9,7 +9,7 @@ import { MessageV2 } from "@/session/message-v2"
 import { markPermissionAbandoned, markPermissionPending, reconcilePermissionAbandonment } from "@/session/pending-input"
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID } from "@/session/schema"
-import { PermissionTable, WorkflowTaskAttemptTable, WorkflowRunTable } from "@/session/session.sql"
+import { PermissionTable, WorkflowArtifactTable, WorkflowTaskAttemptTable, WorkflowRunTable } from "@/session/session.sql"
 import { isTransientWorkflowError, Workflow } from "@/session/workflow"
 import { WorkflowBackgroundTask } from "@/session/workflow-background-task"
 import { WorkflowPlan } from "@/session/workflow-plan"
@@ -100,6 +100,27 @@ const transientGraph = () => {
   } as unknown as WorkflowPlan
 }
 
+const strictCompletionGraph = () => ({
+  formatVersion: 1,
+  name: "Strict completion graph",
+  description: "Require a fresh semantic audit after the DAG finishes",
+  objective: "Finish only after current evidence proves the result",
+  phases: [phase("work", 1, ["work"]), phase("final", 2, ["final"])],
+  tasks: [task("work", "work"), task("final", "final", ["work"], "synthesize")],
+  finalTaskID: "final",
+  completionCriteria: ["The implementation is correct", "The final synthesis is supported"],
+  completion: {
+    confirmation: "next-run" as const,
+    maxAuditAttempts: 2,
+    criteria: [
+      { id: "implementation", description: "The implementation is correct", ownerTaskIDs: ["work"] },
+      { id: "synthesis", description: "The final synthesis is supported", ownerTaskIDs: ["final"] },
+    ],
+  },
+  requiredGates: [],
+  budget: { maxConcurrency: 1, maxFanOut: 2 },
+}) as unknown as WorkflowPlan
+
 describe("workflow scheduler readiness", () => {
   test("recognizes restart and network failures as transient", () => {
     expect(isTransientWorkflowError("Runtime lease expired")).toBe(true)
@@ -179,6 +200,324 @@ const backgroundLayer = BackgroundTask.layer.pipe(Layer.provideMerge(bus))
 const permissionIt = testEffect(Layer.mergeAll(Session.defaultLayer, schedulerLayer, backgroundLayer, bus))
 
 describe("workflow scheduler persistence", () => {
+  it.instance("keeps a strict workflow non-terminal until a separately claimed completion audit passes", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const workflow = yield* WorkflowService.Service
+      const scheduler = yield* WorkflowScheduler.Service
+      const origin = yield* sessions.create({ title: "Strict completion origin" })
+      const started = yield* workflow.start({ plan: strictCompletionGraph(), originSessionID: origin.id })
+
+      const work = (yield* scheduler.tick(started.run.id)).claimed[0]
+      if (!work) throw new Error("Expected work claim")
+      yield* scheduler.finish({
+        runID: work.runID,
+        taskID: work.taskID,
+        attemptID: work.attemptID,
+        attempt: work.attempt,
+        state: "completed",
+        summary: "Implementation completed",
+        evidence: ["work artifact"],
+      })
+      const final = (yield* scheduler.tick(started.run.id)).claimed[0]
+      if (!final) throw new Error("Expected final claim")
+      yield* scheduler.finish({
+        runID: final.runID,
+        taskID: final.taskID,
+        attemptID: final.attemptID,
+        attempt: final.attempt,
+        state: "completed",
+        summary: "Final synthesis completed",
+        evidence: ["final artifact"],
+      })
+
+      const candidate = yield* workflow.show(started.run.id)
+      expect(candidate.run.state).toBe("working")
+      expect(candidate.run.completion).toMatchObject({ status: "candidate", generation: 1, auditAttempts: 0 })
+      expect(candidate.events.some((event) => event.type === "workflow.run.completed")).toBe(false)
+
+      const claimed = yield* workflow.claimCompletionAudit({
+        runID: started.run.id,
+        holder: "auditor-one",
+        leaseMs: 60_000,
+        candidateFingerprint: "workspace-fingerprint",
+      })
+      const duplicate = yield* workflow.claimCompletionAudit({
+        runID: started.run.id,
+        holder: "auditor-two",
+        leaseMs: 60_000,
+        candidateFingerprint: "workspace-fingerprint",
+      })
+      expect(claimed).toMatchObject({ status: "auditing", auditAttempts: 1 })
+      expect(duplicate).toBeUndefined()
+
+      Database.use((db) => {
+        const persisted = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, started.run.id)).get()
+        if (!persisted?.data.completion) throw new Error("Expected persisted completion audit")
+        db.update(WorkflowRunTable)
+          .set({
+            data: {
+              ...persisted.data,
+              completion: {
+                ...persisted.data.completion,
+                auditLease: { holder: "auditor-one", expiresAt: Date.now() - 1 },
+              },
+            },
+          })
+          .where(eq(WorkflowRunTable.id, started.run.id))
+          .run()
+      })
+      const expired = yield* workflow.applyCompletionAudit({
+        runID: started.run.id,
+        holder: "auditor-one",
+        gates: [],
+        receipt: {
+          generation: claimed!.generation,
+          status: "uncertain",
+          summary: "Late audit result",
+          criteria: [],
+          recommendedNextAction: "retry",
+          createdAt: Date.now(),
+        },
+      }).pipe(Effect.exit)
+      expect(Exit.isFailure(expired)).toBe(true)
+
+      Database.use((db) => {
+        const persisted = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, started.run.id)).get()
+        if (!persisted?.data.completion) throw new Error("Expected persisted completion audit")
+        db.update(WorkflowRunTable)
+          .set({ data: { ...persisted.data, completion: { ...persisted.data.completion, auditLease: undefined } } })
+          .where(eq(WorkflowRunTable.id, started.run.id))
+          .run()
+      })
+      const reclaimed = yield* workflow.claimCompletionAudit({
+        runID: started.run.id,
+        holder: "auditor-two",
+        leaseMs: 60_000,
+        candidateFingerprint: "workspace-fingerprint",
+      })
+      expect(reclaimed).toMatchObject({ status: "auditing", auditAttempts: 2 })
+
+      const completed = yield* workflow.applyCompletionAudit({
+        runID: started.run.id,
+        holder: "auditor-two",
+        gates: [{ id: "workspace-fingerprint", status: "pass", summary: "Workspace stayed stable" }],
+        receipt: {
+          generation: reclaimed!.generation,
+          status: "pass",
+          summary: "Every completion criterion has current evidence.",
+          criteria: [
+            {
+              id: "implementation",
+              status: "pass",
+              summary: "Implementation verified",
+              evidence: [{ id: "e1", kind: "observation", summary: "Inspected implementation", source: "test-auditor" }],
+            },
+            {
+              id: "synthesis",
+              status: "pass",
+              summary: "Synthesis verified",
+              evidence: [{ id: "e2", kind: "artifact", summary: "Inspected final artifact", source: "test-auditor" }],
+            },
+          ],
+          fingerprintBefore: "workspace-fingerprint",
+          fingerprintAfter: "workspace-fingerprint",
+          recommendedNextAction: "complete",
+          createdAt: Date.now(),
+        },
+      })
+
+      expect(completed.run.state).toBe("completed")
+      expect(completed.run.completion?.status).toBe("passed")
+      expect(completed.gates.filter((gate) => gate.kind === "completion").every((gate) => gate.state === "pass")).toBe(true)
+      expect(completed.artifacts.some((artifact) => artifact.kind === "completion-audit" && artifact.status === "valid")).toBe(true)
+      expect(completed.events.filter((event) => event.type === "workflow.run.completed")).toHaveLength(1)
+    }),
+  )
+
+  it.instance("reopens only failed completion owners and their descendants", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const workflow = yield* WorkflowService.Service
+      const scheduler = yield* WorkflowScheduler.Service
+      const origin = yield* sessions.create({ title: "Selective recovery origin" })
+      const started = yield* workflow.start({ plan: strictCompletionGraph(), originSessionID: origin.id })
+
+      const work = (yield* scheduler.tick(started.run.id)).claimed[0]!
+      yield* scheduler.finish({
+        runID: work.runID,
+        taskID: work.taskID,
+        attemptID: work.attemptID,
+        attempt: work.attempt,
+        state: "completed",
+        summary: "Implementation completed",
+      })
+      const final = (yield* scheduler.tick(started.run.id)).claimed[0]!
+      yield* scheduler.finish({
+        runID: final.runID,
+        taskID: final.taskID,
+        attemptID: final.attemptID,
+        attempt: final.attempt,
+        state: "completed",
+        summary: "Final synthesis completed",
+      })
+      const claim = yield* workflow.claimCompletionAudit({
+        runID: started.run.id,
+        holder: "failing-auditor",
+        leaseMs: 60_000,
+        candidateFingerprint: "stable",
+      })
+      if (!claim) throw new Error("Expected completion audit claim")
+
+      const reopened = yield* workflow.applyCompletionAudit({
+        runID: started.run.id,
+        holder: "failing-auditor",
+        gates: [{ id: "workspace-fingerprint", status: "pass", summary: "Workspace stayed stable" }],
+        receipt: {
+          generation: claim.generation,
+          status: "fail",
+          summary: "The implementation criterion failed fresh inspection.",
+          criteria: [
+            { id: "implementation", status: "fail", summary: "Implementation is incomplete", evidence: [] },
+            {
+              id: "synthesis",
+              status: "pass",
+              summary: "Synthesis format is valid",
+              evidence: [{ id: "e2", kind: "artifact", summary: "Final format inspected" }],
+            },
+          ],
+          fingerprintBefore: "stable",
+          fingerprintAfter: "stable",
+          recommendedNextAction: "repair implementation",
+          createdAt: Date.now(),
+        },
+      })
+
+      expect(reopened.run.state).toBe("queued")
+      expect(reopened.run.completion).toMatchObject({ status: "rejected", failedCriteria: ["implementation"] })
+      expect(reopened.tasks.find((candidate) => candidate.id === "work")?.state).toBe("pending")
+      expect(reopened.tasks.find((candidate) => candidate.id === "final")?.state).toBe("pending")
+      const taskArtifacts = Database.use((db) =>
+        db.select().from(WorkflowArtifactTable).where(eq(WorkflowArtifactTable.run_id, started.run.id)).all(),
+      )
+      expect(taskArtifacts.filter((artifact) => artifact.task_id).every((artifact) => artifact.status === "invalid")).toBe(true)
+      expect((yield* scheduler.tick(started.run.id)).claimed.map((item) => String(item.taskID))).toEqual(["work"])
+    }),
+  )
+
+  it.instance("blocks a failed completion audit when no criterion declares a safe repair owner", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const workflow = yield* WorkflowService.Service
+      const scheduler = yield* WorkflowScheduler.Service
+      const origin = yield* sessions.create({ title: "Missing repair ownership origin" })
+      const plan = strictCompletionGraph()
+      plan.completion!.criteria = plan.completion!.criteria!.map(({ id, description }) => ({ id, description }))
+      const started = yield* workflow.start({ plan, originSessionID: origin.id })
+
+      for (let index = 0; index < 2; index++) {
+        const claim = (yield* scheduler.tick(started.run.id)).claimed[0]!
+        yield* scheduler.finish({
+          runID: claim.runID,
+          taskID: claim.taskID,
+          attemptID: claim.attemptID,
+          attempt: claim.attempt,
+          state: "completed",
+          summary: `Completed ${claim.taskID}`,
+        })
+      }
+      const claim = yield* workflow.claimCompletionAudit({
+        runID: started.run.id,
+        holder: "ownerless-auditor",
+        leaseMs: 60_000,
+        candidateFingerprint: "stable",
+      })
+      if (!claim) throw new Error("Expected completion audit claim")
+
+      const blocked = yield* workflow.applyCompletionAudit({
+        runID: started.run.id,
+        holder: "ownerless-auditor",
+        gates: [{ id: "workspace-fingerprint", status: "pass" }],
+        receipt: {
+          generation: claim.generation,
+          status: "fail",
+          summary: "Implementation failed inspection.",
+          criteria: [
+            { id: "implementation", status: "fail", summary: "Incomplete", evidence: [] },
+            { id: "synthesis", status: "pass", summary: "Supported", evidence: [{ id: "e", kind: "artifact", summary: "Checked" }] },
+          ],
+          fingerprintBefore: "stable",
+          fingerprintAfter: "stable",
+          recommendedNextAction: "declare repair ownership",
+          createdAt: Date.now(),
+        },
+      })
+
+      expect(blocked.run.state).toBe("blocked")
+      expect(blocked.run.completion?.summary).toContain("will not guess which workflow tasks to rerun")
+      expect(blocked.tasks.every((task) => task.state === "completed")).toBe(true)
+    }),
+  )
+
+  it.instance("accounts for completion audit usage without treating the audit as a task turn", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const workflow = yield* WorkflowService.Service
+      const scheduler = yield* WorkflowScheduler.Service
+      const origin = yield* sessions.create({ title: "Audit budget origin" })
+      const plan = strictCompletionGraph()
+      plan.budget = { ...plan.budget, maxTurns: 2, maxTokens: 1 }
+      const started = yield* workflow.start({ plan, originSessionID: origin.id })
+
+      for (let index = 0; index < 2; index++) {
+        const claim = (yield* scheduler.tick(started.run.id)).claimed[0]!
+        yield* scheduler.finish({
+          runID: claim.runID,
+          taskID: claim.taskID,
+          attemptID: claim.attemptID,
+          attempt: claim.attempt,
+          state: "completed",
+          summary: `Completed ${claim.taskID}`,
+        })
+      }
+      const auditTick = yield* scheduler.tick(started.run.id)
+      expect(auditTick.state).toBe("working")
+      expect(auditTick.claimed).toEqual([])
+      const claim = yield* workflow.claimCompletionAudit({
+        runID: started.run.id,
+        holder: "budget-auditor",
+        leaseMs: 60_000,
+        candidateFingerprint: "stable",
+      })
+      if (!claim) throw new Error("Expected completion audit claim")
+
+      const blocked = yield* workflow.applyCompletionAudit({
+        runID: started.run.id,
+        holder: "budget-auditor",
+        gates: [{ id: "workspace-fingerprint", status: "pass" }],
+        usage: { inputTokens: 1, outputTokens: 0, cost: 0 },
+        receipt: {
+          generation: claim.generation,
+          status: "pass",
+          summary: "Criteria passed, but the audit consumed the remaining token budget.",
+          criteria: [
+            { id: "implementation", status: "pass", summary: "Verified", evidence: [{ id: "e1", kind: "observation", summary: "Checked" }] },
+            { id: "synthesis", status: "pass", summary: "Verified", evidence: [{ id: "e2", kind: "artifact", summary: "Checked" }] },
+          ],
+          fingerprintBefore: "stable",
+          fingerprintAfter: "stable",
+          recommendedNextAction: "block",
+          createdAt: Date.now(),
+        },
+      })
+
+      expect(blocked.run.state).toBe("blocked")
+      expect(blocked.run.completion?.summary).toContain("token budget exhausted during completion audit")
+      expect(blocked.usage?.inputTokens).toBe(1)
+      expect(blocked.gates.some((gate) => gate.kind === "completion" && gate.reason?.includes("token budget exhausted"))).toBe(true)
+    }),
+  )
+
   recoveryIt.instance("finishes a working attempt from its persisted terminal assistant", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
