@@ -4,7 +4,7 @@ import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import path from "path"
-import { readFileSync } from "fs"
+import { existsSync, readFileSync } from "fs"
 import { fileURLToPath } from "url"
 import z from "zod"
 import { BusEvent } from "@/bus/bus-event"
@@ -13,6 +13,7 @@ import * as Log from "@mendcode/core/util/log"
 import { makeRuntime } from "@mendcode/core/effect/runtime"
 import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "@mendcode/core/installation/version"
+import { which } from "@/util/which"
 
 const log = Log.create({ service: "installation" })
 const GITHUB_REPO = process.env.MENDCODE_GITHUB_REPO ?? "MendCode/MendCode"
@@ -97,6 +98,31 @@ export class UpgradeFailedError extends Schema.TaggedErrorClass<UpgradeFailedErr
   stderr: Schema.String,
 }) {}
 
+function describeUpgradeFailure(error: unknown) {
+  if (typeof error === "string" && error.trim()) return error.trim()
+  if (error instanceof Error && error.message.trim()) return error.message.trim()
+  if (typeof error === "object" && error !== null) {
+    const message = (error as { message?: unknown }).message
+    if (typeof message === "string" && message.trim()) return message.trim()
+    const reason = (error as { reason?: unknown }).reason
+    if (typeof reason === "string" && reason.trim()) return reason.trim()
+  }
+  return "The updater process failed before it could complete."
+}
+
+function installerShell() {
+  const configured = process.env.MENDCODE_BASH_PATH?.trim()
+  if (configured) return configured
+
+  const candidates = process.platform === "win32" ? ["bash.exe", "bash"] : ["/bin/bash", "/usr/bin/bash", "bash"]
+  for (const candidate of candidates) {
+    if (candidate.startsWith("/") && existsSync(candidate)) return candidate
+    const resolved = which(candidate)
+    if (resolved) return resolved
+  }
+  return undefined
+}
+
 // Response schemas for external version APIs
 const GitHubRelease = Schema.Struct({ tag_name: Schema.String })
 
@@ -156,9 +182,16 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
         function* (target: string) {
           const response = yield* httpOk.execute(HttpClientRequest.get(GITHUB_RAW_INSTALL_URL))
           const body = yield* response.text
+          const bash = installerShell()
+          if (!bash) {
+            return yield* new UpgradeFailedError({
+              stderr:
+                "MendCode could not find Bash to run the updater. Install Bash (or Git Bash on Windows), then retry the upgrade.",
+            })
+          }
           const bodyBytes = new TextEncoder().encode(body)
           const proc = ChildProcess.make(
-            "bash",
+            bash,
             ["-s", "--", "--version", target, "--no-modify-path", "--skip-setup"],
             {
               stdin: Stream.make(bodyBytes),
@@ -174,7 +207,13 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
           return { code, stdout, stderr }
         },
         Effect.scoped,
-        Effect.orDie,
+        Effect.catchDefect((defect) => Effect.fail(new UpgradeFailedError({ stderr: describeUpgradeFailure(defect) }))),
+        Effect.mapError(
+          (error) =>
+            error instanceof UpgradeFailedError
+              ? error
+              : new UpgradeFailedError({ stderr: describeUpgradeFailure(error) }),
+        ),
       )
 
       const result: Interface = {
@@ -242,7 +281,13 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
               return yield* new UpgradeFailedError({ stderr: `Unknown method: ${m}` })
           }
           if (!upgradeResult || upgradeResult.code !== 0) {
-            return yield* new UpgradeFailedError({ stderr: upgradeResult?.stderr || "" })
+            const details = [upgradeResult?.stderr, upgradeResult?.stdout]
+              .map((value) => value?.trim())
+              .filter((value): value is string => Boolean(value))
+              .join("\n")
+            return yield* new UpgradeFailedError({
+              stderr: details || "The updater exited before installing the requested version.",
+            })
           }
           log.info("upgraded", {
             method: m,
@@ -250,7 +295,12 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
             stdout: upgradeResult.stdout,
             stderr: upgradeResult.stderr,
           })
-          yield* text([process.execPath, "--version"])
+          const installedVersion = (yield* text([process.execPath, "--version"])).trim()
+          if (installedVersion !== target) {
+            return yield* new UpgradeFailedError({
+              stderr: `MendCode upgrade did not install the requested version. Expected ${target}, found ${installedVersion || "unknown"}. Restart the current process and retry.`,
+            })
+          }
         }),
       }
 
