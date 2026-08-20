@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, PlatformError, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Installation } from "../../src/installation"
@@ -11,8 +11,22 @@ function mockHttpClient(handler: (request: HttpClientRequest.HttpClientRequest) 
   return Layer.succeed(HttpClient.HttpClient, client)
 }
 
-function mockSpawner(handler: (cmd: string, args: readonly string[]) => string = () => "") {
+function mockSpawner(
+  handler: (cmd: string, args: readonly string[]) => string = () => "",
+  spawnError?: Error,
+) {
   const spawner = ChildProcessSpawner.make((command) => {
+    if (spawnError) {
+      return Effect.fail(
+        PlatformError.systemError({
+          _tag: "NotFound",
+          module: "ChildProcess",
+          method: "spawn",
+          description: spawnError.message,
+          cause: spawnError,
+        }),
+      )
+    }
     const std = ChildProcess.isStandardCommand(command) ? command : undefined
     const output = handler(std?.command ?? "", std?.args ?? [])
     return Effect.succeed(
@@ -99,6 +113,7 @@ describe("installation", () => {
         () => new Response("#!/usr/bin/env bash\n"),
         (cmd, args) => {
           calls.push({ cmd, args })
+          if (cmd === process.execPath && args.length === 1 && args[0] === "--version") return "0.1.25"
           return ""
         },
       )
@@ -108,9 +123,47 @@ describe("installation", () => {
       )
 
       expect(calls[0]).toEqual({
-        cmd: "bash",
+        cmd: expect.stringMatching(/(?:^|[\\/])bash(?:\.exe)?$/),
         args: ["-s", "--", "--version", "0.1.25", "--no-modify-path", "--skip-setup"],
       })
+    })
+
+    test("turns a missing updater process into an actionable error", async () => {
+      const layer = Installation.layer.pipe(
+        Layer.provide(mockHttpClient(() => new Response("#!/usr/bin/env bash\n"))),
+        Layer.provide(mockSpawner(() => "", new Error("spawn bash ENOENT"))),
+      )
+
+      let error: any
+      try {
+        await Effect.runPromise(
+          Installation.Service.use((svc) => svc.upgrade("curl", "0.1.25")).pipe(Effect.provide(layer)),
+        )
+      } catch (err) {
+        error = err
+      }
+
+      expect(error).toBeInstanceOf(Installation.UpgradeFailedError)
+      expect(error?.stderr).toContain("spawn bash ENOENT")
+    })
+
+    test("rejects an upgrade when the installed binary reports another version", async () => {
+      const layer = testLayer(
+        () => new Response("#!/usr/bin/env bash\n"),
+        (cmd, args) => (cmd === process.execPath && args.length === 1 && args[0] === "--version" ? "0.1.24" : ""),
+      )
+
+      let error: any
+      try {
+        await Effect.runPromise(
+          Installation.Service.use((svc) => svc.upgrade("curl", "0.1.25")).pipe(Effect.provide(layer)),
+        )
+      } catch (err) {
+        error = err
+      }
+
+      expect(error).toBeInstanceOf(Installation.UpgradeFailedError)
+      expect(error?.stderr).toContain("Expected 0.1.25, found 0.1.24")
     })
 
     test("blocks registry upgrades until MendCode-owned registries exist", async () => {

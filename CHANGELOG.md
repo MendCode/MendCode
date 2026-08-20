@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.33 - 2026-08-20
+
+MendCode v0.1.33 is a reliability hotfix for updates, long-running activity, and context-pack presentation.
+
+### Fixed
+
+- Prevent in-app updates from failing when GUI-launched processes do not expose Bash through `PATH`; surface actionable updater errors and verify the installed version.
+- Keep Arcade games visible after context compaction completes so the game is not removed with the compacted transcript.
+- Clear stale Generating/activity state after an aborted shell command leaves a completed assistant timestamp without finish metadata.
+
+### Tests
+
+- Add updater failure and installed-version verification regressions.
+- Add Arcade-after-compaction and aborted-activity regressions.
+
 ## 0.1.32 - 2026-08-20
 
 MendCode v0.1.32 hardens long-running sessions so activity, cancellation, scrolling, and approval state remain truthful while large tools and commands are still running.
