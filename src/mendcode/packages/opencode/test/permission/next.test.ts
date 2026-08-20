@@ -598,10 +598,10 @@ it.live("ask - resolves immediately when action is allow", () =>
   ),
 )
 
-it.live("ask - Smart mode immediately allows a deterministically safe command", () =>
+it.live("ask - Smart mode keeps a safe command pending for prompt-scoped review", () =>
   withDir({ git: true }, () =>
     Effect.gen(function* () {
-      const result = yield* ask({
+      const fiber = yield* ask({
         sessionID: SessionID.make("session_test"),
         permission: "bash",
         patterns: ["date -u +%Y-%m-%dT%H:%M:%SZ"],
@@ -611,9 +611,11 @@ it.live("ask - Smart mode immediately allows a deterministically safe command", 
           { permission: "*", pattern: "*", action: "allow" },
           Permission.sessionModeRule("smart"),
         ],
-      })
-      expect(result).toBeUndefined()
-      expect(yield* list()).toHaveLength(0)
+      }).pipe(Effect.forkScoped)
+
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(fiber)
     }),
   ),
 )

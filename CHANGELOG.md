@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.1.32 - 2026-08-20
+
+MendCode v0.1.32 hardens long-running sessions so activity, cancellation, scrolling, and approval state remain truthful while large tools and commands are still running.
+
+### Added
+
+- Add bounded multi-pass bottom-follow reflow for large tool output, transcript relayouts, and the Session v2 route.
+- Add persisted cancellation retry state with bounded backoff and explicit unknown/failed status instead of silently losing `Esc` requests.
+- Add local tool activity detection for Agent View and a bounded Full reasoning viewport that follows only its own content.
+
+### Changed
+
+- Keep `Esc` available as a global active-session interrupt while preserving approval, question, and plan-review dismissal semantics.
+- Keep the shell default timeout configurable and raise its fallback to 10 minutes so long edits, builds, and device commands have time to finish.
+- Route every Smart Approval shell request through prompt-scoped review; safe reads and directory access are no longer auto-approved without the current user prompt.
+- Render memory actions with explicit add/update/search labels and success/active tones instead of treating completed actions as errors.
+
+### Fixed
+
+- Prevent large tool-height changes and delayed OpenTUI reflows from detaching a session that is still following the bottom.
+- Detach bottom-follow immediately when a manual upward scroll overlaps a delayed tool reflow, so follow mode cannot pull the viewport back down.
+- Prevent the Activity footer and Agents view from becoming idle while a tool remains pending or running after a long edit or command.
+- Prevent `Esc` from being consumed by an inner transcript/widget before it reaches the active session interrupt command.
+- Prevent Full reasoning content from expanding the entire chat and forcing the outer session scroll to move.
+
+### Tests
+
+- Run focused session-control, scroll/activity, Agent View, shell, permission, Smart Approval, presentation, and renderer suites (315 cases in the release-focused run).
+- Verify persisted runtime recovery and source/installed parity with `test:session-runtime:smoke` without provider requests.
+- Verify Linux, Darwin, and Windows package builds with the release builder using the existing no-embed-web-UI release path.
+
 ## 0.1.31 - 2026-08-19
 
 MendCode v0.1.31 adds completion-verified Loop and Workflow execution and keeps long-running agent work visibly active until it actually finishes.

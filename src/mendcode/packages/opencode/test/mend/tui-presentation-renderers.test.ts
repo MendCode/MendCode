@@ -3,10 +3,11 @@ import path from "path"
 import { parseTimelineDiffRows, timelineDiffFileStatus, timelineDiffIsNonText } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
 import { diffStatsFromPatch, formatDiffStats, patchFileTitle } from "../../src/cli/cmd/tui/routes/session/renderers/diff-label"
 import { compactMemoryGraphRows, compactMemoryGraphSnapshot } from "../../src/cli/cmd/tui/util/memory-graph"
-import { compactionArcadeFrames, compactionStageStates, compactionSummaryPreview, rawReasoningDisplay, reasoningPreview, resolveTuiPresentation, shouldShowToolContinuation, toolContinuationActivity, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
+import { compactionArcadeFrames, compactionStageStates, compactionSummaryPreview, rawReasoningDisplay, reasoningPreview, reasoningViewportMaxHeight, resolveTuiPresentation, shouldShowToolContinuation, toolContinuationActivity, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
 import { groupTimelineParts, isTimelineStackStart, timelineCollapseLabel, timelineNodeKeys } from "../../src/mend/tui/timeline/group"
 import {
   normalizeToolEvent,
+  memoryToolPresentation,
   shouldRenderCompactTool,
   shouldRenderImageGenerationTool,
   toolClass,
@@ -220,6 +221,27 @@ describe("mend tui presentation renderers", () => {
     expect(toolSummary("bash", { command: "bun test test/mend/tui-presentation-renderers.test.ts" }).title).toBe(
       "Shell bun test test/mend/tui-presentation-renderers.test.ts",
     )
+  })
+
+  test("memory rows expose their action and a non-error presentation tone", () => {
+    expect(memoryToolPresentation({ tool: "memory", state: "pending", input: { action: "add" } })).toEqual({
+      action: "add",
+      label: "add",
+      title: "Memory add",
+      tone: "active",
+    })
+    expect(memoryToolPresentation({ tool: "memory", state: "completed", input: { action: "update" } }).tone).toBe(
+      "success",
+    )
+    expect(
+      memoryToolPresentation({
+        tool: "memory_graph",
+        state: "completed",
+        input: {},
+        metadata: { mendMemoryTool: { action: "upsert_fact" } },
+      }),
+    ).toMatchObject({ action: "upsert_fact", label: "upsert fact", title: "Memory graph upsert fact", tone: "success" })
+    expect(memoryToolPresentation({ tool: "memory", state: "error", input: { action: "delete" } }).tone).toBe("error")
   })
 
   test("tool summaries include useful Grok-like details", () => {
@@ -807,6 +829,13 @@ describe("mend tui presentation renderers", () => {
     expect(preview.text).toContain("step 0")
     expect(preview.text.endsWith("…")).toBe(true)
     expect(reasoningPreview("short reasoning")).toEqual({ text: "short reasoning", truncated: false })
+  })
+
+  test("keeps Full reasoning inside a bounded local viewport", () => {
+    expect(reasoningViewportMaxHeight(24)).toBe(7)
+    expect(reasoningViewportMaxHeight(80)).toBe(14)
+    expect(reasoningViewportMaxHeight(2)).toBe(4)
+    expect(reasoningViewportMaxHeight(40, { min: 6, max: 10, ratio: 0.5 })).toBe(10)
   })
 
   test("shows tool continuation only while a non-terminal tool is actually active", () => {

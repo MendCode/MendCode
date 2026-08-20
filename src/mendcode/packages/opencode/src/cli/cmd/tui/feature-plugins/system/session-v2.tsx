@@ -39,7 +39,9 @@ import type {
 } from "@mendcode/sdk/v2"
 import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
 import { useMendTuiProfile } from "@tui/context/mend"
+import { useCommandDialog } from "@tui/component/dialog-command"
 import {
+  memoryToolPresentation,
   normalizeToolEvent,
   shouldRenderCompactTool,
   shouldRenderImageGenerationTool,
@@ -56,6 +58,7 @@ import {
   compactionSummaryPreview,
   rawReasoningDisplay,
   reasoningSummary,
+  reasoningViewportMaxHeight,
   shouldDisplayReasoning,
   unavailableReasoningLabel,
 } from "@/mend/tui/presentation"
@@ -109,17 +112,52 @@ function useSessionStatusType() {
 
 function View(props: { api: TuiPluginApi; sessionID: string }) {
   const sync = useSyncV2()
+  const command = useCommandDialog()
+  const sessionStatusType = useSessionStatusType()
   const dimensions = useTerminalDimensions()
   const { theme, syntax, subtleSyntax } = useTheme()
   const contentWidth = createMemo(() => sessionContentWidth(dimensions().width, false))
   const messages = createMemo(() => sync.data.messages[props.sessionID] ?? [])
   const renderedMessages = createMemo(() => messages().toReversed())
   const lastAssistant = createMemo(() => renderedMessages().findLast((message) => message.type === "assistant"))
+  const activeTool = createMemo(() =>
+    messages().some(
+      (message) =>
+        message.type === "assistant" &&
+        message.content.some(
+          (part) => part.type === "tool" && (part.state.status === "pending" || part.state.status === "running"),
+        ),
+    ),
+  )
+  const activeTurn = createMemo(() => {
+    const status = sessionStatusType()
+    return status === "busy" || status === "retry" || activeTool()
+  })
   let scroll: ScrollBoxRenderable | undefined
   const [followSessionOutput, setFollowSessionOutput] = createSignal(true)
   let scrollAnchor: { id: string; offset: number } | undefined
   let lastObservedScrollTop = 0
   let lastObservedScrollHeight = 0
+  let followBottomScrollToken = 0
+  let followBottomScrollScheduled = false
+
+  const scheduleFollowBottomScroll = () => {
+    if (!followSessionOutput() || followBottomScrollScheduled) return
+    followBottomScrollScheduled = true
+    const token = ++followBottomScrollToken
+    ;[0, 16, 50, 120, 240, 480, 960, 1_600, 2_400, 3_600, 5_200].forEach((delay, index, delays) => {
+      setTimeout(() => {
+        if (token !== followBottomScrollToken || !followSessionOutput() || !scroll || scroll.isDestroyed) {
+          if (token === followBottomScrollToken) followBottomScrollScheduled = false
+          return
+        }
+        scroll.scrollTo(scroll.scrollHeight)
+        lastObservedScrollTop = scroll.scrollTop
+        lastObservedScrollHeight = scroll.scrollHeight
+        if (index === delays.length - 1 || isScrollboxAtBottom(scroll, 1)) followBottomScrollScheduled = false
+      }, delay)
+    })
+  }
 
   const captureScrollAnchor = () => {
     if (!scroll || scroll.isDestroyed) {
@@ -151,6 +189,8 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
     if (!scroll || scroll.isDestroyed) return
     const scrollTop = scroll.scrollTop
     const scrollHeight = scroll.scrollHeight
+    const wasFollowing = followSessionOutput()
+    const contentHeightChanged = Math.abs(scrollHeight - lastObservedScrollHeight) > 1
 
     if (isScrollboxAtBottom(scroll)) {
       setFollowSessionOutput(true)
@@ -160,10 +200,17 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
       return
     }
 
+    const userMovedViewport = Math.abs(scrollTop - lastObservedScrollTop) > 1 && !contentHeightChanged
+    if (wasFollowing && !userMovedViewport && contentHeightChanged) {
+      setFollowSessionOutput(true)
+      scheduleFollowBottomScroll()
+      lastObservedScrollTop = scrollTop
+      lastObservedScrollHeight = scrollHeight
+      return
+    }
+
     setFollowSessionOutput(false)
 
-    const userMovedViewport =
-      Math.abs(scrollTop - lastObservedScrollTop) > 1 && Math.abs(scrollHeight - lastObservedScrollHeight) <= 1
     if (userMovedViewport || !scrollAnchor) {
       captureScrollAnchor()
     } else {
@@ -183,13 +230,29 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
     void sync.session.message.sync(props.sessionID)
   })
 
+  createEffect(() => {
+    renderedMessages()
+    if (followSessionOutput()) queueMicrotask(scheduleFollowBottomScroll)
+  })
+
   onMount(() => {
     const timer = setInterval(syncScrollFollowMode, 80)
+    queueMicrotask(scheduleFollowBottomScroll)
     onCleanup(() => clearInterval(timer))
+    onCleanup(() => {
+      followBottomScrollToken += 1
+      followBottomScrollScheduled = false
+    })
   })
 
   useKeyboard((event) => {
     if (event.name !== "escape") return
+    if (activeTurn()) {
+      event.preventDefault()
+      event.stopPropagation()
+      command.trigger("session.interrupt")
+      return
+    }
     event.preventDefault()
     event.stopPropagation()
     props.api.route.navigate("session", { sessionID: props.sessionID })
@@ -633,6 +696,7 @@ function AssistantReasoning(props: {
 }) {
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
+  const dimensions = useTerminalDimensions()
   const content = createMemo(() => props.part.text.replace("[REDACTED]", "").trim())
   const raw = createMemo(() => mend.profile.presentation.profile === "raw")
   const full = createMemo(() => mend.profile.presentation.profile === "mendcode")
@@ -655,6 +719,7 @@ function AssistantReasoning(props: {
     if (!line) return display().title
     return Locale.truncate(line.replace(/^#+\s*/, "").replace(/^\*\*([^*]+)\*\*$/, "$1"), 120)
   })
+  const fullReasoningMaxHeight = createMemo(() => reasoningViewportMaxHeight(dimensions().height))
   return (
     <Show when={hasReasoningEvidence() && shouldDisplayReasoning(mend.profile, { completed: props.completed })}>
       <Switch>
@@ -694,6 +759,28 @@ function AssistantReasoning(props: {
             flexShrink={0}
           >
             <ReasoningHeader done={props.completed} title={fullReasoningTitle()} />
+            <Show when={content()}>
+              {(body) => (
+                <scrollbox
+                  height={fullReasoningMaxHeight()}
+                  maxHeight={fullReasoningMaxHeight()}
+                  stickyScroll={streaming()}
+                  stickyStart="bottom"
+                  verticalScrollbarOptions={{ visible: false }}
+                  viewportOptions={{ paddingRight: 0 }}
+                >
+                  <code
+                    filetype="markdown"
+                    drawUnstyledText={false}
+                    streaming={streaming()}
+                    syntaxStyle={props.subtleSyntax}
+                    content={body()}
+                    conceal={true}
+                    fg={theme.textMuted}
+                  />
+                </scrollbox>
+              )}
+            </Show>
           </box>
         </Match>
         <Match when={true}>
@@ -886,6 +973,16 @@ function PresentationToolRow(props: {
   const plainTool = createMemo(() => event().class === "simple-read" || event().class === "artifact")
   const rowColor = createMemo(() => {
     if (errored()) return theme.error
+    if (props.tool === "memory" || props.tool === "memory_graph") {
+      const tone = memoryToolPresentation({
+        tool: props.tool,
+        state: props.state,
+        input: props.input,
+        metadata: props.metadata,
+      }).tone
+      if (tone === "success") return theme.success
+      if (tone === "active") return theme.primary
+    }
     if (pending() || plainTool()) return theme.text
     return theme.textMuted
   })
