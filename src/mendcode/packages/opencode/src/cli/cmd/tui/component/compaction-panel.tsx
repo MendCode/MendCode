@@ -61,7 +61,10 @@ export function shouldRenderCompactionArcade(input: {
   completed?: boolean
   terminal?: boolean
 }) {
-  return !input.completed && !input.terminal && input.style === "arcade" && input.arcade !== "off"
+  // Packing the context is a presentation milestone, not a reason to tear
+  // down the selected game. Keep the arcade mounted after the summary lands so
+  // the user can still see and play it while reviewing the compacted session.
+  return !input.terminal && input.style === "arcade" && input.arcade !== "off"
 }
 
 export function compactionPanelIsPacked(input: { completed?: boolean; terminal?: boolean; hasSummaryBody?: boolean }) {
@@ -792,6 +795,7 @@ export function CompactionPanel(props: {
           </For>
         </box>
       </Show>
+      </Show>
       <Show when={activeArcadeGame() && arcadeRender()}>
         <box paddingTop={1} width="100%" flexDirection="column" alignItems="center">
           <box
@@ -842,7 +846,6 @@ export function CompactionPanel(props: {
         <box paddingTop={1} flexDirection="column">
           <For each={arcadeFrame()}>{(line) => <text fg={theme.primary}>{line}</text>}</For>
         </box>
-      </Show>
       </Show>
       <box paddingTop={1} flexDirection="column" border={["top"]} borderColor={theme.border} paddingLeft={1} paddingRight={1}>
         <box flexDirection="row" justifyContent="space-between" width="100%" gap={1}>

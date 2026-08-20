@@ -93,8 +93,16 @@ export function isBusyStatusSupersededByTerminalAssistant(input: {
   if ((input.statusType !== "busy" && input.statusType !== "retry") || input.statusKind === "compaction") return false
   const message = input.latestMessage
   if (!message || message.role !== "assistant") return false
-  const terminalFinish = Boolean(message.finish && !["tool-calls", "unknown"].includes(message.finish))
-  if (!terminalFinish && !message.error) return false
+  const continuation = message.finish === "tool-calls" || message.finish === "unknown"
+  const terminalFinish = Boolean(message.finish && !continuation)
+  // Direct shell turns can persist their completed timestamp before a finish
+  // reason is available. This is also the durable receipt left by an aborted
+  // tool run, whose output contains "User aborted the command" but whose
+  // assistant message may not carry an error or finish field in the TUI
+  // snapshot. A completed non-continuation assistant is terminal evidence;
+  // tool-calls/unknown remain live continuations until their next step settles.
+  const completedWithoutContinuation = message.time.completed !== undefined && !continuation
+  if (!terminalFinish && !message.error && !completedWithoutContinuation) return false
   const terminalAt = message.time.completed ?? message.time.created
   if (typeof terminalAt !== "number") return false
   // Older/status-recovered sessions may not carry startedAt. Once the latest
