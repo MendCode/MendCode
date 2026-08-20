@@ -121,6 +121,46 @@ export function normalizeToolEvent(input: {
   }
 }
 
+export type MemoryToolPresentationTone = "active" | "success" | "error"
+
+const memoryActionLabels: Record<string, string> = {
+  add: "add",
+  update: "update",
+  delete: "delete",
+  search: "search",
+  context: "context",
+  list: "list",
+  categories: "categories",
+  status: "status",
+  overview: "overview",
+  validate: "validate",
+  upsert_fact: "upsert fact",
+  link: "link",
+  unlink: "unlink",
+}
+
+export function memoryToolPresentation(input: {
+  tool: string
+  state: TimelineToolState
+  input?: Record<string, unknown>
+  metadata?: Record<string, unknown>
+}) {
+  const metadataMemory = input.metadata?.mendMemoryTool
+  const metadataAction =
+    metadataMemory && typeof metadataMemory === "object"
+      ? (metadataMemory as Record<string, unknown>).action
+      : undefined
+  const action = stringValue(input.input?.action) || stringValue(metadataAction) || "status"
+  const label = memoryActionLabels[action] ?? action.replace(/_/g, " ")
+  const tone: MemoryToolPresentationTone = input.state === "error" ? "error" : input.state === "pending" || input.state === "running" ? "active" : "success"
+  return {
+    action,
+    label,
+    title: input.tool === "memory_graph" ? `Memory graph ${label}` : `Memory ${label}`,
+    tone,
+  }
+}
+
 export function toolSummary(
   tool: string,
   input: Record<string, unknown>,
@@ -154,7 +194,7 @@ function memorySummary(input: Record<string, unknown>, output?: unknown) {
   const query = stringValue(input.query)
   const title = [
     "Memory",
-    action.replace(/_/g, " "),
+    memoryActionLabels[action] ?? action.replace(/_/g, " "),
     scope ? `[${scope}]` : "",
     id ? id : "",
     query ? quote(query) : "",

@@ -16,7 +16,7 @@ import os from "os"
 import { evaluate as evalRule } from "./evaluate"
 import { PermissionID } from "./schema"
 import { markPermissionAbandoned, markPermissionPending, markPermissionResolved } from "@/session/pending-input"
-import { isSafeSmartPermissionRequest } from "@/mend/permission/smart-approval"
+import { isSafeSmartAutoApprovalRequest as isSafeSmartAutoApprovalRequestForShell } from "@/mend/permission/smart-approval"
 
 const log = Log.create({ service: "permission" })
 
@@ -75,7 +75,7 @@ export class Request extends Schema.Class<Request>("PermissionRequest")({
 }
 
 export function isSafeSmartAutoApprovalRequest(request: Request) {
-  return request.permission !== "external_directory" && isSafeSmartPermissionRequest(request)
+  return request.permission !== "external_directory" && isSafeSmartAutoApprovalRequestForShell(request)
 }
 
 export const Reply = Schema.Literals(["once", "always", "reject"]).pipe(withStatics((s) => ({ zod: zod(s) })))

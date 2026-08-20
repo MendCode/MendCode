@@ -5,6 +5,7 @@ import path from "path"
 import { Config } from "@/config/config"
 import { Shell } from "../../src/shell/shell"
 import { ShellTool } from "../../src/tool/shell"
+import { ShellPrompt, shellTimeoutDescription } from "../../src/tool/shell/prompt"
 import { Instance } from "../../src/project/instance"
 import { WithInstance } from "../../src/project/with-instance"
 import { Filesystem } from "@/util/filesystem"
@@ -142,6 +143,11 @@ const mustTruncate = (result: {
 }
 
 describe("tool.shell", () => {
+  test("renders the effective default timeout instead of a stale hardcoded value", () => {
+    const rendered = ShellPrompt.render(sh(), process.platform, { maxLines: 100, maxBytes: 10_000 })
+    expect(rendered.description).toContain(`commands will time out after ${shellTimeoutDescription()}`)
+    expect(shellTimeoutDescription(300_000)).toBe("300000ms (5 minutes)")
+  })
   each("basic", async () => {
     await WithInstance.provide({
       directory: projectRoot,
