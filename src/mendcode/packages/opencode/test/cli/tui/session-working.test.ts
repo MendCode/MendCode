@@ -224,6 +224,16 @@ describe("terminal busy reconciliation", () => {
     ).toBe(true)
   })
 
+  test("treats a completed assistant without finish metadata as terminal", () => {
+    expect(
+      terminalAssistantSettlesActivity({
+        statusType: "busy",
+        latestMessage: { role: "assistant", time: { created: 200, completed: 300 } },
+        hasActiveTool: false,
+      }),
+    ).toBe(true)
+  })
+
   test("clears a stale busy flag even when its recovery startedAt is older than the final response", () => {
     expect(
       terminalAssistantSettlesActivity({
