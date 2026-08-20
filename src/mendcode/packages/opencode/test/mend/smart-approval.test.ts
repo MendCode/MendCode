@@ -4,6 +4,7 @@ import { tmpdir } from "os"
 import path from "path"
 import {
   isSafeSmartPermissionRequest,
+  isSafeSmartAutoApprovalRequest,
   normalizeSmartPermissionDecision,
   reviewPermissionRequestWithModel,
   shouldReviewSmartApproval,
@@ -29,20 +30,20 @@ function externalRequest(command?: string) {
 }
 
 describe("smart permission approval trigger", () => {
-  test("does not call the reviewer for bounded read-only shell commands", () => {
-    expect(shouldReviewSmartApproval(request("git show HEAD"))).toBe(false)
-    expect(shouldReviewSmartApproval(request("git status --short"))).toBe(false)
-    expect(shouldReviewSmartApproval(request("git diff -- src/file.ts | sed -n '1,260p'"))).toBe(false)
-    expect(shouldReviewSmartApproval(request("git show HEAD:src/file.ts | sed -n '1,260p'"))).toBe(false)
-    expect(shouldReviewSmartApproval(request("ls -la /Users/obed/downloads"))).toBe(false)
-    expect(shouldReviewSmartApproval(request("file /etc/hosts"))).toBe(false)
+  test("keeps every shell command in the reviewer path, including reads", () => {
+    expect(shouldReviewSmartApproval(request("git show HEAD"))).toBe(true)
+    expect(shouldReviewSmartApproval(request("git status --short"))).toBe(true)
+    expect(shouldReviewSmartApproval(request("git diff -- src/file.ts | sed -n '1,260p'"))).toBe(true)
+    expect(shouldReviewSmartApproval(request("git show HEAD:src/file.ts | sed -n '1,260p'"))).toBe(true)
+    expect(shouldReviewSmartApproval(request("ls -la /Users/obed/downloads"))).toBe(true)
+    expect(shouldReviewSmartApproval(request("file /etc/hosts"))).toBe(true)
     expect(shouldReviewSmartApproval(request("rm -rf dist", "edit"))).toBe(false)
   })
 
   test("triggers the reviewer for risky or non-read-only shell commands", () => {
-    expect(shouldTriggerSmartApproval(request("echo hello"))).toBe(false)
-    expect(shouldTriggerSmartApproval(request("echo rm"))).toBe(false)
-    expect(shouldTriggerSmartApproval(request("git status"))).toBe(false)
+    expect(shouldTriggerSmartApproval(request("echo hello"))).toBe(true)
+    expect(shouldTriggerSmartApproval(request("echo rm"))).toBe(true)
+    expect(shouldTriggerSmartApproval(request("git status"))).toBe(true)
     expect(shouldTriggerSmartApproval(request("rm -rf dist"))).toBe(true)
     expect(shouldTriggerSmartApproval(request("./scripts/deploy.sh"))).toBe(true)
     expect(shouldTriggerSmartApproval(request("python scripts/migrate.py"))).toBe(true)
@@ -125,12 +126,17 @@ describe("smart permission approval trigger", () => {
     expect(isSafeSmartPermissionRequest(request("npm test"))).toBe(false)
   })
 
-  test("auto-approves bounded local directory creation without a reviewer", () => {
+  test("never auto-approves a shell request without prompt-scoped review", () => {
+    expect(isSafeSmartAutoApprovalRequest(request("git status --short"))).toBe(false)
+    expect(isSafeSmartAutoApprovalRequest(request("ls -la /tmp", "external_directory"))).toBe(false)
+  })
+
+  test("keeps bounded local directory creation in the reviewer path", () => {
     const command =
       'ls ".agents/specs/product-consistency-redesign" && mkdir ".agents/specs/product-consistency-redesign/checklists"'
 
     expect(isSafeSmartPermissionRequest(request(command))).toBe(true)
-    expect(shouldReviewSmartApproval(request(command))).toBe(false)
+    expect(shouldReviewSmartApproval(request(command))).toBe(true)
     expect(isSafeSmartPermissionRequest(request("mkdir -pv .agents/specs/new/checklists"))).toBe(true)
     expect(isSafeSmartPermissionRequest(request("md .agents\\specs\\new\\checklists"))).toBe(true)
     expect(isSafeSmartPermissionRequest(request("mkdir"))).toBe(false)
@@ -160,9 +166,9 @@ describe("smart permission approval trigger", () => {
     expect(shouldTriggerSmartApproval(mismatched)).toBe(true)
   })
 
-  test("only auto-approves external directories when the request came from a safe shell command", () => {
+  test("reviews external directories even when the shell command is safe", () => {
     expect(isSafeSmartPermissionRequest(externalRequest("ls /tmp"))).toBe(true)
-    expect(shouldReviewSmartApproval(externalRequest("ls /tmp"))).toBe(false)
+    expect(shouldReviewSmartApproval(externalRequest("ls /tmp"))).toBe(true)
     expect(isSafeSmartPermissionRequest(externalRequest("rm -rf /tmp/cache"))).toBe(false)
     expect(shouldReviewSmartApproval(externalRequest("rm -rf /tmp/cache"))).toBe(true)
     expect(isSafeSmartPermissionRequest(externalRequest())).toBe(false)

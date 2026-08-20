@@ -361,6 +361,13 @@ export function reasoningPreview(text: string, maxChars = 1200, maxLines = 8) {
   return { text: `${clipped}…`, truncated: true }
 }
 
+export function reasoningViewportMaxHeight(terminalHeight: number, input?: { min?: number; max?: number; ratio?: number }) {
+  const min = Math.max(1, Math.floor(input?.min ?? 4))
+  const max = Math.max(min, Math.floor(input?.max ?? 14))
+  const ratio = input?.ratio ?? 0.32
+  return Math.max(min, Math.min(max, Math.floor(Math.max(1, terminalHeight) * ratio)))
+}
+
 export function shouldShowToolContinuation(input: {
   finish?: string
   terminal: boolean

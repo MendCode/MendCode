@@ -104,6 +104,27 @@ export function retainAgentViewActiveRows<T>(input: {
   return [...input.next, ...retained]
 }
 
+export function activeToolSessionIDs(input: {
+  messages: Readonly<Record<string, readonly { id: string; role?: string }[]>>
+  parts: Readonly<Record<string, readonly { type?: string; state?: { status?: string } }[]>>
+}) {
+  const active = new Set<string>()
+  for (const [sessionID, messages] of Object.entries(input.messages)) {
+    if (
+      messages.some(
+        (message) =>
+          message.role === "assistant" &&
+          (input.parts[message.id] ?? []).some(
+            (part) => part.type === "tool" && (part.state?.status === "pending" || part.state?.status === "running"),
+          ),
+      )
+    ) {
+      active.add(sessionID)
+    }
+  }
+  return active
+}
+
 const agentViewLiveLoopWorkflowStates = new Set(["active", "sleeping", "working", "needs_input", "blocked"])
 
 export function isAgentViewLiveLoopWorkflow(input: { state?: string | null }) {

@@ -32,6 +32,7 @@ import {
   isAgentViewLoopSession,
   isAgentViewSessionVisible,
   agentViewBusyActivity,
+  activeToolSessionIDs,
   agentViewParentSessionIDsWithActiveChildren,
   formatAgentViewDetailLabel,
   formatAgentViewPathLabel,
@@ -499,7 +500,7 @@ export function HomeSurface(props: {
   const agentViewActiveKind = new Map<string, "needsInput" | "looping" | "working">()
   const agentViewActivityStartedAt = new Map<string, number>()
   const agentViewSessionCache = new Map<string, { item: AgentViewSessionItem; seenAt: number }>()
-  const agentViewMissingRowGraceMs = 30_000
+  const agentViewMissingRowGraceMs = 5 * 60_000
   const agentViewActiveGraceMs = agentViewMissingRowGraceMs
   let agentViewRefreshTimer: ReturnType<typeof setTimeout> | undefined
   let agentViewPollTimer: ReturnType<typeof setInterval> | undefined
@@ -526,6 +527,12 @@ export function HomeSurface(props: {
   }
 
   const agentViewDirectory = createMemo(() => project.instance.path().directory || sdk.directory || "")
+  const localToolActivitySessionIDs = createMemo(() =>
+    activeToolSessionIDs({
+      messages: sync.data.message,
+      parts: sync.data.part,
+    }),
+  )
   const agentViewGlobalScope = createMemo(() => {
     const directory = agentViewDirectory()
     const home = project.instance.path().home || Global.Path.home
@@ -789,6 +796,7 @@ export function HomeSurface(props: {
       pendingInputCount(sessionID) > 0 ||
       status?.type === "busy" ||
       status?.type === "retry" ||
+      localToolActivitySessionIDs().has(sessionID) ||
       agentViewActiveChildParentSessionIDs().has(sessionID) ||
       agentViewActiveSeenAt.has(sessionID)
     )
@@ -874,6 +882,7 @@ export function HomeSurface(props: {
     if (isLoopSession(item)) return "looping"
     if (item.background.state === "failed" || item.background.state === "stopped") return "completed"
     if (pendingInputCount(sessionID) > 0 || status?.type === "retry" || item.background.state === "needs_input") return "needsInput"
+    if (localToolActivitySessionIDs().has(sessionID)) return "working"
     if (agentViewActiveChildParentSessionIDs().has(sessionID)) return "working"
 
     if (status?.type === "busy" || item.background.state === "queued" || item.background.state === "working") return "working"

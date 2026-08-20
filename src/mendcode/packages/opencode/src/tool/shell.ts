@@ -12,7 +12,6 @@ import { Language, type Node } from "web-tree-sitter"
 import { AppFileSystem } from "@mendcode/core/filesystem"
 import { fileURLToPath } from "url"
 import { Config } from "@/config/config"
-import { Flag } from "@mendcode/core/flag/flag"
 import { Shell } from "@/shell/shell"
 import { ShellID } from "./shell/id"
 
@@ -20,7 +19,7 @@ import * as Truncate from "./truncate"
 import { Plugin } from "@/plugin"
 import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import { ShellPrompt, type Parameters } from "./shell/prompt"
+import { DEFAULT_TIMEOUT_MS, ShellPrompt, type Parameters } from "./shell/prompt"
 import { BashArity } from "@/permission/arity"
 import { Shell as ShellEvent } from "@/v2/session-event"
 import { createShellOutputDeltaBuffer } from "./shell-output"
@@ -33,7 +32,7 @@ const ABORT_GRACE_PERIOD_MS = 250
 const ABORT_OUTPUT_DRAIN_MS = 750
 const MAX_TERMINAL_PREVIEW_CHARS = MAX_METADATA_LENGTH * 2
 const MAX_TERMINAL_PREVIEW_LINES = 2_000
-const DEFAULT_TIMEOUT = Flag.OPENCODE_EXPERIMENTAL_BASH_DEFAULT_TIMEOUT_MS || 2 * 60 * 1000
+const DEFAULT_TIMEOUT = DEFAULT_TIMEOUT_MS
 const SAFE_RETRY_GUIDANCE =
   "The command result is unknown. If this command is read-only or idempotent, retry the exact same command once before choosing a different approach. If it may have changed state, inspect the current state first and do not repeat destructive actions blindly."
 const TIMEOUT_RETRY_GUIDANCE =
