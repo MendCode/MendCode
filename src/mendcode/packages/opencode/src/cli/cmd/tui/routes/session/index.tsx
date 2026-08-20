@@ -204,6 +204,7 @@ import {
   compactionSummaryPreview,
   rawReasoningDisplay,
   reasoningSummary,
+  reasoningViewportMaxHeight,
   shouldDisplayReasoning,
   unavailableReasoningLabel,
 } from "@/mend/tui/presentation"
@@ -226,12 +227,12 @@ import { readMendTuiCustomization, resolveMendSessionAccent } from "@/mend/tui/c
 import { formatDuration } from "@/util/format"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
 import {
-  isSafeSmartPermissionRequest,
   reviewPermissionRequestWithModel,
   shouldReviewSmartApproval,
 } from "@/mend/permission/smart-approval"
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import {
+  memoryToolPresentation,
   normalizeToolEvent,
   shouldRenderCompactTool,
   shouldRenderImageGenerationTool,
@@ -466,20 +467,22 @@ export function sessionUserMovedViewport(input: {
   lastViewportHeight: number
   followOutput?: boolean
 }) {
+  const scrollDelta = input.scrollTop - input.lastScrollTop
+  const scrollMoved = Math.abs(scrollDelta) > 1
+  const layoutChanged =
+    Math.abs(input.scrollHeight - input.lastScrollHeight) > 1 ||
+    Math.abs(input.viewportHeight - input.lastViewportHeight) > 1
+  if (!scrollMoved) return false
+
   // A sticky/following scrollbox can move its scrollTop while layout is
-  // settling after a streamed part changes height. That is not user intent;
-  // retain follow mode until the next measured frame resolves the bottom.
-  if (
-    input.followOutput &&
-    (Math.abs(input.scrollHeight - input.lastScrollHeight) > 1 ||
-      Math.abs(input.viewportHeight - input.lastViewportHeight) > 1)
-  )
+  // settling after a streamed part changes height. A downward movement can
+  // be that layout adjustment, but a negative delta is an unmistakable manual
+  // scroll-up gesture and must detach follow immediately.
+  if (layoutChanged) {
+    if (input.followOutput) return scrollDelta < -1
     return false
-  return (
-    Math.abs(input.scrollTop - input.lastScrollTop) > 1 &&
-    Math.abs(input.scrollHeight - input.lastScrollHeight) <= 1 &&
-    Math.abs(input.viewportHeight - input.lastViewportHeight) <= 1
-  )
+  }
+  return true
 }
 
 export function sessionSubmitScrollSettlement(input: {
@@ -531,6 +534,37 @@ export function sessionBottomFollowMode(input: {
   if (input.suppressedBoundary === "bottom") return input.alreadyFollowing ? "follow" : "detached"
   if (input.hasMoreNewer && !input.loadingNewer) return input.alreadyFollowing ? "follow" : "page"
   return "follow"
+}
+
+export const SESSION_BOTTOM_FOLLOW_REFLOW_DELAYS_MS = [0, 16, 50, 120, 240, 480, 960, 1_600, 2_400, 3_600, 5_200] as const
+
+export function shouldKeepSessionBottomFollow(input: {
+  following: boolean
+  userMovedViewport: boolean
+  contentHeightChanged: boolean
+  viewportHeightChanged: boolean
+  compactionFocused?: boolean
+}) {
+  return Boolean(
+    input.following &&
+      !input.userMovedViewport &&
+      !input.compactionFocused &&
+      (input.contentHeightChanged || input.viewportHeightChanged),
+  )
+}
+
+export function shouldHandleGlobalSessionInterrupt(input: {
+  eventName: string
+  defaultPrevented?: boolean
+  activeTurn: boolean
+  pendingInput?: boolean
+}) {
+  return (
+    input.eventName === "escape" &&
+    !input.defaultPrevented &&
+    input.activeTurn &&
+    !input.pendingInput
+  )
 }
 
 const context = createContext<{
@@ -1497,26 +1531,8 @@ export function Session() {
   }
 
   async function smartReviewPendingPermissions() {
-    let accepted = 0
     let reviewed = 0
     for (const request of permissions()) {
-      if (isSafeSmartPermissionRequest(request)) {
-        if (await replyPermissionOnce(request)) {
-          accepted++
-          setSmartPermissionStatus("Smart allowed: bounded read-only command")
-          toast.show({
-            message: "Smart Approval allowed this bounded read-only command.",
-            variant: "success",
-            duration: 4000,
-          })
-          setTimeout(() => {
-            setSmartPermissionStatus((current) =>
-              current === "Smart allowed: bounded read-only command" ? null : current,
-            )
-          }, 4000)
-        }
-        continue
-      }
       if (smartReviewedPermissionIDs.has(request.id)) continue
       if (!shouldReviewSmartApproval(request)) {
         setSmartPermissionStatus("Smart needs your approval")
@@ -1525,7 +1541,11 @@ export function Session() {
       smartReviewedPermissionIDs.add(request.id)
       try {
         setSmartPermissionStatus(`Smart reviewing ${request.permission}`)
-        const decision = await reviewPermissionRequestWithModel(request, mend.root)
+        const prompt = sessionUserPromptHistory({
+          messages: sync.data.message[request.sessionID] ?? [],
+          partsByMessage: sync.data.part,
+        }).findLast((item) => item.input.trim().length > 0)?.input
+        const decision = await reviewPermissionRequestWithModel(request, mend.root, { userPrompt: prompt })
         if (!decision.triggered || decision.decision === "ask") {
           setSmartPermissionStatus(`Smart needs approval`)
           toast.show({
@@ -1555,7 +1575,7 @@ export function Session() {
         throw error
       }
     }
-    return { accepted, reviewed }
+    return { accepted: 0, reviewed }
   }
 
   createEffect(
@@ -1718,8 +1738,8 @@ export function Session() {
               .then(() => smartReviewPendingPermissions())
               .then(({ accepted, reviewed }) => {
                 const summary = [
-                  accepted ? `auto-approved ${accepted} safe permission${accepted === 1 ? "" : "s"}` : "",
-                  reviewed ? `reviewed ${reviewed} risky permission${reviewed === 1 ? "" : "s"}` : "",
+                  accepted ? `auto-approved ${accepted} permission${accepted === 1 ? "" : "s"}` : "",
+                  reviewed ? `reviewed ${reviewed} permission${reviewed === 1 ? "" : "s"}` : "",
                 ]
                   .filter(Boolean)
                   .join("; ")
@@ -2137,6 +2157,8 @@ export function Session() {
   let manualScrollGraceUntil = 0
   let bottomScrollToken = 0
   let routeBottomScrollToken = 0
+  let followBottomScrollToken = 0
+  let followBottomScrollSessionID: string | undefined
   let submitScrollToken = 0
   let applyingSubmitScroll = false
   const submittedTurnIDs = new Set<string>()
@@ -2360,6 +2382,8 @@ export function Session() {
   const cancelBottomScrollTimers = () => {
     bottomScrollToken += 1
     routeBottomScrollToken += 1
+    followBottomScrollToken += 1
+    followBottomScrollSessionID = undefined
   }
 
   const cancelSubmitScrollIntent = (options?: { discard?: boolean }) => {
@@ -2603,7 +2627,15 @@ export function Session() {
       return
     }
 
-    if (followSessionOutput() && (contentHeightChanged || viewportHeightChanged) && !userMovedViewport) {
+    if (
+      shouldKeepSessionBottomFollow({
+        following: followSessionOutput(),
+        userMovedViewport,
+        contentHeightChanged,
+        viewportHeightChanged,
+        compactionFocused: isCompactionArcadeFocused(),
+      })
+    ) {
       scheduleFollowBottomScroll(currentSessionID)
       persistSessionScroll(currentSessionID)
       return
@@ -2694,8 +2726,19 @@ export function Session() {
 
   const scheduleFollowBottomScroll = (sessionID: string) => {
     if (submitScrollIntent()?.sessionID === sessionID) return
-    const token = ++routeBottomScrollToken
-    setTimeout(() => scrollToBottomForRouteToken(token, sessionID, { force: true }), 0)
+    if (followBottomScrollSessionID === sessionID) return
+    followBottomScrollSessionID = sessionID
+    const token = ++followBottomScrollToken
+    const delays = SESSION_BOTTOM_FOLLOW_REFLOW_DELAYS_MS
+    delays.forEach((delay, index) => {
+      setTimeout(() => {
+        if (token !== followBottomScrollToken || route.sessionID !== sessionID) return
+        scrollToBottomIfAllowed({ force: true })
+        if (index === delays.length - 1 || isScrollboxAtBottom(scroll, 1)) {
+          if (token === followBottomScrollToken) followBottomScrollSessionID = undefined
+        }
+      }, delay)
+    })
   }
 
   const scheduleTerminalReceiptBottomScroll = (sessionID: string) => {
@@ -3482,6 +3525,25 @@ export function Session() {
   }
 
   const command = useCommandDialog()
+
+  // Esc must cancel the active turn even when a transcript, widget, or an
+  // autocomplete renderable owns focus. Pending approval/question UIs retain
+  // their own Esc semantics (reject/close) and are deliberately excluded.
+  useKeyboard((evt) => {
+    if (
+      !shouldHandleGlobalSessionInterrupt({
+        eventName: evt.name,
+        defaultPrevented: evt.defaultPrevented,
+        activeTurn: Boolean(pending() || sessionWorking() || hasLocalActiveTurn()),
+        pendingInput: disabled(),
+      })
+    )
+      return
+    evt.preventDefault()
+    evt.stopPropagation()
+    command.trigger("session.interrupt")
+  })
+
   function fillSessionPrompt(value: string) {
     setTimeout(() => {
       prompt?.set({ input: value, parts: [] })
@@ -6488,6 +6550,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
   const { theme, subtleSyntax } = useTheme()
   const ctx = use()
   const mend = useMendTuiProfile()
+  const dimensions = useTerminalDimensions()
   const content = createMemo(() => {
     // Some providers send reasoning metadata while redacting the readable text.
     return props.part.text.replace("[REDACTED]", "").trim()
@@ -6539,6 +6602,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
     if (!line) return display().title
     return Locale.truncate(line.replace(/^#+\s*/, "").replace(/^\*\*([^*]+)\*\*$/, "$1"), 120)
   })
+  const fullReasoningMaxHeight = createMemo(() => reasoningViewportMaxHeight(dimensions().height))
 
   return (
     <Show when={visible()}>
@@ -6596,6 +6660,28 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
               title={fullReasoningTitle()}
               duration={headerDetail() || undefined}
             />
+            <Show when={content()}>
+              {(body) => (
+                <scrollbox
+                  height={fullReasoningMaxHeight()}
+                  maxHeight={fullReasoningMaxHeight()}
+                  stickyScroll={streaming()}
+                  stickyStart="bottom"
+                  verticalScrollbarOptions={{ visible: false }}
+                  viewportOptions={{ paddingRight: 0 }}
+                >
+                  <code
+                    filetype="markdown"
+                    drawUnstyledText={false}
+                    streaming={streaming()}
+                    syntaxStyle={subtleSyntax()}
+                    content={body()}
+                    conceal={ctx.conceal()}
+                    fg={theme.textMuted}
+                  />
+                </scrollbox>
+              )}
+            </Show>
           </box>
         </Match>
         <Match when={true}>
@@ -7218,6 +7304,16 @@ function PresentationToolRow(props: {
   )
   const rowColor = createMemo(() => {
     if (errored()) return theme.error
+    if (props.tool === "memory" || props.tool === "memory_graph") {
+      const tone = memoryToolPresentation({
+        tool: props.tool,
+        state: props.state,
+        input: props.input,
+        metadata: props.metadata,
+      }).tone
+      if (tone === "success") return theme.success
+      if (tone === "active") return theme.primary
+    }
     if (pending()) return theme.text
     return theme.textMuted
   })

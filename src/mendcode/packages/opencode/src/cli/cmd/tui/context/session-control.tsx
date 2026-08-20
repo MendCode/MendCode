@@ -8,6 +8,10 @@ const OUTBOX_KEY = "session-control-outbox-v1"
 const OUTBOX_LIMIT = 64
 const OUTBOX_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const CONFIRMATION_TTL_MS = 2_000
+export const SESSION_CANCEL_AUTO_RETRY_MAX_ATTEMPTS = 8
+export const SESSION_CANCEL_AUTO_RETRY_WINDOW_MS = 30_000
+export const SESSION_CANCEL_AUTO_RETRY_BASE_DELAY_MS = 250
+export const SESSION_CANCEL_AUTO_RETRY_MAX_DELAY_MS = 2_000
 
 export type SessionCancelResult = "cancelled" | "already_terminal" | "target_mismatch" | "not_running"
 
@@ -23,15 +27,32 @@ export type SessionCancelOutboxEntry = {
   lastError?: string
 }
 
-type SessionControlStatus =
+export type SessionControlStatus =
   | { state: "idle" }
   | { state: "stop_requested"; targetMessageID: string; requestedAt: number }
+  | { state: "stop_unknown"; targetMessageID: string; requestedAt: number; attempts: number; error: string }
+  | { state: "stop_failed"; targetMessageID: string; requestedAt: number; attempts: number; error?: string }
   | { state: "stop_confirmed"; targetMessageID: string; confirmedAt: number; result: SessionCancelResult }
 
 export function sessionControlAllowsPrompt(status: SessionControlStatus) {
   if (status.state === "idle") return true
-  if (status.state === "stop_requested") return false
+  if (status.state !== "stop_confirmed") return false
   return status.result === "cancelled" || status.result === "already_terminal" || status.result === "not_running"
+}
+
+export function sessionCancelRetryAllowed(input: { attempts: number; requestedAt: number; now?: number }) {
+  const now = input.now ?? Date.now()
+  return (
+    input.attempts < SESSION_CANCEL_AUTO_RETRY_MAX_ATTEMPTS &&
+    now - input.requestedAt <= SESSION_CANCEL_AUTO_RETRY_WINDOW_MS
+  )
+}
+
+export function sessionCancelRetryDelay(attempts: number) {
+  return Math.min(
+    SESSION_CANCEL_AUTO_RETRY_MAX_DELAY_MS,
+    SESSION_CANCEL_AUTO_RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempts - 1),
+  )
 }
 
 export function sessionCancelRequestIsDuplicate(input: {
@@ -100,6 +121,7 @@ export const { use: useSessionControl, provider: SessionControlProvider } = crea
       Record<string, Extract<SessionControlStatus, { state: "stop_confirmed" }>>
     >({})
     const confirmationTimers = new Map<string, ReturnType<typeof setTimeout>>()
+    let retryTimer: ReturnType<typeof setTimeout> | undefined
     let inFlight: Promise<boolean> | undefined
     let resolveReady: (() => void) | undefined
     const ready = kv.ready ? Promise.resolve() : new Promise<void>((resolve) => (resolveReady = resolve))
@@ -144,6 +166,10 @@ export const { use: useSessionControl, provider: SessionControlProvider } = crea
           attempts: 0,
         },
       ])
+      if (retryTimer) {
+        clearTimeout(retryTimer)
+        retryTimer = undefined
+      }
       const timer = confirmationTimers.get(input.sessionID)
       if (timer) clearTimeout(timer)
       confirmationTimers.delete(input.sessionID)
@@ -226,6 +252,19 @@ export const { use: useSessionControl, provider: SessionControlProvider } = crea
       if (inFlight) return inFlight
       inFlight = runDrain().finally(() => {
         inFlight = undefined
+        const pending = entries()
+        if (pending.length === 0) {
+          return
+        }
+        const retryable = pending
+          .filter((entry) => sessionCancelRetryAllowed(entry))
+          .toSorted((a, b) => a.attempts - b.attempts)[0]
+        if (!retryable || retryTimer) return
+        const delay = sessionCancelRetryDelay(retryable.attempts)
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined
+          void drain()
+        }, delay)
       })
       return inFlight
     }
@@ -233,6 +272,24 @@ export const { use: useSessionControl, provider: SessionControlProvider } = crea
     function status(sessionID: string): SessionControlStatus {
       const pending = entries().find((entry) => entry.sessionID === sessionID)
       if (pending) {
+        if (!sessionCancelRetryAllowed(pending)) {
+          return {
+            state: "stop_failed",
+            targetMessageID: pending.targetMessageID,
+            requestedAt: pending.requestedAt,
+            attempts: pending.attempts,
+            ...(pending.lastError ? { error: pending.lastError } : {}),
+          }
+        }
+        if (pending.lastError) {
+          return {
+            state: "stop_unknown",
+            targetMessageID: pending.targetMessageID,
+            requestedAt: pending.requestedAt,
+            attempts: pending.attempts,
+            error: pending.lastError,
+          }
+        }
         return {
           state: "stop_requested",
           targetMessageID: pending.targetMessageID,
@@ -243,6 +300,7 @@ export const { use: useSessionControl, provider: SessionControlProvider } = crea
     }
 
     onCleanup(() => {
+      if (retryTimer) clearTimeout(retryTimer)
       for (const timer of confirmationTimers.values()) clearTimeout(timer)
       confirmationTimers.clear()
     })

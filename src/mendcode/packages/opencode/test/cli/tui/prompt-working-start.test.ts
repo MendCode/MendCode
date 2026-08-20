@@ -67,6 +67,9 @@ import {
   shouldClearSessionPagingBoundarySuppression,
   shouldDeferSessionFollowSync,
   sessionBottomFollowMode,
+  SESSION_BOTTOM_FOLLOW_REFLOW_DELAYS_MS,
+  shouldKeepSessionBottomFollow,
+  shouldHandleGlobalSessionInterrupt,
   shouldReleaseSessionPagingBoundarySuppression,
   shouldRestoreSessionScrollAnchor,
   shouldUseSimpleSessionHistory,
@@ -1705,6 +1708,88 @@ describe("resolveWorkingStartedAt", () => {
         followOutput: true,
       }),
     ).toBe(true)
+  })
+
+  test("detaches follow when a manual scroll-up overlaps a content reflow", () => {
+    expect(
+      sessionUserMovedViewport({
+        scrollTop: 780,
+        lastScrollTop: 840,
+        scrollHeight: 1_260,
+        lastScrollHeight: 1_200,
+        viewportHeight: 48,
+        lastViewportHeight: 48,
+        followOutput: true,
+      }),
+    ).toBe(true)
+    expect(
+      sessionUserMovedViewport({
+        scrollTop: 900,
+        lastScrollTop: 840,
+        scrollHeight: 1_260,
+        lastScrollHeight: 1_200,
+        viewportHeight: 48,
+        lastViewportHeight: 48,
+        followOutput: true,
+      }),
+    ).toBe(false)
+  })
+
+  test("keeps bottom follow armed across delayed tall-tool reflows", () => {
+    expect(SESSION_BOTTOM_FOLLOW_REFLOW_DELAYS_MS.at(-1)).toBeGreaterThanOrEqual(5_000)
+    expect(
+      shouldKeepSessionBottomFollow({
+        following: true,
+        userMovedViewport: false,
+        contentHeightChanged: true,
+        viewportHeightChanged: false,
+      }),
+    ).toBe(true)
+    expect(
+      shouldKeepSessionBottomFollow({
+        following: true,
+        userMovedViewport: false,
+        contentHeightChanged: false,
+        viewportHeightChanged: true,
+      }),
+    ).toBe(true)
+    expect(
+      shouldKeepSessionBottomFollow({
+        following: true,
+        userMovedViewport: true,
+        contentHeightChanged: true,
+        viewportHeightChanged: true,
+      }),
+    ).toBe(false)
+    expect(
+      shouldKeepSessionBottomFollow({
+        following: true,
+        userMovedViewport: false,
+        contentHeightChanged: true,
+        viewportHeightChanged: true,
+        compactionFocused: true,
+      }),
+    ).toBe(false)
+  })
+
+  test("routes Esc to the active session independently of prompt focus", () => {
+    expect(
+      shouldHandleGlobalSessionInterrupt({ eventName: "escape", activeTurn: true, pendingInput: false }),
+    ).toBe(true)
+    expect(
+      shouldHandleGlobalSessionInterrupt({ eventName: "escape", activeTurn: true, pendingInput: true }),
+    ).toBe(false)
+    expect(
+      shouldHandleGlobalSessionInterrupt({ eventName: "escape", activeTurn: false, pendingInput: false }),
+    ).toBe(false)
+    expect(
+      shouldHandleGlobalSessionInterrupt({
+        eventName: "escape",
+        activeTurn: true,
+        pendingInput: false,
+        defaultPrevented: true,
+      }),
+    ).toBe(false)
   })
 
   test("does not refetch the transcript for canonical incremental message events", () => {

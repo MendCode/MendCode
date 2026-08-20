@@ -19,6 +19,7 @@ import {
   isAgentViewSessionFallbackVisible,
   isAgentViewSessionVisible,
   agentViewBusyActivity,
+  activeToolSessionIDs,
   agentViewParentSessionIDsWithActiveChildren,
   isTemporaryAgentViewDirectory,
   retainAgentViewActiveRows,
@@ -120,6 +121,21 @@ describe("Agent View visibility", () => {
         graceMs: 5_000,
       }),
     ).toEqual([...next, cached[0].item])
+  })
+
+  test("keeps a session active while a local assistant tool is still running", () => {
+    expect(
+      activeToolSessionIDs({
+        messages: {
+          "session-1": [{ id: "assistant-1", role: "assistant" }],
+          "session-2": [{ id: "assistant-2", role: "assistant" }],
+        },
+        parts: {
+          "assistant-1": [{ type: "tool", state: { status: "running" } }],
+          "assistant-2": [{ type: "tool", state: { status: "completed" } }],
+        },
+      }),
+    ).toEqual(new Set(["session-1"]))
   })
 
   test("keeps every workflow root classified as a loop, including paused and old manual roots", () => {

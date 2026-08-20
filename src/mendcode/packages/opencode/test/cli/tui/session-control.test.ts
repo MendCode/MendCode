@@ -1,8 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import {
   normalizeSessionCancelOutbox,
+  sessionCancelRetryAllowed,
+  sessionCancelRetryDelay,
   sessionControlAllowsPrompt,
   sessionCancelRequestIsDuplicate,
+  SESSION_CANCEL_AUTO_RETRY_MAX_ATTEMPTS,
+  SESSION_CANCEL_AUTO_RETRY_WINDOW_MS,
   type SessionCancelOutboxEntry,
 } from "@tui/context/session-control"
 
@@ -103,6 +107,51 @@ describe("session control outbox", () => {
         targetMessageID: "message-1",
         confirmedAt: Date.now(),
         result: "target_mismatch",
+      }),
+    ).toBe(false)
+  })
+
+  test("classifies transient cancel delivery as unknown and stops after bounded retries", () => {
+    const now = Date.now()
+    expect(
+      sessionCancelRetryAllowed({
+        attempts: 1,
+        requestedAt: now,
+        now,
+      }),
+    ).toBe(true)
+    expect(
+      sessionCancelRetryAllowed({
+        attempts: SESSION_CANCEL_AUTO_RETRY_MAX_ATTEMPTS,
+        requestedAt: now,
+        now,
+      }),
+    ).toBe(false)
+    expect(
+      sessionCancelRetryAllowed({
+        attempts: 1,
+        requestedAt: now - SESSION_CANCEL_AUTO_RETRY_WINDOW_MS - 1,
+        now,
+      }),
+    ).toBe(false)
+    expect(sessionCancelRetryDelay(1)).toBe(250)
+    expect(sessionCancelRetryDelay(8)).toBe(2_000)
+    expect(
+      sessionControlAllowsPrompt({
+        state: "stop_unknown",
+        targetMessageID: "message-1",
+        requestedAt: now,
+        attempts: 1,
+        error: "offline",
+      }),
+    ).toBe(false)
+    expect(
+      sessionControlAllowsPrompt({
+        state: "stop_failed",
+        targetMessageID: "message-1",
+        requestedAt: now,
+        attempts: SESSION_CANCEL_AUTO_RETRY_MAX_ATTEMPTS,
+        error: "offline",
       }),
     ).toBe(false)
   })
