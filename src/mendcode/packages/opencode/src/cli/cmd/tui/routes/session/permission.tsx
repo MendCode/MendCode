@@ -21,10 +21,9 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../context/tui-config"
 
 type PermissionStage = "permission" | "always" | "reject"
-type PermissionPromptInput = "keyboard" | "mouse"
 
-export function permissionPromptHoverSelection<T>(input: PermissionPromptInput, current: T, hovered: T) {
-  return input === "mouse" ? hovered : current
+export function permissionPromptHoverSelection<T>(eventType: string, current: T, hovered: T) {
+  return eventType === "move" ? hovered : current
 }
 
 function normalizePath(input?: string) {
@@ -556,7 +555,6 @@ function Prompt<const T extends Record<string, string>>(props: {
   const [store, setStore] = createStore({
     selected: keys[0],
     expanded: false,
-    input: "keyboard" as PermissionPromptInput,
   })
   const diffKey = Keybind.parse("ctrl+f")[0]
   const narrow = createMemo(() => dimensions().width < 80)
@@ -567,7 +565,6 @@ function Prompt<const T extends Record<string, string>>(props: {
 
     if (evt.name === "left" || evt.name === "up" || evt.name == "h" || evt.name === "k") {
       evt.preventDefault()
-      setStore("input", "keyboard")
       const idx = keys.indexOf(store.selected)
       const next = keys[(idx - 1 + keys.length) % keys.length]
       setStore("selected", next)
@@ -575,7 +572,6 @@ function Prompt<const T extends Record<string, string>>(props: {
 
     if (evt.name === "right" || evt.name === "down" || evt.name == "l" || evt.name === "j") {
       evt.preventDefault()
-      setStore("input", "keyboard")
       const idx = keys.indexOf(store.selected)
       const next = keys[(idx + 1) % keys.length]
       setStore("selected", next)
@@ -653,9 +649,10 @@ function Prompt<const T extends Record<string, string>>(props: {
                 paddingLeft={0}
                 paddingRight={2}
                 backgroundColor={option === store.selected ? theme.backgroundMenu : undefined}
-                onMouseMove={() => setStore("input", "mouse")}
-                onMouseOver={() => {
-                  setStore("selected", permissionPromptHoverSelection(store.input, store.selected, option))
+                // OpenTUI emits synthetic `over` events when layout changes. Applying
+                // selection only to real `move` events keeps keyboard navigation stable.
+                onMouseMove={(event) => {
+                  setStore("selected", permissionPromptHoverSelection(event.type, store.selected, option))
                 }}
                 onMouseDown={() => setStore("selected", option)}
                 onMouseUp={() => {
