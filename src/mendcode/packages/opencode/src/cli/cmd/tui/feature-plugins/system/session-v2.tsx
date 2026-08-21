@@ -762,8 +762,8 @@ function AssistantReasoning(props: {
             <Show when={content()}>
               {(body) => (
                 <scrollbox
-                  height={fullReasoningMaxHeight()}
                   maxHeight={fullReasoningMaxHeight()}
+                  minHeight={1}
                   stickyScroll={streaming()}
                   stickyStart="bottom"
                   verticalScrollbarOptions={{ visible: false }}

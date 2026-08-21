@@ -6663,8 +6663,8 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
             <Show when={content()}>
               {(body) => (
                 <scrollbox
-                  height={fullReasoningMaxHeight()}
                   maxHeight={fullReasoningMaxHeight()}
+                  minHeight={1}
                   stickyScroll={streaming()}
                   stickyStart="bottom"
                   verticalScrollbarOptions={{ visible: false }}
