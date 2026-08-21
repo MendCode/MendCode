@@ -411,7 +411,7 @@ jobs:
             mendcode.spdx.json \
             --repo "${GITHUB_REPOSITORY}" \
             --target "${GITHUB_SHA}" \
-            --title "$VERSION" \
+            --title "$tag" \
             --notes-file "$notes" \
             --draft \
             ${{ inputs.prerelease && '--prerelease' || '' }}
