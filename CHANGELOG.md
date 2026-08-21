@@ -2,17 +2,19 @@
 
 ## 0.1.34 - 2026-08-20
 
-MendCode v0.1.34 fixes a remaining Full reasoning layout regression from v0.1.33.
+MendCode v0.1.34 fixes remaining session presentation regressions from v0.1.33.
 
 ### Fixed
 
 - Size short Full reasoning blocks to their content instead of reserving the entire bounded reasoning viewport and leaving a large blank gap in the session transcript.
 - Keep the same bounded, scrollable reasoning behavior in the normal session route and the experimental Session v2 renderer.
+- Keep keyboard navigation on the selected permission option when OpenTUI rechecks hover state during layout changes.
+- Remove the fixed transcript clearance that left unused space above the session prompt while preserving the virtualizer's real bottom spacer.
 
 ### Tests
 
-- Add a regression that rejects fixed max-height allocation for short Full reasoning content in both session renderers.
-- Run the focused TUI presentation and session initialization suites.
+- Add regressions for short Full reasoning layout, keyboard permission navigation, and transcript spacing.
+- Run the focused TUI presentation, permission prompt, session layout, and session initialization suites.
 
 ## 0.1.33 - 2026-08-20
 
