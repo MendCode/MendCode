@@ -123,6 +123,22 @@ describe("session route initialization", () => {
     expect(sessionV2).toContain("onMouseUp={handleOpenFirstLoop}")
   })
 
+  test("lets short Full reasoning size to its content instead of reserving the max viewport", async () => {
+    const routes = [
+      await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text(),
+      await Bun.file(new URL("../../../src/cli/cmd/tui/feature-plugins/system/session-v2.tsx", import.meta.url)).text(),
+    ]
+
+    for (const source of routes) {
+      const reasoningStart = source.indexOf("maxHeight={fullReasoningMaxHeight()}")
+      expect(reasoningStart).toBeGreaterThan(-1)
+      const reasoningBlock = source.slice(Math.max(0, reasoningStart - 180), reasoningStart + 240)
+
+      expect(reasoningBlock).toContain("minHeight={1}")
+      expect(reasoningBlock).not.toContain("height={fullReasoningMaxHeight()}")
+    }
+  })
+
   test("renders workflow tasks in the phase-ordered monitor rows", async () => {
     const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/workflows/index.tsx", import.meta.url)).text()
 

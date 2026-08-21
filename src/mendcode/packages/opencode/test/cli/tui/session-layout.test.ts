@@ -63,9 +63,9 @@ describe("session layout", () => {
     ).toBe(false)
   })
 
-  test("reserves transcript clearance above the prompt and pending-input footer", () => {
-    expect(sessionTranscriptBottomSpacer()).toBe(3)
-    expect(sessionTranscriptBottomSpacer(24)).toBe(27)
+  test("does not add unused transcript clearance above the prompt and pending-input footer", () => {
+    expect(sessionTranscriptBottomSpacer()).toBe(0)
+    expect(sessionTranscriptBottomSpacer(24)).toBe(24)
   })
 
   test("labels a question after compaction as waiting instead of assistant generation", () => {

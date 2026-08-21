@@ -8,10 +8,8 @@ export function sessionPromptVisible(input: {
   return input.permissionCount === 0 && input.questionCount === 0 && input.planReviewCount === 0
 }
 
-export const SESSION_TRANSCRIPT_BOTTOM_CLEARANCE_ROWS = 3
-
 export function sessionTranscriptBottomSpacer(virtualBottomSpacer = 0) {
-  return Math.max(0, virtualBottomSpacer) + SESSION_TRANSCRIPT_BOTTOM_CLEARANCE_ROWS
+  return Math.max(0, virtualBottomSpacer)
 }
 
 export function sessionPendingInputStatus(input: {

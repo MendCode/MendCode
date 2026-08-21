@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { once } from "node:events"
 import { probeRuntime } from "./dev-rearm"
 
-const VERSION = "0.1.33"
+const VERSION = "0.1.34"
 const PROJECT = "/tmp/mendcode-dev-rearm-smoke-project"
 
 function assert(condition: unknown, message: string): asserts condition {
