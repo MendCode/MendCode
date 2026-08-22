@@ -15,6 +15,7 @@ import { Todo } from "@/session/todo"
 import { Skill } from "@/skill"
 import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
+import { AgentCommand } from "@/session/agent-command"
 import { SessionStatus } from "@/session/status"
 import { BackgroundTask } from "@/session/background-task"
 import { Provider } from "@/provider/provider"
@@ -100,7 +101,7 @@ const registryLayer = (
     Layer.provide([LoopRunner.defaultLayer, Todo.defaultLayer, WorkflowService.defaultLayer]),
     Layer.provide(Skill.defaultLayer),
     Layer.provide(Agent.defaultLayer),
-    Layer.provide(Session.defaultLayer),
+    Layer.provide([Session.defaultLayer, AgentCommand.defaultLayer]),
     Layer.provide([SessionStatus.defaultLayer, BackgroundTask.defaultLayer]),
     Layer.provide(providerLayer),
     Layer.provide(LSP.defaultLayer),
@@ -148,10 +149,14 @@ const apiKeyIt = testEffect(Layer.mergeAll(registryLayer(apiKeyInfo, imageConfig
 const apiKeyDefaultIt = testEffect(Layer.mergeAll(registryLayer(apiKeyInfo, {}, imageProviderLayer), node))
 const disabledImageIt = testEffect(
   Layer.mergeAll(
-    registryLayer(undefined, {
-      ...imageConfig,
-      image_generation: { enabled: false, model: "openai/test-image-model" },
-    }, imageProviderLayer),
+    registryLayer(
+      undefined,
+      {
+        ...imageConfig,
+        image_generation: { enabled: false, model: "openai/test-image-model" },
+      },
+      imageProviderLayer,
+    ),
     node,
   ),
 )
@@ -186,6 +191,8 @@ describe("tool.registry", () => {
       expect(ids).toContain("memory")
       expect(ids).toContain("memory_graph")
       expect(ids).toContain("review")
+      expect(ids).toContain("tell")
+      expect(ids).toContain("peers")
       expect(ids).toContain("task_status")
       expect(ids).toContain("write")
       expect(ids).not.toContain("image_gen")

@@ -977,7 +977,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
                       ? "Workflows"
                       : route.data.type === "session-history"
                         ? "Session History"
-                     : route.data.type
+                        : route.data.type
     const sessionLabel = session && !SessionApi.isDefaultTitle(session.title) ? session.title : routeLabel
     if (
       route.data.type === "home" &&
@@ -1092,10 +1092,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
         if (readiness.aiReady) return
         if (
           shouldShowFirstRunIntro({
-          interactive: true,
-          setupComplete: isSetupComplete(state),
-          dismissed: Boolean(state.dismissedAt),
-          seen: kv.get(FIRST_RUN_INTRO_SEEN_KEY, false) === true,
+            interactive: true,
+            setupComplete: isSetupComplete(state),
+            dismissed: Boolean(state.dismissedAt),
+            seen: kv.get(FIRST_RUN_INTRO_SEEN_KEY, false) === true,
           })
         ) {
           dialog.clear()
@@ -4814,7 +4814,11 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     {
       title: "Help",
       value: "help.show",
-      keybind: ["setup", "stats", "memory", "changes", "loops", "workflows", "session-history"].includes(route.data.type) ? "help" : undefined,
+      keybind: ["setup", "stats", "memory", "changes", "loops", "workflows", "session-history"].includes(
+        route.data.type,
+      )
+        ? "help"
+        : undefined,
       slash: {
         name: "help",
       },
@@ -5054,10 +5058,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       const titles = evt.properties.taskTitles?.filter(Boolean) ?? []
       const count = evt.properties.taskIDs?.length ?? titles.length
       toast.show({
-        title: "Agent resumed",
-        message: `${titles.join(", ") || `${count} background task${count === 1 ? "" : "s"}`} finished; the runtime event was delivered internally`,
+        title: "Background work finished",
+        message: `${titles.join(", ") || `${count} background task${count === 1 ? "" : "s"}`} finished; an automatic follow-up started`,
         variant: "info",
-        duration: 5_000,
+        duration: 8_000,
       })
       return
     }

@@ -111,6 +111,7 @@ import { providerLogin } from "../runtime/auth"
 import { exportPlan } from "../runtime/export"
 import {
   DEFAULT_LOOP_SERVICE_LIMIT,
+  loopDaemonCanDispatch,
   loopServiceArgsFromConfig,
   loopServiceInstall,
   loopServicePlan,
@@ -539,7 +540,10 @@ async function withWorkflowRuntime<T>(
 }
 
 function workflowRunID(value?: string) {
-  if (!value) throw new Error("Usage: mend workflows <show|events|artifacts|pause|resume|stop|delete|retry-task|retry-phase> <run-id>")
+  if (!value)
+    throw new Error(
+      "Usage: mend workflows <show|events|artifacts|pause|resume|stop|delete|retry-task|retry-phase> <run-id>",
+    )
   return Workflow.WorkflowRunID.make(value)
 }
 
@@ -569,12 +573,19 @@ function formatWorkflowSnapshot(snapshot: WorkflowService.WorkflowSnapshot) {
     "",
     "Phases",
     ...(snapshot.phases.length
-      ? snapshot.phases.map((phase) => `  ${phase.ordinal}. ${phase.name.padEnd(18)} ${phase.state} ${phase.counts.completed}/${phase.counts.total}`)
+      ? snapshot.phases.map(
+          (phase) =>
+            `  ${phase.ordinal}. ${phase.name.padEnd(18)} ${phase.state} ${phase.counts.completed}/${phase.counts.total}`,
+        )
       : ["  none"]),
     "",
     "Tasks",
     ...(snapshot.tasks.length
-      ? snapshot.tasks.slice(0, 40).map((task) => `  ${task.state.padEnd(10)} ${task.id} ${task.name}${task.blocker ? ` — ${task.blocker}` : ""}`)
+      ? snapshot.tasks
+          .slice(0, 40)
+          .map(
+            (task) => `  ${task.state.padEnd(10)} ${task.id} ${task.name}${task.blocker ? ` — ${task.blocker}` : ""}`,
+          )
       : ["  none"]),
   ].join("\n")
 }
@@ -586,10 +597,14 @@ async function workflows(args: string[]) {
       Effect.gen(function* () {
         const initial = yield* workflow.list()
         const stranded = initial.filter((snapshot) => snapshot.run.state === "needs_input")
-        yield* Effect.forEach(stranded, (snapshot) => runner.run(snapshot.run.id).pipe(Effect.catchCause(() => Effect.void)), {
-          concurrency: 8,
-          discard: true,
-        })
+        yield* Effect.forEach(
+          stranded,
+          (snapshot) => runner.run(snapshot.run.id).pipe(Effect.catchCause(() => Effect.void)),
+          {
+            concurrency: 8,
+            discard: true,
+          },
+        )
         const snapshots = stranded.length ? yield* workflow.list() : initial
         yield* Effect.forEach(
           snapshots.filter((snapshot) => snapshot.run.state === "queued" || snapshot.run.state === "working"),
@@ -624,15 +639,20 @@ async function workflows(args: string[]) {
     const receipt = await withWorkflowService((workflow) =>
       workflow.save({
         plan,
-        definitionID: optionValue(args, "--definition-id") ? Workflow.WorkflowDefinitionID.make(optionValue(args, "--definition-id")!) : undefined,
+        definitionID: optionValue(args, "--definition-id")
+          ? Workflow.WorkflowDefinitionID.make(optionValue(args, "--definition-id")!)
+          : undefined,
         name: optionValue(args, "--name") ?? undefined,
         description: optionValue(args, "--description") ?? undefined,
         source: (optionValue(args, "--source") as Workflow.WorkflowDefinition["source"] | null) ?? undefined,
         saved: true,
       }),
     )
-    printResult(args, receipt, (value: WorkflowService.WorkflowRevisionReceipt) =>
-      `Saved workflow ${value.definitionID} revision ${value.revisionID} (#${value.revision})`,
+    printResult(
+      args,
+      receipt,
+      (value: WorkflowService.WorkflowRevisionReceipt) =>
+        `Saved workflow ${value.definitionID} revision ${value.revisionID} (#${value.revision})`,
     )
     return
   }
@@ -642,12 +662,18 @@ async function workflows(args: string[]) {
       Effect.gen(function* () {
         const snapshot = yield* workflow.start({
           plan: planFile ? ((yield* Effect.promise(() => workflowPlan(args))) as WorkflowPlan) : undefined,
-          revisionID: optionValue(args, "--revision-id") ? Workflow.WorkflowRevisionID.make(optionValue(args, "--revision-id")!) : undefined,
-          definitionID: optionValue(args, "--definition-id") ? Workflow.WorkflowDefinitionID.make(optionValue(args, "--definition-id")!) : undefined,
+          revisionID: optionValue(args, "--revision-id")
+            ? Workflow.WorkflowRevisionID.make(optionValue(args, "--revision-id")!)
+            : undefined,
+          definitionID: optionValue(args, "--definition-id")
+            ? Workflow.WorkflowDefinitionID.make(optionValue(args, "--definition-id")!)
+            : undefined,
           name: optionValue(args, "--name") ?? undefined,
           description: optionValue(args, "--description") ?? undefined,
           source: (optionValue(args, "--source") as Workflow.WorkflowDefinition["source"] | null) ?? undefined,
-          originSessionID: optionValue(args, "--origin-session") ? (SessionID.make(optionValue(args, "--origin-session")!) as SessionID) : undefined,
+          originSessionID: optionValue(args, "--origin-session")
+            ? (SessionID.make(optionValue(args, "--origin-session")!) as SessionID)
+            : undefined,
         })
         yield* runner.start(snapshot.run.id)
         return snapshot
@@ -660,7 +686,8 @@ async function workflows(args: string[]) {
     const snapshot = await withWorkflowRuntime((workflow, runner) =>
       Effect.gen(function* () {
         const initial = yield* workflow.show(workflowRunID(args[1]))
-        if (initial.run.state === "needs_input") yield* runner.run(initial.run.id).pipe(Effect.catchCause(() => Effect.void))
+        if (initial.run.state === "needs_input")
+          yield* runner.run(initial.run.id).pipe(Effect.catchCause(() => Effect.void))
         const current = initial.run.state === "needs_input" ? yield* workflow.show(initial.run.id) : initial
         if (current.run.state === "queued" || current.run.state === "working") yield* runner.start(current.run.id)
         return current
@@ -678,12 +705,20 @@ async function workflows(args: string[]) {
   if (sub === "events" || sub === "artifacts") {
     const runID = workflowRunID(args[1])
     if (sub === "events") {
-      const items = await withWorkflowService((workflow) => workflow.events(runID, Number(optionValue(args, "--limit") ?? 50)))
-      printResult(args, items, (value: readonly unknown[]) => value.length ? value.map((item) => JSON.stringify(item)).join("\n") : "No workflow events.")
+      const items = await withWorkflowService((workflow) =>
+        workflow.events(runID, Number(optionValue(args, "--limit") ?? 50)),
+      )
+      printResult(args, items, (value: readonly unknown[]) =>
+        value.length ? value.map((item) => JSON.stringify(item)).join("\n") : "No workflow events.",
+      )
       return
     }
-    const items = await withWorkflowService((workflow) => workflow.artifacts(runID, Number(optionValue(args, "--limit") ?? 50)))
-    printResult(args, items, (value: readonly unknown[]) => value.length ? value.map((item) => JSON.stringify(item)).join("\n") : "No workflow artifacts.")
+    const items = await withWorkflowService((workflow) =>
+      workflow.artifacts(runID, Number(optionValue(args, "--limit") ?? 50)),
+    )
+    printResult(args, items, (value: readonly unknown[]) =>
+      value.length ? value.map((item) => JSON.stringify(item)).join("\n") : "No workflow artifacts.",
+    )
     return
   }
   if (["pause", "resume", "stop", "retry-task", "retry-phase"].includes(sub)) {
@@ -703,12 +738,22 @@ async function workflows(args: string[]) {
         } else if (sub === "retry-task") {
           const taskID = optionValue(args, "--task-id")
           if (!taskID) throw new Error("Usage: mend workflows retry-task <run-id> --task-id <task-id>")
-          snapshot = yield* workflow.retryTask({ runID, taskID: Workflow.WorkflowTaskID.make(taskID), reason: optionValue(args, "--reason") ?? undefined, actor: "cli" })
+          snapshot = yield* workflow.retryTask({
+            runID,
+            taskID: Workflow.WorkflowTaskID.make(taskID),
+            reason: optionValue(args, "--reason") ?? undefined,
+            actor: "cli",
+          })
           yield* runner.start(snapshot.run.id)
         } else {
           const phaseID = optionValue(args, "--phase-id")
           if (!phaseID) throw new Error("Usage: mend workflows retry-phase <run-id> --phase-id <phase-id>")
-          snapshot = yield* workflow.retryPhase({ runID, phaseID: Workflow.WorkflowPhaseID.make(phaseID), reason: optionValue(args, "--reason") ?? undefined, actor: "cli" })
+          snapshot = yield* workflow.retryPhase({
+            runID,
+            phaseID: Workflow.WorkflowPhaseID.make(phaseID),
+            reason: optionValue(args, "--reason") ?? undefined,
+            actor: "cli",
+          })
           yield* runner.start(snapshot.run.id)
         }
         return snapshot
@@ -717,7 +762,9 @@ async function workflows(args: string[]) {
     printResult(args, result, formatWorkflowSnapshot)
     return
   }
-  throw new Error("Usage: mend workflows <list|preview|save|start|show|events|artifacts|pause|resume|stop|delete|retry-task|retry-phase>")
+  throw new Error(
+    "Usage: mend workflows <list|preview|save|start|show|events|artifacts|pause|resume|stop|delete|retry-task|retry-phase>",
+  )
 }
 
 async function loops(args: string[]) {
@@ -760,10 +807,10 @@ async function loops(args: string[]) {
           templateID: template?.id,
           trigger:
             dailyAt || timezone
-            ? { mode: "daily", dailyAt: dailyAt ?? undefined, timezone: timezone ?? undefined }
-            : interval
-              ? { mode: "interval", intervalMs: Number(interval) }
-              : template?.trigger,
+              ? { mode: "daily", dailyAt: dailyAt ?? undefined, timezone: timezone ?? undefined }
+              : interval
+                ? { mode: "interval", intervalMs: Number(interval) }
+                : template?.trigger,
           gates: template?.gates,
           stopWhen: template?.stopWhen,
           policy: template?.policy,
@@ -847,11 +894,17 @@ async function loops(args: string[]) {
     let latestHealthWakeAttempt = 0
     let healthWrite = Promise.resolve()
     const recordHealth = (input: { lastWakeAttempt?: number; lastError?: string; degraded: boolean }) => {
-      if (input.lastWakeAttempt !== undefined && input.lastWakeAttempt < latestHealthWakeAttempt) return Promise.resolve()
+      if (input.lastWakeAttempt !== undefined && input.lastWakeAttempt < latestHealthWakeAttempt)
+        return Promise.resolve()
       latestHealthWakeAttempt = Math.max(latestHealthWakeAttempt, input.lastWakeAttempt ?? 0)
-      healthWrite = healthWrite.then(() => writeLoopServiceHealth(servicePlan, input)).catch((error) => {
-        if (!quiet) console.error(`WARN: loop service health write failed: ${error instanceof Error ? error.message : String(error)}`)
-      })
+      healthWrite = healthWrite
+        .then(() => writeLoopServiceHealth(servicePlan, input))
+        .catch((error) => {
+          if (!quiet)
+            console.error(
+              `WARN: loop service health write failed: ${error instanceof Error ? error.message : String(error)}`,
+            )
+        })
       return healthWrite
     }
     const runTick = async (disposeRuntime: boolean) => {
@@ -870,7 +923,11 @@ async function loops(args: string[]) {
         return
       }
       const schedulerFailure = results.find((item) => item.summary.startsWith("Loop scheduler failed"))
-      await recordHealth({ lastWakeAttempt: startedAt, lastError: schedulerFailure?.summary, degraded: Boolean(schedulerFailure) })
+      await recordHealth({
+        lastWakeAttempt: startedAt,
+        lastError: schedulerFailure?.summary,
+        degraded: Boolean(schedulerFailure),
+      })
       if (results.length) {
         for (const item of results) {
           console.log(
@@ -891,7 +948,7 @@ async function loops(args: string[]) {
     }
     const activeTicks = new Set<Promise<void>>()
     const dispatchTick = () => {
-      if (activeTicks.size >= Math.max(1, limit)) return
+      if (!loopDaemonCanDispatch(activeTicks.size)) return
       const tick = runTick(false).finally(() => activeTicks.delete(tick))
       activeTicks.add(tick)
     }
@@ -1336,37 +1393,37 @@ async function prompt(args: string[]) {
     console.log(
       JSON.stringify(
         {
-      mode: policy.mode,
-      focusID: policy.focusID,
+          mode: policy.mode,
+          focusID: policy.focusID,
           promptOrigin: policy.promptOrigin,
-      modelID,
-      role,
-      workflow,
-      basePromptSource: policy.basePromptSource,
-      usesMendCodeHarnessPrompt: policy.usesMendCodeHarnessPrompt,
-      usesOpenCodeGenericProviderPrompt: policy.usesOpenCodeGenericProviderPrompt,
-      fallbackReason: policy.fallbackReason,
+          modelID,
+          role,
+          workflow,
+          basePromptSource: policy.basePromptSource,
+          usesMendCodeHarnessPrompt: policy.usesMendCodeHarnessPrompt,
+          usesOpenCodeGenericProviderPrompt: policy.usesOpenCodeGenericProviderPrompt,
+          fallbackReason: policy.fallbackReason,
           customPrompt: policy.customPrompt,
-      includeProjectInstructions: policy.includeProjectInstructions,
-      includeSkillsByDefault: policy.includeSkillsByDefault,
-      includeCustomInstructions: policy.includeCustomInstructions,
-      includeMcpContext: policy.includeMcpContext,
-      source: policy.source,
-      sections: policy.sections.map((section) => ({
-        id: section.id,
-        label: section.label,
-        source: section.source,
-        bytes: section.bytes,
-        preview: section.preview,
-      })),
-      basePromptBytes: policy.basePromptBytes,
-      instructionsBytes: policy.instructionsBytes,
-      instructionsPreview: policy.instructionsPreview,
-      policyInstructionsBytes: policy.policyInstructionsBytes,
-      policyInstructionsPreview: policy.policyInstructionsPreview,
-      ...(showFull ? { instructions: policy.instructions } : {}),
-      printsFullPrompt: showFull,
-      note: "Use run/chat --prompt-mode to execute with this policy. This command does not call providers.",
+          includeProjectInstructions: policy.includeProjectInstructions,
+          includeSkillsByDefault: policy.includeSkillsByDefault,
+          includeCustomInstructions: policy.includeCustomInstructions,
+          includeMcpContext: policy.includeMcpContext,
+          source: policy.source,
+          sections: policy.sections.map((section) => ({
+            id: section.id,
+            label: section.label,
+            source: section.source,
+            bytes: section.bytes,
+            preview: section.preview,
+          })),
+          basePromptBytes: policy.basePromptBytes,
+          instructionsBytes: policy.instructionsBytes,
+          instructionsPreview: policy.instructionsPreview,
+          policyInstructionsBytes: policy.policyInstructionsBytes,
+          policyInstructionsPreview: policy.policyInstructionsPreview,
+          ...(showFull ? { instructions: policy.instructions } : {}),
+          printsFullPrompt: showFull,
+          note: "Use run/chat --prompt-mode to execute with this policy. This command does not call providers.",
         },
         null,
         2,
@@ -1636,14 +1693,14 @@ async function mflow(args: string[]) {
     const hookPriority = hookPriorityRaw === null ? undefined : Number(hookPriorityRaw)
     const result = await activateMflow(
       {
-      relayMode: relay,
-      signaling,
-      room,
-      secret,
-      generateSecret: !secret,
-      storeSecret: args.includes("--store-secret"),
-      hookPriority,
-      publicRelayNoticeAccepted: args.includes("--accept-public-relay-limits") || relay !== "legacy-public",
+        relayMode: relay,
+        signaling,
+        room,
+        secret,
+        generateSecret: !secret,
+        storeSecret: args.includes("--store-secret"),
+        hookPriority,
+        publicRelayNoticeAccepted: args.includes("--accept-public-relay-limits") || relay !== "legacy-public",
       },
       root,
     )
@@ -1705,13 +1762,13 @@ async function mflow(args: string[]) {
         (await rl.question("Store secret in .mflow/config.toml? [y/N]: ")).trim().toLowerCase() === "y"
       const result = await activateMflow(
         {
-        relayMode,
-        signaling,
-        room,
-        secret,
-        generateSecret: generate,
-        storeSecret,
-        publicRelayNoticeAccepted,
+          relayMode,
+          signaling,
+          room,
+          secret,
+          generateSecret: generate,
+          storeSecret,
+          publicRelayNoticeAccepted,
         },
         root,
       )
@@ -1747,20 +1804,20 @@ async function tsm(args: string[]) {
   const muxBackend = optionValue(args, "--mux") as TsmState["defaultMuxBackend"] | null
   const result =
     sub === "status"
-    ? await tsmStatus(root)
-    : sub === "plan" || sub === "install"
-      ? await tsmPlan(root)
-      : sub === "setup"
-        ? await setupTsm(root)
-        : sub === "activate"
-          ? await activateTsm(root, { muxBackend: muxBackend || undefined })
-          : sub === "deactivate"
-            ? await deactivateTsm(root)
-            : sub === "remove"
-              ? await removeTsm(root)
-              : sub === "doctor"
-                ? await tsmDoctor(root)
-                : null
+      ? await tsmStatus(root)
+      : sub === "plan" || sub === "install"
+        ? await tsmPlan(root)
+        : sub === "setup"
+          ? await setupTsm(root)
+          : sub === "activate"
+            ? await activateTsm(root, { muxBackend: muxBackend || undefined })
+            : sub === "deactivate"
+              ? await deactivateTsm(root)
+              : sub === "remove"
+                ? await removeTsm(root)
+                : sub === "doctor"
+                  ? await tsmDoctor(root)
+                  : null
   if (!result)
     throw new Error("Usage: mend-control-plane tsm <status|plan|setup|install|activate|deactivate|remove|doctor>")
   printResult(args, result, formatTsmResult)
@@ -1773,22 +1830,22 @@ async function worktree(args: string[]) {
   const rest = args.slice(1)
   const result =
     sub === "status"
-    ? await worktreeStatus(root)
-    : sub === "plan"
-      ? await worktreePlan(rest, root)
-      : sub === "create"
-        ? await worktreeCreate(rest, root)
-        : sub === "open"
-          ? await worktreeOpen(rest, root)
-          : sub === "adopt"
-            ? await worktreeAdopt(rest, root)
-            : sub === "remove"
-              ? await worktreeRemove(rest, root)
-              : sub === "reset"
-                ? await worktreeReset(rest, root)
-                : sub === "doctor"
-                  ? await worktreeDoctor(root)
-                  : null
+      ? await worktreeStatus(root)
+      : sub === "plan"
+        ? await worktreePlan(rest, root)
+        : sub === "create"
+          ? await worktreeCreate(rest, root)
+          : sub === "open"
+            ? await worktreeOpen(rest, root)
+            : sub === "adopt"
+              ? await worktreeAdopt(rest, root)
+              : sub === "remove"
+                ? await worktreeRemove(rest, root)
+                : sub === "reset"
+                  ? await worktreeReset(rest, root)
+                  : sub === "doctor"
+                    ? await worktreeDoctor(root)
+                    : null
   if (!result) throw new Error("Usage: mend-control-plane worktree <status|plan|create|open|adopt|remove|reset|doctor>")
   printResult(args, result, formatWorktreeResult)
   if ("ok" in result && result.ok === false) process.exitCode = 1
@@ -2045,8 +2102,8 @@ async function memory(args: string[]) {
     const query = args
       .slice(1)
       .filter((arg, index, all) => {
-      const prev = all[index - 1]
-      return !arg.startsWith("--") && prev !== "--mode"
+        const prev = all[index - 1]
+        return !arg.startsWith("--") && prev !== "--mode"
       })
       .join(" ")
       .trim()
@@ -2054,14 +2111,14 @@ async function memory(args: string[]) {
     console.log(
       JSON.stringify(
         {
-      query,
-      mode,
-      enabled: result.enabled,
-      use: result.use,
-      callsProviders: false,
-      summaries: result.summaries,
-      entries: result.entries,
-      lines: result.lines,
+          query,
+          mode,
+          enabled: result.enabled,
+          use: result.use,
+          callsProviders: false,
+          summaries: result.summaries,
+          entries: result.entries,
+          lines: result.lines,
         },
         null,
         2,
@@ -2074,8 +2131,8 @@ async function memory(args: string[]) {
     const query = args
       .slice(1)
       .filter((arg, index, all) => {
-      const prev = all[index - 1]
-      return !arg.startsWith("--") && prev !== "--provider" && prev !== "--model" && prev !== "--mode"
+        const prev = all[index - 1]
+        return !arg.startsWith("--") && prev !== "--provider" && prev !== "--model" && prev !== "--mode"
       })
       .join(" ")
       .trim()
@@ -2086,15 +2143,15 @@ async function memory(args: string[]) {
     console.log(
       JSON.stringify(
         {
-      query,
-      mode,
-      providerID,
-      modelID,
-      enabled: result.enabled,
-      use: result.use,
-      callsProviders: false,
-      entries: result.entries,
-      promptBlock: result.lines?.length ? formatMemoryBlock({ model, lines: result.lines }) : "",
+          query,
+          mode,
+          providerID,
+          modelID,
+          enabled: result.enabled,
+          use: result.use,
+          callsProviders: false,
+          entries: result.entries,
+          promptBlock: result.lines?.length ? formatMemoryBlock({ model, lines: result.lines }) : "",
         },
         null,
         2,
@@ -2111,8 +2168,8 @@ async function memory(args: string[]) {
     const text = args
       .slice(1)
       .filter((arg, index, all) => {
-      const prev = all[index - 1]
-      return !arg.startsWith("--") && prev !== "--scope" && prev !== "--tags"
+        const prev = all[index - 1]
+        return !arg.startsWith("--") && prev !== "--scope" && prev !== "--tags"
       })
       .join(" ")
       .trim()
@@ -2127,8 +2184,8 @@ async function memory(args: string[]) {
     const text = args
       .slice(2)
       .filter((arg, index, all) => {
-      const prev = all[index - 1]
-      return !arg.startsWith("--") && prev !== "--scope"
+        const prev = all[index - 1]
+        return !arg.startsWith("--") && prev !== "--scope"
       })
       .join(" ")
       .trim()
@@ -2161,7 +2218,7 @@ async function memory(args: string[]) {
     const text = args
       .slice(1)
       .filter((arg, index, all) => {
-      const prev = all[index - 1]
+        const prev = all[index - 1]
         return (
           !arg.startsWith("--") &&
           prev !== "--scope" &&
@@ -2217,9 +2274,9 @@ async function memory(args: string[]) {
   if (sub === "import-codex") {
     const result = await importCodexMemories(
       {
-      codexMemoryDir: optionValue(args, "--from") || undefined,
-      apply: args.includes("--apply"),
-      maxProposals: optionValue(args, "--max-proposals") ? Number(optionValue(args, "--max-proposals")) : undefined,
+        codexMemoryDir: optionValue(args, "--from") || undefined,
+        apply: args.includes("--apply"),
+        maxProposals: optionValue(args, "--max-proposals") ? Number(optionValue(args, "--max-proposals")) : undefined,
       },
       root,
     )
@@ -2675,16 +2732,16 @@ async function project(args: string[]) {
     const value = (name: string) => optionValue(args, name)
     const result = await packageMetadataSet(
       {
-      id: value("--id"),
-      title: value("--title"),
-      description: value("--description"),
-      version: value("--version"),
-      kind: value("--kind"),
-      channel: value("--channel"),
-      sourceType: value("--source-type"),
-      sourceURL: value("--source-url"),
-      compatMendcode: value("--compat-mendcode"),
-      compatRuntimePack: value("--compat-runtime-pack"),
+        id: value("--id"),
+        title: value("--title"),
+        description: value("--description"),
+        version: value("--version"),
+        kind: value("--kind"),
+        channel: value("--channel"),
+        sourceType: value("--source-type"),
+        sourceURL: value("--source-url"),
+        compatMendcode: value("--compat-mendcode"),
+        compatRuntimePack: value("--compat-runtime-pack"),
       },
       root,
     )

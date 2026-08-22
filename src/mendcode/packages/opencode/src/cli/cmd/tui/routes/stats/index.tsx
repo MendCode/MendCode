@@ -20,6 +20,7 @@ import { useProject } from "@tui/context/project"
 import { useKV } from "@tui/context/kv"
 import { useDialog } from "@tui/ui/dialog"
 import { DialogPrompt } from "@tui/ui/dialog-prompt"
+import { DialogSelect } from "@tui/ui/dialog-select"
 import { Spinner } from "@tui/component/spinner"
 import { CommandDeck, commandDeckLayout } from "@tui/component/command-deck"
 import { Locale } from "@/util/locale"
@@ -34,11 +35,13 @@ import {
   type SessionInsightInput,
   type UsageInsights,
 } from "@tui/util/usage-insights"
+import { loadSubscriptionUsage, type SubscriptionUsageSnapshot } from "@tui/routes/stats/subscription-usage"
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_DAYS = 365
 const ADVANCED_DAYS = 365
 const WEATHER_KV_KEY = "stats_weather"
+const WIDGETS_KV_KEY = "stats_widgets_v1"
 export const STATS_CACHE_KEY = "stats_insights_v2"
 const STATS_CACHE_STALE_MS = 5 * 60 * 1000
 const STATS_TODAY_CACHE_STALE_MS = 5 * 60 * 1000
@@ -53,12 +56,26 @@ const STATS_ADVANCED_MESSAGE_LIMIT = 100
 const HEATMAP_ROWS = 7
 const HEATMAP_COLUMNS = Math.ceil(DEFAULT_DAYS / HEATMAP_ROWS)
 const HEAT_MODES: HeatMode[] = ["daily", "weekly", "cumulative"]
+const STATS_WIDGET_IDS = [
+  "token-mix",
+  "response-load",
+  "subscription-usage",
+  "peak-pressure",
+  "clock",
+  "weather",
+  "status",
+  "outcome-signals",
+  "tools",
+  "agents-models",
+] as const
+const DEFAULT_STATS_WIDGETS: StatsWidgetID[] = STATS_WIDGET_IDS.filter((id) => id !== "peak-pressure")
 
 export function statsUsesScrollableLayout(width: number, height: number) {
   return width < 92 || height < 42
 }
 
 type HeatMode = "daily" | "weekly" | "cumulative"
+type StatsWidgetID = (typeof STATS_WIDGET_IDS)[number]
 type StatsScope = "global" | "project" | "directory"
 type SessionScopeQuery = { scope?: "project"; path?: string; directory?: string }
 type SessionListQuery = SessionScopeQuery & { start: number; limit: number }
@@ -81,6 +98,33 @@ type StatsWeather = {
 type StatsCachePayload = {
   updated: number
   data: UsageInsights
+}
+
+const STATS_WIDGET_META: Record<StatsWidgetID, { title: string; description: string; category: string }> = {
+  "token-mix": { title: "Token Mix", description: "Input, output, reasoning, and cache", category: "Activity" },
+  "response-load": { title: "Response Load", description: "AI and tool runtime", category: "Activity" },
+  "subscription-usage": {
+    title: "Subscription Usage",
+    description: "Real Codex plan windows from local telemetry",
+    category: "Activity",
+  },
+  "peak-pressure": { title: "Peak Pressure", description: "Today compared with the peak day", category: "Activity" },
+  clock: { title: "Clock", description: "Local time and date", category: "Side rail" },
+  weather: { title: "Weather", description: "Configured Open-Meteo weather", category: "Side rail" },
+  status: { title: "Status", description: "Cache and loaded-window diagnostics", category: "Side rail" },
+  "outcome-signals": { title: "Outcome Signals", description: "Local code-change evidence", category: "Details" },
+  tools: { title: "Most Used Tools", description: "Tool call frequency", category: "Details" },
+  "agents-models": { title: "Agents & Models", description: "Most active agents and models", category: "Details" },
+}
+
+export function normalizeStatsWidgets(input: unknown): StatsWidgetID[] {
+  if (!Array.isArray(input)) return [...DEFAULT_STATS_WIDGETS]
+  const known = new Set<StatsWidgetID>(STATS_WIDGET_IDS)
+  return [
+    ...new Set(
+      input.filter((item): item is StatsWidgetID => typeof item === "string" && known.has(item as StatsWidgetID)),
+    ),
+  ]
 }
 
 function sameWeatherConfig(left: StatsWeatherConfig, right: StatsWeatherConfig) {
@@ -493,7 +537,7 @@ function LoadingStats(props: { tiny: boolean; error?: string }) {
           </text>
         </box>
       </Panel>
-       <Panel title="Token activity · daily · 365 days" titlePaddingTop={0} grow>
+      <Panel title="Token activity · daily · 365 days" titlePaddingTop={0} grow>
         <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" overflow="hidden" gap={1}>
           <text fg={theme.textMuted} wrapMode="none">
             · · · · · · · · · · · · · · · · · · · · ·
@@ -549,10 +593,13 @@ function CompactStats(props: {
   contentWidth: number
   selectedDay?: DailyUsage
   selectedDayIndex?: number
-  activityLoading?: boolean
   tokenRows?: Array<{ label: string; value: string; detail?: string }>
   responseRows?: Array<{ label: string; value: string; detail?: string }>
   statusRows?: Array<{ label: string; value: string; detail?: string }>
+  widgets: ReadonlySet<StatsWidgetID>
+  subscriptionUsage?: SubscriptionUsageSnapshot
+  subscriptionLoading: boolean
+  subscriptionError?: string
   tall?: boolean
 }) {
   return (
@@ -569,19 +616,32 @@ function CompactStats(props: {
           rows={7}
           labels={true}
           selectedIndex={props.selectedDayIndex}
-          loading={props.activityLoading}
         />
         <SelectedDayDetail day={props.selectedDay} width={props.contentWidth} compact />
       </Panel>
       <Show when={props.tall}>
         <box flexDirection="column" gap={1} height={20} minHeight={0}>
-          <Panel title="Token Mix" grow>
-            <MetricRows items={props.tokenRows ?? []} dense />
-          </Panel>
-          <Panel title="Response Load" grow>
-            <MetricRows items={props.responseRows ?? []} dense />
-          </Panel>
-          <StatusSummary rows={props.statusRows ?? []} width={props.contentWidth} grow />
+          <Show when={props.widgets.has("token-mix")}>
+            <Panel title="Token Mix" grow>
+              <MetricRows items={props.tokenRows ?? []} dense />
+            </Panel>
+          </Show>
+          <Show when={props.widgets.has("response-load")}>
+            <Panel title="Response Load" grow>
+              <MetricRows items={props.responseRows ?? []} dense />
+            </Panel>
+          </Show>
+          <Show when={props.widgets.has("subscription-usage")}>
+            <SubscriptionUsageWidget
+              usage={props.subscriptionUsage}
+              loading={props.subscriptionLoading}
+              error={props.subscriptionError}
+              grow
+            />
+          </Show>
+          <Show when={props.widgets.has("status")}>
+            <StatusSummary rows={props.statusRows ?? []} width={props.contentWidth} grow />
+          </Show>
         </box>
       </Show>
     </box>
@@ -598,7 +658,6 @@ function MainDashboard(props: {
   heatCellWidth: number
   selectedDay?: DailyUsage
   selectedDayIndex?: number
-  activityLoading?: boolean
   kpis: Array<{ label: string; value: string; detail?: string }>
   tokenRows: Array<{ label: string; value: string; detail?: string }>
   responseRows: Array<{ label: string; value: string; detail?: string }>
@@ -610,6 +669,10 @@ function MainDashboard(props: {
   weatherLoading: boolean
   weatherError?: string
   onConfigureWeather: () => void
+  widgets: ReadonlySet<StatsWidgetID>
+  subscriptionUsage?: SubscriptionUsageSnapshot
+  subscriptionLoading: boolean
+  subscriptionError?: string
 }) {
   const { theme } = useTheme()
   const peakWidth = createMemo(() => (props.roomy ? 18 : 14))
@@ -633,88 +696,126 @@ function MainDashboard(props: {
               cellWidth={props.heatCellWidth}
               labels={true}
               selectedIndex={props.selectedDayIndex}
-              loading={props.activityLoading}
             />
             <SelectedDayDetail day={props.selectedDay} width={props.contentWidth} />
           </Panel>
-          <box flexDirection="row" gap={1} height={props.roomy ? 8 : 6}>
-            <Panel title="Token Mix" grow>
-              <MetricRows items={props.tokenRows} dense />
-            </Panel>
-            <Panel title="Response Load" grow>
-              <MetricRows items={props.responseRows} dense />
-            </Panel>
-            <Panel title="Peak Pressure" width={props.roomy ? 42 : 34}>
-              <ProgressBar
-                value={
-                  props.data.totals.peakTokens > 0
-                    ? (props.data.days.at(-1)?.tokens ?? 0) / props.data.totals.peakTokens
-                    : 0
-                }
-                width={peakWidth()}
-                color={theme.success}
-              />
-              <text fg={theme.textMuted} wrapMode="none">
-                today vs peak day
-              </text>
-            </Panel>
-          </box>
+          <Show
+            when={
+              props.widgets.has("token-mix") ||
+              props.widgets.has("response-load") ||
+              props.widgets.has("subscription-usage") ||
+              props.widgets.has("peak-pressure")
+            }
+          >
+            <box flexDirection="row" gap={1} height={props.roomy ? 9 : 7}>
+              <Show when={props.widgets.has("token-mix")}>
+                <Panel title="Token Mix" grow>
+                  <MetricRows items={props.tokenRows} dense />
+                </Panel>
+              </Show>
+              <Show when={props.widgets.has("response-load")}>
+                <Panel title="Response Load" grow>
+                  <MetricRows items={props.responseRows} dense />
+                </Panel>
+              </Show>
+              <Show when={props.widgets.has("subscription-usage")}>
+                <SubscriptionUsageWidget
+                  usage={props.subscriptionUsage}
+                  loading={props.subscriptionLoading}
+                  error={props.subscriptionError}
+                  width={props.roomy ? 48 : 40}
+                />
+              </Show>
+              <Show when={props.widgets.has("peak-pressure")}>
+                <Panel title="Peak Pressure" width={props.roomy ? 42 : 34}>
+                  <ProgressBar
+                    value={
+                      props.data.totals.peakTokens > 0
+                        ? (props.data.days.at(-1)?.tokens ?? 0) / props.data.totals.peakTokens
+                        : 0
+                    }
+                    width={peakWidth()}
+                    color={theme.success}
+                  />
+                  <text fg={theme.textMuted} wrapMode="none">
+                    today vs peak day
+                  </text>
+                </Panel>
+              </Show>
+            </box>
+          </Show>
           <Show when={props.details}>
             <box flexDirection="row" gap={1} height={11} minHeight={0}>
-              <Panel title="Outcome Signals" grow>
-                <MetricRows items={props.outcomeRows} maxWidth={props.contentWidth} />
-                <text fg={theme.textMuted} wrapMode="none">
-                  Local evidence only; git/PR metrics pending.
-                </text>
-              </Panel>
-              <Panel title="Most Used Tools" width={34}>
-                <Switch>
-                  <Match when={props.data.topTools.length === 0}>
-                    <text fg={theme.textMuted}>No tool calls in this window</text>
-                  </Match>
-                  <Match when={props.data.topTools.length > 0}>
-                    <ListRows
-                      items={props.data.topTools.map((item) => ({
-                        name: item.name,
-                        right: formatInsightNumber(item.count),
-                      }))}
-                      nameWidth={20}
-                    />
-                  </Match>
-                </Switch>
-              </Panel>
-              <Panel title="Agents & Models" width={42}>
-                <ListRows
-                  items={props.data.topAgents
-                    .slice(0, 3)
-                    .map((item) => ({ name: item.name, right: formatInsightNumber(item.count) }))}
-                  nameWidth={22}
-                />
-                <ListRows
-                  items={props.data.topModels.slice(0, 2).map((item) => ({
-                    name: item.name,
-                    right: formatInsightNumber(item.tokens),
-                    color: theme.textMuted,
-                  }))}
-                  nameWidth={24}
-                />
-              </Panel>
+              <Show when={props.widgets.has("outcome-signals")}>
+                <Panel title="Outcome Signals" grow>
+                  <MetricRows items={props.outcomeRows} maxWidth={props.contentWidth} />
+                  <text fg={theme.textMuted} wrapMode="none">
+                    Local evidence only; git/PR metrics pending.
+                  </text>
+                </Panel>
+              </Show>
+              <Show when={props.widgets.has("tools")}>
+                <Panel title="Most Used Tools" width={34}>
+                  <Switch>
+                    <Match when={props.data.topTools.length === 0}>
+                      <text fg={theme.textMuted}>No tool calls in this window</text>
+                    </Match>
+                    <Match when={props.data.topTools.length > 0}>
+                      <ListRows
+                        items={props.data.topTools.map((item) => ({
+                          name: item.name,
+                          right: formatInsightNumber(item.count),
+                        }))}
+                        nameWidth={20}
+                      />
+                    </Match>
+                  </Switch>
+                </Panel>
+              </Show>
+              <Show when={props.widgets.has("agents-models")}>
+                <Panel title="Agents & Models" width={42}>
+                  <ListRows
+                    items={props.data.topAgents
+                      .slice(0, 3)
+                      .map((item) => ({ name: item.name, right: formatInsightNumber(item.count) }))}
+                    nameWidth={22}
+                  />
+                  <ListRows
+                    items={props.data.topModels.slice(0, 2).map((item) => ({
+                      name: item.name,
+                      right: formatInsightNumber(item.tokens),
+                      color: theme.textMuted,
+                    }))}
+                    nameWidth={24}
+                  />
+                </Panel>
+              </Show>
             </box>
           </Show>
         </box>
 
-        <Show when={props.wide}>
+        <Show
+          when={
+            props.wide && (props.widgets.has("clock") || props.widgets.has("weather") || props.widgets.has("status"))
+          }
+        >
           <box flexDirection="column" width={44} height="100%" gap={1} minWidth={0}>
-            <ClockWidget tall={props.roomy} />
-            <WeatherWidget
-              config={props.weatherConfig}
-              weather={props.weather}
-              loading={props.weatherLoading}
-              error={props.weatherError}
-              onConfigure={props.onConfigureWeather}
-              height={props.roomy ? 11 : 10}
-            />
-            <StatusSummary rows={props.statusRows} width={38} grow compact />
+            <Show when={props.widgets.has("clock")}>
+              <ClockWidget tall={props.roomy} />
+            </Show>
+            <Show when={props.widgets.has("weather")}>
+              <WeatherWidget
+                config={props.weatherConfig}
+                weather={props.weather}
+                loading={props.weatherLoading}
+                error={props.weatherError}
+                onConfigure={props.onConfigureWeather}
+                height={props.roomy ? 11 : 10}
+              />
+            </Show>
+            <Show when={props.widgets.has("status")}>
+              <StatusSummary rows={props.statusRows} width={38} grow compact />
+            </Show>
           </box>
         </Show>
       </box>
@@ -730,6 +831,80 @@ function ProgressBar(props: { value: number; width: number; color?: ThemeColorVa
       {"██".repeat(filled())}
       <span style={{ fg: theme.border }}>{"□□".repeat(Math.max(0, props.width - filled()))}</span>
     </text>
+  )
+}
+
+function resetLabel(timestamp: number | undefined) {
+  if (!timestamp) return "reset unknown"
+  const remaining = Math.max(0, timestamp - Date.now())
+  if (remaining < 60_000) return "resets soon"
+  if (remaining < 60 * 60_000) return `resets in ${Math.ceil(remaining / 60_000)}m`
+  if (remaining < 24 * 60 * 60_000) return `resets in ${Math.ceil(remaining / (60 * 60_000))}h`
+  return `resets in ${Math.ceil(remaining / (24 * 60 * 60_000))}d`
+}
+
+function SubscriptionUsageWidget(props: {
+  usage?: SubscriptionUsageSnapshot
+  loading: boolean
+  error?: string
+  width?: number
+  grow?: boolean
+}) {
+  const { theme } = useTheme()
+  return (
+    <Panel title="Subscription Usage" width={props.width} grow={props.grow}>
+      <Switch>
+        <Match when={props.loading && !props.usage}>
+          <text fg={theme.textMuted}>Reading Codex limits…</text>
+        </Match>
+        <Match when={props.usage}>
+          {(usage) => (
+            <box flexDirection="column" gap={0}>
+              <text fg={theme.primary} wrapMode="none">
+                Codex{usage().plan ? ` · ${usage().plan}` : ""}
+              </text>
+              <For each={usage().windows}>
+                {(window) => (
+                  <box flexDirection="column" gap={0}>
+                    <box flexDirection="row" justifyContent="space-between">
+                      <text fg={theme.text}>{window.label}</text>
+                      <text
+                        fg={
+                          window.usedPercent >= 90
+                            ? theme.error
+                            : window.usedPercent >= 70
+                              ? theme.warning
+                              : theme.textMuted
+                        }
+                      >
+                        {Math.round(window.usedPercent)}% · {resetLabel(window.resetsAt)}
+                      </text>
+                    </box>
+                    <ProgressBar
+                      value={window.usedPercent / 100}
+                      width={12}
+                      color={
+                        window.usedPercent >= 90
+                          ? theme.error
+                          : window.usedPercent >= 70
+                            ? theme.warning
+                            : theme.success
+                      }
+                    />
+                  </box>
+                )}
+              </For>
+            </box>
+          )}
+        </Match>
+        <Match when={!props.loading && !props.usage}>
+          <box flexDirection="column" gap={0}>
+            <text fg={theme.textMuted}>{props.error ?? "Codex plan limits unavailable"}</text>
+            <text fg={theme.textMuted}>Claude, Kimi, Grok · no local quota feed</text>
+          </box>
+        </Match>
+      </Switch>
+    </Panel>
   )
 }
 
@@ -835,43 +1010,33 @@ function TokenActivityView(props: {
   rows?: number
   labels?: boolean
   selectedIndex?: number
-  loading?: boolean
 }) {
   return (
-    <Show
-      when={!props.loading}
-      fallback={
-        <box flexDirection="column" width="100%" flexGrow={1} minHeight={0} justifyContent="center" alignItems="center">
-          <Spinner>updating token activity…</Spinner>
-        </box>
-      }
-    >
-      <box flexDirection="column" flexGrow={1} minHeight={0} gap={0}>
-        <Switch>
-          <Match when={props.mode === "daily"}>
-            <UsageHeatmap
-              insights={props.insights}
-              mode="daily"
-              columns={props.columns}
-              cellWidth={props.cellWidth}
-              rows={props.rows}
-              labels={props.labels}
-              selectedIndex={props.selectedIndex}
-            />
-          </Match>
-          <Match when={props.mode === "weekly" || props.mode === "cumulative"}>
-            <UsageGraph
-              insights={props.insights}
-              mode={props.mode === "cumulative" ? "cumulative" : "weekly"}
-              columns={props.columns}
-              cellWidth={props.cellWidth}
-              rows={props.rows}
-              selectedIndex={props.selectedIndex}
-            />
-          </Match>
-        </Switch>
-      </box>
-    </Show>
+    <box flexDirection="column" flexGrow={1} minHeight={0} gap={0}>
+      <Switch>
+        <Match when={props.mode === "daily"}>
+          <UsageHeatmap
+            insights={props.insights}
+            mode="daily"
+            columns={props.columns}
+            cellWidth={props.cellWidth}
+            rows={props.rows}
+            labels={props.labels}
+            selectedIndex={props.selectedIndex}
+          />
+        </Match>
+        <Match when={props.mode === "weekly" || props.mode === "cumulative"}>
+          <UsageGraph
+            insights={props.insights}
+            mode={props.mode === "cumulative" ? "cumulative" : "weekly"}
+            columns={props.columns}
+            cellWidth={props.cellWidth}
+            rows={props.rows}
+            selectedIndex={props.selectedIndex}
+          />
+        </Match>
+      </Switch>
+    </box>
   )
 }
 
@@ -1122,8 +1287,10 @@ export function statsSelectedDayIndex(input: {
   days: readonly { day: string }[]
   selectedDay?: string
   selectedIndex?: number
+  followLatest?: boolean
 }) {
   if (input.days.length <= 0) return undefined
+  if (input.followLatest) return input.days.length - 1
   const selectedDayIndex = input.selectedDay ? input.days.findIndex((day) => day.day === input.selectedDay) : -1
   if (selectedDayIndex >= 0) return selectedDayIndex
 
@@ -1187,18 +1354,19 @@ export function Stats() {
   const [weatherRefresh, setWeatherRefresh] = createSignal(0)
   const [weatherError, setWeatherError] = createSignal<string | undefined>()
   const [weatherReady, setWeatherReady] = createSignal(false)
+  const [widgets, setWidgets] = createSignal<StatsWidgetID[]>([...DEFAULT_STATS_WIDGETS])
   const [selectedDayIndex, setSelectedDayIndex] = createSignal<number | undefined>()
   const [selectedDayKey, setSelectedDayKey] = createSignal<string | undefined>()
-  const [selectedDayLoading, setSelectedDayLoading] = createSignal(false)
+  const [selectedDayPinned, setSelectedDayPinned] = createSignal(false)
   const [cacheUpdated, setCacheUpdated] = createSignal<number | undefined>()
   const [cacheReady, setCacheReady] = createSignal(false)
   const [insightRefreshRequest, setInsightRefreshRequest] = createSignal(0)
   const [refreshingInsights, setRefreshingInsights] = createSignal(false)
   const [insightError, setInsightError] = createSignal<string | undefined>()
   const [statsRefreshTick, setStatsRefreshTick] = createSignal(0)
+  const [subscriptionRefreshTick, setSubscriptionRefreshTick] = createSignal(0)
+  const [subscriptionError, setSubscriptionError] = createSignal<string | undefined>()
   let activeInsightRequest: AbortController | undefined
-  let selectedDayTimer: ReturnType<typeof setTimeout> | undefined
-  let pendingSelectedDay: { index: number; key: string | undefined } | undefined
   const tiny = createMemo(() => statsUsesScrollableLayout(dimensions().width, dimensions().height))
   const narrow = createMemo(() => !tiny() && dimensions().width < 124)
   const wide = createMemo(() => dimensions().width >= 142 && dimensions().height >= 34)
@@ -1232,7 +1400,6 @@ export function Stats() {
   const statsRefreshPoll = setInterval(() => setStatsRefreshTick((value) => value + 1), STATS_TODAY_CACHE_STALE_MS)
   onCleanup(() => {
     clearInterval(statsRefreshPoll)
-    if (selectedDayTimer) clearTimeout(selectedDayTimer)
     activeInsightRequest?.abort()
   })
   createEffect(() => {
@@ -1252,6 +1419,7 @@ export function Stats() {
   createEffect(() => {
     if (!kv.ready) return
     setWeatherConfig(kv.get(WEATHER_KV_KEY, { enabled: false }) as StatsWeatherConfig)
+    setWidgets(normalizeStatsWidgets(kv.get(WIDGETS_KV_KEY)))
   })
   const [insights] = createResource(
     () => ({
@@ -1333,13 +1501,28 @@ export function Stats() {
     },
   )
 
+  const [subscriptionUsage] = createResource(
+    () => ({ refresh: subscriptionRefreshTick() }),
+    async () => {
+      setSubscriptionError(undefined)
+      try {
+        return await loadSubscriptionUsage()
+      } catch (error) {
+        setSubscriptionError(error instanceof Error ? error.message : "Subscription usage failed")
+        return undefined
+      }
+    },
+  )
+
   const weatherStart = setTimeout(() => setWeatherReady(true), 1_500)
   const weatherPoll = setInterval(() => {
     if (weatherConfig().enabled) setWeatherRefresh((value) => value + 1)
   }, 30 * 60_000)
+  const subscriptionPoll = setInterval(() => setSubscriptionRefreshTick((value) => value + 1), 60_000)
   onCleanup(() => {
     clearTimeout(weatherStart)
     clearInterval(weatherPoll)
+    clearInterval(subscriptionPoll)
   })
 
   async function configureWeather() {
@@ -1376,7 +1559,47 @@ export function Stats() {
     }
   }
 
+  function persistWidgets(next: StatsWidgetID[]) {
+    const normalized = normalizeStatsWidgets(next)
+    setWidgets(normalized)
+    kv.set(WIDGETS_KV_KEY, normalized)
+  }
+
+  function showWidgetPicker() {
+    const enabled = new Set(widgets())
+    dialog.replace(() => (
+      <DialogSelect
+        title="Stats widgets"
+        placeholder="Search widgets"
+        options={[
+          ...STATS_WIDGET_IDS.map((id) => ({
+            title: `${enabled.has(id) ? "●" : "○"} ${STATS_WIDGET_META[id].title}`,
+            value: id,
+            category: STATS_WIDGET_META[id].category,
+            description: STATS_WIDGET_META[id].description,
+            onSelect: () => {
+              const next = enabled.has(id) ? widgets().filter((item) => item !== id) : [...widgets(), id]
+              persistWidgets(next)
+              showWidgetPicker()
+            },
+          })),
+          {
+            title: "Reset default layout",
+            value: "__reset__",
+            category: "Layout",
+            description: "Restore the recommended widget set",
+            onSelect: () => {
+              persistWidgets([...DEFAULT_STATS_WIDGETS])
+              showWidgetPicker()
+            },
+          },
+        ]}
+      />
+    ))
+  }
+
   const visibleInsights = createMemo(() => cachedInsights() ?? insights())
+  const visibleWidgetSet = createMemo<ReadonlySet<StatsWidgetID>>(() => new Set(widgets()))
   createEffect(() => {
     const data = visibleInsights()
     if (!data || data.days.length === 0) return
@@ -1384,6 +1607,7 @@ export function Stats() {
       days: data.days,
       selectedDay: selectedDayKey(),
       selectedIndex: selectedDayIndex(),
+      followLatest: !selectedDayPinned(),
     })
     if (nextSelectedDayIndex === undefined) return
     const nextSelectedDayKey = data.days[nextSelectedDayIndex]?.day
@@ -1399,31 +1623,17 @@ export function Stats() {
     if (!data || data.days.length === 0) return
     const next = Math.max(0, Math.min(data.days.length - 1, index))
     const key = data.days[next]?.day
-    const current = pendingSelectedDay?.index ?? selectedDayIndex()
-    if (current === next && pendingSelectedDay === undefined) return
-    pendingSelectedDay = { index: next, key }
-    setSelectedDayLoading(true)
-    if (selectedDayTimer) return
-    selectedDayTimer = setTimeout(() => {
-      const pending = pendingSelectedDay
-      pendingSelectedDay = undefined
-      selectedDayTimer = undefined
-      if (!pending) {
-        setSelectedDayLoading(false)
-        return
-      }
-      batch(() => {
-        setSelectedDayIndex(pending.index)
-        setSelectedDayKey(pending.key)
-        setSelectedDayLoading(false)
-      })
-    }, 0)
+    batch(() => {
+      setSelectedDayPinned(true)
+      setSelectedDayIndex(next)
+      setSelectedDayKey(key)
+    })
   }
 
   function moveSelectedDay(delta: number) {
     const data = visibleInsights()
     if (!data || data.days.length === 0) return
-    selectDay((pendingSelectedDay?.index ?? selectedDayIndex() ?? data.days.length - 1) + delta)
+    selectDay((selectedDayIndex() ?? data.days.length - 1) + delta)
   }
 
   function moveSelectedColumn(delta: number) {
@@ -1466,6 +1676,13 @@ export function Stats() {
       evt.preventDefault()
       evt.stopPropagation()
       if (!refreshingInsights()) setInsightRefreshRequest((value) => value + 1)
+      setSubscriptionRefreshTick((value) => value + 1)
+      return
+    }
+    if (evt.name === "c") {
+      evt.preventDefault()
+      evt.stopPropagation()
+      showWidgetPicker()
       return
     }
     if (evt.name === "w") {
@@ -1602,9 +1819,19 @@ export function Stats() {
   return (
     <CommandDeck
       page="stats"
-      subtitle={() => `${scope() === "global" ? "global" : scope() === "project" ? "project" : "directory"} · ${mode()} · ${advanced() ? ADVANCED_DAYS : DEFAULT_DAYS}d`}
+      subtitle={() =>
+        `${scope() === "global" ? "global" : scope() === "project" ? "project" : "directory"} · ${mode()} · ${advanced() ? ADVANCED_DAYS : DEFAULT_DAYS}d`
+      }
       status={() =>
-        insightError() ? (visibleInsights() ? "STALE" : "ERROR") : refreshingInsights() ? "SYNCING" : visibleInsights() ? "LIVE" : "LOADING"
+        insightError()
+          ? visibleInsights()
+            ? "STALE"
+            : "ERROR"
+          : refreshingInsights()
+            ? "SYNCING"
+            : visibleInsights()
+              ? "LIVE"
+              : "LOADING"
       }
       summary={() => {
         const current = totals()
@@ -1612,7 +1839,7 @@ export function Stats() {
           ? `${formatInsightNumber(current.sessions)} sessions · ${formatInsightNumber(current.tokens)} tokens · ${formatInsightDuration(current.aiResponseMs)} AI`
           : "loading insights"
       }}
-      footer="↑↓ Day   ←→ Week   A Details   M/Tab Mode   1/2/3 Views   R Refresh   W Weather   Esc/Q Back"
+      footer="↑↓ Day   ←→ Week   A Details   M/Tab Mode   C Widgets   R Refresh   W Weather   Esc/Q Back"
     >
       <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
         <Switch>
@@ -1644,10 +1871,13 @@ export function Stats() {
                       contentWidth={deck().contentWidth}
                       selectedDay={selectedDay()}
                       selectedDayIndex={selectedDayIndex()}
-                      activityLoading={selectedDayLoading()}
                       tokenRows={tokenRows()}
                       responseRows={responseRows()}
                       statusRows={statusRows()}
+                      widgets={visibleWidgetSet()}
+                      subscriptionUsage={subscriptionUsage()}
+                      subscriptionLoading={subscriptionUsage.loading}
+                      subscriptionError={subscriptionError()}
                       tall={true}
                     />
                   </scrollbox>
@@ -1663,7 +1893,6 @@ export function Stats() {
                     heatCellWidth={heatCellWidth()}
                     selectedDay={selectedDay()}
                     selectedDayIndex={selectedDayIndex()}
-                    activityLoading={selectedDayLoading()}
                     kpis={kpis()}
                     tokenRows={tokenRows()}
                     responseRows={responseRows()}
@@ -1675,6 +1904,10 @@ export function Stats() {
                     weatherLoading={weather.loading || (weatherConfig().enabled && !weatherReady())}
                     weatherError={weatherError()}
                     onConfigureWeather={configureWeather}
+                    widgets={visibleWidgetSet()}
+                    subscriptionUsage={subscriptionUsage()}
+                    subscriptionLoading={subscriptionUsage.loading}
+                    subscriptionError={subscriptionError()}
                   />
                 </Match>
               </Switch>

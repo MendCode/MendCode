@@ -263,8 +263,10 @@ function asMascot(value: unknown, fallback: MendActivityMascotConfig): MendActiv
   const rawStates = isRecord(value.states) ? value.states : {}
   const states: MendActivityMascotConfig["states"] = { ...fallback.states }
   for (const [phase, text] of Object.entries(rawStates)) {
-    if (phase !== "idle" && phase !== "error" && !Object.prototype.hasOwnProperty.call(activityMessages, phase)) continue
-    if (typeof text === "string" && text.trim()) states[phase as keyof MendActivityMascotConfig["states"]] = text.trimEnd()
+    if (phase !== "idle" && phase !== "error" && !Object.prototype.hasOwnProperty.call(activityMessages, phase))
+      continue
+    if (typeof text === "string" && text.trim())
+      states[phase as keyof MendActivityMascotConfig["states"]] = text.trimEnd()
   }
   return {
     enabled: typeof value.enabled === "boolean" ? value.enabled : fallback.enabled,
@@ -290,8 +292,12 @@ export function resolveTuiPresentation(input: unknown): MendPresentationConfig {
       renderer: asMessageRenderer(message.renderer ?? raw.messageRenderer, defaults.message.renderer),
     },
     input: {
-      pasteSummary: typeof inputConfig.pasteSummary === "boolean" ? inputConfig.pasteSummary : defaults.input.pasteSummary,
-      pasteSummaryMinChars: Math.max(1, Number(inputConfig.pasteSummaryMinChars) || defaults.input.pasteSummaryMinChars),
+      pasteSummary:
+        typeof inputConfig.pasteSummary === "boolean" ? inputConfig.pasteSummary : defaults.input.pasteSummary,
+      pasteSummaryMinChars: Math.max(
+        1,
+        Number(inputConfig.pasteSummaryMinChars) || defaults.input.pasteSummaryMinChars,
+      ),
     },
     reasoning: {
       defaultVisibility: asReasoningVisibility(reasoning.defaultVisibility, defaults.reasoning.defaultVisibility),
@@ -301,24 +307,34 @@ export function resolveTuiPresentation(input: unknown): MendPresentationConfig {
       placement: asPlacement(activity.placement, defaults.activity.placement),
       maxLines: Math.max(1, Math.min(4, Number(activity.maxLines) || defaults.activity.maxLines)),
       collapseOnComplete:
-        typeof activity.collapseOnComplete === "boolean" ? activity.collapseOnComplete : defaults.activity.collapseOnComplete,
+        typeof activity.collapseOnComplete === "boolean"
+          ? activity.collapseOnComplete
+          : defaults.activity.collapseOnComplete,
       showModel: typeof activity.showModel === "boolean" ? activity.showModel : defaults.activity.showModel,
       showTokens: typeof activity.showTokens === "boolean" ? activity.showTokens : defaults.activity.showTokens,
       showElapsed: typeof activity.showElapsed === "boolean" ? activity.showElapsed : defaults.activity.showElapsed,
       showInterruptHint:
-        typeof activity.showInterruptHint === "boolean" ? activity.showInterruptHint : defaults.activity.showInterruptHint,
+        typeof activity.showInterruptHint === "boolean"
+          ? activity.showInterruptHint
+          : defaults.activity.showInterruptHint,
       messages: asMessages(activity.messages, defaults.activity.messages),
       mascot: asMascot(activity.mascot, defaults.activity.mascot),
     },
     compaction: {
       style: asCompactionStyle(compaction.style, defaults.compaction.style),
-      showProgress: typeof compaction.showProgress === "boolean" ? compaction.showProgress : defaults.compaction.showProgress,
+      showProgress:
+        typeof compaction.showProgress === "boolean" ? compaction.showProgress : defaults.compaction.showProgress,
       allowScratchpad:
-        typeof compaction.allowScratchpad === "boolean" ? compaction.allowScratchpad : defaults.compaction.allowScratchpad,
+        typeof compaction.allowScratchpad === "boolean"
+          ? compaction.allowScratchpad
+          : defaults.compaction.allowScratchpad,
       arcade: asCompactionArcade(compaction.arcade, defaults.compaction.arcade),
     },
     symbols: {
-      assistantDone: typeof symbols.assistantDone === "string" && symbols.assistantDone ? symbols.assistantDone : defaults.symbols.assistantDone,
+      assistantDone:
+        typeof symbols.assistantDone === "string" && symbols.assistantDone
+          ? symbols.assistantDone
+          : defaults.symbols.assistantDone,
     },
   }
 }
@@ -361,18 +377,23 @@ export function reasoningPreview(text: string, maxChars = 1200, maxLines = 8) {
   return { text: `${clipped}…`, truncated: true }
 }
 
-export function reasoningViewportMaxHeight(terminalHeight: number, input?: { min?: number; max?: number; ratio?: number }) {
+export function reasoningViewportMaxHeight(
+  terminalHeight: number,
+  input?: { min?: number; max?: number; ratio?: number },
+) {
   const min = Math.max(1, Math.floor(input?.min ?? 4))
   const max = Math.max(min, Math.floor(input?.max ?? 14))
   const ratio = input?.ratio ?? 0.32
   return Math.max(min, Math.min(max, Math.floor(Math.max(1, terminalHeight) * ratio)))
 }
 
-export function shouldShowToolContinuation(input: {
-  finish?: string
-  terminal: boolean
-  activeTool: boolean
-}) {
+export function reasoningViewportHeight(content: string, maxHeight: number) {
+  const boundedMaxHeight = Math.max(1, Math.floor(maxHeight))
+  const contentLines = content.split(/\r?\n/).length
+  return Math.max(1, Math.min(boundedMaxHeight, contentLines))
+}
+
+export function shouldShowToolContinuation(input: { finish?: string; terminal: boolean; activeTool: boolean }) {
   if (input.terminal || !input.activeTool) return false
   return input.finish === "tool-calls" || input.finish === "unknown"
 }
@@ -382,16 +403,21 @@ export function toolContinuationActivity(input: { status: string; tool?: string 
   if (name === "question" || name.includes("ask_user")) return "Waiting for answer..."
   if (name.includes("upload")) return "Uploading..."
   if (name.includes("download")) return "Downloading..."
-  if (name.includes("web") || name.includes("fetch") || name.includes("browser") || name.includes("chrome")) return "Browsing..."
-  if (name.includes("install") || name.includes("pnpm") || name.includes("npm") || name.includes("bun")) return "Installing..."
-  if (name.includes("test") || name.includes("typecheck") || name.includes("lint") || name.includes("build")) return "Testing..."
+  if (name.includes("web") || name.includes("fetch") || name.includes("browser") || name.includes("chrome"))
+    return "Browsing..."
+  if (name.includes("install") || name.includes("pnpm") || name.includes("npm") || name.includes("bun"))
+    return "Installing..."
+  if (name.includes("test") || name.includes("typecheck") || name.includes("lint") || name.includes("build"))
+    return "Testing..."
   if (name.includes("patch") || name.includes("diff")) return "Patching..."
   if (name.includes("edit") || name.includes("write") || name.includes("update")) return "Editing..."
   if (name.includes("read") || name.includes("open") || name.includes("cat")) return "Reading..."
-  if (name.includes("search") || name.includes("grep") || name.includes("glob") || name.includes("list")) return "Searching..."
+  if (name.includes("search") || name.includes("grep") || name.includes("glob") || name.includes("list"))
+    return "Searching..."
   if (name.includes("plan") || name.includes("spec") || name.includes("review")) return "Planning..."
   if (name === "task" || name.includes("subagent")) return "Waiting for subagents..."
-  if (name.includes("bash") || name.includes("shell") || name.includes("exec") || name.includes("command")) return "Running command..."
+  if (name.includes("bash") || name.includes("shell") || name.includes("exec") || name.includes("command"))
+    return "Running command..."
   if (input.status === "pending") return "Generating..."
   return "Thinking..."
 }
@@ -424,7 +450,10 @@ function cleanPreviewLine(line: string) {
 }
 
 function isOnlyCompactionHeading(line: string) {
-  const clean = cleanPreviewLine(line).replace(/[:.]+$/, "").trim().toLowerCase()
+  const clean = cleanPreviewLine(line)
+    .replace(/[:.]+$/, "")
+    .trim()
+    .toLowerCase()
   return [
     "goal",
     "summary",

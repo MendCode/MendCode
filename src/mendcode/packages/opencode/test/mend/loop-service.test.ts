@@ -6,8 +6,10 @@ import { tmpdir } from "../fixture/fixture"
 import { LoopWorkflow } from "../../src/session/loop"
 import { WithInstance } from "../../src/project/with-instance"
 import { resolveMendProjectRoot } from "../../src/mend/config/paths"
+import { loopProjectScopeSql } from "../../src/mend/runtime/loop-project-scope"
 import {
   DEFAULT_LOOP_SERVICE_LIMIT,
+  loopDaemonCanDispatch,
   loopServiceArgsFromConfig,
   loopServiceDefinition,
   loopServicePlan,
@@ -26,6 +28,21 @@ function runLoop<A, E>(fx: Effect.Effect<A, E, LoopWorkflow.Service>) {
 }
 
 describe("loop service plans", () => {
+  test("does not overlap daemon ticks", () => {
+    expect(loopDaemonCanDispatch(0)).toBe(true)
+    expect(loopDaemonCanDispatch(1)).toBe(false)
+    expect(loopDaemonCanDispatch(DEFAULT_LOOP_SERVICE_LIMIT)).toBe(false)
+  })
+
+  test("scopes local worktree loops through their root session", () => {
+    const scope = loopProjectScopeSql("?")
+
+    expect(scope).toContain("s.id = w.root_session_id")
+    expect(scope).toContain("s.project_id = w.project_id")
+    expect(scope).toContain("s.directory = ?")
+    expect(scope.match(/\?/g)).toHaveLength(3)
+  })
+
   test("does not let a stale runtime-root override steal the project cwd", () => {
     expect(resolveMendProjectRoot("/work/project", "/runtime/mendcode", "/runtime/mendcode")).toBe("/work/project")
     expect(resolveMendProjectRoot("/runtime/mendcode", "/work/project", "/runtime/mendcode")).toBe("/work/project")
@@ -68,11 +85,15 @@ describe("loop service plans", () => {
       process.env.OPENCODE_CHANNEL = channel
       delete process.env.MENDCODE_DB
       delete process.env.OPENCODE_DB
-      expect(path.basename(loopServicePlan({ projectRoot: "/tmp/repo", platform: "darwin" }).databasePath)).toBe(`mendcode-${channel}.db`)
+      expect(path.basename(loopServicePlan({ projectRoot: "/tmp/repo", platform: "darwin" }).databasePath)).toBe(
+        `mendcode-${channel}.db`,
+      )
 
       process.env.MENDCODE_DB = "service.db"
       process.env.OPENCODE_DB = "service.db"
-      expect(path.basename(loopServicePlan({ projectRoot: "/tmp/repo", platform: "darwin" }).databasePath)).toBe("service.db")
+      expect(path.basename(loopServicePlan({ projectRoot: "/tmp/repo", platform: "darwin" }).databasePath)).toBe(
+        "service.db",
+      )
     } finally {
       if (previousMendChannel === undefined) delete process.env.MENDCODE_CHANNEL
       else process.env.MENDCODE_CHANNEL = previousMendChannel
@@ -175,6 +196,9 @@ describe("loop service plans", () => {
     expect(plan.serviceProgramArguments.slice(0, 2)).toEqual(["/bin/sh", "-c"])
     expect(plan.serviceProgramArguments[2]).toContain("/usr/bin/sqlite3 -readonly")
     expect(plan.serviceProgramArguments[2]).toContain("/opt/mendcode loops daemon")
+    expect(plan.serviceProgramArguments[2]).toContain("s.id = w.root_session_id")
+    expect(plan.serviceProgramArguments[2]).toContain("s.directory = ")
+    expect(plan.serviceProgramArguments[2]).toContain("/tmp/repo")
     expect(plan.serviceProgramArguments[2]).toContain('if [ "$state" = "0" ]; then exit 0; fi')
     expect(plan.serviceProgramArguments[2]).not.toContain("launchctl bootout")
     expect(loopServicePlist(plan)).toContain("<string>/bin/sh</string>")
@@ -300,21 +324,31 @@ describe("loop service plans", () => {
       try {
         const draft = await WithInstance.provide({
           directory: projectRoot,
-          fn: () => runLoop(LoopWorkflow.Service.use((loop) => loop.createDraft({
-            name: `T21 manual service smoke ${process.pid}`,
-            objective: "Exercise the installed loop service health path without provider execution.",
-            trigger: { mode: "interval", intervalMs: args.intervalMs },
-            budgetMode: "unbounded-monitor",
-          }))),
+          fn: () =>
+            runLoop(
+              LoopWorkflow.Service.use((loop) =>
+                loop.createDraft({
+                  name: `T21 manual service smoke ${process.pid}`,
+                  objective: "Exercise the installed loop service health path without provider execution.",
+                  trigger: { mode: "interval", intervalMs: args.intervalMs },
+                  budgetMode: "unbounded-monitor",
+                }),
+              ),
+            ),
         })
         manualLoopID = draft.id
         await WithInstance.provide({
           directory: projectRoot,
-          fn: () => runLoop(LoopWorkflow.Service.use((loop) => loop.activate({
-            id: draft.id,
-            reason: "T21 manual service smoke",
-            now: Date.now() - 1_000,
-          }))),
+          fn: () =>
+            runLoop(
+              LoopWorkflow.Service.use((loop) =>
+                loop.activate({
+                  id: draft.id,
+                  reason: "T21 manual service smoke",
+                  now: Date.now() - 1_000,
+                }),
+              ),
+            ),
         })
 
         await loopServiceStart(args)

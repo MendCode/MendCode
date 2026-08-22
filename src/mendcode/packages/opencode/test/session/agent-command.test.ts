@@ -12,51 +12,69 @@ import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 
 function run<A, E>(fx: Effect.Effect<A, E, SessionNs.Service | AgentCommand.Service | BackgroundSession.Service>) {
-  return Effect.runPromise(fx.pipe(Effect.provide(Layer.mergeAll(SessionNs.defaultLayer, BackgroundSession.defaultLayer, AgentCommand.defaultLayer))))
+  return Effect.runPromise(
+    fx.pipe(
+      Effect.provide(Layer.mergeAll(SessionNs.defaultLayer, BackgroundSession.defaultLayer, AgentCommand.defaultLayer)),
+    ),
+  )
 }
 
 const svc = {
   createSession(input?: SessionNs.CreateInput) {
-    return run(Effect.gen(function* () {
-      const session = yield* SessionNs.Service
-      return yield* session.create(input)
-    }))
+    return run(
+      Effect.gen(function* () {
+        const session = yield* SessionNs.Service
+        return yield* session.create(input)
+      }),
+    )
   },
   create(input: AgentCommand.CreateInput) {
-    return run(Effect.gen(function* () {
-      const command = yield* AgentCommand.Service
-      return yield* command.create(input)
-    }))
+    return run(
+      Effect.gen(function* () {
+        const command = yield* AgentCommand.Service
+        return yield* command.create(input)
+      }),
+    )
   },
   get(id: AgentCommandID) {
-    return run(Effect.gen(function* () {
-      const command = yield* AgentCommand.Service
-      return yield* command.get(id)
-    }))
+    return run(
+      Effect.gen(function* () {
+        const command = yield* AgentCommand.Service
+        return yield* command.get(id)
+      }),
+    )
   },
   list(input?: AgentCommand.ListInput) {
-    return run(Effect.gen(function* () {
-      const command = yield* AgentCommand.Service
-      return yield* command.list(input)
-    }))
+    return run(
+      Effect.gen(function* () {
+        const command = yield* AgentCommand.Service
+        return yield* command.list(input)
+      }),
+    )
   },
   update(input: AgentCommand.UpdateInput) {
-    return run(Effect.gen(function* () {
-      const command = yield* AgentCommand.Service
-      return yield* command.update(input)
-    }))
+    return run(
+      Effect.gen(function* () {
+        const command = yield* AgentCommand.Service
+        return yield* command.update(input)
+      }),
+    )
   },
   registerBackground(input: BackgroundSession.RegisterInput) {
-    return run(Effect.gen(function* () {
-      const background = yield* BackgroundSession.Service
-      return yield* background.register(input)
-    }))
+    return run(
+      Effect.gen(function* () {
+        const background = yield* BackgroundSession.Service
+        return yield* background.register(input)
+      }),
+    )
   },
   acquireWriter(input: BackgroundSession.WriterInput) {
-    return run(Effect.gen(function* () {
-      const background = yield* BackgroundSession.Service
-      return yield* background.acquireWriter(input)
-    }))
+    return run(
+      Effect.gen(function* () {
+        const background = yield* BackgroundSession.Service
+        return yield* background.acquireWriter(input)
+      }),
+    )
   },
 }
 
@@ -100,6 +118,68 @@ describe("Agent Command inbox", () => {
     })
   })
 
+  test("queues same-workspace peer text without granting tool permissions", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const source = await svc.createSession({ title: "coordinator" })
+        const target = await svc.createSession({ title: "worker" })
+
+        const command = await svc.create({
+          sourceSessionID: source.id,
+          targetSessionID: target.id,
+          type: "peer_message",
+          payload: { text: "  inspect the latest test failure  " },
+        })
+
+        expect(command).toMatchObject({
+          sourceSessionID: source.id,
+          targetSessionID: target.id,
+          type: "peer_message",
+          state: "pending",
+          permissions: [],
+          policy: {
+            decision: "same_workspace",
+            permissions: [],
+          },
+          payload: {
+            text: "inspect the latest test failure",
+            sourceTitle: "coordinator",
+          },
+        })
+
+        await expect(
+          svc.create({
+            sourceSessionID: source.id,
+            targetSessionID: target.id,
+            type: "peer_message",
+            payload: { text: "   " },
+          }),
+        ).rejects.toThrow("Peer message text cannot be empty.")
+      },
+    })
+  })
+
+  test("rejects peer text addressed to its own source session", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const source = await svc.createSession({ title: "coordinator" })
+
+        await expect(
+          svc.create({
+            sourceSessionID: source.id,
+            targetSessionID: source.id,
+            type: "peer_message",
+            payload: { text: "loop back" },
+          }),
+        ).rejects.toThrow("Peer messages require a different target session.")
+      },
+    })
+  })
+
   test("advances valid command states and rejects terminal rewrites", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
@@ -116,7 +196,12 @@ describe("Agent Command inbox", () => {
 
         const accepted = await svc.update({ id: command.id, targetSessionID: target.id, state: "accepted" })
         expect(accepted.state).toBe("accepted")
-        const completed = await svc.update({ id: command.id, targetSessionID: target.id, state: "completed", result: "done" })
+        const completed = await svc.update({
+          id: command.id,
+          targetSessionID: target.id,
+          state: "completed",
+          result: "done",
+        })
         expect(completed).toMatchObject({ state: "completed", result: "done" })
 
         await expect(svc.update({ id: command.id, targetSessionID: target.id, state: "running" })).rejects.toThrow(
@@ -154,7 +239,13 @@ describe("Agent Command inbox", () => {
           state: "completed",
           result: "Updated target Agent View tags.",
         })
-        expect(Database.use((db) => db.select().from(AgentViewMetadataTable).where(eq(AgentViewMetadataTable.session_id, target.id)).get()?.data)).toEqual({
+        expect(
+          Database.use(
+            (db) =>
+              db.select().from(AgentViewMetadataTable).where(eq(AgentViewMetadataTable.session_id, target.id)).get()
+                ?.data,
+          ),
+        ).toEqual({
           title: "Worker Alpha",
           tags: ["frontend", "urgent"],
         })
@@ -188,10 +279,12 @@ describe("Agent Command inbox", () => {
         expect(rename.permissions).toEqual(["agent_view.metadata.patch"])
         expect(rename.policy).toMatchObject({ decision: "same_workspace", permissions: ["agent_view.metadata.patch"] })
 
-        const storedSession = await run(Effect.gen(function* () {
-          const session = yield* SessionNs.Service
-          return yield* session.get(target.id)
-        }))
+        const storedSession = await run(
+          Effect.gen(function* () {
+            const session = yield* SessionNs.Service
+            return yield* session.get(target.id)
+          }),
+        )
         expect(storedSession.title).toBe("Original transcript title")
       },
     })
@@ -255,8 +348,18 @@ describe("Agent Command inbox", () => {
           type: "request_summary",
           payload: { instructions: "status one" },
         })
-        await svc.create({ sourceSessionID: source.id, targetSessionID: target.id, type: "request_summary", payload: { instructions: "status two" } })
-        await svc.create({ sourceSessionID: source.id, targetSessionID: target.id, type: "request_summary", payload: { instructions: "status three" } })
+        await svc.create({
+          sourceSessionID: source.id,
+          targetSessionID: target.id,
+          type: "request_summary",
+          payload: { instructions: "status two" },
+        })
+        await svc.create({
+          sourceSessionID: source.id,
+          targetSessionID: target.id,
+          type: "request_summary",
+          payload: { instructions: "status three" },
+        })
         const overflow = await svc.create({
           sourceSessionID: source.id,
           targetSessionID: target.id,
@@ -283,7 +386,8 @@ describe("Agent Command inbox", () => {
         const id = AgentCommandID.ascending()
         const now = Date.now()
         Database.use((db) =>
-          db.insert(AgentCommandTable)
+          db
+            .insert(AgentCommandTable)
             .values({
               id,
               source_session_id: source.id,
@@ -336,7 +440,11 @@ describe("Agent Command inbox", () => {
         })
 
         expect(await svc.list({ targetSessionID: target.id })).toEqual([
-          expect.objectContaining({ id: command.id, state: "expired", error: "Command expired before the target accepted it." }),
+          expect.objectContaining({
+            id: command.id,
+            state: "expired",
+            error: "Command expired before the target accepted it.",
+          }),
         ])
         await expect(svc.update({ id: command.id, targetSessionID: target.id, state: "accepted" })).rejects.toThrow(
           "Invalid agent command state transition",
@@ -452,7 +560,8 @@ describe("Agent Command inbox", () => {
         const id = AgentCommandID.ascending()
         const now = Date.now()
         Database.use((db) =>
-          db.insert(AgentCommandTable)
+          db
+            .insert(AgentCommandTable)
             .values({
               id,
               source_session_id: source.id,
@@ -468,7 +577,9 @@ describe("Agent Command inbox", () => {
             })
             .run(),
         )
-        Database.use((db) => db.delete(BackgroundSessionTable).where(eq(BackgroundSessionTable.session_id, target.id)).run())
+        Database.use((db) =>
+          db.delete(BackgroundSessionTable).where(eq(BackgroundSessionTable.session_id, target.id)).run(),
+        )
 
         expect(await svc.list({ targetSessionID: target.id })).toEqual([
           expect.objectContaining({
@@ -498,7 +609,8 @@ describe("Agent Command inbox", () => {
         const id = AgentCommandID.ascending()
         const now = Date.now()
         Database.use((db) =>
-          db.insert(AgentCommandTable)
+          db
+            .insert(AgentCommandTable)
             .values({
               id,
               source_session_id: source.id,
@@ -540,7 +652,8 @@ describe("Agent Command inbox", () => {
         const id = AgentCommandID.ascending()
         const now = Date.now()
         Database.use((db) =>
-          db.insert(AgentCommandTable)
+          db
+            .insert(AgentCommandTable)
             .values({
               id,
               source_session_id: source.id,
@@ -589,14 +702,37 @@ describe("Agent Command inbox", () => {
   })
 
   test("exposes a conservative command policy matrix", () => {
-    expect(AgentCommandPolicy.matrix()).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "request_summary", decision: "safe_auto", permissions: ["session.summary.read"] }),
-      expect.objectContaining({ type: "rename", decision: "same_workspace", permissions: ["agent_view.metadata.patch"] }),
-      expect.objectContaining({ type: "tag", decision: "same_workspace", permissions: ["agent_view.metadata.patch"] }),
-      expect.objectContaining({ type: "pause_after_turn", decision: "approval_required", permissions: ["session.control.pause_after_turn"] }),
-      expect.objectContaining({ type: "stop", decision: "approval_required", permissions: ["session.control.stop"] }),
-      expect.objectContaining({ type: "send_message", decision: "approval_required", permissions: ["session.message.send"] }),
-    ]))
+    expect(AgentCommandPolicy.matrix()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "request_summary",
+          decision: "safe_auto",
+          permissions: ["session.summary.read"],
+        }),
+        expect.objectContaining({
+          type: "rename",
+          decision: "same_workspace",
+          permissions: ["agent_view.metadata.patch"],
+        }),
+        expect.objectContaining({
+          type: "tag",
+          decision: "same_workspace",
+          permissions: ["agent_view.metadata.patch"],
+        }),
+        expect.objectContaining({
+          type: "pause_after_turn",
+          decision: "approval_required",
+          permissions: ["session.control.pause_after_turn"],
+        }),
+        expect.objectContaining({ type: "stop", decision: "approval_required", permissions: ["session.control.stop"] }),
+        expect.objectContaining({
+          type: "send_message",
+          decision: "approval_required",
+          permissions: ["session.message.send"],
+        }),
+        expect.objectContaining({ type: "peer_message", decision: "same_workspace", permissions: [] }),
+      ]),
+    )
   })
 
   test("scopes commands to the current project and rejects cross-project targets", async () => {

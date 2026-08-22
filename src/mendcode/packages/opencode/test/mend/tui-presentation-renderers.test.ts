@@ -1,10 +1,35 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
-import { parseTimelineDiffRows, timelineDiffFileStatus, timelineDiffIsNonText } from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
-import { diffStatsFromPatch, formatDiffStats, patchFileTitle } from "../../src/cli/cmd/tui/routes/session/renderers/diff-label"
+import {
+  parseTimelineDiffRows,
+  timelineDiffFileStatus,
+  timelineDiffIsNonText,
+} from "../../src/cli/cmd/tui/routes/session/renderers/diff-parse"
+import {
+  diffStatsFromPatch,
+  formatDiffStats,
+  patchFileTitle,
+} from "../../src/cli/cmd/tui/routes/session/renderers/diff-label"
 import { compactMemoryGraphRows, compactMemoryGraphSnapshot } from "../../src/cli/cmd/tui/util/memory-graph"
-import { compactionArcadeFrames, compactionStageStates, compactionSummaryPreview, rawReasoningDisplay, reasoningPreview, reasoningViewportMaxHeight, resolveTuiPresentation, shouldShowToolContinuation, toolContinuationActivity, unavailableReasoningLabel } from "../../src/mend/tui/presentation"
-import { groupTimelineParts, isTimelineStackStart, timelineCollapseLabel, timelineNodeKeys } from "../../src/mend/tui/timeline/group"
+import {
+  compactionArcadeFrames,
+  compactionStageStates,
+  compactionSummaryPreview,
+  rawReasoningDisplay,
+  reasoningPreview,
+  reasoningViewportHeight,
+  reasoningViewportMaxHeight,
+  resolveTuiPresentation,
+  shouldShowToolContinuation,
+  toolContinuationActivity,
+  unavailableReasoningLabel,
+} from "../../src/mend/tui/presentation"
+import {
+  groupTimelineParts,
+  isTimelineStackStart,
+  timelineCollapseLabel,
+  timelineNodeKeys,
+} from "../../src/mend/tui/timeline/group"
 import {
   normalizeToolEvent,
   memoryToolPresentation,
@@ -35,7 +60,12 @@ describe("mend tui presentation renderers", () => {
       allowScratchpad: true,
       arcade: "snake",
     })
-    expect(resolveTuiPresentation({ profile: "mendcode", compaction: { style: "cockpit", showProgress: true, allowScratchpad: true, arcade: "snake" } }).compaction).toEqual({
+    expect(
+      resolveTuiPresentation({
+        profile: "mendcode",
+        compaction: { style: "cockpit", showProgress: true, allowScratchpad: true, arcade: "snake" },
+      }).compaction,
+    ).toEqual({
       style: "cockpit",
       showProgress: true,
       allowScratchpad: true,
@@ -46,14 +76,15 @@ describe("mend tui presentation renderers", () => {
   })
 
   test("compaction cockpit helpers skip empty headings and expose arcade modes", () => {
-    expect(compactionSummaryPreview("## Goal\n\nKeep implementing the approved plan.")).toBe("Keep implementing the approved plan.")
+    expect(compactionSummaryPreview("## Goal\n\nKeep implementing the approved plan.")).toBe(
+      "Keep implementing the approved plan.",
+    )
     expect(compactionSummaryPreview("# Goal\n")).toBeUndefined()
-    expect(compactionStageStates({ hasSummary: true, tailStartID: "msg_tail", postPrompt: "next" }).map((stage) => stage.label)).toEqual([
-      "Capture transcript",
-      "Write memory",
-      "Preserve tail",
-      "Continue",
-    ])
+    expect(
+      compactionStageStates({ hasSummary: true, tailStartID: "msg_tail", postPrompt: "next" }).map(
+        (stage) => stage.label,
+      ),
+    ).toEqual(["Capture transcript", "Write memory", "Preserve tail", "Continue"])
     expect(compactionArcadeFrames("snake")).toEqual([])
     expect(compactionArcadeFrames("blocks").length).toBeGreaterThan(0)
   })
@@ -100,9 +131,27 @@ describe("mend tui presentation renderers", () => {
   test("compact memory graph rows keep relation endpoints readable without duplicates", () => {
     const snapshot = compactMemoryGraphSnapshot({
       facts: [
-        { id: "fact_a", text: "Use the complete durable memory text for the source endpoint.", scope: "project", categoryIDs: ["memory.policy"], materialized: true },
-        { id: "fact_b", text: "Keep the related destination memory readable in session tools.", scope: "project", categoryIDs: ["memory.policy"], materialized: true },
-        { id: "fact_c", text: "An isolated memory remains visible when no relation exists.", scope: "project", categoryIDs: ["memory.policy"], materialized: true },
+        {
+          id: "fact_a",
+          text: "Use the complete durable memory text for the source endpoint.",
+          scope: "project",
+          categoryIDs: ["memory.policy"],
+          materialized: true,
+        },
+        {
+          id: "fact_b",
+          text: "Keep the related destination memory readable in session tools.",
+          scope: "project",
+          categoryIDs: ["memory.policy"],
+          materialized: true,
+        },
+        {
+          id: "fact_c",
+          text: "An isolated memory remains visible when no relation exists.",
+          scope: "project",
+          categoryIDs: ["memory.policy"],
+          materialized: true,
+        },
       ],
       links: [{ from: "fact_a", to: "fact_b", kind: "supports" }],
       categories: [{ id: "memory.policy", label: "Memory policy", count: 3 }],
@@ -119,7 +168,15 @@ describe("mend tui presentation renderers", () => {
 
   test("compact memory graph rows explain isolated memories", () => {
     const snapshot = compactMemoryGraphSnapshot({
-      facts: [{ id: "fact_a", text: "This isolated memory should still be readable.", scope: "global", categoryIDs: ["agent.policy"], materialized: true }],
+      facts: [
+        {
+          id: "fact_a",
+          text: "This isolated memory should still be readable.",
+          scope: "global",
+          categoryIDs: ["agent.policy"],
+          materialized: true,
+        },
+      ],
       links: [],
       categories: [],
     })
@@ -186,7 +243,8 @@ describe("mend tui presentation renderers", () => {
       tool: "websearch",
       state: "completed",
       input: { query: "release notes" },
-      output: "Found https://example.com/releases/2026-07?channel=stable#notes and https://docs.example.com/setup/install?os=mac.",
+      output:
+        "Found https://example.com/releases/2026-07?channel=stable#notes and https://docs.example.com/setup/install?os=mac.",
     })
 
     expect(event.lines).toEqual([
@@ -196,10 +254,16 @@ describe("mend tui presentation renderers", () => {
   })
 
   test("timeline line wrapping splits long URLs without dropping characters", () => {
-    const lines = wrapTimelineLine("", "https://example.com/docs/really/long/path/that/has/no/spaces?query=alpha-beta-gamma-delta#fragment", 36)
+    const lines = wrapTimelineLine(
+      "",
+      "https://example.com/docs/really/long/path/that/has/no/spaces?query=alpha-beta-gamma-delta#fragment",
+      36,
+    )
 
     expect(lines.length).toBeGreaterThan(1)
-    expect(lines.join("").replaceAll("  ", "")).toBe("https://example.com/docs/really/long/path/that/has/no/spaces?query=alpha-beta-gamma-delta#fragment")
+    expect(lines.join("").replaceAll("  ", "")).toBe(
+      "https://example.com/docs/really/long/path/that/has/no/spaces?query=alpha-beta-gamma-delta#fragment",
+    )
     expect(lines.every((line) => Bun.stringWidth(line) <= 36)).toBe(true)
   })
 
@@ -210,7 +274,10 @@ describe("mend tui presentation renderers", () => {
       input: { pattern: "example" },
     })
 
-    const rendered = event.lines.length > 0 ? [`╭─ ${event.title}`, ...event.lines.map((line) => `│ ${line}`), `╰─ ${event.result ?? ""}`] : [`◈ ${event.title}`]
+    const rendered =
+      event.lines.length > 0
+        ? [`╭─ ${event.title}`, ...event.lines.map((line) => `│ ${line}`), `╰─ ${event.result ?? ""}`]
+        : [`◈ ${event.title}`]
 
     expect(rendered).toEqual(['◈ Search "example"'])
     expect(rendered).not.toContain("╰─")
@@ -246,7 +313,12 @@ describe("mend tui presentation renderers", () => {
 
   test("tool summaries include useful Grok-like details", () => {
     expect(
-      toolSummary("read", { filePath: "src/file.ts", offset: 2, limit: 45 }, undefined, "(Showing lines 2-46 of 66. Use offset=47 to continue.)").title,
+      toolSummary(
+        "read",
+        { filePath: "src/file.ts", offset: 2, limit: 45 },
+        undefined,
+        "(Showing lines 2-46 of 66. Use offset=47 to continue.)",
+      ).title,
     ).toBe("Read src/file.ts (2-46 of 66)")
     expect(
       toolSummary(
@@ -331,12 +403,9 @@ describe("mend tui presentation renderers", () => {
         questions: [
           {
             header: "Format",
-            question: "Which editable and final report format should I use so simulations, screenshots, evidence, and appendices stay readable without breaking the block layout?",
-            options: [
-              { label: "DOCX and PDF" },
-              { label: "PDF only" },
-              { label: "Markdown first" },
-            ],
+            question:
+              "Which editable and final report format should I use so simulations, screenshots, evidence, and appendices stay readable without breaking the block layout?",
+            options: [{ label: "DOCX and PDF" }, { label: "PDF only" }, { label: "Markdown first" }],
           },
         ],
       },
@@ -406,19 +475,23 @@ describe("mend tui presentation renderers", () => {
   })
 
   test("loop tools stay on the rich card renderer in compact profiles", () => {
-    const nodes = groupTimelineParts("minimal", [
-      {
-        id: "loop-tool",
-        type: "tool",
-        tool: "loop",
-        state: {
-          status: "completed",
-          input: { action: "show", workflowID: "loop_test" },
-          metadata: { workflowID: "loop_test", state: "sleeping", phase: "waiting" },
-          output: "loop_id: loop_test",
+    const nodes = groupTimelineParts(
+      "minimal",
+      [
+        {
+          id: "loop-tool",
+          type: "tool",
+          tool: "loop",
+          state: {
+            status: "completed",
+            input: { action: "show", workflowID: "loop_test" },
+            metadata: { workflowID: "loop_test", state: "sleeping", phase: "waiting" },
+            output: "loop_id: loop_test",
+          },
         },
-      },
-    ], { completed: true, showReasoningRows: true })
+      ],
+      { completed: true, showReasoningRows: true },
+    )
 
     expect(nodes).toHaveLength(1)
     expect(nodes[0]).toMatchObject({ type: "tool", tool: "loop" })
@@ -450,15 +523,19 @@ describe("mend tui presentation renderers", () => {
       tool: "read",
       state: { status: "completed", input: { filePath: `file-${index + 1}.ts` }, output: "" },
     }))
-    const nodes = groupTimelineParts("mendcode", [
-      ...completedReads,
-      {
-        id: "web-1",
-        type: "tool",
-        tool: "websearch",
-        state: { status: "running", input: { query: "docs" } },
-      },
-    ], { completed: true, showReasoningRows: true })
+    const nodes = groupTimelineParts(
+      "mendcode",
+      [
+        ...completedReads,
+        {
+          id: "web-1",
+          type: "tool",
+          tool: "websearch",
+          state: { status: "running", input: { query: "docs" } },
+        },
+      ],
+      { completed: true, showReasoningRows: true },
+    )
 
     const labels = nodes.map(timelineNodeLabel)
     expect(labels).toEqual([
@@ -542,21 +619,29 @@ describe("mend tui presentation renderers", () => {
       tool: "read",
       state: { status: "completed", input: { filePath: `stack-${index + 1}.ts` }, output: "" },
     }))
-    const nodes = groupTimelineParts("mendcode", [
-      ...completedReads,
-      {
-        id: "todo-stack",
-        type: "tool",
-        tool: "todowrite",
-        state: { status: "completed", input: { todos: [{ content: "Ship the UI", status: "completed" }] }, output: "" },
-      },
-      {
-        id: "web-stack",
-        type: "tool",
-        tool: "websearch",
-        state: { status: "running", input: { query: "docs" } },
-      },
-    ], { completed: true, showReasoningRows: true })
+    const nodes = groupTimelineParts(
+      "mendcode",
+      [
+        ...completedReads,
+        {
+          id: "todo-stack",
+          type: "tool",
+          tool: "todowrite",
+          state: {
+            status: "completed",
+            input: { todos: [{ content: "Ship the UI", status: "completed" }] },
+            output: "",
+          },
+        },
+        {
+          id: "web-stack",
+          type: "tool",
+          tool: "websearch",
+          state: { status: "running", input: { query: "docs" } },
+        },
+      ],
+      { completed: true, showReasoningRows: true },
+    )
 
     const labels = nodes.map(timelineNodeLabel)
     expect(labels[0]).toBe("◇ 8 tools more")
@@ -569,33 +654,37 @@ describe("mend tui presentation renderers", () => {
   })
 
   test("mendcode uses the live list for the latest grouped todo write", () => {
-    const nodes = groupTimelineParts("mendcode", [
-      {
-        id: "todo-live",
-        type: "tool",
-        tool: "todowrite",
-        state: {
-          status: "completed",
-          input: {
-            todos: [
-              { content: "Initial task", status: "in_progress" },
-              { content: "Second task", status: "pending" },
-            ],
+    const nodes = groupTimelineParts(
+      "mendcode",
+      [
+        {
+          id: "todo-live",
+          type: "tool",
+          tool: "todowrite",
+          state: {
+            status: "completed",
+            input: {
+              todos: [
+                { content: "Initial task", status: "in_progress" },
+                { content: "Second task", status: "pending" },
+              ],
+            },
+            output: "",
           },
-          output: "",
         },
-      },
-    ], {
-      completed: true,
-      latestTodoWritePartID: "todo-live",
-      currentTodos: [
-        { content: "Task 1", status: "completed" },
-        { content: "Task 2", status: "in_progress" },
-        { content: "Task 3", status: "pending" },
-        { content: "Task 4", status: "pending" },
-        { content: "Task 5", status: "pending" },
       ],
-    })
+      {
+        completed: true,
+        latestTodoWritePartID: "todo-live",
+        currentTodos: [
+          { content: "Task 1", status: "completed" },
+          { content: "Task 2", status: "in_progress" },
+          { content: "Task 3", status: "pending" },
+          { content: "Task 4", status: "pending" },
+          { content: "Task 5", status: "pending" },
+        ],
+      },
+    )
 
     const row = nodes.find((node) => isTimelineRowWithTitle(node, "Todos"))
     expect(row).toMatchObject({
@@ -836,6 +925,12 @@ describe("mend tui presentation renderers", () => {
     expect(reasoningViewportMaxHeight(80)).toBe(14)
     expect(reasoningViewportMaxHeight(2)).toBe(4)
     expect(reasoningViewportMaxHeight(40, { min: 6, max: 10, ratio: 0.5 })).toBe(10)
+  })
+
+  test("sizes the Full reasoning viewport to content before applying its cap", () => {
+    expect(reasoningViewportHeight("short reasoning", 14)).toBe(1)
+    expect(reasoningViewportHeight("one\ntwo\nthree", 14)).toBe(3)
+    expect(reasoningViewportHeight(Array.from({ length: 20 }, () => "step").join("\n"), 14)).toBe(14)
   })
 
   test("shows tool continuation only while a non-terminal tool is actually active", () => {
