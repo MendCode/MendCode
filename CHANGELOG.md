@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.1.35 - 2026-08-22
+
+MendCode v0.1.35 makes long-running sessions, Loop execution, Usage Insights, and local agent collaboration more immediate and reliable.
+
+### Added
+
+- Add a customizable Usage Insights widget layout with persisted visibility controls and a subscription-usage widget backed by local Codex rate-limit telemetry.
+- Add same-project peer discovery and bounded, approval-gated peer messages that preserve visible source provenance without granting tool permissions.
+
+### Changed
+
+- Require a second `Esc` press for the same active turn before interruption, with a visible confirmation window that remains responsive during clipboard inspection and compaction.
+- Keep Loop workers fail-closed after an unfinished tool attempt instead of automatically replaying work with unknown side effects.
+- Refresh large session transcripts, Git status, selected-day statistics, and Loop chat activity without blocking the visible interface on expensive auxiliary data.
+- Display accurate background follow-up wording instead of reporting that an agent resumed when detached work merely completed.
+
+### Fixed
+
+- Prevent prompt submission from briefly unmounting or blanking a large transcript before the optimistic user turn is rendered.
+- Prevent overlapping Loop daemon ticks, restore project-scoped Loop discovery for isolated worktrees, and accept canonical macOS temporary-directory aliases in permission checks.
+- Keep selected Usage Insights days current until manually pinned, then update arrow-key navigation synchronously without remounting the dashboard.
+- Preserve keyboard permission selection during synthetic pointer movement and keep compact reasoning, transcript spacing, and grouped tool continuation presentation stable.
+
+### Tests
+
+- Add focused regressions for two-step interruption, prompt mounting, transcript sync and virtualization, Loop scheduling and recovery, permission path aliases, Usage Insights widgets, subscription telemetry, and peer messaging.
+- Run the release-focused agent, session, Loop, TUI, stats, collaboration, and tool suites with isolated test state.
+
 ## 0.1.34 - 2026-08-20
 
 MendCode v0.1.34 fixes remaining session presentation regressions from v0.1.33.

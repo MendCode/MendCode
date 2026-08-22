@@ -1,13 +1,38 @@
 import { describe, expect, test } from "bun:test"
 
 describe("session route initialization", () => {
+  test("does not render an empty-editor preflight frame before the optimistic turn exists", async () => {
+    const source = await Bun.file(
+      new URL("../../../src/cli/cmd/tui/component/prompt/index.tsx", import.meta.url),
+    ).text()
+    const submitStart = source.indexOf("async function submit()")
+    const submitEnd = source.indexOf("function applyExpandedPastedText", submitStart)
+    const submit = source.slice(submitStart, submitEnd)
+
+    expect(submit.indexOf("await budgetEnforcementStatus")).toBeLessThan(submit.indexOf("clearPromptForSubmit()"))
+    expect(submit.indexOf("await findSkill")).toBeLessThan(submit.indexOf("clearPromptForSubmit()"))
+    expect(submit.indexOf("clearPromptForSubmit()")).toBeLessThan(submit.indexOf("insertOptimisticUserTurn({"))
+    expect(submit.indexOf("props.onSubmit?.({")).toBeLessThan(submit.indexOf("renderer.requestRender()"))
+  })
+
+  test("does not overlap expensive topbar git stats refreshes", async () => {
+    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
+
+    expect(source).toContain("if (topStats.loading) return")
+    expect(source).toContain("void refetchTopStats()")
+    expect(source).toContain("}, 15_000)")
+    expect(source).not.toContain("setTopStatsTick")
+  })
+
   test("declares keybind before top navigation memos read it", async () => {
     const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
     const declaration = "const keybind = useKeybind()"
     const firstDeclarationIndex = source.indexOf(declaration)
 
     expect(firstDeclarationIndex).toBeGreaterThan(-1)
-    expect(source.indexOf(declaration, firstDeclarationIndex + declaration.length)).toBeGreaterThan(firstDeclarationIndex)
+    expect(source.indexOf(declaration, firstDeclarationIndex + declaration.length)).toBeGreaterThan(
+      firstDeclarationIndex,
+    )
     expect(firstDeclarationIndex).toBeLessThan(source.indexOf('keybind.print("session_parent")'))
   })
 
@@ -63,12 +88,14 @@ describe("session route initialization", () => {
     expect(restore).toContain("restoreScrollAnchor({ preserveMissing: true })")
     expect(source).toContain("const pagingRestoreToken = scrollPagingRestoreToken")
     expect(source).toContain("pagingRestoreToken !== scrollPagingRestoreToken")
-    expect(source).toContain("bottomFollowMode === \"follow\" && pagingRestoreToken === scrollPagingRestoreToken")
+    expect(source).toContain('bottomFollowMode === "follow" && pagingRestoreToken === scrollPagingRestoreToken')
     expect(source).toContain("cancelScrollPagingRestore()\n    suppressedPagingBoundary = undefined")
   })
 
   test("uses the stable transcript tail for prompt activity while paging older history", async () => {
-    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/component/prompt/index.tsx", import.meta.url)).text()
+    const source = await Bun.file(
+      new URL("../../../src/cli/cmd/tui/component/prompt/index.tsx", import.meta.url),
+    ).text()
 
     expect(source).toContain("const messagesForActivity = createMemo")
     expect(source).toContain("latestAssistant: sync.data.session_latest_assistant[sessionID]")
@@ -76,10 +103,18 @@ describe("session route initialization", () => {
   })
 
   test("publishes prompt delivery handoff state without a navigation timer", async () => {
-    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/component/prompt/index.tsx", import.meta.url)).text()
+    const source = await Bun.file(
+      new URL("../../../src/cli/cmd/tui/component/prompt/index.tsx", import.meta.url),
+    ).text()
 
-    const begin = source.slice(source.indexOf("function beginPendingPromptDelivery"), source.indexOf("function endPendingPromptDelivery"))
-    const end = source.slice(source.indexOf("function endPendingPromptDelivery"), source.indexOf("function cancelPendingPromptDeliveryForInterrupt"))
+    const begin = source.slice(
+      source.indexOf("function beginPendingPromptDelivery"),
+      source.indexOf("function endPendingPromptDelivery"),
+    )
+    const end = source.slice(
+      source.indexOf("function endPendingPromptDelivery"),
+      source.indexOf("function cancelPendingPromptDeliveryForInterrupt"),
+    )
     expect(begin).toContain("notifyPendingPromptDeliveryListeners()")
     expect(end).toContain("if (removed) notifyPendingPromptDeliveryListeners()")
     expect(source.match(/pendingPromptDeliveryRevision\(\)/g)?.length).toBeGreaterThanOrEqual(3)
@@ -87,12 +122,14 @@ describe("session route initialization", () => {
     expect(source.indexOf("const queuedBehindActiveTurn = workingStatusActive()")).toBeLessThan(
       source.indexOf("setSubmitPreflightActive(true)"),
     )
-    expect(source).toContain("route.navigate({\n        type: \"session\",")
+    expect(source).toContain('route.navigate({\n        type: "session",')
     expect(source).not.toContain("setTimeout(() => {\n        route.navigate({")
   })
 
   test("keeps stop acknowledgements in backend control without rendering frontend status copy", async () => {
-    const frontend = await Bun.file(new URL("../../../src/cli/cmd/tui/component/prompt/index.tsx", import.meta.url)).text()
+    const frontend = await Bun.file(
+      new URL("../../../src/cli/cmd/tui/component/prompt/index.tsx", import.meta.url),
+    ).text()
     const backend = await Bun.file(new URL("../../../src/session/prompt.ts", import.meta.url)).text()
 
     expect(frontend).not.toContain('return "stop requested"')
@@ -111,12 +148,11 @@ describe("session route initialization", () => {
       new URL("../../../src/cli/cmd/tui/feature-plugins/system/session-v2.tsx", import.meta.url),
     ).text()
 
-     expect(source).toContain("const sessionScrollStates = new Map<string, SessionScrollState>()")
-     expect(source).toContain("const scheduleSessionScrollRestore = (sessionID: string, state?: SessionScrollState) =>")
-     expect(source).toContain("const navigate = (...args: Parameters<typeof navigateRoute>) =>")
-     expect(source).toContain("return navigateRoute(...args)")
-     expect(source).toContain("if (activeSessionID !== sessionID) rememberSessionScroll(activeSessionID)")
-
+    expect(source).toContain("const sessionScrollStates = new Map<string, SessionScrollState>()")
+    expect(source).toContain("const scheduleSessionScrollRestore = (sessionID: string, state?: SessionScrollState) =>")
+    expect(source).toContain("const navigate = (...args: Parameters<typeof navigateRoute>) =>")
+    expect(source).toContain("return navigateRoute(...args)")
+    expect(source).toContain("if (activeSessionID !== sessionID) rememberSessionScroll(activeSessionID)")
 
     expect(source).toContain("onMouseUp={handleOpenTarget}")
     expect(sessionV2).toContain("const handleOpenFirstLoop = () =>")
@@ -140,7 +176,9 @@ describe("session route initialization", () => {
   })
 
   test("renders workflow tasks in the phase-ordered monitor rows", async () => {
-    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/workflows/index.tsx", import.meta.url)).text()
+    const source = await Bun.file(
+      new URL("../../../src/cli/cmd/tui/routes/workflows/index.tsx", import.meta.url),
+    ).text()
 
     expect(source).toContain("const taskRows = createMemo")
     expect(source).toContain("<For each={taskRows().slice(0, 40)}>")
@@ -148,7 +186,9 @@ describe("session route initialization", () => {
   })
 
   test("retries failed workflow work when resume is requested", async () => {
-    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/workflows/index.tsx", import.meta.url)).text()
+    const source = await Bun.file(
+      new URL("../../../src/cli/cmd/tui/routes/workflows/index.tsx", import.meta.url),
+    ).text()
 
     expect(source).toContain("const target = workflowMonitorResumeTarget(receipt(item))")
     expect(source).toContain('if (target.kind === "retry-task")')
@@ -156,7 +196,9 @@ describe("session route initialization", () => {
   })
 
   test("offers workflow sessions the same permission modes and global default controls", async () => {
-    const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/workflows/index.tsx", import.meta.url)).text()
+    const source = await Bun.file(
+      new URL("../../../src/cli/cmd/tui/routes/workflows/index.tsx", import.meta.url),
+    ).text()
 
     expect(source).toContain('title: "Require approval"')
     expect(source).toContain('title: "Smart Approval"')
@@ -242,7 +284,7 @@ describe("session route initialization", () => {
     expect(source).toContain('return "Waiting for the current response to finish"')
     expect(source).toContain("const transcriptRows = createMemo")
     expect(source).toContain("return sessionTranscriptRows(messages(), queuedMessageIDs(), {")
-    expect(source).toContain("return messages().filter((message): message is UserMessage => message.role === \"user\"")
+    expect(source).toContain('return messages().filter((message): message is UserMessage => message.role === "user"')
     expect(source).toContain("tailIDs: pendingDeliveryTailIDs()")
     expect(source).toContain("const pendingDeliveryQueuedIDs = createMemo")
     expect(source).toContain("pendingPromptDeliveryMessageIDs(route.sessionID)")
@@ -250,10 +292,10 @@ describe("session route initialization", () => {
     expect(source).toContain("<For each={visibleMessageIDs()}>")
     expect(source).toContain("messageByID().get(messageID)")
     expect(source).toContain("queuedMessageIDs().has(message().id)")
-    expect(source).toContain('anchorID={`queued-${message().id}`}')
+    expect(source).toContain("anchorID={`queued-${message().id}`}")
     expect(source).not.toContain("sessionTranscriptRowsForRender")
-    expect(source).not.toContain('<Show when={queuedMessages().length > 0}>')
-    expect(source).not.toContain('anchorID={`queued-dock-${message.id}`}')
+    expect(source).not.toContain("<Show when={queuedMessages().length > 0}>")
+    expect(source).not.toContain("anchorID={`queued-dock-${message.id}`}")
     expect(source).not.toContain("queuedMessageRenderIDs")
     expect(source).toMatch(/queued\s+sticky/)
     expect(source).toContain("bg: sendNowBackground()")
@@ -267,7 +309,9 @@ describe("session route initialization", () => {
 
     expect(source).toContain('mode={currentWorkflowTask() ? "workflow-task"')
     expect(source).toContain('return `↑ Workflow ${keybind.print("session_parent")}${cycle}`')
-    expect(source).toContain('return `${workflowTask.workflowName} · Task ${workflowTask.taskIndex + 1}/${workflowTask.taskCount} · ${workflowTask.taskName}`')
+    expect(source).toContain(
+      "return `${workflowTask.workflowName} · Task ${workflowTask.taskIndex + 1}/${workflowTask.taskCount} · ${workflowTask.taskName}`",
+    )
     expect(source).toContain('type: "workflows"')
     expect(source).toContain("selectedID: workflowTask.runID")
     expect(source).toContain("navigateWorkflowTask(1, dialog)")

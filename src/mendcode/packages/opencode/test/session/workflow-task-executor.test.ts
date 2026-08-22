@@ -76,12 +76,17 @@ function runExecutor(input: {
       loop: () => Effect.succeed(promptMessage(input.promptText)),
       shell: () => Effect.succeed(promptMessage(input.promptText)),
       command: () => Effect.succeed(promptMessage(input.promptText)),
+      wakePeerDelivery: () => Effect.void,
       resolvePromptParts: () => Effect.succeed([]),
     }),
   )
   return Effect.runPromise(
     WorkflowTaskExecutor.Service.use((executor) =>
-      executor.execute({ task: input.task, sessionID: "ses_executor_root" as never, workflowModel: input.workflowModel }),
+      executor.execute({
+        task: input.task,
+        sessionID: "ses_executor_root" as never,
+        workflowModel: input.workflowModel,
+      }),
     ).pipe(Effect.provide(WorkflowTaskExecutor.layer.pipe(Layer.provide(promptLayer)))),
   )
 }

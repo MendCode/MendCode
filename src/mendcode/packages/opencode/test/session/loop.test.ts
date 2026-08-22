@@ -139,6 +139,7 @@ function runRunner<A, E>(
       loop: () => Effect.succeed(promptMessage()),
       shell: () => Effect.succeed(promptMessage()),
       command: () => Effect.succeed(promptMessage()),
+      wakePeerDelivery: () => Effect.void,
       resolvePromptParts: () => Effect.succeed([]),
     }),
   )
@@ -990,39 +991,45 @@ describe("loop workflow service", () => {
       directory: tmp.path,
       fn: async () => {
         const draft = await runWithWorktree(
-          LoopWorkflowService.use((loop) => loop.createDraft({
-            name: "Audit candidate worktree",
-            objective: "Audit the exact workspace that proposed completion.",
-            budgetMode: "max-goal",
-            completionCriteria: ["candidate workspace is reused"],
-            policy: { maxTurns: 3 },
-            evaluation: { mode: "independent", confirmation: "next-run" },
-            workspace: { mode: "per-run-worktree" },
-          })),
+          LoopWorkflowService.use((loop) =>
+            loop.createDraft({
+              name: "Audit candidate worktree",
+              objective: "Audit the exact workspace that proposed completion.",
+              budgetMode: "max-goal",
+              completionCriteria: ["candidate workspace is reused"],
+              policy: { maxTurns: 3 },
+              evaluation: { mode: "independent", confirmation: "next-run" },
+              workspace: { mode: "per-run-worktree" },
+            }),
+          ),
         )
         await runWithWorktree(LoopWorkflowService.use((loop) => loop.activate({ id: draft.id })))
         const workRun = await runWithWorktree(
           LoopWorkflowService.use((loop) => loop.startRun({ id: draft.id, trigger: "manual" })),
         )
         const now = Date.now()
-        await runWithWorktree(LoopWorkflowService.use((loop) => loop.completeRun({
-          id: draft.id,
-          runID: workRun.id,
-          now,
-          goalStatus: "complete",
-          checkpoint: { status: "complete", summary: "Candidate ready", evidence: ["workspace prepared"] },
-          completion: {
-            candidate: {
-              status: "candidate",
-              generation: 1,
-              sourceID: workRun.id,
-              auditAttempts: 0,
-              candidateFingerprint: "candidate-fingerprint",
-              createdAt: now,
-              updatedAt: now,
-            },
-          },
-        })))
+        await runWithWorktree(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: workRun.id,
+              now,
+              goalStatus: "complete",
+              checkpoint: { status: "complete", summary: "Candidate ready", evidence: ["workspace prepared"] },
+              completion: {
+                candidate: {
+                  status: "candidate",
+                  generation: 1,
+                  sourceID: workRun.id,
+                  auditAttempts: 0,
+                  candidateFingerprint: "candidate-fingerprint",
+                  createdAt: now,
+                  updatedAt: now,
+                },
+              },
+            }),
+          ),
+        )
 
         const auditRun = await runWithWorktree(
           LoopWorkflowService.use((loop) => loop.startRun({ id: draft.id, trigger: "manual" })),
@@ -1474,7 +1481,12 @@ describe("loop workflow service", () => {
           phase: "waiting",
           nextWakeup: expect.any(Number),
         })
-        expect(recovered.runs[0]).toMatchObject({ id: stuck.id, state: "failed", phase: "stale", failureClass: "transient" })
+        expect(recovered.runs[0]).toMatchObject({
+          id: stuck.id,
+          state: "failed",
+          phase: "stale",
+          failureClass: "transient",
+        })
         expect(recovered.workflow.failureClass).toBe("transient")
         expect(
           Database.use((db) =>
@@ -2311,7 +2323,10 @@ describe("loop workflow service", () => {
           "- baseline prediction recorded",
           "next_action: retry next iteration",
         ].join("\n")
-        await runRunner(LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })), checkpoint)
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          checkpoint,
+        )
 
         const incomplete = await runRunner(
           LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
@@ -2324,7 +2339,9 @@ describe("loop workflow service", () => {
         expect(snapshot.workflow.state).toBe("sleeping")
         expect(snapshot.workflow.phase).toBe("retry_scheduled")
         expect(snapshot.workflow.failureClass).toBe("transient")
-        expect(snapshot.runs.find((run) => run.checkpoint?.summary === "First iteration checkpoint is durable.")?.checkpoint).toMatchObject({
+        expect(
+          snapshot.runs.find((run) => run.checkpoint?.summary === "First iteration checkpoint is durable.")?.checkpoint,
+        ).toMatchObject({
           status: "continue",
           summary: "First iteration checkpoint is durable.",
         })
@@ -2332,7 +2349,11 @@ describe("loop workflow service", () => {
         expect(retriedRun?.retry?.backoffMs).toBe(30_000)
 
         Database.use((db) =>
-          db.update(LoopWorkflowTable).set({ next_wakeup: Date.now() - 1 }).where(eq(LoopWorkflowTable.id, draft.id)).run(),
+          db
+            .update(LoopWorkflowTable)
+            .set({ next_wakeup: Date.now() - 1 })
+            .where(eq(LoopWorkflowTable.id, draft.id))
+            .run(),
         )
 
         const missingCheckpoint = await runRunner(
@@ -2342,6 +2363,44 @@ describe("loop workflow service", () => {
         expect(missingCheckpoint.value.state).toBe("failed")
         expect(missingCheckpoint.value.summary).toContain("retry scheduled")
         expect((await svc.snapshot(draft.id)).workflow.failureClass).toBe("transient")
+      },
+    })
+  })
+
+  test("incomplete worker output after a tool call pauses instead of replaying the iteration", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Interrupted mutating worker",
+          objective: "Do not replay a possibly mutating tool call.",
+          trigger: { mode: "self-paced" },
+          policy: { maxTurns: 3 },
+        })
+        await svc.activate(draft.id)
+        const interrupted = promptMessageWithInspection("partial output after tool execution")
+        if (interrupted.info.role !== "assistant") throw new Error("Expected assistant fixture")
+        const tool = interrupted.parts.find((part): part is MessageV2.ToolPart => part.type === "tool")
+        if (!tool) throw new Error("Expected tool fixture")
+        tool.tool = "bash"
+        tool.state.input = { command: "git merge --no-commit origin/main" }
+        interrupted.info.finish = undefined
+
+        const result = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          interrupted,
+        )
+
+        expect(result.value.state).toBe("needs_input")
+        expect(result.value.summary).toContain("Automatic retry paused")
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("needs_input")
+        expect(snapshot.workflow.phase).toBe("needs_input")
+        expect(snapshot.workflow.failureClass).toBe("user_input")
+        expect(snapshot.workflow.metrics.failures).toBe(1)
+        expect(snapshot.workflow.metrics.turns).toBe(0)
+        expect(snapshot.runs[0]?.retry).toBeUndefined()
       },
     })
   })
@@ -2697,6 +2756,7 @@ describe("loop workflow service", () => {
             loop: () => Effect.succeed(promptMessage()),
             shell: () => Effect.succeed(promptMessage()),
             command: () => Effect.succeed(promptMessage()),
+            wakePeerDelivery: () => Effect.void,
             resolvePromptParts: () => Effect.succeed([]),
           }),
         )
@@ -3610,7 +3670,8 @@ describe("loop workflow service", () => {
         expect(snapshot.runs[0]?.completion?.candidateFingerprint).toBeTruthy()
 
         Database.use((db) =>
-          db.update(LoopWorkflowTable)
+          db
+            .update(LoopWorkflowTable)
             .set({ state: "sleeping", phase: "retry_scheduled", next_wakeup: Date.now() - 1 })
             .where(eq(LoopWorkflowTable.id, draft.id))
             .run(),

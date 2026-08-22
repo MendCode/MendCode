@@ -442,6 +442,16 @@ export const SessionRoutes = lazy(() =>
             return yield* command.create({ targetSessionID, ...body })
           })
         } catch (error) {
+          if (error instanceof AgentCommand.InvalidTargetError) {
+            return c.json(
+              {
+                success: false as const,
+                data: null,
+                errors: [{ name: error.name, message: error.message }],
+              },
+              { status: 400 },
+            )
+          }
           if (error instanceof NotFoundError) return c.json(error.toObject(), { status: 404 })
           if (error instanceof HTTPException) throw error
           throw error
@@ -475,8 +485,13 @@ export const SessionRoutes = lazy(() =>
             const body = c.req.valid("json")
             const session = yield* Session.Service
             const command = yield* AgentCommand.Service
+            const prompt = yield* SessionPrompt.Service
             yield* session.get(params.sessionID)
-            return yield* command.update({ id: params.commandID, targetSessionID: params.sessionID, ...body })
+            const updated = yield* command.update({ id: params.commandID, targetSessionID: params.sessionID, ...body })
+            if (updated.type === "peer_message" && updated.state === "accepted") {
+              yield* prompt.wakePeerDelivery(updated.targetSessionID)
+            }
+            return updated
           })
         } catch (error) {
           if (error instanceof AgentCommand.InvalidStateTransitionError) {

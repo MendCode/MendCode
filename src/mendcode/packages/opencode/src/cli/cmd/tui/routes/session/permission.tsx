@@ -1,7 +1,7 @@
 import { createStore } from "solid-js/store"
 import { createMemo, For, Match, Show, Switch } from "solid-js"
 import { Portal, useKeyboard, useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
-import type { TextareaRenderable } from "@opentui/core"
+import type { MouseEvent, TextareaRenderable } from "@opentui/core"
 import { useKeybind } from "../../context/keybind"
 import { useTheme } from "../../context/theme"
 import type { PermissionRequest } from "@mendcode/sdk/v2"
@@ -22,8 +22,31 @@ import { useTuiConfig } from "../../context/tui-config"
 
 type PermissionStage = "permission" | "always" | "reject"
 
-export function permissionPromptHoverSelection<T>(eventType: string, current: T, hovered: T) {
-  return eventType === "move" ? hovered : current
+export type PermissionPromptPointerState = {
+  keyboardNavigation: boolean
+  x?: number
+  y?: number
+}
+
+export function permissionPromptHoverSelection<T>(
+  event: Pick<MouseEvent, "type" | "x" | "y">,
+  current: T,
+  hovered: T,
+  pointer: PermissionPromptPointerState,
+) {
+  // OpenTUI rechecks the hit grid after a render and emits `over` at the
+  // pointer's parked coordinates. It must never override a keyboard choice.
+  if (event.type !== "move") return current
+
+  const moved = pointer.x !== event.x || pointer.y !== event.y
+  pointer.x = event.x
+  pointer.y = event.y
+
+  // A real pointer move is an explicit mouse intent. A replay at the same
+  // coordinates is only a layout/hover recheck and keeps keyboard ownership.
+  if (pointer.keyboardNavigation && !moved) return current
+  if (moved) pointer.keyboardNavigation = false
+  return hovered
 }
 
 function normalizePath(input?: string) {
@@ -556,6 +579,9 @@ function Prompt<const T extends Record<string, string>>(props: {
     selected: keys[0],
     expanded: false,
   })
+  const pointer: PermissionPromptPointerState = {
+    keyboardNavigation: false,
+  }
   const diffKey = Keybind.parse("ctrl+f")[0]
   const narrow = createMemo(() => dimensions().width < 80)
   const dialog = useDialog()
@@ -565,6 +591,7 @@ function Prompt<const T extends Record<string, string>>(props: {
 
     if (evt.name === "left" || evt.name === "up" || evt.name == "h" || evt.name === "k") {
       evt.preventDefault()
+      pointer.keyboardNavigation = true
       const idx = keys.indexOf(store.selected)
       const next = keys[(idx - 1 + keys.length) % keys.length]
       setStore("selected", next)
@@ -572,6 +599,7 @@ function Prompt<const T extends Record<string, string>>(props: {
 
     if (evt.name === "right" || evt.name === "down" || evt.name == "l" || evt.name === "j") {
       evt.preventDefault()
+      pointer.keyboardNavigation = true
       const idx = keys.indexOf(store.selected)
       const next = keys[(idx + 1) % keys.length]
       setStore("selected", next)
@@ -650,12 +678,21 @@ function Prompt<const T extends Record<string, string>>(props: {
                 paddingRight={2}
                 backgroundColor={option === store.selected ? theme.backgroundMenu : undefined}
                 // OpenTUI emits synthetic `over` events when layout changes. Applying
-                // selection only to real `move` events keeps keyboard navigation stable.
+                // selection only to real, changed-coordinate `move` events keeps
+                // keyboard navigation stable while preserving deliberate mouse use.
                 onMouseMove={(event) => {
-                  setStore("selected", permissionPromptHoverSelection(event.type, store.selected, option))
+                  setStore("selected", permissionPromptHoverSelection(event, store.selected, option, pointer))
                 }}
-                onMouseDown={() => setStore("selected", option)}
-                onMouseUp={() => {
+                onMouseDown={(event) => {
+                  pointer.keyboardNavigation = false
+                  pointer.x = event.x
+                  pointer.y = event.y
+                  setStore("selected", option)
+                }}
+                onMouseUp={(event) => {
+                  pointer.keyboardNavigation = false
+                  pointer.x = event.x
+                  pointer.y = event.y
                   setStore("selected", option)
                   props.onSelect(option)
                 }}

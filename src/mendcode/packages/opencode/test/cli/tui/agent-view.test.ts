@@ -145,10 +145,31 @@ describe("Agent View visibility", () => {
       { rootSessionID: undefined },
     ])
 
-    expect(isAgentViewLoopSession({ sessionID: "ses_paused_manual", title: "A normal-looking title", loopRootSessionIDs: roots })).toBe(true)
-    expect(isAgentViewLoopSession({ sessionID: "ses_old_manual", title: "Another title", loopRootSessionIDs: roots })).toBe(true)
-    expect(isAgentViewLoopSession({ sessionID: "ses_title_fallback", title: "Loop: legacy root", loopRootSessionIDs: roots })).toBe(true)
-    expect(isAgentViewLoopSession({ sessionID: "ses_summary_fallback", title: "legacy root", summary: "Loop paused: paused", loopRootSessionIDs: roots })).toBe(true)
+    expect(
+      isAgentViewLoopSession({
+        sessionID: "ses_paused_manual",
+        title: "A normal-looking title",
+        loopRootSessionIDs: roots,
+      }),
+    ).toBe(true)
+    expect(
+      isAgentViewLoopSession({ sessionID: "ses_old_manual", title: "Another title", loopRootSessionIDs: roots }),
+    ).toBe(true)
+    expect(
+      isAgentViewLoopSession({
+        sessionID: "ses_title_fallback",
+        title: "Loop: legacy root",
+        loopRootSessionIDs: roots,
+      }),
+    ).toBe(true)
+    expect(
+      isAgentViewLoopSession({
+        sessionID: "ses_summary_fallback",
+        title: "legacy root",
+        summary: "Loop paused: paused",
+        loopRootSessionIDs: roots,
+      }),
+    ).toBe(true)
   })
 
   test("filters loop roots out of the regular session list", () => {
@@ -193,7 +214,9 @@ describe("Agent View visibility", () => {
   test("identifies completed loop sessions from title or workflow roots", () => {
     const roots = agentViewLoopRootSessionIDs([{ rootSessionID: "ses_root" }])
 
-    expect(isAgentViewCompletedLoopSession({ sessionID: "ses_title", title: "Loop: complete me", state: "completed" })).toBe(true)
+    expect(
+      isAgentViewCompletedLoopSession({ sessionID: "ses_title", title: "Loop: complete me", state: "completed" }),
+    ).toBe(true)
     expect(
       isAgentViewCompletedLoopSession({
         sessionID: "ses_summary",
@@ -202,8 +225,17 @@ describe("Agent View visibility", () => {
         summary: "Loop completed: completed",
       }),
     ).toBe(true)
-    expect(isAgentViewCompletedLoopSession({ sessionID: "ses_root", title: "Manual loop", state: "completed", loopRootSessionIDs: roots })).toBe(true)
-    expect(isAgentViewCompletedLoopSession({ sessionID: "ses_chat", title: "Normal chat", state: "completed" })).toBe(false)
+    expect(
+      isAgentViewCompletedLoopSession({
+        sessionID: "ses_root",
+        title: "Manual loop",
+        state: "completed",
+        loopRootSessionIDs: roots,
+      }),
+    ).toBe(true)
+    expect(isAgentViewCompletedLoopSession({ sessionID: "ses_chat", title: "Normal chat", state: "completed" })).toBe(
+      false,
+    )
   })
 
   test("hides completed temp sessions but keeps active or awaiting rows", () => {
@@ -241,14 +273,18 @@ describe("Agent View visibility", () => {
   })
 
   test("keeps pinned or active archived sessions visible while hiding archived completed rows", () => {
-    expect(isAgentViewSessionVisible({ item: item({ state: "completed", metadata: { archived: true } }), now })).toBe(false)
+    expect(isAgentViewSessionVisible({ item: item({ state: "completed", metadata: { archived: true } }), now })).toBe(
+      false,
+    )
     expect(
       isAgentViewSessionVisible({
         item: item({ state: "completed", metadata: { archived: true, pinned: true } }),
         now,
       }),
     ).toBe(true)
-    expect(isAgentViewSessionVisible({ item: item({ state: "working", metadata: { archived: true } }), now })).toBe(true)
+    expect(isAgentViewSessionVisible({ item: item({ state: "working", metadata: { archived: true } }), now })).toBe(
+      true,
+    )
   })
 
   test("allows old real sessions only as the empty-recent fallback", () => {
@@ -270,24 +306,44 @@ describe("Agent View visibility", () => {
   })
 
   test("summarizes and counts command inbox state for Agent View rows", () => {
-    const pending = command({ id: "acmd_1", targetSessionID: "ses_worker", type: "rename", payload: { title: "Worker Alpha" } })
-    const accepted = command({ id: "acmd_2", targetSessionID: "ses_worker", state: "accepted", type: "tag", payload: { tags: ["api"] } })
+    const pending = command({
+      id: "acmd_1",
+      targetSessionID: "ses_worker",
+      type: "rename",
+      payload: { title: "Worker Alpha" },
+    })
+    const accepted = command({
+      id: "acmd_2",
+      targetSessionID: "ses_worker",
+      state: "accepted",
+      type: "tag",
+      payload: { tags: ["api"] },
+    })
     const other = command({ id: "acmd_3", targetSessionID: "ses_other" })
 
     expect(isAgentViewCommandActionable(pending)).toBe(true)
     expect(isAgentViewCommandActionable(accepted)).toBe(false)
     expect(agentViewCommandTouchesSession({ command: pending, sessionID: "ses_worker" })).toBe(true)
     expect(agentViewCommandTouchesSession({ command: pending, sessionID: "ses_source" })).toBe(false)
-    expect(agentViewCommandTouchesSession({ command: pending, sessionID: "ses_source", direction: "either" })).toBe(true)
+    expect(agentViewCommandTouchesSession({ command: pending, sessionID: "ses_source", direction: "either" })).toBe(
+      true,
+    )
     expect(agentViewCommandTouchesSession({ command: pending, sessionID: "ses_else", direction: "either" })).toBe(false)
-    expect(countAgentViewCommands({ commands: [pending, accepted, other], sessionID: "ses_worker", states: ["pending"] })).toBe(1)
+    expect(
+      countAgentViewCommands({ commands: [pending, accepted, other], sessionID: "ses_worker", states: ["pending"] }),
+    ).toBe(1)
     expect(countAgentViewCommands({ commands: [pending, accepted, other], sessionID: "ses_worker" })).toBe(2)
-    expect(countAgentViewCommands({ commands: [pending, accepted, other], sessionID: "ses_source", direction: "either" })).toBe(3)
+    expect(
+      countAgentViewCommands({ commands: [pending, accepted, other], sessionID: "ses_source", direction: "either" }),
+    ).toBe(3)
     expect(formatAgentViewCommandSummary(pending)).toBe("pending · rename row · Worker Alpha")
     expect(formatAgentViewCommandSummary(accepted)).toBe("accepted · update tags · #api")
-    expect(formatAgentViewCommandSummary(command({ type: "send_message", payload: { text: "Ship next safe step" } }))).toBe(
-      "pending · send message · Ship next safe step",
-    )
+    expect(
+      formatAgentViewCommandSummary(command({ type: "send_message", payload: { text: "Ship next safe step" } })),
+    ).toBe("pending · send message · Ship next safe step")
+    expect(
+      formatAgentViewCommandSummary(command({ type: "peer_message", payload: { text: "Check the queued run" } })),
+    ).toBe("pending · peer message · Check the queued run")
     expect(formatAgentViewCommandSummary(command({ type: "stop", payload: { reason: "handoff" } }))).toBe(
       "pending · stop worker · handoff",
     )

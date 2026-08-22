@@ -5,6 +5,7 @@ import { Database as BunDatabase } from "bun:sqlite"
 import { Global } from "@mendcode/core/global"
 import { resolveDualReadDbPathFromLayout } from "@/storage/resolve-default-sqlite-path"
 import { resolveMendProjectRoot } from "../config/paths"
+import { loopProjectScopeSql } from "../runtime/loop-project-scope"
 
 const scheduledLoopModes = new Set(["interval", "daily", "adaptive", "external-signal", "self-paced"])
 
@@ -21,19 +22,20 @@ type DreamWindow = {
 }
 
 function objectValue(value: unknown) {
-  return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : undefined
 }
 
 function loopMode(row: LoopRow) {
-  const data = typeof row.data === "string"
-    ? (() => {
-        try {
-          return JSON.parse(row.data) as unknown
-        } catch {
-          return undefined
-        }
-      })()
-    : row.data
+  const data =
+    typeof row.data === "string"
+      ? (() => {
+          try {
+            return JSON.parse(row.data) as unknown
+          } catch {
+            return undefined
+          }
+        })()
+      : row.data
   return objectValue(objectValue(data)?.spec)?.trigger
 }
 
@@ -51,9 +53,12 @@ function envOpen(openKey: string) {
 
 function backgroundDatabasePath() {
   const override = envOpen("OPENCODE_DB")
-  if (override) return override === ":memory:" || path.isAbsolute(override) ? override : path.join(Global.Path.data, override)
+  if (override)
+    return override === ":memory:" || path.isAbsolute(override) ? override : path.join(Global.Path.data, override)
   const channel = envOpen("OPENCODE_CHANNEL") || "local"
-  const disabled = [envOpen("OPENCODE_DISABLE_CHANNEL_DB")].some((value) => value === "1" || value?.toLowerCase() === "true")
+  const disabled = [envOpen("OPENCODE_DISABLE_CHANNEL_DB")].some(
+    (value) => value === "1" || value?.toLowerCase() === "true",
+  )
   return resolveDualReadDbPathFromLayout(Global.Path.data, channel, disabled)
 }
 
@@ -72,17 +77,22 @@ function readLoopRows(root: string, now: number, dueOnly: boolean) {
       )`
       : "AND (w.state = 'working' OR w.state IN ('active', 'sleeping'))"
     const limit = dueOnly ? "LIMIT 20" : ""
-    const rows = sqlite.query(`
+    const rows = sqlite
+      .query(
+        `
       SELECT w.state, w.data
       FROM loop_workflow AS w
       JOIN project AS p ON p.id = w.project_id
-      WHERE (p.worktree = ? OR EXISTS (
-        SELECT 1 FROM workspace AS ws
-        WHERE ws.project_id = w.project_id AND ws.directory = ?
-      ))
+      WHERE ${loopProjectScopeSql("?")}
       ${duePredicate}
       ${limit}
-    `).all(...(dueOnly ? [path.resolve(root), path.resolve(root), now] : [path.resolve(root), path.resolve(root)])) as LoopRow[]
+    `,
+      )
+      .all(
+        ...(dueOnly
+          ? [path.resolve(root), path.resolve(root), path.resolve(root), now]
+          : [path.resolve(root), path.resolve(root), path.resolve(root)]),
+      ) as LoopRow[]
     return rows
   } catch {
     // A missing/old database must fall back to the full path so migrations and recovery still run.
@@ -148,13 +158,15 @@ function localMinutes(now: Date, timezone?: string) {
 export function dreamBackgroundHasWork(now = new Date()) {
   const globalDir = process.env.MENDCODE_MEMORY_DIR || path.join(Global.Path.data, "memory")
   const files = [path.join(globalDir, "config.json"), path.join(globalDir, "dream", "schedule.json")]
-  return Promise.all(files.map(async (file) => {
-    try {
-      return JSON.parse(await readFile(file, "utf8")) as unknown
-    } catch {
-      return undefined
-    }
-  })).then(([config, schedule]) => {
+  return Promise.all(
+    files.map(async (file) => {
+      try {
+        return JSON.parse(await readFile(file, "utf8")) as unknown
+      } catch {
+        return undefined
+      }
+    }),
+  ).then(([config, schedule]) => {
     const window = dreamWindow(objectValue(config)?.dreamWindow) ?? dreamWindow(objectValue(schedule)?.window)
     if (!window) return false
     const start = minutes(window.start)!
@@ -165,7 +177,10 @@ export function dreamBackgroundHasWork(now = new Date()) {
 }
 
 function managedLoopService() {
-  return process.env.MENDCODE_LOOP_SERVICE === "1" || process.env.XPC_SERVICE_NAME?.startsWith("com.mendcode.loops.") === true
+  return (
+    process.env.MENDCODE_LOOP_SERVICE === "1" ||
+    process.env.XPC_SERVICE_NAME?.startsWith("com.mendcode.loops.") === true
+  )
 }
 
 async function uninstallManagedLoopService(root: string) {
@@ -184,7 +199,8 @@ export async function main(argv = process.argv.slice(2)) {
     }
     if (!loopBackgroundHasWork(root)) return
   }
-  if (once && argv[0] === "memory" && argv[1] === "dream" && argv[2] === "daemon" && !(await dreamBackgroundHasWork())) return
+  if (once && argv[0] === "memory" && argv[1] === "dream" && argv[2] === "daemon" && !(await dreamBackgroundHasWork()))
+    return
   await import("./control-plane")
 }
 

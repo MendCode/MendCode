@@ -228,13 +228,14 @@ export const AgentCommandTable = sqliteTable(
     time_created: integer().notNull(),
     time_updated: integer().notNull(),
     data: text({ mode: "json" }).notNull().$type<{
-      type: "request_summary" | "rename" | "tag" | "pause_after_turn" | "stop" | "send_message"
+      type: "request_summary" | "rename" | "tag" | "pause_after_turn" | "stop" | "send_message" | "peer_message"
       payload:
         | { instructions?: string }
         | { title: string }
         | { tags: readonly string[] }
         | { reason?: string }
         | { text: string }
+        | { text: string; sourceTitle?: string }
       permissions: readonly string[]
       policy?: {
         decision: "safe_auto" | "same_workspace" | "approval_required" | "denied"

@@ -6,6 +6,7 @@ import path from "path"
 import { computeGlobalRoots, resolveActiveAppSegment } from "@mendcode/core/global-layout"
 import { resolveDualReadDbPathFromLayout } from "@/storage/resolve-default-sqlite-path"
 import { readMendConfig } from "../config/project"
+import { loopProjectScopeSql } from "./loop-project-scope"
 
 export type LoopServiceMode = "dry-run" | "report-only" | "execute"
 export type LoopServicePlatform = "darwin" | "linux" | "win32"
@@ -101,6 +102,10 @@ export const DEFAULT_LOOP_SERVICE_LIMIT = 10
 const maxHealthErrorChars = 1_000
 const maxHealthDriftItems = 12
 
+export function loopDaemonCanDispatch(activeTickCount: number) {
+  return activeTickCount === 0
+}
+
 function stableProjectID(projectRoot: string) {
   return createHash("sha256").update(path.resolve(projectRoot)).digest("hex").slice(0, 12)
 }
@@ -142,7 +147,8 @@ function defaultServiceDir(platformValue: LoopServicePlatform) {
   const configured = process.env.MENDCODE_LOOP_SERVICE_DIR
   if (configured) return path.resolve(configured)
   if (platformValue === "darwin") return path.join(os.homedir(), "Library", "LaunchAgents")
-  if (platformValue === "linux") return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "systemd", "user")
+  if (platformValue === "linux")
+    return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "systemd", "user")
   return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "MendCode", "Loops")
 }
 
@@ -150,7 +156,8 @@ function defaultLogDir(platformValue: LoopServicePlatform) {
   const configured = process.env.MENDCODE_LOOP_LOG_DIR
   if (configured) return path.resolve(configured)
   if (platformValue === "darwin") return path.join(os.homedir(), "Library", "Logs", "MendCode")
-  if (platformValue === "linux") return path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"), "mendcode", "logs")
+  if (platformValue === "linux")
+    return path.join(process.env.XDG_STATE_HOME || path.join(os.homedir(), ".local", "state"), "mendcode", "logs")
   return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "MendCode", "Logs")
 }
 
@@ -164,7 +171,9 @@ function loopDatabasePath() {
   const override = envOpen("OPENCODE_DB")
   if (override) return override === ":memory:" || path.isAbsolute(override) ? override : path.join(dataDir, override)
   const channel = envOpen("OPENCODE_CHANNEL") || "local"
-  const disabled = [envOpen("OPENCODE_DISABLE_CHANNEL_DB")].some((value) => value === "1" || value?.toLowerCase() === "true")
+  const disabled = [envOpen("OPENCODE_DISABLE_CHANNEL_DB")].some(
+    (value) => value === "1" || value?.toLowerCase() === "true",
+  )
   return resolveDualReadDbPathFromLayout(dataDir, channel, disabled)
 }
 
@@ -186,7 +195,8 @@ function serviceIntervalSeconds(intervalMs: number) {
 }
 
 function loopDaemonArgs(
-  args: Required<Pick<LoopServiceArgs, "intervalMs" | "limit">> & Pick<LoopServiceArgs, "execute" | "reportOnly" | "quiet">,
+  args: Required<Pick<LoopServiceArgs, "intervalMs" | "limit">> &
+    Pick<LoopServiceArgs, "execute" | "reportOnly" | "quiet">,
   options: { once?: boolean } = {},
 ) {
   const daemonArgs = ["loops", "daemon", "--interval-ms", String(args.intervalMs), "--limit", String(args.limit)]
@@ -201,14 +211,11 @@ function sqlLiteral(value: string) {
   return `'${value.replaceAll("'", "''")}'`
 }
 
-function loopServicePreflightCommand(input: {
-  daemonArguments: string[]
-  databasePath: string
-  projectRoot: string
-}) {
+function loopServicePreflightCommand(input: { daemonArguments: string[]; databasePath: string; projectRoot: string }) {
   const project = sqlLiteral(input.projectRoot)
-  const scope = `(p.worktree = ${project} OR EXISTS (SELECT 1 FROM workspace AS ws WHERE ws.project_id = w.project_id AND ws.directory = ${project}))`
-  const scheduledMode = "(json_valid(w.data) = 0 OR json_extract(w.data, '$.spec.trigger.mode') IS NULL OR json_extract(w.data, '$.spec.trigger.mode') IN ('interval', 'daily', 'adaptive', 'external-signal', 'self-paced'))"
+  const scope = loopProjectScopeSql(project)
+  const scheduledMode =
+    "(json_valid(w.data) = 0 OR json_extract(w.data, '$.spec.trigger.mode') IS NULL OR json_extract(w.data, '$.spec.trigger.mode') IN ('interval', 'daily', 'adaptive', 'external-signal', 'self-paced'))"
   const query = [
     "WITH scheduled AS (",
     `SELECT w.state, w.next_wakeup FROM loop_workflow AS w JOIN project AS p ON p.id = w.project_id WHERE ${scope} AND w.state IN ('working', 'needs_input', 'active', 'sleeping') AND ${scheduledMode}`,
@@ -230,13 +237,17 @@ function configuredMode(value: unknown): LoopServiceMode {
   return value === "dry-run" || value === "execute" || value === "report-only" ? value : "report-only"
 }
 
-export function loopServiceArgsFromConfig(projectRoot: string, overrides: Partial<LoopServiceArgs> = {}): LoopServiceArgs {
+export function loopServiceArgsFromConfig(
+  projectRoot: string,
+  overrides: Partial<LoopServiceArgs> = {},
+): LoopServiceArgs {
   const root = path.resolve(projectRoot)
   const cfg = readMendConfig(root)
   const loop = cfg.loop && typeof cfg.loop === "object" ? cfg.loop : {}
   const mode = configuredMode(loop.defaultServiceMode)
   const cleanOverrides = Object.fromEntries(Object.entries(overrides).filter(([, value]) => value !== undefined))
-  const projectPath = (value: unknown) => typeof value === "string" && value.trim() ? path.resolve(root, value) : undefined
+  const projectPath = (value: unknown) =>
+    typeof value === "string" && value.trim() ? path.resolve(root, value) : undefined
   return {
     execute: mode !== "dry-run",
     reportOnly: mode !== "execute",
@@ -271,13 +282,10 @@ export function loopServicePlan(args: LoopServiceArgs): LoopServicePlan {
         ? path.join(serviceDir, `${label}.service`)
         : path.join(serviceDir, `${label}.cmd`)
   const databasePath = loopDatabasePath()
-  const serviceProgramArguments = platformValue === "darwin"
-    ? [
-        "/bin/sh",
-        "-c",
-         loopServicePreflightCommand({ daemonArguments: programArguments, databasePath, projectRoot }),
-      ]
-    : programArguments
+  const serviceProgramArguments =
+    platformValue === "darwin"
+      ? ["/bin/sh", "-c", loopServicePreflightCommand({ daemonArguments: programArguments, databasePath, projectRoot })]
+      : programArguments
   const programLine = shellQuote(programArguments)
   return {
     label,
@@ -344,19 +352,31 @@ function executableLocation(command: string) {
   const lookup = process.platform === "win32" ? "where.exe" : "which"
   const result = spawnSync(lookup, [command], { encoding: "utf8" })
   if (result.status !== 0) return undefined
-  return result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean)
+  return result.stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
 }
 
 async function executableIdentity(command: string) {
   const executablePath = executableLocation(command)
-  if (!executablePath) return { executablePath: undefined, executableVersion: undefined, executableFingerprint: undefined }
+  if (!executablePath)
+    return { executablePath: undefined, executableVersion: undefined, executableFingerprint: undefined }
   const [executableFingerprint, executableVersion] = await Promise.all([
-    readFile(executablePath).then(fingerprint).catch(() => undefined),
-    Promise.resolve().then(() => {
-      const result = spawnSync(executablePath, ["--version"], { encoding: "utf8", timeout: 5_000 })
-      const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim()
-      return output.split(/\r?\n/).map((line) => line.trim()).find(Boolean)?.slice(0, 200)
-    }).catch(() => undefined),
+    readFile(executablePath)
+      .then(fingerprint)
+      .catch(() => undefined),
+    Promise.resolve()
+      .then(() => {
+        const result = spawnSync(executablePath, ["--version"], { encoding: "utf8", timeout: 5_000 })
+        const output = [result.stdout, result.stderr].filter(Boolean).join("\n").trim()
+        return output
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .find(Boolean)
+          ?.slice(0, 200)
+      })
+      .catch(() => undefined),
   ])
   return { executablePath, executableVersion, executableFingerprint }
 }
@@ -374,7 +394,8 @@ function parseHealthRecord(value: unknown): LoopServiceHealthRecord | undefined 
     typeof record.degraded !== "boolean" ||
     typeof record.updatedAt !== "number" ||
     !Number.isFinite(record.updatedAt)
-  ) return undefined
+  )
+    return undefined
   return {
     schema: 1,
     projectRoot: record.projectRoot,
@@ -385,7 +406,10 @@ function parseHealthRecord(value: unknown): LoopServiceHealthRecord | undefined 
     executableVersion: typeof record.executableVersion === "string" ? record.executableVersion : undefined,
     executableFingerprint: typeof record.executableFingerprint === "string" ? record.executableFingerprint : undefined,
     definitionFingerprint: record.definitionFingerprint,
-    lastWakeAttempt: typeof record.lastWakeAttempt === "number" && Number.isFinite(record.lastWakeAttempt) ? record.lastWakeAttempt : undefined,
+    lastWakeAttempt:
+      typeof record.lastWakeAttempt === "number" && Number.isFinite(record.lastWakeAttempt)
+        ? record.lastWakeAttempt
+        : undefined,
     lastError: typeof record.lastError === "string" ? boundedHealthText(record.lastError) : undefined,
     degraded: record.degraded,
     updatedAt: record.updatedAt,
@@ -424,10 +448,12 @@ export async function writeLoopServiceHealth(plan: LoopServicePlan, update: Loop
 }
 
 function shellQuote(args: string[]) {
-  return args.map((arg) => {
-    if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(arg)) return arg
-    return `'${arg.replaceAll("'", "'\\''")}'`
-  }).join(" ")
+  return args
+    .map((arg) => {
+      if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(arg)) return arg
+      return `'${arg.replaceAll("'", "'\\''")}'`
+    })
+    .join(" ")
 }
 
 export function loopServicePlist(plan: LoopServicePlan) {
@@ -519,7 +545,11 @@ function runServiceCommand(plan: LoopServicePlan, command: string[]) {
 }
 
 function serviceLoaded(plan: LoopServicePlan) {
-  if (platform() !== plan.platform) return { loaded: false, detail: `service is configured for ${plan.platform}, current platform is ${process.platform}` }
+  if (platform() !== plan.platform)
+    return {
+      loaded: false,
+      detail: `service is configured for ${plan.platform}, current platform is ${process.platform}`,
+    }
   const result = runServiceCommand(plan, plan.statusCommand)
   return {
     loaded: result.status === 0,
@@ -535,7 +565,8 @@ function kickstartService(plan: LoopServicePlan) {
 
 export async function loopServiceInstall(args: LoopServiceArgs) {
   const plan = loopServicePlan(args)
-  if (platform() !== plan.platform) throw new Error(`Loop service install target is ${plan.platform}, current platform is ${process.platform}.`)
+  if (platform() !== plan.platform)
+    throw new Error(`Loop service install target is ${plan.platform}, current platform is ${process.platform}.`)
   await mkdir(path.dirname(plan.definitionPath), { recursive: true })
   await mkdir(path.dirname(plan.stdoutPath), { recursive: true })
   await writeFile(plan.definitionPath, loopServiceDefinition(plan))
@@ -549,7 +580,8 @@ export async function loopServiceInstall(args: LoopServiceArgs) {
 
 export async function loopServiceUninstall(args: LoopServiceArgs) {
   const plan = loopServicePlan(args)
-  if (platform() !== plan.platform) throw new Error(`Loop service uninstall target is ${plan.platform}, current platform is ${process.platform}.`)
+  if (platform() !== plan.platform)
+    throw new Error(`Loop service uninstall target is ${plan.platform}, current platform is ${process.platform}.`)
   if (serviceLoaded(plan).loaded) runServiceCommand(plan, plan.uninstallCommand)
   await rm(plan.definitionPath, { force: true })
   if (plan.platform === "linux") runServiceCommand(plan, ["systemctl", "--user", "daemon-reload"])
@@ -558,7 +590,8 @@ export async function loopServiceUninstall(args: LoopServiceArgs) {
 
 export async function loopServiceStart(args: LoopServiceArgs) {
   const plan = loopServicePlan(args)
-  if (platform() !== plan.platform) throw new Error(`Loop service start target is ${plan.platform}, current platform is ${process.platform}.`)
+  if (platform() !== plan.platform)
+    throw new Error(`Loop service start target is ${plan.platform}, current platform is ${process.platform}.`)
   const previousDefinition = await readFile(plan.definitionPath, "utf8").catch(() => undefined)
   const existing = serviceLoaded(plan)
   const installed = await loopServiceInstall(args)
@@ -582,9 +615,11 @@ export async function loopServiceStart(args: LoopServiceArgs) {
 
 export async function loopServiceStop(args: LoopServiceArgs) {
   const plan = loopServicePlan(args)
-  if (platform() !== plan.platform) throw new Error(`Loop service stop target is ${plan.platform}, current platform is ${process.platform}.`)
+  if (platform() !== plan.platform)
+    throw new Error(`Loop service stop target is ${plan.platform}, current platform is ${process.platform}.`)
   const result = runServiceCommand(plan, plan.stopCommand)
-  if (result.status !== 0 && serviceLoaded(plan).loaded) throw new Error(result.stderr || result.stdout || `${plan.backend} stop failed`)
+  if (result.status !== 0 && serviceLoaded(plan).loaded)
+    throw new Error(result.stderr || result.stdout || `${plan.backend} stop failed`)
   return plan
 }
 

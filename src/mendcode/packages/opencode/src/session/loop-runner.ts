@@ -9,7 +9,11 @@ import { InstanceState } from "@/effect/instance-state"
 import { WorkflowRunner } from "@/session/workflow-runner"
 import { WorkflowService } from "@/session/workflow-service"
 import { fingerprintWorkspace } from "@/session/completion-auditor"
-import { compileCompletionCriteria, type CompletionAuditReceipt, type CompletionProgress } from "@/session/completion-contract"
+import {
+  compileCompletionCriteria,
+  type CompletionAuditReceipt,
+  type CompletionProgress,
+} from "@/session/completion-contract"
 import { completionValidationCommandAllowed, runCompletionValidationCommand } from "@/session/completion-validation"
 
 export const TickResult = Schema.Struct({
@@ -21,7 +25,9 @@ export const TickResult = Schema.Struct({
 export type TickResult = Types.DeepMutable<Schema.Schema.Type<typeof TickResult>>
 
 export interface Interface {
-  readonly runOne: (input: RunOneInput) => Effect.Effect<TickResult, unknown, LoopWorkflow.Service | SessionPrompt.Service | Session.Service>
+  readonly runOne: (
+    input: RunOneInput,
+  ) => Effect.Effect<TickResult, unknown, LoopWorkflow.Service | SessionPrompt.Service | Session.Service>
   readonly runDue: (input?: {
     now?: number
     limit?: number
@@ -107,8 +113,10 @@ function loopMemoryPrompt(workflow: LoopWorkflow.Info) {
 function budgetSemantics(workflow: LoopWorkflow.Info) {
   const mode = workflow.spec.budgetMode ?? "legacy"
   if (mode === "fixed") return "fixed: run exactly until the iteration cap unless blocked or stopped."
-  if (mode === "unbounded-monitor") return "unbounded-monitor: continue monitoring until a stop condition, blocker, or user stop."
-  if (mode === "max-goal") return "max-goal: maxTurns is a budget cap, not a work plan; finish as soon as the goal is complete and verified."
+  if (mode === "unbounded-monitor")
+    return "unbounded-monitor: continue monitoring until a stop condition, blocker, or user stop."
+  if (mode === "max-goal")
+    return "max-goal: maxTurns is a budget cap, not a work plan; finish as soon as the goal is complete and verified."
   return "legacy: preserve existing loop behavior; use stop conditions and budget carefully."
 }
 
@@ -130,9 +138,12 @@ function checkpointGuidance(workflow: LoopWorkflow.Info) {
 
 function workspacePolicyPrompt(workflow: LoopWorkflow.Info) {
   const mode = workflow.spec.workspace?.mode ?? "in-place"
-  if (mode === "read-only") return "Workspace policy: read-only. Inspect and report only; do not edit files or run mutating shell commands."
-  if (mode === "per-loop-worktree") return "Workspace policy: per-loop-worktree. Use the assigned loop workspace metadata when available; do not create, promote, or clean worktrees yourself unless explicitly instructed."
-  if (mode === "per-run-worktree") return "Workspace policy: per-run-worktree. Use the assigned run workspace metadata when available; do not create, promote, or clean worktrees yourself unless explicitly instructed."
+  if (mode === "read-only")
+    return "Workspace policy: read-only. Inspect and report only; do not edit files or run mutating shell commands."
+  if (mode === "per-loop-worktree")
+    return "Workspace policy: per-loop-worktree. Use the assigned loop workspace metadata when available; do not create, promote, or clean worktrees yourself unless explicitly instructed."
+  if (mode === "per-run-worktree")
+    return "Workspace policy: per-run-worktree. Use the assigned run workspace metadata when available; do not create, promote, or clean worktrees yourself unless explicitly instructed."
   return "Workspace policy: in-place. Work in the current project workspace and keep changes minimal and auditable."
 }
 
@@ -158,7 +169,9 @@ function iterationPrompt(workflow: LoopWorkflow.Info, reason?: string) {
     workspacePolicyPrompt(workflow),
     `Budget mode: ${budgetSemantics(workflow)}`,
     `Remaining iteration budget after this run starts: ${remaining}`,
-    strategy?.targetTurns ? `Target completion window: aim to complete by about ${strategy.targetTurns} iterations if possible.` : undefined,
+    strategy?.targetTurns
+      ? `Target completion window: aim to complete by about ${strategy.targetTurns} iterations if possible.`
+      : undefined,
     reserve ? `Reserved verification/recovery turns: ${reserve}` : undefined,
     `Current phase: ${workflow.phase}`,
     `Next scheduled wakeup: ${next}`,
@@ -166,12 +179,21 @@ function iterationPrompt(workflow: LoopWorkflow.Info, reason?: string) {
     loopMemoryPrompt(workflow),
     "",
     "Completion criteria:",
-    numberedList(workflow.spec.completionCriteria, "Use the objective, stop conditions, and explicit user constraints as completion criteria."),
+    numberedList(
+      workflow.spec.completionCriteria,
+      "Use the objective, stop conditions, and explicit user constraints as completion criteria.",
+    ),
     "",
     "Success checks:",
-    numberedList(workflow.spec.successChecks, "Run the most relevant available validation and explain any unavailable checks."),
+    numberedList(
+      workflow.spec.successChecks,
+      "Run the most relevant available validation and explain any unavailable checks.",
+    ),
     workflow.spec.validationChecks?.length
-      ? ["Executable validation checks:", ...workflow.spec.validationChecks.map((check) => `- ${check.id}: ${check.command}`)].join("\n")
+      ? [
+          "Executable validation checks:",
+          ...workflow.spec.validationChecks.map((check) => `- ${check.id}: ${check.command}`),
+        ].join("\n")
       : undefined,
     "",
     `Gates: ${gates}`,
@@ -225,7 +247,15 @@ function loopIterationTools(reportOnly: boolean): Record<string, boolean> {
 }
 
 const reportOnlyApprovalGates = ["edit", "write", "apply_patch", "shell", "subagent"]
-const editAllowedApprovalGates = ["push", "merge", "release", "version-bump", "external-send", "destructive-shell", "broad-refactor"]
+const editAllowedApprovalGates = [
+  "push",
+  "merge",
+  "release",
+  "version-bump",
+  "external-send",
+  "destructive-shell",
+  "broad-refactor",
+]
 
 function workflowIsReportOnly(workflow: LoopWorkflow.Info) {
   if (workflow.spec.workspace?.mode === "read-only") return true
@@ -243,16 +273,31 @@ function workflowExplicitlyAllowsEdits(workflow: LoopWorkflow.Info) {
 
 function runTriggerFor(workflow: LoopWorkflow.Info): LoopWorkflow.RunTrigger {
   const mode = workflow.spec.trigger?.mode
-  if (mode === "interval" || mode === "daily" || mode === "adaptive" || mode === "external-signal" || mode === "self-paced") return mode
+  if (
+    mode === "interval" ||
+    mode === "daily" ||
+    mode === "adaptive" ||
+    mode === "external-signal" ||
+    mode === "self-paced"
+  )
+    return mode
   return "manual"
 }
 
-function readinessDecision(workflow: LoopWorkflow.Info): { ready: true } | { ready: false; reason: string; nextWakeup?: number } {
+function readinessDecision(
+  workflow: LoopWorkflow.Info,
+): { ready: true } | { ready: false; reason: string; nextWakeup?: number } {
   if (workflow.state === "blocked" || workflow.state === "needs_input") {
-    return { ready: false, reason: `Loop is ${workflow.state}; resolve the blocking condition before running it again.` }
+    return {
+      ready: false,
+      reason: `Loop is ${workflow.state}; resolve the blocking condition before running it again.`,
+    }
   }
   if (typeof workflow.policy.maxTurns === "number" && (workflow.metrics.turns ?? 0) >= workflow.policy.maxTurns) {
-    return { ready: false, reason: `Loop has no remaining iteration budget (${workflow.metrics.turns ?? 0}/${workflow.policy.maxTurns}).` }
+    return {
+      ready: false,
+      reason: `Loop has no remaining iteration budget (${workflow.metrics.turns ?? 0}/${workflow.policy.maxTurns}).`,
+    }
   }
   if (workflow.spec.trigger?.mode === "external-signal" && workflow.phase !== "signal_received") {
     return { ready: false, reason: "External-signal loop has no pending normalized signal evidence to process." }
@@ -276,7 +321,11 @@ function assistantText(message: MessageV2.WithParts) {
     .join("\n")
 }
 
-function usageFromMessage(message: MessageV2.WithParts | undefined, workflow: LoopWorkflow.Info, started: number): LoopWorkflow.Usage | undefined {
+function usageFromMessage(
+  message: MessageV2.WithParts | undefined,
+  workflow: LoopWorkflow.Info,
+  started: number,
+): LoopWorkflow.Usage | undefined {
   if (!message || message.info.role !== "assistant") return undefined
   return {
     providerID: message.info.providerID ?? workflow.spec.model?.providerID,
@@ -294,11 +343,28 @@ function usageFromMessage(message: MessageV2.WithParts | undefined, workflow: Lo
   }
 }
 
-function incompleteWorkerReason(message: MessageV2.WithParts) {
+function incompleteWorkerFailure(message: MessageV2.WithParts): {
+  reason: string
+  failureClass: LoopWorkflow.FailureClass
+} {
   if (message.info.role !== "assistant" || !message.info.finish) {
-    return "Loop worker ended without a terminal finish; retrying the iteration."
+    const hasToolAttempt = message.parts.some((part) => part.type === "tool")
+    if (hasToolAttempt) {
+      return {
+        reason:
+          "Loop worker ended after a tool call without a terminal finish. Automatic retry paused because the tool may have changed the workspace; inspect the loop chat and resume explicitly.",
+        failureClass: "user_input",
+      }
+    }
+    return {
+      reason: "Loop worker ended without a terminal finish; retrying the iteration.",
+      failureClass: "transient",
+    }
   }
-  return "Loop worker finished without a parseable LOOP_CHECKPOINT; retrying the iteration."
+  return {
+    reason: "Loop worker finished without a parseable LOOP_CHECKPOINT; retrying the iteration.",
+    failureClass: "transient",
+  }
 }
 
 function mergeUsage(usages: Array<LoopWorkflow.Usage | undefined>): LoopWorkflow.Usage | undefined {
@@ -336,7 +402,10 @@ function parseLoopBlock(text: string, marker: "LOOP_CHECKPOINT" | "LOOP_JUDGMENT
     const line = rawLine.trim()
     if (!line) continue
     if (/^status\s*:/i.test(line)) {
-      parsed.status = line.replace(/^status\s*:\s*/i, "").trim().toLowerCase()
+      parsed.status = line
+        .replace(/^status\s*:\s*/i, "")
+        .trim()
+        .toLowerCase()
       inEvidence = false
       continue
     }
@@ -380,7 +449,11 @@ function parseCheckpoint(text: string): LoopCheckpoint {
   if (!block) return {}
   const statusRaw = block.status
   const status =
-    statusRaw === "complete" || statusRaw === "continue" || statusRaw === "needs_input" || statusRaw === "blocked" || statusRaw === "stop"
+    statusRaw === "complete" ||
+    statusRaw === "continue" ||
+    statusRaw === "needs_input" ||
+    statusRaw === "blocked" ||
+    statusRaw === "stop"
       ? statusRaw
       : undefined
   return {
@@ -397,7 +470,11 @@ function parseJudgment(text: string): LoopJudgment {
   if (!block) return { status: "uncertain", summary: "Evaluator did not return a LOOP_JUDGMENT block." }
   const statusRaw = block.status
   const status =
-    statusRaw === "pass" || statusRaw === "fail" || statusRaw === "uncertain" || statusRaw === "blocked" || statusRaw === "needs_human"
+    statusRaw === "pass" ||
+    statusRaw === "fail" ||
+    statusRaw === "uncertain" ||
+    statusRaw === "blocked" ||
+    statusRaw === "needs_human"
       ? statusRaw
       : "uncertain"
   return {
@@ -414,7 +491,10 @@ function requiresIndependentCompletion(workflow: LoopWorkflow.Info, checkpoint: 
   if (checkpoint.status !== "complete" && checkpoint.status !== "blocked") return false
   if (workflow.spec.evaluation?.allowWorkerSelfComplete === true) return false
   if (workflow.spec.evaluation?.confirmation === "next-run") return false
-  return workflow.spec.evaluation?.mode === "independent" || workflow.spec.evaluation?.requireIndependentForCompletion === true
+  return (
+    workflow.spec.evaluation?.mode === "independent" ||
+    workflow.spec.evaluation?.requireIndependentForCompletion === true
+  )
 }
 
 function checkpointGate(checkpoint: LoopCheckpoint): LoopGateResult {
@@ -445,10 +525,20 @@ const sensitiveActionPatterns: Array<[string, RegExp]> = [
 ]
 
 function approvalGate(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint): LoopGateResult | undefined {
-  const corpus = [checkpoint.summary, checkpoint.nextAction, ...(checkpoint.evidence ?? [])].filter((item): item is string => Boolean(item)).join("\n")
-  const required = new Set([...(workflow.policy.requireApprovalFor ?? []), ...(workflow.spec.approvalPolicy?.requireApprovalFor ?? [])])
-  const approved = new Set([...(workflow.policy.approvedActions ?? []), ...(workflow.spec.approvalPolicy?.approvedActions ?? [])])
-  const attempted = sensitiveActionPatterns.flatMap(([action, pattern]) => (required.has(action) && pattern.test(corpus) ? [action] : []))
+  const corpus = [checkpoint.summary, checkpoint.nextAction, ...(checkpoint.evidence ?? [])]
+    .filter((item): item is string => Boolean(item))
+    .join("\n")
+  const required = new Set([
+    ...(workflow.policy.requireApprovalFor ?? []),
+    ...(workflow.spec.approvalPolicy?.requireApprovalFor ?? []),
+  ])
+  const approved = new Set([
+    ...(workflow.policy.approvedActions ?? []),
+    ...(workflow.spec.approvalPolicy?.approvedActions ?? []),
+  ])
+  const attempted = sensitiveActionPatterns.flatMap(([action, pattern]) =>
+    required.has(action) && pattern.test(corpus) ? [action] : [],
+  )
   if (!attempted.length) return
   const missing = attempted.filter((action) => !approved.has(action))
   if (missing.length) {
@@ -462,16 +552,15 @@ function approvalGate(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint): 
   return {
     id: "approval-policy",
     status: "pass",
-    summary: attempted.length ? `Sensitive action approvals present: ${attempted.join(", ")}.` : "No approval-required sensitive action was reported.",
+    summary: attempted.length
+      ? `Sensitive action approvals present: ${attempted.join(", ")}.`
+      : "No approval-required sensitive action was reported.",
     failureClass: "none",
   }
 }
 
 function evidenceCorpus(checkpoint: LoopCheckpoint, judgment: LoopJudgment | undefined) {
-  return [
-    ...(checkpoint.evidence ?? []),
-    ...(judgment?.evidence ?? []),
-  ]
+  return [...(checkpoint.evidence ?? []), ...(judgment?.evidence ?? [])]
     .filter((item): item is string => Boolean(item))
     .map((item) => item.toLowerCase())
 }
@@ -480,10 +569,15 @@ function trimmedNonEmptyStrings(items: readonly string[] | undefined) {
   return items?.map((item) => item.trim()).filter((item): item is string => item.length > 0) ?? []
 }
 
-function successChecksGate(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint, judgment: LoopJudgment | undefined): LoopGateResult | undefined {
+function successChecksGate(
+  workflow: LoopWorkflow.Info,
+  checkpoint: LoopCheckpoint,
+  judgment: LoopJudgment | undefined,
+): LoopGateResult | undefined {
   const checks = trimmedNonEmptyStrings(workflow.spec.successChecks)
   if (!checks.length) return
-  const shouldEvaluate = checkpoint.status === "complete" || (checkpoint.status === "blocked" && judgment?.status === "pass")
+  const shouldEvaluate =
+    checkpoint.status === "complete" || (checkpoint.status === "blocked" && judgment?.status === "pass")
   if (!shouldEvaluate) {
     return {
       id: "success-checks",
@@ -517,47 +611,58 @@ export function loopValidationCommandAllowed(command: string) {
   return completionValidationCommandAllowed(command)
 }
 
-function executeValidationChecks(workflowService: LoopWorkflow.Interface, workflow: LoopWorkflow.Info, run: LoopWorkflow.RunInfo, checkpoint: LoopCheckpoint, directory: string) {
+function executeValidationChecks(
+  workflowService: LoopWorkflow.Interface,
+  workflow: LoopWorkflow.Info,
+  run: LoopWorkflow.RunInfo,
+  checkpoint: LoopCheckpoint,
+  directory: string,
+) {
   const checks = workflow.spec.validationChecks ?? []
-  if (!checks.length || (checkpoint.status !== "complete" && checkpoint.status !== "blocked")) return Effect.succeed([] as LoopGateResult[])
+  if (!checks.length || (checkpoint.status !== "complete" && checkpoint.status !== "blocked"))
+    return Effect.succeed([] as LoopGateResult[])
   return Effect.gen(function* () {
-    return yield* Effect.forEach(checks, (check) =>
-      Effect.gen(function* () {
-        const command = check.command.trim()
-        const result: ValidationExecution = yield* runCompletionValidationCommand(
-          command,
-          run.workspaceLease?.state === "active" ? run.workspaceLease.path : directory,
-          Math.max(1_000, Math.min(check.timeoutMs ?? 120_000, 10 * 60_000)),
-          !workflowIsReportOnly(workflow),
-        )
-        const artifact = yield* workflowService.recordValidation({
-          id: workflow.id,
-          runID: run.id,
-          checkID: check.id,
-          command,
-          status: result.status,
-          summary: result.summary,
-          output: result.output,
-          exitCode: result.exitCode,
-          durationMs: result.durationMs,
-          timedOut: result.timedOut,
-        }).pipe(Effect.orElseSucceed(() => undefined))
-        if (!artifact) {
+    return yield* Effect.forEach(
+      checks,
+      (check) =>
+        Effect.gen(function* () {
+          const command = check.command.trim()
+          const result: ValidationExecution = yield* runCompletionValidationCommand(
+            command,
+            run.workspaceLease?.state === "active" ? run.workspaceLease.path : directory,
+            Math.max(1_000, Math.min(check.timeoutMs ?? 120_000, 10 * 60_000)),
+            !workflowIsReportOnly(workflow),
+          )
+          const artifact = yield* workflowService
+            .recordValidation({
+              id: workflow.id,
+              runID: run.id,
+              checkID: check.id,
+              command,
+              status: result.status,
+              summary: result.summary,
+              output: result.output,
+              exitCode: result.exitCode,
+              durationMs: result.durationMs,
+              timedOut: result.timedOut,
+            })
+            .pipe(Effect.orElseSucceed(() => undefined))
+          if (!artifact) {
+            return {
+              id: `validation:${check.id}`,
+              status: "blocked",
+              summary: "Validation result was discarded because the loop run is no longer active.",
+              failureClass: "environment",
+            } satisfies LoopGateResult
+          }
           return {
             id: `validation:${check.id}`,
-            status: "blocked",
-            summary: "Validation result was discarded because the loop run is no longer active.",
-            failureClass: "environment",
+            status: result.status,
+            summary: result.summary,
+            failureClass: result.failureClass,
+            evidenceArtifacts: [artifact.id],
           } satisfies LoopGateResult
-        }
-        return {
-          id: `validation:${check.id}`,
-          status: result.status,
-          summary: result.summary,
-          failureClass: result.failureClass,
-          evidenceArtifacts: [artifact.id],
-        } satisfies LoopGateResult
-      }),
+        }),
       { concurrency: 1 },
     )
   })
@@ -576,27 +681,27 @@ function rubricRequirementMet(input: {
   const approval = input.gates.find((gate) => gate.id === "approval-policy")
   const validationRequired = input.workflow.spec.validationChecks?.length ?? 0
   const successRequired = trimmedNonEmptyStrings(input.workflow.spec.successChecks).length > 0
-  const validationPassed = validationRequired === 0 || (
-    validation.length === validationRequired &&
-    validation.every((gate) => gate.status === "pass")
-  )
+  const validationPassed =
+    validationRequired === 0 ||
+    (validation.length === validationRequired && validation.every((gate) => gate.status === "pass"))
   const successPassed = !successRequired || success?.status === "pass"
   if (requirement === "checkpoint evidence") return Boolean(input.checkpoint.evidence?.length)
   if (requirement === "success checks") {
     return validationPassed && successPassed
   }
   if (requirement === "success check output" || requirement === "validation output") {
-    const validationOutputRecorded = validationRequired === 0 || (
-      validation.length === validationRequired &&
-      validation.every((gate) => gate.status === "pass" && Boolean(gate.evidenceArtifacts?.length))
-    )
-    const successEvidenceRecorded = !successRequired || (
-      successPassed && Boolean(input.checkpoint.evidence?.length || input.judgment?.evidence?.length)
-    )
+    const validationOutputRecorded =
+      validationRequired === 0 ||
+      (validation.length === validationRequired &&
+        validation.every((gate) => gate.status === "pass" && Boolean(gate.evidenceArtifacts?.length)))
+    const successEvidenceRecorded =
+      !successRequired ||
+      (successPassed && Boolean(input.checkpoint.evidence?.length || input.judgment?.evidence?.length))
     return validationOutputRecorded && successEvidenceRecorded
   }
   if (requirement === "policy gate status") return !approval || approval.status === "pass"
-  if (requirement.startsWith("gate:")) return input.gates.find((gate) => gate.id === requirement.slice(5))?.status === "pass"
+  if (requirement.startsWith("gate:"))
+    return input.gates.find((gate) => gate.id === requirement.slice(5))?.status === "pass"
   return [
     ...(input.checkpoint.evidence ?? []),
     ...(input.judgment?.evidence ?? []),
@@ -604,12 +709,23 @@ function rubricRequirementMet(input: {
   ].some((item) => item.toLowerCase().includes(requirement))
 }
 
-function evaluateRubric(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint, judgment: LoopJudgment | undefined, gates: LoopGateResult[]): LoopWorkflow.RubricResult | undefined {
+function evaluateRubric(
+  workflow: LoopWorkflow.Info,
+  checkpoint: LoopCheckpoint,
+  judgment: LoopJudgment | undefined,
+  gates: LoopGateResult[],
+): LoopWorkflow.RubricResult | undefined {
   const rubric = workflow.spec.rubric
-  if (!rubric || (checkpoint.status !== "complete" && !(checkpoint.status === "blocked" && judgment?.status === "pass"))) return undefined
+  if (
+    !rubric ||
+    (checkpoint.status !== "complete" && !(checkpoint.status === "blocked" && judgment?.status === "pass"))
+  )
+    return undefined
   const criteria = (rubric.criteria ?? []).map((criterion) => {
     const requirements = trimmedNonEmptyStrings(criterion.evidenceRequired)
-    const evidence = requirements.filter((requirement) => rubricRequirementMet({ requirement, workflow, checkpoint, judgment, gates }))
+    const evidence = requirements.filter((requirement) =>
+      rubricRequirementMet({ requirement, workflow, checkpoint, judgment, gates }),
+    )
     const passed = requirements.length
       ? evidence.length === requirements.length
       : Boolean(checkpoint.evidence?.length || judgment?.evidence?.length)
@@ -620,13 +736,20 @@ function evaluateRubric(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint,
       score,
       maxScore,
       passed: passed && score >= (criterion.minScore ?? 0),
-      reason: passed ? "Required runtime evidence is present." : `Missing required evidence: ${requirements.filter((item) => !evidence.includes(item)).join(", ") || "concrete completion evidence"}.`,
+      reason: passed
+        ? "Required runtime evidence is present."
+        : `Missing required evidence: ${requirements.filter((item) => !evidence.includes(item)).join(", ") || "concrete completion evidence"}.`,
       evidence,
       weight: Math.max(0, criterion.weight ?? 1),
     }
   })
-  const gateCorpus = gates.map((gate) => `${gate.id} ${gate.status} ${gate.summary ?? ""}`).join("\n").toLowerCase()
-  const proposalCorpus = [...(checkpoint.evidence ?? []), ...(judgment?.evidence ?? []), judgment?.summary ?? ""].join("\n").toLowerCase()
+  const gateCorpus = gates
+    .map((gate) => `${gate.id} ${gate.status} ${gate.summary ?? ""}`)
+    .join("\n")
+    .toLowerCase()
+  const proposalCorpus = [...(checkpoint.evidence ?? []), ...(judgment?.evidence ?? []), judgment?.summary ?? ""]
+    .join("\n")
+    .toLowerCase()
   const blockers = (rubric.mandatoryBlockers ?? []).map((blocker) => {
     const normalized = blocker.toLowerCase()
     const present = /configured validation failed/.test(normalized)
@@ -645,13 +768,21 @@ function evaluateRubric(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint,
     }
   })
   const totalWeight = criteria.reduce((sum, criterion) => sum + criterion.weight, 0)
-  const score = totalWeight > 0
-    ? criteria.reduce((sum, criterion) => sum + (criterion.score / criterion.maxScore) * criterion.weight, 0) / totalWeight
-    : blockers.some((blocker) => blocker.present) ? 0 : 1
+  const score =
+    totalWeight > 0
+      ? criteria.reduce((sum, criterion) => sum + (criterion.score / criterion.maxScore) * criterion.weight, 0) /
+        totalWeight
+      : blockers.some((blocker) => blocker.present)
+        ? 0
+        : 1
   const threshold = Math.max(0, Math.min(1, rubric.passThreshold ?? 0.85))
   const blocked = blockers.some((blocker) => blocker.present)
   return {
-    status: blocked ? "blocked" : score >= threshold && criteria.every((criterion) => criterion.passed) ? "pass" : "fail",
+    status: blocked
+      ? "blocked"
+      : score >= threshold && criteria.every((criterion) => criterion.passed)
+        ? "pass"
+        : "fail",
     score,
     threshold,
     criteria: criteria.map((criterion) => ({
@@ -688,7 +819,8 @@ function evaluatorGate(judgment: LoopJudgment | undefined): LoopGateResult | und
     return {
       id: "independent-evaluator",
       status: "blocked",
-      summary: judgment.summary ?? `Independent evaluator failed before producing a verdict (${judgment.failureClass}).`,
+      summary:
+        judgment.summary ?? `Independent evaluator failed before producing a verdict (${judgment.failureClass}).`,
       failureClass: judgment.failureClass,
     }
   }
@@ -701,7 +833,11 @@ function evaluatorGate(judgment: LoopJudgment | undefined): LoopGateResult | und
 }
 
 function classifyEvaluatorFailure(error: string): LoopWorkflow.FailureClass {
-  if (/\b(timeout|timed out|rate limit|429|econnreset|etimedout|eai_again|network|overloaded|temporar|retry|503|502|504|500)\b/i.test(error)) {
+  if (
+    /\b(timeout|timed out|rate limit|429|econnreset|etimedout|eai_again|network|overloaded|temporar|retry|503|502|504|500)\b/i.test(
+      error,
+    )
+  ) {
     return "transient"
   }
   return "environment"
@@ -711,7 +847,10 @@ function judgmentPrompt(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint,
   const criteria = compileCompletionCriteria(
     workflow.spec.completionCriteria?.length ? workflow.spec.completionCriteria : [workflow.objective],
   )
-  const successChecks = numberedList(workflow.spec.successChecks, "No explicit success checks were configured; evaluate only the evidence provided.")
+  const successChecks = numberedList(
+    workflow.spec.successChecks,
+    "No explicit success checks were configured; evaluate only the evidence provided.",
+  )
   const rubric = workflow.spec.rubric
   return [
     `Independent loop evaluator: ${workflow.name}`,
@@ -737,14 +876,21 @@ function judgmentPrompt(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint,
     "",
     "Deterministic gate results (authoritative; the judge cannot override failures):",
     gates.length
-      ? gates.map((gate) => `- ${gate.id}: ${gate.status} · ${gate.summary ?? "no summary"}${gate.evidenceArtifacts?.length ? ` · artifacts ${gate.evidenceArtifacts.join(", ")}` : ""}`).join("\n")
+      ? gates
+          .map(
+            (gate) =>
+              `- ${gate.id}: ${gate.status} · ${gate.summary ?? "no summary"}${gate.evidenceArtifacts?.length ? ` · artifacts ${gate.evidenceArtifacts.join(", ")}` : ""}`,
+          )
+          .join("\n")
       : "- no deterministic gate results were recorded",
     "",
     "Worker completion proposal (untrusted):",
     `status: ${checkpoint.status ?? "missing"}`,
     `summary: ${checkpoint.summary ?? "missing"}`,
     `confidence: ${checkpoint.confidence ?? "missing"}`,
-    checkpoint.evidence?.length ? ["evidence:", ...checkpoint.evidence.map((item) => `- ${item}`)].join("\n") : "evidence: none",
+    checkpoint.evidence?.length
+      ? ["evidence:", ...checkpoint.evidence.map((item) => `- ${item}`)].join("\n")
+      : "evidence: none",
     checkpoint.nextAction ? `next_action: ${checkpoint.nextAction}` : undefined,
     "",
     "End your final message with this exact machine-readable block:",
@@ -822,7 +968,9 @@ function auditReceipt(input: {
   const status = input.judgment?.status ?? "uncertain"
   const evidence = input.judgment?.evidence ?? []
   const criteria = compileCompletionCriteria(
-    input.workflow.spec.completionCriteria?.length ? input.workflow.spec.completionCriteria : [input.workflow.objective],
+    input.workflow.spec.completionCriteria?.length
+      ? input.workflow.spec.completionCriteria
+      : [input.workflow.objective],
   )
   return {
     generation: input.candidate.generation,
@@ -832,7 +980,7 @@ function auditReceipt(input: {
       const criterionEvidence = evidence.filter((item) => item.toLowerCase().includes(criterion.id.toLowerCase()))
       return {
         id: criterion.id,
-        status: status === "pass" && criterionEvidence.length === 0 ? "uncertain" as const : status,
+        status: status === "pass" && criterionEvidence.length === 0 ? ("uncertain" as const) : status,
         summary: criterionEvidence.length
           ? (input.judgment?.summary ?? `${criterion.id} verified.`)
           : `No concrete audit evidence was recorded for ${criterion.id}.`,
@@ -862,7 +1010,9 @@ function parentCompletionPrompt(workflow: LoopWorkflow.Info, checkpoint: LoopChe
     `Goal: ${workflow.objective}`,
     "",
     `Summary: ${checkpoint.summary ?? workflow.evaluatorReason ?? "Loop reported completion."}`,
-    checkpoint.evidence?.length ? ["Evidence:", ...checkpoint.evidence.map((item) => `- ${item}`)].join("\n") : undefined,
+    checkpoint.evidence?.length
+      ? ["Evidence:", ...checkpoint.evidence.map((item) => `- ${item}`)].join("\n")
+      : undefined,
     checkpoint.nextAction ? `Next action from loop: ${checkpoint.nextAction}` : undefined,
     "",
     "Review this loop result and decide the next useful step for the user. Do not create a new loop, push, merge, release, or run broad changes unless the user explicitly asks.",
@@ -918,12 +1068,12 @@ export const layer = Layer.effect(
           summary: skipped.evaluatorReason ?? readiness.reason,
         } satisfies TickResult
       }
-      const latestCompletionRun = before.spec.evaluation?.confirmation === "next-run"
-        ? (yield* workflow.snapshot(id, 20)).runs.find((item) => item.completion !== undefined)
-        : undefined
-      const pendingCompletionRun = latestCompletionRun?.completion?.status === "candidate"
-        ? latestCompletionRun
-        : undefined
+      const latestCompletionRun =
+        before.spec.evaluation?.confirmation === "next-run"
+          ? (yield* workflow.snapshot(id, 20)).runs.find((item) => item.completion !== undefined)
+          : undefined
+      const pendingCompletionRun =
+        latestCompletionRun?.completion?.status === "candidate" ? latestCompletionRun : undefined
       const leaseHolder = `loop-runner:${process.pid}:${Date.now()}:${Math.random().toString(36).slice(2)}`
       const run = yield* workflow.startRun({ id, trigger: input.trigger ?? runTriggerFor(before), leaseHolder, now })
       if (run.lease?.holder !== leaseHolder) {
@@ -936,14 +1086,16 @@ export const layer = Layer.effect(
       }
       const current = yield* workflow.get(id, now)
       if (!current.rootSessionID) {
-        return yield* workflow.failRun({ id, runID: run.id, error: "Loop has no root session after activation.", now }).pipe(
-          Effect.map((failed) => ({
-            workflowID: id,
-            runID: failed.id,
-            state: "failed" as const,
-            summary: failed.evaluatorReason ?? "Loop run failed.",
-          })),
-        )
+        return yield* workflow
+          .failRun({ id, runID: run.id, error: "Loop has no root session after activation.", now })
+          .pipe(
+            Effect.map((failed) => ({
+              workflowID: id,
+              runID: failed.id,
+              state: "failed" as const,
+              summary: failed.evaluatorReason ?? "Loop run failed.",
+            })),
+          )
       }
       if (pendingCompletionRun?.completion?.status === "candidate") {
         const candidate = {
@@ -965,10 +1117,15 @@ export const layer = Layer.effect(
           ? { ...run, workspaceLease: pendingCompletionRun.workspaceLease }
           : run
         const validationGates = yield* executeValidationChecks(workflow, current, validationRun, checkpoint, directory)
-        const priorGates = (pendingCompletionRun.gateResults ?? []).filter((gate) => gate.id !== "independent-evaluator")
+        const priorGates = (pendingCompletionRun.gateResults ?? []).filter(
+          (gate) => gate.id !== "independent-evaluator",
+        )
         const preJudgeGates = Array.from(
           new Map(
-            [...priorGates, ...validationGates, workspaceFingerprintGate(fingerprintBeforeResult)].map((gate) => [gate.id, gate]),
+            [...priorGates, ...validationGates, workspaceFingerprintGate(fingerprintBeforeResult)].map((gate) => [
+              gate.id,
+              gate,
+            ]),
           ).values(),
         )
         let judgment: LoopJudgment
@@ -983,10 +1140,7 @@ export const layer = Layer.effect(
             confidence: "high",
             failureClass: "environment",
           }
-        } else if (
-          candidate.candidateFingerprint &&
-          fingerprintBeforeResult.value !== candidate.candidateFingerprint
-        ) {
+        } else if (candidate.candidateFingerprint && fingerprintBeforeResult.value !== candidate.candidateFingerprint) {
           judgment = {
             status: "fail",
             summary: "Workspace changed after the completion candidate was recorded.",
@@ -1008,16 +1162,18 @@ export const layer = Layer.effect(
               model: promptModel(current),
               variant: current.spec.model?.variant,
               tools: loopIterationTools(true),
-              parts: [{
-                type: "text",
-                text: [
-                  judgmentPrompt(current, checkpoint, preJudgeGates),
-                  "",
-                  `This is a fresh terminal audit iteration for candidate generation ${candidate.generation}.`,
-                  `Inspect the current workspace at ${directory}; do not rely only on the worker summary.`,
-                  "Verify every completion criterion against current files and recorded deterministic gates.",
-                ].join("\n"),
-              }],
+              parts: [
+                {
+                  type: "text",
+                  text: [
+                    judgmentPrompt(current, checkpoint, preJudgeGates),
+                    "",
+                    `This is a fresh terminal audit iteration for candidate generation ${candidate.generation}.`,
+                    `Inspect the current workspace at ${directory}; do not rely only on the worker summary.`,
+                    "Verify every completion criterion against current files and recorded deterministic gates.",
+                  ].join("\n"),
+                },
+              ],
             })
             .pipe(
               Effect.map((message) => ({ message, judgment: parseJudgment(assistantText(message)) })),
@@ -1037,9 +1193,9 @@ export const layer = Layer.effect(
           const evaluatorMessage = "message" in evaluatorResult ? evaluatorResult.message : undefined
           evaluatorUsage = usageFromMessage(evaluatorMessage, current, evaluatorStarted)
           judgment = evaluatorResult.judgment
-          const auditMessages = yield* sessions.messages({ sessionID: evaluatorSession.id, view: "full" }).pipe(
-            Effect.catchCause(() => Effect.succeed([])),
-          )
+          const auditMessages = yield* sessions
+            .messages({ sessionID: evaluatorSession.id, view: "full" })
+            .pipe(Effect.catchCause(() => Effect.succeed([])))
           inspectionGate = auditInspectionGate(evaluatorMessage ? [...auditMessages, evaluatorMessage] : auditMessages)
         }
         const fingerprintAfterResult = yield* Effect.promise(() => fingerprintWorkspace(directory))
@@ -1058,23 +1214,47 @@ export const layer = Layer.effect(
           }
         }
         const fingerprintsAvailable = fingerprintAfterResult.status === "ok" && fingerprintBeforeResult.status === "ok"
-        const fingerprintStable = fingerprintsAvailable && fingerprintAfterResult.value === fingerprintBeforeResult.value
-        const fingerprintMatchesCandidate = fingerprintsAvailable && (
-          !candidate.candidateFingerprint || fingerprintBeforeResult.value === candidate.candidateFingerprint
-        )
-        const fingerprintGate: LoopGateResult = fingerprintStable && fingerprintMatchesCandidate
-          ? { id: "workspace-fingerprint", status: "pass", summary: "Workspace fingerprint matched the candidate and stayed stable throughout the audit.", failureClass: "none" }
-          : fingerprintsAvailable
-            ? { id: "workspace-fingerprint", status: "fail", summary: "Workspace fingerprint changed after completion was proposed or during its audit.", failureClass: "quality" }
-            : { id: "workspace-fingerprint", status: "blocked", summary: fingerprintAfterResult.summary, failureClass: "environment" }
+        const fingerprintStable =
+          fingerprintsAvailable && fingerprintAfterResult.value === fingerprintBeforeResult.value
+        const fingerprintMatchesCandidate =
+          fingerprintsAvailable &&
+          (!candidate.candidateFingerprint || fingerprintBeforeResult.value === candidate.candidateFingerprint)
+        const fingerprintGate: LoopGateResult =
+          fingerprintStable && fingerprintMatchesCandidate
+            ? {
+                id: "workspace-fingerprint",
+                status: "pass",
+                summary: "Workspace fingerprint matched the candidate and stayed stable throughout the audit.",
+                failureClass: "none",
+              }
+            : fingerprintsAvailable
+              ? {
+                  id: "workspace-fingerprint",
+                  status: "fail",
+                  summary: "Workspace fingerprint changed after completion was proposed or during its audit.",
+                  failureClass: "quality",
+                }
+              : {
+                  id: "workspace-fingerprint",
+                  status: "blocked",
+                  summary: fingerprintAfterResult.summary,
+                  failureClass: "environment",
+                }
         const deterministicGates = Array.from(
           new Map(
-            [...preJudgeGates.filter((gate) => gate.id !== "workspace-fingerprint"), fingerprintGate, inspectionGate, successChecksGate(current, checkpoint, judgment)].filter(
-              (item): item is LoopGateResult => Boolean(item),
-            ).map((gate) => [gate.id, gate]),
+            [
+              ...preJudgeGates.filter((gate) => gate.id !== "workspace-fingerprint"),
+              fingerprintGate,
+              inspectionGate,
+              successChecksGate(current, checkpoint, judgment),
+            ]
+              .filter((item): item is LoopGateResult => Boolean(item))
+              .map((gate) => [gate.id, gate]),
           ).values(),
         )
-        const gateResults = [...deterministicGates, evaluatorGate(judgment)].filter((item): item is LoopGateResult => Boolean(item))
+        const gateResults = [...deterministicGates, evaluatorGate(judgment)].filter((item): item is LoopGateResult =>
+          Boolean(item),
+        )
         const receipt = auditReceipt({
           workflow: current,
           candidate,
@@ -1103,20 +1283,31 @@ export const layer = Layer.effect(
           after.ownerSessionID &&
           after.ownerSessionID !== after.rootSessionID
         ) {
-          yield* prompt.prompt({
-            sessionID: after.ownerSessionID,
-            agent: after.spec.agent,
-            model: promptModel(after),
-            variant: after.spec.model?.variant,
-            parts: [{ type: "text", text: parentCompletionPrompt(after, { ...checkpoint, summary: receipt.summary }, completed.id) }],
-          }).pipe(Effect.ignore)
+          yield* prompt
+            .prompt({
+              sessionID: after.ownerSessionID,
+              agent: after.spec.agent,
+              model: promptModel(after),
+              variant: after.spec.model?.variant,
+              parts: [
+                {
+                  type: "text",
+                  text: parentCompletionPrompt(after, { ...checkpoint, summary: receipt.summary }, completed.id),
+                },
+              ],
+            })
+            .pipe(Effect.ignore)
         }
         return {
           workflowID: id,
           runID: completed.id,
-          state: after.state === "blocked" || after.state === "needs_input" || after.state === "stopped" || after.state === "failed"
-            ? after.state
-            : "completed",
+          state:
+            after.state === "blocked" ||
+            after.state === "needs_input" ||
+            after.state === "stopped" ||
+            after.state === "failed"
+              ? after.state
+              : "completed",
           summary: after.evaluatorReason ?? receipt.summary,
         } satisfies TickResult
       }
@@ -1129,7 +1320,14 @@ export const layer = Layer.effect(
           return {
             workflowID: id,
             runID: failed.id,
-            state: failed.state === "blocked" ? "blocked" : failed.state === "needs_input" ? "needs_input" : failed.state === "stopped" ? "stopped" : "failed",
+            state:
+              failed.state === "blocked"
+                ? "blocked"
+                : failed.state === "needs_input"
+                  ? "needs_input"
+                  : failed.state === "stopped"
+                    ? "stopped"
+                    : "failed",
             summary: failed.evaluatorReason ?? error,
           } satisfies TickResult
         }
@@ -1150,7 +1348,14 @@ export const layer = Layer.effect(
           return {
             workflowID: id,
             runID: failed.id,
-            state: failed.state === "blocked" ? "blocked" : failed.state === "needs_input" ? "needs_input" : failed.state === "stopped" ? "stopped" : "failed",
+            state:
+              failed.state === "blocked"
+                ? "blocked"
+                : failed.state === "needs_input"
+                  ? "needs_input"
+                  : failed.state === "stopped"
+                    ? "stopped"
+                    : "failed",
             summary: failed.evaluatorReason ?? error,
           } satisfies TickResult
         }
@@ -1178,12 +1383,21 @@ export const layer = Layer.effect(
         const workflowExit = yield* Effect.exit(workflowRunner.run(startedWorkflow.run.id))
         if (workflowExit._tag === "Failure") {
           const error = errorMessage(Cause.squash(workflowExit.cause))
-          yield* workflowService.stop({ runID: startedWorkflow.run.id, reason: error, actor: "loop-adapter" }).pipe(Effect.catchCause(() => Effect.void))
+          yield* workflowService
+            .stop({ runID: startedWorkflow.run.id, reason: error, actor: "loop-adapter" })
+            .pipe(Effect.catchCause(() => Effect.void))
           const failed = yield* workflow.failRun({ id, runID: run.id, error, failureClass: "environment", now })
           return {
             workflowID: id,
             runID: failed.id,
-            state: failed.state === "blocked" ? "blocked" : failed.state === "needs_input" ? "needs_input" : failed.state === "stopped" ? "stopped" : "failed",
+            state:
+              failed.state === "blocked"
+                ? "blocked"
+                : failed.state === "needs_input"
+                  ? "needs_input"
+                  : failed.state === "stopped"
+                    ? "stopped"
+                    : "failed",
             summary: failed.evaluatorReason ?? error,
           } satisfies TickResult
         }
@@ -1194,17 +1408,25 @@ export const layer = Layer.effect(
           return {
             workflowID: id,
             runID: failed.id,
-            state: failed.state === "blocked" ? "blocked" : failed.state === "needs_input" ? "needs_input" : failed.state === "stopped" ? "stopped" : "failed",
+            state:
+              failed.state === "blocked"
+                ? "blocked"
+                : failed.state === "needs_input"
+                  ? "needs_input"
+                  : failed.state === "stopped"
+                    ? "stopped"
+                    : "failed",
             summary: failed.evaluatorReason ?? error,
           } satisfies TickResult
         }
-        const goalStatus = finishedWorkflow.run.state === "completed"
-          ? "complete" as const
-          : finishedWorkflow.run.state === "stopped"
-            ? "stop" as const
-            : finishedWorkflow.run.state === "needs_input"
-              ? "needs_input" as const
-              : "blocked" as const
+        const goalStatus =
+          finishedWorkflow.run.state === "completed"
+            ? ("complete" as const)
+            : finishedWorkflow.run.state === "stopped"
+              ? ("stop" as const)
+              : finishedWorkflow.run.state === "needs_input"
+                ? ("needs_input" as const)
+                : ("blocked" as const)
         const usage = finishedWorkflow.usage
           ? {
               cost: finishedWorkflow.usage.cost,
@@ -1217,12 +1439,18 @@ export const layer = Layer.effect(
         const completed = yield* workflow.completeRun({
           id,
           runID: run.id,
-          reason: finishedWorkflow.run.state === "completed" ? "Referenced workflow completed." : `Referenced workflow is ${finishedWorkflow.run.state}.`,
+          reason:
+            finishedWorkflow.run.state === "completed"
+              ? "Referenced workflow completed."
+              : `Referenced workflow is ${finishedWorkflow.run.state}.`,
           now,
           goalStatus,
           checkpoint: {
             status: goalStatus,
-            summary: finishedWorkflow.run.state === "completed" ? "Referenced workflow completed." : `Referenced workflow is ${finishedWorkflow.run.state}.`,
+            summary:
+              finishedWorkflow.run.state === "completed"
+                ? "Referenced workflow completed."
+                : `Referenced workflow is ${finishedWorkflow.run.state}.`,
             evidence: finishedWorkflow.artifacts.slice(0, 8).map((artifact) => artifact.summary),
           },
           usage,
@@ -1231,11 +1459,18 @@ export const layer = Layer.effect(
         return {
           workflowID: id,
           runID: completed.id,
-          state: after.state === "blocked" || after.state === "needs_input" || after.state === "stopped" || after.state === "failed" ? after.state : "completed",
+          state:
+            after.state === "blocked" ||
+            after.state === "needs_input" ||
+            after.state === "stopped" ||
+            after.state === "failed"
+              ? after.state
+              : "completed",
           summary: after.evaluatorReason ?? completed.evaluatorReason ?? "Referenced workflow run completed.",
         } satisfies TickResult
       }
-      const reportOnly = workflowIsReportOnly(current) || (input.reportOnly === true && !workflowExplicitlyAllowsEdits(current))
+      const reportOnly =
+        workflowIsReportOnly(current) || (input.reportOnly === true && !workflowExplicitlyAllowsEdits(current))
       const runStarted = Date.now()
       const result = yield* prompt
         .prompt({
@@ -1244,7 +1479,12 @@ export const layer = Layer.effect(
           model: promptModel(current),
           variant: current.spec.model?.variant,
           tools: loopIterationTools(reportOnly),
-          parts: [{ type: "text", text: reportOnly ? reportOnlyPrompt(current, input.reason) : iterationPrompt(current, input.reason) }],
+          parts: [
+            {
+              type: "text",
+              text: reportOnly ? reportOnlyPrompt(current, input.reason) : iterationPrompt(current, input.reason),
+            },
+          ],
         })
         .pipe(Effect.exit)
       if (result._tag === "Failure") {
@@ -1261,28 +1501,40 @@ export const layer = Layer.effect(
         } satisfies TickResult
       }
       if (result.value.info.role !== "assistant" || !result.value.info.finish) {
-        const reason = incompleteWorkerReason(result.value)
-        const failed = yield* workflow.failRun({ id, runID: run.id, error: reason, failureClass: "transient", now })
+        const incomplete = incompleteWorkerFailure(result.value)
+        const failed = yield* workflow.failRun({
+          id,
+          runID: run.id,
+          error: incomplete.reason,
+          failureClass: incomplete.failureClass,
+          now,
+        })
         return {
           workflowID: id,
           runID: failed.id,
-          state: "failed" as const,
+          state: failed.state === "needs_input" ? ("needs_input" as const) : ("failed" as const),
           summary: failed.retry
-            ? `Loop run retry scheduled for ${new Date(failed.retry.nextWakeup ?? Date.now()).toISOString()}. ${reason}`
-            : (failed.evaluatorReason ?? reason),
+            ? `Loop run retry scheduled for ${new Date(failed.retry.nextWakeup ?? Date.now()).toISOString()}. ${incomplete.reason}`
+            : (failed.evaluatorReason ?? incomplete.reason),
         } satisfies TickResult
       }
       const checkpoint = parseCheckpoint(assistantText(result.value))
       if (!checkpoint.status) {
-        const reason = incompleteWorkerReason(result.value)
-        const failed = yield* workflow.failRun({ id, runID: run.id, error: reason, failureClass: "transient", now })
+        const incomplete = incompleteWorkerFailure(result.value)
+        const failed = yield* workflow.failRun({
+          id,
+          runID: run.id,
+          error: incomplete.reason,
+          failureClass: incomplete.failureClass,
+          now,
+        })
         return {
           workflowID: id,
           runID: failed.id,
           state: "failed" as const,
           summary: failed.retry
-            ? `Loop run retry scheduled for ${new Date(failed.retry.nextWakeup ?? Date.now()).toISOString()}. ${reason}`
-            : (failed.evaluatorReason ?? reason),
+            ? `Loop run retry scheduled for ${new Date(failed.retry.nextWakeup ?? Date.now()).toISOString()}. ${incomplete.reason}`
+            : (failed.evaluatorReason ?? incomplete.reason),
         } satisfies TickResult
       }
       const validationGates = yield* executeValidationChecks(workflow, current, run, checkpoint, instance.directory)
@@ -1332,23 +1584,29 @@ export const layer = Layer.effect(
       const deterministicGates = [...preJudgeGates, successChecksGate(current, checkpoint, judgment)].filter(
         (item): item is LoopGateResult => Boolean(item),
       )
-      const candidateFingerprintResult = current.spec.evaluation?.confirmation === "next-run" && checkpoint.status === "complete"
-        ? yield* Effect.promise(() => fingerprintWorkspace(run.workspaceLease?.state === "active" ? run.workspaceLease.path : instance.directory))
-        : undefined
+      const candidateFingerprintResult =
+        current.spec.evaluation?.confirmation === "next-run" && checkpoint.status === "complete"
+          ? yield* Effect.promise(() =>
+              fingerprintWorkspace(
+                run.workspaceLease?.state === "active" ? run.workspaceLease.path : instance.directory,
+              ),
+            )
+          : undefined
       const gateResults = [
         ...deterministicGates,
         evaluatorGate(judgment),
         candidateFingerprintResult ? workspaceFingerprintGate(candidateFingerprintResult) : undefined,
       ].filter((item): item is LoopGateResult => Boolean(item))
-      const candidate = candidateFingerprintResult?.status === "ok"
-        ? completionCandidate({
-            workflow: current,
-            run,
-            checkpoint,
-            fingerprint: candidateFingerprintResult.value,
-            now,
-          })
-        : undefined
+      const candidate =
+        candidateFingerprintResult?.status === "ok"
+          ? completionCandidate({
+              workflow: current,
+              run,
+              checkpoint,
+              fingerprint: candidateFingerprintResult.value,
+              now,
+            })
+          : undefined
       const completed = yield* workflow.completeRun({
         id,
         runID: run.id,
@@ -1359,16 +1617,20 @@ export const layer = Layer.effect(
         judgment,
         rubricResult: evaluateRubric(current, checkpoint, judgment, gateResults),
         gateResults,
-        usage: mergeUsage([
-          usageFromMessage(result.value, current, runStarted),
-          evaluatorUsage,
-        ]),
+        usage: mergeUsage([usageFromMessage(result.value, current, runStarted), evaluatorUsage]),
         ...(candidate ? { completion: { candidate } } : {}),
       })
       const after = yield* workflow.get(id)
       const summary =
-        after.state === "blocked" || after.state === "needs_input" || after.state === "stopped" || after.state === "failed"
-          ? (completed.evaluatorReason ?? after.evaluatorReason ?? judgment?.summary ?? checkpoint.summary ?? "Loop run completed.")
+        after.state === "blocked" ||
+        after.state === "needs_input" ||
+        after.state === "stopped" ||
+        after.state === "failed"
+          ? (completed.evaluatorReason ??
+            after.evaluatorReason ??
+            judgment?.summary ??
+            checkpoint.summary ??
+            "Loop run completed.")
           : (judgment?.summary ?? checkpoint.summary ?? completed.evaluatorReason ?? "Loop run completed.")
       if (
         after.state === "completed" &&
@@ -1382,7 +1644,16 @@ export const layer = Layer.effect(
             agent: after.spec.agent,
             model: promptModel(after),
             variant: after.spec.model?.variant,
-            parts: [{ type: "text", text: parentCompletionPrompt(after, { ...checkpoint, summary: judgment?.summary ?? checkpoint.summary }, completed.id) }],
+            parts: [
+              {
+                type: "text",
+                text: parentCompletionPrompt(
+                  after,
+                  { ...checkpoint, summary: judgment?.summary ?? checkpoint.summary },
+                  completed.id,
+                ),
+              },
+            ],
           })
           .pipe(Effect.ignore)
       }
@@ -1410,20 +1681,24 @@ export const layer = Layer.effect(
             Effect.catchCause((cause) => {
               const error = errorMessage(Cause.squash(cause))
               return workflow.recordSchedulerFailure({ id: item.id, error, now }).pipe(
-                Effect.map((failed) => ({
-                  workflowID: item.id,
-                  runID: failed.id,
-                  state: failed.state === "blocked"
-                    ? "blocked"
-                    : failed.state === "needs_input"
-                      ? "needs_input"
-                      : failed.state === "stopped"
-                        ? "stopped"
-                        : failed.state === "completed"
-                          ? "completed"
-                          : "failed",
-                  summary: failed.evaluatorReason ?? `Loop scheduler failed: ${error}`,
-                }) satisfies TickResult),
+                Effect.map(
+                  (failed) =>
+                    ({
+                      workflowID: item.id,
+                      runID: failed.id,
+                      state:
+                        failed.state === "blocked"
+                          ? "blocked"
+                          : failed.state === "needs_input"
+                            ? "needs_input"
+                            : failed.state === "stopped"
+                              ? "stopped"
+                              : failed.state === "completed"
+                                ? "completed"
+                                : "failed",
+                      summary: failed.evaluatorReason ?? `Loop scheduler failed: ${error}`,
+                    }) satisfies TickResult,
+                ),
                 Effect.catchCause(() =>
                   Effect.succeed({
                     workflowID: item.id,
