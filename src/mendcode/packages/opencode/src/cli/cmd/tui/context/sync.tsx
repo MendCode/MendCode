@@ -586,6 +586,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     const sessionMessageSyncGeneration = new Map<string, number>()
     const sessionMessageSyncInFlight = new Map<string, Promise<void>>()
     const sessionMessageSyncQueued = new Set<string>()
+    const sessionDiffHydrationRequested = new Set<string>()
+    const sessionDiffHydrationInFlight = new Map<string, Promise<void>>()
     const sessionCacheSeen = new Set<string>()
     let activeSessionID: string | undefined
     const pinnedSessionMessages = new Map<string, Set<string>>()
@@ -623,7 +625,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       const recentStart = Date.now() - 30 * 24 * 60 * 60 * 1000
       const sort = (items: typeof store.session) => items.toSorted((a, b) => a.id.localeCompare(b.id))
       const attempts: Array<() => Promise<typeof store.session>> = [
-        () => sdk.client.session.list({ start: recentStart, ...query }, { throwOnError: true }).then((x) => x.data ?? []),
+        () =>
+          sdk.client.session.list({ start: recentStart, ...query }, { throwOnError: true }).then((x) => x.data ?? []),
         () => sdk.client.session.list(query, { throwOnError: true }).then((x) => x.data ?? []),
       ]
 
@@ -723,6 +726,22 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       } finally {
         if (fullMessageRequests.get(key) === request) fullMessageRequests.delete(key)
       }
+    }
+
+    function hydrateSessionDiff(sessionID: string) {
+      if (sessionDiffHydrationRequested.has(sessionID)) return
+      sessionDiffHydrationRequested.add(sessionID)
+      const run: Promise<void> = sdk.client.session
+        .diff({ sessionID })
+        .then((diff) => {
+          if (sessionDiffHydrationInFlight.get(sessionID) !== run) return
+          setStore("session_diff", sessionID, reconcile(diff.data ?? []))
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (sessionDiffHydrationInFlight.get(sessionID) === run) sessionDiffHydrationInFlight.delete(sessionID)
+        })
+      sessionDiffHydrationInFlight.set(sessionID, run)
     }
 
     async function fetchSessionMessageWindow(sessionID: string) {
@@ -939,6 +958,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       sessionMessagePaging.delete(sessionID)
       sessionMessageSyncGeneration.delete(sessionID)
       sessionMessageSyncQueued.delete(sessionID)
+      sessionDiffHydrationRequested.delete(sessionID)
+      sessionDiffHydrationInFlight.delete(sessionID)
       pinnedSessionMessages.delete(sessionID)
       removedSessionMessages.delete(sessionID)
       clearSessionStatusTimer(sessionID)
@@ -1206,6 +1227,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       sessionMessagePaging.clear()
       sessionMessageSyncGeneration.clear()
       sessionMessageSyncQueued.clear()
+      sessionDiffHydrationRequested.clear()
+      sessionDiffHydrationInFlight.clear()
       pendingPartDeltas.clear()
       fullMessageRequests.clear()
       pinnedSessionMessages.clear()
@@ -1404,6 +1427,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           break
 
         case "session.diff":
+          sessionDiffHydrationRequested.add(event.properties.sessionID)
+          sessionDiffHydrationInFlight.delete(event.properties.sessionID)
           setStore("session_diff", event.properties.sessionID, event.properties.diff)
           break
 
@@ -1447,6 +1472,8 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           if (activeSessionID === sessionID) activeSessionID = undefined
           sessionMessagePaging.delete(sessionID)
           sessionMessageSyncQueued.delete(sessionID)
+          sessionDiffHydrationRequested.delete(sessionID)
+          sessionDiffHydrationInFlight.delete(sessionID)
           pinnedSessionMessages.delete(sessionID)
           removedSessionMessages.delete(sessionID)
           clearSessionStatusTimer(sessionID)
@@ -2076,11 +2103,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           const run = (async () => {
             const generation = beginSessionMessageSync(sessionID)
             const workspace = project.workspace.current()
-            const [session, messages, todo, diff, statuses] = await Promise.all([
+            const [session, messages, todo, statuses] = await Promise.all([
               sdk.client.session.get({ sessionID }, { throwOnError: true }),
               fetchSessionMessageWindow(sessionID),
               sdk.client.session.todo({ sessionID }),
-              sdk.client.session.diff({ sessionID }),
               sdk.client.session.status({ workspace }),
             ])
             if (!isCurrentSessionMessageSync(sessionID, generation)) return
@@ -2110,9 +2136,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 hasMoreNewer: false,
                 keepLoadedHistory,
               })
-              setStore("session_diff", sessionID, reconcile(diff.data ?? []))
               replaceSessionStatuses(statuses.data ?? {})
             })
+            const status = statuses.data?.[sessionID]
+            if (!status || status.type === "idle") hydrateSessionDiff(sessionID)
             trace.trace("sync-end", {
               sessionID,
               loadedIDs: (store.message[sessionID] ?? []).map((message) => message.id),

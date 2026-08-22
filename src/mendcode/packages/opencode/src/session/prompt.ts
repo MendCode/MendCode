@@ -56,6 +56,7 @@ import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { BackgroundTask } from "./background-task"
 import { WorkflowService } from "./workflow-service"
 import { SessionRunState } from "./run-state"
+import { AgentCommand } from "./agent-command"
 import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@/v2/event"
 import { SessionEvent } from "@/v2/session-event"
@@ -165,15 +166,14 @@ export function findRecoverableQueuedPrompt<T extends RecoverablePromptMessage>(
     ),
   )
   const explicitlyQueued = ordered.find(
-    (message) =>
-      message.info.role === "user" && message.info.queued === true && !answeredUserIDs.has(message.info.id),
+    (message) => message.info.role === "user" && message.info.queued === true && !answeredUserIDs.has(message.info.id),
   )
   if (explicitlyQueued) return explicitlyQueued
 
   const latestAssistantIndex = latestAssistant ? ordered.indexOf(latestAssistant) : -1
-  return ordered.slice(latestAssistantIndex + 1).find(
-    (message) => message.info.role === "user" && options?.includeLegacy === true,
-  )
+  return ordered
+    .slice(latestAssistantIndex + 1)
+    .find((message) => message.info.role === "user" && options?.includeLegacy === true)
 }
 
 function retainedSubtaskText(input: string) {
@@ -477,6 +477,7 @@ export interface Interface {
   readonly loop: (input: LoopInput) => Effect.Effect<MessageV2.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts>
   readonly command: (input: CommandInput) => Effect.Effect<MessageV2.WithParts>
+  readonly wakePeerDelivery: (targetSessionID: SessionID) => Effect.Effect<void>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
 }
 
@@ -507,6 +508,7 @@ export const layer = Layer.effect(
     const scope = yield* Scope.Scope
     const instruction = yield* Instruction.Service
     const state = yield* SessionRunState.Service
+    const agentCommands = yield* AgentCommand.Service
     const revert = yield* SessionRevert.Service
     const summary = yield* SessionSummary.Service
     const sys = yield* SystemPrompt.Service
@@ -520,12 +522,12 @@ export const layer = Layer.effect(
     const scheduledAsyncPrompts = new Set<string>()
     const recoveredWorkflowSessions = new Map<SessionID, WorkflowService.WorkflowTaskSessionRecovery>()
     let ownerWakeState: InstanceState.InstanceState<OwnerWakeState>
-    const acknowledgeOwnerWakeNotifications = Effect.fn("SessionPrompt.acknowledgeOwnerWakeNotifications")(
-      function* (eventIDs: readonly string[]) {
-        yield* backgroundTasks.acknowledgeNotifications(eventIDs)
-        yield* workflows.acknowledgeNotifications(eventIDs)
-      },
-    )
+    const acknowledgeOwnerWakeNotifications = Effect.fn("SessionPrompt.acknowledgeOwnerWakeNotifications")(function* (
+      eventIDs: readonly string[],
+    ) {
+      yield* backgroundTasks.acknowledgeNotifications(eventIDs)
+      yield* workflows.acknowledgeNotifications(eventIDs)
+    })
     const isManualAbort = (sessionID: SessionID) => promptAbortReasons.get(sessionID) === "user"
     const runner = Effect.fn("SessionPrompt.runner")(function* () {
       return yield* EffectBridge.make()
@@ -632,6 +634,10 @@ export const layer = Layer.effect(
 
     const cancelTurn = Effect.fn("SessionPrompt.cancelTurn")(function* (input: CancelTurnInput) {
       yield* elog.info("cancel-turn", { ...input, important: true })
+      // The user explicitly asked this session to stop. Suppress pending owner
+      // wakes even when the targeted turn crossed into terminal state before
+      // the cancel request reached the runner.
+      yield* cancelOwnerWakeSession(input.sessionID)
       const active = promptAbortControllers.get(input.sessionID)
       let interruptedAssistantID: MessageID | undefined
       let markedUserAbort = false
@@ -639,7 +645,6 @@ export const layer = Layer.effect(
         .cancelTurn(input.sessionID, input.targetMessageID, {
           ignoreInterruptible: true,
           before: Effect.gen(function* () {
-            yield* cancelOwnerWakeSession(input.sessionID)
             promptAbortReasons.set(input.sessionID, "user")
             markedUserAbort = true
             const orphanedAssistant = yield* sessions.findMessage(
@@ -965,7 +970,7 @@ export const layer = Layer.effect(
         providerID: input.providerID,
         modelID: input.modelID,
         messages: [{ role: "user", content }],
-        })
+      })
     })
 
     const cancelQueued = Effect.fn("SessionPrompt.cancelQueued")(function* (input: {
@@ -1237,16 +1242,16 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   { args },
                 )
                 const result = yield* item.execute(args, ctx).pipe(
-                    Effect.ensuring(
-                      Effect.promise(() =>
-                        releaseMflowLocks({
-                          root: instance.directory,
-                          files: mflowLocks.locked,
-                          owner: mflowLocks.owner,
-                        }),
-                      ),
+                  Effect.ensuring(
+                    Effect.promise(() =>
+                      releaseMflowLocks({
+                        root: instance.directory,
+                        files: mflowLocks.locked,
+                        owner: mflowLocks.owner,
+                      }),
                     ),
-                  )
+                  ),
+                )
                 const output = {
                   ...result,
                   attachments: result.attachments?.map((attachment) => ({
@@ -1365,7 +1370,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         tools[key] = item
       }
 
-
       return tools
     })
 
@@ -1455,14 +1459,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             abortReason: () => (isManualAbort(sessionID) ? "user" : undefined),
           },
           messages: msgs,
-            metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
-              Effect.gen(function* () {
-                part = yield* sessions.updatePart({
-                  ...part,
-                  type: "tool",
-                  state: { ...part.state, ...val },
-                } satisfies MessageV2.ToolPart)
-              }),
+          metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
+            Effect.gen(function* () {
+              part = yield* sessions.updatePart({
+                ...part,
+                type: "tool",
+                state: { ...part.state, ...val },
+              } satisfies MessageV2.ToolPart)
+            }),
           ask: (req: any) =>
             permission
               .ask({
@@ -2298,11 +2302,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       return wake
     })
 
-    const prompt: (
-      input: PromptInput,
-      options?: { queued?: boolean },
-    ) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.prompt")(
-      function* (input: PromptInput, options?: { queued?: boolean }) {
+    const prompt: (input: PromptInput, options?: { queued?: boolean }) => Effect.Effect<MessageV2.WithParts> =
+      Effect.fn("SessionPrompt.prompt")(function* (input: PromptInput, options?: { queued?: boolean }) {
         log.trace("prompt-start", {
           sessionID: input.sessionID,
           messageID: input.messageID,
@@ -2337,10 +2338,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               throw new NamedError.Unknown({ message: `Message ${input.messageID} is not a user prompt.` })
             }
             if (input.replaceExisting) {
-               const message = yield* createUserMessage(input, {
-                 info: existing.value.info as MessageV2.User,
-                 parts: existing.value.parts,
-               }, options)
+              const message = yield* createUserMessage(
+                input,
+                {
+                  info: existing.value.info as MessageV2.User,
+                  parts: existing.value.parts,
+                },
+                options,
+              )
               yield* sessions.touch(input.sessionID)
               if (ownerWakeAcknowledgementIDs.length > 0)
                 yield* acknowledgeOwnerWakeNotifications(ownerWakeAcknowledgementIDs)
@@ -2373,8 +2378,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         if (input.noReply === true) return message
         log.trace("prompt-queue-run", { sessionID: input.sessionID, messageID: message.info.id })
         return yield* loop({ sessionID: input.sessionID, queue: true, targetMessageID: message.info.id })
-      },
-    )
+      })
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
       const match = yield* sessions.findMessage(sessionID, (m) => m.info.role !== "user")
@@ -2665,19 +2669,19 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               ? latestAcceptedPlanReviewContext(yield* sessions.messages({ sessionID }))
               : undefined
           if (latestPlanReview) system.push(latestPlanReview)
-           const reviewContext = reviewContextForAssistant(ctx.worktree || ctx.directory)
-           if (reviewContext) {
-             system.push(`<mendcode_review_context>\n${reviewContext}\n</mendcode_review_context>`)
-           }
-           const interruptedToolPrompt = interruptedToolPromptText(msgs)
-           if (interruptedToolPrompt) system.push(interruptedToolPrompt)
-           const format = lastUser.format ?? { type: "text" as const }
+          const reviewContext = reviewContextForAssistant(ctx.worktree || ctx.directory)
+          if (reviewContext) {
+            system.push(`<mendcode_review_context>\n${reviewContext}\n</mendcode_review_context>`)
+          }
+          const interruptedToolPrompt = interruptedToolPromptText(msgs)
+          if (interruptedToolPrompt) system.push(interruptedToolPrompt)
+          const format = lastUser.format ?? { type: "text" as const }
           if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
           const streamMessages = [
             ...modelMsgs,
             ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : []),
           ]
-           const promptTokens = Token.estimatePayload({
+          const promptTokens = Token.estimatePayload({
             system: [
               ...(agent.prompt ? [agent.prompt] : mendPrompt.baseProvider),
               mendPrompt.focus,
@@ -2685,50 +2689,50 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               mendPrompt.memory,
               ...system,
             ],
-             messages: streamMessages,
-             tools: Object.fromEntries(
-               Object.entries(tools).map(([name, item]) => {
-                 const toolInfo = item as Record<string, unknown>
-                 return [
-                   name,
-                   {
-                     description: toolInfo.description,
-                     inputSchema: toolInfo.inputSchema ?? toolInfo.parameters,
-                   },
-                 ]
-               }),
-             ),
-           })
-           const previousContextTokens = lastFinished
-             ? lastFinished.tokens.input +
-               lastFinished.tokens.output +
-               lastFinished.tokens.reasoning +
-               lastFinished.tokens.cache.read +
-               lastFinished.tokens.cache.write
-             : undefined
-           const previousContextAtThreshold =
-             previousContextTokens === undefined
-               ? undefined
-               : yield* compaction.isPromptOverflow({
-                   tokens: previousContextTokens,
-                   model,
-                   respectAuto: false,
-                   mode: "threshold",
-                 })
-           const promptOverflow = yield* compaction.isPromptOverflow({
-             tokens: promptTokens,
-             model,
-             respectAuto: false,
-             mode: "hard",
-           })
-           const hardLimit = modelContextLimit({ model })
-           if (shouldPreflightPromptOverflow({ promptOverflow, promptTokens, hardLimit, previousContextAtThreshold })) {
+            messages: streamMessages,
+            tools: Object.fromEntries(
+              Object.entries(tools).map(([name, item]) => {
+                const toolInfo = item as Record<string, unknown>
+                return [
+                  name,
+                  {
+                    description: toolInfo.description,
+                    inputSchema: toolInfo.inputSchema ?? toolInfo.parameters,
+                  },
+                ]
+              }),
+            ),
+          })
+          const previousContextTokens = lastFinished
+            ? lastFinished.tokens.input +
+              lastFinished.tokens.output +
+              lastFinished.tokens.reasoning +
+              lastFinished.tokens.cache.read +
+              lastFinished.tokens.cache.write
+            : undefined
+          const previousContextAtThreshold =
+            previousContextTokens === undefined
+              ? undefined
+              : yield* compaction.isPromptOverflow({
+                  tokens: previousContextTokens,
+                  model,
+                  respectAuto: false,
+                  mode: "threshold",
+                })
+          const promptOverflow = yield* compaction.isPromptOverflow({
+            tokens: promptTokens,
+            model,
+            respectAuto: false,
+            mode: "hard",
+          })
+          const hardLimit = modelContextLimit({ model })
+          if (shouldPreflightPromptOverflow({ promptOverflow, promptTokens, hardLimit, previousContextAtThreshold })) {
             const duplicateAutoCompaction = shouldSkipAutoCompaction(msgs)
             const rescueCompactions = autoRescueCompactionCount(msgs)
             const rescueAlreadyAttempted = rescueCompactions > 0
             const canResumeAfterRescue = shouldResumeAfterAutoRescueCompaction(msgs)
-             yield* beginCompaction()
-             yield* slog.warn("pre-provider compaction", {
+            yield* beginCompaction()
+            yield* slog.warn("pre-provider compaction", {
               promptTokens,
               reason: duplicateAutoCompaction
                 ? "synthetic resume still exceeded effective provider/model threshold before request dispatch"
@@ -2804,13 +2808,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               const hasUsefulParts = handleParts.some(
                 (part) => part.type === "text" || part.type === "tool" || part.type === "patch" || part.type === "file",
               )
-               if (!handle.message.finish && !hasUsefulParts) {
+              if (!handle.message.finish && !hasUsefulParts) {
                 yield* sessions
                   .removeMessage({ sessionID, messageID: handle.message.id })
                   .pipe(Effect.catch(() => Effect.void))
-               }
-               yield* beginCompaction()
-               yield* compaction.create({
+              }
+              yield* beginCompaction()
+              yield* compaction.create({
                 sessionID,
                 agent: lastUser.agent,
                 model: lastUser.model,
@@ -2824,21 +2828,21 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   : "The prompt still exceeded the provider/model context after the preserved tail was discarded. Produce the smallest final rescue summary without auto-resuming; preserve active work, TODOs, latest tool state, changed files, verification evidence, and transcript reference.",
               })
               return "continue" as const
-             }
-             const resumeAfterCompaction = shouldResumeAfterActiveCompaction(
-               handle.message.finish,
-               hasRunnableToolCalls(MessageV2.parts(handle.message.id)),
-             )
-             yield* beginCompaction()
-             yield* compaction.create({
+            }
+            const resumeAfterCompaction = shouldResumeAfterActiveCompaction(
+              handle.message.finish,
+              hasRunnableToolCalls(MessageV2.parts(handle.message.id)),
+            )
+            yield* beginCompaction()
+            yield* compaction.create({
               sessionID,
               agent: lastUser.agent,
               model: lastUser.model,
               auto: true,
               overflow: true,
               resume: resumeAfterCompaction,
-             })
-             return "continue" as const
+            })
+            return "continue" as const
           }
           if (finished && !handle.message.error && !hasRunnableToolCalls(MessageV2.parts(handle.message.id))) {
             return "break" as const
@@ -2877,9 +2881,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       }
 
       const result =
-        backgroundGeneration === recovery.backgroundGeneration
-          ? recovery
-          : { ...recovery, backgroundGeneration }
+        backgroundGeneration === recovery.backgroundGeneration ? recovery : { ...recovery, backgroundGeneration }
       recoveredWorkflowSessions.set(sessionID, result)
       return result
     })
@@ -2892,21 +2894,20 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       if (!recovery) return
 
       if (recovery.runnerManaged) {
-        yield* workflows
-          .wake(recovery.runID)
-          .pipe(
-            Effect.catchCause(() => Effect.void),
-            Effect.ensuring(Effect.sync(() => recoveredWorkflowSessions.delete(sessionID))),
-          )
+        yield* workflows.wake(recovery.runID).pipe(
+          Effect.catchCause(() => Effect.void),
+          Effect.ensuring(Effect.sync(() => recoveredWorkflowSessions.delete(sessionID))),
+        )
         return
       }
 
       const successful =
         message.info.role === "assistant" && Boolean(message.info.finish) && message.info.error === undefined
-      const summary = message.parts
-        .flatMap((part) => (part.type === "text" && !part.ignored ? [part.text] : []))
-        .join("\n")
-        .trim() || undefined
+      const summary =
+        message.parts
+          .flatMap((part) => (part.type === "text" && !part.ignored ? [part.text] : []))
+          .join("\n")
+          .trim() || undefined
       const state = successful ? ("completed" as const) : ("failed" as const)
       const error = successful
         ? undefined
@@ -2948,9 +2949,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       yield* resumeWorkflowTaskSession(input.sessionID)
       let interruptedAssistantID: MessageID | undefined
       const queueMode = (yield* config.get()).queue?.mode ?? "after-response"
-      const targetMessageID = input.targetMessageID ?? Option.getOrUndefined(
-        yield* sessions.findMessage(input.sessionID, (message) => message.info.role === "user"),
-      )?.info.id
+      const targetMessageID =
+        input.targetMessageID ??
+        Option.getOrUndefined(yield* sessions.findMessage(input.sessionID, (message) => message.info.role === "user"))
+          ?.info.id
       log.trace("loop-ensure-running", {
         sessionID: input.sessionID,
         targetMessageID,
@@ -3046,7 +3048,142 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         Effect.forkIn(scope, { startImmediately: true }),
       )
       return message
+    })
+
+    // Peer deliveries are durable inbox entries, not Bus messages. They are
+    // claimed per target only after the target is idle, then persisted through
+    // the normal prompt boundary so a restart can detect the delivery marker
+    // and avoid inserting the same prompt twice.
+    const peerDeliveryTargets = new Set<SessionID>()
+    const peerDeliveryPendingTargets = new Set<SessionID>()
+    const deliverPeerMessage = (info: AgentCommand.Info): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (info.type !== "peer_message" || (info.state !== "accepted" && info.state !== "running")) return
+        if (peerDeliveryTargets.has(info.targetSessionID)) return
+        peerDeliveryTargets.add(info.targetSessionID)
+        let settled = false
+        try {
+          const statusInfo = yield* status.get(info.targetSessionID)
+          if (statusInfo.type !== "idle") return
+          if (info.policy.decision !== "same_workspace") {
+            yield* agentCommands.update({
+              id: info.id,
+              targetSessionID: info.targetSessionID,
+              state: "rejected",
+              error: "Peer delivery requires both sessions to belong to the same workspace.",
+            })
+            settled = true
+            return
+          }
+
+          if (info.state === "accepted") {
+            try {
+              yield* agentCommands.update({
+                id: info.id,
+                targetSessionID: info.targetSessionID,
+                state: "running",
+              })
+            } catch (error) {
+              if (error instanceof AgentCommand.InvalidStateTransitionError) return
+              throw error
+            }
+          }
+
+          const existing = yield* sessions.messages({ sessionID: info.targetSessionID, view: "full" })
+          const marker = existing.find((message) =>
+            message.parts.some(
+              (part) =>
+                part.type === "text" &&
+                (part.metadata as Record<string, unknown> | undefined)?.kind === "peer_message" &&
+                (part.metadata as Record<string, unknown> | undefined)?.deliveryID === info.id,
+            ),
+          )
+          if (marker) {
+            yield* agentCommands.update({
+              id: info.id,
+              targetSessionID: info.targetSessionID,
+              state: "completed",
+              result: `Peer message already persisted in prompt ${marker.info.id}.`,
+            })
+            settled = true
+            return
+          }
+
+          const message = yield* promptAsync({
+            sessionID: info.targetSessionID,
+            parts: [
+              {
+                type: "text",
+                text: info.payload.text,
+                metadata: {
+                  kind: "peer_message",
+                  deliveryID: info.id,
+                  sourceSessionID: info.sourceSessionID,
+                  sourceTitle: info.payload.sourceTitle ?? info.sourceSessionID,
+                  receivedAt: Date.now(),
+                },
+              },
+            ],
+          })
+          yield* agentCommands.update({
+            id: info.id,
+            targetSessionID: info.targetSessionID,
+            state: "completed",
+            result: `Peer message persisted in prompt ${message.info.id}.`,
+          })
+          settled = true
+        } catch (error) {
+          yield* agentCommands.update({
+            id: info.id,
+            targetSessionID: info.targetSessionID,
+            state: "failed",
+            error: error instanceof Error ? error.message : String(error),
+          })
+          settled = true
+        } finally {
+          peerDeliveryTargets.delete(info.targetSessionID)
+          if (settled) yield* scheduleNextPeerDelivery(info.targetSessionID)
+        }
+      }).pipe(Effect.orDie)
+
+    const schedulePeerDelivery = (info: AgentCommand.Info): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (info.type !== "peer_message" || (info.state !== "accepted" && info.state !== "running")) return
+        yield* deliverPeerMessage(info).pipe(Effect.forkIn(scope, { startImmediately: true }))
       })
+
+    const scheduleNextPeerDelivery = (targetSessionID: SessionID): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (!peerDeliveryPendingTargets.has(targetSessionID)) return
+        const next = (yield* agentCommands.list({ targetSessionID }))
+          .filter(
+            (item): item is Extract<AgentCommand.Info, { type: "peer_message" }> =>
+              item.type === "peer_message" && (item.state === "accepted" || item.state === "running"),
+          )
+          .toSorted((a, b) => a.time.created - b.time.created || a.id.localeCompare(b.id))[0]
+        if (next) {
+          yield* schedulePeerDelivery(next)
+          return
+        }
+        peerDeliveryPendingTargets.delete(targetSessionID)
+      })
+
+    const enqueuePeerDelivery = (info: AgentCommand.Info): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (info.type !== "peer_message" || info.state !== "accepted") return
+        peerDeliveryPendingTargets.add(info.targetSessionID)
+        yield* scheduleNextPeerDelivery(info.targetSessionID)
+      })
+
+    const wakePeerDelivery = Effect.fn("SessionPrompt.wakePeerDelivery")(function* (targetSessionID: SessionID) {
+      const pending = (yield* agentCommands.list({ targetSessionID })).filter(
+        (info): info is Extract<AgentCommand.Info, { type: "peer_message" }> =>
+          info.type === "peer_message" && (info.state === "accepted" || info.state === "running"),
+      )
+      if (pending.length === 0) return
+      peerDeliveryPendingTargets.add(targetSessionID)
+      yield* scheduleNextPeerDelivery(targetSessionID)
+    })
 
     const recoverQueuedPrompt = Effect.fn("SessionPrompt.recoverQueuedPrompt")(function* (
       sessionID: SessionID,
@@ -3055,42 +3192,43 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       if (queuedPromptRecovery.has(sessionID)) return
       queuedPromptRecovery.add(sessionID)
 
-      const messages = yield* sessions.messages({ sessionID, view: "full" }).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logError("queued prompt recovery inspection failed", { sessionID, cause }).pipe(
-            Effect.as([] as MessageV2.WithParts[]),
+      const messages = yield* sessions
+        .messages({ sessionID, view: "full" })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("queued prompt recovery inspection failed", { sessionID, cause }).pipe(
+              Effect.as([] as MessageV2.WithParts[]),
+            ),
           ),
-        ),
-      )
+        )
       const incomplete = messages.findLast(
         (message) => message.info.role === "assistant" && message.info.time.completed === undefined,
       )
       const inspectedSession = incomplete
         ? yield* sessions.get(sessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
-      const orphaned = incomplete && !inspectedSession?.parentID && messages.some(
-        (message) =>
-          message.info.role === "user" &&
-          message.info.queued === true &&
-          message.info.time.created > incomplete.info.time.created,
-      )
-        ? incomplete
-        : undefined
+      const orphaned =
+        incomplete &&
+        !inspectedSession?.parentID &&
+        messages.some(
+          (message) =>
+            message.info.role === "user" &&
+            message.info.queued === true &&
+            message.info.time.created > incomplete.info.time.created,
+        )
+          ? incomplete
+          : undefined
       if (orphaned && (yield* state.isBusy(sessionID))) {
         queuedPromptRecovery.delete(sessionID)
         return
       }
       if (orphaned) {
-        yield* finishOrphanedAssistant(
-          sessionID,
-          orphaned.info.id,
-          { reason: "Runtime interrupted before the assistant response completed." },
-        )
+        yield* finishOrphanedAssistant(sessionID, orphaned.info.id, {
+          reason: "Runtime interrupted before the assistant response completed.",
+        })
       }
       const recoveredMessages = orphaned
-        ? yield* sessions.messages({ sessionID, view: "full" }).pipe(
-            Effect.catchCause(() => Effect.succeed(messages)),
-          )
+        ? yield* sessions.messages({ sessionID, view: "full" }).pipe(Effect.catchCause(() => Effect.succeed(messages)))
         : messages
       const queued = findRecoverableQueuedPrompt(recoveredMessages, options)
       if (!queued) {
@@ -3253,79 +3391,77 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
     const drainOwnerWake: (sessionID: SessionID, current?: OwnerWakeState) => Effect.Effect<void> = Effect.fn(
       "SessionPrompt.drainOwnerWake",
-    )(
-      function* (sessionID: SessionID, current?: OwnerWakeState) {
-        const wakeState = current ?? (yield* InstanceState.get(ownerWakeState))
-        const cfg = yield* config.get()
-        if (cfg.subagent_owner_wake === false) {
-          wakeState.pending.delete(sessionID)
-          return
-        }
-        if (!wakeState.sessions.has(sessionID) || wakeState.running.has(sessionID)) return
-        if (yield* state.isBusy(sessionID)) return
+    )(function* (sessionID: SessionID, current?: OwnerWakeState) {
+      const wakeState = current ?? (yield* InstanceState.get(ownerWakeState))
+      const cfg = yield* config.get()
+      if (cfg.subagent_owner_wake === false) {
+        wakeState.pending.delete(sessionID)
+        return
+      }
+      if (!wakeState.sessions.has(sessionID) || wakeState.running.has(sessionID)) return
+      if (yield* state.isBusy(sessionID)) return
 
-        const pending = wakeState.pending.get(sessionID)
-        if (!pending || pending.size === 0) return
-        const session = yield* sessions.get(sessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-        if (!session) return
+      const pending = wakeState.pending.get(sessionID)
+      if (!pending || pending.size === 0) return
+      const session = yield* sessions.get(sessionID).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+      if (!session) return
 
-        const events = Array.from(pending.values()).slice(0, OWNER_WAKE_MAX_EVENTS)
-        events.forEach((event) => pending.delete(event.eventID))
-        if (pending.size === 0) wakeState.pending.delete(sessionID)
+      const events = Array.from(pending.values()).slice(0, OWNER_WAKE_MAX_EVENTS)
+      events.forEach((event) => pending.delete(event.eventID))
+      if (pending.size === 0) wakeState.pending.delete(sessionID)
 
-        const wakeID = Bus.createID()
-        const model = session.model
-          ? {
-              providerID: session.model.providerID,
-              modelID: session.model.id,
-            }
-          : undefined
-        const wake = prompt({
-          sessionID,
-          agent: session.agent,
-          model,
-          variant: session.model?.variant,
-          parts: [
-            {
-              type: "text",
-              text: ownerWakePromptText(events),
-              synthetic: true,
-              metadata: {
-                kind: OWNER_WAKE_PART_KIND,
-                wakeID,
-                eventIDs: events.map((event) => event.eventID),
-              },
-            },
-          ],
-        }).pipe(
-          Effect.ensuring(Effect.sync(() => wakeState.running.delete(sessionID))),
-          Effect.catchCause((cause) =>
-            Effect.sync(() => {
-              const retry = wakeState.pending.get(sessionID) ?? new Map()
-              events.forEach((event) => retry.set(event.eventID, event))
-              wakeState.pending.set(sessionID, retry)
-              log.error("owner wake failed", {
-                sessionID,
-                error: Cause.squash(cause),
-              })
-            }),
-          ),
-        )
-
-        wakeState.running.add(sessionID)
-        yield* wake.pipe(Effect.forkIn(scope))
-        yield* bus.publish(
-          BackgroundTask.Event.OwnerWake,
+      const wakeID = Bus.createID()
+      const model = session.model
+        ? {
+            providerID: session.model.providerID,
+            modelID: session.model.id,
+          }
+        : undefined
+      const wake = prompt({
+        sessionID,
+        agent: session.agent,
+        model,
+        variant: session.model?.variant,
+        parts: [
           {
-            wakeID,
-            parentSessionID: sessionID,
-            taskIDs: events.map((event) => event.taskID),
-            taskTitles: events.map((event) => event.title.slice(0, 96)),
+            type: "text",
+            text: ownerWakePromptText(events),
+            synthetic: true,
+            metadata: {
+              kind: OWNER_WAKE_PART_KIND,
+              wakeID,
+              eventIDs: events.map((event) => event.eventID),
+            },
           },
-          { id: wakeID },
-        )
-      },
-    )
+        ],
+      }).pipe(
+        Effect.ensuring(Effect.sync(() => wakeState.running.delete(sessionID))),
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            const retry = wakeState.pending.get(sessionID) ?? new Map()
+            events.forEach((event) => retry.set(event.eventID, event))
+            wakeState.pending.set(sessionID, retry)
+            log.error("owner wake failed", {
+              sessionID,
+              error: Cause.squash(cause),
+            })
+          }),
+        ),
+      )
+
+      wakeState.running.add(sessionID)
+      yield* wake.pipe(Effect.forkIn(scope))
+      yield* bus.publish(
+        BackgroundTask.Event.OwnerWake,
+        {
+          wakeID,
+          parentSessionID: sessionID,
+          taskIDs: events.map((event) => event.taskID),
+          taskTitles: events.map((event) => event.title.slice(0, 96)),
+        },
+        { id: wakeID },
+      )
+    })
 
     const scheduleOwnerWake: (sessionID: SessionID, current?: OwnerWakeState) => Effect.Effect<void> = Effect.fn(
       "SessionPrompt.scheduleOwnerWake",
@@ -3397,15 +3533,37 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           (sessionID) => scheduleOwnerWake(sessionID, value),
           { discard: true },
         )
-        yield* Effect.forEach(
-          yield* sessions.list({ limit: 100 }),
-          (session) => recoverQueuedPrompt(session.id),
-          { concurrency: 8, discard: true },
-        )
+        yield* Effect.forEach(yield* sessions.list({ limit: 100 }), (session) => recoverQueuedPrompt(session.id), {
+          concurrency: 8,
+          discard: true,
+        })
         return value
       }),
     )
 
+    yield* bus.subscribe(AgentCommand.Event.Updated).pipe(
+      Stream.filter((event) => event.properties.info.type === "peer_message"),
+      Stream.runForEach((event) => {
+        if (event.properties.info.state !== "accepted") return Effect.void
+        return enqueuePeerDelivery(event.properties.info)
+      }),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    yield* bus.subscribe(SessionStatus.Event.Status).pipe(
+      Stream.filter((event) => event.properties.status.type === "idle"),
+      Stream.runForEach((event) => scheduleNextPeerDelivery(event.properties.sessionID)),
+      Effect.forkScoped({ startImmediately: true }),
+    )
+    yield* Effect.gen(function* () {
+      yield* Effect.sleep("1 millis")
+      const targets = new Set(
+        (yield* agentCommands.list())
+          .filter((info) => info.type === "peer_message" && (info.state === "accepted" || info.state === "running"))
+          .map((info) => info.targetSessionID),
+      )
+      for (const targetSessionID of targets) peerDeliveryPendingTargets.add(targetSessionID)
+      yield* Effect.forEach(targets, (targetSessionID) => scheduleNextPeerDelivery(targetSessionID), { discard: true })
+    }).pipe(Effect.forkScoped({ startImmediately: false }))
     return Service.of({
       cancel,
       cancelTurn,
@@ -3417,6 +3575,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       shell,
       command,
       resolvePromptParts,
+      wakePeerDelivery,
     })
   }),
 )
@@ -3438,7 +3597,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Instruction.defaultLayer),
     Layer.provide(AppFileSystem.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
-    Layer.provide(Session.defaultLayer),
+    Layer.provide(Layer.mergeAll(Session.defaultLayer, AgentCommand.defaultLayer)),
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(SessionSummary.defaultLayer),
     Layer.provide(Layer.mergeAll(BackgroundTask.defaultLayer, WorkflowService.defaultLayer)),

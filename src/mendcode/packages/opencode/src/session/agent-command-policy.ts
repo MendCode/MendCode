@@ -3,9 +3,15 @@ import { withStatics } from "@/util/schema"
 import { Schema } from "effect"
 import type { Session } from "./session"
 
-export const CommandType = Schema.Literals(["request_summary", "rename", "tag", "pause_after_turn", "stop", "send_message"]).pipe(
-  withStatics((s) => ({ zod: zod(s) })),
-)
+export const CommandType = Schema.Literals([
+  "request_summary",
+  "rename",
+  "tag",
+  "pause_after_turn",
+  "stop",
+  "send_message",
+  "peer_message",
+]).pipe(withStatics((s) => ({ zod: zod(s) })))
 export type CommandType = Schema.Schema.Type<typeof CommandType>
 
 export const Decision = Schema.Literals(["safe_auto", "same_workspace", "approval_required", "denied"]).pipe(
@@ -55,18 +61,28 @@ export function permissionsFor(type: CommandType) {
   if (type === "pause_after_turn") return ["session.control.pause_after_turn"]
   if (type === "stop") return ["session.control.stop"]
   if (type === "send_message") return ["session.message.send"]
+  if (type === "peer_message") return []
   return ["agent_view.metadata.patch"]
 }
 
 function sameWorkspace(input: { source?: SessionLike; target?: SessionLike }) {
   if (!input.source || !input.target) return false
   if (input.source.workspaceID || input.target.workspaceID) {
-    return input.source.workspaceID !== undefined && input.target.workspaceID !== undefined && input.source.workspaceID === input.target.workspaceID
+    return (
+      input.source.workspaceID !== undefined &&
+      input.target.workspaceID !== undefined &&
+      input.source.workspaceID === input.target.workspaceID
+    )
   }
   return input.source.directory === input.target.directory
 }
 
-export function evaluate(input: { type: CommandType; source?: SessionLike; target?: SessionLike; ownership?: OwnershipLike }): Info {
+export function evaluate(input: {
+  type: CommandType
+  source?: SessionLike
+  target?: SessionLike
+  ownership?: OwnershipLike
+}): Info {
   if (input.type === "request_summary") {
     return {
       decision: "safe_auto",
@@ -79,6 +95,20 @@ export function evaluate(input: { type: CommandType; source?: SessionLike; targe
       decision: "approval_required",
       permissions: permissionsFor(input.type),
       reason: "Execution-changing commands require explicit target approval before they can run.",
+    }
+  }
+  if (input.type === "peer_message") {
+    if (sameWorkspace(input)) {
+      return {
+        decision: "same_workspace",
+        permissions: [],
+        reason: "Peer text is non-authorizing; the target must explicitly accept it before delivery.",
+      }
+    }
+    return {
+      decision: "approval_required",
+      permissions: [],
+      reason: "Peer text lacks same-workspace context, so the target must explicitly accept it before delivery.",
     }
   }
   if (sameWorkspace(input)) {
@@ -127,6 +157,12 @@ export function matrix(): MatrixItem[] {
       decision: "approval_required",
       permissions: permissionsFor("send_message"),
       reason: "Requires explicit target approval before injecting a new user prompt.",
+    },
+    {
+      type: "peer_message",
+      decision: "same_workspace",
+      permissions: [],
+      reason: "Non-authorizing peer text is held until the target explicitly accepts delivery.",
     },
   ]
 }

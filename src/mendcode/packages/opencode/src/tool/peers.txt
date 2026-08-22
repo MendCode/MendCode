@@ -1,0 +1,3 @@
+List the other active MendCode sessions in the current project as bounded peer descriptors.
+
+The result contains only explicit session IDs, titles, lifecycle state, short activity, workspace identity, and update time. It never reads or exposes transcript text, files, reasoning, permissions, secrets, or provider context. Use the exact session ID from this list with the tell tool.

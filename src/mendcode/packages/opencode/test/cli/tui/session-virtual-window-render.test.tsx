@@ -255,6 +255,37 @@ describe("session transcript headless rendering", () => {
     }
   })
 
+  test("never exposes an empty transcript frame while submitting at the virtual tail", async () => {
+    let harness!: Harness
+    const app = await testRender(() => <TranscriptHarness initial={rows(300)} ready={(value) => (harness = value)} />, {
+      width: 100,
+      height: 30,
+    })
+
+    try {
+      await settle(app)
+      harness.scroll.scrollTo(harness.scroll.scrollHeight)
+      harness.syncScrollTop()
+      await settle(app)
+
+      const submitted = { id: "msg-300", role: "user" as const, height: 3 }
+      harness.append(submitted)
+      await app.renderOnce()
+      expect(harness.visibleTranscriptIDs()).not.toHaveLength(0)
+
+      harness.setVirtualAnchorID(submitted.id)
+      harness.setFollow(false)
+      await app.renderOnce()
+      expect(harness.visibleTranscriptIDs()).not.toHaveLength(0)
+      expect(harness.mountedIDs()).toContain(submitted.id)
+
+      await settle(app)
+      expect(app.captureCharFrame()).toContain(submitted.id)
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
   test("does not accumulate renderables while traversing a long transcript", async () => {
     let harness!: Harness
     const app = await testRender(
@@ -337,10 +368,10 @@ describe("session transcript headless rendering", () => {
         height: 6,
       }),
     )
-    const app = await testRender(
-      () => <TranscriptHarness initial={initial} ready={(value) => (harness = value)} />,
-      { width: 100, height: 30 },
-    )
+    const app = await testRender(() => <TranscriptHarness initial={initial} ready={(value) => (harness = value)} />, {
+      width: 100,
+      height: 30,
+    })
 
     try {
       await settle(app)
@@ -412,10 +443,10 @@ describe("session transcript headless rendering", () => {
         height: 6,
       }),
     )
-    const app = await testRender(
-      () => <TranscriptHarness initial={initial} ready={(value) => (harness = value)} />,
-      { width: 100, height: 30 },
-    )
+    const app = await testRender(() => <TranscriptHarness initial={initial} ready={(value) => (harness = value)} />, {
+      width: 100,
+      height: 30,
+    })
 
     try {
       await settle(app)
