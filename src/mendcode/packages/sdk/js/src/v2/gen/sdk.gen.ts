@@ -3986,7 +3986,8 @@ export class Session2 extends HeyApiClient {
       limit?: number
       before?: string
       after?: string
-      view?: "full" | "tui" | "tui-all"
+      view?: "full" | "tui" | "tui-all" | "history"
+      unit?: "message" | "turn"
       partsLimit?: string
     },
     options?: Options<never, ThrowOnError>,
@@ -4003,6 +4004,7 @@ export class Session2 extends HeyApiClient {
             { in: "query", key: "before" },
             { in: "query", key: "after" },
             { in: "query", key: "view" },
+            { in: "query", key: "unit" },
             { in: "query", key: "partsLimit" },
           ],
         },
@@ -4126,7 +4128,7 @@ export class Session2 extends HeyApiClient {
       messageID: string
       directory?: string
       workspace?: string
-      view?: "full" | "tui" | "tui-all"
+      view?: "full" | "tui" | "tui-all" | "history"
       partsLimit?: string
       partsAfter?: string
     },
@@ -5820,6 +5822,20 @@ export class Workflow extends HeyApiClient {
          * Concrete criteria that prove the workflow finished successfully. Must not be empty.
          */
         completionCriteria: Array<string>
+        completion?: {
+          confirmation?: "same-run" | "next-run"
+          maxAuditAttempts?: number
+          validationChecks?: Array<{
+            id: string
+            command: string
+            timeoutMs?: number
+          }>
+          criteria?: Array<{
+            id: string
+            description: string
+            ownerTaskIDs?: Array<string>
+          }>
+        }
         /**
          * Approval gates required before execution. Use [] for immediate execution.
          */
@@ -6097,6 +6113,20 @@ export class Workflow extends HeyApiClient {
          * Concrete criteria that prove the workflow finished successfully. Must not be empty.
          */
         completionCriteria: Array<string>
+        completion?: {
+          confirmation?: "same-run" | "next-run"
+          maxAuditAttempts?: number
+          validationChecks?: Array<{
+            id: string
+            command: string
+            timeoutMs?: number
+          }>
+          criteria?: Array<{
+            id: string
+            description: string
+            ownerTaskIDs?: Array<string>
+          }>
+        }
         /**
          * Approval gates required before execution. Use [] for immediate execution.
          */
@@ -6386,6 +6416,20 @@ export class Workflow extends HeyApiClient {
          * Concrete criteria that prove the workflow finished successfully. Must not be empty.
          */
         completionCriteria: Array<string>
+        completion?: {
+          confirmation?: "same-run" | "next-run"
+          maxAuditAttempts?: number
+          validationChecks?: Array<{
+            id: string
+            command: string
+            timeoutMs?: number
+          }>
+          criteria?: Array<{
+            id: string
+            description: string
+            ownerTaskIDs?: Array<string>
+          }>
+        }
         /**
          * Approval gates required before execution. Use [] for immediate execution.
          */

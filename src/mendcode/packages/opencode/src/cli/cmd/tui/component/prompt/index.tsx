@@ -581,13 +581,7 @@ export function latestPendingAssistantID(
   // still owns the turn or one of its tools is genuinely pending/running.
   // Question rejection is persisted as a completed assistant/tool error and
   // an idle session; treating that receipt as live caused ghost Generating.
-  if (
-    latestAssistant.time.completed &&
-    continuation &&
-    input?.statusType === "idle" &&
-    !input.hasActiveTool
-  )
-    return
+  if (latestAssistant.time.completed && continuation && input?.statusType === "idle" && !input.hasActiveTool) return
   if (
     input &&
     !isAssistantWorking({
@@ -690,20 +684,42 @@ export function shouldEnableSessionInterrupt(input: {
 }) {
   if (input.interruptRequested) return false
   // An active turn owns Esc even when autocomplete/another prompt overlay has
-  // focus. The backend cancellation must not wait for the overlay to close.
-  if (input.statusType !== "idle" || input.hasActiveWorkingAssistant || input.hasPendingPromptDelivery) return true
+  // focus, so the first press can arm cancellation without closing the overlay.
+  if (
+    input.statusType !== "idle" ||
+    input.hasActiveWorkingAssistant ||
+    input.hasPendingPromptDelivery ||
+    input.compactionActive
+  )
+    return true
   if (input.autocompleteVisible) return false
   return false
 }
 
-export function shouldInterruptImmediately(input: {
+export function hasInterruptibleSessionTurn(input: {
   statusType: string
   hasDraft?: boolean
   hasActiveWorkingAssistant?: boolean
   hasPendingPromptDelivery?: boolean
   compactionActive?: boolean
 }) {
-  return input.statusType !== "idle" || Boolean(input.hasActiveWorkingAssistant || input.hasPendingPromptDelivery)
+  return (
+    input.statusType !== "idle" ||
+    Boolean(input.hasActiveWorkingAssistant || input.hasPendingPromptDelivery || input.compactionActive)
+  )
+}
+
+export function sessionInterruptConfirmationAction(input: {
+  activeTargetMessageID?: string
+  armedTargetMessageID?: string
+}): "ignore" | "arm" | "interrupt" {
+  if (!input.activeTargetMessageID) return "ignore"
+  return input.armedTargetMessageID === input.activeTargetMessageID ? "interrupt" : "arm"
+}
+
+export function sessionInterruptHint(input: { enabled: boolean; working: boolean; armed: boolean }) {
+  if (!input.enabled || !input.working) return
+  return input.armed ? "[esc again to interrupt]" : "[esc to interrupt]"
 }
 
 export function clipboardPasteAction(content: { mime?: string; data?: string } | undefined): "image" | "text" | "none" {
@@ -893,6 +909,7 @@ export function Prompt(props: PromptProps) {
   let promptDisposed = false
   let interruptRequest: Promise<unknown> | undefined
   let interruptResetTimer: ReturnType<typeof setTimeout> | undefined
+  let interruptArmedTargetMessageID: string | undefined
   let autocomplete: AutocompleteRef
   let lastPastedContentClick: { time: number; offset: number } | undefined
 
@@ -1616,6 +1633,19 @@ export function Prompt(props: PromptProps) {
     extmarkToPartIndex: new Map(),
     interrupt: 0,
   })
+  function resetInterruptConfirmation() {
+    interruptArmedTargetMessageID = undefined
+    setStore("interrupt", 0)
+    if (!interruptResetTimer) return
+    clearTimeout(interruptResetTimer)
+    interruptResetTimer = undefined
+  }
+  createEffect(() => {
+    if (store.interrupt === 0) return
+    const activeTargetMessageID = workingStatusActive() ? activeTurnTargetMessageID() : undefined
+    if (activeTargetMessageID === interruptArmedTargetMessageID) return
+    resetInterruptConfirmation()
+  })
   const currentMessageHistoryPrompt = createMemo(() =>
     messageHistoryIndex() === 0 ? undefined : messageHistoryItems().at(messageHistoryIndex()),
   )
@@ -1740,16 +1770,16 @@ export function Prompt(props: PromptProps) {
             }),
           }),
         onSelect: (dialog) => {
-          const immediateInterrupt = shouldInterruptImmediately({
+          const hasActiveTurn = hasInterruptibleSessionTurn({
             statusType: status().type,
             hasDraft: store.prompt.input.trim().length > 0 || store.prompt.parts.length > 0,
             hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
             hasPendingPromptDelivery: Boolean(props.sessionID && pendingPromptDeliveryIsActive(props.sessionID)),
             compactionActive: compactionActive(),
           })
-          if (autocomplete?.visible && !immediateInterrupt) return
+          if (autocomplete?.visible && !hasActiveTurn) return
           if (
-            !immediateInterrupt &&
+            !hasActiveTurn &&
             !shouldAcceptPromptInterruptFocus({
               inputFocused: input.focused,
               currentFocusedRenderable: renderer.currentFocusedRenderable,
@@ -1763,31 +1793,26 @@ export function Prompt(props: PromptProps) {
             return
           }
           if (!props.sessionID) return
-          if (immediateInterrupt) {
-            const targetMessageID = activeTurnTargetMessageID()
+          const targetMessageID = activeTurnTargetMessageID()
+          const action = sessionInterruptConfirmationAction({
+            activeTargetMessageID: targetMessageID,
+            armedTargetMessageID: interruptArmedTargetMessageID,
+          })
+          if (action === "ignore") return
+          if (action === "interrupt") {
             cancelPendingPromptDeliveryForInterrupt(props.sessionID, targetMessageID)
             abortSession(props.sessionID, targetMessageID)
-            setStore("interrupt", 0)
+            resetInterruptConfirmation()
             dialog.clear()
             return
           }
 
-          const nextInterrupt = store.interrupt + 1
-          setStore("interrupt", nextInterrupt)
+          interruptArmedTargetMessageID = targetMessageID
+          setStore("interrupt", 1)
           if (interruptResetTimer) clearTimeout(interruptResetTimer)
           interruptResetTimer = setTimeout(() => {
-            setStore("interrupt", 0)
-            interruptResetTimer = undefined
+            resetInterruptConfirmation()
           }, 5000)
-
-          if (nextInterrupt >= 2) {
-            const targetMessageID = activeTurnTargetMessageID()
-            cancelPendingPromptDeliveryForInterrupt(props.sessionID, targetMessageID)
-            abortSession(props.sessionID, targetMessageID)
-            setStore("interrupt", 0)
-            clearTimeout(interruptResetTimer)
-            interruptResetTimer = undefined
-          }
           dialog.clear()
         },
       },
@@ -2620,8 +2645,6 @@ export function Prompt(props: PromptProps) {
       if (props.sessionID) workingStartedAtBySession.set(props.sessionID, submissionStartedAt)
     }
     updateInterruptRequested(false)
-    clearPromptForSubmit()
-    renderer.requestRender()
     const modelConfig = await readModelsConfig(mend.root).catch(() => undefined)
     const configuredRole = Object.values(modelConfig?.roles || {}).find(
       (role) => role?.providerID === selectedModel.providerID && role?.modelID === selectedModel.modelID,
@@ -2774,6 +2797,10 @@ export function Prompt(props: PromptProps) {
       throw error
     }
 
+    // Do not expose a render between clearing the editor and mounting the
+    // optimistic turn. On large transcripts that intermediate layout pass can
+    // briefly leave the scrollbox with only virtual spacers on screen.
+    clearPromptForSubmit()
     history.append(
       {
         ...promptSnapshot,
@@ -2892,13 +2919,8 @@ export function Prompt(props: PromptProps) {
       )
       if (editorParts.length > 0) editor.markSelectionSent()
     }
-    input.extmarks.clear()
-    setStore("prompt", {
-      input: "",
-      parts: [],
-    })
-    setStore("extmarkToPartIndex", new Map())
     props.onSubmit?.({ sessionID, messageID, inputRows: submittedInputRows, queuedBehindActiveTurn })
+    renderer.requestRender()
 
     if (props.sessionID) submitPending = false
 
@@ -3673,6 +3695,13 @@ export function Prompt(props: PromptProps) {
       working: workingStatusActive(),
     }),
   )
+  const interruptHint = createMemo(() => {
+    return sessionInterruptHint({
+      enabled: workingIndicatorConfig().showInterruptHint,
+      working: workingStatusActive(),
+      armed: store.interrupt > 0,
+    })
+  })
   const promptInputPadTop = createMemo(() => {
     if (promptChrome().preset === "minimal") return 1
     if (promptUsesPanelBackground()) return 0
@@ -3691,7 +3720,7 @@ export function Prompt(props: PromptProps) {
   const workingLeftMaxWidth = createMemo(() => {
     const rightMetaWidth = workingRightMeta()?.length ?? 0
     const mascotWidth = 0
-    const interruptWidth = workingIndicatorConfig().showInterruptHint ? "[esc again to interrupt]".length : 0
+    const interruptWidth = interruptHint()?.length ?? 0
     const separatorWidth = [rightMetaWidth, interruptWidth, mascotWidth].filter(Boolean).length * 2
     return Math.max(
       12,
@@ -3926,6 +3955,13 @@ export function Prompt(props: PromptProps) {
               </Show>
             </box>
             <box flexDirection="row" gap={2} flexShrink={0}>
+              <Show when={interruptHint()}>
+                {(hint) => (
+                  <text fg={store.interrupt > 0 ? theme.warning : theme.textMuted} wrapMode="none">
+                    {hint()}
+                  </text>
+                )}
+              </Show>
               <Show when={status().type !== "retry" && workingStatusActive() && workingRightMeta()}>
                 {(meta) => (
                   <text fg={theme.textMuted} wrapMode="none">

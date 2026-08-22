@@ -139,13 +139,14 @@ export type AgentViewCommand = {
   id: string
   sourceSessionID: string
   targetSessionID: string
-  type: "request_summary" | "rename" | "tag" | "pause_after_turn" | "stop" | "send_message"
+  type: "request_summary" | "rename" | "tag" | "pause_after_turn" | "stop" | "send_message" | "peer_message"
   payload?: {
     instructions?: string | null
     title?: string | null
     tags?: readonly string[] | null
     reason?: string | null
     text?: string | null
+    sourceTitle?: string | null
   } | null
   permissions?: readonly string[] | null
   state: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
@@ -389,7 +390,8 @@ export function summarizeAgentViewOrchestration(input: {
 }
 
 export function formatAgentViewOrchestrationSummary(input: AgentViewOrchestrationSummary) {
-  const pendingLabel = input.pendingCapacity > 0 ? `${input.pending}/${input.pendingCapacity} queued` : `${input.pending} queued`
+  const pendingLabel =
+    input.pendingCapacity > 0 ? `${input.pending}/${input.pendingCapacity} queued` : `${input.pending} queued`
   const limitLabel = input.overLimitTargets > 0 ? ` · ${input.overLimitTargets} over limit` : ""
   return `Coordinator commands · ${pendingLabel}${limitLabel} · ${input.active} running · ${input.completed} done · ${input.blocked} blocked`
 }
@@ -400,6 +402,7 @@ export function formatAgentViewCommandType(command: Pick<AgentViewCommand, "type
   if (command.type === "tag") return "update tags"
   if (command.type === "pause_after_turn") return "pause after turn"
   if (command.type === "stop") return "stop worker"
+  if (command.type === "peer_message") return "peer message"
   return "send message"
 }
 
@@ -410,16 +413,9 @@ export function formatAgentViewCommandSummary(command: Pick<AgentViewCommand, "t
       ? command.payload?.title
       : command.type === "tag"
         ? command.payload?.tags?.map((tag) => `#${tag}`).join(" ")
-        : command.type === "send_message"
+        : command.type === "send_message" || command.type === "peer_message"
           ? command.payload?.text
-          : command.payload?.instructions ?? command.payload?.reason
+          : (command.payload?.instructions ?? command.payload?.reason)
   const state = command.state === "pending" ? "pending" : command.state
-  return Locale.truncate(
-    [state, action, detail]
-      .filter(Boolean)
-      .join(" · ")
-      .replace(/\s+/g, " ")
-      .trim(),
-    120,
-  )
+  return Locale.truncate([state, action, detail].filter(Boolean).join(" · ").replace(/\s+/g, " ").trim(), 120)
 }

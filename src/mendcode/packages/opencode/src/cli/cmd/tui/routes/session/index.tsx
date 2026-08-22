@@ -149,7 +149,11 @@ import {
   workflowReceiptStateMarker,
   workflowReceiptUsage,
 } from "@tui/util/workflow-receipt"
-import { workflowParentSessionID, workflowTaskSessionContext, workflowTaskSiblingSessionID } from "@tui/util/workflow-view"
+import {
+  workflowParentSessionID,
+  workflowTaskSessionContext,
+  workflowTaskSiblingSessionID,
+} from "@tui/util/workflow-view"
 import {
   getScrollAcceleration,
   isScrollboxAtBottom,
@@ -204,6 +208,7 @@ import {
   compactionSummaryPreview,
   rawReasoningDisplay,
   reasoningSummary,
+  reasoningViewportHeight,
   reasoningViewportMaxHeight,
   shouldDisplayReasoning,
   unavailableReasoningLabel,
@@ -226,10 +231,7 @@ import {
 import { readMendTuiCustomization, resolveMendSessionAccent } from "@/mend/tui/customization"
 import { formatDuration } from "@/util/format"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
-import {
-  reviewPermissionRequestWithModel,
-  shouldReviewSmartApproval,
-} from "@/mend/permission/smart-approval"
+import { reviewPermissionRequestWithModel, shouldReviewSmartApproval } from "@/mend/permission/smart-approval"
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import {
   memoryToolPresentation,
@@ -432,10 +434,7 @@ export function sessionPinnedUserMessageID(input: {
   return activeParentID && visible(activeParentID) ? activeParentID : undefined
 }
 
-export function sessionStickyUserEligible(input: {
-  role: string
-  parts?: ReadonlyArray<{ type?: string }>
-}) {
+export function sessionStickyUserEligible(input: { role: string; parts?: ReadonlyArray<{ type?: string }> }) {
   return input.role === "user" && input.parts !== undefined && !input.parts.some((part) => part.type === "compaction")
 }
 
@@ -536,7 +535,9 @@ export function sessionBottomFollowMode(input: {
   return "follow"
 }
 
-export const SESSION_BOTTOM_FOLLOW_REFLOW_DELAYS_MS = [0, 16, 50, 120, 240, 480, 960, 1_600, 2_400, 3_600, 5_200] as const
+export const SESSION_BOTTOM_FOLLOW_REFLOW_DELAYS_MS = [
+  0, 16, 50, 120, 240, 480, 960, 1_600, 2_400, 3_600, 5_200,
+] as const
 
 export function shouldKeepSessionBottomFollow(input: {
   following: boolean
@@ -559,12 +560,7 @@ export function shouldHandleGlobalSessionInterrupt(input: {
   activeTurn: boolean
   pendingInput?: boolean
 }) {
-  return (
-    input.eventName === "escape" &&
-    !input.defaultPrevented &&
-    input.activeTurn &&
-    !input.pendingInput
-  )
+  return input.eventName === "escape" && !input.defaultPrevented && input.activeTurn && !input.pendingInput
 }
 
 const context = createContext<{
@@ -926,7 +922,8 @@ export function Session() {
       const parts = sync.data.part[message.id] ?? []
       latest ??= parts.findLast((candidate) => candidate.type === "tool" && candidate.tool === "todowrite")?.id
       latestCompleted ??= parts.findLast(
-        (candidate) => candidate.type === "tool" && candidate.tool === "todowrite" && candidate.state.status === "completed",
+        (candidate) =>
+          candidate.type === "tool" && candidate.tool === "todowrite" && candidate.state.status === "completed",
       )?.id
       if (latest && latestCompleted) break
     }
@@ -1039,30 +1036,29 @@ export function Session() {
     if (typeof directory === "string" && directory.length > 0) return directory
     return typeof process.cwd === "function" ? process.cwd() : ""
   })
-  const [topStatsTick, setTopStatsTick] = createSignal(0)
-  onMount(() => {
-    const timer = setInterval(() => setTopStatsTick((tick) => tick + 1), 1500)
-    onCleanup(() => clearInterval(timer))
-  })
   const topPathLabel = createMemo(() => {
     const directory = sessionDirectory()
     return directory ? directory.replace(Global.Path.home, "~") : ""
   })
-  const [topStats] = createResource(
-    () => ({ directory: sessionDirectory(), tick: topStatsTick() }),
-    async ({ directory }) => {
-      if (!directory) return { added: undefined, removed: undefined, files: undefined, branch: "" }
-      const diff = await Process.text(["git", "diff", "--numstat", "HEAD", "--"], { cwd: directory, nothrow: true })
-      const branch = await Process.text(["git", "branch", "--show-current"], { cwd: directory, nothrow: true })
-      const lineStats = diff.code === 0 ? parseGitNumstat(diff.text) : undefined
-      return {
-        added: lineStats?.added,
-        removed: lineStats?.removed,
-        files: lineStats?.files,
-        branch: branch.code === 0 ? branch.text.trim() : "",
-      }
-    },
-  )
+  const [topStats, { refetch: refetchTopStats }] = createResource(sessionDirectory, async (directory) => {
+    if (!directory) return { added: undefined, removed: undefined, files: undefined, branch: "" }
+    const diff = await Process.text(["git", "diff", "--numstat", "HEAD", "--"], { cwd: directory, nothrow: true })
+    const branch = await Process.text(["git", "branch", "--show-current"], { cwd: directory, nothrow: true })
+    const lineStats = diff.code === 0 ? parseGitNumstat(diff.text) : undefined
+    return {
+      added: lineStats?.added,
+      removed: lineStats?.removed,
+      files: lineStats?.files,
+      branch: branch.code === 0 ? branch.text.trim() : "",
+    }
+  })
+  onMount(() => {
+    const timer = setInterval(() => {
+      if (topStats.loading) return
+      void refetchTopStats()
+    }, 15_000)
+    onCleanup(() => clearInterval(timer))
+  })
   const topDiffStats = createMemo(() => {
     const stats = topStats()
     if (!stats || (!stats.files && !stats.added && !stats.removed)) return
@@ -1102,9 +1098,10 @@ export function Session() {
   const sessionTopNavLabel = createMemo(() => {
     const workflowTask = currentWorkflowTask()
     if (workflowTask) {
-      const cycle = workflowTask.sessionIDs.length > 1
-        ? ` ← Prev task ${keybind.print("session_child_cycle_reverse")} → Next task ${keybind.print("session_child_cycle")}`
-        : ""
+      const cycle =
+        workflowTask.sessionIDs.length > 1
+          ? ` ← Prev task ${keybind.print("session_child_cycle_reverse")} → Next task ${keybind.print("session_child_cycle")}`
+          : ""
       return `↑ Workflow ${keybind.print("session_parent")}${cycle}`
     }
     if (session()?.parentID) {
@@ -1114,7 +1111,9 @@ export function Session() {
     const parent = currentLoopWorkflow()?.ownerSessionID ? "Parent" : "Agent View"
     return `↖ ${parent} ${keybind.print("session_parent")}`
   })
-  const topbarNavVisible = createMemo(() => Boolean(currentWorkflowTask() || session()?.parentID || currentLoopWorkflow()))
+  const topbarNavVisible = createMemo(() =>
+    Boolean(currentWorkflowTask() || session()?.parentID || currentLoopWorkflow()),
+  )
   const topbarNavWidth = createMemo(() => (topbarNavVisible() ? Bun.stringWidth(sessionTopNavLabel()) : 0))
   const headerTitleVisible = createMemo(() => tuiCustomization().sessionTitle)
   const headerTitleJustify = createMemo(() => sessionHeaderTitleJustify("center"))
@@ -1445,16 +1444,16 @@ export function Session() {
             const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
             return result.data?.permission
           },
-           write: async () => {
-             const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
-             await sdk.client.session.update(
-               {
-                 sessionID,
-                 permission: Permission.withSessionMode(result.data?.permission ?? [], mode),
-               },
-               { throwOnError: true },
-             )
-           },
+          write: async () => {
+            const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
+            await sdk.client.session.update(
+              {
+                sessionID,
+                permission: Permission.withSessionMode(result.data?.permission ?? [], mode),
+              },
+              { throwOnError: true },
+            )
+          },
         }),
       )
       .then((synced) => {
@@ -2338,10 +2337,7 @@ export function Session() {
         )
           return
         if (!scroll || scroll.isDestroyed) return
-        if (
-          anchor &&
-          (boundary === "top" ? !isScrollboxAtTop(scroll, 1) : !isScrollboxAtBottom(scroll, 1))
-        ) {
+        if (anchor && (boundary === "top" ? !isScrollboxAtTop(scroll, 1) : !isScrollboxAtBottom(scroll, 1))) {
           // The user or the scrollbox already moved away from the paging edge.
           // Do not resurrect an old anchor into the virtual window: that would
           // mount rows around the old page while the physical viewport is at a
@@ -2438,7 +2434,7 @@ export function Session() {
 
   const syncScrollFollowMode = () => {
     if (!scroll || scroll.isDestroyed) return
-    const heldAnchor = followSessionOutput() ? undefined : scrollAnchor ?? captureScrollAnchor()
+    const heldAnchor = followSessionOutput() ? undefined : (scrollAnchor ?? captureScrollAnchor())
     const scrollTop = scroll.scrollTop
     const scrollHeight = scroll.scrollHeight
     const viewportHeight = scroll.viewport.height
@@ -2757,8 +2753,7 @@ export function Session() {
         const assistant = lastAssistant()
         const hasActiveTool = assistant
           ? (sync.data.part[assistant.id] ?? []).some(
-              (part) =>
-                part.type === "tool" && (part.state.status === "pending" || part.state.status === "running"),
+              (part) => part.type === "tool" && (part.state.status === "pending" || part.state.status === "running"),
             )
           : false
         return [
@@ -3229,13 +3224,13 @@ export function Session() {
     on(
       () =>
         [
-        route.sessionID,
-        sessionScrollTop(),
-        followSessionOutput(),
-        pinnedTurnUserMessageID(),
-        stickyUserMessageID(),
-        transcriptRenderKey(),
-      ] as const,
+          route.sessionID,
+          sessionScrollTop(),
+          followSessionOutput(),
+          pinnedTurnUserMessageID(),
+          stickyUserMessageID(),
+          transcriptRenderKey(),
+        ] as const,
       () => trace.trace("render-scroll-state", renderSnapshot(false)),
       { defer: true },
     ),
@@ -3393,11 +3388,12 @@ export function Session() {
     }
     navigate({
       type: "session",
-      sessionID: workflowParentSessionID({
-        sessionID: currentSessionID,
-        parentSessionID,
-        workflows: response?.data ?? [],
-      }) ?? parentSessionID,
+      sessionID:
+        workflowParentSessionID({
+          sessionID: currentSessionID,
+          parentSessionID,
+          workflows: response?.data ?? [],
+        }) ?? parentSessionID,
     })
     dialog.clear()
   }
@@ -4428,7 +4424,11 @@ export function Session() {
                   <box width={topbarLayout().navWidth} overflow="hidden" flexShrink={0}>
                     <SessionTopNav
                       mode={currentWorkflowTask() ? "workflow-task" : session()?.parentID ? "subagent" : "loop"}
-                      canCycle={currentWorkflowTask() ? (currentWorkflowTask()?.sessionIDs.length ?? 0) > 1 : !!session()?.parentID}
+                      canCycle={
+                        currentWorkflowTask()
+                          ? (currentWorkflowTask()?.sessionIDs.length ?? 0) > 1
+                          : !!session()?.parentID
+                      }
                       hasParent={!!currentLoopWorkflow()?.ownerSessionID}
                       width={topbarLayout().navWidth}
                     />
@@ -4534,9 +4534,7 @@ export function Session() {
                         onMouseUp={() => openSessionHistory(visibleMessageIDs().at(0))}
                       >
                         <text fg={theme.text}>↑ Earlier session history</text>
-                        <text fg={theme.textMuted}>
-                          {keybind.print("session_history")} or /history
-                        </text>
+                        <text fg={theme.textMuted}>{keybind.print("session_history")} or /history</text>
                       </box>
                     </Show>
                     <box height={1} />
@@ -4547,150 +4545,150 @@ export function Session() {
                       {(messageID, index) => {
                         return (
                           <Show when={messageByID().get(messageID)}>
-                          {(message) => {
-                            return (
-                            <Switch>
-                              <Match when={message().id === revert()?.messageID}>
-                            {(function () {
-                              const command = useCommandDialog()
-                              const [hover, setHover] = createSignal(false)
-                              const dialog = useDialog()
-
-                              const handleUnrevert = async () => {
-                                const confirmed = await DialogConfirm.show(
-                                  dialog,
-                                  "Confirm Redo",
-                                  "Are you sure you want to restore the reverted messages?",
-                                )
-                                if (confirmed) {
-                                  command.trigger("session.redo")
-                                }
-                              }
-
+                            {(message) => {
                               return (
-                                <box
-                                  onMouseOver={() => setHover(true)}
-                                  onMouseOut={() => setHover(false)}
-                                  onMouseUp={handleUnrevert}
-                                  marginTop={1}
-                                  flexShrink={0}
-                                  border={["left"]}
-                                  customBorderChars={SplitBorder.customBorderChars}
-                                  borderColor={theme.backgroundPanel}
-                                >
-                                  <box
-                                    paddingTop={1}
-                                    paddingBottom={1}
-                                    paddingLeft={2}
-                                    backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
-                                  >
-                                    <text fg={theme.textMuted}>
+                                <Switch>
+                                  <Match when={message().id === revert()?.messageID}>
+                                    {(function () {
+                                      const command = useCommandDialog()
+                                      const [hover, setHover] = createSignal(false)
+                                      const dialog = useDialog()
+
+                                      const handleUnrevert = async () => {
+                                        const confirmed = await DialogConfirm.show(
+                                          dialog,
+                                          "Confirm Redo",
+                                          "Are you sure you want to restore the reverted messages?",
+                                        )
+                                        if (confirmed) {
+                                          command.trigger("session.redo")
+                                        }
+                                      }
+
+                                      return (
+                                        <box
+                                          onMouseOver={() => setHover(true)}
+                                          onMouseOut={() => setHover(false)}
+                                          onMouseUp={handleUnrevert}
+                                          marginTop={1}
+                                          flexShrink={0}
+                                          border={["left"]}
+                                          customBorderChars={SplitBorder.customBorderChars}
+                                          borderColor={theme.backgroundPanel}
+                                        >
+                                          <box
+                                            paddingTop={1}
+                                            paddingBottom={1}
+                                            paddingLeft={2}
+                                            backgroundColor={hover() ? theme.backgroundElement : theme.backgroundPanel}
+                                          >
+                                            <text fg={theme.textMuted}>
                                               {revert()!.reverted.length} message reverted
                                             </text>
                                             <text fg={theme.textMuted}>
                                               <span style={{ fg: theme.text }}>{keybind.print("messages_redo")}</span>{" "}
                                               or /redo to restore
-                                    </text>
-                                    <Show when={revert()!.diffFiles?.length}>
-                                      <box marginTop={1}>
-                                        <For each={revert()!.diffFiles}>
-                                          {(file) => (
-                                            <text fg={theme.text}>
-                                              {file.filename}
-                                              <Show when={file.additions > 0}>
-                                                <span style={{ fg: theme.diffAdded }}> +{file.additions}</span>
-                                              </Show>
-                                              <Show when={file.deletions > 0}>
+                                            </text>
+                                            <Show when={revert()!.diffFiles?.length}>
+                                              <box marginTop={1}>
+                                                <For each={revert()!.diffFiles}>
+                                                  {(file) => (
+                                                    <text fg={theme.text}>
+                                                      {file.filename}
+                                                      <Show when={file.additions > 0}>
+                                                        <span style={{ fg: theme.diffAdded }}> +{file.additions}</span>
+                                                      </Show>
+                                                      <Show when={file.deletions > 0}>
                                                         <span style={{ fg: theme.diffRemoved }}>
                                                           {" "}
                                                           -{file.deletions}
                                                         </span>
-                                              </Show>
-                                            </text>
-                                          )}
-                                        </For>
-                                      </box>
-                                    </Show>
-                                  </box>
-                                </box>
+                                                      </Show>
+                                                    </text>
+                                                  )}
+                                                </For>
+                                              </box>
+                                            </Show>
+                                          </box>
+                                        </box>
+                                      )
+                                    })()}
+                                  </Match>
+                                  <Match when={revert()?.messageID && message().id >= revert()!.messageID}>
+                                    <></>
+                                  </Match>
+                                  <Match when={queuedMessageIDs().has(message().id)}>
+                                    <UserMessage
+                                      index={virtualWindow().start + index()}
+                                      message={message() as UserMessage}
+                                      parts={sync.data.part[message().id] ?? []}
+                                      queued
+                                      sticky
+                                      anchorID={`queued-${message().id}`}
+                                      onSendNow={() => void sendQueuedNow(message().id)}
+                                      sendNowPending={sendNowMessageID() === message().id}
+                                      simpleHistory={false}
+                                      compactSubagentPrompt={Boolean(session()?.parentID)}
+                                      onMouseUp={() => {
+                                        if (renderer.getSelection()?.getSelectedText()) return
+                                        dialog.replace(() => (
+                                          <DialogMessage
+                                            messageID={message().id}
+                                            sessionID={route.sessionID}
+                                            queued
+                                            setPrompt={(promptInfo) => prompt?.set(promptInfo)}
+                                            onEditPrompt={editQueuedPrompt}
+                                          />
+                                        ))
+                                      }}
+                                    />
+                                  </Match>
+                                  <Match when={message().role === "user" && !queuedMessageIDs().has(message().id)}>
+                                    <UserMessage
+                                      index={virtualWindow().start + index()}
+                                      onMouseUp={() => {
+                                        if (renderer.getSelection()?.getSelectedText()) return
+                                        dialog.replace(() => (
+                                          <DialogMessage
+                                            messageID={message().id}
+                                            sessionID={route.sessionID}
+                                            setPrompt={(promptInfo) => prompt?.set(promptInfo)}
+                                          />
+                                        ))
+                                      }}
+                                      message={message() as UserMessage}
+                                      parts={sync.data.part[message().id] ?? []}
+                                      onSendNow={() => void sendQueuedNow(message().id)}
+                                      sendNowPending={sendNowMessageID() === message().id}
+                                      simpleHistory={
+                                        !showCompactedToolCalls() &&
+                                        shouldUseSimpleSessionHistory({
+                                          messageID: message().id,
+                                          fullStartID: fullHistoryStartID(),
+                                        })
+                                      }
+                                      compactSubagentPrompt={Boolean(session()?.parentID)}
+                                    />
+                                  </Match>
+                                  <Match when={message().role === "assistant"}>
+                                    <box id={message().id} width="100%" flexDirection="column" flexShrink={0}>
+                                      <AssistantMessage
+                                        last={lastAssistant()?.id === message().id}
+                                        message={message() as AssistantMessage}
+                                        parts={sync.data.part[message().id] ?? []}
+                                        simpleHistory={
+                                          !showCompactedToolCalls() &&
+                                          shouldUseSimpleSessionHistory({
+                                            messageID: message().id,
+                                            fullStartID: fullHistoryStartID(),
+                                          })
+                                        }
+                                      />
+                                    </box>
+                                  </Match>
+                                </Switch>
                               )
-                            })()}
-                          </Match>
-                          <Match when={revert()?.messageID && message().id >= revert()!.messageID}>
-                            <></>
-                          </Match>
-                           <Match when={queuedMessageIDs().has(message().id)}>
-                             <UserMessage
-                               index={virtualWindow().start + index()}
-                               message={message() as UserMessage}
-                               parts={sync.data.part[message().id] ?? []}
-                               queued
-                               sticky
-                               anchorID={`queued-${message().id}`}
-                               onSendNow={() => void sendQueuedNow(message().id)}
-                               sendNowPending={sendNowMessageID() === message().id}
-                               simpleHistory={false}
-                               compactSubagentPrompt={Boolean(session()?.parentID)}
-                               onMouseUp={() => {
-                                 if (renderer.getSelection()?.getSelectedText()) return
-                                 dialog.replace(() => (
-                                   <DialogMessage
-                                     messageID={message().id}
-                                     sessionID={route.sessionID}
-                                     queued
-                                     setPrompt={(promptInfo) => prompt?.set(promptInfo)}
-                                     onEditPrompt={editQueuedPrompt}
-                                   />
-                                 ))
-                               }}
-                             />
-                           </Match>
-                           <Match when={message().role === "user" && !queuedMessageIDs().has(message().id)}>
-                            <UserMessage
-                              index={virtualWindow().start + index()}
-                              onMouseUp={() => {
-                                if (renderer.getSelection()?.getSelectedText()) return
-                                dialog.replace(() => (
-                                  <DialogMessage
-                                    messageID={message().id}
-                                    sessionID={route.sessionID}
-                                    setPrompt={(promptInfo) => prompt?.set(promptInfo)}
-                                  />
-                                ))
-                              }}
-                              message={message() as UserMessage}
-                              parts={sync.data.part[message().id] ?? []}
-                              onSendNow={() => void sendQueuedNow(message().id)}
-                              sendNowPending={sendNowMessageID() === message().id}
-                              simpleHistory={
-                                !showCompactedToolCalls() &&
-                                shouldUseSimpleSessionHistory({
-                                  messageID: message().id,
-                                  fullStartID: fullHistoryStartID(),
-                                })
-                              }
-                              compactSubagentPrompt={Boolean(session()?.parentID)}
-                            />
-                           </Match>
-                          <Match when={message().role === "assistant"}>
-                            <box id={message().id} width="100%" flexDirection="column" flexShrink={0}>
-                              <AssistantMessage
-                                last={lastAssistant()?.id === message().id}
-                                message={message() as AssistantMessage}
-                                parts={sync.data.part[message().id] ?? []}
-                                simpleHistory={
-                                  !showCompactedToolCalls() &&
-                                  shouldUseSimpleSessionHistory({
-                                    messageID: message().id,
-                                    fullStartID: fullHistoryStartID(),
-                                  })
-                                }
-                              />
-                            </box>
-                          </Match>
-                            </Switch>
-                            )
-                          }}
+                            }}
                           </Show>
                         )
                       }}
@@ -4761,47 +4759,47 @@ export function Session() {
               {/* Do not keep the hidden prompt subtree mounted while a question/permission owns input. */}
               <Show when={visible()}>
                 <box position="relative" zIndex={2500} overflow="visible" width="100%">
-                <TuiPluginRuntime.Slot
-                  name="session_prompt"
-                  mode="replace"
-                  session_id={route.sessionID}
-                  visible={visible()}
-                  disabled={promptDisabled()}
-                  on_submit={handlePromptSubmit}
-                  ref={bind}
-                >
-                  {
-                    renderMendEditor({
-                      sessionID: route.sessionID,
-                      permissionMode: permissionMode(),
-                      permissionModeLabel: permissionModeLabel(),
-                      permissionPending: permissionPendingCount(),
-                      visible: visible(),
-                      disabled: promptDisabled(),
-                      ref: bind,
-                      onSubmit: handlePromptSubmit,
-                      right: <TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />,
-                      defaultEditor: () => (
-                        <Prompt
-                          visible={visible()}
-                          ref={bind}
-                          disabled={promptDisabled()}
-                          historyScope={`session:${route.sessionID}`}
-                          historyItems={sessionPromptHistory}
-                          workspaceID={project.workspace.current()}
-                          sessionID={route.sessionID}
-                          permissionMode={permissionMode()}
-                          permissionModeLabel={permissionModeLabel()}
-                          permissionPending={permissionPendingCount()}
-                          onInterruptChange={setSessionInterruptRequested}
-                          onSubmit={handlePromptSubmit}
-                          right={<TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
-                        />
-                      ),
-                    }) as any
-                  }
-                </TuiPluginRuntime.Slot>
-              </box>
+                  <TuiPluginRuntime.Slot
+                    name="session_prompt"
+                    mode="replace"
+                    session_id={route.sessionID}
+                    visible={visible()}
+                    disabled={promptDisabled()}
+                    on_submit={handlePromptSubmit}
+                    ref={bind}
+                  >
+                    {
+                      renderMendEditor({
+                        sessionID: route.sessionID,
+                        permissionMode: permissionMode(),
+                        permissionModeLabel: permissionModeLabel(),
+                        permissionPending: permissionPendingCount(),
+                        visible: visible(),
+                        disabled: promptDisabled(),
+                        ref: bind,
+                        onSubmit: handlePromptSubmit,
+                        right: <TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />,
+                        defaultEditor: () => (
+                          <Prompt
+                            visible={visible()}
+                            ref={bind}
+                            disabled={promptDisabled()}
+                            historyScope={`session:${route.sessionID}`}
+                            historyItems={sessionPromptHistory}
+                            workspaceID={project.workspace.current()}
+                            sessionID={route.sessionID}
+                            permissionMode={permissionMode()}
+                            permissionModeLabel={permissionModeLabel()}
+                            permissionPending={permissionPendingCount()}
+                            onInterruptChange={setSessionInterruptRequested}
+                            onSubmit={handlePromptSubmit}
+                            right={<TuiPluginRuntime.Slot name="session_prompt_right" session_id={route.sessionID} />}
+                          />
+                        ),
+                      }) as any
+                    }
+                  </TuiPluginRuntime.Slot>
+                </box>
               </Show>
               <For each={listMendWidgets("belowEditor")}>{(item) => <RenderMendWidget item={item} />}</For>
             </box>
@@ -4867,20 +4865,34 @@ function SessionTopMetrics(props: {
   )
 }
 
-function SessionTopNav(props: { mode: "subagent" | "workflow-task" | "loop"; canCycle?: boolean; hasParent?: boolean; width: number }) {
+function SessionTopNav(props: {
+  mode: "subagent" | "workflow-task" | "loop"
+  canCycle?: boolean
+  hasParent?: boolean
+  width: number
+}) {
   const { theme } = useTheme()
   const keybind = useKeybind()
   const command = useCommandDialog()
   const [hover, setHover] = createSignal<"parent" | "prev" | "next" | null>(null)
-  const items = createMemo<(SessionTopbarNavItem & {
-    id: "parent" | "prev" | "next"
-    commandID: "session.parent" | "session.child.previous" | "session.child.next"
-  })[]>(() => {
+  const items = createMemo<
+    (SessionTopbarNavItem & {
+      id: "parent" | "prev" | "next"
+      commandID: "session.parent" | "session.child.previous" | "session.child.next"
+    })[]
+  >(() => {
     const all = [
       {
         id: "parent" as const,
         icon: props.mode === "workflow-task" ? "↑" : "↖",
-        label: props.mode === "workflow-task" ? "Workflow" : props.mode === "loop" ? (props.hasParent ? "Parent" : "Agent View") : "Parent",
+        label:
+          props.mode === "workflow-task"
+            ? "Workflow"
+            : props.mode === "loop"
+              ? props.hasParent
+                ? "Parent"
+                : "Agent View"
+              : "Parent",
         key: keybind.print("session_parent"),
         commandID: "session.parent" as const,
       },
@@ -5061,7 +5073,8 @@ function sessionLiveStateLabel(input: {
         input.status?.type === "retry" ||
         Boolean(lastAssistant && !lastAssistant.time.completed),
     })
-  ) return SESSION_AGENT_STATE_UNKNOWN_MESSAGE
+  )
+    return SESSION_AGENT_STATE_UNKNOWN_MESSAGE
   if (lastUser && (!lastAssistant || lastAssistant.time.created < lastUser.time.created)) return "waiting"
   if (lastAssistant) return "responded"
   return "ready"
@@ -5756,19 +5769,19 @@ function CompactionCard(props: {
       transcriptPreview={transcriptPreview()}
       summaryContent={
         summaryContent() ? (
-        <box paddingTop={1}>
-          <StyledPlanMarkdown
-            syntaxStyle={syntax()}
-            width={contentWidth()}
-            content={summaryContent()}
-            tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
-            conceal={true}
-            fg={theme.text}
-            bg={theme.backgroundPanel}
-            stableTextMode={false}
-            colorizeHex={true}
-          />
-        </box>
+          <box paddingTop={1}>
+            <StyledPlanMarkdown
+              syntaxStyle={syntax()}
+              width={contentWidth()}
+              content={summaryContent()}
+              tableOptions={{ style: "grid", widthMode: "full", columnFitter: "balanced", wrapMode: "char" }}
+              conceal={true}
+              fg={theme.text}
+              bg={theme.backgroundPanel}
+              stableTextMode={false}
+              colorizeHex={true}
+            />
+          </box>
         ) : undefined
       }
       scratchpad={
@@ -5852,6 +5865,17 @@ function UserMessage(props: {
   const queuedFg = createMemo(() => selectedForeground(theme, color()))
   const sendNowBackground = createMemo(() => (props.sendNowPending ? theme.backgroundElement : theme.accent))
   const sendNowForeground = createMemo(() => selectedForeground(theme, sendNowBackground()))
+  const peerMessage = createMemo(() => {
+    const part = props.parts.find(
+      (item) => item.type === "text" && (item.metadata as Record<string, unknown> | undefined)?.kind === "peer_message",
+    )
+    if (!part || part.type !== "text") return undefined
+    const metadata = part.metadata as Record<string, unknown> | undefined
+    return {
+      sourceTitle: typeof metadata?.sourceTitle === "string" ? metadata.sourceTitle : undefined,
+      sourceSessionID: typeof metadata?.sourceSessionID === "string" ? metadata.sourceSessionID : undefined,
+    }
+  })
   const subagentInitialPrompt = createMemo(() => props.compactSubagentPrompt && props.index === 0)
   const collapsedDisplayText = createMemo(() =>
     userMessageDisplayText(
@@ -5863,7 +5887,10 @@ function UserMessage(props: {
           : undefined,
     ),
   )
-  const effectiveExpandedText = createMemo(() => !props.sticky && !props.simpleHistory && expandedText())
+  // Keep the expanded view available for compacted history and the sticky
+  // header too. The viewport is bounded below, so opening a long message does
+  // not make the transcript grow without limit or silently discard its tail.
+  const effectiveExpandedText = createMemo(() => expandedText())
   const expandedViewportRows = createMemo(() => Math.max(6, Math.min(18, Math.floor(dimensions().height * 0.3))))
   const expandedLines = createMemo(() => fullText().split("\n"))
   const expandedMaxOffset = createMemo(() => Math.max(0, expandedLines().length - expandedViewportRows()))
@@ -5960,9 +5987,9 @@ function UserMessage(props: {
   )
   const latestCompactionMessageID = createMemo(
     () =>
-    (sync.data.message[props.message.sessionID] ?? [])
-      .filter((message) => message.role === "user")
-      .findLast((message) => (sync.data.part[message.id] ?? []).some((part) => part.type === "compaction"))?.id,
+      (sync.data.message[props.message.sessionID] ?? [])
+        .filter((message) => message.role === "user")
+        .findLast((message) => (sync.data.part[message.id] ?? []).some((part) => part.type === "compaction"))?.id,
   )
   const showCompactionCard = createMemo(() => props.message.id === latestCompactionMessageID())
   const visibleCompaction = createMemo(() => (showCompactionCard() ? compaction() : undefined))
@@ -6020,7 +6047,12 @@ function UserMessage(props: {
             <box flexDirection="row" justifyContent="space-between" width="100%" gap={2}>
               <box flexDirection="row" flexGrow={1} minWidth={0} overflow="hidden">
                 <text fg={theme.textMuted} wrapMode="none">
-                  <span style={{ fg: color() }}>●</span> {subagentInitialPrompt() ? "Subagent prompt" : "You"}
+                  <span style={{ fg: color() }}>●</span>{" "}
+                  {peerMessage()
+                    ? `Peer · ${peerMessage()!.sourceTitle ?? peerMessage()!.sourceSessionID ?? "session"}`
+                    : subagentInitialPrompt()
+                      ? "Subagent prompt"
+                      : "You"}
                   <Show when={queued()}>
                     <span> · {queuedPromptWaitLabel(sync.data.config.queue?.mode)}</span>
                   </Show>
@@ -6122,11 +6154,7 @@ function UserMessage(props: {
                 </text>
               </box>
             </Show>
-            <Show
-              when={
-                !effectiveExpandedText() && !props.sticky && !props.simpleHistory && collapsedDisplayText().compacted
-              }
-            >
+            <Show when={!effectiveExpandedText() && collapsedDisplayText().compacted}>
               <box onMouseDown={consumeMouseEvent} onMouseUp={consumeMouseEvent}>
                 <text
                   fg={theme.textMuted}
@@ -6149,11 +6177,7 @@ function UserMessage(props: {
                 </text>
               </box>
             </Show>
-            <Show
-              when={
-                effectiveExpandedText() && !props.sticky && !props.simpleHistory && collapsedDisplayText().compacted
-              }
-            >
+            <Show when={effectiveExpandedText() && collapsedDisplayText().compacted}>
               <box onMouseDown={consumeMouseEvent} onMouseUp={consumeMouseEvent}>
                 <text
                   fg={theme.textMuted}
@@ -6663,6 +6687,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
             <Show when={content()}>
               {(body) => (
                 <scrollbox
+                  height={reasoningViewportHeight(body(), fullReasoningMaxHeight())}
                   maxHeight={fullReasoningMaxHeight()}
                   minHeight={1}
                   stickyScroll={streaming()}
@@ -6887,7 +6912,8 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
     if (ctx.showDetails()) return false
     if (props.part.tool === "image_gen") return false
     if (props.part.tool === "loop") return false
-    if (props.part.tool === "workflow" && shouldRenderSessionWorkflowCard(mend.profile.presentation.profile)) return false
+    if (props.part.tool === "workflow" && shouldRenderSessionWorkflowCard(mend.profile.presentation.profile))
+      return false
     if (props.part.state.status !== "completed") return false
     return true
   })
@@ -6984,7 +7010,9 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         >
           <Loop {...toolprops} />
         </Match>
-        <Match when={props.part.tool === "workflow" && shouldRenderSessionWorkflowCard(mend.profile.presentation.profile)}>
+        <Match
+          when={props.part.tool === "workflow" && shouldRenderSessionWorkflowCard(mend.profile.presentation.profile)}
+        >
           <Workflow {...toolprops} />
         </Match>
         <Match when={props.part.tool === "memory_graph"}>
@@ -7075,17 +7103,9 @@ function ImageGen(props: ToolProps<any>) {
     )
     return imageGenerationCanvasSize(available, imageWait())
   })
-  const activityFieldWidth = createMemo(() =>
-    Math.max(8, activityCanvas().width - 2 - imageWait().canvas.paddingX * 2),
-  )
+  const activityFieldWidth = createMemo(() => Math.max(8, activityCanvas().width - 2 - imageWait().canvas.paddingX * 2))
   const activityFieldHeight = createMemo(() =>
-    Math.max(
-      4,
-      activityCanvas().height -
-        2 -
-        imageWait().canvas.paddingY * 2 -
-        (imageWait().showMetadata ? 2 : 0),
-    ),
+    Math.max(4, activityCanvas().height - 2 - imageWait().canvas.paddingY * 2 - (imageWait().showMetadata ? 2 : 0)),
   )
   const activityFrameCount = createMemo(() => imageGenerationWaitFrameCount(imageWait()))
   const activityLines = createMemo(() =>
@@ -7180,9 +7200,7 @@ function ImageGen(props: ToolProps<any>) {
               <For each={activityLines()}>{(line) => <text fg={activityLineColor(line)}>{line}</text>}</For>
               <Show when={imageWait().showMetadata}>
                 <text fg={theme.textMuted}>{generationModel() ?? "configured image model"}</text>
-                <text fg={theme.textMuted}>
-                  size {imageGenMetadataString(metadata(), "requestedSize") ?? "auto"}
-                </text>
+                <text fg={theme.textMuted}>size {imageGenMetadataString(metadata(), "requestedSize") ?? "auto"}</text>
               </Show>
             </box>
           </box>
@@ -7209,7 +7227,9 @@ function ImageGen(props: ToolProps<any>) {
           >
             <text fg={theme.text}>{summary()}</text>
             <Show when={visualCaption()}>{(value) => <text fg={theme.textMuted}>Caption: {value()}</text>}</Show>
-            <Show when={captionError()}>{(value) => <text fg={theme.warning}>Caption unavailable: {value()}</text>}</Show>
+            <Show when={captionError()}>
+              {(value) => <text fg={theme.warning}>Caption unavailable: {value()}</text>}
+            </Show>
             <Show when={artifactPath()}>
               {(value) => (
                 <>
@@ -7217,7 +7237,10 @@ function ImageGen(props: ToolProps<any>) {
                     {value()}
                   </text>
                   <box flexDirection="row" gap={2}>
-                    <ImageGenToolAction label="Open Preview" onPress={() => void openArtifact(value(), "Opened preview")} />
+                    <ImageGenToolAction
+                      label="Open Preview"
+                      onPress={() => void openArtifact(value(), "Opened preview")}
+                    />
                     <ImageGenToolAction
                       label="Reveal Folder"
                       onPress={() => void openArtifact(path.dirname(value()), "Opened folder")}
@@ -8672,10 +8695,10 @@ function MemoryGraph(props: ToolProps<any>) {
   })
   const openGraph = () =>
     route.navigate({
-    type: "memory",
-    view: "graph",
-    returnTo: route.data.type === "session" ? { type: "session", sessionID: route.data.sessionID } : { type: "home" },
-  })
+      type: "memory",
+      view: "graph",
+      returnTo: route.data.type === "session" ? { type: "session", sessionID: route.data.sessionID } : { type: "home" },
+    })
 
   return (
     <Show when={snapshot()} fallback={<GenericTool {...props} />}>
@@ -8732,7 +8755,13 @@ function workflowToolReceipt(snapshot: WorkflowSnapshot) {
       createdAt: workflowToolNumber(snapshot.run.createdAt),
       updatedAt: workflowToolNumber(snapshot.run.updatedAt),
     },
-    phases: snapshot.phases.map((phase) => ({ state: phase.state, counts: phase.counts, id: phase.id, ordinal: phase.ordinal, name: phase.name })),
+    phases: snapshot.phases.map((phase) => ({
+      state: phase.state,
+      counts: phase.counts,
+      id: phase.id,
+      ordinal: phase.ordinal,
+      name: phase.name,
+    })),
     tasks: snapshot.tasks.map((task) => ({
       id: task.id,
       name: task.name,
@@ -8741,7 +8770,11 @@ function workflowToolReceipt(snapshot: WorkflowSnapshot) {
       blocker: task.blocker,
       attempt: task.attempt,
     })),
-    events: snapshot.events.map((event) => ({ type: event.type, summary: event.summary, createdAt: workflowToolNumber(event.createdAt) })),
+    events: snapshot.events.map((event) => ({
+      type: event.type,
+      summary: event.summary,
+      createdAt: workflowToolNumber(event.createdAt),
+    })),
     usage: snapshot.usage
       ? {
           inputTokens: workflowToolNumber(snapshot.usage.inputTokens),
@@ -8765,12 +8798,15 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
   const [activityFrame, setActivityFrame] = createSignal(0)
   const [hover, setHover] = createSignal(false)
   const runID = createMemo(() => (typeof props.metadata.runID === "string" ? props.metadata.runID : undefined))
-  const [snapshot] = createResource(() => `${runID() ?? ""}:${refresh()}`, async () => {
-    const id = runID()
-    if (!id) return undefined
-    const response = await sdk.client.workflow.show({ runID: id }).catch(() => undefined)
-    return response?.data
-  })
+  const [snapshot] = createResource(
+    () => `${runID() ?? ""}:${refresh()}`,
+    async () => {
+      const id = runID()
+      if (!id) return undefined
+      const response = await sdk.client.workflow.show({ runID: id }).catch(() => undefined)
+      return response?.data
+    },
+  )
   const live = createMemo(() => snapshot.latest ?? snapshot())
   const receipt = createMemo(() => {
     const current = live()
@@ -8784,9 +8820,25 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
     }),
   )
   const phaseDiagram = createMemo(() => workflowReceiptPhaseDiagram({ phases: phases() }, activityFrame(), 8))
-  const state = createMemo(() => live()?.run.state ?? props.metadata.state ?? (props.part.state.status === "running" ? "working" : props.part.state.status))
-  const title = createMemo(() => live()?.definition.name || props.input.plan?.name || (typeof props.input.name === "string" ? props.input.name : "Workflow"))
-  const objective = createMemo(() => live()?.revision.plan.objective || props.metadata.objective || props.input.plan?.objective || "Declarative workflow execution")
+  const state = createMemo(
+    () =>
+      live()?.run.state ??
+      props.metadata.state ??
+      (props.part.state.status === "running" ? "working" : props.part.state.status),
+  )
+  const title = createMemo(
+    () =>
+      live()?.definition.name ||
+      props.input.plan?.name ||
+      (typeof props.input.name === "string" ? props.input.name : "Workflow"),
+  )
+  const objective = createMemo(
+    () =>
+      live()?.revision.plan.objective ||
+      props.metadata.objective ||
+      props.input.plan?.objective ||
+      "Declarative workflow execution",
+  )
   const panelWidth = createMemo(() => Math.max(52, Math.min(92, dimensions().width - 12)))
   const rows = createMemo(() => {
     const current = receipt()
@@ -8807,11 +8859,16 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
       ["tasks", workflowReceiptProgress(current)],
       ["active", `${counts.working} working · ${counts.queued} queued`],
       ["elapsed", `${Math.round(workflowReceiptElapsed(current) / 1000)}s`],
-      ["model", model ? `${model.providerID}/${model.modelID}${model.variant ? `#${model.variant}` : ""}` : "task route"],
+      [
+        "model",
+        model ? `${model.providerID}/${model.modelID}${model.variant ? `#${model.variant}` : ""}` : "task route",
+      ],
       ["usage", workflowReceiptUsage(current)],
     ] as Array<[string, string]>
   })
-  const nextAction = createMemo(() => receipt() ? workflowReceiptNextAction(receipt()!) : "Open the workflow monitor for the latest snapshot.")
+  const nextAction = createMemo(() =>
+    receipt() ? workflowReceiptNextAction(receipt()!) : "Open the workflow monitor for the latest snapshot.",
+  )
 
   onMount(() => {
     const animation = setInterval(() => {
@@ -8865,7 +8922,13 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
     <BlockTool
       title="Workflow"
       icon={toolPresentationIcon("workflow")}
-      titleColor={state() === "completed" ? theme.success : state() === "failed" || state() === "blocked" ? theme.error : theme.secondary}
+      titleColor={
+        state() === "completed"
+          ? theme.success
+          : state() === "failed" || state() === "blocked"
+            ? theme.error
+            : theme.secondary
+      }
       contentGap={0}
       part={props.part}
       spinner={props.part.state.status === "running" && !runID()}
@@ -8885,25 +8948,39 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
           onMouseOut={() => setHover(false)}
         >
           <box flexDirection="row">
-            <text fg={theme.secondary} attributes={TextAttributes.BOLD}>{toolPresentationIcon("workflow")} {Locale.truncateMiddle(title(), Math.max(18, panelWidth() - 24))}</text>
+            <text fg={theme.secondary} attributes={TextAttributes.BOLD}>
+              {toolPresentationIcon("workflow")} {Locale.truncateMiddle(title(), Math.max(18, panelWidth() - 24))}
+            </text>
             <box flexGrow={1} />
-            <text fg={theme.secondary}>{workflowReceiptStateMarker(state(), activityFrame())} {workflowReceiptStateLabel(state())}</text>
+            <text fg={theme.secondary}>
+              {workflowReceiptStateMarker(state(), activityFrame())} {workflowReceiptStateLabel(state())}
+            </text>
           </box>
           <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
             <For each={rows()}>
               {(row) => (
                 <box flexDirection="row">
-                  <text fg={theme.textMuted} wrapMode="none">{row[0].padEnd(10)}</text>
-                  <text fg={theme.text} wrapMode="none">{Locale.truncateMiddle(row[1], Math.max(18, panelWidth() - 24))}</text>
+                  <text fg={theme.textMuted} wrapMode="none">
+                    {row[0].padEnd(10)}
+                  </text>
+                  <text fg={theme.text} wrapMode="none">
+                    {Locale.truncateMiddle(row[1], Math.max(18, panelWidth() - 24))}
+                  </text>
                 </box>
               )}
             </For>
-            <text fg={theme.textMuted} wrapMode="word">{Locale.truncate(objective(), Math.max(24, panelWidth() - 8))}</text>
-            <text fg={theme.warning} wrapMode="word">next: {Locale.truncate(nextAction(), Math.max(24, panelWidth() - 14))}</text>
+            <text fg={theme.textMuted} wrapMode="word">
+              {Locale.truncate(objective(), Math.max(24, panelWidth() - 8))}
+            </text>
+            <text fg={theme.warning} wrapMode="word">
+              next: {Locale.truncate(nextAction(), Math.max(24, panelWidth() - 14))}
+            </text>
           </box>
           <Show when={phaseDiagram().length}>
             <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="column">
-              <text fg={theme.primary} attributes={TextAttributes.BOLD}>PHASE FLOW</text>
+              <text fg={theme.primary} attributes={TextAttributes.BOLD}>
+                PHASE FLOW
+              </text>
               <For each={phaseDiagram()}>
                 {(row) => (
                   <text
@@ -8927,11 +9004,21 @@ function Workflow(props: ToolProps<typeof WorkflowTool>) {
             </box>
           </Show>
           <box border={["top"]} borderColor={theme.border} marginTop={1} paddingTop={1} flexDirection="row">
-            <text fg={hover() ? theme.secondary : theme.textMuted} onMouseUp={handleOpenTarget}>open monitor</text>
+            <text fg={hover() ? theme.secondary : theme.textMuted} onMouseUp={handleOpenTarget}>
+              open monitor
+            </text>
             <box flexGrow={1} />
-            <text fg={theme.textMuted} onMouseUp={() => void control("pause").catch((error) => toast.error(error))}>[pause]</text>
-            <text fg={theme.textMuted} onMouseUp={() => void control("resume").catch((error) => toast.error(error))}> [resume]</text>
-            <text fg={theme.textMuted} onMouseUp={() => void control("stop").catch((error) => toast.error(error))}> [stop]</text>
+            <text fg={theme.textMuted} onMouseUp={() => void control("pause").catch((error) => toast.error(error))}>
+              [pause]
+            </text>
+            <text fg={theme.textMuted} onMouseUp={() => void control("resume").catch((error) => toast.error(error))}>
+              {" "}
+              [resume]
+            </text>
+            <text fg={theme.textMuted} onMouseUp={() => void control("stop").catch((error) => toast.error(error))}>
+              {" "}
+              [stop]
+            </text>
           </box>
         </box>
       </box>

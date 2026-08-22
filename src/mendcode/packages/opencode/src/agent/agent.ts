@@ -15,6 +15,7 @@ import PROMPT_TITLE from "./prompt/title.txt"
 import { Permission } from "@/permission"
 import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@mendcode/core/global"
+import { AppFileSystem } from "@mendcode/core/filesystem"
 import path from "path"
 import { Plugin } from "@/plugin"
 import { Skill } from "../skill"
@@ -81,10 +82,12 @@ export const layer = Layer.effect(
       Effect.fn("Agent.state")(function* (ctx) {
         const cfg = yield* config.get()
         const skillDirs = yield* skill.dirs()
+        const whitelistedRoots = [Global.Path.tmp, ...skillDirs]
         const whitelistedDirs = [
           Truncate.GLOB,
-          path.join(Global.Path.tmp, "*"),
-          ...skillDirs.map((dir) => path.join(dir, "*")),
+          ...new Set(
+            whitelistedRoots.flatMap((dir) => [dir, AppFileSystem.resolve(dir)]).map((dir) => path.join(dir, "*")),
+          ),
         ]
 
         const defaults = Permission.fromConfig({

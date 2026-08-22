@@ -351,6 +351,26 @@ export type AgentCommand =
         text: string
       }
     }
+  | {
+      id: string
+      sourceSessionID: string
+      targetSessionID: string
+      state: "pending" | "accepted" | "running" | "completed" | "rejected" | "failed" | "expired"
+      permissions: Array<string>
+      policy: AgentCommandPolicy
+      error?: string
+      result?: string
+      expiresAt?: number
+      time: {
+        created: number
+        updated: number
+      }
+      type: "peer_message"
+      payload: {
+        text: string
+        sourceTitle?: string
+      }
+    }
 
 export type SessionStatus =
   | {
@@ -361,6 +381,11 @@ export type SessionStatus =
       attempt: number
       message: string
       next: number
+      recovery?: {
+        kind: "stale-session"
+        reason: string
+        tool?: string
+      }
     }
   | {
       type: "busy"
@@ -654,6 +679,7 @@ export type LoopWorkflow = {
     agent?: string
     evaluation?: {
       mode?: "legacy" | "deterministic" | "independent"
+      confirmation?: "same-run" | "next-run"
       evaluatorAgent?: string
       requireIndependentForCompletion?: boolean
       allowWorkerSelfComplete?: boolean
@@ -824,6 +850,41 @@ export type LoopRun = {
       time: number
     }
   }>
+  completion?: {
+    status: "candidate" | "auditing" | "passed" | "rejected" | "blocked"
+    generation: number
+    sourceID: string
+    auditAttempts: number
+    candidateFingerprint?: string
+    summary?: string
+    failedCriteria?: Array<string>
+    receipt?: {
+      generation: number
+      status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+      summary: string
+      criteria: Array<{
+        id: string
+        status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+        summary: string
+        evidence: Array<{
+          id: string
+          kind: "command-output" | "artifact" | "state" | "observation" | "human-approval"
+          summary: string
+          source?: string
+        }>
+      }>
+      fingerprintBefore?: string
+      fingerprintAfter?: string
+      recommendedNextAction?: string
+      createdAt: number
+    }
+    auditLease?: {
+      holder: string
+      expiresAt: number
+    }
+    createdAt: number
+    updatedAt: number
+  }
   retry?: {
     attempt: number
     backoffMs?: number
@@ -2295,7 +2356,7 @@ export type AgentViewMetadataPatch = {
 }
 
 export type AgentCommandPolicyMatrixItem = {
-  type: "request_summary" | "rename" | "tag" | "pause_after_turn" | "stop" | "send_message"
+  type: "request_summary" | "rename" | "tag" | "pause_after_turn" | "stop" | "send_message" | "peer_message"
   decision: "safe_auto" | "same_workspace" | "approval_required" | "denied"
   permissions: Array<string>
   reason: string
@@ -2345,6 +2406,14 @@ export type AgentCommandCreate =
   | {
       sourceSessionID: string
       type: "send_message"
+      payload: {
+        text: string
+      }
+      expiresAt?: number
+    }
+  | {
+      sourceSessionID: string
+      type: "peer_message"
       payload: {
         text: string
       }
@@ -2560,6 +2629,7 @@ export type LoopWorkflow1 = {
     agent?: string
     evaluation?: {
       mode?: "legacy" | "deterministic" | "independent"
+      confirmation?: "same-run" | "next-run"
       evaluatorAgent?: string
       requireIndependentForCompletion?: boolean
       allowWorkerSelfComplete?: boolean
@@ -2730,6 +2800,41 @@ export type LoopRun1 = {
       time: number
     }
   }>
+  completion?: {
+    status: "candidate" | "auditing" | "passed" | "rejected" | "blocked"
+    generation: number
+    sourceID: string
+    auditAttempts: number
+    candidateFingerprint?: string
+    summary?: string
+    failedCriteria?: Array<string>
+    receipt?: {
+      generation: number
+      status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+      summary: string
+      criteria: Array<{
+        id: string
+        status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+        summary: string
+        evidence: Array<{
+          id: string
+          kind: "command-output" | "artifact" | "state" | "observation" | "human-approval"
+          summary: string
+          source?: string
+        }>
+      }>
+      fingerprintBefore?: string
+      fingerprintAfter?: string
+      recommendedNextAction?: string
+      createdAt: number
+    }
+    auditLease?: {
+      holder: string
+      expiresAt: number
+    }
+    createdAt: number
+    updatedAt: number
+  }
   retry?: {
     attempt: number
     backoffMs?: number
@@ -4678,6 +4783,11 @@ export type GlobalDiagnosticsMemoryResponses = {
     external: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     arrayBuffers: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
     uptimeSeconds: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    memoryGuardrail: {
+      status: "ok" | "warning" | "critical"
+      warnBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      criticalBytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
     sharedServer?: {
       runtimeID: string
       stateOwner: boolean
@@ -7236,6 +7346,7 @@ export type SessionMessagesData = {
     before?: string
     after?: string
     view?: "full" | "tui" | "tui-all" | "history"
+    unit?: "message" | "turn"
     partsLimit?: string
   }
   url: "/session/{sessionID}/message"
@@ -8956,6 +9067,20 @@ export type WorkflowPreviewData = {
        * Concrete criteria that prove the workflow finished successfully. Must not be empty.
        */
       completionCriteria: Array<string>
+      completion?: {
+        confirmation?: "same-run" | "next-run"
+        maxAuditAttempts?: number
+        validationChecks?: Array<{
+          id: string
+          command: string
+          timeoutMs?: number
+        }>
+        criteria?: Array<{
+          id: string
+          description: string
+          ownerTaskIDs?: Array<string>
+        }>
+      }
       /**
        * Approval gates required before execution. Use [] for immediate execution.
        */
@@ -9237,6 +9362,20 @@ export type WorkflowSaveData = {
        * Concrete criteria that prove the workflow finished successfully. Must not be empty.
        */
       completionCriteria: Array<string>
+      completion?: {
+        confirmation?: "same-run" | "next-run"
+        maxAuditAttempts?: number
+        validationChecks?: Array<{
+          id: string
+          command: string
+          timeoutMs?: number
+        }>
+        criteria?: Array<{
+          id: string
+          description: string
+          ownerTaskIDs?: Array<string>
+        }>
+      }
       /**
        * Approval gates required before execution. Use [] for immediate execution.
        */
@@ -9512,6 +9651,20 @@ export type WorkflowSaveResponses = {
        * Concrete criteria that prove the workflow finished successfully. Must not be empty.
        */
       completionCriteria: Array<string>
+      completion?: {
+        confirmation?: "same-run" | "next-run"
+        maxAuditAttempts?: number
+        validationChecks?: Array<{
+          id: string
+          command: string
+          timeoutMs?: number
+        }>
+        criteria?: Array<{
+          id: string
+          description: string
+          ownerTaskIDs?: Array<string>
+        }>
+      }
       /**
        * Approval gates required before execution. Use [] for immediate execution.
        */
@@ -9768,6 +9921,20 @@ export type WorkflowStartData = {
        * Concrete criteria that prove the workflow finished successfully. Must not be empty.
        */
       completionCriteria: Array<string>
+      completion?: {
+        confirmation?: "same-run" | "next-run"
+        maxAuditAttempts?: number
+        validationChecks?: Array<{
+          id: string
+          command: string
+          timeoutMs?: number
+        }>
+        criteria?: Array<{
+          id: string
+          description: string
+          ownerTaskIDs?: Array<string>
+        }>
+      }
       /**
        * Approval gates required before execution. Use [] for immediate execution.
        */
@@ -10061,6 +10228,20 @@ export type WorkflowStartResponses = {
          * Concrete criteria that prove the workflow finished successfully. Must not be empty.
          */
         completionCriteria: Array<string>
+        completion?: {
+          confirmation?: "same-run" | "next-run"
+          maxAuditAttempts?: number
+          validationChecks?: Array<{
+            id: string
+            command: string
+            timeoutMs?: number
+          }>
+          criteria?: Array<{
+            id: string
+            description: string
+            ownerTaskIDs?: Array<string>
+          }>
+        }
         /**
          * Approval gates required before execution. Use [] for immediate execution.
          */
@@ -10125,6 +10306,41 @@ export type WorkflowStartResponses = {
       }
       permissionMode?: "report-only" | "normal" | "custom"
       sessionPermissionMode?: "approval" | "smart" | "full_access"
+      completion?: {
+        status: "candidate" | "auditing" | "passed" | "rejected" | "blocked"
+        generation: number
+        sourceID: string
+        auditAttempts: number
+        candidateFingerprint?: string
+        summary?: string
+        failedCriteria?: Array<string>
+        receipt?: {
+          generation: number
+          status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+          summary: string
+          criteria: Array<{
+            id: string
+            status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+            summary: string
+            evidence: Array<{
+              id: string
+              kind: "command-output" | "artifact" | "state" | "observation" | "human-approval"
+              summary: string
+              source?: string
+            }>
+          }>
+          fingerprintBefore?: string
+          fingerprintAfter?: string
+          recommendedNextAction?: string
+          createdAt: number
+        }
+        auditLease?: {
+          holder: string
+          expiresAt: number
+        }
+        createdAt: number
+        updatedAt: number
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -10628,6 +10844,20 @@ export type WorkflowListResponses = {
          * Concrete criteria that prove the workflow finished successfully. Must not be empty.
          */
         completionCriteria: Array<string>
+        completion?: {
+          confirmation?: "same-run" | "next-run"
+          maxAuditAttempts?: number
+          validationChecks?: Array<{
+            id: string
+            command: string
+            timeoutMs?: number
+          }>
+          criteria?: Array<{
+            id: string
+            description: string
+            ownerTaskIDs?: Array<string>
+          }>
+        }
         /**
          * Approval gates required before execution. Use [] for immediate execution.
          */
@@ -10692,6 +10922,41 @@ export type WorkflowListResponses = {
       }
       permissionMode?: "report-only" | "normal" | "custom"
       sessionPermissionMode?: "approval" | "smart" | "full_access"
+      completion?: {
+        status: "candidate" | "auditing" | "passed" | "rejected" | "blocked"
+        generation: number
+        sourceID: string
+        auditAttempts: number
+        candidateFingerprint?: string
+        summary?: string
+        failedCriteria?: Array<string>
+        receipt?: {
+          generation: number
+          status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+          summary: string
+          criteria: Array<{
+            id: string
+            status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+            summary: string
+            evidence: Array<{
+              id: string
+              kind: "command-output" | "artifact" | "state" | "observation" | "human-approval"
+              summary: string
+              source?: string
+            }>
+          }>
+          fingerprintBefore?: string
+          fingerprintAfter?: string
+          recommendedNextAction?: string
+          createdAt: number
+        }
+        auditLease?: {
+          holder: string
+          expiresAt: number
+        }
+        createdAt: number
+        updatedAt: number
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -11234,6 +11499,20 @@ export type WorkflowShowResponses = {
          * Concrete criteria that prove the workflow finished successfully. Must not be empty.
          */
         completionCriteria: Array<string>
+        completion?: {
+          confirmation?: "same-run" | "next-run"
+          maxAuditAttempts?: number
+          validationChecks?: Array<{
+            id: string
+            command: string
+            timeoutMs?: number
+          }>
+          criteria?: Array<{
+            id: string
+            description: string
+            ownerTaskIDs?: Array<string>
+          }>
+        }
         /**
          * Approval gates required before execution. Use [] for immediate execution.
          */
@@ -11298,6 +11577,41 @@ export type WorkflowShowResponses = {
       }
       permissionMode?: "report-only" | "normal" | "custom"
       sessionPermissionMode?: "approval" | "smart" | "full_access"
+      completion?: {
+        status: "candidate" | "auditing" | "passed" | "rejected" | "blocked"
+        generation: number
+        sourceID: string
+        auditAttempts: number
+        candidateFingerprint?: string
+        summary?: string
+        failedCriteria?: Array<string>
+        receipt?: {
+          generation: number
+          status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+          summary: string
+          criteria: Array<{
+            id: string
+            status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+            summary: string
+            evidence: Array<{
+              id: string
+              kind: "command-output" | "artifact" | "state" | "observation" | "human-approval"
+              summary: string
+              source?: string
+            }>
+          }>
+          fingerprintBefore?: string
+          fingerprintAfter?: string
+          recommendedNextAction?: string
+          createdAt: number
+        }
+        auditLease?: {
+          holder: string
+          expiresAt: number
+        }
+        createdAt: number
+        updatedAt: number
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -11902,6 +12216,20 @@ export type WorkflowPauseResponses = {
          * Concrete criteria that prove the workflow finished successfully. Must not be empty.
          */
         completionCriteria: Array<string>
+        completion?: {
+          confirmation?: "same-run" | "next-run"
+          maxAuditAttempts?: number
+          validationChecks?: Array<{
+            id: string
+            command: string
+            timeoutMs?: number
+          }>
+          criteria?: Array<{
+            id: string
+            description: string
+            ownerTaskIDs?: Array<string>
+          }>
+        }
         /**
          * Approval gates required before execution. Use [] for immediate execution.
          */
@@ -11966,6 +12294,41 @@ export type WorkflowPauseResponses = {
       }
       permissionMode?: "report-only" | "normal" | "custom"
       sessionPermissionMode?: "approval" | "smart" | "full_access"
+      completion?: {
+        status: "candidate" | "auditing" | "passed" | "rejected" | "blocked"
+        generation: number
+        sourceID: string
+        auditAttempts: number
+        candidateFingerprint?: string
+        summary?: string
+        failedCriteria?: Array<string>
+        receipt?: {
+          generation: number
+          status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+          summary: string
+          criteria: Array<{
+            id: string
+            status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+            summary: string
+            evidence: Array<{
+              id: string
+              kind: "command-output" | "artifact" | "state" | "observation" | "human-approval"
+              summary: string
+              source?: string
+            }>
+          }>
+          fingerprintBefore?: string
+          fingerprintAfter?: string
+          recommendedNextAction?: string
+          createdAt: number
+        }
+        auditLease?: {
+          holder: string
+          expiresAt: number
+        }
+        createdAt: number
+        updatedAt: number
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -12476,6 +12839,20 @@ export type WorkflowResumeResponses = {
          * Concrete criteria that prove the workflow finished successfully. Must not be empty.
          */
         completionCriteria: Array<string>
+        completion?: {
+          confirmation?: "same-run" | "next-run"
+          maxAuditAttempts?: number
+          validationChecks?: Array<{
+            id: string
+            command: string
+            timeoutMs?: number
+          }>
+          criteria?: Array<{
+            id: string
+            description: string
+            ownerTaskIDs?: Array<string>
+          }>
+        }
         /**
          * Approval gates required before execution. Use [] for immediate execution.
          */
@@ -12540,6 +12917,41 @@ export type WorkflowResumeResponses = {
       }
       permissionMode?: "report-only" | "normal" | "custom"
       sessionPermissionMode?: "approval" | "smart" | "full_access"
+      completion?: {
+        status: "candidate" | "auditing" | "passed" | "rejected" | "blocked"
+        generation: number
+        sourceID: string
+        auditAttempts: number
+        candidateFingerprint?: string
+        summary?: string
+        failedCriteria?: Array<string>
+        receipt?: {
+          generation: number
+          status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+          summary: string
+          criteria: Array<{
+            id: string
+            status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+            summary: string
+            evidence: Array<{
+              id: string
+              kind: "command-output" | "artifact" | "state" | "observation" | "human-approval"
+              summary: string
+              source?: string
+            }>
+          }>
+          fingerprintBefore?: string
+          fingerprintAfter?: string
+          recommendedNextAction?: string
+          createdAt: number
+        }
+        auditLease?: {
+          holder: string
+          expiresAt: number
+        }
+        createdAt: number
+        updatedAt: number
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -13050,6 +13462,20 @@ export type WorkflowStopResponses = {
          * Concrete criteria that prove the workflow finished successfully. Must not be empty.
          */
         completionCriteria: Array<string>
+        completion?: {
+          confirmation?: "same-run" | "next-run"
+          maxAuditAttempts?: number
+          validationChecks?: Array<{
+            id: string
+            command: string
+            timeoutMs?: number
+          }>
+          criteria?: Array<{
+            id: string
+            description: string
+            ownerTaskIDs?: Array<string>
+          }>
+        }
         /**
          * Approval gates required before execution. Use [] for immediate execution.
          */
@@ -13114,6 +13540,41 @@ export type WorkflowStopResponses = {
       }
       permissionMode?: "report-only" | "normal" | "custom"
       sessionPermissionMode?: "approval" | "smart" | "full_access"
+      completion?: {
+        status: "candidate" | "auditing" | "passed" | "rejected" | "blocked"
+        generation: number
+        sourceID: string
+        auditAttempts: number
+        candidateFingerprint?: string
+        summary?: string
+        failedCriteria?: Array<string>
+        receipt?: {
+          generation: number
+          status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+          summary: string
+          criteria: Array<{
+            id: string
+            status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+            summary: string
+            evidence: Array<{
+              id: string
+              kind: "command-output" | "artifact" | "state" | "observation" | "human-approval"
+              summary: string
+              source?: string
+            }>
+          }>
+          fingerprintBefore?: string
+          fingerprintAfter?: string
+          recommendedNextAction?: string
+          createdAt: number
+        }
+        auditLease?: {
+          holder: string
+          expiresAt: number
+        }
+        createdAt: number
+        updatedAt: number
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -13626,6 +14087,20 @@ export type WorkflowPermissionModeResponses = {
          * Concrete criteria that prove the workflow finished successfully. Must not be empty.
          */
         completionCriteria: Array<string>
+        completion?: {
+          confirmation?: "same-run" | "next-run"
+          maxAuditAttempts?: number
+          validationChecks?: Array<{
+            id: string
+            command: string
+            timeoutMs?: number
+          }>
+          criteria?: Array<{
+            id: string
+            description: string
+            ownerTaskIDs?: Array<string>
+          }>
+        }
         /**
          * Approval gates required before execution. Use [] for immediate execution.
          */
@@ -13690,6 +14165,41 @@ export type WorkflowPermissionModeResponses = {
       }
       permissionMode?: "report-only" | "normal" | "custom"
       sessionPermissionMode?: "approval" | "smart" | "full_access"
+      completion?: {
+        status: "candidate" | "auditing" | "passed" | "rejected" | "blocked"
+        generation: number
+        sourceID: string
+        auditAttempts: number
+        candidateFingerprint?: string
+        summary?: string
+        failedCriteria?: Array<string>
+        receipt?: {
+          generation: number
+          status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+          summary: string
+          criteria: Array<{
+            id: string
+            status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+            summary: string
+            evidence: Array<{
+              id: string
+              kind: "command-output" | "artifact" | "state" | "observation" | "human-approval"
+              summary: string
+              source?: string
+            }>
+          }>
+          fingerprintBefore?: string
+          fingerprintAfter?: string
+          recommendedNextAction?: string
+          createdAt: number
+        }
+        auditLease?: {
+          holder: string
+          expiresAt: number
+        }
+        createdAt: number
+        updatedAt: number
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -14201,6 +14711,20 @@ export type WorkflowRetryTaskResponses = {
          * Concrete criteria that prove the workflow finished successfully. Must not be empty.
          */
         completionCriteria: Array<string>
+        completion?: {
+          confirmation?: "same-run" | "next-run"
+          maxAuditAttempts?: number
+          validationChecks?: Array<{
+            id: string
+            command: string
+            timeoutMs?: number
+          }>
+          criteria?: Array<{
+            id: string
+            description: string
+            ownerTaskIDs?: Array<string>
+          }>
+        }
         /**
          * Approval gates required before execution. Use [] for immediate execution.
          */
@@ -14265,6 +14789,41 @@ export type WorkflowRetryTaskResponses = {
       }
       permissionMode?: "report-only" | "normal" | "custom"
       sessionPermissionMode?: "approval" | "smart" | "full_access"
+      completion?: {
+        status: "candidate" | "auditing" | "passed" | "rejected" | "blocked"
+        generation: number
+        sourceID: string
+        auditAttempts: number
+        candidateFingerprint?: string
+        summary?: string
+        failedCriteria?: Array<string>
+        receipt?: {
+          generation: number
+          status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+          summary: string
+          criteria: Array<{
+            id: string
+            status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+            summary: string
+            evidence: Array<{
+              id: string
+              kind: "command-output" | "artifact" | "state" | "observation" | "human-approval"
+              summary: string
+              source?: string
+            }>
+          }>
+          fingerprintBefore?: string
+          fingerprintAfter?: string
+          recommendedNextAction?: string
+          createdAt: number
+        }
+        auditLease?: {
+          holder: string
+          expiresAt: number
+        }
+        createdAt: number
+        updatedAt: number
+      }
       state:
         | "planning"
         | "awaiting_approval"
@@ -14776,6 +15335,20 @@ export type WorkflowRetryPhaseResponses = {
          * Concrete criteria that prove the workflow finished successfully. Must not be empty.
          */
         completionCriteria: Array<string>
+        completion?: {
+          confirmation?: "same-run" | "next-run"
+          maxAuditAttempts?: number
+          validationChecks?: Array<{
+            id: string
+            command: string
+            timeoutMs?: number
+          }>
+          criteria?: Array<{
+            id: string
+            description: string
+            ownerTaskIDs?: Array<string>
+          }>
+        }
         /**
          * Approval gates required before execution. Use [] for immediate execution.
          */
@@ -14840,6 +15413,41 @@ export type WorkflowRetryPhaseResponses = {
       }
       permissionMode?: "report-only" | "normal" | "custom"
       sessionPermissionMode?: "approval" | "smart" | "full_access"
+      completion?: {
+        status: "candidate" | "auditing" | "passed" | "rejected" | "blocked"
+        generation: number
+        sourceID: string
+        auditAttempts: number
+        candidateFingerprint?: string
+        summary?: string
+        failedCriteria?: Array<string>
+        receipt?: {
+          generation: number
+          status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+          summary: string
+          criteria: Array<{
+            id: string
+            status: "pass" | "fail" | "uncertain" | "blocked" | "needs_human"
+            summary: string
+            evidence: Array<{
+              id: string
+              kind: "command-output" | "artifact" | "state" | "observation" | "human-approval"
+              summary: string
+              source?: string
+            }>
+          }>
+          fingerprintBefore?: string
+          fingerprintAfter?: string
+          recommendedNextAction?: string
+          createdAt: number
+        }
+        auditLease?: {
+          holder: string
+          expiresAt: number
+        }
+        createdAt: number
+        updatedAt: number
+      }
       state:
         | "planning"
         | "awaiting_approval"

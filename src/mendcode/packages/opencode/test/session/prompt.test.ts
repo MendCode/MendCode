@@ -23,6 +23,7 @@ import { Question } from "../../src/question"
 import { PlanReview } from "../../src/plan-review"
 import { Todo } from "../../src/session/todo"
 import { Session } from "@/session/session"
+import { AgentCommand } from "../../src/session/agent-command"
 import { MessageTable, PartTable, SessionMessageTable, SessionStatusTable } from "../../src/session/session.sql"
 import { BackgroundTaskEventTable, BackgroundTaskTable } from "../../src/session/background-task.sql"
 import { LLM } from "../../src/session/llm"
@@ -109,7 +110,10 @@ test("finds the first persisted user turn after the latest completed assistant",
     },
     parts: [],
   } satisfies MessageV2.WithParts
-  const queued = { info: { ...userInfo(), time: { created: 4 }, queued: true }, parts: [] } satisfies MessageV2.WithParts
+  const queued = {
+    info: { ...userInfo(), time: { created: 4 }, queued: true },
+    parts: [],
+  } satisfies MessageV2.WithParts
   const secondQueued = {
     info: { ...userInfo(), time: { created: 5 }, queued: true },
     parts: [],
@@ -120,7 +124,10 @@ test("finds the first persisted user turn after the latest completed assistant",
 
 test("recovers an unanswered queued turn even after later assistant and compaction steps", () => {
   const activeUser = { info: { ...userInfo(), time: { created: 1 } }, parts: [] } satisfies MessageV2.WithParts
-  const queued = { info: { ...userInfo(), time: { created: 2 }, queued: true }, parts: [] } satisfies MessageV2.WithParts
+  const queued = {
+    info: { ...userInfo(), time: { created: 2 }, queued: true },
+    parts: [],
+  } satisfies MessageV2.WithParts
   const activeAssistant = {
     info: {
       ...assistantInfo({
@@ -169,7 +176,10 @@ test("does not recover while an assistant is still incomplete", () => {
     },
     parts: [],
   } satisfies MessageV2.WithParts
-  const queued = { info: { ...userInfo(), time: { created: 3 }, queued: true }, parts: [] } satisfies MessageV2.WithParts
+  const queued = {
+    info: { ...userInfo(), time: { created: 3 }, queued: true },
+    parts: [],
+  } satisfies MessageV2.WithParts
 
   expect(findRecoverableQueuedPrompt([user, assistant, queued])).toBeUndefined()
 })
@@ -360,6 +370,7 @@ function makeHttp() {
   const deps = Layer.mergeAll(
     bus,
     Session.defaultLayer,
+    AgentCommand.defaultLayer,
     Snapshot.defaultLayer,
     LLM.defaultLayer,
     Env.defaultLayer,
@@ -560,9 +571,7 @@ runStateIt.instance("allows an explicit cancel-turn to stop a non-interruptible 
     yield* state.setInterruptible(sessionID, false)
 
     expect(yield* state.cancelTurn(sessionID, targetMessageID)).toBe("not_interruptible")
-    expect(
-      yield* state.cancelTurn(sessionID, targetMessageID, { ignoreInterruptible: true }),
-    ).toBe("cancelled")
+    expect(yield* state.cancelTurn(sessionID, targetMessageID, { ignoreInterruptible: true })).toBe("cancelled")
     expect((yield* Fiber.join(active)).info.id).toBe(fallback.info.id)
   }),
 )
@@ -1493,7 +1502,17 @@ it.live("wakes the creator when a workflow reaches a terminal state", () =>
           description: "Owner wake integration test",
           objective: "Notify the creator",
           phases: [{ id: "final", ordinal: 1, name: "Finish", barrier: { kind: "all" }, taskIDs: ["final"] }],
-          tasks: [{ id: "final", phaseID: "final", name: "Finish", kind: "synthesize", prompt: "Finish", dependsOn: [], output: { kind: "text" } }],
+          tasks: [
+            {
+              id: "final",
+              phaseID: "final",
+              name: "Finish",
+              kind: "synthesize",
+              prompt: "Finish",
+              dependsOn: [],
+              output: { kind: "text" },
+            },
+          ],
           finalTaskID: "final",
           completionCriteria: ["Finished"],
           requiredGates: [],
@@ -1507,9 +1526,12 @@ it.live("wakes the creator when a workflow reaches a terminal state", () =>
       expect(yield* llm.calls).toBe(2)
       const messages = yield* sessions.messages({ sessionID: parent.id })
       expect(
-        messages.some((message) =>
-          message.info.role === "user"
-          && message.parts.some((part) => part.type === "text" && part.synthetic === true && part.text.includes(started.run.id)),
+        messages.some(
+          (message) =>
+            message.info.role === "user" &&
+            message.parts.some(
+              (part) => part.type === "text" && part.synthetic === true && part.text.includes(started.run.id),
+            ),
         ),
       ).toBe(true)
       expect(yield* workflows.pendingNotifications(parent.id)).toEqual([])
@@ -1574,6 +1596,70 @@ it.live("does not wake a parent after manual cancellation", () =>
           db.select().from(BackgroundTaskTable).where(Database.eq(BackgroundTaskTable.task_id, child.id)).get(),
         )?.time_dismissed,
       ).toBeNumber()
+    }),
+    {
+      git: true,
+      config: (url: string) => ({
+        ...providerCfg(url),
+      }),
+    },
+  ),
+)
+
+it.live("does not wake a parent when cancel-turn arrives after the target completed", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const tasks = yield* BackgroundTask.Service
+      const parent = yield* sessions.create({ title: "Terminal cancel owner wake parent" })
+      yield* llm.text("parent ready")
+      yield* prompt.prompt({
+        sessionID: parent.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "start" }],
+      })
+      const target = (yield* sessions.messages({ sessionID: parent.id })).find(
+        (message) =>
+          message.info.role === "user" && message.parts.some((part) => part.type === "text" && part.text === "start"),
+      )
+      if (!target) throw new Error("target user message missing")
+
+      const child = yield* sessions.create({ parentID: parent.id, title: "Inspect cache", agent: "general" })
+      const run = yield* tasks.start({
+        taskID: child.id,
+        parentSessionID: parent.id,
+        title: "Inspect cache",
+        agent: "general",
+        startRunning: true,
+      })
+
+      expect(yield* prompt.cancelTurn({ sessionID: parent.id, targetMessageID: target.info.id })).toBe(
+        "already_terminal",
+      )
+      yield* tasks.finish({
+        taskID: child.id,
+        generation: run.generation,
+        state: "completed",
+        background: true,
+        result: { summary: "Cache is healthy." },
+      })
+      yield* Effect.sleep(500)
+
+      const messages = yield* sessions.messages({ sessionID: parent.id })
+      expect(
+        messages.some(
+          (message) =>
+            message.info.role === "user" &&
+            message.parts.some(
+              (part) =>
+                part.type === "text" && part.synthetic === true && part.metadata?.kind === "background_task_owner_wake",
+            ),
+        ),
+      ).toBe(false)
+      expect(yield* llm.calls).toBe(1)
+      expect(yield* tasks.pendingNotifications(parent.id)).toEqual([])
     }),
     {
       git: true,
@@ -2219,10 +2305,93 @@ it.live("promptAsync never replays a delivered prompt whose assistant is still i
       expect(duplicate.info.id).toBe(message.id)
       expect(yield* llm.calls).toBe(0)
       const messages = yield* sessions.messages({ sessionID: chat.id })
-      expect(messages.filter((item) => item.info.role === "assistant" && item.info.parentID === message.id)).toHaveLength(1)
+      expect(
+        messages.filter((item) => item.info.role === "assistant" && item.info.parentID === message.id),
+      ).toHaveLength(1)
       expect(messages.some((item) => item.info.id === assistant.id)).toBe(true)
     }),
     { git: true, config: providerCfg },
+  ),
+)
+
+it.live("delivers an accepted peer message once with visible provenance", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const commands = yield* AgentCommand.Service
+      const source = yield* sessions.create({ title: "Peer sender" })
+      const target = yield* sessions.create({
+        title: "Peer receiver",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.text("peer response")
+
+      const command = yield* commands.create({
+        sourceSessionID: source.id,
+        targetSessionID: target.id,
+        type: "peer_message",
+        payload: { text: "hello from the sender" },
+      })
+      expect(command.state).toBe("pending")
+      yield* commands.update({ id: command.id, targetSessionID: target.id, state: "accepted" })
+      yield* prompt.wakePeerDelivery(target.id)
+      yield* prompt.wakePeerDelivery(target.id)
+
+      const delivered = yield* Effect.gen(function* () {
+        while (true) {
+          const messages = yield* sessions.messages({ sessionID: target.id, view: "full" })
+          const received = messages.find((message) =>
+            message.parts.some(
+              (part) =>
+                part.type === "text" &&
+                (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
+            ),
+          )
+          const state = yield* commands.get(command.id)
+          const assistantCompleted = messages.some(
+            (message) =>
+              message.info.role === "assistant" &&
+              message.info.parentID === received?.info.id &&
+              message.info.time.completed !== undefined,
+          )
+          if (received && state.state === "completed" && assistantCompleted) return true
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(
+        Effect.timeout("2 seconds"),
+        Effect.as(true),
+        Effect.catch(() => Effect.succeed(false)),
+      )
+      expect(delivered).toBe(true)
+
+      const messages = yield* sessions.messages({ sessionID: target.id, view: "full" })
+      const received = messages.find((message) =>
+        message.parts.some(
+          (part) =>
+            part.type === "text" && (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
+        ),
+      )
+      const receivedPart = received?.parts.find(
+        (part) =>
+          part.type === "text" && (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
+      )
+      expect(receivedPart && receivedPart.type === "text" ? receivedPart.text : undefined).toBe("hello from the sender")
+      expect(
+        receivedPart && receivedPart.type === "text"
+          ? (receivedPart.metadata as Record<string, unknown> | undefined)?.sourceSessionID
+          : undefined,
+      ).toBe(source.id)
+      expect(yield* commands.get(command.id).pipe(Effect.map((info) => info.state))).toBe("completed")
+      expect(yield* llm.calls).toBe(1)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        agent: { build: { model: "test/test-model" } },
+      }),
+    },
   ),
 )
 
@@ -2279,11 +2448,7 @@ it.live("startup recovery finalizes stale foreground work without replaying it",
       const rows = Database.use((db) => ({
         message: db.select().from(MessageTable).where(Database.eq(MessageTable.id, assistant.id)).get(),
         part: db.select().from(PartTable).where(Database.eq(PartTable.id, tool.id)).get(),
-        status: db
-          .select()
-          .from(SessionStatusTable)
-          .where(Database.eq(SessionStatusTable.session_id, chat.id))
-          .get(),
+        status: db.select().from(SessionStatusTable).where(Database.eq(SessionStatusTable.session_id, chat.id)).get(),
       }))
       expect(rows.message?.data.role).toBe("assistant")
       if (rows.message?.data.role !== "assistant") return
@@ -2418,14 +2583,14 @@ it.live("cancel-turn aborts an active compaction and finalizes its summary", () 
       const compacting = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
       yield* llm.wait(2)
 
-      expect(yield* prompt.cancelTurn({ sessionID: chat.id, targetMessageID: compactionUser.info.id })).toBe("cancelled")
+      expect(yield* prompt.cancelTurn({ sessionID: chat.id, targetMessageID: compactionUser.info.id })).toBe(
+        "cancelled",
+      )
       gate.resolve()
       yield* Fiber.join(compacting).pipe(Effect.timeout("1 second"))
 
       const messages = yield* sessions.messages({ sessionID: chat.id })
-      const summary = messages.findLast(
-        (message) => message.info.role === "assistant" && message.info.summary === true,
-      )
+      const summary = messages.findLast((message) => message.info.role === "assistant" && message.info.summary === true)
       expect(summary?.info.role).toBe("assistant")
       if (summary?.info.role === "assistant") {
         expect(summary.info.error?.name).toBe("MessageAbortedError")
@@ -3384,7 +3549,9 @@ it.live("loop returns to idle when automatic memory extraction times out", () =>
             sessionID: session.id,
             agent: "build",
             noReply: true,
-            parts: [{ type: "text", text: "Remember that stalled memory extraction must never keep the session busy." }],
+            parts: [
+              { type: "text", text: "Remember that stalled memory extraction must never keep the session busy." },
+            ],
           })
 
           yield* llm.text("understood")
@@ -4564,9 +4731,7 @@ unix(
           expect(exit.value.info.error?.name).toBe("MessageAbortedError")
           expect(exit.value.info.time.completed).toBeNumber()
           expect(
-            exit.value.parts.some(
-              (part) => part.type === "tool" && ["pending", "running"].includes(part.state.status),
-            ),
+            exit.value.parts.some((part) => part.type === "tool" && ["pending", "running"].includes(part.state.status)),
           ).toBe(false)
           expect((yield* status.get(chat.id)).type).toBe("idle")
         }),
@@ -4608,17 +4773,27 @@ unix(
           yield* Effect.gen(function* () {
             while (true) {
               const messages = yield* sessions.messages({ sessionID: chat.id })
-              if (messages.some((message) => message.parts.some((part) => part.type === "tool" && part.state.status === "running"))) return
+              if (
+                messages.some((message) =>
+                  message.parts.some((part) => part.type === "tool" && part.state.status === "running"),
+                )
+              )
+                return
               yield* Effect.sleep("1 millis")
             }
           }).pipe(Effect.timeout("1 second"))
           expect(yield* prompt.cancelTurn({ sessionID: chat.id, targetMessageID })).toBe("cancelled")
           const exit = yield* Fiber.await(run).pipe(Effect.timeout("1 second"))
           expect(Exit.isSuccess(exit)).toBe(true)
-          if (Exit.isSuccess(exit) && exit.value.info.role === "assistant") expect(exit.value.info.error?.name).toBe("MessageAbortedError")
+          if (Exit.isSuccess(exit) && exit.value.info.role === "assistant")
+            expect(exit.value.info.error?.name).toBe("MessageAbortedError")
           expect((yield* status.get(chat.id)).type).toBe("idle")
           const messages = yield* sessions.messages({ sessionID: chat.id })
-          expect(messages.flatMap((message) => message.parts).some((part) => part.type === "tool" && ["pending", "running"].includes(part.state.status))).toBe(false)
+          expect(
+            messages
+              .flatMap((message) => message.parts)
+              .some((part) => part.type === "tool" && ["pending", "running"].includes(part.state.status)),
+          ).toBe(false)
         }),
       { git: true, config: providerCfg },
     ),

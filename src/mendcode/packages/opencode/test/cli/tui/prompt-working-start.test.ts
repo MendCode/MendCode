@@ -39,7 +39,9 @@ import {
   shouldKeepWorkingStatus,
   shouldEnableSessionInterrupt,
   shouldHandlePromptCursorArrow,
-  shouldInterruptImmediately,
+  hasInterruptibleSessionTurn,
+  sessionInterruptConfirmationAction,
+  sessionInterruptHint,
   clipboardPasteAction,
   shouldPreferMessagePromptHistory,
   storedAssistantDeliveryState,
@@ -94,6 +96,7 @@ import {
   statsDayTokenValue,
   statsDayVisualValue,
   statsGraphSeries,
+  normalizeStatsWidgets,
   statsSelectedDayIndex,
   usageInsightsCacheKey,
 } from "@/cli/cmd/tui/routes/stats"
@@ -140,9 +143,11 @@ describe("prompt input event priority", () => {
     expect(clipboardPasteAction(undefined)).toBe("none")
   })
 
-  test("keeps Esc immediate while a clipboard probe is pending", () => {
-    expect(shouldInterruptImmediately({ statusType: "busy", hasActiveWorkingAssistant: true })).toBe(true)
-    expect(shouldEnableSessionInterrupt({ statusType: "busy", autocompleteVisible: false, promptFocused: false })).toBe(true)
+  test("keeps Esc handling available while a clipboard probe is pending", () => {
+    expect(hasInterruptibleSessionTurn({ statusType: "busy", hasActiveWorkingAssistant: true })).toBe(true)
+    expect(shouldEnableSessionInterrupt({ statusType: "busy", autocompleteVisible: false, promptFocused: false })).toBe(
+      true,
+    )
   })
 })
 
@@ -584,7 +589,9 @@ describe("queued user turn", () => {
     const messages = [{ id: "msg_001", role: "assistant", time: { created: 1_000 } }]
     expect(latestPendingAssistantID(messages, { now: 100_000 })).toBeUndefined()
     expect(latestPendingAssistantID(messages, { statusType: "busy", now: 100_000 })).toBeUndefined()
-    expect(latestPendingAssistantID(messages, { statusType: "busy", now: 100_000, statusUntil: 101_000 })).toBe("msg_001")
+    expect(latestPendingAssistantID(messages, { statusType: "busy", now: 100_000, statusUntil: 101_000 })).toBe(
+      "msg_001",
+    )
     expect(latestPendingAssistantID(messages, { statusType: "idle", now: 100_000 })).toBeUndefined()
   })
 
@@ -906,9 +913,9 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldClearWorkingStartedAt({ statusType: "busy" })).toBe(false)
     expect(shouldClearWorkingStartedAt({ statusType: "busy", interrupted: true })).toBe(true)
     expect(shouldClearWorkingStartedAt({ statusType: "busy", terminalAssistant: true })).toBe(true)
-    expect(
-      shouldClearWorkingStartedAt({ statusType: "busy", terminalAssistant: true, permissionPending: true }),
-    ).toBe(false)
+    expect(shouldClearWorkingStartedAt({ statusType: "busy", terminalAssistant: true, permissionPending: true })).toBe(
+      false,
+    )
   })
 
   test("keeps interrupt enabled for orphaned unfinished assistant messages", () => {
@@ -920,6 +927,7 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldEnableSessionInterrupt({ statusType: "idle" })).toBe(false)
     expect(shouldEnableSessionInterrupt({ statusType: "idle", hasActiveWorkingAssistant: true })).toBe(true)
     expect(shouldEnableSessionInterrupt({ statusType: "idle", hasPendingPromptDelivery: true })).toBe(true)
+    expect(shouldEnableSessionInterrupt({ statusType: "idle", compactionActive: true })).toBe(true)
     expect(shouldEnableSessionInterrupt({ statusType: "busy", promptFocused: false })).toBe(true)
     expect(shouldEnableSessionInterrupt({ statusType: "busy", promptFocused: true })).toBe(true)
     expect(shouldEnableSessionInterrupt({ statusType: "busy", autocompleteVisible: true })).toBe(true)
@@ -932,18 +940,39 @@ describe("resolveWorkingStartedAt", () => {
     ).toBe(true)
   })
 
-  test("interrupts an active turn immediately without discarding the local draft", () => {
-    expect(shouldInterruptImmediately({ statusType: "busy" })).toBe(true)
-    expect(shouldInterruptImmediately({ statusType: "busy", compactionActive: true })).toBe(true)
-    expect(shouldInterruptImmediately({ statusType: "retry" })).toBe(true)
-    expect(shouldInterruptImmediately({ statusType: "busy", hasDraft: true })).toBe(true)
-    expect(shouldInterruptImmediately({ statusType: "retry", hasDraft: true })).toBe(true)
-    expect(shouldInterruptImmediately({ statusType: "idle" })).toBe(false)
-    expect(shouldInterruptImmediately({ statusType: "idle", hasActiveWorkingAssistant: true })).toBe(true)
-    expect(shouldInterruptImmediately({ statusType: "idle", hasPendingPromptDelivery: true })).toBe(true)
-    expect(shouldInterruptImmediately({ statusType: "idle", hasActiveWorkingAssistant: true, hasDraft: true })).toBe(
+  test("recognizes an active turn without discarding the local draft", () => {
+    expect(hasInterruptibleSessionTurn({ statusType: "busy" })).toBe(true)
+    expect(hasInterruptibleSessionTurn({ statusType: "busy", compactionActive: true })).toBe(true)
+    expect(hasInterruptibleSessionTurn({ statusType: "retry" })).toBe(true)
+    expect(hasInterruptibleSessionTurn({ statusType: "busy", hasDraft: true })).toBe(true)
+    expect(hasInterruptibleSessionTurn({ statusType: "retry", hasDraft: true })).toBe(true)
+    expect(hasInterruptibleSessionTurn({ statusType: "idle" })).toBe(false)
+    expect(hasInterruptibleSessionTurn({ statusType: "idle", hasActiveWorkingAssistant: true })).toBe(true)
+    expect(hasInterruptibleSessionTurn({ statusType: "idle", hasPendingPromptDelivery: true })).toBe(true)
+    expect(hasInterruptibleSessionTurn({ statusType: "idle", compactionActive: true })).toBe(true)
+    expect(hasInterruptibleSessionTurn({ statusType: "idle", hasActiveWorkingAssistant: true, hasDraft: true })).toBe(
       true,
     )
+  })
+
+  test("requires two Esc presses for the same active turn", () => {
+    expect(sessionInterruptConfirmationAction({ activeTargetMessageID: "message-1" })).toBe("arm")
+    expect(
+      sessionInterruptConfirmationAction({
+        activeTargetMessageID: "message-1",
+        armedTargetMessageID: "message-1",
+      }),
+    ).toBe("interrupt")
+    expect(
+      sessionInterruptConfirmationAction({
+        activeTargetMessageID: "message-2",
+        armedTargetMessageID: "message-1",
+      }),
+    ).toBe("arm")
+    expect(sessionInterruptConfirmationAction({ armedTargetMessageID: "message-1" })).toBe("ignore")
+    expect(sessionInterruptHint({ enabled: true, working: true, armed: false })).toBe("[esc to interrupt]")
+    expect(sessionInterruptHint({ enabled: true, working: true, armed: true })).toBe("[esc again to interrupt]")
+    expect(sessionInterruptHint({ enabled: true, working: false, armed: true })).toBeUndefined()
   })
 
   test("accepts prompt interrupt only when the prompt textarea owns focus", () => {
@@ -1418,7 +1447,10 @@ describe("resolveWorkingStartedAt", () => {
 
     expect(loopWakeupLabel(blocked)).toBe("not scheduled (blocked)")
     expect(loopWakeupLabel(waiting)).toBe("waiting for external-signal")
-    expect(loopStateCounts([{ state: "sleeping" }, { state: "blocked" }, { state: "blocked" }])).toEqual({ scheduled: 1, blocked: 2 })
+    expect(loopStateCounts([{ state: "sleeping" }, { state: "blocked" }, { state: "blocked" }])).toEqual({
+      scheduled: 1,
+      blocked: 2,
+    })
   })
 
   test("updates loop wakeup countdowns from the caller clock", () => {
@@ -1529,6 +1561,22 @@ describe("resolveWorkingStartedAt", () => {
     expect(statsSelectedDayIndex({ days: freshDays, selectedDay: "2026-07-02", selectedIndex: 1 })).toBe(2)
     expect(statsSelectedDayIndex({ days: freshDays, selectedDay: "2026-07-03", selectedIndex: 2 })).toBe(3)
     expect(statsSelectedDayIndex({ days: freshDays, selectedIndex: 2 })).toBe(2)
+    expect(
+      statsSelectedDayIndex({
+        days: freshDays,
+        selectedDay: "2026-07-03",
+        selectedIndex: 2,
+        followLatest: true,
+      }),
+    ).toBe(4)
+  })
+
+  test("normalizes persisted stats widgets without unknown or duplicate entries", () => {
+    expect(normalizeStatsWidgets(["clock", "clock", "subscription-usage", "unknown"])).toEqual([
+      "clock",
+      "subscription-usage",
+    ])
+    expect(normalizeStatsWidgets(undefined)).toContain("subscription-usage")
   })
 
   test("refreshes stale stats cache when the latest cached day is behind today", () => {
@@ -1773,15 +1821,15 @@ describe("resolveWorkingStartedAt", () => {
   })
 
   test("routes Esc to the active session independently of prompt focus", () => {
-    expect(
-      shouldHandleGlobalSessionInterrupt({ eventName: "escape", activeTurn: true, pendingInput: false }),
-    ).toBe(true)
-    expect(
-      shouldHandleGlobalSessionInterrupt({ eventName: "escape", activeTurn: true, pendingInput: true }),
-    ).toBe(false)
-    expect(
-      shouldHandleGlobalSessionInterrupt({ eventName: "escape", activeTurn: false, pendingInput: false }),
-    ).toBe(false)
+    expect(shouldHandleGlobalSessionInterrupt({ eventName: "escape", activeTurn: true, pendingInput: false })).toBe(
+      true,
+    )
+    expect(shouldHandleGlobalSessionInterrupt({ eventName: "escape", activeTurn: true, pendingInput: true })).toBe(
+      false,
+    )
+    expect(shouldHandleGlobalSessionInterrupt({ eventName: "escape", activeTurn: false, pendingInput: false })).toBe(
+      false,
+    )
     expect(
       shouldHandleGlobalSessionInterrupt({
         eventName: "escape",
@@ -1811,14 +1859,15 @@ describe("resolveWorkingStartedAt", () => {
   })
 
   test("does not detach an already-following bottom viewport during newer-page reconciliation", () => {
+    expect(sessionBottomFollowMode({ alreadyFollowing: true, hasMoreNewer: true, loadingNewer: false })).toBe("follow")
+    expect(sessionBottomFollowMode({ alreadyFollowing: false, hasMoreNewer: true, loadingNewer: false })).toBe("page")
     expect(
-      sessionBottomFollowMode({ alreadyFollowing: true, hasMoreNewer: true, loadingNewer: false }),
-    ).toBe("follow")
-    expect(
-      sessionBottomFollowMode({ alreadyFollowing: false, hasMoreNewer: true, loadingNewer: false }),
-    ).toBe("page")
-    expect(
-      sessionBottomFollowMode({ alreadyFollowing: true, hasMoreNewer: true, loadingNewer: false, suppressedBoundary: "bottom" }),
+      sessionBottomFollowMode({
+        alreadyFollowing: true,
+        hasMoreNewer: true,
+        loadingNewer: false,
+        suppressedBoundary: "bottom",
+      }),
     ).toBe("follow")
   })
 

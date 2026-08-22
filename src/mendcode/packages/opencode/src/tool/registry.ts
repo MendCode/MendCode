@@ -62,6 +62,9 @@ import { LoopRunner } from "@/session/loop-runner"
 import { WorkflowService } from "@/session/workflow-service"
 import { BackgroundTask } from "@/session/background-task"
 import { Auth } from "@/auth"
+import { AgentCommand } from "@/session/agent-command"
+import { TellTool } from "./tell"
+import { PeersTool } from "./peers"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -111,6 +114,7 @@ export const layer: Layer.Layer<
   | Ripgrep.Service
   | Format.Service
   | Truncate.Service
+  | AgentCommand.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -143,6 +147,8 @@ export const layer: Layer.Layer<
     const looptool = yield* LoopTool
     const workflowtool = yield* WorkflowTool
     const reviewtool = yield* ReviewTool
+    const telltool = yield* TellTool
+    const peerstool = yield* PeersTool
 
     const memorytool = yield* MemoryTool
     const memorygraphtool = yield* MemoryGraphTool
@@ -244,6 +250,8 @@ export const layer: Layer.Layer<
           loop: Tool.init(looptool),
           workflow: Tool.init(workflowtool),
           review: Tool.init(reviewtool),
+          peers: Tool.init(peerstool),
+          tell: Tool.init(telltool),
           memory: Tool.init(memorytool),
           memoryGraph: Tool.init(memorygraphtool),
           imageGen: Tool.init(imagegentool),
@@ -274,6 +282,8 @@ export const layer: Layer.Layer<
             tool.loop,
             tool.workflow,
             tool.review,
+            tool.peers,
+            tool.tell,
             tool.memory,
             tool.memoryGraph,
             tool.imageGen,
@@ -437,7 +447,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide([LoopRunner.defaultLayer, Todo.defaultLayer, WorkflowService.defaultLayer]),
     Layer.provide(Skill.defaultLayer),
     Layer.provide(Agent.defaultLayer),
-    Layer.provide(Session.defaultLayer),
+    Layer.provide([Session.defaultLayer, AgentCommand.defaultLayer]),
     Layer.provide([SessionStatus.defaultLayer, BackgroundTask.defaultLayer]),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(LSP.defaultLayer),

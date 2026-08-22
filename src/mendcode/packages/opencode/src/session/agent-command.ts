@@ -12,14 +12,26 @@ import { AgentViewMetadata } from "./agent-view-metadata"
 import { AgentCommandTable, BackgroundSessionTable, SessionTable } from "./session.sql"
 import { AgentCommandID, SessionID } from "./schema"
 
-export const CommandType = Schema.Literals(["request_summary", "rename", "tag", "pause_after_turn", "stop", "send_message"]).pipe(
-  withStatics((s) => ({ zod: zod(s) })),
-)
+export const CommandType = Schema.Literals([
+  "request_summary",
+  "rename",
+  "tag",
+  "pause_after_turn",
+  "stop",
+  "send_message",
+  "peer_message",
+]).pipe(withStatics((s) => ({ zod: zod(s) })))
 export type CommandType = Schema.Schema.Type<typeof CommandType>
 
-export const State = Schema.Literals(["pending", "accepted", "running", "completed", "rejected", "failed", "expired"]).pipe(
-  withStatics((s) => ({ zod: zod(s) })),
-)
+export const State = Schema.Literals([
+  "pending",
+  "accepted",
+  "running",
+  "completed",
+  "rejected",
+  "failed",
+  "expired",
+]).pipe(withStatics((s) => ({ zod: zod(s) })))
 export type State = Schema.Schema.Type<typeof State>
 
 const RequestSummaryPayload = Schema.Struct({
@@ -40,8 +52,20 @@ const StopPayload = Schema.Struct({
 const SendMessagePayload = Schema.Struct({
   text: Schema.String,
 })
+const PeerMessagePayload = Schema.Struct({
+  text: Schema.String,
+  sourceTitle: Schema.optional(Schema.String),
+})
 
-const Payload = Schema.Union([RequestSummaryPayload, RenamePayload, TagPayload, PauseAfterTurnPayload, StopPayload, SendMessagePayload])
+const Payload = Schema.Union([
+  RequestSummaryPayload,
+  RenamePayload,
+  TagPayload,
+  PauseAfterTurnPayload,
+  StopPayload,
+  SendMessagePayload,
+  PeerMessagePayload,
+])
 type Payload = Schema.Schema.Type<typeof Payload>
 
 export const Create = Schema.Union([
@@ -81,6 +105,12 @@ export const Create = Schema.Union([
     payload: SendMessagePayload,
     expiresAt: Schema.optional(NonNegativeInt),
   }),
+  Schema.Struct({
+    sourceSessionID: SessionID,
+    type: Schema.Literal("peer_message"),
+    payload: Schema.Struct({ text: Schema.String }),
+    expiresAt: Schema.optional(NonNegativeInt),
+  }),
 ])
   .annotate({ identifier: "AgentCommandCreate" })
   .pipe(withStatics((s) => ({ zod: zod(s) })))
@@ -118,6 +148,7 @@ export const Info = Schema.Union([
   Schema.Struct({ ...InfoBase, type: Schema.Literal("pause_after_turn"), payload: PauseAfterTurnPayload }),
   Schema.Struct({ ...InfoBase, type: Schema.Literal("stop"), payload: StopPayload }),
   Schema.Struct({ ...InfoBase, type: Schema.Literal("send_message"), payload: SendMessagePayload }),
+  Schema.Struct({ ...InfoBase, type: Schema.Literal("peer_message"), payload: PeerMessagePayload }),
 ])
   .annotate({ identifier: "AgentCommand" })
   .pipe(withStatics((s) => ({ zod: zod(s) })))
@@ -148,6 +179,18 @@ export class InvalidStateTransitionError extends Schema.TaggedErrorClass<Invalid
 ) {
   override get message() {
     return `Invalid agent command state transition: ${this.from} -> ${this.to}`
+  }
+}
+
+export class InvalidTargetError extends Schema.TaggedErrorClass<InvalidTargetError>()(
+  "AgentCommandInvalidTargetError",
+  {
+    sourceSessionID: SessionID,
+    targetSessionID: SessionID,
+  },
+) {
+  override get message() {
+    return "Peer messages require a different target session."
   }
 }
 
@@ -206,14 +249,17 @@ function toPolicyOwnership(input?: BackgroundRowLike) {
 export interface Interface {
   readonly get: (id: AgentCommandID) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
   readonly list: (input?: ListInput) => Effect.Effect<Info[]>
-  readonly create: (input: CreateInput) => Effect.Effect<Info, InstanceType<typeof NotFoundError>>
-  readonly update: (input: UpdateInput) => Effect.Effect<Info, InstanceType<typeof NotFoundError> | InvalidStateTransitionError>
+  readonly create: (input: CreateInput) => Effect.Effect<Info, InstanceType<typeof NotFoundError> | InvalidTargetError>
+  readonly update: (
+    input: UpdateInput,
+  ) => Effect.Effect<Info, InstanceType<typeof NotFoundError> | InvalidStateTransitionError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/AgentCommand") {}
 
 const terminalStates = new Set<State>(["completed", "rejected", "failed", "expired"])
 const defaultCommandTTL = 30 * 60 * 1_000
+const maxPeerMessageTTL = 24 * 60 * 60 * 1_000
 const maxPendingPerTarget = 3
 const transitions: Record<State, readonly State[]> = {
   pending: ["accepted", "running", "rejected", "expired"],
@@ -243,11 +289,21 @@ function normalizeTags(value: readonly string[]) {
     .slice(0, 20)
 }
 
-function payloadFor(input: Create): Payload {
+function payloadFor(input: Create, sourceTitle?: string): Payload {
   if (input.type === "request_summary") return { instructions: normalizeString(input.payload?.instructions, 1_000) }
-  if (input.type === "rename") return { title: normalizeString(input.payload.title, 120) ?? input.payload.title.trim().slice(0, 120) }
+  if (input.type === "rename")
+    return { title: normalizeString(input.payload.title, 120) ?? input.payload.title.trim().slice(0, 120) }
   if (input.type === "tag") return { tags: normalizeTags(input.payload.tags) }
-  if (input.type === "send_message") return { text: normalizeString(input.payload.text, 4_000) ?? input.payload.text.trim().slice(0, 4_000) }
+  if (input.type === "send_message")
+    return { text: normalizeString(input.payload.text, 4_000) ?? input.payload.text.trim().slice(0, 4_000) }
+  if (input.type === "peer_message") {
+    const text = normalizeString(input.payload.text, 4_000)
+    if (!text) throw new Error("Peer message text cannot be empty.")
+    return {
+      text,
+      sourceTitle: normalizeString(sourceTitle, 120),
+    }
+  }
   return { reason: normalizeString(input.payload?.reason, 1_000) }
 }
 
@@ -298,7 +354,10 @@ function commandProjectID(row: Pick<Row, "source_session_id" | "target_session_i
   return sessions[0]!.projectID
 }
 
-function fallbackPolicy(row: Row, input?: { source?: SessionRowLike; target?: SessionRowLike; targetBackground?: BackgroundRowLike }) {
+function fallbackPolicy(
+  row: Row,
+  input?: { source?: SessionRowLike; target?: SessionRowLike; targetBackground?: BackgroundRowLike },
+) {
   if (!policyNeedsRefresh(row.data.policy)) return row.data.policy
   return AgentCommandPolicy.evaluate({
     type: row.data.type,
@@ -308,7 +367,10 @@ function fallbackPolicy(row: Row, input?: { source?: SessionRowLike; target?: Se
   })
 }
 
-function fromRow(row: Row, input?: { source?: SessionRowLike; target?: SessionRowLike; targetBackground?: BackgroundRowLike }): Info {
+function fromRow(
+  row: Row,
+  input?: { source?: SessionRowLike; target?: SessionRowLike; targetBackground?: BackgroundRowLike },
+): Info {
   return Schema.decodeUnknownSync(Info)({
     id: row.id,
     sourceSessionID: row.source_session_id,
@@ -361,7 +423,8 @@ export const layer = Layer.effect(
         .map((row) => expireRow(row, now))
       for (const row of expired) {
         Database.use((db) =>
-          db.update(AgentCommandTable)
+          db
+            .update(AgentCommandTable)
             .set({ state: row.state, time_updated: row.time_updated, data: row.data })
             .where(eq(AgentCommandTable.id, row.id))
             .run(),
@@ -373,33 +436,56 @@ export const layer = Layer.effect(
     const get = Effect.fn("AgentCommand.get")(function* (id: AgentCommandID) {
       yield* expireDueCommands()
       const row = Database.use((db) => db.select().from(AgentCommandTable).where(eq(AgentCommandTable.id, id)).get())
-      if (!row || commandProjectID(row) !== (yield* InstanceState.context).project.id) return yield* Effect.fail(notFound(id))
-      const source = Database.use((db) => db.select().from(SessionTable).where(eq(SessionTable.id, row.source_session_id)).get())
-      const target = Database.use((db) => db.select().from(SessionTable).where(eq(SessionTable.id, row.target_session_id)).get())
-      const targetBackground = Database.use((db) => db.select().from(BackgroundSessionTable).where(eq(BackgroundSessionTable.session_id, row.target_session_id)).get())
+      if (!row || commandProjectID(row) !== (yield* InstanceState.context).project.id)
+        return yield* Effect.fail(notFound(id))
+      const source = Database.use((db) =>
+        db.select().from(SessionTable).where(eq(SessionTable.id, row.source_session_id)).get(),
+      )
+      const target = Database.use((db) =>
+        db.select().from(SessionTable).where(eq(SessionTable.id, row.target_session_id)).get(),
+      )
+      const targetBackground = Database.use((db) =>
+        db
+          .select()
+          .from(BackgroundSessionTable)
+          .where(eq(BackgroundSessionTable.session_id, row.target_session_id))
+          .get(),
+      )
       return fromRow(row, { source, target, targetBackground })
     })
 
-      const list = Effect.fn("AgentCommand.list")(function* (input?: ListInput) {
-        yield* expireDueCommands()
-        const currentProjectID = (yield* InstanceState.context).project.id
-        const scopedProjectID = input?.sourceSessionID || input?.targetSessionID
-          ? Database.use((db) =>
-              db
-                .select({ projectID: SessionTable.project_id })
-                .from(SessionTable)
-                .where(eq(SessionTable.id, input.sourceSessionID ?? input.targetSessionID!))
-                .get()?.projectID,
+    const list = Effect.fn("AgentCommand.list")(function* (input?: ListInput) {
+      yield* expireDueCommands()
+      const currentProjectID = (yield* InstanceState.context).project.id
+      const scopedProjectID =
+        input?.sourceSessionID || input?.targetSessionID
+          ? Database.use(
+              (db) =>
+                db
+                  .select({ projectID: SessionTable.project_id })
+                  .from(SessionTable)
+                  .where(eq(SessionTable.id, input.sourceSessionID ?? input.targetSessionID!))
+                  .get()?.projectID,
             )
           : currentProjectID
-        if (!scopedProjectID || scopedProjectID !== currentProjectID) return []
-        return Database.use((db) => db.select().from(AgentCommandTable).all())
-
+      if (!scopedProjectID || scopedProjectID !== currentProjectID) return []
+      const rows = Database.use((db) => db.select().from(AgentCommandTable).all())
+      return rows
         .filter((row) => commandProjectID(row) === scopedProjectID)
         .map((row) => {
-          const source = Database.use((db) => db.select().from(SessionTable).where(eq(SessionTable.id, row.source_session_id)).get())
-          const target = Database.use((db) => db.select().from(SessionTable).where(eq(SessionTable.id, row.target_session_id)).get())
-          const targetBackground = Database.use((db) => db.select().from(BackgroundSessionTable).where(eq(BackgroundSessionTable.session_id, row.target_session_id)).get())
+          const source = Database.use((db) =>
+            db.select().from(SessionTable).where(eq(SessionTable.id, row.source_session_id)).get(),
+          )
+          const target = Database.use((db) =>
+            db.select().from(SessionTable).where(eq(SessionTable.id, row.target_session_id)).get(),
+          )
+          const targetBackground = Database.use((db) =>
+            db
+              .select()
+              .from(BackgroundSessionTable)
+              .where(eq(BackgroundSessionTable.session_id, row.target_session_id))
+              .get(),
+          )
           return fromRow(row, { source, target, targetBackground })
         })
         .filter((info) => matchesInput(info, input))
@@ -412,16 +498,23 @@ export const layer = Layer.effect(
         const now = Date.now()
         const source = db.select().from(SessionTable).where(eq(SessionTable.id, input.sourceSessionID)).get()
         const target = db.select().from(SessionTable).where(eq(SessionTable.id, input.targetSessionID)).get()
-        const targetBackground = db.select().from(BackgroundSessionTable).where(eq(BackgroundSessionTable.session_id, input.targetSessionID)).get()
+        const targetBackground = db
+          .select()
+          .from(BackgroundSessionTable)
+          .where(eq(BackgroundSessionTable.session_id, input.targetSessionID))
+          .get()
         if (!source) return sessionNotFound(input.sourceSessionID)
         if (!target || source.project_id !== target.project_id) return sessionNotFound(input.targetSessionID)
+        if (input.type === "peer_message" && source.id === target.id) {
+          return new InvalidTargetError({ sourceSessionID: source.id, targetSessionID: target.id })
+        }
         const policy = AgentCommandPolicy.evaluate({
           type: input.type,
           source: toPolicySession(source),
           target: toPolicySession(target),
           ownership: toPolicyOwnership(targetBackground),
         })
-        const payload = payloadFor(input)
+        const payload = payloadFor(input, source.title)
         const duplicate = db
           .select()
           .from(AgentCommandTable)
@@ -441,7 +534,9 @@ export const layer = Layer.effect(
           .where(eq(AgentCommandTable.target_session_id, input.targetSessionID))
           .all()
           .filter((row) => row.state === "pending" && !commandExpired(row, now)).length
-        const expiresAt = input.expiresAt ?? now + defaultCommandTTL
+        const requestedExpiresAt = input.expiresAt ?? now + defaultCommandTTL
+        const expiresAt =
+          input.type === "peer_message" ? Math.min(requestedExpiresAt, now + maxPeerMessageTTL) : requestedExpiresAt
         const overLimit = pendingForTarget >= maxPendingPerTarget
         const row = {
           id: AgentCommandID.ascending(),
@@ -456,14 +551,18 @@ export const layer = Layer.effect(
             permissions: policy.permissions,
             policy,
             expiresAt,
-            ...(overLimit ? { error: `Target already has ${maxPendingPerTarget} pending commands; wait for the worker to accept or reject one first.` } : {}),
+            ...(overLimit
+              ? {
+                  error: `Target already has ${maxPendingPerTarget} pending commands; wait for the worker to accept or reject one first.`,
+                }
+              : {}),
             ...(expiresAt <= now ? { error: "Command expired before it could be queued." } : {}),
           } satisfies Data,
         }
         db.insert(AgentCommandTable).values(row).run()
         return { info: fromRow(row, { source, target, targetBackground }), created: true }
       })
-      if (result instanceof NotFoundError) return yield* Effect.fail(result)
+      if (result instanceof NotFoundError || result instanceof InvalidTargetError) return yield* Effect.fail(result)
       if (result.created) yield* bus.publish(Event.Created, eventPayload(result.info))
       return result.info
     })
@@ -473,17 +572,26 @@ export const layer = Layer.effect(
       const projectID = (yield* InstanceState.context).project.id
       const info = Database.transaction((db) => {
         const row = db.select().from(AgentCommandTable).where(eq(AgentCommandTable.id, input.id)).get()
-        if (!row || (input.targetSessionID && row.target_session_id !== input.targetSessionID)) return notFound(input.id)
+        if (!row || (input.targetSessionID && row.target_session_id !== input.targetSessionID))
+          return notFound(input.id)
         if (commandProjectID(row) !== projectID) return notFound(input.id)
         const state = input.state ?? row.state
         if (!canTransition(row.state, state)) {
           return new InvalidStateTransitionError({ commandID: input.id, from: row.state, to: state })
         }
         const needsPolicyRefresh = policyNeedsRefresh(row.data.policy)
-        const source = needsPolicyRefresh ? db.select().from(SessionTable).where(eq(SessionTable.id, row.source_session_id)).get() : undefined
-        const target = needsPolicyRefresh ? db.select().from(SessionTable).where(eq(SessionTable.id, row.target_session_id)).get() : undefined
+        const source = needsPolicyRefresh
+          ? db.select().from(SessionTable).where(eq(SessionTable.id, row.source_session_id)).get()
+          : undefined
+        const target = needsPolicyRefresh
+          ? db.select().from(SessionTable).where(eq(SessionTable.id, row.target_session_id)).get()
+          : undefined
         const targetBackground = needsPolicyRefresh
-          ? db.select().from(BackgroundSessionTable).where(eq(BackgroundSessionTable.session_id, row.target_session_id)).get()
+          ? db
+              .select()
+              .from(BackgroundSessionTable)
+              .where(eq(BackgroundSessionTable.session_id, row.target_session_id))
+              .get()
           : undefined
         const next = {
           ...row,

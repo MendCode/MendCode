@@ -19,11 +19,7 @@ import {
   TUI_SESSION_MESSAGE_SYNC_LIMIT,
   useSync,
 } from "../../../../src/cli/cmd/tui/context/sync"
-import {
-  SyncProviderV2,
-  TUI_V2_SESSION_CACHE_LIMIT,
-  useSyncV2,
-} from "../../../../src/cli/cmd/tui/context/sync-v2"
+import { SyncProviderV2, TUI_V2_SESSION_CACHE_LIMIT, useSyncV2 } from "../../../../src/cli/cmd/tui/context/sync-v2"
 import { tmpdir } from "../../../fixture/fixture"
 
 const worktree = "/tmp/opencode"
@@ -333,8 +329,8 @@ describe("tui sync", () => {
     await Bun.write(`${tmp.path}/kv.json`, "{}")
     let available = true
     const unavailable = () => {
-        if (available) return [{ id: "ses_persisted" }]
-        throw new Error("simulated network loss")
+      if (available) return [{ id: "ses_persisted" }]
+      throw new Error("simulated network loss")
     }
     const { app, sync } = await mount({
       "/session": unavailable,
@@ -1133,6 +1129,72 @@ describe("tui sync", () => {
       release?.()
       await reload
     } finally {
+      app.renderer.destroy()
+      Global.Path.state = previous
+    }
+  })
+
+  test("session sync does not block transcript updates on a slow diff", async () => {
+    const previous = Global.Path.state
+    await using tmp = await tmpdir()
+    Global.Path.state = tmp.path
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+
+    const sessionID = "ses_slow_diff"
+    const message = {
+      info: {
+        id: "msg_slow_diff",
+        sessionID,
+        role: "assistant",
+        agent: "build",
+        providerID: "openai",
+        modelID: "gpt-test",
+        tokens: {},
+        time: { created: 1 },
+      },
+      parts: [{ id: "prt_slow_diff", messageID: "msg_slow_diff", sessionID, type: "text", text: "live" }],
+    }
+    let diffCalls = 0
+    let busy = true
+    let releaseDiff: (() => void) | undefined
+    const { app, sync } = await mount({
+      [`/session/${sessionID}`]: {
+        id: sessionID,
+        projectID: "proj_test",
+        directory,
+        title: "Slow diff",
+        version: "test",
+        time: { created: 1, updated: 1 },
+      },
+      [`/session/${sessionID}/message`]: [message],
+      [`/session/${sessionID}/todo`]: [],
+      "/session/status": () => (busy ? { [sessionID]: { type: "busy" } } : {}),
+      [`/session/${sessionID}/diff`]: async () => {
+        diffCalls++
+        await new Promise<void>((resolve) => (releaseDiff = resolve))
+        return [{ file: "large.diff", additions: 1, deletions: 0 }]
+      },
+    })
+
+    try {
+      await sync.session.sync(sessionID, { force: true })
+
+      expect(sync.data.message[sessionID]?.map((item) => item.id)).toEqual([message.info.id])
+      expect(sync.data.part[message.info.id]?.[0]).toMatchObject({ type: "text", text: "live" })
+      expect(sync.data.session_diff[sessionID]).toBeUndefined()
+      expect(diffCalls).toBe(0)
+
+      busy = false
+      await sync.session.sync(sessionID, { force: true })
+      expect(diffCalls).toBe(1)
+
+      await sync.session.sync(sessionID, { force: true })
+      expect(diffCalls).toBe(1)
+
+      releaseDiff?.()
+      await wait(() => sync.data.session_diff[sessionID]?.[0]?.file === "large.diff")
+    } finally {
+      releaseDiff?.()
       app.renderer.destroy()
       Global.Path.state = previous
     }
@@ -2583,12 +2645,12 @@ describe("tui sync", () => {
       } as GlobalEvent
 
       emit(userEvent)
-       await wait(() => sync.data.message[sessionID]?.some((message) => message.id === optimisticUser.id) === true)
-       emit(assistantEvent)
+      await wait(() => sync.data.message[sessionID]?.some((message) => message.id === optimisticUser.id) === true)
+      emit(assistantEvent)
 
-       await wait(() => sync.data.message[sessionID]?.some((message) => message.id === nextAssistant.id) === true)
-       const messages = sync.data.message[sessionID] ?? []
-       expect(messages).toHaveLength(TUI_SESSION_MESSAGE_STORE_LIMIT)
+      await wait(() => sync.data.message[sessionID]?.some((message) => message.id === nextAssistant.id) === true)
+      const messages = sync.data.message[sessionID] ?? []
+      expect(messages).toHaveLength(TUI_SESSION_MESSAGE_STORE_LIMIT)
 
       expect(messages.map((message) => message.id)).toHaveLength(new Set(messages.map((message) => message.id)).size)
       expect(messages.some((message) => message.id === previousAssistant.id)).toBe(true)
@@ -3794,13 +3856,16 @@ describe("tui sync", () => {
 
   test("v2 event projection evicts old session caches", async () => {
     let emit!: (event: GlobalEvent) => void
-    const { app, sync } = await mountV2({}, {
-      events: eventSource({
-        onSubscribe: (handler) => {
-          emit = handler
-        },
-      }),
-    })
+    const { app, sync } = await mountV2(
+      {},
+      {
+        events: eventSource({
+          onSubscribe: (handler) => {
+            emit = handler
+          },
+        }),
+      },
+    )
 
     try {
       for (let index = 0; index < TUI_V2_SESSION_CACHE_LIMIT + 3; index++) {

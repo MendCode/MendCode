@@ -8,6 +8,7 @@ import { Agent } from "../../src/agent/agent"
 import { Config } from "../../src/config/config"
 import { Permission } from "../../src/permission"
 import { Global } from "@mendcode/core/global"
+import { AppFileSystem } from "@mendcode/core/filesystem"
 import { resolvePlanExitAgent } from "../../src/tool/plan"
 
 // Helper to evaluate permission for a tool with wildcard pattern
@@ -570,6 +571,23 @@ test("global tmp directory children are allowed for external_directory", async (
     },
   })
 })
+
+test.skipIf(process.platform === "win32")(
+  "canonical global tmp aliases are allowed for external_directory",
+  async () => {
+    await using tmp = await tmpdir()
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const build = await load(tmp.path, (svc) => svc.get("build"))
+        const canonicalTmp = AppFileSystem.resolve(Global.Path.tmp)
+        expect(Permission.evaluate("external_directory", path.join(canonicalTmp, "*"), build!.permission).action).toBe(
+          "allow",
+        )
+      },
+    })
+  },
+)
 
 test("Truncate.GLOB is allowed even when user denies external_directory per-agent", async () => {
   const { Truncate } = await import("../../src/tool/truncate")

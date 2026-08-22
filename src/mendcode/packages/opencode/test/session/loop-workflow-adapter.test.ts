@@ -116,6 +116,7 @@ function promptLayer() {
       loop: () => Effect.succeed(message),
       shell: () => Effect.succeed(message),
       command: () => Effect.succeed(message),
+      wakePeerDelivery: () => Effect.void,
       resolvePromptParts: () => Effect.succeed([]),
     }),
   )
