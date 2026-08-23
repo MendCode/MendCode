@@ -349,7 +349,9 @@ const reconcile = (db: DB, runID: WorkflowRunID, now: number) => {
           ? "blocked"
           : hasWorking
             ? "working"
-            : finalTaskID?.state === "completed" && allPhasesSatisfied && completion.completion?.status === "candidate"
+            : finalTaskID?.state === "completed" &&
+                allPhasesSatisfied &&
+                (completion.completion?.status === "candidate" || completion.completion?.status === "auditing")
               ? "working"
               : "queued"
   const state: WorkflowRunState = run.state === "stopped"

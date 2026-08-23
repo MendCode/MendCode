@@ -33,6 +33,9 @@ import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { WorkspaceID } from "@/control-plane/schema"
 import path from "path"
 import { markPermissionPending, markPermissionResolved } from "@/session/pending-input"
+import { InstanceState } from "@/effect/instance-state"
+import { InstanceRef } from "@/effect/instance-ref"
+import { InstanceStore } from "@/project/instance-store"
 
 function promptMessage(
   text?: string,
@@ -104,9 +107,11 @@ function runWithWorktree<A, E>(fx: Effect.Effect<A, E, LoopWorkflowService | Wor
 function runRunner<A, E>(
   fx: Effect.Effect<A, E, LoopRunner.Service | LoopWorkflowService | SessionPrompt.Service | Session.Service>,
   promptText?: string | MessageV2.WithParts | ((call: number) => string | MessageV2.WithParts),
+  options?: { isolatedWorkspaceContext?: boolean },
 ) {
   let prompts = 0
   const promptCalls: PromptInput[] = []
+  const promptDirectories: string[] = []
   const promptLayer = Layer.succeed(
     SessionPrompt.Service,
     SessionPrompt.Service.of({
@@ -115,9 +120,10 @@ function runRunner<A, E>(
       cancelQueued: () => Effect.succeed(false),
       interrupt: () => Effect.void,
       prompt: (input: PromptInput) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           prompts++
           promptCalls.push(input)
+          promptDirectories.push((yield* InstanceState.context).directory)
           const response = typeof promptText === "function" ? promptText(prompts) : promptText
           return typeof response === "string"
             ? promptMessage(response)
@@ -143,11 +149,50 @@ function runRunner<A, E>(
       resolvePromptParts: () => Effect.succeed([]),
     }),
   )
+  const instanceStoreLayer = Layer.succeed(
+    InstanceStore.Service,
+    InstanceStore.Service.of({
+      load: (input) =>
+        InstanceState.context.pipe(
+          Effect.map((current) => ({
+            directory: input.directory,
+            worktree: input.worktree ?? input.directory,
+            project: input.project ?? current.project,
+          })),
+        ),
+      reload: (input) =>
+        InstanceState.context.pipe(
+          Effect.map((current) => ({
+            directory: input.directory,
+            worktree: input.worktree ?? input.directory,
+            project: input.project ?? current.project,
+          })),
+        ),
+      dispose: () => Effect.void,
+      disposeAll: () => Effect.void,
+      loaded: () => Effect.succeed([]),
+      provide: (input, effect) =>
+        InstanceState.context.pipe(
+          Effect.flatMap((current) =>
+            effect.pipe(
+              Effect.provideService(InstanceRef, {
+                directory: input.directory,
+                worktree: input.worktree ?? input.directory,
+                project: input.project ?? current.project,
+              }),
+            ),
+          ),
+        ),
+    }),
+  )
+  const runnerLayer = Layer.mergeAll(loopWorkflowLayer, LoopRunner.defaultLayer, Session.defaultLayer, promptLayer)
   return Effect.runPromise(
     fx.pipe(
-      Effect.provide(Layer.mergeAll(loopWorkflowLayer, LoopRunner.defaultLayer, Session.defaultLayer, promptLayer)),
+      Effect.provide(
+        options?.isolatedWorkspaceContext ? runnerLayer.pipe(Layer.provideMerge(instanceStoreLayer)) : runnerLayer,
+      ),
     ),
-  ).then((value) => ({ value, prompts, promptCalls }))
+  ).then((value) => ({ value, prompts, promptCalls, promptDirectories }))
 }
 
 const svc = {
@@ -976,6 +1021,24 @@ describe("loop workflow service", () => {
           },
         )
 
+        await runWithWorktree(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: run.id,
+              goalStatus: "continue",
+              checkpoint: { status: "continue", summary: "Keep the isolated workspace authoritative." },
+            }),
+          ),
+        )
+        expect(
+          (await runWithWorktree(LoopWorkflowService.use((loop) => loop.snapshot(draft.id)))).threads[0],
+        ).toMatchObject({
+          runID: run.id,
+          worktree: run.workspaceLease?.path,
+          branch: run.workspaceLease?.branch,
+        })
+
         if (run.workspaceLease?.path) {
           await runWithWorktree(
             Worktree.Service.use((worktree) => worktree.remove({ directory: run.workspaceLease!.path })),
@@ -1764,7 +1827,7 @@ describe("loop workflow service", () => {
           objective: "Keep monitoring without an accidental zero token cap.",
           trigger: { mode: "interval", intervalMs: 3_600_000 },
           budgetMode: "unbounded-monitor",
-          costBudget: { maxTokens: 0 },
+          costBudget: { maxCost: 0, maxTokens: 0 },
         })
         const active = await svc.activate(draft.id)
         expect(active.spec.costBudget).toBeUndefined()
@@ -1867,7 +1930,7 @@ describe("loop workflow service", () => {
     })
   })
 
-  test("rehydrates legacy zero token budget blocks as scheduled monitors", async () => {
+  test("rehydrates legacy zero cost and token budget blocks as scheduled monitors", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
       directory: tmp.path,
@@ -1913,7 +1976,7 @@ describe("loop workflow service", () => {
               phase: "budget_exhausted",
               next_wakeup: null,
               time_updated: now,
-              data: { ...workflow.data, spec: { ...workflow.data.spec, costBudget: { maxTokens: 0 } } },
+              data: { ...workflow.data, spec: { ...workflow.data.spec, costBudget: { maxCost: 0, maxTokens: 0 } } },
             })
             .where(eq(LoopWorkflowTable.id, draft.id))
             .run()
@@ -2332,7 +2395,7 @@ describe("loop workflow service", () => {
           LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
           promptMessage("partial TerraPredict output", { finish: "" }),
         )
-        expect(incomplete.value.state).toBe("failed")
+        expect(incomplete.value.state).toBe("retrying")
         expect(incomplete.value.summary).toContain("retry scheduled")
 
         const snapshot = await svc.snapshot(draft.id)
@@ -2360,7 +2423,7 @@ describe("loop workflow service", () => {
           LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
           promptMessage("finished but omitted checkpoint", { finish: "stop" }),
         )
-        expect(missingCheckpoint.value.state).toBe("failed")
+        expect(missingCheckpoint.value.state).toBe("retrying")
         expect(missingCheckpoint.value.summary).toContain("retry scheduled")
         expect((await svc.snapshot(draft.id)).workflow.failureClass).toBe("transient")
       },
@@ -2456,6 +2519,139 @@ describe("loop workflow service", () => {
         expect(snapshot.workflow.state).toBe("failed")
         expect(snapshot.workflow.metrics.failures).toBe(3)
         expect(snapshot.workflow.failureClass).toBe("environment")
+      },
+    })
+  })
+
+  test("explicit run-once bypasses retry backoff without making scheduled runs early", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Manual retry override",
+          objective: "Let the operator retry immediately while automatic scheduling keeps its backoff.",
+          trigger: { mode: "interval", intervalMs: 60_000 },
+          policy: { maxTurns: 5 },
+        })
+        await svc.activate(draft.id)
+        const first = await svc.startRun(draft.id)
+        const failed = await svc.failRunWithError(draft.id, first.id, "temporary provider failure", "transient")
+        expect(failed.retry?.nextWakeup).toBeGreaterThan(Date.now())
+
+        await expect(svc.startRun(draft.id)).rejects.toThrow()
+        const manual = await run(
+          LoopWorkflowService.use((loop) =>
+            loop.startRun({ id: draft.id, trigger: "run-once", reason: "operator retry now" }),
+          ),
+        )
+        expect(manual).toMatchObject({ state: "working", trigger: "run-once", phase: "executing" })
+      },
+    })
+  })
+
+  test("a successful checkpoint resets the consecutive retry budget", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const draft = await svc.createDraft({
+          name: "Retry streak reset",
+          objective: "Keep working after isolated malformed responses.",
+          trigger: { mode: "self-paced" },
+          policy: { maxTurns: 6 },
+        })
+        await svc.activate(draft.id)
+        const malformed = promptMessage("missing checkpoint", { finish: "stop" })
+        const firstFailure = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          malformed,
+        )
+        expect(firstFailure.value.state).toBe("retrying")
+
+        Database.use((db) =>
+          db
+            .update(LoopWorkflowTable)
+            .set({ next_wakeup: Date.now() - 1 })
+            .where(eq(LoopWorkflowTable.id, draft.id))
+            .run(),
+        )
+        await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          "LOOP_CHECKPOINT:\nstatus: continue\nsummary: Valid checkpoint.\nevidence:\n- state inspected\nnext_action: continue",
+        )
+        expect((await svc.snapshot(draft.id)).workflow.metrics.consecutiveFailures).toBe(0)
+
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          Database.use((db) =>
+            db
+              .update(LoopWorkflowTable)
+              .set({ next_wakeup: Date.now() - 1 })
+              .where(eq(LoopWorkflowTable.id, draft.id))
+              .run(),
+          )
+          const retried = await runRunner(
+            LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+            malformed,
+          )
+          expect(retried.value.state).toBe("retrying")
+        }
+
+        const snapshot = await svc.snapshot(draft.id)
+        expect(snapshot.workflow.state).toBe("sleeping")
+        expect(snapshot.workflow.metrics.failures).toBe(3)
+        expect(snapshot.workflow.metrics.consecutiveFailures).toBe(2)
+      },
+    })
+  })
+
+  test("terminal loop failures notify the owner with authoritative persisted state", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const owner = await Effect.runPromise(
+          Session.Service.use((session) => session.create({ title: "Failure owner" })).pipe(
+            Effect.provide(Session.defaultLayer),
+          ),
+        )
+        const draft = await svc.createDraft({
+          name: "Notify terminal failure",
+          objective: "Report a persistent malformed worker response.",
+          ownerSessionID: owner.id,
+          trigger: { mode: "self-paced" },
+          policy: { maxTurns: 6 },
+        })
+        await svc.activate(draft.id)
+        const malformed = promptMessage("finished without checkpoint", { finish: "stop" })
+
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          const retried = await runRunner(
+            LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+            malformed,
+          )
+          expect(retried.value.state).toBe("retrying")
+          expect(retried.prompts).toBe(1)
+          Database.use((db) =>
+            db
+              .update(LoopWorkflowTable)
+              .set({ next_wakeup: Date.now() - 1 })
+              .where(eq(LoopWorkflowTable.id, draft.id))
+              .run(),
+          )
+        }
+
+        const terminal = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          (call) => (call === 1 ? malformed : "Owner acknowledged terminal state."),
+        )
+        expect(terminal.value.state).toBe("failed")
+        expect(terminal.value.summary).toContain("will not retry automatically")
+        expect(terminal.prompts).toBe(2)
+        expect(terminal.promptCalls[1]?.sessionID).toBe(owner.id)
+        expect(promptInputText(terminal.promptCalls[1])).toContain('<mendcode_runtime_event type="loop_status">')
+        expect(promptInputText(terminal.promptCalls[1])).toContain("State: failed")
+        expect(promptInputText(terminal.promptCalls[1])).toContain("do not claim it is still working")
       },
     })
   })
@@ -4537,6 +4733,63 @@ describe("loop workflow service", () => {
         expect(executed.promptCalls[0]?.sessionID).toBe(rootSessionID)
         expect(executed.promptCalls[1]?.sessionID).toBe(owner.id)
         expect(promptInputText(executed.promptCalls[1])).toContain("Loop workflow completed: Notify owner")
+      },
+    })
+  })
+
+  test("isolated loops execute in the leased worktree and hand its location back to the owner", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const owner = await Effect.runPromise(
+          Session.Service.use((session) => session.create({ title: "Isolated loop owner" })).pipe(
+            Effect.provide(Session.defaultLayer),
+          ),
+        )
+        const draft = await svc.createDraft({
+          name: "Authoritative isolated workspace",
+          objective: "Make and report isolated changes without losing their location.",
+          ownerSessionID: owner.id,
+          budgetMode: "max-goal",
+          strategy: { notifyOwnerOnComplete: true },
+          workspace: { mode: "per-run-worktree" },
+          policy: { maxTurns: 3 },
+        })
+        await svc.activate(draft.id)
+
+        const executed = await runRunner(
+          LoopRunner.Service.use((runner) => runner.runOne({ id: draft.id, execute: true })),
+          (call) =>
+            call === 1
+              ? "LOOP_CHECKPOINT:\nstatus: complete\nsummary: Isolated work completed.\nevidence:\n- workspace inspected\nnext_action: stop\nconfidence: high"
+              : "Owner acknowledged authoritative workspace.",
+          { isolatedWorkspaceContext: true },
+        )
+        const snapshot = await svc.snapshot(draft.id)
+        const run = snapshot.runs[0]
+        const workspace = run?.workspaceLease?.path
+        const branch = run?.workspaceLease?.branch
+
+        expect(executed.value.state).toBe("completed")
+        expect(workspace).toBeTruthy()
+        expect(workspace).not.toBe(tmp.path)
+        expect(executed.promptDirectories).toEqual([workspace!, tmp.path])
+        expect(promptInputText(executed.promptCalls[0])).toContain(`Authoritative workspace directory: ${workspace}`)
+        expect(promptInputText(executed.promptCalls[0])).toContain(`Authoritative workspace branch: ${branch}`)
+        expect(promptInputText(executed.promptCalls[1])).toContain(`Authoritative workspace: ${workspace}`)
+        expect(promptInputText(executed.promptCalls[1])).toContain("may be absent from the parent/original checkout")
+        const ownerNotification = executed.promptCalls[1]?.parts.find((part) => part.type === "text")
+        expect(ownerNotification?.metadata).toMatchObject({
+          kind: "loop_owner_notification",
+          workspacePath: workspace,
+          workspaceBranch: branch,
+          workspaceMode: "per-run-worktree",
+        })
+
+        if (workspace) {
+          await runWithWorktree(Worktree.Service.use((worktree) => worktree.remove({ directory: workspace })))
+        }
       },
     })
   })

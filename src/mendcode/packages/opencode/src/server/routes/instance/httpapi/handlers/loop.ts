@@ -1,10 +1,17 @@
 import { externalSignalRateLimit, LoopID, LoopWorkflow } from "@/session/loop"
 import { LoopRunner } from "@/session/loop-runner"
+import { Session } from "@/session/session"
+import { SessionPrompt } from "@/session/prompt"
+import { WorkflowRunner } from "@/session/workflow-runner"
+import { WorkflowService } from "@/session/workflow-service"
+import { InstanceState } from "@/effect/instance-state"
+import { loopServiceArgsFromConfig, loopServiceStart } from "@/mend/runtime/loop-service"
 import { ServerAuth } from "@/server/auth"
 import { Effect, Schema } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { Flag } from "@mendcode/core/flag/flag"
 import { timingSafeEqual } from "crypto"
+import { LoopDraftBody } from "../../loop-draft-schema"
 
 const LoopParams = Schema.Struct({
   loopID: LoopID,
@@ -41,32 +48,30 @@ function requestGlobalPage(request: HttpServerRequest.HttpServerRequest) {
 }
 
 function readReasonBody(request: HttpServerRequest.HttpServerRequest) {
-  return Effect.promise(async () => {
-    const body = await webSource(request)?.json().catch(() => ({}))
-    if (!body || typeof body !== "object") return undefined
-    const reason = (body as { reason?: unknown }).reason
-    return typeof reason === "string" ? reason : undefined
-  })
+  return readObjectBody(request).pipe(
+    Effect.map((body) => {
+      const reason = (body as { reason?: unknown }).reason
+      return typeof reason === "string" ? reason : undefined
+    }),
+  )
 }
 
 function readAgentBody(request: HttpServerRequest.HttpServerRequest) {
-  return Effect.promise(async () => {
-    const body = await webSource(request)?.json().catch(() => ({}))
-    if (!body || typeof body !== "object") return {}
-    const agent = (body as { agent?: unknown }).agent
-    const reason = (body as { reason?: unknown }).reason
-    return {
-      agent: typeof agent === "string" ? agent : undefined,
-      reason: typeof reason === "string" ? reason : undefined,
-    }
-  })
+  return readObjectBody(request).pipe(
+    Effect.map((body) => ({
+      agent: typeof body.agent === "string" ? body.agent : undefined,
+      reason: typeof body.reason === "string" ? body.reason : undefined,
+    })),
+  )
 }
 
 function readObjectBody(request: HttpServerRequest.HttpServerRequest) {
-  return Effect.promise(async () => {
-    const body = await webSource(request)?.json().catch(() => ({}))
-    return body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {}
-  })
+  return request.json.pipe(
+    Effect.catch(() => Effect.succeed(null)),
+    Effect.map((body) =>
+      body && typeof body === "object" && !Array.isArray(body) ? (body as Record<string, unknown>) : {},
+    ),
+  )
 }
 
 function authenticationRequired() {
@@ -92,6 +97,21 @@ export const loopRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const loop = yield* LoopWorkflow.Service
     const runner = yield* LoopRunner.Service
+    const sessions = yield* Session.Service
+    const prompt = yield* SessionPrompt.Service
+    const workflows = yield* WorkflowService.Service
+    const workflowRunner = yield* WorkflowRunner.Service
+
+    const runOne = (input: LoopRunner.RunOneInput) =>
+      runner
+        .runOne(input)
+        .pipe(
+          Effect.provideService(LoopWorkflow.Service, loop),
+          Effect.provideService(Session.Service, sessions),
+          Effect.provideService(SessionPrompt.Service, prompt),
+          Effect.provideService(WorkflowService.Service, workflows),
+          Effect.provideService(WorkflowRunner.Service, workflowRunner),
+        )
 
     yield* router.add(
       "GET",
@@ -127,6 +147,19 @@ export const loopRoute = HttpRouter.use((router) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
         return HttpServerResponse.jsonUnsafe(yield* loop.listGlobalPage(requestGlobalPage(request)))
+      }),
+    )
+
+    yield* router.add(
+      "POST",
+      "/loop/draft",
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const parsed = LoopDraftBody.safeParse(yield* readObjectBody(request))
+        if (!parsed.success) {
+          return HttpServerResponse.jsonUnsafe({ error: "name and objective are required" }, { status: 400 })
+        }
+        return HttpServerResponse.jsonUnsafe(yield* loop.createDraft(parsed.data))
       }),
     )
 
@@ -194,10 +227,34 @@ export const loopRoute = HttpRouter.use((router) =>
         if (action === "pause") return HttpServerResponse.jsonUnsafe(yield* loop.pause({ id: params.loopID, reason }))
         if (action === "resume") return HttpServerResponse.jsonUnsafe(yield* loop.resume({ id: params.loopID, reason }))
         if (action === "run-once") {
-          return HttpServerResponse.jsonUnsafe(yield* runner.runOne({ id: params.loopID, execute: true, reason, trigger: "run-once" }))
+          return HttpServerResponse.jsonUnsafe(
+            yield* runOne({ id: params.loopID, execute: true, reason, trigger: "run-once" }),
+          )
         }
         return HttpServerResponse.jsonUnsafe(yield* loop.stop({ id: params.loopID, reason }))
       })
+
+    yield* router.add(
+      "POST",
+      "/loop/:loopID/activate",
+      Effect.gen(function* () {
+        const params = yield* HttpRouter.schemaPathParams(LoopParams)
+        const request = yield* HttpServerRequest.HttpServerRequest
+        const body = yield* readObjectBody(request)
+        if (body.reason !== undefined && typeof body.reason !== "string") {
+          return HttpServerResponse.jsonUnsafe({ error: "reason must be a string" }, { status: 400 })
+        }
+        if (body.ensureService !== undefined && typeof body.ensureService !== "boolean") {
+          return HttpServerResponse.jsonUnsafe({ error: "ensureService must be a boolean" }, { status: 400 })
+        }
+        const active = yield* loop.activate({ id: params.loopID, reason: body.reason as string | undefined })
+        if (body.ensureService !== false) {
+          const ctx = yield* InstanceState.context
+          yield* Effect.promise(() => loopServiceStart(loopServiceArgsFromConfig(ctx.directory)).catch(() => undefined))
+        }
+        return HttpServerResponse.jsonUnsafe(active)
+      }),
+    )
 
     yield* router.add("POST", "/loop/:loopID/pause", control("pause"))
     yield* router.add("POST", "/loop/:loopID/resume", control("resume"))

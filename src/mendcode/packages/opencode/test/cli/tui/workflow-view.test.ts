@@ -13,7 +13,9 @@ import {
   type WorkflowReceiptSnapshot,
 } from "../../../src/cli/cmd/tui/util/workflow-receipt"
 import {
+  workflowCompletionAuditActivity,
   workflowCurrentActivity,
+  workflowMonitorAuditSessionID,
   workflowMonitorFooter,
   workflowMonitorLayout,
   workflowMonitorResumeTarget,
@@ -123,6 +125,21 @@ describe("workflow monitor helpers", () => {
     expect(workflowMonitorSessionID(snapshot({ tasks: [], run: { ...value.run, originSessionID: undefined, rootSessionID: "ses_root" } }))).toBe("ses_root")
   })
 
+  test("opens the newest completion auditor transcript while an audit is active", () => {
+    expect(
+      workflowMonitorAuditSessionID({
+        rootSessionID: "ses_root",
+        sessions: [
+          { id: "ses_other", parentID: "ses_root", title: "Workflow task", time: { updated: 9_000 } },
+          { id: "ses_audit_old", parentID: "ses_root", title: "Completion audit: Release", time: { updated: 4_000 } },
+          { id: "ses_child", parentID: "ses_root", title: "Nested worker", time: { updated: 5_000 } },
+          { id: "ses_audit_new", parentID: "ses_child", title: "Completion audit: Release", time: { updated: 8_000 } },
+          { id: "ses_unrelated", title: "Completion audit: Other", time: { updated: 10_000 } },
+        ],
+      }),
+    ).toBe("ses_audit_new")
+  })
+
   test("lists tasks in phase order instead of raw plan insertion order", () => {
     const value = snapshot({
       phases: [
@@ -207,6 +224,36 @@ describe("workflow monitor helpers", () => {
     expect(workflowMonitorRows(value)).toContainEqual(["progress", "1/2 tasks"])
   })
 
+  test("reports completion audit lifecycle, lease age, and stalled recovery", () => {
+    const completion = {
+      status: "auditing",
+      generation: 1,
+      auditAttempts: 2,
+      auditLease: { holder: "auditor", expiresAt: 12_000 },
+      createdAt: 2_000,
+      updatedAt: 9_000,
+    }
+    expect(workflowCompletionAuditActivity({ runState: "working", completion, now: 10_000 })).toBe(
+      "running · audit attempt 2 · lease 2s left",
+    )
+    expect(workflowCompletionAuditActivity({ runState: "paused", completion, now: 10_000 })).toBe(
+      "paused · audit attempt 2",
+    )
+    expect(workflowCompletionAuditActivity({ runState: "queued", completion, now: 14_000 })).toBe(
+      "stalled · audit attempt 2 · lease expired 2s ago",
+    )
+
+    const stalled = snapshot({
+      run: { ...snapshot().run, state: "queued", completion },
+    })
+    expect(workflowMonitorRows(stalled, 14_000)).toContainEqual([
+      "audit",
+      "stalled · audit attempt 2 · lease expired 2s ago",
+    ])
+    expect(workflowMonitorRows(stalled, 14_000)).toContainEqual(["audit update", "5s ago"])
+    expect(workflowReceiptNextAction(stalled, 14_000)).toContain("resume")
+  })
+
   test("prioritizes human waits over generic session status", () => {
     expect(
       workflowCurrentActivity({
@@ -251,6 +298,19 @@ describe("workflow monitor helpers", () => {
         statuses: [{ type: "busy", message: "Running a command" }],
       }),
     ).toBe("Workflow approval required")
+    expect(
+      workflowCurrentActivity({
+        runState: "queued",
+        statuses: [],
+        completion: {
+          status: "auditing",
+          generation: 1,
+          auditAttempts: 1,
+          auditLease: { holder: "auditor", expiresAt: 9_000 },
+        },
+        now: 10_000,
+      }),
+    ).toContain("stalled")
   })
 
   test("prioritizes blockers and operator input in the next action", () => {

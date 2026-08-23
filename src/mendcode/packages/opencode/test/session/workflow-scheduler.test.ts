@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Exit, Fiber, Layer } from "effect"
 
 import { Bus } from "@/bus"
+import { Permission } from "@/permission"
 import { Database, eq } from "@/storage/db"
 import { BackgroundTask } from "@/session/background-task"
 import { BackgroundTaskEventTable, BackgroundTaskRunTable } from "@/session/background-task.sql"
@@ -132,6 +133,9 @@ describe("workflow scheduler readiness", () => {
   test("recovers only runnable workflow states after a process restart", () => {
     expect(WorkflowRunner.shouldRecoverWorkflowRun("queued")).toBe(true)
     expect(WorkflowRunner.shouldRecoverWorkflowRun("working")).toBe(true)
+    expect(WorkflowRunner.shouldAuditWorkflowCompletion("queued")).toBe(true)
+    expect(WorkflowRunner.shouldAuditWorkflowCompletion("working")).toBe(true)
+    expect(WorkflowRunner.shouldAuditWorkflowCompletion("paused")).toBe(false)
     expect(WorkflowRunner.shouldRecoverWorkflowRun("awaiting_approval")).toBe(false)
     expect(WorkflowRunner.shouldRecoverWorkflowRun("paused")).toBe(false)
     expect(WorkflowRunner.shouldRecoverWorkflowRun("needs_input")).toBe(false)
@@ -179,6 +183,8 @@ const it = testEffect(Layer.mergeAll(Session.defaultLayer, schedulerLayer, bus))
 const unused = () => Effect.die("unused workflow recovery dependency")
 const recoveryDeps = Layer.mergeAll(
   Session.defaultLayer,
+  Permission.defaultLayer,
+  BackgroundTask.defaultLayer,
   schedulerLayer,
   bus,
   Layer.succeed(
@@ -242,6 +248,12 @@ describe("workflow scheduler persistence", () => {
         leaseMs: 60_000,
         candidateFingerprint: "workspace-fingerprint",
       })
+      const renewed = yield* workflow.claimCompletionAudit({
+        runID: started.run.id,
+        holder: "auditor-one",
+        leaseMs: 120_000,
+        candidateFingerprint: "workspace-fingerprint",
+      })
       const duplicate = yield* workflow.claimCompletionAudit({
         runID: started.run.id,
         holder: "auditor-two",
@@ -249,6 +261,8 @@ describe("workflow scheduler persistence", () => {
         candidateFingerprint: "workspace-fingerprint",
       })
       expect(claimed).toMatchObject({ status: "auditing", auditAttempts: 1 })
+      expect(renewed).toMatchObject({ status: "auditing", auditAttempts: 1 })
+      expect(renewed!.auditLease!.expiresAt).toBeGreaterThanOrEqual(claimed!.auditLease!.expiresAt)
       expect(duplicate).toBeUndefined()
 
       Database.use((db) => {
@@ -256,6 +270,7 @@ describe("workflow scheduler persistence", () => {
         if (!persisted?.data.completion) throw new Error("Expected persisted completion audit")
         db.update(WorkflowRunTable)
           .set({
+            state: "queued",
             data: {
               ...persisted.data,
               completion: {
@@ -290,6 +305,12 @@ describe("workflow scheduler persistence", () => {
           .where(eq(WorkflowRunTable.id, started.run.id))
           .run()
       })
+      const recoveryTick = yield* scheduler.tick(started.run.id)
+      expect(recoveryTick).toMatchObject({ state: "working", claimed: [] })
+      expect((yield* workflow.show(started.run.id)).run.state).toBe("working")
+      Database.use((db) =>
+        db.update(WorkflowRunTable).set({ state: "queued" }).where(eq(WorkflowRunTable.id, started.run.id)).run(),
+      )
       const reclaimed = yield* workflow.claimCompletionAudit({
         runID: started.run.id,
         holder: "auditor-two",
@@ -297,6 +318,7 @@ describe("workflow scheduler persistence", () => {
         candidateFingerprint: "workspace-fingerprint",
       })
       expect(reclaimed).toMatchObject({ status: "auditing", auditAttempts: 2 })
+      expect((yield* workflow.show(started.run.id)).run.state).toBe("working")
 
       const completed = yield* workflow.applyCompletionAudit({
         runID: started.run.id,
@@ -332,6 +354,26 @@ describe("workflow scheduler persistence", () => {
       expect(completed.gates.filter((gate) => gate.kind === "completion").every((gate) => gate.state === "pass")).toBe(true)
       expect(completed.artifacts.some((artifact) => artifact.kind === "completion-audit" && artifact.status === "valid")).toBe(true)
       expect(completed.events.filter((event) => event.type === "workflow.run.completed")).toHaveLength(1)
+    }),
+  )
+
+  it.instance("does not append duplicate workspace events when a runner reuses the same lease", () =>
+    Effect.gen(function* () {
+      const workflow = yield* WorkflowService.Service
+      const started = yield* workflow.start({ plan: retryGraph() })
+      const workspaceLease = {
+        id: "lease_reused",
+        mode: "in-place" as const,
+        path: "/tmp/workflow-reused",
+        state: "active" as const,
+        managed: false,
+        createdAt: 1_000,
+      }
+
+      const first = yield* workflow.setWorkspaceLease({ runID: started.run.id, workspaceLease })
+      const second = yield* workflow.setWorkspaceLease({ runID: started.run.id, workspaceLease })
+      expect(second.run.updatedAt).toBe(first.run.updatedAt)
+      expect(second.events.filter((event) => event.title === "Workflow workspace updated")).toHaveLength(1)
     }),
   )
 
@@ -637,6 +679,73 @@ describe("workflow scheduler persistence", () => {
     }),
   )
 
+  recoveryIt.instance("full access resolves a pending workflow permission and resumes the same task", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const permissions = yield* Permission.Service
+      const backgroundTasks = yield* BackgroundTask.Service
+      const workflow = yield* WorkflowService.Service
+      const scheduler = yield* WorkflowScheduler.Service
+      const runner = yield* WorkflowRunner.Service
+      const origin = yield* sessions.create({ title: "Permission mode origin" })
+      const child = yield* sessions.create({ parentID: origin.id, title: "Permission mode child" })
+      const started = yield* workflow.start({ plan: retryGraph(), originSessionID: origin.id })
+      Database.use((db) =>
+        db
+          .update(WorkflowRunTable)
+          .set({ root_session_id: origin.id })
+          .where(eq(WorkflowRunTable.id, started.run.id))
+          .run(),
+      )
+      const claim = (yield* scheduler.tick(started.run.id)).claimed[0]
+      if (!claim) throw new Error("Expected a workflow task claim")
+      const background = yield* backgroundTasks.start({
+        taskID: child.id,
+        parentSessionID: origin.id,
+        startRunning: true,
+        title: "Permission mode child",
+      })
+      yield* scheduler.markStarted({
+        runID: claim.runID,
+        taskID: claim.taskID,
+        attemptID: claim.attemptID,
+        backgroundTaskID: child.id,
+        backgroundGeneration: background.generation,
+      })
+
+      markPermissionPending({ sessionID: child.id, permission: "bash", patterns: ["pnpm --version"] }, 10)
+      const pending = yield* permissions
+        .ask({
+          sessionID: child.id,
+          permission: "bash",
+          patterns: ["pnpm --version"],
+          metadata: {},
+          always: ["pnpm --version"],
+          ruleset: [Permission.sessionModeRule("approval")],
+        })
+        .pipe(Effect.forkScoped)
+      yield* Effect.sleep("20 millis")
+      expect(yield* permissions.list()).toHaveLength(1)
+      expect(yield* backgroundTasks.get(child.id)).toMatchObject({ state: "needs_input" })
+      expect((yield* workflow.show(started.run.id)).run.state).toBe("needs_input")
+
+      yield* runner
+        .setPermissionMode({ runID: started.run.id, sessionMode: "full_access", actor: "test" })
+        .pipe(Effect.timeout("1 second"))
+      yield* Fiber.join(pending).pipe(Effect.timeout("1 second"))
+
+      expect(yield* permissions.list()).toHaveLength(0)
+      expect(yield* backgroundTasks.get(child.id)).toMatchObject({
+        generation: background.generation,
+        state: "running",
+      })
+      const resumed = yield* workflow.show(started.run.id)
+      expect(resumed.run.state).toBe("working")
+      expect(resumed.tasks.find((task) => task.id === claim.taskID)).toMatchObject({ state: "working" })
+      expect((yield* sessions.get(child.id)).permission?.at(-1)).toEqual(Permission.sessionModeRule("full_access"))
+    }),
+  )
+
   permissionIt.instance("fails an abandoned permission atomically and idempotently", () =>
     Effect.gen(function* () {
       const sessions = yield* Session.Service
@@ -756,6 +865,26 @@ describe("workflow scheduler persistence", () => {
 
       const now = Date.now()
       Database.use((db) => {
+        const permissionData = {
+          version: 2 as const,
+          approved: [],
+          requests: [
+            {
+              info: {
+                id: "per_live" as never,
+                sessionID: child.id,
+                permission: "bash",
+                patterns: ["git status"],
+                metadata: {},
+                always: [],
+              },
+              ownerRuntimeID: `permission:${process.pid}:test`,
+              directory: "/tmp",
+              timeCreated: now,
+              timeUpdated: now,
+            },
+          ],
+        }
         const run = db.select().from(BackgroundTaskRunTable).where(eq(BackgroundTaskRunTable.task_id, child.id)).get()
         if (!run) throw new Error("Expected a background run")
         db.update(BackgroundTaskRunTable)
@@ -780,26 +909,11 @@ describe("workflow scheduler persistence", () => {
             project_id: origin.projectID,
             time_created: now,
             time_updated: now,
-            data: {
-              version: 2,
-              approved: [],
-              requests: [
-                {
-                  info: {
-                    id: "per_live" as never,
-                    sessionID: child.id,
-                    permission: "bash",
-                    patterns: ["git status"],
-                    metadata: {},
-                    always: [],
-                  },
-                  ownerRuntimeID: `permission:${process.pid}:test`,
-                  directory: "/tmp",
-                  timeCreated: now,
-                  timeUpdated: now,
-                },
-              ],
-            },
+            data: permissionData,
+          })
+          .onConflictDoUpdate({
+            target: PermissionTable.project_id,
+            set: { time_updated: now, data: permissionData },
           })
           .run()
       })

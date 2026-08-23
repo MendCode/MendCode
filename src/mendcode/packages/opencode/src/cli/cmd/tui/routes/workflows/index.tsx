@@ -15,6 +15,8 @@ import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } fr
 import { CommandDeck, CommandDeckContext } from "@tui/component/command-deck"
 import {
   workflowCurrentActivity,
+  workflowCompletionAuditActivity,
+  workflowMonitorAuditSessionID,
   workflowMonitorFooter,
   workflowMonitorLayout,
   workflowMonitorResumeTarget,
@@ -22,6 +24,7 @@ import {
   workflowMonitorSessionID,
   workflowMonitorTaskRows,
   workflowRequestErrorText,
+  workflowTimeAgo,
 } from "@tui/util/workflow-view"
 import {
   workflowReceiptStateIsAnimated,
@@ -40,6 +43,9 @@ type WorkflowSnapshot = Omit<WorkflowSnapshotBase, "run" | "revision"> & {
       auditAttempts: number
       summary?: string
       failedCriteria?: string[]
+      auditLease?: { holder: string; expiresAt: number }
+      createdAt?: number
+      updatedAt?: number
     }
   }
   revision: Omit<WorkflowSnapshotBase["revision"], "plan"> & {
@@ -96,7 +102,13 @@ function receipt(snapshot: WorkflowSnapshot): WorkflowReceiptSnapshot {
       rootSessionID: snapshot.run.rootSessionID,
       createdAt: numeric(snapshot.run.createdAt),
       updatedAt: numeric(snapshot.run.updatedAt),
-      completion: snapshot.run.completion,
+      completion: snapshot.run.completion
+        ? {
+            ...snapshot.run.completion,
+            createdAt: optionalNumeric(snapshot.run.completion.createdAt),
+            updatedAt: optionalNumeric(snapshot.run.completion.updatedAt),
+          }
+        : undefined,
     },
     phases: snapshot.phases.map((phase) => ({
       id: phase.id,
@@ -180,10 +192,9 @@ export function Workflows() {
     const loaded = detail.latest ?? detail()
     return loaded?.run.id === item?.run.id ? loaded : item
   })
-  const currentActivity = createMemo(() => {
+  const workflowSessionIDs = createMemo(() => {
     const item = current()
-    if (!item) return
-    if (workflowReceiptStateIsTerminal(item.run.state)) return
+    if (!item) return [] as string[]
     const sessionIDs = new Set(
       [item.run.rootSessionID, ...item.tasks.map((task) => task.sessionID)].filter(
         (sessionID): sessionID is string => Boolean(sessionID),
@@ -199,7 +210,21 @@ export function Workflows() {
         pendingSessionIDs.push(session.id)
       }
     }
-    const sessionIDList = [...sessionIDs]
+    return [...sessionIDs]
+  })
+  const currentAuditSessionID = createMemo(() => {
+    const item = current()
+    if (!item || item.run.completion?.status !== "auditing") return
+    return workflowMonitorAuditSessionID({
+      rootSessionID: item.run.rootSessionID,
+      sessions: sync.data.session,
+    })
+  })
+  const currentActivity = createMemo(() => {
+    const item = current()
+    if (!item) return
+    if (workflowReceiptStateIsTerminal(item.run.state)) return
+    const sessionIDList = workflowSessionIDs()
     const activeTools = sessionIDList.flatMap((sessionID) =>
       (sync.data.message[sessionID] ?? []).flatMap((message) =>
         (sync.data.part[message.id] ?? []).flatMap((part) => {
@@ -223,7 +248,8 @@ export function Workflows() {
       activeTools,
       pendingPermissions,
       waitingTasks: item.tasks.filter((task) => task.state === "needs_input").length,
-      completionStatus: item.run.completion?.status,
+      completion: item.run.completion,
+      now: activityNow(),
     })
   })
   const currentPermissionMode = createMemo<WorkflowPermissionMode>(() => {
@@ -241,7 +267,7 @@ export function Workflows() {
     return item ? receipt(item) : undefined
   })
   const layout = createMemo(() => workflowMonitorLayout(dimensions()))
-  const monitorRows = createMemo(() => workflowMonitorRows(currentReceipt()))
+  const monitorRows = createMemo(() => workflowMonitorRows(currentReceipt(), activityNow()))
   const taskRows = createMemo(() => {
     const item = current()
     return item ? workflowMonitorTaskRows(receipt(item)) : []
@@ -274,7 +300,11 @@ export function Workflows() {
   onMount(() => {
     const timer = setInterval(() => setRefresh((value) => value + 1), 5_000)
     const animation = setInterval(() => {
-      if (items().some((item) => workflowReceiptStateIsAnimated(item.run.state))) {
+      if (
+        items().some(
+          (item) => workflowReceiptStateIsAnimated(item.run.state) || item.run.completion?.status === "auditing",
+        )
+      ) {
         setActivityFrame((value) => value + 1)
       }
     }, 180)
@@ -540,14 +570,14 @@ export function Workflows() {
   }
 
   async function openSession() {
-    const sessionID = workflowMonitorSessionID(currentReceipt())
+    const sessionID = currentAuditSessionID() ?? workflowMonitorSessionID(currentReceipt())
     if (!sessionID) {
-      toast.show({ variant: "info", message: "This workflow has no task transcript yet.", duration: 2500 })
+      toast.show({ variant: "info", message: "This workflow has no audit or task transcript yet.", duration: 2500 })
       return
     }
     const result = await sdk.client.session.get({ sessionID }).catch(() => undefined)
     if (result?.data) return route.navigate({ type: "session", sessionID })
-    toast.show({ variant: "warning", message: "The workflow task transcript was not found.", duration: 3500 })
+    toast.show({ variant: "warning", message: "The workflow transcript was not found.", duration: 3500 })
   }
 
   async function openCreatorSession() {
@@ -728,6 +758,13 @@ export function Workflows() {
                     </text>
                   )}
                 </Show>
+                <Show when={currentAuditSessionID()}>
+                  {(sessionID) => (
+                    <text fg={theme.secondary} wrapMode="none">
+                      audit chat {sessionID()} · Enter/o open
+                    </text>
+                  )}
+                </Show>
               </box>
             )}
           </Show>
@@ -860,6 +897,42 @@ export function Workflows() {
                       )}
                     </For>
                   </box>
+                  <Show
+                    when={item().run.completion?.status === "candidate" || item().run.completion?.status === "auditing"}
+                  >
+                    <box
+                      borderStyle="single"
+                      borderColor={theme.border}
+                      paddingLeft={1}
+                      paddingRight={1}
+                      flexDirection="column"
+                    >
+                      <text fg={theme.primary} attributes={TextAttributes.BOLD} wrapMode="none">
+                        COMPLETION AUDIT
+                      </text>
+                      <text fg={theme.warning} wrapMode="word">
+                        {workflowCompletionAuditActivity({
+                          runState: item().run.state,
+                          completion: item().run.completion,
+                          now: activityNow(),
+                        })}
+                      </text>
+                      <Show when={item().run.completion?.updatedAt}>
+                        {(updatedAt) => (
+                          <text fg={theme.textMuted} wrapMode="none">
+                            updated {workflowTimeAgo(updatedAt(), activityNow())}
+                          </text>
+                        )}
+                      </Show>
+                      <Show when={currentAuditSessionID()}>
+                        {(sessionID) => (
+                          <text fg={theme.secondary} wrapMode="none">
+                            Enter/o opens auditor {sessionID()}
+                          </text>
+                        )}
+                      </Show>
+                    </box>
+                  </Show>
                   <box
                     borderStyle="single"
                     borderColor={theme.border}

@@ -36,6 +36,9 @@ export type WorkflowReceiptSnapshot = {
       auditAttempts: number
       summary?: string
       failedCriteria?: readonly string[]
+      auditLease?: { holder: string; expiresAt: number }
+      createdAt?: number
+      updatedAt?: number
     }
   }
   phases: readonly {
@@ -189,14 +192,23 @@ export function workflowReceiptElapsed(snapshot: Pick<WorkflowReceiptSnapshot, "
   return Math.max(0, end - snapshot.run.createdAt)
 }
 
-export function workflowReceiptNextAction(snapshot: WorkflowReceiptSnapshot) {
+export function workflowReceiptNextAction(snapshot: WorkflowReceiptSnapshot, now = Date.now()) {
   const blocker = snapshot.tasks.find((task) => task.blocker)?.blocker
   if (blocker) return blocker
   if (snapshot.run.state === "needs_input" || snapshot.run.state === "awaiting_approval") return "Operator input or approval required."
   if (snapshot.run.state === "blocked") return "Inspect the blocker before resuming."
+  if (snapshot.run.state === "paused" && snapshot.run.completion?.status === "auditing") {
+    return "Resume the paused completion audit."
+  }
   if (snapshot.run.completion?.status === "candidate") return "Run the fresh completion audit before closing."
-  if (snapshot.run.completion?.status === "auditing") return "Fresh completion audit is inspecting current evidence."
-  if (snapshot.run.completion?.status === "rejected") return "Repair the failed completion criteria and regenerate the final evidence."
+  if (snapshot.run.completion?.status === "auditing") {
+    const lease = snapshot.run.completion.auditLease
+    if (lease && lease.expiresAt <= now) return "Completion audit stalled; resume to reclaim the expired audit lease."
+    if (!lease) return "Completion audit is queued for an auditor."
+    return "Fresh completion audit is inspecting current evidence."
+  }
+  if (snapshot.run.completion?.status === "rejected")
+    return "Repair the failed completion criteria and regenerate the final evidence."
   if (snapshot.run.state === "paused") return "Resume when the workflow is ready to continue."
   if (snapshot.run.state === "completed") return "Review the final artifact."
   if (snapshot.run.state === "failed") return "Retry the failed task or phase."

@@ -442,6 +442,7 @@ export function sessionLoopReceipt(input: {
     if (state === "needs_input" || phase === "needs_input") return { label: "needs input", tone: "warning" as const }
     if (state === "completed") return { label: "complete", tone: "success" as const }
     if (state === "draft" || phase === "draft") return { label: "draft", tone: "info" as const }
+    if (phase === "retry_scheduled") return { label: "retrying", tone: "warning" as const }
     if (state === "working" || phase === "executing") return { label: "running", tone: "active" as const }
     if (phase === "monitor") return { label: "monitoring", tone: "active" as const }
     if (state === "sleeping" || phase === "waiting") return { label: "waiting", tone: "warning" as const }
@@ -463,7 +464,16 @@ export function sessionLoopReceipt(input: {
     return { label: "running", tone: "active" }
   }
   const currentState = stateReceipt()
-  if (currentState && (action === "show" || action === "list" || state === "failed" || state === "blocked" || state === "needs_input")) return currentState
+  if (
+    currentState &&
+    (action === "show" ||
+      action === "list" ||
+      state === "failed" ||
+      state === "blocked" ||
+      state === "needs_input" ||
+      phase === "retry_scheduled")
+  )
+    return currentState
   if (action === "activate") return { label: "started", tone: "success" }
   if (action === "draft") return { label: "drafted", tone: "info" }
   if (action === "show" || action === "list") return { label: "searched", tone: "muted" }

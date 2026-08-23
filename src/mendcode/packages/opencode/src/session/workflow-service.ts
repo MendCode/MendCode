@@ -921,6 +921,19 @@ export const layer = Layer.effect(
       readonly workspaceLease: WorkflowWorkspaceLease
     }) {
       const current = yield* show(input.runID)
+      const existing = current.run.workspaceLease
+      if (
+        existing?.id === input.workspaceLease.id &&
+        existing.mode === input.workspaceLease.mode &&
+        existing.path === input.workspaceLease.path &&
+        existing.branch === input.workspaceLease.branch &&
+        existing.state === input.workspaceLease.state &&
+        existing.managed === input.workspaceLease.managed &&
+        existing.createdAt === input.workspaceLease.createdAt &&
+        existing.error === input.workspaceLease.error
+      ) {
+        return current
+      }
       const now = Date.now()
       Database.transaction((db) => {
         const row = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, input.runID)).get()
@@ -1224,8 +1237,25 @@ export const layer = Layer.effect(
         const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, input.runID)).get()
         if (!run) throw new WorkflowNotFoundError(input.runID)
         const current = run.data.completion
-        if (run.state !== "working") return
+        if (run.state !== "queued" && run.state !== "working") return
         if (!current || (current.status !== "candidate" && current.status !== "auditing")) return
+        if (current.status === "auditing" && current.auditLease?.holder === input.holder) {
+          const progress: CompletionProgress = {
+            ...current,
+            auditLease: { holder: input.holder, expiresAt: now + Math.max(5_000, input.leaseMs) },
+            updatedAt: now,
+          }
+          db.update(WorkflowRunTable)
+            .set({
+              state: "working",
+              time_ended: null,
+              time_updated: now,
+              data: { ...run.data, completion: progress, blocker: undefined, nextAction: "Run the fresh completion audit." },
+            })
+            .where(eq(WorkflowRunTable.id, input.runID))
+            .run()
+          return progress
+        }
         if (current.status === "auditing" && (current.auditLease?.expiresAt ?? 0) > now) return
         const progress: CompletionProgress = {
           ...current,
