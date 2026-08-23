@@ -286,6 +286,14 @@ describe("session layout", () => {
     expect(sessionLoopReceipt({ workflowState: "draft", workflowPhase: "draft" })).toEqual({ label: "draft", tone: "info" })
     expect(sessionLoopReceipt({ workflowState: "active", workflowPhase: "ready" })).toEqual({ label: "ready", tone: "info" })
     expect(sessionLoopReceipt({ workflowState: "working", workflowPhase: "monitor" })).toEqual({ label: "running", tone: "active" })
+    expect(
+      sessionLoopReceipt({
+        action: "activate",
+        toolStatus: "completed",
+        workflowState: "sleeping",
+        workflowPhase: "retry_scheduled",
+      }),
+    ).toEqual({ label: "retrying", tone: "warning" })
     expect(sessionLoopReceipt({ workflowState: "blocked", workflowPhase: "budget_exhausted" })).toEqual({ label: "budget reached", tone: "warning" })
     expect(sessionLoopReceipt({ workflowState: "needs_input" })).toEqual({ label: "needs input", tone: "warning" })
     expect(sessionLoopReceipt({ workflowState: "failed" })).toEqual({ label: "failed", tone: "danger" })

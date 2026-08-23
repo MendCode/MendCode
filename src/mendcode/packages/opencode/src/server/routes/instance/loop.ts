@@ -2,13 +2,13 @@ import { InstanceState } from "@/effect/instance-state"
 import { loopServiceArgsFromConfig, loopServiceStart } from "@/mend/runtime/loop-service"
 import { externalSignalRateLimit, LoopID, LoopWorkflow } from "@/session/loop"
 import { LoopRunner } from "@/session/loop-runner"
-import { SessionID } from "@/session/schema"
 import { lazy } from "@/util/lazy"
 import { Effect } from "effect"
 import { Hono } from "hono"
 import z from "zod"
 import { jsonRequest, runRequest } from "./trace"
 import { Flag } from "@mendcode/core/flag/flag"
+import { LoopDraftBody } from "./loop-draft-schema"
 
 const ReasonBody = z.object({
   reason: z.string().optional(),
@@ -40,40 +40,6 @@ function securedOperator(c: { json: (value: unknown, status?: 401) => Response }
   if (Flag.OPENCODE_SERVER_PASSWORD) return
   return c.json({ error: "Loop signal and override endpoints require configured server authentication." }, 401)
 }
-
-const DraftBody = z.object({
-  name: z.string().min(1),
-  objective: z.string().min(1),
-  source: z.enum(["converted-session", "objective", "template", "manual"]).optional(),
-  ownerSessionID: SessionID.zod.optional(),
-  templateID: z.string().optional(),
-  trigger: z
-    .object({
-      mode: z.enum(["manual", "interval", "daily", "adaptive", "external-signal", "self-paced"]).optional(),
-      intervalMs: z.number().int().nonnegative().optional(),
-      dailyAt: z.string().optional(),
-      timezone: z.string().optional(),
-    })
-    .optional(),
-  workflow: z
-    .object({
-      revisionID: z.string().trim().min(1).optional(),
-      definitionID: z.string().trim().min(1).optional(),
-      overlapKey: z.string().trim().min(1).optional(),
-    })
-    .optional(),
-  stopWhen: z.array(z.string()).optional(),
-  gates: z.array(z.string()).optional(),
-  policy: z
-    .object({
-      maxTurns: z.number().int().positive().optional(),
-      maxRuntimeMs: z.number().int().nonnegative().optional(),
-      maxChildren: z.number().int().nonnegative().optional(),
-      maxDepth: z.number().int().nonnegative().optional(),
-      requireApprovalFor: z.array(z.string()).optional(),
-    })
-    .optional(),
-})
 
 async function readJson<T>(c: { req: { json: () => Promise<unknown> } }, schema: z.ZodType<T>) {
   return schema.parse(await c.req.json().catch(() => ({})))
@@ -131,7 +97,7 @@ export const LoopRoutes = lazy(() =>
       }),
     )
     .post("/draft", async (c) => {
-      const body = await readJson(c, DraftBody)
+      const body = await readJson(c, LoopDraftBody)
       return jsonRequest("LoopRoutes.draft", c, function* () {
         const loop = yield* LoopWorkflow.Service
         return yield* loop.createDraft(body)

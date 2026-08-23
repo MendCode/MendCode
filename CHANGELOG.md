@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.1.36 - 2026-08-23
+
+MendCode v0.1.36 makes Loop and Workflow supervision durable, observable, and consistent with the workspace users actually inspect.
+
+### Changed
+
+- Show the interruption confirmation only after the first `Esc` press, on the left side of the activity row; a second `Esc` still targets the same active turn.
+- Display completion-audit lifecycle, attempt, lease countdown or expiry age, last update, and the active auditor chat directly in the Workflow monitor.
+- Open the current completion-auditor transcript before completed task transcripts while a Workflow audit is active.
+
+### Fixed
+
+- Reclaim expired completion-audit leases after restart even when every Workflow task is already complete, without falling back to a permanently queued run.
+- Renew active completion-audit leases without increasing the attempt count, so long auditor turns cannot reject their own final evidence as stale.
+- Avoid duplicate workspace-update events when a recovered Workflow reuses the same workspace lease.
+- Execute Loop workers inside their authoritative leased worktree, preserve that path and branch through terminal state, and notify the parent chat with the exact workspace location.
+- Keep Loop draft behavior aligned across legacy and Effect HTTP routes, including full contracts that omit optional cost or token caps.
+- Prevent large transcripts from visibly unmounting when a submitted message moves into the optimistic render window.
+- Preserve keyboard permission selection when OpenTUI reports synthetic or parked pointer movement.
+
+### Tests
+
+- Add focused regressions for audit restart recovery, duplicate lease events, auditor transcript routing, audit-state presentation, two-step interruption placement, Loop route parity, worktree ownership, large-session submission, and permission selection.
+- Run 335 release-focused Loop, Workflow, TUI, session, permission, and route tests with isolated state, plus the native Darwin build and startup smoke checks.
+
 ## 0.1.35 - 2026-08-22
 
 MendCode v0.1.35 makes long-running sessions, Loop execution, Usage Insights, and local agent collaboration more immediate and reliable.

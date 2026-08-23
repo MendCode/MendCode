@@ -718,8 +718,8 @@ export function sessionInterruptConfirmationAction(input: {
 }
 
 export function sessionInterruptHint(input: { enabled: boolean; working: boolean; armed: boolean }) {
-  if (!input.enabled || !input.working) return
-  return input.armed ? "[esc again to interrupt]" : "[esc to interrupt]"
+  if (!input.enabled || !input.working || !input.armed) return
+  return "[esc again to interrupt]"
 }
 
 export function clipboardPasteAction(content: { mime?: string; data?: string } | undefined): "image" | "text" | "none" {
@@ -2639,11 +2639,6 @@ export function Prompt(props: PromptProps) {
     const queuedBehindActiveTurn = workingStatusActive()
     const submissionStartedAt = Date.now()
     submitPending = true
-    setSubmitPreflightActive(true)
-    if (!queuedBehindActiveTurn) {
-      setWorkingStartedAt(submissionStartedAt)
-      if (props.sessionID) workingStartedAtBySession.set(props.sessionID, submissionStartedAt)
-    }
     updateInterruptRequested(false)
     const modelConfig = await readModelsConfig(mend.root).catch(() => undefined)
     const configuredRole = Object.values(modelConfig?.roles || {}).find(
@@ -2745,10 +2740,6 @@ export function Prompt(props: PromptProps) {
     local.model.variant.set(variant, { model: selectedModel })
 
     updateInterruptRequested(false)
-    if (!queuedBehindActiveTurn) {
-      workingStartedAtBySession.set(sessionID, submissionStartedAt)
-      setWorkingStartedAt(submissionStartedAt)
-    }
     const inputText = submittedPrompt.inputText
     const nonTextParts = submittedPrompt.nonTextParts
 
@@ -2797,9 +2788,55 @@ export function Prompt(props: PromptProps) {
       throw error
     }
 
-    // Do not expose a render between clearing the editor and mounting the
-    // optimistic turn. On large transcripts that intermediate layout pass can
-    // briefly leave the scrollbox with only virtual spacers on screen.
+    const skillPromptParts =
+      slashInvocation && skillInvocation
+        ? [
+            {
+              id: PartID.ascending(),
+              type: "text" as const,
+              text: `/${slashInvocation.name}${slashInvocation.arguments ? ` ${slashInvocation.arguments}` : ""}`,
+            },
+            {
+              id: PartID.ascending(),
+              type: "text" as const,
+              text: `Use the skill tool to load "${skillInvocation.name}", then follow its instructions for: ${slashInvocation.arguments}`,
+              synthetic: true,
+              metadata: {
+                kind: "skill_invocation",
+                skill: skillInvocation.name,
+              },
+            },
+            ...supplementalSlashPromptParts(promptParts),
+          ]
+        : undefined
+    const optimisticParts =
+      currentMode !== "shell" &&
+      !(slashInvocation && NATIVE_COMPACTION_SLASHES.has(slashInvocation.name)) &&
+      !(slashInvocation && slashServerCommand)
+        ? (skillPromptParts ?? promptParts)
+        : undefined
+
+    // OpenTUI can render synchronously when either transcript or editor height
+    // changes. Commit the submitted-turn anchor and optimistic row together so
+    // virtualization never resolves an intermediate frame from stale scrollTop.
+    batch(() => {
+      setSubmitPreflightActive(true)
+      if (!queuedBehindActiveTurn) {
+        workingStartedAtBySession.set(sessionID, submissionStartedAt)
+        setWorkingStartedAt(submissionStartedAt)
+      }
+      props.onSubmit?.({ sessionID, messageID, inputRows: submittedInputRows, queuedBehindActiveTurn })
+      if (!optimisticParts) return
+      insertOptimisticUserTurn({
+        sessionID,
+        messageID,
+        agent: agent.name,
+        model: selectedModel,
+        variant,
+        created: Date.now(),
+        parts: optimisticParts,
+      })
+    })
     clearPromptForSubmit()
     history.append(
       {
@@ -2838,35 +2875,6 @@ export function Prompt(props: PromptProps) {
           })
         })
     } else if (slashInvocation && skillInvocation) {
-      const visible = `/${slashInvocation.name}${slashInvocation.arguments ? ` ${slashInvocation.arguments}` : ""}`
-      const skillPromptParts = [
-        {
-          id: PartID.ascending(),
-          type: "text" as const,
-          text: visible,
-        },
-        {
-          id: PartID.ascending(),
-          type: "text" as const,
-          text: `Use the skill tool to load "${skillInvocation.name}", then follow its instructions for: ${slashInvocation.arguments}`,
-          synthetic: true,
-          metadata: {
-            kind: "skill_invocation",
-            skill: skillInvocation.name,
-          },
-        },
-        ...supplementalSlashPromptParts(promptParts),
-      ]
-      const optimisticCreated = Date.now()
-      insertOptimisticUserTurn({
-        sessionID,
-        messageID,
-        agent: agent.name,
-        model: selectedModel,
-        variant,
-        created: optimisticCreated,
-        parts: skillPromptParts,
-      })
       void deliverPrompt(
         {
           sessionID,
@@ -2874,7 +2882,7 @@ export function Prompt(props: PromptProps) {
           agent: agent.name,
           model: selectedModel,
           variant,
-          parts: skillPromptParts,
+          parts: skillPromptParts!,
         },
         { queuedBehindActiveTurn },
       )
@@ -2896,16 +2904,6 @@ export function Prompt(props: PromptProps) {
           })),
       })
     } else {
-      const optimisticCreated = Date.now()
-      insertOptimisticUserTurn({
-        sessionID,
-        messageID,
-        agent: agent.name,
-        model: selectedModel,
-        variant,
-        created: optimisticCreated,
-        parts: promptParts,
-      })
       void deliverPrompt(
         {
           sessionID,
@@ -2919,7 +2917,6 @@ export function Prompt(props: PromptProps) {
       )
       if (editorParts.length > 0) editor.markSelectionSent()
     }
-    props.onSubmit?.({ sessionID, messageID, inputRows: submittedInputRows, queuedBehindActiveTurn })
     renderer.requestRender()
 
     if (props.sessionID) submitPending = false
@@ -3888,6 +3885,13 @@ export function Prompt(props: PromptProps) {
             paddingRight={promptFooterPadRight()}
           >
             <box flexDirection="row" gap={1} flexShrink={1}>
+              <Show when={interruptHint()}>
+                {(hint) => (
+                  <text fg={theme.warning} wrapMode="none">
+                    {hint()}
+                  </text>
+                )}
+              </Show>
               <Show when={connectionStateMessage()}>
                 {(message) => (
                   <text fg={theme.warning} wrapMode="none">
@@ -3955,13 +3959,6 @@ export function Prompt(props: PromptProps) {
               </Show>
             </box>
             <box flexDirection="row" gap={2} flexShrink={0}>
-              <Show when={interruptHint()}>
-                {(hint) => (
-                  <text fg={store.interrupt > 0 ? theme.warning : theme.textMuted} wrapMode="none">
-                    {hint()}
-                  </text>
-                )}
-              </Show>
               <Show when={status().type !== "retry" && workingStatusActive() && workingRightMeta()}>
                 {(meta) => (
                   <text fg={theme.textMuted} wrapMode="none">

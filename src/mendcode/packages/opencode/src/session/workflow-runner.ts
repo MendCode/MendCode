@@ -56,6 +56,10 @@ export function shouldRecoverWorkflowRun(state: WorkflowRunState) {
   return state === "queued" || state === "working"
 }
 
+export function shouldAuditWorkflowCompletion(state: WorkflowRunState) {
+  return state === "queued" || state === "working"
+}
+
 const errorText = (error: unknown) => {
   if (error instanceof Error) return error.message
   if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string")
@@ -190,7 +194,7 @@ export const layer = Layer.effect(
     const background = yield* WorkflowBackgroundTask.Service
     const executor = yield* WorkflowTaskExecutor.Service
     const sessions = yield* Session.Service
-    const permissions = Option.getOrUndefined(yield* Effect.serviceOption(Permission.Service))
+    const permissions = yield* Permission.Service
     const instances = Option.getOrUndefined(yield* Effect.serviceOption(InstanceStore.Service))
     const worktrees = Option.getOrUndefined(yield* Effect.serviceOption(Worktree.Service))
     const bus = yield* Bus.Service
@@ -553,30 +557,51 @@ export const layer = Layer.effect(
       readonly sessionPermissionMode: WorkflowSessionPermissionMode
     }) {
       const pending = input.snapshot.run.completion
-      if (input.snapshot.run.state !== "working") return false
+      if (!shouldAuditWorkflowCompletion(input.snapshot.run.state)) return false
       if (!pending || (pending.status !== "candidate" && pending.status !== "auditing")) return false
       const fingerprintBeforeResult = yield* Effect.promise(() => fingerprintWorkspace(input.directory))
       const holder = `workflow-completion-auditor:${process.pid}:${crypto.randomUUID()}`
+      const auditLeaseMs = 10 * 60_000
       const progress = yield* workflow.claimCompletionAudit({
         runID: input.snapshot.run.id,
         holder,
-        leaseMs: 10 * 60_000,
+        leaseMs: auditLeaseMs,
         ...(fingerprintBeforeResult.status === "ok" ? { candidateFingerprint: fingerprintBeforeResult.value } : {}),
       })
       if (!progress) return false
 
+      const withAuditLeaseHeartbeat = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            yield* Effect.gen(function* () {
+              while (true) {
+                yield* Effect.sleep(Duration.millis(Math.floor(auditLeaseMs / 3)))
+                const renewal = yield* workflow.claimCompletionAudit({
+                  runID: input.snapshot.run.id,
+                  holder,
+                  leaseMs: auditLeaseMs,
+                }).pipe(Effect.option)
+                if (Option.isSome(renewal) && !renewal.value) return
+              }
+            }).pipe(Effect.forkScoped)
+            return yield* effect
+          }),
+        )
+
       const checks = input.snapshot.revision.plan.completion?.validationChecks ?? []
       const validationAllowed = input.snapshot.revision.plan.permissions?.mode !== "report-only" &&
         input.snapshot.revision.plan.workspace?.mode !== "read-only"
-      const validationResults = yield* Effect.forEach(
-        checks,
-        (check) => runCompletionValidationCommand(
-          check.command,
-          input.directory,
-          Math.max(1_000, Math.min(check.timeoutMs ?? 120_000, 10 * 60_000)),
-          validationAllowed,
-        ).pipe(Effect.map((result) => ({ check, result }))),
-        { concurrency: 1 },
+      const validationResults = yield* withAuditLeaseHeartbeat(
+        Effect.forEach(
+          checks,
+          (check) => runCompletionValidationCommand(
+            check.command,
+            input.directory,
+            Math.max(1_000, Math.min(check.timeoutMs ?? 120_000, 10 * 60_000)),
+            validationAllowed,
+          ).pipe(Effect.map((result) => ({ check, result }))),
+          { concurrency: 1 },
+        ),
       )
       const gates: CompletionGate[] = validationResults.map(({ check, result }) => ({
         id: `validation:${check.id}`,
@@ -632,18 +657,20 @@ export const layer = Layer.effect(
         permission: Permission.withSessionMode(policy.permission, input.sessionPermissionMode),
       })
       const executionResult = fingerprintBeforeResult.status === "ok"
-        ? yield* executor.execute({
-            task: auditTask,
-            sessionID: auditSession.id,
-            workflowModel: input.snapshot.revision.plan.model,
-            workflowPermissions: input.snapshot.revision.plan.permissions,
-            workflowWorkspace: input.snapshot.revision.plan.workspace,
-          }).pipe(
-            Effect.catchCause((cause) => Effect.succeed<ExecutionResult>({
-              state: "failed",
-              failureClass: isTransientWorkflowError(errorText(Cause.squash(cause))) ? "transient" : "environment",
-              error: errorText(Cause.squash(cause)),
-            })),
+        ? yield* withAuditLeaseHeartbeat(
+            executor.execute({
+              task: auditTask,
+              sessionID: auditSession.id,
+              workflowModel: input.snapshot.revision.plan.model,
+              workflowPermissions: input.snapshot.revision.plan.permissions,
+              workflowWorkspace: input.snapshot.revision.plan.workspace,
+            }).pipe(
+              Effect.catchCause((cause) => Effect.succeed<ExecutionResult>({
+                state: "failed",
+                failureClass: isTransientWorkflowError(errorText(Cause.squash(cause))) ? "transient" : "environment",
+                error: errorText(Cause.squash(cause)),
+              })),
+            ),
           )
         : {
             state: "blocked" as const,
@@ -822,7 +849,13 @@ export const layer = Layer.effect(
       const snapshot = yield* workflow.setPermissionMode(input)
       if (!snapshot.run.rootSessionID) return snapshot
       const children = yield* background.listChildren(snapshot.run.rootSessionID)
-      const sessionIDs = children.map((child) => child.taskID)
+      const sessionIDs = Array.from(
+        new Set([
+          snapshot.run.rootSessionID,
+          ...snapshot.tasks.flatMap((task) => (task.sessionID ? [task.sessionID] : [])),
+          ...children.map((child) => child.taskID),
+        ]),
+      )
       const sessionPermissionMode =
         snapshot.run.sessionPermissionMode ?? (yield* Effect.promise(() => readPermissionsConfig())).mode
 
@@ -840,7 +873,7 @@ export const layer = Layer.effect(
           ),
         { concurrency: 8, discard: true },
       )
-      if (!permissions || sessionIDs.length === 0) return snapshot
+      if (sessionIDs.length === 0) return snapshot
 
       if (input.mode !== undefined && snapshot.run.permissionMode !== "custom") {
         yield* permissions.replyForSessions({
@@ -924,6 +957,7 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer.pipe(
+  Layer.provide(Permission.defaultLayer),
   Layer.provide(WorkflowTaskExecutor.defaultLayer),
   Layer.provide(WorkflowBackgroundTask.defaultLayer),
   Layer.provide(WorkflowScheduler.defaultLayer),

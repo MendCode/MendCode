@@ -497,6 +497,7 @@ describe("tool.loop", () => {
               triggerMode: "interval",
               intervalMs: 3_600_000,
               maxTurns: 1,
+              maxCost: 0,
               maxTokens: 0,
               permissionMode: "report-only",
               reportOnly: true,

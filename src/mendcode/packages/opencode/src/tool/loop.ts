@@ -91,7 +91,7 @@ export const Parameters = Schema.Struct({
       "Loop budget semantics: fixed runs exactly to a positive maxTurns cap, max-goal uses an optional maxTurns cap and completes as soon as the goal is verified, unbounded-monitor omits maxTurns and runs until stopped/blocker.",
   }),
   maxCost: Schema.optional(Schema.Number).annotate({
-    description: "Optional lifetime model cost budget for the loop when usage metadata is available; omit it when Setup has no budget configured.",
+    description: "Optional positive lifetime model cost budget for the loop when usage metadata is available; omit it when Setup has no budget configured. Zero is treated as omitted.",
   }),
   maxTokens: Schema.optional(Schema.Number).annotate({
     description: "Optional lifetime token budget for the loop when usage metadata is available; omit it when Setup has no budget configured or when no per-loop cap was explicitly requested.",
@@ -465,8 +465,8 @@ function positiveMaxTurns(value: number | undefined) {
   return Math.floor(value)
 }
 
-function nonNegativeMaxCost(value: number | undefined) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined
+function positiveMaxCost(value: number | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined
   return value
 }
 
@@ -508,7 +508,7 @@ function createInput(params: Schema.Schema.Type<typeof Parameters>, sessionID: T
     (params.permissionMode === undefined && params.reportOnly !== false && !allowEditsFromObjective)
   const budgetMode = inferBudgetMode(params)
   const maxTurns = maxTurnsFor(params, budgetMode)
-  const maxCost = nonNegativeMaxCost(params.maxCost)
+  const maxCost = positiveMaxCost(params.maxCost)
   const maxTokens = positiveMaxTurns(params.maxTokens)
   const evaluationMode = params.evaluationMode ?? (budgetMode === "max-goal" ? "independent" : "legacy")
   const triggerMode = params.triggerMode ?? (params.dailyAt !== undefined || params.timezone !== undefined ? "daily" : params.intervalMs !== undefined ? "interval" : "manual")
