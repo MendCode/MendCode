@@ -301,6 +301,7 @@ const Metrics = Schema.Struct({
   turns: Schema.optional(NonNegativeInt),
   children: Schema.optional(NonNegativeInt),
   failures: Schema.optional(NonNegativeInt),
+  consecutiveFailures: Schema.optional(NonNegativeInt),
   noProgress: Schema.optional(NonNegativeInt),
   cost: Schema.optional(Schema.Number),
   inputTokens: Schema.optional(NonNegativeInt),
@@ -860,7 +861,8 @@ function positiveInt(value: number | undefined) {
 
 function normalizeCostBudget(value: Spec["costBudget"]) {
   if (!value) return undefined
-  const maxCost = typeof value.maxCost === "number" && Number.isFinite(value.maxCost) && value.maxCost >= 0 ? value.maxCost : undefined
+  const maxCost =
+    typeof value.maxCost === "number" && Number.isFinite(value.maxCost) && value.maxCost > 0 ? value.maxCost : undefined
   const maxTokens = positiveInt(value.maxTokens)
   if (maxCost === undefined && maxTokens === undefined) return undefined
   return { maxCost, maxTokens }
@@ -1081,20 +1083,24 @@ function retryableFailure(failureClass: FailureClass) {
 }
 
 function failureTransition(input: { metrics: Metrics; failureClass: FailureClass; now: number }) {
-  if (input.failureClass === "budget") return { state: "blocked" as const, phase: "budget_exhausted", nextWakeup: undefined, retry: undefined }
-  if (input.failureClass === "user_input") return { state: "needs_input" as const, phase: "needs_input", nextWakeup: undefined, retry: undefined }
-  if (input.failureClass === "policy") return { state: "blocked" as const, phase: "policy_blocked", nextWakeup: undefined, retry: undefined }
-  if (!retryableFailure(input.failureClass) || (input.metrics.failures ?? 0) >= maxFailureRetries) {
+  if (input.failureClass === "budget")
+    return { state: "blocked" as const, phase: "budget_exhausted", nextWakeup: undefined, retry: undefined }
+  if (input.failureClass === "user_input")
+    return { state: "needs_input" as const, phase: "needs_input", nextWakeup: undefined, retry: undefined }
+  if (input.failureClass === "policy")
+    return { state: "blocked" as const, phase: "policy_blocked", nextWakeup: undefined, retry: undefined }
+  const consecutiveFailures = input.metrics.consecutiveFailures ?? input.metrics.failures ?? 0
+  if (!retryableFailure(input.failureClass) || consecutiveFailures >= maxFailureRetries) {
     return { state: "failed" as const, phase: "failed", nextWakeup: undefined, retry: undefined }
   }
-  const backoffMs = failureBackoffMs(input.metrics.failures ?? 1)
+  const backoffMs = failureBackoffMs(consecutiveFailures || 1)
   const nextWakeup = input.now + backoffMs
   return {
     state: "sleeping" as const,
     phase: "retry_scheduled",
     nextWakeup,
     retry: {
-      attempt: input.metrics.failures ?? 1,
+      attempt: consecutiveFailures || 1,
       backoffMs,
       nextWakeup,
     },
@@ -2331,7 +2337,11 @@ function reconcileStaleWorkingRun(row: WorkflowRow, now = Date.now()): WorkflowR
         data: {
           spec: row.data.spec,
           policy: row.data.policy,
-          metrics: { ...row.data.metrics, failures: (row.data.metrics.failures ?? 0) + 1 },
+          metrics: {
+            ...row.data.metrics,
+            failures: (row.data.metrics.failures ?? 0) + 1,
+            consecutiveFailures: (row.data.metrics.consecutiveFailures ?? 0) + 1,
+          },
           memory: row.data.memory,
           scheduler: {
             ...row.data.scheduler,
@@ -2968,7 +2978,7 @@ export const layer = Layer.effect(
             requireApprovalFor: spec.approvalPolicy?.requireApprovalFor ?? policy.requireApprovalFor,
             approvedActions: spec.approvalPolicy?.approvedActions ?? policy.approvedActions,
           },
-          metrics: { turns: 0, children: 0, failures: 0, noProgress: 0 },
+          metrics: { turns: 0, children: 0, failures: 0, consecutiveFailures: 0, noProgress: 0 },
           memory: memoryEnabled(spec) ? { entries: [] } : undefined,
         },
       }
@@ -2990,6 +3000,21 @@ export const layer = Layer.effect(
       if (!workflow.rootSessionID) return
       const ctx = yield* InstanceState.context
       const now = Date.now()
+      const existing = Database.use((db) =>
+        db
+          .select()
+          .from(LoopThreadTable)
+          .where(
+            and(eq(LoopThreadTable.workflow_id, workflow.id), eq(LoopThreadTable.session_id, workflow.rootSessionID!)),
+          )
+          .get(),
+      )
+      const persistedLease =
+        workspaceLease ??
+        (runID
+          ? Database.use((db) => db.select().from(LoopRunTable).where(eq(LoopRunTable.id, runID)).get())?.data
+              .workspaceLease
+          : undefined)
       const row: ThreadRow = {
         workflow_id: workflow.id,
         run_id: runID ?? null,
@@ -3000,7 +3025,11 @@ export const layer = Layer.effect(
         parent_session_id: workflow.ownerSessionID ?? null,
         time_created: now,
         time_updated: now,
-        data: { budget: workflow.metrics, worktree: workspaceLease?.path ?? ctx.worktree, branch: workspaceLease?.branch },
+        data: {
+          budget: workflow.metrics,
+          worktree: persistedLease?.path ?? existing?.data?.worktree ?? ctx.worktree,
+          branch: persistedLease?.branch ?? existing?.data?.branch,
+        },
       }
       Database.use((db) =>
         db
@@ -3842,8 +3871,12 @@ export const layer = Layer.effect(
       }
       if (!current.rootSessionID) current = yield* activate({ id: current.id, reason: input.reason ?? "Activated for loop run.", now: input.now })
       const now = input.now ?? Date.now()
-      if (!canStartScheduledRun(current, now)) {
-        return yield* Effect.fail(new NotFoundError({ message: `Loop \"${current.name}\" is sleeping until ${new Date(current.nextWakeup!).toISOString()}.` }))
+      if (input.trigger !== "run-once" && !canStartScheduledRun(current, now)) {
+        return yield* Effect.fail(
+          new NotFoundError({
+            message: `Loop \"${current.name}\" is sleeping until ${new Date(current.nextWakeup!).toISOString()}.`,
+          }),
+        )
       }
       const lease = runLease({ holder: input.leaseHolder, policy: current.policy, now })
       const runRow: RunRow = {
@@ -3990,7 +4023,10 @@ export const layer = Layer.effect(
       const sanitizedReason = sanitizeArtifactString(input.reason, maxArtifactSummaryChars)
       const pendingExternalSignal = current.spec.trigger?.mode === "external-signal" && typeof current.nextWakeup === "number"
       const nextWakeup = nextWakeupAfterRun(current, input.nextWakeup, now, pendingExternalSignal)
-      const metrics = addUsageToMetrics({ ...current.metrics, turns: (current.metrics.turns ?? 0) + 1 }, usage)
+      const metrics = addUsageToMetrics(
+        { ...current.metrics, turns: (current.metrics.turns ?? 0) + 1, consecutiveFailures: 0 },
+        usage,
+      )
       const checkpointStatus = input.goalStatus ?? sanitizedCheckpoint?.status
       const completionProposed = checkpointStatus === "complete" || (checkpointStatus === "blocked" && judgmentPassed(sanitizedJudgment))
       const sanitizedGateResults = [
@@ -4275,7 +4311,11 @@ export const layer = Layer.effect(
         return fromRunRow(row)
       }
       const now = input.now ?? Date.now()
-      const metrics = { ...current.metrics, failures: (current.metrics.failures ?? 0) + 1 }
+      const metrics = {
+        ...current.metrics,
+        failures: (current.metrics.failures ?? 0) + 1,
+        consecutiveFailures: (current.metrics.consecutiveFailures ?? 0) + 1,
+      }
       const failureClass = input.failureClass ?? classifyFailure(input.error)
       const transition = failureTransition({ metrics, failureClass, now })
       const pendingSignal = current.spec.trigger?.mode === "external-signal" && typeof current.nextWakeup === "number"

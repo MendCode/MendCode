@@ -19,13 +19,56 @@ type WorkflowActiveTool = {
   status: "pending" | "running"
 }
 
+type WorkflowCompletionActivity = WorkflowReceiptSnapshot["run"]["completion"]
+
+function workflowDuration(value: number) {
+  const seconds = Math.max(0, Math.round(value / 1_000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainder = seconds % 60
+  if (minutes < 60) return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const minuteRemainder = minutes % 60
+  return minuteRemainder ? `${hours}h ${minuteRemainder}m` : `${hours}h`
+}
+
+export function workflowTimeAgo(timestamp: number | undefined, now = Date.now()) {
+  if (!timestamp) return "unknown"
+  return `${workflowDuration(now - timestamp)} ago`
+}
+
+export function workflowCompletionAuditActivity(input: {
+  runState: string
+  completion?: WorkflowCompletionActivity
+  now?: number
+}) {
+  const completion = input.completion
+  if (!completion) return
+  if (completion.status === "candidate") return `queued · generation ${completion.generation} · fresh audit pending`
+  if (completion.status !== "auditing") return
+
+  const attempt = Math.max(1, completion.auditAttempts)
+  if (input.runState === "paused") return `paused · audit attempt ${attempt}`
+  if (input.runState === "needs_input") return `waiting for input · audit attempt ${attempt}`
+  if (input.runState === "awaiting_approval") return `waiting for approval · audit attempt ${attempt}`
+
+  const lease = completion.auditLease
+  if (!lease) return `queued · audit attempt ${attempt} · waiting for auditor`
+  const now = input.now ?? Date.now()
+  if (lease.expiresAt <= now) {
+    return `stalled · audit attempt ${attempt} · lease expired ${workflowDuration(now - lease.expiresAt)} ago`
+  }
+  return `running · audit attempt ${attempt} · lease ${workflowDuration(lease.expiresAt - now)} left`
+}
+
 export function workflowCurrentActivity(input: {
   runState: string
   statuses: readonly WorkflowActivityStatus[]
   activeTools?: readonly WorkflowActiveTool[]
   pendingPermissions?: number
   waitingTasks?: number
-  completionStatus?: string
+  completion?: WorkflowCompletionActivity
+  now?: number
 }) {
   const pendingPermissions = input.pendingPermissions ?? 0
   const runningTool = input.activeTools?.findLast((tool) => tool.status === "running" && tool.tool !== "task")
@@ -42,8 +85,6 @@ export function workflowCurrentActivity(input: {
   if (waitingTasks > 0) return `${waitingTasks} task${waitingTasks === 1 ? "" : "s"} waiting for input`
   if (input.runState === "awaiting_approval") return "Workflow approval required"
   if (input.runState === "needs_input") return "Workflow waiting for input"
-  if (input.completionStatus === "candidate") return "Completion candidate waiting for a fresh audit"
-  if (input.completionStatus === "auditing") return "Auditing completion evidence"
 
   const compacting = input.statuses.find((status) => status.type === "busy" && status.kind === "compaction")
   if (compacting) return compacting.message || "AI is compacting context"
@@ -66,6 +107,11 @@ export function workflowCurrentActivity(input: {
   if (input.statuses.some((status) => status.type === "busy" && status.kind === "mflow-wait")) {
     return "Working with file locks"
   }
+  return workflowCompletionAuditActivity({
+    runState: input.runState,
+    completion: input.completion,
+    now: input.now,
+  })
 }
 
 export function workflowRequestErrorText(error: unknown) {
@@ -101,13 +147,27 @@ export function workflowMonitorTaskCounts(snapshot?: Pick<WorkflowReceiptSnapsho
   return workflowReceiptCounts({ tasks: snapshot.tasks, phases: [] })
 }
 
-export function workflowMonitorRows(snapshot?: WorkflowReceiptSnapshot): Array<[string, string]> {
+export function workflowMonitorRows(snapshot?: WorkflowReceiptSnapshot, now = Date.now()): Array<[string, string]> {
   if (!snapshot) return [] as Array<[string, string]>
   const counts = workflowMonitorTaskCounts(snapshot)
-  const elapsed = workflowReceiptElapsed(snapshot)
+  const elapsed = workflowReceiptElapsed(snapshot, now)
+  const audit = workflowCompletionAuditActivity({
+    runState: snapshot.run.state,
+    completion: snapshot.run.completion,
+    now,
+  })
   return [
     ["state", workflowReceiptStateLabel(snapshot.run.state)],
-    ["completion", snapshot.run.completion ? `${snapshot.run.completion.status} · gen ${snapshot.run.completion.generation} · ${snapshot.run.completion.auditAttempts} audit${snapshot.run.completion.auditAttempts === 1 ? "" : "s"}` : "legacy same-run"],
+    [
+      "completion",
+      snapshot.run.completion
+        ? `${snapshot.run.completion.status} · gen ${snapshot.run.completion.generation} · ${snapshot.run.completion.auditAttempts} audit${snapshot.run.completion.auditAttempts === 1 ? "" : "s"}`
+        : "legacy same-run",
+    ],
+    ...(audit ? [["audit", audit] as [string, string]] : []),
+    ...(snapshot.run.completion?.updatedAt
+      ? [["audit update", workflowTimeAgo(snapshot.run.completion.updatedAt, now)] as [string, string]]
+      : []),
     ["progress", workflowReceiptProgress(snapshot)],
     [
       "phases",
@@ -116,7 +176,7 @@ export function workflowMonitorRows(snapshot?: WorkflowReceiptSnapshot): Array<[
     ["active", `${counts.working} working · ${counts.queued} queued`],
     ["blocked", `${counts.blocked} blocked · ${counts.failed} failed · ${counts.needsInput} input`],
     ["elapsed", `${Math.round(elapsed / 1000)}s`],
-    ["next", workflowReceiptNextAction(snapshot)],
+    ["next", workflowReceiptNextAction(snapshot, now)],
   ]
 }
 
@@ -194,6 +254,34 @@ export function workflowMonitorSessionID(snapshot?: WorkflowReceiptSnapshot) {
     snapshot.run.originSessionID ??
     snapshot.run.rootSessionID
   )
+}
+
+export function workflowMonitorAuditSessionID(input: {
+  rootSessionID?: string
+  sessions: readonly {
+    id: string
+    parentID?: string
+    title: string
+    time?: { created?: number; updated?: number }
+  }[]
+}) {
+  if (!input.rootSessionID) return
+  const descendants = new Set([input.rootSessionID])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const session of input.sessions) {
+      if (!session.parentID || !descendants.has(session.parentID) || descendants.has(session.id)) continue
+      descendants.add(session.id)
+      changed = true
+    }
+  }
+  return input.sessions
+    .filter((session) => descendants.has(session.id) && session.title.startsWith("Completion audit:"))
+    .toSorted(
+      (left, right) =>
+        (right.time?.updated ?? right.time?.created ?? 0) - (left.time?.updated ?? left.time?.created ?? 0),
+    )[0]?.id
 }
 
 export function workflowTaskSessionContext(input: {

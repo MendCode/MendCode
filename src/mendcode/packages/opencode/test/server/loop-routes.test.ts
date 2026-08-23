@@ -3,6 +3,7 @@ import { Server } from "../../src/server/server"
 import { WithInstance } from "../../src/project/with-instance"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { defaultLayer as loopWorkflowLayer, LoopWorkflow, Service as LoopWorkflowService } from "../../src/session/loop"
+import { LoopRunner } from "../../src/session/loop-runner"
 import { Effect } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 import { ExperimentalHttpApiServer } from "../../src/server/routes/instance/httpapi/server"
@@ -42,11 +43,35 @@ describe("loop routes", () => {
             name: "PR babysitter",
             objective: "Watch PR comments and report actionable work.",
             trigger: { mode: "interval", intervalMs: 60_000 },
+            budgetMode: "max-goal",
+            completionCriteria: ["actionable work is reported"],
+            successChecks: ["inspect current PR state"],
+            strategy: { targetTurns: 2, reserveTurns: 1, notifyOwnerOnComplete: true },
+            model: { providerID: "local", modelID: "loop-proof", variant: "medium" },
+            agent: "build",
+            evaluation: { mode: "deterministic", confirmation: "same-run" },
+            workspace: { mode: "per-run-worktree" },
+            approvalPolicy: { requireApprovalFor: ["push"], approvedActions: ["edit"] },
+            memory: { enabled: true, sections: ["tried", "verified"] },
+            retention: { maxArtifacts: 25, maxAgeMs: 60_000, maxBytes: 1_000_000 },
           }),
         })
         expect(draftResponse.status).toBe(200)
         const draft = (await draftResponse.json()) as LoopWorkflow.Info
         expect(draft.state).toBe("draft")
+        expect(draft.spec).toMatchObject({
+          budgetMode: "max-goal",
+          completionCriteria: ["actionable work is reported"],
+          successChecks: ["inspect current PR state"],
+          strategy: { targetTurns: 2, reserveTurns: 1, notifyOwnerOnComplete: true },
+          model: { providerID: "local", modelID: "loop-proof", variant: "medium" },
+          agent: "build",
+          evaluation: { mode: "deterministic", confirmation: "same-run" },
+          workspace: { mode: "per-run-worktree" },
+          approvalPolicy: { requireApprovalFor: ["push"], approvedActions: ["edit"] },
+          memory: { enabled: true, sections: ["tried", "verified"] },
+          retention: { maxArtifacts: 25, maxAgeMs: 60_000, maxBytes: 1_000_000 },
+        })
 
         const listResponse = await app.request("/loop")
         expect(listResponse.status).toBe(200)
@@ -69,18 +94,26 @@ describe("loop routes", () => {
         expect(active.rootSessionID).toBeDefined()
         expect(active.state).toBe("sleeping")
 
+        const pauseResponse = await app.request(`/loop/${draft.id}/pause`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reason: "keep route test deterministic" }),
+        })
+        expect(pauseResponse.status).toBe(200)
+        expect((await pauseResponse.json()) as LoopWorkflow.Info).toMatchObject({ state: "paused" })
+
         const runResponse = await app.request(`/loop/${draft.id}/run-once`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ reason: "test run" }),
         })
         expect(runResponse.status).toBe(200)
-        expect((await runResponse.json()) as LoopWorkflow.RunInfo).toMatchObject({ trigger: "run-once", state: "completed" })
+        expect((await runResponse.json()) as LoopRunner.TickResult).toMatchObject({ state: "skipped" })
 
         const eventsResponse = await app.request(`/loop/${draft.id}/events`)
         expect(eventsResponse.status).toBe(200)
         const events = (await eventsResponse.json()) as LoopWorkflow.JournalEvent[]
-        expect(events.map((event) => event.type)).toEqual(["created", "activated", "wake"])
+        expect(events.map((event) => event.type)).toEqual(["created", "activated", "paused"])
 
         const stopResponse = await app.request(`/loop/${draft.id}/stop`, {
           method: "POST",
@@ -102,7 +135,6 @@ describe("loop routes", () => {
     await WithInstance.provide({
       directory: tmp.path,
       fn: async () => {
-        const legacy = Server.Legacy().app
         const handler = HttpRouter.toWebHandler(ExperimentalHttpApiServer.routes, { disableLogger: true }).handler
         const effect = {
           request(input: string | URL | Request, init?: RequestInit) {
@@ -111,17 +143,68 @@ describe("loop routes", () => {
         }
         const headers = { "x-opencode-directory": tmp.path, "content-type": "application/json" }
 
-        const draftResponse = await legacy.request("/loop/draft", {
+        const draftResponse = await effect.request("/loop/draft", {
           method: "POST",
           headers,
           body: JSON.stringify({
             name: "Effect dashboard loop",
             objective: "Verify Effect raw route can serve the loops dashboard.",
             trigger: { mode: "interval", intervalMs: 60_000 },
+            budgetMode: "max-goal",
+            completionCriteria: ["raw route preserves the contract"],
+            strategy: { notifyOwnerOnComplete: true },
+            model: { providerID: "local", modelID: "loop-proof" },
+            workspace: { mode: "read-only" },
           }),
         })
         expect(draftResponse.status).toBe(200)
         const draft = (await draftResponse.json()) as LoopWorkflow.Info
+        expect(draft.state).toBe("draft")
+        expect(draft.spec).toMatchObject({
+          budgetMode: "max-goal",
+          completionCriteria: ["raw route preserves the contract"],
+          strategy: { notifyOwnerOnComplete: true },
+          model: { providerID: "local", modelID: "loop-proof" },
+          workspace: { mode: "read-only" },
+        })
+
+        const activateResponse = await effect.request(`/loop/${draft.id}/activate`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ reason: "effect route activation", ensureService: false }),
+        })
+        expect(activateResponse.status).toBe(200)
+        expect((await activateResponse.json()) as LoopWorkflow.Info).toMatchObject({ id: draft.id, state: "sleeping" })
+
+        const seededRun = await runLoop(
+          LoopWorkflowService.use((loop) =>
+            loop.startRun({ id: draft.id, trigger: "manual", reason: "seed route limit" }),
+          ),
+        )
+        await runLoop(
+          LoopWorkflowService.use((loop) =>
+            loop.completeRun({
+              id: draft.id,
+              runID: seededRun.id,
+              reason: "seed one completed iteration",
+              goalStatus: "continue",
+              checkpoint: { status: "continue", summary: "route wiring checkpoint" },
+            }),
+          ),
+        )
+        const pauseResponse = await effect.request(`/loop/${draft.id}/pause`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ reason: "pause before deterministic route invocation" }),
+        })
+        expect(pauseResponse.status).toBe(200)
+        const runResponse = await effect.request(`/loop/${draft.id}/run-once`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ reason: "verify handler service wiring" }),
+        })
+        expect(runResponse.status).toBe(200)
+        expect((await runResponse.json()) as LoopRunner.TickResult).toMatchObject({ state: "skipped" })
 
         const listResponse = await effect.request("/loop", { headers })
         expect(listResponse.status).toBe(200)

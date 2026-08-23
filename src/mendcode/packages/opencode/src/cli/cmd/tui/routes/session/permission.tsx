@@ -38,14 +38,14 @@ export function permissionPromptHoverSelection<T>(
   // pointer's parked coordinates. It must never override a keyboard choice.
   if (event.type !== "move") return current
 
-  const moved = pointer.x !== event.x || pointer.y !== event.y
   pointer.x = event.x
   pointer.y = event.y
 
-  // A real pointer move is an explicit mouse intent. A replay at the same
-  // coordinates is only a layout/hover recheck and keeps keyboard ownership.
-  if (pointer.keyboardNavigation && !moved) return current
-  if (moved) pointer.keyboardNavigation = false
+  // OpenTUI reports coordinates relative to each option. A parked cursor can
+  // therefore look like it moved when a render rechecks another option. Once
+  // the keyboard owns selection, only an actual click transfers ownership back
+  // to the pointer; mouse down/up already do that below.
+  if (pointer.keyboardNavigation) return current
   return hovered
 }
 
@@ -158,7 +158,11 @@ function TextBody(props: { title: string; description?: string; icon?: string })
   )
 }
 
-export function PermissionPrompt(props: { request: PermissionRequest }) {
+export function PermissionPrompt(props: {
+  request: PermissionRequest
+  selected?: string
+  onSelectionChange?: (option: string) => void
+}) {
   const sdk = useSDK()
   const project = useProject()
   const sync = useSync()
@@ -452,6 +456,8 @@ export function PermissionPrompt(props: { request: PermissionRequest }) {
               header={header()}
               body={current.body}
               options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              selected={props.selected}
+              onSelectionChange={props.onSelectionChange}
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {
@@ -567,6 +573,8 @@ function Prompt<const T extends Record<string, string>>(props: {
   header?: JSX.Element
   body: JSX.Element
   options: T
+  selected?: string
+  onSelectionChange?: (option: string) => void
   escapeKey?: keyof T
   fullscreen?: boolean
   onSelect: (option: keyof T) => void
@@ -575,8 +583,9 @@ function Prompt<const T extends Record<string, string>>(props: {
   const keybind = useKeybind()
   const dimensions = useTerminalDimensions()
   const keys = Object.keys(props.options) as (keyof T)[]
+  const initial = keys.find((key) => String(key) === props.selected) ?? keys[0]
   const [store, setStore] = createStore({
-    selected: keys[0],
+    selected: initial,
     expanded: false,
   })
   const pointer: PermissionPromptPointerState = {
@@ -585,6 +594,10 @@ function Prompt<const T extends Record<string, string>>(props: {
   const diffKey = Keybind.parse("ctrl+f")[0]
   const narrow = createMemo(() => dimensions().width < 80)
   const dialog = useDialog()
+  const select = (option: keyof T) => {
+    setStore("selected", option)
+    props.onSelectionChange?.(String(option))
+  }
 
   useKeyboard((evt) => {
     if (dialog.stack.length > 0) return
@@ -594,7 +607,7 @@ function Prompt<const T extends Record<string, string>>(props: {
       pointer.keyboardNavigation = true
       const idx = keys.indexOf(store.selected)
       const next = keys[(idx - 1 + keys.length) % keys.length]
-      setStore("selected", next)
+      select(next)
     }
 
     if (evt.name === "right" || evt.name === "down" || evt.name == "l" || evt.name === "j") {
@@ -602,7 +615,7 @@ function Prompt<const T extends Record<string, string>>(props: {
       pointer.keyboardNavigation = true
       const idx = keys.indexOf(store.selected)
       const next = keys[(idx + 1) % keys.length]
-      setStore("selected", next)
+      select(next)
     }
 
     if (evt.name === "return") {
@@ -681,19 +694,20 @@ function Prompt<const T extends Record<string, string>>(props: {
                 // selection only to real, changed-coordinate `move` events keeps
                 // keyboard navigation stable while preserving deliberate mouse use.
                 onMouseMove={(event) => {
-                  setStore("selected", permissionPromptHoverSelection(event, store.selected, option, pointer))
+                  const next = permissionPromptHoverSelection(event, store.selected, option, pointer)
+                  if (next !== store.selected) select(next)
                 }}
                 onMouseDown={(event) => {
                   pointer.keyboardNavigation = false
                   pointer.x = event.x
                   pointer.y = event.y
-                  setStore("selected", option)
+                  select(option)
                 }}
                 onMouseUp={(event) => {
                   pointer.keyboardNavigation = false
                   pointer.x = event.x
                   pointer.y = event.y
-                  setStore("selected", option)
+                  select(option)
                   props.onSelect(option)
                 }}
               >

@@ -970,8 +970,9 @@ describe("resolveWorkingStartedAt", () => {
       }),
     ).toBe("arm")
     expect(sessionInterruptConfirmationAction({ armedTargetMessageID: "message-1" })).toBe("ignore")
-    expect(sessionInterruptHint({ enabled: true, working: true, armed: false })).toBe("[esc to interrupt]")
+    expect(sessionInterruptHint({ enabled: true, working: true, armed: false })).toBeUndefined()
     expect(sessionInterruptHint({ enabled: true, working: true, armed: true })).toBe("[esc again to interrupt]")
+    expect(sessionInterruptHint({ enabled: false, working: true, armed: true })).toBeUndefined()
     expect(sessionInterruptHint({ enabled: true, working: false, armed: true })).toBeUndefined()
   })
 
