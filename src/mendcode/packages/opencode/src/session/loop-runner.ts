@@ -6,6 +6,7 @@ import * as MessageV2 from "@/session/message-v2"
 import { Session } from "@/session/session"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { InstanceState } from "@/effect/instance-state"
+import { InstanceStore } from "@/project/instance-store"
 import { WorkflowRunner } from "@/session/workflow-runner"
 import { WorkflowService } from "@/session/workflow-service"
 import { fingerprintWorkspace } from "@/session/completion-auditor"
@@ -19,7 +20,7 @@ import { completionValidationCommandAllowed, runCompletionValidationCommand } fr
 export const TickResult = Schema.Struct({
   workflowID: LoopWorkflow.LoopID,
   runID: Schema.optional(LoopWorkflow.RunID),
-  state: Schema.Literals(["completed", "failed", "blocked", "needs_input", "stopped", "skipped"]),
+  state: Schema.Literals(["completed", "retrying", "failed", "blocked", "needs_input", "stopped", "skipped"]),
   summary: Schema.String,
 })
 export type TickResult = Types.DeepMutable<Schema.Schema.Type<typeof TickResult>>
@@ -136,18 +137,28 @@ function checkpointGuidance(workflow: LoopWorkflow.Info) {
   return "Work autonomously toward completing the objective, not toward consuming every iteration. If the goal is already complete, verify it and report status: complete instead of making more changes."
 }
 
-function workspacePolicyPrompt(workflow: LoopWorkflow.Info) {
+function workspacePolicyPrompt(workflow: LoopWorkflow.Info, run?: LoopWorkflow.RunInfo) {
   const mode = workflow.spec.workspace?.mode ?? "in-place"
   if (mode === "read-only")
     return "Workspace policy: read-only. Inspect and report only; do not edit files or run mutating shell commands."
-  if (mode === "per-loop-worktree")
-    return "Workspace policy: per-loop-worktree. Use the assigned loop workspace metadata when available; do not create, promote, or clean worktrees yourself unless explicitly instructed."
-  if (mode === "per-run-worktree")
-    return "Workspace policy: per-run-worktree. Use the assigned run workspace metadata when available; do not create, promote, or clean worktrees yourself unless explicitly instructed."
+  if (mode === "per-loop-worktree" || mode === "per-run-worktree") {
+    const lease = run?.workspaceLease
+    if (lease?.state === "active") {
+      return [
+        `Workspace policy: ${mode}.`,
+        `Authoritative workspace directory: ${lease.path}`,
+        `Authoritative workspace branch: ${lease.branch ?? "unknown"}`,
+        "All file reads, edits, shell commands, validation, and git inspection for this iteration must run in that authoritative workspace.",
+        "The parent/original checkout may not contain these unpromoted changes. Do not conclude that work is missing by inspecting another checkout.",
+        "Do not create, promote, clean, or remove this worktree yourself unless explicitly instructed.",
+      ].join("\n")
+    }
+    return `Workspace policy: ${mode}. No active isolated workspace lease is available; stay in the current workspace and report the lease failure instead of inventing or searching for another worktree.`
+  }
   return "Workspace policy: in-place. Work in the current project workspace and keep changes minimal and auditable."
 }
 
-function iterationPrompt(workflow: LoopWorkflow.Info, reason?: string) {
+function iterationPrompt(workflow: LoopWorkflow.Info, run: LoopWorkflow.RunInfo, reason?: string) {
   const turn = (workflow.metrics.turns ?? 0) + 1
   const maxTurns = workflow.policy.maxTurns ?? "unlimited"
   const next = workflow.nextWakeup ? new Date(workflow.nextWakeup).toISOString() : "now"
@@ -166,7 +177,7 @@ function iterationPrompt(workflow: LoopWorkflow.Info, reason?: string) {
     "",
     `Objective: ${workflow.objective}`,
     reason?.trim() ? `Operator-requested run reason: ${reason.trim()}` : undefined,
-    workspacePolicyPrompt(workflow),
+    workspacePolicyPrompt(workflow, run),
     `Budget mode: ${budgetSemantics(workflow)}`,
     `Remaining iteration budget after this run starts: ${remaining}`,
     strategy?.targetTurns
@@ -220,9 +231,9 @@ function iterationPrompt(workflow: LoopWorkflow.Info, reason?: string) {
     .join("\n")
 }
 
-function reportOnlyPrompt(workflow: LoopWorkflow.Info, reason?: string) {
+function reportOnlyPrompt(workflow: LoopWorkflow.Info, run: LoopWorkflow.RunInfo, reason?: string) {
   return [
-    iterationPrompt(workflow, reason),
+    iterationPrompt(workflow, run, reason),
     "",
     "REPORT-ONLY MODE:",
     "- Do not edit files.",
@@ -357,13 +368,45 @@ function incompleteWorkerFailure(message: MessageV2.WithParts): {
       }
     }
     return {
-      reason: "Loop worker ended without a terminal finish; retrying the iteration.",
+      reason: "Loop worker ended without a terminal finish.",
       failureClass: "transient",
     }
   }
   return {
-    reason: "Loop worker finished without a parseable LOOP_CHECKPOINT; retrying the iteration.",
+    reason: "Loop worker finished without a parseable LOOP_CHECKPOINT.",
     failureClass: "transient",
+  }
+}
+
+function failedRunResult(input: {
+  workflow: LoopWorkflow.Info
+  run: LoopWorkflow.RunInfo
+  reason: string
+}): TickResult {
+  const retryAt = input.run.retry?.nextWakeup ?? input.workflow.nextWakeup
+  if (input.run.retry && retryAt) {
+    return {
+      workflowID: input.workflow.id,
+      runID: input.run.id,
+      state: "retrying",
+      summary: `Loop run retry scheduled for ${new Date(retryAt).toISOString()}. ${input.reason}`,
+    }
+  }
+  const state =
+    input.workflow.state === "blocked" ||
+    input.workflow.state === "needs_input" ||
+    input.workflow.state === "stopped" ||
+    input.workflow.state === "failed"
+      ? input.workflow.state
+      : "failed"
+  return {
+    workflowID: input.workflow.id,
+    runID: input.run.id,
+    state,
+    summary:
+      state === "failed"
+        ? `Loop run failed and will not retry automatically. ${input.reason}`
+        : (input.run.evaluatorReason ?? input.workflow.evaluatorReason ?? input.reason),
   }
 }
 
@@ -999,15 +1042,35 @@ function auditReceipt(input: {
   }
 }
 
-function parentCompletionPrompt(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint, runID: LoopWorkflow.RunID) {
+function ownerWorkspacePrompt(run: LoopWorkflow.RunInfo) {
+  const lease = run.workspaceLease
+  if (!lease) return []
+  if (lease.state !== "active") {
+    return [
+      `Workspace isolation: ${lease.state}`,
+      `Workspace fallback: ${lease.path}`,
+      lease.error ? `Workspace error: ${lease.error}` : undefined,
+    ].filter((line): line is string => Boolean(line))
+  }
+  return [
+    `Authoritative workspace: ${lease.path}`,
+    `Authoritative branch: ${lease.branch ?? "unknown"}`,
+    `Workspace mode: ${lease.mode}`,
+    `Inspect changes there before judging the result: git -C ${JSON.stringify(lease.path)} status --short`,
+    "Unpromoted loop changes may be absent from the parent/original checkout; that does not mean the loop lost them.",
+  ]
+}
+
+function parentCompletionPrompt(workflow: LoopWorkflow.Info, checkpoint: LoopCheckpoint, run: LoopWorkflow.RunInfo) {
   return [
     `Loop workflow completed: ${workflow.name}`,
     "",
     `Workflow: ${workflow.id}`,
     `Loop chat: ${workflow.rootSessionID ?? "none"}`,
-    `Run: ${runID}`,
+    `Run: ${run.id}`,
     `Iterations used: ${workflow.metrics.turns ?? 0}/${workflow.policy.maxTurns ?? "unlimited"}`,
     `Goal: ${workflow.objective}`,
+    ...ownerWorkspacePrompt(run),
     "",
     `Summary: ${checkpoint.summary ?? workflow.evaluatorReason ?? "Loop reported completion."}`,
     checkpoint.evidence?.length
@@ -1021,6 +1084,36 @@ function parentCompletionPrompt(workflow: LoopWorkflow.Info, checkpoint: LoopChe
     .join("\n")
 }
 
+function shouldNotifyOwner(workflow: LoopWorkflow.Info) {
+  if (!workflow.ownerSessionID || workflow.ownerSessionID === workflow.rootSessionID) return false
+  if (workflow.state === "completed") return workflow.spec.strategy?.notifyOwnerOnComplete === true
+  return (
+    workflow.state === "failed" ||
+    workflow.state === "blocked" ||
+    workflow.state === "needs_input" ||
+    workflow.state === "stopped"
+  )
+}
+
+function parentStatusPrompt(workflow: LoopWorkflow.Info, run: LoopWorkflow.RunInfo, summary: string) {
+  return [
+    '<mendcode_runtime_event type="loop_status">',
+    "This is an internal runtime notification, not a user request.",
+    `Loop workflow: ${workflow.name}`,
+    `Workflow: ${workflow.id}`,
+    `Loop chat: ${workflow.rootSessionID ?? "none"}`,
+    `Run: ${run.id}`,
+    `State: ${workflow.state}`,
+    `Phase: ${workflow.phase}`,
+    `Iterations completed: ${workflow.metrics.turns ?? 0}/${workflow.policy.maxTurns ?? "unlimited"}`,
+    `Summary: ${summary}`,
+    ...ownerWorkspacePrompt(run),
+    "Treat this persisted workflow state as authoritative. Tell the user clearly when the loop needs input, is blocked, stopped, or failed; do not claim it is still working after a terminal state.",
+    "Do not create a replacement loop, push, merge, release, or run broad changes unless the user explicitly asks.",
+    "</mendcode_runtime_event>",
+  ].join("\n")
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.sync(() => {
@@ -1029,7 +1122,52 @@ export const layer = Layer.effect(
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
       const instance = yield* InstanceState.context
+      const instances = Option.getOrUndefined(yield* Effect.serviceOption(InstanceStore.Service))
       const id = input.id
+      const inRunWorkspace = <A, E, R>(run: LoopWorkflow.RunInfo, effect: Effect.Effect<A, E, R>) => {
+        const lease = run.workspaceLease
+        if (lease?.state !== "active" || lease.path === instance.directory) return effect
+        if (!instances) return Effect.fail(new Error("Instance store unavailable for an isolated loop workspace"))
+        return instances.provide(
+          {
+            directory: lease.path,
+            worktree: lease.path,
+            project: instance.project,
+          },
+          effect,
+        )
+      }
+      const notifyOwner = (workflow: LoopWorkflow.Info, run: LoopWorkflow.RunInfo, summary: string) => {
+        if (!shouldNotifyOwner(workflow) || !workflow.ownerSessionID) return Effect.void
+        const text =
+          workflow.state === "completed"
+            ? parentCompletionPrompt(workflow, { summary }, run)
+            : parentStatusPrompt(workflow, run, summary)
+        return prompt
+          .prompt({
+            sessionID: workflow.ownerSessionID,
+            agent: workflow.spec.agent,
+            model: promptModel(workflow),
+            variant: workflow.spec.model?.variant,
+            parts: [
+              {
+                type: "text",
+                text,
+                synthetic: true,
+                metadata: {
+                  kind: "loop_owner_notification",
+                  workflowID: workflow.id,
+                  runID: run.id,
+                  state: workflow.state,
+                  workspacePath: run.workspaceLease?.path,
+                  workspaceBranch: run.workspaceLease?.branch,
+                  workspaceMode: run.workspaceLease?.mode,
+                },
+              },
+            ],
+          })
+          .pipe(Effect.ignore)
+      }
       const before = yield* workflow.get(id, input.now)
       if (typeof before.policy.maxTurns === "number" && (before.metrics.turns ?? 0) >= before.policy.maxTurns) {
         return {
@@ -1155,41 +1293,44 @@ export const layer = Layer.effect(
             title: `Loop completion audit: ${current.name}`,
           })
           const evaluatorStarted = Date.now()
-          const evaluatorResult = yield* prompt
-            .prompt({
-              sessionID: evaluatorSession.id,
-              agent: current.spec.evaluation?.evaluatorAgent ?? current.spec.agent,
-              model: promptModel(current),
-              variant: current.spec.model?.variant,
-              tools: loopIterationTools(true),
-              parts: [
-                {
-                  type: "text",
-                  text: [
-                    judgmentPrompt(current, checkpoint, preJudgeGates),
-                    "",
-                    `This is a fresh terminal audit iteration for candidate generation ${candidate.generation}.`,
-                    `Inspect the current workspace at ${directory}; do not rely only on the worker summary.`,
-                    "Verify every completion criterion against current files and recorded deterministic gates.",
-                  ].join("\n"),
-                },
-              ],
-            })
-            .pipe(
-              Effect.map((message) => ({ message, judgment: parseJudgment(assistantText(message)) })),
-              Effect.catchCause((cause) => {
-                const error = errorMessage(Cause.squash(cause))
-                return Effect.succeed({
-                  judgment: {
-                    status: "uncertain" as const,
-                    summary: `Evaluator failed: ${error}`,
-                    recommendedNextAction: "retry",
-                    confidence: "low",
-                    failureClass: classifyEvaluatorFailure(error),
+          const evaluatorResult = yield* inRunWorkspace(
+            validationRun,
+            prompt
+              .prompt({
+                sessionID: evaluatorSession.id,
+                agent: current.spec.evaluation?.evaluatorAgent ?? current.spec.agent,
+                model: promptModel(current),
+                variant: current.spec.model?.variant,
+                tools: loopIterationTools(true),
+                parts: [
+                  {
+                    type: "text",
+                    text: [
+                      judgmentPrompt(current, checkpoint, preJudgeGates),
+                      "",
+                      `This is a fresh terminal audit iteration for candidate generation ${candidate.generation}.`,
+                      `Inspect the current workspace at ${directory}; do not rely only on the worker summary.`,
+                      "Verify every completion criterion against current files and recorded deterministic gates.",
+                    ].join("\n"),
                   },
-                })
-              }),
-            )
+                ],
+              })
+              .pipe(
+                Effect.map((message) => ({ message, judgment: parseJudgment(assistantText(message)) })),
+                Effect.catchCause((cause) => {
+                  const error = errorMessage(Cause.squash(cause))
+                  return Effect.succeed({
+                    judgment: {
+                      status: "uncertain" as const,
+                      summary: `Evaluator failed: ${error}`,
+                      recommendedNextAction: "retry",
+                      confidence: "low",
+                      failureClass: classifyEvaluatorFailure(error),
+                    },
+                  })
+                }),
+              ),
+          )
           const evaluatorMessage = "message" in evaluatorResult ? evaluatorResult.message : undefined
           evaluatorUsage = usageFromMessage(evaluatorMessage, current, evaluatorStarted)
           judgment = evaluatorResult.judgment
@@ -1277,27 +1418,7 @@ export const layer = Layer.effect(
           completion: { candidate, receipt },
         })
         const after = yield* workflow.get(id)
-        if (
-          after.state === "completed" &&
-          after.spec.strategy?.notifyOwnerOnComplete === true &&
-          after.ownerSessionID &&
-          after.ownerSessionID !== after.rootSessionID
-        ) {
-          yield* prompt
-            .prompt({
-              sessionID: after.ownerSessionID,
-              agent: after.spec.agent,
-              model: promptModel(after),
-              variant: after.spec.model?.variant,
-              parts: [
-                {
-                  type: "text",
-                  text: parentCompletionPrompt(after, { ...checkpoint, summary: receipt.summary }, completed.id),
-                },
-              ],
-            })
-            .pipe(Effect.ignore)
-        }
+        yield* notifyOwner(after, completed, receipt.summary)
         return {
           workflowID: id,
           runID: completed.id,
@@ -1317,19 +1438,10 @@ export const layer = Layer.effect(
         if (!workflowService || !workflowRunner) {
           const error = "Loop workflow adapter services are unavailable."
           const failed = yield* workflow.failRun({ id, runID: run.id, error, failureClass: "environment", now })
-          return {
-            workflowID: id,
-            runID: failed.id,
-            state:
-              failed.state === "blocked"
-                ? "blocked"
-                : failed.state === "needs_input"
-                  ? "needs_input"
-                  : failed.state === "stopped"
-                    ? "stopped"
-                    : "failed",
-            summary: failed.evaluatorReason ?? error,
-          } satisfies TickResult
+          const after = yield* workflow.get(id)
+          const outcome = failedRunResult({ workflow: after, run: failed, reason: error })
+          yield* notifyOwner(after, failed, outcome.summary)
+          return outcome
         }
         const reference = current.spec.workflow
         const startedExit = yield* Effect.exit(
@@ -1345,19 +1457,10 @@ export const layer = Layer.effect(
         if (startedExit._tag === "Failure") {
           const error = errorMessage(Cause.squash(startedExit.cause))
           const failed = yield* workflow.failRun({ id, runID: run.id, error, failureClass: "policy", now })
-          return {
-            workflowID: id,
-            runID: failed.id,
-            state:
-              failed.state === "blocked"
-                ? "blocked"
-                : failed.state === "needs_input"
-                  ? "needs_input"
-                  : failed.state === "stopped"
-                    ? "stopped"
-                    : "failed",
-            summary: failed.evaluatorReason ?? error,
-          } satisfies TickResult
+          const after = yield* workflow.get(id)
+          const outcome = failedRunResult({ workflow: after, run: failed, reason: error })
+          yield* notifyOwner(after, failed, outcome.summary)
+          return outcome
         }
         const startedWorkflow = startedExit.value
         if (startedWorkflow.run.loopRunID !== run.id) {
@@ -1387,37 +1490,19 @@ export const layer = Layer.effect(
             .stop({ runID: startedWorkflow.run.id, reason: error, actor: "loop-adapter" })
             .pipe(Effect.catchCause(() => Effect.void))
           const failed = yield* workflow.failRun({ id, runID: run.id, error, failureClass: "environment", now })
-          return {
-            workflowID: id,
-            runID: failed.id,
-            state:
-              failed.state === "blocked"
-                ? "blocked"
-                : failed.state === "needs_input"
-                  ? "needs_input"
-                  : failed.state === "stopped"
-                    ? "stopped"
-                    : "failed",
-            summary: failed.evaluatorReason ?? error,
-          } satisfies TickResult
+          const after = yield* workflow.get(id)
+          const outcome = failedRunResult({ workflow: after, run: failed, reason: error })
+          yield* notifyOwner(after, failed, outcome.summary)
+          return outcome
         }
         const finishedWorkflow = yield* workflowService.show(startedWorkflow.run.id)
         if (finishedWorkflow.run.state === "failed") {
           const error = finishedWorkflow.tasks.find((task) => task.blocker)?.blocker ?? "Referenced workflow failed."
           const failed = yield* workflow.failRun({ id, runID: run.id, error, failureClass: "terminal", now })
-          return {
-            workflowID: id,
-            runID: failed.id,
-            state:
-              failed.state === "blocked"
-                ? "blocked"
-                : failed.state === "needs_input"
-                  ? "needs_input"
-                  : failed.state === "stopped"
-                    ? "stopped"
-                    : "failed",
-            summary: failed.evaluatorReason ?? error,
-          } satisfies TickResult
+          const after = yield* workflow.get(id)
+          const outcome = failedRunResult({ workflow: after, run: failed, reason: error })
+          yield* notifyOwner(after, failed, outcome.summary)
+          return outcome
         }
         const goalStatus =
           finishedWorkflow.run.state === "completed"
@@ -1456,6 +1541,8 @@ export const layer = Layer.effect(
           usage,
         })
         const after = yield* workflow.get(id)
+        const summary = after.evaluatorReason ?? completed.evaluatorReason ?? "Referenced workflow run completed."
+        yield* notifyOwner(after, completed, summary)
         return {
           workflowID: id,
           runID: completed.id,
@@ -1466,14 +1553,15 @@ export const layer = Layer.effect(
             after.state === "failed"
               ? after.state
               : "completed",
-          summary: after.evaluatorReason ?? completed.evaluatorReason ?? "Referenced workflow run completed.",
+          summary,
         } satisfies TickResult
       }
       const reportOnly =
         workflowIsReportOnly(current) || (input.reportOnly === true && !workflowExplicitlyAllowsEdits(current))
       const runStarted = Date.now()
-      const result = yield* prompt
-        .prompt({
+      const result = yield* inRunWorkspace(
+        run,
+        prompt.prompt({
           sessionID: current.rootSessionID,
           agent: current.spec.agent,
           model: promptModel(current),
@@ -1482,23 +1570,20 @@ export const layer = Layer.effect(
           parts: [
             {
               type: "text",
-              text: reportOnly ? reportOnlyPrompt(current, input.reason) : iterationPrompt(current, input.reason),
+              text: reportOnly
+                ? reportOnlyPrompt(current, run, input.reason)
+                : iterationPrompt(current, run, input.reason),
             },
           ],
-        })
-        .pipe(Effect.exit)
+        }),
+      ).pipe(Effect.exit)
       if (result._tag === "Failure") {
         const message = errorMessage(Cause.squash(result.cause))
         const failed = yield* workflow.failRun({ id, runID: run.id, error: message, now })
         const after = yield* workflow.get(id)
-        return {
-          workflowID: id,
-          runID: failed.id,
-          state: "failed",
-          summary: failed.retry
-            ? `Loop run failed with ${failed.failureClass ?? "retryable"}; retry scheduled for ${new Date(failed.retry.nextWakeup ?? after.nextWakeup ?? Date.now()).toISOString()}. ${message}`
-            : (failed.evaluatorReason ?? after.evaluatorReason ?? message),
-        } satisfies TickResult
+        const outcome = failedRunResult({ workflow: after, run: failed, reason: message })
+        yield* notifyOwner(after, failed, outcome.summary)
+        return outcome
       }
       if (result.value.info.role !== "assistant" || !result.value.info.finish) {
         const incomplete = incompleteWorkerFailure(result.value)
@@ -1509,14 +1594,10 @@ export const layer = Layer.effect(
           failureClass: incomplete.failureClass,
           now,
         })
-        return {
-          workflowID: id,
-          runID: failed.id,
-          state: failed.state === "needs_input" ? ("needs_input" as const) : ("failed" as const),
-          summary: failed.retry
-            ? `Loop run retry scheduled for ${new Date(failed.retry.nextWakeup ?? Date.now()).toISOString()}. ${incomplete.reason}`
-            : (failed.evaluatorReason ?? incomplete.reason),
-        } satisfies TickResult
+        const after = yield* workflow.get(id)
+        const outcome = failedRunResult({ workflow: after, run: failed, reason: incomplete.reason })
+        yield* notifyOwner(after, failed, outcome.summary)
+        return outcome
       }
       const checkpoint = parseCheckpoint(assistantText(result.value))
       if (!checkpoint.status) {
@@ -1528,14 +1609,10 @@ export const layer = Layer.effect(
           failureClass: incomplete.failureClass,
           now,
         })
-        return {
-          workflowID: id,
-          runID: failed.id,
-          state: "failed" as const,
-          summary: failed.retry
-            ? `Loop run retry scheduled for ${new Date(failed.retry.nextWakeup ?? Date.now()).toISOString()}. ${incomplete.reason}`
-            : (failed.evaluatorReason ?? incomplete.reason),
-        } satisfies TickResult
+        const after = yield* workflow.get(id)
+        const outcome = failedRunResult({ workflow: after, run: failed, reason: incomplete.reason })
+        yield* notifyOwner(after, failed, outcome.summary)
+        return outcome
       }
       const validationGates = yield* executeValidationChecks(workflow, current, run, checkpoint, instance.directory)
       const preJudgeGates = [checkpointGate(checkpoint), approvalGate(current, checkpoint), ...validationGates].filter(
@@ -1550,33 +1627,36 @@ export const layer = Layer.effect(
           title: `Loop evaluator: ${current.name}`,
         })
         evaluatorStarted = Date.now()
-        const evaluatorResult = yield* prompt
-          .prompt({
-            sessionID: evaluatorSession.id,
-            agent: current.spec.evaluation?.evaluatorAgent ?? current.spec.agent,
-            model: promptModel(current),
-            variant: current.spec.model?.variant,
-            tools: loopIterationTools(true),
-            parts: [{ type: "text", text: judgmentPrompt(current, checkpoint, preJudgeGates) }],
-          })
-          .pipe(
-            Effect.map((message) => ({
-              message,
-              judgment: parseJudgment(assistantText(message)),
-            })),
-            Effect.catchCause((cause) => {
-              const error = errorMessage(Cause.squash(cause))
-              return Effect.succeed({
-                judgment: {
-                  status: "uncertain" as const,
-                  summary: `Evaluator failed: ${error}`,
-                  recommendedNextAction: "retry",
-                  confidence: "low",
-                  failureClass: classifyEvaluatorFailure(error),
-                },
-              })
-            }),
-          )
+        const evaluatorResult = yield* inRunWorkspace(
+          run,
+          prompt
+            .prompt({
+              sessionID: evaluatorSession.id,
+              agent: current.spec.evaluation?.evaluatorAgent ?? current.spec.agent,
+              model: promptModel(current),
+              variant: current.spec.model?.variant,
+              tools: loopIterationTools(true),
+              parts: [{ type: "text", text: judgmentPrompt(current, checkpoint, preJudgeGates) }],
+            })
+            .pipe(
+              Effect.map((message) => ({
+                message,
+                judgment: parseJudgment(assistantText(message)),
+              })),
+              Effect.catchCause((cause) => {
+                const error = errorMessage(Cause.squash(cause))
+                return Effect.succeed({
+                  judgment: {
+                    status: "uncertain" as const,
+                    summary: `Evaluator failed: ${error}`,
+                    recommendedNextAction: "retry",
+                    confidence: "low",
+                    failureClass: classifyEvaluatorFailure(error),
+                  },
+                })
+              }),
+            ),
+        )
         const evaluatorMessage = "message" in evaluatorResult ? evaluatorResult.message : undefined
         evaluatorUsage = evaluatorStarted ? usageFromMessage(evaluatorMessage, current, evaluatorStarted) : undefined
         judgment = evaluatorResult.judgment
@@ -1632,31 +1712,7 @@ export const layer = Layer.effect(
             checkpoint.summary ??
             "Loop run completed.")
           : (judgment?.summary ?? checkpoint.summary ?? completed.evaluatorReason ?? "Loop run completed.")
-      if (
-        after.state === "completed" &&
-        after.spec.strategy?.notifyOwnerOnComplete === true &&
-        after.ownerSessionID &&
-        after.ownerSessionID !== after.rootSessionID
-      ) {
-        yield* prompt
-          .prompt({
-            sessionID: after.ownerSessionID,
-            agent: after.spec.agent,
-            model: promptModel(after),
-            variant: after.spec.model?.variant,
-            parts: [
-              {
-                type: "text",
-                text: parentCompletionPrompt(
-                  after,
-                  { ...checkpoint, summary: judgment?.summary ?? checkpoint.summary },
-                  completed.id,
-                ),
-              },
-            ],
-          })
-          .pipe(Effect.ignore)
-      }
+      yield* notifyOwner(after, completed, summary)
       return {
         workflowID: id,
         runID: completed.id,

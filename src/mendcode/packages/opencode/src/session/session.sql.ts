@@ -349,6 +349,7 @@ type LoopMetricsData = {
   turns?: number
   children?: number
   failures?: number
+  consecutiveFailures?: number
   noProgress?: number
   cost?: number
   inputTokens?: number

@@ -758,6 +758,7 @@ export function Session() {
     }),
   )
   const [permissionModeSetting, setPermissionModeSetting] = createSignal<PermissionMode>("approval")
+  const [permissionSelection, setPermissionSelection] = createSignal<{ requestID: string; option: string }>()
   const children = createMemo(() => {
     const parentID = session()?.parentID ?? session()?.id
     return sync.data.session
@@ -791,6 +792,7 @@ export function Session() {
     if (permissionModeSetting() === "full_access") return []
     return pendingPermissions()
   })
+  const activePermission = createMemo(() => permissions()[0])
   const questions = createMemo(() => {
     return pendingInputSessionIDs().flatMap((sessionID) => sync.data.question[sessionID] ?? [])
   })
@@ -2398,10 +2400,17 @@ export function Session() {
     if (!scroll || scroll.isDestroyed) return false
     renderer.requestRender()
     const child = scroll.getChildren().find((item) => item.id === intent.messageID)
-    if (!child) return false
+    // A freshly reconciled OpenTUI child exists before Yoga has assigned its
+    // final geometry. Detaching sticky-follow while that child is still at
+    // y=0 makes the first frame jump to the oldest loaded transcript row.
+    if (!child || child.height <= 0 || child.y < scroll.y) return false
     applyingSubmitScroll = true
     const delta = child.y - scroll.y - intent.offset
     if (delta !== 0) scroll.scrollBy(delta)
+    // Keep sticky-follow active until the optimistic child is mounted and the
+    // identity offset has been applied. Detaching earlier lets OpenTUI reset a
+    // resized long transcript to the first loaded row for one visible frame.
+    setFollowSessionOutput(false)
     applyingSubmitScroll = false
     lastObservedScrollTop = scroll.scrollTop
     lastObservedScrollHeight = scroll.scrollHeight
@@ -2413,7 +2422,10 @@ export function Session() {
 
   const scheduleSubmitScrollIntent = () => {
     const token = ++submitScrollToken
-    ;[0, 16, 50, 120, 240, 480].forEach((delay) => {
+    // Keep sticky-follow through the first layout frame. The first retry runs
+    // only after Yoga has positioned the optimistic row, then pins that row
+    // by identity without exposing the bounded store's oldest row.
+    ;[16, 50, 120, 240, 480].forEach((delay) => {
       setTimeout(() => reconcileSubmitScrollIntent(token), delay)
     })
   }
@@ -2427,7 +2439,6 @@ export function Session() {
     scrollAnchor = undefined
     suppressedPagingBoundary = undefined
     restoringSessionScroll = false
-    setFollowSessionOutput(false)
     setSubmitScrollIntent({ sessionID: input.sessionID, messageID: input.messageID, offset: input.offset ?? 0 })
     scheduleSubmitScrollIntent()
   }
@@ -4724,8 +4735,18 @@ export function Session() {
               </Show>
             </box>
             <box flexShrink={0} width="100%">
-              <Show when={permissions().length > 0}>
-                <PermissionPrompt request={permissions()[0]} />
+              <Show when={activePermission()}>
+                {(request) => (
+                  <PermissionPrompt
+                    request={request()}
+                    selected={
+                      permissionSelection()?.requestID === request().id ? permissionSelection()?.option : undefined
+                    }
+                    onSelectionChange={(option) =>
+                      setPermissionSelection({ requestID: request().id, option })
+                    }
+                  />
+                )}
               </Show>
               <Show when={permissions().length === 0 && questions().length > 0}>
                 <QuestionPrompt request={questions()[0]} />
