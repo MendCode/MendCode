@@ -59,19 +59,23 @@ function runExecutor(input: {
   promptText: string
   calls: PromptInput[]
   message?: MessageV2.WithParts
+  stall?: boolean
+  timeoutMs?: number
+  cancellations?: string[]
 }) {
   const promptLayer = Layer.succeed(
     SessionPrompt.Service,
     SessionPrompt.Service.of({
-      cancel: () => Effect.void,
+      cancel: (sessionID) => Effect.sync(() => {
+        input.cancellations?.push(sessionID)
+      }),
       cancelTurn: () => Effect.succeed("not_running" as const),
       cancelQueued: () => Effect.succeed(false),
       interrupt: () => Effect.void,
-      prompt: (prompt: PromptInput) =>
-        Effect.sync(() => {
-          input.calls.push(prompt)
-          return input.message ?? promptMessage(input.promptText)
-        }),
+      prompt: (prompt: PromptInput) => {
+        input.calls.push(prompt)
+        return input.stall ? Effect.never : Effect.succeed(input.message ?? promptMessage(input.promptText))
+      },
       promptAsync: () => Effect.succeed(promptMessage(input.promptText)),
       loop: () => Effect.succeed(promptMessage(input.promptText)),
       shell: () => Effect.succeed(promptMessage(input.promptText)),
@@ -85,6 +89,7 @@ function runExecutor(input: {
       executor.execute({
         task: input.task,
         sessionID: "ses_executor_root" as never,
+        timeoutMs: input.timeoutMs,
         workflowModel: input.workflowModel,
       }),
     ).pipe(Effect.provide(WorkflowTaskExecutor.layer.pipe(Layer.provide(promptLayer)))),
@@ -163,6 +168,19 @@ describe("workflow task executor", () => {
 
     expect(result).toMatchObject({ state: "failed", failureClass: "environment" })
     expect(result.error).toContain("without a terminal finish")
+  })
+
+  test("interrupts a workflow task that never reaches a terminal response", async () => {
+    const cancellations: string[] = []
+    await expect(runExecutor({
+      task: task(),
+      promptText: "",
+      calls: [],
+      stall: true,
+      timeoutMs: 10,
+      cancellations,
+    })).rejects.toThrow("timed out after 10ms")
+    expect(cancellations).toEqual(["ses_executor_root"])
   })
 
   test("fails when structured output violates its declared schema", async () => {

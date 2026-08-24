@@ -612,9 +612,12 @@ export function resolveWorkingStartedAt(input: {
   sessionUpdated?: number
   fallback?: number
 }) {
-  return [input.stored, input.activeAssistantCreated, input.sessionUpdated, input.fallback]
-    .filter((item): item is number => typeof item === "number" && Number.isFinite(item) && item > 0)
-    .toSorted((a, b) => a - b)[0]
+  const valid = (item: number | undefined): item is number =>
+    typeof item === "number" && Number.isFinite(item) && item > 0
+  const activeTurn = [input.stored, input.activeAssistantCreated].filter(valid).toSorted((a, b) => a - b)[0]
+  if (activeTurn) return activeTurn
+  if (valid(input.sessionUpdated)) return input.sessionUpdated
+  if (valid(input.fallback)) return input.fallback
 }
 
 export function shouldClearWorkingStartedAt(input: {

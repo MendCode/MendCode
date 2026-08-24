@@ -59,6 +59,7 @@ import type { OpencodeClient } from "@mendcode/sdk/v2"
 import { useLocal } from "@tui/context/local"
 import * as Log from "@mendcode/core/util/log"
 import { Locale } from "@/util/locale"
+import { tuiText } from "@tui/util/text"
 import { Process } from "@/util/process"
 import type { Tool } from "@/tool/tool"
 import type { ReadTool } from "@/tool/read"
@@ -906,7 +907,7 @@ export function Session() {
       submittedUserMessageID: submittedUserMessageID(),
       isVisibleUser: (messageID) =>
         (sync.data.part[messageID] ?? []).some(
-          (part) => part.type === "text" && !part.synthetic && part.text.trim().length > 0,
+          (part) => part.type === "text" && !part.synthetic && tuiText(part.text).trim().length > 0,
         ),
     }),
   )
@@ -2682,6 +2683,15 @@ export function Session() {
       captureScrollAnchor()
       rememberSessionScroll(activeSessionID)
     }, 0)
+  }
+
+  const markMouseScrollDetached = () => {
+    // OpenTUI invokes this listener before it applies the wheel delta. Disable
+    // sticky mode in the same event so narrow-width reflows cannot consume the
+    // first upward scroll, then capture the resulting position afterward.
+    if (scroll && !scroll.isDestroyed) scroll.stickyScroll = false
+    setFollowSessionOutput(false)
+    queueMicrotask(markScrollDetached)
   }
 
   const scrollToBottomIfAllowed = (options?: { force?: boolean }) => {
@@ -4525,7 +4535,7 @@ export function Session() {
                     flexGrow={1}
                     width="100%"
                     scrollAcceleration={scrollAcceleration()}
-                    onMouseScroll={() => queueMicrotask(markScrollDetached)}
+                    onMouseScroll={markMouseScrollDetached}
                   >
                     <Show
                       when={sessionHistoryBoundaryVisible({
@@ -6028,7 +6038,7 @@ function UserMessage(props: {
     if (!summary) return
     const text = (sync.data.part[summary.id] ?? [])
       .filter((part): part is TextPart => part.type === "text")
-      .map((part) => part.text.trim())
+      .map((part) => tuiText(part.text).trim())
       .filter(Boolean)
       .join("\n\n")
       .trim()
@@ -6308,7 +6318,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
     )
   })
   const simpleTextParts = createMemo(() =>
-    props.parts.filter((part): part is TextPart => part.type === "text" && part.text.trim().length > 0),
+    props.parts.filter((part): part is TextPart => part.type === "text" && tuiText(part.text).trim().length > 0),
   )
 
   const duration = createMemo(() => {
@@ -6598,7 +6608,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
   const dimensions = useTerminalDimensions()
   const content = createMemo(() => {
     // Some providers send reasoning metadata while redacting the readable text.
-    return props.part.text.replace("[REDACTED]", "").trim()
+    return tuiText(props.part.text).replace("[REDACTED]", "").trim()
   })
   const raw = createMemo(() => mend.profile.presentation.profile === "raw")
   const full = createMemo(() => mend.profile.presentation.profile === "mendcode")
@@ -6822,7 +6832,8 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
   const renderer = createMemo(() => mend.profile.presentation.message.renderer)
   const streaming = createMemo(() => props.last && !props.message.time.completed)
   const source = createMemo(() => {
-    const text = streaming() ? props.part.text.trimStart() : props.part.text.trim()
+    const raw = tuiText(props.part.text)
+    const text = streaming() ? raw.trimStart() : raw.trim()
     return text
   })
   const messageWidth = createMemo(() =>

@@ -229,7 +229,7 @@ function loopServicePreflightCommand(input: { daemonArguments: string[]; databas
   return [
     `state=$(/usr/bin/sqlite3 -readonly ${database} ${shellQuote([query])} 2>/dev/null) || exec ${fallback}`,
     `if [ "$state" = "1" ]; then exec ${fallback}; fi`,
-    `if [ "$state" = "0" ]; then exit 0; fi`,
+    `if [ "$state" = "0" ]; then exec ${fallback}; fi`,
   ].join("\n")
 }
 
@@ -275,6 +275,17 @@ export function loopServicePlan(args: LoopServiceArgs): LoopServicePlan {
     command,
     ...loopDaemonArgs({ intervalMs, limit, execute: args.execute, reportOnly: args.reportOnly, quiet: args.quiet }),
   ]
+  const scheduledProgramArguments = platformValue === "darwin"
+    ? [
+        "/usr/bin/env",
+        `PATH=${servicePath()}`,
+        command,
+        ...loopDaemonArgs(
+          { intervalMs, limit, execute: args.execute, reportOnly: args.reportOnly, quiet: args.quiet },
+          { once: true },
+        ),
+      ]
+    : programArguments
   const definitionPath =
     platformValue === "darwin"
       ? path.join(serviceDir, `${label}.plist`)
@@ -284,7 +295,7 @@ export function loopServicePlan(args: LoopServiceArgs): LoopServicePlan {
   const databasePath = loopDatabasePath()
   const serviceProgramArguments =
     platformValue === "darwin"
-      ? ["/bin/sh", "-c", loopServicePreflightCommand({ daemonArguments: programArguments, databasePath, projectRoot })]
+      ? ["/bin/sh", "-c", loopServicePreflightCommand({ daemonArguments: scheduledProgramArguments, databasePath, projectRoot })]
       : programArguments
   const programLine = shellQuote(programArguments)
   return {
@@ -320,7 +331,7 @@ export function loopServicePlan(args: LoopServiceArgs): LoopServicePlan {
           : ["schtasks.exe", "/End", "/TN", `MendCode\\Loops\\${label}`],
     uninstallCommand:
       platformValue === "darwin"
-        ? ["launchctl", "bootout", launchctlDomain(), definitionPath]
+        ? ["launchctl", "bootout", `${launchctlDomain()}/${label}`]
         : platformValue === "linux"
           ? ["systemctl", "--user", "disable", "--now", `${label}.service`]
           : ["schtasks.exe", "/Delete", "/F", "/TN", `MendCode\\Loops\\${label}`],
@@ -582,8 +593,10 @@ export async function loopServiceUninstall(args: LoopServiceArgs) {
   const plan = loopServicePlan(args)
   if (platform() !== plan.platform)
     throw new Error(`Loop service uninstall target is ${plan.platform}, current platform is ${process.platform}.`)
-  if (serviceLoaded(plan).loaded) runServiceCommand(plan, plan.uninstallCommand)
-  await rm(plan.definitionPath, { force: true })
+  const loaded = serviceLoaded(plan).loaded
+  if (plan.platform === "darwin") await rm(plan.definitionPath, { force: true })
+  if (loaded) runServiceCommand(plan, plan.uninstallCommand)
+  if (plan.platform !== "darwin") await rm(plan.definitionPath, { force: true })
   if (plan.platform === "linux") runServiceCommand(plan, ["systemctl", "--user", "daemon-reload"])
   return plan
 }

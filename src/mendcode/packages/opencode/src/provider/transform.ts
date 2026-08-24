@@ -1332,6 +1332,39 @@ export function schema(model: Provider.Model, schema: JSONSchema.BaseSchema | JS
     schema = sanitizeOpencodeSchema(schema) as JSONSchema.BaseSchema | JSONSchema7
   }
 
+  const openAIEndpoint = (() => {
+    try {
+      return new URL(model.api.url).hostname === "api.openai.com"
+    } catch {
+      return false
+    }
+  })()
+  if (
+    model.providerID === "openai" ||
+    model.providerID === "azure" ||
+    model.api.npm === "@ai-sdk/openai" ||
+    model.api.npm === "@ai-sdk/azure" ||
+    openAIEndpoint
+  ) {
+    const usesUnsupportedLookaround = (pattern: string) => /\(\?(?:[=!]|<[=!])/.test(pattern)
+    const sanitizeOpenAISchema = (obj: unknown): unknown => {
+      if (obj === null || typeof obj !== "object") return obj
+      if (Array.isArray(obj)) return obj.map(sanitizeOpenAISchema)
+
+      const result: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(obj)) {
+        // OpenAI rejects lookahead/lookbehind in tool JSON Schemas. Dropping
+        // only that unsupported constraint preserves the tool shape while the
+        // MCP/tool remains responsible for validating the actual input.
+        if (key === "pattern" && typeof value === "string" && usesUnsupportedLookaround(value)) continue
+        result[key] = sanitizeOpenAISchema(value)
+      }
+      return result
+    }
+
+    schema = sanitizeOpenAISchema(schema) as JSONSchema.BaseSchema | JSONSchema7
+  }
+
   /*
   if (["openai", "azure"].includes(providerID)) {
     if (schema.type === "object" && schema.properties) {

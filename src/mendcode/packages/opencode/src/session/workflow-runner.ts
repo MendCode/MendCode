@@ -52,6 +52,8 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/WorkflowRunner") {}
 
+export const completionAuditResponseTimeoutMs = 3 * 60_000
+
 export function shouldRecoverWorkflowRun(state: WorkflowRunState) {
   return state === "queued" || state === "working"
 }
@@ -635,6 +637,7 @@ export const layer = Layer.effect(
           kind: "json",
           schema: JSON.parse(JSON.stringify(completionAuditJsonSchema)) as never,
         },
+        agentProfile: "explore",
         allowedTools: ["read", "grep", "glob"],
         permissions: {
           mode: "report-only",
@@ -653,7 +656,7 @@ export const layer = Layer.effect(
       const auditSession = yield* sessions.create({
         parentID: input.rootSessionID,
         title: `Completion audit: ${input.snapshot.definition.name}`,
-        agent: "general",
+        agent: "explore",
         permission: Permission.withSessionMode(policy.permission, input.sessionPermissionMode),
       })
       const executionResult = fingerprintBeforeResult.status === "ok"
@@ -661,6 +664,7 @@ export const layer = Layer.effect(
             executor.execute({
               task: auditTask,
               sessionID: auditSession.id,
+              timeoutMs: completionAuditResponseTimeoutMs,
               workflowModel: input.snapshot.revision.plan.model,
               workflowPermissions: input.snapshot.revision.plan.permissions,
               workflowWorkspace: input.snapshot.revision.plan.workspace,

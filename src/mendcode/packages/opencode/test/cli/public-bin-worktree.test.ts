@@ -91,6 +91,11 @@ function status(input: {
 }
 
 describe("mend public worktree shortcuts", () => {
+  test("preserves the scheduler project root across canonical cwd aliases", async () => {
+    const launcher = await readFile(path.resolve(import.meta.dir, "../../../../../..", "bin", "mend"), "utf8")
+    expect(launcher).toContain('MENDCODE_SHELL_CWD="${MENDCODE_SHELL_CWD:-$(pwd)}"')
+  })
+
   test("keeps durable services on the public launcher instead of a source entrypoint", () => {
     expect(resolvePublicBinCommand("/runtime/mendcode", undefined, "/runtime/mendcode/src/mend/cli/public-bin.ts")).toBe(
       "/runtime/mendcode/bin/mend",
@@ -273,6 +278,7 @@ describe("mend public CLI help", () => {
     expect(output).toContain("mendcode install <pack-id>")
     expect(output).toContain("mendcode mflow status")
     expect(output).toContain("mendcode worktree status|plan")
+    expect(output).toContain("mend workflows start|resume <id> --wait")
     expect(output).not.toContain("mendcode tui")
     expect(output).not.toContain("mendcode config")
     expect(output).not.toContain("adapter status")
