@@ -675,6 +675,10 @@ async function workflows(args: string[]) {
             ? (SessionID.make(optionValue(args, "--origin-session")!) as SessionID)
             : undefined,
         })
+        if (args.includes("--wait")) {
+          yield* runner.run(snapshot.run.id)
+          return yield* workflow.show(snapshot.run.id)
+        }
         yield* runner.start(snapshot.run.id)
         return snapshot
       }),
@@ -731,7 +735,8 @@ async function workflows(args: string[]) {
           yield* runner.stop(snapshot.run.id)
         } else if (sub === "resume") {
           snapshot = yield* workflow.resume({ runID, reason: optionValue(args, "--reason") ?? undefined, actor: "cli" })
-          yield* runner.start(snapshot.run.id)
+          if (args.includes("--wait")) yield* runner.run(snapshot.run.id)
+          else yield* runner.start(snapshot.run.id)
         } else if (sub === "stop") {
           snapshot = yield* workflow.stop({ runID, reason: optionValue(args, "--reason") ?? undefined, actor: "cli" })
           yield* runner.stop(snapshot.run.id)
@@ -744,7 +749,8 @@ async function workflows(args: string[]) {
             reason: optionValue(args, "--reason") ?? undefined,
             actor: "cli",
           })
-          yield* runner.start(snapshot.run.id)
+          if (args.includes("--wait")) yield* runner.run(snapshot.run.id)
+          else yield* runner.start(snapshot.run.id)
         } else {
           const phaseID = optionValue(args, "--phase-id")
           if (!phaseID) throw new Error("Usage: mend workflows retry-phase <run-id> --phase-id <phase-id>")
@@ -754,9 +760,12 @@ async function workflows(args: string[]) {
             reason: optionValue(args, "--reason") ?? undefined,
             actor: "cli",
           })
-          yield* runner.start(snapshot.run.id)
+          if (args.includes("--wait")) yield* runner.run(snapshot.run.id)
+          else yield* runner.start(snapshot.run.id)
         }
-        return snapshot
+        return args.includes("--wait") && ["resume", "retry-task", "retry-phase"].includes(sub)
+          ? yield* workflow.show(snapshot.run.id)
+          : snapshot
       }),
     )
     printResult(args, result, formatWorkflowSnapshot)

@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.37 - 2026-08-23
+
+MendCode v0.1.37 prevents orphaned macOS Loop services and makes Workflow completion recovery bounded and executable.
+
+### Changed
+
+- Run macOS Loop LaunchAgents as one-shot scheduler ticks instead of leaving a persistent Bun coordinator alive between wakeups.
+- Accept bounded package-manager validation commands from relative project subdirectories, including `pnpm --dir app build`.
+
+### Fixed
+
+- Self-uninstall project Loop services after their final scheduled Loop disappears, including services already waking with an empty project scope.
+- Remove macOS LaunchAgents by their loaded label so a service can safely uninstall itself while it is running.
+- Reject unsupported Workflow completion commands before task execution instead of blocking after every task has finished.
+- Time out a stalled structured completion auditor after 3 minutes, cancel its child session, and route it through the existing bounded retry or blocked state instead of auditing forever or overlapping the retry.
+- Route completion audits through the explicit read-only Explore profile instead of silently inheriting the primary Build agent.
+- Resume a Workflow whose work already finished but whose completion audit was blocked by creating a fresh audit generation without rerunning completed tasks.
+- Keep explicit `workflows start|resume|retry-* --wait` CLI runs attached until a durable stop instead of disposing their runner immediately.
+
+### Tests
+
+- Add focused regressions for macOS one-shot scheduling and self-uninstall routing, package-manager validation safety, early Workflow plan validation, and stalled completion auditors.
+- Run 96 focused public-launcher, Loop, Workflow, scheduler, persistence, and completion tests with isolated test state, plus a real isolated macOS LaunchAgent self-removal smoke.
+
 ## 0.1.36 - 2026-08-23
 
 MendCode v0.1.36 makes Loop and Workflow supervision durable, observable, and consistent with the workspace users actually inspect.

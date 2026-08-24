@@ -269,17 +269,27 @@ describe("session route initialization", () => {
     expect(source).toContain("messages: transcriptRows()")
   })
 
-  test("synchronizes the live scroll position before detaching follow mode", async () => {
+  test("detaches mouse follow before OpenTUI applies the wheel delta", async () => {
     const source = await Bun.file(new URL("../../../src/cli/cmd/tui/routes/session/index.tsx", import.meta.url)).text()
     const markStart = source.indexOf("const markScrollDetached = () =>")
     const markEnd = source.indexOf("const scrollToBottomIfAllowed", markStart)
     const mark = source.slice(markStart, markEnd)
+    const mouseStart = mark.indexOf("const markMouseScrollDetached = () =>")
+    const mouse = mark.slice(mouseStart)
 
     expect(mark).toContain("setSessionScrollTop(scroll.scrollTop)")
     expect(mark.indexOf("setSessionScrollTop(scroll.scrollTop)")).toBeLessThan(
       mark.indexOf("setFollowSessionOutput(false)"),
     )
-    expect(source).toContain("onMouseScroll={() => queueMicrotask(markScrollDetached)}")
+    expect(mouseStart).toBeGreaterThan(-1)
+    expect(mouse.indexOf("scroll.stickyScroll = false")).toBeLessThan(
+      mouse.indexOf("queueMicrotask(markScrollDetached)"),
+    )
+    expect(mouse.indexOf("setFollowSessionOutput(false)")).toBeLessThan(
+      mouse.indexOf("queueMicrotask(markScrollDetached)"),
+    )
+    expect(source).toContain("onMouseScroll={markMouseScrollDetached}")
+    expect(source).not.toContain("onMouseScroll={() => queueMicrotask(markScrollDetached)}")
   })
 
   test("offers a reversible compacted tool-call command with a bounded-loading warning", async () => {

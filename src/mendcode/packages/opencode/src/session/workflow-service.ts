@@ -1570,7 +1570,68 @@ export const layer = Layer.effect(
     })
 
     const pause = (input: WorkflowControlInput) => updateState(input, "paused")
-    const resume = (input: WorkflowControlInput) => updateState(input, "queued")
+    const resume = Effect.fn("WorkflowService.resume")(function* (input: WorkflowControlInput) {
+      const current = yield* show(input.runID)
+      const blockedCompletion = current.run.state === "blocked" && current.run.completion?.status === "blocked"
+      const workComplete = current.tasks.find((task) => task.id === current.revision.plan.finalTaskID)?.state === "completed" &&
+        current.phases.every((phase) => phase.state === "completed")
+      if (!blockedCompletion || !workComplete) return yield* updateState(input, "queued")
+
+      const now = Date.now()
+      const completion = nextCompletionProgress({
+        confirmation: "next-run",
+        workSatisfied: true,
+        current: current.run.completion,
+        sourceID: current.revision.plan.finalTaskID,
+        now,
+      }).progress
+      if (!completion) return yield* Effect.fail(new WorkflowStateError(input.runID, "Unable to retry completion audit"))
+
+      Database.transaction((db) => {
+        const persisted = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, input.runID)).get()
+        if (!persisted) throw new WorkflowNotFoundError(input.runID)
+        db.update(WorkflowRunTable)
+          .set({
+            state: "queued",
+            time_ended: null,
+            time_updated: now,
+            data: {
+              ...persisted.data,
+              completion,
+              blocker: undefined,
+              nextAction: "Run the fresh completion audit.",
+            },
+          })
+          .where(eq(WorkflowRunTable.id, input.runID))
+          .run()
+        for (const gate of db.select().from(WorkflowGateTable).where(eq(WorkflowGateTable.run_id, input.runID)).all()) {
+          if (gate.data?.kind !== "completion") continue
+          db.update(WorkflowGateTable)
+            .set({
+              state: "pending",
+              reason: "Fresh completion audit queued.",
+              time_updated: now,
+              data: { ...gate.data, generation: completion.generation },
+            })
+            .where(and(eq(WorkflowGateTable.run_id, input.runID), eq(WorkflowGateTable.id, gate.id)))
+            .run()
+        }
+        appendEvent(
+          db,
+          input.runID,
+          "workflow.run.updated",
+          "Completion audit retry queued",
+          input.reason ?? "Fresh completion audit queued after a blocked completion check.",
+          {
+            actor: input.actor ?? "user",
+            reason: input.reason,
+            generation: completion.generation,
+          },
+        )
+      })
+      yield* bus.publish(Event.RunWake, { runID: input.runID })
+      return yield* show(input.runID)
+    })
     const wake = Effect.fn("WorkflowService.wake")((runID: WorkflowRunID) =>
       bus.publish(Event.RunWake, { runID }),
     )

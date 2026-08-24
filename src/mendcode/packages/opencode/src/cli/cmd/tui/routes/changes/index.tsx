@@ -5,6 +5,7 @@ import { useDialog } from "@tui/ui/dialog"
 import { DialogPrompt } from "@tui/ui/dialog-prompt"
 import { useTheme } from "@tui/context/theme"
 import { useToast } from "@tui/ui/toast"
+import { useKV } from "@tui/context/kv"
 import { createEffect, createMemo, createResource, createSignal, Show } from "solid-js"
 import { useProject } from "@tui/context/project"
 import { CommandDeck, CommandDeckContext, commandDeckLayout } from "@tui/component/command-deck"
@@ -36,6 +37,7 @@ export function Changes() {
   const project = useProject()
   const dialog = useDialog()
   const toast = useToast()
+  const kv = useKV()
   const { theme } = useTheme()
   const dimensions = useTerminalDimensions()
   let scroll: ScrollBoxRenderable | undefined
@@ -44,18 +46,19 @@ export function Changes() {
   const root = () => project.instance.path().worktree || project.instance.path().directory || process.cwd()
   const [reloadToken, setReloadToken] = createSignal(0)
   const [state, setState] = createSignal<ReviewState>()
+  const [diffWrapMode, setDiffWrapMode] = kv.signal<"word" | "none">("diff_wrap_mode", "word")
+  const [showContext, setShowContext] = createSignal(true)
   const [loaded] = createResource(
     () => `${root()}:${reloadToken()}`,
     () => Promise.resolve(loadWorkspaceDiff(root())),
   )
   const layout = createMemo(() => reviewLayoutForDimensions(dimensions()))
-  const deck = createMemo(() => commandDeckLayout(dimensions()))
+  const deck = createMemo(() => commandDeckLayout({ ...dimensions(), hasContext: showContext() }))
   const contentWidth = createMemo(() => Math.max(40, dimensions().width - 4))
   const note = createMemo(() => {
     const data = loaded()
     if (data?.error) return data.error
-    if (data?.skipped.length)
-      return `Working tree diff review - skipped ${data.skipped.length} large/binary files`
+    if (data?.skipped.length) return `Working tree diff review - skipped ${data.skipped.length} large/binary files`
     return "Working tree diff review"
   })
 
@@ -110,6 +113,30 @@ export function Changes() {
     toast.show({ variant: "info", message: "Reloading changes.", duration: 1500 })
   }
 
+  function toggleContext() {
+    const visible = !showContext()
+    setShowContext(visible)
+    toast.show({
+      variant: "info",
+      message: visible ? "Details sidebar shown." : "Details sidebar hidden.",
+      duration: 1200,
+    })
+  }
+
+  function toggleDiffWrap() {
+    const next = diffWrapMode() === "word" ? "none" : "word"
+    const currentScroll = scroll
+    if (currentScroll && !currentScroll.isDestroyed) {
+      currentScroll.scrollTo({ x: 0, y: currentScroll.scrollTop })
+    }
+    setDiffWrapMode(() => next)
+    toast.show({
+      variant: "info",
+      message: next === "word" ? "Diff wrapping enabled." : "Diff wrapping disabled; use horizontal scroll.",
+      duration: 1500,
+    })
+  }
+
   async function addComment() {
     const current = state()
     const file = current ? activeReviewFile(current) : undefined
@@ -149,6 +176,24 @@ export function Changes() {
     if (evt.name === "r") {
       evt.preventDefault()
       reload()
+      return
+    }
+    if (evt.name === "i") {
+      evt.preventDefault()
+      toggleContext()
+      return
+    }
+    if (evt.name === "w") {
+      evt.preventDefault()
+      toggleDiffWrap()
+      return
+    }
+    if (diffWrapMode() === "none" && evt.ctrl && (evt.name === "left" || evt.name === "right")) {
+      evt.preventDefault()
+      scroll?.scrollBy({
+        x: (evt.name === "right" ? 1 : -1) * Math.max(8, Math.floor(dimensions().width / 3)),
+        y: 0,
+      })
       return
     }
     if (evt.name === "n" || evt.name === "right") {
@@ -231,6 +276,7 @@ export function Changes() {
                   <StackedChanges
                     state={current()}
                     width={contentWidth()}
+                    wrapMode={diffWrapMode()}
                     scrollRef={(value) => (scroll = value)}
                     onSelect={updateSelection}
                   />
@@ -266,13 +312,21 @@ export function Changes() {
                     ref={(value: ScrollBoxRenderable) => (scroll = value)}
                     flexGrow={1}
                     minHeight={0}
-                    horizontalScrollbarOptions={{ visible: false }}
+                    scrollX={diffWrapMode() === "none"}
+                    horizontalScrollbarOptions={{
+                      visible: diffWrapMode() === "none",
+                      trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border },
+                    }}
                     verticalScrollbarOptions={{
                       visible: true,
                       trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border },
                     }}
                   >
-                    <ChangesReviewStream state={current()} width={contentWidth() - layout().sidebarWidth - 3} />
+                    <ChangesReviewStream
+                      state={current()}
+                      width={contentWidth() - layout().sidebarWidth - 3}
+                      wrapMode={diffWrapMode()}
+                    />
                   </scrollbox>
                 </box>
               </Show>
@@ -283,10 +337,12 @@ export function Changes() {
           <CommandDeck
             page="changes"
             subtitle={note}
-            status={() => loaded.loading ? "LOADING" : loaded()?.error ? "ERROR" : "LIVE"}
-             summary={() => `${current().files.length} files · +${current().files.reduce((sum, file) => sum + file.additions, 0)} · -${current().files.reduce((sum, file) => sum + file.deletions, 0)} · ${current().comments.length} comments`}
-            footer="↑↓ Line   n/p File   ]/[ Hunk   c Comment   l Line   r Reload   ? Help   q Back"
-             rail={
+            status={() => (loaded.loading ? "LOADING" : loaded()?.error ? "ERROR" : "LIVE")}
+            summary={() =>
+              `${current().files.length} files · +${current().files.reduce((sum, file) => sum + file.additions, 0)} · -${current().files.reduce((sum, file) => sum + file.deletions, 0)} · ${current().comments.length} comments`
+            }
+            footer="↑↓ Line   n/p File   ]/[ Hunk   w Wrap/scroll   i Sidebar   c Comment   l Line   r Reload   ? Help   q Back"
+            rail={
               <scrollbox
                 ref={(value: ScrollBoxRenderable) => (fileScroll = value)}
                 flexGrow={1}
@@ -305,35 +361,67 @@ export function Changes() {
               </scrollbox>
             }
             context={
-              <CommandDeckContext
-                title={activeReviewFile(current())?.path ?? "Review"}
-                rows={[
-                  ["change", activeReviewFile(current())?.changeType ?? "none"],
-                  ["hunk", activeReviewBlock(current()) ? `${(activeReviewBlock(current())?.index ?? 0) + 1}` : "none"],
-                  ["line", activeReviewLine(current())?.newLine?.toString() ?? activeReviewLine(current())?.oldLine?.toString() ?? "none"],
-                  ["comments", String(current().comments.length)],
-                ]}
-              >
-                <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column" gap={1}>
-                  <text fg={theme.textMuted} wrapMode="none">ACTIONS</text>
-                  <text fg={theme.text} wrapMode="none">c Add comment</text>
-                  <text fg={theme.text} wrapMode="none">l Jump to line</text>
-                  <text fg={theme.text} wrapMode="none">r Reload diff</text>
-                </box>
-              </CommandDeckContext>
+              showContext() ? (
+                <CommandDeckContext
+                  title={activeReviewFile(current())?.path ?? "Review"}
+                  rows={[
+                    ["change", activeReviewFile(current())?.changeType ?? "none"],
+                    [
+                      "hunk",
+                      activeReviewBlock(current()) ? `${(activeReviewBlock(current())?.index ?? 0) + 1}` : "none",
+                    ],
+                    [
+                      "line",
+                      activeReviewLine(current())?.newLine?.toString() ??
+                        activeReviewLine(current())?.oldLine?.toString() ??
+                        "none",
+                    ],
+                    ["comments", String(current().comments.length)],
+                  ]}
+                >
+                  <box border={["top"]} borderColor={theme.border} paddingTop={1} flexDirection="column" gap={1}>
+                    <text fg={theme.textMuted} wrapMode="none">
+                      ACTIONS
+                    </text>
+                    <text fg={theme.text} wrapMode="none">
+                      i Toggle sidebar
+                    </text>
+                    <text fg={theme.text} wrapMode="none">
+                      w Toggle wrap/scroll
+                    </text>
+                    <text fg={theme.text} wrapMode="none">
+                      c Add comment
+                    </text>
+                    <text fg={theme.text} wrapMode="none">
+                      l Jump to line
+                    </text>
+                    <text fg={theme.text} wrapMode="none">
+                      r Reload diff
+                    </text>
+                  </box>
+                </CommandDeckContext>
+              ) : undefined
             }
           >
             <scrollbox
               ref={(value: ScrollBoxRenderable) => (scroll = value)}
               flexGrow={1}
               minHeight={0}
-              horizontalScrollbarOptions={{ visible: false }}
+              scrollX={diffWrapMode() === "none"}
+              horizontalScrollbarOptions={{
+                visible: diffWrapMode() === "none",
+                trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border },
+              }}
               verticalScrollbarOptions={{
                 visible: true,
                 trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border },
               }}
             >
-              <ChangesReviewStream state={current()} width={Math.max(36, deck().contentWidth - 2)} />
+              <ChangesReviewStream
+                state={current()}
+                width={Math.max(36, deck().contentWidth - 2)}
+                wrapMode={diffWrapMode()}
+              />
             </scrollbox>
           </CommandDeck>
         </Show>
@@ -345,6 +433,7 @@ export function Changes() {
 function StackedChanges(props: {
   state: ReviewState
   width: number
+  wrapMode: "word" | "none"
   scrollRef: (value: ScrollBoxRenderable) => void
   onSelect: (next: Partial<ReviewState["selection"]>) => void
 }) {
@@ -354,7 +443,11 @@ function StackedChanges(props: {
       ref={props.scrollRef}
       flexGrow={1}
       minHeight={0}
-      horizontalScrollbarOptions={{ visible: false }}
+      scrollX={props.wrapMode === "none"}
+      horizontalScrollbarOptions={{
+        visible: props.wrapMode === "none",
+        trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border },
+      }}
       verticalScrollbarOptions={{
         visible: true,
         trackOptions: { backgroundColor: theme.backgroundPanel, foregroundColor: theme.border },
@@ -368,7 +461,7 @@ function StackedChanges(props: {
             onSelect={(file: ReviewFile) => props.onSelect(selectionForFile(file))}
           />
         </box>
-        <ChangesReviewStream state={props.state} width={props.width - 2} />
+        <ChangesReviewStream state={props.state} width={props.width - 2} wrapMode={props.wrapMode} />
       </box>
     </scrollbox>
   )

@@ -122,6 +122,7 @@ describe("loop service plans", () => {
     expect(plan.projectRoot).toBe(path.resolve("/tmp/acme repo"))
     expect(plan.mode).toBe("report-only")
     expect(plan.definitionPath).toContain("Library/LaunchAgents")
+    expect(plan.uninstallCommand).toEqual(["launchctl", "bootout", expect.stringContaining(`/${plan.label}`)])
     expect(plan.programArguments).toEqual([
       "/usr/bin/env",
       expect.stringContaining("PATH="),
@@ -196,10 +197,11 @@ describe("loop service plans", () => {
     expect(plan.serviceProgramArguments.slice(0, 2)).toEqual(["/bin/sh", "-c"])
     expect(plan.serviceProgramArguments[2]).toContain("/usr/bin/sqlite3 -readonly")
     expect(plan.serviceProgramArguments[2]).toContain("/opt/mendcode loops daemon")
+    expect(plan.serviceProgramArguments[2]).toContain("--once")
     expect(plan.serviceProgramArguments[2]).toContain("s.id = w.root_session_id")
     expect(plan.serviceProgramArguments[2]).toContain("s.directory = ")
     expect(plan.serviceProgramArguments[2]).toContain("/tmp/repo")
-    expect(plan.serviceProgramArguments[2]).toContain('if [ "$state" = "0" ]; then exit 0; fi')
+    expect(plan.serviceProgramArguments[2]).toContain('if [ "$state" = "0" ]; then exec')
     expect(plan.serviceProgramArguments[2]).not.toContain("launchctl bootout")
     expect(loopServicePlist(plan)).toContain("<string>/bin/sh</string>")
   })
