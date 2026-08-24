@@ -1,11 +1,11 @@
 import { Effect } from "effect"
+import path from "node:path"
 
 import { errorMessage } from "@/util/error"
 
 const validationCommandPatterns = [
   /^git\s+diff\s+--check(?:\s|$)/i,
   /^bun\s+(?:test|typecheck|run\s+(?:test|typecheck|lint|check|build))(?:\s|$)/i,
-  /^(?:npm|pnpm|yarn)\s+(?:test|run\s+(?:test|typecheck|lint|check|build))(?:\s|$)/i,
   /^deno\s+(?:test|lint|check)(?:\s|$)/i,
   /^(?:pytest|python(?:3)?\s+-m\s+pytest)(?:\s|$)/i,
   /^go\s+test(?:\s|$)/i,
@@ -14,12 +14,37 @@ const validationCommandPatterns = [
 ]
 
 const maxValidationOutputBytes = 128 * 1024
+const packageManagers = new Set(["npm", "pnpm", "yarn"])
+const validationScripts = new Set(["test", "typecheck", "lint", "check", "build"])
+
+function safeValidationDirectory(value: string | undefined) {
+  if (!value || value.startsWith("-") || path.isAbsolute(value) || path.win32.isAbsolute(value)) return false
+  if (!/^[A-Za-z0-9_.@+/-]+$/.test(value)) return false
+  return !value.split("/").includes("..")
+}
+
+function packageManagerValidationAllowed(args: readonly string[]) {
+  const manager = args[0]?.toLowerCase()
+  if (!manager || !packageManagers.has(manager)) return false
+  let cursor = 1
+  const directoryOption = args[cursor]
+  const allowedDirectoryOptions = manager === "npm" ? new Set(["--prefix"]) : new Set(["--dir", "-C"])
+  if (directoryOption && allowedDirectoryOptions.has(directoryOption)) {
+    if (!safeValidationDirectory(args[cursor + 1])) return false
+    cursor += 2
+  }
+  const command = args[cursor]?.toLowerCase()
+  if (command === "run") return validationScripts.has(args[cursor + 1]?.toLowerCase() ?? "")
+  return validationScripts.has(command ?? "")
+}
 
 const validationCommandArgs = (command: string) => {
   const value = command.trim()
   if (!value || /[;&|><`$\\\r\n\0]/.test(value)) return
-  if (!validationCommandPatterns.some((pattern) => pattern.test(value))) return
   const args = value.split(/\s+/)
+  if (packageManagers.has(args[0]?.toLowerCase() ?? "")) {
+    if (!packageManagerValidationAllowed(args)) return
+  } else if (!validationCommandPatterns.some((pattern) => pattern.test(value))) return
   if (
     args[0] === "git" &&
     args[1] === "diff" &&

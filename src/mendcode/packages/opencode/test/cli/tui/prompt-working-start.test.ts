@@ -887,6 +887,17 @@ describe("resolveWorkingStartedAt", () => {
     expect(resolveWorkingStartedAt({ fallback: 2_000 })).toBe(2_000)
   })
 
+  test("does not count idle time from a stale session update as active turn time", () => {
+    expect(
+      resolveWorkingStartedAt({
+        stored: 20_000,
+        activeAssistantCreated: 21_000,
+        sessionUpdated: 1_000,
+        fallback: 22_000,
+      }),
+    ).toBe(20_000)
+  })
+
   test("shows immediate working feedback while a new session is still being created", () => {
     expect(
       promptWorkingIndicatorVisible({

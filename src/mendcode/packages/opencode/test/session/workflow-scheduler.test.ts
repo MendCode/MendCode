@@ -498,6 +498,26 @@ describe("workflow scheduler persistence", () => {
       expect(blocked.run.state).toBe("blocked")
       expect(blocked.run.completion?.summary).toContain("will not guess which workflow tasks to rerun")
       expect(blocked.tasks.every((task) => task.state === "completed")).toBe(true)
+
+      const resumed = yield* workflow.resume({
+        runID: started.run.id,
+        actor: "test",
+        reason: "Retry the completion audit after repairing its environment.",
+      })
+      expect(resumed.run.state).toBe("queued")
+      expect(resumed.run.completion).toMatchObject({ status: "candidate", generation: 2, auditAttempts: 0 })
+      expect(resumed.run.completion?.receipt).toBeUndefined()
+      expect(resumed.run.completion?.candidateFingerprint).toBeUndefined()
+      expect(resumed.tasks.every((task) => task.state === "completed")).toBe(true)
+      expect(resumed.gates.filter((gate) => gate.kind === "completion").every((gate) => gate.state === "pending")).toBe(true)
+
+      const retryClaim = yield* workflow.claimCompletionAudit({
+        runID: started.run.id,
+        holder: "recovery-auditor",
+        leaseMs: 60_000,
+        candidateFingerprint: "fresh-stable",
+      })
+      expect(retryClaim).toMatchObject({ status: "auditing", generation: 2, auditAttempts: 1 })
     }),
   )
 

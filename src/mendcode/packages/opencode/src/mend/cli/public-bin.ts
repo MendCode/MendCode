@@ -178,6 +178,8 @@ Workflows:
                                  manage the per-project background Loop service
    mend workflows list|show|preview|save|start|pause|resume|stop|delete|retry-task|retry-phase
                                  inspect and control independent workflow runs; use --plan-file for preview/save/start
+   mend workflows start|resume <id> --wait
+                                 keep the CLI attached until the workflow reaches a durable stop
   mendcode memory dream service status|start|stop
                                 manage the global background Dream service
   mendcode mflow status            inspect mflow activation, daemon, and locks
@@ -221,6 +223,7 @@ Primary public surface:
    mendcode loops service install|start|stop|restart|status|logs|uninstall [--service-dir <path>] [--log-dir <path>]
    mendcode loops daemon --once --quiet  run one due-loop pass for scheduled background services
    mend workflows list|show|preview|save|start|pause|resume|stop|delete|retry-task|retry-phase
+   mend workflows start|resume <id> --wait  execute in the foreground until a durable stop
   mendcode memory dream run|consolidate|tick|daemon|service
   mendcode memory dream run --preview|--auto  run a manual consolidation pass
   mendcode memory dream daemon --once   run one scheduled Dream pass and exit

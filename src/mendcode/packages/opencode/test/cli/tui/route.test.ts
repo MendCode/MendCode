@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { routeReturnTarget, type Route } from "../../../src/cli/cmd/tui/context/route"
 import { commandDeckLayout, commandDeckRouteTarget } from "../../../src/cli/cmd/tui/component/command-deck"
-import { loopDetailHeaderLayout, loopRouteKeyHint, loopRouteSelectionOffset, loopSchedulerState } from "../../../src/cli/cmd/tui/routes/loops"
+import {
+  loopDetailHeaderLayout,
+  loopRouteKeyHint,
+  loopRouteSelectionOffset,
+  loopSchedulerState,
+} from "../../../src/cli/cmd/tui/routes/loops"
 
 describe("tui route helpers", () => {
   test("setup and stats return to the originating session when present", () => {
@@ -9,7 +14,9 @@ describe("tui route helpers", () => {
 
     expect(routeReturnTarget({ type: "setup", returnTo: session })).toEqual(session)
     expect(routeReturnTarget({ type: "stats", scope: "global", returnTo: session })).toEqual(session)
-    expect(routeReturnTarget({ type: "session-history", sessionID: session.sessionID, returnTo: session })).toEqual(session)
+    expect(routeReturnTarget({ type: "session-history", sessionID: session.sessionID, returnTo: session })).toEqual(
+      session,
+    )
   })
 
   test("setup and stats fall back to home without a return route", () => {
@@ -28,6 +35,13 @@ describe("tui route helpers", () => {
     expect(commandDeckLayout({ width: 180, height: 40 })).toMatchObject({ railWidth: 36, contextWidth: 43 })
     expect(commandDeckLayout({ width: 300, height: 40 })).toMatchObject({ railWidth: 48, contextWidth: 50 })
     expect(commandDeckLayout({ width: 100, height: 30 }).wide).toBe(false)
+  })
+
+  test("gives the main pane the context sidebar width when details are hidden", () => {
+    const withContext = commandDeckLayout({ width: 180, height: 40, hasContext: true })
+    const withoutContext = commandDeckLayout({ width: 180, height: 40, hasContext: false })
+
+    expect(withoutContext.contentWidth).toBeGreaterThan(withContext.contentWidth)
   })
 
   test("loop dashboard keeps arrow navigation inside the workflow list", () => {
