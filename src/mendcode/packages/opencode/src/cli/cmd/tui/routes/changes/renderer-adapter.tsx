@@ -11,6 +11,10 @@ import type { ReviewFile, ReviewBlock, ReviewLine, ReviewState } from "./review-
 import { activeReviewFile, activeReviewBlock, reviewStats } from "./review-state"
 import { changesKeybindLabel } from "./keybinds"
 
+export type ChangesDiffWrapMode = "word" | "none"
+
+const DIFF_LINE_GUTTER_WIDTH = 12
+
 export function ChangesHeader(props: { state: ReviewState; width: number; loading?: boolean; note?: string }) {
   const { theme } = useTheme()
   const stats = () => reviewStats(props.state.files)
@@ -148,14 +152,19 @@ export function ChangesFileNav(props: { state: ReviewState; width: number; onSel
   )
 }
 
-export function ChangesReviewStream(props: { state: ReviewState; width: number }) {
+export function ChangesReviewStream(props: { state: ReviewState; width: number; wrapMode: ChangesDiffWrapMode }) {
   const file = () => activeReviewFile(props.state)
+  const reviewWidth = () => {
+    const current = file()
+    if (!current || props.wrapMode === "word") return props.width
+    return diffReviewContentWidth(current, props.width, props.wrapMode)
+  }
   return (
-    <box flexDirection="column" gap={1} overflow="hidden">
+    <box flexDirection="column" gap={1} overflow="hidden" width={reviewWidth()}>
       <Show when={file()} fallback={<EmptyChanges />}>
         {(current) => (
           <>
-            <FileHeader file={current()} width={props.width} />
+            <FileHeader file={current()} width={reviewWidth()} />
             <For each={current().blocks}>
               {(block) => (
                 <BlockView
@@ -163,7 +172,8 @@ export function ChangesReviewStream(props: { state: ReviewState; width: number }
                   file={current()}
                   block={block}
                   selected={activeReviewBlock(props.state)?.id === block.id}
-                  width={props.width}
+                  width={reviewWidth()}
+                  wrapMode={props.wrapMode}
                 />
               )}
             </For>
@@ -225,6 +235,7 @@ function BlockView(props: {
   block: ReviewBlock
   selected: boolean
   width: number
+  wrapMode: ChangesDiffWrapMode
 }) {
   const { theme } = useTheme()
   const comments = () => commentsForBlock(props.state, props.file.path, props.block.index)
@@ -245,7 +256,12 @@ function BlockView(props: {
       <For each={props.block.lines}>
         {(line) => (
           <>
-            <DiffLine line={line} width={props.width - 4} selected={props.state.selection.lineID === line.id} />
+            <DiffLine
+              line={line}
+              width={props.width - 4}
+              wrapMode={props.wrapMode}
+              selected={props.state.selection.lineID === line.id}
+            />
             <For
               each={commentsForLine(
                 props.state,
@@ -289,7 +305,7 @@ function BlockView(props: {
   )
 }
 
-function DiffLine(props: { line: ReviewLine; width: number; selected?: boolean }) {
+function DiffLine(props: { line: ReviewLine; width: number; wrapMode: ChangesDiffWrapMode; selected?: boolean }) {
   const { theme } = useTheme()
   const marker = () =>
     props.line.kind === "added" ? "+" : props.line.kind === "removed" ? "-" : props.line.kind === "meta" ? "\\" : " "
@@ -311,8 +327,12 @@ function DiffLine(props: { line: ReviewLine; width: number; selected?: boolean }
           : theme.text
   const oldLine = () => (props.line.oldLine === undefined ? " " : String(props.line.oldLine))
   const newLine = () => (props.line.newLine === undefined ? " " : String(props.line.newLine))
+  const rowWidth = () =>
+    props.wrapMode === "none"
+      ? Math.max(props.width, Bun.stringWidth(props.line.text || " ") + DIFF_LINE_GUTTER_WIDTH)
+      : props.width
   return (
-    <box flexDirection="row" width="100%" backgroundColor={bg()} overflow="hidden">
+    <box flexDirection="row" width={rowWidth()} backgroundColor={bg()} overflow="hidden">
       <box width={10} flexShrink={0} backgroundColor={bg()} overflow="hidden">
         <text fg={theme.diffLineNumber} wrapMode="none">
           {`${oldLine().padStart(4, " ")} ${newLine().padStart(4, " ")}`}
@@ -323,12 +343,27 @@ function DiffLine(props: { line: ReviewLine; width: number; selected?: boolean }
           {props.selected ? ">" : marker()}
         </text>
       </box>
-      <box flexGrow={1} minWidth={0} backgroundColor={bg()} overflow="hidden">
-        <text fg={fg()} wrapMode="none">
-          {Locale.truncate(props.line.text || " ", Math.max(1, props.width - 12))}
+      <box
+        width={Math.max(1, rowWidth() - DIFF_LINE_GUTTER_WIDTH)}
+        flexShrink={0}
+        backgroundColor={bg()}
+        overflow="hidden"
+      >
+        <text fg={fg()} width="100%" wrapMode={props.wrapMode}>
+          {props.line.text || " "}
         </text>
       </box>
     </box>
+  )
+}
+
+export function diffReviewContentWidth(file: ReviewFile, viewportWidth: number, wrapMode: ChangesDiffWrapMode) {
+  if (wrapMode === "word") return viewportWidth
+  return Math.max(
+    viewportWidth,
+    ...file.blocks.flatMap((block) =>
+      block.lines.map((line) => Bun.stringWidth(line.text || " ") + DIFF_LINE_GUTTER_WIDTH),
+    ),
   )
 }
 

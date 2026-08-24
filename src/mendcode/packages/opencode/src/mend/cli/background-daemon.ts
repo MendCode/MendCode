@@ -186,7 +186,7 @@ function managedLoopService() {
 async function uninstallManagedLoopService(root: string) {
   if (!managedLoopService()) return
   const { loopServiceArgsFromConfig, loopServiceUninstall } = await import("../runtime/loop-service")
-  await loopServiceUninstall(loopServiceArgsFromConfig(root)).catch(() => undefined)
+  await loopServiceUninstall(loopServiceArgsFromConfig(root))
 }
 
 export async function main(argv = process.argv.slice(2)) {

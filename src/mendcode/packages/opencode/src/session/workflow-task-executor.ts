@@ -16,6 +16,7 @@ import { WorkflowPolicy } from "./workflow-policy"
 export interface ExecuteInput {
   readonly task: WorkflowTask
   readonly sessionID: Parameters<Session.Interface["get"]>[0]
+  readonly timeoutMs?: number
   readonly context?: string
   readonly workflowModel?: WorkflowModelRoute
   readonly workflowPermissions?: WorkflowPermissionPolicy
@@ -87,6 +88,9 @@ const textOutput = (message: PromptMessage) =>
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
+
+const isTimeoutError = (error: unknown) =>
+  isRecord(error) && (error._tag === "TimeoutError" || error._tag === "TimeoutException")
 
 const unknownToolName = (message: PromptMessage) =>
   message.parts.flatMap((part) => {
@@ -320,16 +324,26 @@ export const layer = Layer.effect(
         context ? `<workflow_artifact_context>\n${context}\n</workflow_artifact_context>` : undefined,
       ].filter(Boolean).join("\n\n")
       const parts = yield* prompt.resolvePromptParts(promptText)
-      const message = yield* prompt.prompt({
+      const response = prompt.prompt({
         sessionID: input.sessionID,
         agent: input.task.agentProfile,
         tools: allowedTools(input.task, policy.tools, policy.policy),
         format: outputFormat(input.task),
         parts,
         ...modelInput(input.task, input.workflowModel),
-      }).pipe(
-        Effect.mapError((error) => new Error(errorText(Cause.squash(error)))),
-      )
+      }).pipe(Effect.mapError((error) => new Error(errorText(Cause.squash(error)))))
+      const timeoutMs = Math.max(1, input.timeoutMs ?? 1)
+      const message = yield* (input.timeoutMs === undefined
+        ? response
+        : response.pipe(
+            Effect.timeout(timeoutMs),
+            Effect.tapError((error) => isTimeoutError(error) ? prompt.cancel(input.sessionID) : Effect.void),
+            Effect.mapError((error) =>
+              isTimeoutError(error)
+                ? new Error(`Workflow task ${input.task.id} timed out after ${timeoutMs}ms`)
+                : error,
+            ),
+          ))
       return resultFromMessage(input.task, message)
     })
 

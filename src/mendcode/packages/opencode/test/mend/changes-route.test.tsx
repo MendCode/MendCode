@@ -1,10 +1,18 @@
 import { describe, expect, test } from "bun:test"
 import path from "path"
 import { Global } from "@mendcode/core/global"
-import { loadWorkspaceDiffWithGit, normalizeNoIndexPatch, parseGitPathList } from "../../src/cli/cmd/tui/routes/changes/load-diff"
+import {
+  loadWorkspaceDiffWithGit,
+  normalizeNoIndexPatch,
+  parseGitPathList,
+} from "../../src/cli/cmd/tui/routes/changes/load-diff"
 import { changesKeybindLabel } from "../../src/cli/cmd/tui/routes/changes/keybinds"
 import { fileNavScrollOffset } from "../../src/cli/cmd/tui/routes/changes/file-nav"
-import { formatChangesFilePath, formatChangesPath } from "../../src/cli/cmd/tui/routes/changes/renderer-adapter"
+import {
+  diffReviewContentWidth,
+  formatChangesFilePath,
+  formatChangesPath,
+} from "../../src/cli/cmd/tui/routes/changes/renderer-adapter"
 import { routeReturnTarget } from "../../src/cli/cmd/tui/context/route-return"
 import { createReviewState } from "../../src/cli/cmd/tui/routes/changes/review-state"
 
@@ -78,12 +86,33 @@ describe("changes route", () => {
 
   test("renders compact and full keybind labels", () => {
     expect(changesKeybindLabel(60)).toContain("←/→ file")
-    expect(changesKeybindLabel(60)).toContain("↑/↓ Pg lines")
+    expect(changesKeybindLabel(60)).toContain("↑/↓ lines")
+    expect(changesKeybindLabel(60)).toContain("w wrap")
+    expect(changesKeybindLabel(60)).toContain("i sidebar")
     expect(changesKeybindLabel(60)).toContain("l line")
     expect(changesKeybindLabel(120)).toContain("c comment")
     expect(changesKeybindLabel(120)).not.toContain("Enter")
     expect(changesKeybindLabel(120)).toContain("←/→ or n/p files")
+    expect(changesKeybindLabel(120)).toContain("w wrap/scroll")
+    expect(changesKeybindLabel(120)).toContain("i sidebar")
     expect(changesKeybindLabel(120)).toContain("esc/q back")
+  })
+
+  test("keeps long diff lines available for horizontal scrolling when wrapping is disabled", () => {
+    const state = createReviewState({
+      workspaceRoot: "/repo",
+      diff: `diff --git a/src/a.ts b/src/a.ts
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1 +1 @@
+-short
++${"x".repeat(120)}
+`,
+    })
+    const file = state.files[0]!
+
+    expect(diffReviewContentWidth(file, 40, "word")).toBe(40)
+    expect(diffReviewContentWidth(file, 40, "none")).toBeGreaterThan(40)
   })
 
   test("shortens workspace paths inside the home directory", () => {

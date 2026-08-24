@@ -109,6 +109,25 @@ describe("WorkflowPlan", () => {
     expect(decoded.completion?.confirmation).toBe("next-run")
   })
 
+  test("validates completion commands before the workflow starts", () => {
+    const valid = basePlan()
+    valid.completion = {
+      confirmation: "next-run",
+      validationChecks: [{ id: "frontend-build", command: "pnpm --dir app build" }],
+    }
+    expect(validateWorkflowPlan(decode(valid)).valid).toBe(true)
+
+    const unsafe = basePlan()
+    unsafe.completion = {
+      confirmation: "next-run",
+      validationChecks: [{ id: "escaped-build", command: "pnpm --dir ../outside build" }],
+    }
+    expect(validateWorkflowPlan(decode(unsafe))).toMatchObject({
+      valid: false,
+      issues: [expect.objectContaining({ code: "invalid-completion-criteria" })],
+    })
+  })
+
   test("rejects completion owners and validation identifiers that do not exist", () => {
     const plan = basePlan()
     plan.completion = {

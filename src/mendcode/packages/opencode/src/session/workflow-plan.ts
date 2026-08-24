@@ -3,6 +3,7 @@ import { Schema, Types } from "effect"
 import { zod } from "@/util/effect-zod"
 import { NonNegativeInt, PositiveInt, withStatics } from "@/util/schema"
 import { CompletionConfirmation } from "./completion-contract"
+import { completionValidationCommandAllowed } from "./completion-validation"
 import {
   WorkflowArtifactSelector,
   WorkflowBudget,
@@ -240,6 +241,8 @@ export const validateWorkflowPlan = (plan: WorkflowPlan): WorkflowPlanValidation
       }
       if (!check.command.trim()) {
         issues.push(issue("invalid-completion-criteria", `Completion validation ${check.id} has an empty command`, ["completion", "validationChecks", String(index), "command"]))
+      } else if (!completionValidationCommandAllowed(check.command)) {
+        issues.push(issue("invalid-completion-criteria", `Completion validation ${check.id} uses an unsupported or unsafe command`, ["completion", "validationChecks", String(index), "command"]))
       }
     }
   }

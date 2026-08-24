@@ -621,6 +621,70 @@ describe("ProviderTransform.schema - opencode strict schema cleanup", () => {
   })
 })
 
+describe("ProviderTransform.schema - OpenAI regex compatibility", () => {
+  const schema = {
+    type: "object",
+    properties: {
+      contact: {
+        type: "object",
+        properties: {
+          email: {
+            type: "string",
+            pattern: "^(?=.{1,254}$)[^@]+@[^@]+$",
+          },
+          code: {
+            type: "string",
+            pattern: "^[A-Z]{2}-[0-9]+$",
+          },
+        },
+      },
+    },
+  } as any
+
+  test.each([
+    [
+      "direct OpenAI",
+      { providerID: "openai", api: { id: "gpt-5", url: "https://api.openai.com/v1", npm: "@ai-sdk/openai" } },
+    ],
+    [
+      "ChatGPT subscription alias",
+      {
+        providerID: "opencode",
+        api: {
+          id: "gpt-5.6-sol",
+          url: "https://chatgpt.com/backend-api/codex/responses",
+          npm: "@ai-sdk/openai",
+        },
+      },
+    ],
+    [
+      "Azure OpenAI",
+      {
+        providerID: "azure",
+        api: { id: "gpt-5", url: "https://example.openai.azure.com", npm: "@ai-sdk/azure" },
+      },
+    ],
+  ])("removes unsupported lookaround for %s without weakening normal patterns", (_label, model) => {
+    const result = ProviderTransform.schema(model as any, schema) as any
+
+    expect(result.properties.contact.properties.email.pattern).toBeUndefined()
+    expect(result.properties.contact.properties.email.type).toBe("string")
+    expect(result.properties.contact.properties.code.pattern).toBe("^[A-Z]{2}-[0-9]+$")
+  })
+
+  test("preserves lookaround for providers that do not use OpenAI schema validation", () => {
+    const result = ProviderTransform.schema(
+      {
+        providerID: "anthropic",
+        api: { id: "claude-sonnet", url: "https://api.anthropic.com", npm: "@ai-sdk/anthropic" },
+      } as any,
+      schema,
+    ) as any
+
+    expect(result.properties.contact.properties.email.pattern).toBe("^(?=.{1,254}$)[^@]+@[^@]+$")
+  })
+})
+
 describe("ProviderTransform.schema - gemini array items", () => {
   test("adds missing items for array properties", () => {
     const geminiModel = {

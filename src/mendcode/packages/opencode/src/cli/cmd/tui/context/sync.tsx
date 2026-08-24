@@ -37,6 +37,7 @@ import { useKV } from "./kv"
 import { useSessionControl } from "./session-control"
 import { isRecentWorkingAssistant, sessionStatusExpiryDelay } from "../util/session-working"
 import { appendLiveShellOutput, previewShellOutput } from "./shell-output"
+import { tuiText } from "../util/text"
 import {
   isCurrentTuiBootstrap,
   syncBootstrapReadiness,
@@ -82,8 +83,8 @@ const TUI_PENDING_PART_DELTA_PART_LIMIT = 4
 const TUI_PENDING_PART_DELTA_FIELD_LIMIT = 4
 const trace = Log.create({ service: "tui.sync" })
 
-function previewString(input: string | undefined, maxChars: number, label: string) {
-  if (!input || input.length <= maxChars) return input
+function previewString(input: unknown, maxChars: number, label: string) {
+  if (typeof input !== "string" || input.length <= maxChars) return typeof input === "string" ? input : undefined
   const marker = `\n[${label} preview truncated: omitted ${input.length - maxChars} chars; showing start and latest tail.]\n`
   const budget = Math.max(0, maxChars - marker.length)
   if (budget <= 0) return input.slice(-maxChars)
@@ -193,8 +194,8 @@ function preserveAppendOnlyPartText(current: Part, incoming: Part): Part {
   if (current.type !== "text" && current.type !== "reasoning") return incoming
   if (incoming.type !== "text" && incoming.type !== "reasoning") return incoming
 
-  const currentText = current.text
-  const incomingText = incoming.text
+  const currentText = tuiText(current.text)
+  const incomingText = tuiText(incoming.text)
   if (currentText.length > incomingText.length && currentText.startsWith(incomingText)) {
     return previewPartForStore({ ...incoming, text: currentText } as Part)
   }
@@ -349,13 +350,13 @@ function trimLoadedSessionMessages(input: {
 function visibleUserParts(parts: readonly Part[] | undefined) {
   if (!parts) return
   return parts.some(
-    (part) => (part.type === "text" && !part.synthetic && part.text.trim().length > 0) || part.type === "file",
+    (part) => (part.type === "text" && !part.synthetic && tuiText(part.text).trim().length > 0) || part.type === "file",
   )
 }
 
 function visibleAssistantParts(parts: readonly Part[] | undefined) {
   if (!parts) return false
-  return parts.some((part) => part.type === "text" && !part.synthetic && part.text.trim().length > 0)
+  return parts.some((part) => part.type === "text" && !part.synthetic && tuiText(part.text).trim().length > 0)
 }
 
 function isHiddenCompactionSummary(
