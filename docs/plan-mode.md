@@ -86,8 +86,6 @@ Use this behavior to separate planning from writing:
 - Implementation agents should edit files only after approval.
 - If the user edits or rejects the plan, the edited Markdown or rejection reason overrides the previous draft.
 
-## Source Map
+## Implementation paths
 
-- `src/mendcode/packages/opencode/src/tool/plan-review.ts`: tool schema, approve/edit/reject handling, and implementation-agent switch.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/session/plan-review.tsx`: modal UI, preview/edit/comment/reject stages, keyboard handling, and Markdown rendering.
-- `src/mendcode/packages/opencode/src/session/prompt/plan.txt`: agent instruction to use `plan_review` instead of asking for approval in prose.
+See [MendCode Source Map — TUI pages and product surfaces](source-map.md#tui-pages-and-product-surfaces) for the Plan Review tool, modal, and prompt-instruction files.

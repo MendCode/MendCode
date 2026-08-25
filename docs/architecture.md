@@ -1,6 +1,6 @@
 # Architecture and Packages
 
-MendCode has a MendCode-owned control plane wrapped around an adapted terminal coding runtime. The public surface is the `mendcode` CLI. The runtime source lives in `src/mendcode/packages/opencode`, but public commands are routed through MendCode modules under `src/mendcode/packages/opencode/src/mend`.
+MendCode has a MendCode-owned control plane wrapped around an adapted terminal coding runtime. The public surface is the `mendcode` CLI. The internal runtime package is documented in the [MendCode Source Map](source-map.md#why-some-paths-say-opencode); public commands are routed through MendCode-owned control-plane modules.
 
 ## Lineage
 

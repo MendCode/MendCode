@@ -131,9 +131,6 @@ Current aggregation includes session/message metadata available to the TUI:
 
 If a provider or session does not supply a field, that field may be zero or absent. That is better than inventing a number.
 
-## Source Map
+## Implementation paths
 
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/app.tsx`: command palette entries and slash aliases.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/stats/index.tsx`: Usage Insights route, responsive layout, shortcuts, cache, scope handling, and weather integration.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/util/usage-insights.ts`: aggregation and normalization for days, totals, tools, agents, models, token mix, duration, cache data, selected-day detail, and streaks.
-- `src/mendcode/packages/opencode/test/tui/usage-insights.test.ts`: regression coverage for token aggregation, user words, response time, tools, active-day streaks, selected-day activity, and normalized cache input.
+See [MendCode Source Map — TUI pages and product surfaces](source-map.md#tui-pages-and-product-surfaces) for the route, aggregation, command-palette, and regression-test files.

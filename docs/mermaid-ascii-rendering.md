@@ -1,6 +1,6 @@
 # Mermaid ASCII Rendering
 
-MendCode renders Mermaid fences as local, terminal-native ASCII diagrams in Markdown and rich chat presentation modes. The renderer keeps diagram semantics visible without requiring a browser, SVG canvas, or network request.
+MendCode renders Mermaid fences as local, terminal-native ASCII diagrams in Markdown and rich chat presentation modes. The renderer keeps diagram semantics visible without requiring a browser, SVG canvas, or network request. This page reflects the current v0.1.38 behavior; it is documentation-only and does not require a version bump.
 
 ## Chat Canvas Behavior
 
@@ -12,12 +12,17 @@ Every rendered Mermaid diagram is placed in its own bounded chat canvas:
 - Shift-wheel or the horizontal scrollbar pans the canvas directly.
 - Diagrams taller than 28 rows use an internal vertical viewport.
 - The viewport does not clip the generated ASCII geometry; supported diagrams retain their generated nodes, labels, fields, and connectors behind local scrolling when necessary.
+- During streaming, stable Markdown segments keep completed cards in place while the active tail continues to update; each card can recover its original Mermaid source in message order.
+
+## Catalog interaction
+
+Every fixture below is expanded on first load so the expected output is immediately visible. Use the fixture summary to collapse an individual diagram when comparing several examples. The expanded state is part of the documentation contract and is covered by the executable Markdown/TUI test.
 
 Terminal cells have a fixed font size, so the controls perform semantic layout zoom rather than bitmap scaling. If a diagram cannot fit without losing information, the card preserves the full geometry and exposes local scrolling.
 
 ## Coverage Contract
 
-The canonical executable coverage is in [`markdown-render.test.ts`](../src/mendcode/packages/opencode/test/cli/tui/markdown-render.test.ts). It checks:
+The canonical executable coverage is the Markdown/TUI regression suite listed in the [MendCode Source Map](source-map.md#tests-docs-and-release-references). It checks:
 
 - every supported Mermaid family;
 - expanded flowchart shapes;
@@ -27,7 +32,7 @@ The canonical executable coverage is in [`markdown-render.test.ts`](../src/mendc
 - safe handling of Mermaid metadata;
 - bounded per-card viewport behavior and source-to-card ordering.
 
-The catalog below is generated from the same fixture set used for visual QA. Each section shows the exact text canvas expected from MendCode.
+The catalog below is kept in sync with the fixture set used for visual QA. Each section shows the exact text canvas expected from MendCode.
 
 ## Rendered Fixture Catalog
 
@@ -35,7 +40,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `flowchart`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -64,7 +69,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `swimlane-beta`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -88,7 +93,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `sequenceDiagram`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -110,7 +115,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `classDiagram`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -127,7 +132,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `stateDiagram-v2`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -162,7 +167,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `erDiagram`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -179,7 +184,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `journey`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -199,7 +204,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `gantt`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -217,7 +222,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `pie`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -234,7 +239,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `quadrantChart`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -269,7 +274,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `requirementDiagram`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -288,7 +293,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `gitGraph`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -308,7 +313,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `C4Context`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -324,7 +329,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `mindmap`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -344,7 +349,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `timeline`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -367,7 +372,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `zenuml`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -390,7 +395,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `sankey`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -410,7 +415,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `xychart-beta`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -440,7 +445,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `block-beta`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -456,7 +461,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `packet-beta`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -474,7 +479,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `kanban`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -494,7 +499,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `architecture-beta`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -518,7 +523,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `radar-beta`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -534,7 +539,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `eventmodeling`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -563,7 +568,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `treemap-beta`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -582,7 +587,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `venn-beta`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -613,7 +618,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `ishikawa-beta`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -644,7 +649,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `wardley-beta`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -677,7 +682,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `cynefin-beta`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -717,7 +722,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `treeView-beta`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -745,7 +750,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `STRESS · swimlane 4 lanes`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -779,7 +784,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `STRESS · class relation matrix`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -812,7 +817,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `STRESS · state branches and terminal`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -856,7 +861,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `STRESS · ER fields and cross-links`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -888,7 +893,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `STRESS · journey multi-section`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -924,7 +929,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `STRESS · gantt dependencies`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -949,7 +954,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `STRESS · quadrant labels and points`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -984,7 +989,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `STRESS · requirement relations`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -1005,7 +1010,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `STRESS · git branches and merge`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -1025,7 +1030,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `STRESS · mixed XY`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -1055,7 +1060,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `STRESS · radar 6 axes`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -1092,7 +1097,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `STRESS · deep TreeView`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -1144,7 +1149,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `LONG FLOWCHART (120 NODES)`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -1879,7 +1884,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `CYCLES AND BRANCHES`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
@@ -1922,7 +1927,7 @@ The catalog below is generated from the same fixture set used for visual QA. Eac
 
 ### `ADVERSARIAL METADATA`
 
-<details>
+<details open>
 <summary>Expected MendCode ASCII output</summary>
 
 ```text
