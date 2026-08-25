@@ -2,59 +2,53 @@
 
 These docs describe the MendCode-owned product surface: the public `mendcode` CLI, `.mendcode/` configuration, setup flow, runtime packages, model roles, prompt modes, memory, permissions, TUI customization, Plan Mode, Changes Review, Loop Workflows, Usage Insights, mflow, optional TSM/worktrees, and release/security policy.
 
-If you are deciding what to show on GitHub or the website, start with [Feature Map](features.md). If you only read one setup page after this index, read [CLI, setup, and configuration](cli-setup-configuration.md). If you are shaping the visual product experience, read [Customization](customization.md).
+Use this index by intent. **Use MendCode** explains the public workflow, **Features and pages** describes what the TUI can do, and **Build and maintain** is for packages, extensions, source paths, and releases. The [Source Map](source-map.md) is intentionally separate so normal product docs do not repeat internal `opencode` paths.
 
-## Start Here
+## Use MendCode
 
-1. [Feature Map](features.md): the full product inventory for README, website, screenshots, and demos.
-2. [CLI, setup, and configuration](cli-setup-configuration.md): install/open commands, setup state, config paths, focus profiles, model roles, prompt modes (including named project-local `custom.md` context), budget posture, permissions, and memory.
-3. [Customization](customization.md): prompt input, input marker, prompt status, home centered/split modes, Agent View, ASCII title/mascot, activity states, and team profile examples.
-4. [Custom tool calls](custom-tool-calls.md): project-local and package-shared assistant tools with typed arguments, execution context, metadata, and permission checks.
-5. [Plan Mode](plan-mode.md): interactive plan review modal, approve/edit/comment/reject flow, Mermaid support, and post-approval implementation handoff.
-6. [Mermaid ASCII rendering](mermaid-ascii-rendering.md): chat canvas controls, fit and pan behavior, supported diagram families, stress fixtures, and exact expected ASCII output.
-7. [Changes Review](changes-review.md): `/changes` diff workspace, keybinds, comments, responsive layout, and agent-visible review context.
-8. [Loop Workflows](loop-workflows.md): verified goals, recurring scheduled jobs, bounded runs, Agent View loop roots, `/loop` creation, `/loops` supervision with live countdowns, durable permission waits, execution modes, and the per-project OS scheduler.
-9. [Memory Center](memory-center.md): saved memories, proposals, categories, Dream status, project grouping, and the constrained memory side agent for questions, explanations, and draft proposals.
-10. [Usage Insights](usage-insights.md): global/project activity dashboard, token heatmap, AI time, top tools/agents/models, cache behavior, and weather.
-11. [Packages and team sharing](packages-and-team-sharing.md): package commands, agents, modes, skills, prompts, MCP files, widgets, TUI profiles, model policy, permissions, memory, and worktree policy for teams.
-12. [Automation runtime](automation-runtime.md): session automation commands, versioned JSON envelopes, shared model selection, progress inspection, events, waiting, and cancellation.
+- [CLI, setup, and configuration](cli-setup-configuration.md): install/open commands, setup state, config paths, focus profiles, model roles, prompt modes, permissions, and memory.
+- [Session history](session-history.md): browse, inspect, and resume previous sessions.
+- [Automation runtime](automation-runtime.md): JSON envelopes, shared model selection, progress inspection, events, waiting, and cancellation.
+- [Independent Workflows](workflows.md): one-shot plans, task sequencing, completion evidence, and operator controls.
+- [Loop Workflows](loop-workflows.md): verified goals, recurring jobs, bounded runs, durable permission waits, and `/loops` supervision.
+- [mflow coordination](mflow.md): local-first coordination, relay modes, file locks, and same-worktree editing.
+- [TSM and worktrees](tsm-and-worktrees.md): optional terminal sessions, worktree routing, registry ownership, and preview-first safety.
+- [Packages and team sharing](packages-and-team-sharing.md): share commands, agents, modes, skills, prompts, MCP, widgets, profiles, and policy.
 
-## Configure The Harness
+## Features and pages
 
-- [CLI, setup, and configuration](cli-setup-configuration.md): required setup steps, optional setup steps, config files, provider/model roles, prompt modes, permissions, and memory.
-- [Package index](package-index.md): source package map and the distinction between npm workspace packages and runtime `.mendcode` packages.
-- [Architecture and packages](architecture.md): repo layout, MendCode-owned runtime layer, public command router, package map, and safety model.
-- [Provider-aware context continuity](features.md#provider-aware-context-continuity): OAuth Responses Lite continuity, local compaction, and provider-aware limits.
+### Product features
 
-## Shape The Terminal
+- [Feature Map](features.md): complete inventory of product behavior, shortcuts, slash commands, and demo surfaces.
+- [Customization](customization.md): prompt chrome, input marker, status placement, home identity, Agent View, mascot, activity states, and profiles.
+- [Mermaid ASCII rendering](mermaid-ascii-rendering.md): terminal-native diagrams, fit/pan controls, local scrolling, supported families, and expanded fixtures.
+- [Custom Tool Calls](custom-tool-calls.md): project-local and package-shared tools with typed context and permission checks.
+- [TUI Plugins and Widgets](tui-plugins-and-widgets.md): status rows, widgets, slots, commands, dialogs, routes, themes, keybinds, and package distribution.
+- [Themes](themes.md): terminal theme reference.
 
-- [Feature Map](features.md): concise inventory of demo-worthy surfaces, shortcuts, slash commands, and feature claims.
-- [Customization](customization.md): static TUI profile, prompt chrome, prompt marker, prompt status, home identity, Agent View, mascot/activity behavior, and screenshot guidance.
-- [TUI plugins and widgets](tui-plugins-and-widgets.md): dynamic runtime extensions, custom status rows, widgets, slots, command palette entries, slash commands, dialogs, routes, themes, keybinds, and package distribution.
+### TUI pages and operator surfaces
 
-## Review, Memory, And Observability
+- [Plan Mode](plan-mode.md): review, edit, comment, approve, or reject a plan before implementation.
+- [Changes Review](changes-review.md): diff workspace, responsive layout, comments, and agent-visible review context.
+- [Loop Workflows](loop-workflows.md): active/history dashboard, phases, runs, permissions, and recovery controls.
+- [Memory Center](memory-center.md): saved memories, proposals, categories, Dream status, and constrained side chat.
+- [Usage Insights](usage-insights.md): activity scopes, token heatmap, AI time, tools/agents/models, cache behavior, and weather.
 
-- [Plan Mode](plan-mode.md): planning without silent implementation.
-- [Changes Review](changes-review.md): working-tree diff review with comments, keybinds, and agent-visible review context.
-- [Loop Workflows](loop-workflows.md): verified goals and recurring scheduled jobs with explicit completion, cadence, permission, and safety contracts.
-- [Memory Center](memory-center.md): approval-first memory review, Dream maintenance, and constrained side-agent proposals.
-- [Usage Insights](usage-insights.md): local usage visibility without overclaiming productivity.
-- [Automation runtime](automation-runtime.md): machine-readable session control, progress events, lifecycle waiting, cancellation, and shared model selection.
-- [CLI, setup, and configuration](cli-setup-configuration.md#permissions-and-memory): permission modes, smart reviewer role, memory scopes, search/preview, and approval-gated proposals.
+## Build and maintain
 
-## Coordinate Local Work
+- [Architecture and packages](architecture.md): ownership, runtime boundary, repository layout, package map, and safety model.
+- [Package index](package-index.md): workspace packages versus runtime `.mendcode` packages.
+- [MendCode Source Map](source-map.md): one maintained map from public features to implementation and test paths.
+- [Releasing](releasing.md): installer contract, checksums, release notes, and public installer smoke tests.
+- [Changelog](../CHANGELOG.md): versioned behavior changes and regression coverage for recent releases.
+- [Supply chain security](supply-chain-security.md): provenance, SBOM, pinned actions, dependency review, and scanner policy.
+- [Public readiness audit](public-readiness-audit.md): branch, secret, dependency, legacy-reference, and public-surface checks.
 
-- [mflow coordination](mflow.md): optional local-first coordination, relay modes, file locks, and same-worktree multi-agent editing.
-- [TSM and worktrees](tsm-and-worktrees.md): `mendcode --worktree`, `mendcode --tsm`, optional TSM lifecycle, registry ownership, and preview-first worktree safety.
+## Community and publication
 
-## Release And Public Readiness
-
-- [Releasing](releasing.md): release assets, installer contract, checksums, release notes, and public installer smoke tests.
-- [Supply chain security](supply-chain-security.md): release provenance, SBOM, pinned actions, dependency review, and scanner policy.
-- [Public readiness audit](public-readiness-audit.md): current branch, secret, old-repo-reference, and public-surface audit notes.
-- [Community](community.md): issues, discussions, PRs, and labels.
-- [Wiki](wiki.md): GitHub wiki setup and doc sync.
-- [Lineage and acknowledgements](../ACKNOWLEDGEMENTS.md): opencode attribution and MendCode downstream scope.
+- [Community](community.md): issues, discussions, pull requests, and labels.
+- [Wiki](wiki.md): GitHub wiki structure and synchronization.
+- [Lineage and acknowledgements](../ACKNOWLEDGEMENTS.md): upstream attribution and MendCode downstream scope.
 
 ## Main Commands
 
@@ -112,34 +106,6 @@ Ctrl+X then l -> Session switcher
 
 CLI profile inspection exists for compatibility/debugging, but it is not the normal customization path.
 
-## Source Map
+## Implementation pointers
 
-- `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`: public `mendcode` command router.
-- `src/mendcode/packages/opencode/src/mend/config/project.ts`: project config, focus profiles, generated runtime config, package metadata.
-- `src/mendcode/packages/opencode/src/mend/config/models.ts`: model roles, projection, and shared prompt-model precedence.
-- `src/mendcode/packages/opencode/src/cli/cmd/session.ts` and `src/mendcode/packages/opencode/src/cli/automation.ts`: session automation commands and the `mendcode.cli.v1` JSON envelope.
-- `src/mendcode/packages/opencode/src/cli/cmd/run.ts` and `src/mendcode/packages/opencode/src/cli/model-selection.ts`: headless streaming and runtime model/agent resolution.
-- `src/mendcode/packages/opencode/src/mend/config/permissions.ts`: global permission mode and smart-reviewer role config.
-- `src/mendcode/packages/opencode/src/mend/prompt/mode.ts`: prompt modes: `minimal`, `focus`, `full`, and project-local `custom`.
-- `src/mendcode/packages/opencode/src/mend/prompt/custom.ts`: bounded, root-safe loader for `.mendcode/prompts/custom.md`.
-- `src/mendcode/packages/opencode/src/mend/memory/`: approval-gated memory storage, proposals, retrieval, graph, Dream, side chat, workspaces, and category policy.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/memory/index.tsx`: Memory Center route, category policy, Dream panel, inspector, and constrained memory side agent.
-- `src/mendcode/packages/opencode/src/mend/config/mflow.ts`: local-first mflow setup, relay config, edit-lock enforcement.
-- `src/mendcode/packages/opencode/src/mend/config/tsm.ts`: optional TSM lifecycle and detection.
-- `src/mendcode/packages/opencode/src/mend/config/worktree.ts`: worktree status, dry-run planning, adoption, destructive previews.
-- `src/mendcode/packages/opencode/src/mend/runtime/pack.ts`: runtime package snapshots.
-- `src/mendcode/packages/opencode/src/mend/runtime/packages.ts`: installed package state and active package projection.
-- `src/mendcode/packages/opencode/src/mend/profile.ts`: TUI profile schema and defaults.
-- `src/mendcode/packages/opencode/src/tool/plan-review.ts`: Plan Review tool and post-approval agent switch.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/changes/`: Changes Review route, diff loading, comments, responsive renderer, and review state.
-- `src/mendcode/packages/opencode/src/tool/review.ts`: assistant-facing review workspace tool.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/loops/`: Loop Workflows dashboard route.
-- `src/mendcode/packages/opencode/src/mend/runtime/loop-service.ts`: durable loop service, status, activation, and run state.
-- `src/mendcode/packages/opencode/src/session/loop.ts`: loop workflow model and lifecycle.
-- `src/mendcode/packages/opencode/src/session/loop-runner.ts`: loop wakeup execution path.
-- `src/mendcode/packages/opencode/src/tool/loop.ts`: assistant-facing loop workflow tool.
-- `src/mendcode/packages/opencode/src/server/routes/instance/loop.ts` and `src/mendcode/packages/opencode/src/server/routes/instance/httpapi/handlers/loop.ts`: legacy and Effect loop read/control routes.
-- `src/mendcode/packages/opencode/src/mend/cli/control-plane.ts` and `src/mendcode/packages/opencode/src/mend/runtime/loop-service.ts`: public loop CLI controls and project OS service lifecycle.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/stats/index.tsx`: Usage Insights TUI route.
-- `src/mendcode/packages/opencode/src/provider/claude-code.ts`: local Claude Code CLI provider bridge and validation.
-- `src/mendcode/packages/plugin/src/tui.ts`: public TUI plugin/widget types.
+The maintained implementation and test paths now live in the dedicated [MendCode Source Map](source-map.md). This index stays focused on the public product documentation.
